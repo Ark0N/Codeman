@@ -50,6 +50,9 @@ The web interface provides:
 - **Resource Display**: Real-time memory usage and message count per session
 - **Respawn Controls**: Start/stop respawn controller with configurable settings
 - **Case Management**: Create new project workspaces with CLAUDE.md templates
+- **Keyboard Shortcuts**: Quick access to common actions (Ctrl+Enter, Ctrl+K, Ctrl+L)
+- **Toast Notifications**: Non-intrusive status updates and alerts
+- **Mobile Support**: Responsive design optimized for tablets and phones
 - **Modern UI**: Gradient backgrounds, smooth animations, and polished styling
 
 #### Quick Start Button
@@ -73,6 +76,16 @@ The Quick Start button will:
 - Create a new session pointed to that case directory
 - Start an interactive Claude terminal
 - Focus the terminal so you can start working immediately
+
+#### Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Enter` | Quick Start (create case + interactive session) |
+| `Ctrl+K` | Kill all sessions |
+| `Ctrl+L` | Clear terminal |
+| `Ctrl+1/2/3` | Switch tabs (Run/Cases/Settings) |
+| `Escape` | Close modals |
 
 ### CLI Usage
 

@@ -346,6 +346,7 @@ class ClaudemanApp {
       const data = JSON.parse(e.data);
       this.respawnStatus[data.sessionId] = data.status;
       this.showRespawnBanner();
+      this.updatePageTitle();
       this.terminal.writeln(`\x1b[1;32m🔄 Respawn loop started for session ${data.sessionId.slice(0, 8)}\x1b[0m`);
     });
 
@@ -353,6 +354,7 @@ class ClaudemanApp {
       const data = JSON.parse(e.data);
       delete this.respawnStatus[data.sessionId];
       this.hideRespawnBanner();
+      this.updatePageTitle();
       this.terminal.writeln(`\x1b[1;33m⏹ Respawn loop stopped\x1b[0m`);
     });
 
@@ -969,7 +971,10 @@ class ClaudemanApp {
   }
 
   updateTimer() {
-    if (!this.currentRun || this.currentRun.status !== 'running') return;
+    if (!this.currentRun || this.currentRun.status !== 'running') {
+      this.updatePageTitle();
+      return;
+    }
 
     const now = Date.now();
     const remaining = Math.max(0, this.currentRun.endAt - now);
@@ -981,6 +986,26 @@ class ClaudemanApp {
     document.getElementById('timerProgress').style.width = `${percent}%`;
     document.getElementById('timerTasks').textContent = `${this.currentRun.completedTasks} tasks completed`;
     document.getElementById('timerCost').textContent = `$${this.currentRun.totalCost.toFixed(4)}`;
+
+    // Update page title with timer
+    document.title = `${this.formatTime(remaining)} - Claudeman`;
+  }
+
+  // Update page title based on current state
+  updatePageTitle() {
+    const sessionCount = this.sessions.size;
+    const hasRespawn = Object.values(this.respawnStatus).some(s => s.state !== 'stopped');
+
+    if (this.currentRun && this.currentRun.status === 'running') {
+      // Title updated by updateTimer()
+      return;
+    } else if (hasRespawn) {
+      document.title = `🔄 Respawning - Claudeman`;
+    } else if (sessionCount > 0) {
+      document.title = `(${sessionCount}) Claudeman`;
+    } else {
+      document.title = 'Claudeman';
+    }
   }
 
   startTimerUpdates() {
@@ -1012,6 +1037,7 @@ class ClaudemanApp {
   renderSessions() {
     const count = this.sessions.size;
     document.getElementById('sessionCount').textContent = count;
+    this.updatePageTitle();
 
     const list = document.getElementById('sessionsList');
 
