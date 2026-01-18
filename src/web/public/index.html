@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claudeman</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <h1 class="logo">⚡ Claudeman</h1>
+        <div class="connection-status" id="connectionStatus">
+          <span class="status-dot"></span>
+          <span>Connecting</span>
+        </div>
+      </div>
+      <div class="header-stats">
+        <div class="stat-item">
+          <span class="stat-value" id="statCost">$0.00</span>
+          <span class="stat-label">Total Cost</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="statTasks">0</span>
+          <span class="stat-label">Tasks Done</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Timer Banner (shown when timed run is active) -->
+    <div class="timer-banner" id="timerBanner" style="display: none;">
+      <div class="timer-info">
+        <span class="timer-label">Time Remaining</span>
+        <span class="timer-value" id="timerValue">00:00:00</span>
+      </div>
+      <div class="timer-progress">
+        <div class="timer-progress-fill" id="timerProgress"></div>
+      </div>
+      <div class="timer-meta">
+        <span id="timerTasks">0 tasks completed</span>
+        <span id="timerCost">$0.00</span>
+        <button class="btn btn-sm btn-danger" onclick="app.stopCurrentRun()">Stop</button>
+      </div>
+    </div>
+
+    <!-- Main Content -->
+    <main class="main">
+      <!-- Control Panel -->
+      <section class="control-panel">
+        <h2>Run Claude</h2>
+
+        <div class="form-group">
+          <label>Prompt</label>
+          <textarea id="promptInput" placeholder="What should Claude do?"></textarea>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Directory</label>
+            <input type="text" id="dirInput" placeholder="Current directory">
+          </div>
+          <div class="form-group">
+            <label>Duration (minutes)</label>
+            <input type="number" id="durationInput" value="0" min="0" max="720">
+            <span class="form-hint">0 = single run</span>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary btn-large" id="runBtn" onclick="app.startRun()">
+            <span class="btn-icon">▶</span>
+            Run
+          </button>
+        </div>
+      </section>
+
+      <!-- Output Panel -->
+      <section class="output-panel">
+        <div class="output-header">
+          <h2>Output</h2>
+          <div class="output-actions">
+            <button class="btn btn-sm" onclick="app.clearOutput()">Clear</button>
+          </div>
+        </div>
+
+        <div class="output-container" id="outputContainer">
+          <div class="output-placeholder">
+            <div class="placeholder-icon">💬</div>
+            <div class="placeholder-text">Run a prompt to see Claude's output here</div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Sessions Panel (collapsible) -->
+    <aside class="sessions-panel" id="sessionsPanel">
+      <div class="sessions-header" onclick="app.toggleSessions()">
+        <h3>Sessions <span class="session-count" id="sessionCount">0</span></h3>
+        <span class="toggle-icon" id="toggleIcon">▼</span>
+      </div>
+      <div class="sessions-list" id="sessionsList"></div>
+    </aside>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

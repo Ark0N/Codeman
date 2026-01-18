@@ -4,10 +4,13 @@ A Claude Code session manager with an autonomous Ralph Loop for task assignment 
 
 ## Features
 
+- **Web Interface**: Beautiful, responsive web UI for managing sessions and running prompts
 - **Session Management**: Spawn and manage multiple Claude CLI sessions as subprocesses
+- **Timed Runs**: Schedule Claude to work for a specific duration with live countdown
+- **Real-time Output**: Stream Claude's responses in real-time via Server-Sent Events
 - **Task Queue**: Priority-based task queue with dependency support
 - **Ralph Loop**: Autonomous control loop that assigns tasks to idle sessions and monitors completion
-- **Time-Aware Loops**: Set minimum durations for extended autonomous work sessions
+- **Cost Tracking**: Track total API costs across all sessions
 - **State Persistence**: All state persisted to `~/.claudeman/state.json`
 
 ## Installation
@@ -19,6 +22,24 @@ npm link  # Optional: make 'claudeman' available globally
 ```
 
 ## Quick Start
+
+### Web Interface (Recommended)
+
+```bash
+# Start the web interface
+claudeman web
+
+# Open http://localhost:3000 in your browser
+```
+
+The web interface provides:
+- **Prompt Input**: Enter prompts and optionally set a working directory
+- **Duration Timer**: Set duration in minutes for timed runs (0 = single run)
+- **Live Output**: See Claude's response in real-time as it streams
+- **Countdown**: Large timer display when running timed jobs
+- **Session Monitoring**: View all active sessions at the bottom panel
+
+### CLI Usage
 
 ```bash
 # Start a Claude session
@@ -36,6 +57,16 @@ claudeman status
 ```
 
 ## Commands
+
+### Web Interface
+
+```bash
+# Start web interface on default port (3000)
+claudeman web
+
+# Use a different port
+claudeman web --port 8080
+```
 
 ### Session Management
 

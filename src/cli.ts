@@ -449,4 +449,25 @@ program
     console.log('');
   });
 
+// Web interface command
+program
+  .command('web')
+  .description('Start the web interface')
+  .option('-p, --port <port>', 'Port to listen on', '3000')
+  .action(async (options) => {
+    const { startWebServer } = await import('./web/server.js');
+    const port = parseInt(options.port, 10);
+
+    console.log(chalk.cyan(`Starting Claudeman web interface on port ${port}...`));
+
+    try {
+      await startWebServer(port);
+      console.log(chalk.green(`\n✓ Web interface running at http://localhost:${port}`));
+      console.log(chalk.gray('  Press Ctrl+C to stop\n'));
+    } catch (err) {
+      console.error(chalk.red(`✗ Failed to start web server: ${(err as Error).message}`));
+      process.exit(1);
+    }
+  });
+
 export { program };
