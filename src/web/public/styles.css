@@ -312,6 +312,25 @@ body {
   word-break: break-word;
 }
 
+/* Terminal container for xterm.js */
+.terminal-container {
+  flex: 1;
+  background: #1a1a2e;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  min-height: 400px;
+}
+
+.terminal-container .xterm {
+  height: 100%;
+  padding: 0.5rem;
+}
+
+.terminal-container .xterm-viewport {
+  background: transparent !important;
+}
+
 .output-placeholder {
   display: flex;
   flex-direction: column;
@@ -519,4 +538,350 @@ body {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* Tabs */
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
+}
+
+.tab {
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  color: var(--text-dim);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tab:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.tab.active {
+  color: var(--accent);
+  background: var(--bg-input);
+}
+
+.tab-content {
+  display: none;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+/* Section Header */
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.section-header h3 {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+
+/* Input with button */
+.input-with-button {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.input-with-button input {
+  flex: 1;
+}
+
+/* Select */
+select {
+  width: 100%;
+  padding: 0.75rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Cases List */
+.cases-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.case-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.case-card:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.case-icon {
+  font-size: 1.25rem;
+}
+
+.case-info {
+  flex: 1;
+}
+
+.case-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.case-path {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-family: monospace;
+}
+
+/* Create Case Form */
+.create-case-form {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.create-case-form h4 {
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+  color: var(--text);
+}
+
+/* Checkbox */
+input[type="checkbox"] {
+  margin-right: 0.5rem;
+  accent-color: var(--accent);
+}
+
+/* Modal */
+.modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal.active {
+  display: flex;
+}
+
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.modal-content {
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 90%;
+  max-width: 500px;
+  max-height: 80vh;
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h3 {
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1.5rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.modal-close:hover {
+  color: var(--text);
+}
+
+.modal-body {
+  padding: 1rem;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+/* Cases Grid (in modal) */
+.cases-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+}
+
+.cases-grid .case-card {
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+}
+
+/* Respawn Settings */
+.respawn-settings {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.respawn-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.respawn-header label {
+  display: flex;
+  align-items: center;
+  font-size: 0.8rem;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: normal;
+  margin: 0;
+}
+
+.respawn-details {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+/* Respawn Banner */
+.respawn-banner {
+  background: linear-gradient(135deg, #1e3a1e 0%, #0f1f0f 100%);
+  border-bottom: 1px solid var(--green);
+  padding: 0.75rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.respawn-status-info {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.respawn-indicator {
+  font-size: 1.25rem;
+  animation: spin 2s linear infinite;
+}
+
+.respawn-state {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--green);
+  text-transform: capitalize;
+}
+
+.respawn-cycles {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.respawn-step {
+  flex: 1;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.respawn-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* Session Card Respawn Status */
+.session-respawn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-dark);
+  border-top: 1px solid var(--border);
+  font-size: 0.7rem;
+}
+
+.session-respawn-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: pulse 1.5s infinite;
+}
+
+.session-respawn-dot.paused {
+  background: var(--yellow);
+  animation: none;
+}
+
+.session-respawn-dot.stopped {
+  background: var(--text-muted);
+  animation: none;
+}
+
+.session-respawn-state {
+  color: var(--text-dim);
+}
+
+.session-respawn-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 0.25rem;
+}
+
+.session-respawn-actions button {
+  padding: 0.2rem 0.4rem;
+  font-size: 0.65rem;
 }

@@ -61,11 +61,23 @@ export interface AppState {
   config: AppConfig;
 }
 
+export interface RespawnConfig {
+  /** How long to wait after seeing prompt before considering truly idle (ms) */
+  idleTimeoutMs: number;
+  /** The prompt to send for updating docs */
+  updatePrompt: string;
+  /** Delay between sending steps (ms) */
+  interStepDelayMs: number;
+  /** Whether to enable respawn loop */
+  enabled: boolean;
+}
+
 export interface AppConfig {
   pollIntervalMs: number;
   defaultTimeoutMs: number;
   maxConcurrentSessions: number;
   stateFilePath: string;
+  respawn: RespawnConfig;
 }
 
 export interface SessionOutput {
@@ -85,6 +97,12 @@ export const DEFAULT_CONFIG: AppConfig = {
   defaultTimeoutMs: 300000, // 5 minutes
   maxConcurrentSessions: 5,
   stateFilePath: '',
+  respawn: {
+    idleTimeoutMs: 5000,           // 5 seconds of no activity after prompt
+    updatePrompt: 'update all the docs and CLAUDE.md',
+    interStepDelayMs: 1000,        // 1 second between steps
+    enabled: true,
+  },
 };
 
 export function createInitialState(): AppState {

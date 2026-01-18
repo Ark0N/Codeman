@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Claudeman</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
 </head>
 <body>
   <div class="app">
@@ -45,52 +48,173 @@
       </div>
     </div>
 
+    <!-- Respawn Banner (shown when respawn loop is active) -->
+    <div class="respawn-banner" id="respawnBanner" style="display: none;">
+      <div class="respawn-status-info">
+        <span class="respawn-indicator">🔄</span>
+        <span class="respawn-state" id="respawnState">Watching</span>
+        <span class="respawn-cycles">Cycle: <span id="respawnCycleCount">0</span></span>
+      </div>
+      <div class="respawn-step" id="respawnStep"></div>
+      <div class="respawn-actions">
+        <button class="btn btn-sm" onclick="app.toggleRespawn()">
+          <span id="respawnToggleText">Pause</span>
+        </button>
+        <button class="btn btn-sm btn-danger" onclick="app.stopRespawn()">Stop</button>
+      </div>
+    </div>
+
     <!-- Main Content -->
     <main class="main">
       <!-- Control Panel -->
       <section class="control-panel">
-        <h2>Run Claude</h2>
-
-        <div class="form-group">
-          <label>Prompt</label>
-          <textarea id="promptInput" placeholder="What should Claude do?"></textarea>
+        <!-- Tabs -->
+        <div class="tabs">
+          <button class="tab active" data-tab="run" onclick="app.switchTab('run')">Run</button>
+          <button class="tab" data-tab="cases" onclick="app.switchTab('cases')">Cases</button>
+          <button class="tab" data-tab="settings" onclick="app.switchTab('settings')">Settings</button>
         </div>
 
-        <div class="form-row">
+        <!-- Run Tab -->
+        <div class="tab-content active" id="tab-run">
           <div class="form-group">
-            <label>Directory</label>
-            <input type="text" id="dirInput" placeholder="Current directory">
+            <label>Prompt</label>
+            <textarea id="promptInput" placeholder="What should Claude do?" rows="6"></textarea>
           </div>
+
           <div class="form-group">
-            <label>Duration (minutes)</label>
-            <input type="number" id="durationInput" value="0" min="0" max="720">
-            <span class="form-hint">0 = single run</span>
+            <label>Working Directory</label>
+            <div class="input-with-button">
+              <input type="text" id="dirInput" placeholder="Current directory">
+              <button class="btn btn-sm" onclick="app.selectCase()">Select Case</button>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Duration</label>
+              <select id="durationSelect">
+                <option value="0">Single run</option>
+                <option value="5">5 minutes</option>
+                <option value="15">15 minutes</option>
+                <option value="30">30 minutes</option>
+                <option value="60">1 hour</option>
+                <option value="120">2 hours</option>
+                <option value="240">4 hours</option>
+                <option value="480">8 hours</option>
+                <option value="720">12 hours</option>
+                <option value="custom">Custom...</option>
+              </select>
+            </div>
+            <div class="form-group" id="customDurationGroup" style="display: none;">
+              <label>Minutes</label>
+              <input type="number" id="customDuration" value="60" min="1" max="1440">
+            </div>
+          </div>
+
+          <!-- Respawn Settings (for Interactive Sessions) -->
+          <div class="respawn-settings" id="respawnSettings">
+            <div class="respawn-header">
+              <label>
+                <input type="checkbox" id="respawnEnabled" checked>
+                Enable Auto-Respawn Loop
+              </label>
+              <button class="btn btn-sm" onclick="app.toggleRespawnDetails()">⚙️</button>
+            </div>
+            <div class="respawn-details" id="respawnDetails" style="display: none;">
+              <div class="form-group">
+                <label>Update Prompt</label>
+                <input type="text" id="respawnPrompt" value="update all the docs and CLAUDE.md">
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Idle Timeout (sec)</label>
+                  <input type="number" id="respawnIdleTimeout" value="5" min="1" max="60">
+                </div>
+                <div class="form-group">
+                  <label>Step Delay (sec)</label>
+                  <input type="number" id="respawnStepDelay" value="1" min="0" max="10">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn btn-primary btn-large" id="runBtn" onclick="app.startRun()">
+              <span class="btn-icon">▶</span>
+              Run Prompt
+            </button>
+            <button class="btn btn-large" id="interactiveBtn" onclick="app.startInteractive()" style="background: #22c55e;">
+              <span class="btn-icon">💻</span>
+              Interactive Session
+            </button>
           </div>
         </div>
 
-        <div class="form-actions">
-          <button class="btn btn-primary btn-large" id="runBtn" onclick="app.startRun()">
-            <span class="btn-icon">▶</span>
-            Run
-          </button>
+        <!-- Cases Tab -->
+        <div class="tab-content" id="tab-cases">
+          <div class="section-header">
+            <h3>Your Cases</h3>
+            <button class="btn btn-sm btn-primary" onclick="app.showCreateCase()">+ New Case</button>
+          </div>
+
+          <div class="cases-list" id="casesList">
+            <p class="empty-state">Loading cases...</p>
+          </div>
+
+          <!-- Create Case Form (hidden by default) -->
+          <div class="create-case-form" id="createCaseForm" style="display: none;">
+            <h4>Create New Case</h4>
+            <div class="form-group">
+              <label>Case Name</label>
+              <input type="text" id="caseNameInput" placeholder="my-project">
+              <span class="form-hint">Letters, numbers, hyphens, underscores only</span>
+            </div>
+            <div class="form-group">
+              <label>Description</label>
+              <input type="text" id="caseDescInput" placeholder="Project description (optional)">
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-sm" onclick="app.hideCreateCase()">Cancel</button>
+              <button class="btn btn-sm btn-primary" onclick="app.createCase()">Create</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Settings Tab -->
+        <div class="tab-content" id="tab-settings">
+          <div class="form-group">
+            <label>Default Directory</label>
+            <input type="text" id="defaultDirInput" placeholder="~/projects">
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" id="autoScrollOutput" checked>
+              Auto-scroll output
+            </label>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" id="soundOnComplete">
+              Sound on completion
+            </label>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-sm btn-primary" onclick="app.saveSettings()">Save Settings</button>
+          </div>
         </div>
       </section>
 
-      <!-- Output Panel -->
+      <!-- Terminal Panel -->
       <section class="output-panel">
         <div class="output-header">
-          <h2>Output</h2>
+          <h2>Terminal</h2>
           <div class="output-actions">
-            <button class="btn btn-sm" onclick="app.clearOutput()">Clear</button>
+            <button class="btn btn-sm" onclick="app.clearTerminal()">Clear</button>
           </div>
         </div>
 
-        <div class="output-container" id="outputContainer">
-          <div class="output-placeholder">
-            <div class="placeholder-icon">💬</div>
-            <div class="placeholder-text">Run a prompt to see Claude's output here</div>
-          </div>
-        </div>
+        <div class="terminal-container" id="terminalContainer"></div>
       </section>
     </main>
 
@@ -102,6 +226,22 @@
       </div>
       <div class="sessions-list" id="sessionsList"></div>
     </aside>
+
+    <!-- Case Selector Modal -->
+    <div class="modal" id="caseSelectorModal">
+      <div class="modal-backdrop" onclick="app.closeCaseSelector()"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Select Case</h3>
+          <button class="modal-close" onclick="app.closeCaseSelector()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="cases-grid" id="caseSelectorGrid">
+            <p class="empty-state">Loading...</p>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>

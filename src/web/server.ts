@@ -2,9 +2,13 @@ import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import fastifyStatic from '@fastify/static';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { Session, ClaudeMessage } from '../session.js';
+import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
 import { getStore } from '../state-store.js';
+import { generateClaudeMd } from '../templates/claude-md.js';
 import { v4 as uuidv4 } from 'uuid';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -26,6 +30,7 @@ interface ScheduledRun {
 export class WebServer extends EventEmitter {
   private app: FastifyInstance;
   private sessions: Map<string, Session> = new Map();
+  private respawnControllers: Map<string, RespawnController> = new Map();
   private scheduledRuns: Map<string, ScheduledRun> = new Map();
   private sseClients: Set<FastifyReply> = new Set();
   private store = getStore();
@@ -144,6 +149,182 @@ export class WebServer extends EventEmitter {
       return { success: true, message: 'Prompt started' };
     });
 
+    // Start interactive Claude session (persists even if browser disconnects)
+    this.app.post('/api/sessions/:id/interactive', async (req) => {
+      const { id } = req.params as { id: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return { error: 'Session not found' };
+      }
+
+      if (session.isBusy()) {
+        return { error: 'Session is busy' };
+      }
+
+      try {
+        await session.startInteractive();
+        this.broadcast('session:interactive', { id });
+        return { success: true, message: 'Interactive session started' };
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
+    });
+
+    // Send input to interactive session
+    this.app.post('/api/sessions/:id/input', async (req) => {
+      const { id } = req.params as { id: string };
+      const { input } = req.body as { input: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return { error: 'Session not found' };
+      }
+
+      session.write(input);
+      return { success: true };
+    });
+
+    // Resize session terminal
+    this.app.post('/api/sessions/:id/resize', async (req) => {
+      const { id } = req.params as { id: string };
+      const { cols, rows } = req.body as { cols: number; rows: number };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return { error: 'Session not found' };
+      }
+
+      session.resize(cols, rows);
+      return { success: true };
+    });
+
+    // Get session terminal buffer (for reconnecting)
+    this.app.get('/api/sessions/:id/terminal', async (req) => {
+      const { id } = req.params as { id: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return { error: 'Session not found' };
+      }
+
+      return {
+        terminalBuffer: session.terminalBuffer,
+        status: session.status,
+      };
+    });
+
+    // ============ Respawn Controller Endpoints ============
+
+    // Get respawn status for a session
+    this.app.get('/api/sessions/:id/respawn', async (req) => {
+      const { id } = req.params as { id: string };
+      const controller = this.respawnControllers.get(id);
+
+      if (!controller) {
+        return { enabled: false, status: null };
+      }
+
+      return {
+        enabled: true,
+        ...controller.getStatus(),
+      };
+    });
+
+    // Start respawn controller for a session
+    this.app.post('/api/sessions/:id/respawn/start', async (req) => {
+      const { id } = req.params as { id: string };
+      const body = req.body as Partial<RespawnConfig> | undefined;
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return { error: 'Session not found' };
+      }
+
+      // Create or get existing controller
+      let controller = this.respawnControllers.get(id);
+      if (!controller) {
+        controller = new RespawnController(session, body);
+        this.respawnControllers.set(id, controller);
+        this.setupRespawnListeners(id, controller);
+      } else if (body) {
+        controller.updateConfig(body);
+      }
+
+      controller.start();
+      this.broadcast('respawn:started', { sessionId: id, status: controller.getStatus() });
+
+      return { success: true, status: controller.getStatus() };
+    });
+
+    // Stop respawn controller for a session
+    this.app.post('/api/sessions/:id/respawn/stop', async (req) => {
+      const { id } = req.params as { id: string };
+      const controller = this.respawnControllers.get(id);
+
+      if (!controller) {
+        return { error: 'Respawn controller not found' };
+      }
+
+      controller.stop();
+      this.broadcast('respawn:stopped', { sessionId: id });
+
+      return { success: true };
+    });
+
+    // Update respawn configuration
+    this.app.put('/api/sessions/:id/respawn/config', async (req) => {
+      const { id } = req.params as { id: string };
+      const config = req.body as Partial<RespawnConfig>;
+      const controller = this.respawnControllers.get(id);
+
+      if (!controller) {
+        return { error: 'Respawn controller not found' };
+      }
+
+      controller.updateConfig(config);
+      this.broadcast('respawn:configUpdated', { sessionId: id, config: controller.getConfig() });
+
+      return { success: true, config: controller.getConfig() };
+    });
+
+    // Start interactive session WITH respawn enabled
+    this.app.post('/api/sessions/:id/interactive-respawn', async (req) => {
+      const { id } = req.params as { id: string };
+      const body = req.body as { respawnConfig?: Partial<RespawnConfig> } | undefined;
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return { error: 'Session not found' };
+      }
+
+      if (session.isBusy()) {
+        return { error: 'Session is busy' };
+      }
+
+      try {
+        // Start interactive session
+        await session.startInteractive();
+        this.broadcast('session:interactive', { id });
+
+        // Create and start respawn controller
+        const controller = new RespawnController(session, body?.respawnConfig);
+        this.respawnControllers.set(id, controller);
+        this.setupRespawnListeners(id, controller);
+        controller.start();
+
+        this.broadcast('respawn:started', { sessionId: id, status: controller.getStatus() });
+
+        return {
+          success: true,
+          message: 'Interactive session with respawn started',
+          respawnStatus: controller.getStatus(),
+        };
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
+    });
+
     // Quick run (create session, run prompt, return result)
     this.app.post('/api/run', async (req) => {
       const { prompt, workingDir } = req.body as { prompt: string; workingDir?: string };
@@ -201,11 +382,75 @@ export class WebServer extends EventEmitter {
 
       return run;
     });
+
+    // Case management
+    const casesDir = join(homedir(), 'claudeman-cases');
+
+    this.app.get('/api/cases', async () => {
+      if (!existsSync(casesDir)) {
+        return [];
+      }
+      const entries = readdirSync(casesDir, { withFileTypes: true });
+      return entries
+        .filter(e => e.isDirectory())
+        .map(e => ({
+          name: e.name,
+          path: join(casesDir, e.name),
+          hasClaudeMd: existsSync(join(casesDir, e.name, 'CLAUDE.md')),
+        }));
+    });
+
+    this.app.post('/api/cases', async (req) => {
+      const { name, description } = req.body as { name: string; description?: string };
+
+      if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {
+        return { success: false, error: 'Invalid case name. Use only letters, numbers, hyphens, underscores.' };
+      }
+
+      const casePath = join(casesDir, name);
+
+      if (existsSync(casePath)) {
+        return { success: false, error: 'Case already exists' };
+      }
+
+      try {
+        mkdirSync(casePath, { recursive: true });
+        mkdirSync(join(casePath, 'src'), { recursive: true });
+
+        const claudeMd = generateClaudeMd(name, description || '');
+        writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
+
+        this.broadcast('case:created', { name, path: casePath });
+
+        return { success: true, case: { name, path: casePath } };
+      } catch (err) {
+        return { success: false, error: (err as Error).message };
+      }
+    });
+
+    this.app.get('/api/cases/:name', async (req) => {
+      const { name } = req.params as { name: string };
+      const casePath = join(casesDir, name);
+
+      if (!existsSync(casePath)) {
+        return { error: 'Case not found' };
+      }
+
+      return {
+        name,
+        path: casePath,
+        hasClaudeMd: existsSync(join(casePath, 'CLAUDE.md')),
+      };
+    });
   }
 
   private setupSessionListeners(session: Session): void {
     session.on('output', (data) => {
       this.broadcast('session:output', { id: session.id, data });
+    });
+
+    session.on('terminal', (data) => {
+      this.broadcast('session:terminal', { id: session.id, data });
     });
 
     session.on('message', (msg: ClaudeMessage) => {
@@ -224,6 +469,52 @@ export class WebServer extends EventEmitter {
     session.on('exit', (code) => {
       this.broadcast('session:exit', { id: session.id, code });
       this.broadcast('session:updated', session.toDetailedState());
+
+      // Clean up respawn controller when session exits
+      const controller = this.respawnControllers.get(session.id);
+      if (controller) {
+        controller.stop();
+        this.respawnControllers.delete(session.id);
+      }
+    });
+
+    session.on('working', () => {
+      this.broadcast('session:working', { id: session.id });
+    });
+
+    session.on('idle', () => {
+      this.broadcast('session:idle', { id: session.id });
+      this.broadcast('session:updated', session.toDetailedState());
+    });
+  }
+
+  private setupRespawnListeners(sessionId: string, controller: RespawnController): void {
+    controller.on('stateChanged', (state: RespawnState, prevState: RespawnState) => {
+      this.broadcast('respawn:stateChanged', { sessionId, state, prevState });
+    });
+
+    controller.on('respawnCycleStarted', (cycleNumber: number) => {
+      this.broadcast('respawn:cycleStarted', { sessionId, cycleNumber });
+    });
+
+    controller.on('respawnCycleCompleted', (cycleNumber: number) => {
+      this.broadcast('respawn:cycleCompleted', { sessionId, cycleNumber });
+    });
+
+    controller.on('stepSent', (step: string, input: string) => {
+      this.broadcast('respawn:stepSent', { sessionId, step, input });
+    });
+
+    controller.on('stepCompleted', (step: string) => {
+      this.broadcast('respawn:stepCompleted', { sessionId, step });
+    });
+
+    controller.on('log', (message: string) => {
+      this.broadcast('respawn:log', { sessionId, message });
+    });
+
+    controller.on('error', (error: Error) => {
+      this.broadcast('respawn:error', { sessionId, error: error.message });
     });
   }
 
@@ -325,9 +616,16 @@ export class WebServer extends EventEmitter {
   }
 
   private getFullState() {
+    // Build respawn status map
+    const respawnStatus: Record<string, ReturnType<RespawnController['getStatus']>> = {};
+    for (const [sessionId, controller] of this.respawnControllers) {
+      respawnStatus[sessionId] = controller.getStatus();
+    }
+
     return {
       sessions: this.getSessionsState(),
       scheduledRuns: Array.from(this.scheduledRuns.values()),
+      respawnStatus,
       timestamp: Date.now(),
     };
   }
@@ -353,6 +651,12 @@ export class WebServer extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    // Stop all respawn controllers
+    for (const controller of this.respawnControllers.values()) {
+      controller.stop();
+    }
+    this.respawnControllers.clear();
+
     // Stop all sessions
     for (const session of this.sessions.values()) {
       await session.stop();
