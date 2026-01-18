@@ -92,6 +92,115 @@ export interface TaskAssignment {
   assignedAt: number;
 }
 
+// Error codes for consistent error handling
+export enum ApiErrorCode {
+  NOT_FOUND = 'NOT_FOUND',
+  INVALID_INPUT = 'INVALID_INPUT',
+  SESSION_BUSY = 'SESSION_BUSY',
+  OPERATION_FAILED = 'OPERATION_FAILED',
+  ALREADY_EXISTS = 'ALREADY_EXISTS',
+  INTERNAL_ERROR = 'INTERNAL_ERROR',
+}
+
+// Mapping of error codes to user-friendly messages
+export const ErrorMessages: Record<ApiErrorCode, string> = {
+  [ApiErrorCode.NOT_FOUND]: 'The requested resource was not found',
+  [ApiErrorCode.INVALID_INPUT]: 'Invalid input provided',
+  [ApiErrorCode.SESSION_BUSY]: 'Session is currently busy',
+  [ApiErrorCode.OPERATION_FAILED]: 'The operation failed',
+  [ApiErrorCode.ALREADY_EXISTS]: 'Resource already exists',
+  [ApiErrorCode.INTERNAL_ERROR]: 'An internal error occurred',
+};
+
+// API Request/Response types for type safety
+export interface CreateSessionRequest {
+  workingDir?: string;
+}
+
+export interface RunPromptRequest {
+  prompt: string;
+}
+
+export interface SessionInputRequest {
+  input: string;
+}
+
+export interface ResizeRequest {
+  cols: number;
+  rows: number;
+}
+
+export interface CreateCaseRequest {
+  name: string;
+  description?: string;
+}
+
+export interface QuickStartRequest {
+  caseName?: string;
+}
+
+export interface CreateScheduledRunRequest {
+  prompt: string;
+  workingDir?: string;
+  durationMinutes: number;
+}
+
+export interface QuickRunRequest {
+  prompt: string;
+  workingDir?: string;
+}
+
+export interface ApiResponse<T = unknown> {
+  success: boolean;
+  error?: string;
+  errorCode?: ApiErrorCode;
+  data?: T;
+}
+
+// Helper functions for creating consistent error responses
+export function createErrorResponse(code: ApiErrorCode, details?: string): ApiResponse {
+  return {
+    success: false,
+    error: details || ErrorMessages[code],
+    errorCode: code,
+  };
+}
+
+export function createSuccessResponse<T>(data?: T): ApiResponse<T> {
+  return {
+    success: true,
+    data,
+  };
+}
+
+export interface SessionResponse {
+  success: boolean;
+  session?: SessionState & {
+    claudeSessionId: string | null;
+    totalCost: number;
+    textOutput: string;
+    terminalBuffer: string;
+    messageCount: number;
+    isWorking: boolean;
+    lastPromptTime: number;
+  };
+  error?: string;
+}
+
+export interface QuickStartResponse {
+  success: boolean;
+  sessionId?: string;
+  casePath?: string;
+  caseName?: string;
+  error?: string;
+}
+
+export interface CaseInfo {
+  name: string;
+  path: string;
+  hasClaudeMd?: boolean;
+}
+
 export const DEFAULT_CONFIG: AppConfig = {
   pollIntervalMs: 1000,
   defaultTimeoutMs: 300000, // 5 minutes
@@ -101,7 +210,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     idleTimeoutMs: 5000,           // 5 seconds of no activity after prompt
     updatePrompt: 'update all the docs and CLAUDE.md',
     interStepDelayMs: 1000,        // 1 second between steps
-    enabled: true,
+    enabled: false,                // disabled by default
   },
 };
 

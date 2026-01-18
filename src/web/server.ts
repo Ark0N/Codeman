@@ -10,6 +10,20 @@ import { RespawnController, RespawnConfig, RespawnState } from '../respawn-contr
 import { getStore } from '../state-store.js';
 import { generateClaudeMd } from '../templates/claude-md.js';
 import { v4 as uuidv4 } from 'uuid';
+import type {
+  CreateSessionRequest,
+  RunPromptRequest,
+  SessionInputRequest,
+  ResizeRequest,
+  CreateCaseRequest,
+  QuickStartRequest,
+  CreateScheduledRunRequest,
+  QuickRunRequest,
+  ApiResponse,
+  SessionResponse,
+  QuickStartResponse,
+  CaseInfo,
+} from '../types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -27,6 +41,9 @@ interface ScheduledRun {
   logs: string[];
 }
 
+// Batch terminal data for performance - collect for 16ms (60fps) before sending
+const TERMINAL_BATCH_INTERVAL = 16;
+
 export class WebServer extends EventEmitter {
   private app: FastifyInstance;
   private sessions: Map<string, Session> = new Map();
@@ -35,6 +52,9 @@ export class WebServer extends EventEmitter {
   private sseClients: Set<FastifyReply> = new Set();
   private store = getStore();
   private port: number;
+  // Terminal batching for performance
+  private terminalBatches: Map<string, string> = new Map();
+  private terminalBatchTimer: NodeJS.Timeout | null = null;
 
   constructor(port: number = 3000) {
     super();
@@ -74,8 +94,8 @@ export class WebServer extends EventEmitter {
     // Session management
     this.app.get('/api/sessions', async () => this.getSessionsState());
 
-    this.app.post('/api/sessions', async (req) => {
-      const body = req.body as { workingDir?: string };
+    this.app.post('/api/sessions', async (req): Promise<SessionResponse> => {
+      const body = req.body as CreateSessionRequest;
       const workingDir = body.workingDir || process.cwd();
       const session = new Session({ workingDir });
 
@@ -86,7 +106,7 @@ export class WebServer extends EventEmitter {
       return { success: true, session: session.toDetailedState() };
     });
 
-    this.app.delete('/api/sessions/:id', async (req) => {
+    this.app.delete('/api/sessions/:id', async (req): Promise<ApiResponse> => {
       const { id } = req.params as { id: string };
       const session = this.sessions.get(id);
 
@@ -94,10 +114,44 @@ export class WebServer extends EventEmitter {
         return { success: false, error: 'Session not found' };
       }
 
+      // Stop respawn controller first
+      const controller = this.respawnControllers.get(id);
+      if (controller) {
+        controller.stop();
+        this.respawnControllers.delete(id);
+      }
+
       await session.stop();
       this.sessions.delete(id);
+      this.terminalBatches.delete(id);
       this.broadcast('session:deleted', { id });
       return { success: true };
+    });
+
+    // Kill all sessions at once
+    this.app.delete('/api/sessions', async (): Promise<ApiResponse<{ killed: number }>> => {
+      const sessionIds = Array.from(this.sessions.keys());
+      let killed = 0;
+
+      for (const id of sessionIds) {
+        const session = this.sessions.get(id);
+        if (session) {
+          // Stop respawn controller first
+          const controller = this.respawnControllers.get(id);
+          if (controller) {
+            controller.stop();
+            this.respawnControllers.delete(id);
+          }
+
+          await session.stop();
+          this.sessions.delete(id);
+          this.terminalBatches.delete(id);
+          this.broadcast('session:deleted', { id });
+          killed++;
+        }
+      }
+
+      return { success: true, data: { killed } };
     });
 
     this.app.get('/api/sessions/:id', async (req) => {
@@ -127,9 +181,9 @@ export class WebServer extends EventEmitter {
     });
 
     // Run prompt in session
-    this.app.post('/api/sessions/:id/run', async (req) => {
+    this.app.post('/api/sessions/:id/run', async (req): Promise<{ success?: boolean; message?: string; error?: string }> => {
       const { id } = req.params as { id: string };
-      const { prompt } = req.body as { prompt: string };
+      const { prompt } = req.body as RunPromptRequest;
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -172,13 +226,13 @@ export class WebServer extends EventEmitter {
     });
 
     // Send input to interactive session
-    this.app.post('/api/sessions/:id/input', async (req) => {
+    this.app.post('/api/sessions/:id/input', async (req): Promise<ApiResponse> => {
       const { id } = req.params as { id: string };
-      const { input } = req.body as { input: string };
+      const { input } = req.body as SessionInputRequest;
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { error: 'Session not found' };
+        return { success: false, error: 'Session not found' };
       }
 
       session.write(input);
@@ -186,13 +240,13 @@ export class WebServer extends EventEmitter {
     });
 
     // Resize session terminal
-    this.app.post('/api/sessions/:id/resize', async (req) => {
+    this.app.post('/api/sessions/:id/resize', async (req): Promise<ApiResponse> => {
       const { id } = req.params as { id: string };
-      const { cols, rows } = req.body as { cols: number; rows: number };
+      const { cols, rows } = req.body as ResizeRequest;
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { error: 'Session not found' };
+        return { success: false, error: 'Session not found' };
       }
 
       session.resize(cols, rows);
@@ -327,7 +381,7 @@ export class WebServer extends EventEmitter {
 
     // Quick run (create session, run prompt, return result)
     this.app.post('/api/run', async (req) => {
-      const { prompt, workingDir } = req.body as { prompt: string; workingDir?: string };
+      const { prompt, workingDir } = req.body as QuickRunRequest;
       const dir = workingDir || process.cwd();
 
       const session = new Session({ workingDir: dir });
@@ -349,12 +403,8 @@ export class WebServer extends EventEmitter {
       return Array.from(this.scheduledRuns.values());
     });
 
-    this.app.post('/api/scheduled', async (req) => {
-      const { prompt, workingDir, durationMinutes } = req.body as {
-        prompt: string;
-        workingDir?: string;
-        durationMinutes: number;
-      };
+    this.app.post('/api/scheduled', async (req): Promise<{ success: boolean; run: ScheduledRun }> => {
+      const { prompt, workingDir, durationMinutes } = req.body as CreateScheduledRunRequest;
 
       const run = await this.startScheduledRun(prompt, workingDir || process.cwd(), durationMinutes);
       return { success: true, run };
@@ -386,7 +436,7 @@ export class WebServer extends EventEmitter {
     // Case management
     const casesDir = join(homedir(), 'claudeman-cases');
 
-    this.app.get('/api/cases', async () => {
+    this.app.get('/api/cases', async (): Promise<CaseInfo[]> => {
       if (!existsSync(casesDir)) {
         return [];
       }
@@ -400,8 +450,8 @@ export class WebServer extends EventEmitter {
         }));
     });
 
-    this.app.post('/api/cases', async (req) => {
-      const { name, description } = req.body as { name: string; description?: string };
+    this.app.post('/api/cases', async (req): Promise<{ success: boolean; case?: { name: string; path: string }; error?: string }> => {
+      const { name, description } = req.body as CreateCaseRequest;
 
       if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {
         return { success: false, error: 'Invalid case name. Use only letters, numbers, hyphens, underscores.' };
@@ -444,8 +494,8 @@ export class WebServer extends EventEmitter {
     });
 
     // Quick Start: Create case (if needed) and start interactive session in one click
-    this.app.post('/api/quick-start', async (req) => {
-      const { caseName = 'testcase' } = req.body as { caseName?: string };
+    this.app.post('/api/quick-start', async (req): Promise<QuickStartResponse> => {
+      const { caseName = 'testcase' } = req.body as QuickStartRequest;
 
       // Validate case name
       if (!/^[a-zA-Z0-9_-]+$/.test(caseName)) {
@@ -498,7 +548,8 @@ export class WebServer extends EventEmitter {
     });
 
     session.on('terminal', (data) => {
-      this.broadcast('session:terminal', { id: session.id, data });
+      // Use batching for better performance at high throughput
+      this.batchTerminalData(session.id, data);
     });
 
     session.on('message', (msg: ClaudeMessage) => {
@@ -692,6 +743,29 @@ export class WebServer extends EventEmitter {
     }
   }
 
+  // Batch terminal data for better performance (60fps)
+  private batchTerminalData(sessionId: string, data: string): void {
+    const existing = this.terminalBatches.get(sessionId) || '';
+    this.terminalBatches.set(sessionId, existing + data);
+
+    // Start batch timer if not already running
+    if (!this.terminalBatchTimer) {
+      this.terminalBatchTimer = setTimeout(() => {
+        this.flushTerminalBatches();
+        this.terminalBatchTimer = null;
+      }, TERMINAL_BATCH_INTERVAL);
+    }
+  }
+
+  private flushTerminalBatches(): void {
+    for (const [sessionId, data] of this.terminalBatches) {
+      if (data.length > 0) {
+        this.broadcast('session:terminal', { id: sessionId, data });
+      }
+    }
+    this.terminalBatches.clear();
+  }
+
   async start(): Promise<void> {
     await this.setupRoutes();
     await this.app.listen({ port: this.port, host: '0.0.0.0' });
@@ -699,6 +773,13 @@ export class WebServer extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    // Clear batch timer
+    if (this.terminalBatchTimer) {
+      clearTimeout(this.terminalBatchTimer);
+      this.terminalBatchTimer = null;
+    }
+    this.terminalBatches.clear();
+
     // Stop all respawn controllers
     for (const controller of this.respawnControllers.values()) {
       controller.stop();

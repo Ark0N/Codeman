@@ -1,7 +1,17 @@
-import { spawn, ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { v4 as uuidv4 } from 'uuid';
+import * as pty from 'node-pty';
 import { SessionState, SessionStatus, SessionConfig } from './types.js';
+
+// Maximum terminal buffer size in characters (default 5MB of text)
+const MAX_TERMINAL_BUFFER_SIZE = 5 * 1024 * 1024;
+// When trimming, keep the most recent portion (4MB)
+const TERMINAL_BUFFER_TRIM_SIZE = 4 * 1024 * 1024;
+// Maximum text output buffer size (2MB)
+const MAX_TEXT_OUTPUT_SIZE = 2 * 1024 * 1024;
+const TEXT_OUTPUT_TRIM_SIZE = 1.5 * 1024 * 1024;
+// Maximum number of Claude messages to keep in memory
+const MAX_MESSAGES = 1000;
 
 export interface ClaudeMessage {
   type: 'system' | 'assistant' | 'user' | 'result';
@@ -26,6 +36,7 @@ export interface SessionEvents {
   error: (data: string) => void;
   exit: (code: number | null) => void;
   completion: (result: string, cost: number) => void;
+  terminal: (data: string) => void;  // Raw terminal data
 }
 
 export class Session extends EventEmitter {
@@ -33,9 +44,11 @@ export class Session extends EventEmitter {
   readonly workingDir: string;
   readonly createdAt: number;
 
-  private process: ChildProcess | null = null;
+  private ptyProcess: pty.IPty | null = null;
+  private _pid: number | null = null;
   private _status: SessionStatus = 'idle';
   private _currentTaskId: string | null = null;
+  private _terminalBuffer: string = '';  // Raw terminal output
   private _outputBuffer: string = '';
   private _textOutput: string = '';
   private _errorBuffer: string = '';
@@ -44,6 +57,11 @@ export class Session extends EventEmitter {
   private _totalCost: number = 0;
   private _messages: ClaudeMessage[] = [];
   private _lineBuffer: string = '';
+  private resolvePromise: ((value: { result: string; cost: number }) => void) | null = null;
+  private rejectPromise: ((reason: Error) => void) | null = null;
+  private _isWorking: boolean = false;
+  private _lastPromptTime: number = 0;
+  private activityTimeout: NodeJS.Timeout | null = null;
 
   constructor(config: Partial<SessionConfig> & { workingDir: string }) {
     super();
@@ -62,7 +80,11 @@ export class Session extends EventEmitter {
   }
 
   get pid(): number | null {
-    return this.process?.pid ?? null;
+    return this._pid;
+  }
+
+  get terminalBuffer(): string {
+    return this._terminalBuffer;
   }
 
   get outputBuffer(): string {
@@ -91,6 +113,14 @@ export class Session extends EventEmitter {
 
   get messages(): ClaudeMessage[] {
     return this._messages;
+  }
+
+  get isWorking(): boolean {
+    return this._isWorking;
+  }
+
+  get lastPromptTime(): number {
+    return this._lastPromptTime;
   }
 
   isIdle(): boolean {
@@ -123,18 +153,110 @@ export class Session extends EventEmitter {
       claudeSessionId: this._claudeSessionId,
       totalCost: this._totalCost,
       textOutput: this._textOutput,
+      terminalBuffer: this._terminalBuffer,
       messageCount: this._messages.length,
+      isWorking: this._isWorking,
+      lastPromptTime: this._lastPromptTime,
+      // Buffer statistics for monitoring long-running sessions
+      bufferStats: {
+        terminalBufferSize: this._terminalBuffer.length,
+        textOutputSize: this._textOutput.length,
+        messageCount: this._messages.length,
+        maxTerminalBuffer: MAX_TERMINAL_BUFFER_SIZE,
+        maxTextOutput: MAX_TEXT_OUTPUT_SIZE,
+        maxMessages: MAX_MESSAGES,
+      },
     };
+  }
+
+  // Start an interactive Claude Code session (full terminal)
+  async startInteractive(): Promise<void> {
+    if (this.ptyProcess) {
+      throw new Error('Session already has a running process');
+    }
+
+    this._status = 'busy';
+    this._terminalBuffer = '';
+    this._outputBuffer = '';
+    this._textOutput = '';
+    this._errorBuffer = '';
+    this._messages = [];
+    this._lineBuffer = '';
+    this._lastActivityAt = Date.now();
+
+    console.log('[Session] Starting interactive Claude session');
+
+    this.ptyProcess = pty.spawn('claude', [
+      '--dangerously-skip-permissions'
+    ], {
+      name: 'xterm-256color',
+      cols: 120,
+      rows: 40,
+      cwd: this.workingDir,
+      env: { ...process.env, TERM: 'xterm-256color' },
+    });
+
+    this._pid = this.ptyProcess.pid;
+    console.log('[Session] Interactive PTY spawned with PID:', this._pid);
+
+    this.ptyProcess.onData((data: string) => {
+      this._terminalBuffer += data;
+      this._lastActivityAt = Date.now();
+
+      // Trim buffer if it exceeds max size to prevent memory issues
+      if (this._terminalBuffer.length > MAX_TERMINAL_BUFFER_SIZE) {
+        this._terminalBuffer = this._terminalBuffer.slice(-TERMINAL_BUFFER_TRIM_SIZE);
+      }
+
+      this.emit('terminal', data);
+      this.emit('output', data);
+
+      // Detect if Claude is working or at prompt
+      // The prompt line contains "❯" when waiting for input
+      if (data.includes('❯') || data.includes('\u276f')) {
+        // Reset activity timeout - if no activity for 2 seconds after prompt, Claude is idle
+        if (this.activityTimeout) clearTimeout(this.activityTimeout);
+        this.activityTimeout = setTimeout(() => {
+          if (this._isWorking) {
+            this._isWorking = false;
+            this._lastPromptTime = Date.now();
+            this.emit('idle');
+          }
+        }, 2000);
+      }
+
+      // Detect when Claude starts working (thinking, writing, etc)
+      if (data.includes('Thinking') || data.includes('Writing') || data.includes('Reading') ||
+          data.includes('Running') || data.includes('⠋') || data.includes('⠙') ||
+          data.includes('⠹') || data.includes('⠸') || data.includes('⠼') ||
+          data.includes('⠴') || data.includes('⠦') || data.includes('⠧')) {
+        if (!this._isWorking) {
+          this._isWorking = true;
+          this.emit('working');
+        }
+        // Reset timeout since Claude is active
+        if (this.activityTimeout) clearTimeout(this.activityTimeout);
+      }
+    });
+
+    this.ptyProcess.onExit(({ exitCode }) => {
+      console.log('[Session] Interactive PTY exited with code:', exitCode);
+      this.ptyProcess = null;
+      this._pid = null;
+      this._status = 'idle';
+      this.emit('exit', exitCode);
+    });
   }
 
   async runPrompt(prompt: string): Promise<{ result: string; cost: number }> {
     return new Promise((resolve, reject) => {
-      if (this.process) {
+      if (this.ptyProcess) {
         reject(new Error('Session already has a running process'));
         return;
       }
 
       this._status = 'busy';
+      this._terminalBuffer = '';
       this._outputBuffer = '';
       this._textOutput = '';
       this._errorBuffer = '';
@@ -142,43 +264,52 @@ export class Session extends EventEmitter {
       this._lineBuffer = '';
       this._lastActivityAt = Date.now();
 
+      this.resolvePromise = resolve;
+      this.rejectPromise = reject;
+
       try {
-        // Spawn claude with streaming JSON output
-        this.process = spawn('claude', [
+        // Spawn claude in a real PTY
+        console.log('[Session] Spawning PTY for claude with prompt:', prompt.substring(0, 50));
+
+        this.ptyProcess = pty.spawn('claude', [
           '-p',
-          '--output-format', 'stream-json',
+          '--dangerously-skip-permissions',
           prompt
         ], {
+          name: 'xterm-256color',
+          cols: 120,
+          rows: 40,
           cwd: this.workingDir,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          env: { ...process.env },
+          env: { ...process.env, TERM: 'xterm-256color' },
         });
 
-        this.process.stdout?.on('data', (data: Buffer) => {
-          const text = data.toString();
-          this._outputBuffer += text;
+        this._pid = this.ptyProcess.pid;
+        console.log('[Session] PTY spawned with PID:', this._pid);
+
+        // Handle terminal data
+        this.ptyProcess.onData((data: string) => {
+          this._terminalBuffer += data;
           this._lastActivityAt = Date.now();
-          this.emit('output', text);
-          this.processJsonLines(text);
+
+          // Trim buffer if it exceeds max size to prevent memory issues
+          if (this._terminalBuffer.length > MAX_TERMINAL_BUFFER_SIZE) {
+            this._terminalBuffer = this._terminalBuffer.slice(-TERMINAL_BUFFER_TRIM_SIZE);
+          }
+
+          this.emit('terminal', data);
+          this.emit('output', data);
+
+          // Also try to parse JSON lines for structured data
+          this.processOutput(data);
         });
 
-        this.process.stderr?.on('data', (data: Buffer) => {
-          const text = data.toString();
-          this._errorBuffer += text;
-          this._lastActivityAt = Date.now();
-          this.emit('error', text);
-        });
+        // Handle exit
+        this.ptyProcess.onExit(({ exitCode }) => {
+          console.log('[Session] PTY exited with code:', exitCode);
+          this.ptyProcess = null;
+          this._pid = null;
 
-        this.process.on('error', (err) => {
-          this._status = 'error';
-          this.process = null;
-          reject(err);
-        });
-
-        this.process.on('exit', (code) => {
-          this.process = null;
-
-          // Find the result message
+          // Find result from parsed messages or use text output
           const resultMsg = this._messages.find(m => m.type === 'result');
 
           if (resultMsg && !resultMsg.is_error) {
@@ -186,17 +317,26 @@ export class Session extends EventEmitter {
             const cost = resultMsg.total_cost_usd || 0;
             this._totalCost += cost;
             this.emit('completion', resultMsg.result || '', cost);
-            resolve({ result: resultMsg.result || '', cost });
-          } else if (code !== 0 || (resultMsg && resultMsg.is_error)) {
+            if (this.resolvePromise) {
+              this.resolvePromise({ result: resultMsg.result || '', cost });
+            }
+          } else if (exitCode !== 0 || (resultMsg && resultMsg.is_error)) {
             this._status = 'error';
-            reject(new Error(this._errorBuffer || 'Process exited with error'));
+            if (this.rejectPromise) {
+              this.rejectPromise(new Error(this._errorBuffer || this._textOutput || 'Process exited with error'));
+            }
           } else {
             this._status = 'idle';
-            resolve({ result: this._textOutput, cost: 0 });
+            if (this.resolvePromise) {
+              this.resolvePromise({ result: this._textOutput || this._terminalBuffer, cost: this._totalCost });
+            }
           }
 
-          this.emit('exit', code);
+          this.resolvePromise = null;
+          this.rejectPromise = null;
+          this.emit('exit', exitCode);
         });
+
       } catch (err) {
         this._status = 'error';
         reject(err);
@@ -204,21 +344,28 @@ export class Session extends EventEmitter {
     });
   }
 
-  private processJsonLines(chunk: string): void {
-    this._lineBuffer += chunk;
+  private processOutput(data: string): void {
+    // Try to extract JSON from output (Claude may output JSON in stream mode)
+    this._lineBuffer += data;
     const lines = this._lineBuffer.split('\n');
-
-    // Keep incomplete line in buffer
     this._lineBuffer = lines.pop() || '';
 
     for (const line of lines) {
-      if (line.trim()) {
+      const trimmed = line.trim();
+      // Remove ANSI escape codes for JSON parsing
+      const cleanLine = trimmed.replace(/\x1b\[[0-9;]*m/g, '');
+
+      if (cleanLine.startsWith('{') && cleanLine.endsWith('}')) {
         try {
-          const msg = JSON.parse(line) as ClaudeMessage;
+          const msg = JSON.parse(cleanLine) as ClaudeMessage;
           this._messages.push(msg);
           this.emit('message', msg);
 
-          // Extract text content
+          // Trim messages array for long-running sessions
+          if (this._messages.length > MAX_MESSAGES) {
+            this._messages = this._messages.slice(-Math.floor(MAX_MESSAGES * 0.8));
+          }
+
           if (msg.type === 'system' && msg.session_id) {
             this._claudeSessionId = msg.session_id;
           }
@@ -231,22 +378,40 @@ export class Session extends EventEmitter {
             }
           }
 
-          if (msg.type === 'result') {
-            if (msg.total_cost_usd) {
-              this._totalCost += msg.total_cost_usd;
-            }
+          if (msg.type === 'result' && msg.total_cost_usd) {
+            this._totalCost = msg.total_cost_usd;
           }
         } catch {
-          // Not JSON, treat as raw text
+          // Not JSON, just regular output
           this._textOutput += line + '\n';
         }
+      } else if (trimmed) {
+        this._textOutput += line + '\n';
       }
+    }
+
+    // Trim text output buffer for long-running sessions
+    if (this._textOutput.length > MAX_TEXT_OUTPUT_SIZE) {
+      this._textOutput = this._textOutput.slice(-TEXT_OUTPUT_TRIM_SIZE);
+    }
+  }
+
+  // Send input to the PTY (for interactive sessions)
+  write(data: string): void {
+    if (this.ptyProcess) {
+      this.ptyProcess.write(data);
+    }
+  }
+
+  // Resize the PTY
+  resize(cols: number, rows: number): void {
+    if (this.ptyProcess) {
+      this.ptyProcess.resize(cols, rows);
     }
   }
 
   // Legacy method for compatibility with session-manager
   async start(): Promise<void> {
-    // Session is ready by default, actual process starts with runPrompt
     this._status = 'idle';
   }
 
@@ -254,41 +419,66 @@ export class Session extends EventEmitter {
   async sendInput(input: string): Promise<void> {
     this._status = 'busy';
     this._lastActivityAt = Date.now();
-    // Run the prompt asynchronously
     this.runPrompt(input).catch(err => {
       this.emit('error', err.message);
     });
   }
 
-  stop(): Promise<void> {
-    return new Promise((resolve) => {
-      if (!this.process) {
-        this._status = 'stopped';
-        resolve();
-        return;
+  async stop(): Promise<void> {
+    // Clear activity timeout to prevent memory leak
+    if (this.activityTimeout) {
+      clearTimeout(this.activityTimeout);
+      this.activityTimeout = null;
+    }
+
+    if (this.ptyProcess) {
+      const pid = this.ptyProcess.pid;
+
+      // First try graceful SIGTERM
+      try {
+        this.ptyProcess.kill();
+      } catch {
+        // Process may already be dead
       }
 
-      const cleanup = () => {
-        this.process = null;
-        this._status = 'stopped';
-        this._currentTaskId = null;
-        resolve();
-      };
+      // Give it a moment to terminate gracefully
+      await new Promise(resolve => setTimeout(resolve, 100));
 
-      this.process.once('exit', cleanup);
-      this.process.kill('SIGTERM');
-
-      setTimeout(() => {
-        if (this.process && !this.process.killed) {
-          this.process.kill('SIGKILL');
+      // Force kill with SIGKILL if still alive
+      try {
+        if (pid) {
+          process.kill(pid, 'SIGKILL');
         }
-      }, 5000);
-    });
+      } catch {
+        // Process already terminated
+      }
+
+      // Also try to kill any child processes in the process group
+      try {
+        if (pid) {
+          process.kill(-pid, 'SIGKILL');
+        }
+      } catch {
+        // Process group may not exist or already terminated
+      }
+
+      this.ptyProcess = null;
+    }
+    this._pid = null;
+    this._status = 'stopped';
+    this._currentTaskId = null;
+
+    if (this.rejectPromise) {
+      this.rejectPromise(new Error('Session stopped'));
+      this.resolvePromise = null;
+      this.rejectPromise = null;
+    }
   }
 
   assignTask(taskId: string): void {
     this._currentTaskId = taskId;
     this._status = 'busy';
+    this._terminalBuffer = '';
     this._outputBuffer = '';
     this._textOutput = '';
     this._errorBuffer = '';
@@ -310,7 +500,12 @@ export class Session extends EventEmitter {
     return this._errorBuffer;
   }
 
+  getTerminalBuffer(): string {
+    return this._terminalBuffer;
+  }
+
   clearBuffers(): void {
+    this._terminalBuffer = '';
     this._outputBuffer = '';
     this._textOutput = '';
     this._errorBuffer = '';
