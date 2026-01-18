@@ -414,6 +414,40 @@ class ClaudemanApp {
 
     dot.className = 'status-dot ' + status;
     text.textContent = status === 'connected' ? 'Connected' : 'Disconnected';
+
+    // Show toast on disconnect
+    if (status === 'disconnected') {
+      this.showToast('Connection lost. Reconnecting...', 'warning');
+    } else if (status === 'connected') {
+      this.showToast('Connected to server', 'success');
+    }
+  }
+
+  // Show a toast notification
+  showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+
+    // Create container if needed
+    let container = document.querySelector('.toast-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.className = 'toast-container';
+      document.body.appendChild(container);
+    }
+    container.appendChild(toast);
+
+    // Animate in
+    requestAnimationFrame(() => {
+      toast.classList.add('show');
+    });
+
+    // Remove after delay
+    setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 300);
+    }, 3000);
   }
 
   handleInit(data) {
