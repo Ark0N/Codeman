@@ -2,6 +2,9 @@ import { EventEmitter } from 'node:events';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
 import { SessionState, SessionStatus, SessionConfig } from './types.js';
+import { TaskTracker, type BackgroundTask } from './task-tracker.js';
+
+export type { BackgroundTask } from './task-tracker.js';
 
 // Maximum terminal buffer size in characters (default 5MB of text)
 const MAX_TERMINAL_BUFFER_SIZE = 5 * 1024 * 1024;
@@ -37,6 +40,13 @@ export interface SessionEvents {
   exit: (code: number | null) => void;
   completion: (result: string, cost: number) => void;
   terminal: (data: string) => void;  // Raw terminal data
+  // Background task events
+  taskCreated: (task: BackgroundTask) => void;
+  taskUpdated: (task: BackgroundTask) => void;
+  taskCompleted: (task: BackgroundTask) => void;
+  taskFailed: (task: BackgroundTask, error: string) => void;
+  // Auto-clear event
+  autoClear: (data: { tokens: number; threshold: number }) => void;
 }
 
 export class Session extends EventEmitter {
@@ -62,6 +72,14 @@ export class Session extends EventEmitter {
   private _isWorking: boolean = false;
   private _lastPromptTime: number = 0;
   private activityTimeout: NodeJS.Timeout | null = null;
+  private _taskTracker: TaskTracker;
+
+  // Token tracking for auto-clear
+  private _totalInputTokens: number = 0;
+  private _totalOutputTokens: number = 0;
+  private _autoClearThreshold: number = 100000; // Default 100k tokens
+  private _autoClearEnabled: boolean = false;
+  private _isClearing: boolean = false; // Prevent recursive clearing
 
   constructor(config: Partial<SessionConfig> & { workingDir: string }) {
     super();
@@ -69,6 +87,13 @@ export class Session extends EventEmitter {
     this.workingDir = config.workingDir;
     this.createdAt = config.createdAt || Date.now();
     this._lastActivityAt = this.createdAt;
+
+    // Initialize task tracker and forward events
+    this._taskTracker = new TaskTracker();
+    this._taskTracker.on('taskCreated', (task) => this.emit('taskCreated', task));
+    this._taskTracker.on('taskUpdated', (task) => this.emit('taskUpdated', task));
+    this._taskTracker.on('taskCompleted', (task) => this.emit('taskCompleted', task));
+    this._taskTracker.on('taskFailed', (task, error) => this.emit('taskFailed', task, error));
   }
 
   get status(): SessionStatus {
@@ -123,6 +148,50 @@ export class Session extends EventEmitter {
     return this._lastPromptTime;
   }
 
+  get taskTracker(): TaskTracker {
+    return this._taskTracker;
+  }
+
+  get runningTaskCount(): number {
+    return this._taskTracker.getRunningCount();
+  }
+
+  get taskTree(): BackgroundTask[] {
+    return this._taskTracker.getTaskTree();
+  }
+
+  get taskStats(): { total: number; running: number; completed: number; failed: number } {
+    return this._taskTracker.getStats();
+  }
+
+  // Token tracking getters and setters
+  get totalTokens(): number {
+    return this._totalInputTokens + this._totalOutputTokens;
+  }
+
+  get inputTokens(): number {
+    return this._totalInputTokens;
+  }
+
+  get outputTokens(): number {
+    return this._totalOutputTokens;
+  }
+
+  get autoClearThreshold(): number {
+    return this._autoClearThreshold;
+  }
+
+  get autoClearEnabled(): boolean {
+    return this._autoClearEnabled;
+  }
+
+  setAutoClear(enabled: boolean, threshold?: number): void {
+    this._autoClearEnabled = enabled;
+    if (threshold !== undefined) {
+      this._autoClearThreshold = threshold;
+    }
+  }
+
   isIdle(): boolean {
     return this._status === 'idle';
   }
@@ -165,6 +234,19 @@ export class Session extends EventEmitter {
         maxTerminalBuffer: MAX_TERMINAL_BUFFER_SIZE,
         maxTextOutput: MAX_TEXT_OUTPUT_SIZE,
         maxMessages: MAX_MESSAGES,
+      },
+      // Background task tracking
+      taskStats: this._taskTracker.getStats(),
+      taskTree: this._taskTracker.getTaskTree(),
+      // Token tracking
+      tokens: {
+        input: this._totalInputTokens,
+        output: this._totalOutputTokens,
+        total: this._totalInputTokens + this._totalOutputTokens,
+      },
+      autoClear: {
+        enabled: this._autoClearEnabled,
+        threshold: this._autoClearThreshold,
       },
     };
   }
@@ -370,11 +452,22 @@ export class Session extends EventEmitter {
             this._claudeSessionId = msg.session_id;
           }
 
+          // Process message for task tracking
+          this._taskTracker.processMessage(msg);
+
           if (msg.type === 'assistant' && msg.message?.content) {
             for (const block of msg.message.content) {
               if (block.type === 'text' && block.text) {
                 this._textOutput += block.text;
               }
+            }
+            // Track tokens from usage
+            if (msg.message.usage) {
+              this._totalInputTokens += msg.message.usage.input_tokens || 0;
+              this._totalOutputTokens += msg.message.usage.output_tokens || 0;
+
+              // Check if we should auto-clear
+              this.checkAutoClear();
             }
           }
 
@@ -393,6 +486,40 @@ export class Session extends EventEmitter {
     // Trim text output buffer for long-running sessions
     if (this._textOutput.length > MAX_TEXT_OUTPUT_SIZE) {
       this._textOutput = this._textOutput.slice(-TEXT_OUTPUT_TRIM_SIZE);
+    }
+  }
+
+  // Check if we should auto-clear based on token threshold
+  private checkAutoClear(): void {
+    if (!this._autoClearEnabled || this._isClearing) return;
+
+    const totalTokens = this._totalInputTokens + this._totalOutputTokens;
+    if (totalTokens >= this._autoClearThreshold) {
+      this._isClearing = true;
+      console.log(`[Session] Auto-clear triggered: ${totalTokens} tokens >= ${this._autoClearThreshold} threshold`);
+
+      // Wait for Claude to be idle before clearing
+      const checkAndClear = () => {
+        if (!this._isWorking) {
+          // Send /clear command
+          this.write('/clear\n');
+          // Reset token counts
+          this._totalInputTokens = 0;
+          this._totalOutputTokens = 0;
+          this.emit('autoClear', { tokens: totalTokens, threshold: this._autoClearThreshold });
+
+          // Wait a moment then re-enable
+          setTimeout(() => {
+            this._isClearing = false;
+          }, 5000);
+        } else {
+          // Check again in 2 seconds
+          setTimeout(checkAndClear, 2000);
+        }
+      };
+
+      // Start checking after a short delay
+      setTimeout(checkAndClear, 1000);
     }
   }
 
@@ -510,5 +637,6 @@ export class Session extends EventEmitter {
     this._textOutput = '';
     this._errorBuffer = '';
     this._messages = [];
+    this._taskTracker.clear();
   }
 }

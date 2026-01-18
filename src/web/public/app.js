@@ -1,40 +1,23 @@
-// Claudeman App with xterm.js terminal
+// Claudeman App - Tab-based Terminal UI
 class ClaudemanApp {
   constructor() {
     this.sessions = new Map();
     this.cases = [];
     this.currentRun = null;
     this.totalCost = 0;
-    this.totalTasks = 0;
     this.eventSource = null;
-    this.sessionsCollapsed = true;
-    this.settings = this.loadSettings();
     this.terminal = null;
     this.fitAddon = null;
-    this.activeSessionId = null;  // Currently active interactive session
-    this.respawnStatus = {};      // Respawn status per session
-    this.respawnEnabled = false;  // Whether respawn is enabled for new sessions (disabled by default)
+    this.activeSessionId = null;
+    this.respawnStatus = {};
+    this.respawnTimers = {}; // Track timed respawn timers
+    this.terminalBuffers = new Map(); // Store terminal content per session
 
-    // Terminal write batching for performance
+    // Terminal write batching
     this.pendingWrites = '';
     this.writeFrameScheduled = false;
 
     this.init();
-  }
-
-  // Batch terminal writes using requestAnimationFrame for smooth rendering
-  batchTerminalWrite(data) {
-    this.pendingWrites += data;
-    if (!this.writeFrameScheduled) {
-      this.writeFrameScheduled = true;
-      requestAnimationFrame(() => {
-        if (this.pendingWrites && this.terminal) {
-          this.terminal.write(this.pendingWrites);
-          this.pendingWrites = '';
-        }
-        this.writeFrameScheduled = false;
-      });
-    }
   }
 
   init() {
@@ -42,25 +25,19 @@ class ClaudemanApp {
     this.loadFontSize();
     this.connectSSE();
     this.loadState();
-    this.loadCases();
     this.loadQuickStartCases();
-    this.startTimerUpdates();
     this.setupEventListeners();
-
-    // Start with sessions collapsed
-    document.getElementById('sessionsPanel').classList.add('collapsed');
   }
 
   initTerminal() {
-    // Initialize xterm.js
     this.terminal = new Terminal({
       theme: {
-        background: '#1a1a2e',
+        background: '#0d0d0d',
         foreground: '#e0e0e0',
         cursor: '#e0e0e0',
-        cursorAccent: '#1a1a2e',
+        cursorAccent: '#0d0d0d',
         selection: 'rgba(255, 255, 255, 0.3)',
-        black: '#1a1a2e',
+        black: '#0d0d0d',
         red: '#ff6b6b',
         green: '#51cf66',
         yellow: '#ffd43b',
@@ -77,9 +54,9 @@ class ClaudemanApp {
         brightCyan: '#66d9e8',
         brightWhite: '#ffffff',
       },
-      fontFamily: '"Fira Code", "Cascadia Code", "JetBrains Mono", "SF Mono", Monaco, "Andale Mono", Consolas, monospace',
+      fontFamily: '"Fira Code", "Cascadia Code", "JetBrains Mono", "SF Mono", Monaco, monospace',
       fontSize: 14,
-      lineHeight: 1.3,
+      lineHeight: 1.2,
       cursorBlink: true,
       cursorStyle: 'block',
       scrollback: 10000,
@@ -94,27 +71,14 @@ class ClaudemanApp {
     this.fitAddon.fit();
 
     // Welcome message
-    this.terminal.writeln('\x1b[1;36m╔═══════════════════════════════════════════════════════════════╗');
-    this.terminal.writeln('║              \x1b[1;33m⚡ Claudeman Terminal \x1b[1;36m                           ║');
-    this.terminal.writeln('╠═══════════════════════════════════════════════════════════════╣');
-    this.terminal.writeln('║  \x1b[0;90mCtrl+Enter\x1b[1;36m  Quick Start          \x1b[0;90mCtrl+K\x1b[1;36m  Kill All Sessions  ║');
-    this.terminal.writeln('║  \x1b[0;90mCtrl+L\x1b[1;36m      Clear Terminal        \x1b[0;90mCtrl+1/2/3\x1b[1;36m  Switch Tabs  ║');
-    this.terminal.writeln('║  \x1b[0;90mCtrl++/-\x1b[1;36m    Font Size             \x1b[0;90mEscape\x1b[1;36m  Close Modals    ║');
-    this.terminal.writeln('╚═══════════════════════════════════════════════════════════════╝\x1b[0m');
-    this.terminal.writeln('');
+    this.showWelcome();
 
     // Handle resize
-    window.addEventListener('resize', () => {
-      if (this.fitAddon) {
-        this.fitAddon.fit();
-      }
-    });
+    window.addEventListener('resize', () => this.fitAddon && this.fitAddon.fit());
 
-    // Resize observer for container changes
     const resizeObserver = new ResizeObserver(() => {
       if (this.fitAddon) {
         this.fitAddon.fit();
-        // Notify server of resize
         if (this.activeSessionId) {
           const dims = this.fitAddon.proposeDimensions();
           if (dims) {
@@ -129,7 +93,7 @@ class ClaudemanApp {
     });
     resizeObserver.observe(container);
 
-    // Handle keyboard input - send to active session
+    // Handle keyboard input
     this.terminal.onData((data) => {
       if (this.activeSessionId) {
         fetch(`/api/sessions/${this.activeSessionId}/input`, {
@@ -141,65 +105,77 @@ class ClaudemanApp {
     });
   }
 
+  showWelcome() {
+    this.terminal.writeln('\x1b[1;36m  Claudeman Terminal\x1b[0m');
+    this.terminal.writeln('\x1b[90m  Click "Quick Start" or press Ctrl+Enter to begin\x1b[0m');
+    this.terminal.writeln('');
+  }
+
+  batchTerminalWrite(data) {
+    this.pendingWrites += data;
+    if (!this.writeFrameScheduled) {
+      this.writeFrameScheduled = true;
+      requestAnimationFrame(() => {
+        if (this.pendingWrites && this.terminal) {
+          this.terminal.write(this.pendingWrites);
+          this.pendingWrites = '';
+        }
+        this.writeFrameScheduled = false;
+      });
+    }
+  }
+
   setupEventListeners() {
-    // Duration select
-    document.getElementById('durationSelect').addEventListener('change', (e) => {
-      const customGroup = document.getElementById('customDurationGroup');
-      customGroup.style.display = e.target.value === 'custom' ? 'block' : 'none';
-    });
-
-    // Quick Start case select
-    document.getElementById('quickStartCase').addEventListener('change', (e) => {
-      this.handleQuickStartSelect(e.target.value);
-    });
-
-    // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
-      // Escape to close modals
+      // Escape - close panels and modals
       if (e.key === 'Escape') {
-        this.closeCaseSelector();
+        this.closeAllPanels();
         this.closeHelp();
       }
 
-      // Ctrl/Cmd + ? to show help
+      // Ctrl/Cmd + ? - help
       if ((e.ctrlKey || e.metaKey) && (e.key === '?' || e.key === '/')) {
         e.preventDefault();
         this.showHelp();
       }
 
-      // Ctrl/Cmd + Enter to quick start (when not in terminal)
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && document.activeElement.tagName !== 'TEXTAREA') {
+      // Ctrl/Cmd + Enter - quick start
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault();
         this.quickStart();
       }
 
-      // Ctrl/Cmd + K to kill all sessions
+      // Ctrl/Cmd + N - new session
+      if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+        e.preventDefault();
+        this.createNewSession();
+      }
+
+      // Ctrl/Cmd + W - close active session
+      if ((e.ctrlKey || e.metaKey) && e.key === 'w') {
+        e.preventDefault();
+        this.killActiveSession();
+      }
+
+      // Ctrl/Cmd + Tab - next session
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Tab') {
+        e.preventDefault();
+        this.nextSession();
+      }
+
+      // Ctrl/Cmd + K - kill all
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
         this.killAllSessions();
       }
 
-      // Ctrl/Cmd + L to clear terminal
-      if ((e.ctrlKey || e.metaKey) && e.key === 'l' && document.activeElement !== document.getElementById('promptInput')) {
+      // Ctrl/Cmd + L - clear terminal
+      if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
         e.preventDefault();
         this.clearTerminal();
       }
 
-      // Ctrl/Cmd + 1/2/3 to switch tabs
-      if ((e.ctrlKey || e.metaKey) && e.key === '1') {
-        e.preventDefault();
-        this.switchTab('run');
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === '2') {
-        e.preventDefault();
-        this.switchTab('cases');
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === '3') {
-        e.preventDefault();
-        this.switchTab('settings');
-      }
-
-      // Ctrl/Cmd + +/- for font size
+      // Ctrl/Cmd + +/- - font size
       if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
         e.preventDefault();
         this.increaseFontSize();
@@ -211,170 +187,139 @@ class ClaudemanApp {
     });
   }
 
-  // Settings
-  loadSettings() {
-    try {
-      return JSON.parse(localStorage.getItem('claudeman-settings') || '{}');
-    } catch {
-      return {};
-    }
-  }
+  // ========== SSE Connection ==========
 
-  saveSettings() {
-    this.settings = {
-      defaultDir: document.getElementById('defaultDirInput').value,
-      autoScroll: document.getElementById('autoScrollOutput').checked,
-      soundOnComplete: document.getElementById('soundOnComplete').checked,
-    };
-    localStorage.setItem('claudeman-settings', JSON.stringify(this.settings));
-    alert('Settings saved!');
-  }
-
-  // Tabs
-  switchTab(tabName) {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-
-    document.querySelector(`[data-tab="${tabName}"]`).classList.add('active');
-    document.getElementById(`tab-${tabName}`).classList.add('active');
-
-    if (tabName === 'cases') {
-      this.loadCases();
-    }
-  }
-
-  // SSE Connection
   connectSSE() {
     this.eventSource = new EventSource('/api/events');
 
-    this.eventSource.onopen = () => {
-      this.setConnectionStatus('connected');
-    };
-
+    this.eventSource.onopen = () => this.setConnectionStatus('connected');
     this.eventSource.onerror = () => {
       this.setConnectionStatus('disconnected');
       setTimeout(() => this.connectSSE(), 3000);
     };
 
     this.eventSource.addEventListener('init', (e) => {
-      const data = JSON.parse(e.data);
-      this.handleInit(data);
+      this.handleInit(JSON.parse(e.data));
     });
 
     this.eventSource.addEventListener('session:created', (e) => {
       const data = JSON.parse(e.data);
       this.sessions.set(data.id, data);
-      this.renderSessions();
-      this.terminal.writeln(`\x1b[1;32m► Session created: ${data.id.slice(0, 8)}\x1b[0m`);
+      this.renderSessionTabs();
+      this.updateCost();
     });
 
     this.eventSource.addEventListener('session:updated', (e) => {
       const data = JSON.parse(e.data);
       this.sessions.set(data.id, data);
-      this.updateStats();
-      this.renderSessions();
+      this.renderSessionTabs();
+      this.updateCost();
+      // Update tokens display if this is the active session
+      if (data.id === this.activeSessionId && data.tokens) {
+        this.updateRespawnTokens(data.tokens.total);
+      }
     });
 
-    // Handle raw terminal data from PTY - use batched writes for performance
+    this.eventSource.addEventListener('session:deleted', (e) => {
+      const data = JSON.parse(e.data);
+      this.sessions.delete(data.id);
+      this.terminalBuffers.delete(data.id);
+      if (this.activeSessionId === data.id) {
+        this.activeSessionId = null;
+        this.terminal.clear();
+        this.showWelcome();
+      }
+      this.renderSessionTabs();
+    });
+
     this.eventSource.addEventListener('session:terminal', (e) => {
       const data = JSON.parse(e.data);
-      this.batchTerminalWrite(data.data);
-    });
-
-    this.eventSource.addEventListener('session:output', (e) => {
-      const data = JSON.parse(e.data);
-      // Terminal data is handled by session:terminal, so skip duplicate writes
-      this.updateSessionOutput(data.id, data.data);
-    });
-
-    this.eventSource.addEventListener('session:message', (e) => {
-      // JSON messages - we can show these differently if needed
+      if (data.id === this.activeSessionId) {
+        this.batchTerminalWrite(data.data);
+      }
     });
 
     this.eventSource.addEventListener('session:completion', (e) => {
       const data = JSON.parse(e.data);
       this.totalCost += data.cost || 0;
-      this.totalTasks++;
-      this.terminal.writeln('');
-      this.terminal.writeln(`\x1b[1;32m✓ Completed (Cost: $${(data.cost || 0).toFixed(4)})\x1b[0m`);
-      this.updateStats();
-      this.setRunning(false);
-
-      if (this.settings.soundOnComplete) {
-        this.playSound();
+      this.updateCost();
+      if (data.id === this.activeSessionId) {
+        this.terminal.writeln('');
+        this.terminal.writeln(`\x1b[1;32m Done (Cost: $${(data.cost || 0).toFixed(4)})\x1b[0m`);
       }
     });
 
     this.eventSource.addEventListener('session:error', (e) => {
       const data = JSON.parse(e.data);
-      this.terminal.writeln(`\x1b[1;31m❌ Error: ${data.error}\x1b[0m`);
+      if (data.id === this.activeSessionId) {
+        this.terminal.writeln(`\x1b[1;31m Error: ${data.error}\x1b[0m`);
+      }
     });
 
     this.eventSource.addEventListener('session:exit', (e) => {
       const data = JSON.parse(e.data);
-      this.terminal.writeln('');
-      this.terminal.writeln(`\x1b[90m[Session ${data.id.slice(0, 8)} exited with code ${data.code}]\x1b[0m`);
+      const session = this.sessions.get(data.id);
+      if (session) {
+        session.status = 'stopped';
+        this.renderSessionTabs();
+      }
     });
 
-    this.eventSource.addEventListener('scheduled:created', (e) => {
+    this.eventSource.addEventListener('session:idle', (e) => {
       const data = JSON.parse(e.data);
-      this.currentRun = data;
+      const session = this.sessions.get(data.id);
+      if (session) {
+        session.status = 'idle';
+        this.renderSessionTabs();
+      }
+    });
+
+    this.eventSource.addEventListener('session:working', (e) => {
+      const data = JSON.parse(e.data);
+      const session = this.sessions.get(data.id);
+      if (session) {
+        session.status = 'busy';
+        this.renderSessionTabs();
+      }
+    });
+
+    // Scheduled run events
+    this.eventSource.addEventListener('scheduled:created', (e) => {
+      this.currentRun = JSON.parse(e.data);
       this.showTimer();
     });
 
     this.eventSource.addEventListener('scheduled:updated', (e) => {
-      const data = JSON.parse(e.data);
-      this.currentRun = data;
+      this.currentRun = JSON.parse(e.data);
       this.updateTimer();
     });
 
     this.eventSource.addEventListener('scheduled:completed', (e) => {
-      const data = JSON.parse(e.data);
-      this.currentRun = data;
+      this.currentRun = JSON.parse(e.data);
       this.hideTimer();
-      this.terminal.writeln('');
-      this.terminal.writeln(`\x1b[1;33m🎉 Scheduled run completed! Tasks: ${data.completedTasks}, Cost: $${data.totalCost.toFixed(4)}\x1b[0m`);
-      this.setRunning(false);
-
-      if (this.settings.soundOnComplete) {
-        this.playSound();
-      }
+      this.showToast('Scheduled run completed!', 'success');
     });
 
     this.eventSource.addEventListener('scheduled:stopped', (e) => {
-      const data = JSON.parse(e.data);
-      this.currentRun = data;
+      this.currentRun = null;
       this.hideTimer();
-      this.terminal.writeln('');
-      this.terminal.writeln('\x1b[1;33m⏹ Scheduled run stopped.\x1b[0m');
-      this.setRunning(false);
-    });
-
-    this.eventSource.addEventListener('scheduled:log', (e) => {
-      const data = JSON.parse(e.data);
-      this.terminal.writeln(`\x1b[90m${data.log}\x1b[0m`);
-    });
-
-    this.eventSource.addEventListener('case:created', (e) => {
-      this.loadCases();
-      this.loadQuickStartCases();
     });
 
     // Respawn events
     this.eventSource.addEventListener('respawn:started', (e) => {
       const data = JSON.parse(e.data);
       this.respawnStatus[data.sessionId] = data.status;
-      this.showRespawnBanner();
-      this.updatePageTitle();
-      this.terminal.writeln(`\x1b[1;32m🔄 Respawn loop started for session ${data.sessionId.slice(0, 8)}\x1b[0m`);
+      if (data.sessionId === this.activeSessionId) {
+        this.showRespawnBanner();
+      }
     });
 
     this.eventSource.addEventListener('respawn:stopped', (e) => {
       const data = JSON.parse(e.data);
       delete this.respawnStatus[data.sessionId];
-      this.hideRespawnBanner();
-      this.updatePageTitle();
-      this.terminal.writeln(`\x1b[1;33m⏹ Respawn loop stopped\x1b[0m`);
+      if (data.sessionId === this.activeSessionId) {
+        this.hideRespawnBanner();
+      }
     });
 
     this.eventSource.addEventListener('respawn:stateChanged', (e) => {
@@ -382,7 +327,9 @@ class ClaudemanApp {
       if (this.respawnStatus[data.sessionId]) {
         this.respawnStatus[data.sessionId].state = data.state;
       }
-      this.updateRespawnBanner(data.state);
+      if (data.sessionId === this.activeSessionId) {
+        this.updateRespawnBanner(data.state);
+      }
     });
 
     this.eventSource.addEventListener('respawn:cycleStarted', (e) => {
@@ -390,103 +337,90 @@ class ClaudemanApp {
       if (this.respawnStatus[data.sessionId]) {
         this.respawnStatus[data.sessionId].cycleCount = data.cycleNumber;
       }
-      document.getElementById('respawnCycleCount').textContent = data.cycleNumber;
-      this.terminal.writeln(`\x1b[1;36m─── Respawn Cycle #${data.cycleNumber} Started ───\x1b[0m`);
-    });
-
-    this.eventSource.addEventListener('respawn:cycleCompleted', (e) => {
-      const data = JSON.parse(e.data);
-      this.terminal.writeln(`\x1b[1;32m✓ Respawn Cycle #${data.cycleNumber} Completed\x1b[0m`);
+      if (data.sessionId === this.activeSessionId) {
+        document.getElementById('respawnCycleCount').textContent = data.cycleNumber;
+      }
     });
 
     this.eventSource.addEventListener('respawn:stepSent', (e) => {
       const data = JSON.parse(e.data);
-      document.getElementById('respawnStep').textContent = `Sending: ${data.input}`;
+      if (data.sessionId === this.activeSessionId) {
+        document.getElementById('respawnStep').textContent = data.input;
+      }
     });
 
-    this.eventSource.addEventListener('respawn:stepCompleted', (e) => {
+    // Respawn timer events
+    this.eventSource.addEventListener('respawn:timerStarted', (e) => {
       const data = JSON.parse(e.data);
-      document.getElementById('respawnStep').textContent = `Completed: ${data.step}`;
+      this.respawnTimers[data.sessionId] = {
+        endAt: data.endAt,
+        startedAt: data.startedAt,
+        durationMinutes: data.durationMinutes
+      };
+      if (data.sessionId === this.activeSessionId) {
+        this.showRespawnTimer();
+      }
     });
 
-    this.eventSource.addEventListener('respawn:log', (e) => {
+    // Auto-clear event
+    this.eventSource.addEventListener('session:autoClear', (e) => {
       const data = JSON.parse(e.data);
-      console.log('[Respawn]', data.message);
+      if (data.sessionId === this.activeSessionId) {
+        this.showToast(`Auto-cleared at ${data.tokens.toLocaleString()} tokens`, 'info');
+        this.updateRespawnTokens(0);
+      }
     });
 
-    this.eventSource.addEventListener('respawn:error', (e) => {
+    // Background task events
+    this.eventSource.addEventListener('task:created', (e) => {
       const data = JSON.parse(e.data);
-      this.terminal.writeln(`\x1b[1;31m❌ Respawn error: ${data.error}\x1b[0m`);
+      this.renderSessionTabs();
+      if (data.sessionId === this.activeSessionId) {
+        this.renderTaskPanel();
+      }
     });
-  }
 
-  playSound() {
-    try {
-      const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdH2JkJOQjIJ5cGlpcXuFjpWYl5KKgHZsZWdveYSNlZmYk4yBdmtlZmt1gIqSlpeUjoV7cWlnbHV/iZGWl5SSiYB2bGdqcHqEjJOWlZGMhHpwa2ducHmEjJOUk5CMhHpwa2dqb3eFjJOUk4+LgnhvamdscHqEjJKTko6KgXdtaGltdH6HjpKTkY2Jf3Zsa2twd4GIjpKSkI2Jf3ZsamttdH2GjZGSkI2Jf3VramttdX2GjJCRj4yIf3VramtudX6GjJCQjo2If3VraWttdn6FjI+Pjo2If3VraWptdn+FjI+PjoyHfnRqaWptdn6Fi4+PjoyHfnRqaGlsdn6Fi46OjYyHfnRpZ2lsdX2FjI6OjYuHfXNpZ2lrdX2EjI2OjYuGfXNpZmlrdX2EjI2NjIuGfXNoZmlrdXyEi42NjIqGfHNnZWhqdHyDi4yMi4qFfHJnZWhpdHyDioyMi4qFfHJnZGdpdHuDiouLioqEe3FmZGdocnuCiYuLioqEe3FmZGZocnuCiYqKiYmDenBmZGZncnqBiIqJiYiDenBmY2ZncnqBiImIiIiDenBlY2VncXqAh4iIiIiCeW9lY2VmcXmAh4eHh4eCeW9kYmVmcHl/hoaGhoeBd25kYmRlcHh+hYWFhYaBd21jYWRlb3d9hYSEhYWAdmxiYWNkbnd8hIODhISAdjxhYWNkbXZ7g4KCg4N/dWtgYGJja3V6goGBgoJ+dGpfX2FiaXR5gYCAf4F9c2leX2BhZ3N4gH9/f4B8cmhcXV9fZnJ3f318fX57cGdcXF5eZXF1fXt7e3x6b2ZbW11dZG9zent6eXp5bWRaW1xbY25yfHl4eXh4a2JZWltaYWxxeXd2d3Z2aF9XWVlYX2xvdXR0dHRzZVxVV1dWXmpsdHJxcnFwYllUVVRUW2dqdnBvcHBuXldSU1JSWmVodW5tbm1sWlNQUU9PV2Nlc2xramxpV1FOUFE=');
-      audio.volume = 0.3;
-      audio.play();
-    } catch {}
+    this.eventSource.addEventListener('task:completed', (e) => {
+      const data = JSON.parse(e.data);
+      this.renderSessionTabs();
+      if (data.sessionId === this.activeSessionId) {
+        this.renderTaskPanel();
+      }
+    });
+
+    this.eventSource.addEventListener('task:failed', (e) => {
+      const data = JSON.parse(e.data);
+      this.renderSessionTabs();
+      if (data.sessionId === this.activeSessionId) {
+        this.renderTaskPanel();
+      }
+    });
+
+    this.eventSource.addEventListener('task:updated', (e) => {
+      const data = JSON.parse(e.data);
+      if (data.sessionId === this.activeSessionId) {
+        this.renderTaskPanel();
+      }
+    });
   }
 
   setConnectionStatus(status) {
-    const el = document.getElementById('connectionStatus');
-    const dot = el.querySelector('.status-dot');
-    const text = el.querySelector('span:last-child');
-
+    const dot = document.querySelector('.status-dot');
+    const text = document.querySelector('.status-text');
     dot.className = 'status-dot ' + status;
-
-    if (status === 'connected') {
-      text.textContent = 'Connected';
-      text.onclick = null;
-      text.style.cursor = 'default';
-      this.showToast('Connected to server', 'success');
-    } else {
-      text.innerHTML = '<span>Disconnected</span> <button class="btn btn-xs" style="margin-left:0.5rem">Retry</button>';
-      text.querySelector('button').onclick = () => this.reconnectSSE();
-      this.showToast('Connection lost. Click retry to reconnect.', 'warning');
-    }
-  }
-
-  // Manually reconnect SSE
-  reconnectSSE() {
-    if (this.eventSource) {
-      this.eventSource.close();
-      this.eventSource = null;
-    }
-    this.showToast('Reconnecting...', 'info');
-    this.connectSSE();
-  }
-
-  // Show a toast notification
-  showToast(message, type = 'info') {
-    const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
-    toast.textContent = message;
-
-    // Create container if needed
-    let container = document.querySelector('.toast-container');
-    if (!container) {
-      container = document.createElement('div');
-      container.className = 'toast-container';
-      document.body.appendChild(container);
-    }
-    container.appendChild(toast);
-
-    // Animate in
-    requestAnimationFrame(() => {
-      toast.classList.add('show');
-    });
-
-    // Remove after delay
-    setTimeout(() => {
-      toast.classList.remove('show');
-      setTimeout(() => toast.remove(), 300);
-    }, 3000);
+    text.textContent = status === 'connected' ? 'Connected' : 'Disconnected';
   }
 
   handleInit(data) {
     this.sessions.clear();
     data.sessions.forEach(s => this.sessions.set(s.id, s));
+
+    if (data.respawnStatus) {
+      this.respawnStatus = data.respawnStatus;
+    }
+
+    this.totalCost = data.sessions.reduce((sum, s) => sum + (s.totalCost || 0), 0);
+    this.totalCost += data.scheduledRuns.reduce((sum, r) => sum + (r.totalCost || 0), 0);
 
     const activeRun = data.scheduledRuns.find(r => r.status === 'running');
     if (activeRun) {
@@ -494,128 +428,176 @@ class ClaudemanApp {
       this.showTimer();
     }
 
-    // Load respawn status
-    if (data.respawnStatus) {
-      this.respawnStatus = data.respawnStatus;
-      // Show respawn banner if any session has active respawn
-      const hasActiveRespawn = Object.values(this.respawnStatus).some(s => s.state !== 'stopped');
-      if (hasActiveRespawn) {
-        this.showRespawnBanner();
-        const activeStatus = Object.values(this.respawnStatus).find(s => s.state !== 'stopped');
-        if (activeStatus) {
-          this.updateRespawnBanner(activeStatus.state);
-          document.getElementById('respawnCycleCount').textContent = activeStatus.cycleCount || 0;
-        }
-      }
+    this.updateCost();
+    this.renderSessionTabs();
+
+    // Auto-select first session if any
+    if (this.sessions.size > 0 && !this.activeSessionId) {
+      const firstSession = this.sessions.values().next().value;
+      this.selectSession(firstSession.id);
     }
-
-    this.totalCost = data.sessions.reduce((sum, s) => sum + (s.totalCost || 0), 0);
-    this.totalCost += data.scheduledRuns.reduce((sum, r) => sum + (r.totalCost || 0), 0);
-    this.totalTasks = data.scheduledRuns.reduce((sum, r) => sum + (r.completedTasks || 0), 0);
-
-    this.updateStats();
-    this.renderSessions();
   }
 
   async loadState() {
     try {
       const res = await fetch('/api/status');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       this.handleInit(data);
     } catch (err) {
       console.error('Failed to load state:', err);
-      this.showToast('Failed to load state: ' + err.message, 'error');
     }
   }
 
-  // Cases
-  async loadCases() {
+  // ========== Session Tabs ==========
+
+  renderSessionTabs() {
+    const container = document.getElementById('sessionTabs');
+
+    // Build tabs HTML
+    let html = '';
+    for (const [id, session] of this.sessions) {
+      const isActive = id === this.activeSessionId;
+      const status = session.status || 'idle';
+      const name = this.getSessionName(session);
+      const taskStats = session.taskStats || { running: 0, total: 0 };
+      const hasRunningTasks = taskStats.running > 0;
+
+      html += `
+        <div class="session-tab ${isActive ? 'active' : ''}" data-id="${id}" onclick="app.selectSession('${id}')">
+          <span class="tab-status ${status}"></span>
+          <span class="tab-name">${this.escapeHtml(name)}</span>
+          ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()">${taskStats.running}</span>` : ''}
+          <span class="tab-close" onclick="event.stopPropagation(); app.closeSession('${id}')">&times;</span>
+        </div>
+      `;
+    }
+
+    // Add the "+" button
+    html += `
+      <div class="session-tab new-tab" onclick="app.createNewSession()" title="New Session (Ctrl+N)">
+        <span>+</span>
+      </div>
+    `;
+
+    container.innerHTML = html;
+  }
+
+  getSessionName(session) {
+    if (session.workingDir) {
+      return session.workingDir.split('/').pop() || session.workingDir;
+    }
+    return session.id.slice(0, 8);
+  }
+
+  async selectSession(sessionId) {
+    if (this.activeSessionId === sessionId) return;
+
+    this.activeSessionId = sessionId;
+    this.renderSessionTabs();
+
+    // Load terminal buffer for this session
     try {
-      const res = await fetch('/api/cases');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      this.cases = await res.json();
-      this.renderCases();
+      const res = await fetch(`/api/sessions/${sessionId}/terminal`);
+      const data = await res.json();
+      this.terminal.clear();
+      if (data.terminalBuffer) {
+        this.terminal.write(data.terminalBuffer);
+      }
+
+      // Send resize
+      const dims = this.fitAddon.proposeDimensions();
+      if (dims) {
+        fetch(`/api/sessions/${sessionId}/resize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
+        });
+      }
+
+      // Update respawn banner
+      if (this.respawnStatus[sessionId]) {
+        this.showRespawnBanner();
+        this.updateRespawnBanner(this.respawnStatus[sessionId].state);
+        document.getElementById('respawnCycleCount').textContent = this.respawnStatus[sessionId].cycleCount || 0;
+      } else {
+        this.hideRespawnBanner();
+      }
+
+      // Update task panel if open
+      if (document.getElementById('taskPanel').classList.contains('open')) {
+        this.renderTaskPanel();
+      }
+
+      this.terminal.focus();
     } catch (err) {
-      console.error('Failed to load cases:', err);
-      this.showToast('Failed to load cases', 'error');
+      console.error('Failed to load session terminal:', err);
     }
   }
 
-  // Quick Start
+  async closeSession(sessionId) {
+    try {
+      await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+      this.sessions.delete(sessionId);
+      this.terminalBuffers.delete(sessionId);
+
+      if (this.activeSessionId === sessionId) {
+        this.activeSessionId = null;
+        // Select another session or show welcome
+        if (this.sessions.size > 0) {
+          const nextSession = this.sessions.values().next().value;
+          this.selectSession(nextSession.id);
+        } else {
+          this.terminal.clear();
+          this.showWelcome();
+        }
+      }
+
+      this.renderSessionTabs();
+    } catch (err) {
+      this.showToast('Failed to close session', 'error');
+    }
+  }
+
+  nextSession() {
+    const ids = Array.from(this.sessions.keys());
+    if (ids.length <= 1) return;
+
+    const currentIndex = ids.indexOf(this.activeSessionId);
+    const nextIndex = (currentIndex + 1) % ids.length;
+    this.selectSession(ids[nextIndex]);
+  }
+
+  // ========== Quick Start ==========
+
   async loadQuickStartCases() {
     try {
       const res = await fetch('/api/cases');
       const cases = await res.json();
+      this.cases = cases;
+
       const select = document.getElementById('quickStartCase');
+      const newSessionSelect = document.getElementById('newSessionCase');
 
-      // Preserve current selection
-      const currentValue = select.value;
-
-      // Clear and rebuild options
-      select.innerHTML = '<option value="testcase">testcase (default)</option>';
-
-      // Add existing cases (skip testcase if it exists)
+      // Build options
+      let options = '<option value="testcase">testcase</option>';
       cases.forEach(c => {
         if (c.name !== 'testcase') {
-          const option = document.createElement('option');
-          option.value = c.name;
-          option.textContent = c.name;
-          select.appendChild(option);
+          options += `<option value="${c.name}">${c.name}</option>`;
         }
       });
 
-      // Add "Create new..." option
-      const createOption = document.createElement('option');
-      createOption.value = '__create_new__';
-      createOption.textContent = '+ Create new...';
-      select.appendChild(createOption);
-
-      // Restore selection if it still exists
-      if ([...select.options].some(o => o.value === currentValue)) {
-        select.value = currentValue;
-      }
+      select.innerHTML = options;
+      newSessionSelect.innerHTML = options;
     } catch (err) {
-      console.error('Failed to load Quick Start cases:', err);
-    }
-  }
-
-  handleQuickStartSelect(value) {
-    if (value === '__create_new__') {
-      const newName = prompt('Enter a name for the new case:', '');
-      const select = document.getElementById('quickStartCase');
-
-      if (newName && newName.trim()) {
-        const cleanName = newName.trim().replace(/[^a-zA-Z0-9_-]/g, '-');
-        if (cleanName) {
-          // Add the new option and select it
-          const option = document.createElement('option');
-          option.value = cleanName;
-          option.textContent = cleanName;
-          // Insert before the "Create new..." option
-          select.insertBefore(option, select.lastElementChild);
-          select.value = cleanName;
-        } else {
-          select.value = 'testcase';
-        }
-      } else {
-        // Revert to default
-        select.value = 'testcase';
-      }
+      console.error('Failed to load cases:', err);
     }
   }
 
   async quickStart() {
-    const select = document.getElementById('quickStartCase');
-    let caseName = select.value;
-
-    if (caseName === '__create_new__') {
-      caseName = 'testcase';
-    }
+    const caseName = document.getElementById('quickStartCase').value || 'testcase';
 
     this.terminal.clear();
-    this.terminal.writeln('\x1b[1;32m⚡ Quick Start: Launching Claude session...\x1b[0m');
-    this.terminal.writeln(`\x1b[90mCase: ${caseName}\x1b[0m`);
+    this.terminal.writeln(`\x1b[1;32m Starting session in ${caseName}...\x1b[0m`);
     this.terminal.writeln('');
 
     try {
@@ -626,19 +608,12 @@ class ClaudemanApp {
       });
       const data = await res.json();
 
-      if (!data.success) {
-        throw new Error(data.error);
-      }
+      if (!data.success) throw new Error(data.error);
 
       this.activeSessionId = data.sessionId;
-      this.terminal.writeln(`\x1b[1;32m✓ Session started in ${data.casePath}\x1b[0m`);
-      this.terminal.writeln('');
-
-      // Reload cases in case a new one was created
       this.loadQuickStartCases();
-      this.loadCases();
 
-      // Send initial resize
+      // Send resize
       const dims = this.fitAddon.proposeDimensions();
       if (dims) {
         await fetch(`/api/sessions/${data.sessionId}/resize`, {
@@ -648,196 +623,144 @@ class ClaudemanApp {
         });
       }
 
-      // Focus the terminal
       this.terminal.focus();
-
     } catch (err) {
-      this.terminal.writeln(`\x1b[1;31m❌ Error: ${err.message}\x1b[0m`);
+      this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
     }
   }
 
-  renderCases() {
-    const list = document.getElementById('casesList');
+  // ========== New Session ==========
 
-    if (this.cases.length === 0) {
-      list.innerHTML = '<p class="empty-state">No cases yet. Create one to get started.</p>';
-      return;
-    }
-
-    list.innerHTML = this.cases.map(c => `
-      <div class="case-card" onclick="app.useCase('${c.path}')">
-        <span class="case-icon">📁</span>
-        <div class="case-info">
-          <div class="case-name">${this.escapeHtml(c.name)}</div>
-          <div class="case-path">${this.escapeHtml(c.path)}</div>
-        </div>
-      </div>
-    `).join('');
+  createNewSession() {
+    document.getElementById('newSessionPanel').classList.add('open');
   }
 
-  useCase(path) {
-    document.getElementById('dirInput').value = path;
-    this.switchTab('run');
+  hideNewSessionPanel() {
+    document.getElementById('newSessionPanel').classList.remove('open');
   }
 
-  showCreateCase() {
-    document.getElementById('createCaseForm').style.display = 'block';
-    document.getElementById('caseNameInput').focus();
-  }
+  async createSessionFromPanel() {
+    const caseName = document.getElementById('newSessionCase').value;
+    const customDir = document.getElementById('newSessionDir').value.trim();
 
-  hideCreateCase() {
-    document.getElementById('createCaseForm').style.display = 'none';
-    document.getElementById('caseNameInput').value = '';
-    document.getElementById('caseDescInput').value = '';
-  }
-
-  async createCase() {
-    const name = document.getElementById('caseNameInput').value.trim();
-    const description = document.getElementById('caseDescInput').value.trim();
-
-    if (!name) {
-      alert('Please enter a case name');
-      return;
-    }
+    this.hideNewSessionPanel();
 
     try {
-      const res = await fetch('/api/cases', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description })
-      });
-      const data = await res.json();
+      if (customDir) {
+        // Create session with custom directory
+        const createRes = await fetch('/api/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workingDir: customDir })
+        });
+        const createData = await createRes.json();
+        if (!createData.success) throw new Error(createData.error);
 
-      if (data.success) {
-        this.hideCreateCase();
-        this.loadCases();
-        alert(`Case "${name}" created!`);
+        // Start interactive
+        await fetch(`/api/sessions/${createData.session.id}/interactive`, {
+          method: 'POST'
+        });
+
+        this.selectSession(createData.session.id);
       } else {
-        alert('Error: ' + data.error);
+        // Use quick-start with case
+        const res = await fetch('/api/quick-start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ caseName })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error);
+
+        this.selectSession(data.sessionId);
       }
     } catch (err) {
-      alert('Error creating case: ' + err.message);
+      this.showToast('Failed to create session: ' + err.message, 'error');
     }
   }
 
-  selectCase() {
-    this.loadCases().then(() => {
-      const grid = document.getElementById('caseSelectorGrid');
+  // ========== Directory Input ==========
 
-      if (this.cases.length === 0) {
-        grid.innerHTML = '<p class="empty-state">No cases. Create one in the Cases tab.</p>';
+  toggleDirInput() {
+    const btn = document.querySelector('#dirDisplay').parentElement;
+    const input = document.getElementById('dirInput');
+
+    if (input.classList.contains('hidden')) {
+      input.classList.remove('hidden');
+      btn.style.display = 'none';
+      input.focus();
+    }
+  }
+
+  hideDirInput() {
+    const btn = document.querySelector('#dirDisplay').parentElement;
+    const input = document.getElementById('dirInput');
+
+    setTimeout(() => {
+      input.classList.add('hidden');
+      btn.style.display = '';
+
+      const value = input.value.trim();
+      document.getElementById('dirDisplay').textContent = value || 'No directory';
+    }, 100);
+  }
+
+  // ========== Respawn Panel ==========
+
+  toggleRespawnPanel() {
+    const panel = document.getElementById('respawnPanel');
+    panel.classList.toggle('open');
+
+    // Show "Enable on Current" button if there's an active session
+    const enableOnCurrentBtn = document.getElementById('enableOnCurrentBtn');
+    if (this.activeSessionId && this.sessions.has(this.activeSessionId)) {
+      const session = this.sessions.get(this.activeSessionId);
+      // Only show if session is running (has a PID)
+      if (session.pid) {
+        enableOnCurrentBtn.style.display = '';
       } else {
-        grid.innerHTML = this.cases.map(c => `
-          <div class="case-card" onclick="app.selectCaseAndClose('${c.path}')">
-            <span class="case-icon">📁</span>
-            <div class="case-info">
-              <div class="case-name">${this.escapeHtml(c.name)}</div>
-            </div>
-          </div>
-        `).join('');
+        enableOnCurrentBtn.style.display = 'none';
       }
-
-      document.getElementById('caseSelectorModal').classList.add('active');
-    });
-  }
-
-  selectCaseAndClose(path) {
-    document.getElementById('dirInput').value = path;
-    this.closeCaseSelector();
-  }
-
-  closeCaseSelector() {
-    document.getElementById('caseSelectorModal').classList.remove('active');
-  }
-
-  // Help modal
-  showHelp() {
-    document.getElementById('helpModal').classList.add('active');
-  }
-
-  closeHelp() {
-    document.getElementById('helpModal').classList.remove('active');
-  }
-
-  // Actions
-  async startRun() {
-    const prompt = document.getElementById('promptInput').value.trim();
-    const dir = document.getElementById('dirInput').value.trim();
-    const durationSelect = document.getElementById('durationSelect').value;
-
-    let duration = 0;
-    if (durationSelect === 'custom') {
-      duration = parseInt(document.getElementById('customDuration').value) || 0;
     } else {
-      duration = parseInt(durationSelect) || 0;
-    }
-
-    if (!prompt) {
-      this.showToast('Please enter a prompt', 'warning');
-      return;
-    }
-
-    // Confirm for long runs (over 30 minutes)
-    if (duration >= 30) {
-      const hours = Math.floor(duration / 60);
-      const mins = duration % 60;
-      const timeStr = hours > 0 ? `${hours}h ${mins}m` : `${mins} minutes`;
-      if (!confirm(`Start a ${timeStr} timed run? This will use API credits for the duration.`)) {
-        return;
-      }
-    }
-
-    this.setRunning(true);
-    this.terminal.writeln('');
-    this.terminal.writeln(`\x1b[1;36m─── Starting: ${prompt.substring(0, 60)}${prompt.length > 60 ? '...' : ''} ───\x1b[0m`);
-    this.terminal.writeln('');
-
-    try {
-      if (duration > 0) {
-        const res = await fetch('/api/scheduled', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            prompt,
-            workingDir: dir || undefined,
-            durationMinutes: duration
-          })
-        });
-        const data = await res.json();
-        if (!data.success) {
-          throw new Error(data.error);
-        }
-      } else {
-        const res = await fetch('/api/run', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            prompt,
-            workingDir: dir || undefined
-          })
-        });
-        const data = await res.json();
-        if (!data.success) {
-          throw new Error(data.error);
-        }
-      }
-    } catch (err) {
-      this.terminal.writeln(`\x1b[1;31m❌ Error: ${err.message}\x1b[0m`);
-      this.setRunning(false);
+      enableOnCurrentBtn.style.display = 'none';
     }
   }
 
-  // Start an interactive Claude Code session
-  async startInteractive() {
+  getRespawnConfig() {
+    const updatePrompt = document.getElementById('respawnPrompt').value;
+    const idleTimeout = parseInt(document.getElementById('respawnIdleTimeout').value) || 5;
+    const stepDelay = parseInt(document.getElementById('respawnStepDelay').value) || 1;
+    const sendClear = document.getElementById('respawnSendClear').checked;
+    const sendInit = document.getElementById('respawnSendInit').checked;
+    const durationStr = document.getElementById('respawnDuration').value;
+    const durationMinutes = durationStr ? parseInt(durationStr) : null;
+    const autoClearEnabled = document.getElementById('autoClearEnabled').checked;
+    const autoClearThreshold = parseInt(document.getElementById('autoClearThreshold').value) || 100000;
+
+    return {
+      respawnConfig: {
+        updatePrompt,
+        idleTimeoutMs: idleTimeout * 1000,
+        interStepDelayMs: stepDelay * 1000,
+        sendClear,
+        sendInit,
+      },
+      durationMinutes,
+      autoClearEnabled,
+      autoClearThreshold
+    };
+  }
+
+  async startInteractiveWithRespawn() {
+    this.toggleRespawnPanel();
+
     const dir = document.getElementById('dirInput').value.trim();
-    const respawnEnabled = document.getElementById('respawnEnabled').checked;
+    const { respawnConfig, durationMinutes, autoClearEnabled, autoClearThreshold } = this.getRespawnConfig();
 
     this.terminal.clear();
-    this.terminal.writeln('\x1b[1;36m─── Starting Interactive Claude Code Session ───\x1b[0m');
-    if (respawnEnabled) {
-      this.terminal.writeln('\x1b[90mRespawn loop enabled. Claude will auto-restart when idle.\x1b[0m');
-    } else {
-      this.terminal.writeln('\x1b[90mType your prompts directly. Session persists even if you close the browser.\x1b[0m');
+    this.terminal.writeln('\x1b[1;32m Starting session with respawn...\x1b[0m');
+    if (durationMinutes) {
+      this.terminal.writeln(`\x1b[90m Duration: ${durationMinutes} minutes\x1b[0m`);
     }
     this.terminal.writeln('');
 
@@ -849,47 +772,28 @@ class ClaudemanApp {
         body: JSON.stringify({ workingDir: dir || undefined })
       });
       const createData = await createRes.json();
-      if (!createData.success) {
-        throw new Error(createData.error);
-      }
+      if (!createData.success) throw new Error(createData.error);
 
       const sessionId = createData.session.id;
       this.activeSessionId = sessionId;
 
-      // Get respawn config from UI
-      const respawnConfig = respawnEnabled ? {
-        enabled: true,
-        updatePrompt: document.getElementById('respawnPrompt').value || 'update all the docs and CLAUDE.md',
-        idleTimeoutMs: (parseInt(document.getElementById('respawnIdleTimeout').value) || 5) * 1000,
-        interStepDelayMs: (parseInt(document.getElementById('respawnStepDelay').value) || 1) * 1000,
-      } : null;
+      // Start interactive with respawn
+      await fetch(`/api/sessions/${sessionId}/interactive-respawn`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ respawnConfig, durationMinutes })
+      });
 
-      // Start interactive mode with respawn
-      let interactiveRes;
-      if (respawnConfig) {
-        interactiveRes = await fetch(`/api/sessions/${sessionId}/interactive-respawn`, {
+      // Set auto-clear if enabled
+      if (autoClearEnabled) {
+        await fetch(`/api/sessions/${sessionId}/auto-clear`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ respawnConfig })
-        });
-      } else {
-        interactiveRes = await fetch(`/api/sessions/${sessionId}/interactive`, {
-          method: 'POST'
+          body: JSON.stringify({ enabled: true, threshold: autoClearThreshold })
         });
       }
 
-      const interactiveData = await interactiveRes.json();
-      if (!interactiveData.success) {
-        throw new Error(interactiveData.error);
-      }
-
-      this.terminal.writeln(`\x1b[1;32m► Connected to session ${sessionId.slice(0, 8)}\x1b[0m`);
-      if (respawnConfig) {
-        this.terminal.writeln(`\x1b[90m  Respawn: ${respawnConfig.updatePrompt.substring(0, 40)}...\x1b[0m`);
-      }
-      this.terminal.writeln('');
-
-      // Send initial resize
+      // Send resize
       const dims = this.fitAddon.proposeDimensions();
       if (dims) {
         await fetch(`/api/sessions/${sessionId}/resize`, {
@@ -899,163 +803,193 @@ class ClaudemanApp {
         });
       }
 
-      // Focus the terminal
       this.terminal.focus();
-
     } catch (err) {
-      this.terminal.writeln(`\x1b[1;31m❌ Error: ${err.message}\x1b[0m`);
-      this.activeSessionId = null;
+      this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
     }
   }
 
-  // Respawn controls
-  toggleRespawnDetails() {
-    const details = document.getElementById('respawnDetails');
-    details.style.display = details.style.display === 'none' ? 'block' : 'none';
+  async enableRespawnOnCurrent() {
+    if (!this.activeSessionId) {
+      this.showToast('No active session', 'warning');
+      return;
+    }
+
+    this.toggleRespawnPanel();
+
+    const { respawnConfig, durationMinutes, autoClearEnabled, autoClearThreshold } = this.getRespawnConfig();
+
+    try {
+      // Enable respawn on existing session
+      const res = await fetch(`/api/sessions/${this.activeSessionId}/respawn/enable`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: respawnConfig, durationMinutes })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      // Set auto-clear if enabled
+      if (autoClearEnabled) {
+        await fetch(`/api/sessions/${this.activeSessionId}/auto-clear`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: true, threshold: autoClearThreshold })
+        });
+      }
+
+      this.showToast('Respawn enabled on current session', 'success');
+      this.terminal.focus();
+    } catch (err) {
+      this.showToast('Failed to enable respawn: ' + err.message, 'error');
+    }
   }
 
   showRespawnBanner() {
     document.getElementById('respawnBanner').style.display = 'flex';
+    // Also show timer if there's a timed respawn
+    if (this.activeSessionId && this.respawnTimers[this.activeSessionId]) {
+      this.showRespawnTimer();
+    }
+    // Show tokens if session has token data
+    const session = this.sessions.get(this.activeSessionId);
+    if (session && session.tokens) {
+      this.updateRespawnTokens(session.tokens.total);
+    }
   }
 
   hideRespawnBanner() {
     document.getElementById('respawnBanner').style.display = 'none';
+    this.hideRespawnTimer();
   }
 
   updateRespawnBanner(state) {
-    const stateEl = document.getElementById('respawnState');
-    stateEl.textContent = state.replace(/_/g, ' ');
+    document.getElementById('respawnState').textContent = state.replace(/_/g, ' ');
+  }
 
-    // Update indicator animation based on state
-    const indicator = document.querySelector('.respawn-indicator');
-    if (state === 'watching') {
-      indicator.style.animationPlayState = 'paused';
-    } else {
-      indicator.style.animationPlayState = 'running';
+  showRespawnTimer() {
+    const timerEl = document.getElementById('respawnTimer');
+    timerEl.style.display = '';
+    this.updateRespawnTimer();
+    // Update every second
+    if (this.respawnTimerInterval) clearInterval(this.respawnTimerInterval);
+    this.respawnTimerInterval = setInterval(() => this.updateRespawnTimer(), 1000);
+  }
+
+  hideRespawnTimer() {
+    document.getElementById('respawnTimer').style.display = 'none';
+    if (this.respawnTimerInterval) {
+      clearInterval(this.respawnTimerInterval);
+      this.respawnTimerInterval = null;
     }
   }
 
-  async toggleRespawn() {
-    if (!this.activeSessionId) return;
+  updateRespawnTimer() {
+    if (!this.activeSessionId || !this.respawnTimers[this.activeSessionId]) {
+      this.hideRespawnTimer();
+      return;
+    }
 
-    const status = this.respawnStatus[this.activeSessionId];
-    if (!status) return;
+    const timer = this.respawnTimers[this.activeSessionId];
+    const now = Date.now();
+    const remaining = Math.max(0, timer.endAt - now);
 
-    // TODO: Add pause/resume endpoints if needed
-    this.terminal.writeln('\x1b[90mRespawn toggle not yet implemented\x1b[0m');
+    if (remaining <= 0) {
+      document.getElementById('respawnTimer').textContent = 'Time up';
+      delete this.respawnTimers[this.activeSessionId];
+      this.hideRespawnTimer();
+      return;
+    }
+
+    document.getElementById('respawnTimer').textContent = this.formatTime(remaining);
+  }
+
+  updateRespawnTokens(totalTokens) {
+    const tokensEl = document.getElementById('respawnTokens');
+    if (totalTokens > 0) {
+      tokensEl.style.display = '';
+      tokensEl.textContent = `${(totalTokens / 1000).toFixed(1)}k tokens`;
+    } else {
+      tokensEl.style.display = 'none';
+    }
   }
 
   async stopRespawn() {
     if (!this.activeSessionId) return;
+    try {
+      await fetch(`/api/sessions/${this.activeSessionId}/respawn/stop`, { method: 'POST' });
+      delete this.respawnTimers[this.activeSessionId];
+    } catch (err) {
+      this.showToast('Failed to stop respawn', 'error');
+    }
+  }
+
+  // ========== Kill Sessions ==========
+
+  async killActiveSession() {
+    if (!this.activeSessionId) {
+      this.showToast('No active session', 'warning');
+      return;
+    }
+    await this.closeSession(this.activeSessionId);
+  }
+
+  async killAllSessions() {
+    if (this.sessions.size === 0) return;
+
+    if (!confirm(`Kill all ${this.sessions.size} session(s)?`)) return;
 
     try {
-      const res = await fetch(`/api/sessions/${this.activeSessionId}/respawn/stop`, {
-        method: 'POST'
-      });
-      const data = await res.json();
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to stop respawn');
-      }
+      await fetch('/api/sessions', { method: 'DELETE' });
+      this.sessions.clear();
+      this.terminalBuffers.clear();
+      this.activeSessionId = null;
+      this.respawnStatus = {};
+      this.hideRespawnBanner();
+      this.renderSessionTabs();
+      this.terminal.clear();
+      this.showWelcome();
+      this.showToast('All sessions killed', 'success');
     } catch (err) {
-      this.terminal.writeln(`\x1b[1;31m❌ Error stopping respawn: ${err.message}\x1b[0m`);
+      this.showToast('Failed to kill sessions', 'error');
     }
   }
 
-  async startRespawnForSession(sessionId) {
-    const respawnConfig = {
-      enabled: true,
-      updatePrompt: document.getElementById('respawnPrompt').value || 'update all the docs and CLAUDE.md',
-      idleTimeoutMs: (parseInt(document.getElementById('respawnIdleTimeout').value) || 5) * 1000,
-      interStepDelayMs: (parseInt(document.getElementById('respawnStepDelay').value) || 1) * 1000,
-    };
+  // ========== Terminal Controls ==========
 
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}/respawn/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(respawnConfig)
-      });
-      const data = await res.json();
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to start respawn');
-      }
-      this.terminal.writeln(`\x1b[1;32m🔄 Respawn started for session ${sessionId.slice(0, 8)}\x1b[0m`);
-    } catch (err) {
-      this.terminal.writeln(`\x1b[1;31m❌ Error starting respawn: ${err.message}\x1b[0m`);
-    }
-  }
-
-  async stopCurrentRun() {
-    if (!this.currentRun) return;
-
-    try {
-      await fetch(`/api/scheduled/${this.currentRun.id}`, {
-        method: 'DELETE'
-      });
-    } catch (err) {
-      alert('Error stopping run: ' + err.message);
-    }
-  }
-
-  setRunning(running) {
-    const btn = document.getElementById('runBtn');
-    if (running) {
-      btn.disabled = true;
-      btn.innerHTML = '<span class="loading"></span> Running...';
-    } else {
-      btn.disabled = false;
-      btn.innerHTML = '<span class="btn-icon">▶</span> Run';
-    }
-  }
-
-  // Terminal
   clearTerminal() {
     this.terminal.clear();
-    this.terminal.writeln('\x1b[90mTerminal cleared\x1b[0m');
   }
 
-  // Copy terminal contents to clipboard
   async copyTerminal() {
     try {
-      // Get all text from terminal
       const buffer = this.terminal.buffer.active;
       let text = '';
       for (let i = 0; i < buffer.length; i++) {
         const line = buffer.getLine(i);
-        if (line) {
-          text += line.translateToString(true) + '\n';
-        }
+        if (line) text += line.translateToString(true) + '\n';
       }
-
-      // Strip trailing empty lines
-      text = text.replace(/\n+$/, '\n');
-
-      await navigator.clipboard.writeText(text);
-      this.showToast('Terminal output copied to clipboard', 'success');
+      await navigator.clipboard.writeText(text.replace(/\n+$/, '\n'));
+      this.showToast('Copied to clipboard', 'success');
     } catch (err) {
-      this.showToast('Failed to copy: ' + err.message, 'error');
+      this.showToast('Failed to copy', 'error');
     }
   }
 
-  // Font size controls
   increaseFontSize() {
     const current = this.terminal.options.fontSize || 14;
-    const newSize = Math.min(current + 2, 24);
-    this.setFontSize(newSize);
+    this.setFontSize(Math.min(current + 2, 24));
   }
 
   decreaseFontSize() {
     const current = this.terminal.options.fontSize || 14;
-    const newSize = Math.max(current - 2, 10);
-    this.setFontSize(newSize);
+    this.setFontSize(Math.max(current - 2, 10));
   }
 
   setFontSize(size) {
     this.terminal.options.fontSize = size;
-    document.getElementById('fontSizeDisplay').textContent = `${size}px`;
+    document.getElementById('fontSizeDisplay').textContent = size;
     this.fitAddon.fit();
-
-    // Save preference
     localStorage.setItem('claudeman-font-size', size);
   }
 
@@ -1065,33 +999,29 @@ class ClaudemanApp {
       const size = parseInt(saved, 10);
       if (size >= 10 && size <= 24) {
         this.terminal.options.fontSize = size;
-        document.getElementById('fontSizeDisplay').textContent = `${size}px`;
+        document.getElementById('fontSizeDisplay').textContent = size;
       }
     }
   }
 
-  // Timer
+  // ========== Timer ==========
+
   showTimer() {
-    document.getElementById('timerBanner').style.display = 'block';
-    // Set started time
-    if (this.currentRun && this.currentRun.startedAt) {
-      const startDate = new Date(this.currentRun.startedAt);
-      const timeStr = startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      document.getElementById('timerStarted').textContent = `Started: ${timeStr}`;
-    }
+    document.getElementById('timerBanner').style.display = 'flex';
     this.updateTimer();
+    this.timerInterval = setInterval(() => this.updateTimer(), 1000);
   }
 
   hideTimer() {
     document.getElementById('timerBanner').style.display = 'none';
-    this.currentRun = null;
+    if (this.timerInterval) {
+      clearInterval(this.timerInterval);
+      this.timerInterval = null;
+    }
   }
 
   updateTimer() {
-    if (!this.currentRun || this.currentRun.status !== 'running') {
-      this.updatePageTitle();
-      return;
-    }
+    if (!this.currentRun || this.currentRun.status !== 'running') return;
 
     const now = Date.now();
     const remaining = Math.max(0, this.currentRun.endAt - now);
@@ -1101,282 +1031,157 @@ class ClaudemanApp {
 
     document.getElementById('timerValue').textContent = this.formatTime(remaining);
     document.getElementById('timerProgress').style.width = `${percent}%`;
-    document.getElementById('timerTasks').textContent = `${this.currentRun.completedTasks} tasks completed`;
-    document.getElementById('timerCost').textContent = `$${this.currentRun.totalCost.toFixed(4)}`;
-
-    // Update page title with timer
-    document.title = `${this.formatTime(remaining)} - Claudeman`;
+    document.getElementById('timerMeta').textContent =
+      `${this.currentRun.completedTasks} tasks | $${this.currentRun.totalCost.toFixed(2)}`;
   }
 
-  // Update page title based on current state
-  updatePageTitle() {
-    const sessionCount = this.sessions.size;
-    const hasRespawn = Object.values(this.respawnStatus).some(s => s.state !== 'stopped');
-
-    if (this.currentRun && this.currentRun.status === 'running') {
-      // Title updated by updateTimer()
-      return;
-    } else if (hasRespawn) {
-      document.title = `🔄 Respawning - Claudeman`;
-    } else if (sessionCount > 0) {
-      document.title = `(${sessionCount}) Claudeman`;
-    } else {
-      document.title = 'Claudeman';
+  async stopCurrentRun() {
+    if (!this.currentRun) return;
+    try {
+      await fetch(`/api/scheduled/${this.currentRun.id}`, { method: 'DELETE' });
+    } catch (err) {
+      this.showToast('Failed to stop run', 'error');
     }
-  }
-
-  startTimerUpdates() {
-    setInterval(() => this.updateTimer(), 1000);
-    // Also update session durations every 30 seconds
-    setInterval(() => this.renderSessions(), 30000);
   }
 
   formatTime(ms) {
-    const totalSeconds = Math.floor(ms / 1000);
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-
-    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    const s = Math.floor(ms / 1000);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
   }
 
-  // Stats
-  updateStats() {
-    // Calculate total cost from sessions and total cost tracker
-    let sessionsCost = 0;
-    this.sessions.forEach(s => {
-      sessionsCost += s.totalCost || 0;
-    });
-    const displayCost = Math.max(this.totalCost, sessionsCost);
+  // ========== Cost ==========
 
-    document.getElementById('statSessions').textContent = this.sessions.size;
-    document.getElementById('statCost').textContent = `$${displayCost.toFixed(2)}`;
-    document.getElementById('statTasks').textContent = this.totalTasks;
+  updateCost() {
+    let cost = this.totalCost;
+    this.sessions.forEach(s => cost = Math.max(cost, s.totalCost || 0));
+    document.getElementById('headerCost').textContent = `$${cost.toFixed(2)}`;
   }
 
-  // Sessions
-  toggleSessions() {
-    const panel = document.getElementById('sessionsPanel');
-    panel.classList.toggle('collapsed');
-    this.sessionsCollapsed = panel.classList.contains('collapsed');
+  // ========== Help Modal ==========
+
+  showHelp() {
+    document.getElementById('helpModal').classList.add('active');
   }
 
-  renderSessions() {
-    const count = this.sessions.size;
-    document.getElementById('sessionCount').textContent = count;
-    this.updatePageTitle();
+  closeHelp() {
+    document.getElementById('helpModal').classList.remove('active');
+  }
 
-    const list = document.getElementById('sessionsList');
+  closeAllPanels() {
+    document.getElementById('respawnPanel').classList.remove('open');
+    document.getElementById('newSessionPanel').classList.remove('open');
+    document.getElementById('taskPanel').classList.remove('open');
+  }
 
-    if (count === 0) {
-      list.innerHTML = '<div style="padding: 1rem; color: var(--text-muted);">No active sessions</div>';
+  // ========== Task Panel ==========
+
+  toggleTaskPanel() {
+    const panel = document.getElementById('taskPanel');
+    panel.classList.toggle('open');
+    if (panel.classList.contains('open')) {
+      this.renderTaskPanel();
+    }
+  }
+
+  renderTaskPanel() {
+    const session = this.sessions.get(this.activeSessionId);
+    const body = document.getElementById('taskPanelBody');
+    const stats = document.getElementById('taskPanelStats');
+
+    if (!session || !session.taskTree || session.taskTree.length === 0) {
+      body.innerHTML = '<div class="task-empty">No background tasks</div>';
+      stats.textContent = '0 tasks';
       return;
     }
 
-    list.innerHTML = Array.from(this.sessions.values()).map(s => {
-      const respawn = this.respawnStatus[s.id];
-      const respawnHtml = respawn ? `
-        <div class="session-respawn">
-          <span class="session-respawn-dot ${respawn.state === 'stopped' ? 'stopped' : ''}"></span>
-          <span class="session-respawn-state">${respawn.state.replace(/_/g, ' ')}</span>
-          <span class="session-respawn-actions">
-            <button class="btn btn-sm" onclick="event.stopPropagation(); app.stopRespawnForSession('${s.id}')">Stop</button>
-          </span>
-        </div>
-      ` : `
-        <div class="session-respawn">
-          <span class="session-respawn-dot stopped"></span>
-          <span class="session-respawn-state">No respawn</span>
-          <span class="session-respawn-actions">
-            <button class="btn btn-sm" onclick="event.stopPropagation(); app.startRespawnForSession('${s.id}')">Start</button>
-          </span>
-        </div>
-      `;
+    const taskStats = session.taskStats || { running: 0, completed: 0, failed: 0, total: 0 };
+    stats.textContent = `${taskStats.running} running, ${taskStats.completed} done`;
 
-      // Resource usage display
-      const bufferStats = s.bufferStats || {};
-      const terminalSize = bufferStats.terminalBufferSize || 0;
-      const textSize = bufferStats.textOutputSize || 0;
-      const msgCount = bufferStats.messageCount || 0;
-      const totalMemory = terminalSize + textSize;
+    // Render task tree recursively
+    const renderTask = (task, allTasks) => {
+      const statusIcon = task.status === 'running' ? '' :
+                        task.status === 'completed' ? '&#x2713;' : '&#x2717;';
+      const duration = task.endTime
+        ? `${((task.endTime - task.startTime) / 1000).toFixed(1)}s`
+        : `${((Date.now() - task.startTime) / 1000).toFixed(0)}s...`;
 
-      // Color coding based on usage
-      const memoryPercent = bufferStats.maxTerminalBuffer ?
-        (terminalSize / bufferStats.maxTerminalBuffer * 100) : 0;
-      const memoryClass = memoryPercent > 80 ? 'high' : memoryPercent > 50 ? 'medium' : 'low';
-
-      // Session duration
-      const duration = this.formatDuration(Date.now() - s.createdAt);
-
-      const resourceHtml = `
-        <div class="session-resources">
-          <div class="resource-item">
-            <span class="resource-label">⏱</span>
-            <span class="resource-value">${duration}</span>
-          </div>
-          <div class="resource-item">
-            <span class="resource-label">Memory:</span>
-            <span class="resource-value ${memoryClass}">${this.formatBytes(totalMemory)}</span>
-          </div>
-          <div class="resource-item">
-            <span class="resource-label">Messages:</span>
-            <span class="resource-value">${msgCount}</span>
-          </div>
-        </div>
-      `;
-
-      // Extract short working directory name
-      const workingDir = s.workingDir || '';
-      const shortDir = workingDir.split('/').pop() || workingDir;
+      let childrenHtml = '';
+      if (task.children && task.children.length > 0) {
+        childrenHtml = '<div class="task-children">';
+        for (const childId of task.children) {
+          // Find child task in allTasks map
+          const childTask = allTasks.find(t => t.id === childId);
+          if (childTask) {
+            childrenHtml += `<div class="task-node">${renderTask(childTask, allTasks)}</div>`;
+          }
+        }
+        childrenHtml += '</div>';
+      }
 
       return `
-        <div class="session-card ${this.activeSessionId === s.id ? 'active' : ''}" data-session="${s.id}" onclick="app.selectSession('${s.id}')">
-          <div class="session-card-header">
-            <div class="session-status">
-              <span class="session-status-dot ${s.status}"></span>
-              <span>${s.id.slice(0, 8)}</span>
-              ${shortDir ? `<span class="session-dir" title="${this.escapeHtml(workingDir)}">${this.escapeHtml(shortDir)}</span>` : ''}
-            </div>
-            <div class="session-actions">
-              <span class="session-cost">$${(s.totalCost || 0).toFixed(4)}</span>
-              <button class="btn btn-xs btn-danger" onclick="event.stopPropagation(); app.deleteSession('${s.id}')" title="Kill session">✕</button>
+        <div class="task-item">
+          <span class="task-status-icon ${task.status}">${statusIcon}</span>
+          <div class="task-info">
+            <div class="task-description">${this.escapeHtml(task.description)}</div>
+            <div class="task-meta">
+              <span class="task-type">${task.subagentType}</span>
+              <span>${duration}</span>
             </div>
           </div>
-          ${resourceHtml}
-          ${respawnHtml}
         </div>
+        ${childrenHtml}
       `;
-    }).join('');
-  }
+    };
 
-  // Select a session to view its terminal
-  selectSession(sessionId) {
-    this.activeSessionId = sessionId;
-    this.renderSessions();
+    // Flatten all tasks for lookup
+    const allTasks = this.flattenTaskTree(session.taskTree);
 
-    // Load the session's terminal buffer
-    this.loadSessionTerminal(sessionId);
-  }
-
-  // Load terminal buffer for a session
-  async loadSessionTerminal(sessionId) {
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}/terminal`);
-      const data = await res.json();
-      if (data.terminalBuffer) {
-        this.terminal.clear();
-        this.terminal.writeln(`\x1b[90m--- Session ${sessionId.slice(0, 8)} terminal ---\x1b[0m`);
-        this.terminal.write(data.terminalBuffer);
-      }
-    } catch (err) {
-      console.error('Failed to load terminal buffer:', err);
+    // Render only root tasks (those without parents or with null parentId)
+    let html = '<div class="task-tree">';
+    for (const task of session.taskTree) {
+      html += `<div class="task-node">${renderTask(task, allTasks)}</div>`;
     }
+    html += '</div>';
+
+    body.innerHTML = html;
   }
 
-  async stopRespawnForSession(sessionId) {
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}/respawn/stop`, {
-        method: 'POST'
-      });
-      const data = await res.json();
-      if (!data.success) {
-        throw new Error(data.error || 'Failed to stop respawn');
-      }
-    } catch (err) {
-      this.terminal.writeln(`\x1b[1;31m❌ Error stopping respawn: ${err.message}\x1b[0m`);
+  flattenTaskTree(tasks, result = []) {
+    for (const task of tasks) {
+      result.push(task);
+      // Children are stored as IDs, not nested objects in taskTree
+      // The task tree from server already has the structure we need
     }
+    return result;
   }
 
-  // Kill all sessions
-  async killAllSessions() {
-    const count = this.sessions.size;
-    if (count === 0) {
-      this.terminal.writeln('\x1b[90mNo sessions to kill\x1b[0m');
-      return;
+  // ========== Toast ==========
+
+  showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+
+    let container = document.querySelector('.toast-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.className = 'toast-container';
+      document.body.appendChild(container);
     }
+    container.appendChild(toast);
 
-    if (!confirm(`Kill all ${count} session(s)? This will stop all running Claude processes.`)) {
-      return;
-    }
+    requestAnimationFrame(() => toast.classList.add('show'));
 
-    this.terminal.writeln(`\x1b[1;33m⚠ Killing ${count} session(s)...\x1b[0m`);
-
-    try {
-      const res = await fetch('/api/sessions', {
-        method: 'DELETE'
-      });
-      const data = await res.json();
-      if (data.success) {
-        this.terminal.writeln(`\x1b[1;32m✓ Killed ${data.data.killed} session(s)\x1b[0m`);
-        this.sessions.clear();
-        this.activeSessionId = null;
-        this.respawnStatus = {};
-        this.hideRespawnBanner();
-        this.renderSessions();
-      } else {
-        throw new Error(data.error);
-      }
-    } catch (err) {
-      this.terminal.writeln(`\x1b[1;31m❌ Error: ${err.message}\x1b[0m`);
-    }
+    setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 200);
+    }, 3000);
   }
 
-  // Kill a single session
-  async deleteSession(sessionId) {
-    if (!confirm(`Kill session ${sessionId.slice(0, 8)}?`)) {
-      return;
-    }
-
-    try {
-      const res = await fetch(`/api/sessions/${sessionId}`, {
-        method: 'DELETE'
-      });
-      const data = await res.json();
-      if (data.success) {
-        this.terminal.writeln(`\x1b[1;32m✓ Session ${sessionId.slice(0, 8)} killed\x1b[0m`);
-        this.sessions.delete(sessionId);
-        if (this.activeSessionId === sessionId) {
-          this.activeSessionId = null;
-        }
-        delete this.respawnStatus[sessionId];
-        this.renderSessions();
-      } else {
-        throw new Error(data.error);
-      }
-    } catch (err) {
-      this.terminal.writeln(`\x1b[1;31m❌ Error: ${err.message}\x1b[0m`);
-    }
-  }
-
-  // Format bytes for display
-  formatBytes(bytes) {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-  }
-
-  // Format duration in human-readable format
-  formatDuration(ms) {
-    const seconds = Math.floor(ms / 1000);
-    if (seconds < 60) return `${seconds}s`;
-
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m`;
-
-    const hours = Math.floor(minutes / 60);
-    const remainingMinutes = minutes % 60;
-    if (hours < 24) return `${hours}h ${remainingMinutes}m`;
-
-    const days = Math.floor(hours / 24);
-    const remainingHours = hours % 24;
-    return `${days}d ${remainingHours}h`;
-  }
-
-  updateSessionOutput(sessionId, text) {
-    // Sessions list shows brief info, main terminal shows full output
-  }
+  // ========== Utility ==========
 
   escapeHtml(text) {
     if (!text) return '';

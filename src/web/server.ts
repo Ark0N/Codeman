@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { EventEmitter } from 'node:events';
-import { Session, ClaudeMessage } from '../session.js';
+import { Session, ClaudeMessage, type BackgroundTask } from '../session.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
 import { getStore } from '../state-store.js';
 import { generateClaudeMd } from '../templates/claude-md.js';
@@ -48,6 +48,7 @@ export class WebServer extends EventEmitter {
   private app: FastifyInstance;
   private sessions: Map<string, Session> = new Map();
   private respawnControllers: Map<string, RespawnController> = new Map();
+  private respawnTimers: Map<string, { timer: NodeJS.Timeout; endAt: number; startedAt: number }> = new Map();
   private scheduledRuns: Map<string, ScheduledRun> = new Map();
   private sseClients: Set<FastifyReply> = new Set();
   private store = getStore();
@@ -345,7 +346,7 @@ export class WebServer extends EventEmitter {
     // Start interactive session WITH respawn enabled
     this.app.post('/api/sessions/:id/interactive-respawn', async (req) => {
       const { id } = req.params as { id: string };
-      const body = req.body as { respawnConfig?: Partial<RespawnConfig> } | undefined;
+      const body = req.body as { respawnConfig?: Partial<RespawnConfig>; durationMinutes?: number } | undefined;
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -367,6 +368,11 @@ export class WebServer extends EventEmitter {
         this.setupRespawnListeners(id, controller);
         controller.start();
 
+        // Set up timed stop if duration specified
+        if (body?.durationMinutes && body.durationMinutes > 0) {
+          this.setupTimedRespawn(id, body.durationMinutes);
+        }
+
         this.broadcast('respawn:started', { sessionId: id, status: controller.getStatus() });
 
         return {
@@ -377,6 +383,69 @@ export class WebServer extends EventEmitter {
       } catch (err) {
         return { error: (err as Error).message };
       }
+    });
+
+    // Enable respawn on an EXISTING interactive session
+    this.app.post('/api/sessions/:id/respawn/enable', async (req) => {
+      const { id } = req.params as { id: string };
+      const body = req.body as { config?: Partial<RespawnConfig>; durationMinutes?: number } | undefined;
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return { error: 'Session not found' };
+      }
+
+      // Check if session is running (has a PID)
+      if (!session.pid) {
+        return { error: 'Session is not running. Start it first.' };
+      }
+
+      // Stop existing controller if any
+      const existingController = this.respawnControllers.get(id);
+      if (existingController) {
+        existingController.stop();
+      }
+
+      // Create and start new respawn controller
+      const controller = new RespawnController(session, body?.config);
+      this.respawnControllers.set(id, controller);
+      this.setupRespawnListeners(id, controller);
+      controller.start();
+
+      // Set up timed stop if duration specified
+      if (body?.durationMinutes && body.durationMinutes > 0) {
+        this.setupTimedRespawn(id, body.durationMinutes);
+      }
+
+      this.broadcast('respawn:started', { sessionId: id, status: controller.getStatus() });
+
+      return {
+        success: true,
+        message: 'Respawn enabled on existing session',
+        respawnStatus: controller.getStatus(),
+      };
+    });
+
+    // Set auto-clear on a session
+    this.app.post('/api/sessions/:id/auto-clear', async (req) => {
+      const { id } = req.params as { id: string };
+      const body = req.body as { enabled: boolean; threshold?: number };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return { error: 'Session not found' };
+      }
+
+      session.setAutoClear(body.enabled, body.threshold);
+      this.broadcast('session:updated', session.toDetailedState());
+
+      return {
+        success: true,
+        autoClear: {
+          enabled: session.autoClearEnabled,
+          threshold: session.autoClearThreshold,
+        },
+      };
     });
 
     // Quick run (create session, run prompt, return result)
@@ -585,6 +654,31 @@ export class WebServer extends EventEmitter {
       this.broadcast('session:idle', { id: session.id });
       this.broadcast('session:updated', session.toDetailedState());
     });
+
+    // Background task events
+    session.on('taskCreated', (task: BackgroundTask) => {
+      this.broadcast('task:created', { sessionId: session.id, task });
+      this.broadcast('session:updated', session.toDetailedState());
+    });
+
+    session.on('taskUpdated', (task: BackgroundTask) => {
+      this.broadcast('task:updated', { sessionId: session.id, task });
+    });
+
+    session.on('taskCompleted', (task: BackgroundTask) => {
+      this.broadcast('task:completed', { sessionId: session.id, task });
+      this.broadcast('session:updated', session.toDetailedState());
+    });
+
+    session.on('taskFailed', (task: BackgroundTask, error: string) => {
+      this.broadcast('task:failed', { sessionId: session.id, task, error });
+      this.broadcast('session:updated', session.toDetailedState());
+    });
+
+    session.on('autoClear', (data: { tokens: number; threshold: number }) => {
+      this.broadcast('session:autoClear', { sessionId: session.id, ...data });
+      this.broadcast('session:updated', session.toDetailedState());
+    });
   }
 
   private setupRespawnListeners(sessionId: string, controller: RespawnController): void {
@@ -615,6 +709,30 @@ export class WebServer extends EventEmitter {
     controller.on('error', (error: Error) => {
       this.broadcast('respawn:error', { sessionId, error: error.message });
     });
+  }
+
+  private setupTimedRespawn(sessionId: string, durationMinutes: number): void {
+    // Clear existing timer if any
+    const existing = this.respawnTimers.get(sessionId);
+    if (existing) {
+      clearTimeout(existing.timer);
+    }
+
+    const now = Date.now();
+    const endAt = now + durationMinutes * 60 * 1000;
+
+    const timer = setTimeout(() => {
+      // Stop respawn when time is up
+      const controller = this.respawnControllers.get(sessionId);
+      if (controller) {
+        controller.stop();
+        this.broadcast('respawn:stopped', { sessionId, reason: 'duration_expired' });
+      }
+      this.respawnTimers.delete(sessionId);
+    }, durationMinutes * 60 * 1000);
+
+    this.respawnTimers.set(sessionId, { timer, endAt, startedAt: now });
+    this.broadcast('respawn:timerStarted', { sessionId, durationMinutes, endAt, startedAt: now });
   }
 
   private async startScheduledRun(prompt: string, workingDir: string, durationMinutes: number): Promise<ScheduledRun> {

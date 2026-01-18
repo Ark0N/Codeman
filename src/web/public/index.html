@@ -14,278 +14,195 @@
 </head>
 <body>
   <div class="app">
-    <!-- Header -->
+    <!-- Compact Header with Session Tabs -->
     <header class="header">
-      <div class="header-left">
-        <h1 class="logo">⚡ Claudeman</h1>
-        <div class="connection-status" id="connectionStatus">
-          <span class="status-dot"></span>
-          <span>Connecting</span>
+      <div class="header-brand">
+        <span class="logo">Claudeman</span>
+      </div>
+
+      <!-- Session Tabs -->
+      <div class="session-tabs" id="sessionTabs">
+        <div class="session-tab new-tab" onclick="app.createNewSession()" title="New Session (Ctrl+N)">
+          <span>+</span>
         </div>
       </div>
-      <div class="header-stats">
-        <div class="stat-item">
-          <span class="stat-value" id="statSessions">0</span>
-          <span class="stat-label">Sessions</span>
+
+      <div class="header-right">
+        <div class="connection-status" id="connectionStatus">
+          <span class="status-dot"></span>
+          <span class="status-text">Connecting</span>
         </div>
-        <div class="stat-item">
-          <span class="stat-value" id="statCost">$0.00</span>
-          <span class="stat-label">Total Cost</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-value" id="statTasks">0</span>
-          <span class="stat-label">Tasks Done</span>
-        </div>
+        <div class="header-cost" id="headerCost">$0.00</div>
       </div>
     </header>
 
     <!-- Timer Banner (shown when timed run is active) -->
     <div class="timer-banner" id="timerBanner" style="display: none;">
-      <div class="timer-info">
-        <span class="timer-label">Time Remaining</span>
+      <div class="timer-content">
         <span class="timer-value" id="timerValue">00:00:00</span>
+        <div class="timer-progress"><div class="timer-progress-fill" id="timerProgress"></div></div>
+        <span class="timer-meta" id="timerMeta">0 tasks | $0.00</span>
       </div>
-      <div class="timer-progress">
-        <div class="timer-progress-fill" id="timerProgress"></div>
-      </div>
-      <div class="timer-meta">
-        <span id="timerStarted" class="timer-started">Started: --:--</span>
-        <span id="timerTasks">0 tasks completed</span>
-        <span id="timerCost">$0.00</span>
-        <button class="btn btn-sm btn-danger" onclick="app.stopCurrentRun()">Stop</button>
-      </div>
+      <button class="btn-icon-only" onclick="app.stopCurrentRun()" title="Stop">&#x25A0;</button>
     </div>
 
-    <!-- Respawn Banner (shown when respawn loop is active) -->
+    <!-- Respawn Banner -->
     <div class="respawn-banner" id="respawnBanner" style="display: none;">
-      <div class="respawn-status-info">
-        <span class="respawn-indicator">🔄</span>
-        <span class="respawn-state" id="respawnState">Watching</span>
-        <span class="respawn-cycles">Cycle: <span id="respawnCycleCount">0</span></span>
-      </div>
-      <div class="respawn-step" id="respawnStep"></div>
-      <div class="respawn-actions">
-        <button class="btn btn-sm" onclick="app.toggleRespawn()">
-          <span id="respawnToggleText">Pause</span>
-        </button>
-        <button class="btn btn-sm btn-danger" onclick="app.stopRespawn()">Stop</button>
-      </div>
+      <span class="respawn-indicator">&#x21BB;</span>
+      <span class="respawn-state" id="respawnState">Watching</span>
+      <span class="respawn-cycles">Cycle <span id="respawnCycleCount">0</span></span>
+      <span class="respawn-timer" id="respawnTimer" style="display: none;"></span>
+      <span class="respawn-tokens" id="respawnTokens" style="display: none;"></span>
+      <span class="respawn-step" id="respawnStep"></span>
+      <button class="btn-icon-only" onclick="app.stopRespawn()" title="Stop Respawn">&#x25A0;</button>
     </div>
 
-    <!-- Main Content -->
+    <!-- Main Terminal Area -->
     <main class="main">
-      <!-- Control Panel -->
-      <section class="control-panel">
-        <!-- Tabs -->
-        <div class="tabs">
-          <button class="tab active" data-tab="run" onclick="app.switchTab('run')">Run</button>
-          <button class="tab" data-tab="cases" onclick="app.switchTab('cases')">Cases</button>
-          <button class="tab" data-tab="settings" onclick="app.switchTab('settings')">Settings</button>
-        </div>
-
-        <!-- Run Tab -->
-        <div class="tab-content active" id="tab-run">
-          <!-- Quick Start Section -->
-          <div class="quick-start-section">
-            <div class="quick-start-header">
-              <span class="quick-start-icon">&#9889;</span>
-              <span class="quick-start-title">Quick Start</span>
-            </div>
-            <div class="quick-start-controls">
-              <select id="quickStartCase" class="quick-start-select">
-                <option value="testcase">testcase (default)</option>
-              </select>
-              <button class="btn btn-quick-start" onclick="app.quickStart()">
-                <span class="btn-icon">&#9889;</span>
-                Quick Start
-              </button>
-            </div>
-            <p class="quick-start-hint">Start an interactive Claude session in one click</p>
-          </div>
-
-          <div class="section-divider">
-            <span>or configure a custom run</span>
-          </div>
-
-          <div class="form-group">
-            <label>Prompt</label>
-            <textarea id="promptInput" placeholder="What should Claude do?" rows="6"></textarea>
-          </div>
-
-          <div class="form-group">
-            <label>Working Directory</label>
-            <div class="input-with-button">
-              <input type="text" id="dirInput" placeholder="Current directory">
-              <button class="btn btn-sm" onclick="app.selectCase()">Select Case</button>
-            </div>
-          </div>
-
-          <div class="form-row">
-            <div class="form-group">
-              <label>Duration</label>
-              <select id="durationSelect">
-                <option value="0">Single run</option>
-                <option value="5">5 minutes</option>
-                <option value="15">15 minutes</option>
-                <option value="30">30 minutes</option>
-                <option value="60">1 hour</option>
-                <option value="120">2 hours</option>
-                <option value="240">4 hours</option>
-                <option value="480">8 hours</option>
-                <option value="720">12 hours</option>
-                <option value="custom">Custom...</option>
-              </select>
-            </div>
-            <div class="form-group" id="customDurationGroup" style="display: none;">
-              <label>Minutes</label>
-              <input type="number" id="customDuration" value="60" min="1" max="1440">
-            </div>
-          </div>
-
-          <!-- Respawn Settings (for Interactive Sessions) -->
-          <div class="respawn-settings" id="respawnSettings">
-            <div class="respawn-header">
-              <label>
-                <input type="checkbox" id="respawnEnabled">
-                Enable Auto-Respawn Loop
-              </label>
-              <button class="btn btn-sm" onclick="app.toggleRespawnDetails()">⚙️</button>
-            </div>
-            <div class="respawn-details" id="respawnDetails" style="display: none;">
-              <div class="form-group">
-                <label>Update Prompt</label>
-                <input type="text" id="respawnPrompt" value="update all the docs and CLAUDE.md">
-              </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label>Idle Timeout (sec)</label>
-                  <input type="number" id="respawnIdleTimeout" value="5" min="1" max="60">
-                </div>
-                <div class="form-group">
-                  <label>Step Delay (sec)</label>
-                  <input type="number" id="respawnStepDelay" value="1" min="0" max="10">
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="form-actions">
-            <button class="btn btn-primary btn-large" id="runBtn" onclick="app.startRun()">
-              <span class="btn-icon">▶</span>
-              Run Prompt
-            </button>
-            <button class="btn btn-large" id="interactiveBtn" onclick="app.startInteractive()" style="background: #22c55e;">
-              <span class="btn-icon">💻</span>
-              Interactive Session
-            </button>
-          </div>
-        </div>
-
-        <!-- Cases Tab -->
-        <div class="tab-content" id="tab-cases">
-          <div class="section-header">
-            <h3>Your Cases</h3>
-            <button class="btn btn-sm btn-primary" onclick="app.showCreateCase()">+ New Case</button>
-          </div>
-
-          <div class="cases-list" id="casesList">
-            <p class="empty-state">Loading cases...</p>
-          </div>
-
-          <!-- Create Case Form (hidden by default) -->
-          <div class="create-case-form" id="createCaseForm" style="display: none;">
-            <h4>Create New Case</h4>
-            <div class="form-group">
-              <label>Case Name</label>
-              <input type="text" id="caseNameInput" placeholder="my-project">
-              <span class="form-hint">Letters, numbers, hyphens, underscores only</span>
-            </div>
-            <div class="form-group">
-              <label>Description</label>
-              <input type="text" id="caseDescInput" placeholder="Project description (optional)">
-            </div>
-            <div class="form-actions">
-              <button class="btn btn-sm" onclick="app.hideCreateCase()">Cancel</button>
-              <button class="btn btn-sm btn-primary" onclick="app.createCase()">Create</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Settings Tab -->
-        <div class="tab-content" id="tab-settings">
-          <div class="form-group">
-            <label>Default Directory</label>
-            <input type="text" id="defaultDirInput" placeholder="~/projects">
-          </div>
-          <div class="form-group">
-            <label>
-              <input type="checkbox" id="autoScrollOutput" checked>
-              Auto-scroll output
-            </label>
-          </div>
-          <div class="form-group">
-            <label>
-              <input type="checkbox" id="soundOnComplete">
-              Sound on completion
-            </label>
-          </div>
-          <div class="form-actions">
-            <button class="btn btn-sm btn-primary" onclick="app.saveSettings()">Save Settings</button>
-          </div>
-        </div>
-      </section>
-
-      <!-- Terminal Panel -->
-      <section class="output-panel">
-        <div class="output-header">
-          <h2>Terminal</h2>
-          <div class="output-actions">
-            <div class="font-controls">
-              <button class="btn btn-xs" onclick="app.decreaseFontSize()" title="Decrease font size (Ctrl+-)">A-</button>
-              <span class="font-size-display" id="fontSizeDisplay">14px</span>
-              <button class="btn btn-xs" onclick="app.increaseFontSize()" title="Increase font size (Ctrl+=)">A+</button>
-            </div>
-            <button class="btn btn-sm" onclick="app.copyTerminal()" title="Copy terminal output">Copy</button>
-            <button class="btn btn-sm" onclick="app.clearTerminal()">Clear</button>
-          </div>
-        </div>
-
-        <div class="terminal-container" id="terminalContainer"></div>
-      </section>
+      <div class="terminal-container" id="terminalContainer"></div>
     </main>
 
-    <!-- Sessions Panel (collapsible) -->
-    <aside class="sessions-panel" id="sessionsPanel">
-      <div class="sessions-header">
-        <div class="sessions-header-left" onclick="app.toggleSessions()">
-          <h3>Sessions <span class="session-count" id="sessionCount">0</span></h3>
-          <span class="toggle-icon" id="toggleIcon">▼</span>
+    <!-- Bottom Toolbar -->
+    <footer class="toolbar">
+      <div class="toolbar-left">
+        <!-- Quick Start -->
+        <div class="toolbar-group">
+          <button class="btn-toolbar btn-primary" onclick="app.quickStart()" title="Quick Start (Ctrl+Enter)">
+            Quick Start
+          </button>
+          <select id="quickStartCase" class="toolbar-select" title="Select case">
+            <option value="testcase">testcase</option>
+          </select>
         </div>
-        <button class="btn btn-sm btn-danger kill-all-btn" onclick="event.stopPropagation(); app.killAllSessions()" title="Kill all sessions">
-          ✕ Kill All
-        </button>
-      </div>
-      <div class="sessions-list" id="sessionsList"></div>
-    </aside>
 
-    <!-- Case Selector Modal -->
-    <div class="modal" id="caseSelectorModal">
-      <div class="modal-backdrop" onclick="app.closeCaseSelector()"></div>
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>Select Case</h3>
-          <button class="modal-close" onclick="app.closeCaseSelector()">&times;</button>
+        <!-- Directory -->
+        <div class="toolbar-group">
+          <button class="btn-toolbar" onclick="app.toggleDirInput()" title="Set working directory">
+            <span id="dirDisplay">No directory</span>
+          </button>
+          <input type="text" id="dirInput" class="toolbar-input hidden" placeholder="Working directory..." onblur="app.hideDirInput()">
         </div>
-        <div class="modal-body">
-          <div class="cases-grid" id="caseSelectorGrid">
-            <p class="empty-state">Loading...</p>
+
+        <!-- Respawn Settings -->
+        <div class="toolbar-group">
+          <button class="btn-toolbar" onclick="app.toggleRespawnPanel()" id="respawnToggleBtn" title="Respawn settings">
+            Respawn
+          </button>
+        </div>
+      </div>
+
+      <div class="toolbar-right">
+        <!-- Font Controls -->
+        <button class="btn-toolbar btn-sm" onclick="app.decreaseFontSize()" title="Decrease font (Ctrl+-)">A-</button>
+        <span class="font-size-display" id="fontSizeDisplay">14</span>
+        <button class="btn-toolbar btn-sm" onclick="app.increaseFontSize()" title="Increase font (Ctrl++)">A+</button>
+
+        <div class="toolbar-divider"></div>
+
+        <button class="btn-toolbar" onclick="app.copyTerminal()" title="Copy terminal">Copy</button>
+        <button class="btn-toolbar" onclick="app.clearTerminal()" title="Clear terminal (Ctrl+L)">Clear</button>
+
+        <div class="toolbar-divider"></div>
+
+        <button class="btn-toolbar btn-danger" onclick="app.killActiveSession()" title="Kill current session">Kill</button>
+      </div>
+    </footer>
+
+    <!-- Respawn Settings Panel (slide-up) -->
+    <div class="respawn-panel" id="respawnPanel">
+      <div class="respawn-panel-header">
+        <span>Respawn Settings</span>
+        <button class="btn-close" onclick="app.toggleRespawnPanel()">&times;</button>
+      </div>
+      <div class="respawn-panel-body">
+        <div class="form-row">
+          <label>Update Prompt</label>
+          <input type="text" id="respawnPrompt" value="update all the docs and CLAUDE.md" placeholder="Prompt to send when idle">
+        </div>
+        <div class="form-row-inline">
+          <div class="form-col">
+            <label>Idle Timeout</label>
+            <div class="input-suffix">
+              <input type="number" id="respawnIdleTimeout" value="5" min="1" max="60">
+              <span>sec</span>
+            </div>
           </div>
+          <div class="form-col">
+            <label>Step Delay</label>
+            <div class="input-suffix">
+              <input type="number" id="respawnStepDelay" value="1" min="0" max="10">
+              <span>sec</span>
+            </div>
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Run Duration (optional)</label>
+          <div class="input-suffix">
+            <input type="number" id="respawnDuration" value="" min="1" placeholder="No limit">
+            <span>min</span>
+          </div>
+          <span class="form-hint">Leave empty for unlimited. Respawn stops after duration.</span>
+        </div>
+        <div class="form-row">
+          <label>After Update Prompt:</label>
+          <div class="checkbox-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="respawnSendClear" checked>
+              <span>Send /clear</span>
+              <span class="checkbox-hint">Clear conversation context</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="respawnSendInit" checked>
+              <span>Send /init</span>
+              <span class="checkbox-hint">Reinitialize session</span>
+            </label>
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Auto-Clear Context</label>
+          <div class="checkbox-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="autoClearEnabled">
+              <span>Enable Auto-Clear</span>
+              <span class="checkbox-hint">Clear at token threshold</span>
+            </label>
+          </div>
+          <div class="input-suffix" style="margin-top: 0.5rem;">
+            <input type="number" id="autoClearThreshold" value="100000" min="10000" max="500000" step="10000">
+            <span>tokens</span>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button class="btn-toolbar" onclick="app.toggleRespawnPanel()">Cancel</button>
+          <button class="btn-toolbar btn-success" onclick="app.enableRespawnOnCurrent()" id="enableOnCurrentBtn" style="display: none;">Enable on Current</button>
+          <button class="btn-toolbar btn-primary" onclick="app.startInteractiveWithRespawn()">Start New + Respawn</button>
         </div>
       </div>
     </div>
 
-    <!-- Help Button -->
-    <button class="help-btn" onclick="app.showHelp()" title="Keyboard shortcuts (Ctrl+?)">?</button>
+    <!-- New Session Panel (slide-up) -->
+    <div class="new-session-panel" id="newSessionPanel">
+      <div class="respawn-panel-header">
+        <span>New Session</span>
+        <button class="btn-close" onclick="app.hideNewSessionPanel()">&times;</button>
+      </div>
+      <div class="respawn-panel-body">
+        <div class="form-row">
+          <label>Case / Project</label>
+          <select id="newSessionCase" class="form-select">
+            <option value="testcase">testcase (default)</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Or specify directory</label>
+          <input type="text" id="newSessionDir" placeholder="~/projects/my-project">
+        </div>
+        <div class="form-actions">
+          <button class="btn-toolbar" onclick="app.hideNewSessionPanel()">Cancel</button>
+          <button class="btn-toolbar btn-success" onclick="app.createSessionFromPanel()">Create Session</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Help Modal -->
     <div class="modal" id="helpModal">
@@ -296,60 +213,36 @@
           <button class="modal-close" onclick="app.closeHelp()">&times;</button>
         </div>
         <div class="modal-body">
-          <div class="shortcuts-list">
-            <div class="shortcut-group">
-              <h4>General</h4>
-              <div class="shortcut-row">
-                <kbd>Ctrl</kbd>+<kbd>Enter</kbd>
-                <span>Quick Start</span>
-              </div>
-              <div class="shortcut-row">
-                <kbd>Ctrl</kbd>+<kbd>K</kbd>
-                <span>Kill all sessions</span>
-              </div>
-              <div class="shortcut-row">
-                <kbd>Ctrl</kbd>+<kbd>?</kbd>
-                <span>Show this help</span>
-              </div>
-              <div class="shortcut-row">
-                <kbd>Escape</kbd>
-                <span>Close modals</span>
-              </div>
-            </div>
-            <div class="shortcut-group">
-              <h4>Terminal</h4>
-              <div class="shortcut-row">
-                <kbd>Ctrl</kbd>+<kbd>L</kbd>
-                <span>Clear terminal</span>
-              </div>
-              <div class="shortcut-row">
-                <kbd>Ctrl</kbd>+<kbd>+</kbd>
-                <span>Increase font size</span>
-              </div>
-              <div class="shortcut-row">
-                <kbd>Ctrl</kbd>+<kbd>-</kbd>
-                <span>Decrease font size</span>
-              </div>
-            </div>
-            <div class="shortcut-group">
-              <h4>Navigation</h4>
-              <div class="shortcut-row">
-                <kbd>Ctrl</kbd>+<kbd>1</kbd>
-                <span>Run tab</span>
-              </div>
-              <div class="shortcut-row">
-                <kbd>Ctrl</kbd>+<kbd>2</kbd>
-                <span>Cases tab</span>
-              </div>
-              <div class="shortcut-row">
-                <kbd>Ctrl</kbd>+<kbd>3</kbd>
-                <span>Settings tab</span>
-              </div>
-            </div>
+          <div class="shortcuts-grid">
+            <div><kbd>Ctrl</kbd>+<kbd>Enter</kbd></div><div>Quick Start</div>
+            <div><kbd>Ctrl</kbd>+<kbd>N</kbd></div><div>New Session</div>
+            <div><kbd>Ctrl</kbd>+<kbd>W</kbd></div><div>Close Session</div>
+            <div><kbd>Ctrl</kbd>+<kbd>Tab</kbd></div><div>Next Session</div>
+            <div><kbd>Ctrl</kbd>+<kbd>K</kbd></div><div>Kill All Sessions</div>
+            <div><kbd>Ctrl</kbd>+<kbd>L</kbd></div><div>Clear Terminal</div>
+            <div><kbd>Ctrl</kbd>+<kbd>+</kbd></div><div>Increase Font</div>
+            <div><kbd>Ctrl</kbd>+<kbd>-</kbd></div><div>Decrease Font</div>
+            <div><kbd>Ctrl</kbd>+<kbd>?</kbd></div><div>Show Help</div>
+            <div><kbd>Escape</kbd></div><div>Close Panels</div>
           </div>
         </div>
       </div>
     </div>
+
+    <!-- Task Tree Panel (slide-up) -->
+    <div class="task-panel" id="taskPanel">
+      <div class="task-panel-header">
+        <span>Background Tasks</span>
+        <div class="task-panel-stats" id="taskPanelStats">0 running</div>
+        <button class="btn-close" onclick="app.toggleTaskPanel()">&times;</button>
+      </div>
+      <div class="task-panel-body" id="taskPanelBody">
+        <div class="task-empty">No background tasks</div>
+      </div>
+    </div>
+
+    <!-- Help Button -->
+    <button class="help-btn" onclick="app.showHelp()" title="Keyboard shortcuts (Ctrl+?)">?</button>
   </div>
 
   <script src="app.js"></script>

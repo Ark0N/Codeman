@@ -26,6 +26,10 @@ export interface RespawnConfig {
   interStepDelayMs: number;
   /** Whether to enable respawn loop */
   enabled: boolean;
+  /** Whether to send /clear after update prompt */
+  sendClear: boolean;
+  /** Whether to send /init after /clear */
+  sendInit: boolean;
 }
 
 export interface RespawnEvents {
@@ -43,6 +47,8 @@ const DEFAULT_CONFIG: RespawnConfig = {
   updatePrompt: 'update all the docs and CLAUDE.md',
   interStepDelayMs: 1000,        // 1 second between steps
   enabled: true,
+  sendClear: true,               // send /clear after update prompt
+  sendInit: true,                // send /init after /clear
 };
 
 /**
@@ -306,7 +312,14 @@ export class RespawnController extends EventEmitter {
         if (this.promptDetected && !this.workingDetected) {
           this.log('Update docs completed');
           this.emit('stepCompleted', 'update');
-          this.sendClear();
+          // Proceed based on config
+          if (this.config.sendClear) {
+            this.sendClear();
+          } else if (this.config.sendInit) {
+            this.sendInit();
+          } else {
+            this.completeCycle();
+          }
         }
       }, 3000); // 3 second verification
     }
@@ -332,7 +345,12 @@ export class RespawnController extends EventEmitter {
       this.idleTimer = setTimeout(() => {
         this.log('/clear completed');
         this.emit('stepCompleted', 'clear');
-        this.sendInit();
+        // Proceed based on config
+        if (this.config.sendInit) {
+          this.sendInit();
+        } else {
+          this.completeCycle();
+        }
       }, 1000); // 1 second for clear
     }
   }

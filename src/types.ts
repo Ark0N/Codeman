@@ -70,6 +70,10 @@ export interface RespawnConfig {
   interStepDelayMs: number;
   /** Whether to enable respawn loop */
   enabled: boolean;
+  /** Whether to send /clear after update prompt */
+  sendClear: boolean;
+  /** Whether to send /init after /clear */
+  sendInit: boolean;
 }
 
 export interface AppConfig {
@@ -211,6 +215,8 @@ export const DEFAULT_CONFIG: AppConfig = {
     updatePrompt: 'update all the docs and CLAUDE.md',
     interStepDelayMs: 1000,        // 1 second between steps
     enabled: false,                // disabled by default
+    sendClear: true,               // send /clear after update prompt
+    sendInit: true,                // send /init after /clear
   },
 };
 
