@@ -190,12 +190,12 @@ body {
 /* Session tab gear icon */
 .session-tab .tab-gear {
   opacity: 0;
-  padding: 0 0.2rem;
-  font-size: 0.75rem;
+  padding: 0 0.3rem;
+  font-size: 1rem;
   line-height: 1;
   color: var(--text-muted);
   cursor: pointer;
-  transition: opacity 0.15s;
+  transition: opacity 0.15s, transform 0.2s;
 }
 
 .session-tab:hover .tab-gear {
@@ -204,6 +204,7 @@ body {
 
 .session-tab .tab-gear:hover {
   color: var(--accent-hover);
+  transform: rotate(45deg);
 }
 
 /* Mode indicator on session tab */

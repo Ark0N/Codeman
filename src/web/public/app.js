@@ -108,7 +108,7 @@ class ClaudemanApp {
 
   showWelcome() {
     this.terminal.writeln('\x1b[1;36m  Claudeman Terminal\x1b[0m');
-    this.terminal.writeln('\x1b[90m  Click "Quick Start" or press Ctrl+Enter to begin\x1b[0m');
+    this.terminal.writeln('\x1b[90m  Click "Run Claude" or press Ctrl+Enter to begin\x1b[0m');
     this.terminal.writeln('');
   }
 
@@ -127,6 +127,7 @@ class ClaudemanApp {
   }
 
   setupEventListeners() {
+    // Use capture to handle before terminal
     document.addEventListener('keydown', (e) => {
       // Escape - close panels and modals
       if (e.key === 'Escape') {
@@ -185,7 +186,7 @@ class ClaudemanApp {
         e.preventDefault();
         this.decreaseFontSize();
       }
-    });
+    }, true); // Use capture phase to handle before terminal
   }
 
   // ========== SSE Connection ==========
@@ -465,10 +466,10 @@ class ClaudemanApp {
       const hasRunningTasks = taskStats.running > 0;
 
       html += `
-        <div class="session-tab ${isActive ? 'active' : ''}" data-id="${id}" onclick="app.selectSession('${id}')">
+        <div class="session-tab ${isActive ? 'active' : ''}" data-id="${id}" onclick="app.selectSession('${id}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${id}')">
           <span class="tab-status ${status}"></span>
           ${mode === 'shell' ? '<span class="tab-mode shell">sh</span>' : ''}
-          <span class="tab-name">${this.escapeHtml(name)}</span>
+          <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()">${taskStats.running}</span>` : ''}
           <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${id}')" title="Session options">&#x2699;</span>
           <span class="tab-close" onclick="event.stopPropagation(); app.closeSession('${id}')">&times;</span>
@@ -597,8 +598,33 @@ class ClaudemanApp {
 
       select.innerHTML = options;
       newSessionSelect.innerHTML = options;
+
+      // Auto-select first case and update directory display
+      if (cases.length > 0) {
+        const firstCase = cases.find(c => c.name === 'testcase') || cases[0];
+        select.value = firstCase.name;
+        this.updateDirDisplayForCase(firstCase.name);
+      }
+
+      // Update directory when case selection changes
+      select.addEventListener('change', () => {
+        this.updateDirDisplayForCase(select.value);
+      });
     } catch (err) {
       console.error('Failed to load cases:', err);
+    }
+  }
+
+  async updateDirDisplayForCase(caseName) {
+    try {
+      const res = await fetch(`/api/cases/${caseName}`);
+      const data = await res.json();
+      if (data.path) {
+        document.getElementById('dirDisplay').textContent = data.path;
+        document.getElementById('dirInput').value = data.path;
+      }
+    } catch (err) {
+      document.getElementById('dirDisplay').textContent = caseName;
     }
   }
 
@@ -1173,6 +1199,58 @@ class ClaudemanApp {
     } catch (err) {
       this.showToast('Failed to rename: ' + err.message, 'error');
     }
+  }
+
+  // Inline rename on right-click
+  startInlineRename(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    const tabName = document.querySelector(`.tab-name[data-session-id="${sessionId}"]`);
+    if (!tabName) return;
+
+    const currentName = this.getSessionName(session);
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = session.name || '';
+    input.placeholder = currentName;
+    input.className = 'tab-rename-input';
+    input.style.cssText = 'width: 80px; font-size: 0.75rem; padding: 2px 4px; background: var(--bg-input); border: 1px solid var(--accent); border-radius: 3px; color: var(--text); outline: none;';
+
+    const originalContent = tabName.textContent;
+    tabName.textContent = '';
+    tabName.appendChild(input);
+    input.focus();
+    input.select();
+
+    const finishRename = async () => {
+      const newName = input.value.trim();
+      tabName.textContent = newName || originalContent;
+
+      if (newName && newName !== session.name) {
+        try {
+          await fetch(`/api/sessions/${sessionId}/name`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: newName })
+          });
+        } catch (err) {
+          tabName.textContent = originalContent;
+          this.showToast('Failed to rename', 'error');
+        }
+      }
+    };
+
+    input.addEventListener('blur', finishRename);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        input.blur();
+      } else if (e.key === 'Escape') {
+        input.value = '';
+        input.blur();
+      }
+    });
   }
 
   // ========== Help Modal ==========

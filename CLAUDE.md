@@ -80,6 +80,11 @@ src/
 - Terminal buffer persisted for client reconnections
 - Works with RespawnController for autonomous cycling
 
+**Shell Mode** (`startShell()`):
+- Plain bash/zsh terminal without Claude
+- Useful for running commands alongside Claude sessions
+- Same PTY features (resize, buffer persistence)
+
 ## Code Patterns
 
 ### Claude Message Parsing
@@ -241,8 +246,9 @@ All events are broadcast to clients connected to `/api/events`. Event format: `{
 
 ```
 GET  /api/sessions                    # List all sessions (includes buffer stats)
-POST /api/sessions                    # Create session { workingDir }
+POST /api/sessions                    # Create session { workingDir, mode?, name? }
 GET  /api/sessions/:id                # Get single session details
+PUT  /api/sessions/:id/name           # Rename session { name }
 DELETE /api/sessions/:id              # Stop and remove a session (kills process + children)
 DELETE /api/sessions                  # Kill all sessions at once
 GET  /api/sessions/:id/output         # Get session output buffer
@@ -253,7 +259,8 @@ GET  /api/sessions/:id/terminal       # Get terminal buffer (raw ANSI)
 
 ```
 POST /api/sessions/:id/run            # Run prompt { prompt } (one-shot mode)
-POST /api/sessions/:id/interactive    # Start interactive terminal mode
+POST /api/sessions/:id/interactive    # Start interactive Claude terminal mode
+POST /api/sessions/:id/shell          # Start plain shell (bash/zsh, no Claude)
 POST /api/sessions/:id/input          # Send input to interactive session { input }
 POST /api/sessions/:id/resize         # Resize terminal { cols, rows }
 POST /api/sessions/:id/interactive-respawn  # Start interactive + respawn controller
@@ -307,3 +314,9 @@ GET  /api/events                      # SSE stream (real-time events)
 GET  /api/status                      # Full state snapshot (sessions + scheduled + respawn)
 ```
 
+## Pending Tasks
+
+- [ ] Remove the "New Session" tab and add a gear icon (⚙️) in the top right corner for app settings
+- [ ] Add confirmation dialog when clicking "x" on a session tab - warn user that the screen session behind will be closed
+- [ ] In settings: add option to configure a default CLAUDE.md file path (e.g. /home/arkon/default/CLAUDE.md) that will be used for new sessions/cases
+- [ ] Wrap each session in a GNU screen session so they persist even if webinterface stops. Track active screen sessions in a file (~/.claudeman/screens.json), allow killing them after webserver restart, and show them in the background tasks tab for monitoring. Include a detailed task manager view: show memory usage (MB), CPU usage, child processes spawned per session - make it very responsive with real-time updates
