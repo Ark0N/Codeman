@@ -1713,6 +1713,49 @@ body {
   gap: 0.5rem;
 }
 
+/* Modal Tabs */
+.modal-tabs {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 1rem 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-tab-btn {
+  padding: 0.5rem 1rem;
+  font-size: 0.8rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.modal-tab-btn:hover {
+  background: var(--bg-input);
+  color: var(--text);
+}
+
+.modal-tab-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.modal-tab-content.hidden {
+  display: none;
+}
+
+/* Ralph Config Actions */
+.ralph-config-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
 .modal-header {
   display: flex;
   justify-content: space-between;

@@ -766,35 +766,54 @@ class ClaudemanApp {
 
   // ========== Quick Start ==========
 
-  async loadQuickStartCases() {
+  async loadQuickStartCases(selectCaseName = null) {
     try {
-      const res = await fetch('/api/cases');
+      // Add cache-busting to ensure fresh data
+      const res = await fetch('/api/cases?_t=' + Date.now());
       const cases = await res.json();
       this.cases = cases;
+      console.log('[loadQuickStartCases] Loaded cases:', cases.map(c => c.name));
 
       const select = document.getElementById('quickStartCase');
 
-      // Build options
-      let options = '<option value="testcase">testcase</option>';
+      // Build options - existing cases first, then testcase as fallback if not present
+      let options = '';
+      const hasTestcase = cases.some(c => c.name === 'testcase');
+
       cases.forEach(c => {
-        if (c.name !== 'testcase') {
-          options += `<option value="${c.name}">${c.name}</option>`;
-        }
+        options += `<option value="${c.name}">${c.name}</option>`;
       });
 
-      select.innerHTML = options;
+      // Add testcase option if it doesn't exist (will be created on first run)
+      if (!hasTestcase) {
+        options = `<option value="testcase">testcase</option>` + options;
+      }
 
-      // Auto-select first case and update directory display
-      if (cases.length > 0) {
+      select.innerHTML = options;
+      console.log('[loadQuickStartCases] Set options:', select.innerHTML.substring(0, 200));
+
+      // If a specific case was requested, select it
+      if (selectCaseName) {
+        select.value = selectCaseName;
+        this.updateDirDisplayForCase(selectCaseName);
+      } else if (cases.length > 0) {
+        // Auto-select first case
         const firstCase = cases.find(c => c.name === 'testcase') || cases[0];
         select.value = firstCase.name;
         this.updateDirDisplayForCase(firstCase.name);
+      } else {
+        // No cases exist yet - show the default case name as directory hint
+        select.value = 'testcase';
+        document.getElementById('dirDisplay').textContent = '~/claudeman-cases/testcase (will be created)';
       }
 
-      // Update directory when case selection changes
-      select.addEventListener('change', () => {
-        this.updateDirDisplayForCase(select.value);
-      });
+      // Only add event listener once (on first load)
+      if (!select.dataset.listenerAdded) {
+        select.addEventListener('change', () => {
+          this.updateDirDisplayForCase(select.value);
+        });
+        select.dataset.listenerAdded = 'true';
+      }
     } catch (err) {
       console.error('Failed to load cases:', err);
     }
@@ -842,7 +861,7 @@ class ClaudemanApp {
     try {
       // Get case path first
       const caseRes = await fetch(`/api/cases/${caseName}`);
-      const caseData = await caseRes.json();
+      let caseData = await caseRes.json();
 
       // Create the case if it doesn't exist
       if (!caseData.path) {
@@ -853,6 +872,8 @@ class ClaudemanApp {
         });
         const createCaseData = await createCaseRes.json();
         if (!createCaseData.success) throw new Error(createCaseData.error || 'Failed to create case');
+        // Use the newly created case data (API returns { success, case: { name, path } })
+        caseData = createCaseData.case;
       }
 
       const workingDir = caseData.path;
@@ -1291,6 +1312,9 @@ class ClaudemanApp {
 
     this.editingSessionId = sessionId;
 
+    // Reset to Respawn tab
+    this.switchOptionsTab('respawn');
+
     // Update respawn status display and buttons
     const respawnStatus = document.getElementById('sessionRespawnStatus');
     const enableBtn = document.getElementById('modalEnableRespawnBtn');
@@ -1319,6 +1343,15 @@ class ClaudemanApp {
 
     // Reset duration presets to default (unlimited)
     this.selectDurationPreset('');
+
+    // Populate Ralph Wiggum form with current session values
+    const innerState = this.innerStates.get(sessionId);
+    this.populateRalphForm({
+      completionPhrase: innerState?.loop?.completionPhrase || session.innerLoop?.completionPhrase || '',
+      maxIterations: innerState?.loop?.maxIterations || session.innerLoop?.maxIterations || 0,
+      maxTodos: session.innerConfig?.maxTodos || 50,
+      todoExpirationMinutes: session.innerConfig?.todoExpirationMinutes || 60
+    });
 
     document.getElementById('sessionOptionsModal').classList.add('active');
   }
@@ -1479,6 +1512,58 @@ class ClaudemanApp {
     // Session options are applied immediately via individual controls
     // This just closes the modal
     this.closeSessionOptions();
+  }
+
+  // ========== Session Options Modal Tabs ==========
+
+  switchOptionsTab(tabName) {
+    // Toggle active class on tab buttons
+    document.querySelectorAll('.modal-tab-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tab === tabName);
+    });
+
+    // Toggle hidden class on tab content
+    document.getElementById('respawn-tab').classList.toggle('hidden', tabName !== 'respawn');
+    document.getElementById('ralph-tab').classList.toggle('hidden', tabName !== 'ralph');
+  }
+
+  getRalphConfig() {
+    return {
+      completionPhrase: document.getElementById('modalRalphPhrase').value.trim(),
+      maxIterations: parseInt(document.getElementById('modalRalphMaxIterations').value) || 0,
+      maxTodos: parseInt(document.getElementById('modalRalphMaxTodos').value) || 50,
+      todoExpirationMinutes: parseInt(document.getElementById('modalRalphTodoExpiration').value) || 60
+    };
+  }
+
+  populateRalphForm(config) {
+    document.getElementById('modalRalphPhrase').value = config?.completionPhrase || '';
+    document.getElementById('modalRalphMaxIterations').value = config?.maxIterations || 0;
+    document.getElementById('modalRalphMaxTodos').value = config?.maxTodos || 50;
+    document.getElementById('modalRalphTodoExpiration').value = config?.todoExpirationMinutes || 60;
+  }
+
+  async saveRalphConfig() {
+    if (!this.editingSessionId) {
+      this.showToast('No session selected', 'warning');
+      return;
+    }
+
+    const config = this.getRalphConfig();
+
+    try {
+      const res = await fetch(`/api/sessions/${this.editingSessionId}/inner-config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      this.showToast('Ralph config saved', 'success');
+    } catch (err) {
+      this.showToast('Failed to save Ralph config: ' + err.message, 'error');
+    }
   }
 
   // Inline rename on right-click
@@ -2168,9 +2253,7 @@ class ClaudemanApp {
         this.closeCreateCaseModal();
         this.toast(`Case "${name}" created`, 'success');
         // Reload cases and select the new one
-        await this.loadQuickStartCases();
-        document.getElementById('quickStartCase').value = name;
-        this.updateDirDisplayForCase(name);
+        await this.loadQuickStartCases(name);
       } else {
         this.toast(data.error || 'Failed to create case', 'error');
       }
@@ -2248,6 +2331,11 @@ class ClaudemanApp {
 
   // Cached toast container for performance
   _toastContainer = null;
+
+  // Alias for showToast
+  toast(message, type = 'info') {
+    return this.showToast(message, type);
+  }
 
   showToast(message, type = 'info') {
     const toast = document.createElement('div');

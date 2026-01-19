@@ -242,6 +242,50 @@ export class WebServer extends EventEmitter {
       };
     });
 
+    // Configure inner loop (Ralph Wiggum) settings
+    this.app.post('/api/sessions/:id/inner-config', async (req) => {
+      const { id } = req.params as { id: string };
+      const { completionPhrase, maxIterations, maxTodos, todoExpirationMinutes } = req.body as {
+        completionPhrase?: string;
+        maxIterations?: number;
+        maxTodos?: number;
+        todoExpirationMinutes?: number;
+      };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return { success: false, error: 'Session not found' };
+      }
+
+      // Configure the inner loop tracker
+      if (completionPhrase !== undefined) {
+        // Start loop with completion phrase to set it up for watching
+        if (completionPhrase) {
+          session.innerLoopTracker.startLoop(completionPhrase, maxIterations || undefined);
+        }
+      }
+
+      if (maxIterations !== undefined) {
+        session.innerLoopTracker.setMaxIterations(maxIterations || null);
+      }
+
+      // Store additional config on session for reference
+      (session as any).innerConfig = {
+        completionPhrase: completionPhrase || '',
+        maxIterations: maxIterations || 0,
+        maxTodos: maxTodos || 50,
+        todoExpirationMinutes: todoExpirationMinutes || 60
+      };
+
+      // Broadcast the update
+      this.broadcast('session:innerLoopUpdate', {
+        sessionId: id,
+        state: session.innerLoopState
+      });
+
+      return { success: true };
+    });
+
     // Run prompt in session
     this.app.post('/api/sessions/:id/run', async (req): Promise<{ success?: boolean; message?: string; error?: string }> => {
       const { id } = req.params as { id: string };

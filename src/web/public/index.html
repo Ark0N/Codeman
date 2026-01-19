@@ -268,7 +268,14 @@
           <h3>Session Options</h3>
           <button class="modal-close" onclick="app.closeSessionOptions()">&times;</button>
         </div>
+        <!-- Modal Tabs -->
+        <div class="modal-tabs">
+          <button class="modal-tab-btn active" data-tab="respawn" onclick="app.switchOptionsTab('respawn')">Respawn</button>
+          <button class="modal-tab-btn" data-tab="ralph" onclick="app.switchOptionsTab('ralph')">Ralph Wiggum</button>
+        </div>
         <div class="modal-body">
+          <!-- Respawn Tab Content -->
+          <div class="modal-tab-content" id="respawn-tab">
           <!-- Respawn Settings Section -->
           <div class="session-respawn-section" id="sessionRespawnSection">
             <div class="section-divider">
@@ -360,6 +367,41 @@
               <button class="btn-toolbar btn-danger" onclick="app.stopRespawnFromModal()" id="modalStopRespawnBtn" style="display: none;">Stop Respawn</button>
             </div>
           </div>
+          </div><!-- End respawn-tab -->
+
+          <!-- Ralph Wiggum Tab Content -->
+          <div class="modal-tab-content hidden" id="ralph-tab">
+            <div class="form-row">
+              <label>Completion Phrase</label>
+              <input type="text" id="modalRalphPhrase" placeholder="e.g., COMPLETE, DONE, FINISHED">
+              <span class="form-hint">The phrase Claude outputs when the loop is complete (without &lt;promise&gt; tags)</span>
+            </div>
+
+            <div class="form-row">
+              <label>Max Iterations</label>
+              <input type="number" id="modalRalphMaxIterations" value="0" min="0" max="1000">
+              <span class="form-hint">Maximum respawn cycles (0 = unlimited)</span>
+            </div>
+
+            <div class="form-row">
+              <label>Max Todos</label>
+              <input type="number" id="modalRalphMaxTodos" value="50" min="1" max="500">
+              <span class="form-hint">Maximum todos to track per session</span>
+            </div>
+
+            <div class="form-row">
+              <label>Todo Expiration</label>
+              <div class="input-suffix input-suffix-sm">
+                <input type="number" id="modalRalphTodoExpiration" value="60" min="1" max="1440">
+                <span>min</span>
+              </div>
+              <span class="form-hint">Minutes before todos auto-expire</span>
+            </div>
+
+            <div class="ralph-config-actions">
+              <button class="btn-toolbar btn-primary" onclick="app.saveRalphConfig()">Save Ralph Config</button>
+            </div>
+          </div><!-- End ralph-tab -->
         </div>
       </div>
     </div>
