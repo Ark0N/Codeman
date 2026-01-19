@@ -697,6 +697,15 @@ body {
   background: var(--bg-hover);
 }
 
+.btn-danger-sm {
+  color: #ff6b6b;
+}
+
+.btn-danger-sm:hover {
+  color: #fff;
+  background: #dc3545;
+}
+
 .form-row {
   margin-bottom: 0.75rem;
 }
@@ -890,7 +899,8 @@ body {
 .close-option {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
+  text-align: center;
   padding: 0.75rem 1rem;
   background: var(--bg-hover);
   border: 1px solid var(--border);

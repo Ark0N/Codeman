@@ -1561,6 +1561,35 @@ class ClaudemanApp {
     }
   }
 
+  async killAllSessions() {
+    const count = this.screenSessions?.length || 0;
+    if (count === 0) {
+      alert('No sessions to kill');
+      return;
+    }
+
+    const confirmed = confirm(`Kill all ${count} session(s)? This cannot be undone.`);
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch('/api/sessions', { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        // Clear local state
+        this.sessions.clear();
+        this.screenSessions = [];
+        this.activeSessionId = null;
+        this.renderSessionTabs();
+        this.renderScreenSessions();
+        this.terminal.clear();
+        this.terminal.reset();
+      }
+    } catch (err) {
+      console.error('Failed to kill all sessions:', err);
+      alert('Failed to kill sessions: ' + err.message);
+    }
+  }
+
   renderScreenSessions() {
     const body = document.getElementById('screenSessionsBody');
 
