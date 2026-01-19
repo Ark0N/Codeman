@@ -661,6 +661,22 @@ body {
   color: var(--text);
 }
 
+.btn-icon-sm {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0.25rem;
+  line-height: 1;
+  border-radius: 4px;
+}
+
+.btn-icon-sm:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
 .form-row {
   margin-bottom: 0.75rem;
 }

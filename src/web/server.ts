@@ -141,6 +141,8 @@ export class WebServer extends EventEmitter {
       }
 
       session.name = body.name || '';
+      // Also update the screen name if this session has a screen
+      this.screenManager.updateScreenName(id, session.name);
       this.broadcast('session:updated', session.toDetailedState());
       return { success: true, name: session.name };
     });
@@ -1063,7 +1065,7 @@ export class WebServer extends EventEmitter {
               id: screen.sessionId,  // Preserve the original session ID
               workingDir: screen.workingDir,
               mode: screen.mode,
-              name: `Restored: ${screen.screenName}`,
+              name: screen.name || screen.screenName,
               screenManager: this.screenManager,
               useScreen: true
             });

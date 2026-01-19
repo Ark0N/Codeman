@@ -306,7 +306,7 @@ export class Session extends EventEmitter {
     // If screen wrapping is enabled, create a screen session first
     if (this._useScreen && this._screenManager) {
       try {
-        this._screenSession = await this._screenManager.createScreen(this.id, this.workingDir, 'claude');
+        this._screenSession = await this._screenManager.createScreen(this.id, this.workingDir, 'claude', this._name);
         console.log('[Session] Created screen session:', this._screenSession.screenName);
 
         // Wait a moment for screen to fully start
@@ -424,7 +424,7 @@ export class Session extends EventEmitter {
     // If screen wrapping is enabled, create a screen session first
     if (this._useScreen && this._screenManager) {
       try {
-        this._screenSession = await this._screenManager.createScreen(this.id, this.workingDir, 'shell');
+        this._screenSession = await this._screenManager.createScreen(this.id, this.workingDir, 'shell', this._name);
         console.log('[Session] Created screen session:', this._screenSession.screenName);
 
         // Wait a moment for screen to fully start
@@ -766,6 +766,17 @@ export class Session extends EventEmitter {
     this._pid = null;
     this._status = 'stopped';
     this._currentTaskId = null;
+
+    // Kill the associated screen session if any
+    if (this._screenSession && this._screenManager) {
+      try {
+        await this._screenManager.killScreen(this.id);
+        console.log('[Session] Killed screen session:', this._screenSession.screenName);
+      } catch (err) {
+        console.error('[Session] Failed to kill screen session:', err);
+      }
+      this._screenSession = null;
+    }
 
     if (this.rejectPromise) {
       this.rejectPromise(new Error('Session stopped'));

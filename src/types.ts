@@ -214,6 +214,7 @@ export interface ScreenSession {
   workingDir: string;
   mode: 'claude' | 'shell';
   attached: boolean;        // Whether webserver is attached
+  name?: string;            // Session display name (tab name)
 }
 
 export interface ProcessStats {

@@ -30,6 +30,8 @@ class ClaudemanApp {
     this.loadState();
     this.loadQuickStartCases();
     this.setupEventListeners();
+    // Show monitor panel by default
+    this.toggleMonitorPanel();
   }
 
   initTerminal() {
@@ -1361,6 +1363,7 @@ class ClaudemanApp {
 
   async toggleMonitorPanel() {
     const panel = document.getElementById('monitorPanel');
+    const toggleBtn = document.getElementById('monitorToggleBtn');
     panel.classList.toggle('open');
 
     if (panel.classList.contains('open')) {
@@ -1368,9 +1371,11 @@ class ClaudemanApp {
       await this.loadScreens();
       await fetch('/api/screens/stats/start', { method: 'POST' });
       this.renderTaskPanel();
+      if (toggleBtn) toggleBtn.innerHTML = '&#x25BC;'; // Down arrow when open
     } else {
       // Stop stats collection when panel is closed
       await fetch('/api/screens/stats/stop', { method: 'POST' });
+      if (toggleBtn) toggleBtn.innerHTML = '&#x25B2;'; // Up arrow when closed
     }
   }
 
@@ -1487,7 +1492,7 @@ class ClaudemanApp {
         <div class="process-item">
           <span class="process-mode ${modeClass}">${screen.mode}</span>
           <div class="process-info">
-            <div class="process-name">${this.escapeHtml(screen.screenName)}</div>
+            <div class="process-name">${this.escapeHtml(screen.name || screen.screenName)}</div>
             <div class="process-meta">
               <span class="process-stat memory">${stats.memoryMB}MB</span>
               <span class="process-stat cpu">${stats.cpuPercent}%</span>

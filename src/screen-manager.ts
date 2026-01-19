@@ -48,7 +48,7 @@ export class ScreenManager extends EventEmitter {
   }
 
   // Create a new GNU screen session
-  async createScreen(sessionId: string, workingDir: string, mode: 'claude' | 'shell'): Promise<ScreenSession> {
+  async createScreen(sessionId: string, workingDir: string, mode: 'claude' | 'shell', name?: string): Promise<ScreenSession> {
     const screenName = `claudeman-${sessionId.slice(0, 8)}`;
 
     // Create screen in detached mode with the appropriate command
@@ -84,7 +84,8 @@ export class ScreenManager extends EventEmitter {
         createdAt: Date.now(),
         workingDir,
         mode,
-        attached: false
+        attached: false,
+        name
       };
 
       this.screens.set(sessionId, screen);
@@ -148,6 +149,17 @@ export class ScreenManager extends EventEmitter {
   // Get screen by session ID
   getScreen(sessionId: string): ScreenSession | undefined {
     return this.screens.get(sessionId);
+  }
+
+  // Update screen display name
+  updateScreenName(sessionId: string, name: string): boolean {
+    const screen = this.screens.get(sessionId);
+    if (!screen) {
+      return false;
+    }
+    screen.name = name;
+    this.saveScreens();
+    return true;
   }
 
   // Reconcile screens - find orphaned/dead screens
