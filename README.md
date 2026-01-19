@@ -13,6 +13,7 @@ A Claude Code session manager with an autonomous Ralph Loop for task assignment 
 - **Auto-Clear Context**: Automatically send /clear when token count exceeds threshold (default 100k)
 - **Token Tracking**: Real-time input/output token tracking per session
 - **Background Task Tracking**: Detect and display Claude's background tasks in a tree view
+- **Inner Loop Tracking**: Detect Ralph Wiggum loops and todo lists running inside Claude Code sessions
 - **Timed Runs**: Schedule Claude to work for a specific duration with animated live countdown
 - **Real-time Output**: Stream Claude's responses in real-time via Server-Sent Events (30 event types)
 - **Task Queue**: Priority-based task queue with dependency support
@@ -319,6 +320,44 @@ When the minimum duration hasn't been reached and all tasks are complete, the Ra
 - Check for security vulnerabilities
 - Run linting and fix issues
 
+## Inner Loop Tracking
+
+When Claude Code runs inside a claudeman session, it may run its own Ralph Wiggum loops or use the TodoWrite tool. Claudeman automatically detects and displays this internal state.
+
+### What's Detected
+
+- **Completion Phrases**: `<promise>COMPLETE</promise>`, `<promise>TIME_COMPLETE</promise>`, etc.
+- **Todo Items**: Checkbox format (`- [ ]`/`- [x]`), indicator icons (`☐`/`◐`/`✓`), status parentheses
+- **Loop Status**: Cycle counts, elapsed time, loop start/completion
+
+### UI Display
+
+A collapsible panel appears below session tabs when inner state is detected:
+- **Collapsed**: Shows loop status and task summary (e.g., "🔄 Loop: TIME_COMPLETE (2.3h) | Tasks: 3/5")
+- **Expanded**: Shows full todo list with status indicators
+
+### API
+
+```bash
+# Get inner state for a session
+curl localhost:3000/api/sessions/:id/inner-state
+```
+
+Returns:
+```json
+{
+  "success": true,
+  "data": {
+    "loop": { "active": true, "completionPhrase": "COMPLETE", "cycleCount": 5, "elapsedHours": 2.3 },
+    "todos": [
+      { "id": "todo-abc", "content": "Research existing code", "status": "completed" },
+      { "id": "todo-def", "content": "Implement feature", "status": "in_progress" }
+    ],
+    "todoStats": { "total": 5, "pending": 2, "inProgress": 1, "completed": 2 }
+  }
+}
+```
+
 ## Long-Running Sessions
 
 Claudeman is optimized for extended autonomous sessions (12-24+ hours):
@@ -349,9 +388,14 @@ Each session displays real-time resource usage:
 - Click `Kill All` button in sessions panel to terminate all at once
 - Sessions are forcefully killed with SIGKILL after SIGTERM timeout
 
-## State File
+## State Files
 
-All state is persisted to `~/.claudeman/state.json`:
+State is persisted to `~/.claudeman/`:
+- `state.json` - Sessions, tasks, config
+- `state-inner.json` - Inner loop/todo state (separate file to reduce write frequency)
+- `screens.json` - Screen session metadata
+
+Main state file structure:
 
 ```json
 {

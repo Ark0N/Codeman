@@ -52,6 +52,7 @@ src/
 ├── ralph-loop.ts         # Autonomous task assignment
 ├── task-queue.ts         # Priority queue with dependencies
 ├── task-tracker.ts       # Background task detection from terminal output
+├── inner-loop-tracker.ts # Detect Ralph loops and todos inside Claude sessions
 ├── state-store.ts        # Persistence to ~/.claudeman/state.json
 ├── types.ts              # All TypeScript interfaces
 ├── web/
@@ -73,13 +74,18 @@ src/
 
 ### Key Components
 
-- **Session** (`src/session.ts`): Wraps Claude CLI as PTY subprocess. Two modes: `runPrompt(prompt)` for one-shot, `startInteractive()` for persistent terminal. Emits events: `output`, `terminal`, `message`, `completion`, `exit`, `idle`, `working`, `autoClear`, `autoCompact`, `clearTerminal`.
+- **Session** (`src/session.ts`): Wraps Claude CLI as PTY subprocess. Two modes: `runPrompt(prompt)` for one-shot, `startInteractive()` for persistent terminal. Emits events: `output`, `terminal`, `message`, `completion`, `exit`, `idle`, `working`, `autoClear`, `autoCompact`, `clearTerminal`, `innerLoopUpdate`, `innerTodoUpdate`, `innerCompletionDetected`.
 
 - **RespawnController** (`src/respawn-controller.ts`): State machine that keeps sessions productive. Detects idle → sends update prompt → optionally `/clear` → optionally `/init` → optionally kickstart prompt → repeats. State flow: `WATCHING → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR → SENDING_INIT → WAITING_INIT → MONITORING_INIT → (optional) SENDING_KICKSTART → WAITING_KICKSTART → WATCHING`
 
 - **ScreenManager** (`src/screen-manager.ts`): Wraps sessions in GNU screen for persistence across server restarts. On startup, reconciles with `screen -ls` to restore sessions and discovers unknown "ghost" screens. Uses 4-strategy kill process to prevent orphaned claude processes.
 
 - **WebServer** (`src/web/server.ts`): Fastify server with REST API (`/api/*`) + SSE (`/api/events`). Wires session events to SSE broadcast.
+
+- **InnerLoopTracker** (`src/inner-loop-tracker.ts`): Detects Ralph Wiggum loops and todo lists running inside Claude Code sessions by parsing terminal output. Emits `loopUpdate`, `todoUpdate`, `completionDetected` events. Detection patterns:
+  - Completion phrases: `<promise>PHRASE</promise>`
+  - Todo items: checkbox format (`- [ ]`/`- [x]`), indicator icons (`☐`/`◐`/`✓`), status parentheses
+  - Loop status: cycle counts, elapsed time, start/completion indicators
 
 ### Session Modes
 
@@ -149,6 +155,42 @@ Sessions support automatic context management when token thresholds are reached:
 
 Both wait for Claude to be idle before executing. Auto-compact runs first if both are enabled. Configured via `session.setAutoCompact(enabled, threshold?, prompt?)` and `session.setAutoClear(enabled, threshold?)`.
 
+### Inner Loop Tracking
+
+When Claude Code runs inside a claudeman session, it may run its own Ralph Wiggum loops or use the TodoWrite tool. The **InnerLoopTracker** parses terminal output to detect:
+
+**Completion Phrases:**
+```
+<promise>COMPLETE</promise>
+<promise>TIME_COMPLETE</promise>
+<promise>CUSTOM_PHRASE</promise>
+```
+
+**Todo Items (multiple formats):**
+```
+- [ ] Pending task          # Checkbox format
+- [x] Completed task
+Todo: ☐ Pending task        # Indicator format
+Todo: ◐ In progress task
+Todo: ✓ Completed task
+- Task name (in_progress)   # Status parentheses
+```
+
+**Loop Status:**
+```
+Loop started at 2024-01-15
+Elapsed: 2.5 hours
+cycle #5
+```
+
+**API Endpoint:**
+```bash
+curl localhost:3000/api/sessions/:id/inner-state
+# Returns: { loop: InnerLoopState, todos: InnerTodoItem[], todoStats: {...} }
+```
+
+**UI:** Collapsible panel below session tabs shows loop status and todo progress. Auto-hides when no inner state is detected.
+
 ### Terminal Display Fix (Tab Switch & New Session)
 
 When switching tabs or creating new sessions, terminal may be rendered at wrong size. Fix sequence:
@@ -163,7 +205,7 @@ Uses `pendingCtrlL` Set to track sessions needing the fix. Waits for `session:id
 
 All events broadcast to `/api/events` with format: `{ type: string, sessionId?: string, data: any }`.
 
-Event prefixes: `session:`, `task:`, `respawn:`, `scheduled:`, `case:`, `screen:`, `init`. Key events: `session:idle`, `session:working`, `session:terminal`, `session:clearTerminal`, `session:completion`, `session:autoClear`, `session:autoCompact`.
+Event prefixes: `session:`, `task:`, `respawn:`, `scheduled:`, `case:`, `screen:`, `init`. Key events: `session:idle`, `session:working`, `session:terminal`, `session:clearTerminal`, `session:completion`, `session:autoClear`, `session:autoCompact`, `session:innerLoopUpdate`, `session:innerTodoUpdate`, `session:innerCompletionDetected`.
 
 ### Frontend (app.js)
 
@@ -248,5 +290,6 @@ Full test plan available at `.claude/skills/e2e-test.md`.
 
 ## Notes
 
-- State persists to `~/.claudeman/state.json` and `~/.claudeman/screens.json`
+- State persists to `~/.claudeman/state.json`, `~/.claudeman/state-inner.json`, and `~/.claudeman/screens.json`
+- Inner loop/todo state persists separately in `state-inner.json` to reduce write frequency
 - Cases created in `~/claudeman-cases/` by default
