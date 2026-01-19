@@ -1351,6 +1351,54 @@ body {
   font-size: 0.7rem;
 }
 
+/* Duration preset buttons */
+.duration-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.duration-preset-btn {
+  padding: 0.4rem 0.7rem;
+  font-size: 0.75rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.duration-preset-btn:hover {
+  border-color: var(--border-light);
+  color: var(--text);
+}
+
+.duration-preset-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.duration-custom {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.duration-custom-input {
+  display: none;
+}
+
+.duration-custom-input.visible {
+  display: flex;
+}
+
+.duration-custom-input input {
+  width: 60px;
+}
+
 /* Respawn actions in modal */
 .respawn-actions {
   display: flex;

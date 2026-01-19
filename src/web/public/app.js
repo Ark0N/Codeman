@@ -1302,10 +1302,51 @@ class ClaudemanApp {
       respawnSection.style.display = 'none';
     }
 
+    // Reset duration presets to default (unlimited)
+    this.selectDurationPreset('');
+
     document.getElementById('sessionOptionsModal').classList.add('active');
 
     // Focus the name input
     setTimeout(() => document.getElementById('sessionNameInput').focus(), 100);
+  }
+
+  // Handle duration preset selection
+  selectDurationPreset(value) {
+    // Remove active from all buttons
+    document.querySelectorAll('.duration-preset-btn').forEach(btn => btn.classList.remove('active'));
+
+    // Find and activate the clicked button
+    const btn = document.querySelector(`.duration-preset-btn[data-minutes="${value}"]`);
+    if (btn) btn.classList.add('active');
+
+    // Show/hide custom input
+    const customInput = document.querySelector('.duration-custom-input');
+    const durationInput = document.getElementById('modalRespawnDuration');
+
+    if (value === 'custom') {
+      customInput.classList.add('visible');
+      durationInput.focus();
+    } else {
+      customInput.classList.remove('visible');
+      durationInput.value = ''; // Clear custom value when using preset
+    }
+  }
+
+  // Get selected duration from preset buttons or custom input
+  getSelectedDuration() {
+    const customInput = document.querySelector('.duration-custom-input');
+    const durationInput = document.getElementById('modalRespawnDuration');
+
+    if (customInput.classList.contains('visible')) {
+      // Custom mode - use input value
+      return durationInput.value ? parseInt(durationInput.value) : null;
+    } else {
+      // Preset mode - get from active button
+      const activeBtn = document.querySelector('.duration-preset-btn.active');
+      const minutes = activeBtn?.dataset.minutes;
+      return minutes ? parseInt(minutes) : null;
+    }
   }
 
   // Get respawn config from modal inputs
@@ -1314,8 +1355,7 @@ class ClaudemanApp {
     const sendClear = document.getElementById('modalRespawnSendClear').checked;
     const sendInit = document.getElementById('modalRespawnSendInit').checked;
     const kickstartPrompt = document.getElementById('modalRespawnKickstart').value.trim() || undefined;
-    const durationStr = document.getElementById('modalRespawnDuration').value;
-    const durationMinutes = durationStr ? parseInt(durationStr) : null;
+    const durationMinutes = this.getSelectedDuration();
 
     // Auto-compact settings
     const autoCompactEnabled = document.getElementById('modalAutoCompactEnabled').checked;

@@ -209,17 +209,28 @@
             </div>
 
             <div class="form-row">
-              <label>Update Prompt</label>
-              <input type="text" id="modalRespawnPrompt" value="update all the docs and CLAUDE.md" placeholder="Prompt to send when idle">
+              <label>Run Duration</label>
+              <div class="duration-presets">
+                <button type="button" class="duration-preset-btn" data-minutes="30" onclick="app.selectDurationPreset('30')">30m</button>
+                <button type="button" class="duration-preset-btn" data-minutes="60" onclick="app.selectDurationPreset('60')">1h</button>
+                <button type="button" class="duration-preset-btn" data-minutes="120" onclick="app.selectDurationPreset('120')">2h</button>
+                <button type="button" class="duration-preset-btn" data-minutes="240" onclick="app.selectDurationPreset('240')">4h</button>
+                <button type="button" class="duration-preset-btn" data-minutes="480" onclick="app.selectDurationPreset('480')">8h</button>
+                <button type="button" class="duration-preset-btn active" data-minutes="" onclick="app.selectDurationPreset('')">∞</button>
+                <div class="duration-custom">
+                  <button type="button" class="duration-preset-btn" data-minutes="custom" onclick="app.selectDurationPreset('custom')">Custom</button>
+                  <div class="input-suffix input-suffix-sm duration-custom-input">
+                    <input type="number" id="modalRespawnDuration" value="" min="1" placeholder="min">
+                    <span>min</span>
+                  </div>
+                </div>
+              </div>
+              <span class="form-hint">How long to run the respawn loop</span>
             </div>
 
             <div class="form-row">
-              <label>Run Duration</label>
-              <div class="input-suffix">
-                <input type="number" id="modalRespawnDuration" value="" min="1" placeholder="No limit">
-                <span>min</span>
-              </div>
-              <span class="form-hint">Leave empty for unlimited. Respawn stops after duration.</span>
+              <label>Update Prompt</label>
+              <input type="text" id="modalRespawnPrompt" value="update all the docs and CLAUDE.md" placeholder="Prompt to send when idle">
             </div>
 
             <div class="form-row">
