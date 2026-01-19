@@ -55,8 +55,6 @@ class ClaudemanApp {
     this.loadState();
     this.loadQuickStartCases();
     this.setupEventListeners();
-    // Show monitor panel by default
-    this.toggleMonitorPanel();
     // Start system stats polling
     this.startSystemStatsPolling();
   }

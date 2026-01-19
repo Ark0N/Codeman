@@ -2345,7 +2345,7 @@ kbd {
   position: fixed;
   bottom: var(--toolbar-height);
   right: 0.5rem;
-  width: 500px;
+  width: 320px;
   max-width: calc(100vw - 1rem);
   max-height: 80vh;
   background: var(--bg-card);
