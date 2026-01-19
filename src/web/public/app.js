@@ -563,9 +563,9 @@ class ClaudemanApp {
     }
   }
 
-  async closeSession(sessionId) {
+  async closeSession(sessionId, killScreen = true) {
     try {
-      await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+      await fetch(`/api/sessions/${sessionId}?killScreen=${killScreen}`, { method: 'DELETE' });
       this.sessions.delete(sessionId);
       this.terminalBuffers.delete(sessionId);
 
@@ -582,6 +582,12 @@ class ClaudemanApp {
       }
 
       this.renderSessionTabs();
+
+      if (killScreen) {
+        this.showToast('Session closed and screen killed', 'success');
+      } else {
+        this.showToast('Tab hidden, screen still running', 'info');
+      }
     } catch (err) {
       this.showToast('Failed to close session', 'error');
     }
@@ -607,12 +613,12 @@ class ClaudemanApp {
     document.getElementById('closeConfirmModal').classList.remove('active');
   }
 
-  async confirmCloseSession() {
+  async confirmCloseSession(killScreen = true) {
     const sessionId = this.pendingCloseSessionId;
     this.cancelCloseSession();
 
     if (sessionId) {
-      await this.closeSession(sessionId);
+      await this.closeSession(sessionId, killScreen);
     }
   }
 

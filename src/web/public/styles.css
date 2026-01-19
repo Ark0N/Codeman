@@ -800,6 +800,24 @@ body {
   border-top: 1px solid var(--border);
 }
 
+.form-actions-stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.form-actions-stack button {
+  width: 100%;
+}
+
+.btn-warning {
+  background: var(--yellow);
+  color: #000;
+}
+
+.btn-warning:hover {
+  background: #d4a107;
+}
+
 /* Modal */
 .modal {
   display: none;

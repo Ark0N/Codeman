@@ -764,7 +764,7 @@ export class Session extends EventEmitter {
     });
   }
 
-  async stop(): Promise<void> {
+  async stop(killScreen: boolean = true): Promise<void> {
     // Clear activity timeout to prevent memory leak
     if (this.activityTimeout) {
       clearTimeout(this.activityTimeout);
@@ -808,8 +808,8 @@ export class Session extends EventEmitter {
     this._status = 'stopped';
     this._currentTaskId = null;
 
-    // Kill the associated screen session if any
-    if (this._screenSession && this._screenManager) {
+    // Kill the associated screen session if requested
+    if (this._screenSession && this._screenManager && killScreen) {
       try {
         await this._screenManager.killScreen(this.id);
         console.log('[Session] Killed screen session:', this._screenSession.screenName);
@@ -817,6 +817,9 @@ export class Session extends EventEmitter {
         console.error('[Session] Failed to kill screen session:', err);
       }
       this._screenSession = null;
+    } else if (this._screenSession && !killScreen) {
+      console.log('[Session] Keeping screen session alive:', this._screenSession.screenName);
+      this._screenSession = null; // Detach but don't kill
     }
 
     if (this.rejectPromise) {

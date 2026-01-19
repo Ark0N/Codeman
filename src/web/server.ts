@@ -149,6 +149,8 @@ export class WebServer extends EventEmitter {
 
     this.app.delete('/api/sessions/:id', async (req): Promise<ApiResponse> => {
       const { id } = req.params as { id: string };
+      const query = req.query as { killScreen?: string };
+      const killScreen = query.killScreen !== 'false'; // Default to true
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -162,7 +164,7 @@ export class WebServer extends EventEmitter {
         this.respawnControllers.delete(id);
       }
 
-      await session.stop();
+      await session.stop(killScreen);
       this.sessions.delete(id);
       this.terminalBatches.delete(id);
       this.broadcast('session:deleted', { id });

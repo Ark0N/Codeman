@@ -268,12 +268,13 @@
           <button class="modal-close" onclick="app.cancelCloseSession()">&times;</button>
         </div>
         <div class="modal-body">
-          <p class="modal-warning-text">This will terminate the Claude session and any running processes.</p>
           <p class="modal-session-name" id="closeConfirmSessionName"></p>
+          <p class="modal-warning-text">Choose how to close this session:</p>
         </div>
-        <div class="form-actions">
+        <div class="form-actions form-actions-stack">
+          <button class="btn-toolbar btn-warning" onclick="app.confirmCloseSession(false)" title="Remove tab but keep screen session running">Hide Tab (Keep Screen)</button>
+          <button class="btn-toolbar btn-danger" onclick="app.confirmCloseSession(true)" title="Terminate the screen session completely">Close & Kill Screen</button>
           <button class="btn-toolbar" onclick="app.cancelCloseSession()">Cancel</button>
-          <button class="btn-toolbar btn-danger" onclick="app.confirmCloseSession()">Close Session</button>
         </div>
       </div>
     </div>
