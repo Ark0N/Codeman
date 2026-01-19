@@ -355,7 +355,7 @@ export class RespawnController extends EventEmitter {
     this.stepTimer = setTimeout(() => {
       const prompt = this.config.kickstartPrompt!;
       this.log(`Sending kickstart prompt: "${prompt}"`);
-      this.session.write(prompt + '\n');
+      this.session.write(prompt + '\r');  // \r for PTY Enter key
       this.emit('stepSent', 'kickstart', prompt);
       this.setState('waiting_kickstart');
       this.promptDetected = false;
@@ -416,7 +416,7 @@ export class RespawnController extends EventEmitter {
     this.terminalBuffer = ''; // Clear buffer for fresh detection
 
     this.stepTimer = setTimeout(() => {
-      const input = this.config.updatePrompt + '\n';
+      const input = this.config.updatePrompt + '\r';  // \r for PTY Enter key
       this.log(`Sending update prompt: "${this.config.updatePrompt}"`);
       this.session.write(input);
       this.emit('stepSent', 'update', this.config.updatePrompt);
@@ -432,7 +432,7 @@ export class RespawnController extends EventEmitter {
 
     this.stepTimer = setTimeout(() => {
       this.log('Sending /clear');
-      this.session.write('/clear\n');
+      this.session.write('/clear\r');  // \r for PTY Enter key
       this.emit('stepSent', 'clear', '/clear');
       this.setState('waiting_clear');
       this.promptDetected = false;
@@ -445,7 +445,7 @@ export class RespawnController extends EventEmitter {
 
     this.stepTimer = setTimeout(() => {
       this.log('Sending /init');
-      this.session.write('/init\n');
+      this.session.write('/init\r');  // \r for PTY Enter key
       this.emit('stepSent', 'init', '/init');
       this.setState('waiting_init');
       this.promptDetected = false;
