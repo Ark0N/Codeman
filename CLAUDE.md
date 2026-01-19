@@ -12,7 +12,7 @@ Claudeman is a Claude Code session manager with a web interface and autonomous R
 
 ## Commands
 
-**GOTCHA**: `npm run dev` runs CLI help, NOT the web server. Always use `npx tsx src/index.ts web` for development.
+**CRITICAL**: `npm run dev` runs CLI help, NOT the web server. Use `npx tsx src/index.ts web` for development.
 
 ```bash
 npm run build          # Compile TypeScript + copy static files to dist/web/
@@ -30,7 +30,7 @@ npm run test:watch                        # Watch mode
 npm run test:coverage                     # With coverage report
 npx vitest run test/session.test.ts       # Single file
 npx vitest run -t "should create session" # By pattern
-# Tests use ports 3101-3108 to avoid conflicts with dev server (3000)
+# Tests use ports 3099-3121 to avoid conflicts with dev server (3000)
 # Test timeout: 30s (configured in vitest.config.ts for integration tests)
 
 # TypeScript checking (no linter configured)
@@ -68,18 +68,20 @@ src/
 └── templates/
     └── claude-md.ts      # CLAUDE.md generator for new cases
 
-test/                             # All tests use vitest, ports 3101-3108
-├── session.test.ts               # Core session creation, lifecycle, PTY behavior
-├── pty-interactive.test.ts       # Interactive mode, terminal input/output
-├── respawn-controller.test.ts    # Respawn state machine, idle detection
-├── inner-loop-tracker.test.ts    # Ralph loop and todo detection parsing
-├── quick-start.test.ts           # Quick-start API endpoint
-├── scheduled-runs.test.ts        # Timed/scheduled session runs
-├── sse-events.test.ts            # Server-Sent Events broadcasting
-├── integration-flows.test.ts     # Multi-step workflow tests
-├── session-cleanup.test.ts       # Resource cleanup, buffer trimming
-└── edge-cases.test.ts            # Error handling, boundary conditions
+test/                             # All tests use vitest
+├── session.test.ts               # Core session creation, lifecycle, PTY behavior (port 3102)
+├── pty-interactive.test.ts       # Interactive mode, terminal input/output (unit test, no server)
+├── respawn-controller.test.ts    # Respawn state machine, idle detection (unit test, no server)
+├── inner-loop-tracker.test.ts    # Ralph loop and todo detection parsing (unit test, no server)
+├── quick-start.test.ts           # Quick-start API endpoint (ports 3099-3101)
+├── scheduled-runs.test.ts        # Timed/scheduled session runs (ports 3105-3106)
+├── sse-events.test.ts            # Server-Sent Events broadcasting (ports 3107-3108)
+├── integration-flows.test.ts     # Multi-step workflow tests (ports 3115-3116)
+├── session-cleanup.test.ts       # Resource cleanup, buffer trimming (ports 3120-3121)
+└── edge-cases.test.ts            # Error handling, boundary conditions (ports 3110-3112)
 ```
+
+**Test ports**: Integration tests use unique port ranges (3099-3121) to allow parallel execution. Unit tests don't need a server. Dev server uses port 3000.
 
 ### Data Flow
 
@@ -200,7 +202,7 @@ Detects Ralph loops and todos inside Claude sessions. **Disabled by default** - 
 - Iteration patterns (`Iteration 5/50`, `[5/50]`)
 - Todo checkboxes (`- [ ]`/`- [x]`) or indicator icons (`☐`/`◐`/`✓`)
 
-API: `GET /api/sessions/:id/inner-state`. UI: collapsible panel below tabs, shows "Tracking" status when enabled. Use `tracker.enable()` / `tracker.disable()` for manual control.
+API: `GET /api/sessions/:id/inner-state`. UI: collapsible panel below tabs with enable/disable toggle. Use `tracker.enable()` / `tracker.disable()` for programmatic control, or `POST /api/sessions/:id/inner-config` with `{ enabled: boolean }` via API.
 
 ### Terminal Display Fix
 
