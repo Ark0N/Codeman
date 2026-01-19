@@ -898,21 +898,24 @@ export class Session extends EventEmitter {
   }
 
   // Send input to the PTY (for interactive sessions)
-  // When using screen, prefers screen -X stuff for reliable input delivery
   write(data: string): void {
-    // Try screen -X stuff first if we have a screen session
-    // This is more reliable for sending Enter key to Claude CLI
-    if (this._screenManager && this._screenSession) {
-      const success = this._screenManager.sendInput(this.id, data);
-      if (success) {
-        return;
-      }
-      // Fall through to PTY write if screen command failed
-    }
-
     if (this.ptyProcess) {
       this.ptyProcess.write(data);
     }
+  }
+
+  // Send input via screen -X stuff (for programmatic input like respawn controller)
+  // This bypasses PTY and sends directly to screen, more reliable for Enter key
+  writeViaScreen(data: string): boolean {
+    if (this._screenManager && this._screenSession) {
+      return this._screenManager.sendInput(this.id, data);
+    }
+    // Fallback to PTY write
+    if (this.ptyProcess) {
+      this.ptyProcess.write(data);
+      return true;
+    }
+    return false;
   }
 
   // Resize the PTY

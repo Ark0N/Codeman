@@ -355,7 +355,7 @@ export class RespawnController extends EventEmitter {
     this.stepTimer = setTimeout(() => {
       const prompt = this.config.kickstartPrompt!;
       this.log(`Sending kickstart prompt: "${prompt}"`);
-      this.session.write(prompt + '\r');  // \r triggers key.return in Ink/Claude CLI
+      this.session.writeViaScreen(prompt + '\r');  // \r triggers key.return in Ink/Claude CLI
       this.emit('stepSent', 'kickstart', prompt);
       this.setState('waiting_kickstart');
       this.promptDetected = false;
@@ -418,7 +418,7 @@ export class RespawnController extends EventEmitter {
     this.stepTimer = setTimeout(() => {
       const input = this.config.updatePrompt + '\r\n';  // CRLF for screen + Claude CLI
       this.log(`Sending update prompt: "${this.config.updatePrompt}"`);
-      this.session.write(input);
+      this.session.writeViaScreen(input);
       this.emit('stepSent', 'update', this.config.updatePrompt);
       this.setState('waiting_update');
       this.promptDetected = false;
@@ -432,7 +432,7 @@ export class RespawnController extends EventEmitter {
 
     this.stepTimer = setTimeout(() => {
       this.log('Sending /clear');
-      this.session.write('/clear\r\n');  // CRLF for screen + Claude CLI
+      this.session.writeViaScreen('/clear\r\n');  // CRLF for screen + Claude CLI
       this.emit('stepSent', 'clear', '/clear');
       this.setState('waiting_clear');
       this.promptDetected = false;
@@ -445,7 +445,7 @@ export class RespawnController extends EventEmitter {
 
     this.stepTimer = setTimeout(() => {
       this.log('Sending /init');
-      this.session.write('/init\r\n');  // CRLF for screen + Claude CLI
+      this.session.writeViaScreen('/init\r\n');  // CRLF for screen + Claude CLI
       this.emit('stepSent', 'init', '/init');
       this.setState('waiting_init');
       this.promptDetected = false;
