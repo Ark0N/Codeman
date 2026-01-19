@@ -468,28 +468,26 @@ export class ScreenManager extends EventEmitter {
 
     try {
       // Split input into text and control characters
-      // Use printf to generate control characters (octal \015 = carriage return)
-      // This is more reliable than bash $'...' escaping for Ink/Claude CLI
+      // IMPORTANT: Must send text and carriage return as SEPARATE commands
+      // Sending them together doesn't work with Ink/Claude CLI
       const hasCarriageReturn = input.includes('\r');
       const textPart = input.replace(/\r/g, '').replace(/\n/g, '');
 
       // Escape the text part for shell (double quotes)
       const escapedText = textPart.replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
 
-      // Build command: send text, then carriage return via printf
-      let cmd: string;
-      if (hasCarriageReturn) {
-        // Send text + carriage return (Enter key for Ink)
-        cmd = `screen -S ${screen.screenName} -p 0 -X stuff "$(printf '${escapedText}\\015')"`;
-      } else {
-        // Just send text without Enter
-        cmd = `screen -S ${screen.screenName} -p 0 -X stuff "${escapedText}"`;
+      // Send text first (if any)
+      if (escapedText) {
+        const textCmd = `screen -S ${screen.screenName} -p 0 -X stuff "${escapedText}"`;
+        execSync(textCmd, { encoding: 'utf-8', timeout: 5000 });
       }
 
-      execSync(cmd, {
-        encoding: 'utf-8',
-        timeout: 5000
-      });
+      // Send carriage return separately (Enter key for Ink)
+      if (hasCarriageReturn) {
+        const crCmd = `screen -S ${screen.screenName} -p 0 -X stuff "$(printf '\\015')"`;
+        execSync(crCmd, { encoding: 'utf-8', timeout: 5000 });
+      }
+
       return true;
     } catch (err) {
       console.error('[ScreenManager] Failed to send input:', err);
