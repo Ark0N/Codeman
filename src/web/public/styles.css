@@ -850,13 +850,72 @@ body {
 }
 
 .modal-content.modal-sm {
-  max-width: 320px;
+  max-width: 340px;
 }
 
 .modal-warning-text {
   color: var(--text-dim);
   font-size: 0.85rem;
   margin-bottom: 0.5rem;
+}
+
+/* Close Session Options */
+.close-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.close-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0.75rem 1rem;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+}
+
+.close-option:hover {
+  background: var(--bg-card);
+  border-color: var(--accent);
+}
+
+.close-option-danger {
+  border-color: var(--red);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.close-option-danger:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: var(--red);
+}
+
+.close-option-title {
+  font-weight: 500;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.close-option-danger .close-option-title {
+  color: var(--red);
+}
+
+.close-option-desc {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+}
+
+.modal-footer-cancel {
+  display: flex;
+  justify-content: center;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
 }
 
 .modal-session-name {
@@ -1420,9 +1479,9 @@ kbd {
   position: fixed;
   bottom: var(--toolbar-height);
   right: 0.5rem;
-  width: 420px;
+  width: 500px;
   max-width: calc(100vw - 1rem);
-  max-height: 60vh;
+  max-height: 80vh;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-bottom: none;

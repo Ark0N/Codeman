@@ -344,102 +344,24 @@ npx vitest run -t "should create session" # By pattern
 
 ### E2E Testing with agent-browser
 
-For UI testing, we use [agent-browser](https://github.com/vercel-labs/agent-browser) - a fast CLI for browser automation optimized for AI agents.
+For UI testing, use [agent-browser](https://github.com/vercel-labs/agent-browser). A full E2E test plan is documented in `.claude/skills/e2e-test.md`.
 
-**Installation:**
 ```bash
-npm install agent-browser --save-dev
-npx agent-browser install  # Download Chromium
-```
+# Setup
+npx agent-browser install              # Download Chromium (one-time)
+npx tsx src/index.ts web &             # Start server
 
-**Basic E2E Test Flow:**
-```bash
-# Start the server
-npx tsx src/index.ts web &
-
-# Open browser
+# Basic test flow
 npx agent-browser open http://localhost:3000
-
-# Get page snapshot (shows accessibility tree with element refs)
-npx agent-browser snapshot
-
-# Click elements by reference
-npx agent-browser click @e5  # Click element with ref=e5
-
-# Or use semantic locators
-npx agent-browser find text "Run Claude" click
-npx agent-browser find role button click --name "Monitor"
-
-# Fill inputs
-npx agent-browser fill @e32 "my-session-name"
-
-# Execute JavaScript in page context
-npx agent-browser eval "app.sessions.get(app.activeSessionId)"
-
-# Take screenshots
-npx agent-browser screenshot /tmp/test-result.png
-
-# Close browser
+npx agent-browser snapshot             # Get accessibility tree with element refs
+npx agent-browser click @e5            # Click by element ref
+npx agent-browser find text "Run Claude" click  # Or use semantic locators
+npx agent-browser eval "app.sessions.get(app.activeSessionId)"  # Run JS
+npx agent-browser screenshot /tmp/test.png
 npx agent-browser close
 ```
 
-**E2E Test Skill (`.claude/skills/e2e-test.md`):**
-
-A skill file exists that documents the full E2E test plan. Key tests include:
-
-1. **Initial Load**: Verify header layout (font controls, connection status, tokens)
-2. **Font Controls**: Test A-/A+ buttons change font size
-3. **Tab Count Stepper**: Test −/+ buttons increment/decrement
-4. **Session Creation**: Create session, verify screen wrapping
-5. **Session Options Modal**: Open gear icon, verify respawn settings visible
-6. **Monitor Panel**: Test Screen Sessions and Background Tasks display
-
-**Example Test Session:**
-```bash
-# Clean up previous screens
-screen -ls | grep -oP '\d+\.claudeman-[a-z0-9]+' | while read s; do
-  screen -S "$s" -X quit
-done
-
-# Start fresh server
-rm -f ~/.claudeman/screens.json
-npx tsx src/index.ts web &
-sleep 4
-
-# Run tests
-npx agent-browser open http://localhost:3000
-npx agent-browser snapshot | head -30  # Check initial state
-npx agent-browser click @e5            # Run Claude
-sleep 4
-npx agent-browser snapshot             # Verify session created
-
-# Check screen wrapping
-screen -ls | grep claudeman            # Should show screen session
-
-# Check session has PID
-npx agent-browser eval "app.sessions.get(app.activeSessionId).pid"
-
-# Test session options
-npx agent-browser eval "document.querySelector('[title=\"Session options\"]').click()"
-npx agent-browser snapshot | grep -E "Respawn|Enable"  # Should show respawn settings
-
-npx agent-browser screenshot /tmp/test-final.png
-npx agent-browser close
-```
-
-**Key Commands:**
-| Command | Description |
-|---------|-------------|
-| `open <url>` | Navigate to URL |
-| `snapshot` | Get accessibility tree with element refs |
-| `snapshot -i` | Interactive elements only |
-| `click @ref` | Click element by ref |
-| `fill @ref "text"` | Fill input field |
-| `eval "js code"` | Execute JavaScript |
-| `screenshot path` | Save screenshot |
-| `find text/role/label "x" click` | Semantic element location |
-| `wait 1000` | Wait milliseconds |
-| `close` | Close browser |
+**Key test areas:** Initial load, font controls (A-/A+), tab count stepper, session creation with screen wrapping, session options modal, monitor panel.
 
 ## Frontend
 
@@ -449,8 +371,8 @@ The web UI (`src/web/public/`) uses vanilla JavaScript with:
 - **Server-Sent Events**: Real-time updates from `/api/events`
 - **No build step**: Static files served directly by Fastify
 
-## Pending Tasks
+## Notes
 
-**Note to Claude: Do NOT remove or modify this section during /init. These tasks may be actively worked on by other sessions.**
-
-<!-- Add pending tasks here -->
+- State persists to `~/.claudeman/state.json` and `~/.claudeman/screens.json`
+- Cases are created in `~/claudeman-cases/` by default
+- Sessions are wrapped in GNU screen for persistence across server restarts

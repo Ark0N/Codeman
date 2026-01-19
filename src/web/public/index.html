@@ -96,13 +96,7 @@
       </div>
 
       <div class="toolbar-right">
-        <button class="btn-toolbar" onclick="app.copyTerminal()" title="Copy terminal">Copy</button>
-        <button class="btn-toolbar" onclick="app.clearTerminal()" title="Clear terminal (Ctrl+L)">Clear</button>
-        <button class="btn-toolbar" onclick="app.toggleMonitorPanel()" title="Monitor">Monitor</button>
-
-        <div class="toolbar-divider"></div>
-
-        <button class="btn-toolbar btn-danger" onclick="app.killActiveSession()" title="Kill current session">Kill</button>
+        <!-- Buttons removed - use keyboard shortcuts instead -->
       </div>
     </footer>
 
@@ -264,17 +258,24 @@
       <div class="modal-backdrop" onclick="app.cancelCloseSession()"></div>
       <div class="modal-content modal-sm">
         <div class="modal-header">
-          <h3>Close Session?</h3>
+          <h3>Close Session</h3>
           <button class="modal-close" onclick="app.cancelCloseSession()">&times;</button>
         </div>
         <div class="modal-body">
           <p class="modal-session-name" id="closeConfirmSessionName"></p>
-          <p class="modal-warning-text">Choose how to close this session:</p>
         </div>
-        <div class="form-actions form-actions-stack">
-          <button class="btn-toolbar btn-warning" onclick="app.confirmCloseSession(false)" title="Remove tab but keep screen session running">Hide Tab (Keep Screen)</button>
-          <button class="btn-toolbar btn-danger" onclick="app.confirmCloseSession(true)" title="Terminate the screen session completely">Close & Kill Screen</button>
-          <button class="btn-toolbar" onclick="app.cancelCloseSession()">Cancel</button>
+        <div class="close-options">
+          <button class="close-option" onclick="app.confirmCloseSession(false)">
+            <span class="close-option-title">Remove Tab</span>
+            <span class="close-option-desc">Screen session keeps running in background</span>
+          </button>
+          <button class="close-option close-option-danger" onclick="app.confirmCloseSession(true)">
+            <span class="close-option-title">Kill Claude</span>
+            <span class="close-option-desc">Terminate the session completely</span>
+          </button>
+        </div>
+        <div class="modal-footer-cancel">
+          <button class="btn-toolbar btn-sm" onclick="app.cancelCloseSession()">Cancel</button>
         </div>
       </div>
     </div>

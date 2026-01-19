@@ -763,20 +763,10 @@ class ClaudemanApp {
         this.terminal.writeln(`\x1b[90m Created session ${i}/${tabCount}: ${sessionName}\x1b[0m`);
       }
 
-      // Select the first session
+      // Auto-switch to the new session
       if (firstSessionId) {
-        this.activeSessionId = firstSessionId;
+        await this.selectSession(firstSessionId);
         this.loadQuickStartCases();
-
-        // Send resize
-        const dims = this.fitAddon.proposeDimensions();
-        if (dims) {
-          await fetch(`/api/sessions/${firstSessionId}/resize`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
-          });
-        }
       }
 
       this.terminal.focus();
