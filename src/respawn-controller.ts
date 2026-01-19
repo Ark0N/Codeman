@@ -17,17 +17,20 @@ const READY_INDICATOR = '↵ send';
  * Respawn sequence states
  *
  * The controller cycles through these states:
- * WATCHING → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR → SENDING_INIT → WAITING_INIT → WATCHING
+ * WATCHING → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR → SENDING_INIT → WAITING_INIT → MONITORING_INIT → (maybe SENDING_KICKSTART → WAITING_KICKSTART) → WATCHING
  */
 export type RespawnState =
-  | 'watching'        // Watching for idle, ready to start respawn sequence
-  | 'sending_update'  // About to send the update docs prompt
-  | 'waiting_update'  // Waiting for update to complete
-  | 'sending_clear'   // About to send /clear
-  | 'waiting_clear'   // Waiting for clear to complete
-  | 'sending_init'    // About to send /init
-  | 'waiting_init'    // Waiting for init to complete
-  | 'stopped';        // Controller stopped
+  | 'watching'           // Watching for idle, ready to start respawn sequence
+  | 'sending_update'     // About to send the update docs prompt
+  | 'waiting_update'     // Waiting for update to complete
+  | 'sending_clear'      // About to send /clear
+  | 'waiting_clear'      // Waiting for clear to complete
+  | 'sending_init'       // About to send /init
+  | 'waiting_init'       // Waiting for init to complete
+  | 'monitoring_init'    // Monitoring if /init triggered work
+  | 'sending_kickstart'  // About to send kickstart prompt
+  | 'waiting_kickstart'  // Waiting for kickstart to complete
+  | 'stopped';           // Controller stopped
 
 export interface RespawnConfig {
   /** How long to wait after seeing prompt before considering truly idle (ms) */
@@ -42,6 +45,8 @@ export interface RespawnConfig {
   sendClear: boolean;
   /** Whether to send /init after /clear */
   sendInit: boolean;
+  /** Optional prompt to send if /init doesn't trigger work */
+  kickstartPrompt?: string;
 }
 
 export interface RespawnEvents {
@@ -210,6 +215,13 @@ export class RespawnController extends EventEmitter {
       this.promptDetected = false;
       this.lastActivityTime = Date.now();
       this.clearIdleTimer();
+
+      // If we're monitoring init and work started, go to watching (no kickstart needed)
+      if (this._state === 'monitoring_init') {
+        this.log('/init triggered work, skipping kickstart');
+        this.emit('stepCompleted', 'init');
+        this.completeCycle();
+      }
       return;
     }
 
@@ -234,6 +246,12 @@ export class RespawnController extends EventEmitter {
           break;
         case 'waiting_init':
           this.checkInitComplete();
+          break;
+        case 'monitoring_init':
+          this.checkMonitoringInitIdle();
+          break;
+        case 'waiting_kickstart':
+          this.checkKickstartComplete();
           break;
       }
       return;
@@ -287,7 +305,61 @@ export class RespawnController extends EventEmitter {
   private checkInitComplete(): void {
     this.clearIdleTimer();
     this.log('/init completed (ready indicator)');
+
+    // If kickstart prompt is configured, monitor to see if /init triggered work
+    if (this.config.kickstartPrompt) {
+      this.startMonitoringInit();
+    } else {
+      this.emit('stepCompleted', 'init');
+      this.completeCycle();
+    }
+  }
+
+  private startMonitoringInit(): void {
+    this.setState('monitoring_init');
+    this.terminalBuffer = '';
+    this.workingDetected = false;
+    this.log('Monitoring if /init triggered work...');
+
+    // Give Claude a moment to start working before checking for idle
+    this.stepTimer = setTimeout(() => {
+      // If still in monitoring state and no work detected, consider it idle
+      if (this._state === 'monitoring_init' && !this.workingDetected) {
+        this.checkMonitoringInitIdle();
+      }
+    }, 3000); // 3 second grace period for /init to trigger work
+  }
+
+  private checkMonitoringInitIdle(): void {
+    this.clearIdleTimer();
+    if (this.stepTimer) {
+      clearTimeout(this.stepTimer);
+      this.stepTimer = null;
+    }
+    this.log('/init did not trigger work, sending kickstart prompt');
     this.emit('stepCompleted', 'init');
+    this.sendKickstart();
+  }
+
+  private sendKickstart(): void {
+    this.setState('sending_kickstart');
+    this.terminalBuffer = '';
+
+    this.stepTimer = setTimeout(() => {
+      const prompt = this.config.kickstartPrompt!;
+      this.log(`Sending kickstart prompt: "${prompt}"`);
+      this.session.write(prompt + '\n');
+      this.emit('stepSent', 'kickstart', prompt);
+      this.setState('waiting_kickstart');
+      this.promptDetected = false;
+      this.workingDetected = false;
+    }, this.config.interStepDelayMs);
+  }
+
+  private checkKickstartComplete(): void {
+    this.clearIdleTimer();
+    this.log('Kickstart completed (ready indicator)');
+    this.emit('stepCompleted', 'kickstart');
     this.completeCycle();
   }
 

@@ -205,14 +205,6 @@
             </div>
 
             <div class="form-row">
-              <label>Idle Timeout</label>
-              <div class="input-suffix">
-                <input type="number" id="modalRespawnIdleTimeout" value="5" min="1" max="60">
-                <span>sec</span>
-              </div>
-            </div>
-
-            <div class="form-row">
               <label>Run Duration</label>
               <div class="input-suffix">
                 <input type="number" id="modalRespawnDuration" value="" min="1" placeholder="No limit">
@@ -236,6 +228,28 @@
             </div>
 
             <div class="form-row">
+              <label>Kickstart Prompt</label>
+              <input type="text" id="modalRespawnKickstart" value="" placeholder="Optional: prompt if /init doesn't trigger work">
+              <span class="form-hint">Sent only when /init completes but Claude stays idle</span>
+            </div>
+
+            <div class="form-row">
+              <label>Auto-Compact Context</label>
+              <div class="auto-clear-row">
+                <label class="checkbox-inline">
+                  <input type="checkbox" id="modalAutoCompactEnabled">
+                  <span>Enable at</span>
+                </label>
+                <div class="input-suffix input-suffix-sm">
+                  <input type="number" id="modalAutoCompactThreshold" value="110000" min="10000" max="500000" step="10000">
+                  <span>tokens</span>
+                </div>
+              </div>
+              <input type="text" id="modalAutoCompactPrompt" value="" placeholder="Optional: focus prompt for compact" class="mt-sm">
+              <span class="form-hint">Summarizes context while preserving key information</span>
+            </div>
+
+            <div class="form-row">
               <label>Auto-Clear Context</label>
               <div class="auto-clear-row">
                 <label class="checkbox-inline">
@@ -243,10 +257,11 @@
                   <span>Enable at</span>
                 </label>
                 <div class="input-suffix input-suffix-sm">
-                  <input type="number" id="modalAutoClearThreshold" value="100000" min="10000" max="500000" step="10000">
+                  <input type="number" id="modalAutoClearThreshold" value="140000" min="10000" max="500000" step="10000">
                   <span>tokens</span>
                 </div>
               </div>
+              <span class="form-hint">Completely resets context (use higher threshold than compact)</span>
             </div>
 
             <div class="respawn-actions">

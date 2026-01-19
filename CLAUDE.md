@@ -73,9 +73,9 @@ src/
 
 ### Key Components
 
-- **Session** (`src/session.ts`): Wraps Claude CLI as PTY subprocess. Two modes: `runPrompt(prompt)` for one-shot, `startInteractive()` for persistent terminal. Emits events: `output`, `terminal`, `message`, `completion`, `exit`, `idle`, `working`, `autoClear`, `clearTerminal`.
+- **Session** (`src/session.ts`): Wraps Claude CLI as PTY subprocess. Two modes: `runPrompt(prompt)` for one-shot, `startInteractive()` for persistent terminal. Emits events: `output`, `terminal`, `message`, `completion`, `exit`, `idle`, `working`, `autoClear`, `autoCompact`, `clearTerminal`.
 
-- **RespawnController** (`src/respawn-controller.ts`): State machine that keeps sessions productive. Detects idle → sends update prompt → optionally `/clear` → optionally `/init` → repeats. State flow: `WATCHING → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR → SENDING_INIT → WAITING_INIT → WATCHING`
+- **RespawnController** (`src/respawn-controller.ts`): State machine that keeps sessions productive. Detects idle → sends update prompt → optionally `/clear` → optionally `/init` → optionally kickstart prompt → repeats. State flow: `WATCHING → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR → SENDING_INIT → WAITING_INIT → MONITORING_INIT → (optional) SENDING_KICKSTART → WAITING_KICKSTART → WATCHING`
 
 - **ScreenManager** (`src/screen-manager.ts`): Wraps sessions in GNU screen for persistence across server restarts. On startup, reconciles with `screen -ls` to restore sessions and discovers unknown "ghost" screens. Uses 4-strategy kill process to prevent orphaned claude processes.
 
@@ -140,6 +140,15 @@ pty.spawn('claude', ['--dangerously-skip-permissions'], { ... })
 - **One-shot mode**: Uses `--output-format stream-json` for detailed token usage from JSON
 - **Interactive mode**: Parses tokens from Claude's status line (e.g., "123.4k tokens"), estimates 60/40 input/output split
 
+### Auto-Compact & Auto-Clear
+
+Sessions support automatic context management when token thresholds are reached:
+
+- **Auto-Compact** (default: 110k tokens): Sends `/compact` command with optional prompt to summarize context
+- **Auto-Clear** (default: 140k tokens): Sends `/clear` to reset context entirely
+
+Both wait for Claude to be idle before executing. Auto-compact runs first if both are enabled. Configured via `session.setAutoCompact(enabled, threshold?, prompt?)` and `session.setAutoClear(enabled, threshold?)`.
+
 ### Terminal Display Fix (Tab Switch & New Session)
 
 When switching tabs or creating new sessions, terminal may be rendered at wrong size. Fix sequence:
@@ -154,7 +163,7 @@ Uses `pendingCtrlL` Set to track sessions needing the fix. Waits for `session:id
 
 All events broadcast to `/api/events` with format: `{ type: string, sessionId?: string, data: any }`.
 
-Event prefixes: `session:`, `task:`, `respawn:`, `scheduled:`, `case:`, `init`. Key events: `session:idle`, `session:working`, `session:terminal`, `session:clearTerminal`, `session:completion`.
+Event prefixes: `session:`, `task:`, `respawn:`, `scheduled:`, `case:`, `screen:`, `init`. Key events: `session:idle`, `session:working`, `session:terminal`, `session:clearTerminal`, `session:completion`, `session:autoClear`, `session:autoCompact`.
 
 ### Frontend (app.js)
 

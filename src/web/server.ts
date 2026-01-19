@@ -515,6 +515,29 @@ export class WebServer extends EventEmitter {
       };
     });
 
+    // Set auto-compact on a session
+    this.app.post('/api/sessions/:id/auto-compact', async (req) => {
+      const { id } = req.params as { id: string };
+      const body = req.body as { enabled: boolean; threshold?: number; prompt?: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return { error: 'Session not found' };
+      }
+
+      session.setAutoCompact(body.enabled, body.threshold, body.prompt);
+      this.broadcast('session:updated', session.toDetailedState());
+
+      return {
+        success: true,
+        autoCompact: {
+          enabled: session.autoCompactEnabled,
+          threshold: session.autoCompactThreshold,
+          prompt: session.autoCompactPrompt,
+        },
+      };
+    });
+
     // Quick run (create session, run prompt, return result, then cleanup)
     this.app.post('/api/run', async (req) => {
       // Prevent unbounded session creation
@@ -910,6 +933,11 @@ export class WebServer extends EventEmitter {
 
     session.on('autoClear', (data: { tokens: number; threshold: number }) => {
       this.broadcast('session:autoClear', { sessionId: session.id, ...data });
+      this.broadcast('session:updated', session.toDetailedState());
+    });
+
+    session.on('autoCompact', (data: { tokens: number; threshold: number; prompt?: string }) => {
+      this.broadcast('session:autoCompact', { sessionId: session.id, ...data });
       this.broadcast('session:updated', session.toDetailedState());
     });
   }

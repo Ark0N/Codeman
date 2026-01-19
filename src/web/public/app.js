@@ -1264,22 +1264,32 @@ class ClaudemanApp {
   // Get respawn config from modal inputs
   getModalRespawnConfig() {
     const updatePrompt = document.getElementById('modalRespawnPrompt').value;
-    const idleTimeout = parseInt(document.getElementById('modalRespawnIdleTimeout').value) || 5;
     const sendClear = document.getElementById('modalRespawnSendClear').checked;
     const sendInit = document.getElementById('modalRespawnSendInit').checked;
+    const kickstartPrompt = document.getElementById('modalRespawnKickstart').value.trim() || undefined;
     const durationStr = document.getElementById('modalRespawnDuration').value;
     const durationMinutes = durationStr ? parseInt(durationStr) : null;
+
+    // Auto-compact settings
+    const autoCompactEnabled = document.getElementById('modalAutoCompactEnabled').checked;
+    const autoCompactThreshold = parseInt(document.getElementById('modalAutoCompactThreshold').value) || 110000;
+    const autoCompactPrompt = document.getElementById('modalAutoCompactPrompt').value.trim() || undefined;
+
+    // Auto-clear settings
     const autoClearEnabled = document.getElementById('modalAutoClearEnabled').checked;
-    const autoClearThreshold = parseInt(document.getElementById('modalAutoClearThreshold').value) || 100000;
+    const autoClearThreshold = parseInt(document.getElementById('modalAutoClearThreshold').value) || 140000;
 
     return {
       respawnConfig: {
         updatePrompt,
-        idleTimeoutMs: idleTimeout * 1000,
         sendClear,
         sendInit,
+        kickstartPrompt,
       },
       durationMinutes,
+      autoCompactEnabled,
+      autoCompactThreshold,
+      autoCompactPrompt,
       autoClearEnabled,
       autoClearThreshold
     };
@@ -1291,7 +1301,15 @@ class ClaudemanApp {
       return;
     }
 
-    const { respawnConfig, durationMinutes, autoClearEnabled, autoClearThreshold } = this.getModalRespawnConfig();
+    const {
+      respawnConfig,
+      durationMinutes,
+      autoCompactEnabled,
+      autoCompactThreshold,
+      autoCompactPrompt,
+      autoClearEnabled,
+      autoClearThreshold
+    } = this.getModalRespawnConfig();
 
     try {
       // Enable respawn on the session
@@ -1302,6 +1320,15 @@ class ClaudemanApp {
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+
+      // Set auto-compact if enabled
+      if (autoCompactEnabled) {
+        await fetch(`/api/sessions/${this.editingSessionId}/auto-compact`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: true, threshold: autoCompactThreshold, prompt: autoCompactPrompt })
+        });
+      }
 
       // Set auto-clear if enabled
       if (autoClearEnabled) {

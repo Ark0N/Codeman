@@ -62,6 +62,8 @@ export interface SessionEvents {
   taskFailed: (task: BackgroundTask, error: string) => void;
   // Auto-clear event
   autoClear: (data: { tokens: number; threshold: number }) => void;
+  // Auto-compact event
+  autoCompact: (data: { tokens: number; threshold: number; prompt?: string }) => void;
 }
 
 export type SessionMode = 'claude' | 'shell';
@@ -97,9 +99,15 @@ export class Session extends EventEmitter {
   // Token tracking for auto-clear
   private _totalInputTokens: number = 0;
   private _totalOutputTokens: number = 0;
-  private _autoClearThreshold: number = 100000; // Default 100k tokens
+  private _autoClearThreshold: number = 140000; // Default 140k tokens
   private _autoClearEnabled: boolean = false;
   private _isClearing: boolean = false; // Prevent recursive clearing
+
+  // Auto-compact settings
+  private _autoCompactThreshold: number = 110000; // Default 110k tokens (lower than clear)
+  private _autoCompactEnabled: boolean = false;
+  private _autoCompactPrompt: string = ''; // Optional prompt for compact
+  private _isCompacting: boolean = false; // Prevent recursive compacting
 
   // Screen session support
   private _screenManager: ScreenManager | null = null;
@@ -232,6 +240,28 @@ export class Session extends EventEmitter {
     this._autoClearEnabled = enabled;
     if (threshold !== undefined) {
       this._autoClearThreshold = threshold;
+    }
+  }
+
+  get autoCompactThreshold(): number {
+    return this._autoCompactThreshold;
+  }
+
+  get autoCompactEnabled(): boolean {
+    return this._autoCompactEnabled;
+  }
+
+  get autoCompactPrompt(): string {
+    return this._autoCompactPrompt;
+  }
+
+  setAutoCompact(enabled: boolean, threshold?: number, prompt?: string): void {
+    this._autoCompactEnabled = enabled;
+    if (threshold !== undefined) {
+      this._autoCompactThreshold = threshold;
+    }
+    if (prompt !== undefined) {
+      this._autoCompactPrompt = prompt;
     }
   }
 
@@ -694,7 +724,8 @@ export class Session extends EventEmitter {
               this._totalInputTokens += msg.message.usage.input_tokens || 0;
               this._totalOutputTokens += msg.message.usage.output_tokens || 0;
 
-              // Check if we should auto-clear
+              // Check if we should auto-compact or auto-clear
+              this.checkAutoCompact();
               this.checkAutoClear();
             }
           }
@@ -748,15 +779,54 @@ export class Session extends EventEmitter {
         this._totalInputTokens += Math.round(delta * 0.6);
         this._totalOutputTokens += Math.round(delta * 0.4);
 
-        // Check if we should auto-clear
+        // Check if we should auto-compact or auto-clear
+        this.checkAutoCompact();
         this.checkAutoClear();
       }
     }
   }
 
+  // Check if we should auto-compact based on token threshold
+  private checkAutoCompact(): void {
+    if (!this._autoCompactEnabled || this._isCompacting || this._isClearing) return;
+
+    const totalTokens = this._totalInputTokens + this._totalOutputTokens;
+    if (totalTokens >= this._autoCompactThreshold) {
+      this._isCompacting = true;
+      console.log(`[Session] Auto-compact triggered: ${totalTokens} tokens >= ${this._autoCompactThreshold} threshold`);
+
+      // Wait for Claude to be idle before compacting
+      const checkAndCompact = () => {
+        if (!this._isWorking) {
+          // Send /compact command with optional prompt
+          const compactCmd = this._autoCompactPrompt
+            ? `/compact ${this._autoCompactPrompt}\n`
+            : '/compact\n';
+          this.write(compactCmd);
+          this.emit('autoCompact', {
+            tokens: totalTokens,
+            threshold: this._autoCompactThreshold,
+            prompt: this._autoCompactPrompt || undefined
+          });
+
+          // Wait a moment then re-enable (longer than clear since compact takes time)
+          setTimeout(() => {
+            this._isCompacting = false;
+          }, 10000);
+        } else {
+          // Check again in 2 seconds
+          setTimeout(checkAndCompact, 2000);
+        }
+      };
+
+      // Start checking after a short delay
+      setTimeout(checkAndCompact, 1000);
+    }
+  }
+
   // Check if we should auto-clear based on token threshold
   private checkAutoClear(): void {
-    if (!this._autoClearEnabled || this._isClearing) return;
+    if (!this._autoClearEnabled || this._isClearing || this._isCompacting) return;
 
     const totalTokens = this._totalInputTokens + this._totalOutputTokens;
     if (totalTokens >= this._autoClearThreshold) {

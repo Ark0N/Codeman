@@ -74,6 +74,8 @@ export interface RespawnConfig {
   sendClear: boolean;
   /** Whether to send /init after /clear */
   sendInit: boolean;
+  /** Optional prompt to send if /init doesn't trigger work */
+  kickstartPrompt?: string;
 }
 
 export interface AppConfig {
