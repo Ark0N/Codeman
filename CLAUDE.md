@@ -75,7 +75,7 @@ src/
 
 - **RespawnController** (`src/respawn-controller.ts`): State machine that keeps sessions productive. Detects idle → sends update prompt → optionally `/clear` → optionally `/init` → repeats. State flow: `WATCHING → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR → SENDING_INIT → WAITING_INIT → WATCHING`
 
-- **ScreenManager** (`src/screen-manager.ts`): Wraps sessions in GNU screen for persistence across server restarts. On startup, reconciles with `screen -ls` to restore sessions.
+- **ScreenManager** (`src/screen-manager.ts`): Wraps sessions in GNU screen for persistence across server restarts. On startup, reconciles with `screen -ls` to restore sessions and discovers unknown "ghost" screens. Uses 4-strategy kill process to prevent orphaned claude processes.
 
 - **WebServer** (`src/web/server.ts`): Fastify server with REST API (`/api/*`) + SSE (`/api/events`). Wires session events to SSE broadcast.
 
@@ -158,10 +158,33 @@ The frontend uses vanilla JS with xterm.js. Key patterns:
 3. Subscribe in `src/web/server.ts` when wiring session to SSE
 4. Handle in frontend SSE listener
 
+## Session Lifecycle & Cleanup
+
+### Session Limits
+- `MAX_CONCURRENT_SESSIONS = 50` prevents unbounded session creation
+- Limit enforced on `/api/sessions`, `/api/run`, `/api/quick-start`, and scheduled runs
+
+### Kill Process (4 Strategies)
+When killing a screen session, `killScreen()` uses multiple strategies to ensure no orphaned processes:
+1. **Child PIDs**: Recursively find and kill all child processes (SIGTERM then SIGKILL)
+2. **Process Group**: Kill entire process group (`kill -TERM -$PID`) to catch orphans
+3. **Screen Name**: `screen -S <name> -X quit` to cleanly terminate screen
+4. **Direct Kill**: SIGKILL the screen PID as final fallback
+
+### Ghost Screen Discovery
+On server startup, `reconcileScreens()` discovers unknown claudeman screens from `screen -ls` output. This prevents "ghost" screens that persist if `screens.json` is lost or corrupted.
+
+### Cleanup Function
+`cleanupSession()` in server.ts provides comprehensive cleanup:
+- Stops and removes respawn controller + listeners
+- Clears respawn timers
+- Clears terminal/output/task batches
+- Removes session event listeners
+- Stops session and kills screen
+
 ## Notes
 
 - State persists to `~/.claudeman/state.json` and `~/.claudeman/screens.json`
 - Cases created in `~/claudeman-cases/` by default
-- Kill All works on restored sessions: `Session.stop()` checks screenManager directly by session ID
 - Long-running sessions (12-24+ hours) supported with automatic buffer trimming (5MB terminal, 2MB text, 1000 messages max)
 - E2E testing available via agent-browser (see `.claude/skills/e2e-test.md`)
