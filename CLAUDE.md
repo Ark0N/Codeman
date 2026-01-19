@@ -125,6 +125,22 @@ pty.spawn('claude', ['-p', '--dangerously-skip-permissions', '--output-format', 
 pty.spawn('claude', ['--dangerously-skip-permissions'], { ... })
 ```
 
+### Screen Input for Ink/Claude CLI
+
+Claude CLI uses Ink (React for terminals) which has specific input handling. When sending programmatic input via `screen -X stuff`:
+
+**IMPORTANT**: Text and Enter key MUST be sent as separate commands:
+```bash
+# Correct - two separate commands
+screen -S claudeman-xxx -p 0 -X stuff "hello world"
+screen -S claudeman-xxx -p 0 -X stuff "$(printf '\015')"
+
+# Wrong - doesn't work with Ink
+screen -S claudeman-xxx -p 0 -X stuff "$(printf 'hello world\015')"
+```
+
+The `\015` (octal) is carriage return (ASCII 13), which Ink interprets as `key.return` for submission. Use `writeViaScreen()` method for programmatic input that needs Enter key.
+
 ### Idle Detection
 
 **RespawnController**: Primary `↵ send` indicator, fallback prompt chars (`❯`, `⏵`) + 10s timeout. Working patterns: `Thinking`, `Writing`, `Running`.
