@@ -1407,6 +1407,13 @@ export class WebServer extends EventEmitter {
             this.sessions.set(session.id, session);
             this.setupSessionListeners(session);
 
+            // Restore inner loop tracking state (Ralph Wiggum settings) if it was saved
+            const innerState = this.store.getInnerState(screen.sessionId);
+            if (innerState) {
+              session.innerLoopTracker.restoreState(innerState.loop, innerState.todos);
+              console.log(`[Server] Restored inner loop state for session ${session.id} (enabled: ${innerState.loop.enabled})`);
+            }
+
             // Mark it as restored (not started yet - user needs to attach)
             console.log(`[Server] Restored session ${session.id} from screen ${screen.screenName}`);
           }
