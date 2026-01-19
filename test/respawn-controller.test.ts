@@ -26,9 +26,14 @@ class MockSession extends EventEmitter {
     this.emit('terminal', data);
   }
 
-  // Simulate prompt appearing
+  // Simulate prompt appearing (basic prompt character)
   simulatePrompt(): void {
     this.emit('terminal', '❯ ');
+  }
+
+  // Simulate ready state with the definitive indicator
+  simulateReady(): void {
+    this.emit('terminal', '↵ send');
   }
 
   // Simulate working state
@@ -36,15 +41,16 @@ class MockSession extends EventEmitter {
     this.emit('terminal', 'Thinking... ⠋');
   }
 
-  // Simulate clear completion
+  // Simulate clear completion (followed by ready indicator)
   simulateClearComplete(): void {
     this.emit('terminal', 'conversation cleared');
+    setTimeout(() => this.simulateReady(), 50);
   }
 
-  // Simulate init completion
+  // Simulate init completion (followed by ready indicator)
   simulateInitComplete(): void {
     this.emit('terminal', 'Analyzing CLAUDE.md...');
-    setTimeout(() => this.simulatePrompt(), 100);
+    setTimeout(() => this.simulateReady(), 100);
   }
 }
 

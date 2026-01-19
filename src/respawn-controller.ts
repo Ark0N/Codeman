@@ -10,6 +10,9 @@ const RESPAWN_BUFFER_TRIM_SIZE = 512 * 1024;
 const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*[HJKmsu?lh]/g;
 const WHITESPACE_PATTERN = /\s+/g;
 
+// The definitive "ready for input" indicator - when Claude shows a suggestion
+const READY_INDICATOR = '↵ send';
+
 /**
  * Respawn sequence states
  *
@@ -98,8 +101,6 @@ export class RespawnController extends EventEmitter {
     '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏',  // Spinner chars
     '✻', '✽',  // Activity indicators (spinning star)
   ];
-  private readonly CLEAR_COMPLETE_PATTERN = /conversation cleared|cleared|❯|⏵/i;
-  private readonly INIT_COMPLETE_PATTERN = /initialized|analyzing|❯|⏵|CLAUDE\.md/i;
 
   constructor(session: Session, config: Partial<RespawnConfig> = {}) {
     super();
@@ -199,15 +200,8 @@ export class RespawnController extends EventEmitter {
       this.terminalBuffer = this.terminalBuffer.slice(-RESPAWN_BUFFER_TRIM_SIZE);
     }
 
-    // Filter out noise - only count meaningful data as activity
-    // Ignore: cursor movements, color codes alone, small whitespace-only data
-    // Uses pre-compiled patterns for performance
-    const meaningfulData = data
-      .replace(ANSI_ESCAPE_PATTERN, '') // Remove ANSI escape sequences
-      .replace(WHITESPACE_PATTERN, '')  // Remove whitespace
-      .trim();
-
-    const isMeaningfulActivity = meaningfulData.length > 0;
+    // Check for the definitive "ready for input" indicator
+    const isReady = data.includes(READY_INDICATOR);
 
     // Detect working state
     const isWorking = this.WORKING_PATTERNS.some(pattern => data.includes(pattern));
@@ -219,45 +213,82 @@ export class RespawnController extends EventEmitter {
       return;
     }
 
-    // Detect prompt (idle) state
+    // Detect ready state (↵ send indicator) - immediate response
+    if (isReady) {
+      this.promptDetected = true;
+      this.workingDetected = false;
+      this.lastActivityTime = Date.now();
+      this.log('Ready indicator detected (↵ send)');
+
+      // Handle based on current state - immediate action
+      switch (this._state) {
+        case 'watching':
+          this.clearIdleTimer();
+          this.onIdleDetected();
+          break;
+        case 'waiting_update':
+          this.checkUpdateComplete();
+          break;
+        case 'waiting_clear':
+          this.checkClearComplete();
+          break;
+        case 'waiting_init':
+          this.checkInitComplete();
+          break;
+      }
+      return;
+    }
+
+    // Fallback: detect prompt characters - start timeout-based check
     const hasPrompt = this.PROMPT_PATTERNS.some(pattern => data.includes(pattern));
     if (hasPrompt) {
       const wasPromptDetected = this.promptDetected;
       this.promptDetected = true;
       this.workingDetected = false;
+      this.lastActivityTime = Date.now();
 
       if (!wasPromptDetected) {
-        // First time seeing prompt (or after being cleared) - log it
-        this.lastActivityTime = Date.now();
         this.log('Prompt detected');
-
-        // Only start idle timer in watching state
+        // Start fallback timeout for watching state
         if (this._state === 'watching') {
           this.startIdleTimer();
         }
       }
-      // In waiting_* states, checkXxxComplete will handle the state transition
-    } else if (isMeaningfulActivity) {
-      // Meaningful activity that's not a prompt or working indicator
-      this.lastActivityTime = Date.now();
-      if (this.promptDetected && this._state === 'watching') {
-        // Still at prompt but got some other data - restart timer
-        this.startIdleTimer();
-      }
     }
+  }
 
-    // Handle state-specific terminal data
-    switch (this._state) {
-      case 'waiting_update':
-        this.checkUpdateComplete(data);
-        break;
-      case 'waiting_clear':
-        this.checkClearComplete(data);
-        break;
-      case 'waiting_init':
-        this.checkInitComplete(data);
-        break;
+  // Step completion handlers - called when ready indicator is detected
+  private checkUpdateComplete(): void {
+    this.clearIdleTimer();
+    this.log('Update completed (ready indicator)');
+    this.emit('stepCompleted', 'update');
+
+    if (this.config.sendClear) {
+      this.sendClear();
+    } else if (this.config.sendInit) {
+      this.sendInit();
+    } else {
+      this.completeCycle();
     }
+  }
+
+  private checkClearComplete(): void {
+    this.clearIdleTimer();
+    this.log('/clear completed (ready indicator)');
+    this.emit('stepCompleted', 'clear');
+
+    if (this.config.sendInit) {
+      this.sendInit();
+    } else {
+      this.completeCycle();
+    }
+  }
+
+  private checkInitComplete(): void {
+    this.clearIdleTimer();
+    this.log('/init completed (ready indicator)');
+    this.emit('stepCompleted', 'init');
+    this.completeCycle();
   }
 
   private startIdleTimer(): void {
@@ -316,28 +347,6 @@ export class RespawnController extends EventEmitter {
     }, this.config.interStepDelayMs);
   }
 
-  private checkUpdateComplete(data: string): void {
-    // Update is complete when we see the prompt again after working
-    if (this.promptDetected && !this.workingDetected) {
-      // Wait to make sure it's truly done (use configured idle timeout)
-      this.clearIdleTimer();
-      this.idleTimer = setTimeout(() => {
-        if (this.promptDetected && !this.workingDetected) {
-          this.log('Update docs completed');
-          this.emit('stepCompleted', 'update');
-          // Proceed based on config
-          if (this.config.sendClear) {
-            this.sendClear();
-          } else if (this.config.sendInit) {
-            this.sendInit();
-          } else {
-            this.completeCycle();
-          }
-        }
-      }, this.config.idleTimeoutMs); // Use configured idle timeout
-    }
-  }
-
   private sendClear(): void {
     this.setState('sending_clear');
     this.terminalBuffer = '';
@@ -349,23 +358,6 @@ export class RespawnController extends EventEmitter {
       this.setState('waiting_clear');
       this.promptDetected = false;
     }, this.config.interStepDelayMs);
-  }
-
-  private checkClearComplete(data: string): void {
-    // Clear is fast, but wait for prompt and verify idle
-    if (this.CLEAR_COMPLETE_PATTERN.test(data) || this.promptDetected) {
-      this.clearIdleTimer();
-      this.idleTimer = setTimeout(() => {
-        this.log('/clear completed');
-        this.emit('stepCompleted', 'clear');
-        // Proceed based on config
-        if (this.config.sendInit) {
-          this.sendInit();
-        } else {
-          this.completeCycle();
-        }
-      }, this.config.idleTimeoutMs); // Use configured idle timeout
-    }
   }
 
   private sendInit(): void {
@@ -380,20 +372,6 @@ export class RespawnController extends EventEmitter {
       this.promptDetected = false;
       this.workingDetected = false;
     }, this.config.interStepDelayMs);
-  }
-
-  private checkInitComplete(data: string): void {
-    // Init completes when we see the prompt after it finishes
-    if (this.promptDetected && !this.workingDetected) {
-      this.clearIdleTimer();
-      this.idleTimer = setTimeout(() => {
-        if (this.promptDetected && !this.workingDetected) {
-          this.log('/init completed');
-          this.emit('stepCompleted', 'init');
-          this.completeCycle();
-        }
-      }, this.config.idleTimeoutMs); // Use configured idle timeout
-    }
   }
 
   private completeCycle(): void {
