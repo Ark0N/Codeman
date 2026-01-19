@@ -12,6 +12,8 @@ Claudeman is a Claude Code session manager with a web interface and autonomous R
 
 ## Commands
 
+**GOTCHA**: `npm run dev` runs CLI help, NOT the web server. Always use `npx tsx src/index.ts web` for development.
+
 ```bash
 npm run build          # Compile TypeScript + copy static files to dist/web/
 npm run clean          # Remove dist/
@@ -21,9 +23,6 @@ npx tsx src/index.ts web           # Dev mode - no build needed (RECOMMENDED)
 npx tsx src/index.ts web -p 8080   # Dev mode with custom port
 node dist/index.js web             # After npm run build
 claudeman web                      # After npm link
-
-# ⚠️  GOTCHA: `npm run dev` runs CLI help, NOT the web server!
-#     Always use `npx tsx src/index.ts web` for development
 
 # Testing (vitest - tests run against WebServer, no real Claude CLI spawned)
 npm run test                              # Run all tests once
@@ -67,6 +66,18 @@ src/
 │       └── index.html    # Single page with modal templates
 └── templates/
     └── claude-md.ts      # CLAUDE.md generator for new cases
+
+test/
+├── session.test.ts           # Core session creation, lifecycle, PTY behavior
+├── pty-interactive.test.ts   # Interactive mode, terminal input/output
+├── respawn-controller.test.ts # Respawn state machine, idle detection
+├── inner-loop-tracker.test.ts # Ralph loop and todo detection parsing
+├── quick-start.test.ts       # Quick-start API endpoint
+├── scheduled-runs.test.ts    # Timed/scheduled session runs
+├── sse-events.test.ts        # Server-Sent Events broadcasting
+├── integration-flows.test.ts # Multi-step workflow tests
+├── session-cleanup.test.ts   # Resource cleanup, buffer trimming
+└── edge-cases.test.ts        # Error handling, boundary conditions
 ```
 
 ### Data Flow
@@ -85,6 +96,12 @@ src/
 | ScreenManager | `screen-manager.ts` | GNU screen persistence, ghost discovery, 4-strategy kill |
 | WebServer | `web/server.ts` | Fastify REST + SSE at `/api/events` |
 | InnerLoopTracker | `inner-loop-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos, loop status in output |
+
+### Session Modes
+
+Sessions have a `mode` property (`SessionMode` type):
+- **`'claude'`**: Runs Claude CLI for AI interactions (default)
+- **`'shell'`**: Runs a plain bash shell for debugging/testing
 
 ## Code Patterns
 
