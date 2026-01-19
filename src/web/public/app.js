@@ -756,7 +756,7 @@ class ClaudemanApp {
         });
 
         // Track first session
-        if (i === 1) {
+        if (i === 0) {
           firstSessionId = createData.session.id;
         }
 
