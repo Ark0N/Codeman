@@ -416,7 +416,7 @@ export class RespawnController extends EventEmitter {
     this.terminalBuffer = ''; // Clear buffer for fresh detection
 
     this.stepTimer = setTimeout(() => {
-      const input = this.config.updatePrompt + '\r\n';  // CRLF for screen + Claude CLI
+      const input = this.config.updatePrompt + '\r';  // \r triggers Enter in Ink/Claude CLI
       this.log(`Sending update prompt: "${this.config.updatePrompt}"`);
       this.session.writeViaScreen(input);
       this.emit('stepSent', 'update', this.config.updatePrompt);
@@ -432,7 +432,7 @@ export class RespawnController extends EventEmitter {
 
     this.stepTimer = setTimeout(() => {
       this.log('Sending /clear');
-      this.session.writeViaScreen('/clear\r\n');  // CRLF for screen + Claude CLI
+      this.session.writeViaScreen('/clear\r');  // \r triggers Enter in Ink/Claude CLI
       this.emit('stepSent', 'clear', '/clear');
       this.setState('waiting_clear');
       this.promptDetected = false;
@@ -445,7 +445,7 @@ export class RespawnController extends EventEmitter {
 
     this.stepTimer = setTimeout(() => {
       this.log('Sending /init');
-      this.session.writeViaScreen('/init\r\n');  // CRLF for screen + Claude CLI
+      this.session.writeViaScreen('/init\r');  // \r triggers Enter in Ink/Claude CLI
       this.emit('stepSent', 'init', '/init');
       this.setState('waiting_init');
       this.promptDetected = false;

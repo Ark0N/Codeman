@@ -839,9 +839,9 @@ export class Session extends EventEmitter {
         if (!this._isWorking) {
           // Send /compact command with optional prompt
           const compactCmd = this._autoCompactPrompt
-            ? `/compact ${this._autoCompactPrompt}\n`
-            : '/compact\n';
-          this.write(compactCmd);
+            ? `/compact ${this._autoCompactPrompt}\r`
+            : '/compact\r';
+          this.writeViaScreen(compactCmd);
           this.emit('autoCompact', {
             tokens: totalTokens,
             threshold: this._autoCompactThreshold,
@@ -876,7 +876,7 @@ export class Session extends EventEmitter {
       const checkAndClear = () => {
         if (!this._isWorking) {
           // Send /clear command
-          this.write('/clear\n');
+          this.writeViaScreen('/clear\r');
           // Reset token counts
           this._totalInputTokens = 0;
           this._totalOutputTokens = 0;

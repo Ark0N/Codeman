@@ -1275,8 +1275,6 @@ class ClaudemanApp {
 
     this.editingSessionId = sessionId;
 
-    document.getElementById('sessionNameInput').value = session.name || '';
-
     // Update respawn status display and buttons
     const respawnStatus = document.getElementById('sessionRespawnStatus');
     const enableBtn = document.getElementById('modalEnableRespawnBtn');
@@ -1307,9 +1305,6 @@ class ClaudemanApp {
     this.selectDurationPreset('');
 
     document.getElementById('sessionOptionsModal').classList.add('active');
-
-    // Focus the name input
-    setTimeout(() => document.getElementById('sessionNameInput').focus(), 100);
   }
 
   // Handle duration preset selection
@@ -1464,30 +1459,9 @@ class ClaudemanApp {
     document.getElementById('sessionOptionsModal').classList.remove('active');
   }
 
-  async saveSessionOptions() {
-    if (!this.editingSessionId) return;
-
-    const session = this.sessions.get(this.editingSessionId);
-    const newName = document.getElementById('sessionNameInput').value.trim();
-    const oldName = session?.name || '';
-
-    // Only update if name actually changed
-    if (newName !== oldName) {
-      try {
-        const res = await fetch(`/api/sessions/${this.editingSessionId}/name`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: newName })
-        });
-        const data = await res.json();
-        if (data.error) throw new Error(data.error);
-
-        this.showToast('Session renamed', 'success');
-      } catch (err) {
-        this.showToast('Failed to rename: ' + err.message, 'error');
-      }
-    }
-
+  saveSessionOptions() {
+    // Session options are applied immediately via individual controls
+    // This just closes the modal
     this.closeSessionOptions();
   }
 
