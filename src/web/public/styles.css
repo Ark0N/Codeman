@@ -521,6 +521,13 @@ body {
   min-width: 0;
 }
 
+.ralph-title {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
 .ralph-status-badge {
   display: flex;
   align-items: center;
