@@ -1919,10 +1919,12 @@ class ClaudemanApp {
     const state = this.innerStates.get(this.activeSessionId);
 
     // Check if there's anything to show
+    // Only show panel if tracker is enabled OR there's active state to display
+    const isEnabled = state?.loop?.enabled === true;
     const hasLoop = state?.loop?.active || state?.loop?.completionPhrase;
     const hasTodos = state?.todos?.length > 0;
 
-    if (!hasLoop && !hasTodos) {
+    if (!isEnabled && !hasLoop && !hasTodos) {
       panel.style.display = 'none';
       return;
     }
@@ -1996,7 +1998,7 @@ class ClaudemanApp {
     const statusText = badge?.querySelector('.ralph-status-text');
     if (!badge || !statusText) return;
 
-    badge.classList.remove('active', 'completed');
+    badge.classList.remove('active', 'completed', 'tracking');
 
     if (loop?.active) {
       badge.classList.add('active');
@@ -2004,6 +2006,9 @@ class ClaudemanApp {
     } else if (loop?.completionPhrase && !loop?.active) {
       badge.classList.add('completed');
       statusText.textContent = 'Complete';
+    } else if (loop?.enabled) {
+      badge.classList.add('tracking');
+      statusText.textContent = 'Tracking';
     } else {
       statusText.textContent = 'Idle';
     }

@@ -50,12 +50,16 @@ export interface InnerLoopTrackerEvents {
   loopUpdate: (state: InnerLoopState) => void;
   todoUpdate: (todos: InnerTodoItem[]) => void;
   completionDetected: (phrase: string) => void;
+  enabled: () => void;  // Emitted when tracker auto-enables
 }
 
 /**
  * InnerLoopTracker parses terminal output from Claude Code sessions to detect:
  * 1. Ralph Wiggum loop state (active, completion phrase, cycle count)
  * 2. Todo list items from the TodoWrite tool
+ *
+ * The tracker is DISABLED by default and auto-enables when Ralph-related
+ * patterns are detected (e.g., /ralph-loop, <promise>, todos).
  */
 export class InnerLoopTracker extends EventEmitter {
   private _loopState: InnerLoopState;
@@ -65,6 +69,36 @@ export class InnerLoopTracker extends EventEmitter {
   constructor() {
     super();
     this._loopState = createInitialInnerLoopState();
+  }
+
+  /**
+   * Whether the tracker is enabled and actively monitoring
+   */
+  get enabled(): boolean {
+    return this._loopState.enabled;
+  }
+
+  /**
+   * Enable the tracker (called automatically when Ralph patterns detected)
+   */
+  enable(): void {
+    if (!this._loopState.enabled) {
+      this._loopState.enabled = true;
+      this._loopState.lastActivity = Date.now();
+      this.emit('enabled');
+      this.emit('loopUpdate', this.loopState);
+    }
+  }
+
+  /**
+   * Disable the tracker
+   */
+  disable(): void {
+    if (this._loopState.enabled) {
+      this._loopState.enabled = false;
+      this._loopState.lastActivity = Date.now();
+      this.emit('loopUpdate', this.loopState);
+    }
   }
 
   get loopState(): InnerLoopState {
@@ -82,6 +116,16 @@ export class InnerLoopTracker extends EventEmitter {
     // Remove ANSI escape codes for cleaner parsing
     const cleanData = data.replace(ANSI_ESCAPE_PATTERN, '');
 
+    // If tracker is disabled, only check for patterns that should auto-enable it
+    if (!this._loopState.enabled) {
+      if (this.shouldAutoEnable(cleanData)) {
+        this.enable();
+        // Continue processing now that we're enabled
+      } else {
+        return; // Don't process further when disabled
+      }
+    }
+
     // Buffer data for line-based processing
     this._lineBuffer += cleanData;
 
@@ -98,6 +142,51 @@ export class InnerLoopTracker extends EventEmitter {
 
     // Cleanup expired todos
     this.cleanupExpiredTodos();
+  }
+
+  /**
+   * Check if the data contains patterns that should auto-enable the tracker
+   */
+  private shouldAutoEnable(data: string): boolean {
+    // Ralph loop command: /ralph-loop
+    if (RALPH_START_PATTERN.test(data)) {
+      return true;
+    }
+
+    // Completion phrase: <promise>...</promise>
+    if (PROMISE_PATTERN.test(data)) {
+      return true;
+    }
+
+    // TodoWrite tool usage
+    if (TODOWRITE_PATTERN.test(data)) {
+      return true;
+    }
+
+    // Iteration patterns from Ralph loop: "Iteration 5/50", "[5/50]"
+    if (ITERATION_PATTERN.test(data)) {
+      return true;
+    }
+
+    // Todo checkboxes: "- [ ] Task" or "- [x] Task"
+    if (TODO_CHECKBOX_PATTERN.test(data)) {
+      // Reset lastIndex since we're reusing the global regex
+      TODO_CHECKBOX_PATTERN.lastIndex = 0;
+      return true;
+    }
+
+    // Todo indicator icons: "Todo: ☐", "Todo: ◐", etc.
+    if (TODO_INDICATOR_PATTERN.test(data)) {
+      TODO_INDICATOR_PATTERN.lastIndex = 0;
+      return true;
+    }
+
+    // Loop start patterns
+    if (LOOP_START_PATTERN.test(data) && !PROMISE_PATTERN.test(data)) {
+      return true;
+    }
+
+    return false;
   }
 
   /**
@@ -388,8 +477,14 @@ export class InnerLoopTracker extends EventEmitter {
 
   /**
    * Mark the loop as started (can be called externally)
+   * Also enables the tracker if not already enabled
    */
   startLoop(completionPhrase?: string, maxIterations?: number): void {
+    // Enable tracker when loop is explicitly started
+    if (!this._loopState.enabled) {
+      this._loopState.enabled = true;
+      this.emit('enabled');
+    }
     this._loopState.active = true;
     this._loopState.startedAt = Date.now();
     this._loopState.cycleCount = 0;
@@ -422,9 +517,10 @@ export class InnerLoopTracker extends EventEmitter {
 
   /**
    * Clear all state (e.g., when session is cleared)
+   * Resets to disabled state
    */
   clear(): void {
-    this._loopState = createInitialInnerLoopState();
+    this._loopState = createInitialInnerLoopState(); // This sets enabled: false
     this._todos.clear();
     this._lineBuffer = '';
     this.emit('loopUpdate', this.loopState);
@@ -465,7 +561,11 @@ export class InnerLoopTracker extends EventEmitter {
    * Restore state from persisted data
    */
   restoreState(loopState: InnerLoopState, todos: InnerTodoItem[]): void {
-    this._loopState = { ...loopState };
+    // Ensure enabled flag exists (backwards compatibility)
+    this._loopState = {
+      ...loopState,
+      enabled: loopState.enabled ?? false,  // Override after spread for backwards compat
+    };
     this._todos.clear();
     for (const todo of todos) {
       this._todos.set(todo.id, { ...todo });

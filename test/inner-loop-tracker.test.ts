@@ -14,11 +14,14 @@ describe('InnerLoopTracker', () => {
 
   beforeEach(() => {
     tracker = new InnerLoopTracker();
+    // Enable tracker by default for most tests (testing detection logic)
+    tracker.enable();
   });
 
   describe('Initialization', () => {
     it('should start with inactive loop state', () => {
-      const state = tracker.loopState;
+      const freshTracker = new InnerLoopTracker();
+      const state = freshTracker.loopState;
       expect(state.active).toBe(false);
       expect(state.completionPhrase).toBeNull();
       expect(state.startedAt).toBeNull();
@@ -27,6 +30,88 @@ describe('InnerLoopTracker', () => {
 
     it('should start with empty todos', () => {
       expect(tracker.todos).toHaveLength(0);
+    });
+
+    it('should start disabled by default', () => {
+      const freshTracker = new InnerLoopTracker();
+      expect(freshTracker.enabled).toBe(false);
+      expect(freshTracker.loopState.enabled).toBe(false);
+    });
+  });
+
+  describe('Auto-Enable Behavior', () => {
+    it('should not process data when disabled', () => {
+      const freshTracker = new InnerLoopTracker();
+      // This pattern doesn't trigger auto-enable
+      freshTracker.processTerminalData('Elapsed: 2.5 hours\n');
+
+      expect(freshTracker.loopState.elapsedHours).toBeNull();
+    });
+
+    it('should auto-enable on /ralph-loop command', () => {
+      const freshTracker = new InnerLoopTracker();
+      const enableHandler = vi.fn();
+      freshTracker.on('enabled', enableHandler);
+
+      freshTracker.processTerminalData('/ralph-loop\n');
+
+      expect(freshTracker.enabled).toBe(true);
+      expect(enableHandler).toHaveBeenCalled();
+    });
+
+    it('should auto-enable on completion phrase', () => {
+      const freshTracker = new InnerLoopTracker();
+      freshTracker.processTerminalData('<promise>COMPLETE</promise>\n');
+
+      expect(freshTracker.enabled).toBe(true);
+    });
+
+    it('should auto-enable on TodoWrite detection', () => {
+      const freshTracker = new InnerLoopTracker();
+      freshTracker.processTerminalData('TodoWrite: Todos have been modified\n');
+
+      expect(freshTracker.enabled).toBe(true);
+    });
+
+    it('should auto-enable on todo checkboxes', () => {
+      const freshTracker = new InnerLoopTracker();
+      freshTracker.processTerminalData('- [ ] New task\n');
+
+      expect(freshTracker.enabled).toBe(true);
+      expect(freshTracker.todos).toHaveLength(1);
+    });
+
+    it('should auto-enable on iteration patterns', () => {
+      const freshTracker = new InnerLoopTracker();
+      freshTracker.processTerminalData('Iteration 5/50\n');
+
+      expect(freshTracker.enabled).toBe(true);
+    });
+
+    it('should auto-enable on loop start patterns', () => {
+      const freshTracker = new InnerLoopTracker();
+      freshTracker.processTerminalData('Loop started at 2024-01-15\n');
+
+      expect(freshTracker.enabled).toBe(true);
+    });
+
+    it('should allow manual enable/disable', () => {
+      const freshTracker = new InnerLoopTracker();
+      expect(freshTracker.enabled).toBe(false);
+
+      freshTracker.enable();
+      expect(freshTracker.enabled).toBe(true);
+
+      freshTracker.disable();
+      expect(freshTracker.enabled).toBe(false);
+    });
+
+    it('should reset to disabled on clear', () => {
+      tracker.processTerminalData('/ralph-loop\n');
+      expect(tracker.enabled).toBe(true);
+
+      tracker.clear();
+      expect(tracker.enabled).toBe(false);
     });
   });
 
@@ -289,6 +374,7 @@ describe('InnerLoopTracker', () => {
   describe('State Restoration', () => {
     it('should restore state from persisted data', () => {
       const loopState: InnerLoopState = {
+        enabled: true,
         active: true,
         completionPhrase: 'RESTORED',
         startedAt: Date.now() - 1000,
@@ -305,11 +391,30 @@ describe('InnerLoopTracker', () => {
 
       tracker.restoreState(loopState, todos);
 
+      expect(tracker.loopState.enabled).toBe(true);
       expect(tracker.loopState.active).toBe(true);
       expect(tracker.loopState.completionPhrase).toBe('RESTORED');
       expect(tracker.loopState.cycleCount).toBe(5);
       expect(tracker.loopState.maxIterations).toBe(50);
       expect(tracker.todos).toHaveLength(2);
+    });
+
+    it('should handle missing enabled flag in legacy state', () => {
+      // Simulate old state without enabled flag
+      const loopState = {
+        active: true,
+        completionPhrase: 'TEST',
+        startedAt: Date.now(),
+        cycleCount: 0,
+        maxIterations: null,
+        lastActivity: Date.now(),
+        elapsedHours: null,
+      } as InnerLoopState;
+
+      tracker.restoreState(loopState, []);
+
+      // Should default to false for backwards compatibility
+      expect(tracker.loopState.enabled).toBe(false);
     });
   });
 

@@ -251,6 +251,7 @@ export const DEFAULT_CONFIG: AppConfig = {
 export type InnerTodoStatus = 'pending' | 'in_progress' | 'completed';
 
 export interface InnerLoopState {
+  enabled: boolean;  // Whether the tracker is actively monitoring (disabled by default)
   active: boolean;
   completionPhrase: string | null;
   startedAt: number | null;
@@ -280,6 +281,7 @@ export interface InnerStateRecord {
 
 export function createInitialInnerLoopState(): InnerLoopState {
   return {
+    enabled: false,  // Disabled by default, auto-enables when Ralph patterns detected
     active: false,
     completionPhrase: null,
     startedAt: null,

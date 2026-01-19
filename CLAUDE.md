@@ -31,6 +31,7 @@ npm run test:coverage                     # With coverage report
 npx vitest run test/session.test.ts       # Single file
 npx vitest run -t "should create session" # By pattern
 # Tests use ports 3101-3108 to avoid conflicts with dev server (3000)
+# Test timeout: 30s (configured in vitest.config.ts for integration tests)
 
 # TypeScript checking (no linter configured)
 npx tsc --noEmit                          # Type check without building
@@ -92,10 +93,20 @@ test/                             # All tests use vitest, ports 3101-3108
 | Component | File | Purpose |
 |-----------|------|---------|
 | Session | `session.ts` | PTY wrapper for Claude CLI. Modes: `runPrompt()`, `startInteractive()`, `startShell()` |
-| RespawnController | `respawn-controller.ts` | State machine: watching → update → clear → init → monitor → kickstart → repeat |
+| RespawnController | `respawn-controller.ts` | State machine for autonomous session cycling (see diagram below) |
 | ScreenManager | `screen-manager.ts` | GNU screen persistence, ghost discovery, 4-strategy kill |
 | WebServer | `web/server.ts` | Fastify REST + SSE at `/api/events` |
 | InnerLoopTracker | `inner-loop-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos, loop status in output |
+
+### Respawn State Machine
+
+```
+WATCHING → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR → SENDING_INIT → WAITING_INIT → WATCHING
+    ↑                                                                                                          |
+    └──────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+Steps can be skipped via config (`sendClear: false`, `sendInit: false`). Idle detection triggers state transitions.
 
 ### Session Modes
 
@@ -182,7 +193,14 @@ Both wait for idle. Configure via `session.setAutoCompact()` / `session.setAutoC
 
 ### Inner Loop Tracking
 
-Detects Ralph loops and todos inside Claude sessions. Patterns: `<promise>PHRASE</promise>`, checkbox todos (`- [ ]`/`- [x]`), icons (`☐`/`◐`/`✓`), cycle counts. API: `GET /api/sessions/:id/inner-state`. UI: collapsible panel below tabs, auto-hides when empty.
+Detects Ralph loops and todos inside Claude sessions. **Disabled by default** - auto-enables when Ralph-related patterns are detected:
+- `/ralph-loop` command
+- `<promise>PHRASE</promise>` completion phrases
+- `TodoWrite` tool usage
+- Iteration patterns (`Iteration 5/50`, `[5/50]`)
+- Todo checkboxes (`- [ ]`/`- [x]`) or indicator icons (`☐`/`◐`/`✓`)
+
+API: `GET /api/sessions/:id/inner-state`. UI: collapsible panel below tabs, shows "Tracking" status when enabled. Use `tracker.enable()` / `tracker.disable()` for manual control.
 
 ### Terminal Display Fix
 

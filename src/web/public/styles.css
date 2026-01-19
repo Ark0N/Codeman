@@ -556,6 +556,10 @@ body {
   background: var(--green);
 }
 
+.ralph-status-badge.tracking .ralph-status-dot {
+  background: var(--yellow);
+}
+
 @keyframes ralph-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.6; transform: scale(1.2); }
