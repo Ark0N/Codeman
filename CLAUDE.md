@@ -211,6 +211,7 @@ REST API served by Fastify at `src/web/server.ts`. All endpoints are under `/api
 - `GET /api/sessions` - List all sessions
 - `POST /api/sessions` - Create session `{ workingDir, mode?, name? }`
 - `GET /api/sessions/:id` - Get session details (includes bufferStats)
+- `GET /api/sessions/:id/output` - Get text output buffer
 - `DELETE /api/sessions/:id` - Kill and remove session
 - `DELETE /api/sessions` - Kill all sessions
 - `PUT /api/sessions/:id/name` - Rename session `{ name }`
@@ -218,6 +219,7 @@ REST API served by Fastify at `src/web/server.ts`. All endpoints are under `/api
 - `POST /api/sessions/:id/shell` - Start shell terminal (no Claude)
 - `POST /api/sessions/:id/input` - Send input to session `{ input }`
 - `POST /api/sessions/:id/resize` - Resize terminal `{ cols, rows }`
+- `POST /api/sessions/:id/run` - Run one-shot prompt `{ prompt }`
 - `GET /api/sessions/:id/terminal` - Get terminal buffer
 
 **Respawn Controller:**
@@ -252,6 +254,7 @@ REST API served by Fastify at `src/web/server.ts`. All endpoints are under `/api
 - `GET /api/status` - Full state snapshot
 - `GET /api/settings` - Get app settings
 - `PUT /api/settings` - Update settings
+- `POST /api/run` - Quick run prompt without creating persistent session `{ prompt, workingDir? }`
 
 ## E2E Testing with agent-browser
 
