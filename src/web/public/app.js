@@ -678,32 +678,71 @@ class ClaudemanApp {
 
   async runClaude() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
+    const tabCount = Math.min(10, Math.max(1, parseInt(document.getElementById('tabCount').value) || 1));
 
     this.terminal.clear();
-    this.terminal.writeln(`\x1b[1;32m Starting Claude in ${caseName}...\x1b[0m`);
+    this.terminal.writeln(`\x1b[1;32m Starting ${tabCount} Claude session(s) in ${caseName}...\x1b[0m`);
     this.terminal.writeln('');
 
     try {
-      const res = await fetch('/api/quick-start', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ caseName })
-      });
-      const data = await res.json();
+      // Get case path first
+      const caseRes = await fetch(`/api/cases/${caseName}`);
+      const caseData = await caseRes.json();
 
-      if (!data.success) throw new Error(data.error);
-
-      this.activeSessionId = data.sessionId;
-      this.loadQuickStartCases();
-
-      // Send resize
-      const dims = this.fitAddon.proposeDimensions();
-      if (dims) {
-        await fetch(`/api/sessions/${data.sessionId}/resize`, {
+      // Create the case if it doesn't exist
+      if (!caseData.path) {
+        const createCaseRes = await fetch('/api/cases', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
+          body: JSON.stringify({ name: caseName, description: '' })
         });
+        const createCaseData = await createCaseRes.json();
+        if (!createCaseData.success) throw new Error(createCaseData.error || 'Failed to create case');
+      }
+
+      const workingDir = caseData.path || `${process.env.HOME}/claudeman-cases/${caseName}`;
+      let firstSessionId = null;
+
+      // Create multiple sessions
+      for (let i = 1; i <= tabCount; i++) {
+        const sessionName = tabCount > 1 ? `${i}-${caseName}` : caseName;
+
+        // Create session
+        const createRes = await fetch('/api/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workingDir, name: sessionName })
+        });
+        const createData = await createRes.json();
+        if (!createData.success) throw new Error(createData.error);
+
+        // Start interactive mode
+        await fetch(`/api/sessions/${createData.session.id}/interactive`, {
+          method: 'POST'
+        });
+
+        // Track first session
+        if (i === 1) {
+          firstSessionId = createData.session.id;
+        }
+
+        this.terminal.writeln(`\x1b[90m Created session ${i}/${tabCount}: ${sessionName}\x1b[0m`);
+      }
+
+      // Select the first session
+      if (firstSessionId) {
+        this.activeSessionId = firstSessionId;
+        this.loadQuickStartCases();
+
+        // Send resize
+        const dims = this.fitAddon.proposeDimensions();
+        if (dims) {
+          await fetch(`/api/sessions/${firstSessionId}/resize`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
+          });
+        }
       }
 
       this.terminal.focus();

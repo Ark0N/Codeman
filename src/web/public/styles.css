@@ -539,6 +539,28 @@ body {
   max-width: 50vw;
 }
 
+.toolbar-input-sm {
+  padding: 0.3rem 0.4rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.75rem;
+  width: 40px;
+  text-align: center;
+}
+
+.toolbar-input-sm:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.toolbar-input-sm::-webkit-inner-spin-button,
+.toolbar-input-sm::-webkit-outer-spin-button {
+  opacity: 1;
+  height: 16px;
+}
+
 #dirDisplay {
   max-width: 300px;
   overflow: hidden;
