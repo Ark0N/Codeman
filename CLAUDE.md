@@ -22,8 +22,8 @@ npx tsx src/index.ts web -p 8080   # Dev mode with custom port
 node dist/index.js web             # After npm run build
 claudeman web                      # After npm link
 
-# GOTCHA: `npm run dev` runs CLI help, NOT the web server
-# Always use `npx tsx src/index.ts web` for development
+# ⚠️  GOTCHA: `npm run dev` runs CLI help, NOT the web server!
+#     Always use `npx tsx src/index.ts web` for development
 
 # Testing (vitest - tests run against WebServer, no real Claude CLI spawned)
 npm run test                              # Run all tests once
@@ -163,6 +163,10 @@ The frontend uses vanilla JS with xterm.js. Key patterns:
 - **Tab management**: `switchToSession()` handles terminal buffer restore + resize
 - **60fps rendering**: Server batches at 16ms intervals, client uses `requestAnimationFrame`
 
+### State Store Debouncing
+
+State writes to `~/.claudeman/state.json` are debounced (100ms) to prevent excessive disk I/O during rapid updates. The `StateStore` class batches rapid state changes and writes once after activity settles.
+
 ## Adding New Features
 
 ### New API Endpoint
@@ -216,8 +220,24 @@ Long-running sessions are supported with automatic trimming:
 | Line buffer | 64KB | (flushed every 100ms) |
 | Respawn buffer | 1MB | 512KB |
 
+## E2E Testing (agent-browser)
+
+Browser automation for testing the web UI. See README.md for full setup.
+
+```bash
+# Quick test sequence
+npx agent-browser open http://localhost:3000
+npx agent-browser wait --load networkidle
+npx agent-browser snapshot
+npx agent-browser find text "Run Claude" click
+npx agent-browser wait 2000
+npx agent-browser snapshot
+npx agent-browser close
+```
+
+Full test plan available at `.claude/skills/e2e-test.md`.
+
 ## Notes
 
 - State persists to `~/.claudeman/state.json` and `~/.claudeman/screens.json`
 - Cases created in `~/claudeman-cases/` by default
-- E2E testing available via agent-browser (see `.claude/skills/e2e-test.md`)
