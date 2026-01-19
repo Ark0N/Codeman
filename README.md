@@ -23,6 +23,9 @@ A Claude Code session manager with an autonomous Ralph Loop for task assignment 
 - **State Persistence**: All state persisted to `~/.claudeman/state.json`
 - **Long-Running Support**: Optimized for 12-24+ hour sessions with automatic buffer trimming
 - **Resource Monitoring**: Real-time memory/message usage display for each session
+- **Multi-Tab Sessions**: Open 1-10 Claude sessions at once for the same project
+- **Session Restoration**: Automatically restore screen sessions when server restarts
+- **Monitor Panel**: Combined view of screen sessions and background tasks
 
 ## Installation
 
@@ -86,8 +89,7 @@ The Quick Start button will:
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+Enter` | Quick Start (create case + interactive session) |
-| `Ctrl+N` | New Session |
+| `Ctrl+Enter` | Run Claude (create case + interactive session) |
 | `Ctrl+W` | Close current session |
 | `Ctrl+Tab` | Switch to next session |
 | `Ctrl+K` | Kill all sessions |
@@ -98,7 +100,10 @@ The Quick Start button will:
 
 #### Additional Features
 
-- **Terminal Font Controls**: Adjust font size with A+/A- buttons or Ctrl++/-
+- **Multi-Tab Sessions**: Number input (1-10) next to "Run Claude" opens multiple sessions at once, named `1-projectname`, `2-projectname`, etc.
+- **Monitor Panel**: Combined view of Screen Sessions and Background Tasks in one panel
+- **Session Restoration**: Screen sessions are automatically restored when the server restarts
+- **Terminal Font Controls**: Adjust font size with A+/A- buttons in header or Ctrl++/-
 - **Copy Terminal Output**: Copy all terminal content to clipboard
 - **Session Duration**: View how long each session has been running
 - **Working Directory Display**: See the project folder for each session

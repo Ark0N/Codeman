@@ -30,6 +30,7 @@ src/
 ├── cli.ts                # CLI command implementations
 ├── session.ts            # Core: PTY wrapper for Claude CLI + token tracking
 ├── session-manager.ts    # Manages multiple sessions
+├── screen-manager.ts     # GNU screen session persistence + process stats
 ├── respawn-controller.ts # Auto-respawn state machine
 ├── task-tracker.ts       # Background task detection and tree display
 ├── ralph-loop.ts         # Autonomous task assignment
@@ -37,7 +38,7 @@ src/
 ├── state-store.ts        # Persistence to ~/.claudeman/state.json
 ├── types.ts              # All TypeScript interfaces
 ├── web/
-│   ├── server.ts         # Fastify REST API + SSE
+│   ├── server.ts         # Fastify REST API + SSE + session restoration
 │   └── public/           # Static frontend files
 └── templates/
     └── claude-md.ts      # CLAUDE.md generator for new cases
@@ -60,7 +61,9 @@ src/
 
 - **RalphLoop** (`src/ralph-loop.ts`): Autonomous task assignment controller. Monitors sessions for idle state, assigns tasks from queue, detects completion via `<promise>PHRASE</promise>` markers. Supports time-aware loops with minimum duration.
 
-- **WebServer** (`src/web/server.ts`): Fastify server with REST API + SSE. Manages sessions, scheduled runs, respawn controllers, and case directories. Broadcasts all events to connected clients.
+- **WebServer** (`src/web/server.ts`): Fastify server with REST API + SSE. Manages sessions, scheduled runs, respawn controllers, and case directories. Broadcasts all events to connected clients. Restores screen sessions on startup.
+
+- **ScreenManager** (`src/screen-manager.ts`): Manages GNU screen sessions for persistent terminals. Tracks screens in `~/.claudeman/screens.json`. Provides process stats (memory, CPU, children) and reconciliation for dead screens. Screens survive server restarts.
 
 ### Type Definitions
 
@@ -347,3 +350,7 @@ The web UI (`src/web/public/`) uses vanilla JavaScript with:
 - [x] Wrap each session in a GNU screen session - track in ~/.claudeman/screens.json with Process Monitor panel showing memory, CPU, children
 - [x] UI cleanup: Move respawn controls to session options, remove mode label, fix directory display width
 - [x] Fix terminal focus escape sequences: filter out ^[[I and ^[[O (focus in/out) ANSI codes
+- [x] Merge Process Monitor and Background Tasks into single Monitor panel
+- [x] Move font size controls (A+/A-) to header
+- [x] Restore screen sessions automatically on server restart
+- [x] Add multi-tab feature: number input (1-10) next to Run Claude to open multiple sessions at once
