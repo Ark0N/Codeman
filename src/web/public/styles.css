@@ -387,7 +387,7 @@ body {
 
 .terminal-container .xterm {
   height: 100%;
-  padding: 0.5rem;
+  padding: 2px 4px;
 }
 
 .terminal-container .xterm-viewport {
