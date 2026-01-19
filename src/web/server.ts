@@ -52,6 +52,8 @@ const TASK_UPDATE_BATCH_INTERVAL = 100;
 const SCHEDULED_CLEANUP_INTERVAL = 5 * 60 * 1000;
 // Completed scheduled runs max age (1 hour)
 const SCHEDULED_RUN_MAX_AGE = 60 * 60 * 1000;
+// Maximum concurrent sessions to prevent resource exhaustion
+const MAX_CONCURRENT_SESSIONS = 50;
 
 export class WebServer extends EventEmitter {
   private app: FastifyInstance;
@@ -128,6 +130,11 @@ export class WebServer extends EventEmitter {
     this.app.get('/api/sessions', async () => this.getSessionsState());
 
     this.app.post('/api/sessions', async (req): Promise<SessionResponse> => {
+      // Prevent unbounded session creation
+      if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
+        return { success: false, error: `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached. Delete some sessions first.` };
+      }
+
       const body = req.body as CreateSessionRequest & { mode?: 'claude' | 'shell'; name?: string };
       const workingDir = body.workingDir || process.cwd();
       const session = new Session({
@@ -166,23 +173,12 @@ export class WebServer extends EventEmitter {
       const { id } = req.params as { id: string };
       const query = req.query as { killScreen?: string };
       const killScreen = query.killScreen !== 'false'; // Default to true
-      const session = this.sessions.get(id);
 
-      if (!session) {
+      if (!this.sessions.has(id)) {
         return { success: false, error: 'Session not found' };
       }
 
-      // Stop respawn controller first
-      const controller = this.respawnControllers.get(id);
-      if (controller) {
-        controller.stop();
-        this.respawnControllers.delete(id);
-      }
-
-      await session.stop(killScreen);
-      this.sessions.delete(id);
-      this.terminalBatches.delete(id);
-      this.broadcast('session:deleted', { id });
+      await this.cleanupSession(id, killScreen);
       return { success: true };
     });
 
@@ -192,19 +188,8 @@ export class WebServer extends EventEmitter {
       let killed = 0;
 
       for (const id of sessionIds) {
-        const session = this.sessions.get(id);
-        if (session) {
-          // Stop respawn controller first
-          const controller = this.respawnControllers.get(id);
-          if (controller) {
-            controller.stop();
-            this.respawnControllers.delete(id);
-          }
-
-          await session.stop();
-          this.sessions.delete(id);
-          this.terminalBatches.delete(id);
-          this.broadcast('session:deleted', { id });
+        if (this.sessions.has(id)) {
+          await this.cleanupSession(id);
           killed++;
         }
       }
@@ -530,8 +515,13 @@ export class WebServer extends EventEmitter {
       };
     });
 
-    // Quick run (create session, run prompt, return result)
+    // Quick run (create session, run prompt, return result, then cleanup)
     this.app.post('/api/run', async (req) => {
+      // Prevent unbounded session creation
+      if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
+        return { success: false, error: `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.` };
+      }
+
       const { prompt, workingDir } = req.body as QuickRunRequest;
       const dir = workingDir || process.cwd();
 
@@ -543,8 +533,12 @@ export class WebServer extends EventEmitter {
 
       try {
         const result = await session.runPrompt(prompt);
+        // Clean up session after completion to prevent memory leak
+        await this.cleanupSession(session.id);
         return { success: true, sessionId: session.id, ...result };
       } catch (err) {
+        // Clean up session on error too
+        await this.cleanupSession(session.id);
         return { success: false, sessionId: session.id, error: (err as Error).message };
       }
     });
@@ -648,6 +642,11 @@ export class WebServer extends EventEmitter {
 
     // Quick Start: Create case (if needed) and start interactive session in one click
     this.app.post('/api/quick-start', async (req): Promise<QuickStartResponse> => {
+      // Prevent unbounded session creation
+      if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
+        return { success: false, error: `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.` };
+      }
+
       const { caseName = 'testcase' } = req.body as QuickStartRequest;
 
       // Validate case name
@@ -697,6 +696,8 @@ export class WebServer extends EventEmitter {
           caseName,
         };
       } catch (err) {
+        // Clean up session on error to prevent orphaned resources
+        await this.cleanupSession(session.id);
         return { success: false, error: (err as Error).message };
       }
     });
@@ -800,6 +801,40 @@ export class WebServer extends EventEmitter {
         memory: { usedMB: 0, totalMB: 0, percent: 0 }
       };
     }
+  }
+
+  // Clean up all resources associated with a session
+  private async cleanupSession(sessionId: string, killScreen: boolean = true): Promise<void> {
+    const session = this.sessions.get(sessionId);
+
+    // Stop and remove respawn controller
+    const controller = this.respawnControllers.get(sessionId);
+    if (controller) {
+      controller.stop();
+      controller.removeAllListeners();
+      this.respawnControllers.delete(sessionId);
+    }
+
+    // Clear respawn timer
+    const timerInfo = this.respawnTimers.get(sessionId);
+    if (timerInfo) {
+      clearTimeout(timerInfo.timer);
+      this.respawnTimers.delete(sessionId);
+    }
+
+    // Clear batches
+    this.terminalBatches.delete(sessionId);
+    this.outputBatches.delete(sessionId);
+    this.taskUpdateBatches.delete(sessionId);
+
+    // Stop session and remove listeners
+    if (session) {
+      session.removeAllListeners();
+      await session.stop(killScreen);
+      this.sessions.delete(sessionId);
+    }
+
+    this.broadcast('session:deleted', { id: sessionId });
   }
 
   private setupSessionListeners(session: Session): void {
@@ -994,6 +1029,13 @@ export class WebServer extends EventEmitter {
     };
 
     while (Date.now() < run.endAt && run.status === 'running') {
+      // Check session limit before creating new session
+      if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
+        addLog(`Waiting: maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached`);
+        await new Promise(r => setTimeout(r, 5000));
+        continue;
+      }
+
       let session: Session | null = null;
       try {
         // Create a session for this iteration
@@ -1017,9 +1059,7 @@ export class WebServer extends EventEmitter {
         this.broadcast('scheduled:updated', run);
 
         // Clean up the session after iteration to prevent memory leaks
-        await session.stop();
-        this.sessions.delete(session.id);
-        this.terminalBatches.delete(session.id);
+        await this.cleanupSession(session.id);
         run.sessionId = null;
 
         // Small pause between iterations
@@ -1031,9 +1071,7 @@ export class WebServer extends EventEmitter {
         // Clean up the session on error too
         if (session) {
           try {
-            await session.stop();
-            this.sessions.delete(session.id);
-            this.terminalBatches.delete(session.id);
+            await this.cleanupSession(session.id);
           } catch {
             // Ignore cleanup errors
           }

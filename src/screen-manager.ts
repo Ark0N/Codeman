@@ -115,13 +115,61 @@ export class ScreenManager extends EventEmitter {
     }
   }
 
-  // Kill a screen session
+  // Get all child process PIDs recursively
+  private getChildPids(pid: number): number[] {
+    const pids: number[] = [];
+    try {
+      const output = execSync(`pgrep -P ${pid}`, {
+        encoding: 'utf-8',
+        timeout: 5000
+      }).trim();
+      if (output) {
+        for (const childPid of output.split('\n').map(p => parseInt(p, 10)).filter(p => !isNaN(p))) {
+          pids.push(childPid);
+          // Recursively get grandchildren
+          pids.push(...this.getChildPids(childPid));
+        }
+      }
+    } catch {
+      // No children or command failed
+    }
+    return pids;
+  }
+
+  // Kill a screen session and all its child processes
   async killScreen(sessionId: string): Promise<boolean> {
     const screen = this.screens.get(sessionId);
     if (!screen) {
       return false;
     }
 
+    // First, find and kill ALL child processes of the screen session
+    // This prevents orphaned claude processes when screen quits
+    const childPids = this.getChildPids(screen.pid);
+    console.log(`[ScreenManager] Killing screen ${screen.screenName} (PID ${screen.pid}) and ${childPids.length} child processes`);
+
+    // Kill children in reverse order (deepest first) with SIGTERM then SIGKILL
+    for (const childPid of childPids.reverse()) {
+      try {
+        process.kill(childPid, 'SIGTERM');
+      } catch {
+        // Process may already be dead
+      }
+    }
+
+    // Give processes a moment to terminate gracefully
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Force kill any remaining children
+    for (const childPid of childPids) {
+      try {
+        process.kill(childPid, 'SIGKILL');
+      } catch {
+        // Process already terminated
+      }
+    }
+
+    // Now kill the screen session itself
     try {
       // Kill screen session by name
       execSync(`screen -S ${screen.screenName} -X quit`, {
@@ -131,6 +179,8 @@ export class ScreenManager extends EventEmitter {
       // Try killing by PID if name-based kill failed
       try {
         process.kill(screen.pid, 'SIGTERM');
+        await new Promise(resolve => setTimeout(resolve, 100));
+        process.kill(screen.pid, 'SIGKILL');
       } catch {
         // Already dead
       }
