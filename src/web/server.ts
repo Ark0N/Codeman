@@ -245,7 +245,8 @@ export class WebServer extends EventEmitter {
     // Configure inner loop (Ralph Wiggum) settings
     this.app.post('/api/sessions/:id/inner-config', async (req) => {
       const { id } = req.params as { id: string };
-      const { completionPhrase, maxIterations, maxTodos, todoExpirationMinutes } = req.body as {
+      const { enabled, completionPhrase, maxIterations, maxTodos, todoExpirationMinutes } = req.body as {
+        enabled?: boolean;
         completionPhrase?: string;
         maxIterations?: number;
         maxTodos?: number;
@@ -255,6 +256,15 @@ export class WebServer extends EventEmitter {
 
       if (!session) {
         return { success: false, error: 'Session not found' };
+      }
+
+      // Enable/disable the tracker
+      if (enabled !== undefined) {
+        if (enabled) {
+          session.innerLoopTracker.enable();
+        } else {
+          session.innerLoopTracker.disable();
+        }
       }
 
       // Configure the inner loop tracker
@@ -271,6 +281,7 @@ export class WebServer extends EventEmitter {
 
       // Store additional config on session for reference
       (session as any).innerConfig = {
+        enabled: enabled ?? session.innerLoopTracker.enabled,
         completionPhrase: completionPhrase || '',
         maxIterations: maxIterations || 0,
         maxTodos: maxTodos || 50,

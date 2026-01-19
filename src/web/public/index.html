@@ -376,6 +376,15 @@
 
           <!-- Ralph Wiggum Tab Content -->
           <div class="modal-tab-content hidden" id="ralph-tab">
+            <div class="form-row form-row-switch">
+              <label>Enable Tracker</label>
+              <label class="switch">
+                <input type="checkbox" id="modalRalphEnabled">
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Enable Ralph Wiggum tracker for this session (auto-detects loops and todos)</span>
+            </div>
+
             <div class="form-row">
               <label>Completion Phrase</label>
               <input type="text" id="modalRalphPhrase" placeholder="e.g., COMPLETE, DONE, FINISHED">
@@ -456,6 +465,14 @@
             <label>Default Working Directory</label>
             <input type="text" id="appSettingsDefaultDir" placeholder="~/projects">
             <span class="form-hint">Default directory for new sessions.</span>
+          </div>
+          <div class="form-row form-row-switch">
+            <label>Enable Ralph Wiggum Tracker</label>
+            <label class="switch">
+              <input type="checkbox" id="appSettingsRalphEnabled">
+              <span class="slider"></span>
+            </label>
+            <span class="form-hint">Enable tracker by default for new sessions. When disabled, tracker auto-enables when Ralph patterns are detected.</span>
           </div>
         </div>
         <div class="form-actions">

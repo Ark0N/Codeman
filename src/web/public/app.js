@@ -892,6 +892,9 @@ class ClaudemanApp {
         }
       }
 
+      // Get global Ralph tracker setting
+      const ralphEnabled = this.isRalphTrackerEnabledByDefault();
+
       // Create multiple sessions with unique w-numbers
       for (let i = 0; i < tabCount; i++) {
         const sessionName = `w${startNumber + i}-${caseName}`;
@@ -904,6 +907,15 @@ class ClaudemanApp {
         });
         const createData = await createRes.json();
         if (!createData.success) throw new Error(createData.error);
+
+        // Apply global Ralph tracker setting
+        if (ralphEnabled) {
+          await fetch(`/api/sessions/${createData.session.id}/inner-config`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: true })
+          });
+        }
 
         // Start interactive mode
         await fetch(`/api/sessions/${createData.session.id}/interactive`, {
@@ -1347,6 +1359,7 @@ class ClaudemanApp {
     // Populate Ralph Wiggum form with current session values
     const innerState = this.innerStates.get(sessionId);
     this.populateRalphForm({
+      enabled: innerState?.loop?.enabled ?? session.innerConfig?.enabled ?? false,
       completionPhrase: innerState?.loop?.completionPhrase || session.innerLoop?.completionPhrase || '',
       maxIterations: innerState?.loop?.maxIterations || session.innerLoop?.maxIterations || 0,
       maxTodos: session.innerConfig?.maxTodos || 50,
@@ -1529,6 +1542,7 @@ class ClaudemanApp {
 
   getRalphConfig() {
     return {
+      enabled: document.getElementById('modalRalphEnabled').checked,
       completionPhrase: document.getElementById('modalRalphPhrase').value.trim(),
       maxIterations: parseInt(document.getElementById('modalRalphMaxIterations').value) || 0,
       maxTodos: parseInt(document.getElementById('modalRalphMaxTodos').value) || 50,
@@ -1537,6 +1551,7 @@ class ClaudemanApp {
   }
 
   populateRalphForm(config) {
+    document.getElementById('modalRalphEnabled').checked = config?.enabled ?? false;
     document.getElementById('modalRalphPhrase').value = config?.completionPhrase || '';
     document.getElementById('modalRalphMaxIterations').value = config?.maxIterations || 0;
     document.getElementById('modalRalphMaxTodos').value = config?.maxTodos || 50;
@@ -1625,6 +1640,7 @@ class ClaudemanApp {
     const settings = this.loadAppSettingsFromStorage();
     document.getElementById('appSettingsClaudeMdPath').value = settings.defaultClaudeMdPath || '';
     document.getElementById('appSettingsDefaultDir').value = settings.defaultWorkingDir || '';
+    document.getElementById('appSettingsRalphEnabled').checked = settings.ralphTrackerEnabled ?? false;
     document.getElementById('appSettingsModal').classList.add('active');
   }
 
@@ -1636,6 +1652,7 @@ class ClaudemanApp {
     const settings = {
       defaultClaudeMdPath: document.getElementById('appSettingsClaudeMdPath').value.trim(),
       defaultWorkingDir: document.getElementById('appSettingsDefaultDir').value.trim(),
+      ralphTrackerEnabled: document.getElementById('appSettingsRalphEnabled').checked,
     };
 
     // Save to localStorage
@@ -1655,6 +1672,12 @@ class ClaudemanApp {
     }
 
     this.closeAppSettings();
+  }
+
+  // Get the global Ralph tracker enabled setting
+  isRalphTrackerEnabledByDefault() {
+    const settings = this.loadAppSettingsFromStorage();
+    return settings.ralphTrackerEnabled ?? false;
   }
 
   loadAppSettingsFromStorage() {
