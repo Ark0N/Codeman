@@ -52,7 +52,7 @@ export interface RespawnEvents {
 }
 
 const DEFAULT_CONFIG: RespawnConfig = {
-  idleTimeoutMs: 5000,           // 5 seconds of no activity after prompt
+  idleTimeoutMs: 10000,          // 10 seconds of no activity after prompt
   updatePrompt: 'update all the docs and CLAUDE.md',
   interStepDelayMs: 1000,        // 1 second between steps
   enabled: true,
@@ -316,7 +316,7 @@ export class RespawnController extends EventEmitter {
   private checkUpdateComplete(data: string): void {
     // Update is complete when we see the prompt again after working
     if (this.promptDetected && !this.workingDetected) {
-      // Wait a bit more to make sure it's truly done
+      // Wait to make sure it's truly done (use configured idle timeout)
       this.clearIdleTimer();
       this.idleTimer = setTimeout(() => {
         if (this.promptDetected && !this.workingDetected) {
@@ -331,7 +331,7 @@ export class RespawnController extends EventEmitter {
             this.completeCycle();
           }
         }
-      }, 3000); // 3 second verification
+      }, this.config.idleTimeoutMs); // Use configured idle timeout
     }
   }
 
@@ -349,7 +349,7 @@ export class RespawnController extends EventEmitter {
   }
 
   private checkClearComplete(data: string): void {
-    // Clear is fast, just wait for prompt
+    // Clear is fast, but wait for prompt and verify idle
     if (this.CLEAR_COMPLETE_PATTERN.test(data) || this.promptDetected) {
       this.clearIdleTimer();
       this.idleTimer = setTimeout(() => {
@@ -361,7 +361,7 @@ export class RespawnController extends EventEmitter {
         } else {
           this.completeCycle();
         }
-      }, 1000); // 1 second for clear
+      }, this.config.idleTimeoutMs); // Use configured idle timeout
     }
   }
 
@@ -389,7 +389,7 @@ export class RespawnController extends EventEmitter {
           this.emit('stepCompleted', 'init');
           this.completeCycle();
         }
-      }, 3000); // 3 second verification for init
+      }, this.config.idleTimeoutMs); // Use configured idle timeout
     }
   }
 
