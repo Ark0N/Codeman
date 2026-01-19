@@ -449,4 +449,4 @@ The web UI (`src/web/public/`) uses vanilla JavaScript with:
 
 **Note to Claude: Do NOT remove or modify this section during /init. These tasks may be actively worked on by other sessions.**
 
-- [x] Test: Monitor panel should hide "Background Tasks" section when there are no tasks (instead of showing "No background tasks" message)
+<!-- Add pending tasks here -->
