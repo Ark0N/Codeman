@@ -508,9 +508,12 @@ body {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  font-size: 0.55rem;
-  font-weight: 600;
-  color: var(--text);
+  font-size: 0.45rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, #3b82f6, #22c55e);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 /* Summary Info */
