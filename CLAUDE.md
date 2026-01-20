@@ -27,6 +27,7 @@ npm run clean          # Remove dist/
 # Start web server (pick one):
 npx tsx src/index.ts web           # Dev mode - no build needed (RECOMMENDED)
 npx tsx src/index.ts web -p 8080   # Dev mode with custom port
+npm run web                        # After npm run build (shorthand)
 node dist/index.js web             # After npm run build
 claudeman web                      # After npm link
 
@@ -296,6 +297,8 @@ Writes debounced to `~/.claudeman/state.json`. Batches rapid changes.
 | State save debounce | 500ms | `state-store.ts` |
 | Line buffer flush | 100ms | `session.ts` |
 | Terminal batch interval | 16ms | `server.ts` (60fps) |
+| Output batch interval | 50ms | `server.ts` |
+| Task update batch interval | 100ms | `server.ts` |
 | Idle activity timeout | 2s | `session.ts` |
 | Respawn idle timeout | 5s default | `RespawnConfig.idleTimeoutMs` |
 
