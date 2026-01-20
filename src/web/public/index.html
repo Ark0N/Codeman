@@ -93,7 +93,6 @@
           </div>
           <div class="ralph-summary-stats">
             <span class="ralph-stat"><span class="ralph-stat-icon">&#x23F1;</span><span id="ralphStatTime">0m</span></span>
-            <span class="ralph-stat"><span class="ralph-stat-icon">&#x21BB;</span><span id="ralphStatCycles">0</span></span>
             <span class="ralph-stat"><span class="ralph-stat-icon">&#x2713;</span><span id="ralphStatTasks">0/0</span></span>
           </div>
           <span class="ralph-toggle" id="ralphToggle">&#x25C0;</span>
@@ -104,11 +103,11 @@
         </div>
       </div>
 
-      <!-- Expanded Detail View -->
+      <!-- Expanded Detail View - Compact horizontal layout -->
       <div class="ralph-detail" id="ralphDetail">
-        <div class="ralph-progress-section">
-          <!-- Large Progress Ring -->
-          <div class="ralph-ring">
+        <div class="ralph-detail-row">
+          <!-- Progress Ring -->
+          <div class="ralph-ring-compact">
             <svg viewBox="0 0 100 100" class="ralph-ring-svg-large">
               <defs>
                 <linearGradient id="ralphGradient" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -125,30 +124,24 @@
             </div>
           </div>
           <!-- Meta Info -->
-          <div class="ralph-meta">
+          <div class="ralph-meta-compact">
             <div class="ralph-meta-item">
               <span class="ralph-meta-label">Waiting for</span>
               <code id="ralphPhrase">--</code>
             </div>
-            <div class="ralph-meta-row">
-              <div class="ralph-meta-item">
-                <span class="ralph-meta-label">Elapsed</span>
-                <span id="ralphElapsed">0m</span>
-              </div>
-              <div class="ralph-meta-item">
-                <span class="ralph-meta-label">Iterations</span>
-                <span id="ralphIterations">0</span>
-              </div>
+            <div class="ralph-meta-item">
+              <span class="ralph-meta-label">Elapsed</span>
+              <span id="ralphElapsed">0m</span>
             </div>
           </div>
-        </div>
-        <!-- Task Cards -->
-        <div class="ralph-tasks-section">
-          <div class="ralph-tasks-header">
-            <span>Tasks</span>
-            <span class="ralph-tasks-count" id="ralphTasksCount">0/0</span>
+          <!-- Task Cards - inline -->
+          <div class="ralph-tasks-compact">
+            <div class="ralph-tasks-header">
+              <span>Tasks</span>
+              <span class="ralph-tasks-count" id="ralphTasksCount">0/0</span>
+            </div>
+            <div class="ralph-tasks-grid" id="ralphTasksGrid"></div>
           </div>
-          <div class="ralph-tasks-grid" id="ralphTasksGrid"></div>
         </div>
       </div>
 

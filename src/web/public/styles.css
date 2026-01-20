@@ -594,13 +594,103 @@ body {
   display: none;
 }
 
-/* Expanded Detail View */
+/* Expanded Detail View - Compact horizontal layout */
 .ralph-detail {
-  padding: 0.75rem;
+  padding: 0.5rem 0.75rem;
   border-top: 1px solid var(--border);
   background: var(--bg-dark);
 }
 
+.ralph-detail-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+/* Compact Progress Ring */
+.ralph-ring-compact {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  flex-shrink: 0;
+}
+
+.ralph-ring-compact .ralph-ring-percent {
+  font-size: 0.9rem;
+}
+
+.ralph-ring-compact .ralph-ring-label {
+  font-size: 0.5rem;
+}
+
+/* Compact Meta Info */
+.ralph-meta-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 120px;
+}
+
+.ralph-meta-compact .ralph-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.ralph-meta-compact .ralph-meta-label {
+  font-size: 0.6rem;
+}
+
+.ralph-meta-compact code {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.4rem;
+}
+
+.ralph-meta-compact span:not(.ralph-meta-label) {
+  font-size: 0.8rem;
+}
+
+/* Compact Tasks Section */
+.ralph-tasks-compact {
+  flex: 1;
+  background: var(--bg-card);
+  border-radius: 4px;
+  overflow: hidden;
+  max-height: 80px;
+}
+
+.ralph-tasks-compact .ralph-tasks-header {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.7rem;
+}
+
+.ralph-tasks-compact .ralph-tasks-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  max-height: 50px;
+  overflow-y: auto;
+}
+
+.ralph-tasks-compact .ralph-task-card {
+  padding: 0.2rem 0.4rem;
+  font-size: 0.65rem;
+  border-left-width: 2px;
+}
+
+.ralph-tasks-compact .ralph-task-icon {
+  font-size: 0.7rem;
+}
+
+.ralph-tasks-compact .ralph-task-content {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Legacy classes for backward compatibility */
 .ralph-progress-section {
   display: flex;
   align-items: flex-start;
