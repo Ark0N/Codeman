@@ -2093,8 +2093,8 @@ class ClaudemanApp {
     // Update progress rings
     this.updateRalphRing(percent);
 
-    // Update status badge
-    this.updateRalphStatus(state?.loop);
+    // Update status badge (pass completion info)
+    this.updateRalphStatus(state?.loop, completed, total);
 
     // Update stats
     this.updateRalphStats(state?.loop, completed, total);
@@ -2146,7 +2146,7 @@ class ClaudemanApp {
     }
   }
 
-  updateRalphStatus(loop) {
+  updateRalphStatus(loop, completed = 0, total = 0) {
     const badge = this.$('ralphStatusBadge');
     const statusText = badge?.querySelector('.ralph-status-text');
     if (!badge || !statusText) return;
@@ -2156,10 +2156,11 @@ class ClaudemanApp {
     if (loop?.active) {
       badge.classList.add('active');
       statusText.textContent = 'Running';
-    } else if (loop?.completionPhrase && !loop?.active) {
+    } else if (total > 0 && completed === total) {
+      // Only show "Complete" when all todos are actually done
       badge.classList.add('completed');
       statusText.textContent = 'Complete';
-    } else if (loop?.enabled) {
+    } else if (loop?.enabled || total > 0) {
       badge.classList.add('tracking');
       statusText.textContent = 'Tracking';
     } else {
