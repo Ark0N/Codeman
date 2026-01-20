@@ -610,6 +610,12 @@ class ClaudemanApp {
     }
 
     container.innerHTML = parts.join('');
+
+    // Auto-focus: if there's exactly one session and none is active, select it
+    if (this.sessions.size === 1 && !this.activeSessionId) {
+      const [sessionId] = this.sessions.keys();
+      this.selectSession(sessionId);
+    }
   }
 
   getSessionName(session) {
@@ -2007,7 +2013,7 @@ class ClaudemanApp {
       panel.style.width = '';
       panel.style.height = '';
       if (detachBtn) {
-        detachBtn.innerHTML = '&#x2197;'; // Detach icon
+        detachBtn.innerHTML = '&#x29C9;'; // Detach icon (two overlapping squares)
         detachBtn.title = 'Detach panel';
       }
     } else {
@@ -2017,7 +2023,7 @@ class ClaudemanApp {
       this.innerStatePanelCollapsed = false;
       panel.classList.remove('collapsed');
       if (detachBtn) {
-        detachBtn.innerHTML = '&#x2199;'; // Attach icon
+        detachBtn.innerHTML = '&#x229E;'; // Attach icon (squared plus - dock back)
         detachBtn.title = 'Attach panel';
       }
       // Setup drag functionality
