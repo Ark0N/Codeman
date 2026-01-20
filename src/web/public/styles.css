@@ -690,15 +690,37 @@ body {
 /* Compact Tasks Section */
 .ralph-tasks-compact {
   flex: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
   overflow: hidden;
   min-width: 0;
 }
 
 .ralph-tasks-compact .ralph-tasks-header {
-  display: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0;
+  padding: 0.2rem 0;
+  font-size: 0.55rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.ralph-tasks-compact .ralph-tasks-header span:first-child {
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.ralph-tasks-compact .ralph-tasks-count {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text);
 }
 
 .ralph-tasks-compact .ralph-tasks-grid {
+  flex: 1;
   display: flex;
   flex-wrap: wrap;
   gap: 0.2rem;
@@ -966,18 +988,23 @@ body {
 /* Detached Ralph Panel */
 .ralph-panel.detached {
   position: fixed;
-  top: 100px;
-  left: 100px;
-  width: 400px;
+  top: 80px;
+  left: 50px;
+  width: 600px;
+  height: 400px;
+  min-width: 350px;
   min-height: 200px;
+  max-width: 90vw;
   max-height: 80vh;
   z-index: 1000;
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   background: var(--bg-card);
-  overflow: auto;
+  overflow: hidden;
   resize: both;
+  display: flex;
+  flex-direction: column;
 }
 
 .ralph-panel.detached .ralph-summary {
@@ -985,6 +1012,7 @@ body {
   background: linear-gradient(180deg, var(--bg-hover) 0%, var(--bg-card) 100%);
   border-bottom: 1px solid var(--border);
   border-radius: 8px 8px 0 0;
+  flex-shrink: 0;
 }
 
 .ralph-panel.detached .ralph-summary-content {
@@ -996,8 +1024,26 @@ body {
 }
 
 .ralph-panel.detached .ralph-detail {
+  flex: 1;
   max-height: none;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.ralph-panel.detached .ralph-detail-row {
+  flex: 1;
+  overflow: auto;
+}
+
+.ralph-panel.detached .ralph-tasks-compact {
+  max-height: none;
+  flex: 1;
+}
+
+.ralph-panel.detached .ralph-tasks-compact .ralph-tasks-grid {
+  max-height: none;
+  flex: 1;
 }
 
 .ralph-panel.detached.collapsed {
