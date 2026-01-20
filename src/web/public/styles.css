@@ -518,12 +518,14 @@ body {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  font-size: 0.45rem;
+  font-size: 0.4rem;
   font-weight: 700;
   background: linear-gradient(135deg, #3b82f6, #22c55e);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  line-height: 1;
+  text-align: center;
 }
 
 /* Summary Info */
@@ -1089,7 +1091,7 @@ body {
 .btn-toolbar.btn-claude {
   background: linear-gradient(135deg, #1e3a5f 0%, #3d2a5c 100%);
   border-color: #2d4a6f;
-  color: #a8c4e8;
+  color: var(--accent-hover);
   font-weight: 500;
   padding: 0.4rem 0.85rem;
 }
@@ -1185,7 +1187,9 @@ body {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 0.4rem center;
-  max-width: 180px;
+  width: auto;
+  min-width: 60px;
+  max-width: 150px;
 }
 
 .toolbar-select:hover {
@@ -1314,7 +1318,7 @@ body {
 }
 
 #dirDisplay {
-  max-width: 450px;
+  max-width: 250px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
