@@ -2127,10 +2127,10 @@ class ClaudemanApp {
     // Handle collapsed/expanded state
     if (this.innerStatePanelCollapsed) {
       panel.classList.add('collapsed');
-      if (toggle) toggle.innerHTML = '&#x25B6;';
+      if (toggle) toggle.innerHTML = '&#x25C0;'; // Left arrow when collapsed
     } else {
       panel.classList.remove('collapsed');
-      if (toggle) toggle.innerHTML = '&#x25BC;';
+      if (toggle) toggle.innerHTML = '&#x25B2;'; // Up arrow when expanded
 
       // Update expanded view content
       this.updateRalphExpandedView(state);
