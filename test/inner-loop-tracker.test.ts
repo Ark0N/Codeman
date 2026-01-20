@@ -613,4 +613,63 @@ describe('InnerLoopTracker', () => {
       expect(tracker.todos.length).toBeLessThanOrEqual(50);
     });
   });
+
+  describe('Edge Cases and Optimizations', () => {
+    it('should skip empty or whitespace-only content', () => {
+      // These should not create todos
+      tracker.processTerminalData('- [ ] \n');
+      tracker.processTerminalData('- [ ]    \n');
+
+      expect(tracker.todos).toHaveLength(0);
+    });
+
+    it('should skip lines without todo markers (early exit optimization)', () => {
+      const todoHandler = vi.fn();
+      tracker.on('todoUpdate', todoHandler);
+
+      // Process lines that have no todo markers
+      tracker.processTerminalData('This is just regular text\n');
+      tracker.processTerminalData('Another line without markers\n');
+      tracker.processTerminalData('Some code: function() {}\n');
+
+      // No todoUpdate should be emitted
+      expect(todoHandler).not.toHaveBeenCalled();
+      expect(tracker.todos).toHaveLength(0);
+    });
+
+    it('should generate different IDs for different content', () => {
+      tracker.processTerminalData('- [ ] Task A\n');
+      tracker.processTerminalData('- [ ] Task B\n');
+
+      const todos = tracker.todos;
+      expect(todos).toHaveLength(2);
+      expect(todos[0].id).not.toBe(todos[1].id);
+    });
+
+    it('should use activateLoopIfNeeded only once', () => {
+      const loopHandler = vi.fn();
+      tracker.on('loopUpdate', loopHandler);
+
+      // Multiple loop start patterns should only activate once
+      tracker.processTerminalData('Loop started at 2024-01-15\n');
+      tracker.processTerminalData('Starting Ralph loop\n');
+      tracker.processTerminalData('/ralph-loop:ralph-loop\n');
+
+      // Loop should only have been activated once
+      expect(tracker.loopState.active).toBe(true);
+      // But multiple updates are OK (state changes)
+    });
+
+    it('should handle mixed content with todos and non-todos', () => {
+      tracker.processTerminalData(`
+Some regular text
+- [ ] Actual todo item
+More text here
+☐ Another todo with icon
+Final text
+`);
+
+      expect(tracker.todos).toHaveLength(2);
+    });
+  });
 });

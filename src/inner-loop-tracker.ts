@@ -10,6 +10,8 @@ import {
 const MAX_TODO_ITEMS = 50;
 // Todo items older than this will be auto-expired (1 hour)
 const TODO_EXPIRY_MS = 60 * 60 * 1000;
+// Throttle cleanup checks (every 30 seconds)
+const CLEANUP_THROTTLE_MS = 30 * 1000;
 
 // Pre-compiled regex patterns for performance (avoid re-compilation on each call)
 
@@ -35,8 +37,8 @@ const TODO_EXCLUDE_PATTERNS = [
   /^\S+\([^)]+\)$/,                                          // Generic function call pattern
 ];
 
-// Loop status patterns
-const LOOP_START_PATTERN = /Loop started at|Starting.*loop|Ralph loop started|<promise>([^<]+)<\/promise>/i;
+// Loop status patterns (does NOT include <promise> - that's handled by PROMISE_PATTERN)
+const LOOP_START_PATTERN = /Loop started at|Starting.*loop|Ralph loop started/i;
 const ELAPSED_TIME_PATTERN = /Elapsed:\s*(\d+(?:\.\d+)?)\s*hours?/i;
 const CYCLE_PATTERN = /cycle\s*#?(\d+)|respawn cycle #(\d+)/i;
 
@@ -79,6 +81,8 @@ export class InnerLoopTracker extends EventEmitter {
   private _lineBuffer: string = '';
   // Track occurrences of completion phrases to distinguish prompt from actual completion
   private _completionPhraseCount: Map<string, number> = new Map();
+  // Throttle cleanup to avoid running on every data chunk
+  private _lastCleanupTime: number = 0;
 
   constructor() {
     super();
@@ -154,8 +158,8 @@ export class InnerLoopTracker extends EventEmitter {
     // Also check the current buffer for multi-line patterns
     this.checkMultiLinePatterns(cleanData);
 
-    // Cleanup expired todos
-    this.cleanupExpiredTodos();
+    // Cleanup expired todos (throttled to avoid running on every chunk)
+    this.maybeCleanupExpiredTodos();
   }
 
   /**
@@ -201,8 +205,8 @@ export class InnerLoopTracker extends EventEmitter {
       return true;
     }
 
-    // Loop start patterns
-    if (LOOP_START_PATTERN.test(data) && !PROMISE_PATTERN.test(data)) {
+    // Loop start patterns (e.g., "Loop started at", "Starting Ralph loop")
+    if (LOOP_START_PATTERN.test(data)) {
       return true;
     }
 
@@ -276,37 +280,29 @@ export class InnerLoopTracker extends EventEmitter {
   }
 
   /**
+   * Helper: Activate the loop if not already active
+   */
+  private activateLoopIfNeeded(): boolean {
+    if (this._loopState.active) return false;
+
+    this._loopState.active = true;
+    this._loopState.startedAt = Date.now();
+    this._loopState.cycleCount = 0;
+    this._loopState.maxIterations = null;
+    this._loopState.elapsedHours = null;
+    this._loopState.lastActivity = Date.now();
+    this.emit('loopUpdate', this.loopState);
+    return true;
+  }
+
+  /**
    * Detect loop start and status indicators
    */
   private detectLoopStatus(line: string): void {
     // Check for Ralph loop start command (/ralph-loop:ralph-loop)
-    if (RALPH_START_PATTERN.test(line)) {
-      if (!this._loopState.active) {
-        this._loopState.active = true;
-        this._loopState.startedAt = Date.now();
-        this._loopState.cycleCount = 0;
-        this._loopState.maxIterations = null;
-        this._loopState.elapsedHours = null;
-        this._loopState.lastActivity = Date.now();
-        this.emit('loopUpdate', this.loopState);
-      }
-    }
-
-    // Check for generic loop start
-    if (LOOP_START_PATTERN.test(line)) {
-      // Check if this is a promise match (loop ending) vs loop start
-      if (!PROMISE_PATTERN.test(line)) {
-        // This is a loop start indicator
-        if (!this._loopState.active) {
-          this._loopState.active = true;
-          this._loopState.startedAt = Date.now();
-          this._loopState.cycleCount = 0;
-          this._loopState.maxIterations = null;
-          this._loopState.elapsedHours = null;
-          this._loopState.lastActivity = Date.now();
-          this.emit('loopUpdate', this.loopState);
-        }
-      }
+    // or generic loop start patterns ("Loop started at", "Starting Ralph loop")
+    if (RALPH_START_PATTERN.test(line) || LOOP_START_PATTERN.test(line)) {
+      this.activateLoopIfNeeded();
     }
 
     // Check for max iterations setting
@@ -328,12 +324,7 @@ export class InnerLoopTracker extends EventEmitter {
       const maxIter = iterMatch[2] || iterMatch[4] ? parseInt(iterMatch[2] || iterMatch[4]) : null;
 
       if (!isNaN(currentIter)) {
-        // If not already active, start the loop
-        if (!this._loopState.active) {
-          this._loopState.active = true;
-          this._loopState.startedAt = Date.now();
-        }
-
+        this.activateLoopIfNeeded();
         this._loopState.cycleCount = currentIter;
         if (maxIter !== null && !isNaN(maxIter)) {
           this._loopState.maxIterations = maxIter;
@@ -373,6 +364,14 @@ export class InnerLoopTracker extends EventEmitter {
    * Detect todo items in various formats
    */
   private detectTodoItems(line: string): void {
+    // Quick check: skip lines that can't possibly contain todos
+    // Must have: checkbox marker, icon, or parentheses status
+    if (!line.includes('[') && !line.includes('☐') && !line.includes('☒') &&
+        !line.includes('◐') && !line.includes('Todo:') && !line.includes('(pending)') &&
+        !line.includes('(in_progress)') && !line.includes('(completed)')) {
+      return;
+    }
+
     let updated = false;
 
     // Format 1: Checkbox format "- [ ] Task" or "- [x] Task"
@@ -455,7 +454,10 @@ export class InnerLoopTracker extends EventEmitter {
    * Add or update a todo item
    */
   private upsertTodo(content: string, status: InnerTodoStatus): void {
-    // Generate a stable ID from content (simple hash)
+    // Skip empty or whitespace-only content
+    if (!content || !content.trim()) return;
+
+    // Generate a stable ID from content
     const id = this.generateTodoId(content);
 
     const existing = this._todos.get(id);
@@ -483,15 +485,16 @@ export class InnerLoopTracker extends EventEmitter {
   }
 
   /**
-   * Generate a stable ID from todo content
+   * Generate a stable ID from todo content using djb2 hash
    */
   private generateTodoId(content: string): string {
-    // Simple hash based on content
-    let hash = 0;
+    if (!content) return 'todo-empty';
+
+    // djb2 hash algorithm - good distribution for strings
+    let hash = 5381;
     for (let i = 0; i < content.length; i++) {
-      const char = content.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32-bit integer
+      hash = ((hash << 5) + hash) ^ content.charCodeAt(i);
+      hash = hash | 0; // Convert to 32-bit integer
     }
     return `todo-${Math.abs(hash).toString(36)}`;
   }
@@ -507,6 +510,18 @@ export class InnerLoopTracker extends EventEmitter {
       }
     }
     return oldest;
+  }
+
+  /**
+   * Throttled cleanup - only runs every CLEANUP_THROTTLE_MS
+   */
+  private maybeCleanupExpiredTodos(): void {
+    const now = Date.now();
+    if (now - this._lastCleanupTime < CLEANUP_THROTTLE_MS) {
+      return;
+    }
+    this._lastCleanupTime = now;
+    this.cleanupExpiredTodos();
   }
 
   /**
@@ -535,11 +550,7 @@ export class InnerLoopTracker extends EventEmitter {
    * Also enables the tracker if not already enabled
    */
   startLoop(completionPhrase?: string, maxIterations?: number): void {
-    // Enable tracker when loop is explicitly started
-    if (!this._loopState.enabled) {
-      this._loopState.enabled = true;
-      this.emit('enabled');
-    }
+    this.enable(); // Ensure tracker is enabled
     this._loopState.active = true;
     this._loopState.startedAt = Date.now();
     this._loopState.cycleCount = 0;
