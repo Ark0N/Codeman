@@ -10,6 +10,12 @@ Claudeman is a Claude Code session manager with a web interface and autonomous R
 
 **Requirements**: Node.js 18+, Claude CLI (`claude`) installed and available in PATH
 
+## First-Time Setup
+
+```bash
+npm install
+```
+
 ## Commands
 
 **CRITICAL**: `npm run dev` runs CLI help, NOT the web server. Use `npx tsx src/index.ts web` for development.
@@ -24,15 +30,27 @@ npx tsx src/index.ts web -p 8080   # Dev mode with custom port
 node dist/index.js web             # After npm run build
 claudeman web                      # After npm link
 
-# Testing (vitest with globals: true - no imports needed for describe/it/expect)
+# Testing (vitest)
+# Note: globals: true configured - no imports needed for describe/it/expect
 npm run test                              # Run all tests once
 npm run test:watch                        # Watch mode
 npm run test:coverage                     # With coverage report
 npx vitest run test/session.test.ts       # Single file
 npx vitest run -t "should create session" # By pattern
-# Tests use ports 3099-3121 to avoid conflicts with dev server (3000)
-# Test timeout: 30s (configured in vitest.config.ts for integration tests)
+
+# Test port allocation (add new tests in next available range):
+# 3099-3101: quick-start.test.ts
+# 3102: session.test.ts
+# 3105-3106: scheduled-runs.test.ts
+# 3107-3108: sse-events.test.ts
+# 3110-3112: edge-cases.test.ts
+# 3115-3116: integration-flows.test.ts
+# 3120-3121: session-cleanup.test.ts
+# (no port): respawn-controller.test.ts, inner-loop-tracker.test.ts, pty-interactive.test.ts (unit tests)
+# Next available: 3122+
+
 # Tests mock PTY - no real Claude CLI spawned
+# Test timeout: 30s (configured in vitest.config.ts)
 
 # TypeScript checking (no linter configured)
 npx tsc --noEmit                          # Type check without building
@@ -41,48 +59,25 @@ npx tsc --noEmit                          # Type check without building
 screen -ls                                # List GNU screen sessions
 screen -r <name>                          # Attach to screen session
 curl localhost:3000/api/sessions          # Check active sessions
+cat ~/.claudeman/state.json | jq .        # View main state
+cat ~/.claudeman/state-inner.json | jq .  # View inner loop state
 ```
 
 ## Architecture
 
-```
-src/
-├── index.ts              # CLI entry (commander)
-├── cli.ts                # CLI commands
-├── session.ts            # Core: PTY wrapper for Claude CLI + token tracking
-├── session-manager.ts    # Manages multiple sessions
-├── screen-manager.ts     # GNU screen persistence + process stats
-├── respawn-controller.ts # Auto-respawn state machine
-├── ralph-loop.ts         # Autonomous task assignment
-├── task.ts               # Task class implementation
-├── task-queue.ts         # Priority queue with dependencies
-├── task-tracker.ts       # Background task detection from terminal output
-├── inner-loop-tracker.ts # Detect Ralph loops and todos inside Claude sessions
-├── state-store.ts        # Persistence to ~/.claudeman/state.json
-├── types.ts              # All TypeScript interfaces
-├── web/
-│   ├── server.ts         # Fastify REST API + SSE + session restoration
-│   └── public/           # Vanilla JS frontend (xterm.js, no bundler)
-│       ├── app.js        # Main app logic, SSE handling, tab management
-│       ├── styles.css    # All styles including responsive/mobile
-│       └── index.html    # Single page with modal templates
-└── templates/
-    └── claude-md.ts      # CLAUDE.md generator for new cases
+### Key Files
 
-test/                             # All tests use vitest
-├── session.test.ts               # Core session creation, lifecycle, PTY behavior (port 3102)
-├── pty-interactive.test.ts       # Interactive mode, terminal input/output (unit test, no server)
-├── respawn-controller.test.ts    # Respawn state machine, idle detection (unit test, no server)
-├── inner-loop-tracker.test.ts    # Ralph loop and todo detection parsing (unit test, no server)
-├── quick-start.test.ts           # Quick-start API endpoint (ports 3099-3101)
-├── scheduled-runs.test.ts        # Timed/scheduled session runs (ports 3105-3106)
-├── sse-events.test.ts            # Server-Sent Events broadcasting (ports 3107-3108)
-├── integration-flows.test.ts     # Multi-step workflow tests (ports 3115-3116)
-├── session-cleanup.test.ts       # Resource cleanup, buffer trimming (ports 3120-3121)
-└── edge-cases.test.ts            # Error handling, boundary conditions (ports 3110-3112)
-```
-
-**Test ports**: Integration tests use unique port ranges (3099-3121) to allow parallel execution. Unit tests don't need a server. Dev server uses port 3000.
+| File | Purpose |
+|------|---------|
+| `src/session.ts` | Core PTY wrapper for Claude CLI. Modes: `runPrompt()`, `startInteractive()`, `startShell()` |
+| `src/respawn-controller.ts` | State machine for autonomous session cycling |
+| `src/screen-manager.ts` | GNU screen persistence, ghost discovery, 4-strategy kill |
+| `src/inner-loop-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos, loop status in output |
+| `src/task-tracker.ts` | Parses background task output (agent IDs, status) from Claude CLI |
+| `src/state-store.ts` | JSON persistence to `~/.claudeman/` with debounced (100ms) writes |
+| `src/web/server.ts` | Fastify REST API + SSE at `/api/events` |
+| `src/web/public/app.js` | Frontend: SSE handling, xterm.js, tab management |
+| `src/types.ts` | All TypeScript interfaces |
 
 ### Data Flow
 
@@ -90,16 +85,6 @@ test/                             # All tests use vitest
 2. PTY output is buffered, ANSI stripped, and parsed for JSON messages
 3. **WebServer** broadcasts events to SSE clients at `/api/events`
 4. State persists to `~/.claudeman/state.json` via **StateStore**
-
-### Key Components
-
-| Component | File | Purpose |
-|-----------|------|---------|
-| Session | `session.ts` | PTY wrapper for Claude CLI. Modes: `runPrompt()`, `startInteractive()`, `startShell()` |
-| RespawnController | `respawn-controller.ts` | State machine for autonomous session cycling (see diagram below) |
-| ScreenManager | `screen-manager.ts` | GNU screen persistence, ghost discovery, 4-strategy kill |
-| WebServer | `web/server.ts` | Fastify REST + SSE at `/api/events` |
-| InnerLoopTracker | `inner-loop-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos, loop status in output |
 
 ### Respawn State Machine
 
@@ -222,14 +207,16 @@ Both wait for idle. Configure via `session.setAutoCompact()` / `session.setAutoC
 
 ### Inner Loop Tracking
 
-Detects Ralph loops and todos inside Claude sessions. **Disabled by default** - auto-enables when Ralph-related patterns are detected:
+Detects Ralph loops and todos inside Claude sessions. **Disabled by default** but auto-enables when any of these patterns are detected in terminal output:
 - `/ralph-loop` command
 - `<promise>PHRASE</promise>` completion phrases
 - `TodoWrite` tool usage
 - Iteration patterns (`Iteration 5/50`, `[5/50]`)
 - Todo checkboxes (`- [ ]`/`- [x]`) or indicator icons (`☐`/`◐`/`✓`)
 
-API: `GET /api/sessions/:id/inner-state`. UI: collapsible panel below tabs with enable/disable toggle. Use `tracker.enable()` / `tracker.disable()` for programmatic control, or `POST /api/sessions/:id/inner-config` with `{ enabled: boolean }` via API.
+See `inner-loop-tracker.ts:shouldAutoEnable()` for detection logic.
+
+API: `GET /api/sessions/:id/inner-state`. UI: collapsible panel below tabs. Use `tracker.enable()` / `tracker.disable()` for programmatic control, or `POST /api/sessions/:id/inner-config` with `{ enabled: boolean }` via API.
 
 ### Terminal Display Fix
 
@@ -239,32 +226,39 @@ Tab switch/new session fix: clear xterm → write buffer → resize PTY → Ctrl
 
 All events broadcast to `/api/events` with format: `{ type: string, sessionId?: string, data: any }`.
 
-Event prefixes: `session:`, `task:`, `respawn:`, `scheduled:`, `case:`, `screen:`, `init`. Key events: `session:idle`, `session:working`, `session:terminal`, `session:clearTerminal`, `session:completion`, `session:autoClear`, `session:autoCompact`, `session:innerLoopUpdate`, `session:innerTodoUpdate`, `session:innerCompletionDetected`.
+Event prefixes: `session:`, `task:`, `respawn:`, `scheduled:`, `case:`, `screen:`, `init`.
+
+Key events for frontend handling (see `app.js:handleSSEEvent()`):
+- `session:idle`, `session:working` - Status indicator updates
+- `session:terminal`, `session:clearTerminal` - Terminal content
+- `session:completion`, `session:autoClear`, `session:autoCompact` - Lifecycle events
+- `session:innerLoopUpdate`, `session:innerTodoUpdate`, `session:innerCompletionDetected` - Ralph tracking
 
 ### Frontend (app.js)
 
-Vanilla JS + xterm.js. `handleSSEEvent()` dispatches events, `switchToSession()` manages tabs. 60fps: server batches 16ms, client uses `requestAnimationFrame`.
+Vanilla JS + xterm.js. Key functions:
+- `handleSSEEvent()` - Dispatches events to appropriate handlers
+- `switchToSession()` - Tab management and terminal focus
+- `createSessionTab()` - Tab creation and xterm setup
+
+**60fps Rendering Pipeline**:
+- Server batches terminal data every 16ms before broadcasting via SSE
+- Client uses `requestAnimationFrame` to batch xterm.js writes
+- Prevents UI jank during high-throughput Claude output
 
 ### State Store
 
 Writes debounced (100ms) to `~/.claudeman/state.json`. Batches rapid changes.
 
+### TypeScript Config
+
+Module resolution: NodeNext. Target: ES2022. Strict mode enabled. See `tsconfig.json` for full settings.
+
 ## Adding New Features
 
-### New API Endpoint
-1. Add types to `src/types.ts`
-2. Add route in `src/web/server.ts` within `buildServer()`
-3. Use `createErrorResponse()` for errors
-
-### New SSE Event
-1. Emit from component via `broadcast()` in server.ts
-2. Handle in `src/web/public/app.js` `handleSSEEvent()` switch
-
-### New Session Event
-1. Add to `SessionEvents` interface in `src/session.ts`
-2. Emit via `this.emit()`
-3. Subscribe in `src/web/server.ts` when wiring session to SSE
-4. Handle in frontend SSE listener
+- **API endpoint**: Add types in `types.ts`, route in `server.ts:buildServer()`, use `createErrorResponse()` for errors
+- **SSE event**: Emit via `broadcast()` in server.ts, handle in `app.js:handleSSEEvent()` switch
+- **Session event**: Add to `SessionEvents` interface in `session.ts`, emit via `this.emit()`, subscribe in server.ts, handle in frontend
 
 ## Session Lifecycle & Cleanup
 
@@ -290,7 +284,11 @@ Long-running sessions are supported with automatic trimming:
 Uses `agent-browser` for web UI automation. Full test plan: `.claude/skills/e2e-test.md`
 
 ```bash
-npx agent-browser open http://localhost:3000 && npx agent-browser snapshot
+npx agent-browser open http://localhost:3000
+npx agent-browser wait --load networkidle
+npx agent-browser snapshot
+npx agent-browser find text "Run Claude" click
+npx agent-browser close
 ```
 
 ## API Routes Quick Reference
@@ -328,8 +326,75 @@ claudeman ralph start [--min-hours N] # Start autonomous loop
 claudeman status                     # Overall status
 ```
 
-## Notes
+## Keyboard Shortcuts
 
-- State persists to `~/.claudeman/state.json`, `~/.claudeman/state-inner.json`, and `~/.claudeman/screens.json`
-- Inner loop/todo state persists separately in `state-inner.json` to reduce write frequency
-- Cases created in `~/claudeman-cases/` by default
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Enter` | Run Claude (create case + interactive session) |
+| `Ctrl+W` | Close current session |
+| `Ctrl+Tab` | Switch to next session |
+| `Ctrl+K` | Kill all sessions |
+| `Ctrl+L` | Clear terminal |
+| `Ctrl++/-` | Increase/decrease font size |
+| `Ctrl+?` | Show keyboard shortcuts help |
+| `Escape` | Close panels and modals |
+
+## State Files
+
+| File | Purpose |
+|------|---------|
+| `~/.claudeman/state.json` | Sessions, tasks, config |
+| `~/.claudeman/state-inner.json` | Inner loop/todo state (separate to reduce writes) |
+| `~/.claudeman/screens.json` | Screen session metadata |
+
+Cases created in `~/claudeman-cases/` by default.
+
+## Documentation
+
+Extended documentation is available in the `docs/` directory:
+
+| Document | Description |
+|----------|-------------|
+| [`docs/ralph-wiggum-guide.md`](docs/ralph-wiggum-guide.md) | Complete Ralph Wiggum loop guide: official plugin reference, best practices, prompt templates, troubleshooting |
+| [`docs/claude-code-hooks-reference.md`](docs/claude-code-hooks-reference.md) | Official Claude Code hooks documentation: all events, configuration, examples |
+
+### Quick Reference: Ralph Wiggum Loops
+
+Ralph Wiggum is an autonomous loop technique that lets Claude work iteratively until completion criteria are met.
+
+**Core Pattern**: `<promise>PHRASE</promise>` - The completion signal that tells the loop to stop.
+
+**Official Plugin Commands**:
+```bash
+/ralph-loop "<prompt>" --max-iterations 50 --completion-promise "COMPLETE"
+/cancel-ralph
+```
+
+**Best Practices** (see full guide for details):
+1. **Always set `--max-iterations`** - Safety limit to prevent runaway costs
+2. **Define clear success criteria** - Tests pass, lint clean, specific outputs
+3. **Use test-driven verification** - Built-in feedback loop
+4. **Include escape hatches** - "If stuck after N iterations, document and stop"
+5. **Commit frequently** - Recovery points in git history
+
+**Claudeman Implementation**: The `InnerLoopTracker` class (`src/inner-loop-tracker.ts`) detects Ralph patterns in Claude output and tracks loop state, todos, and completion phrases. It auto-enables when Ralph-related patterns are detected.
+
+**API**:
+- `GET /api/sessions/:id/inner-state` - Loop state and todos
+- `POST /api/sessions/:id/inner-config` - Configure tracker
+
+**SSE Events**:
+- `session:innerLoopUpdate` - Loop state changes
+- `session:innerTodoUpdate` - Todo list updates
+- `session:innerCompletionDetected` - Completion phrase detected
+
+### External References
+
+**Official Anthropic Documentation**:
+- [Claude Code Hooks](https://code.claude.com/docs/en/hooks)
+- [Claude Code Best Practices](https://www.anthropic.com/engineering/claude-code-best-practices)
+- [Ralph Wiggum Plugin](https://github.com/anthropics/claude-code/tree/main/plugins/ralph-wiggum)
+
+**Community Resources**:
+- [Awesome Claude - Ralph Wiggum](https://awesomeclaude.ai/ralph-wiggum)
+- [Claude Fast - Autonomous Loops](https://claudefa.st/blog/guide/mechanics/autonomous-agent-loops)
