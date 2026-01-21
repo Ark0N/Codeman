@@ -167,7 +167,7 @@
           </button>
           <div class="tab-count-group" title="Number of tabs to open (1-10)">
             <button class="tab-count-btn" onclick="app.decrementTabCount()">−</button>
-            <input type="number" id="tabCount" class="tab-count-input" value="1" min="1" max="10" readonly>
+            <input type="number" id="tabCount" class="tab-count-input" value="1" min="1" max="20" readonly>
             <button class="tab-count-btn" onclick="app.incrementTabCount()">+</button>
           </div>
           <button class="btn-toolbar btn-shell" onclick="app.runShell()" title="Run Shell">
@@ -479,7 +479,24 @@
             </div>
           </div>
           <div class="settings-section">
-            <div class="settings-section-title">General</div>
+            <div class="settings-section-title">Claude CLI</div>
+            <div class="form-row">
+              <label>Startup Mode</label>
+              <select id="appSettingsClaudeMode" class="form-select">
+                <option value="dangerously-skip-permissions">Skip Permissions (default)</option>
+                <option value="normal">Normal (with prompts)</option>
+                <option value="allowedTools">Allowed Tools Only</option>
+              </select>
+              <span class="form-hint">How Claude CLI is started in screen sessions</span>
+            </div>
+            <div class="form-row" id="allowedToolsRow" style="display: none;">
+              <label>Allowed Tools</label>
+              <input type="text" id="appSettingsAllowedTools" placeholder="Read,Glob,Grep,Bash">
+              <span class="form-hint">Comma-separated list of tools to allow (e.g., Read,Glob,Grep,Bash)</span>
+            </div>
+          </div>
+          <div class="settings-section">
+            <div class="settings-section-title">Paths & Defaults</div>
             <div class="form-row">
               <label>Default CLAUDE.md Template Path</label>
               <input type="text" id="appSettingsClaudeMdPath" placeholder="/path/to/CLAUDE.md template">
@@ -490,6 +507,9 @@
               <input type="text" id="appSettingsDefaultDir" placeholder="~/projects">
               <span class="form-hint">Default directory for new sessions.</span>
             </div>
+          </div>
+          <div class="settings-section">
+            <div class="settings-section-title">Features</div>
             <div class="form-row form-row-switch">
               <label>Enable Ralph Wiggum Tracker</label>
               <label class="switch">

@@ -42,9 +42,9 @@ body {
 /* Compact Header */
 .header {
   display: flex;
-  align-items: center;
-  height: var(--header-height);
-  padding: 0 0.75rem;
+  align-items: flex-start;
+  min-height: var(--header-height);
+  padding: 0.35rem 0.75rem;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -56,6 +56,8 @@ body {
   padding-right: 0.75rem;
   border-right: 1px solid var(--border);
   margin-right: 0.5rem;
+  height: var(--header-height);
+  flex-shrink: 0;
 }
 
 .logo {
@@ -68,12 +70,30 @@ body {
 /* Session Tabs */
 .session-tabs {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   flex-wrap: wrap;
-  gap: 2px;
+  gap: 4px 2px;
   flex: 1;
-  overflow-x: auto;
-  padding: 0 0.25rem;
+  overflow-y: auto;
+  max-height: 120px;
+  padding: 0.15rem 0.25rem;
+}
+
+.session-tabs::-webkit-scrollbar {
+  width: 4px;
+}
+
+.session-tabs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.session-tabs::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
+.session-tabs::-webkit-scrollbar-thumb:hover {
+  background: var(--border-light);
 }
 
 .session-tabs::-webkit-scrollbar {
@@ -1225,9 +1245,9 @@ body {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 0.4rem center;
-  width: auto;
-  min-width: 60px;
-  max-width: 150px;
+  width: fit-content;
+  min-width: unset;
+  max-width: unset;
 }
 
 .toolbar-select:hover {

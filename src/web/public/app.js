@@ -283,12 +283,32 @@ class ClaudemanApp {
       }
     });
 
-    this.eventSource.addEventListener('session:clearTerminal', (e) => {
+    this.eventSource.addEventListener('session:clearTerminal', async (e) => {
       const data = JSON.parse(e.data);
       if (data.id === this.activeSessionId) {
-        // Clear terminal after screen attach to remove initialization blank space
-        this.terminal.clear();
-        this.terminal.reset();
+        // Fetch buffer, clear terminal, write buffer, resize (no Ctrl+L needed)
+        try {
+          const res = await fetch(`/api/sessions/${data.id}/terminal`);
+          const termData = await res.json();
+
+          this.terminal.clear();
+          this.terminal.reset();
+          if (termData.terminalBuffer) {
+            this.terminal.write(termData.terminalBuffer);
+          }
+
+          // Send resize to ensure proper dimensions
+          const dims = this.fitAddon.proposeDimensions();
+          if (dims) {
+            await fetch(`/api/sessions/${data.id}/resize`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
+            });
+          }
+        } catch (err) {
+          console.error('clearTerminal refresh failed:', err);
+        }
       }
     });
 
@@ -669,15 +689,6 @@ class ClaudemanApp {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
         });
-        // Send Ctrl+L to fix squished display after tab switch
-        const session = this.sessions.get(sessionId);
-        if (session && session.mode !== 'shell') {
-          fetch(`/api/sessions/${sessionId}/input`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ input: '\x0c' })
-          });
-        }
       }
 
       // Update respawn banner
@@ -858,7 +869,7 @@ class ClaudemanApp {
   incrementTabCount() {
     const input = document.getElementById('tabCount');
     const current = parseInt(input.value) || 1;
-    input.value = Math.min(10, current + 1);
+    input.value = Math.min(20, current + 1);
   }
 
   decrementTabCount() {
@@ -869,7 +880,7 @@ class ClaudemanApp {
 
   async runClaude() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    const tabCount = Math.min(10, Math.max(1, parseInt(document.getElementById('tabCount').value) || 1));
+    const tabCount = Math.min(20, Math.max(1, parseInt(document.getElementById('tabCount').value) || 1));
 
     this.terminal.clear();
     this.terminal.writeln(`\x1b[1;32m Starting ${tabCount} Claude session(s) in ${caseName}...\x1b[0m`);
@@ -947,35 +958,9 @@ class ClaudemanApp {
         this.terminal.writeln(`\x1b[90m Created session ${i}/${tabCount}: ${sessionName}\x1b[0m`);
       }
 
-      // Auto-switch to the new session
+      // Auto-switch to the new session using selectSession (does proper refresh)
       if (firstSessionId) {
-        // IMPORTANT: Clear terminal BEFORE setting activeSessionId
-        // This prevents SSE events from writing during the transition
-        this.terminal.clear();
-        this.terminal.reset();
-
-        // Small delay to ensure terminal is fully reset before SSE events can write
-        await new Promise(resolve => setTimeout(resolve, 50));
-
-        // NOW set the active session so SSE events start populating
-        this.activeSessionId = firstSessionId;
-        this.renderSessionTabs();
-        this.renderInnerStatePanel(); // Render Ralph panel if enabled globally
-
-        // Send resize to the new session
-        const dims = this.fitAddon.proposeDimensions();
-        if (dims) {
-          await fetch(`/api/sessions/${firstSessionId}/resize`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ cols: dims.cols, rows: dims.rows })
-          });
-        }
-        // Mark this session as needing Ctrl+L fix once Claude is running
-        this.pendingCtrlL = this.pendingCtrlL || new Set();
-        this.pendingCtrlL.add(firstSessionId);
-        console.log('[DEBUG] Marked session for pending Ctrl+L:', firstSessionId);
-
+        await this.selectSession(firstSessionId);
         this.loadQuickStartCases();
       }
 
@@ -1664,6 +1649,16 @@ class ClaudemanApp {
     document.getElementById('appSettingsShowSystemStats').checked = settings.showSystemStats ?? true;
     document.getElementById('appSettingsShowTokenCount').checked = settings.showTokenCount ?? true;
     document.getElementById('appSettingsShowMonitor').checked = settings.showMonitor ?? true;
+    // Claude CLI settings
+    const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
+    const allowedToolsRow = document.getElementById('allowedToolsRow');
+    claudeModeSelect.value = settings.claudeMode || 'dangerously-skip-permissions';
+    document.getElementById('appSettingsAllowedTools').value = settings.allowedTools || '';
+    allowedToolsRow.style.display = claudeModeSelect.value === 'allowedTools' ? '' : 'none';
+    // Toggle allowed tools row visibility based on mode selection
+    claudeModeSelect.onchange = () => {
+      allowedToolsRow.style.display = claudeModeSelect.value === 'allowedTools' ? '' : 'none';
+    };
     document.getElementById('appSettingsModal').classList.add('active');
   }
 
@@ -1681,6 +1676,9 @@ class ClaudemanApp {
       showSystemStats: document.getElementById('appSettingsShowSystemStats').checked,
       showTokenCount: document.getElementById('appSettingsShowTokenCount').checked,
       showMonitor: document.getElementById('appSettingsShowMonitor').checked,
+      // Claude CLI settings
+      claudeMode: document.getElementById('appSettingsClaudeMode').value,
+      allowedTools: document.getElementById('appSettingsAllowedTools').value.trim(),
     };
 
     // Save to localStorage
