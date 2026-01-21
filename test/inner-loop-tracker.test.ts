@@ -205,6 +205,7 @@ describe('InnerLoopTracker', () => {
       tracker.on('todoUpdate', todoHandler);
 
       tracker.processTerminalData('- [ ] First task\n');
+      tracker.flushPendingEvents();  // Flush debounced events
 
       expect(todoHandler).toHaveBeenCalled();
       const todos = tracker.todos;
@@ -380,7 +381,9 @@ describe('InnerLoopTracker', () => {
       tracker.on('todoUpdate', todoHandler);
 
       tracker.processTerminalData('- [ ] Task 1\n');
+      tracker.flushPendingEvents();  // Flush debounced events
       tracker.processTerminalData('- [ ] Task 2\n');
+      tracker.flushPendingEvents();  // Flush debounced events
 
       expect(todoHandler).toHaveBeenCalledTimes(2);
     });

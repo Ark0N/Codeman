@@ -42,6 +42,13 @@ const TODO_EXPIRY_MS = 60 * 60 * 1000;
  */
 const CLEANUP_THROTTLE_MS = 30 * 1000;
 
+/**
+ * Debounce interval for event emissions (milliseconds).
+ * Prevents UI jitter from rapid consecutive updates.
+ * Default: 50ms
+ */
+const EVENT_DEBOUNCE_MS = 50;
+
 // ========== Pre-compiled Regex Patterns ==========
 // Pre-compiled for performance (avoid re-compilation on each call)
 
@@ -266,6 +273,18 @@ export class InnerLoopTracker extends EventEmitter {
   /** Timestamp of last cleanup check for throttling */
   private _lastCleanupTime: number = 0;
 
+  /** Debounce timer for todoUpdate events */
+  private _todoUpdateTimer: NodeJS.Timeout | null = null;
+
+  /** Debounce timer for loopUpdate events */
+  private _loopUpdateTimer: NodeJS.Timeout | null = null;
+
+  /** Flag indicating pending todoUpdate emission */
+  private _todoUpdatePending: boolean = false;
+
+  /** Flag indicating pending loopUpdate emission */
+  private _loopUpdatePending: boolean = false;
+
   /**
    * Creates a new InnerLoopTracker instance.
    * Starts in disabled state until Ralph patterns are detected.
@@ -330,12 +349,16 @@ export class InnerLoopTracker extends EventEmitter {
    * @fires todoUpdate
    */
   reset(): void {
+    // Clear debounce timers
+    this.clearDebounceTimers();
+
     const wasEnabled = this._loopState.enabled;
     this._loopState = createInitialInnerLoopState();
     this._loopState.enabled = wasEnabled;  // Keep enabled status
     this._todos.clear();
     this._completionPhraseCount.clear();
     this._lineBuffer = '';
+    // Emit immediately on reset (no debounce)
     this.emit('loopUpdate', this.loopState);
     this.emit('todoUpdate', this.todos);
   }
@@ -348,12 +371,98 @@ export class InnerLoopTracker extends EventEmitter {
    * @fires todoUpdate
    */
   fullReset(): void {
+    // Clear debounce timers
+    this.clearDebounceTimers();
+
     this._loopState = createInitialInnerLoopState();
     this._todos.clear();
     this._completionPhraseCount.clear();
     this._lineBuffer = '';
+    // Emit immediately on reset (no debounce)
     this.emit('loopUpdate', this.loopState);
     this.emit('todoUpdate', this.todos);
+  }
+
+  /**
+   * Clear all debounce timers.
+   * Called during reset/fullReset to prevent stale emissions.
+   */
+  private clearDebounceTimers(): void {
+    if (this._todoUpdateTimer) {
+      clearTimeout(this._todoUpdateTimer);
+      this._todoUpdateTimer = null;
+    }
+    if (this._loopUpdateTimer) {
+      clearTimeout(this._loopUpdateTimer);
+      this._loopUpdateTimer = null;
+    }
+    this._todoUpdatePending = false;
+    this._loopUpdatePending = false;
+  }
+
+  /**
+   * Emit todoUpdate event with debouncing.
+   * Batches rapid consecutive calls to reduce UI jitter.
+   * The event fires after EVENT_DEBOUNCE_MS of inactivity.
+   */
+  private emitTodoUpdateDebounced(): void {
+    this._todoUpdatePending = true;
+
+    if (this._todoUpdateTimer) {
+      clearTimeout(this._todoUpdateTimer);
+    }
+
+    this._todoUpdateTimer = setTimeout(() => {
+      if (this._todoUpdatePending) {
+        this._todoUpdatePending = false;
+        this._todoUpdateTimer = null;
+        this.emit('todoUpdate', this.todos);
+      }
+    }, EVENT_DEBOUNCE_MS);
+  }
+
+  /**
+   * Emit loopUpdate event with debouncing.
+   * Batches rapid consecutive calls to reduce UI jitter.
+   * The event fires after EVENT_DEBOUNCE_MS of inactivity.
+   */
+  private emitLoopUpdateDebounced(): void {
+    this._loopUpdatePending = true;
+
+    if (this._loopUpdateTimer) {
+      clearTimeout(this._loopUpdateTimer);
+    }
+
+    this._loopUpdateTimer = setTimeout(() => {
+      if (this._loopUpdatePending) {
+        this._loopUpdatePending = false;
+        this._loopUpdateTimer = null;
+        this.emit('loopUpdate', this.loopState);
+      }
+    }, EVENT_DEBOUNCE_MS);
+  }
+
+  /**
+   * Flush all pending debounced events immediately.
+   * Useful for testing or when immediate state sync is needed.
+   */
+  flushPendingEvents(): void {
+    if (this._todoUpdatePending) {
+      this._todoUpdatePending = false;
+      if (this._todoUpdateTimer) {
+        clearTimeout(this._todoUpdateTimer);
+        this._todoUpdateTimer = null;
+      }
+      this.emit('todoUpdate', this.todos);
+    }
+    if (this._loopUpdatePending) {
+      this._loopUpdatePending = false;
+      if (this._loopUpdateTimer) {
+        clearTimeout(this._loopUpdateTimer);
+        this._loopUpdateTimer = null;
+      }
+      this.emit('loopUpdate', this.loopState);
+    }
   }
 
   /**
@@ -806,7 +915,8 @@ export class InnerLoopTracker extends EventEmitter {
       if (!isNaN(maxIter) && maxIter > 0) {
         this._loopState.maxIterations = maxIter;
         this._loopState.lastActivity = Date.now();
-        this.emit('loopUpdate', this.loopState);
+        // Use debounced emit for settings changes
+        this.emitLoopUpdateDebounced();
       }
     }
 
@@ -824,7 +934,8 @@ export class InnerLoopTracker extends EventEmitter {
           this._loopState.maxIterations = maxIter;
         }
         this._loopState.lastActivity = Date.now();
-        this.emit('loopUpdate', this.loopState);
+        // Use debounced emit for rapid iteration updates
+        this.emitLoopUpdateDebounced();
       }
     }
 
@@ -833,7 +944,8 @@ export class InnerLoopTracker extends EventEmitter {
     if (elapsedMatch) {
       this._loopState.elapsedHours = parseFloat(elapsedMatch[1]);
       this._loopState.lastActivity = Date.now();
-      this.emit('loopUpdate', this.loopState);
+      // Use debounced emit for elapsed time updates
+      this.emitLoopUpdateDebounced();
     }
 
     // Check for cycle count (legacy pattern)
@@ -843,7 +955,8 @@ export class InnerLoopTracker extends EventEmitter {
       if (!isNaN(cycleNum) && cycleNum > this._loopState.cycleCount) {
         this._loopState.cycleCount = cycleNum;
         this._loopState.lastActivity = Date.now();
-        this.emit('loopUpdate', this.loopState);
+        // Use debounced emit for cycle updates
+        this.emitLoopUpdateDebounced();
       }
     }
 
@@ -929,7 +1042,8 @@ export class InnerLoopTracker extends EventEmitter {
     }
 
     if (updated) {
-      this.emit('todoUpdate', this.todos);
+      // Use debounced emit to batch rapid todo updates and reduce UI jitter
+      this.emitTodoUpdateDebounced();
     }
   }
 
