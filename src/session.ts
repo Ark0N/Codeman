@@ -308,6 +308,13 @@ export class Session extends EventEmitter {
   private _autoCompactPrompt: string = ''; // Optional prompt for compact
   private _isCompacting: boolean = false; // Prevent recursive compacting
 
+  // Timer tracking for cleanup (prevents memory leaks)
+  private _autoCompactTimer: NodeJS.Timeout | null = null;
+  private _autoClearTimer: NodeJS.Timeout | null = null;
+  private _promptCheckInterval: NodeJS.Timeout | null = null;
+  private _promptCheckTimeout: NodeJS.Timeout | null = null;
+  private _shellIdleTimer: NodeJS.Timeout | null = null;
+
   // Screen session support
   private _screenManager: ScreenManager | null = null;
   private _screenSession: ScreenSession | null = null;
@@ -645,11 +652,18 @@ export class Session extends EventEmitter {
         // For NEW screens: wait for prompt to appear then clean buffer
         // For RESTORED screens: don't do anything - client will fetch buffer on tab switch
         if (!isRestoredSession) {
-          const checkForPrompt = setInterval(() => {
+          this._promptCheckInterval = setInterval(() => {
             // Wait for the prompt character (❯) which means Claude is fully initialized
             const bufferValue = this._terminalBuffer.value;
             if (bufferValue.includes('❯') || bufferValue.includes('\u276f')) {
-              clearInterval(checkForPrompt);
+              if (this._promptCheckInterval) {
+                clearInterval(this._promptCheckInterval);
+                this._promptCheckInterval = null;
+              }
+              if (this._promptCheckTimeout) {
+                clearTimeout(this._promptCheckTimeout);
+                this._promptCheckTimeout = null;
+              }
               // Clean the buffer - remove screen init junk before actual content
               // Strip: cursor movement (\x1b[nA/B/C/D), positioning (\x1b[n;nH),
               // clear screen (\x1b[2J), scroll region (\x1b[n;nr), and whitespace
@@ -661,7 +675,13 @@ export class Session extends EventEmitter {
             }
           }, 50);
           // Timeout after 5 seconds if prompt not found
-          setTimeout(() => clearInterval(checkForPrompt), 5000);
+          this._promptCheckTimeout = setTimeout(() => {
+            if (this._promptCheckInterval) {
+              clearInterval(this._promptCheckInterval);
+              this._promptCheckInterval = null;
+            }
+            this._promptCheckTimeout = null;
+          }, 5000);
         }
       } catch (err) {
         console.error('[Session] Failed to create screen session, falling back to direct PTY:', err);
@@ -745,6 +765,19 @@ export class Session extends EventEmitter {
       this.ptyProcess = null;
       this._pid = null;
       this._status = 'idle';
+      // Clear all timers to prevent memory leaks
+      if (this.activityTimeout) {
+        clearTimeout(this.activityTimeout);
+        this.activityTimeout = null;
+      }
+      if (this._promptCheckInterval) {
+        clearInterval(this._promptCheckInterval);
+        this._promptCheckInterval = null;
+      }
+      if (this._promptCheckTimeout) {
+        clearTimeout(this._promptCheckTimeout);
+        this._promptCheckTimeout = null;
+      }
       // If using screen, mark the screen as detached but don't kill it
       if (this._screenSession && this._screenManager) {
         this._screenManager.setAttached(this.id, false);
@@ -867,6 +900,15 @@ export class Session extends EventEmitter {
       this.ptyProcess = null;
       this._pid = null;
       this._status = 'idle';
+      // Clear timers to prevent memory leaks
+      if (this._shellIdleTimer) {
+        clearTimeout(this._shellIdleTimer);
+        this._shellIdleTimer = null;
+      }
+      if (this.activityTimeout) {
+        clearTimeout(this.activityTimeout);
+        this.activityTimeout = null;
+      }
       // If using screen, mark the screen as detached but don't kill it
       if (this._screenSession && this._screenManager) {
         this._screenManager.setAttached(this.id, false);
@@ -875,7 +917,8 @@ export class Session extends EventEmitter {
     });
 
     // Mark as idle after a short delay (shell is ready)
-    setTimeout(() => {
+    this._shellIdleTimer = setTimeout(() => {
+      this._shellIdleTimer = null;
       this._status = 'idle';
       this._isWorking = false;
       this.emit('idle');
@@ -1151,6 +1194,9 @@ export class Session extends EventEmitter {
 
       // Wait for Claude to be idle before compacting
       const checkAndCompact = () => {
+        // Check if session is still valid (not stopped)
+        if (!this._isCompacting) return;
+
         if (!this._isWorking) {
           // Send /compact command with optional prompt
           const compactCmd = this._autoCompactPrompt
@@ -1164,17 +1210,18 @@ export class Session extends EventEmitter {
           });
 
           // Wait a moment then re-enable (longer than clear since compact takes time)
-          setTimeout(() => {
+          this._autoCompactTimer = setTimeout(() => {
+            this._autoCompactTimer = null;
             this._isCompacting = false;
           }, 10000);
         } else {
           // Check again in 2 seconds
-          setTimeout(checkAndCompact, 2000);
+          this._autoCompactTimer = setTimeout(checkAndCompact, 2000);
         }
       };
 
       // Start checking after a short delay
-      setTimeout(checkAndCompact, 1000);
+      this._autoCompactTimer = setTimeout(checkAndCompact, 1000);
     }
   }
 
@@ -1189,6 +1236,9 @@ export class Session extends EventEmitter {
 
       // Wait for Claude to be idle before clearing
       const checkAndClear = () => {
+        // Check if session is still valid (not stopped)
+        if (!this._isClearing) return;
+
         if (!this._isWorking) {
           // Send /clear command
           this.writeViaScreen('/clear\r');
@@ -1198,17 +1248,18 @@ export class Session extends EventEmitter {
           this.emit('autoClear', { tokens: totalTokens, threshold: this._autoClearThreshold });
 
           // Wait a moment then re-enable
-          setTimeout(() => {
+          this._autoClearTimer = setTimeout(() => {
+            this._autoClearTimer = null;
             this._isClearing = false;
           }, 5000);
         } else {
           // Check again in 2 seconds
-          setTimeout(checkAndClear, 2000);
+          this._autoClearTimer = setTimeout(checkAndClear, 2000);
         }
       };
 
       // Start checking after a short delay
-      setTimeout(checkAndClear, 1000);
+      this._autoClearTimer = setTimeout(checkAndClear, 1000);
     }
   }
 
@@ -1340,6 +1391,35 @@ export class Session extends EventEmitter {
     if (this._lineBufferFlushTimer) {
       clearTimeout(this._lineBufferFlushTimer);
       this._lineBufferFlushTimer = null;
+    }
+
+    // Clear auto-compact/auto-clear timers to prevent memory leaks
+    if (this._autoCompactTimer) {
+      clearTimeout(this._autoCompactTimer);
+      this._autoCompactTimer = null;
+    }
+    this._isCompacting = false;
+
+    if (this._autoClearTimer) {
+      clearTimeout(this._autoClearTimer);
+      this._autoClearTimer = null;
+    }
+    this._isClearing = false;
+
+    // Clear prompt check timers
+    if (this._promptCheckInterval) {
+      clearInterval(this._promptCheckInterval);
+      this._promptCheckInterval = null;
+    }
+    if (this._promptCheckTimeout) {
+      clearTimeout(this._promptCheckTimeout);
+      this._promptCheckTimeout = null;
+    }
+
+    // Clear shell idle timer
+    if (this._shellIdleTimer) {
+      clearTimeout(this._shellIdleTimer);
+      this._shellIdleTimer = null;
     }
 
     // Immediately cleanup Promise callbacks to prevent orphaned references

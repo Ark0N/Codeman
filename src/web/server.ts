@@ -12,7 +12,7 @@
 
 import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
 import fastifyStatic from '@fastify/static';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir, totalmem, freemem, loadavg, cpus } from 'node:os';
@@ -749,6 +749,13 @@ export class WebServer extends EventEmitter {
 
       const casePath = join(casesDir, name);
 
+      // Security: Path traversal protection - ensure resolved path is within casesDir
+      const resolvedPath = resolve(casePath);
+      const resolvedBase = resolve(casesDir);
+      if (!resolvedPath.startsWith(resolvedBase + '/') && resolvedPath !== resolvedBase) {
+        return { success: false, error: 'Invalid case path' };
+      }
+
       if (existsSync(casePath)) {
         return { success: false, error: 'Case already exists' };
       }
@@ -792,7 +799,7 @@ export class WebServer extends EventEmitter {
         return { success: false, error: `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.` };
       }
 
-      const { caseName = 'testcase' } = req.body as QuickStartRequest;
+      const { caseName = 'testcase', mode = 'claude' } = req.body as QuickStartRequest;
 
       // Validate case name
       if (!/^[a-zA-Z0-9_-]+$/.test(caseName)) {
@@ -800,6 +807,13 @@ export class WebServer extends EventEmitter {
       }
 
       const casePath = join(casesDir, caseName);
+
+      // Security: Path traversal protection - ensure resolved path is within casesDir
+      const resolvedPath = resolve(casePath);
+      const resolvedBase = resolve(casesDir);
+      if (!resolvedPath.startsWith(resolvedBase + '/') && resolvedPath !== resolvedBase) {
+        return { success: false, error: 'Invalid case path' };
+      }
 
       // Create case folder and CLAUDE.md if it doesn't exist
       if (!existsSync(casePath)) {
@@ -822,16 +836,22 @@ export class WebServer extends EventEmitter {
       const session = new Session({
         workingDir: casePath,
         screenManager: this.screenManager,
-        useScreen: true
+        useScreen: true,
+        mode: mode,
       });
       this.sessions.set(session.id, session);
       this.setupSessionListeners(session);
       this.broadcast('session:created', session.toDetailedState());
 
-      // Start interactive mode
+      // Start in the appropriate mode
       try {
-        await session.startInteractive();
-        this.broadcast('session:interactive', { id: session.id });
+        if (mode === 'shell') {
+          await session.startShell();
+          this.broadcast('session:interactive', { id: session.id, mode: 'shell' });
+        } else {
+          await session.startInteractive();
+          this.broadcast('session:interactive', { id: session.id });
+        }
         this.broadcast('session:updated', { session: session.toDetailedState() });
 
         return {
@@ -1034,10 +1054,11 @@ export class WebServer extends EventEmitter {
       this.broadcast('session:exit', { id: session.id, code });
       this.broadcast('session:updated', session.toDetailedState());
 
-      // Clean up respawn controller when session exits
+      // Clean up respawn controller when session exits (stop + remove listeners)
       const controller = this.respawnControllers.get(session.id);
       if (controller) {
         controller.stop();
+        controller.removeAllListeners();
         this.respawnControllers.delete(session.id);
       }
     });
@@ -1285,11 +1306,10 @@ export class WebServer extends EventEmitter {
     run.status = 'stopped';
     run.logs.push(`[${new Date().toISOString()}] Run stopped by user`);
 
-    if (run.sessionId) {
-      const session = this.sessions.get(run.sessionId);
-      if (session) {
-        await session.stop();
-      }
+    // Use cleanupSession for proper resource cleanup (listeners, respawn, etc.)
+    if (run.sessionId && this.sessions.has(run.sessionId)) {
+      await this.cleanupSession(run.sessionId);
+      run.sessionId = null;
     }
 
     this.broadcast('scheduled:stopped', run);
@@ -1570,20 +1590,23 @@ export class WebServer extends EventEmitter {
     // Stop screen stats collection
     this.screenManager.stopStatsCollection();
 
-    // Stop all respawn controllers
+    // Stop all respawn controllers and remove listeners
     for (const controller of this.respawnControllers.values()) {
       controller.stop();
+      controller.removeAllListeners();
     }
     this.respawnControllers.clear();
 
-    // Stop all sessions
-    for (const session of this.sessions.values()) {
-      await session.stop();
-    }
-
-    // Stop all scheduled runs
+    // Stop all scheduled runs first (they have their own session cleanup)
     for (const [id] of this.scheduledRuns) {
       await this.stopScheduledRun(id);
+    }
+
+    // Properly clean up all remaining sessions (removes listeners, clears state, etc.)
+    // Don't kill screens on server stop - they can be reattached on restart
+    const sessionIds = Array.from(this.sessions.keys());
+    for (const sessionId of sessionIds) {
+      await this.cleanupSession(sessionId, false);
     }
 
     await this.app.close();

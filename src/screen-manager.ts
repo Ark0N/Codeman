@@ -27,6 +27,56 @@ const SCREENS_FILE = join(homedir(), '.claudeman', 'screens.json');
 /** Pre-compiled regex for parsing `screen -ls` output */
 const SCREEN_PATTERN = /(\d+)\.(claudeman-([a-f0-9-]+))/g;
 
+/** Regex to validate screen names (only allow safe characters) */
+const SAFE_SCREEN_NAME_PATTERN = /^claudeman-[a-f0-9-]+$/;
+
+/** Regex to validate working directory paths (no shell metacharacters) */
+const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_\/\-. ~]+$/;
+
+/**
+ * Validates that a screen name contains only safe characters.
+ * Prevents command injection via malformed session IDs.
+ *
+ * @param name - The screen name to validate
+ * @returns true if the name is safe for use in shell commands
+ */
+function isValidScreenName(name: string): boolean {
+  return SAFE_SCREEN_NAME_PATTERN.test(name);
+}
+
+/**
+ * Validates that a path contains only safe characters.
+ * Prevents command injection via malformed paths.
+ *
+ * @param path - The path to validate
+ * @returns true if the path is safe for use in shell commands
+ */
+function isValidPath(path: string): boolean {
+  // Check for shell metacharacters that could lead to injection
+  if (path.includes(';') || path.includes('&') || path.includes('|') ||
+      path.includes('$') || path.includes('`') || path.includes('(') ||
+      path.includes(')') || path.includes('{') || path.includes('}') ||
+      path.includes('<') || path.includes('>') || path.includes("'") ||
+      path.includes('"') || path.includes('\n') || path.includes('\r')) {
+    return false;
+  }
+  return SAFE_PATH_PATTERN.test(path);
+}
+
+/**
+ * Escapes a string for safe use in shell double quotes.
+ *
+ * @param str - The string to escape
+ * @returns The escaped string
+ */
+function shellEscape(str: string): string {
+  return str
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\$/g, '\\$')
+    .replace(/`/g, '\\`');
+}
+
 /**
  * Manages GNU Screen sessions that wrap Claude CLI or shell processes.
  *
@@ -107,6 +157,14 @@ export class ScreenManager extends EventEmitter {
   async createScreen(sessionId: string, workingDir: string, mode: 'claude' | 'shell', name?: string): Promise<ScreenSession> {
     const screenName = `claudeman-${sessionId.slice(0, 8)}`;
 
+    // Security: Validate screenName and workingDir to prevent command injection
+    if (!isValidScreenName(screenName)) {
+      throw new Error(`Invalid screen name: contains unsafe characters`);
+    }
+    if (!isValidPath(workingDir)) {
+      throw new Error(`Invalid working directory path: contains unsafe characters`);
+    }
+
     // Create screen in detached mode with the appropriate command
     // Set CLAUDEMAN_SCREEN=1 so Claude sessions know they're running in Claudeman
     // This helps prevent Claude from attempting to kill its own screen session
@@ -161,8 +219,16 @@ export class ScreenManager extends EventEmitter {
 
   // Get screen session PID
   private getScreenPid(screenName: string): number | null {
+    // Security: Validate screenName to prevent command injection
+    if (!isValidScreenName(screenName)) {
+      console.error('[ScreenManager] Invalid screen name in getScreenPid:', screenName);
+      return null;
+    }
+
     try {
-      const output = execSync(`screen -ls | grep "${screenName}"`, {
+      // Use shell-escaped screenName in grep
+      const escapedName = shellEscape(screenName);
+      const output = execSync(`screen -ls | grep "${escapedName}"`, {
         encoding: 'utf-8',
         timeout: 5000
       });
@@ -522,6 +588,12 @@ export class ScreenManager extends EventEmitter {
       return false;
     }
 
+    // Security: Validate screenName to prevent command injection
+    if (!isValidScreenName(screen.screenName)) {
+      console.error('[ScreenManager] Invalid screen name in sendInput:', screen.screenName);
+      return false;
+    }
+
     try {
       // Split input into text and control characters
       // IMPORTANT: Must send text and carriage return as SEPARATE commands
@@ -529,8 +601,8 @@ export class ScreenManager extends EventEmitter {
       const hasCarriageReturn = input.includes('\r');
       const textPart = input.replace(/\r/g, '').replace(/\n/g, '');
 
-      // Escape the text part for shell (double quotes)
-      const escapedText = textPart.replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/`/g, '\\`');
+      // Escape the text part for shell using the helper function
+      const escapedText = shellEscape(textPart);
 
       // Send text first (if any)
       if (escapedText) {

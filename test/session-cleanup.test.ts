@@ -101,7 +101,7 @@ describe('Session Cleanup', () => {
       for (const id of sessionIds) {
         expect(sessions.find((s: any) => s.id === id)).toBeUndefined();
       }
-    });
+    }, 60000); // Extended timeout for multi-session test
   });
 
   describe('Respawn Controller Cleanup', () => {

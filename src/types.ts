@@ -299,6 +299,8 @@ export interface CreateCaseRequest {
 export interface QuickStartRequest {
   /** Optional case name, defaults to 'testcase' */
   caseName?: string;
+  /** Session mode: 'claude' for Claude CLI, 'shell' for bash shell */
+  mode?: 'claude' | 'shell';
 }
 
 /**

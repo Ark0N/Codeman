@@ -43,8 +43,11 @@ node dist/index.js web             # After npm run build
 claudeman web                      # After npm link
 
 # Start TUI (terminal user interface):
-npx tsx src/index.ts tui           # Dev mode - full-screen TUI
+npx tsx src/index.ts tui           # Dev mode - prompts to start web if not running
 claudeman tui                      # After npm link
+claudeman tui --with-web           # Auto-start web server if not running (no prompt)
+claudeman tui --no-web             # Skip web server check entirely
+claudeman tui -p 8080              # Specify web server port
 
 # Testing (vitest)
 # Note: globals: true configured - no imports needed for describe/it/expect
@@ -414,12 +417,12 @@ npx agent-browser close
 | GET | `/api/sessions/:id/inner-state` | Get Ralph loop state + todos |
 | POST | `/api/sessions/:id/auto-compact` | Configure auto-compact threshold |
 | POST | `/api/sessions/:id/auto-clear` | Configure auto-clear threshold |
-| POST | `/api/quick-start` | Create case + start interactive session |
+| POST | `/api/quick-start` | Create case + start session (claude or shell mode) |
 | GET | `/api/cases` | List available cases |
 | POST | `/api/cases` | Create new case |
 | GET | `/api/screens` | List screen sessions with stats |
 
-## Keyboard Shortcuts
+## Keyboard Shortcuts (Web UI)
 
 | Shortcut | Action |
 |----------|--------|
@@ -431,6 +434,44 @@ npx agent-browser close
 | `Ctrl++/-` | Increase/decrease font size |
 | `Ctrl+?` | Show keyboard shortcuts help |
 | `Escape` | Close panels and modals |
+
+## TUI Keyboard Shortcuts
+
+**Start Screen - Sessions:**
+| Key | Action |
+|-----|--------|
+| `↑`/`↓` | Navigate list |
+| `Enter` | View session in TUI |
+| `a` | Attach directly to screen (full terminal) |
+| `d` | Delete/kill selected session |
+| `c` | Switch to cases view |
+| `n` | Quick-start new session |
+| `r` | Refresh list |
+| `q` | Quit TUI |
+
+**Start Screen - Cases:**
+| Key | Action |
+|-----|--------|
+| `↑`/`↓` | Navigate list |
+| `Enter` | Start Claude session with selected case |
+| `h` | Start Shell session with selected case |
+| `m` | Multi-start (1-20 sessions at once) |
+| `n` | Create new case |
+| `s` | Switch to sessions view |
+| `r` | Refresh list |
+
+**Main View (Session Active):**
+| Key | Action |
+|-----|--------|
+| `Tab`/`Shift+Tab` | Next/previous session tab |
+| `Ctrl+1-9` | Go to session N |
+| `[`/`]` | Previous/next session (vim-style) |
+| `Ctrl+N` | New session |
+| `Ctrl+W` | Close current session |
+| `Ctrl+K` | Kill all sessions |
+| `Ctrl+R` | Toggle respawn (Claude sessions only) |
+| `Escape` | Back to start screen |
+| `?` | Toggle help overlay |
 
 ## State Files
 

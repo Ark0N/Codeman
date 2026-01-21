@@ -68,8 +68,10 @@ export function App(): React.ReactElement {
     activeSessionId,
     activeSession,
     refreshSessions,
+    refreshCases,
     selectSession,
     createSession,
+    createCase,
     killSession,
     killAllSessions,
     nextSession,
@@ -79,6 +81,9 @@ export function App(): React.ReactElement {
     innerLoopState,
     innerTodos,
     respawnStatus,
+    cases,
+    toggleRespawn,
+    renameSession,
   } = useSessionManager();
 
   // Calculate terminal height based on stdout dimensions
@@ -112,7 +117,7 @@ export function App(): React.ReactElement {
       return;
     }
 
-    // Exit on Ctrl+C (with confirmation in main view)
+    // Exit on Ctrl+C
     if (key.ctrl && input === 'c') {
       exit();
       return;
@@ -129,7 +134,19 @@ export function App(): React.ReactElement {
       return;
     }
 
-    // Main view shortcuts
+    // === SESSION SWITCHING SHORTCUTS ===
+
+    // Tab / Shift+Tab to switch sessions (most intuitive)
+    if (key.tab) {
+      if (key.shift) {
+        prevSession();
+      } else {
+        nextSession();
+      }
+      return;
+    }
+
+    // Ctrl+Tab / Ctrl+Shift+Tab (if terminal supports it)
     if (key.ctrl && key.tab) {
       if (key.shift) {
         prevSession();
@@ -139,14 +156,36 @@ export function App(): React.ReactElement {
       return;
     }
 
-    // Ctrl+1-9 for direct tab access
-    if (key.ctrl) {
+    // Alt+Left/Right arrow keys for session switching
+    if (key.meta && key.leftArrow) {
+      prevSession();
+      return;
+    }
+    if (key.meta && key.rightArrow) {
+      nextSession();
+      return;
+    }
+
+    // [ and ] for previous/next session (vim-like)
+    if (input === '[' && !key.ctrl && !key.meta) {
+      prevSession();
+      return;
+    }
+    if (input === ']' && !key.ctrl && !key.meta) {
+      nextSession();
+      return;
+    }
+
+    // Alt+1-9 or Ctrl+1-9 for direct tab access
+    if (key.ctrl || key.meta) {
       const num = parseInt(input, 10);
       if (!isNaN(num) && num >= 1 && num <= 9 && num <= sessions.length) {
         selectSession(sessions[num - 1].sessionId);
         return;
       }
     }
+
+    // === SESSION MANAGEMENT SHORTCUTS ===
 
     // Ctrl+W to close current session
     if (key.ctrl && input === 'w') {
@@ -172,20 +211,62 @@ export function App(): React.ReactElement {
       return;
     }
 
-    // Escape to go back to start screen
+    // Ctrl+R to toggle respawn on active session
+    if (key.ctrl && input === 'r') {
+      if (activeSessionId && activeSession?.mode === 'claude') {
+        toggleRespawn();
+      }
+      return;
+    }
+
+    // Escape to go back to start screen (doesn't close session)
     if (key.escape) {
       setViewMode('start');
       return;
     }
 
-    // Forward other input to the active session
-    if (activeSessionId && !key.ctrl && !key.meta) {
+    // === FORWARD INPUT TO SESSION ===
+    // Forward all other input to the active screen session
+    if (activeSessionId) {
+      // Handle special keys
       if (key.return) {
         sendInput(activeSessionId, '\r');
-      } else if (key.backspace || key.delete) {
+        return;
+      }
+      if (key.backspace || key.delete) {
         sendInput(activeSessionId, '\x7f');
-      } else if (input) {
+        return;
+      }
+      // Arrow keys - send ANSI escape sequences
+      if (key.upArrow) {
+        sendInput(activeSessionId, '\x1b[A');
+        return;
+      }
+      if (key.downArrow) {
+        sendInput(activeSessionId, '\x1b[B');
+        return;
+      }
+      if (key.rightArrow && !key.meta) {
+        sendInput(activeSessionId, '\x1b[C');
+        return;
+      }
+      if (key.leftArrow && !key.meta) {
+        sendInput(activeSessionId, '\x1b[D');
+        return;
+      }
+      // Ctrl+key combinations (send as control characters)
+      if (key.ctrl && input) {
+        // Convert to control character (Ctrl+A = 0x01, Ctrl+B = 0x02, etc.)
+        const code = input.toLowerCase().charCodeAt(0) - 96;
+        if (code >= 1 && code <= 26) {
+          sendInput(activeSessionId, String.fromCharCode(code));
+          return;
+        }
+      }
+      // Regular character input
+      if (input && !key.ctrl && !key.meta) {
         sendInput(activeSessionId, input);
+        return;
       }
     }
   });
@@ -195,9 +276,24 @@ export function App(): React.ReactElement {
     setViewMode('main');
   }, [selectSession]);
 
-  const handleCreateSession = useCallback(async () => {
-    const sessionId = await createSession();
-    if (sessionId) {
+  const handleCreateSession = useCallback(async (caseName?: string, count?: number, mode: 'claude' | 'shell' = 'claude') => {
+    // Default to 'default' case if no case name provided (like web UI)
+    const sessionsToCreate = Math.min(Math.max(count || 1, 1), 20);
+    let lastSessionId: string | null = null;
+
+    // Create sessions sequentially to avoid overwhelming the server
+    for (let i = 0; i < sessionsToCreate; i++) {
+      const sessionId = await createSession(caseName || 'default', mode);
+      if (sessionId) {
+        lastSessionId = sessionId;
+      }
+      // Small delay between session creations to allow server to process
+      if (i < sessionsToCreate - 1) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    }
+
+    if (lastSessionId) {
       setViewMode('main');
     }
   }, [createSession]);
@@ -239,11 +335,14 @@ export function App(): React.ReactElement {
     return (
       <StartScreen
         sessions={sessions}
+        cases={cases}
         onSelectSession={handleSelectSession}
         onAttachSession={handleAttachSession}
         onDeleteSession={handleDeleteSession}
         onCreateSession={handleCreateSession}
+        onCreateCase={createCase}
         onRefresh={refreshSessions}
+        onRefreshCases={refreshCases}
         onExit={exit}
       />
     );

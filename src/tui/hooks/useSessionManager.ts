@@ -34,10 +34,110 @@ const SCREENS_FILE = join(homedir(), '.claudeman', 'screens.json');
 const INNER_STATE_FILE = join(homedir(), '.claudeman', 'state-inner.json');
 const OUTPUT_POLL_INTERVAL = 500; // Poll terminal output every 500ms
 
+/**
+ * Emoji to ASCII replacement map for screen hardcopy output.
+ * GNU screen's hardcopy doesn't handle UTF-8 multi-byte characters well,
+ * so we replace common Claude Code emoji with ASCII equivalents.
+ */
+const EMOJI_REPLACEMENTS: [RegExp, string][] = [
+  // Claude Code logo/branding
+  [/\u{1F9E0}/gu, '*'],           // 🧠 brain -> *
+  [/\u{2728}/gu, '*'],             // ✨ sparkles -> *
+  [/\u{1F4AC}/gu, '>'],            // 💬 speech bubble -> >
+  [/\u{1F916}/gu, '[bot]'],        // 🤖 robot -> [bot]
+
+  // Status indicators
+  [/\u{2714}/gu, '[ok]'],          // ✔ check mark -> [ok]
+  [/\u{2705}/gu, '[ok]'],          // ✅ check mark button -> [ok]
+  [/\u{274C}/gu, '[x]'],           // ❌ cross mark -> [x]
+  [/\u{26A0}/gu, '[!]'],           // ⚠ warning -> [!]
+  [/\u{2139}/gu, '[i]'],           // ℹ info -> [i]
+  [/\u{1F6A8}/gu, '[!]'],          // 🚨 rotating light -> [!]
+
+  // Progress/activity
+  [/\u{23F3}/gu, '...'],           // ⏳ hourglass -> ...
+  [/\u{231B}/gu, '...'],           // ⌛ hourglass done -> ...
+  [/\u{1F504}/gu, '(...)'],        // 🔄 refresh -> (...)
+  [/\u{25B6}/gu, '>'],             // ▶ play -> >
+  [/\u{23F8}/gu, '||'],            // ⏸ pause -> ||
+  [/\u{23F9}/gu, '[]'],            // ⏹ stop -> []
+
+  // File/folder icons
+  [/\u{1F4C1}/gu, '[dir]'],        // 📁 folder -> [dir]
+  [/\u{1F4C2}/gu, '[dir]'],        // 📂 open folder -> [dir]
+  [/\u{1F4C4}/gu, '[file]'],       // 📄 file -> [file]
+  [/\u{1F4DD}/gu, '[edit]'],       // 📝 memo -> [edit]
+
+  // Arrows and navigation
+  [/\u{2190}/gu, '<-'],            // ← left arrow
+  [/\u{2192}/gu, '->'],            // → right arrow
+  [/\u{2191}/gu, '^'],             // ↑ up arrow
+  [/\u{2193}/gu, 'v'],             // ↓ down arrow
+  [/\u{21B5}/gu, '<CR>'],          // ↵ return symbol -> <CR>
+  [/\u{23CE}/gu, '<CR>'],          // ⏎ return symbol -> <CR>
+
+  // Special Unicode box-drawing and symbols that may corrupt
+  [/\u{25B8}/gu, '>'],             // ▸ small right triangle
+  [/\u{25B9}/gu, '>'],             // ▹ white small right triangle
+  [/\u{2022}/gu, '-'],             // • bullet -> -
+  [/\u{25CF}/gu, 'o'],             // ● black circle -> o
+  [/\u{25CB}/gu, 'o'],             // ○ white circle -> o
+  [/\u{25A0}/gu, '#'],             // ■ black square -> #
+  [/\u{25A1}/gu, '[]'],            // □ white square -> []
+  [/\u{2261}/gu, '='],             // ≡ hamburger menu -> =
+
+  // Misc
+  [/\u{1F512}/gu, '[lock]'],       // 🔒 lock
+  [/\u{1F513}/gu, '[unlock]'],     // 🔓 unlock
+  [/\u{1F527}/gu, '[tool]'],       // 🔧 wrench
+  [/\u{2699}/gu, '[gear]'],        // ⚙ gear
+  [/\u{1F50D}/gu, '[search]'],     // 🔍 magnifying glass
+  [/\u{1F4E6}/gu, '[pkg]'],        // 📦 package
+  [/\u{1F680}/gu, '[>]'],          // 🚀 rocket
+  [/\u{1F3AF}/gu, '[*]'],          // 🎯 target
+
+  // Catch-all for any remaining emoji in common ranges
+  // These will appear as replacement characters otherwise
+  [/[\u{1F300}-\u{1F9FF}]/gu, ''], // Misc symbols and pictographs
+  [/[\u{2600}-\u{26FF}]/gu, ''],   // Misc symbols
+  [/[\u{FE00}-\u{FE0F}]/gu, ''],   // Variation selectors
+];
+
+/**
+ * Sanitizes screen hardcopy output by replacing emoji with ASCII equivalents.
+ *
+ * @param content - Raw hardcopy output that may contain corrupted UTF-8
+ * @returns Sanitized string with emoji replaced by ASCII
+ */
+function sanitizeHardcopyOutput(content: string): string {
+  let result = content;
+
+  // Apply all emoji replacements
+  for (const [pattern, replacement] of EMOJI_REPLACEMENTS) {
+    result = result.replace(pattern, replacement);
+  }
+
+  // Remove any remaining replacement characters (U+FFFD) that indicate
+  // encoding issues with multi-byte sequences
+  result = result.replace(/\uFFFD+/g, '');
+
+  // Remove any other non-printable characters except common whitespace
+  // This catches any remaining problematic bytes
+  result = result.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+
+  return result;
+}
+
 interface RespawnStatus {
   enabled: boolean;
   state: string;
   cycleCount: number;
+}
+
+interface CaseInfo {
+  name: string;
+  path: string;
+  hasClaudeMd: boolean;
 }
 
 interface SessionManagerState {
@@ -48,14 +148,19 @@ interface SessionManagerState {
   innerLoopState: InnerLoopState | null;
   innerTodos: InnerTodoItem[];
   respawnStatus: RespawnStatus | null;
+  cases: CaseInfo[];
   refreshSessions: () => void;
+  refreshCases: () => Promise<void>;
   selectSession: (sessionId: string) => void;
-  createSession: () => Promise<string | null>;
+  createSession: (caseName?: string, mode?: 'claude' | 'shell') => Promise<string | null>;
+  createCase: (name: string) => Promise<boolean>;
   killSession: (sessionId: string) => void;
   killAllSessions: () => void;
   nextSession: () => void;
   prevSession: () => void;
   sendInput: (sessionId: string, input: string) => void;
+  toggleRespawn: () => Promise<boolean>;
+  renameSession: (sessionId: string, name: string) => Promise<boolean>;
 }
 
 /**
@@ -160,6 +265,7 @@ export function useSessionManager(): SessionManagerState {
   const [innerLoopState, setInnerLoopState] = useState<InnerLoopState | null>(null);
   const [innerTodos, setInnerTodos] = useState<InnerTodoItem[]>([]);
   const [respawnStatus, setRespawnStatus] = useState<RespawnStatus | null>(null);
+  const [cases, setCases] = useState<CaseInfo[]>([]);
   const outputBufferRef = useRef<string>('');
 
   // Load sessions on mount and watch for changes
@@ -271,12 +377,20 @@ export function useSessionManager(): SessionManagerState {
 
       try {
         const hardcopyFile = `/tmp/claudeman-${activeSessionId}-hardcopy`;
-        execSync(`screen -S ${activeSession.screenName} -X hardcopy ${hardcopyFile}`, {
+        // Use screen with UTF-8 mode (-U) for proper character handling
+        execSync(`screen -U -S ${activeSession.screenName} -X hardcopy ${hardcopyFile}`, {
           encoding: 'utf-8',
           timeout: 1000,
+          env: {
+            ...process.env,
+            LANG: process.env.LANG || 'en_US.UTF-8',
+            LC_ALL: process.env.LC_ALL || 'en_US.UTF-8',
+          }
         });
         if (existsSync(hardcopyFile)) {
-          const content = readFileSync(hardcopyFile, 'utf-8');
+          const rawContent = readFileSync(hardcopyFile, 'utf-8');
+          // Sanitize emoji/unicode that screen hardcopy corrupts
+          const content = sanitizeHardcopyOutput(rawContent);
           // Only update if content changed
           if (content !== outputBufferRef.current) {
             outputBufferRef.current = content;
@@ -310,6 +424,25 @@ export function useSessionManager(): SessionManagerState {
     setSessions(loadSessions());
   }, []);
 
+  // Refresh cases from API
+  const refreshCases = useCallback(async () => {
+    try {
+      const response = await fetch('http://localhost:3000/api/cases');
+      if (response.ok) {
+        const data = await response.json() as CaseInfo[];
+        setCases(data);
+      }
+    } catch {
+      // Server not running, clear cases
+      setCases([]);
+    }
+  }, []);
+
+  // Load cases on mount
+  useEffect(() => {
+    refreshCases();
+  }, [refreshCases]);
+
   // Select a session
   const selectSession = useCallback((sessionId: string) => {
     setActiveSessionId(sessionId);
@@ -318,23 +451,46 @@ export function useSessionManager(): SessionManagerState {
     // Polling effect will handle fetching output
   }, []);
 
-  // Create new session
-  const createSession = useCallback(async (): Promise<string | null> => {
+  // Create a new case
+  const createCase = useCallback(async (name: string): Promise<boolean> => {
+    try {
+      const response = await fetch('http://localhost:3000/api/cases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+
+      if (response.ok) {
+        const data = await response.json() as { success?: boolean };
+        if (data.success) {
+          await refreshCases();
+          return true;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }, [refreshCases]);
+
+  // Create new session (optionally with case name and mode)
+  const createSession = useCallback(async (caseName?: string, mode: 'claude' | 'shell' = 'claude'): Promise<string | null> => {
     try {
       // Use the web API to create a session if server is running
       const response = await fetch('http://localhost:3000/api/quick-start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ caseName: `tui-${Date.now()}` }),
+        body: JSON.stringify({ caseName: caseName || `case-${Date.now()}`, mode }),
       });
 
       if (response.ok) {
-        const data = await response.json() as { success?: boolean; sessionId?: string };
+        const data = await response.json() as { success?: boolean; sessionId?: string; caseName?: string };
         if (data.success && data.sessionId) {
           // Refresh and select new session
           const sessionId = data.sessionId;
           setTimeout(() => {
             refreshSessions();
+            refreshCases();
             setActiveSessionId(sessionId);
           }, 500);
           return sessionId;
@@ -355,7 +511,7 @@ export function useSessionManager(): SessionManagerState {
       );
       return null;
     }
-  }, [refreshSessions]);
+  }, [refreshSessions, refreshCases]);
 
   // Kill a session
   const killSession = useCallback((sessionId: string) => {
@@ -437,6 +593,55 @@ export function useSessionManager(): SessionManagerState {
     }
   }, [sessions]);
 
+  // Toggle respawn for active session
+  const toggleRespawn = useCallback(async (): Promise<boolean> => {
+    if (!activeSessionId) return false;
+
+    try {
+      const isEnabled = respawnStatus?.enabled || false;
+      const endpoint = isEnabled
+        ? `http://localhost:3000/api/sessions/${activeSessionId}/respawn/stop`
+        : `http://localhost:3000/api/sessions/${activeSessionId}/respawn/enable`;
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(isEnabled ? {} : { config: {} }),
+      });
+
+      if (response.ok) {
+        const data = await response.json() as { success?: boolean };
+        return data.success || false;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }, [activeSessionId, respawnStatus]);
+
+  // Rename a session
+  const renameSession = useCallback(async (sessionId: string, name: string): Promise<boolean> => {
+    try {
+      const response = await fetch(`http://localhost:3000/api/sessions/${sessionId}/name`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+
+      if (response.ok) {
+        const data = await response.json() as { success?: boolean };
+        if (data.success) {
+          // Refresh sessions to get updated name
+          setTimeout(refreshSessions, 100);
+          return true;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }, [refreshSessions]);
+
   return {
     sessions,
     activeSessionId,
@@ -445,13 +650,18 @@ export function useSessionManager(): SessionManagerState {
     innerLoopState,
     innerTodos,
     respawnStatus,
+    cases,
     refreshSessions,
+    refreshCases,
     selectSession,
     createSession,
+    createCase,
     killSession,
     killAllSessions,
     nextSession,
     prevSession,
     sendInput,
+    toggleRespawn,
+    renameSession,
   };
 }

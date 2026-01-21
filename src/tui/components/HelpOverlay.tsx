@@ -27,15 +27,28 @@ interface ShortcutGroup {
 
 const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
-    title: 'Start Screen',
+    title: 'Start Screen - Sessions',
     shortcuts: [
-      { key: '\u2191/\u2193', description: 'Navigate session list' },
+      { key: '\u2191/\u2193', description: 'Navigate list' },
       { key: 'Enter', description: 'View session in TUI' },
       { key: 'a', description: 'Attach to screen (full terminal)' },
       { key: 'd', description: 'Delete/kill selected session' },
-      { key: 'n', description: 'Create new session' },
-      { key: 'r', description: 'Refresh session list' },
+      { key: 'c', description: 'Switch to cases view' },
+      { key: 'n', description: 'Quick-start new session' },
+      { key: 'r', description: 'Refresh list' },
       { key: 'q', description: 'Quit' },
+    ],
+  },
+  {
+    title: 'Start Screen - Cases',
+    shortcuts: [
+      { key: '\u2191/\u2193', description: 'Navigate list' },
+      { key: 'Enter', description: 'Start Claude session with case' },
+      { key: 'h', description: 'Start Shell session with case' },
+      { key: 'm', description: 'Multi-start (1-20 sessions)' },
+      { key: 'n', description: 'Create new case' },
+      { key: 's', description: 'Switch to sessions view' },
+      { key: 'r', description: 'Refresh list' },
     ],
   },
   {
@@ -53,6 +66,7 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { key: 'Ctrl+N', description: 'New session' },
       { key: 'Ctrl+W', description: 'Close current session' },
       { key: 'Ctrl+K', description: 'Kill all sessions' },
+      { key: 'Ctrl+R', description: 'Toggle respawn (Claude sessions only)' },
     ],
   },
   {

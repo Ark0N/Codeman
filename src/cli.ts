@@ -483,10 +483,18 @@ program
 program
   .command('tui')
   .description('Start the terminal user interface')
-  .action(async () => {
+  .option('--with-web', 'Automatically start the web server if not running (no prompt)')
+  .option('--no-web', 'Skip web server check entirely')
+  .option('-p, --port <port>', 'Web server port (default: 3000)', '3000')
+  .action(async (options: { withWeb?: boolean; web?: boolean; port?: string }) => {
     try {
       const { startTUI } = await import('./tui/index.js');
-      await startTUI();
+      const port = parseInt(options.port || '3000', 10);
+      await startTUI({
+        autoStartWeb: options.withWeb || false,
+        skipWebCheck: options.web === false,
+        port,
+      });
     } catch (err) {
       console.error(chalk.red(`✗ Failed to start TUI: ${(err as Error).message}`));
       process.exit(1);
