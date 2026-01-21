@@ -74,6 +74,7 @@ export function App(): React.ReactElement {
     createCase,
     killSession,
     killAllSessions,
+    killAllScreensAndClaude,
     nextSession,
     prevSession,
     sendInput,
@@ -339,6 +340,7 @@ export function App(): React.ReactElement {
         onSelectSession={handleSelectSession}
         onAttachSession={handleAttachSession}
         onDeleteSession={handleDeleteSession}
+        onDeleteAll={killAllScreensAndClaude}
         onCreateSession={handleCreateSession}
         onCreateCase={createCase}
         onRefresh={refreshSessions}

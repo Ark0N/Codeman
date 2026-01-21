@@ -33,6 +33,7 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { key: 'Enter', description: 'View session in TUI' },
       { key: 'a', description: 'Attach to screen (full terminal)' },
       { key: 'd', description: 'Delete/kill selected session' },
+      { key: 'D (Shift+d)', description: 'Delete ALL screens & Claude processes' },
       { key: 'c', description: 'Switch to cases view' },
       { key: 'n', description: 'Quick-start new session' },
       { key: 'r', description: 'Refresh list' },

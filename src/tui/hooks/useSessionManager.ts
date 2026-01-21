@@ -156,6 +156,7 @@ interface SessionManagerState {
   createCase: (name: string) => Promise<boolean>;
   killSession: (sessionId: string) => void;
   killAllSessions: () => void;
+  killAllScreensAndClaude: () => void;
   nextSession: () => void;
   prevSession: () => void;
   sendInput: (sessionId: string, input: string) => void;
@@ -576,6 +577,44 @@ export function useSessionManager(): SessionManagerState {
     setTimeout(refreshSessions, 500);
   }, [sessions, refreshSessions]);
 
+  // Kill ALL claudeman screens and Claude processes (nuclear option)
+  const killAllScreensAndClaude = useCallback(() => {
+    // 1. Kill all tracked sessions first
+    for (const session of sessions) {
+      try {
+        execSync(`screen -S ${session.screenName} -X quit`, {
+          encoding: 'utf-8',
+          timeout: 5000,
+        });
+      } catch {
+        // Ignore
+      }
+    }
+
+    // 2. Kill any remaining claudeman screen sessions
+    try {
+      execSync('pkill -f "SCREEN.*claudeman"', {
+        encoding: 'utf-8',
+        timeout: 5000,
+      });
+    } catch {
+      // May not find any, that's ok
+    }
+
+    // 3. Kill all Claude CLI processes
+    try {
+      execSync('pkill -f "claude"', {
+        encoding: 'utf-8',
+        timeout: 5000,
+      });
+    } catch {
+      // May not find any, that's ok
+    }
+
+    setActiveSessionId(null);
+    setTimeout(refreshSessions, 500);
+  }, [sessions, refreshSessions]);
+
   // Navigate to next session
   const nextSession = useCallback(() => {
     if (sessions.length === 0) return;
@@ -684,6 +723,7 @@ export function useSessionManager(): SessionManagerState {
     createCase,
     killSession,
     killAllSessions,
+    killAllScreensAndClaude,
     nextSession,
     prevSession,
     sendInput,

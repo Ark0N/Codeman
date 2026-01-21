@@ -30,6 +30,7 @@ interface StartScreenProps {
   onSelectSession: (session: ScreenSession) => void;
   onAttachSession: (session: ScreenSession) => void;
   onDeleteSession: (session: ScreenSession) => void;
+  onDeleteAll: () => void;
   onCreateSession: (caseName?: string, count?: number, mode?: 'claude' | 'shell') => void;
   onCreateCase: (name: string) => Promise<boolean>;
   onRefresh: () => void;
@@ -80,6 +81,7 @@ export function StartScreen({
   onSelectSession,
   onAttachSession,
   onDeleteSession,
+  onDeleteAll,
   onCreateSession,
   onCreateCase,
   onRefresh,
@@ -165,6 +167,12 @@ export function StartScreen({
       // 'd' or 'x' to delete/kill session
       if ((input === 'd' || input === 'x') && sessions.length > 0) {
         onDeleteSession(sessions[selectedIndex]);
+        return;
+      }
+
+      // 'D' (shift+d) to delete ALL screens and Claude processes
+      if (input === 'D') {
+        onDeleteAll();
         return;
       }
 
@@ -513,6 +521,8 @@ export function StartScreen({
                 <Text> Attach  </Text>
                 <Text color="red">[d]</Text>
                 <Text> Delete  </Text>
+                <Text color="red" bold>[D]</Text>
+                <Text> Delete ALL  </Text>
                 <Text color="yellow">[q]</Text>
                 <Text> Quit</Text>
               </Text>
