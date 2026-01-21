@@ -37,7 +37,6 @@ const SCREENS_FILE = join(homedir(), '.claudeman', 'screens.json');
 const INNER_STATE_FILE = join(homedir(), '.claudeman', 'state-inner.json');
 const SETTINGS_FILE = join(homedir(), '.claudeman', 'settings.json');
 const OUTPUT_POLL_INTERVAL = 300; // Poll terminal output every 300ms (faster refresh)
-const INPUT_BATCH_INTERVAL = 16; // Batch input every 16ms (60fps)
 
 /**
  * Emoji to ASCII replacement map for screen hardcopy output.

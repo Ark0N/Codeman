@@ -17,7 +17,6 @@ const RESET = `${CSI}0m`;
 const BOLD = `${CSI}1m`;
 const DIM = `${CSI}2m`;
 const BG_BLUE = `${CSI}44m`;
-const BG_GRAY = `${CSI}48;5;238m`;
 const FG_WHITE = `${CSI}37m`;
 const FG_CYAN = `${CSI}36m`;
 const FG_YELLOW = `${CSI}33m`;

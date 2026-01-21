@@ -72,6 +72,13 @@ export class RalphLoop extends EventEmitter {
   private tasksCompleted: number = 0;
   private tasksGenerated: number = 0;
 
+  /** Bound event handlers for cleanup (prevents memory leaks) */
+  private sessionEventHandlers: {
+    completion: (sessionId: string, phrase: string) => void;
+    error: (sessionId: string, error: string) => void;
+    stopped: (sessionId: string) => void;
+  } | null = null;
+
   constructor(options: RalphLoopOptions = {}) {
     super();
     this.sessionManager = getSessionManager();
@@ -95,17 +102,32 @@ export class RalphLoop extends EventEmitter {
   }
 
   private setupEventHandlers(): void {
-    this.sessionManager.on('sessionCompletion', (sessionId: string, phrase: string) => {
-      this.handleSessionCompletion(sessionId, phrase);
-    });
+    // Store bound handlers for later cleanup
+    this.sessionEventHandlers = {
+      completion: (sessionId: string, phrase: string) => {
+        this.handleSessionCompletion(sessionId, phrase);
+      },
+      error: (sessionId: string, error: string) => {
+        this.handleSessionError(sessionId, error);
+      },
+      stopped: (sessionId: string) => {
+        this.handleSessionStopped(sessionId);
+      },
+    };
 
-    this.sessionManager.on('sessionError', (sessionId: string, error: string) => {
-      this.handleSessionError(sessionId, error);
-    });
+    this.sessionManager.on('sessionCompletion', this.sessionEventHandlers.completion);
+    this.sessionManager.on('sessionError', this.sessionEventHandlers.error);
+    this.sessionManager.on('sessionStopped', this.sessionEventHandlers.stopped);
+  }
 
-    this.sessionManager.on('sessionStopped', (sessionId: string) => {
-      this.handleSessionStopped(sessionId);
-    });
+  /** Remove event listeners to prevent memory leaks */
+  private cleanupEventHandlers(): void {
+    if (this.sessionEventHandlers) {
+      this.sessionManager.off('sessionCompletion', this.sessionEventHandlers.completion);
+      this.sessionManager.off('sessionError', this.sessionEventHandlers.error);
+      this.sessionManager.off('sessionStopped', this.sessionEventHandlers.stopped);
+      this.sessionEventHandlers = null;
+    }
   }
 
   get status(): RalphLoopStatus {
@@ -427,6 +449,17 @@ export class RalphLoop extends EventEmitter {
     this.minDurationMs = hours * 60 * 60 * 1000;
     this.store.setRalphLoopState({ minDurationMs: this.minDurationMs });
   }
+
+  /**
+   * Destroys the loop and cleans up all resources.
+   * Use this for complete cleanup (e.g., in tests or before creating a new instance).
+   * After calling destroy(), the instance should not be reused.
+   */
+  destroy(): void {
+    this.stop();
+    this.cleanupEventHandlers();
+    this.removeAllListeners();
+  }
 }
 
 // Singleton instance
@@ -438,4 +471,12 @@ export function getRalphLoop(options?: RalphLoopOptions): RalphLoop {
     loopInstance = new RalphLoop(options);
   }
   return loopInstance;
+}
+
+/** Destroys the singleton instance. Use in tests or for cleanup. */
+export function destroyRalphLoop(): void {
+  if (loopInstance) {
+    loopInstance.destroy();
+    loopInstance = null;
+  }
 }

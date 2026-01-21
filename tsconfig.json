@@ -15,7 +15,14 @@
     "declarationMap": true,
     "sourceMap": true,
     "jsx": "react-jsx",
-    "jsxImportSource": "react"
+    "jsxImportSource": "react",
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

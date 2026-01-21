@@ -122,7 +122,6 @@ export function App(): React.ReactElement {
     cases,
     lastUsedCase,
     toggleRespawn,
-    renameSession,
   } = useSessionManager();
 
   // Calculate terminal height based on stdout dimensions

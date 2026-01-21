@@ -124,7 +124,8 @@ describe('RalphLoop', () => {
   });
 
   afterEach(() => {
-    loop.stop();
+    // Use destroy() instead of stop() to clean up event listeners
+    loop.destroy();
     vi.useRealTimers();
   });
 
