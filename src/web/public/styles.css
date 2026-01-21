@@ -1163,7 +1163,7 @@ body {
   background: linear-gradient(135deg, #1e3a5f 0%, #3d2a5c 100%);
   border-color: #2d4a6f;
   color: var(--accent-hover);
-  font-weight: 500;
+  font-weight: 700;
   padding: 0.4rem 0.85rem;
 }
 
@@ -1726,6 +1726,10 @@ body {
 
 .modal-content.modal-sm {
   max-width: 340px;
+}
+
+.modal-content.modal-lg {
+  max-width: 520px;
 }
 
 .modal-warning-text {

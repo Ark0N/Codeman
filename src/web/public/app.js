@@ -942,9 +942,9 @@ class ClaudemanApp {
         select.value = firstCase.name;
         this.updateDirDisplayForCase(firstCase.name);
       } else {
-        // No cases exist yet - show the default case name as directory hint
+        // No cases exist yet - show the default case name as directory
         select.value = 'testcase';
-        document.getElementById('dirDisplay').textContent = '~/claudeman-cases/testcase (will be created)';
+        document.getElementById('dirDisplay').textContent = '~/claudeman-cases/testcase';
       }
 
       // Only add event listener once (on first load)
@@ -1771,7 +1771,25 @@ class ClaudemanApp {
     claudeModeSelect.onchange = () => {
       allowedToolsRow.style.display = claudeModeSelect.value === 'allowedTools' ? '' : 'none';
     };
-    document.getElementById('appSettingsModal').classList.add('active');
+    // Reset to first tab and wire up tab switching
+    this.switchSettingsTab('settings-display');
+    const modal = document.getElementById('appSettingsModal');
+    modal.querySelectorAll('.modal-tabs .modal-tab-btn').forEach(btn => {
+      btn.onclick = () => this.switchSettingsTab(btn.dataset.tab);
+    });
+    modal.classList.add('active');
+  }
+
+  switchSettingsTab(tabName) {
+    const modal = document.getElementById('appSettingsModal');
+    // Toggle active class on tab buttons
+    modal.querySelectorAll('.modal-tabs .modal-tab-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tab === tabName);
+    });
+    // Toggle hidden class on tab content
+    modal.querySelectorAll('.modal-tab-content').forEach(content => {
+      content.classList.toggle('hidden', content.id !== tabName);
+    });
   }
 
   closeAppSettings() {
