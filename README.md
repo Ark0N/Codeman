@@ -9,7 +9,7 @@
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen" alt="Node.js Version"></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.5-blue" alt="TypeScript"></a>
-  <a href="./test"><img src="https://img.shields.io/badge/tests-195%20passing-success" alt="Tests"></a>
+  <a href="./test"><img src="https://img.shields.io/badge/tests-188%20passing-success" alt="Tests"></a>
 </p>
 
 <p align="center">
@@ -299,6 +299,8 @@ Features:
 - Tab-based session navigation
 - Direct screen attachment for full interactivity
 - Arrow key navigation with visual selection
+- **Ralph Loop tracking** with live progress panel
+- Respawn status indicator in status bar
 
 ### Screen Manager Script
 
@@ -444,7 +446,8 @@ A: Up to 20 in the UI, 50 via API.
 npm install
 npx tsx src/index.ts web    # Dev mode (no build needed)
 npm run build               # Production build
-npm test                    # Run 195 tests
+npm test                    # Run test suite
+npm run tui                 # Launch TUI
 npx tsc --noEmit           # Type check
 ```
 
