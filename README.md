@@ -9,7 +9,7 @@
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen" alt="Node.js Version"></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.5-blue" alt="TypeScript"></a>
-  <a href="./test"><img src="https://img.shields.io/badge/tests-302%20passing-success" alt="Tests"></a>
+  <a href="./test"><img src="https://img.shields.io/badge/tests-329%20passing-success" alt="Tests"></a>
 </p>
 
 <p align="center">

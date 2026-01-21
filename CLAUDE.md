@@ -62,7 +62,7 @@ npx vitest run -t "should create session" # By pattern
 # 3110: edge-cases.test.ts
 # 3115: integration-flows.test.ts
 # 3120: session-cleanup.test.ts
-# Unit tests (no port needed): respawn-controller, inner-loop-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager
+# Unit tests (no port needed): respawn-controller, inner-loop-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store
 # Next available: 3122+
 
 # Tests mock PTY - no real Claude CLI spawned
