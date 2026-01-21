@@ -21,6 +21,11 @@ class MockSession extends EventEmitter {
     this.writeBuffer.push(data);
   }
 
+  writeViaScreen(data: string): boolean {
+    this.writeBuffer.push(data);
+    return true;
+  }
+
   // Simulate terminal output
   simulateTerminalOutput(data: string): void {
     this.emit('terminal', data);

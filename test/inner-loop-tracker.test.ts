@@ -425,7 +425,7 @@ describe('InnerLoopTracker', () => {
 
     it('should clear all state', () => {
       tracker.startLoop('TEST');
-      tracker.processTerminalData('- [ ] Task\n');
+      tracker.processTerminalData('- [ ] Test task to clear\n');
 
       expect(tracker.loopState.active).toBe(true);
       expect(tracker.todos).toHaveLength(1);

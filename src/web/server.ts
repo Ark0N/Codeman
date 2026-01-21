@@ -245,17 +245,27 @@ export class WebServer extends EventEmitter {
     // Configure inner loop (Ralph Wiggum) settings
     this.app.post('/api/sessions/:id/inner-config', async (req) => {
       const { id } = req.params as { id: string };
-      const { enabled, completionPhrase, maxIterations, maxTodos, todoExpirationMinutes } = req.body as {
+      const { enabled, completionPhrase, maxIterations, maxTodos, todoExpirationMinutes, reset } = req.body as {
         enabled?: boolean;
         completionPhrase?: string;
         maxIterations?: number;
         maxTodos?: number;
         todoExpirationMinutes?: number;
+        reset?: boolean | 'full';  // true = soft reset (keep enabled), 'full' = complete reset
       };
       const session = this.sessions.get(id);
 
       if (!session) {
         return { success: false, error: 'Session not found' };
+      }
+
+      // Handle reset first (before other config)
+      if (reset) {
+        if (reset === 'full') {
+          session.innerLoopTracker.fullReset();
+        } else {
+          session.innerLoopTracker.reset();
+        }
       }
 
       // Enable/disable the tracker
@@ -403,8 +413,29 @@ export class WebServer extends EventEmitter {
         return { error: 'Session not found' };
       }
 
+      // Clean the buffer: remove junk before actual Claude content
+      let cleanBuffer = session.terminalBuffer;
+
+      // Find where Claude banner starts (has color codes before "Claude")
+      // Look for the bold escape sequence followed by "Claude"
+      const claudeMatch = cleanBuffer.match(/\x1b\[1mClaud/);
+      if (claudeMatch && claudeMatch.index !== undefined && claudeMatch.index > 0) {
+        // Find the start of that line (look for line start or screen positioning before it)
+        let lineStart = claudeMatch.index;
+        // Go back to find color/positioning sequences that are part of the banner
+        while (lineStart > 0 && cleanBuffer[lineStart - 1] !== '\n') {
+          lineStart--;
+        }
+        cleanBuffer = cleanBuffer.slice(lineStart);
+      }
+
+      // Also remove any Ctrl+L and leading whitespace
+      cleanBuffer = cleanBuffer
+        .replace(/\x0c/g, '')
+        .replace(/^[\s\r\n]+/, '');
+
       return {
-        terminalBuffer: session.terminalBuffer,
+        terminalBuffer: cleanBuffer,
         status: session.status,
       };
     });
@@ -924,8 +955,24 @@ export class WebServer extends EventEmitter {
     this.outputBatches.delete(sessionId);
     this.taskUpdateBatches.delete(sessionId);
 
-    // Clear inner state
+    // Reset inner loop tracker on the session before cleanup
+    if (session) {
+      session.innerLoopTracker.fullReset();
+    }
+
+    // Clear inner state from store
     this.store.removeInnerState(sessionId);
+
+    // Broadcast inner loop cleared to update UI
+    this.broadcast('session:innerLoopUpdate', {
+      sessionId,
+      state: { enabled: false, active: false, completionPhrase: null, startedAt: null, cycleCount: 0, maxIterations: null, lastActivity: Date.now(), elapsedHours: null }
+    });
+    this.broadcast('session:innerTodoUpdate', {
+      sessionId,
+      todos: [],
+      stats: { total: 0, pending: 0, inProgress: 0, completed: 0 }
+    });
 
     // Stop session and remove listeners
     if (session) {
