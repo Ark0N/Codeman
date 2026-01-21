@@ -92,7 +92,10 @@ export class StateStore {
     return createInitialState();
   }
 
-  // Debounced save - batches multiple updates into a single write
+  /**
+   * Schedules a debounced save.
+   * Multiple calls within 500ms are batched into a single disk write.
+   */
   save(): void {
     this.dirty = true;
     if (this.saveTimeout) {
@@ -103,7 +106,10 @@ export class StateStore {
     }, SAVE_DEBOUNCE_MS);
   }
 
-  // Immediate save - use when you need guaranteed persistence
+  /**
+   * Immediately writes state to disk.
+   * Use when guaranteed persistence is required (e.g., before shutdown).
+   */
   saveNow(): void {
     if (this.saveTimeout) {
       clearTimeout(this.saveTimeout);
@@ -117,69 +123,83 @@ export class StateStore {
     writeFileSync(this.filePath, JSON.stringify(this.state, null, 2), 'utf-8');
   }
 
-  // Flush any pending saves (call before shutdown)
+  /** Flushes any pending main state save. Call before shutdown. */
   flush(): void {
     this.saveNow();
   }
 
+  /** Returns the full application state object. */
   getState(): AppState {
     return this.state;
   }
 
+  /** Returns all session states keyed by session ID. */
   getSessions() {
     return this.state.sessions;
   }
 
+  /** Returns a session state by ID, or null if not found. */
   getSession(id: string) {
     return this.state.sessions[id] || null;
   }
 
+  /** Sets a session state and triggers a debounced save. */
   setSession(id: string, session: AppState['sessions'][string]) {
     this.state.sessions[id] = session;
     this.save();
   }
 
+  /** Removes a session state and triggers a debounced save. */
   removeSession(id: string) {
     delete this.state.sessions[id];
     this.save();
   }
 
+  /** Returns all task states keyed by task ID. */
   getTasks() {
     return this.state.tasks;
   }
 
+  /** Returns a task state by ID, or null if not found. */
   getTask(id: string) {
     return this.state.tasks[id] || null;
   }
 
+  /** Sets a task state and triggers a debounced save. */
   setTask(id: string, task: AppState['tasks'][string]) {
     this.state.tasks[id] = task;
     this.save();
   }
 
+  /** Removes a task state and triggers a debounced save. */
   removeTask(id: string) {
     delete this.state.tasks[id];
     this.save();
   }
 
+  /** Returns the Ralph Loop state. */
   getRalphLoopState() {
     return this.state.ralphLoop;
   }
 
+  /** Updates Ralph Loop state (partial merge) and triggers a debounced save. */
   setRalphLoopState(ralphLoop: Partial<AppState['ralphLoop']>) {
     this.state.ralphLoop = { ...this.state.ralphLoop, ...ralphLoop };
     this.save();
   }
 
+  /** Returns the application configuration. */
   getConfig() {
     return this.state.config;
   }
 
+  /** Updates configuration (partial merge) and triggers a debounced save. */
   setConfig(config: Partial<AppState['config']>) {
     this.state.config = { ...this.state.config, ...config };
     this.save();
   }
 
+  /** Resets all state to initial values and saves immediately. */
   reset(): void {
     this.state = createInitialState();
     this.state.config.stateFilePath = this.filePath;
@@ -188,7 +208,7 @@ export class StateStore {
     this.saveInnerStatesNow();
   }
 
-  // ========== Inner State Methods ==========
+  // ========== Inner State Methods (Ralph Loop tracking) ==========
 
   private loadInnerStates(): void {
     try {
@@ -233,15 +253,22 @@ export class StateStore {
     writeFileSync(this.innerStatePath, JSON.stringify(data, null, 2), 'utf-8');
   }
 
+  /** Returns inner state for a session, or null if not found. */
   getInnerState(sessionId: string): InnerSessionState | null {
     return this.innerStates.get(sessionId) || null;
   }
 
+  /** Sets inner state for a session and triggers a debounced save. */
   setInnerState(sessionId: string, state: InnerSessionState): void {
     this.innerStates.set(sessionId, state);
     this.saveInnerStates();
   }
 
+  /**
+   * Updates inner state for a session (partial merge).
+   * Creates initial state if none exists.
+   * @returns The updated inner state.
+   */
   updateInnerState(sessionId: string, updates: Partial<InnerSessionState>): InnerSessionState {
     let state = this.innerStates.get(sessionId);
     if (!state) {
@@ -253,6 +280,7 @@ export class StateStore {
     return state;
   }
 
+  /** Removes inner state for a session and triggers a debounced save. */
   removeInnerState(sessionId: string): void {
     if (this.innerStates.has(sessionId)) {
       this.innerStates.delete(sessionId);
@@ -260,11 +288,12 @@ export class StateStore {
     }
   }
 
+  /** Returns a copy of all inner states as a Map. */
   getAllInnerStates(): Map<string, InnerSessionState> {
     return new Map(this.innerStates);
   }
 
-  // Flush all pending saves (call before shutdown)
+  /** Flushes all pending saves (main and inner state). Call before shutdown. */
   flushAll(): void {
     this.saveNow();
     this.saveInnerStatesNow();
@@ -274,6 +303,10 @@ export class StateStore {
 // Singleton instance
 let storeInstance: StateStore | null = null;
 
+/**
+ * Gets or creates the singleton StateStore instance.
+ * @param filePath Optional custom file path (only used on first call).
+ */
 export function getStore(filePath?: string): StateStore {
   if (!storeInstance) {
     storeInstance = new StateStore(filePath);
