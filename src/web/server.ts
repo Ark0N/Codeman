@@ -505,8 +505,11 @@ export class WebServer extends EventEmitter {
     });
 
     // Get session terminal buffer (for reconnecting)
+    // Query params:
+    //   tail=<bytes> - Only return last N bytes (faster initial load)
     this.app.get('/api/sessions/:id/terminal', async (req) => {
       const { id } = req.params as { id: string };
+      const query = req.query as { tail?: string };
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -534,9 +537,21 @@ export class WebServer extends EventEmitter {
         .replace(/\x0c/g, '')
         .replace(/^[\s\r\n]+/, '');
 
+      // Optionally truncate to last N bytes for faster initial load
+      const tailBytes = query.tail ? parseInt(query.tail, 10) : 0;
+      const fullSize = cleanBuffer.length;
+      let truncated = false;
+
+      if (tailBytes > 0 && cleanBuffer.length > tailBytes) {
+        cleanBuffer = cleanBuffer.slice(-tailBytes);
+        truncated = true;
+      }
+
       return {
         terminalBuffer: cleanBuffer,
         status: session.status,
+        fullSize,
+        truncated,
       };
     });
 

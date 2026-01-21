@@ -31,17 +31,17 @@ export { withTimeout };
 // Buffer Size Constants
 // ============================================================================
 
-/** Maximum terminal buffer size in characters (5MB) */
-const MAX_TERMINAL_BUFFER_SIZE = 5 * 1024 * 1024;
+/** Maximum terminal buffer size in characters (2MB) - reduced from 5MB for better render performance */
+const MAX_TERMINAL_BUFFER_SIZE = 2 * 1024 * 1024;
 
-/** When trimming terminal buffer, keep the most recent portion (4MB) */
-const TERMINAL_BUFFER_TRIM_SIZE = 4 * 1024 * 1024;
+/** When trimming terminal buffer, keep the most recent portion (1.5MB) */
+const TERMINAL_BUFFER_TRIM_SIZE = 1.5 * 1024 * 1024;
 
-/** Maximum text output buffer size (2MB) - ANSI-stripped text */
-const MAX_TEXT_OUTPUT_SIZE = 2 * 1024 * 1024;
+/** Maximum text output buffer size (1MB) - ANSI-stripped text */
+const MAX_TEXT_OUTPUT_SIZE = 1 * 1024 * 1024;
 
-/** When trimming text output, keep the most recent portion (1.5MB) */
-const TEXT_OUTPUT_TRIM_SIZE = 1.5 * 1024 * 1024;
+/** When trimming text output, keep the most recent portion (768KB) */
+const TEXT_OUTPUT_TRIM_SIZE = 768 * 1024;
 
 /** Maximum number of Claude JSON messages to keep in memory */
 const MAX_MESSAGES = 1000;

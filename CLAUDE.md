@@ -19,7 +19,9 @@ Claudeman is a Claude Code session manager with a web interface and autonomous R
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
-**Requirements**: Node.js 18+, Claude CLI (`claude`) installed and available in PATH
+**Key Dependencies**: fastify (REST API), node-pty (PTY spawning), ink/react (TUI), xterm.js (web terminal)
+
+**Requirements**: Node.js 18+, Claude CLI (`claude`) in PATH, GNU Screen (`apt install screen` / `brew install screen`)
 
 ## First-Time Setup
 
@@ -88,6 +90,33 @@ cat ~/.claudeman/state-inner.json | jq .  # View Ralph loop state
 # Kill stuck screen sessions
 screen -X -S <name> quit                  # Graceful quit
 pkill -f "SCREEN.*claudeman"              # Force kill all claudeman screens
+```
+
+## CLI Commands
+
+```bash
+claudeman session [s]              # Manage Claude sessions
+  start                            # Start new session
+  stop <id>                        # Stop session
+  list [ls]                        # List all
+  logs <id>                        # View output
+
+claudeman task [t]                 # Manage tasks
+  add <prompt>                     # Add task
+  list [ls]                        # List tasks
+  status <id>                      # Task details
+  remove [rm] <id>                 # Remove task
+  clear                            # Clear completed/failed
+
+claudeman ralph [r]                # Control Ralph loop
+  start                            # Start loop
+  stop                             # Stop loop
+  status                           # Show status
+
+claudeman web                      # Start web interface
+claudeman tui                      # Start TUI
+claudeman status                   # Overall status
+claudeman reset                    # Reset all state
 ```
 
 ## Architecture
@@ -385,7 +414,7 @@ TUI uses React JSX (`jsxImportSource: react`) for Ink components.
 - **API endpoint**: Add types in `types.ts`, route in `server.ts:buildServer()`, use `createErrorResponse()` for errors
 - **SSE event**: Emit via `broadcast()` in server.ts, handle in `app.js:handleSSEEvent()` switch
 - **Session event**: Add to `SessionEvents` interface in `session.ts`, emit via `this.emit()`, subscribe in server.ts, handle in frontend
-- **New test file**: Create `test/<name>.test.ts`, pick unique port (next available: 3122+), add to port allocation comment above
+- **New test file**: Create `test/<name>.test.ts`, pick unique port (next available: 3127+), add to port allocation comment above
 
 ### API Error Codes
 
@@ -439,11 +468,16 @@ Long-running sessions are supported with automatic trimming:
 
 | Buffer | Max Size | Trim To |
 |--------|----------|---------|
-| Terminal | 5MB | 4MB |
-| Text output | 2MB | 1.5MB |
+| Terminal | 2MB | 1.5MB |
+| Text output | 1MB | 768KB |
 | Messages | 1000 | 800 |
 | Line buffer | 64KB | (flushed every 100ms) |
 | Respawn buffer | 1MB | 512KB |
+
+**Performance optimizations:**
+- Tab switch uses `tail=256KB` for fast initial load, then chunked writes
+- Large buffers written in 64KB chunks via `requestAnimationFrame` to avoid UI jank
+- Truncation indicator shown when earlier output is cut
 
 ## API Routes Quick Reference
 

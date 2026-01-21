@@ -207,6 +207,47 @@ class ClaudemanApp {
     }
   }
 
+  /**
+   * Write large buffer to terminal in chunks to avoid UI jank.
+   * Uses requestAnimationFrame to spread work across frames.
+   * @param {string} buffer - The full terminal buffer to write
+   * @param {number} chunkSize - Size of each chunk (default 64KB for smooth 60fps)
+   * @returns {Promise<void>} - Resolves when all chunks written
+   */
+  chunkedTerminalWrite(buffer, chunkSize = 64 * 1024) {
+    return new Promise((resolve) => {
+      if (!buffer || buffer.length === 0) {
+        resolve();
+        return;
+      }
+
+      // For small buffers, write directly
+      if (buffer.length <= chunkSize) {
+        this.terminal.write(buffer);
+        resolve();
+        return;
+      }
+
+      let offset = 0;
+      const writeChunk = () => {
+        if (offset >= buffer.length) {
+          resolve();
+          return;
+        }
+
+        const chunk = buffer.slice(offset, offset + chunkSize);
+        this.terminal.write(chunk);
+        offset += chunkSize;
+
+        // Schedule next chunk on next frame
+        requestAnimationFrame(writeChunk);
+      };
+
+      // Start writing
+      requestAnimationFrame(writeChunk);
+    });
+  }
+
   setupEventListeners() {
     // Use capture to handle before terminal
     document.addEventListener('keydown', (e) => {
@@ -772,14 +813,21 @@ class ClaudemanApp {
     }
 
     // Load terminal buffer for this session
+    // Use tail mode for faster initial load (256KB is enough for recent visible content)
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/terminal`);
+      const tailSize = 256 * 1024;
+      const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`);
       const data = await res.json();
 
       this.terminal.clear();
       this.terminal.reset();
       if (data.terminalBuffer) {
-        this.terminal.write(data.terminalBuffer);
+        // Show truncation indicator if buffer was cut
+        if (data.truncated) {
+          this.terminal.write('\x1b[90m... (earlier output truncated for performance) ...\x1b[0m\r\n\r\n');
+        }
+        // Use chunked write for large buffers to avoid UI jank
+        await this.chunkedTerminalWrite(data.terminalBuffer);
       }
 
       // Send resize and Ctrl+L to trigger Claude to redraw at correct size
