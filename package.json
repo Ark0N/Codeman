@@ -58,5 +58,18 @@
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/claudeman.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/claudeman/issues"
+  },
+  "homepage": "https://github.com/yourusername/claudeman#readme",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ]
 }
