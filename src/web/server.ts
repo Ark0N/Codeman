@@ -73,6 +73,63 @@ const SCHEDULED_RUN_MAX_AGE = 60 * 60 * 1000;
 // Maximum concurrent sessions to prevent resource exhaustion
 const MAX_CONCURRENT_SESSIONS = 50;
 
+// Pattern to extract completion phrase from CLAUDE.md
+// Matches <promise>PHRASE</promise> with optional whitespace
+const CLAUDE_MD_PROMISE_PATTERN = /<promise>\s*([A-Z0-9_]+)\s*<\/promise>/gi;
+
+/**
+ * Extract completion phrase from CLAUDE.md content.
+ * Looks for <promise>PHRASE</promise> pattern.
+ *
+ * Handles multiple variations:
+ * - Raw text: <promise>PHRASE</promise>
+ * - In backticks: `<promise>PHRASE</promise>`
+ * - With whitespace: <promise> PHRASE </promise>
+ * - Multiple occurrences: returns the first one
+ *
+ * @param claudeMdPath - Path to CLAUDE.md file
+ * @returns The completion phrase (uppercase), or null if not found
+ */
+function extractCompletionPhrase(claudeMdPath: string): string | null {
+  try {
+    if (!existsSync(claudeMdPath)) return null;
+    const content = readFileSync(claudeMdPath, 'utf-8');
+
+    // Reset regex state (global flag)
+    CLAUDE_MD_PROMISE_PATTERN.lastIndex = 0;
+
+    // Find all matches and return the first one
+    const match = CLAUDE_MD_PROMISE_PATTERN.exec(content);
+    if (match && match[1]) {
+      const phrase = match[1].trim().toUpperCase();
+      console.log(`[auto-detect] Found completion phrase in CLAUDE.md: ${phrase}`);
+      return phrase;
+    }
+    return null;
+  } catch (err) {
+    console.error(`[auto-detect] Error reading CLAUDE.md: ${err}`);
+    return null;
+  }
+}
+
+/**
+ * Auto-configure inner loop tracker for a session based on CLAUDE.md
+ */
+function autoConfigureInnerLoop(session: Session, workingDir: string, broadcast: (event: string, data: unknown) => void): void {
+  const claudeMdPath = join(workingDir, 'CLAUDE.md');
+  const completionPhrase = extractCompletionPhrase(claudeMdPath);
+
+  if (completionPhrase) {
+    session.innerLoopTracker.enable();
+    session.innerLoopTracker.startLoop(completionPhrase);
+    console.log(`[auto-detect] Configured inner loop for session ${session.id} with phrase: ${completionPhrase}`);
+    broadcast('session:innerLoopUpdate', {
+      sessionId: session.id,
+      state: session.innerLoopTracker.loopState,
+    });
+  }
+}
+
 export class WebServer extends EventEmitter {
   private app: FastifyInstance;
   private sessions: Map<string, Session> = new Map();
@@ -377,9 +434,13 @@ export class WebServer extends EventEmitter {
       }
 
       try {
+        // Auto-detect completion phrase from CLAUDE.md BEFORE starting
+        autoConfigureInnerLoop(session, session.workingDir, () => {});
+
         await session.startInteractive();
         this.broadcast('session:interactive', { id });
         this.broadcast('session:updated', { session: session.toDetailedState() });
+
         return { success: true, message: 'Interactive session started' };
       } catch (err) {
         return { error: getErrorMessage(err) };
@@ -582,6 +643,9 @@ export class WebServer extends EventEmitter {
       }
 
       try {
+        // Auto-detect completion phrase from CLAUDE.md BEFORE starting
+        autoConfigureInnerLoop(session, session.workingDir, () => {});
+
         // Start interactive session
         await session.startInteractive();
         this.broadcast('session:interactive', { id });
@@ -984,6 +1048,13 @@ export class WebServer extends EventEmitter {
         useScreen: true,
         mode: mode,
       });
+
+      // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting
+      // so the initial state already has the phrase configured
+      if (mode === 'claude') {
+        autoConfigureInnerLoop(session, casePath, () => {}); // no broadcast yet
+      }
+
       this.sessions.set(session.id, session);
       this.setupSessionListeners(session);
       this.broadcast('session:created', session.toDetailedState());
@@ -1727,6 +1798,17 @@ export class WebServer extends EventEmitter {
             if (screen.innerLoopEnabled && !session.innerLoopTracker.enabled) {
               session.innerLoopTracker.enable();
               console.log(`[Server] Enabled inner loop tracker for session ${session.id} from screen config`);
+            }
+
+            // Auto-detect completion phrase from CLAUDE.md if not already set
+            if (!session.innerLoopTracker.loopState.completionPhrase) {
+              const claudeMdPath = join(session.workingDir, 'CLAUDE.md');
+              const completionPhrase = extractCompletionPhrase(claudeMdPath);
+              if (completionPhrase) {
+                session.innerLoopTracker.enable();
+                session.innerLoopTracker.startLoop(completionPhrase);
+                console.log(`[Server] Auto-detected completion phrase for session ${session.id}: ${completionPhrase}`);
+              }
             }
 
             // Restore respawn controller if it was enabled

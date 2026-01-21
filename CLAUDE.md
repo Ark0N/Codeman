@@ -70,6 +70,7 @@ npx vitest run -t "should create session" # By pattern
 
 # Tests mock PTY - no real Claude CLI spawned
 # Test timeout: 30s (configured in vitest.config.ts)
+# Global test utilities (describe/it/expect) available without imports (globals: true)
 
 # TypeScript checking
 npm run typecheck                         # Type check without building (or: npx tsc --noEmit)
@@ -107,6 +108,7 @@ pkill -f "SCREEN.*claudeman"              # Force kill all claudeman screens
 | `src/tui/components/*.tsx` | TUI components: StartScreen, TabBar, TerminalView, StatusBar, RalphPanel, HelpOverlay |
 | `src/tui/hooks/useSessionManager.ts` | TUI session state, screen polling, input handling |
 | `src/types.ts` | All TypeScript interfaces |
+| `src/templates/claude-md.ts` | CLAUDE.md template generation with placeholder support |
 
 ### Data Flow
 
@@ -345,7 +347,17 @@ Writes debounced to `~/.claudeman/state.json`. Batches rapid changes.
 
 ### TypeScript Config
 
-Module resolution: NodeNext. Target: ES2022. Strict mode enabled. See `tsconfig.json` for full settings.
+Module resolution: NodeNext. Target: ES2022. Strict mode with additional checks:
+
+| Setting | Effect |
+|---------|--------|
+| `noUnusedLocals` | Error on unused local variables |
+| `noUnusedParameters` | Error on unused function parameters |
+| `noImplicitReturns` | All code paths must return a value |
+| `noFallthroughCasesInSwitch` | Require break/return in switch cases |
+| `allowUnreachableCode: false` | Error on unreachable code |
+
+TUI uses React JSX (`jsxImportSource: react`) for Ink components.
 
 ## Adding New Features
 
@@ -470,6 +482,13 @@ Long-running sessions are supported with automatic trimming:
 | `~/.claudeman/screens.json` | Screen session metadata |
 
 Cases created in `~/claudeman-cases/` by default.
+
+### Custom CLAUDE.md Templates
+
+New cases can use custom CLAUDE.md templates via `generateClaudeMd()` in `src/templates/claude-md.ts`. Placeholders:
+- `[PROJECT_NAME]` → Case name
+- `[PROJECT_DESCRIPTION]` → Description
+- `[DATE]` → Current date (YYYY-MM-DD)
 
 ## Screen Session Manager (CLI Tool)
 

@@ -786,14 +786,14 @@ export class InnerLoopTracker extends EventEmitter {
     // If we have an expected completion phrase, also check for bare phrase
     // This handles cases where Claude outputs "ALL_TASKS_DONE" without the tags
     const expectedPhrase = this._loopState.completionPhrase;
-    if (expectedPhrase && line.includes(expectedPhrase)) {
-      // Avoid false positives: don't trigger on the original prompt echo
-      // Only trigger if line looks like completion output (standalone or at end)
-      const isStandalone = line.trim() === expectedPhrase;
-      const isAtEnd = line.trim().endsWith(expectedPhrase);
+    if (expectedPhrase && line.toUpperCase().includes(expectedPhrase.toUpperCase())) {
+      // Avoid false positives: don't trigger on prompt context
       const isNotInPromptContext = !line.includes('<promise>') && !line.includes('output:');
+      // Also avoid triggering on "completion phrase is X" explanatory text
+      const isNotExplanation = !line.toLowerCase().includes('completion phrase') &&
+                               !line.toLowerCase().includes('output exactly');
 
-      if ((isStandalone || isAtEnd) && isNotInPromptContext) {
+      if (isNotInPromptContext && isNotExplanation) {
         this.handleBareCompletionPhrase(expectedPhrase);
       }
     }
@@ -817,9 +817,13 @@ export class InnerLoopTracker extends EventEmitter {
    * @fires loopUpdate - When loop state changes
    */
   private handleBareCompletionPhrase(phrase: string): void {
-    // Only count if this phrase was already seen in tagged form (from the prompt)
+    // Allow bare phrase detection if:
+    // 1. Loop is explicitly active (via startLoop()) - phrase was set programmatically
+    // 2. OR phrase was seen in tagged form (from terminal output)
     const taggedCount = this._completionPhraseCount.get(phrase) || 0;
-    if (taggedCount === 0) return;
+    const loopExplicitlyActive = this._loopState.active;
+
+    if (taggedCount === 0 && !loopExplicitlyActive) return;
 
     // Track bare occurrences to avoid double-firing
     const bareKey = `bare:${phrase}`;
