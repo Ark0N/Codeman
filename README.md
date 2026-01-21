@@ -79,21 +79,31 @@ curl -X POST localhost:3000/api/sessions/:id/respawn/enable \
 Claudeman detects and tracks Ralph loops running inside Claude Code:
 
 <p align="center">
-  <img src="docs/images/ralph-tracker-16tasks.png" alt="Ralph Loop Tracking" width="800">
+  <img src="docs/images/ralph-tracker-8tasks-complete.png" alt="Ralph Loop Tracking - Complete" width="800">
+</p>
+
+<p align="center">
+  <em>Real-time tracking: 9 tasks completed in 2 minutes with completion phrase detection</em>
+</p>
+
+**In-Progress Tracking:**
+
+<p align="center">
+  <img src="docs/images/ralph-tracker-8tasks-44percent.png" alt="Ralph Loop Tracking - In Progress" width="800">
 </p>
 
 **Auto-detects:**
 | Pattern | Example |
 |---------|---------|
 | Promise tags | `<promise>COMPLETE</promise>` |
-| Custom phrases | `<promise>AUTH_REFACTOR_DONE</promise>` |
+| Custom phrases | `<promise>ALL_TASKS_DONE</promise>` |
 | TodoWrite | `- [ ] Task`, `- [x] Done` |
 | Iterations | `[5/50]`, `Iteration 5 of 50` |
 
 **Tracks in real-time:**
 - Completion phrase detection
-- Todo progress (`8/12 complete`)
-- Iteration count
+- Todo progress (`4/9 complete`)
+- Progress percentage ring
 - Elapsed time
 
 ---
