@@ -61,12 +61,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yourusername/claudeman.git"
+    "url": "git+https://github.com/Ark0N/claudeman.git"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/claudeman/issues"
+    "url": "https://github.com/Ark0N/claudeman/issues"
   },
-  "homepage": "https://github.com/yourusername/claudeman#readme",
+  "homepage": "https://github.com/Ark0N/claudeman#readme",
   "files": [
     "dist",
     "LICENSE",
