@@ -5,7 +5,7 @@
 <h2 align="center">Autonomous Claude Code work while you sleep</h2>
 
 <p align="center">
-  Track and Monitor Claude Code sessions better than ever<br>
+  Track and Monitor and Manage Claude Code sessions better than ever<br>
   <em>Persistent sessions. Ralph Loop tracking. Respawn agents.</em>
 </p>
 
