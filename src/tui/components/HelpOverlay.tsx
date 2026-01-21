@@ -1,8 +1,16 @@
 /**
  * @fileoverview HelpOverlay component
  *
- * Full-screen overlay showing all keyboard shortcuts.
- * Dismissible with Escape, q, or ?.
+ * Full-screen help overlay displaying all TUI keyboard shortcuts.
+ *
+ * @description
+ * Shows a comprehensive reference of keyboard shortcuts organized by context:
+ * - Start Screen: Session list navigation and actions
+ * - Main View - Navigation: Tab switching and screen navigation
+ * - Main View - Session Management: Create, close, kill sessions
+ * - General: Help toggle and exit
+ *
+ * Dismissible with Escape, q, or ? keys.
  */
 
 import React from 'react';
@@ -57,7 +65,15 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
 ];
 
 /**
- * HelpOverlay component showing keyboard shortcuts
+ * Help overlay component displaying keyboard shortcuts reference.
+ *
+ * @description
+ * Renders a full-screen overlay with categorized keyboard shortcuts.
+ * Uses consistent styling with bordered header and grouped sections.
+ *
+ * @param props - Component props
+ * @param props.onClose - Callback invoked when overlay should close
+ * @returns The help overlay element
  */
 export function HelpOverlay({ onClose }: HelpOverlayProps): React.ReactElement {
   return (

@@ -1,11 +1,16 @@
 /**
  * @fileoverview TerminalView component
  *
- * Displays PTY output from the active session.
- * Features:
- * - Scrollable viewport showing last N lines
- * - ANSI color support (handled by Ink)
- * - Visual border indicating focus
+ * Primary terminal output display for Claude session monitoring.
+ *
+ * @description
+ * Renders the terminal output from a GNU screen session:
+ * - Viewport shows last N lines based on available height
+ * - Line splitting is memoized for performance
+ * - Visual border color indicates session state (green=active, gray=none)
+ * - Long lines are truncated to prevent wrapping issues
+ *
+ * Output is obtained via screen hardcopy polling in useSessionManager.
  */
 
 import React, { useMemo } from 'react';
@@ -19,7 +24,17 @@ interface TerminalViewProps {
 }
 
 /**
- * TerminalView component for PTY output display
+ * Terminal view component for displaying session output.
+ *
+ * @description
+ * Shows the last N lines of terminal output that fit within the given height.
+ * When no session is selected, displays a placeholder message.
+ *
+ * @param props - Component props
+ * @param props.output - Raw terminal output string from screen hardcopy
+ * @param props.height - Available height in terminal rows (includes border)
+ * @param props.session - The active session or null
+ * @returns The terminal view element
  */
 export function TerminalView({
   output,

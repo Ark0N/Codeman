@@ -1,12 +1,15 @@
 /**
  * @fileoverview StatusBar component
  *
- * Bottom status bar showing:
- * - Session status (idle/working)
- * - Token count
- * - Cost
- * - Runtime
- * - Quick keyboard shortcuts
+ * Bottom status bar providing session information and navigation hints.
+ *
+ * @description
+ * Displays real-time session metrics:
+ * - Session name and connection status (alive/dead)
+ * - Runtime duration since session creation
+ * - Session mode (claude/shell)
+ * - Respawn controller status when enabled
+ * - Keyboard shortcut hints for quick reference
  */
 
 import React from 'react';
@@ -26,7 +29,10 @@ interface StatusBarProps {
 }
 
 /**
- * Formats duration from milliseconds to human-readable string
+ * Formats a duration from milliseconds to a human-readable string.
+ *
+ * @param ms - Duration in milliseconds
+ * @returns Formatted string like "45s", "5m 30s", or "2h 15m"
  */
 function formatDuration(ms: number): string {
   const seconds = Math.floor(ms / 1000);
@@ -43,7 +49,20 @@ function formatDuration(ms: number): string {
 }
 
 /**
- * StatusBar component showing session information
+ * Status bar component displaying session information and keyboard hints.
+ *
+ * @description
+ * Renders a bordered bar at the bottom of the TUI with:
+ * - Left side: Session name, status indicator, runtime, mode, respawn state
+ * - Right side: Quick keyboard shortcut reference
+ *
+ * When no session is selected, displays a minimal bar with navigation hints.
+ *
+ * @param props - Component props
+ * @param props.session - The currently active session or null
+ * @param props.inputMode - Whether input mode is active (shows yellow indicator)
+ * @param props.respawnStatus - Respawn controller status if enabled
+ * @returns The status bar element
  */
 export function StatusBar({ session, inputMode = false, respawnStatus }: StatusBarProps): React.ReactElement {
   if (!session) {

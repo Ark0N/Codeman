@@ -1,9 +1,26 @@
 /**
  * @fileoverview Main TUI App component
  *
- * The root component that manages the overall TUI layout:
- * - StartScreen: Initial session discovery view
- * - Main view: TabBar + Terminal + StatusBar
+ * The root component that manages the overall TUI layout and navigation.
+ *
+ * @description
+ * Provides two primary views:
+ * - **StartScreen**: Session discovery and selection interface
+ * - **Main view**: Active session management with:
+ *   - TabBar: Session tabs with switching
+ *   - TerminalView: Live terminal output display
+ *   - RalphPanel: Inner loop tracking (conditional)
+ *   - StatusBar: Session info and keyboard hints
+ *
+ * Keyboard shortcuts are handled globally via Ink's useInput hook.
+ *
+ * @example
+ * ```tsx
+ * import { render } from 'ink';
+ * import { App } from './App.js';
+ *
+ * render(<App />);
+ * ```
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -21,7 +38,23 @@ import type { ScreenSession } from '../types.js';
 type ViewMode = 'start' | 'main';
 
 /**
- * Main application component
+ * Main TUI application component.
+ *
+ * @description
+ * Renders either the StartScreen or Main view based on current state.
+ * Handles all global keyboard shortcuts and manages terminal dimensions.
+ *
+ * **Global Shortcuts:**
+ * - `?` or `Ctrl+H`: Show help overlay
+ * - `Ctrl+C`: Exit application
+ * - `Ctrl+Tab/Shift+Tab`: Navigate sessions
+ * - `Ctrl+1-9`: Direct session access
+ * - `Ctrl+W`: Close current session
+ * - `Ctrl+K`: Kill all sessions
+ * - `Ctrl+N`: Create new session
+ * - `Escape`: Return to start screen
+ *
+ * @returns The rendered TUI application
  */
 export function App(): React.ReactElement {
   const { exit } = useApp();

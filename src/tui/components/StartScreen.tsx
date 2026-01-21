@@ -1,11 +1,16 @@
 /**
  * @fileoverview StartScreen component
  *
- * Initial screen shown when TUI launches. Displays:
- * - List of existing screen sessions from ~/.claudeman/screens.json
- * - Session status (alive/dead), runtime, mode
- * - Arrow key navigation with highlighted selection
- * - Options to select, create, attach, or refresh sessions
+ * Session discovery and selection interface for the TUI.
+ *
+ * @description
+ * The initial screen displayed when launching `claudeman tui`:
+ * - Reads session list from ~/.claudeman/screens.json
+ * - Shows session name, runtime, status (alive/dead), and mode
+ * - Arrow key navigation with visual selection highlight
+ * - Actions: Enter (view), a (attach), d (delete), n (new), r (refresh), q (quit)
+ *
+ * This is the "home screen" users return to with Escape from the main view.
  */
 
 import React, { useState } from 'react';
@@ -23,7 +28,10 @@ interface StartScreenProps {
 }
 
 /**
- * Formats duration from milliseconds to human-readable string
+ * Formats a duration from milliseconds to a compact human-readable string.
+ *
+ * @param ms - Duration in milliseconds
+ * @returns Formatted string like "45s", "5m", "2h 15m", or "3d 5h"
  */
 function formatDuration(ms: number): string {
   const seconds = Math.floor(ms / 1000);
@@ -44,7 +52,30 @@ function formatDuration(ms: number): string {
 }
 
 /**
- * Start screen component showing session list with arrow key navigation
+ * Start screen component for session discovery and selection.
+ *
+ * @description
+ * Renders a table of available sessions with:
+ * - Arrow key navigation (wraps at boundaries)
+ * - Visual selection highlight (blue background)
+ * - Status indicators (green=alive, red=dead)
+ * - Runtime and mode information
+ *
+ * **Keyboard Shortcuts:**
+ * - `↑/↓`: Navigate selection
+ * - `Enter`: View session in TUI
+ * - `a`: Attach directly to screen (exits TUI)
+ * - `d/x`: Delete/kill selected session
+ *
+ * @param props - Component props
+ * @param props.sessions - Array of sessions to display
+ * @param props.onSelectSession - Callback to view session in TUI
+ * @param props.onAttachSession - Callback to attach directly to screen
+ * @param props.onDeleteSession - Callback to delete/kill session
+ * @param props.onCreateSession - Callback to create new session
+ * @param props.onRefresh - Callback to refresh session list
+ * @param props.onExit - Callback to exit TUI
+ * @returns The start screen element
  */
 export function StartScreen({
   sessions,

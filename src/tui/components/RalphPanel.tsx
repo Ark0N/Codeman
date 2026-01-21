@@ -1,10 +1,18 @@
 /**
  * @fileoverview RalphPanel component
  *
- * Displays Ralph Wiggum loop tracking information:
- * - Loop status and completion phrase
- * - Todo list with progress
- * - Cycle count and elapsed time
+ * Displays Ralph Wiggum autonomous loop tracking information.
+ *
+ * @description
+ * The Ralph Wiggum loop is an autonomous work mode where Claude
+ * continues iterating on tasks until completion criteria are met.
+ * This panel provides visibility into:
+ * - Loop status (active/idle) and completion phrase
+ * - Progress through todos with visual indicators
+ * - Cycle count and elapsed time tracking
+ *
+ * @see {@link file://./../../inner-loop-tracker.ts} for detection logic
+ * @see {@link file://./../../../docs/ralph-wiggum-guide.md} for full documentation
  */
 
 import React from 'react';
@@ -18,7 +26,10 @@ interface RalphPanelProps {
 }
 
 /**
- * Status icon for todo items
+ * Returns the visual indicator for a todo item's status.
+ *
+ * @param status - The todo status: 'completed', 'in_progress', or 'pending'
+ * @returns Object with Unicode icon and color name
  */
 function getStatusIcon(status: string): { icon: string; color: string } {
   switch (status) {
@@ -33,7 +44,10 @@ function getStatusIcon(status: string): { icon: string; color: string } {
 }
 
 /**
- * Formats elapsed hours to human-readable string
+ * Formats elapsed hours to a compact human-readable string.
+ *
+ * @param hours - Elapsed time in hours (can be fractional)
+ * @returns Formatted string like "45m" or "2.5h"
  */
 function formatElapsed(hours: number | null): string {
   if (hours === null) return '-';
@@ -45,7 +59,21 @@ function formatElapsed(hours: number | null): string {
 }
 
 /**
- * RalphPanel component showing loop tracking
+ * Panel component displaying Ralph Wiggum loop status and progress.
+ *
+ * @description
+ * Renders a bordered panel with:
+ * - Header showing loop status and completion phrase
+ * - Stats row with cycle count, elapsed time, and todo progress
+ * - Todo list (max 5 visible) with status icons
+ *
+ * Only renders when loop is enabled and has relevant data to show.
+ *
+ * @param props - Component props
+ * @param props.loopState - Current loop state from InnerLoopTracker
+ * @param props.todos - Array of todo items being tracked
+ * @param props.visible - Whether the panel should be visible (default: true)
+ * @returns The panel element or null if hidden/disabled
  */
 export function RalphPanel({
   loopState,

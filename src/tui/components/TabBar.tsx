@@ -1,11 +1,16 @@
 /**
  * @fileoverview TabBar component
  *
- * Horizontal tab bar showing all active sessions.
- * Features:
- * - Visual indication of active tab
- * - Status indicator (idle/working)
- * - Tab truncation for long names
+ * Horizontal tab bar for session navigation in the TUI.
+ *
+ * @description
+ * Provides browser-like tab navigation for Claude sessions:
+ * - Active tab highlighted with blue background
+ * - Status indicators: green dot (alive) or red dot (dead)
+ * - Session names truncated to 15 characters
+ * - Keyboard shortcut hints on the right
+ *
+ * Tab switching is handled by parent via keyboard shortcuts (Ctrl+Tab).
  */
 
 import React from 'react';
@@ -19,7 +24,19 @@ interface TabBarProps {
 }
 
 /**
- * TabBar component for session navigation
+ * Tab bar component showing all available sessions.
+ *
+ * @description
+ * Renders a horizontal bar with one tab per session, showing:
+ * - Status indicator (filled/hollow circle for alive/dead)
+ * - Session name (truncated to 15 chars)
+ * - Visual highlighting for the active session
+ *
+ * @param props - Component props
+ * @param props.sessions - Array of all sessions to display as tabs
+ * @param props.activeSessionId - ID of currently active session for highlighting
+ * @param props.onSelectSession - Callback when a tab is clicked (unused, keyboard nav only)
+ * @returns The tab bar element
  */
 export function TabBar({
   sessions,

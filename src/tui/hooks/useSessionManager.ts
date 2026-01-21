@@ -1,10 +1,26 @@
 /**
  * @fileoverview useSessionManager hook
  *
- * Manages session state for the TUI. Connects to:
- * - ~/.claudeman/screens.json for session discovery
- * - ScreenManager for session operations
- * - Session class for terminal output
+ * Core state management hook for the TUI application.
+ *
+ * @description
+ * This hook provides a complete interface for managing Claude sessions:
+ * - Session discovery from ~/.claudeman/screens.json
+ * - Terminal output polling via GNU screen hardcopy
+ * - Inner loop state tracking for Ralph Wiggum loops
+ * - Respawn status monitoring via the Claudeman API
+ *
+ * @example
+ * ```tsx
+ * const {
+ *   sessions,
+ *   activeSession,
+ *   terminalOutput,
+ *   selectSession,
+ *   createSession,
+ *   sendInput,
+ * } = useSessionManager();
+ * ```
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -43,7 +59,10 @@ interface SessionManagerState {
 }
 
 /**
- * Check if a screen session is alive
+ * Checks if a GNU screen session is currently running.
+ *
+ * @param screenName - The name of the screen session to check
+ * @returns true if the session exists and is alive, false otherwise
  */
 function isScreenAlive(screenName: string): boolean {
   try {
@@ -55,7 +74,13 @@ function isScreenAlive(screenName: string): boolean {
 }
 
 /**
- * Load sessions from screens.json
+ * Loads all sessions from the Claudeman screens registry.
+ *
+ * @description
+ * Reads ~/.claudeman/screens.json and enriches each session with
+ * its current alive/dead status by checking GNU screen.
+ *
+ * @returns Array of screen sessions with updated attached status
  */
 function loadSessions(): ScreenSession[] {
   try {
@@ -76,7 +101,14 @@ function loadSessions(): ScreenSession[] {
 }
 
 /**
- * Load inner state for a session
+ * Loads Ralph Wiggum loop state for a specific session.
+ *
+ * @description
+ * Reads ~/.claudeman/state-inner.json which contains per-session
+ * tracking of inner loops, todos, and completion phrases.
+ *
+ * @param sessionId - The UUID of the session to load state for
+ * @returns The inner session state or null if not found
  */
 function loadInnerState(sessionId: string): InnerSessionState | null {
   try {
@@ -92,7 +124,34 @@ function loadInnerState(sessionId: string): InnerSessionState | null {
 }
 
 /**
- * Hook for managing sessions in the TUI
+ * React hook for managing Claude sessions in the TUI.
+ *
+ * @description
+ * Provides complete session lifecycle management:
+ * - Automatic session discovery and status monitoring
+ * - Terminal output polling (500ms interval)
+ * - Inner loop state tracking (500ms interval)
+ * - Respawn status polling via API (2000ms interval)
+ * - Session CRUD operations via Claudeman API
+ *
+ * @returns SessionManagerState object with session data and control methods
+ *
+ * @example
+ * ```tsx
+ * function MyComponent() {
+ *   const { sessions, selectSession, sendInput } = useSessionManager();
+ *
+ *   return (
+ *     <Box>
+ *       {sessions.map(s => (
+ *         <Text key={s.sessionId} onClick={() => selectSession(s.sessionId)}>
+ *           {s.name}
+ *         </Text>
+ *       ))}
+ *     </Box>
+ *   );
+ * }
+ * ```
  */
 export function useSessionManager(): SessionManagerState {
   const [sessions, setSessions] = useState<ScreenSession[]>([]);
