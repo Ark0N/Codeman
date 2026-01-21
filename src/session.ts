@@ -322,6 +322,20 @@ export class Session extends EventEmitter {
   // Inner loop tracking (Ralph Wiggum loops and todo lists inside Claude Code)
   private _innerLoopTracker: InnerLoopTracker;
 
+  // Store handler references for cleanup (prevents memory leaks)
+  private _taskTrackerHandlers: {
+    taskCreated: (task: BackgroundTask) => void;
+    taskUpdated: (task: BackgroundTask) => void;
+    taskCompleted: (task: BackgroundTask) => void;
+    taskFailed: (task: BackgroundTask, error: string) => void;
+  } | null = null;
+
+  private _innerLoopHandlers: {
+    loopUpdate: (state: InnerLoopState) => void;
+    todoUpdate: (todos: InnerTodoItem[]) => void;
+    completionDetected: (phrase: string) => void;
+  } | null = null;
+
   constructor(config: Partial<SessionConfig> & {
     workingDir: string;
     mode?: SessionMode;
@@ -341,18 +355,29 @@ export class Session extends EventEmitter {
     this._useScreen = config.useScreen ?? (this._screenManager !== null && ScreenManager.isScreenAvailable());
     this._screenSession = config.screenSession || null;  // Use existing screen if provided
 
-    // Initialize task tracker and forward events
+    // Initialize task tracker and forward events (store handlers for cleanup)
     this._taskTracker = new TaskTracker();
-    this._taskTracker.on('taskCreated', (task) => this.emit('taskCreated', task));
-    this._taskTracker.on('taskUpdated', (task) => this.emit('taskUpdated', task));
-    this._taskTracker.on('taskCompleted', (task) => this.emit('taskCompleted', task));
-    this._taskTracker.on('taskFailed', (task, error) => this.emit('taskFailed', task, error));
+    this._taskTrackerHandlers = {
+      taskCreated: (task) => this.emit('taskCreated', task),
+      taskUpdated: (task) => this.emit('taskUpdated', task),
+      taskCompleted: (task) => this.emit('taskCompleted', task),
+      taskFailed: (task, error) => this.emit('taskFailed', task, error),
+    };
+    this._taskTracker.on('taskCreated', this._taskTrackerHandlers.taskCreated);
+    this._taskTracker.on('taskUpdated', this._taskTrackerHandlers.taskUpdated);
+    this._taskTracker.on('taskCompleted', this._taskTrackerHandlers.taskCompleted);
+    this._taskTracker.on('taskFailed', this._taskTrackerHandlers.taskFailed);
 
-    // Initialize inner loop tracker and forward events
+    // Initialize inner loop tracker and forward events (store handlers for cleanup)
     this._innerLoopTracker = new InnerLoopTracker();
-    this._innerLoopTracker.on('loopUpdate', (state) => this.emit('innerLoopUpdate', state));
-    this._innerLoopTracker.on('todoUpdate', (todos) => this.emit('innerTodoUpdate', todos));
-    this._innerLoopTracker.on('completionDetected', (phrase) => this.emit('innerCompletionDetected', phrase));
+    this._innerLoopHandlers = {
+      loopUpdate: (state) => this.emit('innerLoopUpdate', state),
+      todoUpdate: (todos) => this.emit('innerTodoUpdate', todos),
+      completionDetected: (phrase) => this.emit('innerCompletionDetected', phrase),
+    };
+    this._innerLoopTracker.on('loopUpdate', this._innerLoopHandlers.loopUpdate);
+    this._innerLoopTracker.on('todoUpdate', this._innerLoopHandlers.todoUpdate);
+    this._innerLoopTracker.on('completionDetected', this._innerLoopHandlers.completionDetected);
   }
 
   get status(): SessionStatus {
@@ -1271,6 +1296,29 @@ export class Session extends EventEmitter {
   }
 
   /**
+   * Remove event listeners from TaskTracker and InnerLoopTracker.
+   * Prevents memory leaks by ensuring handlers don't persist after session stop.
+   */
+  private cleanupTrackerListeners(): void {
+    // Remove TaskTracker handlers
+    if (this._taskTrackerHandlers) {
+      this._taskTracker.off('taskCreated', this._taskTrackerHandlers.taskCreated);
+      this._taskTracker.off('taskUpdated', this._taskTrackerHandlers.taskUpdated);
+      this._taskTracker.off('taskCompleted', this._taskTrackerHandlers.taskCompleted);
+      this._taskTracker.off('taskFailed', this._taskTrackerHandlers.taskFailed);
+      this._taskTrackerHandlers = null;
+    }
+
+    // Remove InnerLoopTracker handlers
+    if (this._innerLoopHandlers) {
+      this._innerLoopTracker.off('loopUpdate', this._innerLoopHandlers.loopUpdate);
+      this._innerLoopTracker.off('todoUpdate', this._innerLoopHandlers.todoUpdate);
+      this._innerLoopTracker.off('completionDetected', this._innerLoopHandlers.completionDetected);
+      this._innerLoopHandlers = null;
+    }
+  }
+
+  /**
    * Stops the session and cleans up resources.
    *
    * This kills the PTY process and optionally the associated GNU Screen
@@ -1307,6 +1355,9 @@ export class Session extends EventEmitter {
     }
     this.resolvePromise = null;
     this.rejectPromise = null;
+
+    // Remove event listeners from trackers to prevent memory leaks
+    this.cleanupTrackerListeners();
 
     if (this.ptyProcess) {
       const pid = this.ptyProcess.pid;
