@@ -167,6 +167,12 @@ Each item has specific file:line references and expected impact estimates.
 12. **Incremental DOM Updates (Ralph)**: Reuse existing DOM elements in Ralph todo list, ~80% fewer DOM ops
 13. **Incremental DOM Updates (Tabs)**: Session tabs update only changed properties, ~70% fewer DOM ops
 
+### Documentation Work:
+14. **README Improvements**: Added Requirements section, Performance Optimized section
+15. **CLAUDE.md Updates**: Added timing constants, updated optimization status section
+16. **TUI Implementation Plan**: Added implementation status with completed/pending files
+17. **Test Badge Fix**: Updated test count to 195 passing
+
 ### Commits:
 - `df91823` - fix: improve memory safety and regex pattern handling
 - `08b76cd` - perf: add event debouncing to InnerLoopTracker
@@ -179,6 +185,14 @@ Each item has specific file:line references and expected impact estimates.
 - `3dd6ea5` - perf: add input batching for rapid keystrokes
 - `ab6f630` - perf: add incremental DOM updates for Ralph todo list
 - `af1ea57` - perf: add incremental updates for session tabs rendering
+- `63b9abc` - docs: add session tabs incremental updates to log
+- `b4adbeb` - docs: fix test count in README badge (195 passing)
+- `224be69` - docs: improve README for GitHub publishing
+- `b3dd0bc` - docs: update CLAUDE.md with optimization status
+- `84dab25` - feat(tui): add terminal user interface with Ink
+- `f681972` - feat(tui): add real-time terminal output polling
+- `451de84` - docs: add implementation status to TUI plan
+- `8da6dce` - feat(tui): add arrow key navigation and screen attach
 
 ---
 
