@@ -14,6 +14,7 @@ import { TabBar } from './components/TabBar.js';
 import { TerminalView } from './components/TerminalView.js';
 import { StatusBar } from './components/StatusBar.js';
 import { HelpOverlay } from './components/HelpOverlay.js';
+import { RalphPanel } from './components/RalphPanel.js';
 import { useSessionManager } from './hooks/useSessionManager.js';
 import type { ScreenSession } from '../types.js';
 
@@ -42,6 +43,8 @@ export function App(): React.ReactElement {
     prevSession,
     sendInput,
     terminalOutput,
+    innerLoopState,
+    innerTodos,
   } = useSessionManager();
 
   // Calculate terminal height based on stdout dimensions
@@ -224,7 +227,13 @@ export function App(): React.ReactElement {
     );
   }
 
-  // Render main view with tabs, terminal, and status bar
+  // Check if Ralph panel should be visible (enabled and has data)
+  const showRalphPanel = innerLoopState?.enabled && (innerLoopState.active || innerTodos.length > 0);
+
+  // Adjust terminal height if Ralph panel is shown
+  const adjustedTerminalHeight = showRalphPanel ? terminalHeight - 6 : terminalHeight;
+
+  // Render main view with tabs, terminal, ralph panel, and status bar
   return (
     <Box flexDirection="column" height="100%">
       <TabBar
@@ -235,9 +244,16 @@ export function App(): React.ReactElement {
 
       <TerminalView
         output={terminalOutput}
-        height={terminalHeight}
+        height={adjustedTerminalHeight}
         session={activeSession}
       />
+
+      {showRalphPanel && (
+        <RalphPanel
+          loopState={innerLoopState}
+          todos={innerTodos}
+        />
+      )}
 
       <StatusBar session={activeSession} />
     </Box>

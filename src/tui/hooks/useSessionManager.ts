@@ -12,9 +12,10 @@ import { existsSync, readFileSync, writeFileSync, watchFile, unwatchFile, unlink
 import { homedir } from 'os';
 import { join } from 'path';
 import { execSync } from 'child_process';
-import type { ScreenSession } from '../../types.js';
+import type { ScreenSession, InnerLoopState, InnerTodoItem, InnerSessionState } from '../../types.js';
 
 const SCREENS_FILE = join(homedir(), '.claudeman', 'screens.json');
+const INNER_STATE_FILE = join(homedir(), '.claudeman', 'state-inner.json');
 const OUTPUT_POLL_INTERVAL = 500; // Poll terminal output every 500ms
 
 interface SessionManagerState {
@@ -22,6 +23,8 @@ interface SessionManagerState {
   activeSessionId: string | null;
   activeSession: ScreenSession | null;
   terminalOutput: string;
+  innerLoopState: InnerLoopState | null;
+  innerTodos: InnerTodoItem[];
   refreshSessions: () => void;
   selectSession: (sessionId: string) => void;
   createSession: () => Promise<string | null>;
@@ -66,12 +69,30 @@ function loadSessions(): ScreenSession[] {
 }
 
 /**
+ * Load inner state for a session
+ */
+function loadInnerState(sessionId: string): InnerSessionState | null {
+  try {
+    if (!existsSync(INNER_STATE_FILE)) {
+      return null;
+    }
+    const data = readFileSync(INNER_STATE_FILE, 'utf-8');
+    const allStates = JSON.parse(data) as Record<string, InnerSessionState>;
+    return allStates[sessionId] || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Hook for managing sessions in the TUI
  */
 export function useSessionManager(): SessionManagerState {
   const [sessions, setSessions] = useState<ScreenSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [terminalOutput, setTerminalOutput] = useState<string>('');
+  const [innerLoopState, setInnerLoopState] = useState<InnerLoopState | null>(null);
+  const [innerTodos, setInnerTodos] = useState<InnerTodoItem[]>([]);
   const outputBufferRef = useRef<string>('');
 
   // Load sessions on mount and watch for changes
@@ -101,6 +122,36 @@ export function useSessionManager(): SessionManagerState {
 
   // Get active session
   const activeSession = sessions.find((s) => s.sessionId === activeSessionId) || null;
+
+  // Poll inner state for active session
+  useEffect(() => {
+    if (!activeSessionId) {
+      setInnerLoopState(null);
+      setInnerTodos([]);
+      return;
+    }
+
+    const pollInnerState = () => {
+      const state = loadInnerState(activeSessionId);
+      if (state) {
+        setInnerLoopState(state.loop);
+        setInnerTodos(state.todos);
+      } else {
+        setInnerLoopState(null);
+        setInnerTodos([]);
+      }
+    };
+
+    // Initial poll
+    pollInnerState();
+
+    // Set up polling interval (same as output polling)
+    const intervalId = setInterval(pollInnerState, OUTPUT_POLL_INTERVAL);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [activeSessionId]);
 
   // Poll terminal output for active session
   useEffect(() => {
@@ -282,6 +333,8 @@ export function useSessionManager(): SessionManagerState {
     activeSessionId,
     activeSession,
     terminalOutput,
+    innerLoopState,
+    innerTodos,
     refreshSessions,
     selectSession,
     createSession,
