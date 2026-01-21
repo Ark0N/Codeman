@@ -2,6 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ CRITICAL: Screen Session Safety
+
+**You may be running inside a Claudeman-managed screen session.** Before killing ANY screen or Claude process:
+
+1. **Check environment**: `echo $CLAUDEMAN_SCREEN` - if it returns `1`, you're in a managed session
+2. **NEVER run** `screen -X quit`, `pkill screen`, or `pkill claude` without first confirming you're not killing yourself
+3. **Safe debugging**: Use `screen -ls` to LIST sessions, but don't kill them blindly
+4. **If you need to kill screens**: Use the web UI or `./scripts/screen-manager.sh` instead of direct commands
+
+**Why this matters**: Killing your own screen terminates your session mid-work, losing context and potentially corrupting state.
+
 ## Project Overview
 
 Claudeman is a Claude Code session manager with a web interface and autonomous Ralph Loop. It spawns Claude CLI processes via PTY, streams output in real-time via SSE, and supports scheduled/timed runs.
@@ -118,6 +129,20 @@ Steps can be skipped via config (`sendClear: false`, `sendInit: false`). Optiona
 Sessions have a `mode` property (`SessionMode` type):
 - **`'claude'`**: Runs Claude CLI for AI interactions (default)
 - **`'shell'`**: Runs a plain bash shell for debugging/testing
+
+### Screen-Aware Sessions
+
+All Claude sessions spawned by Claudeman receive environment variables indicating they're running in a managed screen:
+
+| Variable | Value | Purpose |
+|----------|-------|---------|
+| `CLAUDEMAN_SCREEN` | `1` | Indicates session is managed by Claudeman |
+| `CLAUDEMAN_SESSION_ID` | `<uuid>` | Unique session identifier |
+| `CLAUDEMAN_SCREEN_NAME` | `claudeman-<name>` | GNU screen session name |
+
+This prevents Claude from accidentally killing its own screen session. The default CLAUDE.md template includes guidance about this.
+
+**Implementation**: Set in `screen-manager.ts:createScreen()` for screen-based sessions and `session.ts:startInteractive()`/`startShell()` for PTY-only sessions.
 
 ## Code Patterns
 
@@ -328,7 +353,7 @@ Use `createErrorResponse(code, details?)` from `types.ts`:
 
 ## Session Lifecycle & Cleanup
 
-- **Limit**: Web server: `MAX_CONCURRENT_SESSIONS = 50` (`server.ts:56`), CLI default: 5 (`types.ts:DEFAULT_CONFIG`)
+- **Limit**: Web server: `MAX_CONCURRENT_SESSIONS = 50` (`server.ts:56`), UI tab limit: 20, CLI default: 5 (`types.ts:DEFAULT_CONFIG`)
 - **Kill** (`killScreen()`): child PIDs → process group → screen quit → SIGKILL
 - **Ghost discovery**: `reconcileScreens()` finds orphaned screens on startup
 - **Cleanup** (`cleanupSession()`): stops respawn, clears buffers/timers, kills screen
@@ -457,3 +482,16 @@ Extended documentation is available in the `docs/` directory:
 **Claudeman Implementation**: The `InnerLoopTracker` class (`src/inner-loop-tracker.ts`) detects Ralph patterns in Claude output and tracks loop state, todos, and completion phrases. It auto-enables when Ralph-related patterns are detected.
 
 See [`docs/ralph-wiggum-guide.md`](docs/ralph-wiggum-guide.md) for full documentation on best practices, prompt templates, and troubleshooting.
+
+## Optimization Roadmap
+
+Future optimizations are documented in `.claude/optimization-todos.md`. Key areas:
+
+| Priority | Area | Files |
+|----------|------|-------|
+| High | Buffer management | `session.ts`, `respawn-controller.ts` |
+| High | Pre-compiled regex | `session.ts`, `inner-loop-tracker.ts` |
+| Medium | Event listener cleanup | `session.ts`, `respawn-controller.ts` |
+| Medium | Debounce batching | `state-store.ts`, `session.ts` |
+
+Run `cat .claude/optimization-todos.md` for the full list with file:line references.
