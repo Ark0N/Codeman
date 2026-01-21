@@ -320,10 +320,16 @@ Writes debounced to `~/.claudeman/state.json`. Batches rapid changes.
 | Constant | Value | Location |
 |----------|-------|----------|
 | State save debounce | 500ms | `state-store.ts` |
+| State update debounce | 500ms | `server.ts` |
 | Line buffer flush | 100ms | `session.ts` |
 | Terminal batch interval | 16ms | `server.ts` (60fps) |
 | Output batch interval | 50ms | `server.ts` |
 | Task update batch interval | 100ms | `server.ts` |
+| Inner loop event debounce | 50ms | `inner-loop-tracker.ts` |
+| Session tabs render debounce | 100ms | `app.js` |
+| Inner panel render debounce | 50ms | `app.js` |
+| Task panel render debounce | 100ms | `app.js` |
+| Input batch interval | 16ms | `app.js` (60fps) |
 | Idle activity timeout | 2s | `session.ts` |
 | Respawn idle timeout | 5s default | `RespawnConfig.idleTimeoutMs` |
 
@@ -483,15 +489,28 @@ Extended documentation is available in the `docs/` directory:
 
 See [`docs/ralph-wiggum-guide.md`](docs/ralph-wiggum-guide.md) for full documentation on best practices, prompt templates, and troubleshooting.
 
-## Optimization Roadmap
+## Optimization Status
 
-Future optimizations are documented in `.claude/optimization-todos.md`. Key areas:
+Most critical optimizations have been implemented. See `.claude/optimization-todos.md` for details.
 
+**Completed:**
+| Area | Implementation |
+|------|----------------|
+| Buffer management | `BufferAccumulator` with auto-trimming |
+| Pre-compiled regex | Module-level patterns with lastIndex resets |
+| Event listener cleanup | `cleanupTrackerListeners()` in session.ts |
+| Event debouncing | 50ms debounce in `inner-loop-tracker.ts` |
+| State update debouncing | 500ms batching in `server.ts` |
+| Regex pre-checks | String.includes() before pattern.test() |
+| Frontend render debouncing | 50-100ms for panels, tabs |
+| CSS containment | `contain` property on terminal, panels, modals |
+| Input batching | 60fps keystroke coalescing |
+| Incremental DOM updates | Session tabs and Ralph todos |
+
+**Remaining:**
 | Priority | Area | Files |
 |----------|------|-------|
-| High | Buffer management | `session.ts`, `respawn-controller.ts` |
-| High | Pre-compiled regex | `session.ts`, `inner-loop-tracker.ts` |
-| Medium | Event listener cleanup | `session.ts`, `respawn-controller.ts` |
-| Medium | Debounce batching | `state-store.ts`, `session.ts` |
+| Low | Task lookup optimization | `task-tracker.ts` |
+| Low | Buffer pagination API | `server.ts` |
 
 Run `cat .claude/optimization-todos.md` for the full list with file:line references.
