@@ -152,6 +152,19 @@ claudeman web
 # Press Ctrl+Enter to start your first session
 ```
 
+### More Options
+
+```bash
+# Custom port
+claudeman web -p 8080
+
+# Terminal UI (attach to sessions directly)
+claudeman tui
+
+# Development mode (no build needed)
+npx tsx src/index.ts web
+```
+
 **Requirements:**
 - Node.js 18+
 - Claude CLI in PATH
