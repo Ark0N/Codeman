@@ -202,11 +202,11 @@ npx tsx src/index.ts web
 | `POST` | `/api/sessions/:id/respawn/stop` | Stop controller |
 | `PUT` | `/api/sessions/:id/respawn/config` | Update config |
 
-### Ralph Tracking
+### Ralph / Todo Tracking
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/sessions/:id/inner-state` | Get loop state + todos |
-| `POST` | `/api/sessions/:id/inner-config` | Configure tracking |
+| `GET` | `/api/sessions/:id/ralph-state` | Get loop state + todos |
+| `POST` | `/api/sessions/:id/ralph-config` | Configure tracking |
 
 ### Real-Time
 | Method | Endpoint | Description |

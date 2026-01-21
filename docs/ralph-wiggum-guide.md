@@ -159,7 +159,7 @@ The official implementation (and Claudeman) prevents false positives when comple
 - **If loop already active**: Emit immediately (explicit loop start via `/ralph-loop:ralph-loop`)
 
 ```typescript
-// From claudeman/src/inner-loop-tracker.ts
+// From claudeman/src/ralph-tracker.ts
 private handleCompletionPhrase(phrase: string): void {
   const count = (this._completionPhraseCount.get(phrase) || 0) + 1;
   this._completionPhraseCount.set(phrase, count);
@@ -616,7 +616,7 @@ Ask yourself:
 
 ## Claudeman Implementation
 
-Claudeman implements Ralph Wiggum tracking via the `InnerLoopTracker` class in `src/inner-loop-tracker.ts`.
+Claudeman implements Ralph Wiggum tracking via the `RalphTracker` class in `src/ralph-tracker.ts`.
 
 ### Auto-Detection Patterns
 
@@ -657,7 +657,7 @@ Each session has its **own independent tracker**:
 ### State Structure
 
 ```typescript
-interface InnerLoopState {
+interface RalphLoopState {
   enabled: boolean;           // Tracker active?
   active: boolean;            // Loop running?
   completionPhrase: string | null;
@@ -668,7 +668,7 @@ interface InnerLoopState {
   elapsedHours: number | null;
 }
 
-interface InnerTodoItem {
+interface RalphTodoItem {
   id: string;
   content: string;
   status: 'pending' | 'in_progress' | 'completed';
@@ -680,10 +680,10 @@ interface InnerTodoItem {
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/sessions/:id/inner-state` | Get loop state and todos |
-| POST | `/api/sessions/:id/inner-config` | Configure tracker settings |
+| GET | `/api/sessions/:id/ralph-state` | Get loop state and todos |
+| POST | `/api/sessions/:id/ralph-config` | Configure tracker settings |
 
-**POST `/inner-config` Options**:
+**POST `/ralph-config` Options**:
 ```json
 {
   "enabled": true,           // Enable/disable tracker
@@ -719,9 +719,9 @@ interface InnerTodoItem {
 
 | Event | Data | When |
 |-------|------|------|
-| `session:innerLoopUpdate` | `InnerLoopState` | Loop state changes |
-| `session:innerTodoUpdate` | `InnerTodoItem[]` | Todos detected/updated |
-| `session:innerCompletionDetected` | `{ phrase: string }` | Completion phrase found |
+| `session:ralphLoopUpdate` | `RalphLoopState` | Loop state changes |
+| `session:ralphTodoUpdate` | `RalphTodoItem[]` | Todos detected/updated |
+| `session:ralphCompletionDetected` | `{ phrase: string }` | Completion phrase found |
 
 ### Skill Commands
 
@@ -787,7 +787,7 @@ If stuck after 10 iterations with the same error:
 **Cause**: No Ralph patterns detected in output.
 
 **Solution**:
-1. Manually enable: `POST /api/sessions/:id/inner-config { "enabled": true }`
+1. Manually enable: `POST /api/sessions/:id/ralph-config { "enabled": true }`
 2. Or ensure Claude outputs recognizable patterns
 
 ### Context Window Exhaustion
@@ -816,7 +816,7 @@ POST /api/sessions/:id/auto-clear
 - [DeepWiki - Ralph Loop](https://deepwiki.com/anthropics/claude-plugins-official/5.2.2-ralph-loop)
 
 ### Related Claudeman Files
-- `src/inner-loop-tracker.ts` - Core detection engine
+- `src/ralph-tracker.ts` - Core detection engine
 - `src/ralph-loop.ts` - Task orchestration
 - `src/respawn-controller.ts` - Session cycling
 - `src/types.ts` - Type definitions
