@@ -1,3 +1,18 @@
+/**
+ * @fileoverview Ralph Loop - Autonomous task execution engine
+ *
+ * The Ralph Loop orchestrates autonomous Claude sessions by:
+ * - Polling for available tasks from the task queue
+ * - Assigning tasks to idle sessions
+ * - Monitoring completion and handling failures
+ * - Auto-generating follow-up tasks when min duration not reached
+ *
+ * Named after Ralph Wiggum's persistence ("I'm in danger!"),
+ * this loop keeps Claude working until all tasks are done.
+ *
+ * @module ralph-loop
+ */
+
 import { EventEmitter } from 'node:events';
 import { getSessionManager, SessionManager } from './session-manager.js';
 import { getTaskQueue, TaskQueue } from './task-queue.js';
@@ -6,6 +21,9 @@ import { Session } from './session.js';
 import { Task } from './task.js';
 import { RalphLoopStatus } from './types.js';
 
+/**
+ * Events emitted by RalphLoop
+ */
 export interface RalphLoopEvents {
   started: () => void;
   stopped: () => void;
@@ -15,12 +33,32 @@ export interface RalphLoopEvents {
   error: (error: Error) => void;
 }
 
+/**
+ * Configuration options for RalphLoop
+ */
 export interface RalphLoopOptions {
+  /** How often to check for new tasks (default from config) */
   pollIntervalMs?: number;
+  /** Minimum time to run before stopping (null = no minimum) */
   minDurationMs?: number;
+  /** Auto-generate follow-up tasks when queue is empty */
   autoGenerateTasks?: boolean;
 }
 
+/**
+ * Autonomous task execution loop.
+ *
+ * @description
+ * Manages the lifecycle of task execution:
+ * 1. Start: Begin polling and task assignment
+ * 2. Run: Assign tasks to idle sessions, monitor completion
+ * 3. Stop: When all tasks done and min duration reached
+ *
+ * Supports time-aware loops that continue generating tasks
+ * until a minimum duration is reached.
+ *
+ * @extends EventEmitter
+ */
 export class RalphLoop extends EventEmitter {
   private sessionManager: SessionManager;
   private taskQueue: TaskQueue;
@@ -113,6 +151,7 @@ export class RalphLoop extends EventEmitter {
     };
   }
 
+  /** Starts the task execution loop. */
   async start(): Promise<void> {
     if (this._status === 'running') {
       return;
@@ -135,6 +174,7 @@ export class RalphLoop extends EventEmitter {
     this.runLoop();
   }
 
+  /** Stops the task execution loop. */
   stop(): void {
     if (this._status === 'stopped') {
       return;
@@ -155,6 +195,7 @@ export class RalphLoop extends EventEmitter {
     this.emit('stopped');
   }
 
+  /** Pauses the loop (can be resumed). */
   pause(): void {
     if (this._status !== 'running') {
       return;
@@ -170,6 +211,7 @@ export class RalphLoop extends EventEmitter {
     this.store.setRalphLoopState({ status: 'paused' });
   }
 
+  /** Resumes a paused loop. */
   resume(): void {
     if (this._status !== 'paused') {
       return;
@@ -380,6 +422,7 @@ export class RalphLoop extends EventEmitter {
     return true;
   }
 
+  /** Sets the minimum duration in hours before the loop can stop. */
   setMinDuration(hours: number): void {
     this.minDurationMs = hours * 60 * 60 * 1000;
     this.store.setRalphLoopState({ minDurationMs: this.minDurationMs });
@@ -389,6 +432,7 @@ export class RalphLoop extends EventEmitter {
 // Singleton instance
 let loopInstance: RalphLoop | null = null;
 
+/** Gets or creates the singleton RalphLoop instance. */
 export function getRalphLoop(options?: RalphLoopOptions): RalphLoop {
   if (!loopInstance) {
     loopInstance = new RalphLoop(options);
