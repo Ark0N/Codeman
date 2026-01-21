@@ -727,17 +727,43 @@ export class WebServer extends EventEmitter {
     const casesDir = join(homedir(), 'claudeman-cases');
 
     this.app.get('/api/cases', async (): Promise<CaseInfo[]> => {
-      if (!existsSync(casesDir)) {
-        return [];
+      const cases: CaseInfo[] = [];
+
+      // Get cases from casesDir
+      if (existsSync(casesDir)) {
+        const entries = readdirSync(casesDir, { withFileTypes: true });
+        for (const e of entries) {
+          if (e.isDirectory()) {
+            cases.push({
+              name: e.name,
+              path: join(casesDir, e.name),
+              hasClaudeMd: existsSync(join(casesDir, e.name, 'CLAUDE.md')),
+            });
+          }
+        }
       }
-      const entries = readdirSync(casesDir, { withFileTypes: true });
-      return entries
-        .filter(e => e.isDirectory())
-        .map(e => ({
-          name: e.name,
-          path: join(casesDir, e.name),
-          hasClaudeMd: existsSync(join(casesDir, e.name, 'CLAUDE.md')),
-        }));
+
+      // Get linked cases
+      const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
+      try {
+        if (existsSync(linkedCasesFile)) {
+          const linkedCases: Record<string, string> = JSON.parse(readFileSync(linkedCasesFile, 'utf-8'));
+          for (const [name, path] of Object.entries(linkedCases)) {
+            // Only add if not already in cases (avoid duplicates) and path exists
+            if (!cases.some(c => c.name === name) && existsSync(path)) {
+              cases.push({
+                name,
+                path,
+                hasClaudeMd: existsSync(join(path, 'CLAUDE.md')),
+              });
+            }
+          }
+        }
+      } catch {
+        // Ignore errors reading linked cases
+      }
+
+      return cases;
     });
 
     this.app.post('/api/cases', async (req): Promise<{ success: boolean; case?: { name: string; path: string }; error?: string }> => {
@@ -777,8 +803,88 @@ export class WebServer extends EventEmitter {
       }
     });
 
+    // Link an existing folder as a case
+    this.app.post('/api/cases/link', async (req): Promise<{ success: boolean; case?: { name: string; path: string }; error?: string }> => {
+      const { name, path: folderPath } = req.body as { name: string; path: string };
+
+      if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {
+        return { success: false, error: 'Invalid case name. Use only letters, numbers, hyphens, underscores.' };
+      }
+
+      if (!folderPath) {
+        return { success: false, error: 'Folder path is required.' };
+      }
+
+      // Expand ~ to home directory
+      const expandedPath = folderPath.startsWith('~')
+        ? join(homedir(), folderPath.slice(1))
+        : folderPath;
+
+      // Validate the folder exists
+      if (!existsSync(expandedPath)) {
+        return { success: false, error: `Folder not found: ${expandedPath}` };
+      }
+
+      // Check if case name already exists in casesDir
+      const casePath = join(casesDir, name);
+      if (existsSync(casePath)) {
+        return { success: false, error: 'A case with this name already exists in claudeman-cases.' };
+      }
+
+      // Load existing linked cases
+      const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
+      let linkedCases: Record<string, string> = {};
+      try {
+        if (existsSync(linkedCasesFile)) {
+          linkedCases = JSON.parse(readFileSync(linkedCasesFile, 'utf-8'));
+        }
+      } catch {
+        // Ignore parse errors, start fresh
+      }
+
+      // Check if name is already linked
+      if (linkedCases[name]) {
+        return { success: false, error: `Case "${name}" is already linked to ${linkedCases[name]}` };
+      }
+
+      // Save the linked case
+      linkedCases[name] = expandedPath;
+      try {
+        const claudemanDir = join(homedir(), '.claudeman');
+        if (!existsSync(claudemanDir)) {
+          mkdirSync(claudemanDir, { recursive: true });
+        }
+        writeFileSync(linkedCasesFile, JSON.stringify(linkedCases, null, 2));
+        this.broadcast('case:linked', { name, path: expandedPath });
+        return { success: true, case: { name, path: expandedPath } };
+      } catch (err) {
+        return { success: false, error: (err as Error).message };
+      }
+    });
+
     this.app.get('/api/cases/:name', async (req) => {
       const { name } = req.params as { name: string };
+
+      // First check linked cases
+      const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
+      try {
+        if (existsSync(linkedCasesFile)) {
+          const linkedCases: Record<string, string> = JSON.parse(readFileSync(linkedCasesFile, 'utf-8'));
+          if (linkedCases[name]) {
+            const linkedPath = linkedCases[name];
+            return {
+              name,
+              path: linkedPath,
+              hasClaudeMd: existsSync(join(linkedPath, 'CLAUDE.md')),
+              linked: true,
+            };
+          }
+        }
+      } catch {
+        // Ignore errors, fall through to casesDir check
+      }
+
+      // Then check casesDir
       const casePath = join(casesDir, name);
 
       if (!existsSync(casePath)) {

@@ -187,6 +187,7 @@ class ClaudemanApp {
     this.terminal.writeln('');
     this.terminal.writeln('\x1b[90m  Each instance opens a persistent GNU Screen session running Claude or Shell.\x1b[0m');
     this.terminal.writeln('\x1b[90m  Sessions stay alive for autonomous work, even if you close this browser.\x1b[0m');
+    this.terminal.writeln('\x1b[90m  Use the \x1b[1;37m+/-\x1b[0m\x1b[90m controls to set how many instances to launch at once.\x1b[0m');
     this.terminal.writeln('');
     this.terminal.writeln('\x1b[90m  Press \x1b[1;37mCtrl+Enter\x1b[0m\x1b[90m to start Claude  •  Click \x1b[1;37mRun Shell\x1b[0m\x1b[90m for a terminal\x1b[0m');
     this.terminal.writeln('');
@@ -2635,12 +2636,52 @@ class ClaudemanApp {
   showCreateCaseModal() {
     document.getElementById('newCaseName').value = '';
     document.getElementById('newCaseDescription').value = '';
-    document.getElementById('createCaseModal').classList.add('active');
+    document.getElementById('linkCaseName').value = '';
+    document.getElementById('linkCasePath').value = '';
+    // Reset to first tab
+    this.caseModalTab = 'case-create';
+    this.switchCaseModalTab('case-create');
+    // Wire up tab buttons
+    const modal = document.getElementById('createCaseModal');
+    modal.querySelectorAll('.modal-tabs .modal-tab-btn').forEach(btn => {
+      btn.onclick = () => this.switchCaseModalTab(btn.dataset.tab);
+    });
+    modal.classList.add('active');
     document.getElementById('newCaseName').focus();
+  }
+
+  switchCaseModalTab(tabName) {
+    this.caseModalTab = tabName;
+    const modal = document.getElementById('createCaseModal');
+    // Toggle active class on tab buttons
+    modal.querySelectorAll('.modal-tabs .modal-tab-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tab === tabName);
+    });
+    // Toggle hidden class on tab content
+    modal.querySelectorAll('.modal-tab-content').forEach(content => {
+      content.classList.toggle('hidden', content.id !== tabName);
+    });
+    // Update submit button text
+    const submitBtn = document.getElementById('caseModalSubmit');
+    submitBtn.textContent = tabName === 'case-create' ? 'Create' : 'Link';
+    // Focus appropriate input
+    if (tabName === 'case-create') {
+      document.getElementById('newCaseName').focus();
+    } else {
+      document.getElementById('linkCaseName').focus();
+    }
   }
 
   closeCreateCaseModal() {
     document.getElementById('createCaseModal').classList.remove('active');
+  }
+
+  async submitCaseModal() {
+    if (this.caseModalTab === 'case-create') {
+      await this.createCase();
+    } else {
+      await this.linkCase();
+    }
   }
 
   async createCase() {
@@ -2648,12 +2689,12 @@ class ClaudemanApp {
     const description = document.getElementById('newCaseDescription').value.trim();
 
     if (!name) {
-      this.toast('Please enter a case name', 'error');
+      this.showToast('Please enter a case name', 'error');
       return;
     }
 
     if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
-      this.toast('Invalid name. Use only letters, numbers, hyphens, underscores.', 'error');
+      this.showToast('Invalid name. Use only letters, numbers, hyphens, underscores.', 'error');
       return;
     }
 
@@ -2667,15 +2708,56 @@ class ClaudemanApp {
       const data = await res.json();
       if (data.success) {
         this.closeCreateCaseModal();
-        this.toast(`Case "${name}" created`, 'success');
+        this.showToast(`Case "${name}" created`, 'success');
         // Reload cases and select the new one
         await this.loadQuickStartCases(name);
       } else {
-        this.toast(data.error || 'Failed to create case', 'error');
+        this.showToast(data.error || 'Failed to create case', 'error');
       }
     } catch (err) {
       console.error('Failed to create case:', err);
-      this.toast('Failed to create case: ' + err.message, 'error');
+      this.showToast('Failed to create case: ' + err.message, 'error');
+    }
+  }
+
+  async linkCase() {
+    const name = document.getElementById('linkCaseName').value.trim();
+    const path = document.getElementById('linkCasePath').value.trim();
+
+    if (!name) {
+      this.showToast('Please enter a case name', 'error');
+      return;
+    }
+
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+      this.showToast('Invalid name. Use only letters, numbers, hyphens, underscores.', 'error');
+      return;
+    }
+
+    if (!path) {
+      this.showToast('Please enter a folder path', 'error');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/cases/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, path })
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        this.closeCreateCaseModal();
+        this.showToast(`Case "${name}" linked to ${path}`, 'success');
+        // Reload cases and select the new one
+        await this.loadQuickStartCases(name);
+      } else {
+        this.showToast(data.error || 'Failed to link case', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to link case:', err);
+      this.showToast('Failed to link case: ' + err.message, 'error');
     }
   }
 

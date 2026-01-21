@@ -537,25 +537,45 @@
     <!-- Create Case Modal -->
     <div class="modal" id="createCaseModal">
       <div class="modal-backdrop" onclick="app.closeCreateCaseModal()"></div>
-      <div class="modal-content modal-sm">
+      <div class="modal-content modal-lg">
         <div class="modal-header">
-          <h3>Create New Case</h3>
+          <h3>Add Case</h3>
           <button class="modal-close" onclick="app.closeCreateCaseModal()">&times;</button>
         </div>
+        <div class="modal-tabs">
+          <button class="modal-tab-btn active" data-tab="case-create">Create New</button>
+          <button class="modal-tab-btn" data-tab="case-link">Link Existing</button>
+        </div>
         <div class="modal-body">
-          <div class="form-row">
-            <label>Case Name</label>
-            <input type="text" id="newCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+">
-            <span class="form-hint">Letters, numbers, hyphens, underscores only</span>
+          <!-- Create New Tab -->
+          <div class="modal-tab-content" id="case-create">
+            <div class="form-row">
+              <label>Case Name</label>
+              <input type="text" id="newCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+">
+              <span class="form-hint">Letters, numbers, hyphens, underscores only. Created in ~/claudeman-cases/</span>
+            </div>
+            <div class="form-row">
+              <label>Description (optional)</label>
+              <input type="text" id="newCaseDescription" placeholder="A brief description...">
+            </div>
           </div>
-          <div class="form-row">
-            <label>Description (optional)</label>
-            <input type="text" id="newCaseDescription" placeholder="A brief description...">
+          <!-- Link Existing Tab -->
+          <div class="modal-tab-content hidden" id="case-link">
+            <div class="form-row">
+              <label>Case Name</label>
+              <input type="text" id="linkCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+">
+              <span class="form-hint">Name to identify this case in Claudeman</span>
+            </div>
+            <div class="form-row">
+              <label>Folder Path</label>
+              <input type="text" id="linkCasePath" placeholder="/home/user/projects/my-project">
+              <span class="form-hint">Absolute path to an existing project folder</span>
+            </div>
           </div>
         </div>
         <div class="form-actions">
           <button class="btn-toolbar" onclick="app.closeCreateCaseModal()">Cancel</button>
-          <button class="btn-toolbar btn-primary" onclick="app.createCase()">Create</button>
+          <button class="btn-toolbar btn-primary" id="caseModalSubmit" onclick="app.submitCaseModal()">Create</button>
         </div>
       </div>
     </div>
