@@ -29,6 +29,9 @@ class ClaudemanApp {
 
     // Render debouncing
     this.renderSessionTabsTimeout = null;
+    this.renderInnerStatePanelTimeout = null;
+    this.renderTaskPanelTimeout = null;
+    this.renderScreenSessionsTimeout = null;
 
     // System stats polling
     this.systemStatsInterval = null;
@@ -1912,6 +1915,16 @@ class ClaudemanApp {
   }
 
   renderTaskPanel() {
+    // Debounce renders at 100ms to prevent excessive DOM updates
+    if (this.renderTaskPanelTimeout) {
+      clearTimeout(this.renderTaskPanelTimeout);
+    }
+    this.renderTaskPanelTimeout = setTimeout(() => {
+      this._renderTaskPanelImmediate();
+    }, 100);
+  }
+
+  _renderTaskPanelImmediate() {
     const session = this.sessions.get(this.activeSessionId);
     const body = document.getElementById('backgroundTasksBody');
     const stats = document.getElementById('taskPanelStats');
@@ -2128,6 +2141,16 @@ class ClaudemanApp {
   }
 
   renderInnerStatePanel() {
+    // Debounce renders at 50ms to prevent excessive DOM updates
+    if (this.renderInnerStatePanelTimeout) {
+      clearTimeout(this.renderInnerStatePanelTimeout);
+    }
+    this.renderInnerStatePanelTimeout = setTimeout(() => {
+      this._renderInnerStatePanelImmediate();
+    }, 50);
+  }
+
+  _renderInnerStatePanelImmediate() {
     const panel = this.$('innerStatePanel');
     const toggle = this.$('ralphToggle');
 
@@ -2462,6 +2485,16 @@ class ClaudemanApp {
   }
 
   renderScreenSessions() {
+    // Debounce renders at 100ms to prevent excessive DOM updates
+    if (this.renderScreenSessionsTimeout) {
+      clearTimeout(this.renderScreenSessionsTimeout);
+    }
+    this.renderScreenSessionsTimeout = setTimeout(() => {
+      this._renderScreenSessionsImmediate();
+    }, 100);
+  }
+
+  _renderScreenSessionsImmediate() {
     const body = document.getElementById('screenSessionsBody');
 
     if (!this.screenSessions || this.screenSessions.length === 0) {

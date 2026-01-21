@@ -77,6 +77,8 @@ body {
   overflow-y: auto;
   max-height: 120px;
   padding: 0.15rem 0.25rem;
+  /* Performance: isolate layout recalculations */
+  contain: layout;
 }
 
 .session-tabs::-webkit-scrollbar {
@@ -134,7 +136,12 @@ body {
 }
 
 .session-tab .tab-status.idle { background: var(--green); }
-.session-tab .tab-status.busy { background: var(--green); animation: pulse 1.5s infinite; }
+.session-tab .tab-status.busy {
+  background: var(--green);
+  animation: pulse 1.5s infinite;
+  /* Performance: GPU acceleration for animation */
+  will-change: opacity;
+}
 .session-tab .tab-status.error { background: var(--red); }
 
 .session-tab .tab-name {
@@ -150,7 +157,8 @@ body {
   line-height: 1;
   color: var(--text-muted);
   overflow: hidden;
-  transition: opacity 0.15s, width 0.15s, padding 0.15s;
+  /* Performance: use transform for GPU acceleration */
+  transition: opacity 0.15s ease-out, width 0.15s ease-out, padding 0.15s ease-out;
 }
 
 .session-tab:hover .tab-close {
@@ -491,6 +499,8 @@ body {
   overflow: hidden;
   position: relative;
   overflow-anchor: none; /* Prevent scroll anchoring when expanding/collapsing */
+  /* Performance: isolate paint and layout operations */
+  contain: layout style paint;
 }
 
 /* Mini Progress Ring (in summary) */
@@ -1066,6 +1076,9 @@ body {
   flex: 1;
   background: #0d0d0d;
   overflow: hidden;
+  /* Performance: isolate layout and paint operations */
+  contain: strict;
+  will-change: contents;
 }
 
 .terminal-container .xterm {
@@ -1707,6 +1720,8 @@ body {
   width: 90%;
   max-width: 400px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  /* Performance: isolate modal paint operations */
+  contain: layout style paint;
 }
 
 .modal-content.modal-sm {
@@ -2145,6 +2160,9 @@ kbd {
   right: 0.5rem;
   width: 350px;
   max-width: calc(100vw - 1rem);
+  /* Performance: GPU-accelerated transforms and isolated paint */
+  contain: layout style;
+  will-change: transform;
   max-height: 50vh;
   background: var(--bg-card);
   border: 1px solid var(--border);
