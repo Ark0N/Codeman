@@ -62,14 +62,14 @@ npx vitest run -t "should create session" # By pattern
 # 3110: edge-cases.test.ts
 # 3115: integration-flows.test.ts
 # 3120: session-cleanup.test.ts
-# Unit tests (no port needed): respawn-controller, inner-loop-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types
+# Unit tests (no port needed): respawn-controller, inner-loop-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates
 # Next available: 3122+
 
 # Tests mock PTY - no real Claude CLI spawned
 # Test timeout: 30s (configured in vitest.config.ts)
 
 # TypeScript checking
-npx tsc --noEmit                          # Type check without building
+npm run typecheck                         # Type check without building (or: npx tsc --noEmit)
 # Note: No ESLint/Prettier configured - rely on TypeScript strict mode
 
 # Debugging
@@ -101,6 +101,7 @@ pkill -f "SCREEN.*claudeman"              # Force kill all claudeman screens
 | `src/web/server.ts` | Fastify REST API + SSE at `/api/events` |
 | `src/web/public/app.js` | Frontend: SSE handling, xterm.js, tab management |
 | `src/tui/App.tsx` | TUI main component: tabs, terminal viewport, status bar (Ink/React) |
+| `src/tui/components/*.tsx` | TUI components: StartScreen, TabBar, TerminalView, StatusBar, RalphPanel, HelpOverlay |
 | `src/tui/hooks/useSessionManager.ts` | TUI session state, screen polling, input handling |
 | `src/types.ts` | All TypeScript interfaces |
 
