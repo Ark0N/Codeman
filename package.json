@@ -12,6 +12,7 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "web": "node dist/index.js web",
+    "tui": "tsx src/index.ts tui",
     "clean": "rm -rf dist",
     "test": "vitest run",
     "test:watch": "vitest",
