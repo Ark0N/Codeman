@@ -13,6 +13,7 @@ import { getSessionManager } from './session-manager.js';
 import { getTaskQueue } from './task-queue.js';
 import { getRalphLoop } from './ralph-loop.js';
 import { getStore } from './state-store.js';
+import { getErrorMessage } from './types.js';
 
 const program = new Command();
 
@@ -40,7 +41,7 @@ sessionCmd
       console.log(`  Working directory: ${session.workingDir}`);
       console.log(`  PID: ${session.pid}`);
     } catch (err) {
-      console.error(chalk.red(`✗ Failed to start session: ${(err as Error).message}`));
+      console.error(chalk.red(`✗ Failed to start session: ${getErrorMessage(err)}`));
       process.exit(1);
     }
   });
@@ -54,7 +55,7 @@ sessionCmd
       await manager.stopSession(id);
       console.log(chalk.green(`✓ Session stopped: ${id}`));
     } catch (err) {
-      console.error(chalk.red(`✗ Failed to stop session: ${(err as Error).message}`));
+      console.error(chalk.red(`✗ Failed to stop session: ${getErrorMessage(err)}`));
       process.exit(1);
     }
   });
@@ -474,7 +475,7 @@ program
       console.log(chalk.green(`\n✓ Web interface running at http://localhost:${port}`));
       console.log(chalk.gray('  Press Ctrl+C to stop\n'));
     } catch (err) {
-      console.error(chalk.red(`✗ Failed to start web server: ${(err as Error).message}`));
+      console.error(chalk.red(`✗ Failed to start web server: ${getErrorMessage(err)}`));
       process.exit(1);
     }
   });
@@ -496,7 +497,7 @@ program
         port,
       });
     } catch (err) {
-      console.error(chalk.red(`✗ Failed to start TUI: ${(err as Error).message}`));
+      console.error(chalk.red(`✗ Failed to start TUI: ${getErrorMessage(err)}`));
       process.exit(1);
     }
   });

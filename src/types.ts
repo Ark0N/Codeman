@@ -615,3 +615,43 @@ export function createInitialState(): AppState {
     config: { ...DEFAULT_CONFIG },
   };
 }
+
+// ========== Error Handling Utilities ==========
+
+/**
+ * Type guard to check if a value is an Error instance
+ * @param value The value to check
+ * @returns True if the value is an Error instance
+ */
+export function isError(value: unknown): value is Error {
+  return value instanceof Error;
+}
+
+/**
+ * Safely extracts an error message from an unknown caught value.
+ * Handles the TypeScript 4.4+ unknown error type in catch blocks.
+ *
+ * @param error The caught error (type unknown in strict mode)
+ * @returns A string error message
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   await riskyOperation();
+ * } catch (err) {
+ *   console.error('Failed:', getErrorMessage(err));
+ * }
+ * ```
+ */
+export function getErrorMessage(error: unknown): string {
+  if (isError(error)) {
+    return error.message;
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  if (error && typeof error === 'object' && 'message' in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return 'An unknown error occurred';
+}

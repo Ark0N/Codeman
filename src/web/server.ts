@@ -23,19 +23,20 @@ import { ScreenManager } from '../screen-manager.js';
 import { getStore } from '../state-store.js';
 import { generateClaudeMd } from '../templates/claude-md.js';
 import { v4 as uuidv4 } from 'uuid';
-import type {
-  CreateSessionRequest,
-  RunPromptRequest,
-  SessionInputRequest,
-  ResizeRequest,
-  CreateCaseRequest,
-  QuickStartRequest,
-  CreateScheduledRunRequest,
-  QuickRunRequest,
-  ApiResponse,
-  SessionResponse,
-  QuickStartResponse,
-  CaseInfo,
+import {
+  getErrorMessage,
+  type CreateSessionRequest,
+  type RunPromptRequest,
+  type SessionInputRequest,
+  type ResizeRequest,
+  type CreateCaseRequest,
+  type QuickStartRequest,
+  type CreateScheduledRunRequest,
+  type QuickRunRequest,
+  type ApiResponse,
+  type SessionResponse,
+  type QuickStartResponse,
+  type CaseInfo,
 } from '../types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -376,7 +377,7 @@ export class WebServer extends EventEmitter {
         this.broadcast('session:updated', { session: session.toDetailedState() });
         return { success: true, message: 'Interactive session started' };
       } catch (err) {
-        return { error: (err as Error).message };
+        return { error: getErrorMessage(err) };
       }
     });
 
@@ -399,7 +400,7 @@ export class WebServer extends EventEmitter {
         this.broadcast('session:updated', { session: session.toDetailedState() });
         return { success: true, message: 'Shell session started' };
       } catch (err) {
-        return { error: (err as Error).message };
+        return { error: getErrorMessage(err) };
       }
     });
 
@@ -580,7 +581,7 @@ export class WebServer extends EventEmitter {
           respawnStatus: controller.getStatus(),
         };
       } catch (err) {
-        return { error: (err as Error).message };
+        return { error: getErrorMessage(err) };
       }
     });
 
@@ -694,7 +695,7 @@ export class WebServer extends EventEmitter {
       } catch (err) {
         // Clean up session on error too
         await this.cleanupSession(session.id);
-        return { success: false, sessionId: session.id, error: (err as Error).message };
+        return { success: false, sessionId: session.id, error: getErrorMessage(err) };
       }
     });
 
@@ -809,7 +810,7 @@ export class WebServer extends EventEmitter {
 
         return { success: true, case: { name, path: casePath } };
       } catch (err) {
-        return { success: false, error: (err as Error).message };
+        return { success: false, error: getErrorMessage(err) };
       }
     });
 
@@ -868,7 +869,7 @@ export class WebServer extends EventEmitter {
         this.broadcast('case:linked', { name, path: expandedPath });
         return { success: true, case: { name, path: expandedPath } };
       } catch (err) {
-        return { success: false, error: (err as Error).message };
+        return { success: false, error: getErrorMessage(err) };
       }
     });
 
@@ -944,7 +945,7 @@ export class WebServer extends EventEmitter {
 
           this.broadcast('case:created', { name: caseName, path: casePath });
         } catch (err) {
-          return { success: false, error: `Failed to create case: ${(err as Error).message}` };
+          return { success: false, error: `Failed to create case: ${getErrorMessage(err)}` };
         }
       }
 
@@ -996,7 +997,7 @@ export class WebServer extends EventEmitter {
       } catch (err) {
         // Clean up session on error to prevent orphaned resources
         await this.cleanupSession(session.id);
-        return { success: false, error: (err as Error).message };
+        return { success: false, error: getErrorMessage(err) };
       }
     });
 
@@ -1026,7 +1027,7 @@ export class WebServer extends EventEmitter {
         writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
         return { success: true };
       } catch (err) {
-        return { error: (err as Error).message };
+        return { error: getErrorMessage(err) };
       }
     });
 
@@ -1415,7 +1416,7 @@ export class WebServer extends EventEmitter {
         // Small pause between iterations
         await new Promise(r => setTimeout(r, 2000));
       } catch (err) {
-        addLog(`Error: ${(err as Error).message}`);
+        addLog(`Error: ${getErrorMessage(err)}`);
         this.broadcast('scheduled:updated', run);
 
         // Clean up the session on error too

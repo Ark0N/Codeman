@@ -19,7 +19,7 @@ import { spawn, execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { ScreenSession, ProcessStats, ScreenSessionWithStats } from './types.js';
+import { ScreenSession, ProcessStats, ScreenSessionWithStats, getErrorMessage } from './types.js';
 
 /** Path to persisted screen session metadata */
 const SCREENS_FILE = join(homedir(), '.claudeman', 'screens.json');
@@ -213,7 +213,7 @@ export class ScreenManager extends EventEmitter {
 
       return screen;
     } catch (err) {
-      throw new Error(`Failed to create screen: ${(err as Error).message}`);
+      throw new Error(`Failed to create screen: ${getErrorMessage(err)}`);
     }
   }
 

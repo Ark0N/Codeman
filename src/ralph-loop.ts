@@ -19,7 +19,7 @@ import { getTaskQueue, TaskQueue } from './task-queue.js';
 import { getStore, StateStore } from './state-store.js';
 import { Session } from './session.js';
 import { Task } from './task.js';
-import { RalphLoopStatus } from './types.js';
+import { RalphLoopStatus, getErrorMessage } from './types.js';
 
 /**
  * Events emitted by RalphLoop
@@ -304,10 +304,10 @@ export class RalphLoop extends EventEmitter {
 
       this.emit('taskAssigned', task.id, session.id);
     } catch (err) {
-      task.fail((err as Error).message);
+      task.fail(getErrorMessage(err));
       session.clearTask();
       this.taskQueue.updateTask(task);
-      this.emit('taskFailed', task.id, (err as Error).message);
+      this.emit('taskFailed', task.id, getErrorMessage(err));
     }
   }
 
