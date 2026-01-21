@@ -8,6 +8,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import { execSync, spawnSync } from 'child_process';
 import { StartScreen } from './components/StartScreen.js';
 import { TabBar } from './components/TabBar.js';
 import { TerminalView } from './components/TerminalView.js';
@@ -176,6 +177,28 @@ export function App(): React.ReactElement {
     }
   }, [createSession]);
 
+  /**
+   * Attach directly to a screen session
+   * This exits the TUI and attaches to GNU screen
+   */
+  const handleAttachSession = useCallback((session: ScreenSession) => {
+    // Clear screen and restore terminal
+    process.stdout.write('\x1b[2J\x1b[H');
+    console.log(`Attaching to screen: ${session.screenName}`);
+    console.log('Press Ctrl+A D to detach and return to terminal\n');
+
+    // Use spawnSync to attach to screen (inherits stdio)
+    const result = spawnSync('screen', ['-r', session.screenName], {
+      stdio: 'inherit',
+    });
+
+    // After detaching, exit the TUI
+    if (result.status === 0) {
+      console.log('\nDetached from screen. Run "claudeman tui" to return.');
+    }
+    exit();
+  }, [exit]);
+
   // Render help overlay if shown
   if (showHelp) {
     return <HelpOverlay onClose={() => setShowHelp(false)} />;
@@ -187,6 +210,7 @@ export function App(): React.ReactElement {
       <StartScreen
         sessions={sessions}
         onSelectSession={handleSelectSession}
+        onAttachSession={handleAttachSession}
         onCreateSession={handleCreateSession}
         onRefresh={refreshSessions}
         onExit={exit}
