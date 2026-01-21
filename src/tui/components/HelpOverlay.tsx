@@ -19,29 +19,31 @@ interface ShortcutGroup {
 
 const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
-    title: 'Navigation',
+    title: 'Start Screen',
     shortcuts: [
-      { key: 'Ctrl+Tab', description: 'Next session' },
-      { key: 'Ctrl+Shift+Tab', description: 'Previous session' },
+      { key: '\u2191/\u2193', description: 'Navigate session list' },
+      { key: 'Enter', description: 'View session in TUI' },
+      { key: 'a', description: 'Attach to screen (full terminal)' },
+      { key: 'n', description: 'Create new session' },
+      { key: 'r', description: 'Refresh session list' },
+      { key: 'q', description: 'Quit' },
+    ],
+  },
+  {
+    title: 'Main View - Navigation',
+    shortcuts: [
+      { key: 'Ctrl+Tab', description: 'Next session tab' },
+      { key: 'Ctrl+Shift+Tab', description: 'Previous session tab' },
       { key: 'Ctrl+1-9', description: 'Go to session N' },
       { key: 'Escape', description: 'Back to start screen' },
     ],
   },
   {
-    title: 'Session Management',
+    title: 'Main View - Session Management',
     shortcuts: [
       { key: 'Ctrl+N', description: 'New session' },
       { key: 'Ctrl+W', description: 'Close current session' },
       { key: 'Ctrl+K', description: 'Kill all sessions' },
-    ],
-  },
-  {
-    title: 'Start Screen',
-    shortcuts: [
-      { key: '1-9', description: 'Select session by number' },
-      { key: 'n', description: 'Create new session' },
-      { key: 'r', description: 'Refresh session list' },
-      { key: 'q', description: 'Quit' },
     ],
   },
   {
