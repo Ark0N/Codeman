@@ -1578,8 +1578,6 @@ export class WebServer extends EventEmitter {
   // Helper to get custom CLAUDE.md template path from settings
   private getDefaultClaudeMdPath(): string | undefined {
     const settingsPath = join(homedir(), '.claudeman', 'settings.json');
-    // Default template path (can be overridden in settings)
-    const defaultPath = '/home/arkon/default/CLAUDE.md';
 
     try {
       if (existsSync(settingsPath)) {
@@ -1588,10 +1586,6 @@ export class WebServer extends EventEmitter {
         if (settings.defaultClaudeMdPath) {
           return settings.defaultClaudeMdPath;
         }
-      }
-      // Use default path if it exists
-      if (existsSync(defaultPath)) {
-        return defaultPath;
       }
     } catch (err) {
       console.error('Failed to read settings:', err);

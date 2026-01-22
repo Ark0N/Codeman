@@ -147,6 +147,7 @@ claudeman reset                    # Reset all state
 | `src/tui/hooks/useSessionManager.ts` | TUI session state, screen polling, input handling |
 | `src/types.ts` | All TypeScript interfaces |
 | `src/templates/claude-md.ts` | CLAUDE.md template generation with placeholder support |
+| `src/templates/case-template.md` | Default CLAUDE.md template for new cases (with placeholders) |
 
 ### Data Flow
 
@@ -619,9 +620,14 @@ Long-running sessions are supported with automatic trimming:
 
 Cases created in `~/claudeman-cases/` by default.
 
-### Custom CLAUDE.md Templates
+### CLAUDE.md Templates
 
-New cases can use custom CLAUDE.md templates via `generateClaudeMd()` in `src/templates/claude-md.ts`. Placeholders:
+New cases get a CLAUDE.md generated from `src/templates/case-template.md` (bundled with the project). Template resolution order:
+1. Custom path from `~/.claudeman/settings.json` (`defaultClaudeMdPath` field)
+2. Bundled `case-template.md` (copied to `dist/templates/` during build)
+3. Minimal fallback (if bundled template is missing)
+
+Placeholders replaced:
 - `[PROJECT_NAME]` → Case name
 - `[PROJECT_DESCRIPTION]` → Description
 - `[DATE]` → Current date (YYYY-MM-DD)
