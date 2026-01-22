@@ -2030,6 +2030,32 @@ export class WebServer extends EventEmitter {
               }
             }
 
+            // Fallback: restore respawn from screens.json if state.json didn't have it
+            if (!this.respawnControllers.has(session.id) && screen.respawnConfig?.enabled) {
+              try {
+                const controller = new RespawnController(session, {
+                  idleTimeoutMs: screen.respawnConfig.idleTimeoutMs,
+                  updatePrompt: screen.respawnConfig.updatePrompt,
+                  interStepDelayMs: screen.respawnConfig.interStepDelayMs,
+                  enabled: true,
+                  sendClear: screen.respawnConfig.sendClear,
+                  sendInit: screen.respawnConfig.sendInit,
+                  kickstartPrompt: screen.respawnConfig.kickstartPrompt,
+                });
+                this.respawnControllers.set(session.id, controller);
+                this.setupRespawnListeners(session.id, controller);
+                controller.start();
+
+                if (screen.respawnConfig.durationMinutes && screen.respawnConfig.durationMinutes > 0) {
+                  this.setupTimedRespawn(session.id, screen.respawnConfig.durationMinutes);
+                }
+
+                console.log(`[Server] Restored respawn controller from screens.json for session ${session.id}`);
+              } catch (err) {
+                console.error(`[Server] Failed to restore respawn from screens.json for session ${session.id}:`, err);
+              }
+            }
+
             // Fallback: restore Ralph state from state-inner.json if not already set
             if (!session.ralphTracker.enabled) {
               const ralphState = this.store.getRalphState(screen.sessionId);
