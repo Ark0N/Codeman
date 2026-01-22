@@ -1289,6 +1289,9 @@ export class WebServer extends EventEmitter {
         ? Math.round((timerInfo.endAt - timerInfo.startedAt) / 60000)
         : undefined;
       state.respawnConfig = { ...config, durationMinutes };
+      state.respawnEnabled = controller.state !== 'stopped';
+    } else {
+      state.respawnEnabled = false;
     }
     this.store.setSession(session.id, state);
   }

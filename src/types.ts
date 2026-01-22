@@ -74,6 +74,8 @@ export interface SessionState {
   inputTokens?: number;
   /** Output tokens used */
   outputTokens?: number;
+  /** Whether respawn controller is currently enabled/running */
+  respawnEnabled?: boolean;
   /** Respawn controller config (if enabled) */
   respawnConfig?: RespawnConfig & { durationMinutes?: number };
   /** Ralph / Todo tracker enabled */
