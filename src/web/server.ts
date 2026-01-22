@@ -1390,7 +1390,11 @@ export class WebServer extends EventEmitter {
       session.removeAllListeners();
       await session.stop(killScreen);
       this.sessions.delete(sessionId);
-      this.store.removeSession(sessionId);
+      // Only remove from state.json if we're also killing the screen.
+      // When killScreen=false (server shutdown), preserve state for recovery.
+      if (killScreen) {
+        this.store.removeSession(sessionId);
+      }
     }
 
     this.broadcast('session:deleted', { id: sessionId });
