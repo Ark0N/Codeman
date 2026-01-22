@@ -1608,6 +1608,16 @@ class ClaudemanApp {
     // Reset duration presets to default (unlimited)
     this.selectDurationPreset('');
 
+    // Populate respawn config from saved state
+    this.loadSavedRespawnConfig(sessionId);
+
+    // Populate auto-compact/clear from session state
+    document.getElementById('modalAutoCompactEnabled').checked = session.autoClear?.autoCompact?.enabled ?? false;
+    document.getElementById('modalAutoCompactThreshold').value = session.autoClear?.autoCompact?.threshold ?? 110000;
+    document.getElementById('modalAutoCompactPrompt').value = session.autoClear?.autoCompact?.prompt ?? '';
+    document.getElementById('modalAutoClearEnabled').checked = session.autoClear?.enabled ?? false;
+    document.getElementById('modalAutoClearThreshold').value = session.autoClear?.threshold ?? 140000;
+
     // Populate Ralph Wiggum form with current session values
     const ralphState = this.ralphStates.get(sessionId);
     this.populateRalphForm({
@@ -1619,6 +1629,80 @@ class ClaudemanApp {
     });
 
     document.getElementById('sessionOptionsModal').classList.add('active');
+  }
+
+  async autoSaveAutoCompact() {
+    if (!this.editingSessionId) return;
+    try {
+      await fetch(`/api/sessions/${this.editingSessionId}/auto-compact`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: document.getElementById('modalAutoCompactEnabled').checked,
+          threshold: parseInt(document.getElementById('modalAutoCompactThreshold').value) || 110000,
+          prompt: document.getElementById('modalAutoCompactPrompt').value.trim() || undefined
+        })
+      });
+    } catch { /* silent */ }
+  }
+
+  async autoSaveAutoClear() {
+    if (!this.editingSessionId) return;
+    try {
+      await fetch(`/api/sessions/${this.editingSessionId}/auto-clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: document.getElementById('modalAutoClearEnabled').checked,
+          threshold: parseInt(document.getElementById('modalAutoClearThreshold').value) || 140000
+        })
+      });
+    } catch { /* silent */ }
+  }
+
+  async autoSaveRespawnConfig() {
+    if (!this.editingSessionId) return;
+    const config = {
+      updatePrompt: document.getElementById('modalRespawnPrompt').value,
+      sendClear: document.getElementById('modalRespawnSendClear').checked,
+      sendInit: document.getElementById('modalRespawnSendInit').checked,
+      kickstartPrompt: document.getElementById('modalRespawnKickstart').value.trim() || undefined,
+    };
+    try {
+      await fetch(`/api/sessions/${this.editingSessionId}/respawn/config`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(config)
+      });
+    } catch {
+      // Silent save - don't interrupt user
+    }
+  }
+
+  async loadSavedRespawnConfig(sessionId) {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/respawn/config`);
+      const data = await res.json();
+      if (data.success && data.config) {
+        const c = data.config;
+        document.getElementById('modalRespawnPrompt').value = c.updatePrompt || 'update all the docs and CLAUDE.md';
+        document.getElementById('modalRespawnSendClear').checked = c.sendClear ?? true;
+        document.getElementById('modalRespawnSendInit').checked = c.sendInit ?? true;
+        document.getElementById('modalRespawnKickstart').value = c.kickstartPrompt || '';
+        // Restore duration if set
+        if (c.durationMinutes) {
+          const presetBtn = document.querySelector(`.duration-preset-btn[data-minutes="${c.durationMinutes}"]`);
+          if (presetBtn) {
+            this.selectDurationPreset(String(c.durationMinutes));
+          } else {
+            this.selectDurationPreset('custom');
+            document.getElementById('modalRespawnDuration').value = c.durationMinutes;
+          }
+        }
+      }
+    } catch {
+      // Ignore - use defaults
+    }
   }
 
   // Handle duration preset selection

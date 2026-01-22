@@ -310,18 +310,18 @@
 
             <div class="form-row">
               <label>Update Prompt</label>
-              <input type="text" id="modalRespawnPrompt" value="update all the docs and CLAUDE.md" placeholder="Prompt to send when idle">
+              <input type="text" id="modalRespawnPrompt" value="update all the docs and CLAUDE.md" placeholder="Prompt to send when idle" onchange="app.autoSaveRespawnConfig()">
             </div>
 
             <div class="form-row">
               <label>After Update Prompt</label>
               <div class="checkbox-group-inline">
                 <label class="checkbox-inline">
-                  <input type="checkbox" id="modalRespawnSendClear" checked>
+                  <input type="checkbox" id="modalRespawnSendClear" checked onchange="app.autoSaveRespawnConfig()">
                   <span>Send /clear</span>
                 </label>
                 <label class="checkbox-inline">
-                  <input type="checkbox" id="modalRespawnSendInit" checked>
+                  <input type="checkbox" id="modalRespawnSendInit" checked onchange="app.autoSaveRespawnConfig()">
                   <span>Send /init</span>
                 </label>
               </div>
@@ -329,7 +329,7 @@
 
             <div class="form-row">
               <label>Kickstart Prompt</label>
-              <input type="text" id="modalRespawnKickstart" value="" placeholder="Optional: prompt if /init doesn't trigger work">
+              <input type="text" id="modalRespawnKickstart" value="" placeholder="Optional: prompt if /init doesn't trigger work" onchange="app.autoSaveRespawnConfig()">
               <span class="form-hint">Sent only when /init completes but Claude stays idle</span>
             </div>
 
@@ -337,15 +337,15 @@
               <label>Auto-Compact Context</label>
               <div class="auto-clear-row">
                 <label class="checkbox-inline">
-                  <input type="checkbox" id="modalAutoCompactEnabled">
+                  <input type="checkbox" id="modalAutoCompactEnabled" onchange="app.autoSaveAutoCompact()">
                   <span>Enable at</span>
                 </label>
                 <div class="input-suffix input-suffix-sm">
-                  <input type="number" id="modalAutoCompactThreshold" value="110000" min="10000" max="500000" step="10000">
+                  <input type="number" id="modalAutoCompactThreshold" value="110000" min="10000" max="500000" step="10000" onchange="app.autoSaveAutoCompact()">
                   <span>tokens</span>
                 </div>
               </div>
-              <input type="text" id="modalAutoCompactPrompt" value="" placeholder="Optional: focus prompt for compact" class="mt-sm">
+              <input type="text" id="modalAutoCompactPrompt" value="" placeholder="Optional: focus prompt for compact" class="mt-sm" onchange="app.autoSaveAutoCompact()">
               <span class="form-hint">Summarizes context while preserving key information</span>
             </div>
 
@@ -353,11 +353,11 @@
               <label>Auto-Clear Context</label>
               <div class="auto-clear-row">
                 <label class="checkbox-inline">
-                  <input type="checkbox" id="modalAutoClearEnabled">
+                  <input type="checkbox" id="modalAutoClearEnabled" onchange="app.autoSaveAutoClear()">
                   <span>Enable at</span>
                 </label>
                 <div class="input-suffix input-suffix-sm">
-                  <input type="number" id="modalAutoClearThreshold" value="140000" min="10000" max="500000" step="10000">
+                  <input type="number" id="modalAutoClearThreshold" value="140000" min="10000" max="500000" step="10000" onchange="app.autoSaveAutoClear()">
                   <span>tokens</span>
                 </div>
               </div>

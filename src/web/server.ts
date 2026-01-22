@@ -581,6 +581,24 @@ export class WebServer extends EventEmitter {
       };
     });
 
+    // Get respawn config (from running controller or pre-saved)
+    this.app.get('/api/sessions/:id/respawn/config', async (req) => {
+      const { id } = req.params as { id: string };
+      const controller = this.respawnControllers.get(id);
+
+      if (controller) {
+        return { success: true, config: controller.getConfig(), active: true };
+      }
+
+      // Return pre-saved config from screens.json
+      const preConfig = this.screenManager.getScreen(id)?.respawnConfig;
+      if (preConfig) {
+        return { success: true, config: preConfig, active: false };
+      }
+
+      return { success: true, config: null, active: false };
+    });
+
     // Start respawn controller for a session
     this.app.post('/api/sessions/:id/respawn/start', async (req) => {
       const { id } = req.params as { id: string };
@@ -594,7 +612,10 @@ export class WebServer extends EventEmitter {
       // Create or get existing controller
       let controller = this.respawnControllers.get(id);
       if (!controller) {
-        controller = new RespawnController(session, body);
+        // Merge request body with pre-saved config from screens.json
+        const preConfig = this.screenManager.getScreen(id)?.respawnConfig;
+        const config = body || preConfig ? { ...preConfig, ...body } : undefined;
+        controller = new RespawnController(session, config);
         this.respawnControllers.set(id, controller);
         this.setupRespawnListeners(id, controller);
       } else if (body) {
@@ -637,28 +658,44 @@ export class WebServer extends EventEmitter {
       return { success: true };
     });
 
-    // Update respawn configuration
+    // Update respawn configuration (works with or without running controller)
     this.app.put('/api/sessions/:id/respawn/config', async (req) => {
       const { id } = req.params as { id: string };
       const config = req.body as Partial<RespawnConfig>;
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
       const controller = this.respawnControllers.get(id);
 
-      if (!controller) {
-        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Respawn controller not found');
-      }
-
-      controller.updateConfig(config);
-
-      // Persist updated config
-      this.saveRespawnConfig(id, controller.getConfig());
-      const session = this.sessions.get(id);
-      if (session) {
+      if (controller) {
+        // Update running controller
+        controller.updateConfig(config);
+        this.saveRespawnConfig(id, controller.getConfig());
         this.persistSessionState(session);
+        this.broadcast('respawn:configUpdated', { sessionId: id, config: controller.getConfig() });
+        return { success: true, config: controller.getConfig() };
       }
 
-      this.broadcast('respawn:configUpdated', { sessionId: id, config: controller.getConfig() });
-
-      return { success: true, config: controller.getConfig() };
+      // No controller running - save as pre-config for when respawn starts
+      const existing = this.screenManager.getScreen(id);
+      const currentConfig = existing?.respawnConfig;
+      const merged: PersistedRespawnConfig = {
+        enabled: config.enabled ?? currentConfig?.enabled ?? false,
+        idleTimeoutMs: config.idleTimeoutMs ?? currentConfig?.idleTimeoutMs ?? 10000,
+        updatePrompt: config.updatePrompt ?? currentConfig?.updatePrompt ?? 'update all the docs and CLAUDE.md',
+        interStepDelayMs: config.interStepDelayMs ?? currentConfig?.interStepDelayMs ?? 1000,
+        sendClear: config.sendClear ?? currentConfig?.sendClear ?? true,
+        sendInit: config.sendInit ?? currentConfig?.sendInit ?? true,
+        kickstartPrompt: config.kickstartPrompt ?? currentConfig?.kickstartPrompt,
+        durationMinutes: currentConfig?.durationMinutes,
+      };
+      this.screenManager.updateRespawnConfig(id, merged);
+      this.persistSessionState(session);
+      this.broadcast('respawn:configUpdated', { sessionId: id, config: merged });
+      return { success: true, config: merged };
     });
 
     // Start interactive session WITH respawn enabled
@@ -733,8 +770,10 @@ export class WebServer extends EventEmitter {
         existingController.stop();
       }
 
-      // Create and start new respawn controller
-      const controller = new RespawnController(session, body?.config);
+      // Create and start new respawn controller (merge with pre-saved config)
+      const preConfig = this.screenManager.getScreen(id)?.respawnConfig;
+      const config = body?.config || preConfig ? { ...preConfig, ...body?.config } : undefined;
+      const controller = new RespawnController(session, config);
       this.respawnControllers.set(id, controller);
       this.setupRespawnListeners(id, controller);
       controller.start();

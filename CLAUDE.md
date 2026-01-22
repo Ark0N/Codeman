@@ -153,7 +153,8 @@ claudeman reset                    # Reset all state
 1. **Session** spawns `claude -p --dangerously-skip-permissions` via `node-pty`
 2. PTY output is buffered, ANSI stripped, and parsed for JSON messages
 3. **WebServer** broadcasts events to SSE clients at `/api/events`
-4. State persists to `~/.claudeman/state.json` via **StateStore**
+4. Full session state (settings, tokens, respawn config, Ralph state) persists to `~/.claudeman/state.json` via **StateStore**
+5. Screen metadata persists separately to `~/.claudeman/screens.json` for session recovery
 
 ### Respawn State Machine
 
@@ -387,7 +388,24 @@ Vanilla JS + xterm.js. Key functions:
 
 ### State Store
 
-Writes debounced to `~/.claudeman/state.json`. Batches rapid changes.
+Writes debounced (500ms) to `~/.claudeman/state.json`. The web server persists full session state via `persistSessionState()` on every meaningful change:
+
+**Persistence triggers**: session create, delete, rename, settings change (auto-compact, auto-clear, Ralph config), respawn start/stop/update/expire, completion, exit.
+
+**Per-session fields stored** (`SessionState` in `types.ts`):
+
+| Field | Description |
+|-------|-------------|
+| `id`, `pid`, `status` | Core session identity |
+| `name`, `mode` | Display name, 'claude' or 'shell' |
+| `workingDir`, `createdAt`, `lastActivityAt` | Location and timestamps |
+| `autoClearEnabled`, `autoClearThreshold` | Auto-clear settings |
+| `autoCompactEnabled`, `autoCompactThreshold`, `autoCompactPrompt` | Auto-compact settings |
+| `ralphEnabled`, `ralphCompletionPhrase` | Ralph / Todo tracker state |
+| `respawnConfig` | Full respawn config including `durationMinutes` |
+| `totalCost`, `inputTokens`, `outputTokens` | Token and cost tracking |
+
+**CLI visibility**: The `claudeman status` and `claudeman session list` commands read from `state.json` to display web server-managed sessions, even though they run in a separate process.
 
 ### Timing Constants
 
@@ -430,6 +448,7 @@ TUI uses React JSX (`jsxImportSource: react`) for Ink components.
 - **API endpoint**: Add types in `types.ts`, route in `server.ts:buildServer()`, use `createErrorResponse()` for errors
 - **SSE event**: Emit via `broadcast()` in server.ts, handle in `app.js:handleSSEEvent()` switch
 - **Session event**: Add to `SessionEvents` interface in `session.ts`, emit via `this.emit()`, subscribe in server.ts, handle in frontend
+- **Session setting**: Add field to `SessionState` in `types.ts`, include in `session.toState()`, call `this.persistSessionState(session)` in server.ts after the change
 - **New test file**: Create `test/<name>.test.ts`, pick unique port (next available: 3127+), add to port allocation comment above
 
 ### API Error Codes
@@ -450,7 +469,8 @@ Use `createErrorResponse(code, details?)` from `types.ts`:
 - **Limit**: Web server: `MAX_CONCURRENT_SESSIONS = 50` (`server.ts:56`), UI tab limit: 20, CLI default: 5 (`types.ts:DEFAULT_CONFIG`)
 - **Kill** (`killScreen()`): child PIDs → process group → screen quit → SIGKILL
 - **Ghost discovery**: `reconcileScreens()` finds orphaned screens on startup
-- **Cleanup** (`cleanupSession()`): stops respawn, clears buffers/timers, kills screen
+- **Cleanup** (`cleanupSession()`): stops respawn, clears buffers/timers, kills screen, removes from `state.json`
+- **State sync**: Every session create/delete/update calls `persistSessionState()` which writes full state (including respawn config from controller) to `state.json`
 
 ## TUI Architecture (Ink/React)
 
@@ -506,10 +526,11 @@ Long-running sessions are supported with automatic trimming:
 | POST | `/api/sessions/:id/input` | Send input to session PTY |
 | POST | `/api/sessions/:id/resize` | Resize terminal (cols, rows) |
 | POST | `/api/sessions/:id/interactive` | Start interactive mode |
-| POST | `/api/sessions/:id/respawn/start` | Start respawn controller |
+| POST | `/api/sessions/:id/respawn/start` | Start respawn controller (merges pre-saved config) |
 | POST | `/api/sessions/:id/respawn/stop` | Stop respawn controller |
 | POST | `/api/sessions/:id/respawn/enable` | Enable respawn with config + optional timer |
-| PUT | `/api/sessions/:id/respawn/config` | Update config on running respawn |
+| GET | `/api/sessions/:id/respawn/config` | Get current or pre-saved respawn config |
+| PUT | `/api/sessions/:id/respawn/config` | Update config (works with or without running controller) |
 | POST | `/api/sessions/:id/ralph-config` | Configure Ralph / Todo Tracker settings |
 | GET | `/api/sessions/:id/ralph-state` | Get Ralph loop state + todos |
 | POST | `/api/sessions/:id/auto-compact` | Configure auto-compact threshold |
@@ -574,9 +595,17 @@ Long-running sessions are supported with automatic trimming:
 
 | File | Purpose |
 |------|---------|
-| `~/.claudeman/state.json` | Sessions, tasks, config |
+| `~/.claudeman/state.json` | Full session state (all settings, tokens, respawn config, Ralph state), tasks, app config |
 | `~/.claudeman/state-inner.json` | Ralph loop/todo state per session (separate to reduce writes) |
-| `~/.claudeman/screens.json` | Screen session metadata |
+| `~/.claudeman/screens.json` | Screen session metadata (for recovery after restart) |
+| `~/.claudeman/settings.json` | User preferences (lastUsedCase, custom template path) |
+
+**State lifecycle**:
+- Web server creates → session added to `state.json` + `screens.json`
+- Settings change → `state.json` updated (debounced 500ms)
+- Session deleted → removed from `state.json` (screen may survive if `killScreen: false`)
+- Server shutdown → all sessions cleaned up from `state.json`, screens preserved for recovery
+- Server restart → sessions restored from `screens.json`, state rebuilt in `state.json`
 
 Cases created in `~/claudeman-cases/` by default.
 
