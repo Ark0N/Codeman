@@ -225,6 +225,7 @@ export class WebServer extends EventEmitter {
       });
 
       this.sessions.set(session.id, session);
+      this.persistSessionState(session);
       this.setupSessionListeners(session);
 
       this.broadcast('session:created', session.toDetailedState());
@@ -244,6 +245,7 @@ export class WebServer extends EventEmitter {
       session.name = body.name || '';
       // Also update the screen name if this session has a screen
       this.screenManager.updateScreenName(id, session.name);
+      this.persistSessionState(session);
       this.broadcast('session:updated', session.toDetailedState());
       return { success: true, name: session.name };
     });
@@ -392,7 +394,8 @@ export class WebServer extends EventEmitter {
         todoExpirationMinutes: todoExpirationMinutes || 60
       };
 
-      // Broadcast the update
+      // Persist and broadcast the update
+      this.persistSessionState(session);
       this.broadcast('session:ralphLoopUpdate', {
         sessionId: id,
         state: session.ralphLoopState
@@ -600,8 +603,9 @@ export class WebServer extends EventEmitter {
 
       controller.start();
 
-      // Persist respawn config to screen session
+      // Persist respawn config to screen session and state.json
       this.saveRespawnConfig(id, controller.getConfig());
+      this.persistSessionState(session);
 
       this.broadcast('respawn:started', { sessionId: id, status: controller.getStatus() });
 
@@ -622,6 +626,12 @@ export class WebServer extends EventEmitter {
       // Clear persisted respawn config
       this.screenManager.clearRespawnConfig(id);
 
+      // Update state.json (respawnConfig removed)
+      const session = this.sessions.get(id);
+      if (session) {
+        this.persistSessionState(session);
+      }
+
       this.broadcast('respawn:stopped', { sessionId: id });
 
       return { success: true };
@@ -641,6 +651,10 @@ export class WebServer extends EventEmitter {
 
       // Persist updated config
       this.saveRespawnConfig(id, controller.getConfig());
+      const session = this.sessions.get(id);
+      if (session) {
+        this.persistSessionState(session);
+      }
 
       this.broadcast('respawn:configUpdated', { sessionId: id, config: controller.getConfig() });
 
@@ -680,6 +694,9 @@ export class WebServer extends EventEmitter {
         if (body?.durationMinutes && body.durationMinutes > 0) {
           this.setupTimedRespawn(id, body.durationMinutes);
         }
+
+        // Persist full session state with respawn config
+        this.persistSessionState(session);
 
         this.broadcast('respawn:started', { sessionId: id, status: controller.getStatus() });
 
@@ -727,8 +744,9 @@ export class WebServer extends EventEmitter {
         this.setupTimedRespawn(id, body.durationMinutes);
       }
 
-      // Persist respawn config to screen session
+      // Persist respawn config to screen session and state.json
       this.saveRespawnConfig(id, controller.getConfig(), body?.durationMinutes);
+      this.persistSessionState(session);
 
       this.broadcast('respawn:started', { sessionId: id, status: controller.getStatus() });
 
@@ -758,6 +776,7 @@ export class WebServer extends EventEmitter {
       }
 
       session.setAutoClear(body.enabled, body.threshold);
+      this.persistSessionState(session);
       this.broadcast('session:updated', session.toDetailedState());
 
       return {
@@ -790,6 +809,7 @@ export class WebServer extends EventEmitter {
       }
 
       session.setAutoCompact(body.enabled, body.threshold, body.prompt);
+      this.persistSessionState(session);
       this.broadcast('session:updated', session.toDetailedState());
 
       return {
@@ -820,6 +840,7 @@ export class WebServer extends EventEmitter {
 
       const session = new Session({ workingDir: dir });
       this.sessions.set(session.id, session);
+      this.persistSessionState(session);
       this.setupSessionListeners(session);
 
       this.broadcast('session:created', session.toDetailedState());
@@ -1101,6 +1122,7 @@ export class WebServer extends EventEmitter {
       }
 
       this.sessions.set(session.id, session);
+      this.persistSessionState(session);
       this.setupSessionListeners(session);
       this.broadcast('session:created', session.toDetailedState());
 
@@ -1217,6 +1239,21 @@ export class WebServer extends EventEmitter {
     });
   }
 
+  /** Persists full session state including respawn config to state.json */
+  private persistSessionState(session: Session): void {
+    const state = session.toState();
+    const controller = this.respawnControllers.get(session.id);
+    if (controller) {
+      const config = controller.getConfig();
+      const timerInfo = this.respawnTimers.get(session.id);
+      const durationMinutes = timerInfo
+        ? Math.round((timerInfo.endAt - timerInfo.startedAt) / 60000)
+        : undefined;
+      state.respawnConfig = { ...config, durationMinutes };
+    }
+    this.store.setSession(session.id, state);
+  }
+
   // Helper to save respawn config to screen session for persistence
   private saveRespawnConfig(sessionId: string, config: RespawnConfig, durationMinutes?: number): void {
     const persistedConfig: PersistedRespawnConfig = {
@@ -1311,6 +1348,7 @@ export class WebServer extends EventEmitter {
       session.removeAllListeners();
       await session.stop(killScreen);
       this.sessions.delete(sessionId);
+      this.store.removeSession(sessionId);
     }
 
     this.broadcast('session:deleted', { id: sessionId });
@@ -1343,6 +1381,7 @@ export class WebServer extends EventEmitter {
     session.on('completion', (result, cost) => {
       this.broadcast('session:completion', { id: session.id, result, cost });
       this.broadcast('session:updated', session.toDetailedState());
+      this.persistSessionState(session);
     });
 
     session.on('exit', (code) => {
@@ -1350,6 +1389,7 @@ export class WebServer extends EventEmitter {
       try {
         this.broadcast('session:exit', { id: session.id, code });
         this.broadcast('session:updated', session.toDetailedState());
+        this.persistSessionState(session);
       } catch (err) {
         console.error(`[Server] Error broadcasting session exit for ${session.id}:`, err);
       }
@@ -1478,6 +1518,11 @@ export class WebServer extends EventEmitter {
         this.broadcast('respawn:stopped', { sessionId, reason: 'duration_expired' });
       }
       this.respawnTimers.delete(sessionId);
+      // Update persisted state (respawn no longer active)
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        this.persistSessionState(session);
+      }
     }, durationMinutes * 60 * 1000);
 
     this.respawnTimers.set(sessionId, { timer, endAt, startedAt: now });
@@ -1557,6 +1602,7 @@ export class WebServer extends EventEmitter {
         // Create a session for this iteration
         session = new Session({ workingDir: run.workingDir });
         this.sessions.set(session.id, session);
+        this.persistSessionState(session);
         this.setupSessionListeners(session);
         run.sessionId = session.id;
 
@@ -1884,6 +1930,7 @@ export class WebServer extends EventEmitter {
             });
 
             this.sessions.set(session.id, session);
+            this.persistSessionState(session);
             this.setupSessionListeners(session);
 
             // Restore Ralph tracking state (Ralph Wiggum settings) if it was saved

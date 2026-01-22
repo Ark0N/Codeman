@@ -92,7 +92,25 @@ sessionCmd
     if (stoppedSessions.length > 0) {
       console.log(chalk.bold('\nStopped Sessions:'));
       for (const session of stoppedSessions) {
-        console.log(`  ${chalk.gray(session.id.slice(0, 8))} ${chalk.gray('stopped')} ${session.workingDir}`);
+        const name = session.name ? ` (${session.name})` : '';
+        console.log(`  ${chalk.gray(session.id.slice(0, 8))} ${chalk.gray('stopped')}${name} ${session.workingDir}`);
+      }
+    }
+
+    // Show active sessions from state (when web server manages them)
+    const activeSessions = Object.values(stored).filter((s) => s.status !== 'stopped');
+    if (sessions.length === 0 && activeSessions.length > 0) {
+      console.log(chalk.bold('\nActive Sessions (from web server):'));
+      for (const session of activeSessions) {
+        const status = session.status === 'idle'
+          ? chalk.green('idle')
+          : session.status === 'busy'
+            ? chalk.yellow('busy')
+            : chalk.red(session.status);
+        const name = session.name ? ` (${session.name})` : '';
+        const mode = session.mode === 'shell' ? chalk.gray(' [shell]') : '';
+        const cost = session.totalCost ? chalk.gray(` $${session.totalCost.toFixed(4)}`) : '';
+        console.log(`  ${chalk.cyan(session.id.slice(0, 8))} ${status}${name}${mode}${cost} ${session.workingDir}`);
       }
     }
     console.log('');
@@ -371,16 +389,27 @@ program
     const loop = getRalphLoop();
 
     const sessions = manager.getAllSessions();
+    const stored = manager.getStoredSessions();
+    const storedValues = Object.values(stored);
     const taskCounts = queue.getCount();
     const loopStatus = loop.status;
+
+    // Use live sessions if available, otherwise fall back to stored state
+    const activeCount = sessions.length || storedValues.filter((s) => s.status !== 'stopped').length;
+    const idleCount = sessions.length
+      ? sessions.filter((s) => s.isIdle()).length
+      : storedValues.filter((s) => s.status === 'idle').length;
+    const busyCount = sessions.length
+      ? sessions.filter((s) => s.isBusy()).length
+      : storedValues.filter((s) => s.status === 'busy').length;
 
     console.log(chalk.bold('\nClaudeman Status'));
     console.log('─'.repeat(40));
 
     console.log(chalk.bold('\nSessions:'));
-    console.log(`  Active: ${sessions.length}`);
-    console.log(`  Idle: ${sessions.filter((s) => s.isIdle()).length}`);
-    console.log(`  Busy: ${sessions.filter((s) => s.isBusy()).length}`);
+    console.log(`  Active: ${activeCount}`);
+    console.log(`  Idle: ${idleCount}`);
+    console.log(`  Busy: ${busyCount}`);
 
     console.log(chalk.bold('\nTasks:'));
     console.log(`  Total: ${taskCounts.total}`);

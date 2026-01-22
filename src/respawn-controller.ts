@@ -413,9 +413,6 @@ export class RespawnController extends EventEmitter {
   /** Timer for step completion confirmation (waits for silence after completion) */
   private stepConfirmTimer: NodeJS.Timeout | null = null;
 
-  /** Which step is pending confirmation */
-  private pendingStepConfirm: 'update' | 'init' | 'kickstart' | null = null;
-
   /** Fallback timeout for /clear step (ms) - sends /init without waiting for prompt */
   private static readonly CLEAR_FALLBACK_TIMEOUT_MS = 10000;
 
@@ -996,7 +993,7 @@ export class RespawnController extends EventEmitter {
     if (this.stepConfirmTimer) {
       clearTimeout(this.stepConfirmTimer);
       this.stepConfirmTimer = null;
-      this.pendingStepConfirm = null;
+
     }
     if (this.noOutputTimer) {
       clearTimeout(this.noOutputTimer);
@@ -1112,7 +1109,6 @@ export class RespawnController extends EventEmitter {
       clearTimeout(this.stepConfirmTimer);
     }
 
-    this.pendingStepConfirm = step;
     this.log(`Step '${step}' completion detected, waiting ${this.config.completionConfirmMs}ms for silence...`);
 
     this.stepConfirmTimer = setTimeout(() => {
@@ -1121,7 +1117,7 @@ export class RespawnController extends EventEmitter {
       if (msSinceOutput >= this.config.completionConfirmMs) {
         this.log(`Step '${step}' confirmed: ${msSinceOutput}ms silence`);
         this.stepConfirmTimer = null;
-        this.pendingStepConfirm = null;
+  
 
         // Proceed with the step completion
         switch (step) {
@@ -1152,7 +1148,6 @@ export class RespawnController extends EventEmitter {
       this.stepConfirmTimer = null;
       this.log(`Step confirmation cancelled (working detected)`);
     }
-    this.pendingStepConfirm = null;
   }
 
   /**

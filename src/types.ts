@@ -54,6 +54,32 @@ export interface SessionState {
   createdAt: number;
   /** Timestamp of last activity */
   lastActivityAt: number;
+  /** Session display name */
+  name?: string;
+  /** Session mode: 'claude' or 'shell' */
+  mode?: 'claude' | 'shell';
+  /** Auto-clear enabled */
+  autoClearEnabled?: boolean;
+  /** Auto-clear token threshold */
+  autoClearThreshold?: number;
+  /** Auto-compact enabled */
+  autoCompactEnabled?: boolean;
+  /** Auto-compact token threshold */
+  autoCompactThreshold?: number;
+  /** Auto-compact prompt */
+  autoCompactPrompt?: string;
+  /** Total cost in USD */
+  totalCost?: number;
+  /** Input tokens used */
+  inputTokens?: number;
+  /** Output tokens used */
+  outputTokens?: number;
+  /** Respawn controller config (if enabled) */
+  respawnConfig?: RespawnConfig & { durationMinutes?: number };
+  /** Ralph / Todo tracker enabled */
+  ralphEnabled?: boolean;
+  /** Ralph completion phrase (if set) */
+  ralphCompletionPhrase?: string;
 }
 
 // ========== Task Types ==========
@@ -171,6 +197,10 @@ export interface RespawnConfig {
   sendInit: boolean;
   /** Optional prompt to send if /init doesn't trigger work */
   kickstartPrompt?: string;
+  /** Time to wait after completion message before confirming idle (ms) */
+  completionConfirmMs?: number;
+  /** Fallback timeout when no output received at all (ms) */
+  noOutputTimeoutMs?: number;
 }
 
 /**

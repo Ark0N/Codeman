@@ -547,6 +547,18 @@ export class Session extends EventEmitter {
       currentTaskId: this._currentTaskId,
       createdAt: this.createdAt,
       lastActivityAt: this._lastActivityAt,
+      name: this._name,
+      mode: this.mode,
+      autoClearEnabled: this._autoClearEnabled,
+      autoClearThreshold: this._autoClearThreshold,
+      autoCompactEnabled: this._autoCompactEnabled,
+      autoCompactThreshold: this._autoCompactThreshold,
+      autoCompactPrompt: this._autoCompactPrompt,
+      totalCost: this._totalCost,
+      inputTokens: this._totalInputTokens,
+      outputTokens: this._totalOutputTokens,
+      ralphEnabled: this._ralphTracker.enabled,
+      ralphCompletionPhrase: this._ralphTracker.loopState.completionPhrase || undefined,
     };
   }
 
