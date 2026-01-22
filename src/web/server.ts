@@ -1971,6 +1971,24 @@ export class WebServer extends EventEmitter {
               screenSession: screen  // Pass the existing screen so startInteractive() can attach to it
             });
 
+            // Restore auto-compact/auto-clear settings from state.json
+            const savedState = this.store.getSession(screen.sessionId);
+            if (savedState) {
+              if (savedState.autoCompactEnabled !== undefined || savedState.autoCompactThreshold !== undefined) {
+                session.setAutoCompact(
+                  savedState.autoCompactEnabled ?? false,
+                  savedState.autoCompactThreshold,
+                  savedState.autoCompactPrompt
+                );
+              }
+              if (savedState.autoClearEnabled !== undefined || savedState.autoClearThreshold !== undefined) {
+                session.setAutoClear(
+                  savedState.autoClearEnabled ?? false,
+                  savedState.autoClearThreshold
+                );
+              }
+            }
+
             this.sessions.set(session.id, session);
             this.persistSessionState(session);
             this.setupSessionListeners(session);
