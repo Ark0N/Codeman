@@ -61,7 +61,7 @@ WATCHING → IDLE DETECTED → SEND UPDATE → CLEAR → INIT → CONTINUE
 - Detects idle state via prompt indicators (`↵ send`, `❯`)
 - Sends configurable update prompts to continue work
 - Auto-cycles `/clear` → `/init` for fresh context
-- **Keeps working even when Ralph Wiggum loops stop**
+- **Keeps working even when Ralph loops stop**
 - Run for **24+ hours** completely unattended
 
 ```bash
@@ -79,7 +79,7 @@ curl -X POST localhost:3000/api/sessions/:id/respawn/enable \
 
 ---
 
-### 🎯 Ralph Wiggum Loop Tracking
+### 🎯 Ralph / Todo Tracking
 
 Claudeman detects and tracks Ralph loops running inside Claude Code:
 
@@ -264,7 +264,7 @@ Optimized for long-running autonomous sessions:
 | Feature | Implementation |
 |---------|----------------|
 | **60fps terminal** | 16ms server batching, `requestAnimationFrame` client |
-| **Memory management** | Auto-trimming buffers (5MB max) |
+| **Memory management** | Auto-trimming buffers (2MB terminal, 1MB text) |
 | **Event debouncing** | 50-500ms on rapid state changes |
 
 ---
