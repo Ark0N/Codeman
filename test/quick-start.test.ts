@@ -18,16 +18,20 @@ describe('Quick Start API', () => {
     baseUrl = `http://localhost:${TEST_PORT}`;
   });
 
-  afterAll(async () => {
-    await server.stop();
-    // Cleanup created test cases
-    for (const caseName of createdCases) {
+  afterEach(() => {
+    // Clean up cases created during this test
+    while (createdCases.length > 0) {
+      const caseName = createdCases.pop()!;
       const casePath = join(CASES_DIR, caseName);
       if (existsSync(casePath)) {
         rmSync(casePath, { recursive: true, force: true });
       }
     }
-  }, 30000); // Increase timeout since server.stop() kills screen sessions
+  });
+
+  afterAll(async () => {
+    await server.stop();
+  }, 30000);
 
   describe('POST /api/quick-start', () => {
     it('should create default testcase and start interactive session', async () => {

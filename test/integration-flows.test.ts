@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { WebServer } from '../src/web/server.js';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -23,19 +23,23 @@ describe('Integration Flows', () => {
     baseUrl = `http://localhost:${TEST_PORT}`;
   });
 
+  afterEach(() => {
+    // Clean up cases created during this test
+    while (createdCases.length > 0) {
+      const caseName = createdCases.pop()!;
+      const casePath = join(CASES_DIR, caseName);
+      if (existsSync(casePath)) {
+        rmSync(casePath, { recursive: true, force: true });
+      }
+    }
+  });
+
   afterAll(async () => {
     // Cleanup sessions
     for (const sessionId of createdSessions) {
       try {
         await fetch(`${baseUrl}/api/sessions/${sessionId}`, { method: 'DELETE' });
       } catch {}
-    }
-    // Cleanup cases
-    for (const caseName of createdCases) {
-      const casePath = join(CASES_DIR, caseName);
-      if (existsSync(casePath)) {
-        rmSync(casePath, { recursive: true, force: true });
-      }
     }
     await server.stop();
   }, 60000);

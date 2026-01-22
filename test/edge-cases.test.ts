@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { WebServer } from '../src/web/server.js';
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -18,14 +18,19 @@ describe('Edge Cases and Error Handling', () => {
     baseUrl = `http://localhost:${TEST_PORT}`;
   });
 
-  afterAll(async () => {
-    await server.stop();
-    for (const caseName of createdCases) {
+  afterEach(() => {
+    // Clean up cases created during this test
+    while (createdCases.length > 0) {
+      const caseName = createdCases.pop()!;
       const casePath = join(CASES_DIR, caseName);
       if (existsSync(casePath)) {
         rmSync(casePath, { recursive: true, force: true });
       }
     }
+  });
+
+  afterAll(async () => {
+    await server.stop();
   }, 30000);
 
   describe('Session Edge Cases', () => {
