@@ -334,6 +334,17 @@
             </div>
 
             <div class="form-row">
+              <label>Auto-Accept Prompts</label>
+              <div class="checkbox-group-inline">
+                <label class="checkbox-inline">
+                  <input type="checkbox" id="modalRespawnAutoAccept" checked onchange="app.autoSaveRespawnConfig()">
+                  <span>Accept plan mode &amp; questions</span>
+                </label>
+              </div>
+              <span class="form-hint">Presses Enter to accept plan approvals and default question options when Claude is waiting</span>
+            </div>
+
+            <div class="form-row">
               <label>Auto-Compact Context</label>
               <div class="auto-clear-row">
                 <label class="checkbox-inline">

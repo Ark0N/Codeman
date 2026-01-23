@@ -857,4 +857,203 @@ describe('RespawnController Edge Cases', () => {
     expect(status.timeSinceActivity).toBeLessThan(100);
     controller.stop();
   });
+
+  describe('Auto-Accept Prompts', () => {
+    it('should have autoAcceptPrompts enabled by default', () => {
+      const defaultController = new RespawnController(session as unknown as Session);
+      const config = defaultController.getConfig();
+      expect(config.autoAcceptPrompts).toBe(true);
+      expect(config.autoAcceptDelayMs).toBe(8000);
+      defaultController.stop();
+    });
+
+    it('should send Enter after silence without completion message', async () => {
+      const autoAcceptController = new RespawnController(session as unknown as Session, {
+        autoAcceptPrompts: true,
+        autoAcceptDelayMs: 100, // Short delay for testing
+        completionConfirmMs: 50,
+        noOutputTimeoutMs: 5000,
+      });
+
+      let autoAcceptFired = false;
+      autoAcceptController.on('autoAcceptSent', () => {
+        autoAcceptFired = true;
+      });
+
+      autoAcceptController.start();
+
+      // Simulate output (e.g., plan content), then silence
+      session.simulateTerminalOutput('Plan: Here is my implementation plan...');
+
+      // Wait for autoAcceptDelayMs to expire
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      expect(autoAcceptFired).toBe(true);
+      expect(session.writeBuffer).toContain('\r');
+      autoAcceptController.stop();
+    });
+
+    it('should NOT send Enter when completion message was detected', async () => {
+      const autoAcceptController = new RespawnController(session as unknown as Session, {
+        autoAcceptPrompts: true,
+        autoAcceptDelayMs: 100,
+        completionConfirmMs: 200, // Longer than autoAcceptDelay
+        noOutputTimeoutMs: 5000,
+      });
+
+      let autoAcceptFired = false;
+      autoAcceptController.on('autoAcceptSent', () => {
+        autoAcceptFired = true;
+      });
+
+      autoAcceptController.start();
+
+      // Simulate completion message - normal idle flow should handle this
+      session.simulateCompletionMessage();
+
+      // Wait for autoAcceptDelayMs
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      expect(autoAcceptFired).toBe(false);
+      autoAcceptController.stop();
+    });
+
+    it('should NOT send Enter when disabled', async () => {
+      const autoAcceptController = new RespawnController(session as unknown as Session, {
+        autoAcceptPrompts: false,
+        autoAcceptDelayMs: 100,
+        completionConfirmMs: 50,
+        noOutputTimeoutMs: 5000,
+      });
+
+      let autoAcceptFired = false;
+      autoAcceptController.on('autoAcceptSent', () => {
+        autoAcceptFired = true;
+      });
+
+      autoAcceptController.start();
+      session.simulateTerminalOutput('Plan: Waiting for approval...');
+
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      expect(autoAcceptFired).toBe(false);
+      autoAcceptController.stop();
+    });
+
+    it('should NOT send Enter before any output is received', async () => {
+      const autoAcceptController = new RespawnController(session as unknown as Session, {
+        autoAcceptPrompts: true,
+        autoAcceptDelayMs: 100,
+        completionConfirmMs: 50,
+        noOutputTimeoutMs: 5000,
+      });
+
+      let autoAcceptFired = false;
+      autoAcceptController.on('autoAcceptSent', () => {
+        autoAcceptFired = true;
+      });
+
+      autoAcceptController.start();
+
+      // Don't simulate any output - just wait
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      expect(autoAcceptFired).toBe(false);
+      autoAcceptController.stop();
+    });
+
+    it('should reset timer when new output arrives', async () => {
+      const autoAcceptController = new RespawnController(session as unknown as Session, {
+        autoAcceptPrompts: true,
+        autoAcceptDelayMs: 150,
+        completionConfirmMs: 50,
+        noOutputTimeoutMs: 5000,
+      });
+
+      let autoAcceptFired = false;
+      autoAcceptController.on('autoAcceptSent', () => {
+        autoAcceptFired = true;
+      });
+
+      autoAcceptController.start();
+      session.simulateTerminalOutput('First output');
+
+      // Wait 100ms (less than 150ms delay), then send more output
+      await new Promise(resolve => setTimeout(resolve, 100));
+      session.simulateTerminalOutput('More output');
+
+      // Wait another 100ms - total 200ms from start but only 100ms from last output
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(autoAcceptFired).toBe(false);
+
+      // Wait the remaining time
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(autoAcceptFired).toBe(true);
+      autoAcceptController.stop();
+    });
+
+    it('should only send Enter once per silence period', async () => {
+      const autoAcceptController = new RespawnController(session as unknown as Session, {
+        autoAcceptPrompts: true,
+        autoAcceptDelayMs: 100,
+        completionConfirmMs: 50,
+        noOutputTimeoutMs: 5000,
+      });
+
+      let autoAcceptCount = 0;
+      autoAcceptController.on('autoAcceptSent', () => {
+        autoAcceptCount++;
+      });
+
+      autoAcceptController.start();
+      session.simulateTerminalOutput('Plan waiting...');
+
+      // Wait for first auto-accept
+      await new Promise(resolve => setTimeout(resolve, 200));
+      expect(autoAcceptCount).toBe(1);
+
+      // Wait more - should NOT fire again (hasReceivedOutput is false)
+      await new Promise(resolve => setTimeout(resolve, 200));
+      expect(autoAcceptCount).toBe(1);
+
+      // New output comes in, then silence again - should fire again
+      session.simulateTerminalOutput('Another question...');
+      await new Promise(resolve => setTimeout(resolve, 200));
+      expect(autoAcceptCount).toBe(2);
+
+      autoAcceptController.stop();
+    });
+
+    it('should NOT auto-accept during respawn cycle (non-watching state)', async () => {
+      const autoAcceptController = new RespawnController(session as unknown as Session, {
+        autoAcceptPrompts: true,
+        autoAcceptDelayMs: 50,
+        completionConfirmMs: 50,
+        interStepDelayMs: 50,
+        noOutputTimeoutMs: 5000,
+      });
+
+      let autoAcceptFired = false;
+      autoAcceptController.on('autoAcceptSent', () => {
+        autoAcceptFired = true;
+      });
+
+      autoAcceptController.start();
+
+      // Trigger a respawn cycle via completion message
+      session.simulateCompletionMessage();
+      await new Promise(resolve => setTimeout(resolve, 150));
+
+      // Now in sending_update or waiting_update state
+      expect(autoAcceptController.state).not.toBe('watching');
+
+      // Simulate output in the waiting state, then silence
+      session.simulateTerminalOutput('Processing update...');
+      await new Promise(resolve => setTimeout(resolve, 150));
+
+      // Auto-accept should NOT fire because we're not in watching state
+      expect(autoAcceptFired).toBe(false);
+      autoAcceptController.stop();
+    });
+  });
 });

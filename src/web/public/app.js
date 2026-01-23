@@ -503,6 +503,13 @@ class ClaudemanApp {
       }
     });
 
+    this.eventSource.addEventListener('respawn:autoAcceptSent', (e) => {
+      const data = JSON.parse(e.data);
+      if (data.sessionId === this.activeSessionId) {
+        document.getElementById('respawnStep').textContent = '⏎ Auto-accepted prompt';
+      }
+    });
+
     this.eventSource.addEventListener('respawn:detectionUpdate', (e) => {
       const data = JSON.parse(e.data);
       if (this.respawnStatus[data.sessionId]) {
@@ -1667,6 +1674,7 @@ class ClaudemanApp {
       sendClear: document.getElementById('modalRespawnSendClear').checked,
       sendInit: document.getElementById('modalRespawnSendInit').checked,
       kickstartPrompt: document.getElementById('modalRespawnKickstart').value.trim() || undefined,
+      autoAcceptPrompts: document.getElementById('modalRespawnAutoAccept').checked,
     };
     try {
       await fetch(`/api/sessions/${this.editingSessionId}/respawn/config`, {
@@ -1689,6 +1697,7 @@ class ClaudemanApp {
         document.getElementById('modalRespawnSendClear').checked = c.sendClear ?? true;
         document.getElementById('modalRespawnSendInit').checked = c.sendInit ?? true;
         document.getElementById('modalRespawnKickstart').value = c.kickstartPrompt || '';
+        document.getElementById('modalRespawnAutoAccept').checked = c.autoAcceptPrompts ?? true;
         // Restore duration if set
         if (c.durationMinutes) {
           const presetBtn = document.querySelector(`.duration-preset-btn[data-minutes="${c.durationMinutes}"]`);
@@ -1749,6 +1758,7 @@ class ClaudemanApp {
     const sendClear = document.getElementById('modalRespawnSendClear').checked;
     const sendInit = document.getElementById('modalRespawnSendInit').checked;
     const kickstartPrompt = document.getElementById('modalRespawnKickstart').value.trim() || undefined;
+    const autoAcceptPrompts = document.getElementById('modalRespawnAutoAccept').checked;
     const durationMinutes = this.getSelectedDuration();
 
     // Auto-compact settings
@@ -1766,6 +1776,7 @@ class ClaudemanApp {
         sendClear,
         sendInit,
         kickstartPrompt,
+        autoAcceptPrompts,
       },
       durationMinutes,
       autoCompactEnabled,

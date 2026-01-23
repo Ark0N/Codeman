@@ -267,6 +267,22 @@ export interface RespawnConfig {
    * @default 30000 (30 seconds)
    */
   noOutputTimeoutMs: number;
+
+  /**
+   * Whether to auto-accept prompts (plan mode approvals, question selections).
+   * When Claude enters plan mode or asks a question, output stops without a completion
+   * message. This feature detects that state and sends Enter to accept the default option.
+   * @default true
+   */
+  autoAcceptPrompts: boolean;
+
+  /**
+   * Delay before auto-accepting prompts (ms).
+   * After no output for this duration AND no completion message detected,
+   * sends Enter to accept the current prompt. Must be shorter than noOutputTimeoutMs.
+   * @default 8000 (8 seconds)
+   */
+  autoAcceptDelayMs: number;
 }
 
 /**
@@ -294,6 +310,8 @@ export interface RespawnEvents {
   stepCompleted: (step: string) => void;
   /** Detection status update for UI display */
   detectionUpdate: (status: DetectionStatus) => void;
+  /** Auto-accept prompt sent (plan mode, question, etc.) */
+  autoAcceptSent: () => void;
   /** Error occurred */
   error: (error: Error) => void;
   /** Debug log message */
@@ -310,6 +328,8 @@ const DEFAULT_CONFIG: RespawnConfig = {
   sendInit: true,                // send /init after /clear
   completionConfirmMs: 5000,     // 5 seconds of silence after completion message
   noOutputTimeoutMs: 30000,      // 30 seconds fallback if no output at all
+  autoAcceptPrompts: true,       // auto-accept plan mode and question prompts
+  autoAcceptDelayMs: 8000,       // 8 seconds before auto-accepting
 };
 
 /**
@@ -388,6 +408,12 @@ export class RespawnController extends EventEmitter {
 
   /** Timer for periodic detection status updates */
   private detectionUpdateTimer: NodeJS.Timeout | null = null;
+
+  /** Timer for auto-accepting prompts (plan mode, questions) */
+  private autoAcceptTimer: NodeJS.Timeout | null = null;
+
+  /** Whether any terminal output has been received since start/last-auto-accept */
+  private hasReceivedOutput: boolean = false;
 
   /** Number of completed respawn cycles */
   private cycleCount: number = 0;
@@ -642,11 +668,15 @@ export class RespawnController extends EventEmitter {
     this.lastTokenChangeTime = now;
     this.lastWorkingPatternTime = now;
     this.completionMessageTime = null;
+    this.hasReceivedOutput = false;
 
     this.setState('watching');
     this.setupTerminalListener();
     this.startDetectionUpdates();
     this.startNoOutputTimer();
+    if (this.config.autoAcceptPrompts) {
+      this.startAutoAcceptTimer();
+    }
   }
 
   /**
@@ -736,7 +766,9 @@ export class RespawnController extends EventEmitter {
     // Track output time (Layer 2)
     this.lastOutputTime = now;
     this.lastActivityTime = now;
+    this.hasReceivedOutput = true;
     this.resetNoOutputTimer();
+    this.resetAutoAcceptTimer();
 
     // Track token count (Layer 3)
     const tokenCount = this.extractTokenCount(data);
@@ -772,6 +804,7 @@ export class RespawnController extends EventEmitter {
     if (this.isCompletionMessage(data)) {
       this.completionMessageTime = now;
       this.workingDetected = false;
+      this.cancelAutoAcceptTimer(); // Normal idle flow handles this
       this.log(`Completion message detected: "${data.trim().substring(0, 50)}..."`);
 
       // In watching state, start completion confirmation timer
@@ -975,7 +1008,7 @@ export class RespawnController extends EventEmitter {
     }
   }
 
-  /** Clear all timers (idle, step, completion confirm, no-output, step confirm, and clear fallback) */
+  /** Clear all timers (idle, step, completion confirm, no-output, step confirm, auto-accept, and clear fallback) */
   private clearTimers(): void {
     this.clearIdleTimer();
     if (this.stepTimer) {
@@ -993,7 +1026,10 @@ export class RespawnController extends EventEmitter {
     if (this.stepConfirmTimer) {
       clearTimeout(this.stepConfirmTimer);
       this.stepConfirmTimer = null;
-
+    }
+    if (this.autoAcceptTimer) {
+      clearTimeout(this.autoAcceptTimer);
+      this.autoAcceptTimer = null;
     }
     if (this.noOutputTimer) {
       clearTimeout(this.noOutputTimer);
@@ -1057,6 +1093,81 @@ export class RespawnController extends EventEmitter {
    */
   private resetNoOutputTimer(): void {
     this.startNoOutputTimer();
+  }
+
+  // ========== Auto-Accept Prompt Methods ==========
+
+  /**
+   * Reset the auto-accept timer.
+   * Called whenever output is received. After autoAcceptDelayMs of silence
+   * (without a completion message), sends Enter to accept prompts.
+   */
+  private resetAutoAcceptTimer(): void {
+    if (!this.config.autoAcceptPrompts) return;
+    this.startAutoAcceptTimer();
+  }
+
+  /**
+   * Start the auto-accept timer.
+   * Fires after autoAcceptDelayMs of no output when no completion message was detected.
+   * This handles plan mode approvals and question prompts by pressing Enter.
+   */
+  private startAutoAcceptTimer(): void {
+    if (this.autoAcceptTimer) {
+      clearTimeout(this.autoAcceptTimer);
+    }
+    this.autoAcceptTimer = setTimeout(() => {
+      this.autoAcceptTimer = null;
+      this.tryAutoAccept();
+    }, this.config.autoAcceptDelayMs);
+  }
+
+  /**
+   * Cancel the auto-accept timer.
+   * Called when a completion message is detected (normal idle flow handles it).
+   */
+  private cancelAutoAcceptTimer(): void {
+    if (this.autoAcceptTimer) {
+      clearTimeout(this.autoAcceptTimer);
+      this.autoAcceptTimer = null;
+    }
+  }
+
+  /**
+   * Attempt to auto-accept a prompt by sending Enter.
+   * Only fires when:
+   * - In 'watching' state (not mid-cycle)
+   * - No completion message was detected (Claude is waiting for input, not truly idle)
+   * - autoAcceptPrompts is enabled
+   *
+   * This handles Claude's plan mode (waiting for approval) and
+   * AskUserQuestion (waiting for option selection) by pressing Enter
+   * to accept the default/currently-selected option.
+   *
+   * @fires autoAcceptSent
+   */
+  private tryAutoAccept(): void {
+    // Only auto-accept in watching state (not during a respawn cycle)
+    if (this._state !== 'watching') return;
+
+    // Don't auto-accept if a completion message was detected (normal idle handles it)
+    if (this.completionMessageTime !== null) return;
+
+    // Don't auto-accept if disabled
+    if (!this.config.autoAcceptPrompts) return;
+
+    // Don't auto-accept if we haven't received any output yet (prevents spurious Enter on fresh start)
+    if (!this.hasReceivedOutput) return;
+
+    const msSinceOutput = Date.now() - this.lastOutputTime;
+    this.log(`Auto-accepting prompt (${msSinceOutput}ms silence, no completion message)`);
+
+    // Send Enter to accept the current prompt/selection
+    this.session.writeViaScreen('\r');
+    this.emit('autoAcceptSent');
+
+    // Reset so we don't keep spamming Enter if Claude doesn't respond
+    this.hasReceivedOutput = false;
   }
 
   /**

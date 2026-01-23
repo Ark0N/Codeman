@@ -203,6 +203,10 @@ export interface RespawnConfig {
   completionConfirmMs?: number;
   /** Fallback timeout when no output received at all (ms) */
   noOutputTimeoutMs?: number;
+  /** Whether to auto-accept prompts (plan mode approvals, question selections) by pressing Enter */
+  autoAcceptPrompts?: boolean;
+  /** Delay before auto-accepting prompts when no output and no completion message (ms) */
+  autoAcceptDelayMs?: number;
 }
 
 /**
@@ -484,6 +488,10 @@ export interface PersistedRespawnConfig {
   sendInit: boolean;
   /** Optional prompt to send if /init doesn't trigger work */
   kickstartPrompt?: string;
+  /** Whether to auto-accept prompts (plan mode, questions) by pressing Enter */
+  autoAcceptPrompts?: boolean;
+  /** Delay before auto-accepting prompts (ms) */
+  autoAcceptDelayMs?: number;
   /** Duration in minutes if timed respawn was set */
   durationMinutes?: number;
 }

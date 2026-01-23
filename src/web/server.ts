@@ -690,6 +690,8 @@ export class WebServer extends EventEmitter {
         sendClear: config.sendClear ?? currentConfig?.sendClear ?? true,
         sendInit: config.sendInit ?? currentConfig?.sendInit ?? true,
         kickstartPrompt: config.kickstartPrompt ?? currentConfig?.kickstartPrompt,
+        autoAcceptPrompts: config.autoAcceptPrompts ?? currentConfig?.autoAcceptPrompts ?? true,
+        autoAcceptDelayMs: config.autoAcceptDelayMs ?? currentConfig?.autoAcceptDelayMs ?? 8000,
         durationMinutes: currentConfig?.durationMinutes,
       };
       this.screenManager.updateRespawnConfig(id, merged);
@@ -1306,6 +1308,8 @@ export class WebServer extends EventEmitter {
       sendClear: config.sendClear,
       sendInit: config.sendInit,
       kickstartPrompt: config.kickstartPrompt,
+      autoAcceptPrompts: config.autoAcceptPrompts,
+      autoAcceptDelayMs: config.autoAcceptDelayMs,
       durationMinutes,
     };
     this.screenManager.updateRespawnConfig(sessionId, persistedConfig);
@@ -1535,6 +1539,10 @@ export class WebServer extends EventEmitter {
 
     controller.on('detectionUpdate', (detection: unknown) => {
       this.broadcast('respawn:detectionUpdate', { sessionId, detection });
+    });
+
+    controller.on('autoAcceptSent', () => {
+      this.broadcast('respawn:autoAcceptSent', { sessionId });
     });
 
     controller.on('log', (message: string) => {
@@ -2008,6 +2016,8 @@ export class WebServer extends EventEmitter {
                     kickstartPrompt: savedState.respawnConfig.kickstartPrompt,
                     completionConfirmMs: savedState.respawnConfig.completionConfirmMs,
                     noOutputTimeoutMs: savedState.respawnConfig.noOutputTimeoutMs,
+                    autoAcceptPrompts: savedState.respawnConfig.autoAcceptPrompts ?? true,
+                    autoAcceptDelayMs: savedState.respawnConfig.autoAcceptDelayMs ?? 8000,
                   });
                   this.respawnControllers.set(session.id, controller);
                   this.setupRespawnListeners(session.id, controller);
@@ -2035,6 +2045,8 @@ export class WebServer extends EventEmitter {
                   sendClear: screen.respawnConfig.sendClear,
                   sendInit: screen.respawnConfig.sendInit,
                   kickstartPrompt: screen.respawnConfig.kickstartPrompt,
+                  autoAcceptPrompts: screen.respawnConfig.autoAcceptPrompts ?? true,
+                  autoAcceptDelayMs: screen.respawnConfig.autoAcceptDelayMs ?? 8000,
                 });
                 this.respawnControllers.set(session.id, controller);
                 this.setupRespawnListeners(session.id, controller);
