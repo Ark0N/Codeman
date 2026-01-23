@@ -8,7 +8,7 @@
     "claudeman": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc && mkdir -p dist/web dist/templates && cp -r src/web/public dist/web/ && cp src/templates/case-template.md dist/templates/",
+    "build": "tsc && chmod +x dist/index.js && mkdir -p dist/web dist/templates && cp -r src/web/public dist/web/ && cp src/templates/case-template.md dist/templates/",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "web": "node dist/index.js web",
