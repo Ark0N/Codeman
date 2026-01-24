@@ -1306,7 +1306,7 @@ export class WebServer extends EventEmitter {
     });
 
     this.app.put('/api/settings', async (req) => {
-      const settings = req.body as { defaultClaudeMdPath?: string; defaultWorkingDir?: string };
+      const settings = req.body as Record<string, unknown>;
 
       try {
         const dir = dirname(settingsPath);

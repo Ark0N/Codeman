@@ -388,6 +388,11 @@ class ClaudemanApp {
     this.setupEventListeners();
     // Start system stats polling
     this.startSystemStatsPolling();
+    // Load server-stored settings (async, re-applies visibility after load)
+    this.loadAppSettingsFromServer().then(() => {
+      this.applyHeaderVisibilitySettings();
+      this.applyMonitorVisibility();
+    });
   }
 
   initTerminal() {
@@ -2518,16 +2523,17 @@ class ClaudemanApp {
     localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
 
     // Save notification preferences separately
+    const notifPrefsToSave = {
+      enabled: document.getElementById('appSettingsNotifEnabled').checked,
+      browserNotifications: document.getElementById('appSettingsNotifBrowser').checked,
+      audioAlerts: document.getElementById('appSettingsNotifAudio').checked,
+      stuckThresholdMs: (parseInt(document.getElementById('appSettingsNotifStuckMins').value) || 10) * 60000,
+      muteCritical: !document.getElementById('appSettingsNotifCritical').checked,
+      muteWarning: !document.getElementById('appSettingsNotifWarning').checked,
+      muteInfo: !document.getElementById('appSettingsNotifInfo').checked,
+    };
     if (this.notificationManager) {
-      this.notificationManager.preferences = {
-        enabled: document.getElementById('appSettingsNotifEnabled').checked,
-        browserNotifications: document.getElementById('appSettingsNotifBrowser').checked,
-        audioAlerts: document.getElementById('appSettingsNotifAudio').checked,
-        stuckThresholdMs: (parseInt(document.getElementById('appSettingsNotifStuckMins').value) || 10) * 60000,
-        muteCritical: !document.getElementById('appSettingsNotifCritical').checked,
-        muteWarning: !document.getElementById('appSettingsNotifWarning').checked,
-        muteInfo: !document.getElementById('appSettingsNotifInfo').checked,
-      };
+      this.notificationManager.preferences = notifPrefsToSave;
       this.notificationManager.savePreferences();
     }
 
@@ -2535,12 +2541,12 @@ class ClaudemanApp {
     this.applyHeaderVisibilitySettings();
     this.applyMonitorVisibility();
 
-    // Also save to server
+    // Save to server (includes notification prefs for cross-browser persistence)
     try {
       await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings)
+        body: JSON.stringify({ ...settings, notificationPreferences: notifPrefsToSave })
       });
       this.showToast('Settings saved', 'success');
     } catch (err) {
@@ -2630,10 +2636,22 @@ class ClaudemanApp {
       const res = await fetch('/api/settings');
       if (res.ok) {
         const settings = await res.json();
-        // Merge with localStorage (server takes precedence)
+        // Extract notification prefs before merging app settings
+        const { notificationPreferences, ...appSettings } = settings;
+        // Merge app settings with localStorage (server takes precedence)
         const localSettings = this.loadAppSettingsFromStorage();
-        const merged = { ...localSettings, ...settings };
+        const merged = { ...localSettings, ...appSettings };
         localStorage.setItem('claudeman-app-settings', JSON.stringify(merged));
+
+        // Apply notification prefs from server if present (only if localStorage has none)
+        if (notificationPreferences && this.notificationManager) {
+          const localNotifPrefs = localStorage.getItem('claudeman-notification-prefs');
+          if (!localNotifPrefs) {
+            this.notificationManager.preferences = notificationPreferences;
+            this.notificationManager.savePreferences();
+          }
+        }
+
         return merged;
       }
     } catch (err) {
