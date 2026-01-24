@@ -2495,12 +2495,13 @@ class ClaudemanApp {
 
   switchOptionsTab(tabName) {
     // Toggle active class on tab buttons
-    document.querySelectorAll('.modal-tab-btn').forEach(btn => {
+    document.querySelectorAll('#sessionOptionsModal .modal-tab-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.tab === tabName);
     });
 
     // Toggle hidden class on tab content
     document.getElementById('respawn-tab').classList.toggle('hidden', tabName !== 'respawn');
+    document.getElementById('context-tab').classList.toggle('hidden', tabName !== 'context');
     document.getElementById('ralph-tab').classList.toggle('hidden', tabName !== 'ralph');
   }
 

@@ -25,6 +25,8 @@ Claudeman is a Claude Code session manager with a web interface and autonomous R
 
 > **Note**: `claude` does not need to be in the server process's PATH. Claudeman auto-discovers the binary from common install locations (`~/.local/bin`, `~/.claude/local`, `/usr/local/bin`, etc.) and augments PATH for spawned sessions.
 
+> **Runtime**: The web server runs as a systemd user service (`claudeman-web.service`) on HTTPS port 3000 with a self-signed certificate. It auto-restarts and survives logout.
+
 ## First-Time Setup
 
 ```bash
@@ -71,7 +73,7 @@ npx vitest run -t "should create session" # By pattern
 # 3115: integration-flows.test.ts
 # 3120: session-cleanup.test.ts
 # 3125: ralph-integration.test.ts
-# Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config, spawn-detector, spawn-types, spawn-orchestrator, hooks-config
+# Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config, spawn-detector, spawn-types, spawn-orchestrator, hooks-config, ai-idle-checker
 # Next available: 3127+
 
 # Tests mock PTY - no real Claude CLI spawned
@@ -151,6 +153,7 @@ claudeman reset                    # Reset all state
 |------|---------|
 | `src/session.ts` | Core PTY wrapper for Claude CLI. Modes: `runPrompt()`, `startInteractive()`, `startShell()` |
 | `src/respawn-controller.ts` | State machine for autonomous session cycling |
+| `src/ai-idle-checker.ts` | Spawns fresh Claude session to analyze terminal output for IDLE/WORKING verdict |
 | `src/screen-manager.ts` | GNU screen persistence, ghost discovery, 4-strategy kill |
 | `src/ralph-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos, loop status in output |
 | `src/ralph-config.ts` | Parses `.claude/ralph-loop.local.md` and CLAUDE.md for Ralph config |
@@ -231,54 +234,11 @@ Claude calls spawn_agent MCP tool
   → Orchestrator reads result.md, notifies parent via SSE
 ```
 
-**Legacy Tag Patterns** (detected by `SpawnDetector`, still functional but superseded by MCP):
-- `<spawn1337>path/to/task.md</spawn1337>` - Spawn request
-- `<spawn1337-status agentId="id"/>` - Status query
-- `<spawn1337-cancel agentId="id"/>` - Cancel request
-- `<spawn1337-message agentId="id">content</spawn1337-message>` - Message to child
+**Agent Directory:** `~/claudeman-cases/spawn-<agentId>/` with `CLAUDE.md`, `spawn-comms/` (task.md, progress.json, result.md, messages/), and `workspace/` (symlinked context files).
 
-**Agent Communication Directory:**
-```
-~/claudeman-cases/spawn-<agentId>/
-├── CLAUDE.md              # Auto-generated agent instructions
-├── spawn-comms/
-│   ├── task.md            # Copy of original task spec
-│   ├── progress.json      # Agent updates periodically
-│   ├── result.md          # Final result (YAML frontmatter + body)
-│   └── messages/          # Bidirectional message files (NNN-parent.md, NNN-agent.md)
-└── workspace/             # Symlinked context files
-```
+**Resource Governance:** Max 5 concurrent agents, max depth 3, default timeout 30min (max 120). Budget warning at 80%, graceful shutdown at 100%, force kill at 110%.
 
-**Task Spec Format** (YAML frontmatter in .md file):
-```yaml
----
-agentId: my-agent-001
-name: My Agent
-type: explore          # explore|implement|test|review|refactor|research|generate|fix|general
-priority: high         # low|normal|high|critical
-maxTokens: 150000
-maxCost: 0.50
-timeoutMinutes: 15
-canModifyParentFiles: false
-contextFiles: [src/auth.ts, src/types.ts]
-dependsOn: [other-agent-id]
-completionPhrase: MY_AGENT_DONE
-outputFormat: structured  # markdown|json|code|structured|freeform
----
-Task instructions here...
-```
-
-**Resource Governance:**
-- Budget warning at 80% of token/cost limit
-- Graceful shutdown message at 100%
-- Force kill at 110% (or timeout + 60s grace)
-- Max concurrent agents: 5 (configurable)
-- Max spawn depth: 3 (prevents infinite recursion)
-- Default timeout: 30 minutes (max: 120)
-
-**Session Integration:** The MCP server communicates with the Claudeman API over HTTP. Legacy SpawnDetector (alongside RalphTracker) can still forward terminal data for tag-based spawning. Spawn events (`spawnRequested`, `spawnStatusRequested`, `spawnCancelRequested`, `spawnMessageToChild`) are emitted on the session and wired to the orchestrator in server.ts.
-
-**Agent Tree:** Agents can spawn children (up to `maxSpawnDepth`). Sessions track `parentAgentId` and `childAgentIds`. Cancelling a parent cascades to all children.
+**Agent Tree:** Agents can spawn children. Sessions track `parentAgentId` and `childAgentIds`. Cancelling a parent cascades to all children.
 
 ### Session Modes
 
@@ -358,61 +318,33 @@ pty.spawn('bash', [], { ... })
 
 ### Sending Input to Sessions
 
-There are two methods for sending input to Claude sessions:
-
-#### 1. `session.write(data)` - Direct PTY write
-Used by the `/api/sessions/:id/input` API endpoint. Writes directly to PTY.
-```typescript
-session.write('hello world');  // Text only, no Enter
-session.write('\r');           // Enter key separately
-```
-
-#### 2. `session.writeViaScreen(data)` - Via GNU screen (RECOMMENDED for programmatic input)
-Used by RespawnController, auto-compact, auto-clear. More reliable for Ink/Claude CLI.
-```typescript
-// Append \r to include Enter - the method handles splitting automatically
-session.writeViaScreen('your command here\r');
-session.writeViaScreen('/clear\r');
-session.writeViaScreen('/init\r');
-```
+Two methods:
+1. **`session.write(data)`** - Direct PTY write (used by `/api/sessions/:id/input` endpoint)
+2. **`session.writeViaScreen(data)`** - Via GNU screen (RECOMMENDED for programmatic input). Used by RespawnController, auto-compact, auto-clear.
 
 **How `writeViaScreen` works internally** (in `screen-manager.ts:sendInput`):
 1. Splits input into text and `\r` (carriage return)
 2. Sends text first: `screen -S name -p 0 -X stuff "text"`
 3. Sends Enter separately: `screen -S name -p 0 -X stuff "$(printf '\015')"`
 
-**Why separate commands?** Claude CLI uses [Ink](https://github.com/vadimdemedes/ink) (React for terminals) which requires text and Enter as separate `screen -X stuff` commands. Combining them doesn't work. This is a critical implementation detail when debugging input issues.
-
-#### API Usage
-```bash
-# Send text (won't submit until Enter is sent)
-curl -X POST localhost:3000/api/sessions/:id/input \
-  -H "Content-Type: application/json" \
-  -d '{"input": "your prompt here"}'
-
-# Send Enter separately to submit
-curl -X POST localhost:3000/api/sessions/:id/input \
-  -H "Content-Type: application/json" \
-  -d '{"input": "\r"}'
-```
-
-**Note**: The API uses `session.write()` which goes to PTY directly. For reliability with Ink, consider using the respawn controller pattern or adding an API endpoint that uses `writeViaScreen()`.
+**Why separate commands?** Claude CLI uses Ink (React for terminals) which requires text and Enter as separate `screen -X stuff` commands. Combining them doesn't work. This is a critical implementation detail when debugging input issues.
 
 ### Idle Detection
 
-**RespawnController (Claude Code 2024+)**: Multi-layer detection with confidence scoring:
+**RespawnController**: Multi-layer detection with confidence scoring:
 1. **Completion message**: Primary signal - detects "Worked for Xm Xs" time patterns (requires "Worked" prefix to avoid false positives)
-2. **Output silence**: Confirms idle after `completionConfirmMs` (10s) of no new output
-3. **Token stability**: Tokens haven't changed
-4. **Working patterns absent**: No `Thinking`, `Writing`, spinner chars
+2. **AI Idle Check** (enabled by default): Spawns a fresh Claude session in a screen to analyze terminal output and provide IDLE/WORKING verdict. Uses `claude-opus-4-5-20251101` by default, sends last 16k chars of terminal buffer. Timeout 90s, cooldown 3min after WORKING. Auto-disables after 3 consecutive errors.
+3. **Output silence**: Confirms idle after `completionConfirmMs` (10s) of no new output
+4. **Token stability**: Tokens haven't changed
+5. **Working patterns absent**: No `Thinking`, `Writing`, spinner chars
 
-Uses `confirming_idle` state to prevent false positives. Cancels idle confirmation if substantial output (>2 chars after ANSI stripping) arrives during the wait. Fallback: `noOutputTimeoutMs` (30s) if no output at all.
+Uses `confirming_idle` state to prevent false positives. Cancels idle confirmation if substantial output (>2 chars after ANSI stripping) arrives during the wait. Fallback: `noOutputTimeoutMs` (30s) if no output at all. AI check is triggered after the no-output fallback; if AI check is disabled/errored, falls back to direct idle confirmation.
 
-**Step Confirmation**: After sending each respawn step (update, init, kickstart), the controller waits for the same `completionConfirmMs` silence before proceeding. This ensures Claude finishes processing each prompt before the next command is sent.
+**Step Confirmation**: After sending each respawn step (update, init, kickstart), waits for `completionConfirmMs` silence before proceeding. Ensures Claude finishes processing before the next command is sent.
 
 **Session**: emits `idle`/`working` events on prompt detection + 2s activity timeout.
 
-**Auto-Accept Plan Mode** (enabled by default): When Claude enters plan mode and presents a plan for approval, output stops without a completion message. After `autoAcceptDelayMs` (8s) of silence with no completion message and no `elicitation_dialog` hook signal detected, sends Enter to accept the plan. Does NOT auto-accept AskUserQuestion prompts — those are blocked via the `elicitation_dialog` notification hook which signals the respawn controller to skip auto-accept. Safety: only fires once per silence period, requires prior output, won't fire during active respawn cycles.
+**Auto-Accept Plan Mode** (enabled by default): After `autoAcceptDelayMs` (8s) of silence with no completion message and no `elicitation_dialog` hook signal detected, sends Enter to accept the plan. Does NOT auto-accept AskUserQuestion prompts — those are blocked via the `elicitation_dialog` notification hook which signals the respawn controller to skip auto-accept.
 
 ### Token Tracking
 
@@ -441,7 +373,7 @@ Detects Ralph loops and todos inside Claude sessions. **Disabled by default** bu
 
 See `ralph-tracker.ts:shouldAutoEnable()` for detection logic.
 
-**Auto-Configuration from Ralph Plugin State**: When a session starts, Claudeman reads `.claude/ralph-loop.local.md` (the official Ralph Wiggum plugin state file) to auto-configure the tracker:
+**Auto-Configuration from Ralph Plugin State**: When a session starts, Claudeman reads `.claude/ralph-loop.local.md` to auto-configure:
 
 ```yaml
 ---
@@ -452,13 +384,9 @@ completion-promise: "COMPLETE"
 ---
 ```
 
-Priority order for configuration:
-1. `.claude/ralph-loop.local.md` (official Ralph plugin state)
-2. `CLAUDE.md` `<promise>` tags (fallback)
+Priority: 1) `.claude/ralph-loop.local.md` (official Ralph plugin state), 2) `CLAUDE.md` `<promise>` tags (fallback). See `src/ralph-config.ts`.
 
-See `src/ralph-config.ts` for parsing logic.
-
-**Completion Detection**: Uses multi-strategy detection:
+**Completion Detection** (multi-strategy):
 - 1st occurrence of `<promise>PHRASE</promise>`: Stores as expected phrase (likely in prompt)
 - 2nd occurrence: Emits `completionDetected` event (actual completion)
 - **Bare phrase detection**: Also detects phrase without tags once expected phrase is known
@@ -468,10 +396,9 @@ See `src/ralph-config.ts` for parsing logic.
 **Session Lifecycle**: Each session has its own independent tracker:
 - New session → Fresh tracker (no carryover)
 - Close tab → Tracker state cleared, UI panel hides
-- Switch tabs → Panel shows tracker for active session
 - `tracker.reset()` → Clears todos/state, keeps enabled status
 - `tracker.fullReset()` → Complete reset to initial state
-- `tracker.configure({ enabled?, completionPhrase?, maxIterations? })` → Partial config update from external state
+- `tracker.configure({ enabled?, completionPhrase?, maxIterations? })` → Partial config update
 
 **API**:
 - `GET /api/sessions/:id/ralph-state` - Get loop state and todos
@@ -479,8 +406,6 @@ See `src/ralph-config.ts` for parsing logic.
   - `{ enabled: boolean }` - Enable/disable
   - `{ reset: true }` - Soft reset (keep enabled)
   - `{ reset: "full" }` - Full reset
-
-UI: Collapsible panel below tabs, shows progress ring and todo list.
 
 ### Terminal Display Fix
 
@@ -492,119 +417,40 @@ All events broadcast to `/api/events` with format: `{ type: string, sessionId?: 
 
 Event prefixes: `session:`, `task:`, `respawn:`, `spawn:`, `hook:`, `scheduled:`, `case:`, `screen:`, `init`.
 
-Key events for frontend handling (see `app.js:handleSSEEvent()`):
-- `session:idle`, `session:working` - Status indicator updates
+Key events (see `app.js:handleSSEEvent()`):
+- `session:idle`, `session:working` - Status indicators
 - `session:terminal`, `session:clearTerminal` - Terminal content
-- `session:completion`, `session:autoClear`, `session:autoCompact` - Lifecycle events
 - `session:ralphLoopUpdate`, `session:ralphTodoUpdate`, `session:ralphCompletionDetected` - Ralph tracking
-- `respawn:detectionUpdate` - Multi-layer idle detection status (confidence level, waiting state)
-- `spawn:queued`, `spawn:started`, `spawn:completed`, `spawn:failed`, `spawn:timeout`, `spawn:cancelled` - Agent lifecycle
-- `spawn:progress`, `spawn:message`, `spawn:budgetWarning`, `spawn:stateUpdate` - Agent monitoring
-- `hook:idle_prompt`, `hook:permission_prompt`, `hook:elicitation_dialog`, `hook:stop` - Claude Code hooks (notifications + tab alerts, includes forwarded data fields)
+- `respawn:detectionUpdate` - Idle detection status
+- `spawn:queued`, `spawn:started`, `spawn:completed`, `spawn:failed` - Agent lifecycle
+- `hook:idle_prompt`, `hook:permission_prompt`, `hook:elicitation_dialog`, `hook:stop` - Claude Code hooks
 
 ### Frontend (app.js)
 
-Vanilla JS + xterm.js. Key functions:
-- `handleSSEEvent()` - Dispatches events to appropriate handlers
-- `selectSession()` - Tab switching, terminal buffer load, and focus
-- `NotificationManager` - Multi-layer notifications with click-to-navigate
-- `tabAlerts` Map - Tracks blinking state per session (`'action'` | `'idle'`)
-
-**60fps Rendering Pipeline**:
-- Server batches terminal data every 16ms before broadcasting via SSE
-- Client uses `requestAnimationFrame` to batch xterm.js writes
-- Prevents UI jank during high-throughput Claude output
+Vanilla JS + xterm.js. 60fps rendering: server batches terminal data every 16ms, client uses `requestAnimationFrame` to batch xterm.js writes.
 
 ### HTTPS & Browser Notifications
 
-**HTTPS**: The `--https` flag generates/reuses self-signed certificates in `~/.claudeman/certs/` (`server.key`, `server.crt`). Required for the Web Notification API in browsers.
+**HTTPS**: The `--https` flag generates/reuses self-signed certificates in `~/.claudeman/certs/`. Required for the Web Notification API.
 
-**Notification Layers** (in `app.js`, `NotificationManager` class):
-1. In-app drawer with notification list (click to navigate to session)
-2. Tab title flashing with unread count (when tab unfocused)
-3. Web Notification API (browser push notifications, click navigates to session)
-4. Audio alerts (critical level only)
-5. Tab blinking alerts (red for action-required, yellow for idle)
+**Notifications** (`NotificationManager` in `app.js`): In-app drawer, tab title flashing, Web Notification API (rate limited 3s), audio alerts (critical only), tab blinking (red=action, yellow=idle).
 
-**Browser Notification Behavior:**
-- Enabled by default (`browserNotifications: true`, prefs version 2)
-- Auto-requests permission on first notification attempt
-- Critical/warning notifications fire regardless of tab visibility
-- Info notifications only fire when tab is hidden
-- Rate limited: max 1 browser notification per 3 seconds
-- Click navigates to the affected session
-
-**Tab Alert Blinking:**
-- `hook:permission_prompt` / `hook:elicitation_dialog` → red blink (2.5s cycle, `tab-alert-action`)
-- `hook:idle_prompt` → yellow blink (3.5s cycle, `tab-alert-idle`)
-- Only blinks non-active tabs (active tab is already visible)
-- Clears when: user clicks the tab, or `session:working` event fires
-
-**Hook Event Data Forwarding:**
-The `/api/hook-event` endpoint forwards the `data` field from the request body into the SSE broadcast. Notifications display actual details:
-- permission_prompt: tool name + command/file (e.g., "Bash: docker push prod:latest")
-- elicitation_dialog: question text (e.g., "Merge PR #42 to main?")
-- idle_prompt: custom message if provided
-- stop: reason if provided
-
-Notifications triggered for: session events, respawn updates, spawn agent lifecycle, hook events. Preferences persist to server-side `state.json` per session.
+**Hook Event Data**: `/api/hook-event` forwards `data` field into SSE broadcast. Hook events: `permission_prompt`, `elicitation_dialog`, `idle_prompt`, `stop`.
 
 ### State Store
 
-Writes debounced (500ms) to `~/.claudeman/state.json`. The web server persists full session state via `persistSessionState()` on every meaningful change:
-
-**Persistence triggers**: session create, delete, rename, settings change (auto-compact, auto-clear, Ralph config), respawn start/stop/update/expire, completion, exit.
+Writes debounced (500ms) to `~/.claudeman/state.json` via `persistSessionState()` on every meaningful change.
 
 **Per-session fields stored** (`SessionState` in `types.ts`):
+- `id`, `pid`, `status`, `name`, `mode` - Core identity
+- `workingDir`, `createdAt`, `lastActivityAt` - Location and timestamps
+- `autoClearEnabled/Threshold`, `autoCompactEnabled/Threshold/Prompt` - Context management
+- `ralphEnabled`, `ralphCompletionPhrase` - Ralph tracker state
+- `respawnEnabled`, `respawnConfig` - Respawn controller state
+- `totalCost`, `inputTokens`, `outputTokens` - Token tracking
+- `parentAgentId`, `childAgentIds` - Spawn agent tree
 
-| Field | Description |
-|-------|-------------|
-| `id`, `pid`, `status` | Core session identity |
-| `name`, `mode` | Display name, 'claude' or 'shell' |
-| `workingDir`, `createdAt`, `lastActivityAt` | Location and timestamps |
-| `autoClearEnabled`, `autoClearThreshold` | Auto-clear settings |
-| `autoCompactEnabled`, `autoCompactThreshold`, `autoCompactPrompt` | Auto-compact settings |
-| `ralphEnabled`, `ralphCompletionPhrase` | Ralph / Todo tracker state |
-| `respawnEnabled` | Whether respawn controller is currently running |
-| `respawnConfig` | Full respawn config including `durationMinutes` |
-| `totalCost`, `inputTokens`, `outputTokens` | Token and cost tracking |
-| `parentAgentId`, `childAgentIds` | Spawn agent tree relationships |
-
-**CLI visibility**: The `claudeman status` and `claudeman session list` commands read from `state.json` to display web server-managed sessions, even though they run in a separate process.
-
-### Timing Constants
-
-| Constant | Value | Location |
-|----------|-------|----------|
-| State save debounce | 500ms | `state-store.ts` |
-| State update debounce | 500ms | `server.ts` |
-| Line buffer flush | 100ms | `session.ts` |
-| Terminal batch interval | 16ms | `server.ts` (60fps) |
-| Output batch interval | 50ms | `server.ts` |
-| Task update batch interval | 100ms | `server.ts` |
-| Ralph loop event debounce | 50ms | `ralph-tracker.ts` |
-| Session tabs render debounce | 100ms | `app.js` |
-| Ralph panel render debounce | 50ms | `app.js` |
-| Task panel render debounce | 100ms | `app.js` |
-| Input batch interval | 16ms | `app.js` (60fps) |
-| Idle activity timeout | 2s | `session.ts` |
-| Respawn idle timeout | 10s default | `RespawnConfig.idleTimeoutMs` |
-| Respawn completion confirm | 10s | `RespawnConfig.completionConfirmMs` |
-| Respawn auto-accept delay | 8s | `RespawnConfig.autoAcceptDelayMs` |
-| Respawn no-output fallback | 30s | `RespawnConfig.noOutputTimeoutMs` |
-| Spawn event debounce | 50ms | `spawn-detector.ts` |
-| Spawn line buffer max | 64KB | `spawn-detector.ts` |
-| Spawn progress poll | 5s | `spawn-orchestrator.ts` |
-| Spawn default timeout | 30 min | `spawn-orchestrator.ts` |
-| Spawn max timeout | 120 min | `spawn-orchestrator.ts` |
-| Spawn max concurrent | 5 agents | `spawn-orchestrator.ts` |
-| Spawn max depth | 3 levels | `spawn-orchestrator.ts` |
-| Spawn budget warning | 80% | `spawn-orchestrator.ts` |
-| Spawn budget grace | 60s | `spawn-orchestrator.ts` |
-| Browser notif rate limit | 3s | `app.js` (NotificationManager) |
-| Tab blink red (action) | 2.5s cycle | `styles.css` (tab-alert-action) |
-| Tab blink yellow (idle) | 3.5s cycle | `styles.css` (tab-alert-idle) |
-| Systemd restart delay | 5s | `claudeman-web.service` |
+CLI commands (`claudeman status/session list`) read from `state.json` to display web-managed sessions.
 
 ### TypeScript Config
 
@@ -653,36 +499,11 @@ Use `createErrorResponse(code, details?)` from `types.ts`:
 - **State sync**: Every session create/delete/update calls `persistSessionState()` which writes full state (including respawn config from controller) to `state.json`
 - **Recovery on restart**: Server reads `state.json` first (has all settings), falls back to `screens.json` for any sessions not found. Settings (auto-compact, auto-clear, respawn config, Ralph state) restored to live session objects after screen reattachment.
 
-## TUI Architecture (Ink/React)
+## TUI (WIP)
 
-The TUI (`claudeman tui`) is built with [Ink](https://github.com/vadimdemedes/ink) (React for terminals).
-
-**Component Hierarchy:**
-```
-App.tsx
-├── StartScreen.tsx         # Session/case list, navigation
-│   ├── List navigation (↑/↓, Enter, a/d/D)
-│   ├── Case creation flow
-│   └── Tab switcher menu
-├── DirectAttach.ts         # Full-screen console attach with tab switching
-├── TabBar.tsx              # Session tabs (when attached)
-├── TerminalView.tsx        # Viewport into screen session
-├── StatusBar.tsx           # Bottom bar with status/tokens
-├── RalphPanel.tsx          # Ralph loop progress display
-└── HelpOverlay.tsx         # Keyboard shortcuts modal
-```
-
-**Key Hook:** `useSessionManager.ts` handles:
-- API polling for sessions/screens
-- Screen attach/detach flow
-- Keyboard input routing
-- State synchronization with web server
-
-**TUI ↔ Web Server:** The TUI is a client to the web server. It doesn't manage sessions directly - it uses `/api/*` endpoints and attaches to screens via GNU screen commands.
+Ink/React-based TUI in `src/tui/`. Client to the web server, uses `/api/*` endpoints and attaches to screens via GNU screen. Not fully implemented yet.
 
 ## Buffer Limits
-
-Long-running sessions are supported with automatic trimming:
 
 | Buffer | Max Size | Trim To |
 |--------|----------|---------|
@@ -692,107 +513,21 @@ Long-running sessions are supported with automatic trimming:
 | Line buffer | 64KB | (flushed every 100ms) |
 | Respawn buffer | 1MB | 512KB |
 
-**Performance optimizations:**
-- Tab switch uses `tail=256KB` for fast initial load, then chunked writes
-- Large buffers written in 64KB chunks via `requestAnimationFrame` to avoid UI jank
-- Truncation indicator shown when earlier output is cut
+Tab switch uses `tail=256KB` for fast initial load, then chunked 64KB writes via `requestAnimationFrame`.
 
-## API Routes Quick Reference
+## API Routes
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/events` | SSE stream for real-time updates |
-| GET | `/api/status` | Full application state |
-| GET/POST/DELETE | `/api/sessions` | List/create/kill-all sessions |
-| GET/DELETE | `/api/sessions/:id` | Get/delete specific session |
-| POST | `/api/sessions/:id/input` | Send input to session PTY |
-| POST | `/api/sessions/:id/resize` | Resize terminal (cols, rows) |
-| POST | `/api/sessions/:id/interactive` | Start interactive mode |
-| POST | `/api/sessions/:id/respawn/start` | Start respawn controller (merges pre-saved config) |
-| POST | `/api/sessions/:id/respawn/stop` | Stop respawn controller |
-| POST | `/api/sessions/:id/respawn/enable` | Enable respawn with config + optional timer |
-| GET | `/api/sessions/:id/respawn/config` | Get current or pre-saved respawn config |
-| PUT | `/api/sessions/:id/respawn/config` | Update config (works with or without running controller) |
-| POST | `/api/sessions/:id/ralph-config` | Configure Ralph / Todo Tracker settings |
-| GET | `/api/sessions/:id/ralph-state` | Get Ralph loop state + todos |
-| POST | `/api/sessions/:id/auto-compact` | Configure auto-compact threshold |
-| POST | `/api/sessions/:id/auto-clear` | Configure auto-clear threshold |
-| POST | `/api/quick-start` | Create case + start session. Body: `{mode?: 'claude'\|'shell'}` |
-| GET | `/api/cases` | List available cases |
-| POST | `/api/cases` | Create new case |
-| GET | `/api/screens` | List screen sessions with stats |
-| GET | `/api/spawn/agents` | List all spawn agents (active + completed + queued) |
-| GET | `/api/spawn/agents/:agentId` | Detailed agent status + progress |
-| GET | `/api/spawn/agents/:agentId/result` | Read agent's result.md |
-| GET | `/api/spawn/agents/:agentId/messages` | List messages in channel |
-| POST | `/api/spawn/agents/:agentId/message` | Send message to agent |
-| POST | `/api/spawn/agents/:agentId/cancel` | Cancel agent (graceful stop) |
-| DELETE | `/api/spawn/agents/:agentId` | Force kill + cleanup |
-| GET | `/api/spawn/status` | Orchestrator status (counts, config) |
-| PUT | `/api/spawn/config` | Update orchestrator config |
-| POST | `/api/spawn/trigger` | Programmatic spawn (bypass terminal detection) |
-| POST | `/api/hook-event` | Receive Claude Code hook callbacks. Body: `{event, sessionId, data?}`. Data fields forwarded to SSE broadcast |
+All routes defined in `server.ts:buildServer()`. Key endpoint groups:
+- `/api/events` - SSE stream | `/api/status` - Full app state
+- `/api/sessions` - CRUD + `/input`, `/resize`, `/interactive`
+- `/api/sessions/:id/respawn/*` - Start/stop/enable/config respawn controller
+- `/api/sessions/:id/ralph-*` - Ralph tracker config and state
+- `/api/sessions/:id/auto-compact`, `/auto-clear` - Token threshold settings
+- `/api/quick-start` - Create case + start session (`{mode?: 'claude'|'shell'}`)
+- `/api/cases`, `/api/screens` - Case and screen management
+- `/api/spawn/*` - Agent lifecycle (list, status, result, messages, cancel, trigger)
+- `/api/hook-event` - Claude Code hook callbacks (`{event, sessionId, data?}`)
 
-### API Input Limits
-
-| Limit | Value | Endpoint |
-|-------|-------|----------|
-| Input length | 64KB | `/api/sessions/:id/input` |
-| Terminal cols | 500 | `/api/sessions/:id/resize` |
-| Terminal rows | 200 | `/api/sessions/:id/resize` |
-| Session name | 128 chars | Session rename |
-| Hook data | 8KB | `/api/hook-event` (sanitized + truncated) |
-
-## Keyboard Shortcuts (Web UI)
-
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+Enter` | Run Claude (create case + interactive session) |
-| `Ctrl+W` | Close current session |
-| `Ctrl+Tab` | Switch to next session |
-| `Ctrl+K` | Kill all sessions |
-| `Ctrl+L` | Clear terminal |
-| `Ctrl++/-` | Increase/decrease font size |
-| `Ctrl+?` | Show keyboard shortcuts help |
-| `Escape` | Close panels and modals |
-
-## TUI Keyboard Shortcuts
-
-**Start Screen - Sessions:**
-| Key | Action |
-|-----|--------|
-| `↑`/`↓` | Navigate list |
-| `Enter` | Open tab switcher menu, then full-screen attach |
-| `a` | Direct attach (skip tab menu, Ctrl+A D returns to TUI) |
-| `d` | Delete/kill selected session |
-| `D` (Shift+d) | Delete ALL screens & Claude processes |
-| `c` | Switch to cases view |
-| `n` | Quick-start new session |
-| `r` | Refresh list |
-| `q` | Quit TUI |
-
-**Start Screen - Cases:**
-| Key | Action |
-|-----|--------|
-| `↑`/`↓` | Navigate list |
-| `Enter` | Start Claude session with selected case |
-| `h` | Start Shell session with selected case |
-| `m` | Multi-start (1-20 sessions at once) |
-| `n` | Create new case |
-| `s` | Switch to sessions view |
-| `r` | Refresh list |
-
-**Tab Switcher Menu (between attaches):**
-| Key | Action |
-|-----|--------|
-| `1-9` | Select and attach to session N |
-| `Enter` | Attach to current session |
-| `q` / `Esc` | Return to TUI start screen |
-
-**While attached to screen:**
-| Key | Action |
-|-----|--------|
-| `Ctrl+A D` | Detach and return to tab switcher |
 
 ## State Files
 
@@ -804,20 +539,7 @@ Long-running sessions are supported with automatic trimming:
 | `~/.claudeman/settings.json` | User preferences (lastUsedCase, custom template path) |
 | `~/.claudeman/certs/` | Self-signed TLS certificates for `--https` mode |
 
-**State lifecycle**:
-- Web server creates → session added to `state.json` + `screens.json`
-- Settings change → `state.json` updated (debounced 500ms)
-- Session deleted → removed from `state.json` (screen may survive if `killScreen: false`)
-- Server shutdown → sessions preserved in `state.json` (not wiped), screens preserved in `screens.json`
-- Server restart → sessions restored from `state.json` (primary) with `screens.json` as fallback
-
-**Recovery strategy** (double redundancy):
-1. **Primary**: `state.json` retains full session state across restarts (settings, tokens, respawn config)
-2. **Fallback**: `screens.json` provides screen metadata if `state.json` is missing a session
-3. After restoration, all settings (auto-compact, auto-clear, respawn, Ralph) are re-applied to live sessions
-4. `persistSessionState()` called after all restorations complete to sync final state
-
-Cases created in `~/claudeman-cases/` by default.
+**Recovery**: On restart, sessions restored from `state.json` (primary) with `screens.json` as fallback. All settings re-applied to live sessions. Cases created in `~/claudeman-cases/` by default.
 
 ### CLAUDE.md Templates
 
@@ -833,44 +555,14 @@ Placeholders replaced:
 
 ## Screen Session Manager (CLI Tool)
 
-Interactive bash tool for managing claudeman screen sessions directly from the terminal.
-
-```bash
-./scripts/screen-manager.sh          # Interactive mode
-./scripts/screen-manager.sh list     # List all sessions
-./scripts/screen-manager.sh attach 1 # Attach to session #1
-./scripts/screen-manager.sh kill 2,3 # Kill sessions 2 and 3
-./scripts/screen-manager.sh kill-all # Kill all sessions
-./scripts/screen-manager.sh info 1   # Show session #1 details
-```
-
-**Interactive Controls:**
-
-| Key | Action |
-|-----|--------|
-| `↑`/`↓` or `j`/`k` | Navigate sessions |
-| `Enter` | Attach to selected session |
-| `d` | Delete selected session |
-| `D` | Delete ALL sessions |
-| `i` | Show session info |
-| `q`/`Esc` | Quit |
-
-**Features:**
-- Reads from `~/.claudeman/screens.json` (claudeman's authoritative source)
-- Shows session name, running time, alive/dead status, mode
-- Flicker-free navigation (only updates changed rows)
-- Requires `jq` and `screen` to be installed
+`./scripts/screen-manager.sh` - Interactive bash tool for managing screen sessions. Commands: `list`, `attach N`, `kill N,M`, `kill-all`, `info N`. Requires `jq` and `screen`.
 
 ## Documentation
 
-Extended documentation is available in the `docs/` directory:
+- `docs/ralph-wiggum-guide.md` - Ralph Wiggum loop guide (plugin reference, prompt templates)
+- `docs/claude-code-hooks-reference.md` - Claude Code hooks documentation
 
-| Document | Description |
-|----------|-------------|
-| [`docs/ralph-wiggum-guide.md`](docs/ralph-wiggum-guide.md) | Complete Ralph Wiggum loop guide: official plugin reference, best practices, prompt templates, troubleshooting |
-| [`docs/claude-code-hooks-reference.md`](docs/claude-code-hooks-reference.md) | Official Claude Code hooks documentation: all events, configuration, examples |
-
-### Quick Reference: Ralph Wiggum Loops
+### Ralph Wiggum Loops
 
 **Core Pattern**: `<promise>PHRASE</promise>` - The completion signal that tells the loop to stop.
 
@@ -881,6 +573,4 @@ Extended documentation is available in the `docs/` directory:
 /ralph-loop:help          # Show help and usage
 ```
 
-**Claudeman Implementation**: The `RalphTracker` class (`src/ralph-tracker.ts`) detects Ralph patterns in Claude output and tracks loop state, todos, and completion phrases. It auto-enables when Ralph-related patterns are detected.
-
-See [`docs/ralph-wiggum-guide.md`](docs/ralph-wiggum-guide.md) for full documentation on best practices, prompt templates, and troubleshooting.
+The `RalphTracker` class (`src/ralph-tracker.ts`) detects Ralph patterns in Claude output and tracks loop state, todos, and completion phrases. It auto-enables when Ralph-related patterns are detected.

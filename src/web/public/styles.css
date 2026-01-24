@@ -1880,19 +1880,18 @@ body {
 
 /* Session respawn section in options modal */
 .session-respawn-section {
-  border-top: 1px solid var(--border);
-  padding-top: 0.75rem;
-  margin-top: 0.75rem;
+  padding-top: 0;
+  margin-top: 0;
 }
 
 .section-divider {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 0.75rem;
-  font-size: 0.8rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.75rem;
   font-weight: 500;
-  color: var(--text);
+  color: var(--text-dim);
 }
 
 .session-respawn-status {

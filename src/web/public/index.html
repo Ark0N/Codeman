@@ -278,7 +278,8 @@
         <!-- Modal Tabs -->
         <div class="modal-tabs">
           <button class="modal-tab-btn active" data-tab="respawn" onclick="app.switchOptionsTab('respawn')">Respawn</button>
-          <button class="modal-tab-btn" data-tab="ralph" onclick="app.switchOptionsTab('ralph')">Ralph / Todo Tracker</button>
+          <button class="modal-tab-btn" data-tab="context" onclick="app.switchOptionsTab('context')">Context</button>
+          <button class="modal-tab-btn" data-tab="ralph" onclick="app.switchOptionsTab('ralph')">Ralph / Todo</button>
         </div>
         <div class="modal-body">
           <!-- Respawn Tab Content -->
@@ -286,7 +287,6 @@
           <!-- Respawn Settings Section -->
           <div class="session-respawn-section" id="sessionRespawnSection">
             <div class="section-divider">
-              <span>Respawn Controller</span>
               <div class="session-respawn-status" id="sessionRespawnStatus">
                 <span class="respawn-status-indicator"></span>
                 <span class="respawn-status-text">Not active</span>
@@ -349,6 +349,15 @@
               <span class="form-hint">Presses Enter to accept plan approvals and default question options when Claude is waiting</span>
             </div>
 
+            <div class="respawn-actions">
+              <button class="btn-toolbar btn-success" onclick="app.enableRespawnFromModal()" id="modalEnableRespawnBtn">Enable Respawn</button>
+              <button class="btn-toolbar btn-danger" onclick="app.stopRespawnFromModal()" id="modalStopRespawnBtn" style="display: none;">Stop Respawn</button>
+            </div>
+          </div>
+          </div><!-- End respawn-tab -->
+
+          <!-- Context Management Tab Content -->
+          <div class="modal-tab-content hidden" id="context-tab">
             <div class="form-row">
               <label>Auto-Compact Context</label>
               <div class="auto-clear-row">
@@ -379,13 +388,7 @@
               </div>
               <span class="form-hint">Completely resets context (use higher threshold than compact)</span>
             </div>
-
-            <div class="respawn-actions">
-              <button class="btn-toolbar btn-success" onclick="app.enableRespawnFromModal()" id="modalEnableRespawnBtn">Enable Respawn</button>
-              <button class="btn-toolbar btn-danger" onclick="app.stopRespawnFromModal()" id="modalStopRespawnBtn" style="display: none;">Stop Respawn</button>
-            </div>
-          </div>
-          </div><!-- End respawn-tab -->
+          </div><!-- End context-tab -->
 
           <!-- Ralph Wiggum Tab Content -->
           <div class="modal-tab-content hidden" id="ralph-tab">
