@@ -16,14 +16,20 @@ import type { HookEventType } from './types.js';
 /**
  * Generates the hooks section for .claude/settings.local.json
  *
- * The curl commands reference env vars that are resolved at runtime by
- * the shell, so the same config works for any session in the case dir.
+ * The hook commands read stdin JSON from Claude Code (contains tool_name,
+ * tool_input, etc.) and forward it as the `data` field to Claudeman's API.
+ * Env vars are resolved at runtime by the shell, so the config is static
+ * per case directory.
  */
 export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
+  // Read Claude Code's stdin JSON and forward it as the data field.
+  // Falls back to empty object if stdin is unavailable or malformed.
   const curlCmd = (event: HookEventType) =>
-    `curl -s -X POST $CLAUDEMAN_API_URL/api/hook-event ` +
+    `HOOK_DATA=$(cat 2>/dev/null || echo '{}'); ` +
+    `curl -s -X POST "$CLAUDEMAN_API_URL/api/hook-event" ` +
     `-H 'Content-Type: application/json' ` +
-    `-d '{"event":"${event}","sessionId":"'$CLAUDEMAN_SESSION_ID'"}' 2>/dev/null || true`;
+    `-d "{\\"event\\":\\"${event}\\",\\"sessionId\\":\\"$CLAUDEMAN_SESSION_ID\\",\\"data\\":$HOOK_DATA}" ` +
+    `2>/dev/null || true`;
 
   return {
     hooks: {

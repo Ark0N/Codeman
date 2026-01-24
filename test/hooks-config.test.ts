@@ -74,11 +74,19 @@ describe('generateHooksConfig', () => {
   it('should include correct event names in curl payloads', () => {
     const config = generateHooksConfig();
     const notifHooks = config.hooks.Notification as Array<{ hooks: Array<{ command: string }> }>;
-    expect(notifHooks[0].hooks[0].command).toContain('"idle_prompt"');
-    expect(notifHooks[1].hooks[0].command).toContain('"permission_prompt"');
-    expect(notifHooks[2].hooks[0].command).toContain('"elicitation_dialog"');
+    expect(notifHooks[0].hooks[0].command).toContain('idle_prompt');
+    expect(notifHooks[1].hooks[0].command).toContain('permission_prompt');
+    expect(notifHooks[2].hooks[0].command).toContain('elicitation_dialog');
     const stopHooks = config.hooks.Stop as Array<{ hooks: Array<{ command: string }> }>;
-    expect(stopHooks[0].hooks[0].command).toContain('"stop"');
+    expect(stopHooks[0].hooks[0].command).toContain('stop');
+  });
+
+  it('should read stdin and forward as data field', () => {
+    const config = generateHooksConfig();
+    const notifHooks = config.hooks.Notification as Array<{ hooks: Array<{ command: string }> }>;
+    // Should capture stdin via cat and include as $HOOK_DATA
+    expect(notifHooks[0].hooks[0].command).toContain('HOOK_DATA=$(cat');
+    expect(notifHooks[0].hooks[0].command).toContain('$HOOK_DATA');
   });
 
   it('should set hook type to command', () => {
