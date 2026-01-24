@@ -182,6 +182,25 @@ body {
   color: var(--green);
 }
 
+/* Tab alert animations */
+.session-tab.tab-alert-action {
+  animation: tab-blink-red 1s infinite;
+}
+
+.session-tab.tab-alert-idle {
+  animation: tab-blink-yellow 1.5s infinite;
+}
+
+@keyframes tab-blink-red {
+  0%, 100% { background: transparent; border-color: transparent; }
+  50% { background: rgba(239, 68, 68, 0.15); border-color: var(--red); }
+}
+
+@keyframes tab-blink-yellow {
+  0%, 100% { background: transparent; border-color: transparent; }
+  50% { background: rgba(234, 179, 8, 0.12); border-color: var(--yellow); }
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }

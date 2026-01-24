@@ -370,6 +370,9 @@ class ClaudemanApp {
     this.ralphStates = new Map(); // Map<sessionId, { loop, todos }>
     this.ralphStatePanelCollapsed = true; // Default to collapsed
 
+    // Tab alert states: Map<sessionId, 'action' | 'idle'>
+    this.tabAlerts = new Map();
+
     // Terminal write batching
     this.pendingWrites = '';
     this.writeFrameScheduled = false;
@@ -832,6 +835,7 @@ class ClaudemanApp {
       const session = this.sessions.get(data.id);
       if (session) {
         session.status = 'busy';
+        this.tabAlerts.delete(data.id);
         this.renderSessionTabs();
         this.sendPendingCtrlL(data.id);
       }
@@ -1121,6 +1125,10 @@ class ClaudemanApp {
     this.eventSource.addEventListener('hook:idle_prompt', (e) => {
       const data = JSON.parse(e.data);
       const session = this.sessions.get(data.sessionId);
+      if (data.sessionId && data.sessionId !== this.activeSessionId) {
+        this.tabAlerts.set(data.sessionId, 'idle');
+        this.renderSessionTabs();
+      }
       this.notificationManager?.notify({
         urgency: 'warning',
         category: 'hook-idle',
@@ -1134,6 +1142,10 @@ class ClaudemanApp {
     this.eventSource.addEventListener('hook:permission_prompt', (e) => {
       const data = JSON.parse(e.data);
       const session = this.sessions.get(data.sessionId);
+      if (data.sessionId && data.sessionId !== this.activeSessionId) {
+        this.tabAlerts.set(data.sessionId, 'action');
+        this.renderSessionTabs();
+      }
       this.notificationManager?.notify({
         urgency: 'critical',
         category: 'hook-permission',
@@ -1147,6 +1159,10 @@ class ClaudemanApp {
     this.eventSource.addEventListener('hook:elicitation_dialog', (e) => {
       const data = JSON.parse(e.data);
       const session = this.sessions.get(data.sessionId);
+      if (data.sessionId && data.sessionId !== this.activeSessionId) {
+        this.tabAlerts.set(data.sessionId, 'action');
+        this.renderSessionTabs();
+      }
       this.notificationManager?.notify({
         urgency: 'critical',
         category: 'hook-elicitation',
@@ -1266,6 +1282,16 @@ class ClaudemanApp {
           tab.classList.remove('active');
         }
 
+        // Update alert class
+        const alertType = this.tabAlerts.get(id);
+        const wantAction = alertType === 'action';
+        const wantIdle = alertType === 'idle';
+        const hasAction = tab.classList.contains('tab-alert-action');
+        const hasIdle = tab.classList.contains('tab-alert-idle');
+        if (wantAction && !hasAction) { tab.classList.add('tab-alert-action'); tab.classList.remove('tab-alert-idle'); }
+        else if (wantIdle && !hasIdle) { tab.classList.add('tab-alert-idle'); tab.classList.remove('tab-alert-action'); }
+        else if (!alertType && (hasAction || hasIdle)) { tab.classList.remove('tab-alert-action', 'tab-alert-idle'); }
+
         // Update status indicator
         const statusEl = tab.querySelector('.tab-status');
         if (statusEl && !statusEl.classList.contains(status)) {
@@ -1320,8 +1346,10 @@ class ClaudemanApp {
       const mode = session.mode || 'claude';
       const taskStats = session.taskStats || { running: 0, total: 0 };
       const hasRunningTasks = taskStats.running > 0;
+      const alertType = this.tabAlerts.get(id);
+      const alertClass = alertType === 'action' ? ' tab-alert-action' : alertType === 'idle' ? ' tab-alert-idle' : '';
 
-      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}" data-id="${id}" onclick="app.selectSession('${id}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${id}')">
+      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}" data-id="${id}" onclick="app.selectSession('${id}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${id}')">
           <span class="tab-status ${status}"></span>
           ${mode === 'shell' ? '<span class="tab-mode shell">sh</span>' : ''}
           <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
@@ -1350,6 +1378,7 @@ class ClaudemanApp {
     if (this.activeSessionId === sessionId) return;
 
     this.activeSessionId = sessionId;
+    this.tabAlerts.delete(sessionId);
     this.renderSessionTabs();
 
     // Check if this is a restored session that needs to be attached
