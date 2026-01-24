@@ -184,21 +184,21 @@ body {
 
 /* Tab alert animations */
 .session-tab.tab-alert-action {
-  animation: tab-blink-red 1s infinite;
+  animation: tab-blink-red 2.5s ease-in-out infinite;
 }
 
 .session-tab.tab-alert-idle {
-  animation: tab-blink-yellow 1.5s infinite;
+  animation: tab-blink-yellow 3.5s ease-in-out infinite;
 }
 
 @keyframes tab-blink-red {
   0%, 100% { background: transparent; border-color: transparent; }
-  50% { background: rgba(239, 68, 68, 0.15); border-color: var(--red); }
+  50% { background: rgba(239, 68, 68, 0.12); border-color: var(--red); }
 }
 
 @keyframes tab-blink-yellow {
   0%, 100% { background: transparent; border-color: transparent; }
-  50% { background: rgba(234, 179, 8, 0.12); border-color: var(--yellow); }
+  50% { background: rgba(234, 179, 8, 0.1); border-color: var(--yellow); }
 }
 
 @keyframes pulse {

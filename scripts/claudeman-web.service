@@ -1,0 +1,23 @@
+[Unit]
+Description=Claudeman Web Server (HTTPS)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/arkon/default/claudeman
+ExecStart=/usr/bin/node dist/index.js web --https
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=HOME=/home/arkon
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claudeman
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target
