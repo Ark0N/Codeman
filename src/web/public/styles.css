@@ -248,8 +248,6 @@ body {
   font-family: 'SF Mono', Monaco, monospace;
   color: var(--text-dim);
   padding: 0 0.5rem;
-  border-left: 1px solid var(--border);
-  margin-left: 0.5rem;
 }
 
 .stat-item {
