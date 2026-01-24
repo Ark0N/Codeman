@@ -474,7 +474,7 @@ Key events for frontend handling (see `app.js:handleSSEEvent()`):
 - `respawn:detectionUpdate` - Multi-layer idle detection status (confidence level, waiting state)
 - `spawn:queued`, `spawn:started`, `spawn:completed`, `spawn:failed`, `spawn:timeout`, `spawn:cancelled` - Agent lifecycle
 - `spawn:progress`, `spawn:message`, `spawn:budgetWarning`, `spawn:stateUpdate` - Agent monitoring
-- `hook:idle_prompt`, `hook:permission_prompt`, `hook:stop` - Claude Code hooks (desktop notifications)
+- `hook:idle_prompt`, `hook:permission_prompt`, `hook:elicitation_dialog`, `hook:stop` - Claude Code hooks (desktop notifications)
 
 ### Frontend (app.js)
 
@@ -678,7 +678,7 @@ Long-running sessions are supported with automatic trimming:
 | GET | `/api/spawn/status` | Orchestrator status (counts, config) |
 | PUT | `/api/spawn/config` | Update orchestrator config |
 | POST | `/api/spawn/trigger` | Programmatic spawn (bypass terminal detection) |
-| POST | `/api/hook-event` | Receive Claude Code hook callbacks (idle_prompt, permission_prompt, stop) |
+| POST | `/api/hook-event` | Receive Claude Code hook callbacks (idle_prompt, permission_prompt, elicitation_dialog, stop) |
 
 ## Keyboard Shortcuts (Web UI)
 

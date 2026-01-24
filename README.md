@@ -159,6 +159,21 @@ curl -X POST localhost:3000/api/sessions/:id/auto-compact \
 
 ---
 
+### 🔔 Desktop Notifications via Hooks
+
+Automatic desktop notifications when sessions need attention — powered by Claude Code's hooks system:
+
+| Hook Event | Urgency | Meaning |
+|------------|---------|---------|
+| `permission_prompt` | Critical | Claude needs tool approval |
+| `elicitation_dialog` | Critical | Claude is asking a question |
+| `idle_prompt` | Warning | Session idle, waiting for input |
+| `stop` | Info | Response complete |
+
+Hooks are auto-configured per case directory (`.claude/settings.local.json`). Requires `--https` flag for browser notification API support.
+
+---
+
 ### 🖥️ Multi-Session Dashboard
 
 Run **20 parallel sessions** with full visibility:
@@ -256,6 +271,11 @@ npx tsx src/index.ts web
 | `POST` | `/api/spawn/agents/:id/message` | Send message to agent |
 | `POST` | `/api/spawn/agents/:id/cancel` | Cancel agent |
 | `POST` | `/api/spawn/trigger` | Programmatic spawn |
+
+### Hooks & Notifications
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/hook-event` | Claude Code hook callbacks |
 
 ### Real-Time
 | Method | Endpoint | Description |

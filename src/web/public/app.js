@@ -1120,6 +1120,19 @@ class ClaudemanApp {
       });
     });
 
+    this.eventSource.addEventListener('hook:elicitation_dialog', (e) => {
+      const data = JSON.parse(e.data);
+      const session = this.sessions.get(data.sessionId);
+      this.notificationManager?.notify({
+        urgency: 'critical',
+        category: 'hook-elicitation',
+        sessionId: data.sessionId,
+        sessionName: session?.name || data.sessionId,
+        title: 'Question Asked',
+        message: 'Claude is asking a question and waiting for your answer',
+      });
+    });
+
     this.eventSource.addEventListener('hook:stop', (e) => {
       const data = JSON.parse(e.data);
       const session = this.sessions.get(data.sessionId);
