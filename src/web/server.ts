@@ -80,6 +80,63 @@ const SCHEDULED_RUN_MAX_AGE = 60 * 60 * 1000;
 const MAX_CONCURRENT_SESSIONS = 50;
 // SSE client health check interval (every 30 seconds)
 const SSE_HEALTH_CHECK_INTERVAL = 30 * 1000;
+// Maximum allowed input length for session write (64KB)
+const MAX_INPUT_LENGTH = 64 * 1024;
+// Maximum terminal resize dimensions
+const MAX_TERMINAL_COLS = 500;
+const MAX_TERMINAL_ROWS = 200;
+// Maximum session name length
+const MAX_SESSION_NAME_LENGTH = 128;
+// Maximum hook data size (prevents oversized SSE broadcasts)
+const MAX_HOOK_DATA_SIZE = 8 * 1024;
+// Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
+const CLAUDE_BANNER_PATTERN = /\x1b\[1mClaud/;
+const CTRL_L_PATTERN = /\x0c/g;
+const LEADING_WHITESPACE_PATTERN = /^[\s\r\n]+/;
+
+/**
+ * Sanitizes hook event data before broadcasting via SSE.
+ * Extracts only relevant fields and limits total size to prevent
+ * oversized payloads from being broadcast to all connected clients.
+ */
+function sanitizeHookData(data: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!data || typeof data !== 'object') return {};
+
+  // Only forward known safe fields from Claude Code hook stdin
+  const safeFields: Record<string, unknown> = {};
+  const allowedKeys = [
+    'hook_event_name', 'tool_name', 'tool_input', 'session_id',
+    'cwd', 'permission_mode', 'stop_hook_active',
+  ];
+
+  for (const key of allowedKeys) {
+    if (key in data && data[key] !== undefined) {
+      safeFields[key] = data[key];
+    }
+  }
+
+  // For tool_input, extract only summary fields (not full file content)
+  if (safeFields.tool_input && typeof safeFields.tool_input === 'object') {
+    const input = safeFields.tool_input as Record<string, unknown>;
+    const summary: Record<string, unknown> = {};
+    if (input.command) summary.command = String(input.command).slice(0, 500);
+    if (input.file_path) summary.file_path = String(input.file_path).slice(0, 500);
+    if (input.description) summary.description = String(input.description).slice(0, 200);
+    if (input.query) summary.query = String(input.query).slice(0, 200);
+    if (input.url) summary.url = String(input.url).slice(0, 500);
+    if (input.pattern) summary.pattern = String(input.pattern).slice(0, 200);
+    if (input.prompt) summary.prompt = String(input.prompt).slice(0, 200);
+    safeFields.tool_input = summary;
+  }
+
+  // Final size check - drop if serialized data exceeds limit
+  const serialized = JSON.stringify(safeFields);
+  if (serialized.length > MAX_HOOK_DATA_SIZE) {
+    return { tool_name: safeFields.tool_name, _truncated: true };
+  }
+
+  return safeFields;
+}
 
 /**
  * Auto-configure Ralph tracker for a session.
@@ -241,7 +298,7 @@ export class WebServer extends EventEmitter {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
+        'X-Accel-Buffering': 'no', // Disable nginx buffering
       });
 
       this.sseClients.add(reply);
@@ -304,10 +361,11 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
-      session.name = body.name || '';
+      const name = String(body.name || '').slice(0, MAX_SESSION_NAME_LENGTH);
+      session.name = name;
       // Also update the screen name if this session has a screen
       this.screenManager.updateScreenName(id, session.name);
       this.persistSessionState(session);
@@ -394,12 +452,10 @@ export class WebServer extends EventEmitter {
     // Configure Ralph (Ralph Wiggum) settings
     this.app.post('/api/sessions/:id/ralph-config', async (req) => {
       const { id } = req.params as { id: string };
-      const { enabled, completionPhrase, maxIterations, maxTodos, todoExpirationMinutes, reset, disableAutoEnable } = req.body as {
+      const { enabled, completionPhrase, maxIterations, reset, disableAutoEnable } = req.body as {
         enabled?: boolean;
         completionPhrase?: string;
         maxIterations?: number;
-        maxTodos?: number;
-        todoExpirationMinutes?: number;
         reset?: boolean | 'full';  // true = soft reset (keep enabled), 'full' = complete reset
         disableAutoEnable?: boolean;  // Prevent auto-enable on pattern detection
       };
@@ -450,15 +506,6 @@ export class WebServer extends EventEmitter {
         session.ralphTracker.setMaxIterations(maxIterations || null);
       }
 
-      // Store additional config on session for reference
-      (session as any).ralphConfig = {
-        enabled: enabled ?? session.ralphTracker.enabled,
-        completionPhrase: completionPhrase || '',
-        maxIterations: maxIterations || 0,
-        maxTodos: maxTodos || 50,
-        todoExpirationMinutes: todoExpirationMinutes || 60
-      };
-
       // Persist and broadcast the update
       this.persistSessionState(session);
       this.broadcast('session:ralphLoopUpdate', {
@@ -470,17 +517,17 @@ export class WebServer extends EventEmitter {
     });
 
     // Run prompt in session
-    this.app.post('/api/sessions/:id/run', async (req): Promise<{ success?: boolean; message?: string; error?: string }> => {
+    this.app.post('/api/sessions/:id/run', async (req): Promise<ApiResponse> => {
       const { id } = req.params as { id: string };
       const { prompt } = req.body as RunPromptRequest;
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
       if (session.isBusy()) {
-        return { error: 'Session is busy' };
+        return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
       }
 
       // Run async, don't wait
@@ -489,20 +536,20 @@ export class WebServer extends EventEmitter {
       });
 
       this.broadcast('session:running', { id, prompt });
-      return { success: true, message: 'Prompt started' };
+      return { success: true };
     });
 
     // Start interactive Claude session (persists even if browser disconnects)
-    this.app.post('/api/sessions/:id/interactive', async (req) => {
+    this.app.post('/api/sessions/:id/interactive', async (req): Promise<ApiResponse> => {
       const { id } = req.params as { id: string };
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
       if (session.isBusy()) {
-        return { error: 'Session is busy' };
+        return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
       }
 
       try {
@@ -518,32 +565,32 @@ export class WebServer extends EventEmitter {
         this.broadcast('session:interactive', { id });
         this.broadcast('session:updated', { session: session.toDetailedState() });
 
-        return { success: true, message: 'Interactive session started' };
+        return { success: true };
       } catch (err) {
-        return { error: getErrorMessage(err) };
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
       }
     });
 
     // Start a plain shell session (no Claude)
-    this.app.post('/api/sessions/:id/shell', async (req) => {
+    this.app.post('/api/sessions/:id/shell', async (req): Promise<ApiResponse> => {
       const { id } = req.params as { id: string };
       const session = this.sessions.get(id);
 
       if (!session) {
-        return { error: 'Session not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
       if (session.isBusy()) {
-        return { error: 'Session is busy' };
+        return createErrorResponse(ApiErrorCode.SESSION_BUSY, 'Session is busy');
       }
 
       try {
         await session.startShell();
         this.broadcast('session:interactive', { id, mode: 'shell' });
         this.broadcast('session:updated', { session: session.toDetailedState() });
-        return { success: true, message: 'Shell session started' };
+        return { success: true };
       } catch (err) {
-        return { error: getErrorMessage(err) };
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
       }
     });
 
@@ -561,7 +608,12 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Input is required');
       }
 
-      session.write(String(input));
+      const inputStr = String(input);
+      if (inputStr.length > MAX_INPUT_LENGTH) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Input exceeds maximum length (${MAX_INPUT_LENGTH} bytes)`);
+      }
+
+      session.write(inputStr);
       return { success: true };
     });
 
@@ -577,6 +629,9 @@ export class WebServer extends EventEmitter {
 
       if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'cols and rows must be positive integers');
+      }
+      if (cols > MAX_TERMINAL_COLS || rows > MAX_TERMINAL_ROWS) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Terminal dimensions exceed maximum (${MAX_TERMINAL_COLS}x${MAX_TERMINAL_ROWS})`);
       }
 
       session.resize(cols, rows);
@@ -599,22 +654,20 @@ export class WebServer extends EventEmitter {
       let cleanBuffer = session.terminalBuffer;
 
       // Find where Claude banner starts (has color codes before "Claude")
-      // Look for the bold escape sequence followed by "Claude"
-      const claudeMatch = cleanBuffer.match(/\x1b\[1mClaud/);
+      const claudeMatch = cleanBuffer.match(CLAUDE_BANNER_PATTERN);
       if (claudeMatch && claudeMatch.index !== undefined && claudeMatch.index > 0) {
-        // Find the start of that line (look for line start or screen positioning before it)
+        // Find the start of that line
         let lineStart = claudeMatch.index;
-        // Go back to find color/positioning sequences that are part of the banner
         while (lineStart > 0 && cleanBuffer[lineStart - 1] !== '\n') {
           lineStart--;
         }
         cleanBuffer = cleanBuffer.slice(lineStart);
       }
 
-      // Also remove any Ctrl+L and leading whitespace
+      // Remove Ctrl+L and leading whitespace
       cleanBuffer = cleanBuffer
-        .replace(/\x0c/g, '')
-        .replace(/^[\s\r\n]+/, '');
+        .replace(CTRL_L_PATTERN, '')
+        .replace(LEADING_WHITESPACE_PATTERN, '');
 
       // Optionally truncate to last N bytes for faster initial load
       const tailBytes = query.tail ? parseInt(query.tail, 10) : 0;
@@ -1002,7 +1055,7 @@ export class WebServer extends EventEmitter {
       const run = this.scheduledRuns.get(id);
 
       if (!run) {
-        return { error: 'Scheduled run not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Scheduled run not found');
       }
 
       return run;
@@ -1179,7 +1232,7 @@ export class WebServer extends EventEmitter {
       const casePath = join(casesDir, name);
 
       if (!existsSync(casePath)) {
-        return { error: 'Case not found' };
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Case not found');
       }
 
       return {
@@ -1324,7 +1377,7 @@ export class WebServer extends EventEmitter {
         writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
         return { success: true };
       } catch (err) {
-        return { error: getErrorMessage(err) };
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
       }
     });
 
@@ -1476,7 +1529,9 @@ export class WebServer extends EventEmitter {
         }
       }
 
-      this.broadcast(`hook:${event}`, { sessionId, timestamp: Date.now(), ...data });
+      // Sanitize forwarded data: only include known safe fields, limit size
+      const safeData = sanitizeHookData(data);
+      this.broadcast(`hook:${event}`, { sessionId, timestamp: Date.now(), ...safeData });
       return { success: true };
     });
   }
@@ -1546,7 +1601,22 @@ export class WebServer extends EventEmitter {
   }
 
   // Clean up all resources associated with a session
+  // Track sessions currently being cleaned up to prevent concurrent cleanup races
+  private cleaningUp: Set<string> = new Set();
+
   private async cleanupSession(sessionId: string, killScreen: boolean = true): Promise<void> {
+    // Guard against concurrent cleanup of the same session
+    if (this.cleaningUp.has(sessionId)) return;
+    this.cleaningUp.add(sessionId);
+
+    try {
+      await this._doCleanupSession(sessionId, killScreen);
+    } finally {
+      this.cleaningUp.delete(sessionId);
+    }
+  }
+
+  private async _doCleanupSession(sessionId: string, killScreen: boolean): Promise<void> {
     const session = this.sessions.get(sessionId);
 
     // Stop and remove respawn controller
@@ -1566,10 +1636,11 @@ export class WebServer extends EventEmitter {
       this.respawnTimers.delete(sessionId);
     }
 
-    // Clear batches
+    // Clear batches and pending state updates
     this.terminalBatches.delete(sessionId);
     this.outputBatches.delete(sessionId);
     this.taskUpdateBatches.delete(sessionId);
+    this.stateUpdatePending.delete(sessionId);
 
     // Reset Ralph tracker on the session before cleanup
     if (session) {
@@ -2077,7 +2148,14 @@ export class WebServer extends EventEmitter {
 
   private broadcast(event: string, data: unknown): void {
     // Performance optimization: serialize JSON once for all clients
-    const message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    let message: string;
+    try {
+      message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    } catch (err) {
+      // Handle circular references or non-serializable values
+      console.error(`[Server] Failed to serialize SSE event "${event}":`, err);
+      return;
+    }
     for (const client of this.sseClients) {
       this.sendSSEPreformatted(client, message);
     }
@@ -2199,8 +2277,9 @@ export class WebServer extends EventEmitter {
   }
 
   /**
-   * Clean up dead SSE clients that may not have properly disconnected.
-   * This prevents memory leaks from abruptly terminated connections.
+   * Clean up dead SSE clients and send keep-alive comments.
+   * Keep-alive prevents proxy/load-balancer timeouts on idle connections.
+   * Dead client cleanup prevents memory leaks from abruptly terminated connections.
    */
   private cleanupDeadSSEClients(): void {
     const deadClients: FastifyReply[] = [];
@@ -2211,6 +2290,9 @@ export class WebServer extends EventEmitter {
         const socket = client.raw.socket || (client.raw as any).connection;
         if (!socket || socket.destroyed || !socket.writable) {
           deadClients.push(client);
+        } else {
+          // Send SSE comment as keep-alive (comments start with ':')
+          client.raw.write(':keepalive\n\n');
         }
       } catch {
         // Error accessing socket means client is dead

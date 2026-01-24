@@ -2197,11 +2197,9 @@ class ClaudemanApp {
     // Populate Ralph Wiggum form with current session values
     const ralphState = this.ralphStates.get(sessionId);
     this.populateRalphForm({
-      enabled: ralphState?.loop?.enabled ?? session.ralphConfig?.enabled ?? false,
+      enabled: ralphState?.loop?.enabled ?? session.ralphLoop?.enabled ?? false,
       completionPhrase: ralphState?.loop?.completionPhrase || session.ralphLoop?.completionPhrase || '',
       maxIterations: ralphState?.loop?.maxIterations || session.ralphLoop?.maxIterations || 0,
-      maxTodos: session.ralphConfig?.maxTodos || 50,
-      todoExpirationMinutes: session.ralphConfig?.todoExpirationMinutes || 60
     });
 
     document.getElementById('sessionOptionsModal').classList.add('active');
