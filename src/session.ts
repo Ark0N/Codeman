@@ -87,7 +87,7 @@ let _augmentedPath: string | null = null;
  * prepends its directory to the current PATH if not already present.
  * Result is cached for subsequent calls.
  */
-function getAugmentedPath(): string {
+export function getAugmentedPath(): string {
   if (_augmentedPath) return _augmentedPath;
 
   const currentPath = process.env.PATH || '';

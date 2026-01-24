@@ -29,6 +29,7 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
+import { getAugmentedPath } from './session.js';
 
 // ========== Types ==========
 
@@ -323,8 +324,9 @@ export class AiIdleChecker extends EventEmitter {
     // Build the command - escape the prompt for shell
     const escapedPrompt = prompt.replace(/'/g, "'\\''");
     const modelArg = `--model ${this.config.model}`;
+    const augmentedPath = getAugmentedPath();
     const claudeCmd = `claude -p ${modelArg} --output-format text '${escapedPrompt}'`;
-    const fullCmd = `${claudeCmd} > "${this.checkTempFile}" 2>&1; echo "${DONE_MARKER}" >> "${this.checkTempFile}"`;
+    const fullCmd = `export PATH="${augmentedPath}"; ${claudeCmd} > "${this.checkTempFile}" 2>&1; echo "${DONE_MARKER}" >> "${this.checkTempFile}"`;
 
     // Spawn screen
     try {

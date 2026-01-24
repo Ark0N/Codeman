@@ -579,6 +579,10 @@ export class RespawnController extends EventEmitter {
 
     this.aiChecker.on('cooldownEnded', () => {
       this.emit('aiCheckCooldown', false, null);
+      // Restart pre-filter timer when cooldown expires so a new check can be triggered
+      if (this._state === 'watching') {
+        this.startPreFilterTimer();
+      }
     });
 
     this.aiChecker.on('disabled', (reason: string) => {
@@ -771,6 +775,14 @@ export class RespawnController extends EventEmitter {
     this.lastWorkingPatternTime = now;
     this.completionMessageTime = null;
     this.hasReceivedOutput = false;
+
+    // Seed the terminal buffer from the session's existing output.
+    // This gives the AI checker context even if no new output arrives.
+    const existingBuffer = this.session.terminalBuffer;
+    if (existingBuffer) {
+      this.terminalBuffer.clear();
+      this.terminalBuffer.append(existingBuffer);
+    }
 
     this.aiChecker.reset();
     this.setState('watching');
@@ -1329,10 +1341,16 @@ export class RespawnController extends EventEmitter {
         this.emit('aiCheckCompleted', result);
         this.setState('watching');
         this.log(`AI check says WORKING, returning to watching with ${this.config.aiIdleCheckCooldownMs}ms cooldown`);
+        // Restart timers so the controller retries after cooldown expires
+        this.startNoOutputTimer();
+        this.startPreFilterTimer();
       } else {
         // ERROR verdict
         this.emit('aiCheckFailed', result.reasoning);
         this.setState('watching');
+        // Restart timers to allow retry
+        this.startNoOutputTimer();
+        this.startPreFilterTimer();
       }
     }).catch((err) => {
       if (this._state === 'ai_checking') {
@@ -1340,6 +1358,9 @@ export class RespawnController extends EventEmitter {
         this.emit('aiCheckFailed', errorMsg);
         this.setState('watching');
         this.log(`AI check error: ${errorMsg}`);
+        // Restart timers to allow retry
+        this.startNoOutputTimer();
+        this.startPreFilterTimer();
       }
     });
   }
