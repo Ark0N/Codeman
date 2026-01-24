@@ -8,6 +8,7 @@ WorkingDirectory=/home/arkon/default/claudeman
 ExecStart=/usr/bin/node dist/index.js web --https
 Restart=always
 RestartSec=5
+KillMode=process
 Environment=NODE_ENV=production
 Environment=HOME=/home/arkon
 
