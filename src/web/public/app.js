@@ -466,6 +466,14 @@ class ClaudemanApp {
     this.terminal.open(container);
     this.fitAddon.fit();
 
+    // Always use mouse wheel for terminal scrollback, never forward to application.
+    // Prevents Claude's Ink UI (plan mode selector) from capturing scroll as option navigation.
+    this.terminal.attachCustomWheelEventHandler((ev) => {
+      const lines = Math.round(ev.deltaY / 25) || (ev.deltaY > 0 ? 1 : -1);
+      this.terminal.scrollLines(lines);
+      return false;
+    });
+
     // Welcome message
     this.showWelcome();
 
