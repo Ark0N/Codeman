@@ -31,6 +31,27 @@
 
 ## What Claudeman Does
 
+### 🔔 Notification System
+
+Real-time desktop notifications when sessions need attention — never miss a permission prompt or idle session again:
+
+| Hook Event | Urgency | Tab Alert | Meaning |
+|------------|---------|-----------|---------|
+| `permission_prompt` | Critical | Red blink | Claude needs tool approval |
+| `elicitation_dialog` | Critical | Red blink | Claude is asking a question |
+| `idle_prompt` | Warning | Yellow blink | Session idle, waiting for input |
+| `stop` | Info | — | Response complete |
+
+**Features:**
+- Browser notifications enabled by default (auto-requests permission)
+- Click any notification to jump directly to the affected session
+- Tab blinking alerts: red for action-required, yellow for idle
+- Notifications include actual context (tool name, command, question text)
+- Hooks are auto-configured per case directory (`.claude/settings.local.json`)
+- Requires `--https` flag for browser notification API support
+
+---
+
 ### 💾 Persistent Screen Sessions
 
 Every Claude session runs inside **GNU Screen** — sessions survive server restarts, network drops, and machine sleep.
@@ -156,27 +177,6 @@ Never hit token limits unexpectedly:
 curl -X POST localhost:3000/api/sessions/:id/auto-compact \
   -d '{"enabled": true, "threshold": 100000}'
 ```
-
----
-
-### 🔔 Desktop Notifications via Hooks
-
-Automatic desktop notifications when sessions need attention — powered by Claude Code's hooks system:
-
-| Hook Event | Urgency | Tab Alert | Meaning |
-|------------|---------|-----------|---------|
-| `permission_prompt` | Critical | Red blink | Claude needs tool approval |
-| `elicitation_dialog` | Critical | Red blink | Claude is asking a question |
-| `idle_prompt` | Warning | Yellow blink | Session idle, waiting for input |
-| `stop` | Info | — | Response complete |
-
-**Features:**
-- Browser notifications enabled by default (auto-requests permission)
-- Click any notification to jump directly to the affected session
-- Tab blinking alerts: red for action-required, yellow for idle
-- Notifications include actual context (tool name, command, question text)
-- Hooks are auto-configured per case directory (`.claude/settings.local.json`)
-- Requires `--https` flag for browser notification API support
 
 ---
 
