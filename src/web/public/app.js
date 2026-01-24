@@ -33,19 +33,30 @@ class NotificationManager {
   }
 
   loadPreferences() {
-    try {
-      const saved = localStorage.getItem('claudeman-notification-prefs');
-      if (saved) return JSON.parse(saved);
-    } catch (_e) { /* ignore */ }
-    return {
+    const defaults = {
       enabled: true,
-      browserNotifications: false,
+      browserNotifications: true,
       audioAlerts: false,
       stuckThresholdMs: 600000,
       muteCritical: false,
       muteWarning: false,
       muteInfo: false,
+      _version: 2,
     };
+    try {
+      const saved = localStorage.getItem('claudeman-notification-prefs');
+      if (saved) {
+        const prefs = JSON.parse(saved);
+        // Migrate: v1 had browserNotifications defaulting to false
+        if (!prefs._version || prefs._version < 2) {
+          prefs.browserNotifications = true;
+          prefs._version = 2;
+          localStorage.setItem('claudeman-notification-prefs', JSON.stringify(prefs));
+        }
+        return { ...defaults, ...prefs };
+      }
+    } catch (_e) { /* ignore */ }
+    return defaults;
   }
 
   savePreferences() {
@@ -104,8 +115,8 @@ class NotificationManager {
       this.updateTabTitle();
     }
 
-    // Layer 3: Browser notification (when tab hidden, critical/warning only)
-    if (!this.isTabVisible && (urgency === 'critical' || urgency === 'warning')) {
+    // Layer 3: Browser notification (critical/warning always, info only when tab hidden)
+    if (urgency === 'critical' || urgency === 'warning' || !this.isTabVisible) {
       this.sendBrowserNotif(title, message, category, sessionId);
     }
 
@@ -184,6 +195,16 @@ class NotificationManager {
   sendBrowserNotif(title, body, tag, sessionId) {
     if (!this.preferences.browserNotifications) return;
     if (typeof Notification === 'undefined') return;
+    if (Notification.permission === 'default') {
+      // Auto-request on first notification attempt
+      Notification.requestPermission().then(result => {
+        if (result === 'granted') {
+          // Re-send this notification now that we have permission
+          this.sendBrowserNotif(title, body, tag, sessionId);
+        }
+      });
+      return;
+    }
     if (Notification.permission !== 'granted') return;
 
     // Rate limit: max 1 per 3 seconds
