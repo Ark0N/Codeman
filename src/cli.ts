@@ -493,15 +493,21 @@ program
   .command('web')
   .description('Start the web interface')
   .option('-p, --port <port>', 'Port to listen on', '3000')
+  .option('--https', 'Enable HTTPS with a self-signed certificate (enables browser Notifications API)')
   .action(async (options) => {
     const { startWebServer } = await import('./web/server.js');
     const port = parseInt(options.port, 10);
+    const https = !!options.https;
+    const protocol = https ? 'https' : 'http';
 
-    console.log(chalk.cyan(`Starting Claudeman web interface on port ${port}...`));
+    console.log(chalk.cyan(`Starting Claudeman web interface on port ${port}${https ? ' (HTTPS)' : ''}...`));
 
     try {
-      await startWebServer(port);
-      console.log(chalk.green(`\n✓ Web interface running at http://localhost:${port}`));
+      await startWebServer(port, https);
+      console.log(chalk.green(`\n✓ Web interface running at ${protocol}://localhost:${port}`));
+      if (https) {
+        console.log(chalk.yellow('  Note: Accept the self-signed certificate in your browser on first visit'));
+      }
       console.log(chalk.gray('  Press Ctrl+C to stop\n'));
     } catch (err) {
       console.error(chalk.red(`✗ Failed to start web server: ${getErrorMessage(err)}`));

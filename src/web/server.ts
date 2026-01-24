@@ -15,6 +15,7 @@ import fastifyStatic from '@fastify/static';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { homedir, totalmem, freemem, loadavg, cpus } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { Session, ClaudeMessage, type BackgroundTask, type RalphTrackerState, type RalphTodoItem } from '../session.js';
@@ -129,6 +130,39 @@ function autoConfigureRalph(session: Session, workingDir: string, broadcast: (ev
   }
 }
 
+/**
+ * Get or generate a self-signed TLS certificate for HTTPS.
+ * Certs are stored in ~/.claudeman/certs/ and reused across restarts.
+ */
+function getOrCreateSelfSignedCert(): { key: string; cert: string } {
+  const certsDir = join(homedir(), '.claudeman', 'certs');
+  const keyPath = join(certsDir, 'server.key');
+  const certPath = join(certsDir, 'server.crt');
+
+  if (existsSync(keyPath) && existsSync(certPath)) {
+    return {
+      key: readFileSync(keyPath, 'utf-8'),
+      cert: readFileSync(certPath, 'utf-8'),
+    };
+  }
+
+  mkdirSync(certsDir, { recursive: true });
+
+  // Generate self-signed cert valid for 365 days, covering localhost and common LAN access patterns
+  execSync(
+    `openssl req -x509 -newkey rsa:2048 -nodes ` +
+    `-keyout "${keyPath}" -out "${certPath}" ` +
+    `-days 365 -subj "/CN=claudeman" ` +
+    `-addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:0.0.0.0"`,
+    { stdio: 'pipe' }
+  );
+
+  return {
+    key: readFileSync(keyPath, 'utf-8'),
+    cert: readFileSync(certPath, 'utf-8'),
+  };
+}
+
 export class WebServer extends EventEmitter {
   private app: FastifyInstance;
   private sessions: Map<string, Session> = new Map();
@@ -138,6 +172,7 @@ export class WebServer extends EventEmitter {
   private sseClients: Set<FastifyReply> = new Set();
   private store = getStore();
   private port: number;
+  private https: boolean;
   private screenManager: ScreenManager;
   // Terminal batching for performance
   private terminalBatches: Map<string, string> = new Map();
@@ -159,10 +194,17 @@ export class WebServer extends EventEmitter {
   // Spawn1337 agent orchestrator
   private spawnOrchestrator: SpawnOrchestrator;
 
-  constructor(port: number = 3000) {
+  constructor(port: number = 3000, https: boolean = false) {
     super();
     this.port = port;
-    this.app = Fastify({ logger: false });
+    this.https = https;
+
+    if (https) {
+      const { key, cert } = getOrCreateSelfSignedCert();
+      this.app = Fastify({ logger: false, https: { key, cert } });
+    } else {
+      this.app = Fastify({ logger: false });
+    }
     this.screenManager = new ScreenManager();
 
     // Set up screen manager event listeners
@@ -2157,10 +2199,11 @@ export class WebServer extends EventEmitter {
   async start(): Promise<void> {
     await this.setupRoutes();
     await this.app.listen({ port: this.port, host: '0.0.0.0' });
-    console.log(`Claudeman web interface running at http://localhost:${this.port}`);
+    const protocol = this.https ? 'https' : 'http';
+    console.log(`Claudeman web interface running at ${protocol}://localhost:${this.port}`);
 
     // Set API URL for child processes (MCP server, spawned sessions)
-    process.env.CLAUDEMAN_API_URL = `http://localhost:${this.port}`;
+    process.env.CLAUDEMAN_API_URL = `${protocol}://localhost:${this.port}`;
 
     // Start scheduled runs cleanup timer
     this.scheduledCleanupTimer = setInterval(() => {
@@ -2405,8 +2448,8 @@ export class WebServer extends EventEmitter {
   }
 }
 
-export async function startWebServer(port: number = 3000): Promise<WebServer> {
-  const server = new WebServer(port);
+export async function startWebServer(port: number = 3000, https: boolean = false): Promise<WebServer> {
+  const server = new WebServer(port, https);
   await server.start();
   return server;
 }
