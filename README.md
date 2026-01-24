@@ -163,14 +163,20 @@ curl -X POST localhost:3000/api/sessions/:id/auto-compact \
 
 Automatic desktop notifications when sessions need attention — powered by Claude Code's hooks system:
 
-| Hook Event | Urgency | Meaning |
-|------------|---------|---------|
-| `permission_prompt` | Critical | Claude needs tool approval |
-| `elicitation_dialog` | Critical | Claude is asking a question |
-| `idle_prompt` | Warning | Session idle, waiting for input |
-| `stop` | Info | Response complete |
+| Hook Event | Urgency | Tab Alert | Meaning |
+|------------|---------|-----------|---------|
+| `permission_prompt` | Critical | Red blink | Claude needs tool approval |
+| `elicitation_dialog` | Critical | Red blink | Claude is asking a question |
+| `idle_prompt` | Warning | Yellow blink | Session idle, waiting for input |
+| `stop` | Info | — | Response complete |
 
-Hooks are auto-configured per case directory (`.claude/settings.local.json`). Requires `--https` flag for browser notification API support.
+**Features:**
+- Browser notifications enabled by default (auto-requests permission)
+- Click any notification to jump directly to the affected session
+- Tab blinking alerts: red for action-required, yellow for idle
+- Notifications include actual context (tool name, command, question text)
+- Hooks are auto-configured per case directory (`.claude/settings.local.json`)
+- Requires `--https` flag for browser notification API support
 
 ---
 
@@ -218,6 +224,15 @@ claudeman web -p 8080
 
 # Development mode (no build needed)
 npx tsx src/index.ts web
+
+# HTTPS (required for browser notifications)
+claudeman web --https
+
+# Run as systemd service (auto-restarts, survives logout)
+ln -sf $(pwd)/scripts/claudeman-web.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now claudeman-web
+loginctl enable-linger $USER
 ```
 
 **Requirements:**
@@ -275,7 +290,7 @@ npx tsx src/index.ts web
 ### Hooks & Notifications
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/hook-event` | Claude Code hook callbacks |
+| `POST` | `/api/hook-event` | Hook callbacks `{event, sessionId, data?}` → notifications + tab alerts |
 
 ### Real-Time
 | Method | Endpoint | Description |

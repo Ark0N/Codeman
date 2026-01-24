@@ -101,6 +101,14 @@ curl localhost:3000/api/status | jq .     # Full app state including respawn
 cat ~/.claudeman/state.json | jq .        # View main state
 cat ~/.claudeman/state-inner.json | jq .  # View Ralph loop state
 
+# Systemd service (respawning, survives logout):
+systemctl --user status claudeman-web     # Check status
+systemctl --user restart claudeman-web    # Restart
+systemctl --user stop claudeman-web       # Stop
+journalctl --user -u claudeman-web -f     # Stream logs
+# Install: ln -sf scripts/claudeman-web.service ~/.config/systemd/user/
+# Enable: systemctl --user enable claudeman-web && loginctl enable-linger $USER
+
 # Kill stuck screen sessions
 screen -X -S <name> quit                  # Graceful quit
 pkill -f "SCREEN.*claudeman"              # Force kill all claudeman screens
@@ -162,6 +170,7 @@ claudeman reset                    # Reset all state
 | `src/spawn-claude-md.ts` | Generates CLAUDE.md for spawned agent sessions |
 | `src/mcp-server.ts` | MCP server binary (`claudeman-mcp`) exposing spawn tools to Claude Code |
 | `src/tui/DirectAttach.ts` | Full-screen console attach with tab switching between sessions |
+| `scripts/claudeman-web.service` | Systemd user service for `claudeman web --https` (Restart=always) |
 
 ### Data Flow
 
@@ -474,14 +483,15 @@ Key events for frontend handling (see `app.js:handleSSEEvent()`):
 - `respawn:detectionUpdate` - Multi-layer idle detection status (confidence level, waiting state)
 - `spawn:queued`, `spawn:started`, `spawn:completed`, `spawn:failed`, `spawn:timeout`, `spawn:cancelled` - Agent lifecycle
 - `spawn:progress`, `spawn:message`, `spawn:budgetWarning`, `spawn:stateUpdate` - Agent monitoring
-- `hook:idle_prompt`, `hook:permission_prompt`, `hook:elicitation_dialog`, `hook:stop` - Claude Code hooks (desktop notifications)
+- `hook:idle_prompt`, `hook:permission_prompt`, `hook:elicitation_dialog`, `hook:stop` - Claude Code hooks (notifications + tab alerts, includes forwarded data fields)
 
 ### Frontend (app.js)
 
 Vanilla JS + xterm.js. Key functions:
 - `handleSSEEvent()` - Dispatches events to appropriate handlers
-- `switchToSession()` - Tab management and terminal focus
-- `createSessionTab()` - Tab creation and xterm setup
+- `selectSession()` - Tab switching, terminal buffer load, and focus
+- `NotificationManager` - Multi-layer notifications with click-to-navigate
+- `tabAlerts` Map - Tracks blinking state per session (`'action'` | `'idle'`)
 
 **60fps Rendering Pipeline**:
 - Server batches terminal data every 16ms before broadcasting via SSE
@@ -493,12 +503,34 @@ Vanilla JS + xterm.js. Key functions:
 **HTTPS**: The `--https` flag generates/reuses self-signed certificates in `~/.claudeman/certs/` (`server.key`, `server.crt`). Required for the Web Notification API in browsers.
 
 **Notification Layers** (in `app.js`, `NotificationManager` class):
-1. In-app drawer with notification list
+1. In-app drawer with notification list (click to navigate to session)
 2. Tab title flashing with unread count (when tab unfocused)
-3. Web Notification API (browser push notifications)
+3. Web Notification API (browser push notifications, click navigates to session)
 4. Audio alerts (critical level only)
+5. Tab blinking alerts (red for action-required, yellow for idle)
 
-Notifications triggered for: session events, respawn updates, spawn agent lifecycle. Preferences persist to server-side `state.json` per session.
+**Browser Notification Behavior:**
+- Enabled by default (`browserNotifications: true`, prefs version 2)
+- Auto-requests permission on first notification attempt
+- Critical/warning notifications fire regardless of tab visibility
+- Info notifications only fire when tab is hidden
+- Rate limited: max 1 browser notification per 3 seconds
+- Click navigates to the affected session
+
+**Tab Alert Blinking:**
+- `hook:permission_prompt` / `hook:elicitation_dialog` → red blink (2.5s cycle, `tab-alert-action`)
+- `hook:idle_prompt` → yellow blink (3.5s cycle, `tab-alert-idle`)
+- Only blinks non-active tabs (active tab is already visible)
+- Clears when: user clicks the tab, or `session:working` event fires
+
+**Hook Event Data Forwarding:**
+The `/api/hook-event` endpoint forwards the `data` field from the request body into the SSE broadcast. Notifications display actual details:
+- permission_prompt: tool name + command/file (e.g., "Bash: docker push prod:latest")
+- elicitation_dialog: question text (e.g., "Merge PR #42 to main?")
+- idle_prompt: custom message if provided
+- stop: reason if provided
+
+Notifications triggered for: session events, respawn updates, spawn agent lifecycle, hook events. Preferences persist to server-side `state.json` per session.
 
 ### State Store
 
@@ -552,6 +584,10 @@ Writes debounced (500ms) to `~/.claudeman/state.json`. The web server persists f
 | Spawn max depth | 3 levels | `spawn-orchestrator.ts` |
 | Spawn budget warning | 80% | `spawn-orchestrator.ts` |
 | Spawn budget grace | 60s | `spawn-orchestrator.ts` |
+| Browser notif rate limit | 3s | `app.js` (NotificationManager) |
+| Tab blink red (action) | 2.5s cycle | `styles.css` (tab-alert-action) |
+| Tab blink yellow (idle) | 3.5s cycle | `styles.css` (tab-alert-idle) |
+| Systemd restart delay | 5s | `claudeman-web.service` |
 
 ### TypeScript Config
 
@@ -678,7 +714,7 @@ Long-running sessions are supported with automatic trimming:
 | GET | `/api/spawn/status` | Orchestrator status (counts, config) |
 | PUT | `/api/spawn/config` | Update orchestrator config |
 | POST | `/api/spawn/trigger` | Programmatic spawn (bypass terminal detection) |
-| POST | `/api/hook-event` | Receive Claude Code hook callbacks (idle_prompt, permission_prompt, elicitation_dialog, stop) |
+| POST | `/api/hook-event` | Receive Claude Code hook callbacks. Body: `{event, sessionId, data?}`. Data fields forwarded to SSE broadcast |
 
 ## Keyboard Shortcuts (Web UI)
 
