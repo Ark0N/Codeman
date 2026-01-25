@@ -2282,20 +2282,24 @@ class ClaudemanApp {
   // ========== Countdown Timer Display Methods ==========
 
   addActionLogEntry(sessionId, action) {
-    // Filter to important actions only
-    // Skip: timer starts/cancels, detection updates, ai-check status
-    // Keep: command (sent to console), plan-check (with action), step (completions)
-    if (action.type === 'timer' || action.type === 'timer-cancel') return;
-    if (action.type === 'detection') return;
-    if (action.type === 'ai-check') return;
-    if (action.type === 'plan-check' && !action.detail.includes('sending')) return;
-    if (action.type === 'step' && !action.detail.includes('completed')) return;
+    // Filter to important actions - keep more for visibility
+    // Skip: timer starts (but keep cancels with reason), routine detection spam
+    if (action.type === 'timer') return;
+    // Keep timer-cancel only if it has a meaningful reason
+    if (action.type === 'timer-cancel' && !action.detail) return;
+    // Keep detection only for completion/silence confirmed events
+    if (action.type === 'detection' && !action.detail.includes('confirmed') && !action.detail.includes('Completion')) return;
+    // Keep ai-check only for verdicts (IDLE, WORKING) and errors
+    if (action.type === 'ai-check' && action.detail.includes('Spawning')) return;
+    // Keep plan-check for verdicts and actions
+    if (action.type === 'plan-check' && action.detail.includes('Spawning')) return;
 
     if (!this.respawnActionLogs[sessionId]) {
       this.respawnActionLogs[sessionId] = [];
     }
     this.respawnActionLogs[sessionId].unshift(action);
-    if (this.respawnActionLogs[sessionId].length > 20) {
+    // Keep more history (50 entries instead of 20)
+    if (this.respawnActionLogs[sessionId].length > 50) {
       this.respawnActionLogs[sessionId].pop();
     }
   }

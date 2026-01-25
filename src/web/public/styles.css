@@ -521,7 +521,7 @@ body {
 
 .respawn-action-log {
   flex: 1;
-  max-height: 100px;
+  max-height: 150px;
   overflow-y: auto;
   font-size: 0.7rem;
   opacity: 0.9;
