@@ -417,6 +417,26 @@ class ClaudemanApp {
     return this._elemCache[id];
   }
 
+  // Format token count: 1000k -> 1m, 1450k -> 1.45m, 500 -> 500
+  formatTokens(count) {
+    if (count >= 1000000) {
+      const m = count / 1000000;
+      return m >= 10 ? `${m.toFixed(1)}m` : `${m.toFixed(2)}m`;
+    } else if (count >= 1000) {
+      const k = count / 1000;
+      return k >= 100 ? `${k.toFixed(0)}k` : `${k.toFixed(1)}k`;
+    }
+    return String(count);
+  }
+
+  // Estimate cost from tokens using Claude Sonnet pricing
+  // Input: $3/M tokens, Output: $15/M tokens
+  estimateCost(inputTokens, outputTokens) {
+    const inputCost = (inputTokens / 1000000) * 3;
+    const outputCost = (outputTokens / 1000000) * 15;
+    return inputCost + outputCost;
+  }
+
   init() {
     this.initTerminal();
     this.loadFontSize();
@@ -738,7 +758,7 @@ class ClaudemanApp {
       this.updateCost();
       // Update tokens display if this is the active session
       if (session.id === this.activeSessionId && session.tokens) {
-        this.updateRespawnTokens(session.tokens.total);
+        this.updateRespawnTokens(session.tokens);
       }
     });
 
@@ -2086,7 +2106,7 @@ class ClaudemanApp {
     // Show tokens if session has token data
     const session = this.sessions.get(this.activeSessionId);
     if (session && session.tokens) {
-      this.updateRespawnTokens(session.tokens.total);
+      this.updateRespawnTokens(session.tokens);
     }
   }
 
@@ -2234,11 +2254,19 @@ class ClaudemanApp {
     this.$('respawnTimer').textContent = this.formatTime(remaining);
   }
 
-  updateRespawnTokens(totalTokens) {
+  updateRespawnTokens(tokens) {
     const tokensEl = this.$('respawnTokens');
-    if (totalTokens > 0) {
+    // Support both old format (number) and new format (object with input/output/total)
+    const isObject = tokens && typeof tokens === 'object';
+    const total = isObject ? tokens.total : tokens;
+    const input = isObject ? (tokens.input || 0) : Math.round(total * 0.6);
+    const output = isObject ? (tokens.output || 0) : Math.round(total * 0.4);
+
+    if (total > 0) {
       tokensEl.style.display = '';
-      tokensEl.textContent = `${(totalTokens / 1000).toFixed(1)}k tokens`;
+      const tokenStr = this.formatTokens(total);
+      const estimatedCost = this.estimateCost(input, output);
+      tokensEl.textContent = `${tokenStr} tokens · $${estimatedCost.toFixed(2)}`;
     } else {
       tokensEl.style.display = 'none';
     }
@@ -2547,28 +2575,32 @@ class ClaudemanApp {
 
   updateTokens() {
     // Use global stats if available (includes deleted sessions)
-    let total = 0;
+    let totalInput = 0;
+    let totalOutput = 0;
     if (this.globalStats) {
-      total = this.globalStats.totalInputTokens + this.globalStats.totalOutputTokens;
+      totalInput = this.globalStats.totalInputTokens || 0;
+      totalOutput = this.globalStats.totalOutputTokens || 0;
     } else {
       // Fallback to active sessions only
       this.sessions.forEach(s => {
         if (s.tokens) {
-          total += s.tokens.total || 0;
+          totalInput += s.tokens.input || 0;
+          totalOutput += s.tokens.output || 0;
         }
       });
     }
+    const total = totalInput + totalOutput;
     this.totalTokens = total;
-    const display = total >= 1000 ? `${(total / 1000).toFixed(1)}k` : total;
+    const display = this.formatTokens(total);
 
-    // Show global cost if available
-    const costDisplay = this.globalStats ? `$${this.globalStats.totalCost.toFixed(2)}` : '';
+    // Estimate cost from tokens (more accurate than stored cost in interactive mode)
+    const estimatedCost = this.estimateCost(totalInput, totalOutput);
     const tokenEl = this.$('headerTokens');
     if (tokenEl) {
-      tokenEl.textContent = costDisplay ? `${display} tokens · ${costDisplay}` : `${display} tokens`;
+      tokenEl.textContent = total > 0 ? `${display} tokens · $${estimatedCost.toFixed(2)}` : '0 tokens';
       tokenEl.title = this.globalStats
-        ? `Lifetime: ${this.globalStats.totalSessionsCreated} sessions created`
-        : 'Token usage across active sessions';
+        ? `Lifetime: ${this.globalStats.totalSessionsCreated} sessions created\nEstimated cost based on Claude Sonnet pricing`
+        : 'Token usage across active sessions\nEstimated cost based on Claude Sonnet pricing';
     }
   }
 
