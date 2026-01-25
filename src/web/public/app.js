@@ -2965,6 +2965,7 @@ class ClaudemanApp {
     document.getElementById('appSettingsShowTokenCount').checked = settings.showTokenCount ?? true;
     document.getElementById('appSettingsShowMonitor').checked = settings.showMonitor ?? true;
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? true;
+    document.getElementById('appSettingsShowSubagents').checked = settings.showSubagents ?? true;
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
     const allowedToolsRow = document.getElementById('allowedToolsRow');
@@ -3025,6 +3026,7 @@ class ClaudemanApp {
       showTokenCount: document.getElementById('appSettingsShowTokenCount').checked,
       showMonitor: document.getElementById('appSettingsShowMonitor').checked,
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
+      showSubagents: document.getElementById('appSettingsShowSubagents').checked,
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
       allowedTools: document.getElementById('appSettingsAllowedTools').value.trim(),
@@ -3123,9 +3125,20 @@ class ClaudemanApp {
   applyMonitorVisibility() {
     const settings = this.loadAppSettingsFromStorage();
     const showMonitor = settings.showMonitor ?? true;
+    const showSubagents = settings.showSubagents ?? true;
+
     const monitorPanel = document.getElementById('monitorPanel');
     if (monitorPanel) {
       monitorPanel.style.display = showMonitor ? '' : 'none';
+    }
+
+    const subagentsPanel = document.getElementById('subagentsPanel');
+    if (subagentsPanel) {
+      if (showSubagents) {
+        subagentsPanel.classList.remove('hidden');
+      } else {
+        subagentsPanel.classList.add('hidden');
+      }
     }
   }
 
@@ -3140,6 +3153,42 @@ class ClaudemanApp {
     const settings = this.loadAppSettingsFromStorage();
     settings.showMonitor = false;
     localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
+  }
+
+  closeSubagentsPanel() {
+    // Hide the subagents panel
+    const subagentsPanel = document.getElementById('subagentsPanel');
+    if (subagentsPanel) {
+      subagentsPanel.classList.remove('open');
+      subagentsPanel.classList.add('hidden');
+    }
+    this.subagentPanelVisible = false;
+    // Save the setting
+    const settings = this.loadAppSettingsFromStorage();
+    settings.showSubagents = false;
+    localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
+  }
+
+  toggleSubagentsPanel() {
+    const panel = document.getElementById('subagentsPanel');
+    if (!panel) return;
+
+    // If hidden, show it first
+    if (panel.classList.contains('hidden')) {
+      panel.classList.remove('hidden');
+      // Save setting
+      const settings = this.loadAppSettingsFromStorage();
+      settings.showSubagents = true;
+      localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
+    }
+
+    // Toggle open/collapsed state
+    panel.classList.toggle('open');
+    this.subagentPanelVisible = panel.classList.contains('open');
+
+    if (this.subagentPanelVisible) {
+      this.renderSubagentPanel();
+    }
   }
 
   async loadAppSettingsFromServer() {
@@ -3806,78 +3855,14 @@ class ClaudemanApp {
 
   // ========== Subagent Panel (Claude Code Background Agents) ==========
 
-  // Switch between Monitor and Subagents tabs in the monitor panel
-  switchMonitorTab(tabName) {
-    const monitorTab = document.querySelector('.monitor-tab[data-tab="monitor"]');
-    const subagentsTab = document.querySelector('.monitor-tab[data-tab="subagents"]');
-    const monitorContent = this.$('monitorTabContent');
-    const subagentsContent = this.$('subagentsTabContent');
-    const panel = this.$('monitorPanel');
-
-    if (tabName === 'monitor') {
-      monitorTab?.classList.add('active');
-      subagentsTab?.classList.remove('active');
-      if (monitorContent) {
-        monitorContent.style.display = 'flex';
-        monitorContent.classList.add('active');
-      }
-      if (subagentsContent) {
-        subagentsContent.style.display = 'none';
-        subagentsContent.classList.remove('active');
-      }
-      // Shrink panel back to normal width
-      panel?.classList.remove('subagents-active');
-      this.subagentPanelVisible = false;
-    } else if (tabName === 'subagents') {
-      monitorTab?.classList.remove('active');
-      subagentsTab?.classList.add('active');
-      if (monitorContent) {
-        monitorContent.style.display = 'none';
-        monitorContent.classList.remove('active');
-      }
-      if (subagentsContent) {
-        subagentsContent.style.display = 'flex';
-        subagentsContent.classList.add('active');
-      }
-      // Expand panel for subagents view
-      panel?.classList.add('subagents-active');
-      this.subagentPanelVisible = true;
-      this.renderSubagentPanel();
-    }
-  }
-
-  toggleSubagentsPanel() {
-    // Open monitor panel and switch to subagents tab
-    const panel = this.$('monitorPanel');
-    if (panel && !panel.classList.contains('open')) {
-      panel.classList.add('open');
-    }
-    this.switchMonitorTab('subagents');
-    this.subagentPanelVisible = true;
-  }
-
-  closeSubagentsPanel() {
-    // Just switch back to monitor tab
-    this.switchMonitorTab('monitor');
-    this.subagentPanelVisible = false;
-  }
-
   // Legacy alias
   toggleSubagentPanel() {
     this.toggleSubagentsPanel();
   }
 
-  updateSubagentTabButton() {
-    const tabBtn = this.$('subagentsTabBtn');
+  updateSubagentBadge() {
     const badge = this.$('subagentCountBadge');
-
     const activeCount = Array.from(this.subagents.values()).filter(s => s.status === 'active' || s.status === 'idle').length;
-    const totalCount = this.subagents.size;
-
-    // Show tab if there are any subagents
-    if (tabBtn) {
-      tabBtn.style.display = totalCount > 0 ? 'inline-flex' : 'none';
-    }
 
     // Update badge with active count
     if (badge) {
