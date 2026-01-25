@@ -672,7 +672,8 @@ export class ScreenManager extends EventEmitter {
       // IMPORTANT: Must send text and carriage return as SEPARATE commands
       // Sending them together doesn't work with Ink/Claude CLI
       const hasCarriageReturn = input.includes('\r');
-      const textPart = input.replace(/\r/g, '').replace(/\n/g, '');
+      // Remove control characters and trim trailing whitespace to avoid spurious spaces
+      const textPart = input.replace(/\r/g, '').replace(/\n/g, '').trimEnd();
 
       // Escape the text part for shell using the helper function
       const escapedText = shellEscape(textPart);
@@ -684,9 +685,35 @@ export class ScreenManager extends EventEmitter {
       }
 
       // Send carriage return separately (Enter key for Ink)
+      // Use a synchronous sleep to ensure screen processes the text first
       if (hasCarriageReturn) {
+        // Delay to let screen process the text before sending Enter
+        // This prevents race conditions where Enter arrives before the text is processed
+        // 100ms is needed for reliability - screen's internal buffering can be slow
+        if (escapedText) {
+          execSync('sleep 0.1', { timeout: 1000 });
+        }
+
         const crCmd = `screen -S ${screen.screenName} -p 0 -X stuff "$(printf '\\015')"`;
-        execSync(crCmd, { encoding: 'utf-8', timeout: 5000 });
+
+        // Try up to 3 times with increasing delays
+        let success = false;
+        for (let attempt = 1; attempt <= 3 && !success; attempt++) {
+          try {
+            execSync(crCmd, { encoding: 'utf-8', timeout: 5000 });
+            success = true;
+          } catch (crErr) {
+            console.warn(`[ScreenManager] Carriage return attempt ${attempt}/3 failed`);
+            if (attempt < 3) {
+              execSync(`sleep 0.${attempt}`, { timeout: 1000 }); // 0.1s, 0.2s delays
+            }
+          }
+        }
+
+        if (!success) {
+          console.error('[ScreenManager] All carriage return attempts failed');
+          return false;
+        }
       }
 
       return true;
