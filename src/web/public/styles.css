@@ -1246,6 +1246,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  position: relative;
   height: var(--toolbar-height);
   padding: 0 0.5rem;
   background: var(--bg-card);
@@ -1258,6 +1259,23 @@ body {
   display: flex;
   align-items: center;
   gap: 0.25rem;
+}
+
+.toolbar-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.version-display {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  padding: 0.2rem 0.5rem;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+  cursor: default;
+  user-select: none;
 }
 
 .toolbar-group {

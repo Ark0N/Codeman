@@ -28,6 +28,11 @@ import { generateClaudeMd } from '../templates/claude-md.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
 import { writeHooksConfig } from '../hooks-config.js';
 import { v4 as uuidv4 } from 'uuid';
+import { createRequire } from 'node:module';
+
+// Load version from package.json
+const require = createRequire(import.meta.url);
+const { version: APP_VERSION } = require('../../package.json');
 import {
   getErrorMessage,
   ApiErrorCode,
@@ -2187,6 +2192,7 @@ export class WebServer extends EventEmitter {
     }
 
     return {
+      version: APP_VERSION,
       sessions: this.getSessionsState(),
       scheduledRuns: Array.from(this.scheduledRuns.values()),
       respawnStatus,

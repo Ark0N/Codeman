@@ -1291,6 +1291,15 @@ class ClaudemanApp {
   }
 
   handleInit(data) {
+    // Update version display
+    if (data.version) {
+      const versionEl = this.$('versionDisplay');
+      if (versionEl) {
+        versionEl.textContent = `v${data.version}`;
+        versionEl.title = `Claudeman v${data.version}`;
+      }
+    }
+
     this.sessions.clear();
     this.ralphStates.clear();
     data.sessions.forEach(s => {
