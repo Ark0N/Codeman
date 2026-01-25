@@ -514,7 +514,14 @@
         </div>
         <div class="modal-footer">
           <span class="run-summary-session-info" id="runSummarySessionInfo"></span>
-          <button class="btn-toolbar btn-sm" onclick="app.closeRunSummary()">Close</button>
+          <div class="modal-footer-actions">
+            <label class="auto-refresh-label">
+              <input type="checkbox" id="runSummaryAutoRefresh" onchange="app.toggleRunSummaryAutoRefresh()">
+              Auto-refresh
+            </label>
+            <button class="btn-toolbar btn-sm" onclick="app.refreshRunSummary()" title="Refresh summary">&#x21BB; Refresh</button>
+            <button class="btn-toolbar btn-sm" onclick="app.closeRunSummary()">Close</button>
+          </div>
         </div>
       </div>
     </div>

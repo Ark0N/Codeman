@@ -6,9 +6,62 @@ const DEFAULT_SCROLLBACK = 5000;
 // Wrap terminal writes with these markers to prevent partial-frame flicker.
 // Terminal buffers all output between markers and renders atomically.
 // Supported by: WezTerm, Kitty, Ghostty, iTerm2 3.5+, Windows Terminal, VSCode terminal
-// Unsupported terminals ignore these sequences harmlessly.
+// xterm.js doesn't support DEC 2026 natively, so we implement buffering ourselves.
 const DEC_SYNC_START = '\x1b[?2026h';
 const DEC_SYNC_END = '\x1b[?2026l';
+
+/**
+ * Process data containing DEC 2026 sync markers.
+ * Strips markers and returns segments that should be written atomically.
+ * Each returned segment represents content between SYNC_START and SYNC_END.
+ * Content outside sync blocks is returned as-is.
+ *
+ * @param {string} data - Raw terminal data with potential sync markers
+ * @returns {string[]} - Array of content segments to write (markers stripped)
+ */
+function extractSyncSegments(data) {
+  const segments = [];
+  let remaining = data;
+
+  while (remaining.length > 0) {
+    const startIdx = remaining.indexOf(DEC_SYNC_START);
+
+    if (startIdx === -1) {
+      // No more sync blocks, return rest as-is
+      if (remaining.length > 0) {
+        segments.push(remaining);
+      }
+      break;
+    }
+
+    // Content before sync block (if any)
+    if (startIdx > 0) {
+      segments.push(remaining.slice(0, startIdx));
+    }
+
+    // Find matching end marker
+    const afterStart = remaining.slice(startIdx + DEC_SYNC_START.length);
+    const endIdx = afterStart.indexOf(DEC_SYNC_END);
+
+    if (endIdx === -1) {
+      // No end marker found - sync block continues in next chunk
+      // Include the start marker so it can be handled when more data arrives
+      segments.push(remaining.slice(startIdx));
+      break;
+    }
+
+    // Extract synchronized content (without markers)
+    const syncContent = afterStart.slice(0, endIdx);
+    if (syncContent.length > 0) {
+      segments.push(syncContent);
+    }
+
+    // Continue with content after end marker
+    remaining = afterStart.slice(endIdx + DEC_SYNC_END.length);
+  }
+
+  return segments;
+}
 
 // Notification Manager - Multi-layer browser notification system
 class NotificationManager {
@@ -393,10 +446,11 @@ class ClaudemanApp {
     // Tab alert states: Map<sessionId, 'action' | 'idle'>
     this.tabAlerts = new Map();
 
-    // Terminal write batching
+    // Terminal write batching with DEC 2026 sync support
     this.pendingWrites = '';
     this.writeFrameScheduled = false;
     this._wasAtBottomBeforeWrite = true; // Default to true for sticky scroll
+    this.syncWaitTimeout = null; // Timeout for incomplete sync blocks
 
     // Render debouncing
     this.renderSessionTabsTimeout = null;
@@ -620,20 +674,67 @@ class ClaudemanApp {
     if (!this.writeFrameScheduled) {
       this._wasAtBottomBeforeWrite = this.isTerminalAtBottom();
     }
+
+    // Accumulate raw data (may contain DEC 2026 markers)
     this.pendingWrites += data;
+
     if (!this.writeFrameScheduled) {
       this.writeFrameScheduled = true;
       requestAnimationFrame(() => {
         if (this.pendingWrites && this.terminal) {
-          this.terminal.write(this.pendingWrites);
-          this.pendingWrites = '';
-          // Sticky scroll: if user was at bottom, keep them there after new output
-          if (this._wasAtBottomBeforeWrite) {
-            this.terminal.scrollToBottom();
+          // Check if we have an incomplete sync block (SYNC_START without SYNC_END)
+          const hasStart = this.pendingWrites.includes(DEC_SYNC_START);
+          const hasEnd = this.pendingWrites.includes(DEC_SYNC_END);
+
+          if (hasStart && !hasEnd) {
+            // Incomplete sync block - wait for more data (up to 50ms max)
+            if (!this.syncWaitTimeout) {
+              this.syncWaitTimeout = setTimeout(() => {
+                this.syncWaitTimeout = null;
+                // Force flush after timeout to prevent stuck state
+                this.flushPendingWrites();
+              }, 50);
+            }
+            this.writeFrameScheduled = false;
+            return;
           }
+
+          // Clear any pending sync wait timeout
+          if (this.syncWaitTimeout) {
+            clearTimeout(this.syncWaitTimeout);
+            this.syncWaitTimeout = null;
+          }
+
+          this.flushPendingWrites();
         }
         this.writeFrameScheduled = false;
       });
+    }
+  }
+
+  /**
+   * Flush pending writes to terminal, processing DEC 2026 sync markers.
+   * Strips markers and writes content atomically within a single frame.
+   */
+  flushPendingWrites() {
+    if (!this.pendingWrites || !this.terminal) return;
+
+    // Extract segments, stripping DEC 2026 markers
+    // This implements synchronized output for xterm.js which doesn't support DEC 2026 natively
+    const segments = extractSyncSegments(this.pendingWrites);
+    this.pendingWrites = '';
+
+    // Write all segments in a single batch (atomic within this frame)
+    // xterm.js internally batches multiple write() calls within same frame
+    for (const segment of segments) {
+      if (segment && !segment.startsWith(DEC_SYNC_START)) {
+        this.terminal.write(segment);
+      }
+    }
+
+    // Sticky scroll: if user was at bottom, keep them there after new output
+    if (this._wasAtBottomBeforeWrite) {
+      this.terminal.scrollToBottom();
     }
   }
 
@@ -651,24 +752,29 @@ class ClaudemanApp {
         return;
       }
 
-      // For small buffers, write directly with DEC 2026 sync for atomic render
-      if (buffer.length <= chunkSize) {
-        this.terminal.write(DEC_SYNC_START + buffer + DEC_SYNC_END);
+      // Strip any DEC 2026 markers that might be in the buffer
+      // (from historical SSE data that was stored with markers)
+      const cleanBuffer = buffer
+        .replaceAll(DEC_SYNC_START, '')
+        .replaceAll(DEC_SYNC_END, '');
+
+      // For small buffers, write directly
+      if (cleanBuffer.length <= chunkSize) {
+        this.terminal.write(cleanBuffer);
         resolve();
         return;
       }
 
       let offset = 0;
       const writeChunk = () => {
-        if (offset >= buffer.length) {
+        if (offset >= cleanBuffer.length) {
           // Wait one more frame for xterm to finish rendering before resolving
           requestAnimationFrame(() => resolve());
           return;
         }
 
-        const chunk = buffer.slice(offset, offset + chunkSize);
-        // Wrap each chunk with DEC 2026 sync markers for atomic render per frame
-        this.terminal.write(DEC_SYNC_START + chunk + DEC_SYNC_END);
+        const chunk = cleanBuffer.slice(offset, offset + chunkSize);
+        this.terminal.write(chunk);
         offset += chunkSize;
 
         // Schedule next chunk on next frame
@@ -816,8 +922,12 @@ class ClaudemanApp {
           this.terminal.clear();
           this.terminal.reset();
           if (termData.terminalBuffer) {
-            // Wrap with DEC 2026 sync markers for atomic render (prevents flicker)
-            this.terminal.write(DEC_SYNC_START + termData.terminalBuffer + DEC_SYNC_END);
+            // Strip any DEC 2026 markers and write raw content
+            // (markers don't help here - this is a static buffer reload, not live Ink redraws)
+            const cleanBuffer = termData.terminalBuffer
+              .replaceAll(DEC_SYNC_START, '')
+              .replaceAll(DEC_SYNC_END, '');
+            this.terminal.write(cleanBuffer);
           }
 
           // Send resize to ensure proper dimensions
@@ -2957,7 +3067,40 @@ class ClaudemanApp {
 
   closeRunSummary() {
     this.runSummarySessionId = null;
+    this.stopRunSummaryAutoRefresh();
     document.getElementById('runSummaryModal').classList.remove('active');
+  }
+
+  async refreshRunSummary() {
+    if (!this.runSummarySessionId) return;
+    await this.loadRunSummary(this.runSummarySessionId);
+  }
+
+  toggleRunSummaryAutoRefresh() {
+    const checkbox = document.getElementById('runSummaryAutoRefresh');
+    if (checkbox.checked) {
+      this.startRunSummaryAutoRefresh();
+    } else {
+      this.stopRunSummaryAutoRefresh();
+    }
+  }
+
+  startRunSummaryAutoRefresh() {
+    if (this.runSummaryAutoRefreshTimer) return;
+    this.runSummaryAutoRefreshTimer = setInterval(() => {
+      if (this.runSummarySessionId) {
+        this.loadRunSummary(this.runSummarySessionId);
+      }
+    }, 5000); // Refresh every 5 seconds
+  }
+
+  stopRunSummaryAutoRefresh() {
+    if (this.runSummaryAutoRefreshTimer) {
+      clearInterval(this.runSummaryAutoRefreshTimer);
+      this.runSummaryAutoRefreshTimer = null;
+    }
+    const checkbox = document.getElementById('runSummaryAutoRefresh');
+    if (checkbox) checkbox.checked = false;
   }
 
   async loadRunSummary(sessionId) {

@@ -2088,6 +2088,25 @@ body {
   color: var(--text-dim);
 }
 
+.modal-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.auto-refresh-label {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.auto-refresh-label input[type="checkbox"] {
+  cursor: pointer;
+}
+
 /* Tab summary icon */
 .tab-summary {
   opacity: 0;
