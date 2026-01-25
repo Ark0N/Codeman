@@ -3899,27 +3899,32 @@ kbd {
 
 .subagent-window-body .activity-line {
   display: flex;
-  gap: 0.4rem;
+  gap: 0.3rem;
   padding: 0.15rem 0;
+  align-items: baseline;
 }
 
 .subagent-window-body .activity-line .time {
   color: var(--text-dim);
-  flex: 0 0 70px;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .subagent-window-body .activity-line .tool-icon {
-  flex: 0 0 20px;
+  flex: 0 0 auto;
 }
 
 .subagent-window-body .activity-line .tool-name {
   color: var(--accent);
-  flex: 0 0 90px;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .subagent-window-body .activity-line .tool-detail {
   color: white;
   flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .subagent-window-body .message-line {
@@ -3930,4 +3935,340 @@ kbd {
 .subagent-window-body .progress-line {
   color: var(--warning);
   font-style: italic;
+}
+
+/* Subagent Window Parent Tab Header */
+.subagent-window-parent {
+  background: var(--bg-darker);
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.subagent-window-parent .parent-label {
+  opacity: 0.7;
+}
+
+.subagent-window-parent .parent-name {
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.subagent-window-parent .parent-name:hover {
+  text-decoration: underline;
+}
+
+/* Subagent Window Spawn Animation */
+.subagent-window.spawning {
+  pointer-events: none;
+}
+
+/* ========== Connection Lines SVG Overlay ========== */
+.connection-lines-svg {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 999; /* Below windows (1000+), above panels (91) */
+}
+
+.connection-line {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 5 3;
+  fill: none;
+  opacity: 0.5;
+  transition: opacity 0.2s, stroke-width 0.2s;
+}
+
+.connection-line:hover {
+  opacity: 0.8;
+  stroke-width: 3;
+}
+
+.connection-line.spawning-line {
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+}
+
+/* ========== Active Tools Panel (Bash File Viewers) ========== */
+
+.active-tools-panel {
+  position: fixed;
+  right: 20px;
+  top: calc(var(--header-height) + 10px);
+  width: 350px;
+  max-height: 200px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  z-index: 1000;
+  display: none;
+  flex-direction: column;
+}
+
+.active-tools-panel.visible {
+  display: flex;
+}
+
+.active-tools-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border);
+  border-radius: 8px 8px 0 0;
+}
+
+.active-tools-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.active-tools-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+
+.active-tool-item {
+  display: flex;
+  flex-direction: column;
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+  background: var(--bg-input);
+  margin-bottom: 0.3rem;
+}
+
+.active-tool-item:last-child {
+  margin-bottom: 0;
+}
+
+.active-tool-command {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text);
+}
+
+.active-tool-command .icon {
+  font-size: 0.9rem;
+}
+
+.active-tool-command .cmd {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.active-tool-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-top: 0.3rem;
+  padding-left: 1.3rem;
+}
+
+.active-tool-filepath {
+  cursor: pointer;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-decoration: underline;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.active-tool-filepath:hover {
+  color: var(--accent-hover);
+}
+
+.active-tool-timeout {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.active-tool-status {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  margin-left: 0.3rem;
+}
+
+.active-tool-status.running {
+  background: var(--success);
+  color: white;
+}
+
+.active-tool-status.completed {
+  background: var(--text-muted);
+  color: white;
+}
+
+/* ========== Log Viewer Windows (Floating) ========== */
+
+.log-viewer-window {
+  position: fixed;
+  width: 550px;
+  height: 400px;
+  min-width: 350px;
+  min-height: 200px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  resize: both;
+}
+
+.log-viewer-window-header {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+}
+
+.log-viewer-window-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1;
+}
+
+.log-viewer-window-title .icon {
+  font-size: 1rem;
+}
+
+.log-viewer-window-title .filename {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: white;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.log-viewer-window-title .status {
+  font-size: 0.6rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  margin-left: 0.5rem;
+}
+
+.log-viewer-window-title .status.streaming {
+  background: var(--success);
+  color: white;
+  animation: pulse 2s infinite;
+}
+
+.log-viewer-window-title .status.disconnected {
+  background: var(--text-muted);
+  color: white;
+}
+
+.log-viewer-window-title .status.error {
+  background: var(--error);
+  color: white;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.log-viewer-window-actions {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.log-viewer-window-actions button {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.9rem;
+}
+
+.log-viewer-window-actions button:hover {
+  color: var(--text);
+}
+
+.log-viewer-window-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  background: var(--bg-dark);
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.log-viewer-window-body .log-line {
+  padding: 0.1rem 0;
+}
+
+.log-viewer-window-body .log-error {
+  color: var(--error);
+}
+
+.log-viewer-window-body .log-info {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ========== xterm.js Clickable Links ========== */
+
+/* Style for detected file path links in terminal */
+.xterm-link-layer .xterm-link {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  cursor: pointer;
+}
+
+/* Hover state for links */
+.xterm .xterm-screen .xterm-decoration-container .xterm-decoration.xterm-link-decoration {
+  cursor: pointer;
+}
+
+/* Custom tooltip for file links */
+.file-link-tooltip {
+  position: fixed;
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text);
+  z-index: 10000;
+  pointer-events: none;
+  box-shadow: var(--shadow-md);
+}
+
+.file-link-tooltip::before {
+  content: "📄 Click to stream: ";
+  color: var(--accent);
 }

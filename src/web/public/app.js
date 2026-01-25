@@ -443,6 +443,12 @@ class ClaudemanApp {
     this.subagentWindowZIndex = 1000;
     this.ralphStatePanelCollapsed = true; // Default to collapsed
 
+    // Active Bash tool tracking (for clickable file paths)
+    this.activeTools = new Map(); // Map<sessionId, ActiveBashTool[]>
+    this.logViewerWindows = new Map(); // Map<windowId, { element, eventSource, filePath }>
+    this.logViewerWindowZIndex = 2000;
+    this.activeToolsPanelVisible = false;
+
     // Tab alert states: Map<sessionId, 'action' | 'idle'>
     this.tabAlerts = new Map();
 
@@ -561,6 +567,9 @@ class ClaudemanApp {
     this.terminal.open(container);
     this.fitAddon.fit();
 
+    // Register link provider for clickable file paths in Bash tool output
+    this.registerFilePathLinkProvider();
+
     // Always use mouse wheel for terminal scrollback, never forward to application.
     // Prevents Claude's Ink UI (plan mode selector) from capturing scroll as option navigation.
     container.addEventListener('wheel', (ev) => {
@@ -597,6 +606,8 @@ class ClaudemanApp {
             }
           }
         }
+        // Update subagent connection lines when viewport resizes
+        this.updateConnectionLines();
       }, 100); // Throttle to 100ms
     };
 
@@ -642,6 +653,179 @@ class ClaudemanApp {
         }
       }
     });
+  }
+
+  /**
+   * Register a custom link provider for xterm.js that detects file paths
+   * in Bash tool output and makes them clickable.
+   * When clicked, opens a floating log viewer window with live streaming.
+   */
+  registerFilePathLinkProvider() {
+    const app = this;
+
+    // Create tooltip element
+    let tooltip = document.getElementById('file-link-tooltip');
+    if (!tooltip) {
+      tooltip = document.createElement('div');
+      tooltip.id = 'file-link-tooltip';
+      tooltip.className = 'file-link-tooltip';
+      tooltip.style.display = 'none';
+      document.body.appendChild(tooltip);
+    }
+
+    this.terminal.registerLinkProvider({
+      provideLinks(bufferLineNumber, callback) {
+        const line = app.terminal.buffer.active.getLine(bufferLineNumber);
+        if (!line) {
+          callback(undefined);
+          return;
+        }
+
+        // Get the line text
+        let lineText = '';
+        for (let i = 0; i < line.length; i++) {
+          lineText += line.getCell(i)?.getChars() || ' ';
+        }
+
+        const links = [];
+
+        // Skip lines that are unlikely to contain file paths (performance optimization)
+        // Only skip if line has NO forward slash at all
+        if (!lineText.includes('/')) {
+          callback(undefined);
+          return;
+        }
+
+        // Pattern 1: File paths after tail/cat/head/less/grep/watch commands
+        // Matches: tail -f /path/to/file, cat /path, head -n 10 /path, grep "foo" /path, etc.
+        // The (?:[^\s/]+\s+)* handles any arguments before the path (flags, values, quoted strings)
+        const cmdPattern = /(tail|cat|head|less|grep|watch|multitail)\s+(?:[^\/\n]+?\s+)?(\/[^\s"'<>|;&\n\)]+)/g;
+
+        // Pattern 2: Any absolute path inside Bash() parentheses
+        const bashPathPattern = /Bash\([^)]*?(\/(?:var|tmp|home|usr|etc|opt|log|logs)[^\s"'<>|;&\)\n]+)/g;
+
+        // Pattern 3: General absolute paths with common file extensions (for Claude output)
+        // Matches paths like /home/user/file.log, /tmp/test.txt, etc.
+        const generalPathPattern = /(\/(?:home|tmp|var|etc|usr|opt)[^\s"'<>|;&\n\)\]]+\.(?:log|txt|json|md|ts|js|sh|py|yaml|yml|csv|xml|html|css))/g;
+
+        // Pattern 3b: Common log file paths without extensions
+        // Matches /var/log/syslog, /var/log/auth.log, etc.
+        const logPathPattern = /(\/var\/log\/[^\s"'<>|;&\n\)\]]+)/g;
+
+        // Pattern 4: Paths in Claude output phrases like "Created file:", "Writing to", "Saved:", etc.
+        const claudeOutputPattern = /(?:Created|Writing|Saved|File|Output|Streaming|Monitoring|Log)(?:\s+(?:file|to|at))?[:\s]+([\/~][^\s"'<>|;&\n\)]+)/gi;
+
+        let match;
+
+        // Match command patterns
+        cmdPattern.lastIndex = 0;
+        while ((match = cmdPattern.exec(lineText)) !== null) {
+          const filePath = match[2].replace(/[,;:]+$/, ''); // Remove trailing punctuation
+          const startIndex = lineText.indexOf(filePath, match.index);
+
+          if (startIndex >= 0 && !app.isDuplicateLink(links, startIndex, filePath)) {
+            links.push(app.createFileLink(bufferLineNumber, startIndex, filePath));
+          }
+        }
+
+        // Match Bash() paths
+        bashPathPattern.lastIndex = 0;
+        while ((match = bashPathPattern.exec(lineText)) !== null) {
+          const filePath = match[1].replace(/[,;:]+$/, '');
+          const startIndex = lineText.indexOf(filePath, match.index);
+
+          if (startIndex >= 0 && !app.isDuplicateLink(links, startIndex, filePath)) {
+            links.push(app.createFileLink(bufferLineNumber, startIndex, filePath));
+          }
+        }
+
+        // Match general absolute paths with file extensions
+        generalPathPattern.lastIndex = 0;
+        while ((match = generalPathPattern.exec(lineText)) !== null) {
+          const filePath = match[1].replace(/[,;:]+$/, '');
+          const startIndex = lineText.indexOf(filePath, match.index);
+
+          if (startIndex >= 0 && !app.isDuplicateLink(links, startIndex, filePath)) {
+            links.push(app.createFileLink(bufferLineNumber, startIndex, filePath));
+          }
+        }
+
+        // Match log paths (no extension required)
+        logPathPattern.lastIndex = 0;
+        while ((match = logPathPattern.exec(lineText)) !== null) {
+          const filePath = match[1].replace(/[,;:]+$/, '');
+          const startIndex = lineText.indexOf(filePath, match.index);
+
+          if (startIndex >= 0 && !app.isDuplicateLink(links, startIndex, filePath)) {
+            links.push(app.createFileLink(bufferLineNumber, startIndex, filePath));
+          }
+        }
+
+        // Match Claude output phrases (Created file:, Writing to, etc.)
+        claudeOutputPattern.lastIndex = 0;
+        while ((match = claudeOutputPattern.exec(lineText)) !== null) {
+          let filePath = match[1].replace(/[,;:]+$/, '');
+          // Expand ~ to /home/username (approximate)
+          if (filePath.startsWith('~')) {
+            filePath = '/home' + filePath.substring(1);
+          }
+          const startIndex = lineText.indexOf(match[1], match.index);
+
+          if (startIndex >= 0 && filePath.startsWith('/') && !app.isDuplicateLink(links, startIndex, filePath)) {
+            links.push(app.createFileLink(bufferLineNumber, startIndex, filePath));
+          }
+        }
+
+        // Debug logging (can be removed later)
+        if (links.length > 0) {
+          console.log('[LinkProvider] Found', links.length, 'link(s) on line', bufferLineNumber, ':', links.map(l => l.text));
+        }
+
+        callback(links.length > 0 ? links : undefined);
+      }
+    });
+  }
+
+  isDuplicateLink(links, startIndex, filePath) {
+    return links.some(l => l.range.start.x === startIndex + 1 && l.text === filePath);
+  }
+
+  createFileLink(bufferLineNumber, startIndex, filePath) {
+    const app = this;
+    return {
+      range: {
+        start: { x: startIndex + 1, y: bufferLineNumber + 1 },
+        end: { x: startIndex + filePath.length + 1, y: bufferLineNumber + 1 }
+      },
+      text: filePath,
+      activate: () => {
+        app.openLogViewerWindow(filePath, app.activeSessionId);
+      },
+      hover: (event, text) => {
+        app.showFileLinkTooltip(event, text);
+      },
+      leave: () => {
+        app.hideFileLinkTooltip();
+      }
+    };
+  }
+
+  showFileLinkTooltip(event, filePath) {
+    const tooltip = document.getElementById('file-link-tooltip');
+    if (!tooltip) return;
+
+    const fileName = filePath.split('/').pop();
+    tooltip.textContent = fileName;
+    tooltip.style.display = 'block';
+    tooltip.style.left = `${event.clientX + 10}px`;
+    tooltip.style.top = `${event.clientY + 10}px`;
+  }
+
+  hideFileLinkTooltip() {
+    const tooltip = document.getElementById('file-link-tooltip');
+    if (tooltip) {
+      tooltip.style.display = 'none';
+    }
   }
 
   showWelcome() {
@@ -889,6 +1073,8 @@ class ClaudemanApp {
       this.sessions.delete(data.id);
       this.terminalBuffers.delete(data.id);
       this.ralphStates.delete(data.id);  // Clean up ralph state for this session
+      this.activeTools.delete(data.id);  // Clean up active tools for this session
+      this.closeSessionLogViewerWindows(data.id);  // Close log viewer windows for this session
       // Clean up idle timer for this session
       const idleTimer = this.idleTimers.get(data.id);
       if (idleTimer) {
@@ -902,6 +1088,7 @@ class ClaudemanApp {
       }
       this.renderSessionTabs();
       this.renderRalphStatePanel();  // Update ralph panel after session deleted
+      this.renderActiveToolsPanel();  // Update active tools panel after session deleted
     });
 
     this.eventSource.addEventListener('session:terminal', (e) => {
@@ -1327,6 +1514,22 @@ class ClaudemanApp {
       });
     });
 
+    // Active Bash tool events (for clickable file paths)
+    this.eventSource.addEventListener('session:bashToolStart', (e) => {
+      const data = JSON.parse(e.data);
+      this.handleBashToolStart(data.sessionId, data.tool);
+    });
+
+    this.eventSource.addEventListener('session:bashToolEnd', (e) => {
+      const data = JSON.parse(e.data);
+      this.handleBashToolEnd(data.sessionId, data.tool);
+    });
+
+    this.eventSource.addEventListener('session:bashToolsUpdate', (e) => {
+      const data = JSON.parse(e.data);
+      this.handleBashToolsUpdate(data.sessionId, data.tools);
+    });
+
     // Spawn agent notification events
     this.eventSource.addEventListener('spawn:failed', (e) => {
       const data = JSON.parse(e.data);
@@ -1444,11 +1647,15 @@ class ClaudemanApp {
 
     // ========== Subagent Events (Claude Code Background Agents) ==========
 
-    this.eventSource.addEventListener('subagent:discovered', (e) => {
+    this.eventSource.addEventListener('subagent:discovered', async (e) => {
       const data = JSON.parse(e.data);
       this.subagents.set(data.agentId, data);
       this.subagentActivity.set(data.agentId, []);
       this.renderSubagentPanel();
+
+      // Find which Claudeman session owns this subagent (by working directory)
+      await this.findParentSessionForSubagent(data.agentId);
+
       // Auto-open window for new active agents
       if (data.status === 'active') {
         this.openSubagentWindow(data.agentId);
@@ -1727,6 +1934,8 @@ class ClaudemanApp {
     }
 
     container.innerHTML = parts.join('');
+    // Update connection lines after tabs change (positions may have shifted)
+    this.updateConnectionLines();
   }
 
   getSessionName(session) {
@@ -1822,6 +2031,9 @@ class ClaudemanApp {
         });
       }
       this.renderRalphStatePanel();
+
+      // Update active tools panel for this session
+      this.renderActiveToolsPanel();
 
       this.terminal.focus();
       this.terminal.scrollToBottom();
@@ -4777,6 +4989,99 @@ class ClaudemanApp {
     }
   }
 
+  // ========== Subagent Parent Session Tracking ==========
+
+  async findParentSessionForSubagent(agentId) {
+    const agent = this.subagents.get(agentId);
+    if (!agent) return;
+
+    // Query each session to find which one owns this subagent
+    for (const [sessionId, session] of this.sessions) {
+      try {
+        const resp = await fetch(`/api/sessions/${sessionId}/subagents`);
+        if (!resp.ok) continue;
+        const result = await resp.json();
+        const subagents = result.data || result.subagents || [];
+        if (subagents.some(s => s.agentId === agentId)) {
+          agent.parentSessionId = sessionId;
+          agent.parentSessionName = this.getSessionName(session);
+          this.subagents.set(agentId, agent);
+          // Update window if already open
+          this.updateSubagentWindowParent(agentId);
+          return;
+        }
+      } catch (err) {
+        // Ignore errors, continue checking other sessions
+      }
+    }
+  }
+
+  updateSubagentWindowParent(agentId) {
+    const windowData = this.subagentWindows.get(agentId);
+    if (!windowData) return;
+    const agent = this.subagents.get(agentId);
+    if (!agent?.parentSessionId) return;
+
+    // Check if parent header already exists
+    const win = windowData.element;
+    if (win.querySelector('.subagent-window-parent')) return;
+
+    // Insert parent header after the main header
+    const header = win.querySelector('.subagent-window-header');
+    if (header) {
+      const parentDiv = document.createElement('div');
+      parentDiv.className = 'subagent-window-parent';
+      parentDiv.dataset.parentSession = agent.parentSessionId;
+      parentDiv.innerHTML = `
+        <span class="parent-label">from</span>
+        <span class="parent-name" onclick="app.selectSession('${agent.parentSessionId}')">${this.escapeHtml(agent.parentSessionName)}</span>
+      `;
+      header.insertAdjacentElement('afterend', parentDiv);
+    }
+
+    // Update connection lines
+    this.updateConnectionLines();
+  }
+
+  // ========== Subagent Connection Lines ==========
+
+  updateConnectionLines() {
+    const svg = document.getElementById('connectionLines');
+    if (!svg) return;
+
+    svg.innerHTML = '';
+
+    for (const [agentId, windowInfo] of this.subagentWindows) {
+      if (windowInfo.minimized) continue;
+
+      const agent = this.subagents.get(agentId);
+      if (!agent?.parentSessionId) continue;
+
+      const tab = document.querySelector(`.session-tab[data-id="${agent.parentSessionId}"]`);
+      const win = windowInfo.element;
+      if (!tab || !win) continue;
+
+      const tabRect = tab.getBoundingClientRect();
+      const winRect = win.getBoundingClientRect();
+
+      // Draw curved line from tab bottom-center to window top-center
+      const x1 = tabRect.left + tabRect.width / 2;
+      const y1 = tabRect.bottom;
+      const x2 = winRect.left + winRect.width / 2;
+      const y2 = winRect.top;
+
+      // Bezier curve control points for smooth curve
+      const midY = (y1 + y2) / 2;
+      const path = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
+
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      line.setAttribute('d', path);
+      line.setAttribute('class', 'connection-line');
+      line.setAttribute('data-agent-id', agentId);
+      svg.appendChild(line);
+    }
+  }
+
   // ========== Subagent Floating Windows ==========
 
   openSubagentWindow(agentId) {
@@ -4784,24 +5089,38 @@ class ClaudemanApp {
     if (this.subagentWindows.has(agentId)) {
       const existing = this.subagentWindows.get(agentId);
       existing.element.style.zIndex = ++this.subagentWindowZIndex;
+      if (existing.minimized) {
+        this.restoreSubagentWindow(agentId);
+      }
       return;
     }
 
     const agent = this.subagents.get(agentId);
     if (!agent) return;
 
-    // Calculate position (cascade from top-left)
+    // Calculate final position (cascade from top-left)
     const windowCount = this.subagentWindows.size;
-    const offsetX = 50 + (windowCount % 5) * 30;
-    const offsetY = 100 + (windowCount % 5) * 30;
+    const finalX = 50 + (windowCount % 5) * 30;
+    const finalY = 100 + (windowCount % 5) * 30;
+
+    // Get parent tab position for spawn animation
+    const parentTab = agent.parentSessionId
+      ? document.querySelector(`.session-tab[data-id="${agent.parentSessionId}"]`)
+      : null;
 
     // Create window element
     const win = document.createElement('div');
     win.className = 'subagent-window';
     win.id = `subagent-window-${agentId}`;
-    win.style.left = `${offsetX}px`;
-    win.style.top = `${offsetY}px`;
     win.style.zIndex = ++this.subagentWindowZIndex;
+
+    // Build parent header if we have parent info
+    const parentHeader = agent.parentSessionId && agent.parentSessionName
+      ? `<div class="subagent-window-parent" data-parent-session="${agent.parentSessionId}">
+          <span class="parent-label">from</span>
+          <span class="parent-name" onclick="app.selectSession('${agent.parentSessionId}')">${this.escapeHtml(agent.parentSessionName)}</span>
+        </div>`
+      : '';
 
     const windowTitle = agent.description || agentId.substring(0, 7);
     const truncatedTitle = windowTitle.length > 50 ? windowTitle.substring(0, 50) + '...' : windowTitle;
@@ -4817,14 +5136,29 @@ class ClaudemanApp {
           <button onclick="app.closeSubagentWindow('${agentId}')" title="Close">×</button>
         </div>
       </div>
+      ${parentHeader}
       <div class="subagent-window-body" id="subagent-window-body-${agentId}">
         <div class="subagent-empty">Loading activity...</div>
       </div>
     `;
 
+    // If we have a parent tab, start window at tab position for spawn animation
+    if (parentTab) {
+      const tabRect = parentTab.getBoundingClientRect();
+      win.style.left = `${tabRect.left}px`;
+      win.style.top = `${tabRect.bottom}px`;
+      win.style.transform = 'scale(0.3)';
+      win.style.opacity = '0';
+      win.classList.add('spawning');
+    } else {
+      // No parent tab, just position normally
+      win.style.left = `${finalX}px`;
+      win.style.top = `${finalY}px`;
+    }
+
     document.body.appendChild(win);
 
-    // Make draggable
+    // Make draggable (with connection line update callback)
     this.makeWindowDraggable(win, win.querySelector('.subagent-window-header'));
 
     // Store reference
@@ -4840,6 +5174,27 @@ class ClaudemanApp {
     win.addEventListener('mousedown', () => {
       win.style.zIndex = ++this.subagentWindowZIndex;
     });
+
+    // Animate to final position if spawning from tab
+    if (parentTab) {
+      requestAnimationFrame(() => {
+        win.style.transition = 'all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)';
+        win.style.left = `${finalX}px`;
+        win.style.top = `${finalY}px`;
+        win.style.transform = 'scale(1)';
+        win.style.opacity = '1';
+
+        // Clean up after animation
+        setTimeout(() => {
+          win.style.transition = '';
+          win.classList.remove('spawning');
+          this.updateConnectionLines();
+        }, 400);
+      });
+    } else {
+      // No animation, just update connection lines
+      this.updateConnectionLines();
+    }
   }
 
   closeSubagentWindow(agentId) {
@@ -4847,6 +5202,7 @@ class ClaudemanApp {
     if (windowData) {
       windowData.element.remove();
       this.subagentWindows.delete(agentId);
+      this.updateConnectionLines();
     }
   }
 
@@ -4855,6 +5211,7 @@ class ClaudemanApp {
     if (windowData) {
       windowData.element.style.display = 'none';
       windowData.minimized = true;
+      this.updateConnectionLines();
     }
   }
 
@@ -4864,12 +5221,14 @@ class ClaudemanApp {
       windowData.element.style.display = 'flex';
       windowData.element.style.zIndex = ++this.subagentWindowZIndex;
       windowData.minimized = false;
+      this.updateConnectionLines();
     }
   }
 
   makeWindowDraggable(win, handle) {
     let isDragging = false;
     let startX, startY, startLeft, startTop;
+    let dragUpdateScheduled = false;
 
     handle.addEventListener('mousedown', (e) => {
       if (e.target.tagName === 'BUTTON') return;
@@ -4887,6 +5246,14 @@ class ClaudemanApp {
       const dy = e.clientY - startY;
       win.style.left = `${startLeft + dx}px`;
       win.style.top = `${startTop + dy}px`;
+      // Throttle connection line updates during drag
+      if (!dragUpdateScheduled) {
+        dragUpdateScheduled = true;
+        requestAnimationFrame(() => {
+          this.updateConnectionLines();
+          dragUpdateScheduled = false;
+        });
+      }
     });
 
     document.addEventListener('mouseup', () => {
@@ -4956,6 +5323,234 @@ class ClaudemanApp {
     for (const [agentId, agent] of this.subagents) {
       if (agent.status === 'active' && !this.subagentWindows.has(agentId)) {
         this.openSubagentWindow(agentId);
+      }
+    }
+  }
+
+  // ========== Active Bash Tools (Clickable File Paths) ==========
+
+  handleBashToolStart(sessionId, tool) {
+    let tools = this.activeTools.get(sessionId) || [];
+    // Add new tool
+    tools = tools.filter(t => t.id !== tool.id);
+    tools.push(tool);
+    this.activeTools.set(sessionId, tools);
+    this.renderActiveToolsPanel();
+  }
+
+  handleBashToolEnd(sessionId, tool) {
+    const tools = this.activeTools.get(sessionId) || [];
+    const existing = tools.find(t => t.id === tool.id);
+    if (existing) {
+      existing.status = 'completed';
+    }
+    this.renderActiveToolsPanel();
+    // Remove after a short delay
+    setTimeout(() => {
+      const current = this.activeTools.get(sessionId) || [];
+      this.activeTools.set(sessionId, current.filter(t => t.id !== tool.id));
+      this.renderActiveToolsPanel();
+    }, 2000);
+  }
+
+  handleBashToolsUpdate(sessionId, tools) {
+    this.activeTools.set(sessionId, tools);
+    this.renderActiveToolsPanel();
+  }
+
+  renderActiveToolsPanel() {
+    const panel = this.$('activeToolsPanel');
+    const list = this.$('activeToolsList');
+    if (!panel || !list) return;
+
+    // Get tools for active session only
+    const tools = this.activeTools.get(this.activeSessionId) || [];
+    const runningTools = tools.filter(t => t.status === 'running');
+
+    if (runningTools.length === 0) {
+      panel.classList.remove('visible');
+      this.activeToolsPanelVisible = false;
+      return;
+    }
+
+    panel.classList.add('visible');
+    this.activeToolsPanelVisible = true;
+
+    const html = [];
+    for (const tool of runningTools) {
+      const cmdDisplay = tool.command.length > 40
+        ? tool.command.substring(0, 40) + '...'
+        : tool.command;
+
+      html.push(`
+        <div class="active-tool-item" data-tool-id="${tool.id}">
+          <div class="active-tool-command">
+            <span class="icon">💻</span>
+            <span class="cmd" title="${this.escapeHtml(tool.command)}">${this.escapeHtml(cmdDisplay)}</span>
+            <span class="active-tool-status ${tool.status}">${tool.status}</span>
+            ${tool.timeout ? `<span class="active-tool-timeout">${this.escapeHtml(tool.timeout)}</span>` : ''}
+          </div>
+          <div class="active-tool-paths">
+      `);
+
+      for (const path of tool.filePaths) {
+        const fileName = path.split('/').pop();
+        html.push(`
+            <span class="active-tool-filepath"
+                  onclick="app.openLogViewerWindow('${this.escapeHtml(path)}', '${tool.sessionId}')"
+                  title="${this.escapeHtml(path)}">${this.escapeHtml(fileName)}</span>
+        `);
+      }
+
+      html.push(`
+          </div>
+        </div>
+      `);
+    }
+
+    list.innerHTML = html.join('');
+  }
+
+  closeActiveToolsPanel() {
+    const panel = this.$('activeToolsPanel');
+    if (panel) {
+      panel.classList.remove('visible');
+      this.activeToolsPanelVisible = false;
+    }
+  }
+
+  // ========== Log Viewer Windows (Floating File Streamers) ==========
+
+  openLogViewerWindow(filePath, sessionId) {
+    sessionId = sessionId || this.activeSessionId;
+    if (!sessionId) return;
+
+    // Create unique window ID
+    const windowId = `${sessionId}-${filePath.replace(/[^a-zA-Z0-9]/g, '_')}`;
+
+    // If window already exists, focus it
+    if (this.logViewerWindows.has(windowId)) {
+      const existing = this.logViewerWindows.get(windowId);
+      existing.element.style.zIndex = ++this.logViewerWindowZIndex;
+      return;
+    }
+
+    // Calculate position (cascade from top-left)
+    const windowCount = this.logViewerWindows.size;
+    const offsetX = 100 + (windowCount % 5) * 30;
+    const offsetY = 100 + (windowCount % 5) * 30;
+
+    // Get filename for title
+    const fileName = filePath.split('/').pop();
+
+    // Create window element
+    const win = document.createElement('div');
+    win.className = 'log-viewer-window';
+    win.id = `log-viewer-window-${windowId}`;
+    win.style.left = `${offsetX}px`;
+    win.style.top = `${offsetY}px`;
+    win.style.zIndex = ++this.logViewerWindowZIndex;
+
+    win.innerHTML = `
+      <div class="log-viewer-window-header">
+        <div class="log-viewer-window-title" title="${this.escapeHtml(filePath)}">
+          <span class="icon">📄</span>
+          <span class="filename">${this.escapeHtml(fileName)}</span>
+          <span class="status streaming">streaming</span>
+        </div>
+        <div class="log-viewer-window-actions">
+          <button onclick="app.closeLogViewerWindow('${windowId}')" title="Close">×</button>
+        </div>
+      </div>
+      <div class="log-viewer-window-body" id="log-viewer-body-${windowId}">
+        <div class="log-info">Connecting to ${this.escapeHtml(filePath)}...</div>
+      </div>
+    `;
+
+    document.body.appendChild(win);
+
+    // Make draggable
+    this.makeWindowDraggable(win, win.querySelector('.log-viewer-window-header'));
+
+    // Connect to SSE stream
+    const eventSource = new EventSource(
+      `/api/sessions/${sessionId}/tail-file?path=${encodeURIComponent(filePath)}&lines=50`
+    );
+
+    eventSource.onmessage = (e) => {
+      const data = JSON.parse(e.data);
+      const body = document.getElementById(`log-viewer-body-${windowId}`);
+      if (!body) return;
+
+      switch (data.type) {
+        case 'connected':
+          body.innerHTML = '';
+          break;
+        case 'data':
+          // Append data, auto-scroll
+          const wasAtBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 10;
+          const content = this.escapeHtml(data.content);
+          body.innerHTML += content;
+          if (wasAtBottom) {
+            body.scrollTop = body.scrollHeight;
+          }
+          // Trim if too large
+          if (body.innerHTML.length > 500000) {
+            body.innerHTML = body.innerHTML.slice(-400000);
+          }
+          break;
+        case 'end':
+          this.updateLogViewerStatus(windowId, 'disconnected', 'ended');
+          break;
+        case 'error':
+          body.innerHTML += `<div class="log-error">${this.escapeHtml(data.error)}</div>`;
+          this.updateLogViewerStatus(windowId, 'error', 'error');
+          break;
+      }
+    };
+
+    eventSource.onerror = () => {
+      this.updateLogViewerStatus(windowId, 'disconnected', 'connection error');
+    };
+
+    // Store reference
+    this.logViewerWindows.set(windowId, {
+      element: win,
+      eventSource,
+      filePath,
+      sessionId,
+    });
+  }
+
+  updateLogViewerStatus(windowId, statusClass, statusText) {
+    const statusEl = document.querySelector(`#log-viewer-window-${windowId} .status`);
+    if (statusEl) {
+      statusEl.className = `status ${statusClass}`;
+      statusEl.textContent = statusText;
+    }
+  }
+
+  closeLogViewerWindow(windowId) {
+    const windowData = this.logViewerWindows.get(windowId);
+    if (!windowData) return;
+
+    // Close SSE connection
+    if (windowData.eventSource) {
+      windowData.eventSource.close();
+    }
+
+    // Remove element
+    windowData.element.remove();
+
+    // Remove from map
+    this.logViewerWindows.delete(windowId);
+  }
+
+  // Close all log viewer windows for a session
+  closeSessionLogViewerWindows(sessionId) {
+    for (const [windowId, data] of this.logViewerWindows) {
+      if (data.sessionId === sessionId) {
+        this.closeLogViewerWindow(windowId);
       }
     }
   }

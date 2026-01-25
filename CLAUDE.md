@@ -21,7 +21,7 @@ When user says "COM": 1) Increment version in BOTH `package.json` AND `CLAUDE.md
 
 Claudeman is a Claude Code session manager with a web interface and autonomous Ralph Loop. It spawns Claude CLI processes via PTY, streams output in real-time via SSE, and supports scheduled/timed runs.
 
-**Version**: 0.1369 (must match `package.json`)
+**Version**: 0.1370 (must match `package.json`)
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -108,8 +108,9 @@ npx vitest run -t "should create session" # By pattern
 | 3151 | browser-e2e.test.ts (SSE events tests) |
 | 3152 | browser-e2e.test.ts (hook events tests) |
 | 3153 | browser-e2e.test.ts (Ralph panel tests) |
+| 3154 | file-link-click.test.ts |
 
-**Next available port**: 3154
+**Next available port**: 3155
 
 Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive, task-queue, task, ralph-loop, session-manager, state-store, types, templates, ralph-config, spawn-detector, spawn-types, spawn-orchestrator, ai-idle-checker, ai-plan-checker
 

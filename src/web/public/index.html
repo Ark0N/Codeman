@@ -172,6 +172,15 @@
       <div class="terminal-container" id="terminalContainer"></div>
     </main>
 
+    <!-- Active Tools Panel (shows file-viewing Bash commands) -->
+    <div class="active-tools-panel" id="activeToolsPanel">
+      <div class="active-tools-header">
+        <span class="active-tools-title">Active Tools</span>
+        <button class="btn-icon-sm" onclick="app.closeActiveToolsPanel()" title="Close">&times;</button>
+      </div>
+      <div class="active-tools-body" id="activeToolsList"></div>
+    </div>
+
     <!-- Bottom Toolbar -->
     <footer class="toolbar">
       <div class="toolbar-left">
@@ -840,6 +849,11 @@
       </div>
     </div>
   </div>
+
+  <!-- SVG Overlay for Subagent Connection Lines -->
+  <svg id="connectionLines" class="connection-lines-svg">
+    <!-- Lines drawn dynamically -->
+  </svg>
 
   <script src="app.js"></script>
 </body>
