@@ -1866,6 +1866,23 @@ export class WebServer extends EventEmitter {
       this.broadcast('respawn:planCheckFailed', { sessionId, error });
     });
 
+    // Timer tracking events for UI countdown display
+    controller.on('timerStarted', (timer) => {
+      this.broadcast('respawn:timerStarted', { sessionId, timer });
+    });
+
+    controller.on('timerCancelled', (timerName, reason) => {
+      this.broadcast('respawn:timerCancelled', { sessionId, timerName, reason });
+    });
+
+    controller.on('timerCompleted', (timerName) => {
+      this.broadcast('respawn:timerCompleted', { sessionId, timerName });
+    });
+
+    controller.on('actionLog', (action) => {
+      this.broadcast('respawn:actionLog', { sessionId, action });
+    });
+
     controller.on('log', (message: string) => {
       this.broadcast('respawn:log', { sessionId, message });
     });

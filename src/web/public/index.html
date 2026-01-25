@@ -67,19 +67,29 @@
 
     <!-- Respawn Banner -->
     <div class="respawn-banner" id="respawnBanner" style="display: none;">
-      <span class="respawn-indicator">&#x21BB;</span>
-      <span class="respawn-state" id="respawnState">Watching</span>
-      <span class="respawn-detection" id="respawnDetection">
-        <span class="detection-status" id="detectionStatus"></span>
-        <span class="detection-waiting" id="detectionWaiting"></span>
-        <span class="detection-confidence" id="detectionConfidence"></span>
-        <span class="detection-ai-check" id="detectionAiCheck" style="display: none;"></span>
-      </span>
-      <span class="respawn-cycles">Cycle <span id="respawnCycleCount">0</span></span>
-      <span class="respawn-timer" id="respawnTimer" style="display: none;"></span>
-      <span class="respawn-tokens" id="respawnTokens" style="display: none;"></span>
-      <span class="respawn-step" id="respawnStep"></span>
-      <button class="btn-icon-only" onclick="app.stopRespawn()" title="Stop Respawn">&#x25A0;</button>
+      <div class="respawn-banner-row">
+        <span class="respawn-indicator">&#x21BB;</span>
+        <span class="respawn-state" id="respawnState">Watching</span>
+        <span class="respawn-detection" id="respawnDetection">
+          <span class="detection-status" id="detectionStatus"></span>
+          <span class="detection-waiting" id="detectionWaiting"></span>
+          <span class="detection-confidence" id="detectionConfidence"></span>
+          <span class="detection-ai-check" id="detectionAiCheck" style="display: none;"></span>
+        </span>
+        <span class="respawn-cycles">Cycle <span id="respawnCycleCount">0</span></span>
+        <span class="respawn-timer" id="respawnTimer" style="display: none;"></span>
+        <span class="respawn-tokens" id="respawnTokens" style="display: none;"></span>
+        <span class="respawn-step" id="respawnStep"></span>
+        <button class="btn-icon-only" onclick="app.stopRespawn()" title="Stop Respawn">&#x25A0;</button>
+      </div>
+      <div class="respawn-timers-row" id="respawnTimersRow" style="display: none;">
+        <div class="respawn-countdown-timers" id="respawnCountdownTimers">
+          <!-- Dynamically populated countdown timers -->
+        </div>
+        <div class="respawn-action-log" id="respawnActionLog">
+          <!-- Recent actions scrolling list -->
+        </div>
+      </div>
     </div>
 
     <!-- Ralph / Todo Tracker Panel -->

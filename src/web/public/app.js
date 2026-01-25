@@ -361,6 +361,9 @@ class ClaudemanApp {
     this.activeSessionId = null;
     this.respawnStatus = {};
     this.respawnTimers = {}; // Track timed respawn timers
+    this.respawnCountdownTimers = {}; // { sessionId: { timerName: { endsAt, totalMs, reason } } }
+    this.respawnActionLogs = {};      // { sessionId: [action, action, ...] } (max 20)
+    this.timerCountdownInterval = null; // Interval for updating countdown display
     this.terminalBuffers = new Map(); // Store terminal content per session
     this.editingSessionId = null; // Session being edited in options modal
     this.pendingCloseSessionId = null; // Session pending close confirmation
@@ -977,7 +980,7 @@ class ClaudemanApp {
       }
     });
 
-    // Respawn timer events
+    // Respawn run timer events (timed respawn runs)
     this.eventSource.addEventListener('respawn:timerStarted', (e) => {
       const data = JSON.parse(e.data);
       this.respawnTimers[data.sessionId] = {
@@ -987,6 +990,60 @@ class ClaudemanApp {
       };
       if (data.sessionId === this.activeSessionId) {
         this.showRespawnTimer();
+      }
+    });
+
+    // Respawn controller countdown timer events (internal timers)
+    this.eventSource.addEventListener('respawn:timerStarted', (e) => {
+      const data = JSON.parse(e.data);
+      // This may fire for both run timers and controller timers - check for timer object
+      if (data.timer) {
+        const { sessionId, timer } = data;
+        if (!this.respawnCountdownTimers[sessionId]) {
+          this.respawnCountdownTimers[sessionId] = {};
+        }
+        this.respawnCountdownTimers[sessionId][timer.name] = {
+          endsAt: timer.endsAt,
+          totalMs: timer.durationMs,
+          reason: timer.reason
+        };
+        if (sessionId === this.activeSessionId) {
+          this.updateCountdownTimerDisplay();
+          this.startCountdownInterval();
+        }
+      }
+    });
+
+    this.eventSource.addEventListener('respawn:timerCancelled', (e) => {
+      const data = JSON.parse(e.data);
+      const { sessionId, timerName, reason } = data;
+      if (this.respawnCountdownTimers[sessionId]) {
+        delete this.respawnCountdownTimers[sessionId][timerName];
+      }
+      if (sessionId === this.activeSessionId) {
+        this.updateCountdownTimerDisplay();
+        // Add to action log
+        this.addActionLogEntry(sessionId, { type: 'timer-cancel', detail: `${timerName}${reason ? ': ' + reason : ''}`, timestamp: Date.now() });
+      }
+    });
+
+    this.eventSource.addEventListener('respawn:timerCompleted', (e) => {
+      const data = JSON.parse(e.data);
+      const { sessionId, timerName } = data;
+      if (this.respawnCountdownTimers[sessionId]) {
+        delete this.respawnCountdownTimers[sessionId][timerName];
+      }
+      if (sessionId === this.activeSessionId) {
+        this.updateCountdownTimerDisplay();
+      }
+    });
+
+    this.eventSource.addEventListener('respawn:actionLog', (e) => {
+      const data = JSON.parse(e.data);
+      const { sessionId, action } = data;
+      this.addActionLogEntry(sessionId, action);
+      if (sessionId === this.activeSessionId) {
+        this.updateActionLogDisplay();
       }
     });
 
@@ -1468,8 +1525,15 @@ class ClaudemanApp {
         this.showRespawnBanner();
         this.updateRespawnBanner(this.respawnStatus[sessionId].state);
         document.getElementById('respawnCycleCount').textContent = this.respawnStatus[sessionId].cycleCount || 0;
+        // Update countdown timers and action log for this session
+        this.updateCountdownTimerDisplay();
+        this.updateActionLogDisplay();
+        if (Object.keys(this.respawnCountdownTimers[sessionId] || {}).length > 0) {
+          this.startCountdownInterval();
+        }
       } else {
         this.hideRespawnBanner();
+        this.stopCountdownInterval();
       }
 
       // Update task panel if open
@@ -1501,6 +1565,7 @@ class ClaudemanApp {
       this.sessions.delete(sessionId);
       this.terminalBuffers.delete(sessionId);
       this.ralphStates.delete(sessionId);
+      this.clearCountdownTimers(sessionId);
 
       if (this.activeSessionId === sessionId) {
         this.activeSessionId = null;
@@ -2011,11 +2076,112 @@ class ClaudemanApp {
     }
   }
 
+  // ========== Countdown Timer Display Methods ==========
+
+  addActionLogEntry(sessionId, action) {
+    if (!this.respawnActionLogs[sessionId]) {
+      this.respawnActionLogs[sessionId] = [];
+    }
+    this.respawnActionLogs[sessionId].unshift(action);
+    if (this.respawnActionLogs[sessionId].length > 20) {
+      this.respawnActionLogs[sessionId].pop();
+    }
+  }
+
+  startCountdownInterval() {
+    if (this.timerCountdownInterval) return;
+    this.timerCountdownInterval = setInterval(() => {
+      if (this.activeSessionId && this.respawnCountdownTimers[this.activeSessionId]) {
+        this.updateCountdownTimerDisplay();
+      }
+    }, 100);
+  }
+
+  stopCountdownInterval() {
+    if (this.timerCountdownInterval) {
+      clearInterval(this.timerCountdownInterval);
+      this.timerCountdownInterval = null;
+    }
+  }
+
+  updateCountdownTimerDisplay() {
+    const timersRow = this.$('respawnTimersRow');
+    const timersContainer = this.$('respawnCountdownTimers');
+    if (!timersRow || !timersContainer) return;
+
+    const timers = this.respawnCountdownTimers[this.activeSessionId];
+    if (!timers || Object.keys(timers).length === 0) {
+      timersRow.style.display = 'none';
+      return;
+    }
+
+    timersRow.style.display = '';
+    const now = Date.now();
+    let html = '';
+
+    for (const [name, timer] of Object.entries(timers)) {
+      const remainingMs = Math.max(0, timer.endsAt - now);
+      const remainingSec = (remainingMs / 1000).toFixed(1);
+      const percent = Math.max(0, Math.min(100, (remainingMs / timer.totalMs) * 100));
+
+      // Format timer name for display (replace hyphens with spaces, capitalize first letter)
+      const displayName = name.replace(/-/g, ' ').replace(/^\w/, c => c.toUpperCase());
+
+      html += `<div class="respawn-countdown-timer" title="${timer.reason || ''}">
+        <span class="timer-name">${displayName}</span>
+        <span class="timer-value">${remainingSec}s</span>
+        <div class="respawn-timer-bar">
+          <div class="respawn-timer-progress" style="width: ${percent}%"></div>
+        </div>
+      </div>`;
+    }
+
+    timersContainer.innerHTML = html;
+  }
+
+  updateActionLogDisplay() {
+    const logContainer = this.$('respawnActionLog');
+    if (!logContainer) return;
+
+    const actions = this.respawnActionLogs[this.activeSessionId];
+    if (!actions || actions.length === 0) {
+      logContainer.innerHTML = '<span class="action-empty">No recent actions</span>';
+      return;
+    }
+
+    let html = '';
+    for (const action of actions.slice(0, 10)) {
+      const time = new Date(action.timestamp).toLocaleTimeString('en-US', {
+        hour12: false,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+      html += `<div class="respawn-action-entry">
+        <span class="action-time">${time}</span>
+        <span class="action-type">[${action.type}]</span>
+        <span class="action-detail">${action.detail}</span>
+      </div>`;
+    }
+
+    logContainer.innerHTML = html;
+  }
+
+  clearCountdownTimers(sessionId) {
+    delete this.respawnCountdownTimers[sessionId];
+    delete this.respawnActionLogs[sessionId];
+    if (sessionId === this.activeSessionId) {
+      this.updateCountdownTimerDisplay();
+      this.updateActionLogDisplay();
+    }
+  }
+
   async stopRespawn() {
     if (!this.activeSessionId) return;
     try {
       await fetch(`/api/sessions/${this.activeSessionId}/respawn/stop`, { method: 'POST' });
       delete this.respawnTimers[this.activeSessionId];
+      this.clearCountdownTimers(this.activeSessionId);
     } catch (err) {
       this.showToast('Failed to stop respawn', 'error');
     }
@@ -2042,6 +2208,9 @@ class ClaudemanApp {
       this.terminalBuffers.clear();
       this.activeSessionId = null;
       this.respawnStatus = {};
+      this.respawnCountdownTimers = {};
+      this.respawnActionLogs = {};
+      this.stopCountdownInterval();
       this.hideRespawnBanner();
       this.renderSessionTabs();
       this.terminal.clear();
@@ -2397,6 +2566,7 @@ class ClaudemanApp {
 
     return {
       respawnConfig: {
+        enabled: true,  // Fix: ensure enabled is set so pre-saved configs with enabled: false get overridden
         updatePrompt,
         sendClear,
         sendInit,
