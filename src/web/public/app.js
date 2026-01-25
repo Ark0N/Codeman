@@ -443,11 +443,11 @@ class ClaudemanApp {
     this.subagentWindowZIndex = 1000;
     this.ralphStatePanelCollapsed = true; // Default to collapsed
 
-    // Active Bash tool tracking (for clickable file paths)
-    this.activeTools = new Map(); // Map<sessionId, ActiveBashTool[]>
+    // Project Insights tracking (active Bash tools with clickable file paths)
+    this.projectInsights = new Map(); // Map<sessionId, ActiveBashTool[]>
     this.logViewerWindows = new Map(); // Map<windowId, { element, eventSource, filePath }>
     this.logViewerWindowZIndex = 2000;
-    this.activeToolsPanelVisible = false;
+    this.projectInsightsPanelVisible = false;
 
     // Tab alert states: Map<sessionId, 'action' | 'idle'>
     this.tabAlerts = new Map();
@@ -1073,8 +1073,9 @@ class ClaudemanApp {
       this.sessions.delete(data.id);
       this.terminalBuffers.delete(data.id);
       this.ralphStates.delete(data.id);  // Clean up ralph state for this session
-      this.activeTools.delete(data.id);  // Clean up active tools for this session
+      this.projectInsights.delete(data.id);  // Clean up project insights for this session
       this.closeSessionLogViewerWindows(data.id);  // Close log viewer windows for this session
+      this.closeSessionSubagentWindows(data.id);  // Close subagent windows for this session
       // Clean up idle timer for this session
       const idleTimer = this.idleTimers.get(data.id);
       if (idleTimer) {
@@ -1088,7 +1089,7 @@ class ClaudemanApp {
       }
       this.renderSessionTabs();
       this.renderRalphStatePanel();  // Update ralph panel after session deleted
-      this.renderActiveToolsPanel();  // Update active tools panel after session deleted
+      this.renderProjectInsightsPanel();  // Update project insights panel after session deleted
     });
 
     this.eventSource.addEventListener('session:terminal', (e) => {
@@ -2032,8 +2033,8 @@ class ClaudemanApp {
       }
       this.renderRalphStatePanel();
 
-      // Update active tools panel for this session
-      this.renderActiveToolsPanel();
+      // Update project insights panel for this session
+      this.renderProjectInsightsPanel();
 
       this.terminal.focus();
       this.terminal.scrollToBottom();
@@ -3643,6 +3644,7 @@ class ClaudemanApp {
     document.getElementById('appSettingsShowMonitor').checked = settings.showMonitor ?? true;
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? true;
     document.getElementById('appSettingsShowSubagents').checked = settings.showSubagents ?? true;
+    document.getElementById('appSettingsShowProjectInsights').checked = settings.showProjectInsights ?? true;
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
     const allowedToolsRow = document.getElementById('allowedToolsRow');
@@ -3704,6 +3706,7 @@ class ClaudemanApp {
       showMonitor: document.getElementById('appSettingsShowMonitor').checked,
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       showSubagents: document.getElementById('appSettingsShowSubagents').checked,
+      showProjectInsights: document.getElementById('appSettingsShowProjectInsights').checked,
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
       allowedTools: document.getElementById('appSettingsAllowedTools').value.trim(),
@@ -3730,6 +3733,7 @@ class ClaudemanApp {
     // Apply header visibility immediately
     this.applyHeaderVisibilitySettings();
     this.applyMonitorVisibility();
+    this.renderProjectInsightsPanel();  // Re-render to apply visibility setting
 
     // Save to server (includes notification prefs for cross-browser persistence)
     try {
@@ -5214,6 +5218,20 @@ class ClaudemanApp {
     }
   }
 
+  // Close all subagent windows for a session
+  closeSessionSubagentWindows(sessionId) {
+    const toClose = [];
+    for (const [agentId, _windowData] of this.subagentWindows) {
+      const agent = this.subagents.get(agentId);
+      if (agent?.parentSessionId === sessionId) {
+        toClose.push(agentId);
+      }
+    }
+    for (const agentId of toClose) {
+      this.closeSubagentWindow(agentId);
+    }
+  }
+
   minimizeSubagentWindow(agentId) {
     const windowData = this.subagentWindows.get(agentId);
     if (windowData) {
@@ -5335,76 +5353,85 @@ class ClaudemanApp {
     }
   }
 
-  // ========== Active Bash Tools (Clickable File Paths) ==========
+  // ========== Project Insights Panel (Bash Tools with Clickable File Paths) ==========
 
   handleBashToolStart(sessionId, tool) {
-    let tools = this.activeTools.get(sessionId) || [];
+    let tools = this.projectInsights.get(sessionId) || [];
     // Add new tool
     tools = tools.filter(t => t.id !== tool.id);
     tools.push(tool);
-    this.activeTools.set(sessionId, tools);
-    this.renderActiveToolsPanel();
+    this.projectInsights.set(sessionId, tools);
+    this.renderProjectInsightsPanel();
   }
 
   handleBashToolEnd(sessionId, tool) {
-    const tools = this.activeTools.get(sessionId) || [];
+    const tools = this.projectInsights.get(sessionId) || [];
     const existing = tools.find(t => t.id === tool.id);
     if (existing) {
       existing.status = 'completed';
     }
-    this.renderActiveToolsPanel();
+    this.renderProjectInsightsPanel();
     // Remove after a short delay
     setTimeout(() => {
-      const current = this.activeTools.get(sessionId) || [];
-      this.activeTools.set(sessionId, current.filter(t => t.id !== tool.id));
-      this.renderActiveToolsPanel();
+      const current = this.projectInsights.get(sessionId) || [];
+      this.projectInsights.set(sessionId, current.filter(t => t.id !== tool.id));
+      this.renderProjectInsightsPanel();
     }, 2000);
   }
 
   handleBashToolsUpdate(sessionId, tools) {
-    this.activeTools.set(sessionId, tools);
-    this.renderActiveToolsPanel();
+    this.projectInsights.set(sessionId, tools);
+    this.renderProjectInsightsPanel();
   }
 
-  renderActiveToolsPanel() {
-    const panel = this.$('activeToolsPanel');
-    const list = this.$('activeToolsList');
+  renderProjectInsightsPanel() {
+    const panel = this.$('projectInsightsPanel');
+    const list = this.$('projectInsightsList');
     if (!panel || !list) return;
 
+    // Check if panel is enabled in settings
+    const settings = this.loadAppSettingsFromStorage();
+    const showProjectInsights = settings.showProjectInsights ?? true;
+    if (!showProjectInsights) {
+      panel.classList.remove('visible');
+      this.projectInsightsPanelVisible = false;
+      return;
+    }
+
     // Get tools for active session only
-    const tools = this.activeTools.get(this.activeSessionId) || [];
+    const tools = this.projectInsights.get(this.activeSessionId) || [];
     const runningTools = tools.filter(t => t.status === 'running');
 
     if (runningTools.length === 0) {
       panel.classList.remove('visible');
-      this.activeToolsPanelVisible = false;
+      this.projectInsightsPanelVisible = false;
       return;
     }
 
     panel.classList.add('visible');
-    this.activeToolsPanelVisible = true;
+    this.projectInsightsPanelVisible = true;
 
     const html = [];
     for (const tool of runningTools) {
-      const cmdDisplay = tool.command.length > 40
-        ? tool.command.substring(0, 40) + '...'
+      const cmdDisplay = tool.command.length > 50
+        ? tool.command.substring(0, 50) + '...'
         : tool.command;
 
       html.push(`
-        <div class="active-tool-item" data-tool-id="${tool.id}">
-          <div class="active-tool-command">
+        <div class="project-insight-item" data-tool-id="${tool.id}">
+          <div class="project-insight-command">
             <span class="icon">💻</span>
             <span class="cmd" title="${this.escapeHtml(tool.command)}">${this.escapeHtml(cmdDisplay)}</span>
-            <span class="active-tool-status ${tool.status}">${tool.status}</span>
-            ${tool.timeout ? `<span class="active-tool-timeout">${this.escapeHtml(tool.timeout)}</span>` : ''}
+            <span class="project-insight-status ${tool.status}">${tool.status}</span>
+            ${tool.timeout ? `<span class="project-insight-timeout">${this.escapeHtml(tool.timeout)}</span>` : ''}
           </div>
-          <div class="active-tool-paths">
+          <div class="project-insight-paths">
       `);
 
       for (const path of tool.filePaths) {
         const fileName = path.split('/').pop();
         html.push(`
-            <span class="active-tool-filepath"
+            <span class="project-insight-filepath"
                   onclick="app.openLogViewerWindow('${this.escapeHtml(path)}', '${tool.sessionId}')"
                   title="${this.escapeHtml(path)}">${this.escapeHtml(fileName)}</span>
         `);
@@ -5419,11 +5446,11 @@ class ClaudemanApp {
     list.innerHTML = html.join('');
   }
 
-  closeActiveToolsPanel() {
-    const panel = this.$('activeToolsPanel');
+  closeProjectInsightsPanel() {
+    const panel = this.$('projectInsightsPanel');
     if (panel) {
       panel.classList.remove('visible');
-      this.activeToolsPanelVisible = false;
+      this.projectInsightsPanelVisible = false;
     }
   }
 

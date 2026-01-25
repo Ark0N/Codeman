@@ -172,13 +172,14 @@
       <div class="terminal-container" id="terminalContainer"></div>
     </main>
 
-    <!-- Active Tools Panel (shows file-viewing Bash commands) -->
-    <div class="active-tools-panel" id="activeToolsPanel">
-      <div class="active-tools-header">
-        <span class="active-tools-title">Active Tools</span>
-        <button class="btn-icon-sm" onclick="app.closeActiveToolsPanel()" title="Close">&times;</button>
+    <!-- Project Insights Panel (shows file-viewing Bash commands) -->
+    <div class="project-insights-panel" id="projectInsightsPanel">
+      <div class="project-insights-header">
+        <span class="project-insights-title">Project Insights</span>
+        <button class="btn-icon-sm" onclick="app.closeProjectInsightsPanel()" title="Close">&times;</button>
       </div>
-      <div class="active-tools-body" id="activeToolsList"></div>
+      <div class="project-insights-body" id="projectInsightsList"></div>
+      <div class="project-insights-resize-handle"></div>
     </div>
 
     <!-- Bottom Toolbar -->
@@ -628,6 +629,14 @@
                 <span class="slider"></span>
               </label>
               <span class="form-hint">Show the Subagents panel (independent from Monitor)</span>
+            </div>
+            <div class="form-row form-row-switch">
+              <label>Show Project Insights Panel</label>
+              <label class="switch">
+                <input type="checkbox" id="appSettingsShowProjectInsights" checked>
+                <span class="slider"></span>
+              </label>
+              <span class="form-hint">Show active tools and file viewers in a floating panel</span>
             </div>
           </div>
           <!-- Claude CLI Tab -->

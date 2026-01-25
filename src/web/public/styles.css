@@ -3895,9 +3895,8 @@ kbd {
   padding: 0.5rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
-  background: #0a0a0a;
-  color: #00ff41;
-  text-shadow: 0 0 2px #00ff41;
+  background: #111;
+  color: #c8c8c8;
 }
 
 .subagent-window-body .activity-line {
@@ -3908,26 +3907,24 @@ kbd {
 }
 
 .subagent-window-body .activity-line .time {
-  color: #00aa30;
+  color: #888;
   flex: 0 0 auto;
   white-space: nowrap;
 }
 
 .subagent-window-body .activity-line .tool-icon {
   flex: 0 0 auto;
-  filter: brightness(1.2);
+  opacity: 0.9;
 }
 
 .subagent-window-body .activity-line .tool-name {
-  color: #00ff41;
-  font-weight: bold;
+  color: #b0b0b0;
   flex: 0 0 auto;
   white-space: nowrap;
-  text-shadow: 0 0 4px #00ff41;
 }
 
 .subagent-window-body .activity-line .tool-detail {
-  color: #33ff66;
+  color: #d0d0d0;
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3935,13 +3932,12 @@ kbd {
 
 .subagent-window-body .message-line {
   padding: 0.3rem 0;
-  color: #00ff41;
+  color: #c8c8c8;
 }
 
 .subagent-window-body .progress-line {
-  color: #66ff99;
+  color: #a0a0a0;
   font-style: italic;
-  text-shadow: 0 0 3px #66ff99;
 }
 
 /* Subagent Window Parent Tab Header */
@@ -4007,14 +4003,16 @@ kbd {
   stroke-dashoffset: 1000;
 }
 
-/* ========== Active Tools Panel (Bash File Viewers) ========== */
+/* ========== Project Insights Panel (Bash File Viewers) ========== */
 
-.active-tools-panel {
+.project-insights-panel {
   position: fixed;
   right: 20px;
   top: calc(var(--header-height) + 10px);
-  width: 350px;
-  max-height: 200px;
+  width: 450px;
+  height: 350px;
+  min-width: 300px;
+  min-height: 200px;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -4022,13 +4020,15 @@ kbd {
   z-index: 1000;
   display: none;
   flex-direction: column;
+  overflow: hidden;
+  resize: both;
 }
 
-.active-tools-panel.visible {
+.project-insights-panel.visible {
   display: flex;
 }
 
-.active-tools-header {
+.project-insights-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4036,95 +4036,117 @@ kbd {
   background: var(--bg-input);
   border-bottom: 1px solid var(--border);
   border-radius: 8px 8px 0 0;
+  flex-shrink: 0;
 }
 
-.active-tools-title {
+.project-insights-title {
   font-size: 0.85rem;
   font-weight: 600;
   color: var(--text);
 }
 
-.active-tools-body {
+.project-insights-body {
   flex: 1;
   overflow-y: auto;
   padding: 0.5rem;
 }
 
-.active-tool-item {
-  display: flex;
-  flex-direction: column;
-  padding: 0.4rem 0.5rem;
-  border-radius: 4px;
-  background: var(--bg-input);
-  margin-bottom: 0.3rem;
+.project-insights-resize-handle {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: se-resize;
+  opacity: 0.5;
 }
 
-.active-tool-item:last-child {
+.project-insights-resize-handle::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--text-muted);
+  border-bottom: 2px solid var(--text-muted);
+}
+
+.project-insight-item {
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem 0.6rem;
+  border-radius: 4px;
+  background: var(--bg-input);
+  margin-bottom: 0.4rem;
+}
+
+.project-insight-item:last-child {
   margin-bottom: 0;
 }
 
-.active-tool-command {
+.project-insight-command {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   font-family: var(--font-mono);
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   color: var(--text);
 }
 
-.active-tool-command .icon {
-  font-size: 0.9rem;
+.project-insight-command .icon {
+  font-size: 1rem;
 }
 
-.active-tool-command .cmd {
+.project-insight-command .cmd {
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.active-tool-paths {
+.project-insight-paths {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
-  margin-top: 0.3rem;
-  padding-left: 1.3rem;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+  padding-left: 1.4rem;
 }
 
-.active-tool-filepath {
+.project-insight-filepath {
   cursor: pointer;
   color: var(--accent);
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   text-decoration: underline;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.active-tool-filepath:hover {
+.project-insight-filepath:hover {
   color: var(--accent-hover);
 }
 
-.active-tool-timeout {
-  font-size: 0.65rem;
+.project-insight-timeout {
+  font-size: 0.7rem;
   color: var(--text-muted);
   margin-left: auto;
 }
 
-.active-tool-status {
-  font-size: 0.65rem;
-  padding: 0.1rem 0.3rem;
+.project-insight-status {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.35rem;
   border-radius: 3px;
   margin-left: 0.3rem;
 }
 
-.active-tool-status.running {
+.project-insight-status.running {
   background: var(--success);
   color: white;
 }
 
-.active-tool-status.completed {
+.project-insight-status.completed {
   background: var(--text-muted);
   color: white;
 }
