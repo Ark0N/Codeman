@@ -2016,20 +2016,41 @@ class ClaudemanApp {
       confidenceEl.style.display = 'none';
     }
 
-    // Simplified AI check display
+    // AI check display - informative but clear
     if (aiCheckEl && detection.aiCheck) {
       const ai = detection.aiCheck;
       let aiText = '';
+      let aiClass = 'detection-ai-check';
+
       if (ai.status === 'checking') {
-        aiText = 'AI analyzing...';
+        aiText = '🔍 AI: Analyzing terminal output...';
+        aiClass += ' ai-checking';
       } else if (ai.status === 'cooldown' && ai.cooldownEndsAt) {
         const remaining = Math.ceil((ai.cooldownEndsAt - Date.now()) / 1000);
-        if (remaining > 0) aiText = `Cooldown ${remaining}s`;
+        if (remaining > 0) {
+          if (ai.lastVerdict === 'WORKING') {
+            aiText = `⏳ AI: Working detected, retry in ${remaining}s`;
+            aiClass += ' ai-working';
+          } else {
+            aiText = `✓ AI: Idle confirmed, cooldown ${remaining}s`;
+            aiClass += ' ai-idle';
+          }
+        }
       } else if (ai.status === 'disabled') {
-        aiText = 'AI disabled';
+        aiText = `⚠ AI: Disabled (${ai.disabledReason || 'errors'})`;
+        aiClass += ' ai-disabled';
+      } else if (ai.lastVerdict && ai.lastCheckTime) {
+        const ago = Math.round((Date.now() - ai.lastCheckTime) / 1000);
+        if (ago < 120) {
+          aiText = ai.lastVerdict === 'IDLE'
+            ? `✓ AI: Idle (${ago}s ago)`
+            : `⏳ AI: Working (${ago}s ago)`;
+          aiClass += ai.lastVerdict === 'IDLE' ? ' ai-idle' : ' ai-working';
+        }
       }
-      // Don't show "last verdict" - it's noise
+
       aiCheckEl.textContent = aiText;
+      aiCheckEl.className = aiClass;
       aiCheckEl.style.display = aiText ? '' : 'none';
     } else if (aiCheckEl) {
       aiCheckEl.style.display = 'none';

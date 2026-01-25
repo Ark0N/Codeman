@@ -566,8 +566,11 @@ body {
 }
 
 .respawn-state {
-  color: var(--green);
-  font-weight: 500;
+  color: #fff;
+  font-weight: 600;
+  background: rgba(34, 197, 94, 0.3);
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
 }
 
 .respawn-spacer {
@@ -601,8 +604,30 @@ body {
 }
 
 .detection-ai-check {
-  color: var(--accent);
   font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.detection-ai-check.ai-checking {
+  color: var(--accent);
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.detection-ai-check.ai-idle {
+  color: var(--green);
+  background: rgba(34, 197, 94, 0.15);
+}
+
+.detection-ai-check.ai-working {
+  color: var(--yellow);
+  background: rgba(234, 179, 8, 0.15);
+}
+
+.detection-ai-check.ai-disabled {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .detection-confidence {
