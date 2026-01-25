@@ -3184,6 +3184,7 @@ class ClaudemanApp {
     this.closeAppSettings();
     this.cancelCloseSession();
     document.getElementById('monitorPanel').classList.remove('open');
+    this.closeSubagentsPanel();
   }
 
   // ========== Monitor Panel (combined Screen Sessions + Background Tasks) ==========
@@ -3803,33 +3804,94 @@ class ClaudemanApp {
 
   // ========== Subagent Panel (Claude Code Background Agents) ==========
 
-  toggleSubagentPanel() {
-    this.subagentPanelVisible = !this.subagentPanelVisible;
-    const panel = this.$('subagentPanel');
-    if (panel) {
-      panel.style.display = this.subagentPanelVisible ? 'block' : 'none';
-    }
-    if (this.subagentPanelVisible) {
+  // Switch between Monitor and Subagents tabs in the monitor panel
+  switchMonitorTab(tabName) {
+    const monitorTab = document.querySelector('.monitor-tab[data-tab="monitor"]');
+    const subagentsTab = document.querySelector('.monitor-tab[data-tab="subagents"]');
+    const monitorContent = this.$('monitorTabContent');
+    const subagentsContent = this.$('subagentsTabContent');
+    const panel = this.$('monitorPanel');
+
+    if (tabName === 'monitor') {
+      monitorTab?.classList.add('active');
+      subagentsTab?.classList.remove('active');
+      if (monitorContent) {
+        monitorContent.style.display = 'flex';
+        monitorContent.classList.add('active');
+      }
+      if (subagentsContent) {
+        subagentsContent.style.display = 'none';
+        subagentsContent.classList.remove('active');
+      }
+      // Shrink panel back to normal width
+      panel?.classList.remove('subagents-active');
+      this.subagentPanelVisible = false;
+    } else if (tabName === 'subagents') {
+      monitorTab?.classList.remove('active');
+      subagentsTab?.classList.add('active');
+      if (monitorContent) {
+        monitorContent.style.display = 'none';
+        monitorContent.classList.remove('active');
+      }
+      if (subagentsContent) {
+        subagentsContent.style.display = 'flex';
+        subagentsContent.classList.add('active');
+      }
+      // Expand panel for subagents view
+      panel?.classList.add('subagents-active');
+      this.subagentPanelVisible = true;
       this.renderSubagentPanel();
     }
   }
 
-  renderSubagentPanel() {
-    const panel = this.$('subagentPanel');
-    const list = this.$('subagentList');
-    const badge = this.$('subagentBadge');
+  toggleSubagentsPanel() {
+    // Open monitor panel and switch to subagents tab
+    const panel = this.$('monitorPanel');
+    if (panel && !panel.classList.contains('open')) {
+      panel.classList.add('open');
+    }
+    this.switchMonitorTab('subagents');
+    this.subagentPanelVisible = true;
+  }
 
-    if (!list) return;
+  closeSubagentsPanel() {
+    // Just switch back to monitor tab
+    this.switchMonitorTab('monitor');
+    this.subagentPanelVisible = false;
+  }
 
-    // Update badge count
-    const activeCount = Array.from(this.subagents.values()).filter(s => s.status === 'active').length;
-    if (badge) {
-      badge.textContent = activeCount > 0 ? activeCount : '';
-      badge.style.display = activeCount > 0 ? 'inline-block' : 'none';
+  // Legacy alias
+  toggleSubagentPanel() {
+    this.toggleSubagentsPanel();
+  }
+
+  updateSubagentTabButton() {
+    const tabBtn = this.$('subagentsTabBtn');
+    const badge = this.$('subagentCountBadge');
+
+    const activeCount = Array.from(this.subagents.values()).filter(s => s.status === 'active' || s.status === 'idle').length;
+    const totalCount = this.subagents.size;
+
+    // Show tab if there are any subagents
+    if (tabBtn) {
+      tabBtn.style.display = totalCount > 0 ? 'inline-flex' : 'none';
     }
 
-    // If panel is not visible and there are active subagents, show indicator
-    if (!this.subagentPanelVisible && activeCount === 0) {
+    // Update badge with active count
+    if (badge) {
+      badge.textContent = activeCount > 0 ? activeCount : '';
+    }
+  }
+
+  renderSubagentPanel() {
+    const list = this.$('subagentList');
+    if (!list) return;
+
+    // Always update toolbar button visibility
+    this.updateSubagentTabButton();
+
+    // If panel is not visible, don't render content
+    if (!this.subagentPanelVisible) {
       return;
     }
 
@@ -3854,14 +3916,17 @@ class ClaudemanApp {
       const lastActivity = activity[activity.length - 1];
       const lastTool = lastActivity?.type === 'tool' ? lastActivity.tool : null;
       const hasWindow = this.subagentWindows.has(agent.agentId);
+      const canKill = agent.status === 'active' || agent.status === 'idle';
 
+      const displayName = agent.description || agent.agentId.substring(0, 7);
       html.push(`
         <div class="subagent-item ${statusClass} ${isActive ? 'selected' : ''}"
              onclick="app.selectSubagent('${agent.agentId}')">
           <div class="subagent-header">
             <span class="subagent-icon">🤖</span>
-            <span class="subagent-id">${agent.agentId.substring(0, 7)}</span>
+            <span class="subagent-id" title="${this.escapeHtml(agent.description || agent.agentId)}">${this.escapeHtml(displayName.length > 40 ? displayName.substring(0, 40) + '...' : displayName)}</span>
             <span class="subagent-status ${statusClass}">${agent.status}</span>
+            ${canKill ? `<button class="subagent-kill-btn" onclick="event.stopPropagation(); app.killSubagent('${agent.agentId}')" title="Kill agent">&#x2715;</button>` : ''}
             <button class="subagent-window-btn" onclick="event.stopPropagation(); app.${hasWindow ? 'closeSubagentWindow' : 'openSubagentWindow'}('${agent.agentId}')" title="${hasWindow ? 'Close window' : 'Open in window'}">
               ${hasWindow ? '✕' : '⧉'}
             </button>
@@ -3927,9 +3992,10 @@ class ClaudemanApp {
       return '';
     }).join('');
 
+    const detailTitle = agent.description || `Agent ${agent.agentId}`;
     detail.innerHTML = `
       <div class="subagent-detail-header">
-        <span class="subagent-id">Agent ${agent.agentId}</span>
+        <span class="subagent-id" title="${this.escapeHtml(agent.description || agent.agentId)}">${this.escapeHtml(detailTitle.length > 60 ? detailTitle.substring(0, 60) + '...' : detailTitle)}</span>
         <span class="subagent-status ${agent.status}">${agent.status}</span>
         <button class="subagent-transcript-btn" onclick="app.viewSubagentTranscript('${agent.agentId}')">
           View Full Transcript
@@ -3974,6 +4040,30 @@ class ClaudemanApp {
     if (tool === 'Glob' && input.pattern) return input.pattern;
     if (tool === 'Grep' && input.pattern) return input.pattern;
     return '';
+  }
+
+  async killSubagent(agentId) {
+    try {
+      const res = await fetch(`/api/subagents/${agentId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.success) {
+        // Update local state
+        const agent = this.subagents.get(agentId);
+        if (agent) {
+          agent.status = 'completed';
+          this.subagents.set(agentId, agent);
+        }
+        this.renderSubagentPanel();
+        this.renderSubagentDetail();
+        this.updateSubagentWindows();
+        this.showToast(`Subagent ${agentId.substring(0, 7)} killed`, 'success');
+      } else {
+        this.showToast(data.error || 'Failed to kill subagent', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to kill subagent:', err);
+      this.showToast('Failed to kill subagent: ' + err.message, 'error');
+    }
   }
 
   async viewSubagentTranscript(agentId) {
@@ -4036,11 +4126,13 @@ class ClaudemanApp {
     win.style.top = `${offsetY}px`;
     win.style.zIndex = ++this.subagentWindowZIndex;
 
+    const windowTitle = agent.description || agentId.substring(0, 7);
+    const truncatedTitle = windowTitle.length > 50 ? windowTitle.substring(0, 50) + '...' : windowTitle;
     win.innerHTML = `
       <div class="subagent-window-header">
-        <div class="subagent-window-title">
+        <div class="subagent-window-title" title="${this.escapeHtml(agent.description || agentId)}">
           <span class="icon">🤖</span>
-          <span class="id">${agentId.substring(0, 7)}</span>
+          <span class="id">${this.escapeHtml(truncatedTitle)}</span>
           <span class="status ${agent.status}">${agent.status}</span>
         </div>
         <div class="subagent-window-actions">

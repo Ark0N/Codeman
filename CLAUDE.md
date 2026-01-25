@@ -17,7 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Claudeman is a Claude Code session manager with a web interface and autonomous Ralph Loop. It spawns Claude CLI processes via PTY, streams output in real-time via SSE, and supports scheduled/timed runs.
 
-**Version**: 0.1352
+**Version**: 0.1353
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -222,6 +222,7 @@ claudeman reset                    # Reset all state
 | `src/spawn-orchestrator.ts` | Full agent lifecycle: spawn, monitor, budget, queue, cleanup |
 | `src/spawn-claude-md.ts` | Generates CLAUDE.md for spawned agent sessions |
 | `src/mcp-server.ts` | MCP server binary (`claudeman-mcp`) exposing spawn tools to Claude Code |
+| `src/subagent-watcher.ts` | Monitors Claude Code background agents in `~/.claude/projects/*/subagents/*.jsonl` |
 | `src/tui/DirectAttach.ts` | Full-screen console attach with tab switching between sessions |
 | `scripts/claudeman-web.service` | Systemd user service for `claudeman web --https` (Restart=always) |
 
@@ -244,6 +245,23 @@ See `docs/respawn-state-machine.md` for the full state diagram, idle detection l
 Spawned agents are full-power Claude sessions in their own screen sessions, managed via MCP tools (`spawn_agent`, `list_agents`, `get_agent_status`, `get_agent_result`, `send_agent_message`, `cancel_agent`). Max 5 concurrent, max depth 3, default timeout 30min. Agents communicate via filesystem (`spawn-comms/`) and signal completion via `<promise>PHRASE</promise>`.
 
 See `docs/spawn-protocol.md` for the full protocol flow, directory structure, resource governance, and MCP configuration.
+
+### Subagent Watcher (Claude Code Background Agents)
+
+Monitors Claude Code's internal background agents (the `Task` tool) in real-time. Watches `~/.claude/projects/{project}/{session}/subagents/agent-{id}.jsonl` files and emits structured events.
+
+**Events**: `subagent:discovered`, `subagent:tool_call`, `subagent:progress`, `subagent:message`, `subagent:completed`
+
+**API**:
+- `GET /api/subagents` - List all known subagents (optional `?minutes=60` for recent only)
+- `GET /api/subagents/:agentId` - Get subagent info
+- `GET /api/subagents/:agentId/transcript` - Get transcript (`?limit=N`, `?format=formatted`)
+- `DELETE /api/subagents/:agentId` - Kill subagent process
+- `GET /api/sessions/:id/subagents` - Get subagents for session's working directory
+
+**Status lifecycle**: `active` → `idle` (30s no activity) → `completed` (process exited or file stale)
+
+Implementation: `src/subagent-watcher.ts` - singleton `subagentWatcher` started on server boot.
 
 ### Session Modes
 
@@ -400,7 +418,7 @@ Tab switch/new session fix: clear xterm → write buffer → resize PTY → Ctrl
 
 All events broadcast to `/api/events` with format: `{ type: string, sessionId?: string, data: any }`.
 
-Event prefixes: `session:`, `task:`, `respawn:`, `spawn:`, `hook:`, `scheduled:`, `case:`, `screen:`, `init`.
+Event prefixes: `session:`, `task:`, `respawn:`, `spawn:`, `subagent:`, `hook:`, `scheduled:`, `case:`, `screen:`, `init`.
 
 Key events (see `app.js:handleSSEEvent()`):
 - `session:idle`, `session:working` - Status indicators
@@ -408,6 +426,7 @@ Key events (see `app.js:handleSSEEvent()`):
 - `session:ralphLoopUpdate`, `session:ralphTodoUpdate`, `session:ralphCompletionDetected` - Ralph tracking
 - `respawn:detectionUpdate` - Idle detection status
 - `spawn:queued`, `spawn:started`, `spawn:completed`, `spawn:failed` - Agent lifecycle
+- `subagent:discovered`, `subagent:tool_call`, `subagent:progress`, `subagent:message`, `subagent:completed` - Claude Code background agents
 - `hook:idle_prompt`, `hook:permission_prompt`, `hook:elicitation_dialog`, `hook:stop` - Claude Code hooks
 
 ### Frontend (app.js)
@@ -501,6 +520,8 @@ All routes defined in `server.ts:buildServer()`. Key endpoint groups:
 - `/api/quick-start` - Create case + start session (`{mode?: 'claude'|'shell'}`)
 - `/api/cases`, `/api/screens` - Case and screen management
 - `/api/spawn/*` - Agent lifecycle (list, status, result, messages, cancel, trigger)
+- `/api/subagents` - List/get/kill Claude Code background agents, get transcripts
+- `/api/sessions/:id/subagents` - Get subagents for a specific session's working directory
 - `/api/hook-event` - Claude Code hook callbacks (`{event, sessionId, data?}`)
 
 

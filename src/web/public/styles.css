@@ -2850,13 +2850,22 @@ kbd {
   box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4);
   z-index: 100;
   transform: translateY(100%);
-  transition: transform 0.2s ease;
+  transition: transform 0.2s ease, width 0.2s ease;
   display: flex;
   flex-direction: column;
 }
 
 .monitor-panel.open {
   transform: translateY(0);
+}
+
+/* Wider panel when subagents tab is active */
+.monitor-panel.subagents-active {
+  width: 700px;
+}
+
+.monitor-panel.detached.subagents-active {
+  width: 800px;
 }
 
 /* Detached floating state */
@@ -2896,11 +2905,60 @@ kbd {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.6rem 1rem;
+  padding: 0.4rem 1rem;
   border-bottom: 1px solid var(--border);
   font-size: 0.85rem;
   font-weight: 500;
   flex-shrink: 0;
+}
+
+.monitor-tabs {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.monitor-tab {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  padding: 0.3rem 0.6rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+.monitor-tab:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.monitor-tab.active {
+  color: white;
+  background: var(--accent);
+}
+
+.monitor-tab-badge {
+  display: inline-block;
+  background: var(--success);
+  color: white;
+  font-size: 0.6rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 8px;
+  margin-left: 0.25rem;
+  font-weight: 600;
+}
+
+.monitor-tab-badge:empty {
+  display: none;
+}
+
+.monitor-tab-content {
+  display: none;
+}
+
+.monitor-tab-content.active {
+  display: flex;
 }
 
 .monitor-panel-actions {
@@ -3000,10 +3058,162 @@ kbd {
 
 /* ========== Subagent Panel (Claude Code Background Agents) ========== */
 
+/* Toolbar button for subagents tab */
+.toolbar-btn-subagents {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.toolbar-btn-subagents:hover {
+  background: var(--bg-card);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.toolbar-btn-subagents.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.toolbar-badge {
+  background: var(--accent);
+  color: white;
+  font-size: 0.65rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 8px;
+  min-width: 1.2em;
+  text-align: center;
+}
+
+.toolbar-badge:empty {
+  display: none;
+}
+
+/* Main subagents panel - positioned on left side */
+.subagents-panel {
+  position: fixed;
+  bottom: var(--toolbar-height);
+  left: 0.5rem;
+  width: 500px;
+  max-width: calc(100vw - 1rem);
+  max-height: 60vh;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4);
+  z-index: 100;
+  transform: translateY(100%);
+  transition: transform 0.2s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.subagents-panel.open {
+  transform: translateY(0);
+}
+
+/* Detached floating state */
+.subagents-panel.detached {
+  bottom: auto;
+  left: auto;
+  top: 100px;
+  left: 50px;
+  width: 600px;
+  height: 400px;
+  max-height: none;
+  border-radius: 8px;
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  transform: none;
+  resize: both;
+  overflow: hidden;
+  min-width: 400px;
+  min-height: 250px;
+}
+
+.subagents-panel.detached .subagents-panel-header {
+  cursor: move;
+  background: linear-gradient(180deg, var(--bg-hover) 0%, var(--bg-card) 100%);
+  user-select: none;
+}
+
+.subagents-panel.detached .subagents-resize-handle {
+  display: block;
+}
+
+.subagents-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.subagents-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.subagents-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+
+/* Resize handle for detached panel */
+.subagents-resize-handle {
+  display: none;
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--border-light) 50%);
+  border-radius: 0 0 8px 0;
+}
+
+.subagents-resize-handle::before {
+  content: '';
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--text-muted);
+  border-bottom: 2px solid var(--text-muted);
+}
+
+@media (max-width: 600px) {
+  .subagents-panel {
+    width: 100%;
+    max-width: 100%;
+    left: 0;
+    border-radius: 8px 8px 0 0;
+  }
+}
+
+/* Subagent container (list + detail) */
 .subagent-container {
   display: flex;
   gap: 0.5rem;
-  height: 200px;
+  height: 100%;
+  min-height: 280px;
 }
 
 .subagent-list {
@@ -3020,7 +3230,7 @@ kbd {
 }
 
 .subagent-empty {
-  color: var(--text-muted);
+  color: var(--text-dim);
   font-size: 0.75rem;
   text-align: center;
   padding: 1rem;
@@ -3038,7 +3248,7 @@ kbd {
 .subagent-item {
   padding: 0.5rem;
   border-radius: 6px;
-  background: var(--bg-elevated);
+  background: var(--bg-input);
   margin-bottom: 0.4rem;
   cursor: pointer;
   transition: background 0.15s;
@@ -3067,7 +3277,7 @@ kbd {
 .subagent-id {
   font-family: var(--font-mono);
   font-size: 0.75rem;
-  color: var(--text);
+  color: white;
 }
 
 .subagent-status {
@@ -3104,6 +3314,22 @@ kbd {
 
 .subagent-window-btn:hover {
   color: var(--accent);
+}
+
+.subagent-kill-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.7rem;
+  opacity: 0.6;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.subagent-kill-btn:hover {
+  color: var(--red);
+  opacity: 1;
 }
 
 .subagent-meta {
@@ -3145,7 +3371,7 @@ kbd {
 }
 
 .subagent-transcript-btn:hover {
-  background: var(--bg-elevated);
+  background: var(--bg-hover);
 }
 
 .subagent-detail-stats {
@@ -3210,7 +3436,9 @@ kbd {
   position: fixed;
   width: 500px;
   height: 400px;
-  background: var(--bg-surface);
+  min-width: 300px;
+  min-height: 200px;
+  background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
@@ -3218,13 +3446,14 @@ kbd {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  resize: both;
 }
 
 .subagent-window-header {
   display: flex;
   align-items: center;
   padding: 0.5rem 0.75rem;
-  background: var(--bg-elevated);
+  background: var(--bg-input);
   border-bottom: 1px solid var(--border);
   cursor: move;
 }
@@ -3243,6 +3472,7 @@ kbd {
 .subagent-window-title .id {
   font-family: var(--font-mono);
   font-size: 0.8rem;
+  color: white;
 }
 
 .subagent-window-title .status {
@@ -3289,7 +3519,7 @@ kbd {
 }
 
 .subagent-window-body .activity-line .time {
-  color: var(--text-muted);
+  color: var(--text-dim);
   flex: 0 0 70px;
 }
 
@@ -3303,13 +3533,13 @@ kbd {
 }
 
 .subagent-window-body .activity-line .tool-detail {
-  color: var(--text-dim);
+  color: white;
   flex: 1;
 }
 
 .subagent-window-body .message-line {
   padding: 0.3rem 0;
-  color: var(--text);
+  color: white;
 }
 
 .subagent-window-body .progress-line {

@@ -11,6 +11,7 @@ import { createReadStream } from 'fs';
 import { createInterface } from 'readline';
 import { homedir } from 'os';
 import { join, basename } from 'path';
+import { execSync } from 'child_process';
 
 // ========== Types ==========
 
@@ -25,6 +26,7 @@ export interface SubagentInfo {
   toolCallCount: number;
   entryCount: number;
   fileSize: number;
+  description?: string; // Task description from first user message
 }
 
 export interface SubagentToolCall {
@@ -88,6 +90,7 @@ export interface SubagentEvents {
 const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude/projects');
 const IDLE_TIMEOUT_MS = 30000; // Consider agent idle after 30s of no activity
 const POLL_INTERVAL_MS = 1000; // Check for new files every second
+const LIVENESS_CHECK_MS = 10000; // Check if subagent processes are still alive every 10s
 
 // ========== SubagentWatcher Class ==========
 
@@ -98,6 +101,7 @@ export class SubagentWatcher extends EventEmitter {
   private agentInfo = new Map<string, SubagentInfo>();
   private idleTimers = new Map<string, NodeJS.Timeout>();
   private pollInterval: NodeJS.Timeout | null = null;
+  private livenessInterval: NodeJS.Timeout | null = null;
   private isRunning = false;
   private knownSubagentDirs = new Set<string>();
 
@@ -121,6 +125,56 @@ export class SubagentWatcher extends EventEmitter {
     this.pollInterval = setInterval(() => {
       this.scanForSubagents();
     }, POLL_INTERVAL_MS);
+
+    // Periodic liveness check for active subagents
+    this.startLivenessChecker();
+  }
+
+  /**
+   * Start periodic liveness checker
+   * Detects when subagent processes have exited but status is still active/idle
+   */
+  private startLivenessChecker(): void {
+    if (this.livenessInterval) return;
+
+    this.livenessInterval = setInterval(async () => {
+      for (const [agentId, info] of this.agentInfo) {
+        if (info.status === 'active' || info.status === 'idle') {
+          const alive = await this.checkSubagentAlive(agentId);
+          if (!alive) {
+            info.status = 'completed';
+            this.emit('subagent:completed', info);
+          }
+        }
+      }
+    }, LIVENESS_CHECK_MS);
+  }
+
+  /**
+   * Check if a subagent process is still running
+   */
+  private async checkSubagentAlive(agentId: string): Promise<boolean> {
+    const info = this.agentInfo.get(agentId);
+    if (!info) return false;
+
+    // Method 1: Check if the process is still running
+    const pid = await this.findSubagentProcess(info.sessionId);
+    if (pid !== null) return true;
+
+    // Method 2: Check if the transcript file was recently modified
+    // (within the last 60 seconds - gives some buffer for slow operations)
+    try {
+      const stat = statSync(info.filePath);
+      const mtime = stat.mtime.getTime();
+      const now = Date.now();
+      if (now - mtime < 60000) {
+        return true;
+      }
+    } catch {
+      // File doesn't exist or can't be read
+    }
+
+    return false;
   }
 
   /**
@@ -132,6 +186,11 @@ export class SubagentWatcher extends EventEmitter {
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
+    }
+
+    if (this.livenessInterval) {
+      clearInterval(this.livenessInterval);
+      this.livenessInterval = null;
     }
 
     for (const watcher of this.fileWatchers.values()) {
@@ -185,6 +244,88 @@ export class SubagentWatcher extends EventEmitter {
       .sort((a, b) =>
         new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime()
       );
+  }
+
+  /**
+   * Kill a subagent by its agent ID
+   * Finds the Claude process and sends SIGTERM
+   */
+  async killSubagent(agentId: string): Promise<boolean> {
+    const info = this.agentInfo.get(agentId);
+    if (!info) return false;
+
+    // Already completed, nothing to kill
+    if (info.status === 'completed') return false;
+
+    try {
+      // Find Claude process with matching session ID
+      const pid = await this.findSubagentProcess(info.sessionId);
+      if (pid) {
+        process.kill(pid, 'SIGTERM');
+        info.status = 'completed';
+        this.emit('subagent:completed', info);
+        return true;
+      }
+    } catch {
+      // Process may have already exited
+    }
+
+    // Mark as completed even if we couldn't find the process
+    info.status = 'completed';
+    this.emit('subagent:completed', info);
+    return true;
+  }
+
+  /**
+   * Kill all subagents for a specific Claudeman session working directory
+   */
+  async killSubagentsForSession(workingDir: string): Promise<void> {
+    const subagents = this.getSubagentsForSession(workingDir);
+    for (const agent of subagents) {
+      if (agent.status === 'active' || agent.status === 'idle') {
+        await this.killSubagent(agent.agentId);
+      }
+    }
+  }
+
+  /**
+   * Find the process ID of a Claude subagent by its session ID
+   * Searches /proc for claude processes with matching session ID in environment
+   */
+  private async findSubagentProcess(sessionId: string): Promise<number | null> {
+    try {
+      // Find all claude processes
+      const pgrepOutput = execSync('pgrep -f "claude"', { encoding: 'utf8' });
+      const pids = pgrepOutput.trim().split('\n').filter(Boolean);
+
+      for (const pidStr of pids) {
+        const pid = parseInt(pidStr, 10);
+        if (isNaN(pid)) continue;
+
+        try {
+          // Check /proc/{pid}/environ for session ID
+          const environ = readFileSync(`/proc/${pid}/environ`, 'utf8');
+          if (environ.includes(sessionId)) {
+            return pid;
+          }
+        } catch {
+          // Can't read this process's environ - skip
+        }
+
+        try {
+          // Also check /proc/{pid}/cmdline for session ID
+          const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+          if (cmdline.includes(sessionId)) {
+            return pid;
+          }
+        } catch {
+          // Can't read this process's cmdline - skip
+        }
+      }
+    } catch {
+      // pgrep returns non-zero if no matches
+    }
+    return null;
   }
 
   /**
@@ -351,6 +492,52 @@ export class SubagentWatcher extends EventEmitter {
 
     // Initial info
     const stat = statSync(filePath);
+
+    // Extract description from first user message in the JSONL
+    // The Task tool passes a "description" (short title) and "prompt" (full task)
+    // We want the short description, which may be in the first line or sentence
+    let description: string | undefined;
+    try {
+      const content = readFileSync(filePath, 'utf8');
+      const lines = content.split('\n').filter((l) => l.trim());
+
+      // Try each line until we find a user message with text
+      for (const line of lines.slice(0, 5)) {
+        try {
+          const entry = JSON.parse(line) as SubagentTranscriptEntry;
+          if (entry.type === 'user' && entry.message?.content) {
+            const firstContent = entry.message.content[0];
+            if (firstContent?.type === 'text' && firstContent.text) {
+              const text = firstContent.text.trim();
+              // Extract a useful title: first line, first sentence, or first 80 chars
+              // Split on newline first
+              const firstLine = text.split('\n')[0].trim();
+              // If still long, try to find a sentence boundary
+              let title = firstLine;
+              if (title.length > 80) {
+                // Look for sentence end (. ! ?) within first 100 chars
+                const sentenceEnd = title.substring(0, 100).search(/[.!?]/);
+                if (sentenceEnd > 10) {
+                  title = title.substring(0, sentenceEnd + 1);
+                } else {
+                  // Truncate at word boundary
+                  const truncated = title.substring(0, 80);
+                  const lastSpace = truncated.lastIndexOf(' ');
+                  title = lastSpace > 40 ? truncated.substring(0, lastSpace) + '...' : truncated + '...';
+                }
+              }
+              description = title;
+              break;
+            }
+          }
+        } catch {
+          // Skip malformed lines
+        }
+      }
+    } catch {
+      // Failed to read description, continue without it
+    }
+
     const info: SubagentInfo = {
       agentId,
       sessionId,
@@ -362,6 +549,7 @@ export class SubagentWatcher extends EventEmitter {
       toolCallCount: 0,
       entryCount: 0,
       fileSize: stat.size,
+      description,
     };
 
     this.agentInfo.set(agentId, info);

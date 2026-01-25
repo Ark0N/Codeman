@@ -214,7 +214,6 @@
       </div>
 
       <div class="toolbar-right">
-        <!-- Buttons removed - use keyboard shortcuts instead -->
       </div>
     </footer>
 
@@ -242,10 +241,15 @@
       </div>
     </div>
 
-    <!-- Monitor Panel (combined Process Monitor + Background Tasks) -->
+    <!-- Monitor Panel (combined Process Monitor + Background Tasks + Subagents) -->
     <div class="monitor-panel" id="monitorPanel">
       <div class="monitor-panel-header" id="monitorPanelHeader">
-        <span>Monitor</span>
+        <div class="monitor-tabs">
+          <button class="monitor-tab active" data-tab="monitor" onclick="app.switchMonitorTab('monitor')">Monitor</button>
+          <button class="monitor-tab" data-tab="subagents" onclick="app.switchMonitorTab('subagents')" id="subagentsTabBtn" style="display: none;">
+            Subagents <span id="subagentCountBadge" class="monitor-tab-badge"></span>
+          </button>
+        </div>
         <div class="monitor-panel-actions">
           <button class="btn-toolbar btn-sm btn-danger" onclick="app.killAllSessions()" title="Kill all sessions and their screen processes">Kill All</button>
           <button class="btn-icon-sm" onclick="app.reconcileScreens()" title="Refresh screens">&#x21BB;</button>
@@ -255,7 +259,8 @@
         </div>
       </div>
       <div class="monitor-resize-handle" id="monitorResizeHandle"></div>
-      <div class="monitor-panel-body">
+      <!-- Monitor Tab Content -->
+      <div class="monitor-panel-body monitor-tab-content active" id="monitorTabContent">
         <div class="monitor-section">
           <div class="monitor-section-header">
             <span>Screen Sessions</span>
@@ -272,20 +277,15 @@
           <div class="monitor-section-body" id="backgroundTasksBody">
           </div>
         </div>
-        <div class="monitor-section" id="subagentSection">
-          <div class="monitor-section-header">
-            <span>Subagents</span>
-            <span class="subagent-badge" id="subagentBadge" style="display: none;"></span>
+      </div>
+      <!-- Subagents Tab Content -->
+      <div class="monitor-panel-body monitor-tab-content" id="subagentsTabContent" style="display: none;">
+        <div class="subagent-container">
+          <div class="subagent-list" id="subagentList">
+            <div class="subagent-empty">No background agents detected</div>
           </div>
-          <div class="monitor-section-body">
-            <div class="subagent-container">
-              <div class="subagent-list" id="subagentList">
-                <div class="subagent-empty">No background agents detected</div>
-              </div>
-              <div class="subagent-detail" id="subagentDetail">
-                <div class="subagent-empty">Select an agent to view details</div>
-              </div>
-            </div>
+          <div class="subagent-detail" id="subagentDetail">
+            <div class="subagent-empty">Select an agent to view details</div>
           </div>
         </div>
       </div>

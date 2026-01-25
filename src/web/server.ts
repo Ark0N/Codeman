@@ -1635,6 +1635,21 @@ export class WebServer extends EventEmitter {
       return { success: true, data: transcript };
     });
 
+    // Kill a subagent
+    this.app.delete('/api/subagents/:agentId', async (req) => {
+      const { agentId } = req.params as { agentId: string };
+      const info = subagentWatcher.getSubagent(agentId);
+      if (!info) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Subagent not found');
+      }
+
+      const killed = await subagentWatcher.killSubagent(agentId);
+      if (killed) {
+        return { success: true, data: { agentId, status: 'killed' } };
+      }
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Subagent not found or already completed');
+    });
+
     // ========== Hook Events ==========
 
     this.app.post('/api/hook-event', async (req) => {
@@ -1766,6 +1781,15 @@ export class WebServer extends EventEmitter {
 
   private async _doCleanupSession(sessionId: string, killScreen: boolean): Promise<void> {
     const session = this.sessions.get(sessionId);
+
+    // Kill all subagents spawned by this session
+    if (session && killScreen) {
+      try {
+        await subagentWatcher.killSubagentsForSession(session.workingDir);
+      } catch (err) {
+        console.error(`[Server] Failed to kill subagents for session ${sessionId}:`, err);
+      }
+    }
 
     // Stop and remove respawn controller - but save config first for restart recovery
     const controller = this.respawnControllers.get(sessionId);
