@@ -258,6 +258,9 @@ export class WebServer extends EventEmitter {
   private _isStopping: boolean = false;
   // Spawn1337 agent orchestrator
   private spawnOrchestrator: SpawnOrchestrator;
+  // Token recording for daily stats (track what's been recorded to avoid double-counting)
+  private lastRecordedTokens: Map<string, { input: number; output: number }> = new Map();
+  private tokenRecordingTimer: NodeJS.Timeout | null = null;
 
   constructor(port: number = 3000, https: boolean = false) {
     super();
@@ -371,6 +374,24 @@ export class WebServer extends EventEmitter {
         success: true,
         stats: this.store.getAggregateStats(activeSessionTokens),
         raw: this.store.getGlobalStats(),
+      };
+    });
+
+    // Token stats with daily history
+    this.app.get('/api/token-stats', async () => {
+      // Get aggregate totals (global + active sessions)
+      const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> = {};
+      for (const [sessionId, session] of this.sessions) {
+        activeSessionTokens[sessionId] = {
+          inputTokens: session.inputTokens,
+          outputTokens: session.outputTokens,
+          totalCost: session.totalCost,
+        };
+      }
+      return {
+        success: true,
+        daily: this.store.getDailyStats(30),
+        totals: this.store.getAggregateStats(activeSessionTokens),
       };
     });
 
@@ -1862,6 +1883,14 @@ export class WebServer extends EventEmitter {
       // This preserves lifetime usage even after sessions are deleted
       if (killScreen && (session.inputTokens > 0 || session.outputTokens > 0 || session.totalCost > 0)) {
         this.store.addToGlobalStats(session.inputTokens, session.outputTokens, session.totalCost);
+        // Record to daily stats (for what hasn't been recorded yet via periodic recording)
+        const lastRecorded = this.lastRecordedTokens.get(sessionId) || { input: 0, output: 0 };
+        const deltaInput = session.inputTokens - lastRecorded.input;
+        const deltaOutput = session.outputTokens - lastRecorded.output;
+        if (deltaInput > 0 || deltaOutput > 0) {
+          this.store.recordDailyUsage(deltaInput, deltaOutput);
+        }
+        this.lastRecordedTokens.delete(sessionId);
         console.log(`[Server] Added to global stats: ${session.inputTokens + session.outputTokens} tokens, $${session.totalCost.toFixed(4)} from session ${sessionId}`);
       }
 
@@ -2620,6 +2649,26 @@ export class WebServer extends EventEmitter {
     }
   }
 
+  /**
+   * Records token usage for long-running sessions periodically.
+   * Called every 5 minutes to capture usage in daily stats without waiting for session deletion.
+   */
+  private recordPeriodicTokenUsage(): void {
+    for (const [sessionId, session] of this.sessions) {
+      const last = this.lastRecordedTokens.get(sessionId) || { input: 0, output: 0 };
+      const deltaInput = session.inputTokens - last.input;
+      const deltaOutput = session.outputTokens - last.output;
+
+      if (deltaInput > 0 || deltaOutput > 0) {
+        this.store.recordDailyUsage(deltaInput, deltaOutput);
+        this.lastRecordedTokens.set(sessionId, {
+          input: session.inputTokens,
+          output: session.outputTokens,
+        });
+      }
+    }
+  }
+
   async start(): Promise<void> {
     await this.setupRoutes();
     await this.app.listen({ port: this.port, host: '0.0.0.0' });
@@ -2638,6 +2687,11 @@ export class WebServer extends EventEmitter {
     this.sseHealthCheckTimer = setInterval(() => {
       this.cleanupDeadSSEClients();
     }, SSE_HEALTH_CHECK_INTERVAL);
+
+    // Start token recording timer (every 5 minutes for long-running sessions)
+    this.tokenRecordingTimer = setInterval(() => {
+      this.recordPeriodicTokenUsage();
+    }, 5 * 60 * 1000);
 
     // Restore screen sessions from previous run
     await this.restoreScreenSessions();
@@ -2830,6 +2884,13 @@ export class WebServer extends EventEmitter {
       this.stateUpdateTimer = null;
     }
     this.stateUpdatePending.clear();
+
+    // Clear token recording timer
+    if (this.tokenRecordingTimer) {
+      clearInterval(this.tokenRecordingTimer);
+      this.tokenRecordingTimer = null;
+    }
+    this.lastRecordedTokens.clear();
 
     // Clear scheduled cleanup timer
     if (this.scheduledCleanupTimer) {

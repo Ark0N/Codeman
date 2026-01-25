@@ -756,6 +756,29 @@
 
     <!-- Help Button -->
     <button class="help-btn" onclick="app.showHelp()" title="Keyboard shortcuts (Ctrl+?)">?</button>
+
+    <!-- Token Stats Modal -->
+    <div class="modal" id="tokenStatsModal">
+      <div class="modal-backdrop" onclick="app.closeTokenStats()"></div>
+      <div class="modal-content token-stats-modal">
+        <div class="modal-header">
+          <h3>Token Usage Statistics</h3>
+          <button class="modal-close" onclick="app.closeTokenStats()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="stats-summary" id="statsSummary"></div>
+          <div class="stats-chart-container">
+            <div class="stats-chart-label">Last 7 Days</div>
+            <div class="stats-chart" id="statsChart"></div>
+            <div class="stats-chart-days" id="statsChartDays"></div>
+          </div>
+          <div class="stats-table-container">
+            <div class="stats-table-label">Daily Breakdown</div>
+            <div class="stats-table" id="statsTable"></div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>

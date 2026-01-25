@@ -726,6 +726,13 @@ class ClaudemanApp {
         this.decreaseFontSize();
       }
     }, true); // Use capture phase to handle before terminal
+
+    // Token stats click handler
+    const tokenEl = this.$('headerTokens');
+    if (tokenEl) {
+      tokenEl.classList.add('clickable');
+      tokenEl.addEventListener('click', () => this.openTokenStats());
+    }
   }
 
   // ========== SSE Connection ==========
@@ -3229,6 +3236,7 @@ class ClaudemanApp {
 
   toggleSubagentsPanel() {
     const panel = document.getElementById('subagentsPanel');
+    const toggleBtn = document.getElementById('subagentsToggleBtn');
     if (!panel) return;
 
     // If hidden, show it first
@@ -3243,6 +3251,11 @@ class ClaudemanApp {
     // Toggle open/collapsed state
     panel.classList.toggle('open');
     this.subagentPanelVisible = panel.classList.contains('open');
+
+    // Update toggle button icon
+    if (toggleBtn) {
+      toggleBtn.innerHTML = this.subagentPanelVisible ? '&#x25BC;' : '&#x25B2;'; // Down when open, up when collapsed
+    }
 
     if (this.subagentPanelVisible) {
       this.renderSubagentPanel();
@@ -3292,6 +3305,7 @@ class ClaudemanApp {
     this.closeSessionOptions();
     this.closeAppSettings();
     this.cancelCloseSession();
+    this.closeTokenStats();
     document.getElementById('monitorPanel').classList.remove('open');
     // Collapse subagents panel (don't hide it permanently)
     const subagentsPanel = document.getElementById('subagentsPanel');
@@ -3299,6 +3313,131 @@ class ClaudemanApp {
       subagentsPanel.classList.remove('open');
     }
     this.subagentPanelVisible = false;
+  }
+
+  // ========== Token Statistics Modal ==========
+
+  async openTokenStats() {
+    try {
+      const response = await fetch('/api/token-stats');
+      const data = await response.json();
+      if (data.success) {
+        this.renderTokenStats(data);
+        document.getElementById('tokenStatsModal').classList.add('active');
+      } else {
+        this.showToast('Failed to load token stats', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to fetch token stats:', err);
+      this.showToast('Failed to load token stats', 'error');
+    }
+  }
+
+  renderTokenStats(data) {
+    const { daily, totals } = data;
+
+    // Calculate period totals
+    const today = new Date().toISOString().split('T')[0];
+    const todayData = daily.find(d => d.date === today) || { inputTokens: 0, outputTokens: 0, estimatedCost: 0 };
+
+    // Last 7 days totals (for summary card)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const last7Days = daily.filter(d => new Date(d.date) >= sevenDaysAgo);
+    const weekInput = last7Days.reduce((sum, d) => sum + d.inputTokens, 0);
+    const weekOutput = last7Days.reduce((sum, d) => sum + d.outputTokens, 0);
+    const weekCost = this.estimateCost(weekInput, weekOutput);
+
+    // Lifetime totals (from aggregate stats)
+    const lifetimeInput = totals.totalInputTokens;
+    const lifetimeOutput = totals.totalOutputTokens;
+    const lifetimeCost = this.estimateCost(lifetimeInput, lifetimeOutput);
+
+    // Render summary cards
+    const summaryEl = document.getElementById('statsSummary');
+    summaryEl.innerHTML = `
+      <div class="stat-card">
+        <span class="stat-card-label">Today</span>
+        <span class="stat-card-value">${this.formatTokens(todayData.inputTokens + todayData.outputTokens)}</span>
+        <span class="stat-card-cost">~$${todayData.estimatedCost.toFixed(2)}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-card-label">7 Days</span>
+        <span class="stat-card-value">${this.formatTokens(weekInput + weekOutput)}</span>
+        <span class="stat-card-cost">~$${weekCost.toFixed(2)}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-card-label">Lifetime</span>
+        <span class="stat-card-value">${this.formatTokens(lifetimeInput + lifetimeOutput)}</span>
+        <span class="stat-card-cost">~$${lifetimeCost.toFixed(2)}</span>
+      </div>
+    `;
+
+    // Render bar chart (last 7 days)
+    const chartEl = document.getElementById('statsChart');
+    const daysEl = document.getElementById('statsChartDays');
+
+    // Get last 7 days (fill gaps with empty data)
+    const chartData = [];
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      const dateStr = date.toISOString().split('T')[0];
+      const dayData = daily.find(d => d.date === dateStr);
+      chartData.push({
+        date: dateStr,
+        dayName: date.toLocaleDateString('en-US', { weekday: 'short' }),
+        tokens: dayData ? dayData.inputTokens + dayData.outputTokens : 0,
+        cost: dayData ? dayData.estimatedCost : 0,
+      });
+    }
+
+    // Find max for scaling
+    const maxTokens = Math.max(...chartData.map(d => d.tokens), 1);
+
+    chartEl.innerHTML = chartData.map(d => {
+      const height = Math.max((d.tokens / maxTokens) * 100, 3);
+      const tooltip = `${d.dayName}: ${this.formatTokens(d.tokens)} (~$${d.cost.toFixed(2)})`;
+      return `<div class="bar" style="height: ${height}%" data-tooltip="${tooltip}"></div>`;
+    }).join('');
+
+    daysEl.innerHTML = chartData.map(d => `<span>${d.dayName}</span>`).join('');
+
+    // Render table (last 14 days with data)
+    const tableEl = document.getElementById('statsTable');
+    const tableData = daily.slice(0, 14);
+
+    if (tableData.length === 0) {
+      tableEl.innerHTML = '<div class="stats-no-data">No usage data recorded yet</div>';
+    } else {
+      tableEl.innerHTML = `
+        <div class="stats-table-header">
+          <span>Date</span>
+          <span>Input</span>
+          <span>Output</span>
+          <span>Cost</span>
+        </div>
+        ${tableData.map(d => {
+          const dateObj = new Date(d.date + 'T00:00:00');
+          const dateStr = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          return `
+            <div class="stats-table-row">
+              <span class="cell cell-date">${dateStr}</span>
+              <span class="cell">${this.formatTokens(d.inputTokens)}</span>
+              <span class="cell">${this.formatTokens(d.outputTokens)}</span>
+              <span class="cell cell-cost">$${d.estimatedCost.toFixed(2)}</span>
+            </div>
+          `;
+        }).join('')}
+      `;
+    }
+  }
+
+  closeTokenStats() {
+    const modal = document.getElementById('tokenStatsModal');
+    if (modal) {
+      modal.classList.remove('active');
+    }
   }
 
   // ========== Monitor Panel (combined Screen Sessions + Background Tasks) ==========

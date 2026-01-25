@@ -17,7 +17,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { AppState, createInitialState, RalphSessionState, createInitialRalphSessionState, GlobalStats, createInitialGlobalStats } from './types.js';
+import { AppState, createInitialState, RalphSessionState, createInitialRalphSessionState, GlobalStats, createInitialGlobalStats, TokenStats, TokenUsageEntry } from './types.js';
 
 /** Debounce delay for batching state writes (ms) */
 const SAVE_DEBOUNCE_MS = 500;
@@ -270,6 +270,96 @@ export class StateStore {
       totalSessionsCreated: global.totalSessionsCreated,
       activeSessionsCount: activeCount,
     };
+  }
+
+  // ========== Token Stats Methods (Daily Tracking) ==========
+
+  /** Maximum days to keep in daily history */
+  private static readonly MAX_DAILY_HISTORY = 30;
+
+  /**
+   * Get or initialize token stats from state.
+   */
+  getTokenStats(): TokenStats {
+    const state = this.state as AppState & { tokenStats?: TokenStats };
+    if (!state.tokenStats) {
+      state.tokenStats = {
+        daily: [],
+        lastUpdated: Date.now(),
+      };
+    }
+    return state.tokenStats;
+  }
+
+  /**
+   * Get today's date string in YYYY-MM-DD format.
+   */
+  private getTodayDateString(): string {
+    const now = new Date();
+    return now.toISOString().split('T')[0];
+  }
+
+  /**
+   * Calculate estimated cost from tokens using Claude Opus pricing.
+   * Input: $15/M tokens, Output: $75/M tokens
+   */
+  private calculateEstimatedCost(inputTokens: number, outputTokens: number): number {
+    const inputCost = (inputTokens / 1000000) * 15;
+    const outputCost = (outputTokens / 1000000) * 75;
+    return inputCost + outputCost;
+  }
+
+  /**
+   * Record token usage for today.
+   * Accumulates tokens to today's entry, creating it if needed.
+   * @param inputTokens Input tokens to add
+   * @param outputTokens Output tokens to add
+   */
+  recordDailyUsage(inputTokens: number, outputTokens: number): void {
+    if (inputTokens <= 0 && outputTokens <= 0) return;
+
+    const stats = this.getTokenStats();
+    const today = this.getTodayDateString();
+
+    // Find or create today's entry
+    let todayEntry = stats.daily.find(e => e.date === today);
+    if (!todayEntry) {
+      todayEntry = {
+        date: today,
+        inputTokens: 0,
+        outputTokens: 0,
+        estimatedCost: 0,
+        sessions: 0,
+      };
+      stats.daily.unshift(todayEntry); // Add to front (most recent first)
+    }
+
+    // Accumulate tokens
+    todayEntry.inputTokens += inputTokens;
+    todayEntry.outputTokens += outputTokens;
+    todayEntry.estimatedCost = this.calculateEstimatedCost(
+      todayEntry.inputTokens,
+      todayEntry.outputTokens
+    );
+    todayEntry.sessions += 1;
+
+    // Prune old entries (keep last 30 days)
+    if (stats.daily.length > StateStore.MAX_DAILY_HISTORY) {
+      stats.daily = stats.daily.slice(0, StateStore.MAX_DAILY_HISTORY);
+    }
+
+    stats.lastUpdated = Date.now();
+    this.save();
+  }
+
+  /**
+   * Get daily stats for display.
+   * @param days Number of days to return (default: 30)
+   * @returns Array of daily entries, most recent first
+   */
+  getDailyStats(days: number = 30): TokenUsageEntry[] {
+    const stats = this.getTokenStats();
+    return stats.daily.slice(0, days);
   }
 
   // ========== Inner State Methods (Ralph Loop tracking) ==========

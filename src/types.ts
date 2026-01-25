@@ -109,6 +109,34 @@ export interface GlobalStats {
   lastUpdatedAt: number;
 }
 
+// ========== Token Usage History Types ==========
+
+/**
+ * Daily token usage entry for historical tracking.
+ */
+export interface TokenUsageEntry {
+  /** Date in YYYY-MM-DD format */
+  date: string;
+  /** Input tokens used on this day */
+  inputTokens: number;
+  /** Output tokens used on this day */
+  outputTokens: number;
+  /** Estimated cost in USD */
+  estimatedCost: number;
+  /** Number of sessions that contributed to this day's usage */
+  sessions: number;
+}
+
+/**
+ * Token usage statistics with daily tracking.
+ */
+export interface TokenStats {
+  /** Daily usage entries (most recent first) */
+  daily: TokenUsageEntry[];
+  /** Timestamp of last update */
+  lastUpdated: number;
+}
+
 // ========== Task Types ==========
 
 /**
