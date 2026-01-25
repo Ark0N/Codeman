@@ -429,11 +429,11 @@ class ClaudemanApp {
     return String(count);
   }
 
-  // Estimate cost from tokens using Claude Sonnet pricing
-  // Input: $3/M tokens, Output: $15/M tokens
+  // Estimate cost from tokens using Claude Opus pricing
+  // Input: $15/M tokens, Output: $75/M tokens
   estimateCost(inputTokens, outputTokens) {
-    const inputCost = (inputTokens / 1000000) * 3;
-    const outputCost = (outputTokens / 1000000) * 15;
+    const inputCost = (inputTokens / 1000000) * 15;
+    const outputCost = (outputTokens / 1000000) * 75;
     return inputCost + outputCost;
   }
 
@@ -2599,8 +2599,8 @@ class ClaudemanApp {
     if (tokenEl) {
       tokenEl.textContent = total > 0 ? `${display} tokens · $${estimatedCost.toFixed(2)}` : '0 tokens';
       tokenEl.title = this.globalStats
-        ? `Lifetime: ${this.globalStats.totalSessionsCreated} sessions created\nEstimated cost based on Claude Sonnet pricing`
-        : 'Token usage across active sessions\nEstimated cost based on Claude Sonnet pricing';
+        ? `Lifetime: ${this.globalStats.totalSessionsCreated} sessions created\nEstimated cost based on Claude Opus pricing`
+        : 'Token usage across active sessions\nEstimated cost based on Claude Opus pricing';
     }
   }
 
