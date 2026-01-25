@@ -1720,7 +1720,7 @@ class ClaudemanApp {
           ${mode === 'shell' ? '<span class="tab-mode shell">sh</span>' : ''}
           <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()">${taskStats.running}</span>` : ''}
-          <span class="tab-summary" onclick="event.stopPropagation(); app.openRunSummary('${id}')" title="Run Summary">&#x1F4CA;</span>
+          <span class="tab-summary" onclick="event.stopPropagation(); app.openRunSummary('${id}')" title="Run Summary" data-session-id="${id}">&#x1F4CA;</span>
           <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${id}')" title="Session options">&#x2699;</span>
           <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${id}')">&times;</span>
         </div>`);
