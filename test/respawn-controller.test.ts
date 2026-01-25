@@ -877,6 +877,7 @@ describe('RespawnController Edge Cases', () => {
         completionConfirmMs: 50,
         noOutputTimeoutMs: 5000,
         aiIdleCheckEnabled: false,
+        aiPlanCheckEnabled: false, // Pre-filter only for this test
       });
 
       let autoAcceptFired = false;
@@ -886,8 +887,8 @@ describe('RespawnController Edge Cases', () => {
 
       autoAcceptController.start();
 
-      // Simulate output (e.g., plan content), then silence
-      session.simulateTerminalOutput('Plan: Here is my implementation plan...');
+      // Simulate plan mode UI with numbered options and selector
+      session.simulateTerminalOutput('Would you like to proceed?\n❯ 1. Yes\n  2. No\n');
 
       // Wait for autoAcceptDelayMs to expire
       await new Promise(resolve => setTimeout(resolve, 200));
@@ -976,6 +977,7 @@ describe('RespawnController Edge Cases', () => {
         completionConfirmMs: 50,
         noOutputTimeoutMs: 5000,
         aiIdleCheckEnabled: false,
+        aiPlanCheckEnabled: false,
       });
 
       let autoAcceptFired = false;
@@ -984,7 +986,7 @@ describe('RespawnController Edge Cases', () => {
       });
 
       autoAcceptController.start();
-      session.simulateTerminalOutput('First output');
+      session.simulateTerminalOutput('❯ 1. Yes\n  2. No\n');
 
       // Wait 100ms (less than 150ms delay), then send more output
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -1007,6 +1009,7 @@ describe('RespawnController Edge Cases', () => {
         completionConfirmMs: 50,
         noOutputTimeoutMs: 5000,
         aiIdleCheckEnabled: false,
+        aiPlanCheckEnabled: false,
       });
 
       let autoAcceptCount = 0;
@@ -1015,7 +1018,7 @@ describe('RespawnController Edge Cases', () => {
       });
 
       autoAcceptController.start();
-      session.simulateTerminalOutput('Plan waiting...');
+      session.simulateTerminalOutput('❯ 1. Yes\n  2. No\n');
 
       // Wait for first auto-accept
       await new Promise(resolve => setTimeout(resolve, 200));
@@ -1025,8 +1028,8 @@ describe('RespawnController Edge Cases', () => {
       await new Promise(resolve => setTimeout(resolve, 200));
       expect(autoAcceptCount).toBe(1);
 
-      // New output comes in, then silence again - should fire again
-      session.simulateTerminalOutput('Another question...');
+      // New output comes in (plan mode again), then silence again - should fire again
+      session.simulateTerminalOutput('❯ 1. Yes\n  2. No\n');
       await new Promise(resolve => setTimeout(resolve, 200));
       expect(autoAcceptCount).toBe(2);
 
@@ -1101,6 +1104,7 @@ describe('RespawnController Edge Cases', () => {
         completionConfirmMs: 50,
         noOutputTimeoutMs: 5000,
         aiIdleCheckEnabled: false,
+        aiPlanCheckEnabled: false,
       });
 
       let autoAcceptFired = false;
@@ -1117,8 +1121,8 @@ describe('RespawnController Edge Cases', () => {
       // Working pattern clears the elicitation flag (new turn started)
       session.simulateTerminalOutput('Thinking');
 
-      // New silence after work - plan mode approval
-      session.simulateTerminalOutput('Plan: Here is the plan...');
+      // New silence after work - plan mode approval with plan mode UI
+      session.simulateTerminalOutput('❯ 1. Yes\n  2. No\n');
 
       await new Promise(resolve => setTimeout(resolve, 200));
 
@@ -1353,6 +1357,298 @@ describe('RespawnController AI Idle Check', () => {
 
     // Should return to watching after timeout (with cooldown)
     expect(controller.state).toBe('watching');
+    controller.stop();
+  });
+});
+
+describe('RespawnController AI Plan Mode Check', () => {
+  let session: MockSession;
+
+  beforeEach(() => {
+    session = new MockSession();
+  });
+
+  it('should have AI plan check enabled by default', () => {
+    const controller = new RespawnController(session as unknown as Session);
+    const config = controller.getConfig();
+    expect(config.aiPlanCheckEnabled).toBe(true);
+    expect(config.aiPlanCheckModel).toBe('claude-opus-4-5-20251101');
+    expect(config.aiPlanCheckMaxContext).toBe(8000);
+    expect(config.aiPlanCheckTimeoutMs).toBe(60000);
+    expect(config.aiPlanCheckCooldownMs).toBe(30000);
+    controller.stop();
+  });
+
+  it('should block auto-accept when buffer has no plan mode patterns (pre-filter)', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      autoAcceptPrompts: true,
+      autoAcceptDelayMs: 100,
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 5000,
+      aiIdleCheckEnabled: false,
+      aiPlanCheckEnabled: false, // Test pre-filter only
+    });
+
+    let autoAcceptFired = false;
+    controller.on('autoAcceptSent', () => {
+      autoAcceptFired = true;
+    });
+
+    controller.start();
+
+    // Output without plan mode patterns (no numbered list, no selector)
+    session.simulateTerminalOutput('Claude is just thinking about something...\nSome regular output here.');
+
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Pre-filter should block - no plan mode patterns found
+    expect(autoAcceptFired).toBe(false);
+    controller.stop();
+  });
+
+  it('should pass pre-filter when buffer contains numbered list + selector', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      autoAcceptPrompts: true,
+      autoAcceptDelayMs: 100,
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 5000,
+      aiIdleCheckEnabled: false,
+      aiPlanCheckEnabled: false, // Test pre-filter only (no AI)
+    });
+
+    let autoAcceptFired = false;
+    controller.on('autoAcceptSent', () => {
+      autoAcceptFired = true;
+    });
+
+    controller.start();
+
+    // Output WITH plan mode patterns
+    session.simulateTerminalOutput(
+      'Would you like to proceed with this plan?\n' +
+      '❯ 1. Yes\n' +
+      '  2. No\n' +
+      '  3. Type your own\n'
+    );
+
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Pre-filter should pass and send Enter (AI disabled)
+    expect(autoAcceptFired).toBe(true);
+    controller.stop();
+  });
+
+  it('should block pre-filter when working patterns are in the tail', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      autoAcceptPrompts: true,
+      autoAcceptDelayMs: 100,
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 5000,
+      aiIdleCheckEnabled: false,
+      aiPlanCheckEnabled: false,
+    });
+
+    let autoAcceptFired = false;
+    controller.on('autoAcceptSent', () => {
+      autoAcceptFired = true;
+    });
+
+    controller.start();
+
+    // Plan mode patterns BUT also has working patterns (spinner) in the tail
+    session.simulateTerminalOutput(
+      '❯ 1. Yes\n' +
+      '  2. No\n' +
+      'Thinking ⠋\n'
+    );
+
+    // Wait for autoAcceptDelay - but working pattern resets the timer
+    // so we need to wait longer and check after working pattern was consumed
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Should NOT fire because working patterns detected resets timer
+    // (the working pattern in handleTerminalData clears timers)
+    expect(autoAcceptFired).toBe(false);
+    controller.stop();
+  });
+
+  it('should emit planCheckStarted when AI plan check is triggered', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      autoAcceptPrompts: true,
+      autoAcceptDelayMs: 100,
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 5000,
+      aiIdleCheckEnabled: false,
+      aiPlanCheckEnabled: true,
+      aiPlanCheckTimeoutMs: 500, // Short timeout for test
+    });
+
+    let planCheckStarted = false;
+    controller.on('planCheckStarted', () => {
+      planCheckStarted = true;
+    });
+
+    controller.start();
+
+    // Output with plan mode patterns to pass pre-filter
+    session.simulateTerminalOutput(
+      'Would you like to proceed?\n' +
+      '❯ 1. Yes\n' +
+      '  2. No\n'
+    );
+
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Plan check should have been started (pre-filter passed, AI enabled)
+    expect(planCheckStarted).toBe(true);
+    controller.stop();
+  });
+
+  it('should cancel plan check when new output arrives', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      autoAcceptPrompts: true,
+      autoAcceptDelayMs: 100,
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 5000,
+      aiIdleCheckEnabled: false,
+      aiPlanCheckEnabled: true,
+      aiPlanCheckTimeoutMs: 5000, // Long timeout so we can interrupt
+    });
+
+    let planCheckStarted = false;
+    let autoAcceptFired = false;
+    controller.on('planCheckStarted', () => {
+      planCheckStarted = true;
+    });
+    controller.on('autoAcceptSent', () => {
+      autoAcceptFired = true;
+    });
+
+    controller.start();
+
+    // Trigger plan check
+    session.simulateTerminalOutput(
+      '❯ 1. Yes\n' +
+      '  2. No\n'
+    );
+    await new Promise(resolve => setTimeout(resolve, 150));
+    expect(planCheckStarted).toBe(true);
+
+    // New output arrives - should cancel plan check (stale)
+    session.simulateTerminalOutput('New output from Claude...');
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Auto-accept should NOT have fired (check was cancelled)
+    expect(autoAcceptFired).toBe(false);
+    controller.stop();
+  });
+
+  it('should discard stale plan check result (output during check)', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      autoAcceptPrompts: true,
+      autoAcceptDelayMs: 100,
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 5000,
+      aiIdleCheckEnabled: false,
+      aiPlanCheckEnabled: true,
+      aiPlanCheckTimeoutMs: 5000,
+    });
+
+    let autoAcceptFired = false;
+    controller.on('autoAcceptSent', () => {
+      autoAcceptFired = true;
+    });
+
+    controller.start();
+
+    // Plan mode patterns to trigger check
+    session.simulateTerminalOutput(
+      '❯ 1. Yes\n  2. No\n'
+    );
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    // Output arrives during check - result should be discarded
+    session.simulateTerminalOutput('Claude started working again');
+
+    // Wait for any pending check to complete
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    expect(autoAcceptFired).toBe(false);
+    controller.stop();
+  });
+
+  it('should fall back to pre-filter-only when AI plan check is disabled', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      autoAcceptPrompts: true,
+      autoAcceptDelayMs: 100,
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 5000,
+      aiIdleCheckEnabled: false,
+      aiPlanCheckEnabled: false, // Disabled - pre-filter only
+    });
+
+    let autoAcceptFired = false;
+    let planCheckStarted = false;
+    controller.on('autoAcceptSent', () => {
+      autoAcceptFired = true;
+    });
+    controller.on('planCheckStarted', () => {
+      planCheckStarted = true;
+    });
+
+    controller.start();
+
+    // Plan mode patterns
+    session.simulateTerminalOutput(
+      '❯ 1. Yes\n  2. No\n'
+    );
+
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Should send Enter directly (no AI check)
+    expect(planCheckStarted).toBe(false);
+    expect(autoAcceptFired).toBe(true);
+    controller.stop();
+  });
+
+  it('should update plan checker config on updateConfig', () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      aiPlanCheckEnabled: true,
+    });
+
+    controller.updateConfig({
+      aiPlanCheckModel: 'claude-sonnet-4-20250514',
+      aiPlanCheckCooldownMs: 60000,
+    });
+
+    const config = controller.getConfig();
+    expect(config.aiPlanCheckModel).toBe('claude-sonnet-4-20250514');
+    expect(config.aiPlanCheckCooldownMs).toBe(60000);
+    controller.stop();
+  });
+
+  it('should not auto-accept if pre-filter passes but no output received yet', async () => {
+    const controller = new RespawnController(session as unknown as Session, {
+      autoAcceptPrompts: true,
+      autoAcceptDelayMs: 100,
+      completionConfirmMs: 50,
+      noOutputTimeoutMs: 5000,
+      aiIdleCheckEnabled: false,
+      aiPlanCheckEnabled: false,
+    });
+
+    let autoAcceptFired = false;
+    controller.on('autoAcceptSent', () => {
+      autoAcceptFired = true;
+    });
+
+    controller.start();
+
+    // Don't send any output - hasReceivedOutput should guard
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    expect(autoAcceptFired).toBe(false);
     controller.stop();
   });
 });

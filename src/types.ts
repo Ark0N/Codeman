@@ -221,6 +221,16 @@ export interface RespawnConfig {
   aiIdleCheckTimeoutMs?: number;
   /** Cooldown after WORKING verdict in ms */
   aiIdleCheckCooldownMs?: number;
+  /** Whether AI plan mode check is enabled for auto-accept */
+  aiPlanCheckEnabled?: boolean;
+  /** Model to use for AI plan mode check */
+  aiPlanCheckModel?: string;
+  /** Maximum characters of terminal buffer for plan check */
+  aiPlanCheckMaxContext?: number;
+  /** Timeout for AI plan check in ms */
+  aiPlanCheckTimeoutMs?: number;
+  /** Cooldown after NOT_PLAN_MODE verdict in ms */
+  aiPlanCheckCooldownMs?: number;
 }
 
 /**
@@ -535,6 +545,16 @@ export interface PersistedRespawnConfig {
   aiIdleCheckTimeoutMs?: number;
   /** Cooldown after WORKING verdict in ms */
   aiIdleCheckCooldownMs?: number;
+  /** Whether AI plan mode check is enabled for auto-accept */
+  aiPlanCheckEnabled?: boolean;
+  /** Model to use for AI plan mode check */
+  aiPlanCheckModel?: string;
+  /** Maximum characters of terminal buffer for plan check */
+  aiPlanCheckMaxContext?: number;
+  /** Timeout for AI plan check in ms */
+  aiPlanCheckTimeoutMs?: number;
+  /** Cooldown after NOT_PLAN_MODE verdict in ms */
+  aiPlanCheckCooldownMs?: number;
   /** Duration in minutes if timed respawn was set */
   durationMinutes?: number;
 }

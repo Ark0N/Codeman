@@ -37,6 +37,7 @@
 import { EventEmitter } from 'node:events';
 import { Session } from './session.js';
 import { AiIdleChecker, type AiCheckResult, type AiCheckState } from './ai-idle-checker.js';
+import { AiPlanChecker, type AiPlanCheckResult } from './ai-plan-checker.js';
 
 // ========== Configuration Constants ==========
 
@@ -69,6 +70,12 @@ const COMPLETION_TIME_PATTERN = /\bWorked\s+for\s+\d+[hms](\s*\d+[hms])*/i;
  * Matches: "123.4k tokens", "5234 tokens", "1.2M tokens"
  */
 const TOKEN_PATTERN = /(\d+(?:\.\d+)?)\s*([kKmM])?\s*tokens/;
+
+/** Pre-filter: numbered option pattern for plan mode detection */
+const PLAN_MODE_OPTION_PATTERN = /\d+\.\s+(Yes|No|Type|Cancel|Skip|Proceed|Approve|Reject)/i;
+
+/** Pre-filter: selection indicator arrow for plan mode detection */
+const PLAN_MODE_SELECTOR_PATTERN = /[❯>]\s*\d+\./;
 
 // Note: The old '↵ send' indicator is no longer reliable in Claude Code 2024+
 // Detection now uses completion message patterns ("for Xm Xs") instead.
@@ -327,6 +334,38 @@ export interface RespawnConfig {
    * @default 180000 (3 minutes)
    */
   aiIdleCheckCooldownMs: number;
+
+  /**
+   * Whether AI plan mode check is enabled for auto-accept.
+   * When enabled, spawns a fresh Claude CLI to confirm the terminal is
+   * showing a plan mode approval prompt before auto-accepting.
+   * @default true
+   */
+  aiPlanCheckEnabled: boolean;
+
+  /**
+   * Model to use for AI plan mode check.
+   * @default 'claude-opus-4-5-20251101' (thinking enabled by default)
+   */
+  aiPlanCheckModel: string;
+
+  /**
+   * Maximum characters of terminal buffer to send to plan checker.
+   * @default 8000
+   */
+  aiPlanCheckMaxContext: number;
+
+  /**
+   * Timeout for the AI plan check in ms.
+   * @default 60000 (60 seconds, allows time for thinking)
+   */
+  aiPlanCheckTimeoutMs: number;
+
+  /**
+   * Cooldown after NOT_PLAN_MODE verdict in ms.
+   * @default 30000 (30 seconds)
+   */
+  aiPlanCheckCooldownMs: number;
 }
 
 /**
@@ -364,6 +403,12 @@ export interface RespawnEvents {
   aiCheckFailed: (error: string) => void;
   /** AI idle check cooldown state changed */
   aiCheckCooldown: (active: boolean, endsAt: number | null) => void;
+  /** AI plan check started */
+  planCheckStarted: () => void;
+  /** AI plan check completed with verdict */
+  planCheckCompleted: (result: AiPlanCheckResult) => void;
+  /** AI plan check failed */
+  planCheckFailed: (error: string) => void;
   /** Error occurred */
   error: (error: Error) => void;
   /** Debug log message */
@@ -387,6 +432,11 @@ const DEFAULT_CONFIG: RespawnConfig = {
   aiIdleCheckMaxContext: 16000,  // ~4k tokens
   aiIdleCheckTimeoutMs: 90000,   // 90 seconds (thinking can be slow)
   aiIdleCheckCooldownMs: 180000, // 3 minutes after WORKING verdict
+  aiPlanCheckEnabled: true,      // use AI to confirm plan mode before auto-accept
+  aiPlanCheckModel: 'claude-opus-4-5-20251101',
+  aiPlanCheckMaxContext: 8000,   // ~2k tokens (plan mode UI is compact)
+  aiPlanCheckTimeoutMs: 60000,   // 60 seconds (thinking can be slow)
+  aiPlanCheckCooldownMs: 30000,  // 30 seconds after NOT_PLAN_MODE
 };
 
 /**
@@ -499,6 +549,12 @@ export class RespawnController extends EventEmitter {
   /** AI idle checker instance */
   private aiChecker: AiIdleChecker;
 
+  /** AI plan mode checker instance */
+  private planChecker: AiPlanChecker;
+
+  /** Timestamp when plan check was started (to detect stale results) */
+  private planCheckStartTime: number = 0;
+
   /** Timer for /clear step fallback (sends /init if no prompt detected) */
   private clearFallbackTimer: NodeJS.Timeout | null = null;
 
@@ -564,7 +620,15 @@ export class RespawnController extends EventEmitter {
       checkTimeoutMs: this.config.aiIdleCheckTimeoutMs,
       cooldownMs: this.config.aiIdleCheckCooldownMs,
     });
+    this.planChecker = new AiPlanChecker(session.id, {
+      enabled: this.config.aiPlanCheckEnabled,
+      model: this.config.aiPlanCheckModel,
+      maxContextChars: this.config.aiPlanCheckMaxContext,
+      checkTimeoutMs: this.config.aiPlanCheckTimeoutMs,
+      cooldownMs: this.config.aiPlanCheckCooldownMs,
+    });
     this.setupAiCheckerListeners();
+    this.setupPlanCheckerListeners();
   }
 
   /** Wire up AI checker events to controller events */
@@ -587,6 +651,17 @@ export class RespawnController extends EventEmitter {
 
     this.aiChecker.on('disabled', (reason: string) => {
       this.log(`AI checker disabled: ${reason}. Falling back to noOutputTimeoutMs.`);
+    });
+  }
+
+  /** Wire up plan checker events to controller events */
+  private setupPlanCheckerListeners(): void {
+    this.planChecker.on('log', (message: string) => {
+      this.log(message);
+    });
+
+    this.planChecker.on('disabled', (reason: string) => {
+      this.log(`Plan checker disabled: ${reason}. Falling back to pre-filter only.`);
     });
   }
 
@@ -785,6 +860,7 @@ export class RespawnController extends EventEmitter {
     }
 
     this.aiChecker.reset();
+    this.planChecker.reset();
     this.setState('watching');
     this.setupTerminalListener();
     this.startDetectionUpdates();
@@ -806,6 +882,7 @@ export class RespawnController extends EventEmitter {
   stop(): void {
     this.log('Stopping respawn controller');
     this.aiChecker.cancel();
+    this.planChecker.cancel();
     this.clearTimers();
     this.stopDetectionUpdates();
     this.setState('stopped');
@@ -888,6 +965,12 @@ export class RespawnController extends EventEmitter {
     this.resetPreFilterTimer();
     this.resetAutoAcceptTimer();
 
+    // Cancel plan check if running (new output makes result stale)
+    if (this.planChecker.status === 'checking') {
+      this.log('New output during plan check, cancelling (stale)');
+      this.planChecker.cancel();
+    }
+
     // Track token count (Layer 3)
     const tokenCount = this.extractTokenCount(data);
     if (tokenCount !== null && tokenCount !== this.lastTokenCount) {
@@ -915,6 +998,12 @@ export class RespawnController extends EventEmitter {
         this.log('Working patterns detected during AI check, cancelling');
         this.aiChecker.cancel();
         this.setState('watching');
+      }
+
+      // Cancel plan check if running (Claude started working)
+      if (this.planChecker.status === 'checking') {
+        this.log('Working patterns detected during plan check, cancelling');
+        this.planChecker.cancel();
       }
 
       // If we're monitoring init and work started, go to watching (no kickstart needed)
@@ -1405,17 +1494,14 @@ export class RespawnController extends EventEmitter {
 
   /**
    * Attempt to auto-accept a plan mode prompt by sending Enter.
-   * Only fires when:
-   * - In 'watching' state (not mid-cycle)
-   * - No completion message was detected (Claude is waiting for input, not truly idle)
-   * - No elicitation dialog was detected (not an AskUserQuestion prompt)
-   * - autoAcceptPrompts is enabled
+   * Two-stage gate:
+   * 1. Strict regex pre-filter — check if terminal buffer contains plan mode UI elements
+   * 2. AI confirmation — spawn Opus to classify buffer as PLAN_MODE or NOT_PLAN_MODE
    *
-   * This handles Claude's plan mode (waiting for approval) by pressing Enter
-   * to accept the plan. It does NOT auto-accept AskUserQuestion prompts -
-   * those require explicit user interaction.
+   * Only sends Enter if both stages confirm (or pre-filter only if AI disabled).
    *
    * @fires autoAcceptSent
+   * @fires planCheckStarted
    */
   private tryAutoAccept(): void {
     // Only auto-accept in watching state (not during a respawn cycle)
@@ -1436,13 +1522,116 @@ export class RespawnController extends EventEmitter {
       return;
     }
 
-    const msSinceOutput = Date.now() - this.lastOutputTime;
-    this.log(`Auto-accepting plan mode prompt (${msSinceOutput}ms silence, no completion message, no elicitation)`);
+    // Stage 1: Pre-filter — check if buffer looks like plan mode
+    const buffer = this.terminalBuffer.value;
+    if (!this.isPlanModePreFilterMatch(buffer)) {
+      this.log('Skipping auto-accept: pre-filter did not match plan mode patterns');
+      return;
+    }
 
-    // Send Enter to accept the plan
+    // Stage 2: AI confirmation (if enabled and available)
+    if (this.config.aiPlanCheckEnabled && this.planChecker.status !== 'disabled') {
+      if (this.planChecker.isOnCooldown()) {
+        this.log(`Skipping auto-accept: plan checker on cooldown (${Math.ceil(this.planChecker.getCooldownRemainingMs() / 1000)}s remaining)`);
+        return;
+      }
+      if (this.planChecker.status === 'checking') {
+        this.log('Skipping auto-accept: plan check already in progress');
+        return;
+      }
+      // Start async AI plan check
+      this.startPlanCheck(buffer);
+      return;
+    }
+
+    // AI plan check disabled — pre-filter passed, send Enter directly
+    this.sendAutoAcceptEnter();
+  }
+
+  /**
+   * Check if the terminal buffer matches plan mode pre-filter patterns.
+   * Only checks the last 2000 chars (plan mode UI appears at the bottom).
+   *
+   * Must find:
+   * - Numbered option pattern (e.g., "1. Yes", "2. No")
+   * - Selection indicator (❯ or > followed by number)
+   * Must NOT find:
+   * - Recent working patterns (spinners, "Thinking", etc.) in the tail
+   */
+  private isPlanModePreFilterMatch(buffer: string): boolean {
+    // Only check the last 2000 chars (plan mode UI is at the bottom)
+    const tail = buffer.slice(-2000);
+
+    // Strip ANSI codes for pattern matching
+    const stripped = tail.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+
+    // Must find numbered option pattern
+    if (!PLAN_MODE_OPTION_PATTERN.test(stripped)) return false;
+
+    // Must find selection indicator
+    const selectorMatch = stripped.match(PLAN_MODE_SELECTOR_PATTERN);
+    if (!selectorMatch) return false;
+
+    // Must NOT have working patterns AFTER the selector position.
+    // Working patterns before the selector are from earlier work and don't matter.
+    const selectorIndex = stripped.lastIndexOf(selectorMatch[0]);
+    const afterSelector = stripped.slice(selectorIndex + selectorMatch[0].length);
+    const hasWorking = this.WORKING_PATTERNS.some(pattern => afterSelector.includes(pattern));
+    if (hasWorking) return false;
+
+    return true;
+  }
+
+  /**
+   * Start an AI plan check to confirm plan mode before auto-accepting.
+   * Async — result handled by then/catch.
+   *
+   * @param buffer - Terminal buffer to analyze
+   * @fires planCheckStarted
+   * @fires planCheckCompleted
+   * @fires planCheckFailed
+   */
+  private startPlanCheck(buffer: string): void {
+    this.planCheckStartTime = Date.now();
+    this.log('Starting AI plan check for auto-accept confirmation');
+    this.emit('planCheckStarted');
+
+    this.planChecker.check(buffer).then((result) => {
+      // Discard stale result if new output arrived during check
+      if (this.lastOutputTime > this.planCheckStartTime) {
+        this.log('Plan check result discarded (output arrived during check)');
+        return;
+      }
+
+      if (result.verdict === 'PLAN_MODE') {
+        this.emit('planCheckCompleted', result);
+        this.log(`Plan check confirmed PLAN_MODE, sending Enter`);
+        this.sendAutoAcceptEnter();
+      } else if (result.verdict === 'NOT_PLAN_MODE') {
+        this.emit('planCheckCompleted', result);
+        this.log(`Plan check says NOT_PLAN_MODE, skipping auto-accept (cooldown ${this.config.aiPlanCheckCooldownMs}ms)`);
+      } else {
+        // ERROR verdict
+        this.emit('planCheckFailed', result.reasoning);
+        this.log(`Plan check error: ${result.reasoning}, skipping auto-accept`);
+      }
+    }).catch((err) => {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      this.emit('planCheckFailed', errorMsg);
+      this.log(`Plan check error: ${errorMsg}, skipping auto-accept`);
+    });
+  }
+
+  /**
+   * Send the actual Enter keystroke for auto-accept.
+   * Factored out so both pre-filter-only and AI-confirmed paths can call it.
+   * @fires autoAcceptSent
+   */
+  private sendAutoAcceptEnter(): void {
+    const msSinceOutput = Date.now() - this.lastOutputTime;
+    this.log(`Auto-accepting plan mode prompt (${msSinceOutput}ms silence, pre-filter + AI confirmed)`);
     this.session.writeViaScreen('\r');
     this.emit('autoAcceptSent');
-
     // Reset so we don't keep spamming Enter if Claude doesn't respond
     this.hasReceivedOutput = false;
   }
@@ -1708,6 +1897,19 @@ export class RespawnController extends EventEmitter {
         maxContextChars: this.config.aiIdleCheckMaxContext,
         checkTimeoutMs: this.config.aiIdleCheckTimeoutMs,
         cooldownMs: this.config.aiIdleCheckCooldownMs,
+      });
+    }
+
+    // Sync plan checker config if relevant fields changed
+    if (config.aiPlanCheckEnabled !== undefined || config.aiPlanCheckModel !== undefined ||
+        config.aiPlanCheckMaxContext !== undefined || config.aiPlanCheckTimeoutMs !== undefined ||
+        config.aiPlanCheckCooldownMs !== undefined) {
+      this.planChecker.updateConfig({
+        enabled: this.config.aiPlanCheckEnabled,
+        model: this.config.aiPlanCheckModel,
+        maxContextChars: this.config.aiPlanCheckMaxContext,
+        checkTimeoutMs: this.config.aiPlanCheckTimeoutMs,
+        cooldownMs: this.config.aiPlanCheckCooldownMs,
       });
     }
 

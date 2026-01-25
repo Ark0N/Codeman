@@ -820,6 +820,11 @@ export class WebServer extends EventEmitter {
         aiIdleCheckMaxContext: config.aiIdleCheckMaxContext ?? currentConfig?.aiIdleCheckMaxContext,
         aiIdleCheckTimeoutMs: config.aiIdleCheckTimeoutMs ?? currentConfig?.aiIdleCheckTimeoutMs,
         aiIdleCheckCooldownMs: config.aiIdleCheckCooldownMs ?? currentConfig?.aiIdleCheckCooldownMs,
+        aiPlanCheckEnabled: config.aiPlanCheckEnabled ?? currentConfig?.aiPlanCheckEnabled ?? true,
+        aiPlanCheckModel: config.aiPlanCheckModel ?? currentConfig?.aiPlanCheckModel,
+        aiPlanCheckMaxContext: config.aiPlanCheckMaxContext ?? currentConfig?.aiPlanCheckMaxContext,
+        aiPlanCheckTimeoutMs: config.aiPlanCheckTimeoutMs ?? currentConfig?.aiPlanCheckTimeoutMs,
+        aiPlanCheckCooldownMs: config.aiPlanCheckCooldownMs ?? currentConfig?.aiPlanCheckCooldownMs,
         durationMinutes: currentConfig?.durationMinutes,
       };
       this.screenManager.updateRespawnConfig(id, merged);
@@ -1576,6 +1581,11 @@ export class WebServer extends EventEmitter {
       aiIdleCheckMaxContext: config.aiIdleCheckMaxContext,
       aiIdleCheckTimeoutMs: config.aiIdleCheckTimeoutMs,
       aiIdleCheckCooldownMs: config.aiIdleCheckCooldownMs,
+      aiPlanCheckEnabled: config.aiPlanCheckEnabled,
+      aiPlanCheckModel: config.aiPlanCheckModel,
+      aiPlanCheckMaxContext: config.aiPlanCheckMaxContext,
+      aiPlanCheckTimeoutMs: config.aiPlanCheckTimeoutMs,
+      aiPlanCheckCooldownMs: config.aiPlanCheckCooldownMs,
       durationMinutes,
     };
     this.screenManager.updateRespawnConfig(sessionId, persistedConfig);
@@ -1842,6 +1852,18 @@ export class WebServer extends EventEmitter {
 
     controller.on('aiCheckCooldown', (active: boolean, endsAt: number | null) => {
       this.broadcast('respawn:aiCheckCooldown', { sessionId, active, endsAt });
+    });
+
+    controller.on('planCheckStarted', () => {
+      this.broadcast('respawn:planCheckStarted', { sessionId });
+    });
+
+    controller.on('planCheckCompleted', (result: { verdict: string; reasoning: string; durationMs: number }) => {
+      this.broadcast('respawn:planCheckCompleted', { sessionId, verdict: result.verdict, reasoning: result.reasoning, durationMs: result.durationMs });
+    });
+
+    controller.on('planCheckFailed', (error: string) => {
+      this.broadcast('respawn:planCheckFailed', { sessionId, error });
     });
 
     controller.on('log', (message: string) => {
@@ -2432,6 +2454,11 @@ export class WebServer extends EventEmitter {
                     aiIdleCheckMaxContext: savedState.respawnConfig.aiIdleCheckMaxContext ?? 16000,
                     aiIdleCheckTimeoutMs: savedState.respawnConfig.aiIdleCheckTimeoutMs ?? 90000,
                     aiIdleCheckCooldownMs: savedState.respawnConfig.aiIdleCheckCooldownMs ?? 180000,
+                    aiPlanCheckEnabled: savedState.respawnConfig.aiPlanCheckEnabled ?? true,
+                    aiPlanCheckModel: savedState.respawnConfig.aiPlanCheckModel ?? 'claude-opus-4-5-20251101',
+                    aiPlanCheckMaxContext: savedState.respawnConfig.aiPlanCheckMaxContext ?? 8000,
+                    aiPlanCheckTimeoutMs: savedState.respawnConfig.aiPlanCheckTimeoutMs ?? 60000,
+                    aiPlanCheckCooldownMs: savedState.respawnConfig.aiPlanCheckCooldownMs ?? 30000,
                   });
                   this.respawnControllers.set(session.id, controller);
                   this.setupRespawnListeners(session.id, controller);
@@ -2466,6 +2493,11 @@ export class WebServer extends EventEmitter {
                   aiIdleCheckMaxContext: screen.respawnConfig.aiIdleCheckMaxContext ?? 16000,
                   aiIdleCheckTimeoutMs: screen.respawnConfig.aiIdleCheckTimeoutMs ?? 90000,
                   aiIdleCheckCooldownMs: screen.respawnConfig.aiIdleCheckCooldownMs ?? 180000,
+                  aiPlanCheckEnabled: screen.respawnConfig.aiPlanCheckEnabled ?? true,
+                  aiPlanCheckModel: screen.respawnConfig.aiPlanCheckModel ?? 'claude-opus-4-5-20251101',
+                  aiPlanCheckMaxContext: screen.respawnConfig.aiPlanCheckMaxContext ?? 8000,
+                  aiPlanCheckTimeoutMs: screen.respawnConfig.aiPlanCheckTimeoutMs ?? 60000,
+                  aiPlanCheckCooldownMs: screen.respawnConfig.aiPlanCheckCooldownMs ?? 30000,
                 });
                 this.respawnControllers.set(session.id, controller);
                 this.setupRespawnListeners(session.id, controller);
