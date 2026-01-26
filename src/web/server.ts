@@ -384,7 +384,9 @@ export class WebServer extends EventEmitter {
       this.sseClients.add(reply);
 
       // Send initial state
-      this.sendSSE(reply, 'init', this.getFullState());
+      // Use light state for SSE init to avoid sending 2MB+ terminal buffers
+      // Buffers are fetched on-demand when switching tabs
+      this.sendSSE(reply, 'init', this.getLightState());
 
       req.raw.on('close', () => {
         this.sseClients.delete(reply);
@@ -2797,6 +2799,27 @@ export class WebServer extends EventEmitter {
     });
   }
 
+  /**
+   * Get lightweight session state for SSE init - excludes full terminal buffers
+   * to prevent browser freezes on SSE reconnect. Full buffers are fetched
+   * on-demand when switching tabs via /api/sessions/:id/buffer
+   */
+  private getLightSessionsState() {
+    return Array.from(this.sessions.values()).map(s => {
+      const controller = this.respawnControllers.get(s.id);
+      const detailed = s.toDetailedState();
+      return {
+        ...detailed,
+        // Exclude full buffers - they're fetched on-demand
+        terminalBuffer: '',
+        textOutput: '',
+        respawnEnabled: controller?.getConfig()?.enabled ?? false,
+        respawnConfig: controller?.getConfig() ?? null,
+        respawn: controller?.getStatus() ?? null,
+      };
+    });
+  }
+
   // Clean up old completed scheduled runs
   private cleanupScheduledRuns(): void {
     const now = Date.now();
@@ -2846,6 +2869,36 @@ export class WebServer extends EventEmitter {
       respawnStatus,
       globalStats: this.store.getAggregateStats(activeSessionTokens),
       subagents: subagentWatcher.getRecentSubagents(60), // Last hour of subagent activity
+      timestamp: Date.now(),
+    };
+  }
+
+  /**
+   * Get lightweight state for SSE init - excludes full terminal buffers
+   * to prevent browser freezes. Terminal buffers are fetched on-demand.
+   */
+  private getLightState() {
+    const respawnStatus: Record<string, ReturnType<RespawnController['getStatus']>> = {};
+    for (const [sessionId, controller] of this.respawnControllers) {
+      respawnStatus[sessionId] = controller.getStatus();
+    }
+
+    const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> = {};
+    for (const [sessionId, session] of this.sessions) {
+      activeSessionTokens[sessionId] = {
+        inputTokens: session.inputTokens,
+        outputTokens: session.outputTokens,
+        totalCost: session.totalCost,
+      };
+    }
+
+    return {
+      version: APP_VERSION,
+      sessions: this.getLightSessionsState(),
+      scheduledRuns: Array.from(this.scheduledRuns.values()),
+      respawnStatus,
+      globalStats: this.store.getAggregateStats(activeSessionTokens),
+      subagents: subagentWatcher.getRecentSubagents(60),
       timestamp: Date.now(),
     };
   }

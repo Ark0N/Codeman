@@ -15,13 +15,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## ⚡ COM Shorthand (Deployment)
 
-When user says "COM": 1) Increment version in BOTH `package.json` AND `CLAUDE.md` (keep them in sync), 2) `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`. Always bump version on every COM, even for small changes.
+When user says "COM":
+1. Increment version in BOTH `package.json` AND `CLAUDE.md` (keep them in sync)
+2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
+
+Always bump version on every COM, even for small changes.
 
 ## Project Overview
 
 Claudeman is a Claude Code session manager with a web interface and autonomous Ralph Loop. It spawns Claude CLI processes via PTY, streams output in real-time via SSE, and supports scheduled/timed runs.
 
-**Version**: 0.1387 (must match `package.json`)
+**Version**: 0.1388 (must match `package.json`)
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -126,7 +130,7 @@ Unit tests (no port needed): respawn-controller, ralph-tracker, pty-interactive,
 
 **Test Cleanup Patterns**: Integration tests track resources in `createdSessions` and `createdCases` arrays, cleaned up by `afterAll`/`afterEach` hooks. However, some tests perform cleanup in the test body itself (e.g., `edge-cases.test.ts:273-302` creates 5 sessions and cleans them in a loop). If assertions fail before cleanup code runs, resources leak.
 
-**Known Cleanup Issues**:
+**Known Cleanup Issues** (technical debt):
 - `pty-interactive.test.ts`: Uses `await session.stop()` at end of each test, not in `afterEach`. Test failures leave sessions running.
 - `edge-cases.test.ts`: Multiple sessions created in test body with cleanup at end; failures leak sessions.
 - Test cases (`~/claudeman-cases/`): Cases named `flow-test-*`, `ralph-track-loop-*`, `session-detail-*` may persist after test failures.
@@ -604,10 +608,15 @@ Placeholders replaced:
 
 ## Documentation
 
+**Reference docs** (read these for deep dives):
 - `docs/respawn-state-machine.md` - Respawn controller states, idle detection, auto-accept
 - `docs/spawn-protocol.md` - Spawn1337 agent protocol, MCP tools, resource governance
 - `docs/ralph-wiggum-guide.md` - Ralph Wiggum loop guide (plugin reference, prompt templates)
 - `docs/claude-code-hooks-reference.md` - Claude Code hooks documentation
+
+**Internal planning** (historical context, may be outdated):
+- `docs/respawn-improvement-plan.md` - Planned respawn improvements
+- `docs/run-summary-plan.md` - Run summary feature design
 
 ### Ralph Wiggum Loops
 
