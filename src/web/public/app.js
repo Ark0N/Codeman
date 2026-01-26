@@ -2036,6 +2036,9 @@ class ClaudemanApp {
       // Update project insights panel for this session
       this.renderProjectInsightsPanel();
 
+      // Update subagent window visibility for active session
+      this.updateSubagentWindowVisibility();
+
       this.terminal.focus();
       this.terminal.scrollToBottom();
     } catch (err) {
@@ -3644,6 +3647,7 @@ class ClaudemanApp {
     document.getElementById('appSettingsShowMonitor').checked = settings.showMonitor ?? true;
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? true;
     document.getElementById('appSettingsShowSubagents').checked = settings.showSubagents ?? true;
+    document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? false;
     document.getElementById('appSettingsShowProjectInsights').checked = settings.showProjectInsights ?? true;
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
@@ -3706,6 +3710,7 @@ class ClaudemanApp {
       showMonitor: document.getElementById('appSettingsShowMonitor').checked,
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       showSubagents: document.getElementById('appSettingsShowSubagents').checked,
+      subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
       showProjectInsights: document.getElementById('appSettingsShowProjectInsights').checked,
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
@@ -3734,6 +3739,7 @@ class ClaudemanApp {
     this.applyHeaderVisibilitySettings();
     this.applyMonitorVisibility();
     this.renderProjectInsightsPanel();  // Re-render to apply visibility setting
+    this.updateSubagentWindowVisibility();  // Apply subagent window visibility setting
 
     // Save to server (includes notification prefs for cross-browser persistence)
     try {
@@ -4999,11 +5005,11 @@ class ClaudemanApp {
     const agent = this.subagents.get(agentId);
     if (!agent) return;
 
-    // Query each session to find which one owns this subagent
-    for (const [sessionId, session] of this.sessions) {
+    // Helper to check a session and set parent if found
+    const checkSession = async (sessionId, session) => {
       try {
         const resp = await fetch(`/api/sessions/${sessionId}/subagents`);
-        if (!resp.ok) continue;
+        if (!resp.ok) return false;
         const result = await resp.json();
         const subagents = result.data || result.subagents || [];
         if (subagents.some(s => s.agentId === agentId)) {
@@ -5012,11 +5018,27 @@ class ClaudemanApp {
           this.subagents.set(agentId, agent);
           // Update window if already open
           this.updateSubagentWindowParent(agentId);
-          return;
+          // Update visibility based on whether this is the active session
+          this.updateSubagentWindowVisibility();
+          return true;
         }
       } catch (err) {
-        // Ignore errors, continue checking other sessions
+        // Ignore errors
       }
+      return false;
+    };
+
+    // First, check the active session (most likely parent for new agents)
+    if (this.activeSessionId && this.sessions.has(this.activeSessionId)) {
+      const found = await checkSession(this.activeSessionId, this.sessions.get(this.activeSessionId));
+      if (found) return;
+    }
+
+    // Then check other sessions
+    for (const [sessionId, session] of this.sessions) {
+      if (sessionId === this.activeSessionId) continue; // Already checked
+      const found = await checkSession(sessionId, session);
+      if (found) return;
     }
   }
 
@@ -5056,7 +5078,7 @@ class ClaudemanApp {
     svg.innerHTML = '';
 
     for (const [agentId, windowInfo] of this.subagentWindows) {
-      if (windowInfo.minimized) continue;
+      if (windowInfo.minimized || windowInfo.hidden) continue;
 
       const agent = this.subagents.get(agentId);
       if (!agent?.parentSessionId) continue;
@@ -5086,12 +5108,66 @@ class ClaudemanApp {
     }
   }
 
+  /**
+   * Show/hide subagent windows based on active session.
+   * Behavior controlled by "Subagents for Active Tab Only" setting.
+   */
+  updateSubagentWindowVisibility() {
+    const settings = this.loadAppSettingsFromStorage();
+    const activeTabOnly = settings.subagentActiveTabOnly ?? false;
+
+    for (const [agentId, windowInfo] of this.subagentWindows) {
+      const agent = this.subagents.get(agentId);
+
+      // Determine visibility based on setting
+      let shouldShow;
+      if (activeTabOnly) {
+        // Show if: no parent known yet, or parent matches active session
+        const hasKnownParent = agent?.parentSessionId;
+        shouldShow = !hasKnownParent || agent.parentSessionId === this.activeSessionId;
+      } else {
+        // Show all windows (original behavior)
+        shouldShow = true;
+      }
+
+      if (shouldShow) {
+        // Show window (unless it was minimized by user)
+        if (!windowInfo.minimized) {
+          windowInfo.element.style.display = 'flex';
+        }
+        windowInfo.hidden = false;
+      } else {
+        // Hide window (but don't close it)
+        windowInfo.element.style.display = 'none';
+        windowInfo.hidden = true;
+      }
+    }
+    // Update connection lines after visibility changes
+    this.updateConnectionLines();
+  }
+
   // ========== Subagent Floating Windows ==========
 
   openSubagentWindow(agentId) {
     // If window already exists, focus it
     if (this.subagentWindows.has(agentId)) {
       const existing = this.subagentWindows.get(agentId);
+      const agent = this.subagents.get(agentId);
+      const settings = this.loadAppSettingsFromStorage();
+      const activeTabOnly = settings.subagentActiveTabOnly ?? false;
+
+      // If window is hidden (different tab) and activeTabOnly is enabled, switch to parent tab
+      if (existing.hidden && agent?.parentSessionId && activeTabOnly) {
+        this.selectSession(agent.parentSessionId);
+        return;
+      }
+
+      // If not activeTabOnly mode, just show the window
+      if (existing.hidden && !activeTabOnly) {
+        existing.element.style.display = 'flex';
+        existing.hidden = false;
+      }
+
       existing.element.style.zIndex = ++this.subagentWindowZIndex;
       if (existing.minimized) {
         this.restoreSubagentWindow(agentId);
@@ -5173,11 +5249,27 @@ class ClaudemanApp {
     // Make draggable (with connection line update callback)
     this.makeWindowDraggable(win, win.querySelector('.subagent-window-header'));
 
+    // Check if this window should be visible based on settings
+    const settings = this.loadAppSettingsFromStorage();
+    const activeTabOnly = settings.subagentActiveTabOnly ?? false;
+    let shouldHide = false;
+    if (activeTabOnly) {
+      const hasKnownParent = agent.parentSessionId;
+      const isForActiveSession = !hasKnownParent || agent.parentSessionId === this.activeSessionId;
+      shouldHide = !isForActiveSession;
+    }
+
     // Store reference
     this.subagentWindows.set(agentId, {
       element: win,
       minimized: false,
+      hidden: shouldHide,
     });
+
+    // Hide window if not for active session
+    if (shouldHide) {
+      win.style.display = 'none';
+    }
 
     // Render content
     this.renderSubagentWindowContent(agentId);
@@ -5244,8 +5336,22 @@ class ClaudemanApp {
   restoreSubagentWindow(agentId) {
     const windowData = this.subagentWindows.get(agentId);
     if (windowData) {
-      windowData.element.style.display = 'flex';
-      windowData.element.style.zIndex = ++this.subagentWindowZIndex;
+      const agent = this.subagents.get(agentId);
+      const settings = this.loadAppSettingsFromStorage();
+      const activeTabOnly = settings.subagentActiveTabOnly ?? false;
+
+      // Determine if we should show the window
+      let shouldShow = true;
+      if (activeTabOnly) {
+        // Only restore if the window belongs to the active session (or has no parent)
+        shouldShow = !agent?.parentSessionId || agent.parentSessionId === this.activeSessionId;
+      }
+
+      if (shouldShow) {
+        windowData.element.style.display = 'flex';
+        windowData.element.style.zIndex = ++this.subagentWindowZIndex;
+        windowData.hidden = false;
+      }
       windowData.minimized = false;
       this.updateConnectionLines();
     }
