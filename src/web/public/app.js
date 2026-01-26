@@ -441,6 +441,7 @@ class ClaudemanApp {
     this.subagentPanelVisible = false;
     this.subagentWindows = new Map(); // Map<agentId, { element, position }>
     this.subagentWindowZIndex = 1000;
+    this.minimizedSubagents = new Map(); // Map<sessionId, Set<agentId>> - minimized to tab
     this.ralphStatePanelCollapsed = true; // Default to collapsed
 
     // Project Insights tracking (active Bash tools with clickable file paths)
@@ -448,6 +449,7 @@ class ClaudemanApp {
     this.logViewerWindows = new Map(); // Map<windowId, { element, eventSource, filePath }>
     this.logViewerWindowZIndex = 2000;
     this.projectInsightsPanelVisible = false;
+    this.currentSessionWorkingDir = null; // Track current session's working dir for path normalization
 
     // Tab alert states: Map<sessionId, 'action' | 'idle'>
     this.tabAlerts = new Map();
@@ -660,172 +662,12 @@ class ClaudemanApp {
    * in Bash tool output and makes them clickable.
    * When clicked, opens a floating log viewer window with live streaming.
    */
+  /**
+   * Placeholder for file path link provider.
+   * Currently disabled - xterm.js link provider doesn't render decorations reliably.
+   */
   registerFilePathLinkProvider() {
-    const app = this;
-
-    // Create tooltip element
-    let tooltip = document.getElementById('file-link-tooltip');
-    if (!tooltip) {
-      tooltip = document.createElement('div');
-      tooltip.id = 'file-link-tooltip';
-      tooltip.className = 'file-link-tooltip';
-      tooltip.style.display = 'none';
-      document.body.appendChild(tooltip);
-    }
-
-    this.terminal.registerLinkProvider({
-      provideLinks(bufferLineNumber, callback) {
-        const line = app.terminal.buffer.active.getLine(bufferLineNumber);
-        if (!line) {
-          callback(undefined);
-          return;
-        }
-
-        // Get the line text
-        let lineText = '';
-        for (let i = 0; i < line.length; i++) {
-          lineText += line.getCell(i)?.getChars() || ' ';
-        }
-
-        const links = [];
-
-        // Skip lines that are unlikely to contain file paths (performance optimization)
-        // Only skip if line has NO forward slash at all
-        if (!lineText.includes('/')) {
-          callback(undefined);
-          return;
-        }
-
-        // Pattern 1: File paths after tail/cat/head/less/grep/watch commands
-        // Matches: tail -f /path/to/file, cat /path, head -n 10 /path, grep "foo" /path, etc.
-        // The (?:[^\s/]+\s+)* handles any arguments before the path (flags, values, quoted strings)
-        const cmdPattern = /(tail|cat|head|less|grep|watch|multitail)\s+(?:[^\/\n]+?\s+)?(\/[^\s"'<>|;&\n\)]+)/g;
-
-        // Pattern 2: Any absolute path inside Bash() parentheses
-        const bashPathPattern = /Bash\([^)]*?(\/(?:var|tmp|home|usr|etc|opt|log|logs)[^\s"'<>|;&\)\n]+)/g;
-
-        // Pattern 3: General absolute paths with common file extensions (for Claude output)
-        // Matches paths like /home/user/file.log, /tmp/test.txt, etc.
-        const generalPathPattern = /(\/(?:home|tmp|var|etc|usr|opt)[^\s"'<>|;&\n\)\]]+\.(?:log|txt|json|md|ts|js|sh|py|yaml|yml|csv|xml|html|css))/g;
-
-        // Pattern 3b: Common log file paths without extensions
-        // Matches /var/log/syslog, /var/log/auth.log, etc.
-        const logPathPattern = /(\/var\/log\/[^\s"'<>|;&\n\)\]]+)/g;
-
-        // Pattern 4: Paths in Claude output phrases like "Created file:", "Writing to", "Saved:", etc.
-        const claudeOutputPattern = /(?:Created|Writing|Saved|File|Output|Streaming|Monitoring|Log)(?:\s+(?:file|to|at))?[:\s]+([\/~][^\s"'<>|;&\n\)]+)/gi;
-
-        let match;
-
-        // Match command patterns
-        cmdPattern.lastIndex = 0;
-        while ((match = cmdPattern.exec(lineText)) !== null) {
-          const filePath = match[2].replace(/[,;:]+$/, ''); // Remove trailing punctuation
-          const startIndex = lineText.indexOf(filePath, match.index);
-
-          if (startIndex >= 0 && !app.isDuplicateLink(links, startIndex, filePath)) {
-            links.push(app.createFileLink(bufferLineNumber, startIndex, filePath));
-          }
-        }
-
-        // Match Bash() paths
-        bashPathPattern.lastIndex = 0;
-        while ((match = bashPathPattern.exec(lineText)) !== null) {
-          const filePath = match[1].replace(/[,;:]+$/, '');
-          const startIndex = lineText.indexOf(filePath, match.index);
-
-          if (startIndex >= 0 && !app.isDuplicateLink(links, startIndex, filePath)) {
-            links.push(app.createFileLink(bufferLineNumber, startIndex, filePath));
-          }
-        }
-
-        // Match general absolute paths with file extensions
-        generalPathPattern.lastIndex = 0;
-        while ((match = generalPathPattern.exec(lineText)) !== null) {
-          const filePath = match[1].replace(/[,;:]+$/, '');
-          const startIndex = lineText.indexOf(filePath, match.index);
-
-          if (startIndex >= 0 && !app.isDuplicateLink(links, startIndex, filePath)) {
-            links.push(app.createFileLink(bufferLineNumber, startIndex, filePath));
-          }
-        }
-
-        // Match log paths (no extension required)
-        logPathPattern.lastIndex = 0;
-        while ((match = logPathPattern.exec(lineText)) !== null) {
-          const filePath = match[1].replace(/[,;:]+$/, '');
-          const startIndex = lineText.indexOf(filePath, match.index);
-
-          if (startIndex >= 0 && !app.isDuplicateLink(links, startIndex, filePath)) {
-            links.push(app.createFileLink(bufferLineNumber, startIndex, filePath));
-          }
-        }
-
-        // Match Claude output phrases (Created file:, Writing to, etc.)
-        claudeOutputPattern.lastIndex = 0;
-        while ((match = claudeOutputPattern.exec(lineText)) !== null) {
-          let filePath = match[1].replace(/[,;:]+$/, '');
-          // Expand ~ to /home/username (approximate)
-          if (filePath.startsWith('~')) {
-            filePath = '/home' + filePath.substring(1);
-          }
-          const startIndex = lineText.indexOf(match[1], match.index);
-
-          if (startIndex >= 0 && filePath.startsWith('/') && !app.isDuplicateLink(links, startIndex, filePath)) {
-            links.push(app.createFileLink(bufferLineNumber, startIndex, filePath));
-          }
-        }
-
-        // Debug logging (can be removed later)
-        if (links.length > 0) {
-          console.log('[LinkProvider] Found', links.length, 'link(s) on line', bufferLineNumber, ':', links.map(l => l.text));
-        }
-
-        callback(links.length > 0 ? links : undefined);
-      }
-    });
-  }
-
-  isDuplicateLink(links, startIndex, filePath) {
-    return links.some(l => l.range.start.x === startIndex + 1 && l.text === filePath);
-  }
-
-  createFileLink(bufferLineNumber, startIndex, filePath) {
-    const app = this;
-    return {
-      range: {
-        start: { x: startIndex + 1, y: bufferLineNumber + 1 },
-        end: { x: startIndex + filePath.length + 1, y: bufferLineNumber + 1 }
-      },
-      text: filePath,
-      activate: () => {
-        app.openLogViewerWindow(filePath, app.activeSessionId);
-      },
-      hover: (event, text) => {
-        app.showFileLinkTooltip(event, text);
-      },
-      leave: () => {
-        app.hideFileLinkTooltip();
-      }
-    };
-  }
-
-  showFileLinkTooltip(event, filePath) {
-    const tooltip = document.getElementById('file-link-tooltip');
-    if (!tooltip) return;
-
-    const fileName = filePath.split('/').pop();
-    tooltip.textContent = fileName;
-    tooltip.style.display = 'block';
-    tooltip.style.left = `${event.clientX + 10}px`;
-    tooltip.style.top = `${event.clientY + 10}px`;
-  }
-
-  hideFileLinkTooltip() {
-    const tooltip = document.getElementById('file-link-tooltip');
-    if (tooltip) {
-      tooltip.style.display = 'none';
-    }
+    // Disabled for now
   }
 
   showWelcome() {
@@ -1363,14 +1205,12 @@ class ClaudemanApp {
 
     this.eventSource.addEventListener('respawn:timerCancelled', (e) => {
       const data = JSON.parse(e.data);
-      const { sessionId, timerName, reason } = data;
+      const { sessionId, timerName } = data;
       if (this.respawnCountdownTimers[sessionId]) {
         delete this.respawnCountdownTimers[sessionId][timerName];
       }
       if (sessionId === this.activeSessionId) {
         this.updateCountdownTimerDisplay();
-        // Add to action log
-        this.addActionLogEntry(sessionId, { type: 'timer-cancel', detail: `${timerName}${reason ? ': ' + reason : ''}`, timestamp: Date.now() });
       }
     });
 
@@ -1674,9 +1514,10 @@ class ClaudemanApp {
         this.subagents.set(data.agentId, data);
       }
       this.renderSubagentPanel();
-      // Update floating window if open
+      // Update floating window if open (content + header/title)
       if (this.subagentWindows.has(data.agentId)) {
         this.renderSubagentWindowContent(data.agentId);
+        this.updateSubagentWindowHeader(data.agentId);
       }
     });
 
@@ -1895,6 +1736,17 @@ class ClaudemanApp {
           this._fullRenderSessionTabs();
           return;
         }
+
+        // Update subagent badge - check if count changed
+        const subagentBadgeEl = tab.querySelector('.tab-subagent-badge');
+        const minimizedAgents = this.minimizedSubagents.get(id);
+        const minimizedCount = minimizedAgents?.size || 0;
+        const currentCount = subagentBadgeEl ? parseInt(subagentBadgeEl.querySelector('.subagent-count')?.textContent || '0') : 0;
+        if (minimizedCount !== currentCount) {
+          // Count changed - need full rebuild for dropdown update
+          this._fullRenderSessionTabs();
+          return;
+        }
       }
     } else {
       // Full rebuild needed (sessions added/removed)
@@ -1923,11 +1775,17 @@ class ClaudemanApp {
       const alertType = this.tabAlerts.get(id);
       const alertClass = alertType === 'action' ? ' tab-alert-action' : alertType === 'idle' ? ' tab-alert-idle' : '';
 
+      // Get minimized subagents for this session
+      const minimizedAgents = this.minimizedSubagents.get(id);
+      const minimizedCount = minimizedAgents?.size || 0;
+      const subagentBadge = minimizedCount > 0 ? this.renderSubagentTabBadge(id, minimizedAgents) : '';
+
       parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}" data-id="${id}" onclick="app.selectSession('${id}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${id}')">
           <span class="tab-status ${status}"></span>
           ${mode === 'shell' ? '<span class="tab-mode shell">sh</span>' : ''}
           <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()">${taskStats.running}</span>` : ''}
+          ${subagentBadge}
           <span class="tab-summary" onclick="event.stopPropagation(); app.openRunSummary('${id}')" title="Run Summary" data-session-id="${id}">&#x1F4CA;</span>
           <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${id}')" title="Session options">&#x2699;</span>
           <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${id}')">&times;</span>
@@ -1936,6 +1794,98 @@ class ClaudemanApp {
 
     container.innerHTML = parts.join('');
     // Update connection lines after tabs change (positions may have shifted)
+    this.updateConnectionLines();
+  }
+
+  // Render subagent badge with dropdown for minimized agents on a tab
+  renderSubagentTabBadge(sessionId, minimizedAgents) {
+    if (!minimizedAgents || minimizedAgents.size === 0) return '';
+
+    const agentItems = [];
+    for (const agentId of minimizedAgents) {
+      const agent = this.subagents.get(agentId);
+      const displayName = agent?.description || agentId.substring(0, 12);
+      const truncatedName = displayName.length > 30 ? displayName.substring(0, 30) + '...' : displayName;
+      const statusClass = agent?.status || 'idle';
+      agentItems.push(`
+        <div class="subagent-dropdown-item">
+          <span class="subagent-dropdown-icon">🤖</span>
+          <span class="subagent-dropdown-name" onclick="event.stopPropagation(); app.restoreMinimizedSubagent('${agentId}', '${sessionId}')" title="Click to restore">${this.escapeHtml(truncatedName)}</span>
+          <span class="subagent-dropdown-status ${statusClass}">${statusClass}</span>
+          <span class="subagent-dropdown-close" onclick="event.stopPropagation(); app.permanentlyCloseMinimizedSubagent('${agentId}', '${sessionId}')" title="Close permanently">&times;</span>
+        </div>
+      `);
+    }
+
+    return `
+      <span class="tab-subagent-badge" onclick="event.stopPropagation(); app.toggleSubagentDropdown(this);" title="${minimizedAgents.size} minimized subagent${minimizedAgents.size > 1 ? 's' : ''}">
+        🤖<span class="subagent-count">${minimizedAgents.size}</span>
+        <div class="subagent-dropdown">
+          <div class="subagent-dropdown-header">Minimized Agents</div>
+          ${agentItems.join('')}
+        </div>
+      </span>
+    `;
+  }
+
+  // Restore a minimized subagent window
+  restoreMinimizedSubagent(agentId, sessionId) {
+    // Remove from minimized set
+    const minimizedAgents = this.minimizedSubagents.get(sessionId);
+    if (minimizedAgents) {
+      minimizedAgents.delete(agentId);
+      if (minimizedAgents.size === 0) {
+        this.minimizedSubagents.delete(sessionId);
+      }
+    }
+
+    // Restore the window
+    this.restoreSubagentWindow(agentId);
+
+    // Re-render tabs to update badge
+    this.renderSessionTabs();
+  }
+
+  // Toggle subagent dropdown visibility on click
+  toggleSubagentDropdown(badgeEl) {
+    const dropdown = badgeEl.querySelector('.subagent-dropdown');
+    if (!dropdown) return;
+
+    const isOpen = dropdown.classList.contains('open');
+
+    // Close all other dropdowns first
+    document.querySelectorAll('.subagent-dropdown.open').forEach(d => d.classList.remove('open'));
+
+    if (!isOpen) {
+      dropdown.classList.add('open');
+
+      // Close dropdown when clicking outside
+      const closeHandler = (e) => {
+        if (!badgeEl.contains(e.target)) {
+          dropdown.classList.remove('open');
+          document.removeEventListener('click', closeHandler);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', closeHandler), 0);
+    }
+  }
+
+  // Permanently close a minimized subagent (remove from DOM and minimized set)
+  permanentlyCloseMinimizedSubagent(agentId, sessionId) {
+    // Remove from minimized set
+    const minimizedAgents = this.minimizedSubagents.get(sessionId);
+    if (minimizedAgents) {
+      minimizedAgents.delete(agentId);
+      if (minimizedAgents.size === 0) {
+        this.minimizedSubagents.delete(sessionId);
+      }
+    }
+
+    // Force close the window (removes from DOM)
+    this.forceCloseSubagentWindow(agentId);
+
+    // Re-render tabs to update badge
+    this.renderSessionTabs();
     this.updateConnectionLines();
   }
 
@@ -1960,6 +1910,9 @@ class ClaudemanApp {
 
     // Check if this is a restored session that needs to be attached
     const session = this.sessions.get(sessionId);
+
+    // Track working directory for path normalization in Project Insights
+    this.currentSessionWorkingDir = session?.workingDir || null;
     if (session && session.pid === null && session.status === 'idle') {
       // This is a restored session - attach to the existing screen
       try {
@@ -2495,8 +2448,8 @@ class ClaudemanApp {
     // Hook-based detection indicator (highest priority signals)
     if (hookEl) {
       if (detection.stopHookReceived || detection.idlePromptReceived) {
-        const hookType = detection.idlePromptReceived ? 'idle_prompt' : 'Stop';
-        hookEl.textContent = `🎯 ${hookType} hook received`;
+        const hookType = detection.idlePromptReceived ? 'idle' : 'stop';
+        hookEl.textContent = `🎯 ${hookType} hook`;
         hookEl.className = 'detection-hook hook-active';
         hookEl.style.display = '';
       } else {
@@ -2533,35 +2486,35 @@ class ClaudemanApp {
       confidenceEl.style.display = 'none';
     }
 
-    // AI check display - informative but clear
+    // AI check display - compact format
     if (aiCheckEl && detection.aiCheck) {
       const ai = detection.aiCheck;
       let aiText = '';
       let aiClass = 'detection-ai-check';
 
       if (ai.status === 'checking') {
-        aiText = '🔍 AI: Analyzing terminal output...';
+        aiText = '🔍 AI checking...';
         aiClass += ' ai-checking';
       } else if (ai.status === 'cooldown' && ai.cooldownEndsAt) {
         const remaining = Math.ceil((ai.cooldownEndsAt - Date.now()) / 1000);
         if (remaining > 0) {
           if (ai.lastVerdict === 'WORKING') {
-            aiText = `⏳ AI: Working detected, retry in ${remaining}s`;
+            aiText = `⏳ Working, retry ${remaining}s`;
             aiClass += ' ai-working';
           } else {
-            aiText = `✓ AI: Idle confirmed, cooldown ${remaining}s`;
+            aiText = `✓ Idle, wait ${remaining}s`;
             aiClass += ' ai-idle';
           }
         }
       } else if (ai.status === 'disabled') {
-        aiText = `⚠ AI: Disabled (${ai.disabledReason || 'errors'})`;
+        aiText = '⚠ AI disabled';
         aiClass += ' ai-disabled';
       } else if (ai.lastVerdict && ai.lastCheckTime) {
         const ago = Math.round((Date.now() - ai.lastCheckTime) / 1000);
         if (ago < 120) {
           aiText = ai.lastVerdict === 'IDLE'
-            ? `✓ AI: Idle (${ago}s ago)`
-            : `⏳ AI: Working (${ago}s ago)`;
+            ? `✓ Idle (${ago}s)`
+            : `⏳ Working (${ago}s)`;
           aiClass += ai.lastVerdict === 'IDLE' ? ' ai-idle' : ' ai-working';
         }
       }
@@ -2571,6 +2524,18 @@ class ClaudemanApp {
       aiCheckEl.style.display = aiText ? '' : 'none';
     } else if (aiCheckEl) {
       aiCheckEl.style.display = 'none';
+    }
+
+    // Manage row2 visibility - hide if nothing visible
+    const row2 = this.$('respawnStatusRow2');
+    if (row2) {
+      const hasVisibleContent =
+        (hookEl && hookEl.style.display !== 'none') ||
+        (aiCheckEl && aiCheckEl.style.display !== 'none') ||
+        (statusEl && statusEl.style.display !== 'none') ||
+        (this.respawnCountdownTimers[this.activeSessionId] &&
+         Object.keys(this.respawnCountdownTimers[this.activeSessionId]).length > 0);
+      row2.style.display = hasVisibleContent ? '' : 'none';
     }
   }
 
@@ -2638,24 +2603,39 @@ class ClaudemanApp {
   // ========== Countdown Timer Display Methods ==========
 
   addActionLogEntry(sessionId, action) {
-    // Filter to important actions - keep more for visibility
-    // Skip: timer starts (but keep cancels with reason), routine detection spam
-    if (action.type === 'timer') return;
-    // Keep timer-cancel only if it has a meaningful reason
-    if (action.type === 'timer-cancel' && !action.detail) return;
-    // Keep detection only for completion/silence confirmed events
-    if (action.type === 'detection' && !action.detail.includes('confirmed') && !action.detail.includes('Completion')) return;
-    // Keep ai-check only for verdicts (IDLE, WORKING) and errors
-    if (action.type === 'ai-check' && action.detail.includes('Spawning')) return;
-    // Keep plan-check for verdicts and actions
-    if (action.type === 'plan-check' && action.detail.includes('Spawning')) return;
+    // Only keep truly interesting events - no spam
+    // KEEP: command (inputs), hook events, AI verdicts, plan verdicts
+    // SKIP: timer, timer-cancel, state changes, routine detection, step confirmations
+
+    const interestingTypes = ['command', 'hook'];
+
+    // Always keep commands and hooks
+    if (interestingTypes.includes(action.type)) {
+      // ok, keep it
+    }
+    // AI check: only verdicts (IDLE, WORKING) and errors, not "Spawning"
+    else if (action.type === 'ai-check') {
+      if (action.detail.includes('Spawning')) return;
+    }
+    // Plan check: only verdicts, not "Spawning"
+    else if (action.type === 'plan-check') {
+      if (action.detail.includes('Spawning')) return;
+    }
+    // Transcript: keep completion/plan detection
+    else if (action.type === 'transcript') {
+      // keep it
+    }
+    // Skip everything else (timer, timer-cancel, state, detection, step)
+    else {
+      return;
+    }
 
     if (!this.respawnActionLogs[sessionId]) {
       this.respawnActionLogs[sessionId] = [];
     }
     this.respawnActionLogs[sessionId].unshift(action);
-    // Keep more history (50 entries instead of 20)
-    if (this.respawnActionLogs[sessionId].length > 50) {
+    // Keep reasonable history
+    if (this.respawnActionLogs[sessionId].length > 30) {
       this.respawnActionLogs[sessionId].pop();
     }
   }
@@ -2677,42 +2657,50 @@ class ClaudemanApp {
   }
 
   updateCountdownTimerDisplay() {
-    const timersRow = this.$('respawnTimersRow');
     const timersContainer = this.$('respawnCountdownTimers');
-    if (!timersRow || !timersContainer) return;
+    const row2 = this.$('respawnStatusRow2');
+    if (!timersContainer) return;
 
     const timers = this.respawnCountdownTimers[this.activeSessionId];
-    const actions = this.respawnActionLogs[this.activeSessionId];
     const hasTimers = timers && Object.keys(timers).length > 0;
-    const hasActions = actions && actions.length > 0;
 
-    // Show row if we have timers OR action log entries
-    if (!hasTimers && !hasActions) {
-      timersRow.style.display = 'none';
+    if (!hasTimers) {
+      timersContainer.innerHTML = '';
+      // Update row2 visibility
+      if (row2) {
+        const hookEl = document.getElementById('detectionHook');
+        const aiCheckEl = document.getElementById('detectionAiCheck');
+        const statusEl = this.$('detectionStatus');
+        const hasVisibleContent =
+          (hookEl && hookEl.style.display !== 'none') ||
+          (aiCheckEl && aiCheckEl.style.display !== 'none') ||
+          (statusEl && statusEl.style.display !== 'none');
+        row2.style.display = hasVisibleContent ? '' : 'none';
+      }
       return;
     }
 
-    timersRow.style.display = '';
+    // Show row2 since we have timers
+    if (row2) row2.style.display = '';
+
     const now = Date.now();
     let html = '';
 
-    if (hasTimers) {
-      for (const [name, timer] of Object.entries(timers)) {
-        const remainingMs = Math.max(0, timer.endsAt - now);
-        const remainingSec = (remainingMs / 1000).toFixed(1);
-        const percent = Math.max(0, Math.min(100, (remainingMs / timer.totalMs) * 100));
+    for (const [name, timer] of Object.entries(timers)) {
+      const remainingMs = Math.max(0, timer.endsAt - now);
+      const remainingSec = (remainingMs / 1000).toFixed(1);
+      const percent = Math.max(0, Math.min(100, (remainingMs / timer.totalMs) * 100));
 
-        // Format timer name for display (replace hyphens with spaces, capitalize first letter)
-        const displayName = name.replace(/-/g, ' ').replace(/^\w/, c => c.toUpperCase());
+      // Shorter timer name display
+      const displayName = name.replace(/-/g, ' ').replace(/^\w/, c => c.toUpperCase());
 
-        html += `<div class="respawn-countdown-timer" title="${timer.reason || ''}">
-          <span class="timer-name">${displayName}</span>
-          <span class="timer-value">${remainingSec}s</span>
-          <div class="respawn-timer-bar">
-            <div class="respawn-timer-progress" style="width: ${percent}%"></div>
-          </div>
-        </div>`;
-      }
+      html += `<div class="respawn-countdown-timer" title="${timer.reason || ''}">
+        <span class="timer-name">${displayName}</span>
+        <span class="timer-value">${remainingSec}s</span>
+        <div class="respawn-timer-bar">
+          <div class="respawn-timer-progress" style="width: ${percent}%"></div>
+        </div>
+      </div>`;
     }
 
     timersContainer.innerHTML = html;
@@ -2724,12 +2712,13 @@ class ClaudemanApp {
 
     const actions = this.respawnActionLogs[this.activeSessionId];
     if (!actions || actions.length === 0) {
-      logContainer.innerHTML = '<span class="action-empty">No recent actions</span>';
+      logContainer.innerHTML = '';
       return;
     }
 
     let html = '';
-    for (const action of actions.slice(0, 10)) {
+    // Show fewer entries for compact view
+    for (const action of actions.slice(0, 5)) {
       const time = new Date(action.timestamp).toLocaleTimeString('en-US', {
         hour12: false,
         hour: '2-digit',
@@ -2738,6 +2727,7 @@ class ClaudemanApp {
       });
       const isCommand = action.type === 'command';
       const extraClass = isCommand ? ' action-command' : '';
+      // Compact format: time [type] detail
       html += `<div class="respawn-action-entry${extraClass}">
         <span class="action-time">${time}</span>
         <span class="action-type">[${action.type}]</span>
@@ -5220,8 +5210,7 @@ class ClaudemanApp {
           <span class="status ${agent.status}">${agent.status}</span>
         </div>
         <div class="subagent-window-actions">
-          <button onclick="app.minimizeSubagentWindow('${agentId}')" title="Minimize">─</button>
-          <button onclick="app.closeSubagentWindow('${agentId}')" title="Close">×</button>
+          <button onclick="app.closeSubagentWindow('${agentId}')" title="Minimize to tab">─</button>
         </div>
       </div>
       ${parentHeader}
@@ -5279,6 +5268,15 @@ class ClaudemanApp {
       win.style.zIndex = ++this.subagentWindowZIndex;
     });
 
+    // Update connection lines when window is resized
+    const resizeObserver = new ResizeObserver(() => {
+      this.updateConnectionLines();
+    });
+    resizeObserver.observe(win);
+
+    // Store observer for cleanup
+    this.subagentWindows.get(agentId).resizeObserver = resizeObserver;
+
     // Animate to final position if spawning from tab
     if (parentTab) {
       requestAnimationFrame(() => {
@@ -5303,14 +5301,34 @@ class ClaudemanApp {
 
   closeSubagentWindow(agentId) {
     const windowData = this.subagentWindows.get(agentId);
-    if (windowData) {
+    if (!windowData) return;
+
+    const agent = this.subagents.get(agentId);
+    const parentSessionId = agent?.parentSessionId;
+
+    if (parentSessionId) {
+      // Minimize to tab instead of removing
+      windowData.element.style.display = 'none';
+      windowData.minimized = true;
+
+      // Track minimized agent for the parent session
+      if (!this.minimizedSubagents.has(parentSessionId)) {
+        this.minimizedSubagents.set(parentSessionId, new Set());
+      }
+      this.minimizedSubagents.get(parentSessionId).add(agentId);
+
+      // Update tab badge to show minimized agents
+      this.renderSessionTabs();
+    } else {
+      // No parent session - fully remove the window
       windowData.element.remove();
       this.subagentWindows.delete(agentId);
-      this.updateConnectionLines();
     }
+
+    this.updateConnectionLines();
   }
 
-  // Close all subagent windows for a session
+  // Close all subagent windows for a session (fully removes them, not minimize)
   closeSessionSubagentWindows(sessionId) {
     const toClose = [];
     for (const [agentId, _windowData] of this.subagentWindows) {
@@ -5320,7 +5338,23 @@ class ClaudemanApp {
       }
     }
     for (const agentId of toClose) {
-      this.closeSubagentWindow(agentId);
+      this.forceCloseSubagentWindow(agentId);
+    }
+    // Also clean up minimized agents for this session
+    this.minimizedSubagents.delete(sessionId);
+    this.renderSessionTabs();
+  }
+
+  // Fully close a subagent window (removes from DOM, not minimize)
+  forceCloseSubagentWindow(agentId) {
+    const windowData = this.subagentWindows.get(agentId);
+    if (windowData) {
+      // Clean up resize observer
+      if (windowData.resizeObserver) {
+        windowData.resizeObserver.disconnect();
+      }
+      windowData.element.remove();
+      this.subagentWindows.delete(agentId);
     }
   }
 
@@ -5437,16 +5471,37 @@ class ClaudemanApp {
   updateSubagentWindows() {
     for (const agentId of this.subagentWindows.keys()) {
       this.renderSubagentWindowContent(agentId);
+      this.updateSubagentWindowHeader(agentId);
+    }
+  }
 
-      // Update status in header
-      const agent = this.subagents.get(agentId);
-      if (agent) {
-        const statusEl = document.querySelector(`#subagent-window-${agentId} .status`);
-        if (statusEl) {
-          statusEl.className = `status ${agent.status}`;
-          statusEl.textContent = agent.status;
-        }
-      }
+  // Update subagent window header (title and status)
+  updateSubagentWindowHeader(agentId) {
+    const agent = this.subagents.get(agentId);
+    if (!agent) return;
+
+    const win = document.getElementById(`subagent-window-${agentId}`);
+    if (!win) return;
+
+    // Update title/id element with description if available
+    const idEl = win.querySelector('.subagent-window-title .id');
+    if (idEl) {
+      const windowTitle = agent.description || agentId.substring(0, 7);
+      const truncatedTitle = windowTitle.length > 50 ? windowTitle.substring(0, 50) + '...' : windowTitle;
+      idEl.textContent = truncatedTitle;
+    }
+
+    // Update full tooltip
+    const titleContainer = win.querySelector('.subagent-window-title');
+    if (titleContainer) {
+      titleContainer.title = agent.description || agentId;
+    }
+
+    // Update status
+    const statusEl = win.querySelector('.subagent-window-title .status');
+    if (statusEl) {
+      statusEl.className = `status ${agent.status}`;
+      statusEl.textContent = agent.status;
     }
   }
 
@@ -5460,6 +5515,201 @@ class ClaudemanApp {
   }
 
   // ========== Project Insights Panel (Bash Tools with Clickable File Paths) ==========
+
+  /**
+   * Normalize a file path to its canonical form for comparison.
+   * - Expands ~ to home directory approximation
+   * - Resolves relative paths against working directory (case folder)
+   * - Normalizes . and .. components
+   */
+  normalizeFilePath(path, workingDir) {
+    if (!path) return '';
+
+    let normalized = path.trim();
+    const homeDir = '/home/' + (window.USER || 'user'); // Approximation
+
+    // Expand ~ to home directory
+    if (normalized.startsWith('~/')) {
+      normalized = homeDir + normalized.slice(1);
+    } else if (normalized === '~') {
+      normalized = homeDir;
+    }
+
+    // If not absolute, resolve against working directory (case folder)
+    if (!normalized.startsWith('/') && workingDir) {
+      normalized = workingDir + '/' + normalized;
+    }
+
+    // Normalize path components (resolve . and ..)
+    const parts = normalized.split('/');
+    const stack = [];
+
+    for (const part of parts) {
+      if (part === '' || part === '.') {
+        continue;
+      } else if (part === '..') {
+        if (stack.length > 1) {
+          stack.pop();
+        }
+      } else {
+        stack.push(part);
+      }
+    }
+
+    return '/' + stack.join('/');
+  }
+
+  /**
+   * Extract just the filename from a path.
+   */
+  getFilename(path) {
+    const parts = path.split('/');
+    return parts[parts.length - 1] || '';
+  }
+
+  /**
+   * Check if a path is a "shallow root path" - an absolute path with only one
+   * component after root (e.g., /test.txt, /file.log).
+   * These are often typos where the user meant a relative path in the case folder.
+   */
+  isShallowRootPath(path) {
+    if (!path.startsWith('/')) return false;
+    const parts = path.split('/').filter(p => p !== '');
+    return parts.length === 1;
+  }
+
+  /**
+   * Check if a path is inside (or is) the working directory (case folder).
+   */
+  isPathInWorkingDir(path, workingDir) {
+    if (!workingDir) return false;
+    const normalized = this.normalizeFilePath(path, workingDir);
+    return normalized.startsWith(workingDir + '/') || normalized === workingDir;
+  }
+
+  /**
+   * Smart path equivalence check.
+   * Two paths are considered equivalent if:
+   * 1. They normalize to the same path (standard case)
+   * 2. One is a "shallow root path" (e.g., /test.txt) and the other is the
+   *    same filename inside the case folder - the shallow root path
+   *    is likely a typo and they probably meant the same file.
+   */
+  pathsAreEquivalent(path1, path2, workingDir) {
+    const norm1 = this.normalizeFilePath(path1, workingDir);
+    const norm2 = this.normalizeFilePath(path2, workingDir);
+
+    // Standard check: exact normalized match
+    if (norm1 === norm2) return true;
+
+    // Smart check: shallow root path vs case folder path with same filename
+    const file1 = this.getFilename(norm1);
+    const file2 = this.getFilename(norm2);
+
+    if (file1 !== file2) return false; // Different filenames, can't be equivalent
+
+    const shallow1 = this.isShallowRootPath(path1);
+    const shallow2 = this.isShallowRootPath(path2);
+    const inWorkDir1 = this.isPathInWorkingDir(norm1, workingDir);
+    const inWorkDir2 = this.isPathInWorkingDir(norm2, workingDir);
+
+    // If one is shallow root (e.g., /test.txt) and other is in case folder
+    // with same filename, treat as equivalent (user likely made a typo)
+    if (shallow1 && inWorkDir2) return true;
+    if (shallow2 && inWorkDir1) return true;
+
+    return false;
+  }
+
+  /**
+   * Pick the "better" of two paths that resolve to the same file.
+   * Prefers paths inside the case folder, longer/more explicit paths, and absolute paths.
+   */
+  pickBetterPath(path1, path2, workingDir) {
+    // Prefer paths inside the case folder (working directory)
+    if (workingDir) {
+      const inWorkDir1 = this.isPathInWorkingDir(path1, workingDir);
+      const inWorkDir2 = this.isPathInWorkingDir(path2, workingDir);
+      if (inWorkDir1 && !inWorkDir2) return path1;
+      if (inWorkDir2 && !inWorkDir1) return path2;
+    }
+
+    // Prefer absolute paths
+    const abs1 = path1.startsWith('/');
+    const abs2 = path2.startsWith('/');
+    if (abs1 && !abs2) return path1;
+    if (abs2 && !abs1) return path2;
+
+    // Both absolute or both relative - prefer longer (more explicit)
+    if (path1.length !== path2.length) {
+      return path1.length > path2.length ? path1 : path2;
+    }
+
+    // Prefer paths without ~
+    if (!path1.includes('~') && path2.includes('~')) return path1;
+    if (!path2.includes('~') && path1.includes('~')) return path2;
+
+    return path1;
+  }
+
+  /**
+   * Deduplicate file paths across all tools, keeping the "best" version.
+   * Uses smart equivalence checking:
+   * - Standard normalization for relative vs absolute paths
+   * - Detects likely typos (e.g., /file.txt when caseFolder/file.txt exists)
+   * - Prefers paths inside the case folder (working directory)
+   * - Prefers longer, more explicit paths
+   * Returns a Map of normalized path -> best raw path.
+   */
+  deduplicateProjectInsightPaths(tools, workingDir) {
+    // Collect all paths with their tool IDs
+    const allPaths = [];
+    for (const tool of tools) {
+      for (const rawPath of tool.filePaths) {
+        allPaths.push({ rawPath, toolId: tool.id });
+      }
+    }
+
+    if (allPaths.length <= 1) {
+      const pathMap = new Map();
+      for (const p of allPaths) {
+        pathMap.set(this.normalizeFilePath(p.rawPath, workingDir), p);
+      }
+      return pathMap;
+    }
+
+    // Sort paths: prefer paths in case folder first, then by length (longer first)
+    allPaths.sort((a, b) => {
+      const aInWorkDir = this.isPathInWorkingDir(a.rawPath, workingDir);
+      const bInWorkDir = this.isPathInWorkingDir(b.rawPath, workingDir);
+      if (aInWorkDir && !bInWorkDir) return -1;
+      if (bInWorkDir && !aInWorkDir) return 1;
+      return b.rawPath.length - a.rawPath.length; // Longer paths first
+    });
+
+    const result = new Map(); // normalized -> { rawPath, toolId }
+    const seenNormalized = new Set();
+
+    for (const { rawPath, toolId } of allPaths) {
+      const normalized = this.normalizeFilePath(rawPath, workingDir);
+
+      // Check if we've already seen an equivalent path
+      let isDuplicate = false;
+      for (const [, existing] of result) {
+        if (this.pathsAreEquivalent(rawPath, existing.rawPath, workingDir)) {
+          isDuplicate = true;
+          break;
+        }
+      }
+
+      if (!isDuplicate && !seenNormalized.has(normalized)) {
+        result.set(normalized, { rawPath, toolId });
+        seenNormalized.add(normalized);
+      }
+    }
+
+    return result;
+  }
 
   handleBashToolStart(sessionId, tool) {
     let tools = this.projectInsights.get(sessionId) || [];
@@ -5517,8 +5767,25 @@ class ClaudemanApp {
     panel.classList.add('visible');
     this.projectInsightsPanelVisible = true;
 
+    // Get working directory for path normalization
+    const session = this.sessions.get(this.activeSessionId);
+    const workingDir = session?.workingDir || this.currentSessionWorkingDir;
+
+    // Smart deduplication: collect all unique paths across all tools
+    // Paths that resolve to the same file are deduplicated, keeping the most complete version
+    const deduplicatedPaths = this.deduplicateProjectInsightPaths(runningTools, workingDir);
+
+    // Build a set of paths to show (only the best version of each unique file)
+    const pathsToShow = new Set(Array.from(deduplicatedPaths.values()).map(p => p.rawPath));
+
     const html = [];
     for (const tool of runningTools) {
+      // Filter this tool's paths to only include those that weren't deduplicated away
+      const filteredPaths = tool.filePaths.filter(p => pathsToShow.has(p));
+
+      // Skip tools with no paths to show (all were duplicates of better paths elsewhere)
+      if (filteredPaths.length === 0) continue;
+
       const cmdDisplay = tool.command.length > 50
         ? tool.command.substring(0, 50) + '...'
         : tool.command;
@@ -5534,7 +5801,7 @@ class ClaudemanApp {
           <div class="project-insight-paths">
       `);
 
-      for (const path of tool.filePaths) {
+      for (const path of filteredPaths) {
         const fileName = path.split('/').pop();
         html.push(`
             <span class="project-insight-filepath"

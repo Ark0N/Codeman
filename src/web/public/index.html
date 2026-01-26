@@ -65,24 +65,27 @@
       <button class="btn-icon-only" onclick="app.stopCurrentRun()" title="Stop">&#x25A0;</button>
     </div>
 
-    <!-- Respawn Banner -->
+    <!-- Respawn Banner - Compact 2-column layout -->
     <div class="respawn-banner" id="respawnBanner" style="display: none;">
-      <div class="respawn-banner-row">
-        <span class="respawn-indicator">&#x21BB;</span>
-        <span class="respawn-state" id="respawnState">Watching</span>
-        <span class="detection-status" id="detectionStatus"></span>
-        <span class="detection-waiting" id="detectionWaiting" style="display: none;"></span>
-        <span class="detection-confidence" id="detectionConfidence"></span>
-        <span class="detection-hook" id="detectionHook" style="display: none;"></span>
-        <span class="detection-ai-check" id="detectionAiCheck" style="display: none;"></span>
-        <span class="respawn-spacer"></span>
-        <span class="respawn-cycles">#<span id="respawnCycleCount">0</span></span>
-        <span class="respawn-timer" id="respawnTimer" style="display: none;"></span>
-        <span class="respawn-tokens" id="respawnTokens" style="display: none;"></span>
-        <button class="btn-icon-only" onclick="app.stopRespawn()" title="Stop Respawn">&#x25A0;</button>
-      </div>
-      <div class="respawn-timers-row" id="respawnTimersRow" style="display: none;">
-        <div class="respawn-countdown-timers" id="respawnCountdownTimers"></div>
+      <div class="respawn-compact-layout">
+        <div class="respawn-status-col">
+          <div class="respawn-status-row1">
+            <span class="respawn-indicator">&#x21BB;</span>
+            <span class="respawn-state" id="respawnState">Watching</span>
+            <span class="detection-confidence" id="detectionConfidence"></span>
+            <span class="respawn-cycles">#<span id="respawnCycleCount">0</span></span>
+            <span class="respawn-timer" id="respawnTimer" style="display: none;"></span>
+            <span class="respawn-tokens" id="respawnTokens" style="display: none;"></span>
+            <button class="btn-icon-only" onclick="app.stopRespawn()" title="Stop Respawn">&#x25A0;</button>
+          </div>
+          <div class="respawn-status-row2" id="respawnStatusRow2">
+            <span class="detection-hook" id="detectionHook" style="display: none;"></span>
+            <span class="detection-ai-check" id="detectionAiCheck" style="display: none;"></span>
+            <span class="detection-status" id="detectionStatus"></span>
+            <span class="detection-waiting" id="detectionWaiting" style="display: none;"></span>
+            <div class="respawn-countdown-timers" id="respawnCountdownTimers"></div>
+          </div>
+        </div>
         <div class="respawn-action-log" id="respawnActionLog"></div>
       </div>
     </div>

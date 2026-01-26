@@ -451,47 +451,64 @@ body {
   color: var(--text-dim);
 }
 
-/* Respawn Banner - Compact */
+/* Respawn Banner - Compact 2-column layout */
 .respawn-banner {
   display: flex;
-  flex-direction: column;
-  padding: 0.35rem 1rem;
+  padding: 0.25rem 0.75rem;
   background: linear-gradient(90deg, #1e3a1e, #132513);
   border-bottom: 1px solid rgba(34, 197, 94, 0.3);
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   flex-shrink: 0;
 }
 
-.respawn-banner-row {
+.respawn-compact-layout {
   display: flex;
-  align-items: center;
-  gap: 0.75rem;
+  width: 100%;
+  gap: 1rem;
 }
 
-.respawn-timers-row {
+.respawn-status-col {
   display: flex;
-  align-items: flex-start;
-  gap: 1rem;
-  padding-top: 0.35rem;
-  border-top: 1px solid rgba(34, 197, 94, 0.15);
-  margin-top: 0.35rem;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.respawn-status-row1 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.respawn-status-row2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 1.2em;
+  font-size: 0.65rem;
+  color: var(--text-dim);
+}
+
+.respawn-status-row2:empty {
+  display: none;
 }
 
 .respawn-countdown-timers {
   display: flex;
-  gap: 0.4rem;
+  gap: 0.3rem;
   flex-wrap: wrap;
 }
 
 .respawn-countdown-timer {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.25rem;
   background: rgba(0, 0, 0, 0.35);
-  padding: 0.2rem 0.5rem;
-  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
   font-family: 'SF Mono', Monaco, monospace;
-  font-size: 0.7rem;
+  font-size: 0.6rem;
 }
 
 .respawn-countdown-timer .timer-name {
@@ -501,15 +518,15 @@ body {
 .respawn-countdown-timer .timer-value {
   color: var(--green);
   font-weight: 500;
-  min-width: 2.5em;
+  min-width: 2em;
   text-align: right;
 }
 
 .respawn-timer-bar {
-  width: 40px;
-  height: 3px;
+  width: 30px;
+  height: 2px;
   background: rgba(255, 255, 255, 0.15);
-  border-radius: 2px;
+  border-radius: 1px;
   overflow: hidden;
 }
 
@@ -521,16 +538,17 @@ body {
 
 .respawn-action-log {
   flex: 1;
-  max-height: 150px;
+  max-height: 3.2em;
   overflow-y: auto;
-  font-size: 0.7rem;
-  opacity: 0.9;
+  font-size: 0.65rem;
   font-family: 'SF Mono', Monaco, monospace;
   color: var(--text-dim);
+  border-left: 1px solid rgba(34, 197, 94, 0.2);
+  padding-left: 0.5rem;
 }
 
 .respawn-action-log::-webkit-scrollbar {
-  width: 4px;
+  width: 3px;
 }
 
 .respawn-action-log::-webkit-scrollbar-thumb {
@@ -539,8 +557,7 @@ body {
 }
 
 .respawn-action-entry {
-  padding: 0.1rem 0;
-  border-bottom: 1px solid rgba(34, 197, 94, 0.1);
+  padding: 0.05rem 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -548,12 +565,12 @@ body {
 
 .respawn-action-entry .action-time {
   color: var(--text-muted);
-  margin-right: 0.4rem;
+  margin-right: 0.3rem;
 }
 
 .respawn-action-entry .action-type {
   color: var(--green);
-  margin-right: 0.4rem;
+  margin-right: 0.3rem;
 }
 
 .respawn-action-entry .action-detail {
@@ -562,10 +579,11 @@ body {
 
 /* Command entries are highlighted */
 .respawn-action-entry.action-command {
-  background: rgba(59, 130, 246, 0.15);
-  border-left: 2px solid var(--accent);
-  padding-left: 0.3rem;
-  margin: 0.15rem 0;
+  color: var(--accent);
+}
+
+.respawn-action-entry.action-command .action-detail {
+  color: var(--accent-hover);
 }
 
 .respawn-action-entry.action-command .action-type {
@@ -581,54 +599,50 @@ body {
 .respawn-indicator {
   color: var(--green);
   animation: spin 2s linear infinite;
+  font-size: 0.8rem;
 }
 
 .respawn-state {
   color: #fff;
   font-weight: 600;
   background: rgba(34, 197, 94, 0.3);
-  padding: 0.15rem 0.5rem;
+  padding: 0.1rem 0.4rem;
   border-radius: 3px;
+  font-size: 0.7rem;
 }
 
-.respawn-spacer {
-  flex: 1;
-}
+/* Respawn spacer removed - using flex layout */
 
 .respawn-cycles {
   color: var(--text-muted);
   font-family: 'SF Mono', Monaco, monospace;
-  font-size: 0.7rem;
+  font-size: 0.65rem;
 }
 
 .respawn-timer {
   color: var(--accent-hover);
   font-family: 'SF Mono', Monaco, monospace;
   font-weight: 500;
-  padding: 0 0.5rem;
+  font-size: 0.65rem;
+  padding: 0 0.4rem;
   border-left: 1px solid rgba(34, 197, 94, 0.3);
-  border-right: 1px solid rgba(34, 197, 94, 0.3);
 }
 
 .respawn-tokens {
   color: var(--text-dim);
   font-family: 'SF Mono', Monaco, monospace;
-  font-size: 0.7rem;
+  font-size: 0.65rem;
 }
 
 .detection-status {
-  color: var(--text);
-  font-size: 0.75rem;
-  font-weight: 500;
-  padding: 0.1rem 0.5rem;
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 3px;
+  color: var(--text-dim);
+  font-size: 0.65rem;
 }
 
 .detection-ai-check {
-  font-size: 0.7rem;
-  padding: 0.1rem 0.4rem;
-  border-radius: 3px;
+  font-size: 0.65rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: 2px;
   background: rgba(255, 255, 255, 0.1);
 }
 
@@ -655,10 +669,10 @@ body {
 .detection-confidence {
   color: var(--text-dim);
   font-family: 'SF Mono', Monaco, monospace;
-  font-size: 0.65rem;
-  padding: 0.1rem 0.3rem;
+  font-size: 0.6rem;
+  padding: 0.05rem 0.25rem;
   background: rgba(34, 197, 94, 0.15);
-  border-radius: 3px;
+  border-radius: 2px;
 }
 
 .detection-confidence.high {
@@ -677,9 +691,9 @@ body {
 }
 
 .detection-hook {
-  font-size: 0.7rem;
-  padding: 0.1rem 0.4rem;
-  border-radius: 3px;
+  font-size: 0.65rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: 2px;
   background: rgba(139, 92, 246, 0.15);
   color: var(--purple, #a78bfa);
 }
@@ -688,7 +702,6 @@ body {
   background: rgba(139, 92, 246, 0.25);
   color: var(--purple, #a78bfa);
   font-weight: 500;
-  animation: pulse-hook 1.5s ease-in-out infinite;
 }
 
 @keyframes pulse-hook {
@@ -2922,6 +2935,136 @@ kbd {
   animation: none;
 }
 
+/* Subagent Badge on Tabs */
+.session-tab .tab-subagent-badge {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: 0.7rem;
+  cursor: pointer;
+  background: rgba(59, 130, 246, 0.2);
+  border: 1px solid var(--accent);
+}
+
+.session-tab .tab-subagent-badge:hover {
+  background: rgba(59, 130, 246, 0.3);
+}
+
+.session-tab .tab-subagent-badge .subagent-count {
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: var(--accent-hover);
+}
+
+/* Subagent Dropdown */
+.subagent-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 220px;
+  max-width: 320px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.tab-subagent-badge:hover .subagent-dropdown,
+.subagent-dropdown.open {
+  display: block;
+}
+
+.subagent-dropdown-header {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border);
+}
+
+.subagent-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.subagent-dropdown-item:hover {
+  background: var(--bg-hover);
+}
+
+.subagent-dropdown-icon {
+  font-size: 0.85rem;
+}
+
+.subagent-dropdown-name {
+  flex: 1;
+  font-size: 0.75rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-dropdown-status {
+  font-size: 0.6rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-muted);
+}
+
+.subagent-dropdown-status.active {
+  background: var(--green);
+  color: white;
+}
+
+.subagent-dropdown-status.idle {
+  background: var(--yellow);
+  color: #000;
+}
+
+.subagent-dropdown-status.completed {
+  background: var(--accent);
+  color: white;
+}
+
+.subagent-dropdown-name {
+  cursor: pointer;
+}
+
+.subagent-dropdown-name:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+.subagent-dropdown-close {
+  font-size: 1rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 0.25rem;
+  margin-left: auto;
+  opacity: 0.6;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.subagent-dropdown-close:hover {
+  opacity: 1;
+  color: var(--red);
+}
+
 /* Task Panel */
 .task-panel {
   position: fixed;
@@ -3823,6 +3966,8 @@ kbd {
   height: 350px;
   min-width: 280px;
   min-height: 180px;
+  max-width: 90vw;
+  max-height: 80vh;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -3832,6 +3977,19 @@ kbd {
   flex-direction: column;
   overflow: hidden;
   resize: both;
+}
+
+/* Resize handle indicator in bottom-right corner */
+.subagent-window::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 12px;
+  height: 12px;
+  background: linear-gradient(135deg, transparent 50%, var(--border-light) 50%, var(--border-light) 60%, transparent 60%, transparent 70%, var(--border-light) 70%, var(--border-light) 80%, transparent 80%);
+  pointer-events: none;
+  opacity: 0.6;
 }
 
 .subagent-window-header {
@@ -3892,11 +4050,32 @@ kbd {
 .subagent-window-body {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 0.5rem;
   font-family: var(--font-mono);
   font-size: 0.75rem;
   background: #111;
   color: #c8c8c8;
+  min-height: 0; /* Allow flex child to shrink below content size */
+  scroll-behavior: smooth;
+}
+
+/* Custom scrollbar for subagent window body */
+.subagent-window-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.subagent-window-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.subagent-window-body::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.subagent-window-body::-webkit-scrollbar-thumb:hover {
+  background: var(--border-light);
 }
 
 .subagent-window-body .activity-line {
