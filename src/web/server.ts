@@ -321,6 +321,13 @@ export class WebServer extends EventEmitter {
    */
   private setupSubagentWatcherListeners(): void {
     subagentWatcher.on('subagent:discovered', (info: SubagentInfo) => {
+      // Try to get a better description from the session's TaskTracker
+      // The TaskTracker has access to params.description from the Task tool call
+      const betterDescription = this.getTaskDescriptionForSubagent(info);
+      if (betterDescription && betterDescription !== info.description) {
+        info.description = betterDescription;
+        subagentWatcher.updateDescription(info.agentId, betterDescription);
+      }
       this.broadcast('subagent:discovered', info);
     });
 
@@ -347,6 +354,54 @@ export class WebServer extends EventEmitter {
     subagentWatcher.on('subagent:error', (error: Error, agentId?: string) => {
       console.error(`[SubagentWatcher] Error${agentId ? ` for ${agentId}` : ''}:`, error.message);
     });
+  }
+
+  /**
+   * Get the short description from TaskTracker for a discovered subagent.
+   *
+   * When Claude Code spawns a subagent via the Task tool, it passes two parameters:
+   * - description: Short title like "Explore Python scripts" (3-5 words)
+   * - prompt: Full detailed task prompt
+   *
+   * The TaskTracker parses the Task tool call and has access to params.description,
+   * while the SubagentWatcher only sees the JSONL file which contains the full prompt.
+   *
+   * This method correlates them by finding the session whose working directory
+   * matches the subagent's project hash, then checking for recent tasks.
+   */
+  private getTaskDescriptionForSubagent(info: SubagentInfo): string | undefined {
+    // Find the session whose working directory matches this subagent's project
+    for (const session of this.sessions.values()) {
+      const sessionProjectHash = subagentWatcher.getProjectHashForDir(session.workingDir);
+      if (sessionProjectHash === info.projectHash) {
+        // Found the owning session - check its TaskTracker for recent tasks
+        // Get all tasks from the tracker
+        const allTasks = Array.from(session.taskTracker.getAllTasks().values());
+        if (allTasks.length > 0) {
+          // Sort by start time descending to get most recent first
+          const recentTasks = allTasks.sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
+
+          // Check if there's a task that started recently (within 5 seconds of subagent discovery)
+          const subagentStartTime = new Date(info.startedAt).getTime();
+          for (const task of recentTasks) {
+            const taskStartTime = task.startTime || 0;
+            const timeDiff = Math.abs(subagentStartTime - taskStartTime);
+            // If the task started within 5 seconds of the subagent, use its description
+            if (timeDiff < 5000 && task.description) {
+              return task.description;
+            }
+          }
+
+          // Fallback: use the most recent running task's description
+          const runningTask = recentTasks.find(t => t.status === 'running');
+          if (runningTask?.description) {
+            return runningTask.description;
+          }
+        }
+        break; // Found the session, no need to continue
+      }
+    }
+    return undefined;
   }
 
   private async setupRoutes(): Promise<void> {
@@ -1639,6 +1694,36 @@ export class WebServer extends EventEmitter {
       }
     });
 
+    // ============ Subagent Window State Endpoints ============
+    // Persists minimized/open window states for cross-browser sync
+    const windowStatesPath = join(homedir(), '.claudeman', 'subagent-window-states.json');
+
+    this.app.get('/api/subagent-window-states', async () => {
+      try {
+        if (existsSync(windowStatesPath)) {
+          const content = readFileSync(windowStatesPath, 'utf-8');
+          return JSON.parse(content);
+        }
+      } catch (err) {
+        console.error('Failed to read subagent window states:', err);
+      }
+      return { minimized: {}, open: [] };
+    });
+
+    this.app.put('/api/subagent-window-states', async (req) => {
+      const states = req.body as Record<string, unknown>;
+      try {
+        const dir = dirname(windowStatesPath);
+        if (!existsSync(dir)) {
+          mkdirSync(dir, { recursive: true });
+        }
+        writeFileSync(windowStatesPath, JSON.stringify(states, null, 2));
+        return { success: true };
+      } catch (err) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+      }
+    });
+
     // ============ Screen Management Endpoints ============
 
     // Get all tracked screens with stats
@@ -2186,6 +2271,9 @@ export class WebServer extends EventEmitter {
       this.broadcast('session:completion', { id: session.id, result, cost });
       this.broadcast('session:updated', session.toDetailedState());
       this.persistSessionState(session);
+      // Track tokens in run summary (completion event has updated token values)
+      const tracker = this.runSummaryTrackers.get(session.id);
+      if (tracker) tracker.recordTokens(session.inputTokens, session.outputTokens);
     });
 
     session.on('exit', (code) => {

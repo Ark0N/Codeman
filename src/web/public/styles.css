@@ -2103,6 +2103,21 @@ body {
   color: var(--text-dim);
 }
 
+.run-summary-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.run-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 .modal-footer-actions {
   display: flex;
   align-items: center;

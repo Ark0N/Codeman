@@ -1661,6 +1661,15 @@ class ClaudemanApp {
       }
       this.renderSubagentPanel();
       this.updateSubagentWindows();
+
+      // Auto-minimize completed subagent windows
+      if (this.subagentWindows.has(data.agentId)) {
+        const windowData = this.subagentWindows.get(data.agentId);
+        if (windowData && !windowData.minimized) {
+          this.closeSubagentWindow(data.agentId); // This minimizes to tab
+          this.saveSubagentWindowStates(); // Persist the minimized state
+        }
+      }
     });
   }
 
@@ -1722,6 +1731,9 @@ class ClaudemanApp {
         this.subagents.set(s.agentId, s);
       });
       this.renderSubagentPanel();
+
+      // Restore subagent window states (minimized/open) after subagents are loaded
+      this.restoreSubagentWindowStates();
     }
 
     // Auto-select first session if any
@@ -1871,7 +1883,6 @@ class ClaudemanApp {
           <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()">${taskStats.running}</span>` : ''}
           ${subagentBadge}
-          <span class="tab-summary" onclick="event.stopPropagation(); app.openRunSummary('${id}')" title="Run Summary" data-session-id="${id}">&#x1F4CA;</span>
           <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${id}')" title="Session options">&#x2699;</span>
           <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${id}')">&times;</span>
         </div>`);
@@ -1929,6 +1940,9 @@ class ClaudemanApp {
 
     // Re-render tabs to update badge
     this.renderSessionTabs();
+
+    // Persist the state change
+    this.saveSubagentWindowStates();
   }
 
   // Toggle subagent dropdown visibility on click
@@ -1992,6 +2006,9 @@ class ClaudemanApp {
     // Re-render tabs to update badge
     this.renderSessionTabs();
     this.updateConnectionLines();
+
+    // Persist the state change
+    this.saveSubagentWindowStates();
   }
 
   getSessionName(session) {
@@ -3355,17 +3372,20 @@ class ClaudemanApp {
 
   closeSessionOptions() {
     this.editingSessionId = null;
+    // Stop run summary auto-refresh if it was running
+    this.stopRunSummaryAutoRefresh();
     document.getElementById('sessionOptionsModal').classList.remove('active');
   }
 
   // ========== Run Summary Modal ==========
 
   async openRunSummary(sessionId) {
+    // Open session options modal and switch to summary tab
+    this.openSessionOptions(sessionId);
+    this.switchOptionsTab('summary');
+
     this.runSummarySessionId = sessionId;
     this.runSummaryFilter = 'all';
-
-    // Show modal
-    document.getElementById('runSummaryModal').classList.add('active');
 
     // Reset filter buttons
     document.querySelectorAll('.run-summary-filters .filter-btn').forEach(btn => {
@@ -3379,12 +3399,14 @@ class ClaudemanApp {
   closeRunSummary() {
     this.runSummarySessionId = null;
     this.stopRunSummaryAutoRefresh();
-    document.getElementById('runSummaryModal').classList.remove('active');
+    // Close session options modal (summary is now a tab in it)
+    this.closeSessionOptions();
   }
 
   async refreshRunSummary() {
-    if (!this.runSummarySessionId) return;
-    await this.loadRunSummary(this.runSummarySessionId);
+    const sessionId = this.runSummarySessionId || this.editingSessionId;
+    if (!sessionId) return;
+    await this.loadRunSummary(sessionId);
   }
 
   toggleRunSummaryAutoRefresh() {
@@ -3632,6 +3654,12 @@ class ClaudemanApp {
     document.getElementById('respawn-tab').classList.toggle('hidden', tabName !== 'respawn');
     document.getElementById('context-tab').classList.toggle('hidden', tabName !== 'context');
     document.getElementById('ralph-tab').classList.toggle('hidden', tabName !== 'ralph');
+    document.getElementById('summary-tab').classList.toggle('hidden', tabName !== 'summary');
+
+    // Load run summary data when switching to summary tab
+    if (tabName === 'summary' && this.editingSessionId) {
+      this.loadRunSummary(this.editingSessionId);
+    }
   }
 
   getRalphConfig() {
@@ -4006,6 +4034,120 @@ class ClaudemanApp {
       console.error('Failed to load settings from server:', err);
     }
     return this.loadAppSettingsFromStorage();
+  }
+
+  // ========== Subagent Window State Persistence ==========
+
+  /**
+   * Save subagent window states (minimized/open) to server for cross-browser persistence.
+   * Called when a window is minimized, restored, or auto-minimized on completion.
+   */
+  async saveSubagentWindowStates() {
+    // Build state object: which agents are minimized per session
+    const minimizedState = {};
+    for (const [sessionId, agentIds] of this.minimizedSubagents) {
+      minimizedState[sessionId] = Array.from(agentIds);
+    }
+
+    // Also track which windows are open (not minimized)
+    const openWindows = [];
+    for (const [agentId, windowData] of this.subagentWindows) {
+      if (!windowData.minimized) {
+        openWindows.push({
+          agentId,
+          position: windowData.position || null
+        });
+      }
+    }
+
+    const windowStates = { minimized: minimizedState, open: openWindows };
+
+    // Save to localStorage for quick restore
+    localStorage.setItem('claudeman-subagent-window-states', JSON.stringify(windowStates));
+
+    // Save to server for cross-browser persistence
+    try {
+      await fetch('/api/subagent-window-states', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(windowStates)
+      });
+    } catch (err) {
+      console.error('Failed to save subagent window states to server:', err);
+    }
+  }
+
+  /**
+   * Load subagent window states from server (or localStorage fallback).
+   * Called on page load to restore minimized/open window states.
+   */
+  async loadSubagentWindowStates() {
+    let states = null;
+
+    // Try server first for cross-browser sync
+    try {
+      const res = await fetch('/api/subagent-window-states');
+      if (res.ok) {
+        states = await res.json();
+        // Also update localStorage
+        localStorage.setItem('claudeman-subagent-window-states', JSON.stringify(states));
+      }
+    } catch (err) {
+      console.error('Failed to load subagent window states from server:', err);
+    }
+
+    // Fallback to localStorage
+    if (!states) {
+      try {
+        const saved = localStorage.getItem('claudeman-subagent-window-states');
+        if (saved) {
+          states = JSON.parse(saved);
+        }
+      } catch (err) {
+        console.error('Failed to load subagent window states from localStorage:', err);
+      }
+    }
+
+    return states || { minimized: {}, open: [] };
+  }
+
+  /**
+   * Restore subagent window states after loading subagents.
+   * Opens windows that were open before, keeps minimized ones minimized.
+   */
+  async restoreSubagentWindowStates() {
+    const states = await this.loadSubagentWindowStates();
+
+    // Restore minimized state
+    for (const [sessionId, agentIds] of Object.entries(states.minimized || {})) {
+      if (Array.isArray(agentIds) && agentIds.length > 0) {
+        // Verify agents still exist
+        const validAgents = agentIds.filter(id => this.subagents.has(id));
+        if (validAgents.length > 0) {
+          this.minimizedSubagents.set(sessionId, new Set(validAgents));
+        }
+      }
+    }
+
+    // Restore open windows (for non-completed agents only)
+    for (const { agentId, position } of (states.open || [])) {
+      const agent = this.subagents.get(agentId);
+      // Only restore window if agent exists and is still active/idle (not completed)
+      if (agent && agent.status !== 'completed') {
+        this.openSubagentWindow(agentId);
+        // Restore position if saved
+        if (position) {
+          const windowData = this.subagentWindows.get(agentId);
+          if (windowData && windowData.element) {
+            windowData.element.style.left = position.left;
+            windowData.element.style.top = position.top;
+            windowData.position = position;
+          }
+        }
+      }
+    }
+
+    this.renderSessionTabs(); // Update tab badges
   }
 
   // ========== Help Modal ==========
@@ -5402,6 +5544,9 @@ class ClaudemanApp {
       // No animation, just update connection lines
       this.updateConnectionLines();
     }
+
+    // Persist the state change (new window opened)
+    this.saveSubagentWindowStates();
   }
 
   closeSubagentWindow(agentId) {
@@ -5424,6 +5569,9 @@ class ClaudemanApp {
 
       // Update tab badge to show minimized agents
       this.renderSessionTabs();
+
+      // Persist the state change
+      this.saveSubagentWindowStates();
     } else {
       // No parent session - fully remove the window
       windowData.element.remove();

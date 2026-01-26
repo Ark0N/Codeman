@@ -243,6 +243,28 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
+   * Update a subagent's description.
+   * Used to set the short description from TaskTracker when available.
+   */
+  updateDescription(agentId: string, description: string): boolean {
+    const info = this.agentInfo.get(agentId);
+    if (info) {
+      info.description = description;
+      this.emit('subagent:updated', info);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Find sessions whose working directory matches a project hash.
+   * Returns the project hash for a given working directory.
+   */
+  getProjectHashForDir(workingDir: string): string {
+    return this.getProjectHash(workingDir);
+  }
+
+  /**
    * Get recent subagents (modified within specified minutes)
    */
   getRecentSubagents(minutes: number = 60): SubagentInfo[] {

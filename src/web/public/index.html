@@ -326,6 +326,7 @@
           <button class="modal-tab-btn active" data-tab="respawn" onclick="app.switchOptionsTab('respawn')">Respawn</button>
           <button class="modal-tab-btn" data-tab="context" onclick="app.switchOptionsTab('context')">Context</button>
           <button class="modal-tab-btn" data-tab="ralph" onclick="app.switchOptionsTab('ralph')">Ralph / Todo</button>
+          <button class="modal-tab-btn" data-tab="summary" onclick="app.switchOptionsTab('summary')">Summary</button>
         </div>
         <div class="modal-body">
           <!-- Respawn Tab Content -->
@@ -478,11 +479,62 @@
               <button class="btn-toolbar btn-primary" onclick="app.saveRalphConfig()">Save Ralph Config</button>
             </div>
           </div><!-- End ralph-tab -->
+
+          <!-- Summary Tab Content -->
+          <div class="modal-tab-content hidden" id="summary-tab">
+            <!-- Stats Cards -->
+            <div class="run-summary-stats" id="runSummaryStats">
+              <div class="stat-card">
+                <div class="stat-value" id="rsStat-cycles">0</div>
+                <div class="stat-label">Respawn Cycles</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value" id="rsStat-tokens">0</div>
+                <div class="stat-label">Tokens Used</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value" id="rsStat-active">0m</div>
+                <div class="stat-label">Active Time</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value" id="rsStat-issues">0</div>
+                <div class="stat-label">Issues</div>
+              </div>
+            </div>
+
+            <!-- Filter Buttons -->
+            <div class="run-summary-filters">
+              <button class="filter-btn active" data-filter="all" onclick="app.filterRunSummary('all')">All</button>
+              <button class="filter-btn" data-filter="errors" onclick="app.filterRunSummary('errors')">Errors</button>
+              <button class="filter-btn" data-filter="warnings" onclick="app.filterRunSummary('warnings')">Warnings</button>
+              <button class="filter-btn" data-filter="respawn" onclick="app.filterRunSummary('respawn')">Respawn</button>
+              <button class="filter-btn" data-filter="idle" onclick="app.filterRunSummary('idle')">Idle/Working</button>
+            </div>
+
+            <!-- Timeline -->
+            <div class="run-summary-timeline" id="runSummaryTimeline">
+              <p class="empty-message">Select a session to view summary</p>
+            </div>
+
+            <!-- Footer with actions -->
+            <div class="run-summary-footer">
+              <span class="run-summary-session-info" id="runSummarySessionInfo"></span>
+              <div class="run-summary-actions">
+                <label class="auto-refresh-label">
+                  <input type="checkbox" id="runSummaryAutoRefresh" onchange="app.toggleRunSummaryAutoRefresh()">
+                  Auto-refresh
+                </label>
+                <button class="btn-toolbar btn-sm" onclick="app.refreshRunSummary()" title="Refresh summary">&#x21BB; Refresh</button>
+                <button class="btn-toolbar btn-sm" onclick="app.exportRunSummary('json')" title="Export as JSON">Export JSON</button>
+                <button class="btn-toolbar btn-sm" onclick="app.exportRunSummary('md')" title="Export as Markdown">Export MD</button>
+              </div>
+            </div>
+          </div><!-- End summary-tab -->
         </div>
       </div>
     </div>
 
-    <!-- Run Summary Modal -->
+    <!-- Run Summary Modal (legacy, kept for backwards compatibility) -->
     <div class="modal" id="runSummaryModal">
       <div class="modal-backdrop" onclick="app.closeRunSummary()"></div>
       <div class="modal-content modal-lg">

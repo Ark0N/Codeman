@@ -184,7 +184,9 @@ export class RunSummaryTracker {
     const now = Date.now();
 
     // Update idle time if was previously idle
-    if (!this.isCurrentlyActive && this.stats.lastIdleAt) {
+    // Note: We count the initial idle period (from session start to first working state)
+    // even if lastIdleAt hasn't been set yet
+    if (!this.isCurrentlyActive) {
       this.stats.totalTimeIdleMs += now - this.lastStatusChangeAt;
     }
 
