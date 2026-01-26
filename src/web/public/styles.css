@@ -843,6 +843,117 @@ body {
   50% { opacity: 0.6; transform: scale(1.2); }
 }
 
+/* Circuit Breaker Badge */
+.ralph-circuit-breaker {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-left: 0.5rem;
+}
+
+.ralph-circuit-breaker.half-open {
+  background: rgba(255, 193, 7, 0.2);
+  color: #ffc107;
+  border: 1px solid rgba(255, 193, 7, 0.4);
+}
+
+.ralph-circuit-breaker.half-open:hover {
+  background: rgba(255, 193, 7, 0.3);
+}
+
+.ralph-circuit-breaker.open {
+  background: rgba(244, 67, 54, 0.2);
+  color: #f44336;
+  border: 1px solid rgba(244, 67, 54, 0.4);
+  animation: circuit-breaker-pulse 1s ease-in-out infinite;
+}
+
+.ralph-circuit-breaker.open:hover {
+  background: rgba(244, 67, 54, 0.3);
+}
+
+.ralph-circuit-breaker .cb-icon {
+  font-size: 0.8rem;
+}
+
+.ralph-circuit-breaker .cb-text {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+@keyframes circuit-breaker-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* RALPH_STATUS Block Display */
+.ralph-status-block {
+  background: var(--bg-input);
+  border-radius: 4px;
+  padding: 0.5rem 0.75rem;
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+}
+
+.ralph-status-block-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.ralph-status-block-status {
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.ralph-status-block-status.in-progress {
+  background: rgba(33, 150, 243, 0.2);
+  color: #2196f3;
+}
+
+.ralph-status-block-status.complete {
+  background: rgba(76, 175, 80, 0.2);
+  color: #4caf50;
+}
+
+.ralph-status-block-status.blocked {
+  background: rgba(244, 67, 54, 0.2);
+  color: #f44336;
+}
+
+.ralph-status-block-stats {
+  display: flex;
+  gap: 1rem;
+  color: var(--text-dim);
+}
+
+.ralph-status-block-stats span {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.ralph-status-block-recommendation {
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 /* Summary Stats */
 .ralph-summary-stats {
   display: flex;

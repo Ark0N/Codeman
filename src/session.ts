@@ -319,6 +319,12 @@ export interface SessionEvents {
   ralphTodoUpdate: (todos: RalphTodoItem[]) => void;
   /** Ralph completion phrase detected */
   ralphCompletionDetected: (phrase: string) => void;
+  /** RALPH_STATUS block detected */
+  ralphStatusBlockDetected: (block: import('./types.js').RalphStatusBlock) => void;
+  /** Circuit breaker state changed */
+  ralphCircuitBreakerUpdate: (status: import('./types.js').CircuitBreakerStatus) => void;
+  /** Dual-condition exit gate met */
+  ralphExitGateMet: (data: { completionIndicators: number; exitSignal: boolean }) => void;
   /** Bash tool with file paths started */
   bashToolStart: (tool: ActiveBashTool) => void;
   /** Bash tool completed */
@@ -441,6 +447,9 @@ export class Session extends EventEmitter {
     loopUpdate: (state: RalphTrackerState) => void;
     todoUpdate: (todos: RalphTodoItem[]) => void;
     completionDetected: (phrase: string) => void;
+    statusBlockDetected: (block: import('./types.js').RalphStatusBlock) => void;
+    circuitBreakerUpdate: (status: import('./types.js').CircuitBreakerStatus) => void;
+    exitGateMet: (data: { completionIndicators: number; exitSignal: boolean }) => void;
   } | null = null;
 
   // Bash tool tracking (file paths for live log viewing)
@@ -494,10 +503,16 @@ export class Session extends EventEmitter {
       loopUpdate: (state) => this.emit('ralphLoopUpdate', state),
       todoUpdate: (todos) => this.emit('ralphTodoUpdate', todos),
       completionDetected: (phrase) => this.emit('ralphCompletionDetected', phrase),
+      statusBlockDetected: (block) => this.emit('ralphStatusBlockDetected', block),
+      circuitBreakerUpdate: (status) => this.emit('ralphCircuitBreakerUpdate', status),
+      exitGateMet: (data) => this.emit('ralphExitGateMet', data),
     };
     this._ralphTracker.on('loopUpdate', this._ralphHandlers.loopUpdate);
     this._ralphTracker.on('todoUpdate', this._ralphHandlers.todoUpdate);
     this._ralphTracker.on('completionDetected', this._ralphHandlers.completionDetected);
+    this._ralphTracker.on('statusBlockDetected', this._ralphHandlers.statusBlockDetected);
+    this._ralphTracker.on('circuitBreakerUpdate', this._ralphHandlers.circuitBreakerUpdate);
+    this._ralphTracker.on('exitGateMet', this._ralphHandlers.exitGateMet);
 
     // Initialize Bash tool parser and forward events (store handlers for cleanup)
     this._bashToolParser = new BashToolParser({ sessionId: this.id, workingDir: this.workingDir });
@@ -1739,6 +1754,9 @@ export class Session extends EventEmitter {
       this._ralphTracker.off('loopUpdate', this._ralphHandlers.loopUpdate);
       this._ralphTracker.off('todoUpdate', this._ralphHandlers.todoUpdate);
       this._ralphTracker.off('completionDetected', this._ralphHandlers.completionDetected);
+      this._ralphTracker.off('statusBlockDetected', this._ralphHandlers.statusBlockDetected);
+      this._ralphTracker.off('circuitBreakerUpdate', this._ralphHandlers.circuitBreakerUpdate);
+      this._ralphTracker.off('exitGateMet', this._ralphHandlers.exitGateMet);
       this._ralphHandlers = null;
     }
 

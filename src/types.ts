@@ -753,6 +753,139 @@ export interface RalphStateRecord {
   [sessionId: string]: RalphSessionState;
 }
 
+// ========== RALPH_STATUS Block Types ==========
+
+/**
+ * Status values from RALPH_STATUS block.
+ * - IN_PROGRESS: Work is ongoing
+ * - COMPLETE: All tasks finished
+ * - BLOCKED: Needs human intervention
+ */
+export type RalphStatusValue = 'IN_PROGRESS' | 'COMPLETE' | 'BLOCKED';
+
+/**
+ * Test status from RALPH_STATUS block.
+ */
+export type RalphTestsStatus = 'PASSING' | 'FAILING' | 'NOT_RUN';
+
+/**
+ * Work type classification for current iteration.
+ */
+export type RalphWorkType = 'IMPLEMENTATION' | 'TESTING' | 'DOCUMENTATION' | 'REFACTORING';
+
+/**
+ * Parsed RALPH_STATUS block from Claude output.
+ *
+ * Claude outputs this at the end of every response:
+ * ```
+ * ---RALPH_STATUS---
+ * STATUS: IN_PROGRESS
+ * TASKS_COMPLETED_THIS_LOOP: 3
+ * FILES_MODIFIED: 5
+ * TESTS_STATUS: PASSING
+ * WORK_TYPE: IMPLEMENTATION
+ * EXIT_SIGNAL: false
+ * RECOMMENDATION: Continue with database migration
+ * ---END_RALPH_STATUS---
+ * ```
+ */
+export interface RalphStatusBlock {
+  /** Overall loop status */
+  status: RalphStatusValue;
+  /** Number of tasks completed in current iteration */
+  tasksCompletedThisLoop: number;
+  /** Number of files modified in current iteration */
+  filesModified: number;
+  /** Current state of tests */
+  testsStatus: RalphTestsStatus;
+  /** Type of work being performed */
+  workType: RalphWorkType;
+  /** Whether Claude is signaling completion */
+  exitSignal: boolean;
+  /** Claude's recommendation for next steps */
+  recommendation: string;
+  /** Timestamp when this block was parsed */
+  parsedAt: number;
+}
+
+// ========== Circuit Breaker Types ==========
+
+/**
+ * Circuit breaker states for detecting stuck loops.
+ * - CLOSED: Normal operation, all checks passing
+ * - HALF_OPEN: Warning state, some checks failing
+ * - OPEN: Loop is stuck, requires intervention
+ */
+export type CircuitBreakerState = 'CLOSED' | 'HALF_OPEN' | 'OPEN';
+
+/**
+ * Reason codes for circuit breaker state transitions.
+ */
+export type CircuitBreakerReason =
+  | 'normal_operation'
+  | 'no_progress_warning'
+  | 'no_progress_open'
+  | 'same_error_repeated'
+  | 'tests_failing_too_long'
+  | 'progress_detected'
+  | 'manual_reset';
+
+/**
+ * Circuit breaker status for tracking loop health.
+ *
+ * Transitions:
+ * - CLOSED -> HALF_OPEN: consecutive_no_progress >= 2
+ * - CLOSED -> OPEN: consecutive_no_progress >= 3 OR consecutive_same_error >= 5
+ * - HALF_OPEN -> CLOSED: progress detected
+ * - HALF_OPEN -> OPEN: consecutive_no_progress >= 3
+ * - OPEN -> CLOSED: manual reset only
+ */
+export interface CircuitBreakerStatus {
+  /** Current state of the circuit breaker */
+  state: CircuitBreakerState;
+  /** Number of consecutive iterations with no progress */
+  consecutiveNoProgress: number;
+  /** Number of consecutive iterations with the same error */
+  consecutiveSameError: number;
+  /** Number of consecutive iterations with failing tests */
+  consecutiveTestsFailure: number;
+  /** Last iteration number that showed progress */
+  lastProgressIteration: number;
+  /** Human-readable reason for current state */
+  reason: string;
+  /** Reason code for programmatic handling */
+  reasonCode: CircuitBreakerReason;
+  /** Timestamp of last state transition */
+  lastTransitionAt: number;
+  /** Last error message seen (for same-error tracking) */
+  lastErrorMessage: string | null;
+}
+
+/**
+ * Creates initial circuit breaker status.
+ */
+export function createInitialCircuitBreakerStatus(): CircuitBreakerStatus {
+  return {
+    state: 'CLOSED',
+    consecutiveNoProgress: 0,
+    consecutiveSameError: 0,
+    consecutiveTestsFailure: 0,
+    lastProgressIteration: 0,
+    reason: 'Initial state',
+    reasonCode: 'normal_operation',
+    lastTransitionAt: Date.now(),
+    lastErrorMessage: null,
+  };
+}
+
+// ========== Priority Todo Types ==========
+
+/**
+ * Priority levels for todo items.
+ * Matches @fix_plan.md format.
+ */
+export type RalphTodoPriority = 'P0' | 'P1' | 'P2' | null;
+
 /**
  * Creates initial Ralph tracker state
  * @returns Fresh Ralph tracker state with defaults

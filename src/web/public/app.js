@@ -1523,6 +1523,43 @@ class ClaudemanApp {
       });
     });
 
+    // RALPH_STATUS block and circuit breaker events
+    this.eventSource.addEventListener('session:ralphStatusUpdate', (e) => {
+      const data = JSON.parse(e.data);
+      this.updateRalphState(data.sessionId, { statusBlock: data.block });
+    });
+
+    this.eventSource.addEventListener('session:circuitBreakerUpdate', (e) => {
+      const data = JSON.parse(e.data);
+      this.updateRalphState(data.sessionId, { circuitBreaker: data.status });
+      // Notify if circuit breaker opens
+      if (data.status.state === 'OPEN') {
+        const session = this.sessions.get(data.sessionId);
+        this.notificationManager?.notify({
+          urgency: 'critical',
+          category: 'circuit-breaker',
+          sessionId: data.sessionId,
+          sessionName: session?.name || data.sessionId?.slice(0, 8),
+          title: 'Circuit Breaker Open',
+          message: data.status.reason || 'Loop stuck - no progress detected',
+        });
+      }
+    });
+
+    this.eventSource.addEventListener('session:exitGateMet', (e) => {
+      const data = JSON.parse(e.data);
+      // Notify when exit gate is met
+      const session = this.sessions.get(data.sessionId);
+      this.notificationManager?.notify({
+        urgency: 'warning',
+        category: 'exit-gate',
+        sessionId: data.sessionId,
+        sessionName: session?.name || data.sessionId?.slice(0, 8),
+        title: 'Exit Gate Met',
+        message: `Loop ready to exit (indicators: ${data.completionIndicators})`,
+      });
+    });
+
     // Active Bash tool events (for clickable file paths)
     this.eventSource.addEventListener('session:bashToolStart', (e) => {
       const data = JSON.parse(e.data);
@@ -5185,8 +5222,10 @@ class ClaudemanApp {
     const isEnabled = state?.loop?.enabled === true;
     const hasLoop = state?.loop?.active || state?.loop?.completionPhrase;
     const hasTodos = state?.todos?.length > 0;
+    const hasCircuitBreaker = state?.circuitBreaker && state.circuitBreaker.state !== 'CLOSED';
+    const hasStatusBlock = state?.statusBlock !== undefined;
 
-    if (!isEnabled && !hasLoop && !hasTodos) {
+    if (!isEnabled && !hasLoop && !hasTodos && !hasCircuitBreaker && !hasStatusBlock) {
       panel.style.display = 'none';
       return;
     }
@@ -5207,6 +5246,9 @@ class ClaudemanApp {
 
     // Update stats
     this.updateRalphStats(state?.loop, completed, total);
+
+    // Update circuit breaker badge
+    this.updateCircuitBreakerBadge(state?.circuitBreaker);
 
     // Handle collapsed/expanded state
     if (this.ralphStatePanelCollapsed) {
@@ -5266,6 +5308,67 @@ class ClaudemanApp {
       statusText.textContent = 'Tracking';
     } else {
       statusText.textContent = 'Idle';
+    }
+  }
+
+  updateCircuitBreakerBadge(circuitBreaker) {
+    // Find or create the circuit breaker badge container
+    let cbContainer = this.$('ralphCircuitBreakerBadge');
+    if (!cbContainer) {
+      // Create container if it doesn't exist (we'll add it dynamically)
+      const summary = this.$('ralphSummary');
+      if (!summary) return;
+
+      // Check if it already exists
+      cbContainer = summary.querySelector('.ralph-circuit-breaker');
+      if (!cbContainer) {
+        cbContainer = document.createElement('div');
+        cbContainer.id = 'ralphCircuitBreakerBadge';
+        cbContainer.className = 'ralph-circuit-breaker';
+        // Insert after the status badge
+        const statusBadge = this.$('ralphStatusBadge');
+        if (statusBadge && statusBadge.nextSibling) {
+          statusBadge.parentNode.insertBefore(cbContainer, statusBadge.nextSibling);
+        } else {
+          summary.appendChild(cbContainer);
+        }
+      }
+    }
+
+    // Hide if no circuit breaker state or CLOSED
+    if (!circuitBreaker || circuitBreaker.state === 'CLOSED') {
+      cbContainer.style.display = 'none';
+      return;
+    }
+
+    cbContainer.style.display = '';
+    cbContainer.classList.remove('half-open', 'open');
+
+    if (circuitBreaker.state === 'HALF_OPEN') {
+      cbContainer.classList.add('half-open');
+      cbContainer.innerHTML = `<span class="cb-icon">⚠</span><span class="cb-text">Warning</span>`;
+      cbContainer.title = circuitBreaker.reason || 'Circuit breaker warning';
+    } else if (circuitBreaker.state === 'OPEN') {
+      cbContainer.classList.add('open');
+      cbContainer.innerHTML = `<span class="cb-icon">🛑</span><span class="cb-text">Stuck</span>`;
+      cbContainer.title = circuitBreaker.reason || 'Loop appears stuck';
+    }
+
+    // Add click handler to reset
+    cbContainer.onclick = () => this.resetCircuitBreaker();
+  }
+
+  async resetCircuitBreaker() {
+    if (!this.activeSessionId) return;
+    try {
+      const response = await fetch(`/api/sessions/${this.activeSessionId}/ralph-circuit-breaker/reset`, {
+        method: 'POST',
+      });
+      if (response.ok) {
+        console.log('Circuit breaker reset');
+      }
+    } catch (err) {
+      console.error('Failed to reset circuit breaker:', err);
     }
   }
 
@@ -5352,6 +5455,69 @@ class ClaudemanApp {
 
     // Render task cards
     this.renderRalphTasks(todos);
+
+    // Render RALPH_STATUS block if present
+    this.renderRalphStatusBlock(state?.statusBlock);
+  }
+
+  renderRalphStatusBlock(statusBlock) {
+    // Find or create the status block container
+    let container = this.$('ralphStatusBlockDisplay');
+    const expandedContent = this.$('ralphExpandedContent');
+
+    if (!statusBlock) {
+      // Remove container if no status block
+      if (container) {
+        container.remove();
+      }
+      return;
+    }
+
+    if (!container && expandedContent) {
+      container = document.createElement('div');
+      container.id = 'ralphStatusBlockDisplay';
+      container.className = 'ralph-status-block';
+      // Insert at the top of expanded content
+      expandedContent.insertBefore(container, expandedContent.firstChild);
+    }
+
+    if (!container) return;
+
+    // Build status class
+    const statusClass = statusBlock.status === 'IN_PROGRESS' ? 'in-progress'
+      : statusBlock.status === 'COMPLETE' ? 'complete'
+      : statusBlock.status === 'BLOCKED' ? 'blocked' : '';
+
+    // Build tests status icon
+    const testsIcon = statusBlock.testsStatus === 'PASSING' ? '✅'
+      : statusBlock.testsStatus === 'FAILING' ? '❌'
+      : '⏸';
+
+    // Build work type icon
+    const workIcon = statusBlock.workType === 'IMPLEMENTATION' ? '🔧'
+      : statusBlock.workType === 'TESTING' ? '🧪'
+      : statusBlock.workType === 'DOCUMENTATION' ? '📝'
+      : statusBlock.workType === 'REFACTORING' ? '♻️' : '📋';
+
+    let html = `
+      <div class="ralph-status-block-header">
+        <span>RALPH_STATUS</span>
+        <span class="ralph-status-block-status ${statusClass}">${statusBlock.status}</span>
+        ${statusBlock.exitSignal ? '<span style="color: #4caf50;">🚪 EXIT</span>' : ''}
+      </div>
+      <div class="ralph-status-block-stats">
+        <span>${workIcon} ${statusBlock.workType}</span>
+        <span>📁 ${statusBlock.filesModified} files</span>
+        <span>✓ ${statusBlock.tasksCompletedThisLoop} tasks</span>
+        <span>${testsIcon} Tests: ${statusBlock.testsStatus}</span>
+      </div>
+    `;
+
+    if (statusBlock.recommendation) {
+      html += `<div class="ralph-status-block-recommendation">${statusBlock.recommendation}</div>`;
+    }
+
+    container.innerHTML = html;
   }
 
   renderRalphTasks(todos) {

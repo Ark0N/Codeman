@@ -119,6 +119,24 @@ const CTRL_L_PATTERN = /\x0c/g;
 const LEADING_WHITESPACE_PATTERN = /^[\s\r\n]+/;
 
 /**
+ * Formats uptime in seconds to a human-readable string.
+ */
+function formatUptime(seconds: number): string {
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  if (secs > 0 || parts.length === 0) parts.push(`${secs}s`);
+
+  return parts.join(' ');
+}
+
+/**
  * Sanitizes hook event data before broadcasting via SSE.
  * Extracts only relevant fields and limits total size to prevent
  * oversized payloads from being broadcast to all connected clients.
@@ -444,6 +462,50 @@ export class WebServer extends EventEmitter {
       return { success: true, config: this.store.getConfig() };
     });
 
+    // Debug/monitoring endpoint - lightweight, only runs when called
+    this.app.get('/api/debug/memory', async () => {
+      const mem = process.memoryUsage();
+      const spawnState = this.spawnOrchestrator.getState();
+      return {
+        memory: {
+          rss: mem.rss,
+          rssMB: Math.round(mem.rss / 1024 / 1024 * 10) / 10,
+          heapUsed: mem.heapUsed,
+          heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024 * 10) / 10,
+          heapTotal: mem.heapTotal,
+          heapTotalMB: Math.round(mem.heapTotal / 1024 / 1024 * 10) / 10,
+          external: mem.external,
+          externalMB: Math.round(mem.external / 1024 / 1024 * 10) / 10,
+          arrayBuffers: mem.arrayBuffers,
+          arrayBuffersMB: Math.round(mem.arrayBuffers / 1024 / 1024 * 10) / 10,
+        },
+        counts: {
+          sessions: this.sessions.size,
+          sseClients: this.sseClients.size,
+          respawnControllers: this.respawnControllers.size,
+          runSummaryTrackers: this.runSummaryTrackers.size,
+          scheduledRuns: this.scheduledRuns.size,
+          terminalBatches: this.terminalBatches.size,
+          outputBatches: this.outputBatches.size,
+          pendingRespawnStarts: this.pendingRespawnStarts.size,
+          respawnTimers: this.respawnTimers.size,
+          subagents: subagentWatcher.getSubagents().length,
+        },
+        spawn: {
+          activeAgents: spawnState.activeCount,
+          queuedAgents: spawnState.queuedCount,
+          totalSpawned: spawnState.totalSpawned,
+          totalCompleted: spawnState.totalCompleted,
+          totalFailed: spawnState.totalFailed,
+        },
+        uptime: {
+          seconds: Math.round(process.uptime()),
+          formatted: formatUptime(process.uptime()),
+        },
+        timestamp: Date.now(),
+      };
+    });
+
     // Session management
     this.app.get('/api/sessions', async () => this.getSessionsState());
 
@@ -757,6 +819,39 @@ export class WebServer extends EventEmitter {
       });
 
       return { success: true };
+    });
+
+    // Reset circuit breaker for Ralph tracker
+    this.app.post('/api/sessions/:id/ralph-circuit-breaker/reset', async (req) => {
+      const { id } = req.params as { id: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      session.ralphTracker.resetCircuitBreaker();
+      return { success: true };
+    });
+
+    // Get Ralph status block and circuit breaker state
+    this.app.get('/api/sessions/:id/ralph-status', async (req) => {
+      const { id } = req.params as { id: string };
+      const session = this.sessions.get(id);
+
+      if (!session) {
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
+      }
+
+      return {
+        success: true,
+        data: {
+          lastStatusBlock: session.ralphTracker.lastStatusBlock,
+          circuitBreaker: session.ralphTracker.circuitBreakerStatus,
+          cumulativeStats: session.ralphTracker.cumulativeStats,
+          exitGateMet: session.ralphTracker.exitGateMet,
+        }
+      };
     });
 
     // Run prompt in session
@@ -2346,6 +2441,49 @@ export class WebServer extends EventEmitter {
       // Track in run summary
       const tracker = this.runSummaryTrackers.get(session.id);
       if (tracker) tracker.recordRalphCompletion(phrase);
+    });
+
+    // RALPH_STATUS block events
+    session.on('ralphStatusBlockDetected', (block: import('../types.js').RalphStatusBlock) => {
+      this.broadcast('session:ralphStatusUpdate', { sessionId: session.id, block });
+      // Track in run summary
+      const tracker = this.runSummaryTrackers.get(session.id);
+      if (tracker) {
+        tracker.addEvent(
+          block.status === 'BLOCKED' ? 'warning' : 'idle_detected',
+          block.status === 'BLOCKED' ? 'warning' : 'info',
+          `Ralph Status: ${block.status}`,
+          `Tasks: ${block.tasksCompletedThisLoop}, Files: ${block.filesModified}, Tests: ${block.testsStatus}`
+        );
+      }
+    });
+
+    session.on('ralphCircuitBreakerUpdate', (status: import('../types.js').CircuitBreakerStatus) => {
+      this.broadcast('session:circuitBreakerUpdate', { sessionId: session.id, status });
+      // Track state changes in run summary
+      const tracker = this.runSummaryTrackers.get(session.id);
+      if (tracker && status.state === 'OPEN') {
+        tracker.addEvent(
+          'warning',
+          'warning',
+          'Circuit Breaker Opened',
+          status.reason
+        );
+      }
+    });
+
+    session.on('ralphExitGateMet', (data: { completionIndicators: number; exitSignal: boolean }) => {
+      this.broadcast('session:exitGateMet', { sessionId: session.id, ...data });
+      // Track in run summary
+      const tracker = this.runSummaryTrackers.get(session.id);
+      if (tracker) {
+        tracker.addEvent(
+          'ralph_completion',
+          'success',
+          'Exit Gate Met',
+          `Indicators: ${data.completionIndicators}, EXIT_SIGNAL: ${data.exitSignal}`
+        );
+      }
     });
 
     // Bash tool tracking events (for clickable file paths)
