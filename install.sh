@@ -8,6 +8,7 @@
 #   CLAUDEMAN_NONINTERACTIVE=1  - Skip all prompts (for CI/automation)
 #   CLAUDEMAN_INSTALL_DIR       - Custom install directory (default: ~/.claudeman/app)
 #   CLAUDEMAN_SKIP_SYSTEMD=1    - Skip systemd service setup prompt
+#   CLAUDEMAN_NODE_VERSION      - Node.js major version to install (default: 22)
 
 set -euo pipefail
 
@@ -18,6 +19,7 @@ set -euo pipefail
 INSTALL_DIR="${CLAUDEMAN_INSTALL_DIR:-$HOME/.claudeman/app}"
 REPO_URL="https://github.com/Ark0N/claudeman.git"
 MIN_NODE_VERSION=18
+TARGET_NODE_VERSION="${CLAUDEMAN_NODE_VERSION:-22}"
 NONINTERACTIVE="${CLAUDEMAN_NONINTERACTIVE:-0}"
 SKIP_SYSTEMD="${CLAUDEMAN_SKIP_SYSTEMD:-0}"
 
@@ -34,25 +36,29 @@ CLAUDE_SEARCH_PATHS=(
 # Color Output (from scripts/screen-manager.sh pattern)
 # ============================================================================
 
-# Check if terminal supports colors
-if [[ -t 1 ]] && [[ -n "${TERM:-}" ]] && command -v tput &>/dev/null; then
-    ncolors=$(tput colors 2>/dev/null || echo 0)
-    if [[ "$ncolors" -ge 8 ]]; then
-        RED='\033[0;31m'
-        GREEN='\033[0;32m'
-        YELLOW='\033[1;33m'
-        BLUE='\033[0;34m'
-        CYAN='\033[0;36m'
-        MAGENTA='\033[0;35m'
-        BOLD='\033[1m'
-        DIM='\033[2m'
-        NC='\033[0m'
-    else
-        RED='' GREEN='' YELLOW='' BLUE='' CYAN='' MAGENTA='' BOLD='' DIM='' NC=''
+setup_colors() {
+    # Check if terminal supports colors
+    if [[ -t 1 ]] && [[ -n "${TERM:-}" ]] && command -v tput &>/dev/null; then
+        local ncolors
+        ncolors=$(tput colors 2>/dev/null || echo 0)
+        if [[ "$ncolors" -ge 8 ]]; then
+            RED='\033[0;31m'
+            GREEN='\033[0;32m'
+            YELLOW='\033[1;33m'
+            BLUE='\033[0;34m'
+            CYAN='\033[0;36m'
+            MAGENTA='\033[0;35m'
+            BOLD='\033[1m'
+            DIM='\033[2m'
+            NC='\033[0m'
+            return
+        fi
     fi
-else
+    # No color support
     RED='' GREEN='' YELLOW='' BLUE='' CYAN='' MAGENTA='' BOLD='' DIM='' NC=''
-fi
+}
+
+setup_colors
 
 # ============================================================================
 # Output Helpers
@@ -67,7 +73,7 @@ success() {
 }
 
 warn() {
-    echo -e "${YELLOW}Warning:${NC} $1"
+    echo -e "${YELLOW}Warning:${NC} $1" >&2
 }
 
 error() {
@@ -80,6 +86,20 @@ die() {
 }
 
 # ============================================================================
+# Cleanup on Failure
+# ============================================================================
+
+cleanup() {
+    local exit_code=$?
+    if [[ $exit_code -ne 0 ]]; then
+        error "Installation failed. Partial installation may remain at $INSTALL_DIR"
+        error "To retry, run the installer again or remove the directory manually."
+    fi
+}
+
+trap cleanup EXIT
+
+# ============================================================================
 # System Detection
 # ============================================================================
 
@@ -89,6 +109,9 @@ detect_os() {
     case "$os" in
         Darwin) echo "macos" ;;
         Linux)  echo "linux" ;;
+        MINGW*|MSYS*|CYGWIN*)
+            die "Windows is not supported directly. Please use WSL (Windows Subsystem for Linux)."
+            ;;
         *)      die "Unsupported operating system: $os" ;;
     esac
 }
@@ -99,13 +122,25 @@ detect_arch() {
     case "$arch" in
         x86_64|amd64)   echo "x64" ;;
         aarch64|arm64)  echo "arm64" ;;
+        armv7l)         echo "armv7" ;;
         *)              die "Unsupported architecture: $arch" ;;
     esac
 }
 
 detect_linux_distro() {
     if [[ ! -f /etc/os-release ]]; then
-        echo "unknown"
+        # Fallback detection for older systems
+        if [[ -f /etc/debian_version ]]; then
+            echo "debian"
+        elif [[ -f /etc/redhat-release ]]; then
+            echo "fedora"
+        elif [[ -f /etc/arch-release ]]; then
+            echo "arch"
+        elif [[ -f /etc/alpine-release ]]; then
+            echo "alpine"
+        else
+            echo "unknown"
+        fi
         return
     fi
 
@@ -114,16 +149,16 @@ detect_linux_distro() {
     source /etc/os-release
 
     case "${ID:-}" in
-        debian|ubuntu|linuxmint|pop|elementary|zorin|kali)
+        debian|ubuntu|linuxmint|pop|elementary|zorin|kali|raspbian)
             echo "debian"
             ;;
-        fedora|rhel|centos|rocky|alma|ol)
+        fedora|rhel|centos|rocky|alma|ol|amzn)
             echo "fedora"
             ;;
-        arch|manjaro|endeavouros|garuda)
+        arch|manjaro|endeavouros|garuda|artix)
             echo "arch"
             ;;
-        opensuse*|suse*)
+        opensuse*|sles|suse)
             echo "suse"
             ;;
         alpine)
@@ -140,6 +175,42 @@ detect_linux_distro() {
             esac
             ;;
     esac
+}
+
+# ============================================================================
+# Prerequisite Checks
+# ============================================================================
+
+check_curl_or_wget() {
+    if command -v curl &>/dev/null; then
+        DOWNLOADER="curl"
+        return 0
+    elif command -v wget &>/dev/null; then
+        DOWNLOADER="wget"
+        return 0
+    fi
+    return 1
+}
+
+download() {
+    local url="$1"
+    local output="$2"
+
+    if [[ "$DOWNLOADER" == "curl" ]]; then
+        curl -fsSL "$url" -o "$output"
+    else
+        wget -q "$url" -O "$output"
+    fi
+}
+
+download_to_stdout() {
+    local url="$1"
+
+    if [[ "$DOWNLOADER" == "curl" ]]; then
+        curl -fsSL "$url"
+    else
+        wget -qO- "$url"
+    fi
 }
 
 # ============================================================================
@@ -206,16 +277,39 @@ get_claude_path() {
 # Dependency Installation
 # ============================================================================
 
+ensure_sudo() {
+    if [[ $EUID -eq 0 ]]; then
+        return 0
+    fi
+    if ! command -v sudo &>/dev/null; then
+        die "sudo is required but not installed. Please install packages manually or run as root."
+    fi
+    # Validate sudo access
+    if ! sudo -v 2>/dev/null; then
+        die "Failed to obtain sudo privileges."
+    fi
+}
+
+run_as_root() {
+    if [[ $EUID -eq 0 ]]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
+
 install_node_macos() {
     info "Installing Node.js via Homebrew..."
 
     if ! command -v brew &>/dev/null; then
         info "Installing Homebrew first..."
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+        /bin/bash -c "$(download_to_stdout https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
         # Add Homebrew to PATH for Apple Silicon
         if [[ -f /opt/homebrew/bin/brew ]]; then
             eval "$(/opt/homebrew/bin/brew shellenv)"
+        elif [[ -f /usr/local/bin/brew ]]; then
+            eval "$(/usr/local/bin/brew shellenv)"
         fi
     fi
 
@@ -223,89 +317,120 @@ install_node_macos() {
 }
 
 install_node_debian() {
-    info "Installing Node.js via NodeSource..."
+    info "Installing Node.js v$TARGET_NODE_VERSION via NodeSource..."
 
-    # Check if we can use sudo
-    if ! command -v sudo &>/dev/null; then
-        die "sudo is required to install Node.js. Please install sudo or Node.js manually."
-    fi
+    ensure_sudo
 
     # Install prerequisites
-    sudo apt-get update
-    sudo apt-get install -y ca-certificates curl gnupg
+    run_as_root apt-get update -qq
+    run_as_root apt-get install -y -qq ca-certificates curl gnupg
 
-    # Add NodeSource repository
-    sudo mkdir -p /etc/apt/keyrings
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+    # Setup NodeSource repository (new method)
+    run_as_root mkdir -p /etc/apt/keyrings
 
-    NODE_MAJOR=20
-    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
+    # Remove old key if exists to avoid conflicts
+    run_as_root rm -f /etc/apt/keyrings/nodesource.gpg
 
-    sudo apt-get update
-    sudo apt-get install -y nodejs
+    download_to_stdout https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | run_as_root gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$TARGET_NODE_VERSION.x nodistro main" | run_as_root tee /etc/apt/sources.list.d/nodesource.list > /dev/null
+
+    run_as_root apt-get update -qq
+    run_as_root apt-get install -y -qq nodejs
 }
 
 install_node_fedora() {
-    info "Installing Node.js via dnf..."
+    info "Installing Node.js v$TARGET_NODE_VERSION via NodeSource..."
 
-    if ! command -v sudo &>/dev/null; then
-        die "sudo is required to install Node.js. Please install sudo or Node.js manually."
-    fi
+    ensure_sudo
 
-    sudo dnf install -y nodejs npm
+    # Use NodeSource for consistent version across Fedora versions
+    download_to_stdout "https://rpm.nodesource.com/setup_$TARGET_NODE_VERSION.x" | run_as_root bash -
+    run_as_root dnf install -y nodejs
 }
 
 install_node_arch() {
     info "Installing Node.js via pacman..."
 
-    if ! command -v sudo &>/dev/null; then
-        die "sudo is required to install Node.js. Please install sudo or Node.js manually."
-    fi
+    ensure_sudo
+    run_as_root pacman -Sy --noconfirm nodejs npm
 
-    sudo pacman -Sy --noconfirm nodejs npm
+    # Verify version is sufficient
+    local version
+    version=$(node --version 2>/dev/null | sed 's/^v//' | cut -d. -f1)
+    if [[ "$version" -lt "$MIN_NODE_VERSION" ]]; then
+        warn "Arch package nodejs is v$version, which is older than required v$MIN_NODE_VERSION"
+        warn "Consider using nvm or the nodejs-lts-* package instead"
+    fi
 }
 
 install_node_alpine() {
     info "Installing Node.js via apk..."
 
-    if [[ $EUID -eq 0 ]]; then
-        apk add --no-cache nodejs npm
-    else
-        if ! command -v sudo &>/dev/null; then
-            die "sudo is required to install Node.js. Please install sudo or Node.js manually."
-        fi
-        sudo apk add --no-cache nodejs npm
+    run_as_root apk add --no-cache nodejs npm
+
+    # Verify version
+    local version
+    version=$(node --version 2>/dev/null | sed 's/^v//' | cut -d. -f1)
+    if [[ "$version" -lt "$MIN_NODE_VERSION" ]]; then
+        warn "Alpine package nodejs is v$version, which is older than required v$MIN_NODE_VERSION"
+        warn "Consider using a newer Alpine version or building from source"
     fi
+}
+
+install_node_suse() {
+    info "Installing Node.js v$TARGET_NODE_VERSION via NodeSource..."
+
+    ensure_sudo
+
+    # Use NodeSource for openSUSE
+    download_to_stdout "https://rpm.nodesource.com/setup_$TARGET_NODE_VERSION.x" | run_as_root bash -
+    run_as_root zypper install -y nodejs
 }
 
 install_screen_macos() {
     info "Installing GNU Screen via Homebrew..."
+
+    # macOS has a built-in screen but it's very outdated
+    if command -v screen &>/dev/null; then
+        local builtin_version
+        builtin_version=$(screen --version 2>&1 | head -1 || echo "unknown")
+        if [[ "$builtin_version" == *"Apple"* ]] || [[ ! "$builtin_version" == *"GNU"* ]]; then
+            info "Upgrading from macOS built-in screen to GNU Screen..."
+        fi
+    fi
+
     brew install screen
 }
 
 install_screen_debian() {
     info "Installing GNU Screen via apt..."
-    sudo apt-get update
-    sudo apt-get install -y screen
+    ensure_sudo
+    run_as_root apt-get update -qq
+    run_as_root apt-get install -y -qq screen
 }
 
 install_screen_fedora() {
     info "Installing GNU Screen via dnf..."
-    sudo dnf install -y screen
+    ensure_sudo
+    run_as_root dnf install -y screen
 }
 
 install_screen_arch() {
     info "Installing GNU Screen via pacman..."
-    sudo pacman -Sy --noconfirm screen
+    ensure_sudo
+    run_as_root pacman -Sy --noconfirm screen
 }
 
 install_screen_alpine() {
     info "Installing GNU Screen via apk..."
-    if [[ $EUID -eq 0 ]]; then
-        apk add --no-cache screen
-    else
-        sudo apk add --no-cache screen
-    fi
+    run_as_root apk add --no-cache screen
+}
+
+install_screen_suse() {
+    info "Installing GNU Screen via zypper..."
+    ensure_sudo
+    run_as_root zypper install -y screen
 }
 
 install_git_macos() {
@@ -315,27 +440,32 @@ install_git_macos() {
 
 install_git_debian() {
     info "Installing Git via apt..."
-    sudo apt-get update
-    sudo apt-get install -y git
+    ensure_sudo
+    run_as_root apt-get update -qq
+    run_as_root apt-get install -y -qq git
 }
 
 install_git_fedora() {
     info "Installing Git via dnf..."
-    sudo dnf install -y git
+    ensure_sudo
+    run_as_root dnf install -y git
 }
 
 install_git_arch() {
     info "Installing Git via pacman..."
-    sudo pacman -Sy --noconfirm git
+    ensure_sudo
+    run_as_root pacman -Sy --noconfirm git
 }
 
 install_git_alpine() {
     info "Installing Git via apk..."
-    if [[ $EUID -eq 0 ]]; then
-        apk add --no-cache git
-    else
-        sudo apk add --no-cache git
-    fi
+    run_as_root apk add --no-cache git
+}
+
+install_git_suse() {
+    info "Installing Git via zypper..."
+    ensure_sudo
+    run_as_root zypper install -y git
 }
 
 # ============================================================================
@@ -351,6 +481,13 @@ prompt_yes_no() {
         return
     fi
 
+    # Check if stdin is a terminal
+    if [[ ! -t 0 ]]; then
+        # Non-interactive, use default
+        [[ "$default" == "y" ]]
+        return
+    fi
+
     local yn_hint
     if [[ "$default" == "y" ]]; then
         yn_hint="[Y/n]"
@@ -359,13 +496,13 @@ prompt_yes_no() {
     fi
 
     while true; do
-        echo -en "${CYAN}$prompt${NC} $yn_hint "
+        echo -en "${CYAN}$prompt${NC} $yn_hint " >&2
         read -r answer
         answer="${answer:-$default}"
         case "$answer" in
             [Yy]|[Yy][Ee][Ss]) return 0 ;;
             [Nn]|[Nn][Oo])     return 1 ;;
-            *)                 echo "Please answer yes or no." ;;
+            *)                 echo "Please answer yes or no." >&2 ;;
         esac
     done
 }
@@ -387,12 +524,21 @@ detect_shell_profile() {
             fi
             ;;
         bash)
-            if [[ -f "$HOME/.bashrc" ]]; then
-                echo "$HOME/.bashrc"
-            elif [[ -f "$HOME/.bash_profile" ]]; then
-                echo "$HOME/.bash_profile"
+            # macOS uses .bash_profile, Linux typically uses .bashrc
+            if [[ "$(uname -s)" == "Darwin" ]]; then
+                if [[ -f "$HOME/.bash_profile" ]]; then
+                    echo "$HOME/.bash_profile"
+                else
+                    echo "$HOME/.profile"
+                fi
             else
-                echo "$HOME/.profile"
+                if [[ -f "$HOME/.bashrc" ]]; then
+                    echo "$HOME/.bashrc"
+                elif [[ -f "$HOME/.bash_profile" ]]; then
+                    echo "$HOME/.bash_profile"
+                else
+                    echo "$HOME/.profile"
+                fi
             fi
             ;;
         fish)
@@ -410,13 +556,13 @@ add_to_path() {
     profile=$(detect_shell_profile)
 
     # Check if already in PATH
-    if echo "$PATH" | tr ':' '\n' | grep -qx "$bin_dir"; then
+    if [[ ":$PATH:" == *":$bin_dir:"* ]]; then
         info "PATH already includes $bin_dir"
         return 0
     fi
 
     # Check if already in profile
-    if [[ -f "$profile" ]] && grep -q "$bin_dir" "$profile" 2>/dev/null; then
+    if [[ -f "$profile" ]] && grep -qF "$bin_dir" "$profile" 2>/dev/null; then
         info "PATH export already in $profile"
         return 0
     fi
@@ -430,6 +576,8 @@ add_to_path() {
     shell_name="$(basename "${SHELL:-/bin/bash}")"
 
     if [[ "$shell_name" == "fish" ]]; then
+        echo "" >> "$profile"
+        echo "# Added by Claudeman installer" >> "$profile"
         echo "fish_add_path $bin_dir" >> "$profile"
     else
         echo "" >> "$profile"
@@ -452,6 +600,10 @@ setup_systemd_service() {
 
     mkdir -p "$service_dir"
 
+    # Find node binary path
+    local node_path
+    node_path=$(command -v node)
+
     # Create service file
     cat > "$service_file" << EOF
 [Unit]
@@ -460,11 +612,12 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=$INSTALL_DIR/dist/index.js web --https
+ExecStart=$node_path $INSTALL_DIR/dist/index.js web --https
 WorkingDirectory=$HOME
 Restart=always
 RestartSec=10
 Environment=NODE_ENV=production
+Environment=PATH=$PATH
 
 [Install]
 WantedBy=default.target
@@ -474,7 +627,7 @@ EOF
     systemctl --user daemon-reload
 
     # Enable service
-    systemctl --user enable claudeman-web.service
+    systemctl --user enable claudeman-web.service 2>/dev/null || true
 
     # Enable lingering (allows service to run after logout)
     if command -v loginctl &>/dev/null; then
@@ -486,23 +639,50 @@ EOF
 }
 
 # ============================================================================
+# Installation Helpers
+# ============================================================================
+
+install_dependency() {
+    local dep_name="$1"
+    local os="$2"
+    local distro="$3"
+
+    local install_func="install_${dep_name}_${distro:-$os}"
+
+    # Try distro-specific first, then OS-level
+    if [[ "$os" == "macos" ]]; then
+        install_func="install_${dep_name}_macos"
+    elif ! declare -f "$install_func" &>/dev/null; then
+        die "Don't know how to install $dep_name on $distro. Please install it manually."
+    fi
+
+    "$install_func"
+}
+
+# ============================================================================
 # Main Installation
 # ============================================================================
 
 print_banner() {
     echo -e "${CYAN}${BOLD}"
-    echo "  ____  _                 _                             "
-    echo " / ___|| | __ _ _   _  __| | ___ _ __ ___   __ _ _ __   "
-    echo "| |    | |/ _\` | | | |/ _\` |/ _ \\ '_ \` _ \\ / _\` | '_ \\  "
-    echo "| |____| | (_| | |_| | (_| |  __/ | | | | | (_| | | | | "
-    echo " \\_____|_|\\__,_|\\__,_|\\__,_|\\___|_| |_| |_|\\__,_|_| |_| "
-    echo ""
+    cat << 'EOF'
+   ____ _                 _
+  / ___| | __ _ _   _  __| | ___ _ __ ___   __ _ _ __
+ | |   | |/ _` | | | |/ _` |/ _ \ '_ ` _ \ / _` | '_ \
+ | |___| | (_| | |_| | (_| |  __/ | | | | | (_| | | | |
+  \____|_|\__,_|\__,_|\__,_|\___|_| |_| |_|\__,_|_| |_|
+EOF
     echo -e "${NC}${DIM}  The missing control plane for Claude Code${NC}"
     echo ""
 }
 
 main() {
     print_banner
+
+    # Check for curl/wget first
+    if ! check_curl_or_wget; then
+        die "curl or wget is required but neither is installed. Please install one first."
+    fi
 
     # Detect system
     local os arch distro=""
@@ -524,14 +704,7 @@ main() {
     info "Checking Git..."
     if ! check_git; then
         if prompt_yes_no "Git is not installed. Install it now?"; then
-            case "$os-$distro" in
-                macos-*)       install_git_macos ;;
-                linux-debian)  install_git_debian ;;
-                linux-fedora)  install_git_fedora ;;
-                linux-arch)    install_git_arch ;;
-                linux-alpine)  install_git_alpine ;;
-                *)             die "Don't know how to install Git on this system. Please install it manually." ;;
-            esac
+            install_dependency "git" "$os" "$distro"
         else
             die "Git is required to install Claudeman."
         fi
@@ -548,15 +721,11 @@ main() {
             warn "Node.js $node_version is installed but version $MIN_NODE_VERSION+ is required."
         fi
 
-        if prompt_yes_no "Install Node.js $MIN_NODE_VERSION+?"; then
-            case "$os-$distro" in
-                macos-*)       install_node_macos ;;
-                linux-debian)  install_node_debian ;;
-                linux-fedora)  install_node_fedora ;;
-                linux-arch)    install_node_arch ;;
-                linux-alpine)  install_node_alpine ;;
-                *)             die "Don't know how to install Node.js on this system. Please install it manually." ;;
-            esac
+        if prompt_yes_no "Install Node.js v$TARGET_NODE_VERSION?"; then
+            install_dependency "node" "$os" "$distro"
+
+            # Rehash to pick up new node
+            hash -r 2>/dev/null || true
         else
             die "Node.js $MIN_NODE_VERSION+ is required to run Claudeman."
         fi
@@ -575,14 +744,7 @@ main() {
     info "Checking GNU Screen..."
     if ! check_screen; then
         if prompt_yes_no "GNU Screen is not installed. Install it now?"; then
-            case "$os-$distro" in
-                macos-*)       install_screen_macos ;;
-                linux-debian)  install_screen_debian ;;
-                linux-fedora)  install_screen_fedora ;;
-                linux-arch)    install_screen_arch ;;
-                linux-alpine)  install_screen_alpine ;;
-                *)             die "Don't know how to install GNU Screen on this system. Please install it manually." ;;
-            esac
+            install_dependency "screen" "$os" "$distro"
         else
             die "GNU Screen is required for session persistence."
         fi
@@ -598,7 +760,7 @@ main() {
         echo -e "  ${DIM}Claudeman requires Claude CLI to manage AI sessions.${NC}"
         echo -e "  ${DIM}Install it with:${NC}"
         echo ""
-        echo -e "    ${CYAN}npm install -g @anthropic-ai/claude-code${NC}"
+        echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}"
         echo ""
         echo -e "  ${DIM}Or see: https://docs.anthropic.com/en/docs/claude-code${NC}"
         echo ""
@@ -619,14 +781,26 @@ main() {
     if [[ -d "$INSTALL_DIR/.git" ]]; then
         info "Existing installation found, updating..."
         cd "$INSTALL_DIR"
-        git fetch --quiet origin
-        git reset --hard origin/master --quiet
+
+        # Check for local changes
+        if ! git diff --quiet 2>/dev/null || ! git diff --staged --quiet 2>/dev/null; then
+            warn "Local changes detected in $INSTALL_DIR"
+            if prompt_yes_no "Discard local changes and update?" "n"; then
+                git fetch --quiet origin
+                git reset --hard origin/master --quiet
+            else
+                info "Keeping existing installation, skipping update"
+            fi
+        else
+            git fetch --quiet origin
+            git reset --hard origin/master --quiet
+        fi
     else
         # Create parent directory
         mkdir -p "$(dirname "$INSTALL_DIR")"
 
-        # Clone repository
-        git clone --quiet "$REPO_URL" "$INSTALL_DIR"
+        # Clone repository (shallow for speed)
+        git clone --quiet --depth 1 "$REPO_URL" "$INSTALL_DIR"
         cd "$INSTALL_DIR"
     fi
 
@@ -637,10 +811,10 @@ main() {
     # ========================================================================
 
     info "Installing dependencies..."
-    npm install --quiet --no-fund --no-audit
+    npm install --quiet --no-fund --no-audit 2>/dev/null || npm install --no-fund --no-audit
 
     info "Building..."
-    npm run build --quiet
+    npm run build --quiet 2>/dev/null || npm run build
 
     success "Build complete"
 
@@ -653,9 +827,15 @@ main() {
 
     # Create symlink in a common PATH location if possible
     local symlink_dir="$HOME/.local/bin"
-    if [[ -d "$symlink_dir" ]] || mkdir -p "$symlink_dir" 2>/dev/null; then
+    mkdir -p "$symlink_dir" 2>/dev/null || true
+    if [[ -d "$symlink_dir" ]]; then
         ln -sf "$INSTALL_DIR/dist/index.js" "$symlink_dir/claudeman"
         info "Created symlink: $symlink_dir/claudeman"
+
+        # Add ~/.local/bin to PATH if not already there
+        if [[ ":$PATH:" != *":$symlink_dir:"* ]]; then
+            add_to_path "$symlink_dir"
+        fi
     fi
 
     # ========================================================================
@@ -664,7 +844,7 @@ main() {
 
     if [[ "$os" == "linux" ]] && [[ "$SKIP_SYSTEMD" != "1" ]] && command -v systemctl &>/dev/null; then
         echo ""
-        if prompt_yes_no "Set up systemd service for auto-start?"; then
+        if prompt_yes_no "Set up systemd service for auto-start?" "n"; then
             setup_systemd_service
         fi
     fi
@@ -705,14 +885,14 @@ main() {
 
     if ! check_claude; then
         echo -e "  ${YELLOW}${BOLD}Reminder:${NC} Install Claude CLI to start using Claudeman:"
-        echo -e "    ${CYAN}npm install -g @anthropic-ai/claude-code${NC}"
+        echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}"
         echo ""
     fi
 
     # Remind to reload shell if PATH was modified
     local profile
     profile=$(detect_shell_profile)
-    if ! echo "$PATH" | tr ':' '\n' | grep -qx "$bin_dir"; then
+    if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
         echo -e "  ${DIM}Restart your shell or run: source $profile${NC}"
         echo ""
     fi
