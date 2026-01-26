@@ -1,6 +1,6 @@
 {
   "name": "claudeman",
-  "version": "0.1375",
+  "version": "0.1376",
   "description": "The missing control plane for Claude Code - run 20 autonomous agents with real-time monitoring and session persistence",
   "type": "module",
   "main": "dist/index.js",
@@ -9,6 +9,7 @@
     "claudeman-mcp": "./dist/mcp-server.js"
   },
   "scripts": {
+    "postinstall": "node scripts/postinstall.js",
     "build": "tsc && chmod +x dist/index.js dist/mcp-server.js && mkdir -p dist/web dist/templates && cp -r src/web/public dist/web/ && cp src/templates/case-template.md dist/templates/",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
