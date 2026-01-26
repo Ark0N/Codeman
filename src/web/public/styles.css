@@ -4023,7 +4023,17 @@ kbd {
 }
 
 .subagent-window-title .status.active {
-  background: var(--success);
+  background: var(--green);
+  color: white;
+}
+
+.subagent-window-title .status.idle {
+  background: var(--yellow);
+  color: #000;
+}
+
+.subagent-window-title .status.completed {
+  background: var(--accent);
   color: white;
 }
 
