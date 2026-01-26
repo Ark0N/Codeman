@@ -259,6 +259,8 @@ export interface AgentContext {
   depth: number;
   /** Timeout timer handle */
   timeoutTimer: NodeJS.Timeout | null;
+  /** Warning timer handle (fires at 90% of timeout) */
+  warningTimer: NodeJS.Timeout | null;
   /** Progress poll timer handle */
   progressTimer: NodeJS.Timeout | null;
   /** Current status */

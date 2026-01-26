@@ -545,6 +545,7 @@ export class SpawnOrchestrator extends EventEmitter {
       parentSessionId: task.parentSessionId,
       depth: task.depth,
       timeoutTimer: null,
+      warningTimer: null,
       progressTimer: null,
       status: 'initializing',
       startedAt: null,
@@ -688,9 +689,9 @@ export class SpawnOrchestrator extends EventEmitter {
   private setupTimeout(agent: AgentContext): void {
     const timeoutMs = agent.task.spec.timeoutMinutes * 60 * 1000;
 
-    // Warning at 90%
+    // Warning at 90% - store timer for cleanup
     const warningMs = timeoutMs * 0.9;
-    setTimeout(() => {
+    agent.warningTimer = setTimeout(() => {
       if (agent.status === 'running' && this._sessionCreator && agent.sessionId) {
         this._sessionCreator.writeToSession(
           agent.sessionId,
@@ -817,6 +818,10 @@ export class SpawnOrchestrator extends EventEmitter {
     if (agent.timeoutTimer) {
       clearTimeout(agent.timeoutTimer);
       agent.timeoutTimer = null;
+    }
+    if (agent.warningTimer) {
+      clearTimeout(agent.warningTimer);
+      agent.warningTimer = null;
     }
     if (agent.progressTimer) {
       clearInterval(agent.progressTimer);

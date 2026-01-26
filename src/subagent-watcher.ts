@@ -273,6 +273,39 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
+   * Clean up stale completed agents to prevent unbounded memory growth
+   * Removes agents that have been completed for longer than STALE_AGENT_MAX_AGE_MS
+   */
+  private cleanupStaleAgents(): void {
+    const now = Date.now();
+    const agentsToDelete: string[] = [];
+
+    for (const [agentId, info] of this.agentInfo) {
+      if (info.status === 'completed') {
+        const lastActivity = new Date(info.lastActivityAt).getTime();
+        if (now - lastActivity > STALE_AGENT_MAX_AGE_MS) {
+          agentsToDelete.push(agentId);
+        }
+      }
+    }
+
+    for (const agentId of agentsToDelete) {
+      const info = this.agentInfo.get(agentId);
+      if (info) {
+        // Clean up all associated resources
+        this.agentInfo.delete(agentId);
+        this.pendingToolCalls.delete(agentId);
+        this.filePositions.delete(info.filePath);
+        const watcher = this.fileWatchers.get(info.filePath);
+        if (watcher) {
+          watcher.close();
+          this.fileWatchers.delete(info.filePath);
+        }
+      }
+    }
+  }
+
+  /**
    * Get all known subagents
    */
   getSubagents(): SubagentInfo[] {
@@ -744,6 +777,13 @@ export class SubagentWatcher extends EventEmitter {
         }
       });
 
+      // Handle watcher errors to prevent unhandled exceptions
+      watcher.on('error', (error) => {
+        this.emit('subagent:error', error instanceof Error ? error : new Error(String(error)));
+        this.dirWatchers.delete(dir);
+        this.knownSubagentDirs.delete(dir);
+      });
+
       this.dirWatchers.set(dir, watcher);
     } catch {
       // Watch failed
@@ -834,6 +874,12 @@ export class SubagentWatcher extends EventEmitter {
             this.resetIdleTimer(agentId);
           }
         }
+      });
+
+      // Handle watcher errors to prevent unhandled exceptions
+      watcher.on('error', (error) => {
+        this.emit('subagent:error', error instanceof Error ? error : new Error(String(error)), agentId);
+        this.fileWatchers.delete(filePath);
       });
 
       this.fileWatchers.set(filePath, watcher);
@@ -997,7 +1043,10 @@ export class SubagentWatcher extends EventEmitter {
           } else if (content.type === 'tool_result' && content.tool_use_id) {
             // Extract tool result
             const resultContent = this.extractToolResultContent(content.content);
-            const toolName = this.pendingToolCalls.get(agentId)?.get(content.tool_use_id);
+            const agentPendingCalls = this.pendingToolCalls.get(agentId);
+            const toolName = agentPendingCalls?.get(content.tool_use_id);
+            // Delete after lookup to prevent memory leak
+            agentPendingCalls?.delete(content.tool_use_id);
 
             const toolResult: SubagentToolResult = {
               agentId,
@@ -1044,7 +1093,10 @@ export class SubagentWatcher extends EventEmitter {
         for (const content of entry.message.content) {
           if (content.type === 'tool_result' && content.tool_use_id) {
             const resultContent = this.extractToolResultContent(content.content);
-            const toolName = this.pendingToolCalls.get(agentId)?.get(content.tool_use_id);
+            const agentPendingCalls = this.pendingToolCalls.get(agentId);
+            const toolName = agentPendingCalls?.get(content.tool_use_id);
+            // Delete after lookup to prevent memory leak
+            agentPendingCalls?.delete(content.tool_use_id);
 
             const toolResult: SubagentToolResult = {
               agentId,
