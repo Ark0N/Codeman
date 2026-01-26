@@ -6,7 +6,7 @@
 
 <p align="center">
   Autonomous Claude Code work while you sleep<br>
-  <em>Persistent sessions, Ralph Loop tracking, Respawn Controller, Multi-Session Dashboards, Monitor Panel</em>
+  <em>Persistent sessions, Ralph Loop tracking, Respawn Controller, Agent Visualization, Multi-Session Dashboards</em>
 </p>
 
 <p align="center">
@@ -163,6 +163,58 @@ Implement the feature described below...
 
 ---
 
+### 👁️ Live Agent Visualization
+
+**Watch your agents work in real-time.** Claudeman monitors Claude Code's background agents (the `Task` tool) and displays them in draggable floating windows with Matrix-style connection lines.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Session Tab [AGENTS (3)]                                   │
+│      │                                                      │
+│      │ ╭──────────────────╮  ╭──────────────────╮          │
+│      ├─┤ Agent: explore   │  │ Agent: implement │          │
+│      │ │ ● active         │  │ ○ completed      │          │
+│      │ │ Tool: Grep       │  │ Result: success  │          │
+│      │ ╰──────────────────╯  ╰──────────────────╯          │
+│      │         ╭──────────────────╮                        │
+│      └─────────┤ Agent: test      │                        │
+│                │ ◐ idle           │                        │
+│                ╰──────────────────╯                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Features:**
+- **Floating windows** — Draggable, resizable panels for each agent
+- **Connection lines** — Animated green lines linking parent sessions to agent windows
+- **Live activity log** — See every tool call, progress update, and message in real-time
+- **Status indicators** — Green (active), yellow (idle), blue (completed)
+- **Model badges** — Shows Haiku/Sonnet/Opus with color coding
+- **Auto-behavior** — Windows auto-open on spawn, auto-minimize on completion
+- **Tab badge** — Shows "AGENT" or "AGENTS (n)" count on session tabs
+
+**Subagent API:**
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/subagents` | List all background agents |
+| `GET` | `/api/subagents/:id` | Agent info and status |
+| `GET` | `/api/subagents/:id/transcript` | Full activity transcript |
+| `DELETE` | `/api/subagents/:id` | Kill agent process |
+
+---
+
+### 🔍 Project Insights Panel
+
+Real-time visibility into what Claude is reading and searching:
+
+- **Active Bash tools** displayed as they run (file viewers, grep, find)
+- **Clickable file paths** — Jump directly to files in Claude Code
+- **Timeout indicators** — See how long tools have been running
+- **Smart deduplication** — Overlapping file ranges collapsed
+
+Toggle via App Settings → Display → "Show Project Insights Panel"
+
+---
+
 ### 📊 Smart Token Management
 
 Never hit token limits unexpectedly:
@@ -198,6 +250,28 @@ Run **20 parallel sessions** with full visibility:
 <p align="center">
   <img src="docs/screenshots/multi-session-monitor.png" alt="Monitor Panel" width="800">
 </p>
+
+---
+
+### 📈 Run Summary ("What Happened While You Were Away")
+
+Click the chart icon on any session tab to see a complete timeline of what happened:
+
+**Tracked Events:**
+- Session start/stop and respawn cycles
+- Idle/working transitions with durations
+- Token milestones (every 50k tokens)
+- Auto-compact and auto-clear triggers
+- Ralph Loop completions
+- AI check results (idle detection verdicts)
+- Hook events (permissions, questions, stops)
+- Errors, warnings, and stuck-state alerts
+
+**Stats at a glance:**
+- Total respawn cycles
+- Peak token usage
+- Active vs idle time
+- Error/warning counts
 
 ---
 
@@ -276,10 +350,24 @@ claudeman web --https
 | `POST` | `/api/spawn/agents/:id/cancel` | Cancel agent |
 | `POST` | `/api/spawn/trigger` | Programmatic spawn |
 
+### Subagents (Claude Code Background Agents)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/subagents` | List all background agents |
+| `GET` | `/api/subagents/:id` | Agent info and status |
+| `GET` | `/api/subagents/:id/transcript` | Full activity transcript |
+| `DELETE` | `/api/subagents/:id` | Kill agent process |
+| `GET` | `/api/sessions/:id/subagents` | Subagents for session's working dir |
+
 ### Hooks & Notifications
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/hook-event` | Hook callbacks `{event, sessionId, data?}` → notifications + tab alerts |
+
+### Run Summary
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/sessions/:id/run-summary` | Timeline + stats for "what happened" |
 
 ### Real-Time
 | Method | Endpoint | Description |
@@ -295,7 +383,7 @@ claudeman web --https
 flowchart TB
     subgraph Claudeman["🖥️ CLAUDEMAN"]
         subgraph Frontend["Frontend Layer"]
-            UI["Web UI<br/><small>xterm.js</small>"]
+            UI["Web UI<br/><small>xterm.js + Agent Windows</small>"]
             API["REST API<br/><small>Fastify</small>"]
             SSE["SSE Events<br/><small>/api/events</small>"]
         end
@@ -311,6 +399,7 @@ flowchart TB
         subgraph Detection["Detection Layer"]
             RT["Ralph Tracker"]
             SD["Spawn Detector"]
+            SW["Subagent Watcher<br/><small>~/.claude/projects/*/subagents</small>"]
         end
 
         subgraph Persistence["Persistence Layer"]
@@ -322,6 +411,7 @@ flowchart TB
             CLI["Claude CLI"]
             A1["Agent 1<br/><small>(screen)</small>"]
             A2["Agent 2<br/><small>(screen)</small>"]
+            BG["Background Agents<br/><small>(Task tool)</small>"]
         end
     end
 
@@ -341,6 +431,8 @@ flowchart TB
     S2 --> SCR
     RC --> SCR
     SCR --> CLI
+    SW --> BG
+    SW --> SSE
 ```
 
 ---
@@ -378,5 +470,5 @@ MIT — see [LICENSE](LICENSE)
 ---
 
 <p align="center">
-  <strong>Track sessions. Control respawn. Let it run while you sleep.</strong>
+  <strong>Track sessions. Visualize agents. Control respawn. Let it run while you sleep.</strong>
 </p>
