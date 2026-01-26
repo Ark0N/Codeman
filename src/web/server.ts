@@ -1972,6 +1972,18 @@ export class WebServer extends EventEmitter {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Subagent not found or already completed');
     });
 
+    // Trigger cleanup of stale subagents
+    this.app.post('/api/subagents/cleanup', async () => {
+      const removed = subagentWatcher.cleanupNow();
+      return { success: true, data: { removed, remaining: subagentWatcher.getSubagents().length } };
+    });
+
+    // Clear all tracked subagents (memory only - does not delete files)
+    this.app.delete('/api/subagents', async () => {
+      const cleared = subagentWatcher.clearAll();
+      return { success: true, data: { cleared } };
+    });
+
 
     // ========== Hook Events ==========
 

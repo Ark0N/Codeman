@@ -25,7 +25,20 @@ Always bump version on every COM, even for small changes.
 
 Claudeman is a Claude Code session manager with a web interface and autonomous Ralph Loop. It spawns Claude CLI processes via PTY, streams output in real-time via SSE, and supports scheduled/timed runs.
 
-**Version**: 0.1389 (must match `package.json`)
+### Mission: Rock-Solid Performance
+
+**The app MUST remain fast, responsive, and never hang** — even with many tabs open and many subagent windows active. This is a core design principle, not a nice-to-have. Every feature must be built with this constraint in mind:
+
+- **60fps terminal rendering** with batched writes and `requestAnimationFrame`
+- **Auto-trimming buffers** prevent memory bloat in long-running sessions
+- **Debounced state persistence** (500ms) avoids disk thrashing
+- **SSE batching** (16ms) reduces client-side event storms
+- **Lazy loading** of agent transcripts and historical data
+- **No blocking operations** in the main event loop
+
+When adding new features, always ask: "Will this maintain responsiveness with 20 sessions and 50 agent windows?"
+
+**Version**: 0.1390 (must match `package.json`)
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 
@@ -528,7 +541,7 @@ TUI uses React JSX (`jsx: react-jsx`, `jsxImportSource: react`) for Ink componen
 - **Session event**: Add to `SessionEvents` interface in `session.ts`, emit via `this.emit()`, subscribe in server.ts, handle in frontend
 - **Session setting**: Add field to `SessionState` in `types.ts`, include in `session.toState()`, call `this.persistSessionState(session)` in server.ts after the change
 - **MCP tool**: Add tool definition in `mcp-server.ts` using `server.tool()`, use `apiRequest()` to call Claudeman REST API
-- **New test file**: Create `test/<name>.test.ts`, pick unique port (next available: 3155), add to port allocation table above
+- **New test file**: Create `test/<name>.test.ts`, pick unique port (next available: 3183), add to port allocation table above
 
 ### API Error Codes
 

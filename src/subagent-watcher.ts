@@ -123,7 +123,10 @@ const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude/projects');
 const IDLE_TIMEOUT_MS = 30000; // Consider agent idle after 30s of no activity
 const POLL_INTERVAL_MS = 1000; // Check for new files every second
 const LIVENESS_CHECK_MS = 10000; // Check if subagent processes are still alive every 10s
-const STALE_AGENT_MAX_AGE_MS = 24 * 60 * 60 * 1000; // Remove completed agents older than 24 hours
+const STALE_COMPLETED_MAX_AGE_MS = 60 * 60 * 1000; // Remove completed agents older than 1 hour
+const STALE_IDLE_MAX_AGE_MS = 4 * 60 * 60 * 1000; // Remove idle agents older than 4 hours
+const STARTUP_MAX_FILE_AGE_MS = 4 * 60 * 60 * 1000; // Only load files modified in last 4 hours on startup
+const MAX_TRACKED_AGENTS = 500; // Maximum agents to track (LRU eviction when exceeded)
 
 // Display/preview length constants
 const TEXT_PREVIEW_LENGTH = 200; // Length for text previews in tool results
@@ -282,36 +285,91 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
-   * Clean up stale completed agents to prevent unbounded memory growth
-   * Removes agents that have been completed for longer than STALE_AGENT_MAX_AGE_MS
+   * Clean up stale agents to prevent unbounded memory growth.
+   * - Completed agents: removed after STALE_COMPLETED_MAX_AGE_MS (1 hour)
+   * - Idle agents: removed after STALE_IDLE_MAX_AGE_MS (4 hours)
+   * Also enforces MAX_TRACKED_AGENTS limit with LRU eviction.
    */
   private cleanupStaleAgents(): void {
     const now = Date.now();
     const agentsToDelete: string[] = [];
 
     for (const [agentId, info] of this.agentInfo) {
-      if (info.status === 'completed') {
-        const lastActivity = new Date(info.lastActivityAt).getTime();
-        if (now - lastActivity > STALE_AGENT_MAX_AGE_MS) {
-          agentsToDelete.push(agentId);
-        }
+      const lastActivity = new Date(info.lastActivityAt).getTime();
+      const age = now - lastActivity;
+
+      // Clean up based on status and age
+      if (info.status === 'completed' && age > STALE_COMPLETED_MAX_AGE_MS) {
+        agentsToDelete.push(agentId);
+      } else if (info.status === 'idle' && age > STALE_IDLE_MAX_AGE_MS) {
+        agentsToDelete.push(agentId);
       }
     }
 
-    for (const agentId of agentsToDelete) {
-      const info = this.agentInfo.get(agentId);
-      if (info) {
-        // Clean up all associated resources
-        this.agentInfo.delete(agentId);
-        this.pendingToolCalls.delete(agentId);
-        this.filePositions.delete(info.filePath);
-        const watcher = this.fileWatchers.get(info.filePath);
-        if (watcher) {
-          watcher.close();
-          this.fileWatchers.delete(info.filePath);
-        }
+    // Enforce max tracked agents limit (LRU eviction)
+    const currentCount = this.agentInfo.size - agentsToDelete.length;
+    if (currentCount > MAX_TRACKED_AGENTS) {
+      // Sort by lastActivityAt (oldest first) and evict oldest completed/idle agents
+      const sortedAgents = Array.from(this.agentInfo.entries())
+        .filter(([id]) => !agentsToDelete.includes(id))
+        .filter(([, info]) => info.status !== 'active') // Keep active agents
+        .sort((a, b) => new Date(a[1].lastActivityAt).getTime() - new Date(b[1].lastActivityAt).getTime());
+
+      const toEvict = currentCount - MAX_TRACKED_AGENTS;
+      for (let i = 0; i < toEvict && i < sortedAgents.length; i++) {
+        agentsToDelete.push(sortedAgents[i][0]);
       }
     }
+
+    // Perform cleanup
+    for (const agentId of agentsToDelete) {
+      this.removeAgent(agentId);
+    }
+  }
+
+  /**
+   * Remove an agent and all its associated resources.
+   */
+  private removeAgent(agentId: string): void {
+    const info = this.agentInfo.get(agentId);
+    if (info) {
+      this.agentInfo.delete(agentId);
+      this.pendingToolCalls.delete(agentId);
+      this.filePositions.delete(info.filePath);
+      const watcher = this.fileWatchers.get(info.filePath);
+      if (watcher) {
+        watcher.close();
+        this.fileWatchers.delete(info.filePath);
+      }
+      const timer = this.idleTimers.get(agentId);
+      if (timer) {
+        clearTimeout(timer);
+        this.idleTimers.delete(agentId);
+      }
+    }
+  }
+
+  /**
+   * Manually trigger cleanup of stale agents.
+   * Returns number of agents removed.
+   */
+  cleanupNow(): number {
+    const beforeCount = this.agentInfo.size;
+    this.cleanupStaleAgents();
+    return beforeCount - this.agentInfo.size;
+  }
+
+  /**
+   * Clear all tracked agents (for manual reset).
+   * Returns number of agents cleared.
+   */
+  clearAll(): number {
+    const count = this.agentInfo.size;
+    const agentIds = Array.from(this.agentInfo.keys());
+    for (const agentId of agentIds) {
+      this.removeAgent(agentId);
+    }
+    return count;
   }
 
   /**
@@ -757,12 +815,12 @@ export class SubagentWatcher extends EventEmitter {
     if (this.knownSubagentDirs.has(dir)) return;
     this.knownSubagentDirs.add(dir);
 
-    // Watch existing files
+    // Watch existing files (initial scan - skip old files)
     try {
       const files = readdirSync(dir);
       for (const file of files) {
         if (file.endsWith('.jsonl')) {
-          this.watchAgentFile(join(dir, file), projectHash, sessionId);
+          this.watchAgentFile(join(dir, file), projectHash, sessionId, true);
         }
       }
     } catch {
@@ -801,8 +859,12 @@ export class SubagentWatcher extends EventEmitter {
 
   /**
    * Watch a specific agent transcript file
+   * @param filePath Path to the agent transcript file
+   * @param projectHash Claude project hash
+   * @param sessionId Claude session ID
+   * @param isInitialScan If true, skip files older than STARTUP_MAX_FILE_AGE_MS
    */
-  private watchAgentFile(filePath: string, projectHash: string, sessionId: string): void {
+  private watchAgentFile(filePath: string, projectHash: string, sessionId: string, isInitialScan: boolean = false): void {
     if (this.fileWatchers.has(filePath)) return;
 
     const agentId = basename(filePath).replace('agent-', '').replace('.jsonl', '');
@@ -814,6 +876,14 @@ export class SubagentWatcher extends EventEmitter {
     } catch {
       // File was deleted between discovery and stat - skip this agent
       return;
+    }
+
+    // On initial scan, skip old files to avoid loading stale historical data
+    if (isInitialScan) {
+      const fileAge = Date.now() - stat.mtime.getTime();
+      if (fileAge > STARTUP_MAX_FILE_AGE_MS) {
+        return; // Skip old files on startup
+      }
     }
 
     // Extract description - prefer reading from parent transcript (most reliable)
