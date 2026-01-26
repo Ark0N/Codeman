@@ -273,6 +273,12 @@ export class WebServer extends EventEmitter {
   // Token recording for daily stats (track what's been recorded to avoid double-counting)
   private lastRecordedTokens: Map<string, { input: number; output: number }> = new Map();
   private tokenRecordingTimer: NodeJS.Timeout | null = null;
+  // Server startup time for respawn grace period calculation
+  private readonly serverStartTime: number = Date.now();
+  // Pending respawn start timers (for cleanup on shutdown)
+  private pendingRespawnStarts: Map<string, NodeJS.Timeout> = new Map();
+  // Grace period before starting restored respawn controllers (2 minutes)
+  private static readonly RESPAWN_RESTORE_GRACE_PERIOD_MS = 2 * 60 * 1000;
 
   constructor(port: number = 3000, https: boolean = false) {
     super();
@@ -2068,6 +2074,13 @@ export class WebServer extends EventEmitter {
       this.respawnTimers.delete(sessionId);
     }
 
+    // Clear pending respawn start timer (from restoration grace period)
+    const pendingStart = this.pendingRespawnStarts.get(sessionId);
+    if (pendingStart) {
+      clearTimeout(pendingStart);
+      this.pendingRespawnStarts.delete(sessionId);
+    }
+
     // Stop transcript watcher
     this.stopTranscriptWatcher(sessionId);
 
@@ -2497,9 +2510,10 @@ export class WebServer extends EventEmitter {
     this.broadcast('respawn:timerStarted', { sessionId, durationMinutes, endAt, startedAt: now });
   }
 
+
   /**
    * Restore a RespawnController from persisted configuration.
-   * Creates the controller, sets up listeners, starts it, and optionally sets up a timed respawn.
+   * Creates the controller, sets up listeners, but does NOT start it.
    *
    * @param session - The session to attach the controller to
    * @param config - The persisted respawn configuration
@@ -2536,13 +2550,34 @@ export class WebServer extends EventEmitter {
 
     this.respawnControllers.set(session.id, controller);
     this.setupRespawnListeners(session.id, controller);
-    controller.start();
+
+    // Calculate delay: wait until 2 minutes after server start before starting respawn
+    // This prevents false idle detection immediately after a server restart/rebuild
+    const timeSinceStart = Date.now() - this.serverStartTime;
+    const delayMs = Math.max(0, WebServer.RESPAWN_RESTORE_GRACE_PERIOD_MS - timeSinceStart);
+
+    if (delayMs > 0) {
+      console.log(`[Server] Restored respawn controller for session ${session.id} from ${source} (will start in ${Math.ceil(delayMs / 1000)}s)`);
+      const timer = setTimeout(() => {
+        this.pendingRespawnStarts.delete(session.id);
+        // Double-check controller still exists and is stopped
+        const ctrl = this.respawnControllers.get(session.id);
+        if (ctrl && ctrl.state === 'stopped') {
+          ctrl.start();
+          this.broadcast('respawn:started', { sessionId: session.id });
+          console.log(`[Server] Restored respawn controller started for session ${session.id}`);
+        }
+      }, delayMs);
+      this.pendingRespawnStarts.set(session.id, timer);
+    } else {
+      // Grace period has passed, start immediately
+      controller.start();
+      console.log(`[Server] Restored respawn controller for session ${session.id} from ${source} (started immediately)`);
+    }
 
     if (config.durationMinutes && config.durationMinutes > 0) {
       this.setupTimedRespawn(session.id, config.durationMinutes);
     }
-
-    console.log(`[Server] Restored respawn controller for session ${session.id} from ${source}`);
   }
 
   // Helper to get custom CLAUDE.md template path from settings
@@ -3199,6 +3234,12 @@ export class WebServer extends EventEmitter {
 
     // Stop screen stats collection
     this.screenManager.stopStatsCollection();
+
+    // Clear all pending respawn start timers (from restoration grace period)
+    for (const timer of this.pendingRespawnStarts.values()) {
+      clearTimeout(timer);
+    }
+    this.pendingRespawnStarts.clear();
 
     // Stop all respawn controllers and remove listeners
     for (const controller of this.respawnControllers.values()) {
