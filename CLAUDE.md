@@ -38,7 +38,7 @@ Claudeman is a Claude Code session manager with a web interface and autonomous R
 
 When adding new features, always ask: "Will this maintain responsiveness with 20 sessions and 50 agent windows?"
 
-**Version**: 0.1392 (must match `package.json`)
+**Version**: 0.1393 (must match `package.json`)
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, Server-Sent Events, node-pty
 

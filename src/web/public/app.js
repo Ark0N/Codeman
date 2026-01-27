@@ -2332,6 +2332,16 @@ class ClaudemanApp {
       // Update subagent window visibility for active session
       this.updateSubagentWindowVisibility();
 
+      // Load file browser if enabled
+      const settings = this.loadAppSettingsFromStorage();
+      if (settings.showFileBrowser) {
+        const fileBrowserPanel = this.$('fileBrowserPanel');
+        if (fileBrowserPanel) {
+          fileBrowserPanel.classList.add('visible');
+          this.loadFileBrowser(sessionId);
+        }
+      }
+
       this.terminal.focus();
       this.terminal.scrollToBottom();
     } catch (err) {
@@ -7072,6 +7082,313 @@ class ClaudemanApp {
       panel.classList.remove('visible');
       this.projectInsightsPanelVisible = false;
     }
+  }
+
+  // ========== File Browser Panel ==========
+
+  // File tree data and state
+  fileBrowserData = null;
+  fileBrowserExpandedDirs = new Set();
+  fileBrowserFilter = '';
+  fileBrowserAllExpanded = false;
+  filePreviewContent = '';
+
+  async loadFileBrowser(sessionId) {
+    if (!sessionId) return;
+
+    const treeEl = this.$('fileBrowserTree');
+    const statusEl = this.$('fileBrowserStatus');
+    if (!treeEl) return;
+
+    // Show loading state
+    treeEl.innerHTML = '<div class="file-browser-loading">Loading files...</div>';
+
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/files?depth=5&showHidden=false`);
+      if (!res.ok) throw new Error('Failed to load files');
+
+      const result = await res.json();
+      if (!result.success) throw new Error(result.error || 'Failed to load files');
+
+      this.fileBrowserData = result.data;
+      this.renderFileBrowserTree();
+
+      // Update status
+      if (statusEl) {
+        const { totalFiles, totalDirectories, truncated } = result.data;
+        statusEl.textContent = `${totalFiles} files, ${totalDirectories} dirs${truncated ? ' (truncated)' : ''}`;
+      }
+    } catch (err) {
+      console.error('Failed to load file browser:', err);
+      treeEl.innerHTML = `<div class="file-browser-empty">Failed to load files: ${err.message}</div>`;
+    }
+  }
+
+  renderFileBrowserTree() {
+    const treeEl = this.$('fileBrowserTree');
+    if (!treeEl || !this.fileBrowserData) return;
+
+    const { tree } = this.fileBrowserData;
+    if (!tree || tree.length === 0) {
+      treeEl.innerHTML = '<div class="file-browser-empty">No files found</div>';
+      return;
+    }
+
+    const html = [];
+    const filter = this.fileBrowserFilter.toLowerCase();
+
+    const renderNode = (node, depth) => {
+      const isDir = node.type === 'directory';
+      const isExpanded = this.fileBrowserExpandedDirs.has(node.path);
+      const matchesFilter = !filter || node.name.toLowerCase().includes(filter);
+
+      // For directories, check if any children match
+      let hasMatchingChildren = false;
+      if (isDir && filter && node.children) {
+        hasMatchingChildren = this.hasMatchingChild(node, filter);
+      }
+
+      const shouldShow = matchesFilter || hasMatchingChildren;
+      const hiddenClass = !shouldShow && filter ? ' hidden-by-filter' : '';
+
+      const icon = isDir
+        ? (isExpanded ? '\uD83D\uDCC2' : '\uD83D\uDCC1')
+        : this.getFileIcon(node.extension);
+
+      const expandIcon = isDir
+        ? `<span class="file-tree-expand${isExpanded ? ' expanded' : ''}">\u25B6</span>`
+        : '<span class="file-tree-expand"></span>';
+
+      const sizeStr = !isDir && node.size !== undefined
+        ? `<span class="file-tree-size">${this.formatFileSize(node.size)}</span>`
+        : '';
+
+      const nameClass = isDir ? 'file-tree-name directory' : 'file-tree-name';
+
+      html.push(`
+        <div class="file-tree-item${hiddenClass}" data-path="${this.escapeHtml(node.path)}" data-type="${node.type}" data-depth="${depth}">
+          ${expandIcon}
+          <span class="file-tree-icon">${icon}</span>
+          <span class="${nameClass}">${this.escapeHtml(node.name)}</span>
+          ${sizeStr}
+        </div>
+      `);
+
+      // Render children if directory is expanded
+      if (isDir && isExpanded && node.children) {
+        for (const child of node.children) {
+          renderNode(child, depth + 1);
+        }
+      }
+    };
+
+    for (const node of tree) {
+      renderNode(node, 0);
+    }
+
+    treeEl.innerHTML = html.join('');
+
+    // Add click handlers
+    treeEl.querySelectorAll('.file-tree-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const path = item.dataset.path;
+        const type = item.dataset.type;
+
+        if (type === 'directory') {
+          this.toggleFileBrowserFolder(path);
+        } else {
+          this.openFilePreview(path);
+        }
+      });
+    });
+  }
+
+  hasMatchingChild(node, filter) {
+    if (!node.children) return false;
+    for (const child of node.children) {
+      if (child.name.toLowerCase().includes(filter)) return true;
+      if (child.type === 'directory' && this.hasMatchingChild(child, filter)) return true;
+    }
+    return false;
+  }
+
+  toggleFileBrowserFolder(path) {
+    if (this.fileBrowserExpandedDirs.has(path)) {
+      this.fileBrowserExpandedDirs.delete(path);
+    } else {
+      this.fileBrowserExpandedDirs.add(path);
+    }
+    this.renderFileBrowserTree();
+  }
+
+  filterFileBrowser(value) {
+    this.fileBrowserFilter = value;
+    // Auto-expand all if filtering
+    if (value) {
+      this.expandAllDirectories(this.fileBrowserData?.tree || []);
+    }
+    this.renderFileBrowserTree();
+  }
+
+  expandAllDirectories(nodes) {
+    for (const node of nodes) {
+      if (node.type === 'directory') {
+        this.fileBrowserExpandedDirs.add(node.path);
+        if (node.children) {
+          this.expandAllDirectories(node.children);
+        }
+      }
+    }
+  }
+
+  collapseAllDirectories() {
+    this.fileBrowserExpandedDirs.clear();
+  }
+
+  toggleFileBrowserExpand() {
+    this.fileBrowserAllExpanded = !this.fileBrowserAllExpanded;
+    const btn = this.$('fileBrowserExpandBtn');
+
+    if (this.fileBrowserAllExpanded) {
+      this.expandAllDirectories(this.fileBrowserData?.tree || []);
+      if (btn) btn.innerHTML = '\u229F'; // Collapse icon
+    } else {
+      this.collapseAllDirectories();
+      if (btn) btn.innerHTML = '\u229E'; // Expand icon
+    }
+    this.renderFileBrowserTree();
+  }
+
+  refreshFileBrowser() {
+    if (this.activeSessionId) {
+      this.fileBrowserExpandedDirs.clear();
+      this.fileBrowserFilter = '';
+      this.fileBrowserAllExpanded = false;
+      const searchInput = this.$('fileBrowserSearch');
+      if (searchInput) searchInput.value = '';
+      this.loadFileBrowser(this.activeSessionId);
+    }
+  }
+
+  closeFileBrowserPanel() {
+    const panel = this.$('fileBrowserPanel');
+    if (panel) {
+      panel.classList.remove('visible');
+    }
+    // Save setting
+    const settings = this.loadAppSettingsFromStorage();
+    settings.showFileBrowser = false;
+    localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
+  }
+
+  async openFilePreview(filePath) {
+    if (!this.activeSessionId || !filePath) return;
+
+    const overlay = this.$('filePreviewOverlay');
+    const titleEl = this.$('filePreviewTitle');
+    const bodyEl = this.$('filePreviewBody');
+    const footerEl = this.$('filePreviewFooter');
+
+    if (!overlay || !bodyEl) return;
+
+    // Show overlay with loading state
+    overlay.classList.add('visible');
+    titleEl.textContent = filePath;
+    bodyEl.innerHTML = '<div class="binary-message">Loading...</div>';
+    footerEl.textContent = '';
+
+    try {
+      const res = await fetch(`/api/sessions/${this.activeSessionId}/file-content?path=${encodeURIComponent(filePath)}&lines=500`);
+      if (!res.ok) throw new Error('Failed to load file');
+
+      const result = await res.json();
+      if (!result.success) throw new Error(result.error || 'Failed to load file');
+
+      const data = result.data;
+
+      if (data.type === 'image') {
+        bodyEl.innerHTML = `<img src="${data.url}" alt="${this.escapeHtml(filePath)}">`;
+        footerEl.textContent = `${this.formatFileSize(data.size)} \u2022 ${data.extension}`;
+      } else if (data.type === 'video') {
+        bodyEl.innerHTML = `<video src="${data.url}" controls autoplay></video>`;
+        footerEl.textContent = `${this.formatFileSize(data.size)} \u2022 ${data.extension}`;
+      } else if (data.type === 'binary') {
+        bodyEl.innerHTML = `<div class="binary-message">Binary file (${this.formatFileSize(data.size)})<br>Cannot preview</div>`;
+        footerEl.textContent = data.extension || 'binary';
+      } else {
+        // Text content
+        this.filePreviewContent = data.content;
+        bodyEl.innerHTML = `<pre><code>${this.escapeHtml(data.content)}</code></pre>`;
+        const truncNote = data.truncated ? ` (showing 500/${data.totalLines} lines)` : '';
+        footerEl.textContent = `${data.totalLines} lines \u2022 ${this.formatFileSize(data.size)}${truncNote}`;
+      }
+    } catch (err) {
+      console.error('Failed to preview file:', err);
+      bodyEl.innerHTML = `<div class="binary-message">Error: ${err.message}</div>`;
+    }
+  }
+
+  closeFilePreview() {
+    const overlay = this.$('filePreviewOverlay');
+    if (overlay) {
+      overlay.classList.remove('visible');
+    }
+    this.filePreviewContent = '';
+  }
+
+  copyFilePreviewContent() {
+    if (this.filePreviewContent) {
+      navigator.clipboard.writeText(this.filePreviewContent).then(() => {
+        this.showToast('Copied to clipboard', 'success');
+      }).catch(() => {
+        this.showToast('Failed to copy', 'error');
+      });
+    }
+  }
+
+  getFileIcon(ext) {
+    if (!ext) return '\uD83D\uDCC4'; // Default file
+
+    const icons = {
+      // TypeScript/JavaScript
+      'ts': '\uD83D\uDCD8', 'tsx': '\uD83D\uDCD8', 'js': '\uD83D\uDCD2', 'jsx': '\uD83D\uDCD2',
+      'mjs': '\uD83D\uDCD2', 'cjs': '\uD83D\uDCD2',
+      // Python
+      'py': '\uD83D\uDC0D', 'pyx': '\uD83D\uDC0D', 'pyw': '\uD83D\uDC0D',
+      // Rust/Go/C
+      'rs': '\uD83E\uDD80', 'go': '\uD83D\uDC39', 'c': '\u2699\uFE0F', 'cpp': '\u2699\uFE0F',
+      'h': '\u2699\uFE0F', 'hpp': '\u2699\uFE0F',
+      // Web
+      'html': '\uD83C\uDF10', 'htm': '\uD83C\uDF10', 'css': '\uD83C\uDFA8', 'scss': '\uD83C\uDFA8',
+      'sass': '\uD83C\uDFA8', 'less': '\uD83C\uDFA8',
+      // Data
+      'json': '\uD83D\uDCCB', 'yaml': '\uD83D\uDCCB', 'yml': '\uD83D\uDCCB', 'xml': '\uD83D\uDCCB',
+      'toml': '\uD83D\uDCCB', 'csv': '\uD83D\uDCCB',
+      // Docs
+      'md': '\uD83D\uDCDD', 'markdown': '\uD83D\uDCDD', 'txt': '\uD83D\uDCDD', 'rst': '\uD83D\uDCDD',
+      // Images
+      'png': '\uD83D\uDDBC\uFE0F', 'jpg': '\uD83D\uDDBC\uFE0F', 'jpeg': '\uD83D\uDDBC\uFE0F',
+      'gif': '\uD83D\uDDBC\uFE0F', 'svg': '\uD83D\uDDBC\uFE0F', 'webp': '\uD83D\uDDBC\uFE0F',
+      'ico': '\uD83D\uDDBC\uFE0F', 'bmp': '\uD83D\uDDBC\uFE0F',
+      // Video/Audio
+      'mp4': '\uD83C\uDFAC', 'webm': '\uD83C\uDFAC', 'mov': '\uD83C\uDFAC',
+      'mp3': '\uD83C\uDFB5', 'wav': '\uD83C\uDFB5', 'ogg': '\uD83C\uDFB5',
+      // Config/Shell
+      'sh': '\uD83D\uDCBB', 'bash': '\uD83D\uDCBB', 'zsh': '\uD83D\uDCBB',
+      'env': '\uD83D\uDD10', 'gitignore': '\uD83D\uDEAB', 'dockerfile': '\uD83D\uDC33',
+      // Lock files
+      'lock': '\uD83D\uDD12',
+    };
+
+    return icons[ext.toLowerCase()] || '\uD83D\uDCC4';
+  }
+
+  formatFileSize(bytes) {
+    if (bytes === undefined || bytes === null) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   }
 
   // ========== Log Viewer Windows (Floating File Streamers) ==========
