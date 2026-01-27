@@ -2448,7 +2448,10 @@ class ClaudemanApp {
     generatedPlan: null,      // [{content, priority, enabled, id}] or null
     planGenerated: false,
     skipPlanGeneration: false,
+    planDetailLevel: 'standard', // 'brief', 'standard', 'detailed'
   };
+  planLoadingTimer = null;
+  planLoadingStartTime = null;
 
   showRalphWizard() {
     // Reset wizard state
@@ -2463,6 +2466,7 @@ class ClaudemanApp {
       generatedPlan: null,
       planGenerated: false,
       skipPlanGeneration: false,
+      planDetailLevel: 'standard',
     };
 
     // Reset UI
@@ -2524,13 +2528,16 @@ class ClaudemanApp {
       this.ralphWizardConfig.completionPhrase = completionPhrase.toUpperCase();
       this.ralphWizardConfig.caseName = caseName;
 
-      // Move to step 2 (plan generation)
+      // Move to step 2 (plan generation) and auto-start
       this.ralphWizardStep = 2;
       this.updateRalphWizardUI();
+
+      // Auto-start plan generation
+      this.generatePlan();
     } else if (this.ralphWizardStep === 2) {
       // Must have generated or skipped plan
       if (!this.ralphWizardConfig.planGenerated && !this.ralphWizardConfig.skipPlanGeneration) {
-        this.showToast('Generate a plan or skip', 'warning');
+        this.showToast('Wait for plan generation or skip', 'warning');
         return;
       }
 
@@ -2628,11 +2635,34 @@ class ClaudemanApp {
   async generatePlan() {
     const config = this.ralphWizardConfig;
 
+    // Stop any existing timer
+    if (this.planLoadingTimer) {
+      clearInterval(this.planLoadingTimer);
+      this.planLoadingTimer = null;
+    }
+
     // Show loading state
-    document.getElementById('planGenerationControls')?.classList.add('hidden');
     document.getElementById('planGenerationError')?.classList.add('hidden');
     document.getElementById('planEditor')?.classList.add('hidden');
     document.getElementById('planGenerationLoading')?.classList.remove('hidden');
+
+    // Start elapsed time display
+    this.planLoadingStartTime = Date.now();
+    const timeEl = document.getElementById('planLoadingTime');
+    if (timeEl) timeEl.textContent = '0s';
+
+    this.planLoadingTimer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - this.planLoadingStartTime) / 1000);
+      if (timeEl) timeEl.textContent = `${elapsed}s`;
+    }, 1000);
+
+    // Determine max items based on detail level
+    const detailConfig = {
+      brief: { maxItems: 5, includeTests: false },
+      standard: { maxItems: 8, includeTests: true },
+      detailed: { maxItems: 12, includeTests: true },
+    };
+    const { maxItems, includeTests } = detailConfig[config.planDetailLevel] || detailConfig.standard;
 
     try {
       const res = await fetch('/api/generate-plan', {
@@ -2640,11 +2670,19 @@ class ClaudemanApp {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           taskDescription: config.taskDescription,
-          maxItems: 8,
+          maxItems,
+          includeTests,
+          detailLevel: config.planDetailLevel,
         }),
       });
 
       const data = await res.json();
+
+      // Stop timer
+      if (this.planLoadingTimer) {
+        clearInterval(this.planLoadingTimer);
+        this.planLoadingTimer = null;
+      }
 
       if (!data.success) {
         this.showPlanError(data.error || 'Failed to generate plan');
@@ -2665,13 +2703,31 @@ class ClaudemanApp {
       config.planGenerated = true;
       config.skipPlanGeneration = false;
 
-      // Show editor
+      // Show editor and update detail buttons
       this.renderPlanEditor();
+      this.updateDetailLevelButtons();
 
     } catch (err) {
+      // Stop timer
+      if (this.planLoadingTimer) {
+        clearInterval(this.planLoadingTimer);
+        this.planLoadingTimer = null;
+      }
       console.error('Plan generation failed:', err);
       this.showPlanError('Network error: ' + err.message);
     }
+  }
+
+  setPlanDetail(level) {
+    this.ralphWizardConfig.planDetailLevel = level;
+    this.updateDetailLevelButtons();
+  }
+
+  updateDetailLevelButtons() {
+    const level = this.ralphWizardConfig.planDetailLevel;
+    document.querySelectorAll('.plan-detail-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.detail === level);
+    });
   }
 
   showPlanError(message) {
