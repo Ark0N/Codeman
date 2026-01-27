@@ -16,13 +16,15 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1404 (must match `package.json`)
+**Version**: 0.1405 (must match `package.json`)
 
 ## Project Overview
 
 Claudeman is a Claude Code session manager with web interface and autonomous Ralph Loop. Spawns Claude CLI via PTY, streams via SSE, supports respawn cycling for 24+ hour autonomous runs.
 
-**Tech Stack**: TypeScript (ES2022/NodeNext, strict mode with `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`), Node.js, Fastify, node-pty, xterm.js
+**Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, node-pty, xterm.js
+
+**TypeScript Strictness**: `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`, `noImplicitOverride`, `noFallthroughCasesInSwitch`, `allowUnreachableCode: false`
 
 **Requirements**: Node.js 18+, Claude CLI, GNU Screen
 
@@ -34,18 +36,26 @@ Claudeman is a Claude Code session manager with web interface and autonomous Ral
 # Development
 npx tsx src/index.ts web           # Dev server (RECOMMENDED)
 npx tsx src/index.ts web --https   # With TLS for notifications
-npx tsc --noEmit                   # Type check
+npm run typecheck                  # Type check
 
 # Testing
 npx vitest run                     # All tests
 npx vitest run test/<file>.test.ts # Single file
-npm run test:e2e                   # Browser E2E tests
+npm run test:coverage              # With coverage report
+npm run test:e2e                   # Browser E2E (run `npx playwright install chromium` first)
 
 # Production
 npm run build
 systemctl --user restart claudeman-web
 journalctl --user -u claudeman-web -f
 ```
+
+## Binaries
+
+| Binary | Purpose |
+|--------|---------|
+| `claudeman` | Main CLI and web server |
+| `claudeman-mcp` | MCP server for Claude Desktop integration |
 
 ## Architecture
 
@@ -101,7 +111,7 @@ journalctl --user -u claudeman-web -f
 
 **E2E tests**: Use Playwright. Run `npx playwright install chromium` first. See `test/e2e/fixtures/` for helpers. E2E config provides ports, timeouts, and helpers.
 
-**Test config**: Vitest runs with `globals: true` (no imports needed for `describe`/`it`/`expect`) and `fileParallelism: false` (files run sequentially to respect screen limits).
+**Test config**: Vitest runs with `globals: true` (no imports needed for `describe`/`it`/`expect`) and `fileParallelism: false` (files run sequentially to respect screen limits). Test timeout is 30s, teardown timeout is 60s.
 
 **Test safety**: `test/setup.ts` provides:
 - Screen concurrency limiter (max 10)

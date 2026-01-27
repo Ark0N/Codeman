@@ -8109,8 +8109,7 @@ class ClaudemanApp {
 
     // Check if Ralph wizard modal is open
     const wizardModal = document.getElementById('ralphWizardModal');
-    const wizardOpen = wizardModal && !wizardModal.classList.contains('hidden') &&
-                       wizardModal.style.display !== 'none';
+    const wizardOpen = wizardModal?.classList.contains('active');
     const wizardContent = wizardOpen ? wizardModal.querySelector('.modal-content') : null;
 
     // Collect visible regular subagent windows for connection logic
@@ -8360,8 +8359,7 @@ class ClaudemanApp {
 
     // Check if Ralph wizard modal is open - if so, position windows on the sides
     const wizardModal = document.getElementById('ralphWizardModal');
-    const wizardOpen = wizardModal && !wizardModal.classList.contains('hidden') &&
-                       wizardModal.style.display !== 'none';
+    const wizardOpen = wizardModal?.classList.contains('active');
 
     let startX, startY, maxCols;
 
