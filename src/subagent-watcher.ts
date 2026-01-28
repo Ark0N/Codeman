@@ -420,6 +420,36 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
+   * Get internal statistics for memory monitoring.
+   * Returns counts of internal Maps and resources.
+   */
+  getStats(): {
+    agentCount: number;
+    fileWatcherCount: number;
+    dirWatcherCount: number;
+    idleTimerCount: number;
+    pendingToolCallsCount: number;
+    knownDirsCount: number;
+    filePositionsCount: number;
+  } {
+    // Count pending tool calls across all agents
+    let pendingToolCallsCount = 0;
+    for (const agentCalls of this.pendingToolCalls.values()) {
+      pendingToolCallsCount += agentCalls.size;
+    }
+
+    return {
+      agentCount: this.agentInfo.size,
+      fileWatcherCount: this.fileWatchers.size,
+      dirWatcherCount: this.dirWatchers.size,
+      idleTimerCount: this.idleTimers.size,
+      pendingToolCallsCount,
+      knownDirsCount: this.knownSubagentDirs.size,
+      filePositionsCount: this.filePositions.size,
+    };
+  }
+
+  /**
    * Get recent subagents (modified within specified minutes)
    */
   getRecentSubagents(minutes: number = 60): SubagentInfo[] {

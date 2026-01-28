@@ -494,9 +494,34 @@ export class WebServer extends EventEmitter {
     });
 
     // Debug/monitoring endpoint - lightweight, only runs when called
+    // Returns comprehensive memory metrics for debugging memory leaks
     this.app.get('/api/debug/memory', async () => {
       const mem = process.memoryUsage();
       const spawnState = this.spawnOrchestrator.getState();
+      const subagentStats = subagentWatcher.getStats();
+
+      // Calculate total Map entries for memory estimation
+      const serverMapSizes = {
+        sessions: this.sessions.size,
+        sseClients: this.sseClients.size,
+        respawnControllers: this.respawnControllers.size,
+        runSummaryTrackers: this.runSummaryTrackers.size,
+        transcriptWatchers: this.transcriptWatchers.size,
+        scheduledRuns: this.scheduledRuns.size,
+        terminalBatches: this.terminalBatches.size,
+        outputBatches: this.outputBatches.size,
+        taskUpdateBatches: this.taskUpdateBatches.size,
+        stateUpdatePending: this.stateUpdatePending.size,
+        lastRecordedTokens: this.lastRecordedTokens.size,
+        pendingRespawnStarts: this.pendingRespawnStarts.size,
+        respawnTimers: this.respawnTimers.size,
+        activePlanOrchestrators: this.activePlanOrchestrators.size,
+        cleaningUp: this.cleaningUp.size,
+      };
+
+      const totalServerMapEntries = Object.values(serverMapSizes).reduce((a, b) => a + b, 0);
+      const totalSubagentMapEntries = Object.values(subagentStats).reduce((a, b) => a + b, 0);
+
       return {
         memory: {
           rss: mem.rss,
@@ -510,17 +535,26 @@ export class WebServer extends EventEmitter {
           arrayBuffers: mem.arrayBuffers,
           arrayBuffersMB: Math.round(mem.arrayBuffers / 1024 / 1024 * 10) / 10,
         },
-        counts: {
-          sessions: this.sessions.size,
-          sseClients: this.sseClients.size,
-          respawnControllers: this.respawnControllers.size,
-          runSummaryTrackers: this.runSummaryTrackers.size,
-          scheduledRuns: this.scheduledRuns.size,
-          terminalBatches: this.terminalBatches.size,
-          outputBatches: this.outputBatches.size,
-          pendingRespawnStarts: this.pendingRespawnStarts.size,
+        mapSizes: {
+          server: serverMapSizes,
+          subagentWatcher: subagentStats,
+          totals: {
+            serverEntries: totalServerMapEntries,
+            subagentEntries: totalSubagentMapEntries,
+            allEntries: totalServerMapEntries + totalSubagentMapEntries,
+          },
+        },
+        watchers: {
+          fileWatchers: subagentStats.fileWatcherCount,
+          dirWatchers: subagentStats.dirWatcherCount,
+          transcriptWatchers: this.transcriptWatchers.size,
+          total: subagentStats.fileWatcherCount + subagentStats.dirWatcherCount + this.transcriptWatchers.size,
+        },
+        timers: {
           respawnTimers: this.respawnTimers.size,
-          subagents: subagentWatcher.getSubagents().length,
+          pendingRespawnStarts: this.pendingRespawnStarts.size,
+          subagentIdleTimers: subagentStats.idleTimerCount,
+          total: this.respawnTimers.size + this.pendingRespawnStarts.size + subagentStats.idleTimerCount,
         },
         spawn: {
           activeAgents: spawnState.activeCount,
