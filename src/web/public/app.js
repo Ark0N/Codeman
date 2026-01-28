@@ -2642,6 +2642,7 @@ class ClaudemanApp {
       maxIterations: 10,
       caseName: document.getElementById('quickStartCase')?.value || 'testcase',
       enableRespawn: true,
+      autoStart: false,         // Auto-start loop after plan generation
       // Plan generation fields
       generatedPlan: null,
       planGenerated: false,
@@ -2656,6 +2657,9 @@ class ClaudemanApp {
     document.getElementById('ralphTaskDescription').value = '';
     document.getElementById('ralphCompletionPhrase').value = 'COMPLETE';
     this.selectIterationPreset(10);
+    // Reset auto-start checkbox (off by default)
+    const autoStartEl = document.getElementById('ralphAutoStart');
+    if (autoStartEl) autoStartEl.checked = false;
 
     // Populate case selector
     this.populateRalphCaseSelector();
@@ -3171,6 +3175,15 @@ class ClaudemanApp {
       // Show editor and update detail buttons
       this.renderPlanEditor();
       this.updateDetailLevelButtons();
+
+      // Check for auto-start
+      if (this.ralphWizardConfig.autoStart) {
+        console.log('[RalphWizard] Auto-start enabled, starting loop automatically...');
+        this.showToast('Plan complete! Auto-starting Ralph Loop...', 'success');
+        // Small delay to let user see the plan briefly
+        await new Promise(r => setTimeout(r, 1500));
+        this.startRalphLoop();
+      }
 
     } catch (err) {
       // Stop timer
@@ -4014,6 +4027,7 @@ class ClaudemanApp {
 
     // Read advanced options (respawn disabled by default for Ralph Loops)
     config.enableRespawn = document.getElementById('ralphEnableRespawn')?.checked ?? false;
+    config.autoStart = document.getElementById('ralphAutoStart')?.checked ?? false;
 
     // Close wizard
     this.closeRalphWizard();
@@ -4204,29 +4218,39 @@ class ClaudemanApp {
         if (!initRes.ok) {
           console.warn('[RalphWizard] Failed to send /init, continuing anyway...');
         } else {
-          // Wait for /init to complete (look for ready indicator or timeout)
-          console.log('[RalphWizard] Waiting for /init to complete...');
+          // Wait for /init to complete - can take up to 3 minutes for large CLAUDE.md files
+          console.log('[RalphWizard] Waiting for /init to complete (can take up to 3 minutes)...');
           let initComplete = false;
-          for (let attempt = 0; attempt < 20; attempt++) {
-            await new Promise(r => setTimeout(r, 500));
+          const initMaxAttempts = 180; // 3 minutes at 1 second intervals
+          for (let attempt = 0; attempt < initMaxAttempts; attempt++) {
+            await new Promise(r => setTimeout(r, 1000));
             try {
               const statusRes = await fetch(`/api/sessions/${sessionId}`);
               const statusData = await statusRes.json();
-              // /init is complete when we see the prompt indicator (❯) or status is ready
-              if (statusData.status === 'ready' || statusData.lastOutput?.includes('❯')) {
-                console.log('[RalphWizard] /init complete, Claude now has research context.');
+              const termBuf = statusData?.terminalBuffer || '';
+              // /init is complete when we see the prompt indicator (❯) and not working
+              const hasPrompt = termBuf.includes('❯');
+              const isIdle = !statusData.isWorking;
+              if (hasPrompt && isIdle) {
+                console.log(`[RalphWizard] /init complete after ${attempt + 1}s, Claude now has research context.`);
                 initComplete = true;
                 break;
+              }
+              // Log progress every 15 seconds
+              if ((attempt + 1) % 15 === 0) {
+                console.log(`[RalphWizard] Still waiting for /init... ${attempt + 1}s elapsed (isWorking=${statusData.isWorking})`);
               }
             } catch (e) {
               console.warn('[RalphWizard] Status check error:', e);
             }
           }
           if (!initComplete) {
-            console.log('[RalphWizard] /init may still be running, proceeding anyway...');
+            console.warn('[RalphWizard] /init did not complete within 3 minutes, proceeding anyway...');
+            this.showToast('/init took longer than expected, prompt may not have full context', 'warning');
           }
-          // Small delay after /init
-          await new Promise(r => setTimeout(r, 1000));
+          // Delay after /init to let Claude settle
+          console.log('[RalphWizard] Adding 3s delay after /init...');
+          await new Promise(r => setTimeout(r, 3000));
         }
       }
 

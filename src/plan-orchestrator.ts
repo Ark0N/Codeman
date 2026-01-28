@@ -814,16 +814,18 @@ Check \`${caseDir}/ralph-wizard/research/result.json\` for:
     this.runningSessions.add(session);
 
     try {
-      const prompt = RESEARCH_AGENT_PROMPT.replace('{TASK}', taskDescription);
+      const prompt = RESEARCH_AGENT_PROMPT
+        .replace('{TASK}', taskDescription)
+        .replace('{WORKING_DIR}', this.workingDir);
 
-      onProgress?.('research', 'Starting research agent (web search + codebase exploration)...');
+      onProgress?.('research', 'Starting research agent (local project + web search)...');
 
       // Periodic progress updates showing elapsed time with contextual messages
       const researchPhases = [
-        { min: 0, msg: 'Searching for relevant GitHub repos and documentation...' },
-        { min: 30, msg: 'Exploring official docs and best practice guides...' },
-        { min: 60, msg: 'Analyzing codebase patterns and conventions...' },
-        { min: 120, msg: 'Synthesizing findings and recommendations...' },
+        { min: 0, msg: 'Reading CLAUDE.md and exploring project structure...' },
+        { min: 30, msg: 'Analyzing existing code patterns and conventions...' },
+        { min: 60, msg: 'Searching for relevant documentation and examples...' },
+        { min: 120, msg: 'Synthesizing local and external findings...' },
         { min: 180, msg: 'Compiling research results (complex tasks take time)...' },
         { min: 300, msg: 'Almost done - finalizing enriched task description...' },
       ];
