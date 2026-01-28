@@ -813,6 +813,11 @@ main() {
     info "Installing dependencies..."
     npm install --quiet --no-fund --no-audit 2>/dev/null || npm install --no-fund --no-audit
 
+    # Rebuild node-pty from source for Node.js 22+ compatibility
+    # The prebuilt binaries may not support newer Node.js ABI versions
+    info "Rebuilding node-pty for current Node.js version..."
+    npm rebuild node-pty --build-from-source --quiet 2>/dev/null || npm rebuild node-pty --build-from-source
+
     info "Building..."
     npm run build --quiet 2>/dev/null || npm run build
 
