@@ -331,6 +331,9 @@ export class Session extends EventEmitter {
   private _autoCompactPrompt: string = ''; // Optional prompt for compact
   private _isCompacting: boolean = false; // Prevent recursive compacting
 
+  // Image watcher setting (per-session toggle)
+  private _imageWatcherEnabled: boolean = true;
+
   // Timer tracking for cleanup (prevents memory leaks)
   private _autoCompactTimer: NodeJS.Timeout | null = null;
   private _autoClearTimer: NodeJS.Timeout | null = null;
@@ -669,6 +672,14 @@ export class Session extends EventEmitter {
     }
   }
 
+  get imageWatcherEnabled(): boolean {
+    return this._imageWatcherEnabled;
+  }
+
+  set imageWatcherEnabled(enabled: boolean) {
+    this._imageWatcherEnabled = enabled;
+  }
+
   isIdle(): boolean {
     return this._status === 'idle';
   }
@@ -697,6 +708,7 @@ export class Session extends EventEmitter {
       autoCompactEnabled: this._autoCompactEnabled,
       autoCompactThreshold: this._autoCompactThreshold,
       autoCompactPrompt: this._autoCompactPrompt,
+      imageWatcherEnabled: this._imageWatcherEnabled,
       totalCost: this._totalCost,
       inputTokens: this._totalInputTokens,
       outputTokens: this._totalOutputTokens,
