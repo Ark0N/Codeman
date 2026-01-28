@@ -2663,9 +2663,11 @@ class ClaudemanApp {
     document.getElementById('ralphTaskDescription').value = '';
     document.getElementById('ralphCompletionPhrase').value = 'COMPLETE';
     this.selectIterationPreset(10);
-    // Reset auto-start checkbox (off by default)
+    // Reset auto-start checkboxes (off by default) - there are two, one in step 2 and one in step 3
     const autoStartEl = document.getElementById('ralphAutoStart');
+    const autoStartStep2El = document.getElementById('ralphAutoStartStep2');
     if (autoStartEl) autoStartEl.checked = false;
+    if (autoStartStep2El) autoStartStep2El.checked = false;
 
     // Populate case selector
     this.populateRalphCaseSelector();
@@ -2767,6 +2769,137 @@ class ClaudemanApp {
     }
   }
 
+  // Check for existing ralph-wizard research files
+  async checkExistingWizardFiles() {
+    const caseName = this.ralphWizardConfig.caseName;
+    if (!caseName) return;
+
+    try {
+      const res = await fetch(`/api/cases/${encodeURIComponent(caseName)}/ralph-wizard/files`);
+      const data = await res.json();
+
+      if (data.success && data.data?.files?.length > 0) {
+        this.ralphWizardConfig.existingWizardFiles = data.data.files;
+        this.updateExistingWizardFilesUI();
+      } else {
+        this.ralphWizardConfig.existingWizardFiles = null;
+        this.updateExistingWizardFilesUI();
+      }
+    } catch (err) {
+      console.error('Failed to check for existing wizard files:', err);
+      this.ralphWizardConfig.existingWizardFiles = null;
+    }
+  }
+
+  // Update UI to show existing wizard files option
+  updateExistingWizardFilesUI() {
+    const files = this.ralphWizardConfig.existingWizardFiles;
+    let section = document.getElementById('existingWizardFilesSection');
+
+    if (!files || files.length === 0) {
+      section?.remove();
+      return;
+    }
+
+    // Count agents with results
+    const agentsWithResults = files.filter(f => f.resultFile).length;
+
+    if (!section) {
+      // Create the section if it doesn't exist - insert before loading state
+      const loadingState = document.getElementById('planGenerationLoading');
+      section = document.createElement('div');
+      section.id = 'existingWizardFilesSection';
+      section.className = 'existing-wizard-files-section';
+      loadingState?.parentNode?.insertBefore(section, loadingState);
+    }
+
+    section.innerHTML = `
+      <div class="existing-wizard-card">
+        <div class="existing-wizard-header">
+          <span class="existing-wizard-icon">📁</span>
+          <span class="existing-wizard-title">Previous Research Found</span>
+        </div>
+        <p class="existing-wizard-desc">
+          Found ${agentsWithResults} agent result${agentsWithResults !== 1 ? 's' : ''} from a previous plan generation.
+        </p>
+        <div class="existing-wizard-agents">
+          ${files.filter(f => f.resultFile).map(f => `
+            <span class="existing-wizard-agent">${this.getAgentTypeLabel(f.agentType)}</span>
+          `).join('')}
+        </div>
+        <div class="existing-wizard-actions">
+          <button class="btn-toolbar btn-sm btn-primary" onclick="app.reuseExistingWizardFiles()">
+            Use Existing Research
+          </button>
+          <button class="btn-toolbar btn-sm" onclick="app.regenerateAllWizardFiles()">
+            Regenerate All
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  getAgentTypeLabel(agentType) {
+    const labels = {
+      research: 'Research',
+      requirements: 'Requirements',
+      architecture: 'Architecture',
+      testing: 'Testing',
+      risks: 'Risks',
+      verification: 'Verification',
+      execution: 'Execution',
+      'final-review': 'Review',
+    };
+    return labels[agentType] || agentType;
+  }
+
+  async reuseExistingWizardFiles() {
+    // Load the final result if it exists
+    const caseName = this.ralphWizardConfig.caseName;
+    try {
+      const res = await fetch(`/api/cases/${encodeURIComponent(caseName)}/ralph-wizard/file/${encodeURIComponent('final-result.json')}`);
+      const data = await res.json();
+
+      if (data.success && data.data?.parsed?.items) {
+        // Use the existing plan items
+        this.ralphWizardConfig.generatedPlan = data.data.parsed.items.map((item, idx) => ({
+          content: item.content || item.title || `Task ${idx + 1}`,
+          priority: item.priority || 'P1',
+          enabled: true,
+          id: item.id || `reused-${Date.now()}-${idx}`,
+          source: item.source,
+          rationale: item.rationale,
+          tddPhase: item.tddPhase,
+        }));
+        this.ralphWizardConfig.planGenerated = true;
+        this.ralphWizardConfig.reusingExistingFiles = true;
+        this.ralphWizardConfig.planCost = 0;
+
+        // Hide the existing files section
+        document.getElementById('existingWizardFilesSection')?.remove();
+
+        // Show the plan editor
+        this.renderPlanEditor();
+        this.updateDetailLevelButtons();
+      } else {
+        // No final result, just skip to generate with existing research
+        this.ralphWizardConfig.reusingExistingFiles = true;
+        this.generatePlan();
+      }
+    } catch (err) {
+      console.error('Failed to load existing results:', err);
+      // Fall back to regenerating
+      this.generatePlan();
+    }
+  }
+
+  regenerateAllWizardFiles() {
+    // Clear the reuse flag and hide the section
+    this.ralphWizardConfig.reusingExistingFiles = false;
+    document.getElementById('existingWizardFilesSection')?.remove();
+    this.generatePlan();
+  }
+
   // Called when case selector changes
   onRalphCaseChange() {
     const caseName = document.getElementById('ralphCaseSelect')?.value;
@@ -2774,6 +2907,7 @@ class ClaudemanApp {
       this.ralphWizardConfig.caseName = caseName;
       this.ralphWizardConfig.existingPlan = null;
       this.ralphWizardConfig.useExistingPlan = false;
+      this.ralphWizardConfig.existingWizardFiles = null;
       this.checkExistingFixPlan();
     }
   }
@@ -2852,6 +2986,19 @@ class ClaudemanApp {
     this.updateDetailLevelButtons();
   }
 
+  // Sync auto-start checkboxes between step 2 and step 3
+  syncAutoStartCheckbox(sourceEl) {
+    const step2El = document.getElementById('ralphAutoStartStep2');
+    const step3El = document.getElementById('ralphAutoStart');
+    const isChecked = sourceEl.checked;
+
+    if (step2El) step2El.checked = isChecked;
+    if (step3El) step3El.checked = isChecked;
+
+    // Update config
+    this.ralphWizardConfig.autoStart = isChecked;
+  }
+
   // Stop any ongoing plan generation (abort fetch, clear timers, hide spinner)
   stopPlanGeneration() {
     // Abort ongoing fetch
@@ -2903,13 +3050,17 @@ class ClaudemanApp {
       this.ralphWizardStep = 2;
       this.updateRalphWizardUI();
 
-      // If there's an existing plan, show the option to use it
-      // Otherwise auto-start plan generation
-      if (this.ralphWizardConfig.existingPlan) {
-        this.updateExistingPlanUI();
-      } else {
-        this.generatePlan();
-      }
+      // Check for existing wizard files first, then existing plan
+      this.checkExistingWizardFiles().then(() => {
+        // If there's an existing plan (@fix_plan.md), show the option to use it
+        if (this.ralphWizardConfig.existingPlan) {
+          this.updateExistingPlanUI();
+        } else if (!this.ralphWizardConfig.existingWizardFiles?.length) {
+          // No existing files, auto-start plan generation
+          this.generatePlan();
+        }
+        // If existingWizardFiles exists, the UI will show and wait for user choice
+      });
     } else if (this.ralphWizardStep === 2) {
       // Must have generated or skipped plan
       if (!this.ralphWizardConfig.planGenerated && !this.ralphWizardConfig.skipPlanGeneration) {
@@ -4732,7 +4883,10 @@ class ClaudemanApp {
 
     // Read advanced options (respawn disabled by default for Ralph Loops)
     config.enableRespawn = document.getElementById('ralphEnableRespawn')?.checked ?? false;
-    config.autoStart = document.getElementById('ralphAutoStart')?.checked ?? false;
+    // Check either auto-start checkbox (step 2 or step 3)
+    config.autoStart = document.getElementById('ralphAutoStart')?.checked ||
+                       document.getElementById('ralphAutoStartStep2')?.checked ||
+                       this.ralphWizardConfig.autoStart || false;
 
     // Close wizard
     this.closeRalphWizard();

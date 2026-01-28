@@ -16,7 +16,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1410 (must match `package.json`)
+**Version**: 0.1411 (must match `package.json`)
 
 ## Project Overview
 
@@ -167,25 +167,20 @@ The app must stay fast with 20 sessions and 50 agent windows:
 | **Test utilities** | `test/respawn-test-utils.ts` |
 | **Keyboard shortcuts** | README.md or App Settings in web UI |
 
-## Active Ralph Loop Task
+## MCP Server Integration
 
-**Current Task**: Create an improvement plan to make this app(Claudeman) significantly better, but focus on performance, memory leaks, that it runs really fluid and fast and all the functions are working properly also in edge cases.
+The `claudeman-mcp` binary provides Model Context Protocol integration for Claude Desktop:
 
-**Case Folder**: `/home/arkon/claudeman-cases/claudeman`
+```json
+// Add to ~/.claude/claude_desktop_config.json
+{
+  "mcpServers": {
+    "claudeman-spawn": {
+      "command": "node",
+      "args": ["/path/to/claudeman/dist/mcp-server.js"]
+    }
+  }
+}
+```
 
-### Key Files
-- **Plan Summary**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/summary.md` - Human-readable plan overview
-- **Todo Items**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/final-result.json` - Contains `items` array with all todo tasks
-- **Research**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/research/result.json` - External resources and codebase patterns
-
-### How to Work on This Task
-1. Read the plan summary to understand the overall approach
-2. Check `final-result.json` for the todo items array - each item has `id`, `title`, `description`, `priority`
-3. Work through items in priority order (critical → high → medium → low)
-4. Use `<promise>COMPLETION_PHRASE</promise>` when the entire task is complete
-
-### Research Insights
-Check `/home/arkon/claudeman-cases/claudeman/ralph-wizard/research/result.json` for:
-- External GitHub repos and documentation links to reference
-- Existing codebase patterns to follow
-- Technical recommendations from the research phase
+This enables Claude Desktop to spawn and manage agents via MCP tools.

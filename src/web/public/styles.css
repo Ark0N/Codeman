@@ -5925,6 +5925,92 @@ kbd {
   justify-content: center;
 }
 
+.plan-autostart-toggle {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.plan-autostart-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  justify-content: center;
+}
+
+.plan-autostart-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.plan-autostart-text {
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.plan-autostart-label:hover .plan-autostart-text {
+  color: var(--accent);
+}
+
+/* Existing wizard files section */
+.existing-wizard-files-section {
+  padding: 1rem;
+}
+
+.existing-wizard-card {
+  background: var(--bg-dark);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.existing-wizard-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.existing-wizard-icon {
+  font-size: 1.2rem;
+}
+
+.existing-wizard-title {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.existing-wizard-desc {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  margin: 0 0 0.75rem 0;
+}
+
+.existing-wizard-agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+}
+
+.existing-wizard-agent {
+  background: rgba(96, 165, 250, 0.2);
+  color: var(--accent);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.existing-wizard-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+}
+
 .plan-cancel-btn {
   color: var(--red);
 }

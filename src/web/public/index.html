@@ -1030,6 +1030,13 @@
                 <button class="btn-toolbar btn-sm plan-cancel-btn" onclick="app.cancelPlanGeneration()">Stop</button>
                 <button class="btn-toolbar btn-sm" onclick="app.regeneratePlan()">Regenerate</button>
               </div>
+              <!-- Auto-start toggle visible during generation -->
+              <div class="plan-autostart-toggle">
+                <label class="plan-autostart-label">
+                  <input type="checkbox" id="ralphAutoStartStep2" onchange="app.syncAutoStartCheckbox(this)">
+                  <span class="plan-autostart-text">Auto-launch when plan completes</span>
+                </label>
+              </div>
             </div>
 
             <!-- Stopped/Error state -->
