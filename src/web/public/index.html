@@ -458,36 +458,11 @@
               <input type="text" id="modalRespawnPrompt" value="update all the docs and CLAUDE.md" placeholder="Prompt to send when idle" onchange="app.autoSaveRespawnConfig()">
             </div>
 
-            <div class="form-row">
-              <label>After Update Prompt</label>
-              <div class="checkbox-group-inline">
-                <label class="checkbox-inline">
-                  <input type="checkbox" id="modalRespawnSendClear" checked onchange="app.autoSaveRespawnConfig()">
-                  <span>Send /clear</span>
-                </label>
-                <label class="checkbox-inline">
-                  <input type="checkbox" id="modalRespawnSendInit" checked onchange="app.autoSaveRespawnConfig()">
-                  <span>Send /init</span>
-                </label>
-              </div>
-            </div>
-
-            <div class="form-row">
-              <label>Kickstart Prompt</label>
-              <input type="text" id="modalRespawnKickstart" value="" placeholder="Optional: prompt if /init doesn't trigger work" onchange="app.autoSaveRespawnConfig()">
-              <span class="form-hint">Sent only when /init completes but Claude stays idle</span>
-            </div>
-
-            <div class="form-row">
-              <label>Auto-Accept Plan Mode</label>
-              <div class="checkbox-group-inline">
-                <label class="checkbox-inline">
-                  <input type="checkbox" id="modalRespawnAutoAccept" checked onchange="app.autoSaveRespawnConfig()">
-                  <span>Accept plan mode approvals</span>
-                </label>
-              </div>
-              <span class="form-hint">Presses Enter to accept plan approvals and default question options when Claude is waiting</span>
-            </div>
+            <!-- Hidden inputs to preserve defaults -->
+            <input type="checkbox" id="modalRespawnSendClear" checked style="display:none">
+            <input type="checkbox" id="modalRespawnSendInit" checked style="display:none">
+            <input type="text" id="modalRespawnKickstart" value="" style="display:none">
+            <input type="checkbox" id="modalRespawnAutoAccept" checked style="display:none">
 
             <div class="respawn-actions">
               <button class="btn-toolbar btn-success" onclick="app.enableRespawnFromModal()" id="modalEnableRespawnBtn">Enable Respawn</button>
@@ -632,65 +607,6 @@
               </div>
             </div>
           </div><!-- End summary-tab -->
-        </div>
-      </div>
-    </div>
-
-    <!-- Run Summary Modal (legacy, kept for backwards compatibility) -->
-    <div class="modal" id="runSummaryModal">
-      <div class="modal-backdrop" onclick="app.closeRunSummary()"></div>
-      <div class="modal-content modal-lg">
-        <div class="modal-header">
-          <h3>Run Summary</h3>
-          <button class="modal-close" onclick="app.closeRunSummary()">&times;</button>
-        </div>
-        <div class="modal-body">
-          <!-- Stats Cards -->
-          <div class="run-summary-stats" id="runSummaryStats">
-            <div class="stat-card">
-              <div class="stat-value" id="rsStat-cycles">0</div>
-              <div class="stat-label">Respawn Cycles</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-value" id="rsStat-tokens">0</div>
-              <div class="stat-label">Tokens Used</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-value" id="rsStat-active">0m</div>
-              <div class="stat-label">Active Time</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-value" id="rsStat-issues">0</div>
-              <div class="stat-label">Issues</div>
-            </div>
-          </div>
-
-          <!-- Filter Buttons -->
-          <div class="run-summary-filters">
-            <button class="filter-btn active" data-filter="all" onclick="app.filterRunSummary('all')">All</button>
-            <button class="filter-btn" data-filter="errors" onclick="app.filterRunSummary('errors')">Errors</button>
-            <button class="filter-btn" data-filter="warnings" onclick="app.filterRunSummary('warnings')">Warnings</button>
-            <button class="filter-btn" data-filter="respawn" onclick="app.filterRunSummary('respawn')">Respawn</button>
-            <button class="filter-btn" data-filter="idle" onclick="app.filterRunSummary('idle')">Idle/Working</button>
-          </div>
-
-          <!-- Timeline -->
-          <div class="run-summary-timeline" id="runSummaryTimeline">
-            <p class="empty-message">Loading summary...</p>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <span class="run-summary-session-info" id="runSummarySessionInfo"></span>
-          <div class="modal-footer-actions">
-            <label class="auto-refresh-label">
-              <input type="checkbox" id="runSummaryAutoRefresh" onchange="app.toggleRunSummaryAutoRefresh()">
-              Auto-refresh
-            </label>
-            <button class="btn-toolbar btn-sm" onclick="app.refreshRunSummary()" title="Refresh summary">&#x21BB; Refresh</button>
-            <button class="btn-toolbar btn-sm" onclick="app.exportRunSummary('json')" title="Export as JSON">Export JSON</button>
-            <button class="btn-toolbar btn-sm" onclick="app.exportRunSummary('md')" title="Export as Markdown">Export MD</button>
-            <button class="btn-toolbar btn-sm" onclick="app.closeRunSummary()">Close</button>
-          </div>
         </div>
       </div>
     </div>

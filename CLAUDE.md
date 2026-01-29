@@ -16,7 +16,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1428 (must match `package.json`)
+**Version**: 0.1429 (must match `package.json`)
 
 ## Project Overview
 
@@ -226,25 +226,14 @@ The `claudeman-mcp` binary provides Model Context Protocol integration for Claud
 
 This enables Claude Desktop to spawn and manage agents via MCP tools.
 
-## Active Ralph Loop Task
+## Scripts
 
-**Current Task**: build out installers for mac os x, any linux and windows at the end. I want it as easy as possible to install claudeman on these machines, explore the code of claudeman, its in your directory where you work. with windows make use of WSL to have the real screen gnu running
+| Script | Purpose |
+|--------|---------|
+| `scripts/screen-manager.sh` | Safe screen management (use instead of direct kill commands) |
+| `scripts/monitor-respawn.sh` | Monitor respawn state machine in real-time |
+| `scripts/postinstall.js` | npm postinstall hook for setup |
 
-**Case Folder**: `/home/arkon/claudeman-cases/claudeman`
+## Deprecated Code
 
-### Key Files
-- **Plan Summary**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/summary.md` - Human-readable plan overview
-- **Todo Items**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/final-result.json` - Contains `items` array with all todo tasks
-- **Research**: `/home/arkon/claudeman-cases/claudeman/ralph-wizard/research/result.json` - External resources and codebase patterns
-
-### How to Work on This Task
-1. Read the plan summary to understand the overall approach
-2. Check `final-result.json` for the todo items array - each item has `id`, `title`, `description`, `priority`
-3. Work through items in priority order (critical → high → medium → low)
-4. Use `<promise>COMPLETION_PHRASE</promise>` when the entire task is complete
-
-### Research Insights
-Check `/home/arkon/claudeman-cases/claudeman/ralph-wizard/research/result.json` for:
-- External GitHub repos and documentation links to reference
-- Existing codebase patterns to follow
-- Technical recommendations from the research phase
+The TUI (Terminal UI) has been removed in favor of the web interface. Files in `src/tui/` are excluded from compilation via `tsconfig.json`.
