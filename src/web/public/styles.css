@@ -166,6 +166,8 @@ body {
   line-height: 1;
   color: var(--text-muted);
   overflow: hidden;
+  cursor: default;
+  border-radius: 3px;
   /* Performance: use transform for GPU acceleration */
   transition: opacity 0.15s ease-out, width 0.15s ease-out, padding 0.15s ease-out;
 }
@@ -173,11 +175,12 @@ body {
 .session-tab:hover .tab-close {
   opacity: 1;
   width: auto;
-  padding: 0 0.2rem;
+  padding: 0.15rem 0.35rem;
 }
 
 .session-tab .tab-close:hover {
   color: var(--red);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .session-tab.new-tab {
