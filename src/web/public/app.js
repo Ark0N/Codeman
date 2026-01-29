@@ -4124,7 +4124,7 @@ class ClaudemanApp {
       testing: 'TDD Specialist',
       risks: 'Risk Analyst',
       verification: 'Verification Expert',
-      execution: 'Execution Optimizer',
+      'execution-optimizer': 'Execution Optimizer',
       'final-review': 'Final Review',
     };
 
@@ -4135,7 +4135,7 @@ class ClaudemanApp {
       testing: '🧪',
       risks: '⚠️',
       verification: '✓',
-      execution: '⚡',
+      'execution-optimizer': '⚡',
       'final-review': '🔍',
     };
 
@@ -4580,7 +4580,7 @@ class ClaudemanApp {
       testing: 'TDD Specialist',
       risks: 'Risk Analyst',
       verification: 'Verification Expert',
-      execution: 'Execution Optimizer',
+      'execution-optimizer': 'Execution Optimizer',
       'final-review': 'Final Review',
     };
 
