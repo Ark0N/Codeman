@@ -1213,6 +1213,7 @@ export class Session extends EventEmitter {
           '-p',
           '--dangerously-skip-permissions',
           '--output-format', 'stream-json',
+          '--verbose',  // Required for stream-json output format
         ];
         if (model) {
           args.push('--model', model);
