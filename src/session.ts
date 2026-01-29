@@ -823,6 +823,10 @@ export class Session extends EventEmitter {
             cwd: this.workingDir,
             env: { ...process.env, TERM: 'xterm-256color' },
           });
+
+          // Set claudeSessionId immediately since we passed --session-id to Claude
+          // The screen-manager passes --session-id ${sessionId} to Claude
+          this._claudeSessionId = this.id;
         } catch (spawnErr) {
           console.error('[Session] Failed to spawn PTY for screen attachment:', spawnErr);
           this.emit('error', `Failed to attach to screen: ${spawnErr}`);
@@ -873,8 +877,11 @@ export class Session extends EventEmitter {
     // Fallback to direct PTY if screen is not used
     if (!this.ptyProcess) {
       try {
+        // Pass --session-id to use the SAME ID as the Claudeman session
+        // This ensures subagents can be directly matched to the correct tab
         this.ptyProcess = pty.spawn('claude', [
-          '--dangerously-skip-permissions'
+          '--dangerously-skip-permissions',
+          '--session-id', this.id
         ], {
           name: 'xterm-256color',
           cols: 120,
@@ -897,6 +904,10 @@ export class Session extends EventEmitter {
         throw new Error(`Failed to spawn Claude process: ${spawnErr}`);
       }
     }
+
+    // Set the claudeSessionId immediately since we passed --session-id
+    // This ensures subagent matching works without waiting for JSON messages
+    this._claudeSessionId = this.id;
 
     this._pid = this.ptyProcess.pid;
     console.log('[Session] Interactive PTY spawned with PID:', this._pid);
@@ -1358,8 +1369,12 @@ export class Session extends EventEmitter {
             this._messages = this._messages.slice(-Math.floor(MAX_MESSAGES * 0.8));
           }
 
-          if (msg.type === 'system' && msg.session_id) {
-            this._claudeSessionId = msg.session_id;
+          // Extract Claude session ID from messages (can be in any message type)
+          // Support both sessionId (camelCase) and session_id (snake_case)
+          const msgSessionId = (msg as unknown as Record<string, unknown>).sessionId as string | undefined
+            ?? msg.session_id;
+          if (msgSessionId && !this._claudeSessionId) {
+            this._claudeSessionId = msgSessionId;
           }
 
           // Process message for task tracking

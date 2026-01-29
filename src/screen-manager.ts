@@ -266,8 +266,10 @@ export class ScreenManager extends EventEmitter {
     ].join(' && ');
 
     // Base command for the mode (just the executable, env vars are exported separately)
+    // For Claude sessions: pass --session-id to use the SAME ID as the Claudeman session
+    // This ensures subagents (discovered via file path) can be directly matched to the correct tab
     const baseCmd = mode === 'claude'
-      ? 'claude --dangerously-skip-permissions'
+      ? `claude --dangerously-skip-permissions --session-id ${sessionId}`
       : '$SHELL';
 
     // Apply nice priority if configured

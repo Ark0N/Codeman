@@ -2956,6 +2956,37 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       }
     });
 
+    // ============ Subagent Parent Associations ============
+    // Persists which TAB each agent window connects to.
+    // This is the PERMANENT record of agent -> tab associations.
+    const parentMapPath = join(homedir(), '.claudeman', 'subagent-parents.json');
+
+    this.app.get('/api/subagent-parents', async () => {
+      try {
+        if (existsSync(parentMapPath)) {
+          const content = readFileSync(parentMapPath, 'utf-8');
+          return JSON.parse(content);
+        }
+      } catch (err) {
+        console.error('Failed to read subagent parent map:', err);
+      }
+      return {};
+    });
+
+    this.app.put('/api/subagent-parents', async (req) => {
+      const parentMap = req.body as Record<string, string>;
+      try {
+        const dir = dirname(parentMapPath);
+        if (!existsSync(dir)) {
+          mkdirSync(dir, { recursive: true });
+        }
+        writeFileSync(parentMapPath, JSON.stringify(parentMap, null, 2));
+        return { success: true };
+      } catch (err) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+      }
+    });
+
     // ============ Screen Management Endpoints ============
 
     // Get all tracked screens with stats

@@ -464,6 +464,11 @@ class ClaudemanApp {
     this.subagentWindowZIndex = 1000;
     this.minimizedSubagents = new Map(); // Map<sessionId, Set<agentId>> - minimized to tab
     this._subagentHideTimeout = null; // Timeout for hover-based dropdown hide
+
+    // PERSISTENT parent associations - agentId -> sessionId
+    // This is the SINGLE SOURCE OF TRUTH for which tab an agent window connects to.
+    // Once set, never recalculated. Persisted to localStorage and server.
+    this.subagentParentMap = new Map();
     this.ralphStatePanelCollapsed = true; // Default to collapsed
 
     // Plan subagent windows (visible agents during plan generation)
@@ -2093,8 +2098,34 @@ class ClaudemanApp {
       });
       this.renderSubagentPanel();
 
-      // Restore subagent window states (minimized/open) after subagents are loaded
-      this.restoreSubagentWindowStates();
+      // Load PERSISTENT parent associations FIRST, before restoring windows
+      // This ensures connection lines are drawn to the correct tabs
+      // Clear the in-memory map first to ensure fresh state from storage
+      this.subagentParentMap.clear();
+      this.loadSubagentParentMap().then(() => {
+        // Apply stored parent associations to agents
+        for (const [agentId, sessionId] of this.subagentParentMap) {
+          const agent = this.subagents.get(agentId);
+          if (agent && this.sessions.has(sessionId)) {
+            agent.parentSessionId = sessionId;
+            const session = this.sessions.get(sessionId);
+            if (session) {
+              agent.parentSessionName = this.getSessionName(session);
+            }
+            this.subagents.set(agentId, agent);
+          }
+        }
+
+        // Now try to find parents for any agents that don't have one yet
+        for (const [agentId] of this.subagents) {
+          if (!this.subagentParentMap.has(agentId)) {
+            this.findParentSessionForSubagent(agentId);
+          }
+        }
+
+        // Finally, restore window states (this opens windows with correct parent info)
+        this.restoreSubagentWindowStates();
+      });
     }
 
     // Auto-select first session if any (use sessionOrder for user's preferred order)
@@ -7547,19 +7578,12 @@ class ClaudemanApp {
   /**
    * Restore subagent window states after loading subagents.
    * Opens windows that were open before, keeps minimized ones minimized.
+   * IMPORTANT: Parent associations are loaded from subagentParentMap BEFORE this is called.
    */
   async restoreSubagentWindowStates() {
     const states = await this.loadSubagentWindowStates();
 
-    // First, discover parent sessions for all subagents to establish correct mapping
-    // This is important after server restart when parentSessionId isn't set
-    for (const [agentId, agent] of this.subagents) {
-      if (!agent.parentSessionId) {
-        this.findParentSessionForSubagent(agentId);
-      }
-    }
-
-    // Restore minimized state, but verify session mapping is correct
+    // Restore minimized state using the PERSISTENT parent map
     // Skip old agents from previous runs to avoid confusion
     const cutoffTime = Date.now() - 10 * 60 * 1000; // 10 minutes
     for (const [savedSessionId, agentIds] of Object.entries(states.minimized || {})) {
@@ -7572,11 +7596,18 @@ class ClaudemanApp {
           const agentStartTime = agent.startedAt ? new Date(agent.startedAt).getTime() : 0;
           if (agent.status === 'completed' || agentStartTime < cutoffTime) continue;
 
-          // Use discovered parentSessionId, or validate saved sessionId exists
-          const correctSessionId = agent.parentSessionId ||
+          // Use the PERSISTENT parent map (THE source of truth)
+          // Fall back to saved sessionId only if it exists in current sessions
+          const parentFromMap = this.subagentParentMap.get(agentId);
+          const correctSessionId = parentFromMap ||
             (this.sessions.has(savedSessionId) ? savedSessionId : null);
 
           if (correctSessionId) {
+            // Ensure the parent map has this association
+            if (!parentFromMap && this.sessions.has(savedSessionId)) {
+              this.setAgentParentSessionId(agentId, savedSessionId);
+            }
+
             if (!this.minimizedSubagents.has(correctSessionId)) {
               this.minimizedSubagents.set(correctSessionId, new Set());
             }
@@ -7623,6 +7654,113 @@ class ClaudemanApp {
     requestAnimationFrame(() => {
       this.updateConnectionLines();
     });
+  }
+
+  // ========== Persistent Parent Associations ==========
+  // This is the ROCK-SOLID system for tracking which tab an agent belongs to.
+  // Once an agent's parent is discovered, it's saved here PERMANENTLY.
+
+  /**
+   * Save the subagent parent map to localStorage and server.
+   * Called whenever a new parent association is discovered.
+   */
+  async saveSubagentParentMap() {
+    const mapData = Object.fromEntries(this.subagentParentMap);
+
+    // Save to localStorage for instant recovery
+    try {
+      localStorage.setItem('claudeman-subagent-parents', JSON.stringify(mapData));
+    } catch (err) {
+      console.error('Failed to save subagent parents to localStorage:', err);
+    }
+
+    // Save to server for cross-browser/session persistence
+    try {
+      await fetch('/api/subagent-parents', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mapData)
+      });
+    } catch (err) {
+      console.error('Failed to save subagent parents to server:', err);
+    }
+  }
+
+  /**
+   * Load the subagent parent map from server (or localStorage fallback).
+   * Called once on page load, before any agents are discovered.
+   */
+  async loadSubagentParentMap() {
+    let mapData = null;
+
+    // Try server first (most authoritative)
+    try {
+      const res = await fetch('/api/subagent-parents');
+      if (res.ok) {
+        mapData = await res.json();
+        // Update localStorage as cache
+        localStorage.setItem('claudeman-subagent-parents', JSON.stringify(mapData));
+      }
+    } catch (err) {
+      console.error('Failed to load subagent parents from server:', err);
+    }
+
+    // Fallback to localStorage
+    if (!mapData) {
+      try {
+        const saved = localStorage.getItem('claudeman-subagent-parents');
+        if (saved) {
+          mapData = JSON.parse(saved);
+        }
+      } catch (err) {
+        console.error('Failed to load subagent parents from localStorage:', err);
+      }
+    }
+
+    // Populate the map
+    if (mapData && typeof mapData === 'object') {
+      for (const [agentId, sessionId] of Object.entries(mapData)) {
+        // Only keep associations for sessions that still exist
+        if (this.sessions.has(sessionId)) {
+          this.subagentParentMap.set(agentId, sessionId);
+        }
+      }
+    }
+  }
+
+  /**
+   * Get the parent session ID for an agent from the persistent map.
+   * This is the ONLY source of truth for connection lines.
+   */
+  getAgentParentSessionId(agentId) {
+    return this.subagentParentMap.get(agentId) || null;
+  }
+
+  /**
+   * Set and persist the parent session ID for an agent.
+   * Once set, this association is PERMANENT and never recalculated.
+   */
+  setAgentParentSessionId(agentId, sessionId) {
+    if (!agentId || !sessionId) return;
+
+    // Only set if not already set (first association wins)
+    if (this.subagentParentMap.has(agentId)) {
+      return; // Already has a parent, don't override
+    }
+
+    this.subagentParentMap.set(agentId, sessionId);
+    this.saveSubagentParentMap(); // Persist immediately
+
+    // Also update the agent object for consistency
+    const agent = this.subagents.get(agentId);
+    if (agent) {
+      agent.parentSessionId = sessionId;
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        agent.parentSessionName = this.getSessionName(session);
+      }
+      this.subagents.set(agentId, agent);
+    }
   }
 
   // ========== Help Modal ==========
@@ -9349,125 +9487,205 @@ class ClaudemanApp {
     }
   }
 
-  // ========== Subagent Parent Session Tracking ==========
+  // ========== Subagent Parent TAB Tracking ==========
+  //
+  // CRITICAL: This system tracks which TAB an agent window connects to.
+  // The association is stored in `subagentParentMap` (agentId -> sessionId).
+  // The sessionId IS the tab identifier (tabs have data-id="${sessionId}").
+  // Once set, this association is PERMANENT and persisted across restarts.
 
   /**
-   * Find and assign the parent Claudeman session for a subagent.
+   * Find and assign the parent TAB for a subagent.
    *
-   * ROCK-SOLID MATCHING: Only uses claudeSessionId.
-   * - agent.sessionId = Claude session ID that spawned this subagent (from file path)
-   * - session.claudeSessionId = Claude session ID running in this Claudeman session
+   * Matching strategy (in order):
+   * 1. Use existing stored association from subagentParentMap (permanent)
+   * 2. Match via claudeSessionId (agent.sessionId === session.claudeSessionId)
+   * 3. FALLBACK: Use the currently active session (since that's where the user typed the command)
    *
-   * If they match, the subagent belongs to that tab. No fallbacks, no heuristics.
-   * If no match is found, the subagent waits - when a session's claudeSessionId gets
-   * set (via session:updated), we re-check all orphan subagents.
+   * Once found, the association is stored PERMANENTLY in subagentParentMap.
    */
   findParentSessionForSubagent(agentId) {
+    // Check if we already have a permanent association
+    if (this.subagentParentMap.has(agentId)) {
+      // Already have a parent - update agent object from stored value
+      const storedSessionId = this.subagentParentMap.get(agentId);
+      // Verify the session still exists
+      if (this.sessions.has(storedSessionId)) {
+        const agent = this.subagents.get(agentId);
+        if (agent && !agent.parentSessionId) {
+          agent.parentSessionId = storedSessionId;
+          const session = this.sessions.get(storedSessionId);
+          if (session) {
+            agent.parentSessionName = this.getSessionName(session);
+          }
+          this.subagents.set(agentId, agent);
+          this.updateSubagentWindowParent(agentId);
+        }
+        return;
+      }
+      // Stored session no longer exists - clear and re-discover
+      this.subagentParentMap.delete(agentId);
+    }
+
     const agent = this.subagents.get(agentId);
     if (!agent) return;
 
-    // Can't match without a sessionId
-    if (!agent.sessionId) return;
-
-    // Direct match: subagent.sessionId === session.claudeSessionId
-    for (const [sessionId, session] of this.sessions) {
-      if (session.claudeSessionId === agent.sessionId) {
-        agent.parentSessionId = sessionId;
-        agent.parentSessionName = this.getSessionName(session);
-        this.subagents.set(agentId, agent);
-        this.updateSubagentWindowParent(agentId);
-        this.updateSubagentWindowVisibility();
-        return;
-      }
-    }
-
-    // No match found - the session's claudeSessionId might not be set yet.
-    // When session:updated fires with claudeSessionId, we'll re-check orphans.
-  }
-
-  /**
-   * Re-check all orphan subagents (those without a parentSessionId) when a session updates.
-   * Called when session:updated fires, in case claudeSessionId was just set.
-   */
-  recheckOrphanSubagents() {
-    let anyFound = false;
-    for (const [agentId, agent] of this.subagents) {
-      if (!agent.parentSessionId && agent.sessionId) {
-        const hadParent = agent.parentSessionId;
-        this.findParentSessionForSubagent(agentId);
-        if (!hadParent && this.subagents.get(agentId)?.parentSessionId) {
-          anyFound = true;
+    // Strategy 1: Match via claudeSessionId (most accurate)
+    if (agent.sessionId) {
+      for (const [sessionId, session] of this.sessions) {
+        if (session.claudeSessionId === agent.sessionId) {
+          // FOUND! Store this association PERMANENTLY
+          this.setAgentParentSessionId(agentId, sessionId);
+          this.updateSubagentWindowParent(agentId);
+          this.updateSubagentWindowVisibility();
+          this.updateConnectionLines();
+          return;
         }
       }
     }
-    // Ensure connection lines are updated after all orphans are processed
-    if (anyFound) {
+
+    // Strategy 2: FALLBACK - Use the currently active session
+    // This works because agents spawn from where the user typed the command
+    if (this.activeSessionId && this.sessions.has(this.activeSessionId)) {
+      this.setAgentParentSessionId(agentId, this.activeSessionId);
+      this.updateSubagentWindowParent(agentId);
+      this.updateSubagentWindowVisibility();
+      this.updateConnectionLines();
+      return;
+    }
+
+    // Strategy 3: If no active session, use the first session
+    if (this.sessions.size > 0) {
+      const firstSessionId = this.sessions.keys().next().value;
+      this.setAgentParentSessionId(agentId, firstSessionId);
+      this.updateSubagentWindowParent(agentId);
+      this.updateSubagentWindowVisibility();
       this.updateConnectionLines();
     }
   }
 
   /**
-   * Update parentSessionName for all subagents belonging to a session.
-   * Called when a session is updated (e.g., renamed) to keep cached names fresh.
+   * Re-check all orphan subagents (those without a parent TAB) when a session updates.
+   * Called when session:updated fires with claudeSessionId.
+   *
+   * Also re-validates existing associations when claudeSessionId becomes available,
+   * in case the fallback association was wrong.
+   */
+  recheckOrphanSubagents() {
+    let anyChanged = false;
+    for (const [agentId, agent] of this.subagents) {
+      // Check if this agent has no parent in the persistent map
+      if (!this.subagentParentMap.has(agentId)) {
+        this.findParentSessionForSubagent(agentId);
+        if (this.subagentParentMap.has(agentId)) {
+          anyChanged = true;
+        }
+      } else if (agent.sessionId) {
+        // Agent has a stored parent, but check if we can now do a proper claudeSessionId match
+        // This handles the case where fallback was used but now the real parent is known
+        const storedParent = this.subagentParentMap.get(agentId);
+        const storedSession = this.sessions.get(storedParent);
+
+        // If the stored session doesn't have a matching claudeSessionId, try to find the real match
+        if (storedSession && storedSession.claudeSessionId !== agent.sessionId) {
+          for (const [sessionId, session] of this.sessions) {
+            if (session.claudeSessionId === agent.sessionId) {
+              // Found the real parent - update the association
+              this.subagentParentMap.set(agentId, sessionId);
+              agent.parentSessionId = sessionId;
+              agent.parentSessionName = this.getSessionName(session);
+              this.subagents.set(agentId, agent);
+              this.updateSubagentWindowParent(agentId);
+              anyChanged = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (anyChanged) {
+      this.saveSubagentParentMap();
+      this.updateConnectionLines();
+    }
+  }
+
+  /**
+   * Update parentSessionName for all subagents belonging to a TAB.
+   * Called when a session is renamed to keep cached names fresh.
    */
   updateSubagentParentNames(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session) return;
 
     const newName = this.getSessionName(session);
-    let updated = false;
 
-    for (const [agentId, agent] of this.subagents) {
-      if (agent.parentSessionId === sessionId && agent.parentSessionName !== newName) {
-        agent.parentSessionName = newName;
-        this.subagents.set(agentId, agent);
-        updated = true;
+    for (const [agentId, storedSessionId] of this.subagentParentMap) {
+      if (storedSessionId === sessionId) {
+        const agent = this.subagents.get(agentId);
+        if (agent) {
+          agent.parentSessionName = newName;
+          this.subagents.set(agentId, agent);
 
-        // Update the window header if open
-        const windowData = this.subagentWindows.get(agentId);
-        if (windowData) {
-          const parentNameEl = windowData.element.querySelector('.subagent-window-parent .parent-name');
-          if (parentNameEl) {
-            parentNameEl.textContent = newName;
+          // Update the window header if open
+          const windowData = this.subagentWindows.get(agentId);
+          if (windowData) {
+            const parentNameEl = windowData.element.querySelector('.subagent-window-parent .parent-name');
+            if (parentNameEl) {
+              parentNameEl.textContent = newName;
+            }
           }
         }
       }
     }
-
-    // Update connection lines if any names changed (visual refresh)
-    if (updated) {
-      this.updateConnectionLines();
-    }
   }
 
+  /**
+   * Add parent header to an agent window, showing which TAB it belongs to.
+   */
   updateSubagentWindowParent(agentId) {
     const windowData = this.subagentWindows.get(agentId);
     if (!windowData) return;
-    const agent = this.subagents.get(agentId);
-    if (!agent?.parentSessionId) return;
+
+    // Get parent from persistent map (THE source of truth)
+    const parentSessionId = this.subagentParentMap.get(agentId);
+    if (!parentSessionId) return;
+
+    const session = this.sessions.get(parentSessionId);
+    const parentName = session ? this.getSessionName(session) : 'Unknown';
 
     // Check if parent header already exists
     const win = windowData.element;
-    if (win.querySelector('.subagent-window-parent')) return;
+    const existingParent = win.querySelector('.subagent-window-parent');
+    if (existingParent) {
+      // Update existing
+      existingParent.dataset.parentSession = parentSessionId;
+      const nameEl = existingParent.querySelector('.parent-name');
+      if (nameEl) {
+        nameEl.textContent = parentName;
+        nameEl.onclick = () => this.selectSession(parentSessionId);
+      }
+      return;
+    }
 
-    // Insert parent header after the main header
+    // Insert new parent header after the main header
     const header = win.querySelector('.subagent-window-header');
     if (header) {
       const parentDiv = document.createElement('div');
       parentDiv.className = 'subagent-window-parent';
-      parentDiv.dataset.parentSession = agent.parentSessionId;
+      parentDiv.dataset.parentSession = parentSessionId;
       parentDiv.innerHTML = `
         <span class="parent-label">from</span>
-        <span class="parent-name" onclick="app.selectSession('${agent.parentSessionId}')">${this.escapeHtml(agent.parentSessionName)}</span>
+        <span class="parent-name" onclick="app.selectSession('${parentSessionId}')">${this.escapeHtml(parentName)}</span>
       `;
       header.insertAdjacentElement('afterend', parentDiv);
     }
-
-    // Update connection lines
-    this.updateConnectionLines();
   }
 
   // ========== Subagent Connection Lines ==========
+  //
+  // Connection lines are drawn from agent windows to their parent TABs.
+  // The parent TAB is determined by the PERSISTENT subagentParentMap.
+  // This map stores agentId -> sessionId, where sessionId is the tab's data-id.
 
   updateConnectionLines() {
     const svg = document.getElementById('connectionLines');
@@ -9480,7 +9698,7 @@ class ClaudemanApp {
     const wizardOpen = wizardModal?.classList.contains('active');
     const wizardContent = wizardOpen ? wizardModal.querySelector('.modal-content') : null;
 
-    // Collect visible regular subagent windows for connection logic
+    // Collect visible regular subagent windows
     const visibleSubagentWindows = [];
     for (const [agentId, windowInfo] of this.subagentWindows) {
       if (windowInfo.minimized || windowInfo.hidden) continue;
@@ -9494,8 +9712,7 @@ class ClaudemanApp {
       .filter(([, data]) => data.element)
       .map(([id, data]) => ({ id, ...data }));
 
-    for (const { agentId, windowInfo, win } of visibleSubagentWindows) {
-      const agent = this.subagents.get(agentId);
+    for (const { agentId, win } of visibleSubagentWindows) {
       const winRect = win.getBoundingClientRect();
 
       // If wizard is open with plan subagents, connect regular subagents to plan subagent windows
@@ -9527,20 +9744,17 @@ class ClaudemanApp {
           const winCenterX = winRect.left + winRect.width / 2;
 
           if (winCenterX < planCenterX) {
-            // Regular window is to the left of plan window
             x1 = planRect.left;
             y1 = planRect.top + planRect.height / 2;
             x2 = winRect.right;
             y2 = winRect.top + winRect.height / 2;
           } else {
-            // Regular window is to the right of plan window
             x1 = planRect.right;
             y1 = planRect.top + planRect.height / 2;
             x2 = winRect.left;
             y2 = winRect.top + winRect.height / 2;
           }
 
-          // Bezier curve for smooth connection
           const midX = (x1 + x2) / 2;
           const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
 
@@ -9580,14 +9794,26 @@ class ClaudemanApp {
         line.setAttribute('class', 'connection-line wizard-connection');
         line.setAttribute('data-agent-id', agentId);
         svg.appendChild(line);
-      } else if (agent?.parentSessionId) {
-        // Normal mode - connect to parent session tab
-        const tab = document.querySelector(`.session-tab[data-id="${agent.parentSessionId}"]`);
-        if (!tab) continue;
+      } else {
+        // NORMAL MODE: Connect agent window to its parent TAB
+        // Use the PERSISTENT subagentParentMap as the ONLY source of truth
+        const parentSessionId = this.subagentParentMap.get(agentId);
+
+        if (!parentSessionId) {
+          // No parent known yet - skip this agent
+          continue;
+        }
+
+        // Find the TAB element by its data-id
+        const tab = document.querySelector(`.session-tab[data-id="${parentSessionId}"]`);
+        if (!tab) {
+          // Tab not in DOM (might be scrolled out or session closed)
+          continue;
+        }
 
         const tabRect = tab.getBoundingClientRect();
 
-        // Draw curved line from tab bottom-center to window top-center
+        // Draw curved line from TAB bottom-center to window top-center
         const x1 = tabRect.left + tabRect.width / 2;
         const y1 = tabRect.bottom;
         const x2 = winRect.left + winRect.width / 2;
@@ -9601,6 +9827,7 @@ class ClaudemanApp {
         line.setAttribute('d', path);
         line.setAttribute('class', 'connection-line');
         line.setAttribute('data-agent-id', agentId);
+        line.setAttribute('data-parent-tab', parentSessionId);
         svg.appendChild(line);
       }
     }
@@ -9623,13 +9850,11 @@ class ClaudemanApp {
         let x1, y1, x2, y2;
 
         if (winCenterX < wizardCenterX) {
-          // Window is on the left
           x1 = wizardRect.left;
           y1 = wizardRect.top + wizardRect.height / 3 + (this.planSubagents.size > 3 ? 0 : 50);
           x2 = winRect.right;
           y2 = winRect.top + winRect.height / 2;
         } else {
-          // Window is on the right
           x1 = wizardRect.right;
           y1 = wizardRect.top + wizardRect.height / 3 + (this.planSubagents.size > 3 ? 0 : 50);
           x2 = winRect.left;
@@ -9651,20 +9876,24 @@ class ClaudemanApp {
   /**
    * Show/hide subagent windows based on active session.
    * Behavior controlled by "Subagents for Active Tab Only" setting.
+   * Uses the PERSISTENT subagentParentMap for accurate tab-based visibility.
    */
   updateSubagentWindowVisibility() {
     const settings = this.loadAppSettingsFromStorage();
     const activeTabOnly = settings.subagentActiveTabOnly ?? false;
 
     for (const [agentId, windowInfo] of this.subagentWindows) {
+      // Get parent from PERSISTENT map (THE source of truth)
+      const storedParent = this.subagentParentMap.get(agentId);
       const agent = this.subagents.get(agentId);
+      const parentSessionId = storedParent || agent?.parentSessionId;
 
       // Determine visibility based on setting
       let shouldShow;
       if (activeTabOnly) {
         // Show if: no parent known yet, or parent matches active session
-        const hasKnownParent = agent?.parentSessionId;
-        shouldShow = !hasKnownParent || agent.parentSessionId === this.activeSessionId;
+        const hasKnownParent = !!parentSessionId;
+        shouldShow = !hasKnownParent || parentSessionId === this.activeSessionId;
       } else {
         // Show all windows (original behavior)
         shouldShow = true;
@@ -9774,9 +10003,26 @@ class ClaudemanApp {
     finalX = Math.max(10, Math.min(finalX, viewportWidth - windowWidth - 10));
     finalY = Math.max(10, Math.min(finalY, viewportHeight - windowHeight - 10));
 
-    // Get parent tab position for spawn animation
-    const parentTab = agent.parentSessionId
-      ? document.querySelector(`.session-tab[data-id="${agent.parentSessionId}"]`)
+    // Get parent session from PERSISTENT map (THE source of truth for tab connections)
+    const parentSessionId = this.subagentParentMap.get(agentId) || agent.parentSessionId;
+    let parentSessionName = null;
+
+    if (parentSessionId) {
+      const parentSession = this.sessions.get(parentSessionId);
+      if (parentSession) {
+        parentSessionName = this.getSessionName(parentSession);
+        // Ensure the agent object is also updated for consistency
+        if (!agent.parentSessionId) {
+          agent.parentSessionId = parentSessionId;
+          agent.parentSessionName = parentSessionName;
+          this.subagents.set(agentId, agent);
+        }
+      }
+    }
+
+    // Get parent TAB element for spawn animation
+    const parentTab = parentSessionId
+      ? document.querySelector(`.session-tab[data-id="${parentSessionId}"]`)
       : null;
 
     // Create window element
@@ -9786,10 +10032,10 @@ class ClaudemanApp {
     win.style.zIndex = ++this.subagentWindowZIndex;
 
     // Build parent header if we have parent info
-    const parentHeader = agent.parentSessionId && agent.parentSessionName
-      ? `<div class="subagent-window-parent" data-parent-session="${agent.parentSessionId}">
+    const parentHeader = parentSessionId && parentSessionName
+      ? `<div class="subagent-window-parent" data-parent-session="${parentSessionId}">
           <span class="parent-label">from</span>
-          <span class="parent-name" onclick="app.selectSession('${agent.parentSessionId}')">${this.escapeHtml(agent.parentSessionName)}</span>
+          <span class="parent-name" onclick="app.selectSession('${parentSessionId}')">${this.escapeHtml(parentSessionName)}</span>
         </div>`
       : '';
 
@@ -9836,12 +10082,15 @@ class ClaudemanApp {
     const dragListeners = this.makeWindowDraggable(win, win.querySelector('.subagent-window-header'));
 
     // Check if this window should be visible based on settings
+    // Use the PERSISTENT parent map for accurate tab-based visibility
     const settings = this.loadAppSettingsFromStorage();
     const activeTabOnly = settings.subagentActiveTabOnly ?? false;
     let shouldHide = false;
     if (activeTabOnly) {
-      const hasKnownParent = agent.parentSessionId;
-      const isForActiveSession = !hasKnownParent || agent.parentSessionId === this.activeSessionId;
+      const storedParent = this.subagentParentMap.get(agentId);
+      const hasKnownParent = storedParent || agent.parentSessionId;
+      const parentId = storedParent || agent.parentSessionId;
+      const isForActiveSession = !hasKnownParent || parentId === this.activeSessionId;
       shouldHide = !isForActiveSession;
     }
 
@@ -9906,20 +10155,21 @@ class ClaudemanApp {
 
     const agent = this.subagents.get(agentId);
 
-    // Try to discover parent session if not already known
-    // This ensures we minimize to the correct tab
-    if (agent && !agent.parentSessionId) {
-      this.findParentSessionForSubagent(agentId);
+    // Get parent from PERSISTENT map (THE source of truth)
+    // Fall back to agent's parentSessionId, then to active session
+    const storedParent = this.subagentParentMap.get(agentId);
+    let parentSessionId = storedParent || agent?.parentSessionId || this.activeSessionId;
+
+    // If we don't have a stored parent yet, store it now
+    if (!storedParent && parentSessionId && this.sessions.has(parentSessionId)) {
+      this.setAgentParentSessionId(agentId, parentSessionId);
     }
 
-    // Get the parent session (use active session if no parent found)
-    const parentSessionId = agent?.parentSessionId || this.activeSessionId;
-
-    // Always minimize to tab (use active session if no parent found)
+    // Always minimize to tab
     windowData.element.style.display = 'none';
     windowData.minimized = true;
 
-    // Track minimized agent for the session
+    // Track minimized agent for the session (use the TAB's session ID)
     if (parentSessionId) {
       if (!this.minimizedSubagents.has(parentSessionId)) {
         this.minimizedSubagents.set(parentSessionId, new Set());
@@ -10053,7 +10303,7 @@ class ClaudemanApp {
 
     // If window doesn't exist but agent does, recreate it
     if (!windowData && agent) {
-      this.createSubagentWindow(agentId);
+      this.openSubagentWindow(agentId);
       return;
     }
 
@@ -10061,11 +10311,15 @@ class ClaudemanApp {
       const settings = this.loadAppSettingsFromStorage();
       const activeTabOnly = settings.subagentActiveTabOnly ?? false;
 
+      // Get parent from PERSISTENT map (THE source of truth)
+      const storedParent = this.subagentParentMap.get(agentId);
+      const parentSessionId = storedParent || agent?.parentSessionId;
+
       // Determine if we should show the window
       let shouldShow = true;
       if (activeTabOnly) {
         // Only restore if the window belongs to the active session (or has no parent)
-        shouldShow = !agent?.parentSessionId || agent.parentSessionId === this.activeSessionId;
+        shouldShow = !parentSessionId || parentSessionId === this.activeSessionId;
       }
 
       if (shouldShow) {
