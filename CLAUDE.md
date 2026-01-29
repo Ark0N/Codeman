@@ -16,7 +16,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md`
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1432 (must match `package.json`)
+**Version**: 0.1433 (must match `package.json`)
 
 ## Project Overview
 
@@ -31,6 +31,8 @@ Claudeman is a Claude Code session manager with web interface and autonomous Ral
 ## Commands
 
 **CRITICAL**: `npm run dev` shows CLI help, NOT the web server.
+
+**Default port**: `3000` (web UI at `http://localhost:3000`)
 
 ```bash
 # Development
