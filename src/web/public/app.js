@@ -1971,6 +1971,8 @@ class ClaudemanApp {
       const data = JSON.parse(e.data);
       console.log('[Plan Started]', data);
       this.activePlanOrchestratorId = data.orchestratorId;
+      this.planGenerationStopped = false; // Reset flag for new generation
+      this.renderMonitorPlanAgents();
     });
 
     // Plan generation cancelled
@@ -1980,6 +1982,7 @@ class ClaudemanApp {
       if (this.activePlanOrchestratorId === data.orchestratorId) {
         this.activePlanOrchestratorId = null;
       }
+      this.renderMonitorPlanAgents();
     });
 
     // Plan generation completed
@@ -1989,6 +1992,7 @@ class ClaudemanApp {
       if (this.activePlanOrchestratorId === data.orchestratorId) {
         this.activePlanOrchestratorId = null;
       }
+      this.renderMonitorPlanAgents();
     });
   }
 
@@ -2721,6 +2725,50 @@ class ClaudemanApp {
     // Reset wizard position
     this.wizardPosition = null;
     this.planAgentsMinimized = false;
+
+    // === CRITICAL: Clean up any orphaned plan generation state ===
+
+    // Cancel any in-flight plan generation
+    if (this.activePlanOrchestratorId) {
+      console.log('[Wizard Close] Cancelling active plan orchestrator:', this.activePlanOrchestratorId);
+      fetch('/api/cancel-plan-generation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orchestratorId: this.activePlanOrchestratorId }),
+      }).catch(err => console.error('[Wizard Close] Failed to cancel plan:', err));
+      this.activePlanOrchestratorId = null;
+    }
+
+    // Abort any in-flight fetch request
+    if (this.planGenerationAbortController) {
+      this.planGenerationAbortController.abort();
+      this.planGenerationAbortController = null;
+    }
+
+    // Clear progress handler to prevent orphaned callbacks
+    this._planProgressHandler = null;
+
+    // Clear plan loading timers
+    if (this.planLoadingTimer) {
+      clearInterval(this.planLoadingTimer);
+      this.planLoadingTimer = null;
+    }
+    if (this.planPhaseTimer) {
+      clearTimeout(this.planPhaseTimer);
+      this.planPhaseTimer = null;
+    }
+
+    // Mark generation as stopped to ignore any late SSE events
+    this.planGenerationStopped = true;
+
+    // Close all plan subagent windows
+    this.closePlanSubagentWindows();
+
+    // Clear wizard minimized windows tracking
+    this.wizardMinimizedWindows = null;
+
+    // Update monitor panel to reflect changes
+    this.renderMonitorPlanAgents();
 
     // Update connection lines (wizard closed, revert to normal)
     this.updateConnectionLines();
@@ -4024,6 +4072,9 @@ class ClaudemanApp {
         if (detailEl) detailEl.textContent = detail || '';
       }
     }
+
+    // Update monitor panel to show plan agents
+    this.renderMonitorPlanAgents();
   }
 
   /**
@@ -4360,6 +4411,8 @@ class ClaudemanApp {
     this.updateWizardAgentCount();
     this.removeAgentsMinimizedTab();
     this.updateConnectionLines();
+    // Update monitor panel (will hide section if no agents)
+    this.renderMonitorPlanAgents();
   }
 
   // ========== Wizard Dragging ==========
@@ -9837,8 +9890,34 @@ class ClaudemanApp {
     }
     this.logViewerWindows.clear();
 
+    // Clean up plan subagent windows (wizard agents)
+    if (this.planSubagents) {
+      for (const [agentId, windowData] of this.planSubagents) {
+        if (windowData.dragListeners) {
+          document.removeEventListener('mousemove', windowData.dragListeners.move);
+          document.removeEventListener('mouseup', windowData.dragListeners.up);
+        }
+        if (windowData.element) {
+          windowData.element.remove();
+        }
+      }
+      this.planSubagents.clear();
+    }
+
+    // Clear orphaned plan generation state
+    this.activePlanOrchestratorId = null;
+    this._planProgressHandler = null;
+    this.planGenerationStopped = true;
+    if (this.planGenerationAbortController) {
+      this.planGenerationAbortController.abort();
+      this.planGenerationAbortController = null;
+    }
+
     // Clear minimized agents tracking
     this.minimizedSubagents.clear();
+
+    // Update monitor panel
+    this.renderMonitorPlanAgents();
 
     // Update connection lines (should be empty now)
     this.updateConnectionLines();
@@ -11250,6 +11329,90 @@ class ClaudemanApp {
     } catch (err) {
       this.showToast('Failed to reconcile screens', 'error');
     }
+  }
+
+  // ========== Plan Wizard Agents in Monitor ==========
+
+  renderMonitorPlanAgents() {
+    const section = document.getElementById('monitorPlanAgentsSection');
+    const body = document.getElementById('monitorPlanAgentsBody');
+    const stats = document.getElementById('monitorPlanAgentStats');
+    if (!section || !body) return;
+
+    const planAgents = Array.from(this.planSubagents?.values() || []);
+    const hasActiveOrchestrator = !!this.activePlanOrchestratorId;
+
+    // Show section only if there are plan agents or active orchestrator
+    if (planAgents.length === 0 && !hasActiveOrchestrator) {
+      section.style.display = 'none';
+      return;
+    }
+
+    section.style.display = '';
+
+    const activeCount = planAgents.filter(a => a.status === 'running').length;
+    const completedCount = planAgents.filter(a => a.status === 'completed' || a.status === 'failed').length;
+
+    if (stats) {
+      if (hasActiveOrchestrator) {
+        stats.textContent = `${activeCount} running, ${completedCount} done`;
+      } else {
+        stats.textContent = `${planAgents.length} total`;
+      }
+    }
+
+    if (planAgents.length === 0) {
+      body.innerHTML = `<div class="monitor-empty">${hasActiveOrchestrator ? 'Plan generation starting...' : 'No plan agents'}</div>`;
+      return;
+    }
+
+    let html = '';
+    for (const agent of planAgents) {
+      const statusClass = agent.status === 'running' ? 'active' : agent.status === 'completed' ? 'completed' : 'error';
+      const agentLabel = agent.agentType || agent.agentId;
+      const modelBadge = agent.model ? `<span class="model-badge opus">opus</span>` : '';
+      const detail = agent.detail ? this.escapeHtml(agent.detail.substring(0, 50)) : '';
+      const duration = agent.durationMs ? `${(agent.durationMs / 1000).toFixed(1)}s` : '';
+      const itemCount = agent.itemCount ? `${agent.itemCount} items` : '';
+
+      html += `
+        <div class="process-item">
+          <span class="process-mode ${statusClass}">${agent.status || 'pending'}</span>
+          <div class="process-info">
+            <div class="process-name">${modelBadge} ${this.escapeHtml(agentLabel)}</div>
+            <div class="process-meta">
+              ${detail ? `<span>${detail}</span>` : ''}
+              ${itemCount ? `<span>${itemCount}</span>` : ''}
+              ${duration ? `<span>${duration}</span>` : ''}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    body.innerHTML = html;
+  }
+
+  async cancelPlanFromMonitor() {
+    if (!this.activePlanOrchestratorId && this.planSubagents?.size === 0) {
+      this.showToast('No active plan generation', 'info');
+      return;
+    }
+
+    if (!confirm('Cancel plan generation and close all plan agent windows?')) return;
+
+    // Cancel the plan generation (reuse existing method)
+    await this.cancelPlanGeneration();
+
+    // Also force close the wizard if it's open
+    const wizardModal = document.getElementById('ralphWizardModal');
+    if (wizardModal?.classList.contains('active')) {
+      this.closeRalphWizard();
+    }
+
+    // Update monitor display
+    this.renderMonitorPlanAgents();
+    this.showToast('Plan generation cancelled', 'success');
   }
 
   // ========== Toast ==========
