@@ -4112,6 +4112,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       const controller = this.respawnControllers.get(sessionId);
       if (controller) {
         controller.stop();
+        controller.removeAllListeners();
+        this.respawnControllers.delete(sessionId);
         this.broadcast('respawn:stopped', { sessionId, reason: 'duration_expired' });
       }
       this.respawnTimers.delete(sessionId);

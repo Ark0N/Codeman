@@ -705,8 +705,11 @@ export class RespawnController extends EventEmitter {
     if (c.aiPlanCheckMaxContext <= 0) c.aiPlanCheckMaxContext = DEFAULT_CONFIG.aiPlanCheckMaxContext;
   }
 
-  /** Wire up AI checker events to controller events */
+  /** Wire up AI checker events to controller events (removes existing listeners first to prevent duplicates) */
   private setupAiCheckerListeners(): void {
+    // Remove any existing listeners to prevent duplicates when restarting
+    this.aiChecker.removeAllListeners();
+
     this.aiChecker.on('log', (message: string) => {
       this.log(message);
     });
@@ -728,8 +731,11 @@ export class RespawnController extends EventEmitter {
     });
   }
 
-  /** Wire up plan checker events to controller events */
+  /** Wire up plan checker events to controller events (removes existing listeners first to prevent duplicates) */
   private setupPlanCheckerListeners(): void {
+    // Remove any existing listeners to prevent duplicates when restarting
+    this.planChecker.removeAllListeners();
+
     this.planChecker.on('log', (message: string) => {
       this.log(message);
     });
@@ -995,6 +1001,11 @@ export class RespawnController extends EventEmitter {
     }
 
     this.log('Starting respawn controller (multi-layer detection)');
+
+    // Re-setup AI checker listeners in case they were removed by a previous stop()
+    // This allows the controller to be restarted after being stopped
+    this.setupAiCheckerListeners();
+    this.setupPlanCheckerListeners();
 
     // Initialize all timestamps and reset hook state
     const now = Date.now();
