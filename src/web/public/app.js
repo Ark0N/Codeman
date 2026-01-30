@@ -11175,6 +11175,16 @@ class ClaudemanApp {
       this.planSubagents.clear();
     }
 
+    // Clean up all image popup windows with their drag listeners
+    for (const [imageId, popupData] of this.imagePopups) {
+      if (popupData.dragListeners) {
+        document.removeEventListener('mousemove', popupData.dragListeners.move);
+        document.removeEventListener('mouseup', popupData.dragListeners.up);
+      }
+      popupData.element.remove();
+    }
+    this.imagePopups.clear();
+
     // Clear orphaned plan generation state
     this.activePlanOrchestratorId = null;
     this._planProgressHandler = null;
