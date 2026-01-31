@@ -290,6 +290,8 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | `scripts/postinstall.js` | npm postinstall hook for setup |
 | `scripts/data-generator.sh` | Generate test data for development |
 | `scripts/test-tail-links.sh` | Test clickable file links in tail output |
+| `scripts/capture-subagent-screenshots.mjs` | Capture subagent screenshots/GIFs for README (uses real Claude sessions) |
+| `scripts/mobile-screenshot.mjs` | Capture mobile UI screenshots |
 
 ## Memory Leak Prevention
 

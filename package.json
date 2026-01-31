@@ -19,7 +19,8 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run test/e2e/",
     "test:e2e:quick": "vitest run test/e2e/workflows/quick-start.e2e.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "capture:subagents": "node scripts/capture-subagent-screenshots.mjs"
   },
   "keywords": [
     "claude",

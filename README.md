@@ -130,21 +130,13 @@ Claudeman detects and tracks Ralph Loops and Todos inside Claude Code:
 
 **Watch your agents work in real-time.** Claudeman monitors Claude Code's background agents (the `Task` tool) and displays them in draggable floating windows with Matrix-style connection lines.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Session Tab [AGENTS (3)]                                   │
-│      │                                                      │
-│      │ ╭──────────────────╮  ╭──────────────────╮          │
-│      ├─┤ Agent: explore   │  │ Agent: implement │          │
-│      │ │ ● active         │  │ ○ completed      │          │
-│      │ │ Tool: Grep       │  │ Result: success  │          │
-│      │ ╰──────────────────╯  ╰──────────────────╯          │
-│      │         ╭──────────────────╮                        │
-│      └─────────┤ Agent: test      │                        │
-│                │ ◐ idle           │                        │
-│                ╰──────────────────╯                        │
-└─────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="docs/images/subagent-spawn.png" alt="Subagent Visualization" width="900">
+</p>
+
+<p align="center">
+  <img src="docs/images/subagent-demo.gif" alt="Subagent Demo" width="900">
+</p>
 
 **Features:**
 - **Floating windows** — Draggable, resizable panels for each agent
