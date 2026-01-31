@@ -74,11 +74,14 @@ CLAUDEMAN_SCREEN_NAME=claudeman-myproject
 
 **The core of autonomous work.** When Claude becomes idle, the Respawn Controller kicks in:
 
-```
-WATCHING → IDLE DETECTED → SEND UPDATE → CLEAR → INIT → CONTINUE
-    ↑                                                      │
-    └──────────────────────────────────────────────────────┘
-```
+| State | Action | Next |
+|:-----:|:------:|:----:|
+| **WATCHING** | Monitor for idle | IDLE DETECTED |
+| **IDLE DETECTED** | Confirm silence | SEND UPDATE |
+| **SEND UPDATE** | Push continue prompt | CLEAR |
+| **CLEAR** | Run `/clear` | INIT |
+| **INIT** | Run `/init` | CONTINUE |
+| **CONTINUE** | Resume work | WATCHING |
 
 - Multi-layer idle detection (completion messages, output silence, token stability)
 - Sends configurable update prompts to continue work
@@ -214,9 +217,8 @@ Run **20 parallel sessions** with full visibility:
 
 **The solution:** Claudeman implements a 6-layer antiflicker system that delivers butter-smooth 60fps terminal output:
 
-```
-PTY Output → 16ms Batch → DEC 2026 Wrap → SSE → rAF Batch → xterm.js → 60fps Canvas
-```
+| PTY Output | **→** | 16ms Batch | **→** | DEC 2026 Wrap | **→** | SSE | **→** | rAF Batch | **→** | xterm.js | **→** | 60fps Canvas |
+|:----------:|:-----:|:----------:|:-----:|:-------------:|:-----:|:---:|:-----:|:---------:|:-----:|:--------:|:-----:|:------------:|
 
 #### How Each Layer Works
 
