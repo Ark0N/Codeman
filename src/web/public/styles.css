@@ -1858,19 +1858,20 @@ body {
   background: var(--accent-hover);
 }
 
-/* Claude Button - Subtle gray styling */
+/* Claude Button - Special styling (matches welcome-btn-primary) */
 .btn-toolbar.btn-claude {
-  background: var(--bg-input);
-  border-color: var(--border-light);
-  color: var(--text);
+  background: linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%);
+  border-color: #3b82f6;
+  color: #e0e7ff;
   font-weight: 500;
-  padding: 0.3rem 0.6rem;
-  gap: 0.3rem;
+  padding: 0.4rem 0.85rem;
+  gap: 0.4rem;
 }
 
 .btn-toolbar.btn-claude:hover {
-  background: var(--bg-hover);
-  border-color: var(--accent);
+  background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
+  border-color: #3b82f6;
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
   color: #fff;
 }
 
@@ -1893,13 +1894,6 @@ body {
   border-color: #3d7a3d;
   box-shadow: 0 0 8px rgba(34, 139, 34, 0.4);
   color: #a8d8a8;
-}
-
-/* Hide Run Claude and Run Shell buttons on desktop - only show on mobile */
-/* These buttons are for mobile quick access; desktop uses welcome overlay buttons */
-.btn-toolbar.btn-claude,
-.btn-toolbar.btn-shell {
-  display: none;
 }
 
 /* Button icon styling */
@@ -8181,9 +8175,8 @@ kbd {
     color: #fff;
   }
 
-  /* Primary action button - Run Claude (shown on mobile only) */
+  /* Primary action button - Run Claude - compact for mobile */
   .btn-toolbar.btn-claude {
-    display: inline-flex !important; /* Override desktop hide */
     flex: 0 0 auto;
     padding: 0 0.75rem !important;
     background: var(--bg-input);
@@ -8204,9 +8197,8 @@ kbd {
     margin-right: 4px;
   }
 
-  /* Secondary action - Run Shell - right side (shown on mobile only) */
+  /* Secondary action - Run Shell - compact for mobile */
   .btn-toolbar.btn-shell {
-    display: inline-flex !important; /* Override desktop hide */
     flex: 0 0 auto;
     background: transparent;
     border: 1px solid rgba(255, 255, 255, 0.2);
