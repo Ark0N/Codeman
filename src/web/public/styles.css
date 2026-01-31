@@ -8044,31 +8044,29 @@ kbd {
     display: none;
   }
 
-  /* Gear icon on active tab - smaller, pushed right, vertically centered */
+  /* Gear icon on active tab - tiny, subtle */
   .session-tab.active .tab-gear {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.7rem;
+    font-size: 0.5rem;
     line-height: 1;
-    padding: 0;
-    width: 20px;
-    height: 20px;
+    width: 12px;
+    height: 12px;
     margin-left: auto;
-    margin-right: 0;
+    opacity: 0.6;
   }
 
-  /* Close button on active tab - larger, tight to gear, vertically centered */
+  /* Close button on active tab - prominent for easy tapping */
   .session-tab.active .tab-close {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 1rem;
+    font-size: 0.9rem;
     line-height: 1;
-    padding: 0;
-    width: 20px;
-    height: 20px;
-    margin-left: 2px;
+    width: 18px;
+    height: 16px;
+    margin-left: 6px;
   }
 
   /* Clean dark toolbar - positioned near bottom */
