@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Quick Reference
+
+| Task | Command |
+|------|---------|
+| Dev server | `npx tsx src/index.ts web` |
+| Type check | `tsc --noEmit` |
+| Single test | `npx vitest run test/<file>.test.ts` |
+| E2E tests | `npm run test:e2e` |
+| Production | `npm run build && systemctl --user restart claudeman-web` |
+
 ## CRITICAL: Screen Session Safety
 
 **You may be running inside a Claudeman-managed screen session.** Before killing ANY screen or Claude process:
@@ -58,6 +68,20 @@ systemctl --user restart claudeman-web
 journalctl --user -u claudeman-web -f
 ```
 
+## Common Gotchas
+
+- **`npm run dev` is NOT the web server** — it shows CLI help. Use `npx tsx src/index.ts web`
+- **Single-line prompts only** — `writeViaScreen()` sends text and Enter separately; multi-line breaks Ink
+- **Test screens need 'test' in name** — The cleanup system only kills screens containing 'test'
+- **Don't kill screens blindly** — Check `$CLAUDEMAN_SCREEN` first; you might be inside one
+- **Port 3000 during E2E** — Tests use ports 3183-3193; don't run dev server on 3000 while testing
+
+## Import Conventions
+
+- **Utilities**: Import from `./utils` (re-exports all): `import { LRUMap, debounce } from './utils'`
+- **Types**: Use type imports: `import type { SessionState } from './types'`
+- **Config**: Import from specific files: `import { BUFFER_LIMITS } from './config/buffer-limits'`
+
 ## Architecture
 
 ### Core Files
@@ -86,6 +110,7 @@ journalctl --user -u claudeman-web -f
 | `src/file-stream-manager.ts` | Manages `tail -f` processes for live log viewing |
 | `src/plan-orchestrator.ts` | Multi-agent plan generation with research and planning phases |
 | `src/prompts/*.ts` | Agent prompts (research-agent, code-reviewer, planner) |
+| `src/templates/claude-md.ts` | CLAUDE.md generation for new cases |
 | `src/cli.ts` | Command-line interface handlers |
 | `src/web/server.ts` | Fastify REST API + SSE at `/api/events` |
 | `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows |
@@ -186,6 +211,7 @@ To change defaults, edit the `??` fallback values in `openAppSettings()` and `ap
 - Pre-existing screen protection (never kills screens present before tests)
 - Tracked resource cleanup (only kills screens/processes tests register)
 - Safe to run from within Claudeman-managed sessions
+- Exported helpers: `acquireScreenSlot()`, `releaseScreenSlot()`, `registerTestScreen()`, `unregisterTestScreen()`
 
 Respawn tests use MockSession to avoid spawning real Claude processes. See `test/respawn-test-utils.ts` for MockSession, MockAiIdleChecker, MockAiPlanChecker, state trackers, and terminal output generators.
 
@@ -201,7 +227,7 @@ curl localhost:3000/api/subagents   # List background agents
 curl localhost:3000/api/sessions/:id/run-summary | jq  # Session timeline
 ```
 
-**Avoid port 3000 during E2E tests** - tests use ports 3183-3190 (see `test/e2e/e2e.config.ts`).
+**Avoid port 3000 during E2E tests** — tests use ports 3183-3193 (see `test/e2e/e2e.config.ts`).
 
 ## Performance Constraints
 
@@ -262,6 +288,8 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | `scripts/screen-chooser.sh` | Claudeman Screens - mobile-friendly session picker (`sc` alias, see README for usage) |
 | `scripts/monitor-respawn.sh` | Monitor respawn state machine in real-time |
 | `scripts/postinstall.js` | npm postinstall hook for setup |
+| `scripts/data-generator.sh` | Generate test data for development |
+| `scripts/test-tail-links.sh` | Test clickable file links in tail output |
 
 ## Memory Leak Prevention
 
