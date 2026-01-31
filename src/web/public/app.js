@@ -973,6 +973,81 @@ class ClaudemanApp {
       this.terminal.scrollLines(lines);
     }, { passive: false });
 
+    // Touch scrolling - only use custom JS scrolling on desktop
+    // Mobile uses native browser scrolling via CSS touch-action: pan-y
+    const isMobileDevice = MobileDetection.isTouchDevice() && window.innerWidth < 1024;
+
+    if (!isMobileDevice) {
+      // Desktop touch scrolling with custom momentum
+      let touchLastY = 0;
+      let pendingDelta = 0;
+      let velocity = 0;
+      let lastTime = 0;
+      let scrollFrame = null;
+      let isTouching = false;
+
+      const viewport = container.querySelector('.xterm-viewport');
+
+      // Single RAF loop handles both touch and momentum
+      const scrollLoop = (timestamp) => {
+        if (!viewport) return;
+
+        const dt = lastTime ? (timestamp - lastTime) / 16.67 : 1; // Normalize to 60fps
+        lastTime = timestamp;
+
+        if (isTouching) {
+          // During touch: apply pending delta
+          if (pendingDelta !== 0) {
+            viewport.scrollTop += pendingDelta;
+            pendingDelta = 0;
+          }
+          scrollFrame = requestAnimationFrame(scrollLoop);
+        } else if (Math.abs(velocity) > 0.1) {
+          // Momentum phase
+          viewport.scrollTop += velocity * dt;
+          velocity *= 0.94; // Smooth deceleration
+          scrollFrame = requestAnimationFrame(scrollLoop);
+        } else {
+          scrollFrame = null;
+          velocity = 0;
+        }
+      };
+
+      container.addEventListener('touchstart', (ev) => {
+        if (ev.touches.length === 1) {
+          touchLastY = ev.touches[0].clientY;
+          pendingDelta = 0;
+          velocity = 0;
+          isTouching = true;
+          lastTime = 0;
+          if (!scrollFrame) {
+            scrollFrame = requestAnimationFrame(scrollLoop);
+          }
+        }
+      }, { passive: true });
+
+      container.addEventListener('touchmove', (ev) => {
+        if (ev.touches.length === 1 && isTouching) {
+          const touchY = ev.touches[0].clientY;
+          const delta = touchLastY - touchY;
+          pendingDelta += delta;
+          velocity = delta * 1.2; // Track for momentum
+          touchLastY = touchY;
+        }
+      }, { passive: true });
+
+      container.addEventListener('touchend', () => {
+        isTouching = false;
+        // Momentum continues in scrollLoop
+      }, { passive: true });
+
+      container.addEventListener('touchcancel', () => {
+        isTouching = false;
+        velocity = 0;
+      }, { passive: true });
+    }
+    // Mobile: native scrolling handles touch via CSS
+
     // Welcome message
     this.showWelcome();
 
@@ -5133,6 +5208,12 @@ class ClaudemanApp {
       wizardContent.style.left = `${startLeft}px`;
       wizardContent.style.top = `${startTop}px`;
 
+      // Add move/end listeners only during drag (prevents blocking scroll)
+      document.addEventListener('mousemove', moveHandler);
+      document.addEventListener('mouseup', upHandler);
+      document.addEventListener('touchmove', moveHandler, { passive: false });
+      document.addEventListener('touchend', upHandler);
+
       e.preventDefault();
     };
 
@@ -5171,19 +5252,19 @@ class ClaudemanApp {
     const upHandler = () => {
       if (isDragging) {
         isDragging = false;
+        // Remove move/end listeners when drag ends
+        document.removeEventListener('mousemove', moveHandler);
+        document.removeEventListener('mouseup', upHandler);
+        document.removeEventListener('touchmove', moveHandler);
+        document.removeEventListener('touchend', upHandler);
         // Save agent window positions for next drag
         this.saveAgentWindowRelativePositions();
       }
     };
 
-    // Mouse events
+    // Only attach start handlers - move/end are added dynamically during drag
     header.addEventListener('mousedown', startHandler);
-    document.addEventListener('mousemove', moveHandler);
-    document.addEventListener('mouseup', upHandler);
-    // Touch events
     header.addEventListener('touchstart', startHandler, { passive: false });
-    document.addEventListener('touchmove', moveHandler, { passive: false });
-    document.addEventListener('touchend', upHandler);
 
     this.wizardDragListeners = {
       header,

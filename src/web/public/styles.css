@@ -1641,15 +1641,22 @@ body {
   will-change: contents;
   /* Minimum width to prevent 0-column terminal on mobile */
   min-width: 280px;
+  /* Allow touch scrolling */
+  touch-action: pan-y;
 }
 
 .terminal-container .xterm {
   height: 100%;
   padding: 0;
+  /* Allow touch scrolling in xterm */
+  touch-action: pan-y;
 }
 
 .terminal-container .xterm-viewport {
   background: transparent !important;
+  /* Enable touch scrolling in viewport */
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Welcome Overlay */
@@ -7852,17 +7859,13 @@ kbd {
    Tablet Breakpoint (430px - 768px)
    ============================================================================ */
 @media (max-width: 768px) and (min-width: 430px) {
-  /* Safe area padding for iOS devices */
-  .ios-device .app {
-    padding-left: var(--safe-area-left);
-    padding-right: var(--safe-area-right);
-  }
-
-  /* Compact header for tablet */
+  /* Compact header for tablet - includes safe area padding */
   .header {
     min-height: 44px;
     max-height: 64px;
     padding: 0.35rem 0.5rem;
+    padding-left: calc(0.5rem + var(--safe-area-left));
+    padding-right: calc(0.5rem + var(--safe-area-right));
   }
 
   /* Hide some header elements on tablet for more space */
@@ -7902,9 +7905,11 @@ kbd {
     max-width: 80px;
   }
 
-  /* Compact toolbar */
+  /* Compact toolbar - includes safe area padding */
   .toolbar {
     padding: 0.4rem 0.5rem;
+    padding-left: calc(0.5rem + var(--safe-area-left));
+    padding-right: calc(0.5rem + var(--safe-area-right));
     gap: 0.4rem;
   }
 
@@ -7949,11 +7954,9 @@ kbd {
    Phone Breakpoint (<430px)
    ============================================================================ */
 @media (max-width: 430px) {
-  /* Safe area padding for iOS devices */
+  /* iOS safe area - only top padding on app, sides go to header/toolbar */
   .ios-device .app {
     padding-top: var(--safe-area-top);
-    padding-left: var(--safe-area-left);
-    padding-right: var(--safe-area-right);
   }
 
   /* Hide header brand on phones */
@@ -7976,32 +7979,48 @@ kbd {
     display: none;
   }
 
-  /* Compact header */
+  /* Ultra-compact header for mobile */
   .header {
-    min-height: 40px;
-    max-height: 52px; /* Tighter max height for mobile */
-    padding: 0.25rem 0.4rem;
-    gap: 0.2rem;
+    min-height: 32px;
+    max-height: 36px;
+    padding: 0.15rem 0.3rem;
+    padding-left: calc(0.3rem + var(--safe-area-left));
+    padding-right: calc(0.3rem + var(--safe-area-right));
+    gap: 0.15rem;
     flex-shrink: 0;
     overflow: hidden;
+    background: #0a0a0a;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
 
   .header-right {
-    padding-left: 0.35rem;
-    gap: 0.15rem;
+    padding-left: 0.2rem;
+    gap: 0.1rem;
     flex-shrink: 0;
     border-left: none;
   }
 
   /* Smaller header buttons on mobile */
   .btn-icon-header {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+  }
+
+  .btn-icon-header svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  /* Larger settings gear icon for visibility */
+  .btn-icon-header.btn-settings {
     width: 32px;
     height: 32px;
   }
 
-  .btn-icon-header.btn-settings {
-    width: 32px;
-    height: 32px;
+  .btn-icon-header.btn-settings svg {
+    width: 16px;
+    height: 16px;
   }
 
   /* App container - prevent scrolling, strict layout */
@@ -8009,65 +8028,77 @@ kbd {
     overflow: hidden;
   }
 
-  /* Compact session tabs - horizontal scroll, smaller */
+  /* Ultra-compact session tabs */
   .session-tabs {
     flex: 1;
     flex-wrap: nowrap;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    max-height: 44px;
+    max-height: 36px;
     gap: 2px;
-    padding: 0.1rem 0.15rem;
+    padding: 0;
   }
 
   .session-tabs::-webkit-scrollbar {
     display: none;
   }
 
-  /* Compact tabs for mobile */
+  /* Smaller tabs for mobile */
   .session-tab {
     flex-shrink: 0;
-    min-height: 36px;
-    max-height: 36px;
-    padding: 0.3rem 0.5rem;
-    font-size: 0.7rem;
-    gap: 0.25rem;
+    min-height: 22px;
+    max-height: 22px;
+    padding: 0.1rem 0.4rem;
+    font-size: 0.65rem;
+    gap: 0.2rem;
     border-radius: 3px;
   }
 
   /* Smaller status indicator on mobile */
   .session-tab .tab-status {
-    width: 5px;
-    height: 5px;
+    width: 4px;
+    height: 4px;
   }
 
   /* Truncate tab names more aggressively on mobile */
   .session-tab .tab-name {
-    max-width: 60px;
+    max-width: 50px;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  /* Smaller close/gear buttons on mobile tabs */
+  /* Hide close/gear buttons on non-active tabs on mobile */
   .session-tab .tab-close,
   .session-tab .tab-gear {
-    font-size: 0.75rem;
-    padding: 0.1rem 0.25rem;
+    display: none;
   }
 
-  /* Compact toolbar - only essential buttons */
+  /* Only show close/gear buttons on active tab - smaller gear */
+  .session-tab.active .tab-close,
+  .session-tab.active .tab-gear {
+    display: inline-flex;
+    font-size: 0.55rem;
+    padding: 0.02rem 0.1rem;
+    min-width: 14px;
+    height: 14px;
+  }
+
+  /* Clean dark toolbar - simple black/gray with white text */
   .toolbar {
-    height: 44px;
-    min-height: 44px;
-    max-height: 44px;
-    padding: 0.4rem 0.6rem;
-    padding-bottom: calc(0.4rem + var(--safe-area-bottom));
+    height: 40px;
+    min-height: 40px;
+    max-height: 40px;
+    padding: 0.3rem 0.4rem;
+    padding-left: calc(0.4rem + var(--safe-area-left));
+    padding-right: calc(0.4rem + var(--safe-area-right));
+    padding-bottom: calc(0.3rem + var(--safe-area-bottom));
     flex-wrap: nowrap;
-    gap: 0.4rem;
+    gap: 0.3rem;
     align-items: center;
-    background: linear-gradient(180deg, var(--bg-card) 0%, rgba(20, 20, 25, 0.98) 100%);
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    justify-content: space-between;
+    background: #111111;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
   }
 
   /* Hide secondary toolbar groups */
@@ -8084,25 +8115,25 @@ kbd {
     display: none !important;
   }
 
-  /* Full-width primary toolbar group - left-aligned for mobile */
+  /* Toolbar layout: case selector left, Run Claude center, Shell right */
   .toolbar-left {
     flex: 1;
-    justify-content: flex-start;
+    justify-content: space-between;
     width: 100%;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.3rem;
   }
 
   .toolbar-left .toolbar-group {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.3rem;
   }
 
   .toolbar-left .toolbar-group:first-child {
     flex: 1;
-    justify-content: flex-start;
-    gap: 0.4rem;
+    justify-content: space-between;
+    gap: 0.3rem;
     flex-wrap: nowrap;
     align-items: center;
   }
@@ -8112,105 +8143,112 @@ kbd {
     display: none !important;
   }
 
-  /* Sleek compact toolbar buttons for mobile */
+  /* Compact toolbar buttons for mobile - white text on dark */
   .btn-toolbar {
-    min-height: 28px !important;
-    max-height: 28px !important;
-    height: 28px !important;
-    padding: 0 0.6rem !important;
-    font-size: 0.7rem !important;
-    border-radius: 6px;
-    line-height: 28px;
+    min-height: 26px !important;
+    max-height: 26px !important;
+    height: 26px !important;
+    padding: 0 0.5rem !important;
+    font-size: 0.65rem !important;
+    border-radius: 4px;
+    line-height: 26px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     font-weight: 500;
     letter-spacing: 0.01em;
+    color: #fff;
   }
 
-  /* Primary action button - Run Claude */
+  /* Primary action button - Run Claude - centered prominent */
   .btn-toolbar.btn-claude {
     flex: 0 0 auto;
-    padding: 0 0.75rem !important;
-    background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
+    padding: 0 1rem !important;
+    background: #2563eb;
     border: none;
-    box-shadow: 0 2px 4px rgba(37, 99, 235, 0.3);
+    color: #fff;
+    font-weight: 600;
+    order: 2; /* Center position */
   }
 
-  .btn-toolbar.btn-claude:hover {
-    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-    box-shadow: 0 3px 8px rgba(37, 99, 235, 0.4);
+  .btn-toolbar.btn-claude:hover,
+  .btn-toolbar.btn-claude:active {
+    background: #3b82f6;
   }
 
   .btn-toolbar.btn-claude svg {
-    width: 11px;
-    height: 11px;
+    width: 10px;
+    height: 10px;
     margin-right: 4px;
   }
 
-  /* Secondary action - Run Shell */
+  /* Secondary action - Run Shell - right side */
   .btn-toolbar.btn-shell {
     flex: 0 0 auto;
-    background: rgba(34, 197, 94, 0.15);
-    border: 1px solid rgba(34, 197, 94, 0.3);
-    color: #4ade80;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #9ca3af;
+    order: 3; /* Right position */
   }
 
-  .btn-toolbar.btn-shell:hover {
-    background: rgba(34, 197, 94, 0.25);
-    border-color: rgba(34, 197, 94, 0.5);
+  .btn-toolbar.btn-shell:hover,
+  .btn-toolbar.btn-shell:active {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
   }
 
-  /* Compact case selector for mobile - centered in toolbar */
+  /* Case selector - fills available space on left */
   .case-select-group {
-    flex: 0 0 auto;
+    flex: 1;
     display: flex;
     align-items: center;
     gap: 4px;
-    /* Center in available space, not pushed to edge */
-    margin: 0 auto;
+    order: 1; /* Left position */
+    min-width: 0;
   }
 
   .toolbar-select {
-    font-size: 0.7rem !important;
-    padding: 0 1.2rem 0 0.5rem !important;
-    min-height: 28px !important;
-    max-height: 28px !important;
-    height: 28px !important;
-    line-height: 28px;
-    border-radius: 6px;
-    background: var(--bg-input);
+    font-size: 0.65rem !important;
+    padding: 0 1.4rem 0 0.4rem !important;
+    min-height: 26px !important;
+    max-height: 26px !important;
+    height: 26px !important;
+    line-height: 26px;
+    border-radius: 4px;
+    background: #1a1a1a;
     border: 1px solid rgba(255, 255, 255, 0.15);
-    /* Limit width so long names don't overflow */
-    max-width: 90px;
+    color: #e5e5e5;
+    flex: 1;
+    min-width: 0;
     text-overflow: ellipsis;
     overflow: hidden;
   }
 
-  /* Add case button - always visible on mobile */
+  /* Add case button - compact */
   .btn-case-add {
-    min-width: 28px !important;
-    max-width: 28px !important;
-    width: 28px !important;
-    min-height: 28px !important;
-    max-height: 28px !important;
-    height: 28px !important;
+    min-width: 26px !important;
+    max-width: 26px !important;
+    width: 26px !important;
+    min-height: 26px !important;
+    max-height: 26px !important;
+    height: 26px !important;
     padding: 0 !important;
-    font-size: 1rem;
+    font-size: 0.9rem;
     font-weight: bold;
     display: inline-flex !important;
     align-items: center;
     justify-content: center;
     line-height: 1;
-    border-radius: 6px;
-    background: rgba(34, 197, 94, 0.15);
-    border: 1px solid rgba(34, 197, 94, 0.3);
-    color: var(--success);
+    border-radius: 4px;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #9ca3af;
   }
 
-  .btn-case-add:hover {
-    background: rgba(34, 197, 94, 0.25);
-    border-color: rgba(34, 197, 94, 0.5);
+  .btn-case-add:hover,
+  .btn-case-add:active {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
   }
 
   /* Full-width panels - hide on phones due to limited screen space and toolbar overlap */
@@ -8244,10 +8282,12 @@ kbd {
     margin: 0;
   }
 
-  /* Modal safe area padding */
+  /* Modal safe area padding - all sides for full-screen modals */
   .ios-device .modal-content {
     padding-top: var(--safe-area-top);
     padding-bottom: var(--safe-area-bottom);
+    padding-left: var(--safe-area-left);
+    padding-right: var(--safe-area-right);
   }
 
   .modal-header {
@@ -8286,24 +8326,35 @@ kbd {
     display: block;
   }
 
+  /* Mobile terminal - use native browser scrolling for smooth performance */
   .terminal-container {
-    height: calc(100% + 45px); /* Make taller so bottom is clipped */
+    height: 100%;
     min-height: 0;
     position: relative;
-    margin-bottom: -45px; /* Clip bottom - hides status line but keeps input visible */
+    overflow: hidden;
+    contain: layout style;
+    touch-action: pan-y; /* Allow native vertical scrolling */
   }
 
-  /* Gradient mask at bottom to smoothly fade content into clipped area */
-  .terminal-container::after {
-    content: '';
-    position: absolute;
-    bottom: 45px; /* Position above the clipped area */
-    left: 0;
-    right: 0;
-    height: 20px;
-    background: linear-gradient(to bottom, transparent 0%, #0d0d0d 100%);
-    pointer-events: none;
-    z-index: 5;
+  .terminal-container .xterm {
+    touch-action: pan-y;
+  }
+
+  /* Viewport scroll optimization - use native scrolling */
+  /* CRITICAL: xterm-viewport must be above xterm-screen for touch scrolling to work */
+  /* See: https://github.com/xtermjs/xterm.js/issues/5377 */
+  .terminal-container .xterm-viewport {
+    position: absolute !important;
+    z-index: 10 !important; /* Above xterm-screen so touch events hit the scrollable viewport */
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch; /* Enable iOS momentum scrolling */
+    overflow-y: scroll !important;
+    scroll-behavior: auto !important;
+    will-change: scroll-position;
+  }
+
+  .terminal-container .xterm-screen {
+    touch-action: pan-y;
   }
 
   /* Compact welcome overlay for mobile */
@@ -8364,9 +8415,17 @@ kbd {
     display: none;
   }
 
-  /* Respawn/Ralph panels - more compact on mobile */
+  /* Timer banner - includes safe area padding */
+  .timer-banner {
+    padding-left: calc(0.5rem + var(--safe-area-left));
+    padding-right: calc(0.5rem + var(--safe-area-right));
+  }
+
+  /* Respawn/Ralph panels - more compact on mobile, includes safe area padding */
   .respawn-banner {
     padding: 0.4rem 0.5rem;
+    padding-left: calc(0.5rem + var(--safe-area-left));
+    padding-right: calc(0.5rem + var(--safe-area-right));
     font-size: 0.7rem;
   }
 
@@ -8376,6 +8435,8 @@ kbd {
 
   .ralph-summary {
     padding: 0.4rem 0.5rem;
+    padding-left: calc(0.5rem + var(--safe-area-left));
+    padding-right: calc(0.5rem + var(--safe-area-right));
   }
 
   /* Project insights panel - hide on mobile */
@@ -8388,12 +8449,15 @@ kbd {
     display: none !important;
   }
 
-  /* Notification drawer - full width on mobile */
+  /* Notification drawer - full width on mobile, includes safe area padding */
   .notification-drawer {
     width: 100%;
     max-width: 100%;
     right: 0;
     border-radius: 0;
+    padding-left: var(--safe-area-left);
+    padding-right: var(--safe-area-right);
+    padding-bottom: var(--safe-area-bottom);
   }
 }
 
@@ -8423,8 +8487,12 @@ kbd {
 }
 
 .ios-device.safari-browser .terminal-container {
-  /* Prevent rubber-banding in terminal */
-  -webkit-overflow-scrolling: auto;
+  /* Keep momentum scrolling but prevent page bounce */
+  -webkit-overflow-scrolling: touch;
+}
+
+.ios-device.safari-browser .terminal-container .xterm-viewport {
+  -webkit-overflow-scrolling: touch;
 }
 
 /* ============================================================================
