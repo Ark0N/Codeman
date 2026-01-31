@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Claude Code session manager with web interface">
   <meta name="theme-color" content="#0a0a0a">
   <title>Claudeman</title>
@@ -20,7 +20,6 @@
     <header class="header">
       <div class="header-brand">
         <span class="logo" onclick="app.goHome()" title="Go to main page">Claudeman</span>
-        <span class="header-version" id="headerVersion" title="Claudeman version">v0.0.0</span>
       </div>
 
       <!-- Session Tabs -->
@@ -192,8 +191,6 @@
 
     <!-- Main Terminal Area -->
     <main class="main">
-      <!-- CLI Info Bar (shown on mobile - displays Claude Code version/model) -->
-      <div class="cli-info-bar" id="cliInfoBar" style="display: none;"></div>
       <div class="terminal-container" id="terminalContainer"></div>
 
       <!-- Welcome Overlay (shown when no session active) -->
@@ -264,33 +261,47 @@
     <!-- Bottom Toolbar -->
     <footer class="toolbar">
       <div class="toolbar-left">
-        <!-- Run Claude & Shell -->
+        <!-- Run Claude -->
         <div class="toolbar-group">
           <button class="btn-toolbar btn-claude" onclick="app.runClaude()" title="Run Claude (Ctrl+Enter)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             Run Claude
           </button>
+          <div class="tab-count-group" title="Instance count">
+            <button class="tab-count-btn" onclick="app.decrementTabCount()">−</button>
+            <input type="number" id="tabCount" class="tab-count-input" value="1" min="1" max="20" readonly>
+            <button class="tab-count-btn" onclick="app.incrementTabCount()">+</button>
+          </div>
           <button class="btn-toolbar btn-shell" onclick="app.runShell()" title="Run Shell">
             Run Shell
           </button>
+          <div class="tab-count-group" title="Instance count">
+            <button class="tab-count-btn" onclick="app.decrementShellCount()">−</button>
+            <input type="number" id="shellCount" class="tab-count-input" value="1" min="1" max="20" readonly>
+            <button class="tab-count-btn" onclick="app.incrementShellCount()">+</button>
+          </div>
+          <div class="case-select-group">
+            <select id="quickStartCase" class="toolbar-select" title="Select case">
+              <option value="testcase">testcase</option>
+            </select>
+            <button class="btn-case-add" onclick="app.showCreateCaseModal()" title="Create new case">+</button>
+          </div>
+        </div>
+
+        <!-- Directory (hidden) -->
+        <div class="toolbar-group" style="display: none;">
+          <button class="btn-toolbar" onclick="app.toggleDirInput()" title="Set working directory">
+            <span id="dirDisplay">No directory</span>
+          </button>
+          <input type="text" id="dirInput" class="toolbar-input hidden" placeholder="Working directory..." onblur="app.hideDirInput()">
         </div>
       </div>
 
       <div class="toolbar-center">
-        <!-- Add Case + Case Select -->
-        <div class="toolbar-group toolbar-case-group">
-          <button class="btn-case-add" onclick="app.showCreateCaseModal()" title="Create new case">+</button>
-          <select id="quickStartCase" class="toolbar-select" title="Select case">
-            <option value="testcase">testcase</option>
-          </select>
-        </div>
+        <span class="version-display" id="versionDisplay" title="Claudeman version">v0.0.0</span>
       </div>
 
       <div class="toolbar-right">
-        <span class="version-display" id="versionDisplay" title="Claudeman version">v0.0.0</span>
-        <!-- Hidden instance counts (preserved for functionality) -->
-        <input type="hidden" id="tabCount" value="1">
-        <input type="hidden" id="shellCount" value="1">
       </div>
     </footer>
 

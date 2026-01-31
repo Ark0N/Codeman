@@ -109,9 +109,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background: var(--bg-dark);
   color: var(--text);
-  /* Use dynamic viewport height for mobile browsers */
   height: 100vh;
-  height: 100dvh;
   overflow: hidden;
 }
 
@@ -119,10 +117,7 @@ body {
 .app {
   display: flex;
   flex-direction: column;
-  /* Use dynamic viewport height for mobile browsers with fallbacks */
   height: 100vh;
-  height: -webkit-fill-available;
-  height: 100dvh;
 }
 
 /* Compact Header */
@@ -1607,29 +1602,9 @@ body {
 .main {
   flex: 1;
   display: flex;
-  flex-direction: column;
   overflow: hidden;
   background: var(--bg-dark);
   position: relative;
-}
-
-/* CLI Info Bar - shows tokens/version/model on mobile */
-.cli-info-bar {
-  display: none; /* Hidden by default on desktop */
-  flex-shrink: 0;
-  padding: 0.25rem 0.5rem;
-  font-size: 0.65rem;
-  font-family: 'SF Mono', Monaco, monospace;
-  color: var(--text-muted);
-  background: linear-gradient(180deg, rgba(30, 58, 95, 0.3) 0%, rgba(20, 20, 25, 0.95) 100%);
-  border-bottom: 1px solid rgba(59, 130, 246, 0.2);
-  text-align: center;
-  letter-spacing: 0.02em;
-  /* Prevent overflow on mobile */
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
 }
 
 .terminal-container {
@@ -1639,24 +1614,15 @@ body {
   /* Performance: isolate layout and paint operations */
   contain: strict;
   will-change: contents;
-  /* Minimum width to prevent 0-column terminal on mobile */
-  min-width: 280px;
-  /* Allow touch scrolling */
-  touch-action: pan-y;
 }
 
 .terminal-container .xterm {
   height: 100%;
   padding: 0;
-  /* Allow touch scrolling in xterm */
-  touch-action: pan-y;
 }
 
 .terminal-container .xterm-viewport {
   background: transparent !important;
-  /* Enable touch scrolling in viewport */
-  touch-action: pan-y;
-  -webkit-overflow-scrolling: touch;
 }
 
 /* Welcome Overlay */
@@ -1785,25 +1751,20 @@ body {
 }
 
 .toolbar-center {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
 }
 
 .version-display {
   font-family: 'SF Mono', Monaco, monospace;
-  font-size: 0.6rem;
+  font-size: 0.7rem;
   color: var(--text-muted);
-  padding: 0.15rem 0.35rem;
+  padding: 0.2rem 0.5rem;
   background: rgba(255, 255, 255, 0.05);
-  border-radius: 2px;
+  border-radius: 3px;
   cursor: default;
   user-select: none;
-}
-
-/* Header version display - hidden */
-.header-version {
-  display: none;
 }
 
 .toolbar-group {
@@ -1947,29 +1908,21 @@ body {
   align-items: center;
 }
 
-/* Toolbar case group - center layout */
-.toolbar-case-group {
-  display: flex;
-  align-items: center;
-  gap: 0;
-}
-
 .toolbar-select {
-  padding: 0.2rem 1.2rem 0.2rem 0.4rem;
+  padding: 0.4rem 1.5rem 0.4rem 0.5rem;
   background: var(--bg-input);
   border: 1px solid var(--border);
-  border-radius: 0 3px 3px 0;
+  border-radius: 4px 0 0 4px;
   color: var(--text-dim);
-  font-size: 0.7rem;
+  font-size: 0.75rem;
   cursor: pointer;
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 0.3rem center;
+  background-position: right 0.4rem center;
   width: fit-content;
   min-width: unset;
   max-width: unset;
-  height: 22px;
 }
 
 .toolbar-select:hover {
@@ -1985,14 +1938,14 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
   background: var(--bg-input);
   border: 1px solid var(--border);
-  border-right: none;
-  border-radius: 3px 0 0 3px;
+  border-left: none;
+  border-radius: 0 4px 4px 0;
   color: var(--green);
-  font-size: 1rem;
+  font-size: 1.1rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s;
@@ -7834,41 +7787,6 @@ kbd {
 }
 
 /* ============================================================================
-   Mobile & Touch Device Optimizations
-   ============================================================================ */
-
-/* Touch-friendly sizing for touch devices */
-.touch-device .btn-toolbar {
-  min-height: var(--touch-target-min);
-  min-width: var(--touch-target-min);
-}
-
-.touch-device .btn-icon-header,
-.touch-device .btn-icon-sm,
-.touch-device .btn-icon-only {
-  min-height: var(--touch-target-min);
-  min-width: var(--touch-target-min);
-}
-
-.touch-device .session-tab {
-  min-height: var(--touch-target-min);
-  padding: 0.5rem 0.75rem;
-}
-
-/* Always show close/gear buttons on touch devices (no hover) */
-.touch-device .session-tab .tab-close,
-.touch-device .session-tab .tab-gear {
-  opacity: 1;
-  width: auto;
-  padding: 0.2rem 0.4rem;
-}
-
-.touch-device .tab-count-btn {
-  min-height: var(--touch-target-min);
-  min-width: var(--touch-target-min);
-}
-
-/* ============================================================================
    Tablet Breakpoint (430px - 768px)
    ============================================================================ */
 @media (max-width: 768px) and (min-width: 430px) {
@@ -8099,13 +8017,13 @@ kbd {
 
   /* Clean dark toolbar - simple black/gray with white text */
   .toolbar {
-    height: auto;
-    min-height: 36px;
-    max-height: none;
-    padding: 0.25rem 0.4rem;
+    height: 40px;
+    min-height: 40px;
+    max-height: 40px;
+    padding: 0.3rem 0.4rem;
     padding-left: calc(0.4rem + var(--safe-area-left));
     padding-right: calc(0.4rem + var(--safe-area-right));
-    padding-bottom: calc(0.25rem + var(--safe-area-bottom));
+    padding-bottom: calc(0.3rem + var(--safe-area-bottom));
     flex-wrap: nowrap;
     gap: 0.3rem;
     align-items: center;
@@ -8172,7 +8090,7 @@ kbd {
     color: #fff;
   }
 
-  /* Primary action button - Run Claude - compact for mobile */
+  /* Primary action button - Run Claude */
   .btn-toolbar.btn-claude {
     flex: 0 0 auto;
     padding: 0 0.75rem !important;
@@ -8194,7 +8112,7 @@ kbd {
     margin-right: 4px;
   }
 
-  /* Secondary action - Run Shell - compact for mobile */
+  /* Secondary action - Run Shell - right side */
   .btn-toolbar.btn-shell {
     flex: 0 0 auto;
     background: transparent;
@@ -8322,9 +8240,9 @@ kbd {
     padding-bottom: calc(0.75rem + var(--safe-area-bottom));
   }
 
-  /* Terminal container - no safe area padding needed as toolbar handles it */
-  .terminal-container {
-    padding-bottom: 0;
+  /* Terminal container safe area */
+  .ios-device .terminal-container {
+    padding-bottom: var(--safe-area-bottom);
   }
 
   /* Main area must fill available space */
