@@ -26,10 +26,14 @@ const OUTPUT_DIR = join(PROJECT_ROOT, 'docs', 'images');
 const CASES_DIR = join(process.env.HOME, 'claudeman-cases');
 
 // Configuration
-const PORT = 3199; // Unique port for capture script
+const PORT = 3198; // Unique port for capture script (avoid 3199 conflicts)
 const BASE_URL = `http://localhost:${PORT}`;
 const CASE_NAME = `screenshot-capture-${Date.now()}`;
 const VIEWPORT = { width: 1280, height: 720 };
+
+// Use linked case pointing to real codebase for actual code exploration
+const USE_REAL_CODEBASE = true;
+const REAL_CODEBASE_PATH = PROJECT_ROOT;
 
 // Timeouts (generous for real Claude sessions)
 const TIMEOUTS = {
@@ -74,7 +78,8 @@ async function startServer() {
 
   serverProcess.stderr.on('data', (data) => {
     const msg = data.toString();
-    if (!msg.includes('DeprecationWarning')) {
+    // Log errors but don't exit - let the startup check handle port conflicts
+    if (!msg.includes('DeprecationWarning') && !msg.includes('[RalphTracker]') && !msg.includes('[Server] Restored')) {
       console.log('Server stderr:', msg.trim());
     }
   });
@@ -146,6 +151,21 @@ async function createCase(name) {
 }
 
 /**
+ * Link an existing folder as a case via API
+ */
+async function linkCase(name, folderPath) {
+  const response = await fetch(`${BASE_URL}/api/cases/link`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, path: folderPath }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to link case: ${await response.text()}`);
+  }
+  return response.json();
+}
+
+/**
  * Quick-start a Claude session
  */
 async function quickStart(caseName) {
@@ -172,9 +192,14 @@ async function deleteSession(sessionId) {
 }
 
 /**
- * Delete a case directory
+ * Delete a case directory (only for non-linked cases)
  */
-function deleteCase(caseName) {
+function deleteCase(caseName, isLinked = false) {
+  if (isLinked) {
+    // For linked cases, just log - the link will be cleaned up when server stops
+    console.log(`✓ Linked case ${caseName} will be unlinked`);
+    return;
+  }
   const casePath = join(CASES_DIR, caseName);
   if (existsSync(casePath)) {
     try {
@@ -204,15 +229,32 @@ async function configureSettings(page) {
 }
 
 /**
- * Send input to a session
+ * Send input to a session via API
+ * Note: useScreen requires \r at end to submit
  */
 async function sendInput(sessionId, text) {
   const response = await fetch(`${BASE_URL}/api/sessions/${sessionId}/input`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ input: text }),
+    body: JSON.stringify({ input: text + '\r', useScreen: true }),
   });
   return response.ok;
+}
+
+/**
+ * Get subagents for a specific session
+ */
+async function getSessionSubagents(sessionId) {
+  try {
+    const response = await fetch(`${BASE_URL}/api/sessions/${sessionId}/subagents`);
+    if (response.ok) {
+      const data = await response.json();
+      return data.data || [];
+    }
+  } catch {
+    // Ignore errors
+  }
+  return [];
 }
 
 /**
@@ -290,9 +332,14 @@ async function capture() {
     console.log('Configuring settings...');
     await configureSettings(page);
 
-    // Create case
-    console.log(`Creating case: ${CASE_NAME}...`);
-    await createCase(CASE_NAME);
+    // Create or link case
+    if (USE_REAL_CODEBASE) {
+      console.log(`Linking case ${CASE_NAME} to ${REAL_CODEBASE_PATH}...`);
+      await linkCase(CASE_NAME, REAL_CODEBASE_PATH);
+    } else {
+      console.log(`Creating case: ${CASE_NAME}...`);
+      await createCase(CASE_NAME);
+    }
     await page.reload({ waitUntil: 'domcontentloaded' });
     await sleep(500);
 
@@ -305,7 +352,7 @@ async function capture() {
     if (!startResult.success) {
       throw new Error(`Quick-start failed: ${startResult.error}`);
     }
-    sessionId = startResult.session?.id;
+    sessionId = startResult.sessionId;
     console.log(`✓ Session started: ${sessionId}`);
 
     // Wait for session tab and terminal
@@ -313,9 +360,27 @@ async function capture() {
     await page.waitForSelector('.xterm', { timeout: TIMEOUTS.SESSION_READY });
     console.log('✓ Terminal ready');
 
-    // Wait for Claude to initialize
+    // IMPORTANT: Click on OUR session tab to ensure it's selected
+    // (other sessions from state.json may be present)
+    console.log('Selecting our session tab...');
+    const ourTab = page.locator(`.session-tab[data-id="${sessionId}"]`);
+    if (await ourTab.count() > 0) {
+      await ourTab.click();
+      console.log('✓ Selected our session tab');
+    } else {
+      // Fallback: click the last tab (most recently created)
+      const tabs = page.locator('.session-tab');
+      const count = await tabs.count();
+      if (count > 0) {
+        await tabs.nth(count - 1).click();
+        console.log('✓ Selected last session tab');
+      }
+    }
+    await sleep(1000);
+
+    // Wait for Claude to initialize (needs time to show prompt)
     console.log('Waiting for Claude to initialize...');
-    await sleep(5000);
+    await sleep(10000);
 
     // Screenshot 1: Initial state (before subagents)
     await page.screenshot({
@@ -324,32 +389,39 @@ async function capture() {
     });
     console.log('✓ Saved: subagent-before.png');
 
-    // Focus terminal and send prompt
-    console.log('Sending prompt to trigger subagents...');
-    await page.click('.xterm');
-    await sleep(500);
-
-    // Type the prompt character by character to simulate real input
-    for (const char of SUBAGENT_PROMPT) {
-      await page.keyboard.type(char, { delay: 10 });
+    // Send prompt via API (more reliable than keyboard simulation)
+    console.log('Sending prompt to trigger subagents via API...');
+    const sent = await sendInput(sessionId, SUBAGENT_PROMPT);
+    if (!sent) {
+      console.log('⚠ Failed to send input via API, trying keyboard...');
+      await page.click('.xterm');
+      await sleep(500);
+      await page.keyboard.type(SUBAGENT_PROMPT, { delay: 5 });
+      await page.keyboard.press('Enter');
+    } else {
+      console.log('✓ Prompt sent via API');
     }
-    await page.keyboard.press('Enter');
 
-    // Wait for subagents to spawn
+    // Give Claude time to start processing before polling
+    console.log('Waiting for Claude to start processing...');
+    await sleep(15000);
+
+    // Wait for subagents to spawn (filter to our session only)
     console.log('Waiting for subagents to spawn...');
     const spawnStart = Date.now();
     let subagents = [];
     let spawnedCount = 0;
 
     while (Date.now() - spawnStart < TIMEOUTS.AGENT_SPAWN) {
-      subagents = await pollSubagents();
+      // Use session-specific endpoint to only get our subagents
+      subagents = await getSessionSubagents(sessionId);
       if (subagents.length >= 2) {
-        console.log(`✓ Found ${subagents.length} subagents!`);
+        console.log(`✓ Found ${subagents.length} subagents for our session!`);
         spawnedCount = subagents.length;
         break;
       }
       if (subagents.length > 0 && subagents.length !== spawnedCount) {
-        console.log(`  Found ${subagents.length} subagent(s)...`);
+        console.log(`  Found ${subagents.length} subagent(s) for our session...`);
         spawnedCount = subagents.length;
       }
       await sleep(2000);
@@ -467,7 +539,7 @@ async function capture() {
       await deleteSession(sessionId);
     }
 
-    deleteCase(CASE_NAME);
+    deleteCase(CASE_NAME, USE_REAL_CODEBASE);
     stopServer();
 
     console.log('Done.');
