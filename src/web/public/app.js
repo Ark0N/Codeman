@@ -1754,10 +1754,10 @@ class ClaudemanApp {
    * Write large buffer to terminal in chunks to avoid UI jank.
    * Uses requestAnimationFrame to spread work across frames.
    * @param {string} buffer - The full terminal buffer to write
-   * @param {number} chunkSize - Size of each chunk (default 64KB for smooth 60fps)
+   * @param {number} chunkSize - Size of each chunk (default 128KB for fast loading)
    * @returns {Promise<void>} - Resolves when all chunks written
    */
-  chunkedTerminalWrite(buffer, chunkSize = 64 * 1024) {
+  chunkedTerminalWrite(buffer, chunkSize = 128 * 1024) {
     return new Promise((resolve) => {
       if (!buffer || buffer.length === 0) {
         resolve();
@@ -3553,39 +3553,47 @@ class ClaudemanApp {
 
     // Track working directory for path normalization in Project Insights
     this.currentSessionWorkingDir = session?.workingDir || null;
+
+    // OPTIMIZATION: Start fetch early, prepare terminal while waiting
+    const tailSize = 256 * 1024;
+    const bufferFetchPromise = fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`)
+      .then(res => res.json())
+      .catch(err => {
+        console.error('Failed to fetch terminal buffer:', err);
+        return { terminalBuffer: null };
+      });
+
+    // Prepare terminal immediately (show loading state)
+    this.terminal.clear();
+    this.terminal.reset();
+    this.terminal.write('\x1b[90mLoading session...\x1b[0m');
+
+    // Attach to restored session if needed (in parallel with buffer fetch)
     if (session && session.pid === null && session.status === 'idle') {
-      // This is a restored session - attach to the existing screen
-      try {
-        await fetch(`/api/sessions/${sessionId}/interactive`, { method: 'POST' });
-        // Update local session state
-        session.status = 'busy';
-      } catch (err) {
-        console.error('Failed to attach to restored session:', err);
-      }
+      fetch(`/api/sessions/${sessionId}/interactive`, { method: 'POST' })
+        .then(() => { session.status = 'busy'; })
+        .catch(err => console.error('Failed to attach to restored session:', err));
     }
 
-    // Load terminal buffer for this session
-    // Use tail mode for faster initial load (256KB is enough for recent visible content)
-    try {
-      const tailSize = 256 * 1024;
-      const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`);
-      const data = await res.json();
+    // Wait for buffer fetch to complete
+    const data = await bufferFetchPromise;
 
-      this.terminal.clear();
-      this.terminal.reset();
-      if (data.terminalBuffer) {
-        // Show truncation indicator if buffer was cut
-        if (data.truncated) {
-          this.terminal.write('\x1b[90m... (earlier output truncated for performance) ...\x1b[0m\r\n\r\n');
-        }
-        // Use chunked write for large buffers to avoid UI jank
-        await this.chunkedTerminalWrite(data.terminalBuffer);
-        // Ensure terminal is scrolled to bottom after buffer load
-        this.terminal.scrollToBottom();
+    // Clear loading message and write buffer
+    this.terminal.clear();
+    this.terminal.reset();
+    if (data.terminalBuffer) {
+      // Show truncation indicator if buffer was cut
+      if (data.truncated) {
+        this.terminal.write('\x1b[90m... (earlier output truncated for performance) ...\x1b[0m\r\n\r\n');
       }
+      // Use chunked write for large buffers to avoid UI jank
+      await this.chunkedTerminalWrite(data.terminalBuffer);
+      // Ensure terminal is scrolled to bottom after buffer load
+      this.terminal.scrollToBottom();
+    }
 
-      // Send resize and Ctrl+L to trigger Claude to redraw at correct size
-      await this.sendResize(sessionId);
+    // Send resize (fire and forget - don't block on it)
+    this.sendResize(sessionId).catch(() => {});
 
       // Update respawn banner
       if (this.respawnStatus[sessionId]) {

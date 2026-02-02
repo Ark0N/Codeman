@@ -310,10 +310,16 @@ for (const segment of segments) {
 ```
 Note: Segments starting with `DEC_SYNC_START` are incomplete blocks awaiting more data. These are skipped (discarded if timeout forces flush).
 
-**chunkedTerminalWrite(buffer, chunkSize=64KB):**
+**chunkedTerminalWrite(buffer, chunkSize=128KB):**
 - For large buffer restoration (session switch, reconnect)
-- Writes 64KB per `requestAnimationFrame` to avoid UI jank
+- Writes 128KB per `requestAnimationFrame` to avoid UI jank
 - Strips any embedded DEC 2026 markers from historical data
+
+**selectSession() optimizations:**
+- Starts buffer fetch immediately before other setup
+- Shows "Loading session..." indicator while fetching
+- Parallelizes session attach with buffer fetch
+- Fire-and-forget resize (doesn't block tab switch)
 
 ### Optional Flicker Filter
 
