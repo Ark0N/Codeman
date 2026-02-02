@@ -1626,18 +1626,23 @@ class ClaudemanApp {
     const session = this.activeSessionId ? this.sessions.get(this.activeSessionId) : null;
     const flickerFilterEnabled = session?.flickerFilterEnabled ?? false;
 
-    // Flicker filter: detect screen clear patterns and buffer output
+    // Flicker filter: detect screen clear and cursor-up patterns and buffer output
     if (flickerFilterEnabled) {
-      // Detect Ink's screen clear patterns:
+      // Detect Ink's redraw patterns:
       // - ESC[2J (clear entire screen)
       // - ESC[H ESC[J (cursor home + clear to end)
       // - ESC[?25l ESC[H (hide cursor + home - common Ink pattern)
+      // - ESC[nA (cursor up n lines - Ink's line redraw pattern)
       const hasScreenClear = data.includes('\x1b[2J') ||
                              data.includes('\x1b[H\x1b[J') ||
                              (data.includes('\x1b[H') && data.includes('\x1b[?25l'));
 
-      if (hasScreenClear) {
-        // Screen clear detected - activate flicker filter
+      // Detect cursor-up patterns (ESC[nA where n >= 2) - indicates Ink redrawing multiple lines
+      // Use regex to find ESC[nA where n is 2 or more digits
+      const hasCursorUpRedraw = /\x1b\[\d{1,2}A/.test(data);
+
+      if (hasScreenClear || hasCursorUpRedraw) {
+        // Redraw pattern detected - activate flicker filter
         this.flickerFilterActive = true;
         this.flickerFilterBuffer += data;
 
@@ -2888,6 +2893,13 @@ class ClaudemanApp {
     }
     this.flickerFilterBuffer = '';
     this.flickerFilterActive = false;
+    // Clear pending terminal writes
+    if (this.syncWaitTimeout) {
+      clearTimeout(this.syncWaitTimeout);
+      this.syncWaitTimeout = null;
+    }
+    this.pendingWrites = '';
+    this.writeFrameScheduled = false;
     // Clear pending hooks
     this.pendingHooks.clear();
     // Clear tab alerts
@@ -3521,6 +3533,14 @@ class ClaudemanApp {
     }
     this.flickerFilterBuffer = '';
     this.flickerFilterActive = false;
+
+    // Clean up pending terminal writes to prevent old session data from appearing in new session
+    if (this.syncWaitTimeout) {
+      clearTimeout(this.syncWaitTimeout);
+      this.syncWaitTimeout = null;
+    }
+    this.pendingWrites = '';
+    this.writeFrameScheduled = false;
 
     this.activeSessionId = sessionId;
     this.hideWelcome();

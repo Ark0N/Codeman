@@ -115,8 +115,9 @@ const STATS_COLLECTION_INTERVAL_MS = 2000;
 const SESSION_LIMIT_WAIT_MS = 5000;
 // Pause between scheduled run iterations (2 seconds)
 const ITERATION_PAUSE_MS = 2000;
-// SSE batch flush threshold (number of items)
-const BATCH_FLUSH_THRESHOLD = 1024;
+// Terminal batch flush threshold - flush immediately if batch exceeds this size
+// Set high (32KB) to allow effective batching; avg Ink events are ~14KB
+const BATCH_FLUSH_THRESHOLD = 32 * 1024;
 // Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
 const CLAUDE_BANNER_PATTERN = /\x1b\[1mClaud/;
 const CTRL_L_PATTERN = /\x0c/g;
@@ -316,6 +317,9 @@ export class WebServer extends EventEmitter {
   // Terminal batching for performance
   private terminalBatches: Map<string, string> = new Map();
   private terminalBatchTimer: NodeJS.Timeout | null = null;
+  // Adaptive batching: track rapid events to extend batch window
+  private lastTerminalEventTime: Map<string, number> = new Map();
+  private adaptiveBatchInterval: number = TERMINAL_BATCH_INTERVAL;
   // Scheduled runs cleanup timer
   private scheduledCleanupTimer: NodeJS.Timeout | null = null;
   // SSE event batching
@@ -4365,7 +4369,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   // Batch terminal data for better performance (60fps)
-  // Flushes immediately if batch > 1KB for snappier response to large outputs
+  // Uses adaptive batching: extends batch window when events are rapid-fire
   private batchTerminalData(sessionId: string, data: string): void {
     // Skip if server is stopping
     if (this._isStopping) return;
@@ -4373,6 +4377,22 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     const existing = this.terminalBatches.get(sessionId) || '';
     const newBatch = existing + data;
     this.terminalBatches.set(sessionId, newBatch);
+
+    // Adaptive batching: detect rapid events and extend batch window
+    const now = Date.now();
+    const lastEvent = this.lastTerminalEventTime.get(sessionId) || 0;
+    const eventGap = now - lastEvent;
+    this.lastTerminalEventTime.set(sessionId, now);
+
+    // Adjust batch interval based on event frequency
+    // Rapid events (<10ms gap) = 50ms batch, moderate (<20ms) = 32ms, else 16ms
+    if (eventGap > 0 && eventGap < 10) {
+      this.adaptiveBatchInterval = 50;
+    } else if (eventGap > 0 && eventGap < 20) {
+      this.adaptiveBatchInterval = 32;
+    } else {
+      this.adaptiveBatchInterval = TERMINAL_BATCH_INTERVAL;
+    }
 
     // Flush immediately if batch is large for responsiveness
     if (newBatch.length > BATCH_FLUSH_THRESHOLD) {
@@ -4384,12 +4404,14 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       return;
     }
 
-    // Start batch timer if not already running (16ms = 60fps)
+    // Start batch timer if not already running (uses adaptive interval)
     if (!this.terminalBatchTimer) {
       this.terminalBatchTimer = setTimeout(() => {
         this.flushTerminalBatches();
         this.terminalBatchTimer = null;
-      }, TERMINAL_BATCH_INTERVAL);
+        // Reset adaptive interval after flush
+        this.adaptiveBatchInterval = TERMINAL_BATCH_INTERVAL;
+      }, this.adaptiveBatchInterval);
     }
   }
 
