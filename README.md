@@ -355,8 +355,6 @@ claudeman web
 <p align="center">
   <img src="docs/screenshots/mobile-main.png" alt="Mobile Dashboard" width="280">
   &nbsp;&nbsp;
-  <img src="docs/screenshots/mobile-with-keyboard.png" alt="Mobile Keyboard" width="280">
-  &nbsp;&nbsp;
   <img src="docs/screenshots/mobile-toolbar-above-keyboard.png" alt="Mobile Toolbar" width="280">
 </p>
 
