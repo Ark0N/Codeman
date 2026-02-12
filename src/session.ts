@@ -21,11 +21,11 @@ import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
-import { SessionState, SessionStatus, SessionConfig, ScreenSession, RalphTrackerState, RalphTodoItem, ActiveBashTool, NiceConfig, DEFAULT_NICE_CONFIG } from './types.js';
+import { SessionState, SessionStatus, SessionConfig, RalphTrackerState, RalphTodoItem, ActiveBashTool, NiceConfig, DEFAULT_NICE_CONFIG } from './types.js';
+import type { TerminalMultiplexer, MuxSession } from './mux-interface.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
 import { BashToolParser } from './bash-tool-parser.js';
-import { ScreenManager } from './screen-manager.js';
 import { BufferAccumulator } from './utils/buffer-accumulator.js';
 import { LRUMap } from './utils/lru-map.js';
 import {
@@ -361,10 +361,10 @@ export class Session extends EventEmitter {
   private _promptCheckTimeout: NodeJS.Timeout | null = null;
   private _shellIdleTimer: NodeJS.Timeout | null = null;
 
-  // Screen session support
-  private _screenManager: ScreenManager | null = null;
-  private _screenSession: ScreenSession | null = null;
-  private _useScreen: boolean = false;
+  // Multiplexer session support (tmux or GNU Screen)
+  private _mux: TerminalMultiplexer | null = null;
+  private _muxSession: MuxSession | null = null;
+  private _useMux: boolean = false;
   // Flag to prevent new timers after session is stopped
   private _isStopped: boolean = false;
 
@@ -415,9 +415,18 @@ export class Session extends EventEmitter {
     workingDir: string;
     mode?: SessionMode;
     name?: string;
-    screenManager?: ScreenManager;
+    /** Terminal multiplexer instance (tmux or screen) */
+    mux?: TerminalMultiplexer;
+    /** Whether to use multiplexer wrapping */
+    useMux?: boolean;
+    /** Existing mux session for restored sessions */
+    muxSession?: MuxSession;
+    /** @deprecated Use `mux` instead */
+    screenManager?: TerminalMultiplexer;
+    /** @deprecated Use `useMux` instead */
     useScreen?: boolean;
-    screenSession?: ScreenSession;  // For restored sessions - pass the existing screen
+    /** @deprecated Use `muxSession` instead */
+    screenSession?: MuxSession;
     niceConfig?: NiceConfig;  // Nice prioritying configuration
   }) {
     super();
@@ -427,9 +436,10 @@ export class Session extends EventEmitter {
     this.mode = config.mode || 'claude';
     this._name = config.name || '';
     this._lastActivityAt = this.createdAt;
-    this._screenManager = config.screenManager || null;
-    this._useScreen = config.useScreen ?? (this._screenManager !== null && ScreenManager.isScreenAvailable());
-    this._screenSession = config.screenSession || null;  // Use existing screen if provided
+    // Support both new (mux) and deprecated (screenManager) parameter names
+    this._mux = config.mux || config.screenManager || null;
+    this._useMux = config.useMux ?? config.useScreen ?? (this._mux !== null && this._mux.isAvailable());
+    this._muxSession = config.muxSession || config.screenSession || null;
 
     // Apply Nice priority configuration if provided
     if (config.niceConfig) {
@@ -868,29 +878,30 @@ export class Session extends EventEmitter {
     this._lineBuffer = '';
     this._lastActivityAt = Date.now();
 
-    console.log('[Session] Starting interactive Claude session' + (this._useScreen ? ' (with screen)' : ''));
+    console.log('[Session] Starting interactive Claude session' + (this._useMux ? ` (with ${this._mux!.backend})` : ''));
 
-    // If screen wrapping is enabled, create or attach to a screen session
-    if (this._useScreen && this._screenManager) {
+    // If mux wrapping is enabled, create or attach to a mux session
+    if (this._useMux && this._mux) {
       try {
-        // Check if we already have a screen session (restored session)
-        const isRestoredSession = this._screenSession !== null;
+        // Check if we already have a mux session (restored session)
+        const isRestoredSession = this._muxSession !== null;
         if (isRestoredSession) {
-          console.log('[Session] Attaching to existing screen session:', this._screenSession!.screenName);
+          console.log('[Session] Attaching to existing mux session:', this._muxSession!.muxName);
         } else {
-          // Create a new screen session
-          this._screenSession = await this._screenManager.createScreen(this.id, this.workingDir, 'claude', this._name, this._niceConfig);
-          console.log('[Session] Created screen session:', this._screenSession.screenName);
+          // Create a new mux session
+          this._muxSession = await this._mux.createSession(this.id, this.workingDir, 'claude', this._name, this._niceConfig);
+          console.log('[Session] Created mux session:', this._muxSession.muxName);
 
-          // Wait a moment for screen to fully start
+          // Wait a moment for mux to fully start
           await new Promise(resolve => setTimeout(resolve, SCREEN_STARTUP_DELAY_MS));
         }
 
-        // Attach to the screen session via PTY
+        // Attach to the mux session via PTY
         try {
-          this.ptyProcess = pty.spawn('screen', [
-            '-x', this._screenSession!.screenName
-          ], {
+          this.ptyProcess = pty.spawn(
+            this._mux.getAttachCommand(),
+            this._mux.getAttachArgs(this._muxSession!.muxName),
+          {
             name: 'xterm-256color',
             cols: 120,
             rows: 40,
@@ -899,7 +910,7 @@ export class Session extends EventEmitter {
           });
 
           // Set claudeSessionId immediately since we passed --session-id to Claude
-          // The screen-manager passes --session-id ${sessionId} to Claude
+          // The mux manager passes --session-id ${sessionId} to Claude
           this._claudeSessionId = this.id;
         } catch (spawnErr) {
           console.error('[Session] Failed to spawn PTY for screen attachment:', spawnErr);
@@ -942,13 +953,13 @@ export class Session extends EventEmitter {
           }, 5000);
         }
       } catch (err) {
-        console.error('[Session] Failed to create screen session, falling back to direct PTY:', err);
-        this._useScreen = false;
-        this._screenSession = null;
+        console.error('[Session] Failed to create mux session, falling back to direct PTY:', err);
+        this._useMux = false;
+        this._muxSession = null;
       }
     }
 
-    // Fallback to direct PTY if screen is not used
+    // Fallback to direct PTY if mux is not used
     if (!this.ptyProcess) {
       try {
         // Pass --session-id to use the SAME ID as the Claudeman session
@@ -1084,9 +1095,9 @@ export class Session extends EventEmitter {
         clearTimeout(this._promptCheckTimeout);
         this._promptCheckTimeout = null;
       }
-      // If using screen, mark the screen as detached but don't kill it
-      if (this._screenSession && this._screenManager) {
-        this._screenManager.setAttached(this.id, false);
+      // If using mux, mark the session as detached but don't kill it
+      if (this._muxSession && this._mux) {
+        this._mux.setAttached(this.id, false);
       }
       this.emit('exit', exitCode);
     });
@@ -1122,29 +1133,30 @@ export class Session extends EventEmitter {
 
     // Use user's default shell or bash
     const shell = process.env.SHELL || '/bin/bash';
-    console.log('[Session] Starting shell session with:', shell + (this._useScreen ? ' (with screen)' : ''));
+    console.log('[Session] Starting shell session with:', shell + (this._useMux ? ` (with ${this._mux!.backend})` : ''));
 
-    // If screen wrapping is enabled, create or attach to a screen session
-    if (this._useScreen && this._screenManager) {
+    // If mux wrapping is enabled, create or attach to a mux session
+    if (this._useMux && this._mux) {
       try {
-        // Check if we already have a screen session (restored session)
-        const isRestoredSession = this._screenSession !== null;
+        // Check if we already have a mux session (restored session)
+        const isRestoredSession = this._muxSession !== null;
         if (isRestoredSession) {
-          console.log('[Session] Attaching to existing screen session:', this._screenSession!.screenName);
+          console.log('[Session] Attaching to existing mux session:', this._muxSession!.muxName);
         } else {
-          // Create a new screen session
-          this._screenSession = await this._screenManager.createScreen(this.id, this.workingDir, 'shell', this._name, this._niceConfig);
-          console.log('[Session] Created screen session:', this._screenSession.screenName);
+          // Create a new mux session
+          this._muxSession = await this._mux.createSession(this.id, this.workingDir, 'shell', this._name, this._niceConfig);
+          console.log('[Session] Created mux session:', this._muxSession.muxName);
 
-          // Wait a moment for screen to fully start
+          // Wait a moment for mux to fully start
           await new Promise(resolve => setTimeout(resolve, SCREEN_STARTUP_DELAY_MS));
         }
 
-        // Attach to the screen session via PTY
+        // Attach to the mux session via PTY
         try {
-          this.ptyProcess = pty.spawn('screen', [
-            '-x', this._screenSession!.screenName
-          ], {
+          this.ptyProcess = pty.spawn(
+            this._mux.getAttachCommand(),
+            this._mux.getAttachArgs(this._muxSession!.muxName),
+          {
             name: 'xterm-256color',
             cols: 120,
             rows: 40,
@@ -1152,13 +1164,13 @@ export class Session extends EventEmitter {
             env: { ...process.env, TERM: 'xterm-256color' },
           });
         } catch (spawnErr) {
-          console.error('[Session] Failed to spawn PTY for shell screen attachment:', spawnErr);
-          this.emit('error', `Failed to attach to screen: ${spawnErr}`);
+          console.error('[Session] Failed to spawn PTY for shell mux attachment:', spawnErr);
+          this.emit('error', `Failed to attach to mux session: ${spawnErr}`);
           throw spawnErr;
         }
 
-        // For NEW screens: clear by sending 'clear' command to the shell
-        // For RESTORED screens: don't clear - we want to see the existing output
+        // For NEW sessions: clear by sending 'clear' command to the shell
+        // For RESTORED sessions: don't clear - we want to see the existing output
         if (!isRestoredSession) {
           setTimeout(() => {
             if (this.ptyProcess) {
@@ -1168,13 +1180,13 @@ export class Session extends EventEmitter {
           }, 100);
         }
       } catch (err) {
-        console.error('[Session] Failed to create screen session, falling back to direct PTY:', err);
-        this._useScreen = false;
-        this._screenSession = null;
+        console.error('[Session] Failed to create mux session, falling back to direct PTY:', err);
+        this._useMux = false;
+        this._muxSession = null;
       }
     }
 
-    // Fallback to direct PTY if screen is not used
+    // Fallback to direct PTY if mux is not used
     if (!this.ptyProcess) {
       try {
         this.ptyProcess = pty.spawn(shell, [], {
@@ -1228,9 +1240,9 @@ export class Session extends EventEmitter {
         clearTimeout(this.activityTimeout);
         this.activityTimeout = null;
       }
-      // If using screen, mark the screen as detached but don't kill it
-      if (this._screenSession && this._screenManager) {
-        this._screenManager.setAttached(this.id, false);
+      // If using mux, mark the session as detached but don't kill it
+      if (this._muxSession && this._mux) {
+        this._mux.setAttached(this.id, false);
       }
       this.emit('exit', exitCode);
     });
@@ -1883,14 +1895,18 @@ export class Session extends EventEmitter {
   }
 
   /**
-   * Sends input via GNU Screen's `screen -X stuff` command.
+   * Sends input via the terminal multiplexer's direct input mechanism.
    *
    * More reliable than direct PTY write for programmatic input, especially
-   * with Claude CLI which uses Ink (React for terminals). Text and Enter
-   * are sent as separate commands internally.
+   * with Claude CLI which uses Ink (React for terminals).
+   * - tmux: `send-keys -l 'text' Enter` (single command, no delay)
+   * - screen: `stuff "text"` + 100ms delay + `stuff CR` (with retries)
+   *
+   * Method name kept as `writeViaScreen` for backward compatibility with
+   * respawn-controller and other callers.
    *
    * @param data - Input data with optional `\r` for Enter
-   * @returns true if input was sent, false if no screen session or PTY
+   * @returns true if input was sent, false if no mux session or PTY
    *
    * @example
    * ```typescript
@@ -1899,8 +1915,8 @@ export class Session extends EventEmitter {
    * ```
    */
   writeViaScreen(data: string): boolean {
-    if (this._screenManager && this._screenSession) {
-      return this._screenManager.sendInput(this.id, data);
+    if (this._mux && this._muxSession) {
+      return this._mux.sendInput(this.id, data);
     }
     // Fallback to PTY write
     if (this.ptyProcess) {
@@ -2091,21 +2107,21 @@ export class Session extends EventEmitter {
     // Clear task description cache to prevent memory leak
     this._recentTaskDescriptions.clear();
 
-    // Kill the associated screen session if requested
-    if (killScreen && this._screenManager) {
-      // Try to kill screen even if _screenSession is not set (e.g., restored sessions)
+    // Kill the associated mux session if requested
+    if (killScreen && this._mux) {
+      // Try to kill mux session even if _muxSession is not set (e.g., restored sessions)
       try {
-        const killed = await this._screenManager.killScreen(this.id);
+        const killed = await this._mux.killSession(this.id);
         if (killed) {
-          console.log('[Session] Killed screen session for:', this.id);
+          console.log('[Session] Killed mux session for:', this.id);
         }
       } catch (err) {
-        console.error('[Session] Failed to kill screen session:', err);
+        console.error('[Session] Failed to kill mux session:', err);
       }
-      this._screenSession = null;
-    } else if (this._screenSession && !killScreen) {
-      console.log('[Session] Keeping screen session alive:', this._screenSession.screenName);
-      this._screenSession = null; // Detach but don't kill
+      this._muxSession = null;
+    } else if (this._muxSession && !killScreen) {
+      console.log('[Session] Keeping mux session alive:', this._muxSession.muxName);
+      this._muxSession = null; // Detach but don't kill
     }
   }
 

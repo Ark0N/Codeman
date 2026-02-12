@@ -16,7 +16,7 @@
  */
 
 import { Session } from './session.js';
-import { ScreenManager } from './screen-manager.js';
+import type { TerminalMultiplexer } from './mux-interface.js';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -157,15 +157,15 @@ const MODEL = 'opus';
 // ============================================================================
 
 export class PlanOrchestrator {
-  private screenManager: ScreenManager;
+  private mux: TerminalMultiplexer;
   private workingDir: string;
   private outputDir?: string;
   private runningSessions: Set<Session> = new Set();
   private cancelled = false;
   private taskDescription = '';
 
-  constructor(screenManager: ScreenManager, workingDir: string = process.cwd(), outputDir?: string) {
-    this.screenManager = screenManager;
+  constructor(mux: TerminalMultiplexer, workingDir: string = process.cwd(), outputDir?: string) {
+    this.mux = mux;
     this.workingDir = workingDir;
     this.outputDir = outputDir;
   }
@@ -390,7 +390,7 @@ export class PlanOrchestrator {
 
     const session = new Session({
       workingDir: this.workingDir,
-      screenManager: this.screenManager,
+      screenManager: this.mux,
       useScreen: false,
       mode: 'claude',
     });
@@ -472,7 +472,7 @@ export class PlanOrchestrator {
 
     const session = new Session({
       workingDir: this.workingDir,
-      screenManager: this.screenManager,
+      screenManager: this.mux,
       useScreen: false,
       mode: 'claude',
     });

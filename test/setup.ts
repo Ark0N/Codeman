@@ -2,18 +2,18 @@
  * @fileoverview Global test setup for Claudeman tests
  *
  * Provides:
- * - Screen session concurrency limiter (max 10)
+ * - Session concurrency limiter (max 10 tmux/screen sessions)
  * - Tracked resource cleanup (only kills what tests create)
  * - Global beforeAll/afterAll hooks
  *
  * CRITICAL SAFETY GUARANTEES:
- * 1. Pre-existing screens (captured at MODULE LOAD) are NEVER killed
+ * 1. Pre-existing screens/tmux sessions (captured at MODULE LOAD) are NEVER killed
  * 2. Current process screen ($CLAUDEMAN_SCREEN_NAME) is NEVER killed
- * 3. Only screens explicitly registered via registerTestScreen() can be killed
- * 4. All screen names must pass validation before being accepted
+ * 3. Only sessions explicitly registered via registerTestScreen()/registerTestTmuxSession() can be killed
+ * 4. All session names must pass validation before being accepted
  *
  * This setup ONLY cleans up resources that the test suite itself creates.
- * It will NEVER kill Claude processes or screens that weren't spawned by tests.
+ * It will NEVER kill Claude processes or sessions that weren't spawned by tests.
  * This makes it safe to run tests from within a Claudeman-managed session.
  */
 
@@ -25,6 +25,9 @@ const MAX_CONCURRENT_SCREENS = 10;
 
 /** Track active screen sessions created during tests */
 const activeTestScreens = new Set<string>();
+
+/** Track active tmux sessions created during tests */
+const activeTestTmuxSessions = new Set<string>();
 
 /** Track Claude PIDs spawned by tests (for cleanup) */
 const activeTestClaudePids = new Set<number>();
@@ -61,6 +64,25 @@ try {
   }
 } catch {
   // Ignore errors during capture
+}
+
+/**
+ * CRITICAL: Pre-existing tmux sessions captured at MODULE LOAD time.
+ * These sessions existed before any test code ran and must NEVER be killed.
+ */
+const preExistingTmuxSessionsAtModuleLoad = new Set<string>();
+
+// Capture pre-existing tmux sessions IMMEDIATELY when this module loads
+try {
+  const output = execSync("tmux list-sessions -F '#{session_name}' 2>/dev/null || true", { encoding: 'utf-8', timeout: 5000 });
+  for (const line of output.trim().split('\n')) {
+    const name = line.trim();
+    if (name) {
+      preExistingTmuxSessionsAtModuleLoad.add(name);
+    }
+  }
+} catch {
+  // tmux may not be running or available
 }
 
 /**
@@ -130,6 +152,38 @@ function killTrackedTestScreens(): void {
     }
   }
   activeTestScreens.clear();
+}
+
+/**
+ * Check if a tmux session is protected and must NEVER be killed.
+ */
+function isTmuxSessionProtected(sessionName: string): boolean {
+  if (preExistingTmuxSessionsAtModuleLoad.has(sessionName)) {
+    return true;
+  }
+  if (preExistingTmuxSessions.has(sessionName)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Kill only the tmux sessions that tests have registered via registerTestTmuxSession()
+ */
+function killTrackedTestTmuxSessions(): void {
+  for (const sessionName of activeTestTmuxSessions) {
+    if (isTmuxSessionProtected(sessionName)) {
+      console.warn(`[Test Setup] BLOCKED: Refusing to kill protected tmux session: ${sessionName}`);
+      continue;
+    }
+    try {
+      console.log(`[Test Setup] Killing test tmux session: ${sessionName}`);
+      execSync(`tmux kill-session -t "${sessionName}" 2>/dev/null || true`, { encoding: 'utf-8' });
+    } catch {
+      // Ignore errors
+    }
+  }
+  activeTestTmuxSessions.clear();
 }
 
 /**
@@ -211,6 +265,24 @@ export function unregisterTestScreen(screenName: string): void {
 }
 
 /**
+ * Register a tmux session for tracking.
+ * SAFETY: Protected sessions will be skipped at cleanup time.
+ */
+export function registerTestTmuxSession(sessionName: string): void {
+  if (isTmuxSessionProtected(sessionName)) {
+    console.warn(`[Test Setup] WARNING: Registering protected tmux session ${sessionName} - will be skipped during cleanup`);
+  }
+  activeTestTmuxSessions.add(sessionName);
+}
+
+/**
+ * Unregister a tmux session
+ */
+export function unregisterTestTmuxSession(sessionName: string): void {
+  activeTestTmuxSessions.delete(sessionName);
+}
+
+/**
  * Register a Claude PID for tracking (so it gets cleaned up after tests)
  */
 export function registerTestClaudePid(pid: number): void {
@@ -243,6 +315,9 @@ export function forceCleanupAllTestResources(): void {
   // Kill all tracked test screens
   killTrackedTestScreens();
 
+  // Kill all tracked test tmux sessions
+  killTrackedTestTmuxSessions();
+
   // Kill all tracked Claude processes
   killTrackedTestClaudeProcesses();
 
@@ -257,6 +332,9 @@ export function forceCleanupAllTestResources(): void {
 
 /** Screens that existed before tests started (never killed by cleanup) */
 const preExistingScreens = new Set<string>();
+
+/** Tmux sessions that existed before tests started (never killed by cleanup) */
+const preExistingTmuxSessions = new Set<string>();
 
 /**
  * List all current claudeman-* screen session names
@@ -313,6 +391,20 @@ beforeAll(async () => {
   for (const name of listClaudemanScreens()) {
     preExistingScreens.add(name);
   }
+
+  // Record pre-existing tmux sessions so we never kill them
+  try {
+    const output = execSync("tmux list-sessions -F '#{session_name}' 2>/dev/null || true", { encoding: 'utf-8', timeout: 5000 });
+    for (const line of output.trim().split('\n')) {
+      const name = line.trim();
+      if (name) {
+        preExistingTmuxSessions.add(name);
+      }
+    }
+  } catch {
+    // tmux may not be running
+  }
+
   console.log(`[Test Setup] ${preExistingScreens.size} pre-existing screens preserved`);
 });
 
@@ -341,6 +433,9 @@ afterAll(async () => {
   if (activeTestScreens.size > 0) {
     console.warn(`[Test Setup] Warning: ${activeTestScreens.size} test screens weren't properly unregistered`);
   }
+  if (activeTestTmuxSessions.size > 0) {
+    console.warn(`[Test Setup] Warning: ${activeTestTmuxSessions.size} test tmux sessions weren't properly unregistered`);
+  }
   if (activeTestClaudePids.size > 0) {
     console.warn(`[Test Setup] Warning: ${activeTestClaudePids.size} test Claude PIDs weren't properly unregistered`);
   }
@@ -351,10 +446,13 @@ afterAll(async () => {
 // Export utilities for tests that need them
 export {
   killTrackedTestScreens,
+  killTrackedTestTmuxSessions,
   killTrackedTestClaudeProcesses,
   MAX_CONCURRENT_SCREENS,
   isScreenProtected,
+  isTmuxSessionProtected,
   isTestScreen,
   isUserScreenPattern,
   preExistingScreensAtModuleLoad,
+  preExistingTmuxSessionsAtModuleLoad,
 };

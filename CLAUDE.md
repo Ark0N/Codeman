@@ -12,13 +12,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | E2E tests | `npm run test:e2e` |
 | Production | `npm run build && systemctl --user restart claudeman-web` |
 
-## CRITICAL: Screen Session Safety
+## CRITICAL: Session Safety
 
-**You may be running inside a Claudeman-managed screen session.** Before killing ANY screen or Claude process:
+**You may be running inside a Claudeman-managed tmux/screen session.** Before killing ANY tmux, screen, or Claude process:
 
 1. Check: `echo $CLAUDEMAN_SCREEN` - if `1`, you're in a managed session
-2. **NEVER** run `screen -X quit`, `pkill screen`, or `pkill claude` without confirming
-3. Use the web UI or `./scripts/screen-manager.sh` instead of direct kill commands
+2. **NEVER** run `tmux kill-session`, `screen -X quit`, `pkill tmux`, `pkill screen`, or `pkill claude` without confirming
+3. Use the web UI or `./scripts/tmux-manager.sh` instead of direct kill commands
 
 ## COM Shorthand (Deployment)
 
@@ -26,7 +26,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1480 (must match `package.json` for npm publish)
+**Version**: 0.1481 (must match `package.json` for npm publish)
 
 ## Project Overview
 
@@ -36,7 +36,7 @@ Claudeman is a Claude Code session manager with web interface and autonomous Ral
 
 **TypeScript Strictness** (see `tsconfig.json`): `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`, `noImplicitOverride`, `noFallthroughCasesInSwitch`, `allowUnreachableCode: false`, `allowUnusedLabels: false`. Note: `src/tui` is excluded from compilation (legacy/deprecated code path).
 
-**Requirements**: Node.js 18+, Claude CLI, GNU Screen
+**Requirements**: Node.js 18+, Claude CLI, tmux (preferred) or GNU Screen (deprecated fallback via `CLAUDEMAN_MUX=screen`)
 
 ## Commands
 
@@ -89,7 +89,10 @@ journalctl --user -u claudeman-web -f
 | File | Purpose |
 |------|---------|
 | `src/session.ts` | PTY wrapper: `runPrompt()`, `startInteractive()`, `startShell()` |
-| `src/screen-manager.ts` | GNU screen persistence, ghost discovery |
+| `src/mux-interface.ts` | `TerminalMultiplexer` interface + `MuxSession` type |
+| `src/mux-factory.ts` | Auto-detect tmux/screen, create multiplexer (`CLAUDEMAN_MUX` override) |
+| `src/tmux-manager.ts` | tmux session management (preferred backend) |
+| `src/screen-manager.ts` | GNU screen persistence, ghost discovery (deprecated fallback) |
 | `src/session-manager.ts` | Session lifecycle, cleanup |
 | `src/state-store.ts` | State persistence to `~/.claudeman/state.json` |
 | `src/respawn-controller.ts` | State machine for autonomous cycling |
@@ -100,8 +103,10 @@ journalctl --user -u claudeman-web -f
 | `src/task-queue.ts` | Priority queue for tasks with dependencies |
 | `src/task-tracker.ts` | Background task tracker for subagent detection |
 | `src/subagent-watcher.ts` | Monitors Claude Code's Task tool (background agents) |
+| `src/team-watcher.ts` | Polls `~/.claude/teams/` for agent team activity; matches teams to sessions via `leadSessionId` |
 | `src/run-summary.ts` | Timeline events for "what happened while away" |
-| `src/ai-idle-checker.ts` | AI-powered idle detection with `ai-checker-base.ts` |
+| `src/ai-checker-base.ts` | Base class for AI-powered checkers (shared by idle + plan checkers) |
+| `src/ai-idle-checker.ts` | AI-powered idle detection |
 | `src/ai-plan-checker.ts` | AI-powered plan completion checker |
 | `src/bash-tool-parser.ts` | Parses Claude's bash tool invocations from output |
 | `src/transcript-watcher.ts` | Watches Claude's transcript files for changes |
@@ -109,6 +114,7 @@ journalctl --user -u claudeman-web -f
 | `src/image-watcher.ts` | Watches for image file creation (screenshots, etc.) |
 | `src/file-stream-manager.ts` | Manages `tail -f` processes for live log viewing |
 | `src/plan-orchestrator.ts` | Multi-agent plan generation with research and planning phases |
+| `src/prompts/index.ts` | Barrel export for all agent prompts |
 | `src/prompts/*.ts` | Agent prompts (research-agent, code-reviewer, planner) |
 | `src/templates/claude-md.ts` | CLAUDE.md generation for new cases |
 | `src/cli.ts` | Command-line interface handlers |
@@ -138,6 +144,7 @@ journalctl --user -u claudeman-web -f
 | `string-similarity.ts` | String matching utilities (fuzzy matching) |
 | `token-validation.ts` | Token count parsing and validation |
 | `regex-patterns.ts` | Shared regex patterns for parsing |
+| `type-safety.ts` | `assertNever()` for exhaustive switch/case type checking |
 
 ### Data Flow
 
@@ -148,13 +155,17 @@ journalctl --user -u claudeman-web -f
 
 ### Key Patterns
 
-**Input to sessions**: Use `session.writeViaScreen()` for programmatic input (respawn, auto-compact). Text and Enter sent as separate `screen -X stuff` commands due to Ink's requirements. All prompts must be single-line.
+**Input to sessions**: Use `session.writeViaScreen()` for programmatic input (respawn, auto-compact). With tmux, uses `send-keys -l` (literal text) + `send-keys Enter` — single command, no delay. With screen (deprecated), text and Enter sent as separate `screen -X stuff` commands with 100ms delay. All prompts must be single-line.
+
+**Terminal multiplexer abstraction**: `TerminalMultiplexer` interface (`src/mux-interface.ts`) abstracts tmux vs screen. `createMultiplexer()` from `src/mux-factory.ts` auto-detects tmux (preferred) or falls back to screen. Set `CLAUDEMAN_MUX=screen` env var to force screen backend.
 
 **Idle detection**: Multi-layer (completion message → AI check → output silence → token stability). See `docs/respawn-state-machine.md`.
 
 **Token tracking**: Interactive mode parses status line ("123.4k tokens"), estimates 60/40 input/output split.
 
 **Hook events**: Claude Code hooks trigger notifications via `/api/hook-event`. Key events: `permission_prompt` (tool approval needed), `elicitation_dialog` (Claude asking question), `idle_prompt` (waiting for input), `stop` (response complete). See `src/hooks-config.ts`.
+
+**Agent Teams (experimental)**: `TeamWatcher` polls `~/.claude/teams/` for team configs and matches teams to sessions via `leadSessionId`. Teammates are in-process threads (not separate OS processes) and appear as standard subagents. RespawnController checks `TeamWatcher.hasActiveTeammates()` before triggering respawn. Enable via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` env var in `settings.local.json`. See `agent-teams/` for full docs.
 
 ## Adding Features
 
@@ -170,7 +181,8 @@ journalctl --user -u claudeman-web -f
 | File | Purpose |
 |------|---------|
 | `~/.claudeman/state.json` | Sessions, settings, tokens, respawn config |
-| `~/.claudeman/screens.json` | Screen metadata for recovery |
+| `~/.claudeman/mux-sessions.json` | Tmux session metadata for recovery |
+| `~/.claudeman/screens.json` | Legacy screen metadata (auto-migrated to mux-sessions.json) |
 | `~/.claudeman/settings.json` | User preferences |
 
 ## Default Settings
@@ -181,7 +193,7 @@ UI defaults are set in `src/web/public/app.js` using `??` fallbacks. To change d
 
 ## Testing
 
-**Port allocation**: E2E tests use centralized ports in `test/e2e/e2e.config.ts`. Unit/integration tests pick unique ports manually. Search `const PORT =` or `TEST_PORT` in test files to find used ports before adding new tests.
+**Port allocation**: E2E tests use centralized ports in `test/e2e/e2e.config.ts` (3183-3193). Unit/integration tests pick unique ports manually (team tests: 3150-3151). Search `const PORT =` or `TEST_PORT` in test files to find used ports before adding new tests.
 
 **E2E tests**: Use Playwright. Run `npx playwright install chromium` first. See `test/e2e/fixtures/` for helpers. E2E config (`test/e2e/e2e.config.ts`) provides ports (3183-3193), timeouts, and helpers.
 
@@ -199,8 +211,8 @@ Respawn tests use MockSession to avoid spawning real Claude processes. See `test
 ## Debugging
 
 ```bash
-screen -ls                          # List screens
-screen -r <name>                    # Attach (Ctrl+A D to detach)
+tmux list-sessions                  # List tmux sessions
+tmux attach-session -t <name>       # Attach (Ctrl+B D to detach)
 curl localhost:3000/api/sessions    # Check sessions
 curl localhost:3000/api/status | jq # Full app state
 cat ~/.claudeman/state.json | jq    # View persisted state
@@ -214,12 +226,12 @@ curl localhost:3000/api/sessions/:id/run-summary | jq  # Session timeline
 
 | Problem | Check | Fix |
 |---------|-------|-----|
-| Session won't start | `screen -ls` for orphans | Kill orphaned screens, check Claude CLI installed |
+| Session won't start | `tmux list-sessions` for orphans | Kill orphaned sessions, check Claude CLI installed |
 | Port 3000 in use | `lsof -i :3000` | Kill conflicting process or use `--port` flag |
 | SSE not connecting | Browser console for errors | Check CORS, ensure server running |
 | Respawn not triggering | Session settings → Respawn enabled? | Enable respawn, check idle timeout config |
 | Terminal blank on tab switch | Network tab for `/api/sessions/:id/buffer` | Check session exists, restart server |
-| Tests failing on screen limits | `screen -ls \| wc -l` | Clean up test screens: `screen -ls \| grep test \| awk '{print $1}' \| xargs -I{} screen -X -S {} quit` |
+| Tests failing on session limits | `tmux list-sessions \| wc -l` | Clean up test sessions: `tmux list-sessions \| grep test \| awk -F: '{print $1}' \| xargs -I{} tmux kill-session -t {}` |
 | State not persisting | `cat ~/.claudeman/state.json` | Check file permissions, disk space |
 
 ## Performance Constraints
@@ -287,19 +299,26 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Mobile/SSH access** | README.md (Claudeman Screens / `sc` command) |
 | **Plan orchestrator** | `src/plan-orchestrator.ts` file header |
 | **Agent prompts** | `src/prompts/` directory |
+| **Agent Teams (experimental)** | `agent-teams/README.md`, `agent-teams/design.md` |
 
 ## Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/screen-manager.sh` | Safe screen management (use instead of direct kill commands) |
-| `scripts/screen-chooser.sh` | Claudeman Screens - mobile-friendly session picker (`sc` alias, see README for usage) |
+| `scripts/tmux-manager.sh` | Safe tmux session management (use instead of direct kill commands) |
+| `scripts/tmux-chooser.sh` | Mobile-friendly tmux session picker (`sc` alias) |
+| `scripts/screen-manager.sh` | Legacy screen management (deprecated, use tmux-manager.sh) |
+| `scripts/screen-chooser.sh` | Legacy screen session picker (deprecated, use tmux-chooser.sh) |
 | `scripts/monitor-respawn.sh` | Monitor respawn state machine in real-time |
 | `scripts/postinstall.js` | npm postinstall hook for setup |
 | `scripts/data-generator.sh` | Generate test data for development |
 | `scripts/test-tail-links.sh` | Test clickable file links in tail output |
 | `scripts/capture-subagent-screenshots.mjs` | Capture subagent screenshots/GIFs for README (uses real Claude sessions) |
 | `scripts/mobile-screenshot.mjs` | Capture mobile UI screenshots |
+| `scripts/ralph-wizard-start.mjs` | Automate Ralph Loop startup via headless browser |
+| `scripts/ralph-wizard-prod.mjs` | Production Ralph wizard with HTTPS support |
+| `scripts/watch-subagents.ts` | Real-time subagent transcript watcher (list, follow by session/agent ID) |
+| `scripts/claudeman-web.service` | systemd service file for production deployment |
 
 ## Memory Leak Prevention
 

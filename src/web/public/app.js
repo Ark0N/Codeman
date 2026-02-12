@@ -1500,6 +1500,12 @@ class ClaudemanApp {
 
     this.terminal.onData((data) => {
       if (this.activeSessionId) {
+        // Filter out terminal query responses that xterm.js generates automatically.
+        // These are responses to DA (Device Attributes), DSR (Device Status Report), etc.
+        // sent by tmux when attaching. Without this filter, they appear as typed text.
+        // Patterns: \x1b[?...c (DA1), \x1b[>...c (DA2), \x1b[...R (CPR), \x1b[...n (DSR)
+        if (/^\x1b\[[\?>=]?[\d;]*[cnR]$/.test(data)) return;
+
         this._pendingInput += data;
 
         // Flush immediately for control characters (Enter, Ctrl+C, etc.)

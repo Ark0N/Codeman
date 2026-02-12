@@ -20,6 +20,7 @@ import { existsSync, readFileSync, mkdirSync, writeFile } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { ScreenSession, ProcessStats, ScreenSessionWithStats, PersistedRespawnConfig, getErrorMessage, NiceConfig, DEFAULT_NICE_CONFIG } from './types.js';
+import type { TerminalMultiplexer, MuxSession, MuxSessionWithStats } from './mux-interface.js';
 
 // ============================================================================
 // Claude CLI PATH Resolution
@@ -181,7 +182,8 @@ function shellEscape(str: string): string {
  * @fires ScreenManager#screenCreated - New screen session created
  * @fires ScreenManager#screenKilled - Screen session terminated
  */
-export class ScreenManager extends EventEmitter {
+export class ScreenManager extends EventEmitter implements TerminalMultiplexer {
+  readonly backend = 'screen' as const;
   private screens: Map<string, ScreenSession> = new Map();
   private statsInterval: NodeJS.Timeout | null = null;
 
@@ -902,5 +904,98 @@ export class ScreenManager extends EventEmitter {
       console.error('[ScreenManager] Failed to send input:', err);
       return false;
     }
+  }
+
+  // ========================================================================
+  // TerminalMultiplexer interface adapter methods
+  // These delegate to existing Screen-specific methods, mapping between
+  // MuxSession (muxName) and ScreenSession (screenName).
+  // ========================================================================
+
+  private screenToMux(screen: ScreenSession): MuxSession {
+    return {
+      sessionId: screen.sessionId,
+      muxName: screen.screenName,
+      pid: screen.pid,
+      createdAt: screen.createdAt,
+      workingDir: screen.workingDir,
+      mode: screen.mode,
+      attached: screen.attached,
+      name: screen.name,
+      respawnConfig: screen.respawnConfig,
+      ralphEnabled: screen.ralphEnabled,
+    };
+  }
+
+  private screenWithStatsToMux(screen: ScreenSessionWithStats): MuxSessionWithStats {
+    return {
+      ...this.screenToMux(screen),
+      stats: screen.stats,
+    };
+  }
+
+  async createSession(
+    sessionId: string,
+    workingDir: string,
+    mode: 'claude' | 'shell',
+    name?: string,
+    niceConfig?: NiceConfig,
+  ): Promise<MuxSession> {
+    const screen = await this.createScreen(sessionId, workingDir, mode, name, niceConfig);
+    return this.screenToMux(screen);
+  }
+
+  async killSession(sessionId: string): Promise<boolean> {
+    return this.killScreen(sessionId);
+  }
+
+  getSessions(): MuxSession[] {
+    return this.getScreens().map(s => this.screenToMux(s));
+  }
+
+  getSession(sessionId: string): MuxSession | undefined {
+    const screen = this.getScreen(sessionId);
+    return screen ? this.screenToMux(screen) : undefined;
+  }
+
+  async getSessionsWithStats(): Promise<MuxSessionWithStats[]> {
+    const screens = await this.getScreensWithStats();
+    return screens.map(s => this.screenWithStatsToMux(s));
+  }
+
+  updateSessionName(sessionId: string, name: string): boolean {
+    return this.updateScreenName(sessionId, name);
+  }
+
+  registerSession(session: MuxSession): void {
+    const screen: ScreenSession = {
+      sessionId: session.sessionId,
+      screenName: session.muxName,
+      pid: session.pid,
+      createdAt: session.createdAt,
+      workingDir: session.workingDir,
+      mode: session.mode,
+      attached: session.attached,
+      name: session.name,
+      respawnConfig: session.respawnConfig,
+      ralphEnabled: session.ralphEnabled,
+    };
+    this.registerScreen(screen);
+  }
+
+  async reconcileSessions(): Promise<{ alive: string[]; dead: string[]; discovered: string[] }> {
+    return this.reconcileScreens();
+  }
+
+  getAttachCommand(): string {
+    return 'screen';
+  }
+
+  getAttachArgs(muxName: string): string[] {
+    return ['-x', muxName];
+  }
+
+  isAvailable(): boolean {
+    return ScreenManager.isScreenAvailable();
   }
 }

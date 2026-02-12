@@ -22,7 +22,8 @@ import { EventEmitter } from 'node:events';
 import { Session, ClaudeMessage, type BackgroundTask, type RalphTrackerState, type RalphTodoItem, type ActiveBashTool } from '../session.js';
 import { fileStreamManager } from '../file-stream-manager.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
-import { ScreenManager } from '../screen-manager.js';
+import type { TerminalMultiplexer } from '../mux-interface.js';
+import { createMultiplexer } from '../mux-factory.js';
 import { getStore } from '../state-store.js';
 import { generateClaudeMd } from '../templates/claude-md.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
@@ -322,7 +323,7 @@ export class WebServer extends EventEmitter {
   private port: number;
   private https: boolean;
   private testMode: boolean;
-  private screenManager: ScreenManager;
+  private mux: TerminalMultiplexer;
   // Terminal batching for performance
   private terminalBatches: Map<string, string> = new Map();
   private terminalBatchTimer: NodeJS.Timeout | null = null;
@@ -388,19 +389,28 @@ export class WebServer extends EventEmitter {
     } else {
       this.app = Fastify({ logger: false });
     }
-    this.screenManager = new ScreenManager();
+    this.mux = createMultiplexer();
 
-    // Set up screen manager event listeners
-    this.screenManager.on('screenCreated', (screen) => {
+    // Set up mux event listeners (event names kept for SSE backward compat)
+    this.mux.on('screenCreated', (screen) => {
       this.broadcast('screen:created', screen);
     });
-    this.screenManager.on('screenKilled', (data) => {
+    this.mux.on('sessionCreated', (session) => {
+      this.broadcast('screen:created', session);
+    });
+    this.mux.on('screenKilled', (data) => {
       this.broadcast('screen:killed', data);
     });
-    this.screenManager.on('screenDied', (data) => {
+    this.mux.on('sessionKilled', (data) => {
+      this.broadcast('screen:killed', data);
+    });
+    this.mux.on('screenDied', (data) => {
       this.broadcast('screen:died', data);
     });
-    this.screenManager.on('statsUpdated', (screens) => {
+    this.mux.on('sessionDied', (data) => {
+      this.broadcast('screen:died', data);
+    });
+    this.mux.on('statsUpdated', (screens) => {
       this.broadcast('screen:statsUpdated', screens);
     });
 
@@ -691,7 +701,7 @@ export class WebServer extends EventEmitter {
         workingDir,
         mode: body.mode || 'claude',
         name: body.name || '',
-        screenManager: this.screenManager,
+        screenManager: this.mux,
         useScreen: true,
         niceConfig: globalNice,
       });
@@ -718,7 +728,7 @@ export class WebServer extends EventEmitter {
       const name = String(body.name || '').slice(0, MAX_SESSION_NAME_LENGTH);
       session.name = name;
       // Also update the screen name if this session has a screen
-      this.screenManager.updateScreenName(id, session.name);
+      this.mux.updateSessionName(id, session.name);
       this.persistSessionState(session);
       this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
       return { success: true, name: session.name };
@@ -1229,7 +1239,7 @@ export class WebServer extends EventEmitter {
           session.ralphTracker.disableAutoEnable();
         }
         // Persist Ralph enabled state
-        this.screenManager.updateRalphEnabled(id, enabled);
+        this.mux.updateRalphEnabled(id, enabled);
       }
 
       // Configure the Ralph tracker
@@ -1654,7 +1664,7 @@ export class WebServer extends EventEmitter {
       }
 
       // Return pre-saved config from screens.json
-      const preConfig = this.screenManager.getScreen(id)?.respawnConfig;
+      const preConfig = this.mux.getSession(id)?.respawnConfig;
       if (preConfig) {
         return { success: true, config: preConfig, active: false };
       }
@@ -1676,7 +1686,7 @@ export class WebServer extends EventEmitter {
       let controller = this.respawnControllers.get(id);
       if (!controller) {
         // Merge request body with pre-saved config from screens.json
-        const preConfig = this.screenManager.getScreen(id)?.respawnConfig;
+        const preConfig = this.mux.getSession(id)?.respawnConfig;
         const config = body || preConfig ? { ...preConfig, ...body } : undefined;
         controller = new RespawnController(session, config);
         this.respawnControllers.set(id, controller);
@@ -1718,7 +1728,7 @@ export class WebServer extends EventEmitter {
       }
 
       // Clear persisted respawn config
-      this.screenManager.clearRespawnConfig(id);
+      this.mux.clearRespawnConfig(id);
 
       // Update state.json (respawnConfig removed)
       const session = this.sessions.get(id);
@@ -1758,7 +1768,7 @@ export class WebServer extends EventEmitter {
       }
 
       // No controller running - save as pre-config for when respawn starts
-      const existing = this.screenManager.getScreen(id);
+      const existing = this.mux.getSession(id);
       const currentConfig = existing?.respawnConfig;
       const merged: PersistedRespawnConfig = {
         enabled: config.enabled ?? currentConfig?.enabled ?? false,
@@ -1782,7 +1792,7 @@ export class WebServer extends EventEmitter {
         aiPlanCheckCooldownMs: config.aiPlanCheckCooldownMs ?? currentConfig?.aiPlanCheckCooldownMs ?? 30000,
         durationMinutes: currentConfig?.durationMinutes,
       };
-      this.screenManager.updateRespawnConfig(id, merged);
+      this.mux.updateRespawnConfig(id, merged);
       this.persistSessionState(session);
       this.broadcast('respawn:configUpdated', { sessionId: id, config: merged });
       return { success: true, config: merged };
@@ -1866,7 +1876,7 @@ export class WebServer extends EventEmitter {
       }
 
       // Create and start new respawn controller (merge with pre-saved config)
-      const preConfig = this.screenManager.getScreen(id)?.respawnConfig;
+      const preConfig = this.mux.getSession(id)?.respawnConfig;
       const config = body?.config || preConfig ? { ...preConfig, ...body?.config } : undefined;
       const controller = new RespawnController(session, config);
       this.respawnControllers.set(id, controller);
@@ -2421,7 +2431,7 @@ export class WebServer extends EventEmitter {
       const niceConfig = this.getGlobalNiceConfig();
       const session = new Session({
         workingDir: casePath,
-        screenManager: this.screenManager,
+        screenManager: this.mux,
         useScreen: true,
         mode: mode,
         niceConfig: niceConfig,
@@ -2601,7 +2611,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       // Create temporary session for the AI call using Opus 4.5 for deep reasoning
       const session = new Session({
         workingDir: process.cwd(),
-        screenManager: this.screenManager,
+        screenManager: this.mux,
         useScreen: false, // No screen needed for one-shot
         mode: 'claude',
       });
@@ -2726,7 +2736,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         }
       }
 
-      const orchestrator = new PlanOrchestrator(this.screenManager, process.cwd(), outputDir);
+      const orchestrator = new PlanOrchestrator(this.mux, process.cwd(), outputDir);
 
       // Store orchestrator for potential cancellation via API (not on disconnect)
       // Plan generation continues even if browser disconnects - only explicit cancel stops it
@@ -3214,35 +3224,35 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     // Get all tracked screens with stats
     this.app.get('/api/screens', async () => {
-      const screens = await this.screenManager.getScreensWithStats();
+      const screens = await this.mux.getSessionsWithStats();
       return {
         screens,
-        screenAvailable: ScreenManager.isScreenAvailable()
+        screenAvailable: this.mux.isAvailable()
       };
     });
 
     // Kill a screen session
     this.app.delete('/api/screens/:sessionId', async (req) => {
       const { sessionId } = req.params as { sessionId: string };
-      const success = await this.screenManager.killScreen(sessionId);
+      const success = await this.mux.killSession(sessionId);
       return { success };
     });
 
     // Reconcile screens (find dead ones)
     this.app.post('/api/screens/reconcile', async () => {
-      const result = await this.screenManager.reconcileScreens();
+      const result = await this.mux.reconcileSessions();
       return result;
     });
 
     // Start stats collection
     this.app.post('/api/screens/stats/start', async () => {
-      this.screenManager.startStatsCollection(STATS_COLLECTION_INTERVAL_MS);
+      this.mux.startStatsCollection(STATS_COLLECTION_INTERVAL_MS);
       return { success: true };
     });
 
     // Stop stats collection
     this.app.post('/api/screens/stats/stop', async () => {
-      this.screenManager.stopStatsCollection();
+      this.mux.stopStatsCollection();
       return { success: true };
     });
 
@@ -3530,7 +3540,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       aiPlanCheckCooldownMs: config.aiPlanCheckCooldownMs,
       durationMinutes,
     };
-    this.screenManager.updateRespawnConfig(sessionId, persistedConfig);
+    this.mux.updateRespawnConfig(sessionId, persistedConfig);
   }
 
   // Get system CPU and memory usage
@@ -4840,7 +4850,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   private async restoreScreenSessions(): Promise<void> {
     try {
       // Reconcile screens to find which ones are still alive (also discovers unknown screens)
-      const { alive, dead, discovered } = await this.screenManager.reconcileScreens();
+      const { alive, dead, discovered } = await this.mux.reconcileSessions();
 
       if (discovered.length > 0) {
         console.log(`[Server] Discovered ${discovered.length} unknown screen session(s)`);
@@ -4850,30 +4860,30 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         console.log(`[Server] Found ${alive.length + discovered.length} alive screen session(s) from previous run`);
 
         // For each alive screen, create a Session object if it doesn't exist
-        const screens = this.screenManager.getScreens();
+        const screens = this.mux.getSessions();
         for (const screen of screens) {
           if (!this.sessions.has(screen.sessionId)) {
             // Restore session settings from state.json (single source of truth)
             const savedState = this.store.getSession(screen.sessionId);
 
-            // Determine the correct session name (priority: savedState > screen > screenName)
+            // Determine the correct session name (priority: savedState > screen > muxName)
             // This ensures renamed sessions keep their name after server restart
-            const sessionName = savedState?.name || screen.name || screen.screenName;
+            const sessionName = savedState?.name || screen.name || screen.muxName;
 
-            // Create a session object for this screen with the existing screenSession
+            // Create a session object for this mux session with the existing session
             const session = new Session({
               id: screen.sessionId,  // Preserve the original session ID
               workingDir: screen.workingDir,
               mode: screen.mode,
               name: sessionName,
-              screenManager: this.screenManager,
-              useScreen: true,
-              screenSession: screen  // Pass the existing screen so startInteractive() can attach to it
+              mux: this.mux,
+              useMux: true,
+              muxSession: screen  // Pass the existing session so startInteractive() can attach to it
             });
 
             // Update screen name if it was a "Restored:" placeholder or doesn't match saved name
             if (savedState?.name && screen.name !== savedState.name) {
-              this.screenManager.updateScreenName(screen.sessionId, savedState.name);
+              this.mux.updateSessionName(screen.sessionId, savedState.name);
             }
             if (savedState) {
               // Auto-compact
@@ -4977,12 +4987,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
             this.persistSessionState(session);
 
             // Mark it as restored (not started yet - user needs to attach)
-            console.log(`[Server] Restored session ${session.id} from screen ${screen.screenName}`);
+            console.log(`[Server] Restored session ${session.id} from mux ${screen.muxName}`);
           }
         }
 
         // Start stats collection to show screen info
-        this.screenManager.startStatsCollection(STATS_COLLECTION_INTERVAL_MS);
+        this.mux.startStatsCollection(STATS_COLLECTION_INTERVAL_MS);
       }
 
       if (dead.length > 0) {
@@ -5053,8 +5063,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       this.scheduledCleanupTimer = null;
     }
 
-    // Stop screen manager and flush pending saves
-    this.screenManager.destroy();
+    // Stop multiplexer and flush pending saves
+    this.mux.destroy();
 
     // Clear all pending respawn start timers (from restoration grace period)
     for (const timer of this.pendingRespawnStarts.values()) {
