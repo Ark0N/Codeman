@@ -3890,9 +3890,9 @@ class ClaudemanApp {
       this.renderSessionTabs();
 
       if (killScreen) {
-        this.showToast('Session closed and screen killed', 'success');
+        this.showToast('Session closed and tmux killed', 'success');
       } else {
-        this.showToast('Tab hidden, screen still running', 'info');
+        this.showToast('Tab hidden, tmux still running', 'info');
       }
     } catch (err) {
       this.showToast('Failed to close session', 'error');
@@ -13977,7 +13977,7 @@ class ClaudemanApp {
 
     try {
       if (killScreens) {
-        // Kill everything including screens
+        // Kill everything including tmux sessions
         const res = await fetch('/api/sessions', { method: 'DELETE' });
         const data = await res.json();
         if (data.success) {
@@ -13988,7 +13988,7 @@ class ClaudemanApp {
           this.renderScreenSessions();
           this.terminal.clear();
           this.terminal.reset();
-          this.toast('All sessions and screens killed', 'success');
+          this.toast('All sessions and tmux killed', 'success');
         }
       } else {
         // Just remove tabs, keep screens running
@@ -13997,7 +13997,7 @@ class ClaudemanApp {
         this.renderSessionTabs();
         this.terminal.clear();
         this.terminal.reset();
-        this.toast('All tabs removed, screens still running', 'info');
+        this.toast('All tabs removed, tmux still running', 'info');
       }
     } catch (err) {
       console.error('Failed to kill sessions:', err);
@@ -14303,7 +14303,7 @@ class ClaudemanApp {
             </div>
           </div>
           <div class="process-actions">
-            <button class="btn-toolbar btn-sm btn-danger" onclick="app.killScreen('${screen.sessionId}')" title="Kill screen">Kill</button>
+            <button class="btn-toolbar btn-sm btn-danger" onclick="app.killScreen('${screen.sessionId}')" title="Kill tmux session">Kill</button>
           </div>
         </div>
       `;
@@ -14362,9 +14362,9 @@ class ClaudemanApp {
       await fetch(`/api/screens/${sessionId}`, { method: 'DELETE' });
       this.screenSessions = this.screenSessions.filter(s => s.sessionId !== sessionId);
       this.renderScreenSessions();
-      this.showToast('Screen killed', 'success');
+      this.showToast('Tmux session killed', 'success');
     } catch (err) {
-      this.showToast('Failed to kill screen', 'error');
+      this.showToast('Failed to kill tmux session', 'error');
     }
   }
 

@@ -335,7 +335,7 @@
             <div><kbd>Ctrl</kbd>+<kbd>Enter</kbd></div><div>Run Claude</div>
             <div><kbd>Ctrl</kbd>+<kbd>W</kbd></div><div>Close Session</div>
             <div><kbd>Ctrl</kbd>+<kbd>Tab</kbd></div><div>Next Session</div>
-            <div><kbd>Ctrl</kbd>+<kbd>K</kbd></div><div>Kill All Sessions + Screens</div>
+            <div><kbd>Ctrl</kbd>+<kbd>K</kbd></div><div>Kill All Sessions + Tmux</div>
             <div><kbd>Ctrl</kbd>+<kbd>L</kbd></div><div>Clear Terminal</div>
             <div><kbd>Ctrl</kbd>+<kbd>+</kbd></div><div>Increase Font</div>
             <div><kbd>Ctrl</kbd>+<kbd>-</kbd></div><div>Decrease Font</div>
@@ -351,7 +351,7 @@
       <div class="monitor-panel-header" id="monitorPanelHeader">
         <div class="monitor-panel-title">Monitor</div>
         <div class="monitor-panel-actions">
-          <button class="btn-toolbar btn-sm btn-danger" onclick="app.killAllSessions()" title="Kill all sessions and their screen processes">Kill All</button>
+          <button class="btn-toolbar btn-sm btn-danger" onclick="app.killAllSessions()" title="Kill all sessions and their tmux processes">Kill All</button>
           <button class="btn-icon-sm" onclick="app.reconcileScreens()" title="Refresh screens">&#x21BB;</button>
           <button class="btn-icon-sm" onclick="app.toggleMonitorDetach()" title="Detach panel" id="monitorDetachBtn">&#x29C9;</button>
           <button class="btn-icon-sm" onclick="app.toggleMonitorPanel()" title="Toggle panel" id="monitorToggleBtn">&#x25B2;</button>
@@ -1358,10 +1358,10 @@
         <div class="close-options">
           <button class="close-option" onclick="app.confirmKillAll(false)">
             <span class="close-option-title">Remove All Tabs</span>
-            <span class="close-option-desc">Screen sessions keep running in background</span>
+            <span class="close-option-desc">Tmux sessions keep running in background</span>
           </button>
           <button class="close-option close-option-danger" onclick="app.confirmKillAll(true)">
-            <span class="close-option-title">Kill All Claude + Screens</span>
+            <span class="close-option-title">Kill All Claude + Tmux</span>
             <span class="close-option-desc">Terminate everything completely</span>
           </button>
         </div>
