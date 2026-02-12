@@ -1536,3 +1536,44 @@ export interface PaneInfo {
 // ========== Plan Orchestrator Re-exports ==========
 
 export type { PlanItem } from './plan-orchestrator.js';
+
+// ========== Agent Teams Types ==========
+
+/** Team configuration from ~/.claude/teams/{name}/config.json */
+export interface TeamConfig {
+  name: string;
+  leadSessionId: string;
+  members: TeamMember[];
+}
+
+/** A single team member (lead or teammate) */
+export interface TeamMember {
+  agentId: string;
+  name: string;
+  agentType: 'team-lead' | 'general-purpose' | string;
+  color?: string;
+  backendType?: string;
+  prompt?: string;
+  tmuxPaneId?: string;
+}
+
+/** A task from ~/.claude/tasks/{team-name}/{N}.json */
+export interface TeamTask {
+  id: string;
+  subject: string;
+  description?: string;
+  activeForm?: string;
+  status: 'pending' | 'in_progress' | 'completed' | string;
+  blocks: string[];
+  blockedBy: string[];
+  owner?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** An inbox message from ~/.claude/teams/{name}/inboxes/{member}.json */
+export interface InboxMessage {
+  from: string;
+  text: string;
+  timestamp: string;
+  read?: boolean;
+}
