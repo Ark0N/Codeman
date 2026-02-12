@@ -242,7 +242,7 @@ describe('Case Management', () => {
       const data = await response.json();
 
       expect(data.success).toBe(true);
-      expect(data.case.name).toBe(testCaseName);
+      expect(data.data.case.name).toBe(testCaseName);
     });
 
     it('should reject duplicate case names', async () => {

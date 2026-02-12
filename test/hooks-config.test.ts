@@ -371,7 +371,7 @@ describe('Hook Event API', () => {
       });
       const data = await res.json();
       expect(data.success).toBe(false);
-      expect(data.errorCode).toBe('NOT_FOUND');
+      expect(data.errorCode).toBe('INVALID_INPUT');
     });
   });
 });

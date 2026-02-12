@@ -29,12 +29,30 @@ vi.mock('fs', async () => {
   };
 });
 
+// Mock node:fs/promises (used by scanForSubagents for async directory traversal)
+vi.mock('node:fs/promises', () => ({
+  readdir: vi.fn(),
+  stat: vi.fn(),
+  readFile: vi.fn(),
+}));
+
 vi.mock('readline', () => ({
   createInterface: vi.fn(),
 }));
 
 vi.mock('child_process', () => ({
   execSync: vi.fn(),
+  execFile: vi.fn((_cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null, stdout: string) => void) => {
+    cb(new Error('No processes'), '');
+  }),
+}));
+
+// Also mock the node: prefixed version (source imports from 'node:child_process')
+vi.mock('node:child_process', () => ({
+  execSync: vi.fn(),
+  execFile: vi.fn((_cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null, stdout: string) => void) => {
+    cb(new Error('No processes'), '');
+  }),
 }));
 
 // Import after mocking
@@ -47,8 +65,17 @@ import {
   SubagentTranscriptEntry,
 } from '../src/subagent-watcher.js';
 import * as fs from 'fs';
+import * as fsPromises from 'node:fs/promises';
 import { createInterface } from 'readline';
 import { execSync } from 'child_process';
+
+/**
+ * Flush the microtask queue to allow async scanForSubagents() to complete.
+ * Each await in the scan chain (readdir, stat, etc.) needs its own microtask tick.
+ */
+async function flushAsyncScan(): Promise<void> {
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+}
 
 // Helper to create mock JSONL entries as Claude Code produces them
 function createUserEntry(text: string, timestamp?: string): string {
@@ -117,6 +144,9 @@ describe('SubagentWatcher', () => {
   let mockCreateReadStream: Mock;
   let mockCreateInterface: Mock;
   let mockExecSync: Mock;
+  let mockReaddir: Mock;
+  let mockStatAsync: Mock;
+  let mockReadFile: Mock;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -130,6 +160,9 @@ describe('SubagentWatcher', () => {
     mockCreateReadStream = (fs as unknown as { createReadStream: Mock }).createReadStream;
     mockCreateInterface = createInterface as Mock;
     mockExecSync = execSync as Mock;
+    mockReaddir = fsPromises.readdir as Mock;
+    mockStatAsync = fsPromises.stat as Mock;
+    mockReadFile = fsPromises.readFile as Mock;
 
     // Default mocks - no projects exist
     mockExistsSync.mockReturnValue(false);
@@ -141,10 +174,15 @@ describe('SubagentWatcher', () => {
     });
     mockReaddirSync.mockReturnValue([]);
     mockReadFileSync.mockReturnValue('');
-    mockWatch.mockReturnValue({ close: vi.fn() });
+    mockWatch.mockReturnValue({ close: vi.fn(), on: vi.fn(), off: vi.fn() });
     mockExecSync.mockImplementation(() => {
       throw new Error('No processes');
     });
+
+    // Async fs/promises mocks - delegate to sync mocks for consistent behavior
+    mockReaddir.mockImplementation(async (path: string) => mockReaddirSync(path));
+    mockStatAsync.mockImplementation(async (path: string) => mockStatSync(path));
+    mockReadFile.mockImplementation(async (path: string) => mockReadFileSync(path));
 
     // Create new watcher for each test
     watcher = new SubagentWatcher();
@@ -225,6 +263,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:discovered', discoveredHandler);
 
       watcher.start();
+      await flushAsyncScan();
 
       // Simulate readline events
       for (const line of lines) {
@@ -272,6 +311,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:error', errorHandler);
 
       watcher.start();
+      await flushAsyncScan();
 
       // Emit all lines including malformed ones
       for (const line of malformedLines) {
@@ -313,6 +353,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:message', messageHandler);
 
       watcher.start();
+      await flushAsyncScan();
 
       // Emit partial line
       mockRl.emit('line', partialContent);
@@ -348,6 +389,7 @@ describe('SubagentWatcher', () => {
       mockReadFileSync.mockReturnValue(contentWithEmptyLines);
 
       watcher.start();
+      await flushAsyncScan();
 
       // Emit lines including empty ones
       mockRl.emit('line', '');
@@ -383,12 +425,13 @@ describe('SubagentWatcher', () => {
         mtime: new Date(),
         size: 100,
       });
-      mockReadFileSync.mockReturnValue(createUserEntry('Test'));
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
 
       const discoveredHandler = vi.fn();
       watcher.on('subagent:discovered', discoveredHandler);
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -416,9 +459,10 @@ describe('SubagentWatcher', () => {
         mtime: new Date(),
         size: 100,
       });
-      mockReadFileSync.mockReturnValue(createUserEntry('Test'));
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -441,7 +485,7 @@ describe('SubagentWatcher', () => {
       mockCreateInterface.mockReturnValue(mockRl);
       mockCreateReadStream.mockReturnValue({});
 
-      const mockWatcher = { close: vi.fn() };
+      const mockWatcher = { close: vi.fn(), on: vi.fn(), off: vi.fn() };
       mockWatch.mockReturnValue(mockWatcher);
 
       mockExistsSync.mockReturnValue(true);
@@ -457,9 +501,10 @@ describe('SubagentWatcher', () => {
         mtime: new Date(),
         size: 100,
       });
-      mockReadFileSync.mockReturnValue(createUserEntry('Test'));
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -511,12 +556,13 @@ describe('SubagentWatcher', () => {
         mtime: recentTime,
         size: 100,
       });
-      mockReadFileSync.mockReturnValue(createUserEntry('Test'));
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
 
       const completedHandler = vi.fn();
       watcher.on('subagent:completed', completedHandler);
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -565,6 +611,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:tool_call', toolCallHandler);
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('line', toolEntry);
       mockRl.emit('close');
 
@@ -602,6 +649,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:message', messageHandler);
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('line', textEntry);
       mockRl.emit('close');
 
@@ -657,6 +705,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:discovered', discoveredHandler);
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('line', arrayFormat);
       mockRl.emit('line', stringFormat);
       mockRl.emit('close');
@@ -694,6 +743,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:message', messageHandler);
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('line', textEntry);
       mockRl.emit('close');
 
@@ -730,6 +780,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:progress', progressHandler);
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('line', progressEntry);
       mockRl.emit('close');
 
@@ -761,9 +812,10 @@ describe('SubagentWatcher', () => {
         mtime: new Date(),
         size: 100,
       });
-      mockReadFileSync.mockReturnValue(createUserEntry('Test'));
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -800,6 +852,7 @@ describe('SubagentWatcher', () => {
       mockReadFileSync.mockReturnValue([toolEntry1, toolEntry2].join('\n'));
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('line', toolEntry1);
       mockRl.emit('line', toolEntry2);
       mockRl.emit('close');
@@ -838,6 +891,7 @@ describe('SubagentWatcher', () => {
       mockReadFileSync.mockReturnValue(entries.join('\n'));
 
       watcher.start();
+      await flushAsyncScan();
       for (const entry of entries) {
         mockRl.emit('line', entry);
       }
@@ -873,9 +927,10 @@ describe('SubagentWatcher', () => {
         mtime: new Date(),
         size: 100,
       });
-      mockReadFileSync.mockReturnValue(createUserEntry('Test'));
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -914,6 +969,7 @@ describe('SubagentWatcher', () => {
       mockReadFileSync.mockReturnValue(entries.join('\n'));
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -947,6 +1003,7 @@ describe('SubagentWatcher', () => {
       mockReadFileSync.mockReturnValue(entries.join('\n'));
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -1058,6 +1115,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:discovered', discoveredHandler);
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -1099,6 +1157,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:discovered', discoveredHandler);
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -1137,6 +1196,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:updated', updatedHandler);
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -1204,6 +1264,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:discovered', discoveredHandler);
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -1234,9 +1295,10 @@ describe('SubagentWatcher', () => {
         mtime: new Date(),
         size: 100,
       });
-      mockReadFileSync.mockReturnValue(createUserEntry('Test'));
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -1263,9 +1325,10 @@ describe('SubagentWatcher', () => {
         mtime: new Date(),
         size: 100,
       });
-      mockReadFileSync.mockReturnValue(createUserEntry('Test'));
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -1299,9 +1362,10 @@ describe('SubagentWatcher', () => {
         mtime: new Date(),
         size: 100,
       });
-      mockReadFileSync.mockReturnValue(createUserEntry('Test'));
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -1339,9 +1403,10 @@ describe('SubagentWatcher', () => {
         mtime: staleTime,
         size: 100,
       });
-      mockReadFileSync.mockReturnValue(createUserEntry('Test'));
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -1371,7 +1436,7 @@ describe('SubagentWatcher', () => {
         mtime: new Date(),
         size: 100,
       });
-      mockReadFileSync.mockReturnValue(createUserEntry('Test'));
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
 
       // Mock process finding - return no process found
       mockExecSync.mockImplementation(() => {
@@ -1382,6 +1447,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:completed', completedHandler);
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -1427,9 +1493,10 @@ describe('SubagentWatcher', () => {
         mtime: new Date(),
         size: 100,
       });
-      mockReadFileSync.mockReturnValue(createUserEntry('Test'));
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
 
       watcher.start();
+      await flushAsyncScan();
 
       // Emit readline error
       mockRl.emit('error', new Error('Read error'));
@@ -1443,8 +1510,8 @@ describe('SubagentWatcher', () => {
 
   describe('File Watcher Management', () => {
     it('should close file watchers on stop', async () => {
-      const mockFileWatcher = { close: vi.fn() };
-      const mockDirWatcher = { close: vi.fn() };
+      const mockFileWatcher = { close: vi.fn(), on: vi.fn(), off: vi.fn() };
+      const mockDirWatcher = { close: vi.fn(), on: vi.fn(), off: vi.fn() };
 
       mockWatch.mockImplementation((path: string) => {
         if (path.endsWith('.jsonl')) return mockFileWatcher;
@@ -1468,9 +1535,10 @@ describe('SubagentWatcher', () => {
         mtime: new Date(),
         size: 100,
       });
-      mockReadFileSync.mockReturnValue(createUserEntry('Test'));
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -1499,9 +1567,10 @@ describe('SubagentWatcher', () => {
         mtime: new Date(),
         size: 100,
       });
-      mockReadFileSync.mockReturnValue(createUserEntry('Test'));
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -1540,9 +1609,10 @@ describe('SubagentWatcher', () => {
         mtime: new Date(),
         size: 100,
       });
-      mockReadFileSync.mockReturnValue(createUserEntry('Test'));
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('close');
 
       await vi.advanceTimersByTimeAsync(100);
@@ -1700,6 +1770,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:message', messageHandler);
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('line', userEntry);
       mockRl.emit('close');
 
@@ -1736,6 +1807,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:message', messageHandler);
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('line', longUserEntry);
       mockRl.emit('close');
 
@@ -1776,6 +1848,7 @@ describe('SubagentWatcher', () => {
       watcher.on('subagent:message', messageHandler);
 
       watcher.start();
+      await flushAsyncScan();
       mockRl.emit('line', emptyTextEntry);
       mockRl.emit('close');
 

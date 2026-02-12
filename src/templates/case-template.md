@@ -355,6 +355,55 @@ Final verification:
 
 Instead: Fix the issue, verify, then complete. For time-aware loops: generate more tasks and keep improving until minimum time elapsed.
 
+### RALPH_STATUS Block (Required During Ralph Loop)
+
+At the **END of every response** during a Ralph Loop, output this structured status block:
+
+```
+---RALPH_STATUS---
+STATUS: IN_PROGRESS | COMPLETE | BLOCKED
+TASKS_COMPLETED_THIS_LOOP: <number>
+FILES_MODIFIED: <number>
+TESTS_STATUS: PASSING | FAILING | NOT_RUN
+WORK_TYPE: IMPLEMENTATION | TESTING | DOCUMENTATION | REFACTORING
+EXIT_SIGNAL: false | true
+RECOMMENDATION: <one line summary of what to do next>
+---END_RALPH_STATUS---
+```
+
+**Rules:**
+- Output this block at the end of **every** response, no exceptions
+- Set `EXIT_SIGNAL` to `true` ONLY when ALL tasks are verifiably done
+- Set `STATUS` to `BLOCKED` when you need human intervention
+- Do NOT continue with busy work when `EXIT_SIGNAL` should be `true`
+- Do NOT forget the status block — it is required for loop tracking
+
+### Testing Limits
+
+- **LIMIT testing to ~20% of total effort** per loop
+- PRIORITIZE: Implementation > Documentation > Tests
+- Only write tests for NEW functionality
+- Do NOT refactor existing tests unless broken
+- Do NOT run tests repeatedly without implementing new features
+
+### Exit Scenarios (When to Set EXIT_SIGNAL)
+
+| Scenario | STATUS | EXIT_SIGNAL | Action |
+|----------|--------|-------------|--------|
+| All tasks completed, tests pass | COMPLETE | true | Output completion phrase |
+| No work remaining, specs done | COMPLETE | true | Output completion phrase |
+| Making normal progress | IN_PROGRESS | false | Continue to next task |
+| Test-only loop (no implementation) | IN_PROGRESS | false | Warn and shift to implementation |
+| Stuck on same error repeatedly | BLOCKED | false | Describe blocker, request help |
+| Needs human decision/intervention | BLOCKED | false | Describe what's needed |
+
+**Anti-patterns to avoid:**
+- Setting `EXIT_SIGNAL: true` when tests are failing
+- Continuing to work when all tasks are genuinely done (busy work)
+- Running the same failing test repeatedly without changing approach
+- Adding features not in the original specifications
+- Refactoring working code instead of completing assigned tasks
+
 ---
 
 ## Code Standards

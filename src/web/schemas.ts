@@ -79,7 +79,7 @@ export const QuickStartSchema = z.object({
 export const HookEventSchema = z.object({
   event: z.enum(['permission_prompt', 'elicitation_dialog', 'idle_prompt', 'stop', 'teammate_idle', 'task_completed']),
   sessionId: z.string().min(1),
-  data: z.record(z.string(), z.unknown()).optional(),
+  data: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
 // ========== Configuration ==========

@@ -26,7 +26,8 @@ import { spawn, execSync, exec } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
-import { existsSync, readFileSync, mkdirSync, writeFile } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { writeFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { ProcessStats, PersistedRespawnConfig, getErrorMessage, NiceConfig, DEFAULT_NICE_CONFIG, type PaneInfo } from './types.js';
@@ -190,6 +191,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
   /**
    * Save sessions to disk asynchronously. (NEVER writes in test mode)
+   * Uses atomic temp+rename to prevent corruption on crash.
    */
   private saveSessions(): void {
     if (IS_TEST_MODE) return;
@@ -202,11 +204,12 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const data = Array.from(this.sessions.values());
       const json = JSON.stringify(data, null, 2);
 
-      writeFile(MUX_SESSIONS_FILE, json, (err) => {
-        if (err) {
+      const tempPath = MUX_SESSIONS_FILE + '.tmp';
+      writeFile(tempPath, json, 'utf-8')
+        .then(() => rename(tempPath, MUX_SESSIONS_FILE))
+        .catch((err) => {
           console.error('[TmuxManager] Failed to save sessions:', err);
-        }
-      });
+        });
     } catch (err) {
       console.error('[TmuxManager] Failed to save sessions:', err);
     }

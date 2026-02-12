@@ -221,7 +221,7 @@ describe('Ralph Integration Tests', () => {
 
       expect(res.status).toBe(200);
       expect(data.success).toBe(true);
-      expect(data.case.name).toBe(caseName);
+      expect(data.data.case.name).toBe(caseName);
     });
 
     it('should reject duplicate case name', async () => {

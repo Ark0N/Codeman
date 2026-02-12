@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { RalphTracker } from '../src/ralph-tracker.js';
-import { RalphTrackerState, RalphTodoItem } from '../src/types.js';
+import { RalphTrackerState, RalphTodoItem, RalphStatusBlock, CircuitBreakerStatus } from '../src/types.js';
 
 /**
  * RalphTracker Tests
@@ -649,13 +649,13 @@ describe('RalphTracker', () => {
   });
 
   describe('Maximum Todo Limit', () => {
-    it('should limit to max 50 todos', () => {
-      // Add 55 todos
-      for (let i = 0; i < 55; i++) {
+    it('should limit to max 500 todos', () => {
+      // Add 505 todos
+      for (let i = 0; i < 505; i++) {
         tracker.processTerminalData(`- [ ] Task ${i}\n`);
       }
 
-      expect(tracker.todos.length).toBeLessThanOrEqual(50);
+      expect(tracker.todos.length).toBeLessThanOrEqual(500);
     });
   });
 
@@ -1289,6 +1289,509 @@ Final text
         expect(tracker.todos).toHaveLength(1);
         expect(tracker.todos[0].content).toBe('Repeated task');
       });
+    });
+  });
+
+  // ========== NEW TEST SUITES: RALPH_STATUS, Circuit Breaker, Exit Gate, Priority ==========
+
+  describe('RALPH_STATUS Block Parsing', () => {
+    /**
+     * Helper to feed a complete RALPH_STATUS block via processTerminalData.
+     * Lines are joined with newlines and wrapped with start/end markers.
+     */
+    function feedStatusBlock(tracker: RalphTracker, fields: string[]): void {
+      const block = [
+        '---RALPH_STATUS---',
+        ...fields,
+        '---END_RALPH_STATUS---',
+      ].join('\n') + '\n';
+      tracker.processTerminalData(block);
+    }
+
+    it('should parse a valid status block with all 7 fields', () => {
+      const handler = vi.fn();
+      tracker.on('statusBlockDetected', handler);
+
+      feedStatusBlock(tracker, [
+        'STATUS: IN_PROGRESS',
+        'TASKS_COMPLETED_THIS_LOOP: 3',
+        'FILES_MODIFIED: 7',
+        'TESTS_STATUS: PASSING',
+        'WORK_TYPE: IMPLEMENTATION',
+        'EXIT_SIGNAL: false',
+        'RECOMMENDATION: Continue working on feature X',
+      ]);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      const block: RalphStatusBlock = handler.mock.calls[0][0];
+      expect(block.status).toBe('IN_PROGRESS');
+      expect(block.tasksCompletedThisLoop).toBe(3);
+      expect(block.filesModified).toBe(7);
+      expect(block.testsStatus).toBe('PASSING');
+      expect(block.workType).toBe('IMPLEMENTATION');
+      expect(block.exitSignal).toBe(false);
+      expect(block.recommendation).toBe('Continue working on feature X');
+      expect(block.parsedAt).toBeGreaterThan(0);
+    });
+
+    it('should parse block with missing optional fields using defaults', () => {
+      const handler = vi.fn();
+      tracker.on('statusBlockDetected', handler);
+
+      // Only provide the required STATUS field
+      feedStatusBlock(tracker, [
+        'STATUS: COMPLETE',
+      ]);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      const block: RalphStatusBlock = handler.mock.calls[0][0];
+      expect(block.status).toBe('COMPLETE');
+      expect(block.tasksCompletedThisLoop).toBe(0);
+      expect(block.filesModified).toBe(0);
+      expect(block.testsStatus).toBe('NOT_RUN');
+      expect(block.workType).toBe('IMPLEMENTATION');
+      expect(block.exitSignal).toBe(false);
+      expect(block.recommendation).toBe('');
+    });
+
+    it('should ignore malformed block without END marker', () => {
+      const handler = vi.fn();
+      tracker.on('statusBlockDetected', handler);
+
+      // No ---END_RALPH_STATUS--- marker
+      tracker.processTerminalData(
+        '---RALPH_STATUS---\n' +
+        'STATUS: IN_PROGRESS\n' +
+        'TASKS_COMPLETED_THIS_LOOP: 5\n' +
+        'Some other text\n'
+      );
+
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('should skip block missing required STATUS field', () => {
+      const handler = vi.fn();
+      tracker.on('statusBlockDetected', handler);
+
+      // Block with no STATUS field
+      feedStatusBlock(tracker, [
+        'TASKS_COMPLETED_THIS_LOOP: 5',
+        'FILES_MODIFIED: 2',
+      ]);
+
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('should handle multiple blocks in sequence (latest wins for lastStatusBlock)', () => {
+      const handler = vi.fn();
+      tracker.on('statusBlockDetected', handler);
+
+      feedStatusBlock(tracker, [
+        'STATUS: IN_PROGRESS',
+        'FILES_MODIFIED: 1',
+      ]);
+
+      feedStatusBlock(tracker, [
+        'STATUS: COMPLETE',
+        'FILES_MODIFIED: 10',
+        'EXIT_SIGNAL: true',
+      ]);
+
+      expect(handler).toHaveBeenCalledTimes(2);
+
+      // lastStatusBlock should be the second one
+      const last = tracker.lastStatusBlock;
+      expect(last).not.toBeNull();
+      expect(last!.status).toBe('COMPLETE');
+      expect(last!.filesModified).toBe(10);
+      expect(last!.exitSignal).toBe(true);
+    });
+
+    it('should parse case-insensitive field values', () => {
+      const handler = vi.fn();
+      tracker.on('statusBlockDetected', handler);
+
+      feedStatusBlock(tracker, [
+        'STATUS: in_progress',
+        'TESTS_STATUS: failing',
+        'WORK_TYPE: testing',
+        'EXIT_SIGNAL: True',
+      ]);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      const block: RalphStatusBlock = handler.mock.calls[0][0];
+      expect(block.status).toBe('IN_PROGRESS');
+      expect(block.testsStatus).toBe('FAILING');
+      expect(block.workType).toBe('TESTING');
+      expect(block.exitSignal).toBe(true);
+    });
+
+    it('should update cumulative stats across multiple blocks', () => {
+      feedStatusBlock(tracker, [
+        'STATUS: IN_PROGRESS',
+        'FILES_MODIFIED: 3',
+        'TASKS_COMPLETED_THIS_LOOP: 2',
+      ]);
+
+      feedStatusBlock(tracker, [
+        'STATUS: IN_PROGRESS',
+        'FILES_MODIFIED: 5',
+        'TASKS_COMPLETED_THIS_LOOP: 1',
+      ]);
+
+      const stats = tracker.cumulativeStats;
+      expect(stats.filesModified).toBe(8);
+      expect(stats.tasksCompleted).toBe(3);
+    });
+
+    it('should parse BLOCKED status', () => {
+      const handler = vi.fn();
+      tracker.on('statusBlockDetected', handler);
+
+      feedStatusBlock(tracker, [
+        'STATUS: BLOCKED',
+        'RECOMMENDATION: Need human review of failing tests',
+      ]);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      const block: RalphStatusBlock = handler.mock.calls[0][0];
+      expect(block.status).toBe('BLOCKED');
+      expect(block.recommendation).toBe('Need human review of failing tests');
+    });
+  });
+
+  describe('Circuit Breaker State Transitions', () => {
+    /**
+     * Helper to feed a status block with specific progress/test values.
+     */
+    function feedStatusBlock(tracker: RalphTracker, opts: {
+      filesModified?: number;
+      tasksCompleted?: number;
+      testsStatus?: string;
+      status?: string;
+    }): void {
+      const fields = [
+        `STATUS: ${opts.status ?? 'IN_PROGRESS'}`,
+        `FILES_MODIFIED: ${opts.filesModified ?? 0}`,
+        `TASKS_COMPLETED_THIS_LOOP: ${opts.tasksCompleted ?? 0}`,
+      ];
+      if (opts.testsStatus) {
+        fields.push(`TESTS_STATUS: ${opts.testsStatus}`);
+      }
+      const block = [
+        '---RALPH_STATUS---',
+        ...fields,
+        '---END_RALPH_STATUS---',
+      ].join('\n') + '\n';
+      tracker.processTerminalData(block);
+    }
+
+    it('should start in CLOSED state', () => {
+      expect(tracker.circuitBreakerStatus.state).toBe('CLOSED');
+    });
+
+    it('should transition CLOSED → HALF_OPEN on 2 consecutive no-progress', () => {
+      const handler = vi.fn();
+      tracker.on('circuitBreakerUpdate', handler);
+
+      // 2 iterations with no progress (filesModified=0, tasksCompleted=0)
+      feedStatusBlock(tracker, { filesModified: 0, tasksCompleted: 0 });
+      feedStatusBlock(tracker, { filesModified: 0, tasksCompleted: 0 });
+
+      expect(tracker.circuitBreakerStatus.state).toBe('HALF_OPEN');
+      expect(handler).toHaveBeenCalled();
+      const status: CircuitBreakerStatus = handler.mock.calls[handler.mock.calls.length - 1][0];
+      expect(status.state).toBe('HALF_OPEN');
+      expect(status.reasonCode).toBe('no_progress_warning');
+    });
+
+    it('should transition CLOSED → OPEN on 3 consecutive no-progress', () => {
+      const handler = vi.fn();
+      tracker.on('circuitBreakerUpdate', handler);
+
+      feedStatusBlock(tracker, { filesModified: 0, tasksCompleted: 0 });
+      feedStatusBlock(tracker, { filesModified: 0, tasksCompleted: 0 });
+      feedStatusBlock(tracker, { filesModified: 0, tasksCompleted: 0 });
+
+      expect(tracker.circuitBreakerStatus.state).toBe('OPEN');
+      expect(tracker.circuitBreakerStatus.reasonCode).toBe('no_progress_open');
+    });
+
+    it('should transition HALF_OPEN → CLOSED when progress detected', () => {
+      const handler = vi.fn();
+      tracker.on('circuitBreakerUpdate', handler);
+
+      // Get to HALF_OPEN (2 no-progress)
+      feedStatusBlock(tracker, { filesModified: 0, tasksCompleted: 0 });
+      feedStatusBlock(tracker, { filesModified: 0, tasksCompleted: 0 });
+      expect(tracker.circuitBreakerStatus.state).toBe('HALF_OPEN');
+
+      // Progress detected → should close circuit
+      feedStatusBlock(tracker, { filesModified: 3, tasksCompleted: 1 });
+      expect(tracker.circuitBreakerStatus.state).toBe('CLOSED');
+      expect(tracker.circuitBreakerStatus.reasonCode).toBe('progress_detected');
+    });
+
+    it('should transition HALF_OPEN → OPEN on continued no-progress', () => {
+      // Get to HALF_OPEN
+      feedStatusBlock(tracker, { filesModified: 0, tasksCompleted: 0 });
+      feedStatusBlock(tracker, { filesModified: 0, tasksCompleted: 0 });
+      expect(tracker.circuitBreakerStatus.state).toBe('HALF_OPEN');
+
+      // One more no-progress → OPEN (consecutiveNoProgress now 3)
+      feedStatusBlock(tracker, { filesModified: 0, tasksCompleted: 0 });
+      expect(tracker.circuitBreakerStatus.state).toBe('OPEN');
+    });
+
+    it('should reset from OPEN → CLOSED via resetCircuitBreaker()', () => {
+      const handler = vi.fn();
+      tracker.on('circuitBreakerUpdate', handler);
+
+      // Get to OPEN
+      feedStatusBlock(tracker, { filesModified: 0, tasksCompleted: 0 });
+      feedStatusBlock(tracker, { filesModified: 0, tasksCompleted: 0 });
+      feedStatusBlock(tracker, { filesModified: 0, tasksCompleted: 0 });
+      expect(tracker.circuitBreakerStatus.state).toBe('OPEN');
+
+      tracker.resetCircuitBreaker();
+
+      expect(tracker.circuitBreakerStatus.state).toBe('CLOSED');
+      expect(tracker.circuitBreakerStatus.reasonCode).toBe('manual_reset');
+      expect(tracker.circuitBreakerStatus.reason).toBe('Manual reset');
+    });
+
+    it('should open on 5 consecutive test failures', () => {
+      for (let i = 0; i < 5; i++) {
+        feedStatusBlock(tracker, { filesModified: 1, tasksCompleted: 0, testsStatus: 'FAILING' });
+      }
+
+      expect(tracker.circuitBreakerStatus.state).toBe('OPEN');
+      expect(tracker.circuitBreakerStatus.reasonCode).toBe('tests_failing_too_long');
+    });
+
+    it('should reset test failure count when tests pass', () => {
+      // 4 failing iterations
+      for (let i = 0; i < 4; i++) {
+        feedStatusBlock(tracker, { filesModified: 1, tasksCompleted: 0, testsStatus: 'FAILING' });
+      }
+      expect(tracker.circuitBreakerStatus.state).toBe('CLOSED');
+
+      // Tests pass → reset counter
+      feedStatusBlock(tracker, { filesModified: 1, tasksCompleted: 0, testsStatus: 'PASSING' });
+
+      // 4 more failing → should NOT open (counter was reset)
+      for (let i = 0; i < 4; i++) {
+        feedStatusBlock(tracker, { filesModified: 1, tasksCompleted: 0, testsStatus: 'FAILING' });
+      }
+      expect(tracker.circuitBreakerStatus.state).toBe('CLOSED');
+    });
+
+    it('should open immediately on BLOCKED status', () => {
+      feedStatusBlock(tracker, { filesModified: 1, tasksCompleted: 1, status: 'BLOCKED' });
+
+      expect(tracker.circuitBreakerStatus.state).toBe('OPEN');
+      expect(tracker.circuitBreakerStatus.reasonCode).toBe('same_error_repeated');
+    });
+
+    it('should emit circuitBreakerUpdate only on state transitions', () => {
+      const handler = vi.fn();
+      tracker.on('circuitBreakerUpdate', handler);
+
+      // First no-progress: CLOSED → CLOSED (no transition, no event)
+      feedStatusBlock(tracker, { filesModified: 0, tasksCompleted: 0 });
+      expect(handler).not.toHaveBeenCalled();
+
+      // Second no-progress: CLOSED → HALF_OPEN (transition → event)
+      feedStatusBlock(tracker, { filesModified: 0, tasksCompleted: 0 });
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('Dual-Condition Exit Gate', () => {
+    /**
+     * Helper to feed a RALPH_STATUS block.
+     */
+    function feedStatusBlock(tracker: RalphTracker, opts: {
+      status?: string;
+      exitSignal?: boolean;
+      filesModified?: number;
+    }): void {
+      const fields = [
+        `STATUS: ${opts.status ?? 'IN_PROGRESS'}`,
+        `EXIT_SIGNAL: ${opts.exitSignal ?? false}`,
+        `FILES_MODIFIED: ${opts.filesModified ?? 0}`,
+      ];
+      const block = [
+        '---RALPH_STATUS---',
+        ...fields,
+        '---END_RALPH_STATUS---',
+      ].join('\n') + '\n';
+      tracker.processTerminalData(block);
+    }
+
+    it('should fire exitGateMet when completionIndicators >= 2 AND exitSignal = true', () => {
+      const handler = vi.fn();
+      tracker.on('exitGateMet', handler);
+
+      // Feed 2 COMPLETE status blocks (each increments completionIndicators)
+      feedStatusBlock(tracker, { status: 'COMPLETE', exitSignal: false });
+      feedStatusBlock(tracker, { status: 'COMPLETE', exitSignal: false });
+      expect(handler).not.toHaveBeenCalled();
+
+      // Now send exitSignal: true with indicators already >= 2
+      feedStatusBlock(tracker, { status: 'COMPLETE', exitSignal: true });
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][0]).toEqual({
+        completionIndicators: 3,
+        exitSignal: true,
+      });
+      expect(tracker.exitGateMet).toBe(true);
+    });
+
+    it('should NOT fire exitGateMet when indicators >= 2 but exitSignal is false', () => {
+      const handler = vi.fn();
+      tracker.on('exitGateMet', handler);
+
+      // Feed 3 COMPLETE blocks without exitSignal
+      feedStatusBlock(tracker, { status: 'COMPLETE', exitSignal: false });
+      feedStatusBlock(tracker, { status: 'COMPLETE', exitSignal: false });
+      feedStatusBlock(tracker, { status: 'COMPLETE', exitSignal: false });
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(tracker.exitGateMet).toBe(false);
+    });
+
+    it('should NOT fire exitGateMet when exitSignal is true but indicators < 2', () => {
+      const handler = vi.fn();
+      tracker.on('exitGateMet', handler);
+
+      // Only 1 COMPLETE + exitSignal
+      feedStatusBlock(tracker, { status: 'COMPLETE', exitSignal: true });
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(tracker.exitGateMet).toBe(false);
+    });
+
+    it('should only fire exitGateMet once (not on subsequent qualifying blocks)', () => {
+      const handler = vi.fn();
+      tracker.on('exitGateMet', handler);
+
+      // Get to 2 indicators
+      feedStatusBlock(tracker, { status: 'COMPLETE', exitSignal: false });
+      feedStatusBlock(tracker, { status: 'COMPLETE', exitSignal: true });
+
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      // Send another qualifying block — should NOT fire again
+      feedStatusBlock(tracker, { status: 'COMPLETE', exitSignal: true });
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('should track completionIndicators in cumulativeStats', () => {
+      feedStatusBlock(tracker, { status: 'COMPLETE' });
+      feedStatusBlock(tracker, { status: 'IN_PROGRESS' });
+      feedStatusBlock(tracker, { status: 'COMPLETE' });
+
+      expect(tracker.cumulativeStats.completionIndicators).toBe(2);
+    });
+  });
+
+  describe('Priority Todo Parsing', () => {
+    it('should assign P0 for critical keywords', () => {
+      const criticalKeywords = [
+        'CRITICAL: Fix database connection',
+        'This is a BLOCKER for release',
+        'URGENT: Deploy hotfix now',
+        'Security vulnerability found in auth',
+        'Application is CRASHING on startup',
+        'Login page is BROKEN',
+      ];
+
+      for (const keyword of criticalKeywords) {
+        const freshTracker = new RalphTracker();
+        freshTracker.enable();
+        freshTracker.processTerminalData(`- [ ] ${keyword}\n`);
+        const todos = freshTracker.todos;
+        expect(todos).toHaveLength(1);
+        expect(todos[0].priority).toBe('P0');
+      }
+    });
+
+    it('should assign P1 for high priority keywords', () => {
+      const highKeywords = [
+        'IMPORTANT: Update user validation',
+        'HIGH PRIORITY: Review API changes',
+        'Fix the BUG in payment processing',
+        'FIX: Handle null pointer in parser',
+        'ERROR in authentication flow',
+        'Tests are FAILING on CI',
+      ];
+
+      for (const keyword of highKeywords) {
+        const freshTracker = new RalphTracker();
+        freshTracker.enable();
+        freshTracker.processTerminalData(`- [ ] ${keyword}\n`);
+        const todos = freshTracker.todos;
+        expect(todos).toHaveLength(1);
+        expect(todos[0].priority).toBe('P1');
+      }
+    });
+
+    it('should assign P2 for lower priority keywords', () => {
+      const lowKeywords = [
+        'NICE TO HAVE: Add dark mode',
+        'LOW PRIORITY: Update readme',
+        'REFACTOR the database layer',
+        'CLEANUP old migration files',
+        'IMPROVE the logging output',
+        'OPTIMIZE query performance',
+      ];
+
+      for (const keyword of lowKeywords) {
+        const freshTracker = new RalphTracker();
+        freshTracker.enable();
+        freshTracker.processTerminalData(`- [ ] ${keyword}\n`);
+        const todos = freshTracker.todos;
+        expect(todos).toHaveLength(1);
+        expect(todos[0].priority).toBe('P2');
+      }
+    });
+
+    it('should assign null priority when no keywords match', () => {
+      tracker.processTerminalData('- [ ] Add unit tests for user service\n');
+
+      const todos = tracker.todos;
+      expect(todos).toHaveLength(1);
+      expect(todos[0].priority).toBeNull();
+    });
+
+    it('should assign P0 over P1 when both match (highest wins)', () => {
+      // "CRITICAL" is P0 and "BUG" is P1 — P0 should win
+      tracker.processTerminalData('- [ ] CRITICAL BUG in production\n');
+
+      const todos = tracker.todos;
+      expect(todos).toHaveLength(1);
+      expect(todos[0].priority).toBe('P0');
+    });
+
+    it('should detect explicit P0/P1/P2 labels', () => {
+      tracker.processTerminalData('- [ ] P0: Server is down\n');
+      tracker.processTerminalData('- [ ] (P1) Review PR comments\n');
+      tracker.processTerminalData('- [ ] P2: Add logging\n');
+
+      const todos = tracker.todos;
+      expect(todos).toHaveLength(3);
+      expect(todos.find(t => t.content.includes('Server'))?.priority).toBe('P0');
+      expect(todos.find(t => t.content.includes('Review'))?.priority).toBe('P1');
+      expect(todos.find(t => t.content.includes('logging'))?.priority).toBe('P2');
+    });
+
+    it('should be case-insensitive for priority keywords', () => {
+      tracker.processTerminalData('- [ ] critical issue with login\n');
+
+      const todos = tracker.todos;
+      expect(todos).toHaveLength(1);
+      expect(todos[0].priority).toBe('P0');
     });
   });
 });

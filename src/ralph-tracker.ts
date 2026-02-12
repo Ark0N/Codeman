@@ -2883,6 +2883,8 @@ export class RalphTracker extends EventEmitter {
     this.clearDebounceTimers();
     // Stop fix plan file watcher to prevent memory leak
     this.stopWatchingFixPlan();
+    // Stop iteration stall detection timer to prevent leak
+    this.stopIterationStallDetection();
     this._loopState = createInitialRalphTrackerState(); // This sets enabled: false
     this._todos.clear();
     this._taskNumberToContent.clear();
@@ -3833,6 +3835,7 @@ export class RalphTracker extends EventEmitter {
   destroy(): void {
     this.clearDebounceTimers();
     this.stopWatchingFixPlan();
+    this.stopIterationStallDetection();
     this._todos.clear();
     this._taskNumberToContent.clear();
     this._completionPhraseCount.clear();

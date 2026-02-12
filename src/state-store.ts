@@ -146,7 +146,6 @@ export class StateStore {
       return;
     }
 
-    this.dirty = false;
     this.ensureDir();
 
     const tempPath = this.filePath + '.tmp';
@@ -163,7 +162,6 @@ export class StateStore {
         console.error('[StateStore] Circuit breaker OPEN - serialization failing repeatedly');
         this.circuitBreakerOpen = true;
       }
-      this.dirty = true;
       return;
     }
 
@@ -180,7 +178,8 @@ export class StateStore {
       await writeFile(tempPath, json, 'utf-8');
       await rename(tempPath, this.filePath);
 
-      // Success! Reset failure counter
+      // Success! Clear dirty flag AFTER write completes
+      this.dirty = false;
       this.consecutiveSaveFailures = 0;
       if (this.circuitBreakerOpen) {
         console.log('[StateStore] Circuit breaker CLOSED - save succeeded');
@@ -202,8 +201,6 @@ export class StateStore {
         console.error('[StateStore] Circuit breaker OPEN - writes failing repeatedly');
         this.circuitBreakerOpen = true;
       }
-
-      this.dirty = true;
     }
   }
 

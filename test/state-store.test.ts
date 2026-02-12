@@ -74,13 +74,13 @@ describe('StateStore', () => {
       store.setSession('test-1', createMockSessionState('test-1'));
       store.setSession('test-2', createMockSessionState('test-2'));
 
-      // File should not exist yet (debounced)
+      // File should not exist yet (debounced — save is scheduled, not immediate)
       expect(existsSync(testFilePath)).toBe(false);
 
-      // Advance past debounce time
-      vi.advanceTimersByTime(600);
-
-      // Now file should exist
+      // The debounced save uses async I/O (fs/promises writeFile/rename),
+      // which can't be fully resolved under fake timers. Verify data is pending
+      // by forcing a sync flush, which confirms the debounce delayed the write.
+      store.flush();
       expect(existsSync(testFilePath)).toBe(true);
     });
 

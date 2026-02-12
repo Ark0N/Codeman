@@ -163,7 +163,7 @@ describe('AiIdleChecker', () => {
 
       // First call should try to kill existing screen
       expect(mockedExecSync).toHaveBeenCalledWith(
-        expect.stringContaining('screen -X -S claudeman-aicheck-'),
+        expect.stringContaining('screen -X -S "claudeman-aicheck-'),
         expect.any(Object)
       );
     });

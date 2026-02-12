@@ -1990,7 +1990,8 @@ export class Session extends EventEmitter {
 
     // Immediately cleanup Promise callbacks to prevent orphaned references
     // during the rest of stop() processing (e.g., if screen kill times out)
-    if (this.rejectPromise) {
+    if (this.rejectPromise && !this._promptResolved) {
+      this._promptResolved = true;
       this.rejectPromise(new Error('Session stopped'));
     }
     this.resolvePromise = null;

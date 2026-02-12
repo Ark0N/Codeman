@@ -96,6 +96,11 @@ export class RalphLoop extends EventEmitter {
       // If we crashed while running, reset to stopped
       this._status = 'stopped';
       this.store.setRalphLoopState({ status: 'stopped' });
+      // Reset orphaned in_progress tasks back to pending
+      for (const task of this.taskQueue.getRunningTasks()) {
+        task.reset();
+        this.taskQueue.updateTask(task);
+      }
     }
 
     this.setupEventHandlers();

@@ -1,0 +1,80 @@
+
+> claudeman@0.1490 test
+> vitest run test/state-store.test.ts
+
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90m/home/arkon/default/claudeman[39m
+
+ [31m❯[39m test/state-store.test.ts [2m([22m[2m33 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 57[2mms[22m[39m
+       [32m✓[39m should create initial state when no file exists[32m 6[2mms[22m[39m
+       [32m✓[39m should set state file path in config[32m 2[2mms[22m[39m
+[31m       [31m×[31m should debounce saves by default[39m[32m 15[2mms[22m[39m
+       [32m✓[39m should write immediately with saveNow[32m 2[2mms[22m[39m
+       [32m✓[39m should flush pending saves[32m 1[2mms[22m[39m
+       [32m✓[39m should set and get sessions[32m 1[2mms[22m[39m
+       [32m✓[39m should return null for non-existent session[32m 1[2mms[22m[39m
+       [32m✓[39m should remove sessions[32m 1[2mms[22m[39m
+       [32m✓[39m should get all sessions[32m 2[2mms[22m[39m
+       [32m✓[39m should set and get tasks[32m 1[2mms[22m[39m
+       [32m✓[39m should return null for non-existent task[32m 1[2mms[22m[39m
+       [32m✓[39m should remove tasks[32m 1[2mms[22m[39m
+       [32m✓[39m should get all tasks[32m 1[2mms[22m[39m
+       [32m✓[39m should get and set Ralph Loop state[32m 1[2mms[22m[39m
+       [32m✓[39m should merge partial updates[32m 1[2mms[22m[39m
+       [32m✓[39m should get and set config[32m 1[2mms[22m[39m
+       [32m✓[39m should merge partial updates[32m 1[2mms[22m[39m
+       [32m✓[39m should reset state to initial values[32m 1[2mms[22m[39m
+       [32m✓[39m should preserve state file path in config[32m 1[2mms[22m[39m
+       [32m✓[39m should get and set ralph state[32m 1[2mms[22m[39m
+       [32m✓[39m should return null for non-existent ralph state[32m 1[2mms[22m[39m
+       [32m✓[39m should update ralph state with partial merge[32m 1[2mms[22m[39m
+       [32m✓[39m should create initial state on update if none exists[32m 1[2mms[22m[39m
+       [32m✓[39m should remove ralph state[32m 1[2mms[22m[39m
+       [32m✓[39m should get all ralph states[32m 1[2mms[22m[39m
+       [32m✓[39m should flush both main and ralph state[32m 2[2mms[22m[39m
+       [32m✓[39m should persist and restore state across instances[32m 2[2mms[22m[39m
+       [32m✓[39m should initialize global stats with zero values[32m 1[2mms[22m[39m
+       [32m✓[39m should add to global stats[32m 1[2mms[22m[39m
+       [32m✓[39m should accumulate global stats across multiple calls[32m 1[2mms[22m[39m
+       [32m✓[39m should increment sessions created counter[32m 1[2mms[22m[39m
+       [32m✓[39m should compute aggregate stats combining global and active sessions[32m 1[2mms[22m[39m
+       [32m✓[39m should persist global stats across instances[32m 1[2mms[22m[39m
+[90mstderr[2m | StateStore.saveNowAsync (/home/arkon/default/claudeman/src/state-store.ts:190:15)
+[22m[39m[StateStore] Failed to write state file: Error: ENOENT: no such file or directory, open '/tmp/claudeman-test-1770917629701/state.json.tmp'
+[90m    at open (node:internal/fs/promises:636:25)[39m
+[90m    at writeFile (node:internal/fs/promises:1205:14)[39m
+    at StateStore.saveNowAsync [90m(/home/arkon/default/claudeman/[39msrc/state-store.ts:180:7[90m)[39m {
+  errno: [33m-2[39m,
+  code: [32m'ENOENT'[39m,
+  syscall: [32m'open'[39m,
+  path: [32m'/tmp/claudeman-test-1770917629701/state.json.tmp'[39m
+}
+
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m test/state-store.test.ts[2m > [22mStateStore[2m > [22msave and saveNow[2m > [22mshould debounce saves by default
+[31m[1mAssertionError[22m: expected false to be true // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- true[39m
+[31m+ false[39m
+
+[36m [2m❯[22m test/state-store.test.ts:[2m84:40[22m[39m
+    [90m 82| [39m
+    [90m 83| [39m      [90m// Now file should exist[39m
+    [90m 84| [39m      [34mexpect[39m([34mexistsSync[39m(testFilePath))[33m.[39m[34mtoBe[39m([35mtrue[39m)[33m;[39m
+    [90m   | [39m                                       [31m^[39m
+    [90m 85| [39m    })[33m;[39m
+    [90m 86| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m32 passed[39m[22m[90m (33)[39m
+[2m   Start at [22m 18:33:49
+[2m   Duration [22m 625ms[2m (transform 207ms, setup 49ms, import 219ms, tests 57ms, environment 0ms)[22m
+

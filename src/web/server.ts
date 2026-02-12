@@ -152,7 +152,7 @@ function formatUptime(seconds: number): string {
  * Extracts only relevant fields and limits total size to prevent
  * oversized payloads from being broadcast to all connected clients.
  */
-function sanitizeHookData(data: Record<string, unknown> | undefined): Record<string, unknown> {
+function sanitizeHookData(data: Record<string, unknown> | null | undefined): Record<string, unknown> {
   if (!data || typeof data !== 'object') return {};
 
   // Only forward known safe fields from Claude Code hook stdin
@@ -336,6 +336,8 @@ export class WebServer extends EventEmitter {
   });
   // Per-session adaptive batch intervals (sessions with rapid output get longer batches)
   private adaptiveBatchIntervals: Map<string, number> = new Map();
+  // Tracked minimum across adaptiveBatchIntervals (avoids spreading into Math.min on every batch)
+  private _minBatchInterval: number = TERMINAL_BATCH_INTERVAL;
   // Scheduled runs cleanup timer
   private scheduledCleanupTimer: NodeJS.Timeout | null = null;
   // SSE event batching
@@ -667,7 +669,7 @@ export class WebServer extends EventEmitter {
         updateCaseEnvVars(workingDir, body.envOverrides);
       }
 
-      const globalNice = this.getGlobalNiceConfig();
+      const globalNice = await this.getGlobalNiceConfig();
       const session = new Session({
         workingDir,
         mode: body.mode || 'claude',
@@ -680,7 +682,7 @@ export class WebServer extends EventEmitter {
       this.sessions.set(session.id, session);
       this.store.incrementSessionsCreated();
       this.persistSessionState(session);
-      this.setupSessionListeners(session);
+      await this.setupSessionListeners(session);
 
       this.broadcast('session:created', session.toDetailedState());
       return { success: true, session: session.toDetailedState() };
@@ -2015,7 +2017,7 @@ export class WebServer extends EventEmitter {
       this.sessions.set(session.id, session);
       this.store.incrementSessionsCreated();
       this.persistSessionState(session);
-      this.setupSessionListeners(session);
+      await this.setupSessionListeners(session);
 
       this.broadcast('session:created', session.toDetailedState());
 
@@ -2089,22 +2091,21 @@ export class WebServer extends EventEmitter {
       // Get linked cases
       const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
       try {
-        if (existsSync(linkedCasesFile)) {
-          const linkedCases: Record<string, string> = JSON.parse(readFileSync(linkedCasesFile, 'utf-8'));
-          for (const [name, path] of Object.entries(linkedCases)) {
-            // Only add if not already in cases (avoid duplicates) and path exists
-            if (!cases.some(c => c.name === name) && existsSync(path)) {
-              cases.push({
-                name,
-                path,
-                hasClaudeMd: existsSync(join(path, 'CLAUDE.md')),
-              });
-            }
+        const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
+        for (const [name, path] of Object.entries(linkedCases)) {
+          // Only add if not already in cases (avoid duplicates) and path exists
+          if (!cases.some(c => c.name === name) && existsSync(path)) {
+            cases.push({
+              name,
+              path,
+              hasClaudeMd: existsSync(join(path, 'CLAUDE.md')),
+            });
           }
         }
       } catch (err) {
-        // Log but don't fail - linked cases are optional
-        console.warn('[Server] Failed to read linked cases:', err);
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          console.warn('[Server] Failed to read linked cases:', err);
+        }
       }
 
       return cases;
@@ -2136,7 +2137,7 @@ export class WebServer extends EventEmitter {
         mkdirSync(join(casePath, 'src'), { recursive: true });
 
         // Read settings to get custom template path
-        const templatePath = this.getDefaultClaudeMdPath();
+        const templatePath = await this.getDefaultClaudeMdPath();
         const claudeMd = generateClaudeMd(name, description || '', templatePath);
         writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
 
@@ -2183,11 +2184,11 @@ export class WebServer extends EventEmitter {
       const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
       let linkedCases: Record<string, string> = {};
       try {
-        if (existsSync(linkedCasesFile)) {
-          linkedCases = JSON.parse(readFileSync(linkedCasesFile, 'utf-8'));
+        linkedCases = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          console.warn('[Server] Failed to read linked cases:', err);
         }
-      } catch {
-        // Ignore parse errors, start fresh
       }
 
       // Check if name is already linked
@@ -2216,20 +2217,18 @@ export class WebServer extends EventEmitter {
       // First check linked cases
       const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
       try {
-        if (existsSync(linkedCasesFile)) {
-          const linkedCases: Record<string, string> = JSON.parse(readFileSync(linkedCasesFile, 'utf-8'));
-          if (linkedCases[name]) {
-            const linkedPath = linkedCases[name];
-            return {
-              name,
-              path: linkedPath,
-              hasClaudeMd: existsSync(join(linkedPath, 'CLAUDE.md')),
-              linked: true,
-            };
-          }
+        const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
+        if (linkedCases[name]) {
+          const linkedPath = linkedCases[name];
+          return {
+            name,
+            path: linkedPath,
+            hasClaudeMd: existsSync(join(linkedPath, 'CLAUDE.md')),
+            linked: true,
+          };
         }
       } catch {
-        // Ignore errors, fall through to casesDir check
+        // ENOENT or parse errors - fall through to casesDir check
       }
 
       // Then check casesDir
@@ -2255,14 +2254,12 @@ export class WebServer extends EventEmitter {
 
       const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
       try {
-        if (existsSync(linkedCasesFile)) {
-          const linkedCases: Record<string, string> = JSON.parse(readFileSync(linkedCasesFile, 'utf-8'));
-          if (linkedCases[name]) {
-            casePath = linkedCases[name];
-          }
+        const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
+        if (linkedCases[name]) {
+          casePath = linkedCases[name];
         }
       } catch {
-        // Ignore errors
+        // ENOENT or parse errors - fall through to casesDir
       }
 
       if (!casePath) {
@@ -2276,7 +2273,7 @@ export class WebServer extends EventEmitter {
       }
 
       try {
-        const content = readFileSync(fixPlanPath, 'utf-8');
+        const content = await fs.readFile(fixPlanPath, 'utf-8');
 
         // Parse todos from the content (similar to ralph-tracker's importFixPlanMarkdown)
         const todos: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed'; priority: string | null }> = [];
@@ -2384,7 +2381,7 @@ export class WebServer extends EventEmitter {
           mkdirSync(join(casePath, 'src'), { recursive: true });
 
           // Read settings to get custom template path
-          const templatePath = this.getDefaultClaudeMdPath();
+          const templatePath = await this.getDefaultClaudeMdPath();
           const claudeMd = generateClaudeMd(caseName, '', templatePath);
           writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
 
@@ -2399,7 +2396,7 @@ export class WebServer extends EventEmitter {
 
       // Create a new session with the case as working directory
       // Apply global Nice priority config if enabled in settings
-      const niceConfig = this.getGlobalNiceConfig();
+      const niceConfig = await this.getGlobalNiceConfig();
       const session = new Session({
         workingDir: casePath,
         screenManager: this.mux,
@@ -2421,7 +2418,7 @@ export class WebServer extends EventEmitter {
       this.sessions.set(session.id, session);
       this.store.incrementSessionsCreated();
       this.persistSessionState(session);
-      this.setupSessionListeners(session);
+      await this.setupSessionListeners(session);
       this.broadcast('session:created', session.toDetailedState());
 
       // Start in the appropriate mode
@@ -2439,8 +2436,10 @@ export class WebServer extends EventEmitter {
         try {
           const settingsFilePath = join(homedir(), '.claudeman', 'settings.json');
           let settings: Record<string, unknown> = {};
-          if (existsSync(settingsFilePath)) {
-            settings = JSON.parse(readFileSync(settingsFilePath, 'utf-8'));
+          try {
+            settings = JSON.parse(await fs.readFile(settingsFilePath, 'utf-8'));
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
           }
           settings.lastUsedCase = caseName;
           const dir = dirname(settingsFilePath);
@@ -2884,11 +2883,15 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid file path');
       }
 
-      if (!existsSync(fullPath)) {
-        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found');
+      let content: string;
+      try {
+        content = await fs.readFile(fullPath, 'utf-8');
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          return createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found');
+        }
+        throw err;
       }
-
-      const content = readFileSync(fullPath, 'utf-8');
       const isJson = filePath.endsWith('.json');
 
       // Parse JSON content safely (may contain invalid JSON)
@@ -3034,12 +3037,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     this.app.get('/api/settings', async () => {
       try {
-        if (existsSync(settingsPath)) {
-          const content = readFileSync(settingsPath, 'utf-8');
-          return JSON.parse(content);
-        }
+        const content = await fs.readFile(settingsPath, 'utf-8');
+        return JSON.parse(content);
       } catch (err) {
-        console.error('Failed to read settings:', err);
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          console.error('Failed to read settings:', err);
+        }
       }
       return {};
     });
@@ -3136,12 +3139,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     this.app.get('/api/subagent-window-states', async () => {
       try {
-        if (existsSync(windowStatesPath)) {
-          const content = readFileSync(windowStatesPath, 'utf-8');
-          return JSON.parse(content);
-        }
+        const content = await fs.readFile(windowStatesPath, 'utf-8');
+        return JSON.parse(content);
       } catch (err) {
-        console.error('Failed to read subagent window states:', err);
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          console.error('Failed to read subagent window states:', err);
+        }
       }
       return { minimized: {}, open: [] };
     });
@@ -3167,12 +3170,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     this.app.get('/api/subagent-parents', async () => {
       try {
-        if (existsSync(parentMapPath)) {
-          const content = readFileSync(parentMapPath, 'utf-8');
-          return JSON.parse(content);
-        }
+        const content = await fs.readFile(parentMapPath, 'utf-8');
+        return JSON.parse(content);
       } catch (err) {
-        console.error('Failed to read subagent parent map:', err);
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          console.error('Failed to read subagent parent map:', err);
+        }
       }
       return {};
     });
@@ -3668,7 +3671,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.broadcast('session:deleted', { id: sessionId });
   }
 
-  private setupSessionListeners(session: Session): void {
+  private async setupSessionListeners(session: Session): Promise<void> {
     // Create run summary tracker for this session
     const summaryTracker = new RunSummaryTracker(session.id, session.name);
     this.runSummaryTrackers.set(session.id, summaryTracker);
@@ -3678,7 +3681,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     session.ralphTracker.setWorkingDir(session.workingDir);
 
     // Start watching for new images in this session's working directory (if enabled globally and per-session)
-    if (this.isImageWatcherEnabled() && session.imageWatcherEnabled) {
+    if (await this.isImageWatcherEnabled() && session.imageWatcherEnabled) {
       imageWatcher.watchSession(session.id, session.workingDir);
     }
 
@@ -4134,40 +4137,40 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   // Helper to get custom CLAUDE.md template path from settings
-  private getDefaultClaudeMdPath(): string | undefined {
+  private async getDefaultClaudeMdPath(): Promise<string | undefined> {
     const settingsPath = join(homedir(), '.claudeman', 'settings.json');
 
     try {
-      if (existsSync(settingsPath)) {
-        const content = readFileSync(settingsPath, 'utf-8');
-        const settings = JSON.parse(content);
-        if (settings.defaultClaudeMdPath) {
-          return settings.defaultClaudeMdPath;
-        }
+      const content = await fs.readFile(settingsPath, 'utf-8');
+      const settings = JSON.parse(content);
+      if (settings.defaultClaudeMdPath) {
+        return settings.defaultClaudeMdPath;
       }
     } catch (err) {
-      console.error('Failed to read settings:', err);
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.error('Failed to read settings:', err);
+      }
     }
     return undefined;
   }
 
   // Helper to get global Nice priority config from settings
-  private getGlobalNiceConfig(): NiceConfig | undefined {
+  private async getGlobalNiceConfig(): Promise<NiceConfig | undefined> {
     const settingsPath = join(homedir(), '.claudeman', 'settings.json');
 
     try {
-      if (existsSync(settingsPath)) {
-        const content = readFileSync(settingsPath, 'utf-8');
-        const settings = JSON.parse(content);
-        if (settings.nice && settings.nice.enabled) {
-          return {
-            enabled: settings.nice.enabled ?? false,
-            niceValue: settings.nice.niceValue ?? DEFAULT_NICE_CONFIG.niceValue,
-          };
-        }
+      const content = await fs.readFile(settingsPath, 'utf-8');
+      const settings = JSON.parse(content);
+      if (settings.nice && settings.nice.enabled) {
+        return {
+          enabled: settings.nice.enabled ?? false,
+          niceValue: settings.nice.niceValue ?? DEFAULT_NICE_CONFIG.niceValue,
+        };
       }
     } catch (err) {
-      console.error('Failed to read Nice priority settings:', err);
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.error('Failed to read Nice priority settings:', err);
+      }
     }
     return undefined;
   }
@@ -4231,7 +4234,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         this.sessions.set(session.id, session);
         this.store.incrementSessionsCreated();
         this.persistSessionState(session);
-        this.setupSessionListeners(session);
+        await this.setupSessionListeners(session);
         run.sessionId = session.id;
 
         addLog(`Starting task iteration with session ${session.id.slice(0, 8)}`);
@@ -4464,6 +4467,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       sessionInterval = TERMINAL_BATCH_INTERVAL;
     }
     this.adaptiveBatchIntervals.set(sessionId, sessionInterval);
+    // Track minimum to avoid O(n) spread on every batch event
+    if (sessionInterval < this._minBatchInterval) {
+      this._minBatchInterval = sessionInterval;
+    }
 
     // Flush immediately if batch is large for responsiveness
     if (newBatch.length > BATCH_FLUSH_THRESHOLD) {
@@ -4478,16 +4485,13 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Start batch timer if not already running (uses adaptive interval)
     // Pick the minimum interval across all pending sessions for responsiveness
     if (!this.terminalBatchTimer) {
-      const batchInterval = Math.min(
-        ...Array.from(this.adaptiveBatchIntervals.values()),
-        TERMINAL_BATCH_INTERVAL
-      );
       this.terminalBatchTimer = setTimeout(() => {
         this.flushTerminalBatches();
         this.terminalBatchTimer = null;
         // Clear per-session intervals after flush (they'll be recalculated on next event)
         this.adaptiveBatchIntervals.clear();
-      }, batchInterval);
+        this._minBatchInterval = TERMINAL_BATCH_INTERVAL;
+      }, this._minBatchInterval);
     }
   }
 
@@ -4696,7 +4700,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }, 5 * 60 * 1000);
 
     // Start subagent watcher for Claude Code background agent visibility (if enabled)
-    if (this.isSubagentTrackingEnabled()) {
+    if (await this.isSubagentTrackingEnabled()) {
       subagentWatcher.start();
       console.log('Subagent watcher started - monitoring ~/.claude/projects for background agent activity');
     } else {
@@ -4704,7 +4708,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }
 
     // Start image watcher for auto-popup of screenshots (if enabled)
-    if (this.isImageWatcherEnabled()) {
+    if (await this.isImageWatcherEnabled()) {
       imageWatcher.start();
       console.log('Image watcher started - monitoring session directories for new images');
     } else {
@@ -4716,17 +4720,17 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   /**
    * Check if subagent tracking is enabled in settings (default: true)
    */
-  private isSubagentTrackingEnabled(): boolean {
+  private async isSubagentTrackingEnabled(): Promise<boolean> {
     const settingsPath = join(homedir(), '.claudeman', 'settings.json');
     try {
-      if (existsSync(settingsPath)) {
-        const content = readFileSync(settingsPath, 'utf-8');
-        const settings = JSON.parse(content);
-        // Default to true if not explicitly set
-        return settings.subagentTrackingEnabled ?? true;
-      }
+      const content = await fs.readFile(settingsPath, 'utf-8');
+      const settings = JSON.parse(content);
+      // Default to true if not explicitly set
+      return settings.subagentTrackingEnabled ?? true;
     } catch (err) {
-      console.error('Failed to read subagent tracking setting:', err);
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.error('Failed to read subagent tracking setting:', err);
+      }
     }
     return true; // Default enabled
   }
@@ -4734,17 +4738,17 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   /**
    * Check if image watcher is enabled in settings (default: true)
    */
-  private isImageWatcherEnabled(): boolean {
+  private async isImageWatcherEnabled(): Promise<boolean> {
     const settingsPath = join(homedir(), '.claudeman', 'settings.json');
     try {
-      if (existsSync(settingsPath)) {
-        const content = readFileSync(settingsPath, 'utf-8');
-        const settings = JSON.parse(content);
-        // Default to true if not explicitly set
-        return settings.imageWatcherEnabled ?? true;
-      }
+      const content = await fs.readFile(settingsPath, 'utf-8');
+      const settings = JSON.parse(content);
+      // Default to true if not explicitly set
+      return settings.imageWatcherEnabled ?? true;
     } catch (err) {
-      console.error('Failed to read image watcher setting:', err);
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.error('Failed to read image watcher setting:', err);
+      }
     }
     return true; // Default enabled
   }
@@ -4885,7 +4889,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
             }
 
             this.sessions.set(session.id, session);
-            this.setupSessionListeners(session);
+            await this.setupSessionListeners(session);
             this.persistSessionState(session);
 
             // Mark it as restored (not started yet - user needs to attach)
@@ -4983,16 +4987,18 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.respawnControllers.clear();
 
     // Stop all scheduled runs first (they have their own session cleanup)
-    for (const [id] of this.scheduledRuns) {
-      await this.stopScheduledRun(id);
-    }
+    await Promise.allSettled(
+      Array.from(this.scheduledRuns.keys()).map(id => this.stopScheduledRun(id))
+    );
 
-    // Properly clean up all remaining sessions (removes listeners, clears state, etc.)
+    // Properly clean up all remaining sessions in parallel (removes listeners, clears state, etc.)
     // Don't kill screens on server stop - they can be reattached on restart
-    const sessionIds = Array.from(this.sessions.keys());
-    for (const sessionId of sessionIds) {
-      await this.cleanupSession(sessionId, false);
-    }
+    // Use Promise.race with a 30s timeout to prevent shutdown from hanging indefinitely
+    const sessionCleanup = Promise.allSettled(
+      Array.from(this.sessions.keys()).map(id => this.cleanupSession(id, false))
+    );
+    const shutdownTimeout = new Promise<void>(resolve => setTimeout(resolve, 30_000));
+    await Promise.race([sessionCleanup, shutdownTimeout]);
 
     // Flush state store to prevent data loss from debounced saves
     this.store.flushAll();
@@ -5031,6 +5037,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Dispose StaleExpirationMap (stops internal cleanup timer)
     this.lastTerminalEventTime.dispose();
     this.adaptiveBatchIntervals.clear();
+    this._minBatchInterval = TERMINAL_BATCH_INTERVAL;
     this.activePlanOrchestrators.clear();
     this.cleaningUp.clear();
 
