@@ -3211,10 +3211,17 @@ class ClaudemanApp {
       });
     }
 
-    // Restore previously active session (survives page reload), or fall back to first
-    if (this.sessionOrder.length > 0 && !this.activeSessionId) {
-      let restoreId = null;
-      try { restoreId = localStorage.getItem('claudeman-active-session'); } catch {}
+    // Restore previously active session (survives page reload + SSE reconnect)
+    // Must always re-select because handleInit clears terminal state above.
+    // Reset activeSessionId so selectSession doesn't early-return.
+    const previousActiveId = this.activeSessionId;
+    this.activeSessionId = null;
+    if (this.sessionOrder.length > 0) {
+      // Priority: current active > localStorage > first session
+      let restoreId = previousActiveId;
+      if (!restoreId || !this.sessions.has(restoreId)) {
+        try { restoreId = localStorage.getItem('claudeman-active-session'); } catch {}
+      }
       if (restoreId && this.sessions.has(restoreId)) {
         this.selectSession(restoreId);
       } else {
