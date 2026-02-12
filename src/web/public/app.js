@@ -1191,7 +1191,7 @@ class ClaudemanApp {
     this.pendingHooks = new Map();
 
     // Terminal write batching with DEC 2026 sync support
-    this.pendingWrites = '';
+    this.pendingWrites = [];
     this.writeFrameScheduled = false;
     this._wasAtBottomBeforeWrite = true; // Default to true for sticky scroll
     this.syncWaitTimeout = null; // Timeout for incomplete sync blocks
@@ -1765,15 +1765,17 @@ class ClaudemanApp {
     }
 
     // Accumulate raw data (may contain DEC 2026 markers)
-    this.pendingWrites += data;
+    this.pendingWrites.push(data);
 
     if (!this.writeFrameScheduled) {
       this.writeFrameScheduled = true;
       requestAnimationFrame(() => {
-        if (this.pendingWrites && this.terminal) {
+        if (this.pendingWrites.length > 0 && this.terminal) {
+          // Join chunks for sync marker detection
+          const pending = this.pendingWrites.join('');
           // Check if we have an incomplete sync block (SYNC_START without SYNC_END)
-          const hasStart = this.pendingWrites.includes(DEC_SYNC_START);
-          const hasEnd = this.pendingWrites.includes(DEC_SYNC_END);
+          const hasStart = pending.includes(DEC_SYNC_START);
+          const hasEnd = pending.includes(DEC_SYNC_END);
 
           if (hasStart && !hasEnd) {
             // Incomplete sync block - wait for more data (up to 50ms max)
@@ -1809,7 +1811,7 @@ class ClaudemanApp {
     if (!this.flickerFilterBuffer) return;
 
     // Transfer buffered data to normal pending writes
-    this.pendingWrites += this.flickerFilterBuffer;
+    this.pendingWrites.push(this.flickerFilterBuffer);
     this.flickerFilterBuffer = '';
     this.flickerFilterActive = false;
 
@@ -1828,12 +1830,12 @@ class ClaudemanApp {
    * Strips markers and writes content atomically within a single frame.
    */
   flushPendingWrites() {
-    if (!this.pendingWrites || !this.terminal) return;
+    if (this.pendingWrites.length === 0 || !this.terminal) return;
 
     // Extract segments, stripping DEC 2026 markers
     // This implements synchronized output for xterm.js which doesn't support DEC 2026 natively
-    const segments = extractSyncSegments(this.pendingWrites);
-    this.pendingWrites = '';
+    const segments = extractSyncSegments(this.pendingWrites.join(''));
+    this.pendingWrites = [];
 
     // Write all segments in a single batch (atomic within this frame)
     // xterm.js internally batches multiple write() calls within same frame
@@ -2126,6 +2128,7 @@ class ClaudemanApp {
       delete this.respawnActionLogs[data.id];
       if (this.activeSessionId === data.id) {
         this.activeSessionId = null;
+        try { localStorage.removeItem('claudeman-active-session'); } catch {}
         this.terminal.clear();
         this.showWelcome();
       }
@@ -3082,7 +3085,7 @@ class ClaudemanApp {
       clearTimeout(this.syncWaitTimeout);
       this.syncWaitTimeout = null;
     }
-    this.pendingWrites = '';
+    this.pendingWrites = [];
     this.writeFrameScheduled = false;
     // Clear pending hooks
     this.pendingHooks.clear();
@@ -3208,9 +3211,15 @@ class ClaudemanApp {
       });
     }
 
-    // Auto-select first session if any (use sessionOrder for user's preferred order)
+    // Restore previously active session (survives page reload), or fall back to first
     if (this.sessionOrder.length > 0 && !this.activeSessionId) {
-      this.selectSession(this.sessionOrder[0]);
+      let restoreId = null;
+      try { restoreId = localStorage.getItem('claudeman-active-session'); } catch {}
+      if (restoreId && this.sessions.has(restoreId)) {
+        this.selectSession(restoreId);
+      } else {
+        this.selectSession(this.sessionOrder[0]);
+      }
     }
   }
 
@@ -3747,10 +3756,11 @@ class ClaudemanApp {
       clearTimeout(this.syncWaitTimeout);
       this.syncWaitTimeout = null;
     }
-    this.pendingWrites = '';
+    this.pendingWrites = [];
     this.writeFrameScheduled = false;
 
     this.activeSessionId = sessionId;
+    try { localStorage.setItem('claudeman-active-session', sessionId); } catch {}
     this.hideWelcome();
     // Clear idle hooks on view, but keep action hooks until user interacts
     this.clearPendingHooks(sessionId, 'idle_prompt');
@@ -3876,6 +3886,7 @@ class ClaudemanApp {
 
       if (this.activeSessionId === sessionId) {
         this.activeSessionId = null;
+        try { localStorage.removeItem('claudeman-active-session'); } catch {}
         // Select another session or show welcome (use sessionOrder for consistent ordering)
         if (this.sessionOrder.length > 0 && this.sessions.size > 0) {
           const nextSessionId = this.sessionOrder[0];
@@ -3949,6 +3960,7 @@ class ClaudemanApp {
   goHome() {
     // Deselect active session and show welcome screen
     this.activeSessionId = null;
+    try { localStorage.removeItem('claudeman-active-session'); } catch {}
     this.terminal.clear();
     this.showWelcome();
     this.renderSessionTabs();
@@ -7707,6 +7719,7 @@ class ClaudemanApp {
       this.sessions.clear();
       this.terminalBuffers.clear();
       this.activeSessionId = null;
+      try { localStorage.removeItem('claudeman-active-session'); } catch {}
       this.respawnStatus = {};
       this.respawnCountdownTimers = {};
       this.respawnActionLogs = {};
@@ -13984,6 +13997,7 @@ class ClaudemanApp {
           this.sessions.clear();
           this.screenSessions = [];
           this.activeSessionId = null;
+          try { localStorage.removeItem('claudeman-active-session'); } catch {}
           this.renderSessionTabs();
           this.renderScreenSessions();
           this.terminal.clear();
@@ -13994,6 +14008,7 @@ class ClaudemanApp {
         // Just remove tabs, keep screens running
         this.sessions.clear();
         this.activeSessionId = null;
+        try { localStorage.removeItem('claudeman-active-session'); } catch {}
         this.renderSessionTabs();
         this.terminal.clear();
         this.terminal.reset();
@@ -14529,6 +14544,10 @@ class ClaudemanApp {
   }
 
   async fetchSystemStats() {
+    // Skip polling when monitor panel is not visible
+    const monitorPanel = document.getElementById('monitorPanel');
+    if (!monitorPanel || monitorPanel.style.display === 'none') return;
+
     try {
       const res = await fetch('/api/system/stats');
       const stats = await res.json();
