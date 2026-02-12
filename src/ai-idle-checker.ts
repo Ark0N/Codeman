@@ -149,25 +149,12 @@ export class AiIdleChecker extends AiCheckerBase<
   protected readonly logPrefix = '[AiIdleChecker]';
   protected readonly checkDescription = 'AI idle check';
 
-  /** Number of active teammates (injected by respawn controller) */
-  private teammateCount: number = 0;
-
   constructor(sessionId: string, config: Partial<AiIdleCheckConfig> = {}) {
     super(sessionId, DEFAULT_AI_CHECK_CONFIG, config);
   }
 
-  /** Set active teammate count for prompt context injection */
-  setTeammateCount(count: number): void {
-    this.teammateCount = count;
-  }
-
   protected buildPrompt(terminalBuffer: string): string {
-    let prompt = AI_CHECK_PROMPT.replace('{TERMINAL_BUFFER}', terminalBuffer);
-    if (this.teammateCount > 0) {
-      const teamContext = `\n\n## Agent Teams Context\n${this.teammateCount} agent teammate(s) are currently working on tasks for this session.\nIf teammates are active, answer WORKING — the lead is waiting for their results.\n`;
-      prompt = prompt.replace('## Terminal Output to Analyze', teamContext + '## Terminal Output to Analyze');
-    }
-    return prompt;
+    return AI_CHECK_PROMPT.replace('{TERMINAL_BUFFER}', terminalBuffer);
   }
 
   protected parseVerdict(output: string): { verdict: AiCheckVerdict; reasoning: string } | null {

@@ -1145,14 +1145,6 @@ class ClaudemanApp {
     // Once set, never recalculated. Persisted to localStorage and server.
     this.subagentParentMap = new Map();
 
-    // Agent Teams tracking
-    this.teams = new Map(); // Map<teamName, TeamConfig>
-    this.teamTasks = new Map(); // Map<teamName, TeamTask[]>
-    this.teammateMap = new Map(); // Map<agentId-prefix, {name, color, teamName}> for quick lookup
-
-    // Teammate tmux pane terminals
-    this.teammatePanesByName = new Map(); // Map<name, { paneTarget, sessionId, color }>
-    this.teammateTerminals = new Map(); // Map<agentId, { terminal, fitAddon, paneTarget, sessionId, resizeObserver }>
     this.ralphStatePanelCollapsed = true; // Default to collapsed
     this.ralphClosedSessions = new Set(); // Sessions where user explicitly closed Ralph panel
 
@@ -2108,22 +2100,6 @@ class ClaudemanApp {
       this.closeSessionImagePopups(data.id);  // Close image popup windows for this session
       this.closeSessionSubagentWindows(data.id, true);  // Close subagent windows and cleanup activity data
 
-      // Clean up any agent teams associated with this session
-      for (const [teamName, team] of this.teams) {
-        if (team.leadSessionId === data.id) {
-          this.teams.delete(teamName);
-          this.teamTasks.delete(teamName);
-        }
-      }
-      // Clean up teammate pane tracking for this session
-      for (const [name, paneInfo] of this.teammatePanesByName) {
-        if (paneInfo.sessionId === data.id) {
-          this.teammatePanesByName.delete(name);
-        }
-      }
-      this.rebuildTeammateMap();
-      this.renderTeamTasksPanel();
-
       // Clean up idle timer for this session
       const idleTimer = this.idleTimers.get(data.id);
       if (idleTimer) {
@@ -2890,81 +2866,6 @@ class ClaudemanApp {
           this.subagentToolResults.delete(data.agentId);
         }
       }, 5 * 60 * 1000); // 5 minutes
-    });
-
-    // ========== Agent Teams Events ==========
-
-    addListener('team:created', (e) => {
-      const team = JSON.parse(e.data);
-      this.teams.set(team.name, team);
-      this.rebuildTeammateMap();
-      this.renderTeamTasksPanel();
-      this.updateSubagentWindows();
-    });
-
-    addListener('team:updated', (e) => {
-      const team = JSON.parse(e.data);
-      this.teams.set(team.name, team);
-      this.rebuildTeammateMap();
-      this.renderTeamTasksPanel();
-      this.updateSubagentWindows();
-    });
-
-    addListener('team:removed', (e) => {
-      const team = JSON.parse(e.data);
-      this.teams.delete(team.name);
-      this.teamTasks.delete(team.name);
-      this.rebuildTeammateMap();
-      this.renderTeamTasksPanel();
-      this.updateSubagentWindows();
-    });
-
-    addListener('team:task_updated', (e) => {
-      const data = JSON.parse(e.data);
-      this.teamTasks.set(data.teamName, data.tasks);
-      this.renderTeamTasksPanel();
-    });
-
-    addListener('team:inbox_message', (e) => {
-      // Inbox messages currently just trigger panel updates
-      this.renderTeamTasksPanel();
-    });
-
-    // ========== Teammate Pane Events ==========
-
-    addListener('teammate:pane_available', (e) => {
-      const data = JSON.parse(e.data);
-
-      // Only show teammate pane windows if the session has a tab in Claudeman
-      if (!this.sessions.has(data.sessionId)) return;
-
-      this.teammatePanesByName.set(data.teammateName, {
-        paneTarget: data.paneTarget,
-        sessionId: data.sessionId,
-        color: data.color,
-      });
-      // Teammate pane windows are disabled — users interact with teammates
-      // directly through the main tmux split-pane terminal instead.
-    });
-
-    addListener('teammate:terminal', (e) => {
-      const data = JSON.parse(e.data);
-      // Find the terminal instance for this pane
-      for (const [, termData] of this.teammateTerminals) {
-        if (termData.paneTarget === data.paneTarget && termData.sessionId === data.sessionId) {
-          // Decode base64 to Uint8Array to preserve UTF-8 multi-byte sequences
-          const binary = atob(data.data);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          if (termData.terminal) {
-            try { termData.terminal.write(bytes); } catch {}
-          } else if (termData.pendingData) {
-            // Terminal not ready yet — buffer the data
-            termData.pendingData.push(bytes);
-          }
-          break;
-        }
-      }
     });
 
     // ========== Image Detection Events (Screenshots & Generated Images) ==========
@@ -11285,6 +11186,16 @@ class ClaudemanApp {
   }
 
   renderSubagentPanel() {
+    // Debounce renders at 150ms to prevent excessive DOM updates from rapid subagent events
+    if (this._subagentPanelRenderTimeout) {
+      clearTimeout(this._subagentPanelRenderTimeout);
+    }
+    this._subagentPanelRenderTimeout = setTimeout(() => {
+      this._renderSubagentPanelImmediate();
+    }, 150);
+  }
+
+  _renderSubagentPanelImmediate() {
     const list = this.$('subagentList');
     if (!list) return;
 
@@ -11777,6 +11688,17 @@ class ClaudemanApp {
   // This map stores agentId -> sessionId, where sessionId is the tab's data-id.
 
   updateConnectionLines() {
+    // Coalesce multiple calls within the same frame into a single rAF
+    if (!this._connectionLinesScheduled) {
+      this._connectionLinesScheduled = true;
+      requestAnimationFrame(() => {
+        this._connectionLinesScheduled = false;
+        this._updateConnectionLinesImmediate();
+      });
+    }
+  }
+
+  _updateConnectionLinesImmediate() {
     const svg = document.getElementById('connectionLines');
     if (!svg) return;
 
@@ -12007,13 +11929,6 @@ class ClaudemanApp {
   // ========== Subagent Floating Windows ==========
 
   openSubagentWindow(agentId) {
-    // Skip teammate agents — they use tmux split panes in the main terminal,
-    // not floating popup windows. Prevents false-info activity log popups.
-    const agentForTeammateCheck = this.subagents.get(agentId);
-    if (agentForTeammateCheck && this.getTeammateInfo(agentForTeammateCheck)) {
-      return;
-    }
-
     // If window already exists, focus it
     if (this.subagentWindows.has(agentId)) {
       const existing = this.subagentWindows.get(agentId);
@@ -12581,47 +12496,72 @@ class ClaudemanApp {
       return;
     }
 
-    const html = activity.slice(-100).map(a => {
-      const time = new Date(a.timestamp).toLocaleTimeString('en-US', { hour12: false });
-      if (a.type === 'tool') {
-        return `<div class="activity-line">
-          <span class="time">${time}</span>
-          <span class="tool-icon">${this.getToolIcon(a.tool)}</span>
-          <span class="tool-name">${a.tool}</span>
-          <span class="tool-detail">${this.escapeHtml(this.getToolDetail(a.tool, a.input))}</span>
-        </div>`;
-      } else if (a.type === 'tool_result') {
-        const icon = a.isError ? '❌' : '📄';
-        const statusClass = a.isError ? ' error' : '';
-        const sizeInfo = a.contentLength > 500 ? ` (${this.formatBytes(a.contentLength)})` : '';
-        const preview = a.preview.length > 60 ? a.preview.substring(0, 60) + '...' : a.preview;
-        return `<div class="activity-line result-line${statusClass}">
-          <span class="time">${time}</span>
-          <span class="tool-icon">${icon}</span>
-          <span class="tool-name">${a.tool || '→'}</span>
-          <span class="tool-detail">${this.escapeHtml(preview)}${sizeInfo}</span>
-        </div>`;
-      } else if (a.type === 'progress') {
-        // Check for hook events
-        const isHook = a.hookEvent || a.hookName;
-        const icon = isHook ? '🪝' : (a.progressType === 'query_update' ? '⟳' : '✓');
-        const displayText = isHook ? (a.hookName || a.hookEvent) : (a.query || a.progressType);
-        return `<div class="activity-line progress-line${isHook ? ' hook-line' : ''}">
-          <span class="time">${time}</span>
-          <span class="tool-icon">${icon}</span>
-          <span class="tool-detail">${this.escapeHtml(displayText)}</span>
-        </div>`;
-      } else if (a.type === 'message') {
-        const preview = a.text.length > 150 ? a.text.substring(0, 150) + '...' : a.text;
-        return `<div class="message-line">
-          <span class="time">${time}</span> 💬 ${this.escapeHtml(preview)}
-        </div>`;
-      }
-      return '';
-    }).join('');
+    // Incremental rendering: track how many items are already rendered
+    const renderedCount = body.dataset.renderedCount ? parseInt(body.dataset.renderedCount, 10) : 0;
+    const maxItems = 100;
+    const visibleActivity = activity.slice(-maxItems);
 
-    body.innerHTML = html;
+    // If activity was trimmed or this is a fresh render, do full rebuild
+    if (renderedCount === 0 || renderedCount > visibleActivity.length || body.children.length === 0 ||
+        (body.children.length === 1 && body.querySelector('.subagent-empty'))) {
+      // Full rebuild
+      const html = visibleActivity.map(a => this._renderActivityItem(a)).join('');
+      body.innerHTML = html;
+      body.dataset.renderedCount = String(visibleActivity.length);
+    } else {
+      // Incremental: only append new items
+      const newItems = visibleActivity.slice(renderedCount);
+      if (newItems.length > 0) {
+        const newHtml = newItems.map(a => this._renderActivityItem(a)).join('');
+        body.insertAdjacentHTML('beforeend', newHtml);
+        body.dataset.renderedCount = String(visibleActivity.length);
+
+        // Trim excess children from the front if over maxItems
+        while (body.children.length > maxItems) {
+          body.removeChild(body.firstChild);
+        }
+      }
+    }
+
     body.scrollTop = body.scrollHeight;
+  }
+
+  _renderActivityItem(a) {
+    const time = new Date(a.timestamp).toLocaleTimeString('en-US', { hour12: false });
+    if (a.type === 'tool') {
+      return `<div class="activity-line">
+        <span class="time">${time}</span>
+        <span class="tool-icon">${this.getToolIcon(a.tool)}</span>
+        <span class="tool-name">${a.tool}</span>
+        <span class="tool-detail">${this.escapeHtml(this.getToolDetail(a.tool, a.input))}</span>
+      </div>`;
+    } else if (a.type === 'tool_result') {
+      const icon = a.isError ? '❌' : '📄';
+      const statusClass = a.isError ? ' error' : '';
+      const sizeInfo = a.contentLength > 500 ? ` (${this.formatBytes(a.contentLength)})` : '';
+      const preview = a.preview.length > 60 ? a.preview.substring(0, 60) + '...' : a.preview;
+      return `<div class="activity-line result-line${statusClass}">
+        <span class="time">${time}</span>
+        <span class="tool-icon">${icon}</span>
+        <span class="tool-name">${a.tool || '→'}</span>
+        <span class="tool-detail">${this.escapeHtml(preview)}${sizeInfo}</span>
+      </div>`;
+    } else if (a.type === 'progress') {
+      const isHook = a.hookEvent || a.hookName;
+      const icon = isHook ? '🪝' : (a.progressType === 'query_update' ? '⟳' : '✓');
+      const displayText = isHook ? (a.hookName || a.hookEvent) : (a.query || a.progressType);
+      return `<div class="activity-line progress-line${isHook ? ' hook-line' : ''}">
+        <span class="time">${time}</span>
+        <span class="tool-icon">${icon}</span>
+        <span class="tool-detail">${this.escapeHtml(displayText)}</span>
+      </div>`;
+    } else if (a.type === 'message') {
+      const preview = a.text.length > 150 ? a.text.substring(0, 150) + '...' : a.text;
+      return `<div class="message-line">
+        <span class="time">${time}</span> 💬 ${this.escapeHtml(preview)}
+      </div>`;
+    }
+    return '';
   }
 
   // Update all open subagent windows

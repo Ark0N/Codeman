@@ -430,6 +430,13 @@ export class Session extends EventEmitter {
     niceConfig?: NiceConfig;  // Nice prioritying configuration
   }) {
     super();
+
+    // Default error handler prevents unhandled 'error' events from crashing the process.
+    // Server attaches its own handler after construction — this is a safety net for the gap.
+    this.on('error', (err) => {
+      console.error(`[Session] Unhandled error event:`, err);
+    });
+
     this.id = config.id || uuidv4();
     this.workingDir = config.workingDir;
     this.createdAt = config.createdAt || Date.now();
@@ -1016,11 +1023,11 @@ export class Session extends EventEmitter {
       this.emit('terminal', data);
       this.emit('output', data);
 
-      // Forward to Ralph tracker to detect Ralph loops and todos (handles own stripping)
-      this._ralphTracker.processTerminalData(data);
+      // Forward to Ralph tracker to detect Ralph loops and todos (pre-stripped)
+      this._ralphTracker.processCleanData(cleanData);
 
-      // Forward to Bash tool parser to detect file-viewing commands (handles own stripping)
-      this._bashToolParser.processTerminalData(data);
+      // Forward to Bash tool parser to detect file-viewing commands (pre-stripped)
+      this._bashToolParser.processCleanData(cleanData);
 
       // Parse token count from status line (e.g., "123.4k tokens" or "5234 tokens")
       this.parseTokensFromStatusLine(cleanData);

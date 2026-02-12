@@ -11,7 +11,8 @@ import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join, basename } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { readFile, readdir, stat as statAsync } from 'node:fs/promises';
 import { PENDING_TOOL_CALL_TTL_MS, MAX_PENDING_TOOL_CALLS } from './config/map-limits.js';
 
 // ========== Types ==========
@@ -208,11 +209,11 @@ export class SubagentWatcher extends EventEmitter {
     this._isRunning = true;
 
     // Initial scan
-    this.scanForSubagents();
+    this.scanForSubagents().catch((err) => this.emit('subagent:error', err as Error));
 
     // Periodic scan for new subagent directories
     this.pollInterval = setInterval(() => {
-      this.scanForSubagents();
+      this.scanForSubagents().catch((err) => this.emit('subagent:error', err as Error));
     }, POLL_INTERVAL_MS);
 
     // Periodic liveness check for active subagents
@@ -583,8 +584,13 @@ export class SubagentWatcher extends EventEmitter {
    */
   private async findSubagentProcess(sessionId: string): Promise<number | null> {
     try {
-      // Find all claude processes
-      const pgrepOutput = execSync('pgrep -f "claude"', { encoding: 'utf8' });
+      // Find all claude processes (async to avoid blocking event loop)
+      const pgrepOutput = await new Promise<string>((resolve, reject) => {
+        execFile('pgrep', ['-f', 'claude'], { encoding: 'utf8' }, (err, stdout) => {
+          if (err) return reject(err);
+          resolve(stdout);
+        });
+      });
       const pids = pgrepOutput.trim().split('\n').filter(Boolean);
 
       for (const pidStr of pids) {
@@ -592,8 +598,8 @@ export class SubagentWatcher extends EventEmitter {
         if (Number.isNaN(pid)) continue;
 
         try {
-          // Check /proc/{pid}/environ for session ID
-          const environ = readFileSync(`/proc/${pid}/environ`, 'utf8');
+          // Check /proc/{pid}/environ for session ID (async read)
+          const environ = await readFile(`/proc/${pid}/environ`, 'utf8');
           if (environ.includes(sessionId)) {
             return pid;
           }
@@ -602,8 +608,8 @@ export class SubagentWatcher extends EventEmitter {
         }
 
         try {
-          // Also check /proc/{pid}/cmdline for session ID
-          const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+          // Also check /proc/{pid}/cmdline for session ID (async read)
+          const cmdline = await readFile(`/proc/${pid}/cmdline`, 'utf8');
           if (cmdline.includes(sessionId)) {
             return pid;
           }
@@ -850,28 +856,28 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
-   * Scan for all subagent directories
+   * Scan for all subagent directories (async to avoid blocking event loop)
    */
-  private scanForSubagents(): void {
+  private async scanForSubagents(): Promise<void> {
     if (!existsSync(CLAUDE_PROJECTS_DIR)) return;
 
     try {
-      const projects = readdirSync(CLAUDE_PROJECTS_DIR);
+      const projects = await readdir(CLAUDE_PROJECTS_DIR);
 
       for (const project of projects) {
         const projectPath = join(CLAUDE_PROJECTS_DIR, project);
 
         try {
-          const stat = statSync(projectPath);
-          if (!stat.isDirectory()) continue;
+          const st = await statAsync(projectPath);
+          if (!st.isDirectory()) continue;
 
-          const sessions = readdirSync(projectPath);
+          const sessions = await readdir(projectPath);
 
           for (const session of sessions) {
             const sessionPath = join(projectPath, session);
 
             try {
-              const sessionStat = statSync(sessionPath);
+              const sessionStat = await statAsync(sessionPath);
               if (!sessionStat.isDirectory()) continue;
 
               const subagentDir = join(sessionPath, 'subagents');

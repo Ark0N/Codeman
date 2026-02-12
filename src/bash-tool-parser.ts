@@ -412,7 +412,7 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
   processTerminalData(data: string): void {
     if (!this._enabled || this._destroyed) return;
 
-    // Append to line buffer
+    // Append to line buffer (raw data — lines will be stripped individually in processLine)
     this._lineBuffer += data;
 
     // Prevent unbounded growth
@@ -434,14 +434,44 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
     }
   }
 
+  /**
+   * Process pre-stripped terminal data (ANSI codes already removed).
+   * Use this when the caller has already stripped ANSI to avoid redundant regex work.
+   */
+  processCleanData(data: string): void {
+    if (!this._enabled || this._destroyed) return;
+
+    this._lineBuffer += data;
+
+    if (this._lineBuffer.length > MAX_LINE_BUFFER_SIZE) {
+      const trimPoint = this._lineBuffer.lastIndexOf('\n', MAX_LINE_BUFFER_SIZE / 2);
+      this._lineBuffer = trimPoint > 0
+        ? this._lineBuffer.slice(trimPoint + 1)
+        : this._lineBuffer.slice(-MAX_LINE_BUFFER_SIZE / 2);
+    }
+
+    const lines = this._lineBuffer.split('\n');
+    this._lineBuffer = lines.pop() || '';
+
+    for (const line of lines) {
+      this.processCleanLine(line);
+    }
+  }
+
   // ========== Private Methods ==========
 
   /**
-   * Process a single line of terminal output.
+   * Process a single line of terminal output (raw — will strip ANSI).
    */
   private processLine(line: string): void {
-    // Strip ANSI codes for cleaner pattern matching
     const cleanLine = this.stripAnsi(line);
+    this.processCleanLine(cleanLine);
+  }
+
+  /**
+   * Process a single pre-stripped line of terminal output.
+   */
+  private processCleanLine(cleanLine: string): void {
 
     // Check for tool start
     const startMatch = cleanLine.match(BASH_TOOL_START_PATTERN);

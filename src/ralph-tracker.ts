@@ -1317,6 +1317,14 @@ export class RalphTracker extends EventEmitter {
   processTerminalData(data: string): void {
     // Remove ANSI escape codes for cleaner parsing
     const cleanData = data.replace(ANSI_ESCAPE_PATTERN_SIMPLE, '');
+    this.processCleanData(cleanData);
+  }
+
+  /**
+   * Process pre-stripped terminal data (ANSI codes already removed).
+   * Use this when the caller has already stripped ANSI to avoid redundant regex work.
+   */
+  processCleanData(cleanData: string): void {
 
     // If tracker is disabled, only check for patterns that should auto-enable it
     if (!this._loopState.enabled) {

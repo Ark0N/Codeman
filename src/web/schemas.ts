@@ -140,14 +140,3 @@ export const SessionInputWithLimitSchema = z.object({
   input: z.string().max(100000), // 100KB max input
   useScreen: z.boolean().optional(),
 });
-
-// ========== Teammate Pane Routes ==========
-
-/**
- * Schema for POST /api/sessions/:id/teammate-pane-input
- * Sends keyboard input to a teammate's tmux pane.
- */
-export const TeammatePaneInputSchema = z.object({
-  paneTarget: z.string().regex(/^(%\d+|\d+)$/, 'Invalid pane target format'),
-  input: z.string().max(100000),
-});

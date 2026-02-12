@@ -15,6 +15,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
+import { writeFile, rename, unlink, copyFile, access } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AppState, createInitialState, RalphSessionState, createInitialRalphSessionState, GlobalStats, createInitialGlobalStats, TokenStats, TokenUsageEntry } from './types.js';
@@ -105,6 +106,7 @@ export class StateStore {
   /**
    * Schedules a debounced save.
    * Multiple calls within 500ms are batched into a single disk write.
+   * Uses async I/O to avoid blocking the event loop.
    */
   save(): void {
     this.dirty = true;
@@ -112,17 +114,18 @@ export class StateStore {
       return; // Already scheduled
     }
     this.saveTimeout = setTimeout(() => {
-      this.saveNow();
+      this.saveNowAsync().catch((err) => {
+        console.error('[StateStore] Async save failed:', err);
+      });
     }, SAVE_DEBOUNCE_MS);
   }
 
   /**
-   * Immediately writes state to disk using atomic write pattern.
-   * Writes to temp file first, then renames to prevent corruption on crash.
-   * Includes backup mechanism and circuit breaker for reliability.
-   * Use when guaranteed persistence is required (e.g., before shutdown).
+   * Async version of saveNow — used by the debounced save() path.
+   * Uses non-blocking fs.promises to avoid blocking the event loop during
+   * the debounced write cycle. For synchronous shutdown flush, use saveNow().
    */
-  saveNow(): void {
+  async saveNowAsync(): Promise<void> {
     if (this.saveTimeout) {
       clearTimeout(this.saveTimeout);
       this.saveTimeout = null;
@@ -146,7 +149,7 @@ export class StateStore {
 
     // Step 1: Serialize state (validates it's JSON-safe)
     try {
-      json = JSON.stringify(this.state, null, 2);
+      json = JSON.stringify(this.state);
     } catch (err) {
       console.error('[StateStore] Failed to serialize state (circular reference or invalid data):', err);
       this.consecutiveSaveFailures++;
@@ -154,29 +157,22 @@ export class StateStore {
         console.error('[StateStore] Circuit breaker OPEN - serialization failing repeatedly');
         this.circuitBreakerOpen = true;
       }
-      // Don't throw - this prevents crashing the app
-      // Mark dirty again so we can retry later
       this.dirty = true;
       return;
     }
 
-    // Step 2: Create backup of current state file (if exists)
+    // Step 2: Create backup via file copy (async, no read+parse+write)
     try {
-      if (existsSync(this.filePath)) {
-        // Read current file and verify it's valid JSON before backing up
-        const currentContent = readFileSync(this.filePath, 'utf-8');
-        JSON.parse(currentContent); // Validate
-        writeFileSync(backupPath, currentContent, 'utf-8');
-      }
-    } catch (err) {
-      // Backup failed - current file may be corrupt, continue with write
-      console.warn('[StateStore] Could not create backup (current file may be corrupt):', err);
+      await access(this.filePath);
+      await copyFile(this.filePath, backupPath);
+    } catch {
+      // Backup failed or file doesn't exist yet - continue with write
     }
 
-    // Step 3: Atomic write: write to temp file, then rename
+    // Step 3: Atomic write: write to temp file, then rename (async)
     try {
-      writeFileSync(tempPath, json, 'utf-8');
-      renameSync(tempPath, this.filePath);
+      await writeFile(tempPath, json, 'utf-8');
+      await rename(tempPath, this.filePath);
 
       // Success! Reset failure counter
       this.consecutiveSaveFailures = 0;
@@ -190,11 +186,9 @@ export class StateStore {
 
       // Try to clean up temp file on error
       try {
-        if (existsSync(tempPath)) {
-          unlinkSync(tempPath);
-        }
-      } catch (cleanupErr) {
-        console.warn('[StateStore] Failed to cleanup temp file during save error:', cleanupErr);
+        await unlink(tempPath);
+      } catch {
+        // Temp file may not exist
       }
 
       // Check circuit breaker threshold
@@ -203,7 +197,75 @@ export class StateStore {
         this.circuitBreakerOpen = true;
       }
 
-      // Mark dirty so we retry later (don't throw to avoid crashing app)
+      this.dirty = true;
+    }
+  }
+
+  /**
+   * Synchronous immediate write to disk using atomic write pattern.
+   * Used by flushAll() during shutdown when async is not appropriate.
+   * Prefer saveNowAsync() for normal operation.
+   */
+  saveNow(): void {
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout);
+      this.saveTimeout = null;
+    }
+    if (!this.dirty) {
+      return;
+    }
+
+    if (this.circuitBreakerOpen) {
+      console.warn('[StateStore] Circuit breaker open - skipping save (too many consecutive failures)');
+      return;
+    }
+
+    this.dirty = false;
+    this.ensureDir();
+
+    const tempPath = this.filePath + '.tmp';
+    const backupPath = this.filePath + '.bak';
+    let json: string;
+
+    try {
+      json = JSON.stringify(this.state);
+    } catch (err) {
+      console.error('[StateStore] Failed to serialize state (circular reference or invalid data):', err);
+      this.consecutiveSaveFailures++;
+      if (this.consecutiveSaveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        console.error('[StateStore] Circuit breaker OPEN - serialization failing repeatedly');
+        this.circuitBreakerOpen = true;
+      }
+      this.dirty = true;
+      return;
+    }
+
+    // Backup via copy (skip read+parse validation — just copy the file)
+    try {
+      if (existsSync(this.filePath)) {
+        const currentContent = readFileSync(this.filePath, 'utf-8');
+        writeFileSync(backupPath, currentContent, 'utf-8');
+      }
+    } catch {
+      // Backup failed - continue with write
+    }
+
+    try {
+      writeFileSync(tempPath, json, 'utf-8');
+      renameSync(tempPath, this.filePath);
+      this.consecutiveSaveFailures = 0;
+      if (this.circuitBreakerOpen) {
+        console.log('[StateStore] Circuit breaker CLOSED - save succeeded');
+        this.circuitBreakerOpen = false;
+      }
+    } catch (err) {
+      console.error('[StateStore] Failed to write state file:', err);
+      this.consecutiveSaveFailures++;
+      try { if (existsSync(tempPath)) unlinkSync(tempPath); } catch { /* ignore */ }
+      if (this.consecutiveSaveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        console.error('[StateStore] Circuit breaker OPEN - writes failing repeatedly');
+        this.circuitBreakerOpen = true;
+      }
       this.dirty = true;
     }
   }

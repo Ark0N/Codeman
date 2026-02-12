@@ -36,7 +36,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { createRequire } from 'node:module';
 import { RunSummaryTracker } from '../run-summary.js';
 import { PlanOrchestrator, type DetailedPlanResult } from '../plan-orchestrator.js';
-import { TeamWatcher } from '../team-watcher.js';
 
 // Load version from package.json
 const require = createRequire(import.meta.url);
@@ -54,9 +53,6 @@ import {
   type PersistedRespawnConfig,
   type NiceConfig,
   type ImageDetectedEvent,
-  type TeamConfig,
-  type TeamTask,
-  type InboxMessage,
   DEFAULT_NICE_CONFIG,
 } from '../types.js';
 import {
@@ -69,7 +65,6 @@ import {
   HookEventSchema,
   ConfigUpdateSchema,
   RespawnConfigSchema,
-  TeammatePaneInputSchema,
 } from './schemas.js';
 import { StaleExpirationMap } from '../utils/index.js';
 
@@ -377,11 +372,6 @@ export class WebServer extends EventEmitter {
     detected: (event: ImageDetectedEvent) => void;
     error: (error: Error, sessionId?: string) => void;
   } | null = null;
-  private teamWatcher: TeamWatcher = new TeamWatcher();
-  // Pane streaming for teammate tmux panes: keyed by "sessionId:paneTarget"
-  private paneStreams: Map<string, { tailProcess: ChildProcess; outputFile: string; muxName: string; paneTarget: string; sessionId: string; teammateName: string }> = new Map();
-  private paneStreamTempDir: string | null = null;
-
   constructor(port: number = 3000, https: boolean = false, testMode: boolean = false) {
     super();
     this.port = port;
@@ -504,176 +494,6 @@ export class WebServer extends EventEmitter {
     }
   }
 
-  private setupTeamWatcherListeners(): void {
-    this.teamWatcher.on('teamCreated', (team: TeamConfig) => {
-      this.broadcast('team:created', team);
-      this.startPaneStreamsForTeam(team);
-    });
-    this.teamWatcher.on('teamUpdated', (team: TeamConfig) => {
-      this.broadcast('team:updated', team);
-      this.startPaneStreamsForTeam(team);
-    });
-    this.teamWatcher.on('teamRemoved', (team: TeamConfig) => {
-      this.broadcast('team:removed', team);
-      this.stopPaneStreamsForSession(team.leadSessionId);
-    });
-    this.teamWatcher.on('taskUpdated', (data: { teamName: string; tasks: TeamTask[] }) => {
-      // Filter out internal tasks for broadcast
-      const visibleTasks = data.tasks.filter(t => !t.metadata?._internal);
-      this.broadcast('team:task_updated', { teamName: data.teamName, tasks: visibleTasks });
-    });
-    this.teamWatcher.on('inboxMessage', (data: { teamName: string; member: string; message: InboxMessage }) => {
-      this.broadcast('team:inbox_message', data);
-    });
-  }
-
-  /** Start pane streams for any tmux-pane teammates in a team */
-  private startPaneStreamsForTeam(team: TeamConfig): void {
-    if (this.mux.backend !== 'tmux') return;
-    const tmuxMgr = this.mux as TmuxManager;
-
-    // Find the mux session for this team's lead
-    const muxSession = tmuxMgr.getSession(team.leadSessionId);
-    if (!muxSession) return;
-
-    // Enable mouse mode so users can click between panes in the main terminal
-    tmuxMgr.enableMouseMode(muxSession.muxName);
-
-    let paneTeammates = this.teamWatcher.getTmuxPaneTeammates(team.name);
-
-    // Auto-discover panes if config.json doesn't include tmuxPaneId.
-    // When Claude Code creates agent team split panes in tmux mode, the panes
-    // exist in the tmux session but config.json may not include pane IDs.
-    // We discover them by querying tmux and matching to non-lead teammates.
-    if (paneTeammates.length === 0) {
-      const nonLeadMembers = team.members.filter(m => m.agentType !== 'team-lead');
-      if (nonLeadMembers.length === 0) return;
-
-      const panes = tmuxMgr.listPanes(muxSession.muxName);
-      // Skip pane index 0 (leader's pane) — remaining panes are teammates
-      const teammatePanes = panes.filter(p => p.paneIndex > 0).sort((a, b) => a.paneIndex - b.paneIndex);
-
-      if (teammatePanes.length > 0) {
-        // Match discovered panes to teammates in order
-        const discovered: Array<typeof team.members[0] & { tmuxPaneId: string }> = [];
-        for (let i = 0; i < Math.min(teammatePanes.length, nonLeadMembers.length); i++) {
-          const paneId = teammatePanes[i].paneId; // e.g., "%1"
-          const member = nonLeadMembers[i];
-          // Write back to member for future lookups
-          member.tmuxPaneId = paneId;
-          discovered.push({ ...member, tmuxPaneId: paneId });
-        }
-        paneTeammates = discovered;
-        console.log(`[Server] Auto-discovered ${discovered.length} teammate panes via tmux list-panes`);
-      }
-    }
-
-    if (paneTeammates.length === 0) return;
-
-    // Ensure temp directory exists
-    if (!this.paneStreamTempDir) {
-      this.paneStreamTempDir = mkdtempSync(join(tmpdir(), 'claudeman-panes-'));
-    }
-
-    for (const teammate of paneTeammates) {
-      const streamKey = `${team.leadSessionId}:${teammate.tmuxPaneId}`;
-
-      // Skip if stream already exists
-      if (this.paneStreams.has(streamKey)) continue;
-
-      const outputFile = join(this.paneStreamTempDir, `pane-${teammate.name}-${Date.now()}.raw`);
-
-      // Create the output file so tail -f doesn't error
-      writeFileSync(outputFile, '');
-
-      // Start tmux pipe-pane to redirect pane output to the file
-      const started = tmuxMgr.startPipePane(muxSession.muxName, teammate.tmuxPaneId, outputFile);
-      if (!started) {
-        console.error(`[Server] Failed to start pipe-pane for teammate ${teammate.name}`);
-        continue;
-      }
-
-      // Start tail -f to stream the output file contents
-      const tailProcess = spawn('tail', ['-f', '-n', '0', outputFile], {
-        stdio: ['ignore', 'pipe', 'ignore'],
-      });
-
-      tailProcess.stdout?.on('data', (chunk: Buffer) => {
-        this.broadcast('teammate:terminal', {
-          sessionId: team.leadSessionId,
-          teammateName: teammate.name,
-          paneTarget: teammate.tmuxPaneId,
-          data: chunk.toString('base64'),
-        });
-      });
-
-      tailProcess.on('error', (err) => {
-        console.error(`[Server] Pane stream tail error for ${teammate.name}:`, err.message);
-      });
-
-      this.paneStreams.set(streamKey, {
-        tailProcess,
-        outputFile,
-        muxName: muxSession.muxName,
-        paneTarget: teammate.tmuxPaneId,
-        sessionId: team.leadSessionId,
-        teammateName: teammate.name,
-      });
-
-      // Notify frontend that a pane is available
-      this.broadcast('teammate:pane_available', {
-        sessionId: team.leadSessionId,
-        teammateName: teammate.name,
-        paneTarget: teammate.tmuxPaneId,
-        color: teammate.color || 'blue',
-      });
-
-      console.log(`[Server] Started pane stream for teammate ${teammate.name} (pane ${teammate.tmuxPaneId})`);
-    }
-  }
-
-  /** Stop all pane streams for a session */
-  private stopPaneStreamsForSession(sessionId: string): void {
-    if (this.mux.backend !== 'tmux') return;
-    const tmuxMgr = this.mux as TmuxManager;
-
-    for (const [key, stream] of this.paneStreams) {
-      if (stream.sessionId === sessionId) {
-        // Kill the tail process
-        try { stream.tailProcess.kill('SIGTERM'); } catch { /* already dead */ }
-        // Stop tmux pipe-pane
-        tmuxMgr.stopPipePane(stream.muxName, stream.paneTarget);
-        // Remove output file
-        try { unlinkSync(stream.outputFile); } catch { /* ignore */ }
-        this.paneStreams.delete(key);
-      }
-    }
-  }
-
-  /** Stop all pane streams and clean up temp directory */
-  private cleanupAllPaneStreams(): void {
-    if (this.mux.backend === 'tmux') {
-      const tmuxMgr = this.mux as TmuxManager;
-      for (const [, stream] of this.paneStreams) {
-        try { stream.tailProcess.kill('SIGTERM'); } catch { /* already dead */ }
-        tmuxMgr.stopPipePane(stream.muxName, stream.paneTarget);
-        try { unlinkSync(stream.outputFile); } catch { /* ignore */ }
-      }
-    } else {
-      for (const [, stream] of this.paneStreams) {
-        try { stream.tailProcess.kill('SIGTERM'); } catch { /* already dead */ }
-        try { unlinkSync(stream.outputFile); } catch { /* ignore */ }
-      }
-    }
-    this.paneStreams.clear();
-
-    // Remove temp directory
-    if (this.paneStreamTempDir) {
-      try { rmSync(this.paneStreamTempDir, { recursive: true, force: true }); } catch { /* ignore */ }
-      this.paneStreamTempDir = null;
-    }
-  }
-
   private async setupRoutes(): Promise<void> {
     // Serve static files
     await this.app.register(fastifyStatic, {
@@ -696,18 +516,6 @@ export class WebServer extends EventEmitter {
       // Use light state for SSE init to avoid sending 2MB+ terminal buffers
       // Buffers are fetched on-demand when switching tabs
       this.sendSSE(reply, 'init', this.getLightState());
-
-      // Send pane_available events for any active pane streams
-      for (const stream of this.paneStreams.values()) {
-        const team = this.teamWatcher?.getTeamForSession(stream.sessionId);
-        const member = team?.members.find(m => m.name === stream.teammateName);
-        this.sendSSE(reply, 'teammate:pane_available', {
-          sessionId: stream.sessionId,
-          teammateName: stream.teammateName,
-          paneTarget: stream.paneTarget,
-          color: member?.color || 'blue',
-        });
-      }
 
       req.raw.on('close', () => {
         this.sseClients.delete(reply);
@@ -843,7 +651,7 @@ export class WebServer extends EventEmitter {
     });
 
     // Session management
-    this.app.get('/api/sessions', async () => this.getSessionsState());
+    this.app.get('/api/sessions', async () => this.getLightSessionsState());
 
     this.app.post('/api/sessions', async (req): Promise<SessionResponse> => {
       // Prevent unbounded session creation
@@ -3503,106 +3311,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     });
 
 
-    // ========== Agent Teams ==========
-
-    // List all active teams
-    this.app.get('/api/teams', async () => {
-      const teams = this.teamWatcher.getTeams();
-      // Enrich with session association
-      const enriched = teams.map(team => ({
-        ...team,
-        sessionExists: this.sessions.has(team.leadSessionId),
-        activeTasks: this.teamWatcher.getActiveTaskCount(team.name),
-        teammateCount: team.members.filter(m => m.agentType !== 'team-lead').length,
-      }));
-      return { success: true, data: enriched };
-    });
-
-    // Get team for a specific session
-    this.app.get('/api/sessions/:id/team', async (req) => {
-      const { id } = req.params as { id: string };
-      const team = this.teamWatcher.getTeamForSession(id);
-      if (!team) {
-        return { success: true, data: null };
-      }
-      return {
-        success: true,
-        data: {
-          ...team,
-          activeTasks: this.teamWatcher.getActiveTaskCount(team.name),
-          teammateCount: team.members.filter(m => m.agentType !== 'team-lead').length,
-        },
-      };
-    });
-
-    // Get team tasks for a session's team
-    this.app.get('/api/sessions/:id/team-tasks', async (req) => {
-      const { id } = req.params as { id: string };
-      const team = this.teamWatcher.getTeamForSession(id);
-      if (!team) {
-        return { success: true, data: [] };
-      }
-      const tasks = this.teamWatcher.getTeamTasks(team.name);
-      return { success: true, data: tasks };
-    });
-
-    // ========== Teammate Pane Endpoints ==========
-
-    // List teammate panes for a session
-    this.app.get('/api/sessions/:id/teammate-panes', async (req) => {
-      const { id } = req.params as { id: string };
-      const team = this.teamWatcher.getTeamForSession(id);
-      if (!team) {
-        return { success: true, data: [] };
-      }
-      const paneTeammates = this.teamWatcher.getTmuxPaneTeammates(team.name);
-      const panes = paneTeammates.map(t => ({
-        teammateName: t.name,
-        paneTarget: t.tmuxPaneId,
-        color: t.color || 'blue',
-        hasStream: this.paneStreams.has(`${id}:${t.tmuxPaneId}`),
-      }));
-      return { success: true, data: panes };
-    });
-
-    // Get pane buffer for a teammate
-    this.app.get('/api/sessions/:id/teammate-pane-buffer/:paneTarget', async (req) => {
-      const { id, paneTarget } = req.params as { id: string; paneTarget: string };
-      if (this.mux.backend !== 'tmux') {
-        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Pane access requires tmux backend');
-      }
-      const tmuxMgr = this.mux as TmuxManager;
-      const muxSession = tmuxMgr.getSession(id);
-      if (!muxSession) {
-        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
-      }
-      const buffer = tmuxMgr.capturePaneBuffer(muxSession.muxName, paneTarget);
-      if (buffer === null) {
-        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Failed to capture pane buffer');
-      }
-      return { success: true, data: { buffer } };
-    });
-
-    // Send input to a teammate's pane
-    this.app.post('/api/sessions/:id/teammate-pane-input', async (req) => {
-      const { id } = req.params as { id: string };
-      const result = TeammatePaneInputSchema.safeParse(req.body);
-      if (!result.success) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
-      }
-      const { paneTarget, input } = result.data;
-      if (this.mux.backend !== 'tmux') {
-        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Pane access requires tmux backend');
-      }
-      const tmuxMgr = this.mux as TmuxManager;
-      const muxSession = tmuxMgr.getSession(id);
-      if (!muxSession) {
-        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
-      }
-      const success = tmuxMgr.sendInputToPane(muxSession.muxName, paneTarget, input);
-      return { success };
-    });
-
     // ========== Hook Events ==========
 
     this.app.post('/api/hook-event', async (req) => {
@@ -3827,14 +3535,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       } catch (err) {
         console.error(`[Server] Failed to kill subagents for session ${sessionId}:`, err);
       }
-    }
-
-    // Clean up any agent team associated with this session
-    // Stop pane streams and notify frontend so team tasks/windows are removed
-    this.stopPaneStreamsForSession(sessionId);
-    const team = this.teamWatcher.getTeamForSession(sessionId);
-    if (team) {
-      this.broadcast('team:removed', team);
     }
 
     // Stop and remove respawn controller - but save config first for restart recovery
@@ -4227,9 +3927,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   private setupRespawnListeners(sessionId: string, controller: RespawnController): void {
-    // Inject team watcher for team-aware idle detection
-    controller.setTeamWatcher(this.teamWatcher);
-
     // Helper to get tracker lazily (may not exist at setup time for restored sessions)
     const getTracker = () => this.runSummaryTrackers.get(sessionId);
 
@@ -5037,10 +4734,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       console.log('Image watcher disabled by user settings');
     }
 
-    // Start team watcher for Agent Teams support
-    this.setupTeamWatcherListeners();
-    this.teamWatcher.start();
-    console.log('Team watcher started - monitoring ~/.claude/teams for agent team activity');
   }
 
   /**
@@ -5336,13 +5029,20 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Stop image watcher
     imageWatcher.stop();
 
-    // Stop team watcher and clean up pane streams
-    this.cleanupAllPaneStreams();
-    this.teamWatcher.removeAllListeners();
-    this.teamWatcher.stop();
-
     // Destroy file stream manager (clears cleanup timer and kills remaining tail processes)
     fileStreamManager.destroy();
+
+    // Stop all remaining tracked resources before clearing their Maps
+    for (const tracker of this.runSummaryTrackers.values()) {
+      tracker.stop();
+    }
+    for (const watcher of this.transcriptWatchers.values()) {
+      watcher.removeAllListeners();
+      watcher.stop();
+    }
+    for (const orchestrator of this.activePlanOrchestrators.values()) {
+      orchestrator.cancel();
+    }
 
     // Clear remaining Maps that accumulate session references
     this.respawnTimers.clear();

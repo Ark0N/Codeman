@@ -57,7 +57,6 @@ import type {
   CycleOutcome,
   HealthStatus,
 } from './types.js';
-import type { TeamWatcher } from './team-watcher.js';
 
 // ========== Constants ==========
 
@@ -638,9 +637,6 @@ const DEFAULT_CONFIG: RespawnConfig = {
 export class RespawnController extends EventEmitter {
   /** The session being controlled */
   private session: Session;
-
-  /** Optional team watcher for team-aware idle detection */
-  private teamWatcher: TeamWatcher | null = null;
 
   /** Current configuration */
   private config: RespawnConfig;
@@ -1235,10 +1231,6 @@ export class RespawnController extends EventEmitter {
    *
    * @fires stateChanged - Transitions to 'watching'
    */
-  setTeamWatcher(watcher: TeamWatcher | null): void {
-    this.teamWatcher = watcher;
-  }
-
   start(): void {
     if (!this.config.enabled) {
       this.log('Respawn is disabled');
@@ -2191,12 +2183,6 @@ export class RespawnController extends EventEmitter {
     // Get the terminal buffer for analysis
     const buffer = this.terminalBuffer.value;
 
-    // Inject teammate context for team-aware AI check
-    if (this.teamWatcher) {
-      const count = this.teamWatcher.getActiveTeammateCount(this.session.id);
-      this.aiChecker.setTeammateCount(count);
-    }
-
     this.aiChecker.check(buffer).then((result) => {
       // If state changed while checking (e.g., cancelled), ignore result
       if (this._state !== 'ai_checking') {
@@ -2744,17 +2730,6 @@ export class RespawnController extends EventEmitter {
     if (this.session.isWorking) {
       this.log(`Idle confirmation rejected - Session reports isWorking=true (reason was: ${reason})`);
       this.logAction('detection', 'Rejected: Session still working');
-      this.setState('watching');
-      this.startNoOutputTimer();
-      this.startPreFilterTimer();
-      return;
-    }
-
-    // Team-awareness: don't respawn if teammates are active
-    if (this.teamWatcher?.hasActiveTeammates(this.session.id)) {
-      this.log(`Idle confirmation rejected - active teammates working (reason was: ${reason})`);
-      this.logAction('detection', 'Rejected: Active teammates');
-      this.emit('respawnBlocked', { reason: 'active_teammates', details: 'Team has active teammates' });
       this.setState('watching');
       this.startNoOutputTimer();
       this.startPreFilterTimer();
