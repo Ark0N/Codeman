@@ -1242,11 +1242,6 @@ class ClaudemanApp {
     // Sequential input send chain — ensures keystroke ordering across async fetches
     this._inputSendChain = Promise.resolve();
 
-    // Speculative local echo (mosh-style) — echo printable chars immediately,
-    // strip redundant server echo when it arrives. Only active during idle state.
-    this._localEchoBuffer = '';
-    this._localEchoTimeout = null;
-
     // Accessibility: Focus trap for modals
     this.activeFocusTrap = null;
 
@@ -1576,24 +1571,6 @@ class ClaudemanApp {
         // Patterns: \x1b[?...c (DA1), \x1b[>...c (DA2), \x1b[...R (CPR), \x1b[...n (DSR)
         if (/^\x1b\[[\?>=]?[\d;]*[cnR]$/.test(data)) return;
 
-        // Speculative local echo: show printable chars instantly during idle state
-        const session = this.sessions.get(this.activeSessionId);
-        const isIdle = session && session.status === 'idle';
-        if (isIdle && data.length === 1) {
-          const code = data.charCodeAt(0);
-          if (code >= 32 && code < 127) {
-            // Printable ASCII — echo immediately, strip server echo later
-            this.terminal.write(data);
-            this._localEchoBuffer += data;
-            this._resetLocalEchoTimeout();
-          } else if ((code === 0x7f || code === 0x08) && this._localEchoBuffer.length > 0) {
-            // Backspace — undo last local echo char
-            this._localEchoBuffer = this._localEchoBuffer.slice(0, -1);
-            this.terminal.write('\b \b');
-            this._resetLocalEchoTimeout();
-          }
-        }
-
         this._pendingInput += data;
 
         // Flush immediately for control characters (Enter, Ctrl+C, etc.)
@@ -1866,13 +1843,7 @@ class ClaudemanApp {
     // xterm.js internally batches multiple write() calls within same frame
     for (const segment of segments) {
       if (segment && !segment.startsWith(DEC_SYNC_START)) {
-        // Strip locally-echoed characters from server output to prevent doubles
-        if (this._localEchoBuffer.length > 0) {
-          const stripped = this._stripLocalEcho(segment);
-          if (stripped) this.terminal.write(stripped);
-        } else {
-          this.terminal.write(segment);
-        }
+        this.terminal.write(segment);
       }
     }
 
@@ -2279,11 +2250,6 @@ class ClaudemanApp {
       const session = this.sessions.get(data.id);
       if (session) {
         session.status = 'busy';
-        // Clear local echo buffer — server is now generating output
-        if (data.id === this.activeSessionId) {
-          this._localEchoBuffer = '';
-          this._clearLocalEchoTimeout();
-        }
         // Only clear tab alert if no pending hooks (permission_prompt, elicitation_dialog, etc.)
         if (!this.pendingHooks.has(data.id)) {
           this.tabAlerts.delete(data.id);
@@ -3026,67 +2992,6 @@ class ClaudemanApp {
         this._enqueueInput(sessionId, input);
       }
     });
-  }
-
-  /**
-   * Strip locally-echoed characters from server output to prevent doubles.
-   * Walks output char-by-char, skipping ANSI escape sequences (passed through),
-   * and consuming matching chars from the echo buffer.
-   */
-  _stripLocalEcho(serverOutput) {
-    let echoIdx = 0;
-    let outIdx = 0;
-    let result = '';
-
-    while (outIdx < serverOutput.length && echoIdx < this._localEchoBuffer.length) {
-      // Skip ANSI escape sequences — pass them through to output
-      if (serverOutput[outIdx] === '\x1b') {
-        const seqStart = outIdx;
-        outIdx++; // skip ESC
-        // CSI sequence: ESC [ ... <letter>
-        if (outIdx < serverOutput.length && serverOutput[outIdx] === '[') {
-          outIdx++;
-          while (outIdx < serverOutput.length && !/[A-Za-z]/.test(serverOutput[outIdx])) outIdx++;
-          if (outIdx < serverOutput.length) outIdx++; // include final letter
-        }
-        result += serverOutput.slice(seqStart, outIdx);
-        continue;
-      }
-
-      if (serverOutput[outIdx] === this._localEchoBuffer[echoIdx]) {
-        // Match — consume from echo buffer, skip in output (already displayed)
-        echoIdx++;
-        outIdx++;
-      } else {
-        // Mismatch — stop stripping, pass rest through
-        break;
-      }
-    }
-
-    // Consumed echoIdx chars from buffer
-    this._localEchoBuffer = this._localEchoBuffer.slice(echoIdx);
-    if (this._localEchoBuffer.length === 0) this._clearLocalEchoTimeout();
-
-    // Append any remaining server output
-    result += serverOutput.slice(outIdx);
-    return result;
-  }
-
-  /**
-   * Reset the local echo safety timeout. If the echo buffer isn't consumed
-   * within 3 seconds (e.g., dropped connection), clear it to prevent stuck state.
-   */
-  _resetLocalEchoTimeout() {
-    clearTimeout(this._localEchoTimeout);
-    this._localEchoTimeout = setTimeout(() => {
-      this._localEchoBuffer = '';
-      this._localEchoTimeout = null;
-    }, 3000);
-  }
-
-  _clearLocalEchoTimeout() {
-    clearTimeout(this._localEchoTimeout);
-    this._localEchoTimeout = null;
   }
 
   _enqueueInput(sessionId, input) {
