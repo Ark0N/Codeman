@@ -883,15 +883,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const textPart = input.replace(/\r/g, '').replace(/\n/g, '').trimEnd();
 
       if (textPart && hasCarriageReturn) {
-        // Send text + Enter in a single command
-        // -l flag = literal text (no special key interpretation)
-        // 'Enter' after -l text = Enter key
+        // Send text + Enter in a single tmux invocation (one child process).
+        // tmux's \; separator chains commands within one process spawn.
         await execAsync(
-          `tmux send-keys -t "${session.muxName}" -l ${shellescape(textPart)}`,
-          { timeout: EXEC_TIMEOUT_MS }
-        );
-        await execAsync(
-          `tmux send-keys -t "${session.muxName}" Enter`,
+          `tmux send-keys -t "${session.muxName}" -l ${shellescape(textPart)} \\; send-keys -t "${session.muxName}" Enter`,
           { timeout: EXEC_TIMEOUT_MS }
         );
       } else if (textPart) {

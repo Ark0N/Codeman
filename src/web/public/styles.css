@@ -1669,9 +1669,11 @@ body {
   flex: 1;
   background: #0d0d0d;
   overflow: hidden;
-  /* Performance: isolate layout and paint operations */
-  contain: strict;
-  will-change: contents;
+  position: relative;
+  /* Performance: isolate layout and paint operations.
+     Do NOT use contain:strict — size containment breaks xterm.js
+     FitAddon dimension calculations. */
+  contain: layout paint;
 }
 /* Tab switch: green-tinted overlay fades in over old content, fades out to reveal new.
    Animated via Web Animations API (not CSS keyframes) for reliable GPU compositing.

@@ -1526,21 +1526,23 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Input exceeds maximum length (${MAX_INPUT_LENGTH} bytes)`);
       }
 
-      // Use writeViaScreen for programmatic input (more reliable for mux sessions)
-      let success = false;
+      // Write input to PTY. Direct write is synchronous; writeViaScreen
+      // (tmux send-keys) is fire-and-forget to avoid blocking the HTTP response.
       if (useScreen) {
-        success = await session.writeViaScreen(inputStr);
-        if (!success) {
-          console.warn(`[Server] writeViaScreen failed for session ${id}, falling back to direct write`);
-          // Fallback to direct write if screen write fails
+        // Fire-and-forget: don't block HTTP response on tmux child process.
+        // Fallback to direct write on failure.
+        session.writeViaScreen(inputStr).then(ok => {
+          if (!ok) {
+            console.warn(`[Server] writeViaScreen failed for session ${id}, falling back to direct write`);
+            session.write(inputStr);
+          }
+        }).catch(() => {
           session.write(inputStr);
-          success = true; // Direct write doesn't return status, assume success
-        }
+        });
       } else {
         session.write(inputStr);
-        success = true;
       }
-      return { success };
+      return { success: true };
     });
 
     // Resize session terminal
