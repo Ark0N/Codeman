@@ -4314,7 +4314,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   private getSessionStateWithRespawn(session: Session) {
     const controller = this.respawnControllers.get(session.id);
     return {
-      ...session.toDetailedState(),
+      ...session.toLightDetailedState(),
       respawnEnabled: controller?.getConfig()?.enabled ?? false,
       respawnConfig: controller?.getConfig() ?? null,
       respawn: controller?.getStatus() ?? null,
@@ -4327,15 +4327,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
    * on-demand when switching tabs via /api/sessions/:id/buffer
    */
   private getLightSessionsState() {
-    return Array.from(this.sessions.values()).map(s => {
-      const state = this.getSessionStateWithRespawn(s);
-      return {
-        ...state,
-        // Exclude full buffers - they're fetched on-demand
-        terminalBuffer: '',
-        textOutput: '',
-      };
-    });
+    // getSessionStateWithRespawn already uses toLightDetailedState() which
+    // excludes terminalBuffer and textOutput — no extra stripping needed
+    return Array.from(this.sessions.values()).map(s => this.getSessionStateWithRespawn(s));
   }
 
   // Clean up old completed scheduled runs

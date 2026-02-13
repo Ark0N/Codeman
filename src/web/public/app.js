@@ -1171,6 +1171,7 @@ class ClaudemanApp {
     this.teammatePanesByName = new Map(); // Map<name, { paneTarget, sessionId, color }>
     this.teammateTerminals = new Map(); // Map<agentId, { terminal, fitAddon, paneTarget, sessionId, resizeObserver }>
 
+    this.terminalBufferCache = new Map(); // Map<sessionId, string> — client-side cache for instant tab re-visits (max 20)
     this.ralphStatePanelCollapsed = true; // Default to collapsed
     this.ralphClosedSessions = new Set(); // Sessions where user explicitly closed Ralph panel
 
@@ -1549,6 +1550,7 @@ class ClaudemanApp {
     // PTY/Ink handles all character echoing to avoid desync ("typing visible below" bug).
     this._pendingInput = '';
     this._inputFlushTimeout = null;
+    this._lastKeystrokeTime = 0;
 
     const flushInput = () => {
       this._inputFlushTimeout = null;
@@ -1580,10 +1582,23 @@ class ClaudemanApp {
           return;
         }
 
-        // Regular chars — flush on next microtask to coalesce rapid keystrokes
-        // (e.g. paste) while keeping latency near-zero for single keystrokes.
-        if (!this._inputFlushTimeout) {
-          this._inputFlushTimeout = setTimeout(flushInput, 0);
+        // Regular chars — flush immediately if typed after a gap (>50ms),
+        // otherwise batch via microtask to coalesce rapid keystrokes (paste).
+        const now = performance.now();
+        if (now - this._lastKeystrokeTime > 50) {
+          // Single char after a gap — send immediately, no setTimeout latency
+          if (this._inputFlushTimeout) {
+            clearTimeout(this._inputFlushTimeout);
+            this._inputFlushTimeout = null;
+          }
+          this._lastKeystrokeTime = now;
+          flushInput();
+        } else {
+          // Rapid sequence (paste or fast typing) — coalesce via microtask
+          this._lastKeystrokeTime = now;
+          if (!this._inputFlushTimeout) {
+            this._inputFlushTimeout = setTimeout(flushInput, 0);
+          }
         }
       }
     });
@@ -2973,22 +2988,31 @@ class ClaudemanApp {
       return;
     }
 
-    // Chain sends sequentially to preserve keystroke ordering
-    this._inputSendChain = this._inputSendChain.then(async () => {
-      try {
-        const resp = await fetch(`/api/sessions/${sessionId}/input`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ input })
-        });
+    // Chain on dispatch only — wait for the previous request to be sent before
+    // dispatching the next one (preserves keystroke ordering), but don't wait
+    // for the server's response. The server handles writeViaScreen as
+    // fire-and-forget anyway, so the HTTP response carries no useful data
+    // beyond success/failure for retry purposes.
+    this._inputSendChain = this._inputSendChain.then(() => {
+      const fetchPromise = fetch(`/api/sessions/${sessionId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input }),
+        keepalive: input.length < 65536,
+      });
+
+      // Handle response asynchronously — don't block next keystroke on response
+      fetchPromise.then(resp => {
         if (!resp.ok) {
           this._enqueueInput(sessionId, input);
         } else {
           this.clearPendingHooks(sessionId);
         }
-      } catch {
+      }).catch(() => {
         this._enqueueInput(sessionId, input);
-      }
+      });
+
+      // Return immediately after fetch is dispatched (don't await response)
     });
   }
 
@@ -3097,6 +3121,7 @@ class ClaudemanApp {
     this.sessions.clear();
     this.ralphStates.clear();
     this.terminalBuffers.clear();
+    this.terminalBufferCache.clear();
     this.projectInsights.clear();
     // Clear all idle timers to prevent stale timers from firing
     for (const timer of this.idleTimers.values()) {
@@ -3282,6 +3307,20 @@ class ClaudemanApp {
     this.renderSessionTabsTimeout = setTimeout(() => {
       this._renderSessionTabsImmediate();
     }, 100);
+  }
+
+  /** Toggle .active class on tabs immediately (no debounce). Used by selectSession(). */
+  _updateActiveTabImmediate(sessionId) {
+    const container = this.$('sessionTabs');
+    if (!container) return;
+    const tabs = container.querySelectorAll('.session-tab[data-id]');
+    for (const tab of tabs) {
+      if (tab.dataset.id === sessionId) {
+        tab.classList.add('active');
+      } else {
+        tab.classList.remove('active');
+      }
+    }
   }
 
   _renderSessionTabsImmediate() {
@@ -3831,6 +3870,8 @@ class ClaudemanApp {
     this.hideWelcome();
     // Clear idle hooks on view, but keep action hooks until user interacts
     this.clearPendingHooks(sessionId, 'idle_prompt');
+    // Instant active-class toggle (no 100ms debounce), then schedule full render for badges/status
+    this._updateActiveTabImmediate(sessionId);
     this.renderSessionTabs();
 
     // Glow the newly-active tab
@@ -3857,9 +3898,19 @@ class ClaudemanApp {
     }
 
     // Load terminal buffer for this session
-    // Use tail mode for faster initial load (256KB is enough for recent visible content)
+    // Show cached content instantly while fetching fresh data in background.
+    // Use tail mode for faster initial load (256KB is enough for recent visible content).
     // Fetch runs in parallel with fade-out; we wait for both before clearing terminal.
     try {
+      // Instant cache restore — show previous buffer immediately while network fetch runs
+      const cachedBuffer = this.terminalBufferCache.get(sessionId);
+      if (cachedBuffer) {
+        this.terminal.clear();
+        this.terminal.reset();
+        this.terminal.write(cachedBuffer);
+        this.terminal.scrollToBottom();
+      }
+
       const tailSize = 256 * 1024;
       const [res] = await Promise.all([
         fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`),
@@ -3880,61 +3931,76 @@ class ClaudemanApp {
         if (selectGen !== this._selectGeneration) return; // stale — skip post-write UI updates
         // Ensure terminal is scrolled to bottom after buffer load
         this.terminal.scrollToBottom();
+
+        // Update cache (cap at 20 entries)
+        this.terminalBufferCache.set(sessionId, data.terminalBuffer);
+        if (this.terminalBufferCache.size > 20) {
+          // Evict oldest entry (first key in Map iteration order)
+          const oldest = this.terminalBufferCache.keys().next().value;
+          this.terminalBufferCache.delete(oldest);
+        }
       }
 
       // Send resize and Ctrl+L to trigger Claude to redraw at correct size
       await this.sendResize(sessionId);
 
-      // Update respawn banner
-      if (this.respawnStatus[sessionId]) {
-        this.showRespawnBanner();
-        this.updateRespawnBanner(this.respawnStatus[sessionId].state);
-        document.getElementById('respawnCycleCount').textContent = this.respawnStatus[sessionId].cycleCount || 0;
-        // Update countdown timers and action log for this session
-        this.updateCountdownTimerDisplay();
-        this.updateActionLogDisplay();
-        if (Object.keys(this.respawnCountdownTimers[sessionId] || {}).length > 0) {
-          this.startCountdownInterval();
+      // Defer secondary panel updates so they don't block the main thread
+      // after terminal content is already visible.
+      const idleCb = typeof requestIdleCallback === 'function' ? requestIdleCallback : (cb) => setTimeout(cb, 16);
+      idleCb(() => {
+        // Guard against stale generation — user may have switched tabs again
+        if (selectGen !== this._selectGeneration) return;
+
+        // Update respawn banner
+        if (this.respawnStatus[sessionId]) {
+          this.showRespawnBanner();
+          this.updateRespawnBanner(this.respawnStatus[sessionId].state);
+          document.getElementById('respawnCycleCount').textContent = this.respawnStatus[sessionId].cycleCount || 0;
+          this.updateCountdownTimerDisplay();
+          this.updateActionLogDisplay();
+          if (Object.keys(this.respawnCountdownTimers[sessionId] || {}).length > 0) {
+            this.startCountdownInterval();
+          }
+        } else {
+          this.hideRespawnBanner();
+          this.stopCountdownInterval();
         }
-      } else {
-        this.hideRespawnBanner();
-        this.stopCountdownInterval();
-      }
 
-      // Update task panel if open
-      const taskPanel = document.getElementById('taskPanel');
-      if (taskPanel && taskPanel.classList.contains('open')) {
-        this.renderTaskPanel();
-      }
-
-      // Update ralph state panel for this session
-      const session = this.sessions.get(sessionId);
-      if (session && (session.ralphLoop || session.ralphTodos)) {
-        this.updateRalphState(sessionId, {
-          loop: session.ralphLoop,
-          todos: session.ralphTodos
-        });
-      }
-      this.renderRalphStatePanel();
-
-      // Update CLI info bar (mobile - shows Claude version/model)
-      this.updateCliInfoDisplay();
-
-      // Update project insights panel for this session
-      this.renderProjectInsightsPanel();
-
-      // Update subagent window visibility for active session
-      this.updateSubagentWindowVisibility();
-
-      // Load file browser if enabled
-      const settings = this.loadAppSettingsFromStorage();
-      if (settings.showFileBrowser) {
-        const fileBrowserPanel = this.$('fileBrowserPanel');
-        if (fileBrowserPanel) {
-          fileBrowserPanel.classList.add('visible');
-          this.loadFileBrowser(sessionId);
+        // Update task panel if open
+        const taskPanel = document.getElementById('taskPanel');
+        if (taskPanel && taskPanel.classList.contains('open')) {
+          this.renderTaskPanel();
         }
-      }
+
+        // Update ralph state panel for this session
+        const curSession = this.sessions.get(sessionId);
+        if (curSession && (curSession.ralphLoop || curSession.ralphTodos)) {
+          this.updateRalphState(sessionId, {
+            loop: curSession.ralphLoop,
+            todos: curSession.ralphTodos
+          });
+        }
+        this.renderRalphStatePanel();
+
+        // Update CLI info bar (mobile - shows Claude version/model)
+        this.updateCliInfoDisplay();
+
+        // Update project insights panel for this session
+        this.renderProjectInsightsPanel();
+
+        // Update subagent window visibility for active session
+        this.updateSubagentWindowVisibility();
+
+        // Load file browser if enabled
+        const settings = this.loadAppSettingsFromStorage();
+        if (settings.showFileBrowser) {
+          const fileBrowserPanel = this.$('fileBrowserPanel');
+          if (fileBrowserPanel) {
+            fileBrowserPanel.classList.add('visible');
+            this.loadFileBrowser(sessionId);
+          }
+        }
+      });
 
       this.terminal.focus();
       this.terminal.scrollToBottom();
@@ -3964,6 +4030,7 @@ class ClaudemanApp {
         this.saveSessionOrder();
       }
       this.terminalBuffers.delete(sessionId);
+      this.terminalBufferCache.delete(sessionId);
       this.ralphStates.delete(sessionId);
       this.clearCountdownTimers(sessionId);
 
@@ -7548,10 +7615,13 @@ class ClaudemanApp {
   }
 
   updateRespawnTokens(tokens) {
-    const tokensEl = this.$('respawnTokens');
-    // Support both old format (number) and new format (object with input/output/total)
+    // Skip if tokens haven't changed (avoid unnecessary DOM writes)
     const isObject = tokens && typeof tokens === 'object';
     const total = isObject ? tokens.total : tokens;
+    if (total === this._lastRespawnTokenTotal) return;
+    this._lastRespawnTokenTotal = total;
+
+    const tokensEl = this.$('respawnTokens');
     const input = isObject ? (tokens.input || 0) : Math.round(total * 0.6);
     const output = isObject ? (tokens.output || 0) : Math.round(total * 0.4);
 
@@ -7801,6 +7871,7 @@ class ClaudemanApp {
       await fetch('/api/sessions', { method: 'DELETE' });
       this.sessions.clear();
       this.terminalBuffers.clear();
+      this.terminalBufferCache.clear();
       this.activeSessionId = null;
       try { localStorage.removeItem('claudeman-active-session'); } catch {}
       this.respawnStatus = {};
@@ -8029,6 +8100,18 @@ class ClaudemanApp {
   }
 
   updateTokens() {
+    // Debounce at 200ms — token display is non-critical and shouldn't
+    // compete with input handling on the main thread
+    if (this._updateTokensTimeout) {
+      clearTimeout(this._updateTokensTimeout);
+    }
+    this._updateTokensTimeout = setTimeout(() => {
+      this._updateTokensTimeout = null;
+      this._updateTokensImmediate();
+    }, 200);
+  }
+
+  _updateTokensImmediate() {
     // Use global stats if available (includes deleted sessions)
     let totalInput = 0;
     let totalOutput = 0;
@@ -9363,20 +9446,27 @@ class ClaudemanApp {
   }
 
   loadAppSettingsFromStorage() {
+    // Return cached settings if available (avoids synchronous localStorage + JSON.parse
+    // on every SSE event — critical for input responsiveness)
+    if (this._cachedAppSettings) return this._cachedAppSettings;
     try {
       const key = this.getSettingsStorageKey();
       const saved = localStorage.getItem(key);
       if (saved) {
-        return JSON.parse(saved);
+        this._cachedAppSettings = JSON.parse(saved);
+        return this._cachedAppSettings;
       }
     } catch (err) {
       console.error('Failed to load app settings:', err);
     }
     // Return device-specific defaults
-    return this.getDefaultSettings();
+    this._cachedAppSettings = this.getDefaultSettings();
+    return this._cachedAppSettings;
   }
 
   saveAppSettingsToStorage(settings) {
+    // Invalidate cache on save
+    this._cachedAppSettings = settings;
     try {
       const key = this.getSettingsStorageKey();
       localStorage.setItem(key, JSON.stringify(settings));
@@ -11739,6 +11829,12 @@ class ClaudemanApp {
     if (!session) return;
 
     const newName = this.getSessionName(session);
+
+    // Skip iteration if name hasn't changed (avoids O(n) loop on every session:updated)
+    const cachedName = this._parentNameCache?.get(sessionId);
+    if (cachedName === newName) return;
+    if (!this._parentNameCache) this._parentNameCache = new Map();
+    this._parentNameCache.set(sessionId, newName);
 
     for (const [agentId, storedSessionId] of this.subagentParentMap) {
       if (storedSessionId === sessionId) {

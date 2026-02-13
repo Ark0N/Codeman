@@ -755,13 +755,24 @@ export class Session extends EventEmitter {
 
   toDetailedState() {
     return {
+      ...this.toLightDetailedState(),
+      textOutput: this._textOutput.value,
+      terminalBuffer: this._terminalBuffer.value,
+    };
+  }
+
+  /**
+   * Lightweight detailed state that excludes heavy buffers (textOutput, terminalBuffer).
+   * Use for SSE session:updated broadcasts where buffers aren't needed.
+   * Full buffers are fetched on-demand via /api/sessions/:id/terminal.
+   */
+  toLightDetailedState() {
+    return {
       ...this.toState(),
       name: this._name,
       mode: this.mode,
       claudeSessionId: this._claudeSessionId,
       totalCost: this._totalCost,
-      textOutput: this._textOutput.value,
-      terminalBuffer: this._terminalBuffer.value,
       messageCount: this._messages.length,
       isWorking: this._isWorking,
       lastPromptTime: this._lastPromptTime,

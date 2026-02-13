@@ -131,6 +131,9 @@ body {
   flex-shrink: 0;
   position: relative;
   z-index: 100; /* Above main content so dropdowns work */
+  /* Performance: isolate header from terminal reflow — tab badge updates
+     and token counter changes shouldn't trigger terminal layout recalculation */
+  contain: layout style paint;
 }
 
 .header-brand {
@@ -204,7 +207,7 @@ body {
   font-size: 0.75rem;
   cursor: pointer;
   white-space: nowrap;
-  transition: all 0.15s;
+  transition: background 0.05s, border-color 0.05s, color 0.05s, box-shadow 0.05s;
 }
 
 .session-tab:hover {
@@ -228,7 +231,7 @@ body {
 
 /* Tab switch feedback: bright green glow on the newly-active tab */
 .session-tab.tab-glow {
-  animation: tab-glow 1s ease-out forwards;
+  animation: tab-glow 0.35s ease-out forwards;
 }
 
 @keyframes tab-glow {
@@ -288,7 +291,7 @@ body {
   cursor: default;
   border-radius: 3px;
   /* Performance: use transform for GPU acceleration */
-  transition: opacity 0.15s ease-out, width 0.15s ease-out, padding 0.15s ease-out;
+  transition: opacity 0.05s ease-out, width 0.05s ease-out, padding 0.05s ease-out;
 }
 
 .session-tab:hover .tab-close {
@@ -1674,6 +1677,10 @@ body {
      Do NOT use contain:strict — size containment breaks xterm.js
      FitAddon dimension calculations. */
   contain: layout paint;
+  /* Performance: promote to own compositor layer for isolation from
+     header/toolbar/panel repaints. Eliminates compositing stalls
+     when surrounding UI elements update during typing. */
+  will-change: contents;
 }
 /* Tab switch: green-tinted overlay fades in over old content, fades out to reveal new.
    Animated via Web Animations API (not CSS keyframes) for reliable GPU compositing.
@@ -1812,6 +1819,8 @@ body {
   background: var(--bg-card);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
+  /* Performance: isolate from terminal — toolbar updates shouldn't trigger terminal reflow */
+  contain: layout style paint;
 }
 
 .toolbar-left,
