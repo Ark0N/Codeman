@@ -1,6 +1,6 @@
 {
   "name": "claudeman",
-  "version": "0.1503",
+  "version": "0.1504",
   "description": "The missing control plane for Claude Code - run 20 autonomous agents with real-time monitoring and session persistence",
   "type": "module",
   "main": "dist/index.js",
@@ -36,6 +36,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@fastify/compress": "^8.3.1",
     "@fastify/static": "^8.0.0",
     "chalk": "^5.3.0",
     "chokidar": "^3.6.0",

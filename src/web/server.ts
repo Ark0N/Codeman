@@ -11,6 +11,7 @@
  */
 
 import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
+import fastifyCompress from '@fastify/compress';
 import fastifyStatic from '@fastify/static';
 import path, { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -496,10 +497,19 @@ export class WebServer extends EventEmitter {
   }
 
   private async setupRoutes(): Promise<void> {
-    // Serve static files
+    // Enable gzip/brotli compression for all responses.
+    // Massive win: 793KB uncompressed → ~120KB compressed for static assets.
+    // Threshold 1024 = don't compress tiny responses (headers > savings).
+    await this.app.register(fastifyCompress, {
+      threshold: 1024,
+    });
+
+    // Serve static files with caching headers for immutable CDN-like assets
     await this.app.register(fastifyStatic, {
       root: join(__dirname, 'public'),
       prefix: '/',
+      // Cache static assets for 1 hour (they change on deploy, not during session)
+      maxAge: '1h',
     });
 
     // SSE endpoint for real-time updates
