@@ -2702,7 +2702,7 @@ body {
   justify-content: flex-end;
   gap: 0.5rem;
   margin-top: 1rem;
-  padding-top: 0.75rem;
+  padding: 0.75rem;
   border-top: 1px solid var(--border);
 }
 
@@ -2763,7 +2763,7 @@ body {
 }
 
 .modal-content.modal-lg {
-  max-width: 520px;
+  max-width: 540px;
   max-height: 85vh;
   display: flex;
   flex-direction: column;
@@ -3474,7 +3474,7 @@ body {
 .modal-tabs {
   display: flex;
   gap: 0.5rem;
-  padding: 0 1rem 0.75rem 1rem;
+  padding: 0.75rem;
   border-bottom: 1px solid var(--border);
 }
 
