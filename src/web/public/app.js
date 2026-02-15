@@ -9030,19 +9030,21 @@ class ClaudemanApp {
     const settings = this.loadAppSettingsFromStorage();
     document.getElementById('appSettingsClaudeMdPath').value = settings.defaultClaudeMdPath || '';
     document.getElementById('appSettingsDefaultDir').value = settings.defaultWorkingDir || '';
-    document.getElementById('appSettingsRalphEnabled').checked = settings.ralphTrackerEnabled ?? false;
-    // Header visibility settings (default to true/enabled)
-    document.getElementById('appSettingsShowFontControls').checked = settings.showFontControls ?? false;
-    document.getElementById('appSettingsShowSystemStats').checked = settings.showSystemStats ?? true;
-    document.getElementById('appSettingsShowTokenCount').checked = settings.showTokenCount ?? true;
-    document.getElementById('appSettingsShowCost').checked = settings.showCost ?? false;
-    document.getElementById('appSettingsShowMonitor').checked = settings.showMonitor ?? true;
-    document.getElementById('appSettingsShowProjectInsights').checked = settings.showProjectInsights ?? false;
-    document.getElementById('appSettingsShowFileBrowser').checked = settings.showFileBrowser ?? false;
-    document.getElementById('appSettingsShowSubagents').checked = settings.showSubagents ?? false;
-    document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? true;
-    document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? true;
-    document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? false;
+    // Use device-aware defaults for display settings (mobile has different defaults)
+    const defaults = this.getDefaultSettings();
+    document.getElementById('appSettingsRalphEnabled').checked = settings.ralphTrackerEnabled ?? defaults.ralphTrackerEnabled ?? false;
+    // Header visibility settings
+    document.getElementById('appSettingsShowFontControls').checked = settings.showFontControls ?? defaults.showFontControls ?? false;
+    document.getElementById('appSettingsShowSystemStats').checked = settings.showSystemStats ?? defaults.showSystemStats ?? true;
+    document.getElementById('appSettingsShowTokenCount').checked = settings.showTokenCount ?? defaults.showTokenCount ?? true;
+    document.getElementById('appSettingsShowCost').checked = settings.showCost ?? defaults.showCost ?? false;
+    document.getElementById('appSettingsShowMonitor').checked = settings.showMonitor ?? defaults.showMonitor ?? true;
+    document.getElementById('appSettingsShowProjectInsights').checked = settings.showProjectInsights ?? defaults.showProjectInsights ?? false;
+    document.getElementById('appSettingsShowFileBrowser').checked = settings.showFileBrowser ?? defaults.showFileBrowser ?? false;
+    document.getElementById('appSettingsShowSubagents').checked = settings.showSubagents ?? defaults.showSubagents ?? false;
+    document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? defaults.subagentTrackingEnabled ?? true;
+    document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? defaults.subagentActiveTabOnly ?? true;
+    document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? defaults.imageWatcherEnabled ?? false;
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
     const allowedToolsRow = document.getElementById('allowedToolsRow');
@@ -9416,10 +9418,10 @@ class ClaudemanApp {
 
   applyHeaderVisibilitySettings() {
     const settings = this.loadAppSettingsFromStorage();
-    // Use stored values or fallback defaults (mobile has different defaults via getDefaultSettings)
-    const showFontControls = settings.showFontControls ?? false;
-    const showSystemStats = settings.showSystemStats ?? true;
-    const showTokenCount = settings.showTokenCount ?? true;
+    const defaults = this.getDefaultSettings();
+    const showFontControls = settings.showFontControls ?? defaults.showFontControls ?? false;
+    const showSystemStats = settings.showSystemStats ?? defaults.showSystemStats ?? true;
+    const showTokenCount = settings.showTokenCount ?? defaults.showTokenCount ?? true;
 
     const fontControlsEl = document.querySelector('.header-font-controls');
     const systemStatsEl = document.getElementById('headerSystemStats');
@@ -9450,9 +9452,10 @@ class ClaudemanApp {
 
   applyMonitorVisibility() {
     const settings = this.loadAppSettingsFromStorage();
-    const showMonitor = settings.showMonitor ?? true;
-    const showSubagents = settings.showSubagents ?? false;
-    const showFileBrowser = settings.showFileBrowser ?? false;
+    const defaults = this.getDefaultSettings();
+    const showMonitor = settings.showMonitor ?? defaults.showMonitor ?? true;
+    const showSubagents = settings.showSubagents ?? defaults.showSubagents ?? false;
+    const showFileBrowser = settings.showFileBrowser ?? defaults.showFileBrowser ?? false;
 
     const monitorPanel = document.getElementById('monitorPanel');
     if (monitorPanel) {
@@ -9576,9 +9579,23 @@ class ClaudemanApp {
         const settings = await res.json();
         // Extract notification prefs before merging app settings
         const { notificationPreferences, ...appSettings } = settings;
-        // Merge app settings with localStorage (server takes precedence)
+        // Filter out display settings — these are device-specific (mobile vs desktop)
+        // and should not be synced from the server to avoid overriding mobile defaults
+        const displayKeys = new Set([
+          'showFontControls', 'showSystemStats', 'showTokenCount', 'showCost',
+          'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
+          'subagentTrackingEnabled', 'subagentActiveTabOnly',
+          'imageWatcherEnabled', 'ralphTrackerEnabled',
+        ]);
+        const filteredAppSettings = {};
+        for (const [key, value] of Object.entries(appSettings)) {
+          if (!displayKeys.has(key)) {
+            filteredAppSettings[key] = value;
+          }
+        }
+        // Merge non-display settings with localStorage (server takes precedence)
         const localSettings = this.loadAppSettingsFromStorage();
-        const merged = { ...localSettings, ...appSettings };
+        const merged = { ...localSettings, ...filteredAppSettings };
         this.saveAppSettingsToStorage(merged);
 
         // Apply notification prefs from server if present (only if localStorage has none)
