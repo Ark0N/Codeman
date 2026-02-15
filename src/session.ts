@@ -369,6 +369,7 @@ export class Session extends EventEmitter {
     niceConfig?: NiceConfig;  // Nice prioritying configuration
   }) {
     super();
+    this.setMaxListeners(25);
 
     // Default error handler prevents unhandled 'error' events from crashing the process.
     // Server attaches its own handler after construction — this is a safety net for the gap.

@@ -87,6 +87,7 @@ export class ImageWatcher extends EventEmitter {
 
   constructor() {
     super();
+    this.setMaxListeners(50);
   }
 
   // ========== Public API ==========

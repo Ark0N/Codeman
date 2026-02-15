@@ -3097,6 +3097,8 @@ class ClaudemanApp {
     this.terminalBuffers.clear();
     this.terminalBufferCache.clear();
     this.projectInsights.clear();
+    this.teams.clear();
+    this.teamTasks.clear();
     // Clear all idle timers to prevent stale timers from firing
     for (const timer of this.idleTimers.values()) {
       clearTimeout(timer);

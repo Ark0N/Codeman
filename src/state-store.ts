@@ -64,6 +64,9 @@ export class StateStore {
   private consecutiveSaveFailures: number = 0;
   private circuitBreakerOpen: boolean = false;
 
+  // Guard against concurrent saveNowAsync() calls (debounce can race with in-flight write)
+  private _saveInFlight: Promise<void> | null = null;
+
   constructor(filePath?: string) {
     this.filePath = filePath || join(homedir(), '.claudeman', 'state.json');
     this.ralphStatePath = this.filePath.replace('.json', '-inner.json');
@@ -130,8 +133,25 @@ export class StateStore {
    * Async version of saveNow — used by the debounced save() path.
    * Uses non-blocking fs.promises to avoid blocking the event loop during
    * the debounced write cycle. For synchronous shutdown flush, use saveNow().
+   *
+   * Guards against concurrent execution: if a save is already in flight,
+   * waits for it to complete then re-checks dirty flag before starting another.
    */
   async saveNowAsync(): Promise<void> {
+    if (this._saveInFlight) {
+      await this._saveInFlight;
+      // After waiting, re-check if still dirty (the previous save may have handled it)
+      if (!this.dirty) return;
+    }
+    this._saveInFlight = this._doSaveAsync();
+    try {
+      await this._saveInFlight;
+    } finally {
+      this._saveInFlight = null;
+    }
+  }
+
+  private async _doSaveAsync(): Promise<void> {
     if (this.saveTimeout) {
       clearTimeout(this.saveTimeout);
       this.saveTimeout = null;

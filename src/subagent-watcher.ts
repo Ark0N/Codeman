@@ -177,6 +177,7 @@ export class SubagentWatcher extends EventEmitter {
 
   constructor() {
     super();
+    this.setMaxListeners(50);
   }
 
   /**

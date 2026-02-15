@@ -141,6 +141,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
   constructor() {
     super();
+    this.setMaxListeners(50);
     if (!IS_TEST_MODE) {
       this.loadSessions();
     }

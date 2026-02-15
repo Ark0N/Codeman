@@ -115,6 +115,8 @@ const DEC_SYNC_START = '\x1b[?2026h';  // Begin synchronized update
 const DEC_SYNC_END = '\x1b[?2026l';    // End synchronized update (flush to screen)
 // State update debounce interval (batch expensive toDetailedState() calls)
 const STATE_UPDATE_DEBOUNCE_INTERVAL = 500;
+// Cache TTL for getLightSessionsState() — avoids re-serializing all sessions on every SSE init / /api/sessions call
+const SESSIONS_LIST_CACHE_TTL = 1000;
 // Scheduled runs cleanup interval (check every 5 minutes)
 const SCHEDULED_CLEANUP_INTERVAL = 5 * 60 * 1000;
 // Completed scheduled runs max age (1 hour)
@@ -373,6 +375,8 @@ export class WebServer extends EventEmitter {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private cachedLightState: { data: Record<string, unknown>; timestamp: number } | null = null;
   private static readonly LIGHT_STATE_CACHE_TTL_MS = 1000;
+  // Cached sessions list for getLightSessionsState() (avoids re-serializing all sessions on every call)
+  private cachedSessionsList: { data: unknown[]; timestamp: number } | null = null;
   // Token recording for daily stats (track what's been recorded to avoid double-counting)
   private lastRecordedTokens: Map<string, { input: number; output: number }> = new Map();
   private tokenRecordingTimer: NodeJS.Timeout | null = null;
@@ -382,6 +386,7 @@ export class WebServer extends EventEmitter {
   private pendingRespawnStarts: Map<string, NodeJS.Timeout> = new Map();
   // Active plan orchestrators (for cancellation via API)
   private activePlanOrchestrators: Map<string, PlanOrchestrator> = new Map();
+  private persistDebounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
   // Grace period before starting restored respawn controllers (2 minutes)
   private static readonly RESPAWN_RESTORE_GRACE_PERIOD_MS = 2 * 60 * 1000;
   // Stored listener handlers for cleanup
@@ -401,6 +406,7 @@ export class WebServer extends EventEmitter {
   } | null = null;
   constructor(port: number = 3000, https: boolean = false, testMode: boolean = false) {
     super();
+    this.setMaxListeners(0);
     this.port = port;
     this.https = https;
     this.testMode = testMode;
@@ -3438,8 +3444,21 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }
   }
 
-  /** Persists full session state including respawn config to state.json */
+  /** Debounced wrapper — coalesces rapid persistSessionState calls per session */
   private persistSessionState(session: Session): void {
+    const existing = this.persistDebounceTimers.get(session.id);
+    if (existing) clearTimeout(existing);
+    this.persistDebounceTimers.set(session.id, setTimeout(() => {
+      this.persistDebounceTimers.delete(session.id);
+      // Session may have been removed during debounce
+      if (this.sessions.has(session.id)) {
+        this._persistSessionStateNow(session);
+      }
+    }, 100));
+  }
+
+  /** Persists full session state including respawn config to state.json */
+  private _persistSessionStateNow(session: Session): void {
     const state = session.toState();
     const controller = this.respawnControllers.get(session.id);
     if (controller) {
@@ -4341,9 +4360,15 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
    * on-demand when switching tabs via /api/sessions/:id/buffer
    */
   private getLightSessionsState() {
+    const now = Date.now();
+    if (this.cachedSessionsList && (now - this.cachedSessionsList.timestamp) < SESSIONS_LIST_CACHE_TTL) {
+      return this.cachedSessionsList.data;
+    }
     // getSessionStateWithRespawn already uses toLightDetailedState() which
     // excludes terminalBuffer and textOutput — no extra stripping needed
-    return Array.from(this.sessions.values()).map(s => this.getSessionStateWithRespawn(s));
+    const data = Array.from(this.sessions.values()).map(s => this.getSessionStateWithRespawn(s));
+    this.cachedSessionsList = { data, timestamp: now };
+    return data;
   }
 
   // Clean up old completed scheduled runs
@@ -4449,9 +4474,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   private broadcast(event: string, data: unknown): void {
-    // Invalidate light state cache on any state-changing broadcast
+    // Invalidate caches on any state-changing broadcast
     if (event.startsWith('session:') || event === 'respawn:') {
       this.cachedLightState = null;
+      this.cachedSessionsList = null;
     }
     // Performance optimization: serialize JSON once for all clients
     let message: string;
@@ -4999,6 +5025,20 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     // Stop multiplexer and flush pending saves
     this.mux.destroy();
+
+    // Flush any pending persist-debounce timers and persist dirty sessions
+    for (const [sessionId, timer] of this.persistDebounceTimers) {
+      clearTimeout(timer);
+      const session = this.sessions.get(sessionId);
+      if (session) {
+        this._persistSessionStateNow(session);
+      }
+    }
+    this.persistDebounceTimers.clear();
+
+    // Clear cached state
+    this.cachedLightState = null;
+    this.cachedSessionsList = null;
 
     // Clear all pending respawn start timers (from restoration grace period)
     for (const timer of this.pendingRespawnStarts.values()) {
