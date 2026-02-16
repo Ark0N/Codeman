@@ -367,10 +367,11 @@ const KeyboardHandler = {
 
     this.resetLayout();
 
-    // Refit terminal and send resize to restore original dimensions
+    // Refit terminal, scroll to bottom, and send resize to restore original dimensions
     setTimeout(() => {
       if (typeof app !== 'undefined' && app.fitAddon) {
         try { app.fitAddon.fit(); } catch {}
+        if (app.terminal) app.terminal.scrollToBottom();
         // Send resize to server to restore full terminal size
         this._sendTerminalResize();
       }
@@ -545,7 +546,7 @@ const KeyboardAccessoryBar = {
         </svg>
       </button>
       <button class="accessory-btn accessory-btn-dismiss" data-action="dismiss" title="Dismiss keyboard">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
           <path d="M19 9l-7 7-7-7"/>
         </svg>
       </button>
