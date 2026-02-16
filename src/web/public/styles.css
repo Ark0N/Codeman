@@ -1807,8 +1807,9 @@ body {
   background: var(--bg-card);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
-  /* Performance: isolate from terminal — toolbar updates shouldn't trigger terminal reflow */
-  contain: layout style paint;
+  /* contain: style only — layout/paint containment clips the case-settings popover
+     that extends above the toolbar (popover uses position:absolute + bottom:100%) */
+  contain: style;
 }
 
 .toolbar-left,
@@ -8580,10 +8581,17 @@ kbd {
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 6px;
     color: #e5e5e5;
-    font-size: 0.75rem;
+    font-size: 0.65rem;
     font-weight: 500;
     cursor: pointer;
-    transition: background 0.1s;
+    transition: background 0.15s, border-color 0.15s;
+  }
+
+  /* Confirm state — button turns amber and shows "Tap again" */
+  .accessory-btn.confirming {
+    background: #6b4f00;
+    border-color: #b8860b;
+    color: #ffd54f;
   }
 
   .accessory-btn:active {

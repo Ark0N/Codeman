@@ -516,13 +516,22 @@ const KeyboardAccessoryBar = {
       </button>
     `;
 
-    // Add click handlers
+    // Add click handlers — preventDefault stops event from reaching terminal
     this.element.addEventListener('click', (e) => {
       const btn = e.target.closest('.accessory-btn');
       if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
 
       const action = btn.dataset.action;
-      this.handleAction(action);
+      this.handleAction(action, btn);
+
+      // For double-tap buttons, refocus terminal so keyboard stays open during confirm state
+      if ((action === 'clear' || action === 'compact') && this._confirmAction) {
+        if (typeof app !== 'undefined' && app.terminal) {
+          app.terminal.focus();
+        }
+      }
     });
 
     // Insert before toolbar
@@ -532,20 +541,29 @@ const KeyboardAccessoryBar = {
     }
   },
 
+  _confirmTimer: null,
+  _confirmAction: null,
+
   /** Handle accessory button actions */
-  handleAction(action) {
+  handleAction(action, btn) {
     if (typeof app === 'undefined' || !app.activeSessionId) return;
 
     switch (action) {
       case 'init':
-        this.confirmAndSend('/init', 'Run /init command?');
+        this.sendCommand('/init');
         break;
       case 'clear':
-        this.confirmAndSend('/clear', 'Clear conversation history?');
+      case 'compact': {
+        // Require double-tap: first tap turns amber, second tap within 2s sends
+        const cmd = action === 'clear' ? '/clear' : '/compact';
+        if (this._confirmAction === action && this._confirmTimer) {
+          this.clearConfirm();
+          this.sendCommand(cmd);
+        } else {
+          this.setConfirm(action, btn);
+        }
         break;
-      case 'compact':
-        this.confirmAndSend('/compact', 'Compact context?');
-        break;
+      }
       case 'paste':
         this.pasteFromClipboard();
         break;
@@ -556,11 +574,43 @@ const KeyboardAccessoryBar = {
     }
   },
 
-  /** Show confirmation dialog before sending command */
-  confirmAndSend(command, message) {
-    if (confirm(message)) {
-      app.sendInput(command + '\r');
+  /** Enter confirm state: button turns amber for 2s waiting for second tap */
+  setConfirm(action, btn) {
+    this.clearConfirm();
+    this._confirmAction = action;
+    if (btn) {
+      btn.classList.add('confirming');
+      btn.dataset.origText = btn.textContent;
+      btn.textContent = 'Tap again';
     }
+    this._confirmTimer = setTimeout(() => this.clearConfirm(), 2000);
+  },
+
+  /** Reset confirm state */
+  clearConfirm() {
+    if (this._confirmTimer) {
+      clearTimeout(this._confirmTimer);
+      this._confirmTimer = null;
+    }
+    if (this._confirmAction && this.element) {
+      const btn = this.element.querySelector(`[data-action="${this._confirmAction}"]`);
+      if (btn && btn.dataset.origText) {
+        btn.textContent = btn.dataset.origText;
+        delete btn.dataset.origText;
+      }
+      if (btn) btn.classList.remove('confirming');
+    }
+    this._confirmAction = null;
+  },
+
+  /** Send a slash command to the active session.
+   *  Sends text and Enter separately so Ink processes them as distinct events. */
+  sendCommand(command) {
+    if (!app.activeSessionId) return;
+    // Send command text first (without Enter)
+    app.sendInput(command);
+    // Send Enter separately after a brief delay so Ink has time to process the text.
+    setTimeout(() => app.sendInput('\r'), 120);
   },
 
   /** Read clipboard and send contents as input */
