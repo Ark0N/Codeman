@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Upload Screenshot - Claudeman</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: #0d1117; color: #c9d1d9;
+    min-height: 100vh; min-height: 100dvh;
+    display: flex; align-items: center; justify-content: center;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    -webkit-text-size-adjust: 100%;
+  }
+  .container { max-width: 480px; width: 100%; padding: 24px; }
+  h1 { font-size: 1.4em; margin-bottom: 16px; color: #58a6ff; }
+  .drop-zone {
+    border: 2px dashed #30363d; border-radius: 12px;
+    padding: 48px 20px; text-align: center;
+    -webkit-tap-highlight-color: transparent;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .drop-zone.active { border-color: #58a6ff; background: #161b22; }
+  .drop-zone p { margin-bottom: 12px; font-size: 1.1em; }
+  .drop-zone small { color: #8b949e; }
+  input[type=file] { display: none; }
+  .preview { margin-top: 16px; text-align: center; display: none; }
+  .preview img { max-width: 100%; max-height: 300px; border-radius: 8px; border: 1px solid #30363d; }
+  .preview .name { margin-top: 6px; font-size: 0.85em; color: #8b949e; word-break: break-all; }
+  button {
+    width: 100%; padding: 14px; margin-top: 16px;
+    background: #238636; color: #fff; border: none;
+    border-radius: 8px; font-size: 1.05em;
+    font-weight: 600; -webkit-appearance: none;
+    opacity: 0.4; pointer-events: none;
+  }
+  button.ready { opacity: 1; pointer-events: auto; }
+  button:active { background: #2ea043; }
+  .status { margin-top: 12px; padding: 10px; border-radius: 6px; text-align: center; display: none; }
+  .status.ok { display: block; background: #1a3a2a; color: #3fb950; }
+  .status.err { display: block; background: #3a1a1a; color: #f85149; }
+  .files { margin-top: 24px; }
+  .files h2 { font-size: 0.95em; color: #8b949e; margin-bottom: 8px; }
+  .files a { display: block; color: #58a6ff; text-decoration: none; padding: 6px 0; font-size: 0.9em; word-break: break-all; }
+  .files a:active { color: #79c0ff; }
+  .back { display: inline-block; margin-bottom: 12px; color: #8b949e; text-decoration: none; font-size: 0.9em; }
+  .back:active { color: #c9d1d9; }
+</style>
+</head><body>
+<div class="container">
+  <a class="back" href="/">&larr; Back to Claudeman</a>
+  <h1>Upload Screenshot</h1>
+  <div class="drop-zone" id="drop">
+    <p>Tap to select image</p>
+    <small>PNG, JPG, WebP &mdash; up to 10 MB</small>
+  </div>
+  <input type="file" id="file" accept="image/*">
+  <div class="preview" id="preview">
+    <img id="previewImg" alt="Preview">
+    <div class="name" id="previewName"></div>
+  </div>
+  <button id="btn">Upload</button>
+  <div class="status" id="status"></div>
+  <div class="files" id="files"></div>
+</div>
+<script>
+(function() {
+  var drop = document.getElementById('drop');
+  var fileInput = document.getElementById('file');
+  var preview = document.getElementById('preview');
+  var previewImg = document.getElementById('previewImg');
+  var previewName = document.getElementById('previewName');
+  var btn = document.getElementById('btn');
+  var status = document.getElementById('status');
+  var filesDiv = document.getElementById('files');
+  var selectedFile = null;
+
+  drop.addEventListener('click', function() { fileInput.click(); });
+
+  fileInput.addEventListener('change', function() {
+    if (fileInput.files && fileInput.files[0]) pick(fileInput.files[0]);
+  });
+
+  // Drag-and-drop (desktop fallback)
+  drop.addEventListener('dragover', function(e) { e.preventDefault(); drop.classList.add('active'); });
+  drop.addEventListener('dragleave', function() { drop.classList.remove('active'); });
+  drop.addEventListener('drop', function(e) {
+    e.preventDefault(); drop.classList.remove('active');
+    if (e.dataTransfer && e.dataTransfer.files[0]) pick(e.dataTransfer.files[0]);
+  });
+
+  function pick(f) {
+    selectedFile = f;
+    previewImg.src = URL.createObjectURL(f);
+    previewName.textContent = f.name + ' (' + (f.size / 1024).toFixed(0) + ' KB)';
+    preview.style.display = 'block';
+    btn.classList.add('ready');
+    status.className = 'status';
+    status.style.display = 'none';
+  }
+
+  btn.addEventListener('click', function() {
+    if (!selectedFile) return;
+    btn.classList.remove('ready');
+    btn.textContent = 'Uploading\u2026';
+    var form = new FormData();
+    form.append('file', selectedFile);
+    fetch('/api/screenshots', { method: 'POST', body: form })
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        if (j.success) {
+          status.className = 'status ok';
+          status.textContent = 'Saved: ' + j.filename;
+          status.style.display = 'block';
+          selectedFile = null;
+          preview.style.display = 'none';
+          btn.textContent = 'Upload';
+          loadFiles();
+        } else {
+          status.className = 'status err';
+          status.textContent = j.error || 'Upload failed';
+          status.style.display = 'block';
+          btn.classList.add('ready');
+          btn.textContent = 'Upload';
+        }
+      })
+      .catch(function(e) {
+        status.className = 'status err';
+        status.textContent = e.message;
+        status.style.display = 'block';
+        btn.classList.add('ready');
+        btn.textContent = 'Upload';
+      });
+  });
+
+  function loadFiles() {
+    fetch('/api/screenshots')
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        if (j.files && j.files.length) {
+          var html = '<h2>Recent uploads</h2>';
+          j.files.forEach(function(f) {
+            html += '<a href="/api/screenshots/' + encodeURIComponent(f.name) + '" target="_blank">' + f.name + '</a>';
+          });
+          filesDiv.innerHTML = html;
+        }
+      })
+      .catch(function() {});
+  }
+
+  loadFiles();
+})();
+</script>
+</body></html>

@@ -250,10 +250,18 @@ const KeyboardHandler = {
       this.onKeyboardShow();
     }
     // Keyboard hidden (viewport grew back close to initial)
-    else if (heightDiff < 50 && this.keyboardVisible) {
+    // Use 100px threshold (not 50) to handle iOS address bar drift,
+    // iOS 26's persistent 24px discrepancy, and Safari bottom bar changes
+    else if (heightDiff < 100 && this.keyboardVisible) {
       this.keyboardVisible = false;
       document.body.classList.remove('keyboard-visible');
       this.onKeyboardHide();
+    }
+
+    // Update baseline when keyboard is not visible — adapts to address bar
+    // state changes, orientation changes, and other viewport shifts
+    if (!this.keyboardVisible) {
+      this.initialViewportHeight = currentHeight;
     }
 
     this.updateLayoutForKeyboard();
@@ -279,6 +287,16 @@ const KeyboardHandler = {
       const layoutHeight = window.innerHeight;
       const visualBottom = window.visualViewport.offsetTop + window.visualViewport.height;
       const keyboardOffset = layoutHeight - visualBottom;
+
+      // Safety: if keyboard is supposedly visible but offset is 0 or negative,
+      // the keyboard is actually gone — force dismiss. This catches cases where
+      // visualViewport.resize fires late or with intermediate values on iOS.
+      if (keyboardOffset <= 0) {
+        this.keyboardVisible = false;
+        document.body.classList.remove('keyboard-visible');
+        this.onKeyboardHide();
+        return;
+      }
 
       // Move toolbar up above keyboard
       if (toolbar) {
@@ -325,14 +343,14 @@ const KeyboardHandler = {
     }
 
     // Scroll active terminal to bottom so input line is visible
+    // Delay to let layout settle after keyboard resizes the viewport
     setTimeout(() => {
-      if (typeof app !== 'undefined' && app.activeSessionId) {
-        const sessionData = app.sessions.get(app.activeSessionId);
-        if (sessionData?.terminal) {
-          sessionData.terminal.scrollToBottom();
-        }
+      if (typeof app !== 'undefined' && app.terminal) {
+        // Refit terminal to the now-smaller container, then scroll
+        if (app.fitAddon) try { app.fitAddon.fit(); } catch {}
+        app.terminal.scrollToBottom();
       }
-    }, 100);
+    }, 150);
   },
 
   /** Called when keyboard hides */
@@ -343,6 +361,13 @@ const KeyboardHandler = {
     }
 
     this.resetLayout();
+
+    // Refit terminal to the restored (larger) container to prevent black gap
+    setTimeout(() => {
+      if (typeof app !== 'undefined' && app.fitAddon) {
+        try { app.fitAddon.fit(); } catch {}
+      }
+    }, 100);
   },
 
   /** Check if element is an input that triggers keyboard (excludes terminal) */

@@ -8782,31 +8782,32 @@ kbd {
     display: block;
   }
 
-  /* Mobile terminal - use native browser scrolling for smooth performance */
+  /* Mobile terminal - native touch scrolling via xterm-viewport */
   .terminal-container {
     height: 100%;
     min-height: 0;
     position: relative;
-    overflow: hidden;
-    contain: layout style;
-    touch-action: pan-y; /* Allow native vertical scrolling */
+    overflow: visible; /* Must not be hidden — blocks touch scroll on viewport */
+    touch-action: pan-y;
   }
 
   .terminal-container .xterm {
     touch-action: pan-y;
   }
 
-  /* Viewport scroll optimization - use native scrolling */
-  /* CRITICAL: xterm-viewport must be above xterm-screen for touch scrolling to work */
-  /* See: https://github.com/xtermjs/xterm.js/issues/5377 */
+  /* xterm-viewport is the scrollable element inside xterm.js.
+     It must sit above xterm-screen to receive touch events.
+     See: https://github.com/xtermjs/xterm.js/issues/5377 */
   .terminal-container .xterm-viewport {
     position: absolute !important;
-    z-index: 10 !important; /* Above xterm-screen so touch events hit the scrollable viewport */
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    z-index: 10 !important;
     touch-action: pan-y;
-    -webkit-overflow-scrolling: touch; /* Enable iOS momentum scrolling */
+    -webkit-overflow-scrolling: touch;
     overflow-y: scroll !important;
-    scroll-behavior: auto !important;
-    will-change: scroll-position;
   }
 
   .terminal-container .xterm-screen {

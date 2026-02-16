@@ -134,6 +134,10 @@ const MAX_TERMINAL_ROWS = 200;
 const MAX_SESSION_NAME_LENGTH = 128;
 // Maximum hook data size (prevents oversized SSE broadcasts)
 const MAX_HOOK_DATA_SIZE = 8 * 1024;
+// Maximum screenshot upload size (10MB)
+const MAX_SCREENSHOT_SIZE = 10 * 1024 * 1024;
+// Screenshots directory
+const SCREENSHOTS_DIR = join(homedir(), '.claudeman', 'screenshots');
 // Stats collection interval (2 seconds)
 const STATS_COLLECTION_INTERVAL_MS = 2000;
 // Session limit wait time before retrying (5 seconds)
@@ -519,6 +523,12 @@ export class WebServer extends EventEmitter {
   }
 
   private async setupRoutes(): Promise<void> {
+    // Allow multipart/form-data for screenshot uploads — skip Fastify's body parser
+    // so the route handler can read the raw stream directly.
+    this.app.addContentTypeParser('multipart/form-data', (_req, _payload, done) => {
+      done(null);
+    });
+
     // Enable gzip/brotli compression for all responses.
     // Massive win: 793KB uncompressed → ~120KB compressed for static assets.
     // Threshold 1024 = don't compress tiny responses (headers > savings).
@@ -3383,6 +3393,122 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       }
 
       return { success: true };
+    });
+
+    // Screenshot upload endpoint (accepts multipart/form-data)
+    // Upload form served as static file: /upload.html (src/web/public/upload.html)
+    this.app.post('/api/screenshots', async (req, reply) => {
+      const contentType = req.headers['content-type'] ?? '';
+      if (!contentType.includes('multipart/form-data')) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Expected multipart/form-data');
+      }
+
+      // Parse multipart boundary
+      const boundaryMatch = contentType.match(/boundary=(.+?)(?:;|$)/);
+      if (!boundaryMatch) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing boundary');
+      }
+
+      // Collect raw body
+      const chunks: Buffer[] = [];
+      let totalSize = 0;
+      for await (const chunk of req.raw) {
+        totalSize += chunk.length;
+        if (totalSize > MAX_SCREENSHOT_SIZE) {
+          reply.status(413);
+          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'File too large (max 10MB)');
+        }
+        chunks.push(chunk as Buffer);
+      }
+      const body = Buffer.concat(chunks);
+
+      // Extract file from multipart body
+      const boundary = '--' + boundaryMatch[1];
+      const boundaryBuf = Buffer.from(boundary);
+      const parts: { headers: string; data: Buffer }[] = [];
+      let pos = 0;
+
+      // Find each part between boundaries
+      while (pos < body.length) {
+        const start = body.indexOf(boundaryBuf, pos);
+        if (start === -1) break;
+        const afterBoundary = start + boundaryBuf.length;
+        // Check for closing boundary (--)
+        if (body[afterBoundary] === 0x2d && body[afterBoundary + 1] === 0x2d) break;
+        // Skip \r\n after boundary
+        const headerStart = afterBoundary + 2;
+        const headerEnd = body.indexOf(Buffer.from('\r\n\r\n'), headerStart);
+        if (headerEnd === -1) break;
+        const headers = body.subarray(headerStart, headerEnd).toString();
+        const dataStart = headerEnd + 4;
+        const nextBoundary = body.indexOf(boundaryBuf, dataStart);
+        // Data ends 2 bytes before next boundary (\r\n)
+        const dataEnd = nextBoundary === -1 ? body.length : nextBoundary - 2;
+        parts.push({ headers, data: body.subarray(dataStart, dataEnd) });
+        pos = nextBoundary === -1 ? body.length : nextBoundary;
+      }
+
+      const filePart = parts.find(p => p.headers.includes('name="file"'));
+      if (!filePart || filePart.data.length === 0) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'No file uploaded');
+      }
+
+      // Determine extension from Content-Type or filename
+      let ext = '.png';
+      const filenameMatch = filePart.headers.match(/filename="(.+?)"/);
+      if (filenameMatch) {
+        const origExt = filenameMatch[1].match(/\.(png|jpg|jpeg|webp|gif)$/i);
+        if (origExt) ext = origExt[0].toLowerCase();
+      }
+      const ctMatch = filePart.headers.match(/Content-Type:\s*image\/(png|jpeg|webp|gif)/i);
+      if (ctMatch) {
+        const map: Record<string, string> = { png: '.png', jpeg: '.jpg', webp: '.webp', gif: '.gif' };
+        ext = map[ctMatch[1].toLowerCase()] ?? ext;
+      }
+
+      // Save to ~/.claudeman/screenshots/
+      if (!existsSync(SCREENSHOTS_DIR)) {
+        mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+      }
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+      const filename = `screenshot_${timestamp}${ext}`;
+      const filepath = join(SCREENSHOTS_DIR, filename);
+      writeFileSync(filepath, filePart.data);
+
+      return { success: true, path: filepath, filename };
+    });
+
+    // List screenshots
+    this.app.get('/api/screenshots', async () => {
+      if (!existsSync(SCREENSHOTS_DIR)) {
+        return { files: [] };
+      }
+      const files = readdirSync(SCREENSHOTS_DIR)
+        .filter(f => /\.(png|jpg|jpeg|webp|gif)$/i.test(f))
+        .sort()
+        .reverse()
+        .slice(0, 50)
+        .map(name => ({ name, path: join(SCREENSHOTS_DIR, name) }));
+      return { files };
+    });
+
+    // Serve individual screenshot
+    this.app.get('/api/screenshots/:name', async (req, reply) => {
+      const { name } = req.params as { name: string };
+      // Prevent path traversal
+      if (name.includes('/') || name.includes('\\') || name.includes('..')) {
+        reply.status(400);
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid filename');
+      }
+      const filepath = join(SCREENSHOTS_DIR, name);
+      if (!existsSync(filepath)) {
+        reply.status(404);
+        return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Screenshot not found');
+      }
+      const ext = name.match(/\.(png|jpg|jpeg|webp|gif)$/i)?.[1]?.toLowerCase() ?? 'png';
+      const mimeMap: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
+      reply.type(mimeMap[ext] ?? 'image/png');
+      return fs.readFile(filepath);
     });
   }
 

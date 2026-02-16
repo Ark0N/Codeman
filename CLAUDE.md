@@ -35,7 +35,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1510 (must match `package.json` for npm publish)
+**Version**: 0.1511 (must match `package.json` for npm publish)
 
 ## Project Overview
 
@@ -220,6 +220,17 @@ npx vitest run -t "pattern"
 **Safety**: `test/setup.ts` snapshots pre-existing tmux sessions at load time and never kills them. Only sessions registered via `registerTestTmuxSession()` get cleaned up.
 
 **Respawn tests**: Use MockSession from `test/respawn-test-utils.ts` to avoid spawning real Claude processes.
+
+## Screenshots ("sc")
+
+When the user says "check the sc", "screenshot", or "sc", they mean uploaded screenshots from their mobile device. Screenshots are saved to `~/.claudeman/screenshots/` and uploaded via `/upload.html` on the Claudeman web UI. To view them, use the Read tool on the image files:
+
+```bash
+ls ~/.claudeman/screenshots/        # List uploaded screenshots
+# Then use Read tool on individual files — Claude Code can view images natively
+```
+
+API: `GET /api/screenshots` (list), `GET /api/screenshots/:name` (serve), `POST /api/screenshots` (upload multipart/form-data). Source: `src/web/public/upload.html`.
 
 ## Debugging
 

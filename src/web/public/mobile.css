@@ -1,0 +1,943 @@
+/* ============================================================================
+   Mobile & Touch Styles
+   Extracted from styles.css for cleaner separation.
+   Loaded only on small/medium screens via media attribute in index.html.
+   ============================================================================ */
+
+/* ============================================================================
+   Tablet Breakpoint (430px - 768px)
+   ============================================================================ */
+@media (max-width: 768px) and (min-width: 430px) {
+  /* Compact header for tablet - fixed at top, includes safe area padding */
+  .header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    min-height: 48px;
+    max-height: 48px;
+    padding: 0.35rem 0.5rem;
+    padding-left: calc(0.5rem + var(--safe-area-left));
+    padding-right: calc(0.5rem + var(--safe-area-right));
+    background: #0a0a0a;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    z-index: 200;
+  }
+
+  /* iOS safe area adjustment for fixed header - header extends into notch area */
+  .ios-device .header {
+    padding-top: calc(0.35rem + var(--safe-area-top));
+    min-height: calc(48px + var(--safe-area-top));
+    max-height: calc(48px + var(--safe-area-top));
+  }
+
+  /* Add top margin to main content to account for fixed header */
+  .main {
+    margin-top: 54px;
+  }
+
+  .ios-device .main {
+    margin-top: calc(54px + var(--safe-area-top));
+  }
+
+  /* Font controls - smaller on tablet, visibility controlled by JS */
+  .header-font-controls {
+    gap: 0.15rem;
+    padding: 0.15rem 0.25rem;
+  }
+
+  .header-font-controls .btn-icon-sm {
+    width: 18px;
+    height: 18px;
+  }
+
+  /* System stats - compact on tablet, visibility controlled by JS */
+  .header-system-stats {
+    font-size: 0.6rem;
+    gap: 0.25rem;
+  }
+
+  .header-right {
+    gap: 0.35rem;
+  }
+
+  /* Compact session tabs */
+  .session-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    max-height: 52px;
+    gap: 3px;
+  }
+
+  .session-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .session-tab {
+    padding: 0.4rem 0.6rem;
+    font-size: 0.75rem;
+    min-height: 40px;
+  }
+
+  .session-tab .tab-name {
+    max-width: 80px;
+  }
+
+  /* Compact toolbar - includes safe area padding */
+  .toolbar {
+    padding: 0.4rem 0.5rem;
+    padding-left: calc(0.5rem + var(--safe-area-left));
+    padding-right: calc(0.5rem + var(--safe-area-right));
+    gap: 0.4rem;
+  }
+
+  /* Hide instance count buttons on tablet too */
+  .tab-count-group {
+    display: none;
+  }
+
+  /* Compact toolbar buttons */
+  .btn-toolbar {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.8rem;
+    min-height: 40px;
+  }
+
+  .case-select-group {
+    max-width: 150px;
+  }
+
+  .toolbar-select {
+    font-size: 0.75rem;
+  }
+
+  /* Stack panels vertically */
+  .monitor-panel,
+  .subagents-panel {
+    width: 100%;
+    max-width: 100%;
+    left: 0;
+    right: 0;
+    border-radius: 8px 8px 0 0;
+    max-height: 40vh;
+  }
+
+  /* Project insights - compact on tablet, visibility controlled by JS */
+  .project-insights-panel {
+    max-width: 280px;
+    font-size: 0.7rem;
+  }
+}
+
+/* ============================================================================
+   Phone Breakpoint (<430px)
+   ============================================================================ */
+@media (max-width: 430px) {
+  /* Hide header brand on phones */
+  .header-brand {
+    display: none;
+  }
+
+  /* Font controls - compact on phones, visibility controlled by JS */
+  .header-font-controls {
+    gap: 0.1rem;
+    padding: 0.1rem 0.2rem;
+  }
+
+  .header-font-controls .btn-icon-sm {
+    width: 16px;
+    height: 16px;
+  }
+
+  .header-font-controls .font-size-display {
+    font-size: 0.6rem;
+    min-width: 14px;
+  }
+
+  /* System stats - very compact on phones, visibility controlled by JS */
+  .header-system-stats {
+    font-size: 0.55rem;
+    gap: 0.15rem;
+  }
+
+  /* Token count - compact on phones, visibility controlled by JS */
+  .header-tokens {
+    font-size: 0.6rem;
+    padding: 0.1rem 0.3rem;
+  }
+
+  /* Ultra-compact header for mobile - fixed at top */
+  .header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    min-height: 36px;
+    max-height: 36px;
+    padding: 0.15rem 0.3rem;
+    padding-left: calc(0.3rem + var(--safe-area-left));
+    padding-right: calc(0.3rem + var(--safe-area-right));
+    gap: 0.15rem;
+    overflow: hidden;
+    background: #0a0a0a;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    z-index: 200;
+  }
+
+  /* iOS safe area adjustment for fixed header - header extends into notch area */
+  .ios-device .header {
+    padding-top: calc(0.15rem + var(--safe-area-top));
+    min-height: calc(36px + var(--safe-area-top));
+    max-height: calc(36px + var(--safe-area-top));
+  }
+
+  /* Add top margin to main content to account for fixed header */
+  .main {
+    margin-top: 42px;
+  }
+
+  .ios-device .main {
+    margin-top: calc(42px + var(--safe-area-top));
+  }
+
+  .header-right {
+    padding-left: 0.2rem;
+    gap: 0.1rem;
+    flex-shrink: 0;
+    border-left: none;
+  }
+
+  /* Smaller header buttons on mobile */
+  .btn-icon-header {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+  }
+
+  .btn-icon-header svg {
+    width: 12px;
+    height: 12px;
+  }
+
+  /* Larger settings gear icon for visibility */
+  .btn-icon-header.btn-settings {
+    width: 32px;
+    height: 32px;
+  }
+
+  .btn-icon-header.btn-settings svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* App container - prevent scrolling, strict layout */
+  .app {
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* Ultra-compact session tabs */
+  .session-tabs {
+    flex: 1;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    max-height: 36px;
+    gap: 2px;
+    padding: 0;
+  }
+
+  .session-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Smaller tabs for mobile */
+  .session-tab {
+    flex-shrink: 0;
+    min-height: 32px;
+    max-height: 32px;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.7rem;
+    gap: 0.25rem;
+    border-radius: 4px;
+  }
+
+  /* Smaller status indicator on mobile */
+  .session-tab .tab-status {
+    width: 4px;
+    height: 4px;
+  }
+
+  /* Truncate tab names more aggressively on mobile */
+  .session-tab .tab-name {
+    max-width: 50px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Hide close/gear buttons on non-active tabs on mobile */
+  .session-tab .tab-close,
+  .session-tab .tab-gear {
+    display: none;
+  }
+
+  /* Gear icon on active tab - tiny, subtle */
+  .session-tab.active .tab-gear {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.5rem;
+    line-height: 1;
+    width: 12px;
+    height: 12px;
+    margin-left: auto;
+    opacity: 0.6;
+  }
+
+  /* Close button on active tab - large for easy tapping */
+  .session-tab.active .tab-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    line-height: 1;
+    width: 20px;
+    height: 18px;
+    margin-left: -2px;
+  }
+
+  /* Clean dark toolbar - positioned near bottom */
+  .toolbar {
+    position: fixed;
+    bottom: var(--safe-area-bottom);
+    left: 0;
+    right: 0;
+    height: 40px;
+    min-height: 40px;
+    max-height: 40px;
+    padding: 0.3rem 0.4rem;
+    padding-left: calc(0.4rem + var(--safe-area-left));
+    padding-right: calc(0.4rem + var(--safe-area-right));
+    flex-wrap: nowrap;
+    gap: 0.3rem;
+    align-items: center;
+    justify-content: space-between;
+    background: #111111;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    z-index: 50;
+    /* Smooth transition for keyboard show/hide */
+    transition: transform 0.15s ease-out;
+    /* Ensure transform works properly */
+    will-change: transform;
+  }
+
+  /* Show case selector in center */
+  .toolbar-center {
+    display: flex !important;
+    align-items: center;
+  }
+
+  .toolbar-right {
+    display: none !important;
+  }
+
+  /* Hide version display on mobile */
+  .version-display {
+    display: none !important;
+  }
+
+  /* Toolbar layout */
+  .toolbar-left {
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 0.3rem;
+  }
+
+  .toolbar-left .toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+
+  .toolbar-left .toolbar-group:first-child {
+    flex: 1;
+    justify-content: space-between;
+    gap: 0.3rem;
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+
+  /* Hide instance count buttons (±) on mobile - cleaner UI */
+  .tab-count-group {
+    display: none !important;
+  }
+
+  /* Compact toolbar buttons for mobile - white text on dark */
+  .btn-toolbar {
+    min-height: 26px !important;
+    max-height: 26px !important;
+    height: 26px !important;
+    padding: 0 0.5rem !important;
+    font-size: 0.65rem !important;
+    border-radius: 4px;
+    line-height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    color: #fff;
+  }
+
+  /* Primary action button - Run Claude */
+  .btn-toolbar.btn-claude {
+    flex: 0 0 auto;
+    padding: 0 0.75rem !important;
+    background: var(--bg-input);
+    border: 1px solid var(--border-light);
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .btn-toolbar.btn-claude:hover,
+  .btn-toolbar.btn-claude:active {
+    background: var(--bg-hover);
+    border-color: var(--accent);
+  }
+
+  .btn-toolbar.btn-claude svg {
+    width: 10px;
+    height: 10px;
+    margin-right: 4px;
+  }
+
+  /* Secondary action - Run Shell - right side */
+  .btn-toolbar.btn-shell {
+    flex: 0 0 auto;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #9ca3af;
+    order: 3; /* Right position */
+  }
+
+  .btn-toolbar.btn-shell:hover,
+  .btn-toolbar.btn-shell:active {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+  }
+
+  /* Hide case selector on mobile - simplified toolbar */
+  .case-select-group {
+    display: none !important;
+  }
+
+  /* Simplified toolbar layout - Run Claude, Shell, and Case */
+  .toolbar-left .toolbar-group:first-child {
+    width: 100%;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .btn-toolbar.btn-claude {
+    flex: 0 0 auto;
+    min-width: fit-content;
+    white-space: nowrap;
+    padding: 0 10px !important;
+  }
+
+  .btn-toolbar.btn-shell {
+    flex: 0 0 auto;
+    min-width: fit-content;
+    white-space: nowrap;
+    padding: 0 10px !important;
+  }
+
+  /* Mobile case button - visible on mobile */
+  .btn-toolbar.btn-case-mobile {
+    display: inline-flex !important;
+    flex: 0 0 auto;
+    min-width: fit-content;
+    white-space: nowrap;
+    padding: 0 8px !important;
+    order: 2; /* Between Run Claude and Run Shell */
+  }
+
+  .btn-toolbar.btn-case-mobile #mobileCaseName {
+    max-width: 50px;
+  }
+
+  /* Keyboard Accessory Bar - quick actions above keyboard */
+  .keyboard-accessory-bar {
+    display: none;
+    position: fixed;
+    bottom: calc(var(--safe-area-bottom) + 40px); /* Above toolbar */
+    left: 0;
+    right: 0;
+    height: 44px;
+    background: #1a1a1a;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 6px 8px;
+    padding-left: calc(8px + var(--safe-area-left));
+    padding-right: calc(8px + var(--safe-area-right));
+    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    z-index: 51;
+    transition: transform 0.15s ease-out;
+    will-change: transform;
+  }
+
+  .keyboard-accessory-bar.visible {
+    display: flex;
+  }
+
+  .accessory-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 6px 12px;
+    background: #2a2a2a;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    color: #e5e5e5;
+    font-size: 0.75rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+
+  .accessory-btn:active {
+    background: #3a3a3a;
+  }
+
+  .accessory-btn svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .accessory-btn-dismiss {
+    margin-left: auto;
+    padding: 6px 10px;
+    background: transparent;
+    border-color: transparent;
+    color: #888;
+  }
+
+  /* Add case button - compact (keeping for when shown via menu) */
+  .btn-case-add {
+    display: none !important;
+  }
+
+  .btn-case-settings {
+    display: none !important;
+  }
+
+  /* When keyboard is visible, also move accessory bar up */
+  .keyboard-visible .keyboard-accessory-bar.visible {
+    /* Position is handled by JS transform along with toolbar */
+  }
+
+  /* Paste overlay for iOS clipboard access */
+  .paste-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 10000;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: env(safe-area-inset-bottom, 12px);
+  }
+
+  .paste-dialog {
+    background: var(--bg-secondary, #1e1e2e);
+    border: 1px solid var(--border-color, #444);
+    border-radius: 12px;
+    padding: 12px;
+    width: calc(100% - 24px);
+    max-width: 400px;
+    margin-bottom: 8px;
+  }
+
+  .paste-textarea {
+    width: 100%;
+    min-height: 100px;
+    background: var(--bg-primary, #0d0d14);
+    color: var(--text-primary, #e0e0e0);
+    border: 1px solid var(--border-color, #444);
+    border-radius: 8px;
+    padding: 10px;
+    font-family: inherit;
+    font-size: 14px;
+    resize: vertical;
+    box-sizing: border-box;
+  }
+
+  .paste-textarea:focus {
+    outline: none;
+    border-color: var(--accent-color, #7aa2f7);
+  }
+
+  .paste-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .paste-cancel, .paste-send {
+    padding: 8px 18px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .paste-cancel {
+    background: var(--bg-tertiary, #333);
+    color: var(--text-secondary, #aaa);
+  }
+
+  .paste-send {
+    background: var(--accent-color, #7aa2f7);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  /* LEGACY: Hide old toolbar select (no longer used on mobile) */
+  .toolbar-select {
+    display: none !important;
+  }
+
+  /* Keep btn-case-add styling for tablet/future use */
+  .toolbar .btn-case-add {
+    min-width: 26px !important;
+    max-width: 26px !important;
+    width: 26px !important;
+    min-height: 26px !important;
+    max-height: 26px !important;
+    height: 26px !important;
+    padding: 0 !important;
+    font-size: 0.9rem;
+    font-weight: bold;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    border-radius: 4px;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #9ca3af;
+  }
+
+  .btn-case-add:hover,
+  .btn-case-add:active {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+  }
+
+  /* Panels on mobile - full width, positioned above toolbar, visibility controlled by JS */
+  .monitor-panel,
+  .subagents-panel {
+    width: 100%;
+    max-width: 100%;
+    left: 0;
+    right: 0;
+    border-radius: 8px 8px 0 0;
+    bottom: calc(44px + 2rem + var(--safe-area-bottom));
+    max-height: 35vh;
+  }
+
+  /* Full-screen modals on phones */
+  .modal-content {
+    width: 100%;
+    max-width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border-radius: 0;
+    margin: 0;
+  }
+
+  /* Modal safe area padding - all sides for full-screen modals */
+  .ios-device .modal-content {
+    padding-top: var(--safe-area-top);
+    padding-bottom: var(--safe-area-bottom);
+    padding-left: var(--safe-area-left);
+    padding-right: var(--safe-area-right);
+  }
+
+  .modal-header {
+    padding: 0.75rem 1rem;
+  }
+
+  .modal-header h3 {
+    font-size: 1rem;
+  }
+
+  .modal-body {
+    padding: 0.75rem 1rem;
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  .modal-footer,
+  .form-actions {
+    padding: 0.75rem 1rem;
+    padding-bottom: calc(0.75rem + var(--safe-area-bottom));
+  }
+
+  /* Terminal container safe area */
+  .ios-device .terminal-container {
+    padding-bottom: var(--safe-area-bottom);
+  }
+
+  /* Main area must fill available space */
+  .main {
+    flex: 1;
+    min-height: 0; /* Allow flex item to shrink below content size */
+  }
+
+  /* Show CLI info bar on mobile (Claude version/model) */
+  .cli-info-bar {
+    display: block;
+  }
+
+  /* Mobile terminal - native touch scrolling via xterm-viewport */
+  .terminal-container {
+    height: 100%;
+    min-height: 0;
+    position: relative;
+    overflow: visible; /* Must not be hidden — blocks touch scroll on viewport */
+    touch-action: pan-y;
+  }
+
+  .terminal-container .xterm {
+    touch-action: pan-y;
+  }
+
+  /* xterm-viewport is the scrollable element inside xterm.js.
+     It must sit above xterm-screen to receive touch events.
+     See: https://github.com/xtermjs/xterm.js/issues/5377 */
+  .terminal-container .xterm-viewport {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    z-index: 10 !important;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+    overflow-y: scroll !important;
+  }
+
+  .terminal-container .xterm-screen {
+    touch-action: pan-y;
+  }
+
+  /* Compact welcome overlay for mobile */
+  .welcome-content {
+    padding: 1rem 0.75rem;
+  }
+
+  .welcome-title {
+    font-size: 1.2rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .welcome-desc {
+    font-size: 0.8rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .welcome-actions {
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 1rem;
+  }
+
+  .welcome-btn {
+    width: 100%;
+    justify-content: center;
+    min-height: 44px;
+    padding: 0.75rem 1rem;
+    font-size: 0.85rem;
+  }
+
+  .welcome-hint {
+    font-size: 0.7rem;
+    margin-top: 0.75rem;
+  }
+
+  /* Ralph wizard responsive */
+  .modal-wizard {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .wizard-progress {
+    padding: 0.5rem;
+  }
+
+  .wizard-step {
+    padding: 0.3rem;
+  }
+
+  .wizard-step-number {
+    width: 24px;
+    height: 24px;
+    font-size: 0.7rem;
+  }
+
+  .wizard-step-label {
+    display: none;
+  }
+
+  /* Timer banner - includes safe area padding */
+  .timer-banner {
+    padding-left: calc(0.5rem + var(--safe-area-left));
+    padding-right: calc(0.5rem + var(--safe-area-right));
+  }
+
+  /* Respawn/Ralph panels - more compact on mobile, includes safe area padding */
+  .respawn-banner {
+    padding: 0.4rem 0.5rem;
+    padding-left: calc(0.5rem + var(--safe-area-left));
+    padding-right: calc(0.5rem + var(--safe-area-right));
+    font-size: 0.7rem;
+  }
+
+  .ralph-panel {
+    font-size: 0.75rem;
+  }
+
+  .ralph-summary {
+    padding: 0.4rem 0.5rem;
+    padding-left: calc(0.5rem + var(--safe-area-left));
+    padding-right: calc(0.5rem + var(--safe-area-right));
+  }
+
+  /* Project insights panel - compact on mobile, visibility controlled by JS */
+  .project-insights-panel {
+    max-width: 100%;
+    font-size: 0.65rem;
+    bottom: calc(44px + 2rem + var(--safe-area-bottom));
+  }
+
+  /* File browser panel - compact on mobile, visibility controlled by JS */
+  .file-browser-panel {
+    max-width: 100%;
+    max-height: 50vh;
+    bottom: calc(44px + 2rem + var(--safe-area-bottom));
+  }
+
+  /* Notification drawer - full width on mobile, includes safe area padding */
+  .notification-drawer {
+    width: 100%;
+    max-width: 100%;
+    right: 0;
+    border-radius: 0;
+    padding-left: var(--safe-area-left);
+    padding-right: var(--safe-area-right);
+    padding-bottom: var(--safe-area-bottom);
+  }
+
+  /* Scroll margin for inputs - helps with keyboard visibility */
+  input, textarea, [contenteditable] {
+    scroll-margin-bottom: 200px;
+    scroll-margin-top: 80px;
+  }
+
+  /* When keyboard is visible, adjust content to account for moved toolbar */
+  .keyboard-visible .terminal-container {
+    /* Reduce terminal height when keyboard is up so it doesn't overlap toolbar */
+    padding-bottom: 50px;
+  }
+
+  /* Ensure modals scroll properly when keyboard is visible */
+  .keyboard-visible .modal-body {
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+
+  /* Mobile Case Picker - Mobile-specific overrides */
+  .mobile-case-picker .modal-backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  .mobile-case-picker-sheet {
+    max-height: 60vh;
+    padding-bottom: var(--safe-area-bottom);
+    animation: slideUp 0.2s ease-out;
+  }
+
+  @keyframes slideUp {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+
+  .mobile-case-picker-header .modal-close {
+    width: 32px;
+    height: 32px;
+    font-size: 1.5rem;
+  }
+
+  .mobile-case-picker-footer {
+    padding-bottom: calc(12px + var(--safe-area-bottom));
+  }
+}
+
+
+/* ============================================================================
+   iOS Safari Specific Fixes
+   ============================================================================ */
+.ios-device.safari-browser {
+  /* Prevent pull-to-refresh */
+  overscroll-behavior: none;
+}
+
+.ios-device.safari-browser .terminal-container {
+  /* Keep momentum scrolling but prevent page bounce */
+  -webkit-overflow-scrolling: touch;
+}
+
+.ios-device.safari-browser .terminal-container .xterm-viewport {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ============================================================================
+   Hover State Fallbacks for Touch
+   ============================================================================ */
+@media (hover: none) and (pointer: coarse) {
+  /* Remove hover-dependent UI patterns */
+  .session-tab .tab-close,
+  .session-tab .tab-gear {
+    opacity: 1;
+    width: auto;
+    padding: 0.15rem 0.25rem;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Simplify button hover states */
+  .btn-toolbar:hover {
+    transform: none;
+  }
+
+  .btn-icon-header:hover {
+    transform: none;
+  }
+
+  /* Show dropdown on tap instead of hover */
+  .subagent-dropdown-trigger:active + .subagent-dropdown-menu,
+  .subagent-dropdown-trigger:focus + .subagent-dropdown-menu {
+    display: block;
+  }
+}
