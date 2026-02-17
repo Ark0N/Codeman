@@ -14311,6 +14311,11 @@ class ClaudemanApp {
     if (popupData.dragListeners) {
       document.removeEventListener('mousemove', popupData.dragListeners.move);
       document.removeEventListener('mouseup', popupData.dragListeners.up);
+      if (popupData.dragListeners.touchMove) {
+        document.removeEventListener('touchmove', popupData.dragListeners.touchMove);
+        document.removeEventListener('touchend', popupData.dragListeners.up);
+        document.removeEventListener('touchcancel', popupData.dragListeners.up);
+      }
     }
 
     // Remove element
