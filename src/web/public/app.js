@@ -6007,6 +6007,11 @@ class ClaudemanApp {
       if (windowData.dragListeners) {
         document.removeEventListener('mousemove', windowData.dragListeners.move);
         document.removeEventListener('mouseup', windowData.dragListeners.up);
+        if (windowData.dragListeners.touchMove) {
+          document.removeEventListener('touchmove', windowData.dragListeners.touchMove);
+          document.removeEventListener('touchend', windowData.dragListeners.up);
+          document.removeEventListener('touchcancel', windowData.dragListeners.up);
+        }
       }
       if (windowData.element) {
         windowData.element.remove();
@@ -12287,8 +12292,10 @@ class ClaudemanApp {
     // Calculate final position - grid layout to avoid overlaps
     const windowCount = this.subagentWindows.size;
     const isMobile = MobileDetection.getDeviceType() === 'mobile';
+    const mobileCardHeight = 110;
+    const mobileCardGap = 4;
     const windowWidth = isMobile ? window.innerWidth : 420;
-    const windowHeight = isMobile ? Math.round(window.innerHeight * 0.4) : 350;
+    const windowHeight = isMobile ? mobileCardHeight : 350;
     const gap = 20;
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
@@ -12297,16 +12304,16 @@ class ClaudemanApp {
     let finalY = 0;
 
     if (isMobile) {
-      // Mobile: CSS handles full-width bottom-sheet positioning via .subagent-window rules.
-      // Only one window visible at a time on mobile — new window replaces the old.
-      // Minimize all existing windows first so only the latest is visible.
-      for (const [existingId, existingData] of this.subagentWindows) {
-        if (!existingData.minimized) {
-          this.minimizeSubagentWindow(existingId);
-        }
+      // Mobile: stack compact cards above toolbar. Count visible (non-minimized) windows.
+      let visibleCount = 0;
+      for (const [, data] of this.subagentWindows) {
+        if (!data.minimized && !data.hidden) visibleCount++;
       }
-      finalX = 0;
-      finalY = viewportHeight - windowHeight - 40; // toolbar height
+      const toolbarHeight = 40;
+      // Stack from bottom: first card just above toolbar, next above that, etc.
+      const bottomOffset = toolbarHeight + visibleCount * (mobileCardHeight + mobileCardGap);
+      finalX = 4;
+      finalY = viewportHeight - bottomOffset - mobileCardHeight;
     } else {
       // Check if Ralph wizard modal is open - if so, position windows on the sides
       const wizardModal = document.getElementById('ralphWizardModal');
@@ -12419,25 +12426,32 @@ class ClaudemanApp {
     `;
 
     // If we have a parent tab, start window at tab position for spawn animation
-    // On mobile, skip spawn animation — CSS handles bottom-sheet positioning
-    if (parentTab && !isMobile) {
+    if (isMobile) {
+      // Mobile: position as stacked card via inline bottom offset
+      let visibleCount = 0;
+      for (const [, data] of this.subagentWindows) {
+        if (!data.minimized && !data.hidden) visibleCount++;
+      }
+      const bottomPx = 40 + visibleCount * (mobileCardHeight + mobileCardGap);
+      win.style.bottom = `${bottomPx}px`;
+      win.style.top = 'auto';
+    } else if (parentTab) {
       const tabRect = parentTab.getBoundingClientRect();
       win.style.left = `${tabRect.left}px`;
       win.style.top = `${tabRect.bottom}px`;
       win.style.transform = 'scale(0.3)';
       win.style.opacity = '0';
       win.classList.add('spawning');
-    } else if (!isMobile) {
+    } else {
       // No parent tab, just position normally (desktop/tablet)
       win.style.left = `${finalX}px`;
       win.style.top = `${finalY}px`;
     }
-    // On mobile: CSS positions via fixed bottom-sheet rules, no inline positioning needed
 
     document.body.appendChild(win);
 
-    // Make draggable (returns listener refs for cleanup) — skip on mobile (bottom-sheet)
-    const dragListeners = isMobile ? null : this.makeWindowDraggable(win, win.querySelector('.subagent-window-header'));
+    // Make draggable (returns listener refs for cleanup)
+    const dragListeners = this.makeWindowDraggable(win, win.querySelector('.subagent-window-header'));
 
     // Check if this window should be visible based on settings
     // Use the PERSISTENT parent map for accurate tab-based visibility
@@ -12588,6 +12602,11 @@ class ClaudemanApp {
       if (windowData.dragListeners) {
         document.removeEventListener('mousemove', windowData.dragListeners.move);
         document.removeEventListener('mouseup', windowData.dragListeners.up);
+        if (windowData.dragListeners.touchMove) {
+          document.removeEventListener('touchmove', windowData.dragListeners.touchMove);
+          document.removeEventListener('touchend', windowData.dragListeners.up);
+          document.removeEventListener('touchcancel', windowData.dragListeners.up);
+        }
       }
       windowData.element.remove();
       this.subagentWindows.delete(agentId);
@@ -12615,6 +12634,11 @@ class ClaudemanApp {
       if (windowData.dragListeners) {
         document.removeEventListener('mousemove', windowData.dragListeners.move);
         document.removeEventListener('mouseup', windowData.dragListeners.up);
+        if (windowData.dragListeners.touchMove) {
+          document.removeEventListener('touchmove', windowData.dragListeners.touchMove);
+          document.removeEventListener('touchend', windowData.dragListeners.up);
+          document.removeEventListener('touchcancel', windowData.dragListeners.up);
+        }
       }
       windowData.element.remove();
     }
@@ -12638,6 +12662,11 @@ class ClaudemanApp {
       if (data.dragListeners) {
         document.removeEventListener('mousemove', data.dragListeners.move);
         document.removeEventListener('mouseup', data.dragListeners.up);
+        if (data.dragListeners.touchMove) {
+          document.removeEventListener('touchmove', data.dragListeners.touchMove);
+          document.removeEventListener('touchend', data.dragListeners.up);
+          document.removeEventListener('touchcancel', data.dragListeners.up);
+        }
       }
       data.element.remove();
     }
@@ -12676,6 +12705,11 @@ class ClaudemanApp {
       if (popupData.dragListeners) {
         document.removeEventListener('mousemove', popupData.dragListeners.move);
         document.removeEventListener('mouseup', popupData.dragListeners.up);
+        if (popupData.dragListeners.touchMove) {
+          document.removeEventListener('touchmove', popupData.dragListeners.touchMove);
+          document.removeEventListener('touchend', popupData.dragListeners.up);
+          document.removeEventListener('touchcancel', popupData.dragListeners.up);
+        }
       }
       popupData.element.remove();
     }
@@ -12709,6 +12743,11 @@ class ClaudemanApp {
     if (this.teamTasksDragListeners) {
       document.removeEventListener('mousemove', this.teamTasksDragListeners.move);
       document.removeEventListener('mouseup', this.teamTasksDragListeners.up);
+      if (this.teamTasksDragListeners.touchMove) {
+        document.removeEventListener('touchmove', this.teamTasksDragListeners.touchMove);
+        document.removeEventListener('touchend', this.teamTasksDragListeners.up);
+        document.removeEventListener('touchcancel', this.teamTasksDragListeners.up);
+      }
       this.teamTasksDragListeners = null;
     }
 
@@ -12772,28 +12811,27 @@ class ClaudemanApp {
     let startX, startY, startLeft, startTop;
     let dragUpdateScheduled = false;
 
-    handle.addEventListener('mousedown', (e) => {
-      if (e.target.tagName === 'BUTTON') return;
+    const startDrag = (clientX, clientY) => {
       isDragging = true;
-      startX = e.clientX;
-      startY = e.clientY;
-      startLeft = parseInt(win.style.left) || 0;
-      startTop = parseInt(win.style.top) || 0;
-      e.preventDefault();
-    });
+      startX = clientX;
+      startY = clientY;
+      startLeft = parseInt(win.style.left) || win.getBoundingClientRect().left;
+      startTop = parseInt(win.style.top) || win.getBoundingClientRect().top;
+      // On drag start, switch from bottom-positioned to top-positioned so left/top work
+      win.style.bottom = 'auto';
+    };
 
-    // Store references to document-level listeners so they can be removed on window close
-    const moveListener = (e) => {
+    const moveDrag = (clientX, clientY) => {
       if (!isDragging) return;
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
+      const dx = clientX - startX;
+      const dy = clientY - startY;
       // Constrain to viewport bounds
       const winWidth = win.offsetWidth || 420;
       const winHeight = win.offsetHeight || 350;
-      const maxX = window.innerWidth - winWidth - 10;
-      const maxY = window.innerHeight - winHeight - 10;
-      const newLeft = Math.max(10, Math.min(startLeft + dx, maxX));
-      const newTop = Math.max(10, Math.min(startTop + dy, maxY));
+      const maxX = window.innerWidth - winWidth - 4;
+      const maxY = window.innerHeight - winHeight - 4;
+      const newLeft = Math.max(4, Math.min(startLeft + dx, maxX));
+      const newTop = Math.max(4, Math.min(startTop + dy, maxY));
       win.style.left = `${newLeft}px`;
       win.style.top = `${newTop}px`;
       // Throttle connection line updates during drag
@@ -12806,7 +12844,7 @@ class ClaudemanApp {
       }
     };
 
-    const upListener = () => {
+    const endDrag = () => {
       if (isDragging) {
         isDragging = false;
         // Save position after drag ends
@@ -12814,11 +12852,44 @@ class ClaudemanApp {
       }
     };
 
+    // Mouse events
+    handle.addEventListener('mousedown', (e) => {
+      if (e.target.tagName === 'BUTTON') return;
+      startDrag(e.clientX, e.clientY);
+      e.preventDefault();
+    });
+
+    // Touch events
+    handle.addEventListener('touchstart', (e) => {
+      if (e.target.tagName === 'BUTTON') return;
+      const touch = e.touches[0];
+      startDrag(touch.clientX, touch.clientY);
+    }, { passive: true });
+
+    // Store references to document-level listeners so they can be removed on window close
+    const moveListener = (e) => {
+      moveDrag(e.clientX, e.clientY);
+    };
+
+    const touchMoveListener = (e) => {
+      if (!isDragging) return;
+      e.preventDefault(); // Prevent page scroll while dragging
+      const touch = e.touches[0];
+      moveDrag(touch.clientX, touch.clientY);
+    };
+
+    const upListener = () => {
+      endDrag();
+    };
+
     document.addEventListener('mousemove', moveListener);
     document.addEventListener('mouseup', upListener);
+    document.addEventListener('touchmove', touchMoveListener, { passive: false });
+    document.addEventListener('touchend', upListener);
+    document.addEventListener('touchcancel', upListener);
 
     // Return listener references for cleanup
-    return { move: moveListener, up: upListener };
+    return { move: moveListener, up: upListener, touchMove: touchMoveListener };
   }
 
   renderSubagentWindowContent(agentId) {
@@ -13355,6 +13426,11 @@ class ClaudemanApp {
     if (this.teamTasksDragListeners) {
       document.removeEventListener('mousemove', this.teamTasksDragListeners.move);
       document.removeEventListener('mouseup', this.teamTasksDragListeners.up);
+      if (this.teamTasksDragListeners.touchMove) {
+        document.removeEventListener('touchmove', this.teamTasksDragListeners.touchMove);
+        document.removeEventListener('touchend', this.teamTasksDragListeners.up);
+        document.removeEventListener('touchcancel', this.teamTasksDragListeners.up);
+      }
       this.teamTasksDragListeners = null;
     }
   }
