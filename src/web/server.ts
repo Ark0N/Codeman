@@ -785,6 +785,8 @@ export class WebServer extends EventEmitter {
       }
 
       const globalNice = await this.getGlobalNiceConfig();
+      const modelConfig = await this.getModelConfig();
+      const model = (body.mode !== 'shell') ? modelConfig?.defaultModel : undefined;
       const session = new Session({
         workingDir,
         mode: body.mode || 'claude',
@@ -792,6 +794,7 @@ export class WebServer extends EventEmitter {
         mux: this.mux,
         useMux: true,
         niceConfig: globalNice,
+        model,
       });
 
       this.sessions.set(session.id, session);
@@ -2569,14 +2572,17 @@ export class WebServer extends EventEmitter {
       }
 
       // Create a new session with the case as working directory
-      // Apply global Nice priority config if enabled in settings
+      // Apply global Nice priority config and model config from settings
       const niceConfig = await this.getGlobalNiceConfig();
+      const qsModelConfig = await this.getModelConfig();
+      const qsModel = (mode !== 'shell') ? qsModelConfig?.defaultModel : undefined;
       const session = new Session({
         workingDir: casePath,
         mux: this.mux,
         useMux: true,
         mode: mode,
         niceConfig: niceConfig,
+        model: qsModel,
       });
 
       // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting
@@ -2750,8 +2756,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         mode: 'claude',
       });
 
-      // Use Opus 4.5 for plan generation (better reasoning)
-      const modelToUse = 'opus';
+      // Use configured model for plan generation, falling back to opus
+      const planModelConfig = await this.getModelConfig();
+      const modelToUse = planModelConfig?.agentTypeOverrides?.implement || planModelConfig?.defaultModel || 'opus';
 
       try {
         const { result, cost } = await session.runPrompt(prompt, { model: modelToUse });
@@ -2866,7 +2873,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         }
       }
 
-      const orchestrator = new PlanOrchestrator(this.mux, process.cwd(), outputDir);
+      const detailedModelConfig = await this.getModelConfig();
+      const orchestrator = new PlanOrchestrator(this.mux, process.cwd(), outputDir, detailedModelConfig ?? undefined);
 
       // Store orchestrator for potential cancellation via API (not on disconnect)
       // Plan generation continues even if browser disconnects - only explicit cancel stops it
@@ -4564,6 +4572,18 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       }
     }
     return undefined;
+  }
+
+  // Helper to get model configuration from settings
+  private async getModelConfig(): Promise<{ defaultModel?: string; agentTypeOverrides?: Record<string, string> } | null> {
+    const settingsPath = join(homedir(), '.claudeman', 'settings.json');
+
+    try {
+      const content = await fs.readFile(settingsPath, 'utf-8');
+      return JSON.parse(content).modelConfig || null;
+    } catch {
+      return null;
+    }
   }
 
   private async startScheduledRun(prompt: string, workingDir: string, durationMinutes: number): Promise<ScheduledRun> {

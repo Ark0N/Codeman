@@ -1,6 +1,6 @@
 {
   "name": "claudeman",
-  "version": "0.1548",
+  "version": "0.1549",
   "description": "The missing control plane for Claude Code - run 20 autonomous agents with real-time monitoring and session persistence",
   "type": "module",
   "main": "dist/index.js",

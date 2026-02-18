@@ -201,6 +201,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     mode: 'claude' | 'shell',
     name?: string,
     niceConfig?: NiceConfig,
+    model?: string,
   ): Promise<MuxSession> {
     const muxName = `claudeman-${sessionId.slice(0, 8)}`;
 
@@ -240,8 +241,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       `export CLAUDEMAN_API_URL=${process.env.CLAUDEMAN_API_URL || 'http://localhost:3000'}`,
     ].join(' && ');
 
+    // Validate model to prevent command injection (only allow alphanumeric, hyphens, dots)
+    const safeModel = (model && /^[a-zA-Z0-9._-]+$/.test(model)) ? model : undefined;
+    const modelFlag = (mode === 'claude' && safeModel) ? ` --model ${safeModel}` : '';
     const baseCmd = mode === 'claude'
-      ? `claude --dangerously-skip-permissions --session-id "${sessionId}"`
+      ? `claude --dangerously-skip-permissions --session-id "${sessionId}"${modelFlag}`
       : '$SHELL';
 
     const config = niceConfig || DEFAULT_NICE_CONFIG;

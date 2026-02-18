@@ -70,6 +70,7 @@ export interface TerminalMultiplexer extends EventEmitter {
     mode: 'claude' | 'shell',
     name?: string,
     niceConfig?: NiceConfig,
+    model?: string,
   ): Promise<MuxSession>;
 
   /**

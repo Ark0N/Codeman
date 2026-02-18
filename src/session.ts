@@ -317,6 +317,9 @@ export class Session extends EventEmitter {
   // Nice prioritying configuration
   private _niceConfig: NiceConfig = { ...DEFAULT_NICE_CONFIG };
 
+  // Claude model override (e.g., 'opus', 'sonnet', 'haiku')
+  private _model: string | undefined;
+
   // Session color for visual differentiation
   private _color: import('./types.js').SessionColor = 'default';
 
@@ -361,6 +364,8 @@ export class Session extends EventEmitter {
     /** Existing mux session for restored sessions */
     muxSession?: MuxSession;
     niceConfig?: NiceConfig;  // Nice prioritying configuration
+    /** Claude model override (e.g., 'opus', 'sonnet', 'haiku') */
+    model?: string;
   }) {
     super();
     this.setMaxListeners(25);
@@ -389,6 +394,11 @@ export class Session extends EventEmitter {
     // Apply Nice priority configuration if provided
     if (config.niceConfig) {
       this._niceConfig = { ...config.niceConfig };
+    }
+
+    // Apply model override if provided
+    if (config.model) {
+      this._model = config.model;
     }
 
     // Initialize task tracker and forward events (store handlers for cleanup)
@@ -845,7 +855,7 @@ export class Session extends EventEmitter {
           console.log('[Session] Attaching to existing mux session:', this._muxSession!.muxName);
         } else {
           // Create a new mux session
-          this._muxSession = await this._mux.createSession(this.id, this.workingDir, 'claude', this._name, this._niceConfig);
+          this._muxSession = await this._mux.createSession(this.id, this.workingDir, 'claude', this._name, this._niceConfig, this._model);
           console.log('[Session] Created mux session:', this._muxSession.muxName);
 
           // Wait a moment for mux to fully start
@@ -920,10 +930,9 @@ export class Session extends EventEmitter {
       try {
         // Pass --session-id to use the SAME ID as the Claudeman session
         // This ensures subagents can be directly matched to the correct tab
-        this.ptyProcess = pty.spawn('claude', [
-          '--dangerously-skip-permissions',
-          '--session-id', this.id
-        ], {
+        const args = ['--dangerously-skip-permissions', '--session-id', this.id];
+        if (this._model) args.push('--model', this._model);
+        this.ptyProcess = pty.spawn('claude', args, {
           name: 'xterm-256color',
           cols: 120,
           rows: 40,
