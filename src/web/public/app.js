@@ -9999,12 +9999,13 @@ class ClaudemanApp {
         // Extract notification prefs before merging app settings
         const { notificationPreferences, ...appSettings } = settings;
         // Filter out display settings — these are device-specific (mobile vs desktop)
-        // and should not be synced from the server to avoid overriding mobile defaults
+        // and should not be synced from the server to avoid overriding mobile defaults.
+        // NOTE: Feature toggles (subagentTrackingEnabled, imageWatcherEnabled, ralphTrackerEnabled)
+        // are NOT display keys — they control server-side behavior and must sync from server.
         const displayKeys = new Set([
           'showFontControls', 'showSystemStats', 'showTokenCount', 'showCost',
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
-          'subagentTrackingEnabled', 'subagentActiveTabOnly',
-          'imageWatcherEnabled', 'ralphTrackerEnabled', 'tabTwoRows',
+          'subagentActiveTabOnly', 'tabTwoRows',
         ]);
         // Merge settings: non-display keys always sync from server,
         // display keys only seed from server when localStorage has no value

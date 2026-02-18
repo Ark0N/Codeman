@@ -476,21 +476,13 @@ const TERMINAL_SUBAGENT = [
 // ─── Route Interceptors ──────────────────────────────────────────────────────
 
 async function setupRoutes(page, initPayload, terminalContent) {
-  // Intercept SSE endpoint — return init event then keep connection open
+  // CRITICAL: Block SSE entirely to prevent reconnection loops that clear state.
+  // We'll inject data directly via page.evaluate() instead.
   await page.route('**/api/events', async (route) => {
-    const sseData = `event: init\ndata: ${JSON.stringify(initPayload)}\n\n`;
-    await route.fulfill({
-      status: 200,
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      },
-      body: sseData,
-    });
+    await route.abort();
   });
 
-  // Terminal buffer endpoint
+  // Terminal buffer endpoint — used by selectSession()
   await page.route('**/api/sessions/*/terminal**', async (route) => {
     await route.fulfill({
       status: 200,
@@ -504,7 +496,7 @@ async function setupRoutes(page, initPayload, terminalContent) {
     });
   });
 
-  // Mux sessions
+  // Mux sessions (subpath routes before base route)
   await page.route('**/api/mux-sessions/**', async (route) => {
     await route.fulfill({
       status: 200,
@@ -535,42 +527,6 @@ async function setupRoutes(page, initPayload, terminalContent) {
     });
   });
 
-  // Subagents
-  await page.route('**/api/subagents', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ success: true, data: initPayload.subagents || [] }),
-    });
-  });
-
-  // System stats
-  await page.route('**/api/system/stats', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ cpu: 24, memory: { usedMB: 16300, totalMB: 32000, percent: 51 } }),
-    });
-  });
-
-  // Status (fallback for handleInit)
-  await page.route('**/api/status', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify(initPayload),
-    });
-  });
-
-  // Cases
-  await page.route('**/api/cases**', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ cases: [{ name: 'testcase', workingDir: '/home/arkon/claudeman-cases/testcase' }] }),
-    });
-  });
-
   // Subagent window states (restore)
   await page.route('**/api/subagent-window-states', async (route) => {
     await route.fulfill({
@@ -586,33 +542,6 @@ async function setupRoutes(page, initPayload, terminalContent) {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({}),
-    });
-  });
-
-  // Token stats
-  await page.route('**/api/token-stats', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ success: true, data: {} }),
-    });
-  });
-
-  // Execution model config
-  await page.route('**/api/execution/**', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({}),
-    });
-  });
-
-  // Sessions list
-  await page.route('**/api/sessions', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify(initPayload.sessions),
     });
   });
 
@@ -643,7 +572,7 @@ async function setupRoutes(page, initPayload, terminalContent) {
     });
   });
 
-  // Catch-all for any other API endpoints
+  // Catch-all for any remaining API endpoints
   await page.route('**/api/**', async (route) => {
     await route.fulfill({
       status: 200,
@@ -653,59 +582,126 @@ async function setupRoutes(page, initPayload, terminalContent) {
   });
 }
 
+/**
+ * Inject mock state into the app and render.
+ * Bypasses SSE entirely — calls handleInit directly, then selects a session
+ * and writes terminal content.
+ */
+async function injectState(page, initPayload, terminalContent, activeSessionId) {
+  // Wait for app to be ready
+  await page.waitForFunction(() => window.app && window.app.terminal, { timeout: 10000 });
+
+  // Cancel the SSE fallback timer and inject state directly
+  await page.evaluate((payload) => {
+    const app = window.app;
+    // Cancel the init fallback timer (prevents double handleInit)
+    if (app._initFallbackTimer) {
+      clearTimeout(app._initFallbackTimer);
+      app._initFallbackTimer = null;
+    }
+    // Inject state
+    app.handleInit(payload);
+  }, initPayload);
+
+  await sleep(500);
+
+  // Select the target session (this triggers terminal fetch via our mocked route)
+  if (activeSessionId) {
+    await page.evaluate((sid) => {
+      window.app.activeSessionId = null; // Force re-select
+      window.app.selectSession(sid);
+    }, activeSessionId);
+    await sleep(800);
+  }
+
+  // Write terminal content directly as backup (in case fetch didn't work)
+  await page.evaluate((content) => {
+    const app = window.app;
+    if (app.terminal) {
+      // Only write if terminal is still empty
+      const buf = app.terminal.buffer?.active;
+      const hasContent = buf && buf.length > 2 && buf.getLine(1)?.translateToString().trim();
+      if (!hasContent) {
+        app.terminal.clear();
+        app.terminal.reset();
+        app.terminal.write(content);
+        app.terminal.scrollToBottom();
+      }
+    }
+  }, terminalContent);
+
+  // Clean up UI elements that look wrong in screenshots
+  await page.evaluate(() => {
+    // Hide connection indicator (SSE is blocked so it shows "Reconnecting...")
+    const indicator = document.getElementById('connectionIndicator');
+    if (indicator) indicator.style.display = 'none';
+
+    // Hide respawn banner (shows "idle" state which isn't needed in screenshots)
+    const respawnBanner = document.getElementById('respawnBanner');
+    if (respawnBanner) respawnBanner.style.display = 'none';
+
+    // Fix system stats display (CPU/MEM) — inject mock values
+    const statsEl = document.getElementById('headerSystemStats');
+    if (statsEl) {
+      statsEl.innerHTML = `
+        <span class="stat-label">CPU</span>
+        <div class="stat-bar"><div class="stat-bar-fill cpu-bar" style="width: 24%"></div></div>
+        <span class="stat-value">24%</span>
+        <span class="stat-label">MEM</span>
+        <div class="stat-bar"><div class="stat-bar-fill mem-bar" style="width: 51%"></div></div>
+        <span class="stat-value">16.9G</span>
+      `;
+    }
+
+    // Hide subagents panel by default (will be shown per-scenario)
+    const subagentsPanel = document.getElementById('subagentsPanel');
+    if (subagentsPanel) subagentsPanel.style.display = 'none';
+
+    // Ensure monitor panel is closed by default (will be opened per-scenario)
+    const monitorPanel = document.getElementById('monitorPanel');
+    if (monitorPanel) monitorPanel.classList.remove('open');
+
+    // Update token display to show per-session tokens (not globalStats)
+    const app = window.app;
+    if (app && app.activeSessionId) {
+      const session = app.sessions.get(app.activeSessionId);
+      if (session) {
+        const tokens = (session.tokens?.total || 0);
+        const tokenEl = document.getElementById('headerTokens');
+        if (tokenEl) {
+          const formatted = tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens);
+          tokenEl.innerHTML = `<span class="token-icon">⊙</span> <span class="token-count">${formatted} tokens</span>`;
+        }
+      }
+    }
+  });
+
+  await sleep(300);
+}
+
 // ─── Screenshot Scenarios ────────────────────────────────────────────────────
 
 async function captureOverview(page) {
   console.log('\n1/5 Capturing claude-overview.png...');
 
   const initPayload = buildInitPayload(STANDARD_SESSIONS);
-
   await setupRoutes(page, initPayload, TERMINAL_INIT);
 
   await page.goto(`http://localhost:${PORT}`, { waitUntil: 'domcontentloaded' });
-  await sleep(2000);
-
-  // Configure settings for display
-  await page.evaluate(() => {
-    localStorage.setItem('claudeman-app-settings', JSON.stringify({
-      showSubagents: true,
-      subagentTrackingEnabled: true,
-      subagentActiveTabOnly: false,
-      showMonitor: true,
-    }));
-  });
-
-  // Select the w4-testcase tab (matching overview screenshot)
-  await page.evaluate((sessionId) => {
-    if (window.app) {
-      window.app.selectSession(sessionId);
-    }
-  }, SESSION_IDS.w4);
-  await sleep(1000);
+  await injectState(page, initPayload, TERMINAL_INIT, SESSION_IDS.w4);
 
   // Open Monitor panel and populate mux sessions
   await page.evaluate((muxSessions) => {
     const app = window.app;
     if (!app) return;
-
-    // Set mux sessions data
     app.muxSessions = muxSessions;
-
-    // Open monitor panel
     const panel = document.getElementById('monitorPanel');
     if (panel) {
       panel.classList.add('open');
-      // Render the mux sessions
       app._renderMuxSessionsImmediate();
     }
   }, MUX_SESSIONS);
   await sleep(500);
-
-  // Hide connection indicator (looks cleaner)
-  await page.evaluate(() => {
-    const indicator = document.getElementById('connectionIndicator');
-    if (indicator) indicator.style.display = 'none';
-  });
 
   await page.screenshot({
     path: join(PROJECT_ROOT, 'docs', 'images', 'claude-overview.png'),
@@ -718,27 +714,10 @@ async function captureSubagentSpawn(page) {
   console.log('\n2/5 Capturing subagent-spawn.png...');
 
   const initPayload = buildInitPayload(STANDARD_SESSIONS, MOCK_SUBAGENTS);
-
   await setupRoutes(page, initPayload, TERMINAL_SUBAGENT);
 
   await page.goto(`http://localhost:${PORT}`, { waitUntil: 'domcontentloaded' });
-  await sleep(2000);
-
-  // Configure settings
-  await page.evaluate(() => {
-    localStorage.setItem('claudeman-app-settings', JSON.stringify({
-      showSubagents: true,
-      subagentTrackingEnabled: true,
-      subagentActiveTabOnly: false,
-      showMonitor: false,
-    }));
-  });
-
-  // Select w1-testcase (the parent session with subagents)
-  await page.evaluate((sessionId) => {
-    if (window.app) window.app.selectSession(sessionId);
-  }, SESSION_IDS.w1);
-  await sleep(1000);
+  await injectState(page, initPayload, TERMINAL_SUBAGENT, SESSION_IDS.w1);
 
   // Open subagent windows and populate activity
   await page.evaluate((activity) => {
@@ -750,11 +729,11 @@ async function captureSubagentSpawn(page) {
       app.subagentActivity.set(agentId, entries);
     }
 
-    // Open subagent windows (only the first two for cleaner screenshot)
+    // Open subagent windows (first two for cleaner screenshot)
     app.openSubagentWindow('agent-001');
     app.openSubagentWindow('agent-002');
   }, SUBAGENT_ACTIVITY);
-  await sleep(1000);
+  await sleep(800);
 
   // Position windows nicely (matching existing screenshot layout)
   await page.evaluate(() => {
@@ -763,14 +742,12 @@ async function captureSubagentSpawn(page) {
 
     const windows = Array.from(app.subagentWindows.values());
     if (windows.length >= 2) {
-      // Position first window top-right area
       const w1 = windows[0].element;
       w1.style.left = '420px';
       w1.style.top = '40px';
       w1.style.width = '420px';
       w1.style.height = '320px';
 
-      // Position second window right side
       const w2 = windows[1].element;
       w2.style.left = '850px';
       w2.style.top = '40px';
@@ -779,12 +756,6 @@ async function captureSubagentSpawn(page) {
     }
   });
   await sleep(500);
-
-  // Hide connection indicator
-  await page.evaluate(() => {
-    const indicator = document.getElementById('connectionIndicator');
-    if (indicator) indicator.style.display = 'none';
-  });
 
   await page.screenshot({
     path: join(PROJECT_ROOT, 'docs', 'images', 'subagent-spawn.png'),
@@ -797,33 +768,16 @@ async function captureRalphTracker(page) {
   console.log('\n3/5 Capturing ralph-tracker-8tasks-44percent.png...');
 
   const initPayload = buildInitPayload(RALPH_SESSIONS);
-
   await setupRoutes(page, initPayload, TERMINAL_RALPH);
 
   await page.goto(`http://localhost:${PORT}`, { waitUntil: 'domcontentloaded' });
-  await sleep(2000);
-
-  // Configure settings
-  await page.evaluate(() => {
-    localStorage.setItem('claudeman-app-settings', JSON.stringify({
-      showSubagents: false,
-      subagentTrackingEnabled: false,
-      showMonitor: false,
-    }));
-  });
-
-  // Select ralph session
-  await page.evaluate((sessionId) => {
-    if (window.app) window.app.selectSession(sessionId);
-  }, RALPH_SESSION_ID);
-  await sleep(1000);
+  await injectState(page, initPayload, TERMINAL_RALPH, RALPH_SESSION_ID);
 
   // Ensure Ralph state panel is visible and expanded
   await page.evaluate((sessionId) => {
     const app = window.app;
     if (!app) return;
 
-    // Force the ralph state to be set
     const session = app.sessions.get(sessionId);
     if (session) {
       app.ralphStates.set(sessionId, {
@@ -837,12 +791,6 @@ async function captureRalphTracker(page) {
   }, RALPH_SESSION_ID);
   await sleep(500);
 
-  // Hide connection indicator
-  await page.evaluate(() => {
-    const indicator = document.getElementById('connectionIndicator');
-    if (indicator) indicator.style.display = 'none';
-  });
-
   await page.screenshot({
     path: join(PROJECT_ROOT, 'docs', 'images', 'ralph-tracker-8tasks-44percent.png'),
     fullPage: false,
@@ -854,23 +802,10 @@ async function captureMultiSessionDashboard(page) {
   console.log('\n4/5 Capturing multi-session-dashboard.png...');
 
   const initPayload = buildInitPayload(STANDARD_SESSIONS);
-
   await setupRoutes(page, initPayload, TERMINAL_WORKING);
 
   await page.goto(`http://localhost:${PORT}`, { waitUntil: 'domcontentloaded' });
-  await sleep(2000);
-
-  // Select w3-testcase (matching existing screenshot)
-  await page.evaluate((sessionId) => {
-    if (window.app) window.app.selectSession(sessionId);
-  }, SESSION_IDS.w3);
-  await sleep(1000);
-
-  // Hide connection indicator
-  await page.evaluate(() => {
-    const indicator = document.getElementById('connectionIndicator');
-    if (indicator) indicator.style.display = 'none';
-  });
+  await injectState(page, initPayload, TERMINAL_WORKING, SESSION_IDS.w3);
 
   await page.screenshot({
     path: join(PROJECT_ROOT, 'docs', 'screenshots', 'multi-session-dashboard.png'),
@@ -883,23 +818,15 @@ async function captureMultiSessionMonitor(page) {
   console.log('\n5/5 Capturing multi-session-monitor.png...');
 
   const initPayload = buildInitPayload(STANDARD_SESSIONS);
-
   await setupRoutes(page, initPayload, TERMINAL_INIT);
 
   await page.goto(`http://localhost:${PORT}`, { waitUntil: 'domcontentloaded' });
-  await sleep(2000);
-
-  // Select w4-testcase (matching existing screenshot)
-  await page.evaluate((sessionId) => {
-    if (window.app) window.app.selectSession(sessionId);
-  }, SESSION_IDS.w4);
-  await sleep(1000);
+  await injectState(page, initPayload, TERMINAL_INIT, SESSION_IDS.w4);
 
   // Open Monitor panel and populate mux sessions
   await page.evaluate((muxSessions) => {
     const app = window.app;
     if (!app) return;
-
     app.muxSessions = muxSessions;
     const panel = document.getElementById('monitorPanel');
     if (panel) {
@@ -908,12 +835,6 @@ async function captureMultiSessionMonitor(page) {
     }
   }, MUX_SESSIONS);
   await sleep(500);
-
-  // Hide connection indicator
-  await page.evaluate(() => {
-    const indicator = document.getElementById('connectionIndicator');
-    if (indicator) indicator.style.display = 'none';
-  });
 
   await page.screenshot({
     path: join(PROJECT_ROOT, 'docs', 'screenshots', 'multi-session-monitor.png'),
