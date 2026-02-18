@@ -278,37 +278,37 @@ describe('Session State Management', () => {
     });
   });
 
-  describe('Screen Session Environment', () => {
-    interface ScreenEnv {
-      CLAUDEMAN_SCREEN: string;
+  describe('Mux Session Environment', () => {
+    interface MuxEnv {
+      CLAUDEMAN_MUX: string;
       CLAUDEMAN_SESSION_ID: string;
-      CLAUDEMAN_SCREEN_NAME: string;
+      CLAUDEMAN_MUX_NAME: string;
     }
 
-    const createScreenEnv = (sessionId: string, screenName: string): ScreenEnv => ({
-      CLAUDEMAN_SCREEN: '1',
+    const createMuxEnv = (sessionId: string, muxName: string): MuxEnv => ({
+      CLAUDEMAN_MUX: '1',
       CLAUDEMAN_SESSION_ID: sessionId,
-      CLAUDEMAN_SCREEN_NAME: screenName,
+      CLAUDEMAN_MUX_NAME: muxName,
     });
 
     const isClaudemanSession = (env: Record<string, string | undefined>): boolean => {
-      return env.CLAUDEMAN_SCREEN === '1';
+      return env.CLAUDEMAN_MUX === '1';
     };
 
-    it('should create valid screen environment', () => {
-      const env = createScreenEnv('session-123', 'claudeman-test');
-      expect(env.CLAUDEMAN_SCREEN).toBe('1');
+    it('should create valid mux environment', () => {
+      const env = createMuxEnv('session-123', 'claudeman-test');
+      expect(env.CLAUDEMAN_MUX).toBe('1');
       expect(env.CLAUDEMAN_SESSION_ID).toBe('session-123');
-      expect(env.CLAUDEMAN_SCREEN_NAME).toBe('claudeman-test');
+      expect(env.CLAUDEMAN_MUX_NAME).toBe('claudeman-test');
     });
 
     it('should detect claudeman session', () => {
-      const env = createScreenEnv('session-123', 'claudeman-test');
+      const env = createMuxEnv('session-123', 'claudeman-test');
       expect(isClaudemanSession(env)).toBe(true);
     });
 
     it('should detect non-claudeman session', () => {
-      const env = { CLAUDEMAN_SCREEN: '0' };
+      const env = { CLAUDEMAN_MUX: '0' };
       expect(isClaudemanSession(env)).toBe(false);
     });
 
@@ -382,7 +382,7 @@ describe('Session State Management', () => {
     interface CleanupState {
       buffersCleared: boolean;
       timersCleared: boolean;
-      screenKilled: boolean;
+      muxKilled: boolean;
       respawnStopped: boolean;
       trackerReset: boolean;
     }
@@ -390,7 +390,7 @@ describe('Session State Management', () => {
     const createCleanupState = (): CleanupState => ({
       buffersCleared: false,
       timersCleared: false,
-      screenKilled: false,
+      muxKilled: false,
       respawnStopped: false,
       trackerReset: false,
     });
@@ -415,7 +415,7 @@ describe('Session State Management', () => {
       const state: CleanupState = {
         buffersCleared: true,
         timersCleared: true,
-        screenKilled: true,
+        muxKilled: true,
         respawnStopped: true,
         trackerReset: true,
       };

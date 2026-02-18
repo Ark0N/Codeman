@@ -1,9 +1,0 @@
-# PROTECTED SCREEN SESSIONS - DO NOT KILL
-# Captured at 2026-02-12 before agent-teams implementation
-# These are live Claudeman sessions running on port 3000
-685273.claudeman-a5929405
-684663.claudeman-07a604fb
-684529.claudeman-a55c7db2
-# User-specified protected sessions (NEVER kill these):
-# w1-claudeman, w2, w3-claudeman
-# NEVER run tests on port 3000 (live dev server)

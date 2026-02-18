@@ -429,18 +429,18 @@ export class WebServer extends EventEmitter {
     }
     this.mux = createMultiplexer();
 
-    // Set up mux event listeners (SSE event names kept as screen:* for frontend compat)
+    // Set up mux event listeners
     this.mux.on('sessionCreated', (session) => {
-      this.broadcast('screen:created', session);
+      this.broadcast('mux:created', session);
     });
     this.mux.on('sessionKilled', (data) => {
-      this.broadcast('screen:killed', data);
+      this.broadcast('mux:killed', data);
     });
     this.mux.on('sessionDied', (data) => {
-      this.broadcast('screen:died', data);
+      this.broadcast('mux:died', data);
     });
-    this.mux.on('statsUpdated', (screens) => {
-      this.broadcast('screen:statsUpdated', screens);
+    this.mux.on('statsUpdated', (sessions) => {
+      this.broadcast('mux:statsUpdated', sessions);
     });
 
     // Set up subagent watcher listeners
@@ -789,8 +789,8 @@ export class WebServer extends EventEmitter {
         workingDir,
         mode: body.mode || 'claude',
         name: body.name || '',
-        screenManager: this.mux,
-        useScreen: true,
+        mux: this.mux,
+        useMux: true,
         niceConfig: globalNice,
       });
 
@@ -820,7 +820,7 @@ export class WebServer extends EventEmitter {
 
       const name = String(body.name || '').slice(0, MAX_SESSION_NAME_LENGTH);
       session.name = name;
-      // Also update the screen name if this session has a screen
+      // Also update the mux session name if applicable
       this.mux.updateSessionName(id, session.name);
       this.persistSessionState(session);
       this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
@@ -854,14 +854,14 @@ export class WebServer extends EventEmitter {
 
     this.app.delete('/api/sessions/:id', async (req): Promise<ApiResponse> => {
       const { id } = req.params as { id: string };
-      const query = req.query as { killScreen?: string };
-      const killScreen = query.killScreen !== 'false'; // Default to true
+      const query = req.query as { killMux?: string };
+      const killMux = query.killMux !== 'false'; // Default to true
 
       if (!this.sessions.has(id)) {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
-      await this.cleanupSession(id, killScreen);
+      await this.cleanupSession(id, killMux);
       return { success: true };
     });
 
@@ -1512,7 +1512,7 @@ export class WebServer extends EventEmitter {
     });
 
     // Write Ralph prompt to file in session's working directory
-    // This avoids screen input escaping issues with long multi-line prompts
+    // This avoids mux input escaping issues with long multi-line prompts
     this.app.post('/api/sessions/:id/ralph-prompt/write', async (req) => {
       const { id } = req.params as { id: string };
       const promptResult = RalphPromptWriteSchema.safeParse(req.body);
@@ -1630,14 +1630,14 @@ export class WebServer extends EventEmitter {
     });
 
     // Send input to interactive session
-    // useScreen: true uses writeViaScreen which is more reliable for programmatic input
+    // useMux: true uses writeViaMux which is more reliable for programmatic input
     this.app.post('/api/sessions/:id/input', async (req): Promise<ApiResponse> => {
       const { id } = req.params as { id: string };
       const result = SessionInputWithLimitSchema.safeParse(req.body);
       if (!result.success) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
       }
-      const { input, useScreen } = result.data;
+      const { input, useMux } = result.data;
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -1649,14 +1649,14 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Input exceeds maximum length (${MAX_INPUT_LENGTH} bytes)`);
       }
 
-      // Write input to PTY. Direct write is synchronous; writeViaScreen
+      // Write input to PTY. Direct write is synchronous; writeViaMux
       // (tmux send-keys) is fire-and-forget to avoid blocking the HTTP response.
-      if (useScreen) {
+      if (useMux) {
         // Fire-and-forget: don't block HTTP response on tmux child process.
         // Fallback to direct write on failure.
-        session.writeViaScreen(inputStr).then(ok => {
+        session.writeViaMux(inputStr).then(ok => {
           if (!ok) {
-            console.warn(`[Server] writeViaScreen failed for session ${id}, falling back to direct write`);
+            console.warn(`[Server] writeViaMux failed for session ${id}, falling back to direct write`);
             session.write(inputStr);
           }
         }).catch(() => {
@@ -1766,7 +1766,7 @@ export class WebServer extends EventEmitter {
         return { success: true, config: controller.getConfig(), active: true };
       }
 
-      // Return pre-saved config from screens.json
+      // Return pre-saved config from mux-sessions.json
       const preConfig = this.mux.getSession(id)?.respawnConfig;
       if (preConfig) {
         return { success: true, config: preConfig, active: false };
@@ -1795,7 +1795,7 @@ export class WebServer extends EventEmitter {
       // Create or get existing controller
       let controller = this.respawnControllers.get(id);
       if (!controller) {
-        // Merge request body with pre-saved config from screens.json
+        // Merge request body with pre-saved config from mux-sessions.json
         const preConfig = this.mux.getSession(id)?.respawnConfig;
         const config = body || preConfig ? { ...preConfig, ...body } : undefined;
         controller = new RespawnController(session, config);
@@ -2566,8 +2566,8 @@ export class WebServer extends EventEmitter {
       const niceConfig = await this.getGlobalNiceConfig();
       const session = new Session({
         workingDir: casePath,
-        screenManager: this.mux,
-        useScreen: true,
+        mux: this.mux,
+        useMux: true,
         mode: mode,
         niceConfig: niceConfig,
       });
@@ -2738,8 +2738,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       // Create temporary session for the AI call using Opus 4.5 for deep reasoning
       const session = new Session({
         workingDir: process.cwd(),
-        screenManager: this.mux,
-        useScreen: false, // No screen needed for one-shot
+        mux: this.mux,
+        useMux: false, // No mux needed for one-shot
         mode: 'claude',
       });
 
@@ -3449,38 +3449,38 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       }
     });
 
-    // ============ Screen Management Endpoints ============
+    // ============ Mux Session Management Endpoints ============
 
-    // Get all tracked screens with stats
-    this.app.get('/api/screens', async () => {
-      const screens = await this.mux.getSessionsWithStats();
+    // Get all tracked mux sessions with stats
+    this.app.get('/api/mux-sessions', async () => {
+      const sessions = await this.mux.getSessionsWithStats();
       return {
-        screens,
-        screenAvailable: this.mux.isAvailable()
+        sessions,
+        muxAvailable: this.mux.isAvailable()
       };
     });
 
     // Kill a mux session
-    this.app.delete('/api/screens/:sessionId', async (req) => {
+    this.app.delete('/api/mux-sessions/:sessionId', async (req) => {
       const { sessionId } = req.params as { sessionId: string };
       const success = await this.mux.killSession(sessionId);
       return { success };
     });
 
-    // Reconcile screens (find dead ones)
-    this.app.post('/api/screens/reconcile', async () => {
+    // Reconcile mux sessions (find dead ones)
+    this.app.post('/api/mux-sessions/reconcile', async () => {
       const result = await this.mux.reconcileSessions();
       return result;
     });
 
     // Start stats collection
-    this.app.post('/api/screens/stats/start', async () => {
+    this.app.post('/api/mux-sessions/stats/start', async () => {
       this.mux.startStatsCollection(STATS_COLLECTION_INTERVAL_MS);
       return { success: true };
     });
 
     // Stop stats collection
-    this.app.post('/api/screens/stats/stop', async () => {
+    this.app.post('/api/mux-sessions/stats/stop', async () => {
       this.mux.stopStatsCollection();
       return { success: true };
     });
@@ -3891,19 +3891,19 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   // Track sessions currently being cleaned up to prevent concurrent cleanup races
   private cleaningUp: Set<string> = new Set();
 
-  private async cleanupSession(sessionId: string, killScreen: boolean = true): Promise<void> {
+  private async cleanupSession(sessionId: string, killMux: boolean = true): Promise<void> {
     // Guard against concurrent cleanup of the same session
     if (this.cleaningUp.has(sessionId)) return;
     this.cleaningUp.add(sessionId);
 
     try {
-      await this._doCleanupSession(sessionId, killScreen);
+      await this._doCleanupSession(sessionId, killMux);
     } finally {
       this.cleaningUp.delete(sessionId);
     }
   }
 
-  private async _doCleanupSession(sessionId: string, killScreen: boolean): Promise<void> {
+  private async _doCleanupSession(sessionId: string, killMux: boolean): Promise<void> {
     const session = this.sessions.get(sessionId);
 
     // Stop watching @fix_plan.md for this session
@@ -3912,7 +3912,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }
 
     // Kill all subagents spawned by this session
-    if (session && killScreen) {
+    if (session && killMux) {
       try {
         await subagentWatcher.killSubagentsForSession(session.workingDir);
       } catch (err) {
@@ -3994,7 +3994,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     if (session) {
       // Accumulate tokens to global stats before removing session
       // This preserves lifetime usage even after sessions are deleted
-      if (killScreen && (session.inputTokens > 0 || session.outputTokens > 0 || session.totalCost > 0)) {
+      if (killMux && (session.inputTokens > 0 || session.outputTokens > 0 || session.totalCost > 0)) {
         this.store.addToGlobalStats(session.inputTokens, session.outputTokens, session.totalCost);
         // Record to daily stats (for what hasn't been recorded yet via periodic recording)
         const lastRecorded = this.lastRecordedTokens.get(sessionId) || { input: 0, output: 0 };
@@ -4043,11 +4043,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       fileStreamManager.closeSessionStreams(sessionId);
       // Stop watching for images in this session's directory
       imageWatcher.unwatchSession(sessionId);
-      await session.stop(killScreen);
+      await session.stop(killMux);
       this.sessions.delete(sessionId);
-      // Only remove from state.json if we're also killing the screen.
-      // When killScreen=false (server shutdown), preserve state for recovery.
-      if (killScreen) {
+      // Only remove from state.json if we're also killing the mux session.
+      // When killMux=false (server shutdown), preserve state for recovery.
+      if (killMux) {
         this.store.removeSession(sessionId);
       }
     }
@@ -4083,7 +4083,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       },
 
       clearTerminal: () => {
-        // Tell clients to clear their terminal (after screen attach)
+        // Tell clients to clear their terminal (after mux attach)
         this.broadcast('session:clearTerminal', { id: session.id });
       },
 
@@ -4452,7 +4452,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
    *
    * @param session - The session to attach the controller to
    * @param config - The persisted respawn configuration
-   * @param source - Source of the config for logging (e.g., 'state.json' or 'screens.json')
+   * @param source - Source of the config for logging (e.g., 'state.json' or 'mux-sessions.json')
    */
   private restoreRespawnController(
     session: Session,
@@ -5074,10 +5074,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // This prevents race conditions where clients connect before state is ready
     // CRITICAL: Skip in test mode to prevent tests from picking up user sessions
     if (!this.testMode) {
-      await this.restoreScreenSessions();
+      await this.restoreMuxSessions();
     }
 
-    // Clean up stale sessions from state file that don't have active screens
+    // Clean up stale sessions from state file that don't have active mux sessions
     this.cleanupStaleSessions();
 
     await this.app.listen({ port: this.port, host: '0.0.0.0' });
@@ -5156,9 +5156,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     return false; // Default disabled (matches UI default)
   }
 
-  private async restoreScreenSessions(): Promise<void> {
+  private async restoreMuxSessions(): Promise<void> {
     try {
-      // Reconcile screens to find which ones are still alive (also discovers unknown screens)
+      // Reconcile mux sessions to find which ones are still alive (also discovers unknown ones)
       const { alive, dead, discovered } = await this.mux.reconcileSessions();
 
       if (discovered.length > 0) {
@@ -5168,31 +5168,31 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       if (alive.length > 0 || discovered.length > 0) {
         console.log(`[Server] Found ${alive.length + discovered.length} alive mux session(s) from previous run`);
 
-        // For each alive screen, create a Session object if it doesn't exist
-        const screens = this.mux.getSessions();
-        for (const screen of screens) {
-          if (!this.sessions.has(screen.sessionId)) {
+        // For each alive mux session, create a Session object if it doesn't exist
+        const muxSessions = this.mux.getSessions();
+        for (const muxSession of muxSessions) {
+          if (!this.sessions.has(muxSession.sessionId)) {
             // Restore session settings from state.json (single source of truth)
-            const savedState = this.store.getSession(screen.sessionId);
+            const savedState = this.store.getSession(muxSession.sessionId);
 
-            // Determine the correct session name (priority: savedState > screen > muxName)
+            // Determine the correct session name (priority: savedState > muxSession > muxName)
             // This ensures renamed sessions keep their name after server restart
-            const sessionName = savedState?.name || screen.name || screen.muxName;
+            const sessionName = savedState?.name || muxSession.name || muxSession.muxName;
 
-            // Create a session object for this mux session with the existing session
+            // Create a session object for this mux session
             const session = new Session({
-              id: screen.sessionId,  // Preserve the original session ID
-              workingDir: screen.workingDir,
-              mode: screen.mode,
+              id: muxSession.sessionId,  // Preserve the original session ID
+              workingDir: muxSession.workingDir,
+              mode: muxSession.mode,
               name: sessionName,
               mux: this.mux,
               useMux: true,
-              muxSession: screen  // Pass the existing session so startInteractive() can attach to it
+              muxSession: muxSession  // Pass the existing session so startInteractive() can attach to it
             });
 
-            // Update screen name if it was a "Restored:" placeholder or doesn't match saved name
-            if (savedState?.name && screen.name !== savedState.name) {
-              this.mux.updateSessionName(screen.sessionId, savedState.name);
+            // Update session name if it was a "Restored:" placeholder or doesn't match saved name
+            if (savedState?.name && muxSession.name !== savedState.name) {
+              this.mux.updateSessionName(muxSession.sessionId, savedState.name);
             }
             if (savedState) {
               // Auto-compact
@@ -5263,18 +5263,18 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
               }
             }
 
-            // Fallback: restore respawn from screens.json if state.json didn't have it
-            if (!this.respawnControllers.has(session.id) && screen.respawnConfig?.enabled) {
+            // Fallback: restore respawn from mux-sessions.json if state.json didn't have it
+            if (!this.respawnControllers.has(session.id) && muxSession.respawnConfig?.enabled) {
               try {
-                this.restoreRespawnController(session, screen.respawnConfig, 'screens.json');
+                this.restoreRespawnController(session, muxSession.respawnConfig, 'mux-sessions.json');
               } catch (err) {
-                console.error(`[Server] Failed to restore respawn from screens.json for session ${session.id}:`, err);
+                console.error(`[Server] Failed to restore respawn from mux-sessions.json for session ${session.id}:`, err);
               }
             }
 
             // Fallback: restore Ralph state from state-inner.json if not already set and not explicitly disabled
             if (!session.ralphTracker.enabled && !session.ralphTracker.autoEnableDisabled) {
-              const ralphState = this.store.getRalphState(screen.sessionId);
+              const ralphState = this.store.getRalphState(muxSession.sessionId);
               if (ralphState?.loop?.enabled) {
                 session.ralphTracker.restoreState(ralphState.loop, ralphState.todos);
                 console.log(`[Server] Restored Ralph state from inner store for session ${session.id}`);
@@ -5296,16 +5296,16 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
             this.persistSessionState(session);
 
             // Mark it as restored (not started yet - user needs to attach)
-            console.log(`[Server] Restored session ${session.id} from mux ${screen.muxName}`);
+            console.log(`[Server] Restored session ${session.id} from mux ${muxSession.muxName}`);
           }
         }
 
-        // Start stats collection to show screen info
+        // Start stats collection for mux sessions
         this.mux.startStatsCollection(STATS_COLLECTION_INTERVAL_MS);
 
         // Start mouse mode sync (tmux only) — toggles mouse on/off based on pane count.
         // Mouse off = native xterm.js selection; mouse on = tmux pane clicking (split layouts).
-        if (this.mux.backend === 'tmux' && 'startMouseModeSync' in this.mux) {
+        if ('startMouseModeSync' in this.mux) {
           (this.mux as { startMouseModeSync: (ms?: number) => void }).startMouseModeSync();
         }
       }
@@ -5415,7 +5415,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     );
 
     // Properly clean up all remaining sessions in parallel (removes listeners, clears state, etc.)
-    // Don't kill screens on server stop - they can be reattached on restart
+    // Don't kill mux sessions on server stop - they can be reattached on restart
     // Use Promise.race with a 30s timeout to prevent shutdown from hanging indefinitely
     const sessionCleanup = Promise.allSettled(
       Array.from(this.sessions.keys()).map(id => this.cleanupSession(id, false))

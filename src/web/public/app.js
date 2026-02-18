@@ -1350,7 +1350,7 @@ class ClaudemanApp {
     this.terminalBuffers = new Map(); // Store terminal content per session
     this.editingSessionId = null; // Session being edited in options modal
     this.pendingCloseSessionId = null; // Session pending close confirmation
-    this.screenSessions = []; // Screen sessions for process monitor
+    this.muxSessions = []; // Screen sessions for process monitor
 
     // Ralph loop/todo state per session
     this.ralphStates = new Map(); // Map<sessionId, { loop, todos }>
@@ -1428,7 +1428,7 @@ class ClaudemanApp {
     this.renderSessionTabsTimeout = null;
     this.renderRalphStatePanelTimeout = null;
     this.renderTaskPanelTimeout = null;
-    this.renderScreenSessionsTimeout = null;
+    this.renderMuxSessionsTimeout = null;
 
     // System stats polling
     this.systemStatsInterval = null;
@@ -2766,29 +2766,29 @@ class ClaudemanApp {
     });
 
     // Screen events
-    addListener('screen:created', (e) => {
+    addListener('mux:created', (e) => {
       const screen = JSON.parse(e.data);
-      this.screenSessions.push(screen);
-      this.renderScreenSessions();
+      this.muxSessions.push(screen);
+      this.renderMuxSessions();
     });
 
-    addListener('screen:killed', (e) => {
+    addListener('mux:killed', (e) => {
       const data = JSON.parse(e.data);
-      this.screenSessions = this.screenSessions.filter(s => s.sessionId !== data.sessionId);
-      this.renderScreenSessions();
+      this.muxSessions = this.muxSessions.filter(s => s.sessionId !== data.sessionId);
+      this.renderMuxSessions();
     });
 
-    addListener('screen:died', (e) => {
+    addListener('mux:died', (e) => {
       const data = JSON.parse(e.data);
-      this.screenSessions = this.screenSessions.filter(s => s.sessionId !== data.sessionId);
-      this.renderScreenSessions();
+      this.muxSessions = this.muxSessions.filter(s => s.sessionId !== data.sessionId);
+      this.renderMuxSessions();
       this.showToast('Mux session died: ' + data.sessionId.slice(0, 8), 'warning');
     });
 
-    addListener('screen:statsUpdated', (e) => {
-      this.screenSessions = JSON.parse(e.data);
+    addListener('mux:statsUpdated', (e) => {
+      this.muxSessions = JSON.parse(e.data);
       if (document.getElementById('monitorPanel').classList.contains('open')) {
-        this.renderScreenSessions();
+        this.renderMuxSessions();
       }
     });
 
@@ -3272,7 +3272,7 @@ class ClaudemanApp {
 
     // Chain on dispatch only — wait for the previous request to be sent before
     // dispatching the next one (preserves keystroke ordering), but don't wait
-    // for the server's response. The server handles writeViaScreen as
+    // for the server's response. The server handles writeViaMux as
     // fire-and-forget anyway, so the HTTP response carries no useful data
     // beyond success/failure for retry purposes.
     this._inputSendChain = this._inputSendChain.then(() => {
@@ -4318,9 +4318,9 @@ class ClaudemanApp {
     delete this.respawnActionLogs[sessionId];
   }
 
-  async closeSession(sessionId, killScreen = true) {
+  async closeSession(sessionId, killMux = true) {
     try {
-      await fetch(`/api/sessions/${sessionId}?killScreen=${killScreen}`, { method: 'DELETE' });
+      await fetch(`/api/sessions/${sessionId}?killMux=${killMux}`, { method: 'DELETE' });
       this._cleanupSessionData(sessionId);
 
       if (this.activeSessionId === sessionId) {
@@ -4339,7 +4339,7 @@ class ClaudemanApp {
 
       this.renderSessionTabs();
 
-      if (killScreen) {
+      if (killMux) {
         this.showToast('Session closed and tmux killed', 'success');
       } else {
         this.showToast('Tab hidden, tmux still running', 'info');
@@ -4369,12 +4369,12 @@ class ClaudemanApp {
     document.getElementById('closeConfirmModal').classList.remove('active');
   }
 
-  async confirmCloseSession(killScreen = true) {
+  async confirmCloseSession(killMux = true) {
     const sessionId = this.pendingCloseSessionId;
     this.cancelCloseSession();
 
     if (sessionId) {
-      await this.closeSession(sessionId, killScreen);
+      await this.closeSession(sessionId, killMux);
     }
   }
 
@@ -7187,7 +7187,7 @@ class ClaudemanApp {
       }
 
       // Step 3: Enable respawn if requested (with Ralph-specific prompts)
-      // NOTE: Prompts must be single-line because screen-manager.ts strips newlines
+      // NOTE: Prompts must be single-line because tmux send-keys handles them as single input
       if (config.enableRespawn) {
         const ralphUpdatePrompt = 'Before /clear: Update CLAUDE.md with discoveries and notes, mark completed tasks in @fix_plan.md, write a brief progress summary to a file so the next iteration can continue seamlessly.';
 
@@ -7269,7 +7269,7 @@ class ClaudemanApp {
         const initRes = await fetch(`/api/sessions/${sessionId}/input`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ input: '/init\r', useScreen: true })
+          body: JSON.stringify({ input: '/init\r', useMux: true })
         });
 
         if (!initRes.ok) {
@@ -7319,7 +7319,7 @@ class ClaudemanApp {
       const inputRes = await fetch(`/api/sessions/${sessionId}/input`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: readCommand, useScreen: true })
+        body: JSON.stringify({ input: readCommand, useMux: true })
       });
 
       if (!inputRes.ok) {
@@ -8363,7 +8363,7 @@ class ClaudemanApp {
     await fetch(`/api/sessions/${this.activeSessionId}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input, useScreen: true })
+      body: JSON.stringify({ input, useMux: true })
     });
   }
 
@@ -10473,13 +10473,13 @@ class ClaudemanApp {
 
     if (panel.classList.contains('open')) {
       // Load screens and start stats collection
-      await this.loadScreens();
-      await fetch('/api/screens/stats/start', { method: 'POST' });
+      await this.loadMuxSessions();
+      await fetch('/api/mux-sessions/stats/start', { method: 'POST' });
       this.renderTaskPanel();
       if (toggleBtn) toggleBtn.innerHTML = '&#x25BC;'; // Down arrow when open
     } else {
       // Stop stats collection when panel is closed
-      await fetch('/api/screens/stats/stop', { method: 'POST' });
+      await fetch('/api/mux-sessions/stats/stop', { method: 'POST' });
       if (toggleBtn) toggleBtn.innerHTML = '&#x25B2;'; // Up arrow when closed
     }
   }
@@ -14659,19 +14659,19 @@ class ClaudemanApp {
 
   // ========== Mux Sessions (in Monitor Panel) ==========
 
-  async loadScreens() {
+  async loadMuxSessions() {
     try {
-      const res = await fetch('/api/screens');
+      const res = await fetch('/api/mux-sessions');
       const data = await res.json();
-      this.screenSessions = data.screens || [];
-      this.renderScreenSessions();
+      this.muxSessions = data.sessions || [];
+      this.renderMuxSessions();
     } catch (err) {
-      console.error('Failed to load screens:', err);
+      console.error('Failed to load mux sessions:', err);
     }
   }
 
   killAllSessions() {
-    const count = this.screenSessions?.length || 0;
+    const count = this.muxSessions?.length || 0;
     if (count === 0) {
       alert('No sessions to kill');
       return;
@@ -14697,27 +14697,27 @@ class ClaudemanApp {
     }
   }
 
-  async confirmKillAll(killScreens) {
+  async confirmKillAll(killMux) {
     this.closeKillAllModal();
 
     try {
-      if (killScreens) {
+      if (killMux) {
         // Kill everything including tmux sessions
         const res = await fetch('/api/sessions', { method: 'DELETE' });
         const data = await res.json();
         if (data.success) {
           this.sessions.clear();
-          this.screenSessions = [];
+          this.muxSessions = [];
           this.activeSessionId = null;
           try { localStorage.removeItem('claudeman-active-session'); } catch {}
           this.renderSessionTabs();
-          this.renderScreenSessions();
+          this.renderMuxSessions();
           this.terminal.clear();
           this.terminal.reset();
           this.toast('All sessions and tmux killed', 'success');
         }
       } else {
-        // Just remove tabs, keep screens running
+        // Just remove tabs, keep mux sessions running
         this.sessions.clear();
         this.activeSessionId = null;
         try { localStorage.removeItem('claudeman-active-session'); } catch {}
@@ -15048,43 +15048,43 @@ class ClaudemanApp {
     setTimeout(() => modal.classList.remove('from-mobile'), 300);
   }
 
-  renderScreenSessions() {
+  renderMuxSessions() {
     // Debounce renders at 100ms to prevent excessive DOM updates
-    if (this.renderScreenSessionsTimeout) {
-      clearTimeout(this.renderScreenSessionsTimeout);
+    if (this.renderMuxSessionsTimeout) {
+      clearTimeout(this.renderMuxSessionsTimeout);
     }
-    this.renderScreenSessionsTimeout = setTimeout(() => {
-      this._renderScreenSessionsImmediate();
+    this.renderMuxSessionsTimeout = setTimeout(() => {
+      this._renderMuxSessionsImmediate();
     }, 100);
   }
 
-  _renderScreenSessionsImmediate() {
-    const body = document.getElementById('screenSessionsBody');
+  _renderMuxSessionsImmediate() {
+    const body = document.getElementById('muxSessionsBody');
 
-    if (!this.screenSessions || this.screenSessions.length === 0) {
+    if (!this.muxSessions || this.muxSessions.length === 0) {
       body.innerHTML = '<div class="monitor-empty">No mux sessions</div>';
       return;
     }
 
     let html = '';
-    for (const screen of this.screenSessions) {
-      const stats = screen.stats || { memoryMB: 0, cpuPercent: 0, childCount: 0 };
-      const modeClass = screen.mode === 'shell' ? 'shell' : '';
+    for (const muxSession of this.muxSessions) {
+      const stats = muxSession.stats || { memoryMB: 0, cpuPercent: 0, childCount: 0 };
+      const modeClass = muxSession.mode === 'shell' ? 'shell' : '';
 
       html += `
         <div class="process-item">
-          <span class="process-mode ${modeClass}">${screen.mode}</span>
+          <span class="process-mode ${modeClass}">${muxSession.mode}</span>
           <div class="process-info">
-            <div class="process-name">${this.escapeHtml(screen.name || screen.screenName)}</div>
+            <div class="process-name">${this.escapeHtml(muxSession.name || muxSession.muxName)}</div>
             <div class="process-meta">
               <span class="process-stat memory">${stats.memoryMB}MB</span>
               <span class="process-stat cpu">${stats.cpuPercent}%</span>
               <span class="process-stat children">${stats.childCount} children</span>
-              <span>PID: ${screen.pid}</span>
+              <span>PID: ${muxSession.pid}</span>
             </div>
           </div>
           <div class="process-actions">
-            <button class="btn-toolbar btn-sm btn-danger" onclick="app.killScreen('${this.escapeHtml(screen.sessionId)}')" title="Kill tmux session">Kill</button>
+            <button class="btn-toolbar btn-sm btn-danger" onclick="app.killMuxSession('${this.escapeHtml(muxSession.sessionId)}')" title="Kill tmux session">Kill</button>
           </div>
         </div>
       `;
@@ -15136,32 +15136,32 @@ class ClaudemanApp {
     body.innerHTML = html;
   }
 
-  async killScreen(sessionId) {
+  async killMuxSession(sessionId) {
     if (!confirm('Kill this mux session?')) return;
 
     try {
-      await fetch(`/api/screens/${sessionId}`, { method: 'DELETE' });
-      this.screenSessions = this.screenSessions.filter(s => s.sessionId !== sessionId);
-      this.renderScreenSessions();
+      await fetch(`/api/mux-sessions/${sessionId}`, { method: 'DELETE' });
+      this.muxSessions = this.muxSessions.filter(s => s.sessionId !== sessionId);
+      this.renderMuxSessions();
       this.showToast('Tmux session killed', 'success');
     } catch (err) {
       this.showToast('Failed to kill tmux session', 'error');
     }
   }
 
-  async reconcileScreens() {
+  async reconcileMuxSessions() {
     try {
-      const res = await fetch('/api/screens/reconcile', { method: 'POST' });
+      const res = await fetch('/api/mux-sessions/reconcile', { method: 'POST' });
       const data = await res.json();
 
       if (data.dead && data.dead.length > 0) {
-        this.showToast(`Found ${data.dead.length} dead screen(s)`, 'warning');
-        await this.loadScreens();
+        this.showToast(`Found ${data.dead.length} dead mux session(s)`, 'warning');
+        await this.loadMuxSessions();
       } else {
-        this.showToast('All screens are alive', 'success');
+        this.showToast('All mux sessions are alive', 'success');
       }
     } catch (err) {
-      this.showToast('Failed to reconcile screens', 'error');
+      this.showToast('Failed to reconcile mux sessions', 'error');
     }
   }
 

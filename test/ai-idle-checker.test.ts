@@ -138,32 +138,32 @@ describe('AiIdleChecker', () => {
     });
   });
 
-  describe('Screen Spawn', () => {
-    it('should spawn a screen session for the check', async () => {
+  describe('Tmux Spawn', () => {
+    it('should spawn a tmux session for the check', async () => {
       mockedReadFileSync.mockReturnValue('IDLE\n__AICHECK_DONE__');
 
       const checkPromise = checker.check('terminal output');
       await vi.advanceTimersByTimeAsync(500);
       await checkPromise;
 
-      // Verify screen was spawned with correct args
+      // Verify tmux was spawned with correct args
       expect(mockedSpawn).toHaveBeenCalledWith(
-        'screen',
-        expect.arrayContaining(['-dmS', expect.stringContaining('claudeman-aicheck-')]),
+        'tmux',
+        expect.arrayContaining(['new-session', '-d', '-s', expect.stringContaining('claudeman-aicheck-')]),
         expect.objectContaining({ detached: true, stdio: 'ignore' })
       );
     });
 
-    it('should kill existing screen with same name before spawning', async () => {
+    it('should kill existing tmux session with same name before spawning', async () => {
       mockedReadFileSync.mockReturnValue('IDLE\n__AICHECK_DONE__');
 
       const checkPromise = checker.check('output');
       await vi.advanceTimersByTimeAsync(500);
       await checkPromise;
 
-      // First call should try to kill existing screen
+      // First call should try to kill existing session
       expect(mockedExecSync).toHaveBeenCalledWith(
-        expect.stringContaining('screen -X -S "claudeman-aicheck-'),
+        expect.stringContaining('tmux kill-session -t "claudeman-aicheck-'),
         expect.any(Object)
       );
     });
@@ -213,7 +213,7 @@ describe('AiIdleChecker', () => {
       expect(result.reasoning).toBe('Cancelled');
     });
 
-    it('should clean up screen on cancel', async () => {
+    it('should clean up tmux session on cancel', async () => {
       mockedReadFileSync.mockReturnValue('');
 
       const checkPromise = checker.check('output');
@@ -221,9 +221,9 @@ describe('AiIdleChecker', () => {
       checker.cancel();
       await checkPromise;
 
-      // Should have tried to kill the screen (initial kill + cleanup kill)
+      // Should have tried to kill the tmux session (initial kill + cleanup kill)
       const killCalls = mockedExecSync.mock.calls.filter(
-        call => typeof call[0] === 'string' && call[0].includes('quit')
+        call => typeof call[0] === 'string' && call[0].includes('kill-session')
       );
       expect(killCalls.length).toBeGreaterThan(0);
     });

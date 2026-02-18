@@ -20,10 +20,10 @@ Then update the Project Overview section below.
 
 ## Claudeman Environment
 
-This session is managed by **Claudeman** and runs within a tmux session (or GNU Screen as fallback).
+This session is managed by **Claudeman** and runs within a tmux session.
 
-**Important**: Check for `CLAUDEMAN_SCREEN=1` environment variable to confirm.
-- Do NOT attempt to kill your own tmux/screen session
+**Important**: Check for `CLAUDEMAN_MUX=1` environment variable to confirm.
+- Do NOT attempt to kill your own tmux session
 - The session persists across disconnects - your work is safe
 - Token usage, costs, and background tasks are tracked externally
 

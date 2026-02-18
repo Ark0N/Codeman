@@ -54,13 +54,13 @@ Real-time desktop notifications when sessions need attention — never miss a pe
 
 ### 💾 Persistent Sessions
 
-Every Claude session runs inside **tmux** (or GNU Screen as fallback) — sessions survive server restarts, network drops, and machine sleep.
+Every Claude session runs inside **tmux** — sessions survive server restarts, network drops, and machine sleep.
 
 ```bash
 # Your sessions are always recoverable
-CLAUDEMAN_SCREEN=1
+CLAUDEMAN_MUX=1
 CLAUDEMAN_SESSION_ID=abc-123-def
-CLAUDEMAN_SCREEN_NAME=claudeman-myproject
+CLAUDEMAN_MUX_NAME=claudeman-myproject
 ```
 
 - Sessions auto-recover on startup (dual redundancy: `state.json` + `mux-sessions.json`)
@@ -322,7 +322,7 @@ npm install -g claudeman
 
 - Node.js 18+
 - [Claude CLI](https://docs.anthropic.com/en/docs/claude-code/getting-started) installed
-- tmux (`apt install tmux` / `brew install tmux`) — preferred; GNU Screen as fallback (`CLAUDEMAN_MUX=screen`)
+- tmux (`apt install tmux` / `brew install tmux`)
 
 ## Getting Started
 
@@ -517,7 +517,7 @@ flowchart TB
         end
 
         subgraph Persistence["Persistence Layer"]
-            SCR["Mux Manager<br/><small>(tmux/screen)</small>"]
+            SCR["Mux Manager<br/><small>(tmux)</small>"]
             SS["State Store<br/><small>state.json</small>"]
         end
 

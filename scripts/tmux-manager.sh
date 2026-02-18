@@ -20,10 +20,6 @@ REVERSE='\033[7m'
 # Use the same path as claudeman (src/tmux-manager.ts)
 SESSIONS_FILE="${HOME}/.claudeman/mux-sessions.json"
 
-# Fallback to legacy screens.json if mux-sessions.json doesn't exist
-if [[ ! -f "$SESSIONS_FILE" ]] && [[ -f "${HOME}/.claudeman/screens.json" ]]; then
-    SESSIONS_FILE="${HOME}/.claudeman/screens.json"
-fi
 
 # Cached data
 CACHED_JSON=""

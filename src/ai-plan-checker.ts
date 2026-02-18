@@ -1,22 +1,22 @@
 /**
  * @fileoverview AI-Powered Plan Mode Checker for Auto-Accept
  *
- * Spawns a fresh Claude CLI session to analyze terminal output and determine
- * if Claude Code is showing a plan mode approval prompt (numbered selection menu).
+ * Spawns a fresh Claude CLI session in a tmux session to analyze terminal output
+ * and determine if Claude Code is showing a plan mode approval prompt.
  * Used as a confirmation gate before auto-accepting prompts.
  *
  * ## How It Works
  *
  * 1. Generate temp file path for output capture
- * 2. Spawn screen: `screen -dmS claudeman-plancheck-<short> bash -c 'claude -p ...'`
+ * 2. Spawn tmux: `tmux new-session -d -s claudeman-plancheck-<short> bash -c 'claude -p ...'`
  * 3. Poll the temp file every 500ms for `__PLANCHECK_DONE__` marker
  * 4. Parse the file content for PLAN_MODE/NOT_PLAN_MODE on the first line
- * 5. Kill screen and delete temp file
+ * 5. Kill tmux session and delete temp file
  *
  * ## Error Handling
  *
- * - Screen spawn fails: 30s cooldown, increment error counter
- * - Check times out (60s): Kill screen, 30s cooldown
+ * - Tmux spawn fails: 30s cooldown, increment error counter
+ * - Check times out (60s): Kill session, 30s cooldown
  * - Can't parse verdict: Treat as NOT_PLAN_MODE, 30s cooldown
  * - 3 consecutive errors: Disable AI plan check
  *
@@ -105,7 +105,7 @@ export class AiPlanChecker extends AiCheckerBase<
   AiPlanCheckResult,
   AiPlanCheckState
 > {
-  protected readonly screenNamePrefix = 'claudeman-plancheck-';
+  protected readonly muxNamePrefix = 'claudeman-plancheck-';
   protected readonly doneMarker = '__PLANCHECK_DONE__';
   protected readonly tempFilePrefix = 'claudeman-plancheck';
   protected readonly logPrefix = '[AiPlanChecker]';

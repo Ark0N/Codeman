@@ -32,10 +32,6 @@ set -e
 CLAUDEMAN_STATE="$HOME/.claudeman/state.json"
 CLAUDEMAN_SESSIONS="$HOME/.claudeman/mux-sessions.json"
 
-# Fallback to legacy screens.json
-if [[ ! -f "$CLAUDEMAN_SESSIONS" ]] && [[ -f "$HOME/.claudeman/screens.json" ]]; then
-    CLAUDEMAN_SESSIONS="$HOME/.claudeman/screens.json"
-fi
 
 # iPhone 17 Pro portrait width (conservative)
 MAX_WIDTH=44

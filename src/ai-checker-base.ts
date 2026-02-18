@@ -11,7 +11,7 @@
  * - Event emission for state changes
  *
  * Subclasses implement:
- * - `screenNamePrefix`: Prefix for mux session names (e.g., 'claudeman-aicheck-')
+ * - `muxNamePrefix`: Prefix for mux session names (e.g., 'claudeman-aicheck-')
  * - `doneMarker`: Completion marker in output file (e.g., '__AICHECK_DONE__')
  * - `tempFilePrefix`: Prefix for temp files (e.g., 'claudeman-aicheck')
  * - `logPrefix`: Prefix for log messages (e.g., '[AiIdleChecker]')
@@ -45,12 +45,12 @@ function isValidModelName(model: string): boolean {
 }
 
 /**
- * Validates that a screen name is safe for shell use.
- * Screen names should only contain alphanumeric characters, hyphens, and underscores.
+ * Validates that a mux session name is safe for shell use.
+ * Names should only contain alphanumeric characters, hyphens, and underscores.
  */
-function isValidScreenName(screenName: string): boolean {
-  if (!screenName || typeof screenName !== 'string') return false;
-  return /^[a-zA-Z0-9_-]+$/.test(screenName) && screenName.length <= 100;
+function isValidMuxName(muxName: string): boolean {
+  if (!muxName || typeof muxName !== 'string') return false;
+  return /^[a-zA-Z0-9_-]+$/.test(muxName) && muxName.length <= 100;
 }
 
 // ========== Types ==========
@@ -143,7 +143,7 @@ export abstract class AiCheckerBase<
   protected disabledReason: string | null = null;
 
   // Active check state
-  protected checkScreenName: string | null = null;
+  protected checkMuxName: string | null = null;
   protected checkTempFile: string | null = null;
   protected checkPromptFile: string | null = null;
   protected checkPollTimer: NodeJS.Timeout | null = null;
@@ -155,7 +155,7 @@ export abstract class AiCheckerBase<
   // ========== Abstract Properties ==========
 
   /** Prefix for mux session names (e.g., 'claudeman-aicheck-') */
-  protected abstract readonly screenNamePrefix: string;
+  protected abstract readonly muxNamePrefix: string;
 
   /** Marker written to temp file when check is complete */
   protected abstract readonly doneMarker: string;
@@ -255,7 +255,7 @@ export abstract class AiCheckerBase<
 
   /**
    * Run an AI check against the provided terminal buffer.
-   * Spawns a fresh Claude CLI in a screen, captures output to temp file.
+   * Spawns a fresh Claude CLI in a tmux session, captures output to temp file.
    *
    * @param terminalBuffer - Raw terminal output to analyze
    * @returns The verdict result
@@ -387,16 +387,16 @@ export abstract class AiCheckerBase<
     // Build the prompt
     const prompt = this.buildPrompt(trimmed);
 
-    // Generate temp files and screen name
+    // Generate temp files and mux session name
     const shortId = this.sessionId.slice(0, 8);
     const timestamp = Date.now();
     this.checkTempFile = join(tmpdir(), `${this.tempFilePrefix}-${shortId}-${timestamp}.txt`);
     this.checkPromptFile = join(tmpdir(), `${this.tempFilePrefix}-prompt-${shortId}-${timestamp}.txt`);
-    this.checkScreenName = `${this.screenNamePrefix}${shortId}`;
+    this.checkMuxName = `${this.muxNamePrefix}${shortId}`;
 
-    // Security: Validate screen name before use in shell commands
-    if (!isValidScreenName(this.checkScreenName)) {
-      throw new Error(`Invalid screen name generated: ${this.checkScreenName.substring(0, 50)}`);
+    // Security: Validate mux name before use in shell commands
+    if (!isValidMuxName(this.checkMuxName)) {
+      throw new Error(`Invalid mux name generated: ${this.checkMuxName.substring(0, 50)}`);
     }
 
     // Ensure output temp file exists (empty) so we can poll it
@@ -413,26 +413,25 @@ export abstract class AiCheckerBase<
     const claudeCmd = `cat "${this.checkPromptFile}" | claude -p ${modelArg} --output-format text`;
     const fullCmd = `export PATH="${augmentedPath}"; ${claudeCmd} > "${this.checkTempFile}" 2>&1; echo "${this.doneMarker}" >> "${this.checkTempFile}"; rm -f "${this.checkPromptFile}"`;
 
-    // Spawn screen
+    // Spawn tmux session
     try {
-      // Kill any leftover screen with this name first (screen name already validated above)
+      // Kill any leftover session with this name first (mux name already validated above)
       try {
-        execSync(`screen -X -S "${this.checkScreenName}" quit 2>/dev/null`, { timeout: 3000 });
+        execSync(`tmux kill-session -t "${this.checkMuxName}" 2>/dev/null`, { timeout: 3000 });
       } catch {
-        // No existing screen, that's fine
+        // No existing session, that's fine
       }
 
-      const screenProcess = childSpawn('screen', [
-        '-dmS', this.checkScreenName,
-        '-c', '/dev/null',
+      const muxProcess = childSpawn('tmux', [
+        'new-session', '-d', '-s', this.checkMuxName,
         'bash', '-c', fullCmd
       ], {
         detached: true,
         stdio: 'ignore',
       });
-      screenProcess.unref();
+      muxProcess.unref();
     } catch (err) {
-      throw new Error(`Failed to spawn ${this.checkDescription} screen: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(`Failed to spawn ${this.checkDescription} tmux session: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // Poll the temp file for completion
@@ -505,23 +504,15 @@ export abstract class AiCheckerBase<
       this.checkTimeoutTimer = null;
     }
 
-    // Kill the screen with fallback for stubborn processes
-    if (this.checkScreenName) {
-      const screenName = this.checkScreenName;
-      // Screen name was validated before use, but still quote for defense-in-depth
+    // Kill the tmux session
+    if (this.checkMuxName) {
+      const muxName = this.checkMuxName;
       try {
-        execSync(`screen -X -S "${screenName}" quit 2>/dev/null`, { timeout: 2000 });
+        execSync(`tmux kill-session -t "${muxName}" 2>/dev/null`, { timeout: 2000 });
       } catch {
-        // First attempt failed - try force kill via pkill as fallback
-        // Escape regex metacharacters in screen name to prevent pattern injection
-        const escapedName = screenName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        try {
-          execSync(`pkill -f "SCREEN.*${escapedName}" 2>/dev/null`, { timeout: 1000 });
-        } catch {
-          // Screen may already be dead or no matching process
-        }
+        // Session may already be dead
       }
-      this.checkScreenName = null;
+      this.checkMuxName = null;
     }
 
     // Delete temp files

@@ -1,22 +1,22 @@
 /**
  * @fileoverview AI-Powered Idle Checker for Respawn Controller
  *
- * Spawns a fresh Claude CLI session in a screen to analyze terminal output
+ * Spawns a fresh Claude CLI session in a tmux session to analyze terminal output
  * and provide a definitive IDLE/WORKING verdict. This replaces the "Worked for Xm Xs"
  * pattern as the primary idle detection signal.
  *
  * ## How It Works
  *
  * 1. Generate temp file path for output capture
- * 2. Spawn screen: `screen -dmS claudeman-aicheck-<short> bash -c 'claude -p ...'`
+ * 2. Spawn tmux: `tmux new-session -d -s claudeman-aicheck-<short> bash -c 'claude -p ...'`
  * 3. Poll the temp file every 500ms for `__AICHECK_DONE__` marker
  * 4. Parse the file content for IDLE/WORKING on the first word
- * 5. Kill screen and delete temp file
+ * 5. Kill tmux session and delete temp file
  *
  * ## Error Handling
  *
- * - Screen spawn fails: 1-min cooldown, increment error counter
- * - Check times out (90s): Kill screen, 1-min cooldown
+ * - Tmux spawn fails: 1-min cooldown, increment error counter
+ * - Check times out (90s): Kill session, 1-min cooldown
  * - Can't parse IDLE/WORKING: Treat as WORKING, 1-min cooldown
  * - 3 consecutive errors: Disable AI check, fall back to noOutputTimeoutMs
  * - Claude CLI not found: Disable permanently
@@ -143,7 +143,7 @@ export class AiIdleChecker extends AiCheckerBase<
   AiCheckResult,
   AiCheckState
 > {
-  protected readonly screenNamePrefix = 'claudeman-aicheck-';
+  protected readonly muxNamePrefix = 'claudeman-aicheck-';
   protected readonly doneMarker = '__AICHECK_DONE__';
   protected readonly tempFilePrefix = 'claudeman-aicheck';
   protected readonly logPrefix = '[AiIdleChecker]';

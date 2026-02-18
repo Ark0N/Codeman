@@ -93,12 +93,12 @@ export class MockSession extends EventEmitter {
   writeBuffer: string[] = [];
   terminalBuffer: string = '';
 
-  private _screenName: string | null = null;
+  private _muxName: string | null = null;
 
   constructor(id: string = 'mock-session-id') {
     super();
     this.id = id;
-    this._screenName = `claudeman-test-${id.slice(0, 8)}`;
+    this._muxName = `claudeman-test-${id.slice(0, 8)}`;
   }
 
   /** Direct PTY write (used by session.write()) */
@@ -106,8 +106,8 @@ export class MockSession extends EventEmitter {
     this.writeBuffer.push(data);
   }
 
-  /** Write via screen (used by respawn controller) */
-  async writeViaScreen(data: string): Promise<boolean> {
+  /** Write via mux (used by respawn controller) */
+  async writeViaMux(data: string): Promise<boolean> {
     this.writeBuffer.push(data);
     return true;
   }
@@ -234,9 +234,9 @@ export class MockSession extends EventEmitter {
     this.removeAllListeners();
   }
 
-  /** Get screen name (for screen-based operations) */
-  get screenName(): string | null {
-    return this._screenName;
+  /** Get mux name (for mux-based operations) */
+  get muxName(): string | null {
+    return this._muxName;
   }
 }
 

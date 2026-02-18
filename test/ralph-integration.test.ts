@@ -300,17 +300,17 @@ describe('Ralph Integration Tests', () => {
     });
   });
 
-  // ========== Screen Sessions API Tests ==========
+  // ========== Mux Sessions API Tests ==========
 
-  describe('Screen Sessions API', () => {
-    it('should return screens object with array', async () => {
-      const res = await fetch(`${baseUrl}/api/screens`);
+  describe('Mux Sessions API', () => {
+    it('should return sessions object with array', async () => {
+      const res = await fetch(`${baseUrl}/api/mux-sessions`);
       const data = await res.json();
 
       expect(res.status).toBe(200);
-      expect(data.screens).toBeDefined();
-      expect(Array.isArray(data.screens)).toBe(true);
-      expect(typeof data.screenAvailable).toBe('boolean');
+      expect(data.sessions).toBeDefined();
+      expect(Array.isArray(data.sessions)).toBe(true);
+      expect(typeof data.muxAvailable).toBe('boolean');
     });
   });
 

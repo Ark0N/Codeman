@@ -1,8 +1,7 @@
 /**
  * @fileoverview Shared utility for wrapping commands with `nice` priority.
  *
- * Extracted from screen-manager.ts so both tmux-manager and screen-manager
- * can use it without cross-dependency on the deprecated screen module.
+ * Extracted as a shared utility for tmux-manager and other consumers.
  *
  * @module utils/nice-wrapper
  */

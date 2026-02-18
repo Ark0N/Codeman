@@ -390,8 +390,8 @@ export class PlanOrchestrator {
 
     const session = new Session({
       workingDir: this.workingDir,
-      screenManager: this.mux,
-      useScreen: false,
+      mux: this.mux,
+      useMux: false,
       mode: 'claude',
     });
 
@@ -472,8 +472,8 @@ export class PlanOrchestrator {
 
     const session = new Session({
       workingDir: this.workingDir,
-      screenManager: this.mux,
-      useScreen: false,
+      mux: this.mux,
+      useMux: false,
       mode: 'claude',
     });
 

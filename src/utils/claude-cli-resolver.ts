@@ -2,8 +2,8 @@
  * @fileoverview Shared Claude CLI binary resolution.
  *
  * Finds the `claude` binary across common installation paths and provides
- * an augmented PATH string. Used by session.ts, tmux-manager.ts, and
- * screen-manager.ts to locate the Claude CLI.
+ * an augmented PATH string. Used by session.ts and tmux-manager.ts
+ * to locate the Claude CLI.
  *
  * @module utils/claude-cli-resolver
  */

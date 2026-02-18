@@ -8,8 +8,8 @@
  * 2. **Interactive mode** (`startInteractive`): Start an interactive Claude session
  * 3. **Shell mode**: Run a plain bash shell for debugging/testing
  *
- * The session can optionally run inside a tmux session (or GNU Screen as fallback)
- * for persistence across disconnects. It tracks tokens, costs, background tasks, and supports
+ * The session can optionally run inside a tmux session for persistence across disconnects.
+ * It tracks tokens, costs, background tasks, and supports
  * auto-clear/auto-compact functionality when token limits are approached.
  *
  * @module session
@@ -50,8 +50,8 @@ const LINE_BUFFER_FLUSH_INTERVAL = 100;
 // Timing Constants
 // ============================================================================
 
-/** Delay after screen creation before sending commands (300ms) */
-const SCREEN_STARTUP_DELAY_MS = 300;
+/** Delay after mux session creation before sending commands (300ms) */
+const MUX_STARTUP_DELAY_MS = 300;
 
 /** Delay before declaring session idle after last output (2 seconds) */
 const IDLE_DETECTION_DELAY_MS = 2000;
@@ -161,7 +161,7 @@ export interface SessionEvents {
   completion: (result: string, cost: number) => void;
   /** Raw terminal data (includes ANSI codes) */
   terminal: (data: string) => void;
-  /** Signal to clear terminal display (after screen attach) */
+  /** Signal to clear terminal display (after mux attach) */
   clearTerminal: () => void;
   /** New background task started */
   taskCreated: (task: BackgroundTask) => void;
@@ -210,8 +210,8 @@ export type SessionMode = 'claude' | 'shell';
  * // Create and start an interactive Claude session
  * const session = new Session({
  *   workingDir: '/path/to/project',
- *   screenManager: screenManager,
- *   useScreen: true
+ *   mux: muxManager,
+ *   useMux: true
  * });
  * await session.startInteractive();
  *
@@ -300,7 +300,7 @@ export class Session extends EventEmitter {
   private _promptCheckTimeout: NodeJS.Timeout | null = null;
   private _shellIdleTimer: NodeJS.Timeout | null = null;
 
-  // Multiplexer session support (tmux or GNU Screen)
+  // Multiplexer session support (tmux)
   private _mux: TerminalMultiplexer | null = null;
   private _muxSession: MuxSession | null = null;
   private _useMux: boolean = false;
@@ -354,18 +354,12 @@ export class Session extends EventEmitter {
     workingDir: string;
     mode?: SessionMode;
     name?: string;
-    /** Terminal multiplexer instance (tmux or screen) */
+    /** Terminal multiplexer instance (tmux) */
     mux?: TerminalMultiplexer;
     /** Whether to use multiplexer wrapping */
     useMux?: boolean;
     /** Existing mux session for restored sessions */
     muxSession?: MuxSession;
-    /** @deprecated Use `mux` instead */
-    screenManager?: TerminalMultiplexer;
-    /** @deprecated Use `useMux` instead */
-    useScreen?: boolean;
-    /** @deprecated Use `muxSession` instead */
-    screenSession?: MuxSession;
     niceConfig?: NiceConfig;  // Nice prioritying configuration
   }) {
     super();
@@ -388,10 +382,9 @@ export class Session extends EventEmitter {
     // This ensures subagent matching works even for recovered sessions (where
     // startInteractive() hasn't been called yet).
     this._claudeSessionId = this.id;
-    // Support both new (mux) and deprecated (screenManager) parameter names
-    this._mux = config.mux || config.screenManager || null;
-    this._useMux = config.useMux ?? config.useScreen ?? (this._mux !== null && this._mux.isAvailable());
-    this._muxSession = config.muxSession || config.screenSession || null;
+    this._mux = config.mux || null;
+    this._useMux = config.useMux ?? (this._mux !== null && this._mux.isAvailable());
+    this._muxSession = config.muxSession || null;
 
     // Apply Nice priority configuration if provided
     if (config.niceConfig) {
@@ -815,14 +808,14 @@ export class Session extends EventEmitter {
    * Starts an interactive Claude CLI session with full terminal support.
    *
    * This spawns Claude CLI with `--dangerously-skip-permissions` flag in
-   * interactive mode. If screen wrapping is enabled, the session runs inside
-   * a tmux session (or GNU Screen as fallback) for persistence across disconnects.
+   * interactive mode. If mux wrapping is enabled, the session runs inside
+   * a tmux session for persistence across disconnects.
    *
    * @throws {Error} If a process is already running in this session
    *
    * @example
    * ```typescript
-   * const session = new Session({ workingDir: '/project', useScreen: true });
+   * const session = new Session({ workingDir: '/project', useMux: true });
    * await session.startInteractive();
    * session.on('terminal', (data) => process.stdout.write(data));
    * session.write('help me with this code\r');
@@ -856,7 +849,7 @@ export class Session extends EventEmitter {
           console.log('[Session] Created mux session:', this._muxSession.muxName);
 
           // Wait a moment for mux to fully start
-          await new Promise(resolve => setTimeout(resolve, SCREEN_STARTUP_DELAY_MS));
+          await new Promise(resolve => setTimeout(resolve, MUX_STARTUP_DELAY_MS));
         }
 
         // Attach to the mux session via PTY
@@ -876,13 +869,13 @@ export class Session extends EventEmitter {
           // The mux manager passes --session-id ${sessionId} to Claude
           this._claudeSessionId = this.id;
         } catch (spawnErr) {
-          console.error('[Session] Failed to spawn PTY for screen attachment:', spawnErr);
-          this.emit('error', `Failed to attach to screen: ${spawnErr}`);
+          console.error('[Session] Failed to spawn PTY for mux attachment:', spawnErr);
+          this.emit('error', `Failed to attach to mux session: ${spawnErr}`);
           throw spawnErr;
         }
 
-        // For NEW screens: wait for prompt to appear then clean buffer
-        // For RESTORED screens: don't do anything - client will fetch buffer on tab switch
+        // For NEW mux sessions: wait for prompt to appear then clean buffer
+        // For RESTORED mux sessions: don't do anything - client will fetch buffer on tab switch
         if (!isRestoredSession) {
           this._promptCheckInterval = setInterval(() => {
             // Wait for the prompt character (❯) which means Claude is fully initialized
@@ -896,7 +889,7 @@ export class Session extends EventEmitter {
                 clearTimeout(this._promptCheckTimeout);
                 this._promptCheckTimeout = null;
               }
-              // Clean the buffer - remove screen init junk before actual content
+              // Clean the buffer - remove mux init junk before actual content
               // Strip: cursor movement (\x1b[nA/B/C/D), positioning (\x1b[n;nH),
               // clear screen (\x1b[2J), scroll region (\x1b[n;nr), and whitespace
               this._terminalBuffer.set(
@@ -942,7 +935,7 @@ export class Session extends EventEmitter {
             COLORTERM: undefined,
             CLAUDECODE: undefined,
             // Inform Claude it's running within Claudeman (helps prevent self-termination)
-            CLAUDEMAN_SCREEN: '1',
+            CLAUDEMAN_MUX: '1',
             CLAUDEMAN_SESSION_ID: this.id,
             CLAUDEMAN_API_URL: process.env.CLAUDEMAN_API_URL || 'http://localhost:3000',
           },
@@ -1136,7 +1129,7 @@ export class Session extends EventEmitter {
           console.log('[Session] Created mux session:', this._muxSession.muxName);
 
           // Wait a moment for mux to fully start
-          await new Promise(resolve => setTimeout(resolve, SCREEN_STARTUP_DELAY_MS));
+          await new Promise(resolve => setTimeout(resolve, MUX_STARTUP_DELAY_MS));
         }
 
         // Attach to the mux session via PTY
@@ -1185,7 +1178,7 @@ export class Session extends EventEmitter {
           env: {
             ...process.env,
             TERM: 'xterm-256color',
-            CLAUDEMAN_SCREEN: '1',
+            CLAUDEMAN_MUX: '1',
             CLAUDEMAN_SESSION_ID: this.id,
             CLAUDEMAN_API_URL: process.env.CLAUDEMAN_API_URL || 'http://localhost:3000',
           },
@@ -1317,7 +1310,7 @@ export class Session extends EventEmitter {
               COLORTERM: undefined,
               CLAUDECODE: undefined,
               // Inform Claude it's running within Claudeman
-              CLAUDEMAN_SCREEN: '1',
+              CLAUDEMAN_MUX: '1',
               CLAUDEMAN_SESSION_ID: this.id,
               CLAUDEMAN_API_URL: process.env.CLAUDEMAN_API_URL || 'http://localhost:3000',
             },
@@ -1770,7 +1763,7 @@ export class Session extends EventEmitter {
           const compactCmd = this._autoCompactPrompt
             ? `/compact ${this._autoCompactPrompt}\r`
             : '/compact\r';
-          await this.writeViaScreen(compactCmd);
+          await this.writeViaMux(compactCmd);
           this.emit('autoCompact', {
             tokens: totalTokens,
             threshold: this._autoCompactThreshold,
@@ -1821,7 +1814,7 @@ export class Session extends EventEmitter {
           if (this._isStopped) return;
 
           // Send /clear command
-          await this.writeViaScreen('/clear\r');
+          await this.writeViaMux('/clear\r');
           // Reset token counts
           this._totalInputTokens = 0;
           this._totalOutputTokens = 0;
@@ -1876,22 +1869,18 @@ export class Session extends EventEmitter {
    *
    * More reliable than direct PTY write for programmatic input, especially
    * with Claude CLI which uses Ink (React for terminals).
-   * - tmux: `send-keys -l 'text' Enter` (single command, no delay)
-   * - screen: `stuff "text"` + 100ms delay + `stuff CR` (with retries)
-   *
-   * Method name kept as `writeViaScreen` for backward compatibility with
-   * respawn-controller and other callers.
+   * Uses tmux `send-keys -l` to inject text + Enter.
    *
    * @param data - Input data with optional `\r` for Enter
    * @returns true if input was sent, false if no mux session or PTY
    *
    * @example
    * ```typescript
-   * session.writeViaScreen('/clear\r');  // Send /clear command
-   * session.writeViaScreen('/init\r');   // Send /init command
+   * session.writeViaMux('/clear\r');  // Send /clear command
+   * session.writeViaMux('/init\r');   // Send /init command
    * ```
    */
-  async writeViaScreen(data: string): Promise<boolean> {
+  async writeViaMux(data: string): Promise<boolean> {
     if (this._mux && this._muxSession) {
       return this._mux.sendInput(this.id, data);
     }
@@ -1974,21 +1963,21 @@ export class Session extends EventEmitter {
   /**
    * Stops the session and cleans up resources.
    *
-   * This kills the PTY process and optionally the associated tmux/screen
-   * session. All buffers are cleared and the session is marked as stopped.
+   * This kills the PTY process and optionally the associated tmux session.
+   * All buffers are cleared and the session is marked as stopped.
    *
-   * @param killScreen - Whether to also kill the screen session (default: true)
+   * @param killMux - Whether to also kill the mux session (default: true)
    *
    * @example
    * ```typescript
    * // Stop and kill everything
    * await session.stop();
    *
-   * // Stop but keep screen running for later reattachment
+   * // Stop but keep mux session running for later reattachment
    * await session.stop(false);
    * ```
    */
-  async stop(killScreen: boolean = true): Promise<void> {
+  async stop(killMux: boolean = true): Promise<void> {
     // Set stopped flag first to prevent new timers from being created
     this._isStopped = true;
 
@@ -2034,7 +2023,7 @@ export class Session extends EventEmitter {
     }
 
     // Immediately cleanup Promise callbacks to prevent orphaned references
-    // during the rest of stop() processing (e.g., if screen kill times out)
+    // during the rest of stop() processing (e.g., if mux kill times out)
     if (this.rejectPromise && !this._promptResolved) {
       this._promptResolved = true;
       this.rejectPromise(new Error('Session stopped'));
@@ -2087,7 +2076,7 @@ export class Session extends EventEmitter {
     this._childAgentIds = [];
 
     // Kill the associated mux session if requested
-    if (killScreen && this._mux) {
+    if (killMux && this._mux) {
       // Try to kill mux session even if _muxSession is not set (e.g., restored sessions)
       try {
         const killed = await this._mux.killSession(this.id);
@@ -2098,7 +2087,7 @@ export class Session extends EventEmitter {
         console.error('[Session] Failed to kill mux session:', err);
       }
       this._muxSession = null;
-    } else if (this._muxSession && !killScreen) {
+    } else if (this._muxSession && !killMux) {
       console.log('[Session] Keeping mux session alive:', this._muxSession.muxName);
       this._muxSession = null; // Detach but don't kill
     }

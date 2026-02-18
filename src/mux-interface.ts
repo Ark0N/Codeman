@@ -1,11 +1,7 @@
 /**
- * @fileoverview Terminal multiplexer abstraction layer.
+ * @fileoverview Terminal multiplexer abstraction layer (tmux).
  *
- * Defines the TerminalMultiplexer interface that both ScreenManager (GNU Screen)
- * and TmuxManager (tmux) implement. This allows the rest of the codebase to work
- * with either backend transparently.
- *
- * The MuxSession type is the backend-agnostic equivalent of ScreenSession.
+ * Defines the TerminalMultiplexer interface that TmuxManager implements.
  *
  * @module mux-interface
  */
@@ -14,8 +10,7 @@ import type { EventEmitter } from 'node:events';
 import type { ProcessStats, PersistedRespawnConfig, NiceConfig } from './types.js';
 
 /**
- * Backend-agnostic multiplexer session.
- * Equivalent to ScreenSession but uses `muxName` instead of `screenName`.
+ * Multiplexer session metadata.
  */
 export interface MuxSession {
   /** Claudeman session ID */
@@ -51,8 +46,7 @@ export interface MuxSessionWithStats extends MuxSession {
 /**
  * Terminal multiplexer interface.
  *
- * Both ScreenManager and TmuxManager implement this interface,
- * allowing the rest of the codebase to work with either backend.
+ * Implemented by TmuxManager.
  *
  * Events emitted:
  * - `sessionCreated` (session: MuxSession) - New session created
@@ -62,7 +56,7 @@ export interface MuxSessionWithStats extends MuxSession {
  */
 export interface TerminalMultiplexer extends EventEmitter {
   /** Which backend this instance uses */
-  readonly backend: 'tmux' | 'screen';
+  readonly backend: 'tmux';
 
   // ========== Lifecycle ==========
 
@@ -104,9 +98,7 @@ export interface TerminalMultiplexer extends EventEmitter {
   // ========== Input ==========
 
   /**
-   * Send input to a session.
-   * tmux: `send-keys -l 'text' Enter` (single command, no delay)
-   * screen: `stuff "text"` + 100ms delay + `stuff CR` (with retries)
+   * Send input to a session via tmux send-keys.
    */
   sendInput(sessionId: string, input: string): Promise<boolean>;
 
@@ -149,15 +141,12 @@ export interface TerminalMultiplexer extends EventEmitter {
   // ========== PTY Attachment ==========
 
   /**
-   * Get the command to spawn for attaching to a session.
-   * Returns 'tmux' or 'screen'.
+   * Get the command to spawn for attaching to a session ('tmux').
    */
   getAttachCommand(): string;
 
   /**
    * Get the arguments for attaching to a session by mux name.
-   * tmux: ['attach-session', '-t', muxName]
-   * screen: ['-x', muxName]
    */
   getAttachArgs(muxName: string): string[];
 

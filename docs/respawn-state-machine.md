@@ -46,7 +46,7 @@ After sending each step (update, clear, init, kickstart), the controller waits f
 ## Idle Detection (Multi-Layer)
 
 1. **Completion message**: Primary signal - detects "Worked for Xm Xs" time patterns (requires "Worked" prefix to avoid false positives)
-2. **AI Idle Check** (enabled by default): Spawns a fresh Claude session in a screen to analyze terminal output and provide IDLE/WORKING verdict. Uses `claude-opus-4-5-20251101` by default, sends last 16k chars of terminal buffer. Timeout 90s, cooldown 3min after WORKING. Auto-disables after 3 consecutive errors. The AI prompt is conservative: when in doubt, it answers WORKING.
+2. **AI Idle Check** (enabled by default): Spawns a fresh Claude session in a tmux session to analyze terminal output and provide IDLE/WORKING verdict. Uses `claude-opus-4-5-20251101` by default, sends last 16k chars of terminal buffer. Timeout 90s, cooldown 3min after WORKING. Auto-disables after 3 consecutive errors. The AI prompt is conservative: when in doubt, it answers WORKING.
 3. **Output silence**: Confirms idle after `completionConfirmMs` (10s) of no new output
 4. **Token stability**: Tokens haven't changed
 5. **Working patterns absent**: No `Thinking`, `Writing`, spinner chars, etc. for at least 8 seconds

@@ -41,7 +41,7 @@ const ALLOWED_ENV_PREFIXES = ['CLAUDE_CODE_'];
 /** Env var keys that are always blocked (security-sensitive) */
 const BLOCKED_ENV_KEYS = new Set([
   'PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'NODE_OPTIONS',
-  'CLAUDEMAN_SCREEN_NAME', 'CLAUDEMAN_TMUX',
+  'CLAUDEMAN_MUX_NAME', 'CLAUDEMAN_TMUX',
 ]);
 
 /** Validate that an env var key is allowed */
@@ -86,7 +86,7 @@ export const RunPromptSchema = z.object({
  */
 export const SessionInputSchema = z.object({
   input: z.string(),
-  useScreen: z.boolean().optional(),
+  useMux: z.boolean().optional(),
 });
 
 /**
@@ -193,7 +193,7 @@ export const SettingsUpdateSchema = z.object({
  */
 export const SessionInputWithLimitSchema = z.object({
   input: z.string().max(100000), // 100KB max input
-  useScreen: z.boolean().optional(),
+  useMux: z.boolean().optional(),
 });
 
 // ========== Session Mutation Routes ==========

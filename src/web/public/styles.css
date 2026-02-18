@@ -4626,7 +4626,7 @@ kbd {
   color: var(--yellow);
 }
 
-/* Combined Monitor Panel (Screen Sessions + Background Tasks) */
+/* Combined Monitor Panel (Tmux Sessions + Background Tasks) */
 .monitor-panel {
   position: fixed;
   bottom: var(--toolbar-height);

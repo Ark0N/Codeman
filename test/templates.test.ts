@@ -58,7 +58,7 @@ describe('generateClaudeMd', () => {
       const result = generateClaudeMd('my-project');
 
       expect(result).toContain('## Claudeman Environment');
-      expect(result).toContain('CLAUDEMAN_SCREEN=1');
+      expect(result).toContain('CLAUDEMAN_MUX=1');
     });
 
     it('should include work principles', () => {

@@ -33,7 +33,7 @@ CLAUDE_SEARCH_PATHS=(
 )
 
 # ============================================================================
-# Color Output (from scripts/screen-manager.sh pattern)
+# Color Output
 # ============================================================================
 
 setup_colors() {
@@ -243,10 +243,6 @@ check_tmux() {
     command -v tmux &>/dev/null
 }
 
-check_screen() {
-    command -v screen &>/dev/null
-}
-
 check_claude() {
     # Check PATH first
     if command -v claude &>/dev/null; then
@@ -427,51 +423,6 @@ install_tmux_suse() {
     run_as_root zypper install -y tmux
 }
 
-install_screen_macos() {
-    info "Installing GNU Screen via Homebrew..."
-
-    # macOS has a built-in screen but it's very outdated
-    if command -v screen &>/dev/null; then
-        local builtin_version
-        builtin_version=$(screen --version 2>&1 | head -1 || echo "unknown")
-        if [[ "$builtin_version" == *"Apple"* ]] || [[ ! "$builtin_version" == *"GNU"* ]]; then
-            info "Upgrading from macOS built-in screen to GNU Screen..."
-        fi
-    fi
-
-    brew install screen
-}
-
-install_screen_debian() {
-    info "Installing GNU Screen via apt..."
-    ensure_sudo
-    run_as_root apt-get update -qq
-    run_as_root apt-get install -y -qq screen
-}
-
-install_screen_fedora() {
-    info "Installing GNU Screen via dnf..."
-    ensure_sudo
-    run_as_root dnf install -y screen
-}
-
-install_screen_arch() {
-    info "Installing GNU Screen via pacman..."
-    ensure_sudo
-    run_as_root pacman -Sy --noconfirm screen
-}
-
-install_screen_alpine() {
-    info "Installing GNU Screen via apk..."
-    run_as_root apk add --no-cache screen
-}
-
-install_screen_suse() {
-    info "Installing GNU Screen via zypper..."
-    ensure_sudo
-    run_as_root zypper install -y screen
-}
-
 install_git_macos() {
     info "Installing Git via Homebrew..."
     brew install git
@@ -642,59 +593,15 @@ setup_sc_alias() {
 
     if [[ "$shell_name" == "fish" ]]; then
         echo "" >> "$profile"
-        echo "# Claudeman Screens shortcut" >> "$profile"
-        echo "alias sc='screen-chooser'" >> "$profile"
+        echo "# Claudeman tmux session shortcut" >> "$profile"
+        echo "alias sc='tmux-chooser'" >> "$profile"
     else
         echo "" >> "$profile"
-        echo "# Claudeman Screens shortcut" >> "$profile"
-        echo "alias sc='screen-chooser'" >> "$profile"
+        echo "# Claudeman tmux session shortcut" >> "$profile"
+        echo "alias sc='tmux-chooser'" >> "$profile"
     fi
 
-    info "Added 'sc' alias for screen-chooser"
-}
-
-# ============================================================================
-# Screen Configuration
-# ============================================================================
-
-setup_screenrc() {
-    local screenrc="$HOME/.screenrc"
-
-    # Check if screenrc already exists and has our config
-    if [[ -f "$screenrc" ]] && grep -q "mousetrack on" "$screenrc" 2>/dev/null; then
-        info "Screen configuration already set up"
-        return 0
-    fi
-
-    info "Setting up screen configuration..."
-
-    # Backup existing screenrc if it exists
-    if [[ -f "$screenrc" ]]; then
-        cp "$screenrc" "${screenrc}.backup.$(date +%Y%m%d%H%M%S)"
-        info "Backed up existing .screenrc"
-    fi
-
-    # Create or append screen config
-    cat >> "$screenrc" << 'EOF'
-
-# ============================================================================
-# Claudeman screen configuration
-# ============================================================================
-
-# Enable mouse tracking for scrolling in mobile terminals (Termius, etc.)
-mousetrack on
-
-# Increase scrollback buffer (default is 100)
-defscrollback 10000
-
-# Disable startup message
-startup_message off
-
-# Enable alternate screen (better compatibility)
-altscreen on
-EOF
-
-    success "Screen configuration saved to $screenrc"
+    info "Added 'sc' alias for tmux-chooser"
 }
 
 # ============================================================================
@@ -849,17 +756,15 @@ main() {
         die "npm is not available. Please reinstall Node.js."
     fi
 
-    # Terminal multiplexer (tmux preferred, GNU Screen as fallback)
-    info "Checking terminal multiplexer..."
+    # Terminal multiplexer (tmux required)
+    info "Checking tmux..."
     if check_tmux; then
-        success "tmux is installed (preferred)"
-    elif check_screen; then
-        success "GNU Screen is installed (fallback — consider installing tmux for better performance)"
+        success "tmux is installed"
     else
         if prompt_yes_no "tmux is not installed. Install it now?"; then
             install_dependency "tmux" "$os" "$distro"
         else
-            die "A terminal multiplexer (tmux or GNU Screen) is required for session persistence."
+            die "tmux is required for session persistence."
         fi
     fi
 
@@ -943,10 +848,10 @@ main() {
         ln -sf "$INSTALL_DIR/dist/index.js" "$symlink_dir/claudeman"
         info "Created symlink: $symlink_dir/claudeman"
 
-        # Install screen-chooser as 'screen-chooser' command
-        if [[ -f "$INSTALL_DIR/scripts/screen-chooser.sh" ]]; then
-            ln -sf "$INSTALL_DIR/scripts/screen-chooser.sh" "$symlink_dir/screen-chooser"
-            info "Created symlink: $symlink_dir/screen-chooser"
+        # Install tmux-chooser as 'tmux-chooser' command
+        if [[ -f "$INSTALL_DIR/scripts/tmux-chooser.sh" ]]; then
+            ln -sf "$INSTALL_DIR/scripts/tmux-chooser.sh" "$symlink_dir/tmux-chooser"
+            info "Created symlink: $symlink_dir/tmux-chooser"
             # Add 'sc' alias for quick access
             setup_sc_alias
         fi
@@ -957,11 +862,6 @@ main() {
         fi
     fi
 
-    # ========================================================================
-    # Screen Configuration
-    # ========================================================================
-
-    setup_screenrc
 
     # ========================================================================
     # Systemd Service (Linux only)
@@ -996,7 +896,7 @@ main() {
     echo ""
     echo -e "  ${BOLD}Mobile Access (Termius/SSH):${NC}"
     echo ""
-    echo -e "    ${CYAN}sc${NC}              # Interactive screen session chooser"
+    echo -e "    ${CYAN}sc${NC}              # Interactive tmux session chooser"
     echo -e "    ${CYAN}sc 2${NC}            # Quick attach to session 2"
     echo -e "    ${CYAN}sc -h${NC}           # Help"
     echo ""

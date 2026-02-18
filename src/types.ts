@@ -7,7 +7,7 @@
  * - Task queue operations
  * - Ralph Loop configuration
  * - API requests/responses
- * - Screen session handling
+ * - Mux session handling
  * - Inner loop tracking (Ralph Wiggum detection)
  */
 
@@ -852,15 +852,10 @@ export interface CaseInfo {
   hasClaudeMd?: boolean;
 }
 
-// ========== Screen Session Types ==========
+// ========== Mux Session Types ==========
 
 /**
- * Terminal multiplexer session wrapper.
- *
- * Claudeman uses tmux (preferred) or GNU Screen (fallback) for session persistence.
- */
-/**
- * Persisted respawn configuration for screen sessions.
+ * Persisted respawn configuration for mux sessions.
  * Subset of RespawnConfig that gets saved to disk.
  */
 export interface PersistedRespawnConfig {
@@ -910,29 +905,6 @@ export interface PersistedRespawnConfig {
   durationMinutes?: number;
 }
 
-export interface ScreenSession {
-  /** Claudeman session ID */
-  sessionId: string;
-  /** Mux session name (claudeman-<id>) */
-  screenName: string;
-  /** Screen process PID */
-  pid: number;
-  /** Timestamp when created */
-  createdAt: number;
-  /** Working directory */
-  workingDir: string;
-  /** Session mode: claude or shell */
-  mode: 'claude' | 'shell';
-  /** Whether webserver is attached to this screen */
-  attached: boolean;
-  /** Session display name (tab name) */
-  name?: string;
-  /** Persisted respawn controller configuration (restored on server restart) */
-  respawnConfig?: PersistedRespawnConfig;
-  /** Whether Ralph / Todo tracking is enabled */
-  ralphEnabled?: boolean;
-}
-
 /**
  * Process resource statistics
  */
@@ -945,14 +917,6 @@ export interface ProcessStats {
   childCount: number;
   /** Timestamp of stats collection */
   updatedAt: number;
-}
-
-/**
- * Screen session with resource statistics
- */
-export interface ScreenSessionWithStats extends ScreenSession {
-  /** Optional resource statistics */
-  stats?: ProcessStats;
 }
 
 // ========== Default Configuration ==========

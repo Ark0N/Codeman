@@ -385,13 +385,13 @@
       </div>
     </div>
 
-    <!-- Monitor Panel (Screen Sessions + Background Tasks) -->
+    <!-- Monitor Panel (Tmux Sessions + Background Tasks) -->
     <div class="monitor-panel" id="monitorPanel">
       <div class="monitor-panel-header" id="monitorPanelHeader">
         <div class="monitor-panel-title">Monitor</div>
         <div class="monitor-panel-actions">
           <button class="btn-toolbar btn-sm btn-danger" onclick="app.killAllSessions()" title="Kill all sessions and their tmux processes">Kill All</button>
-          <button class="btn-icon-sm" onclick="app.reconcileScreens()" title="Refresh screens">&#x21BB;</button>
+          <button class="btn-icon-sm" onclick="app.reconcileMuxSessions()" title="Refresh tmux sessions">&#x21BB;</button>
           <button class="btn-icon-sm" onclick="app.toggleMonitorDetach()" title="Detach panel" id="monitorDetachBtn">&#x29C9;</button>
           <button class="btn-icon-sm" onclick="app.toggleMonitorPanel()" title="Toggle panel" id="monitorToggleBtn">&#x25B2;</button>
           <button class="btn-icon-sm" onclick="app.closeMonitor()" title="Close monitor">&times;</button>
@@ -401,10 +401,10 @@
       <div class="monitor-panel-body" id="monitorTabContent">
         <div class="monitor-section">
           <div class="monitor-section-header">
-            <span>Screen Sessions</span>
+            <span>Tmux Sessions</span>
           </div>
-          <div class="monitor-section-body" id="screenSessionsBody">
-            <div class="monitor-empty">No screen sessions</div>
+          <div class="monitor-section-body" id="muxSessionsBody">
+            <div class="monitor-empty">No mux sessions</div>
           </div>
         </div>
         <div class="monitor-section" id="monitorPlanAgentsSection" style="display: none;">

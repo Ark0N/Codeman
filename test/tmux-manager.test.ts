@@ -194,9 +194,9 @@ describe('TmuxManager (unit)', () => {
       expect(manager.getSession('kill-test')).toBeUndefined();
     });
 
-    it('should allow kill when session does NOT match CLAUDEMAN_SCREEN_NAME', async () => {
-      const originalEnv = process.env.CLAUDEMAN_SCREEN_NAME;
-      process.env.CLAUDEMAN_SCREEN_NAME = 'claudeman-0ther1111';
+    it('should allow kill when session does NOT match CLAUDEMAN_MUX_NAME', async () => {
+      const originalEnv = process.env.CLAUDEMAN_MUX_NAME;
+      process.env.CLAUDEMAN_MUX_NAME = 'claudeman-0ther1111';
 
       try {
         manager.registerSession({
@@ -219,16 +219,16 @@ describe('TmuxManager (unit)', () => {
         expect(manager.getSession('other-kill-test')).toBeUndefined();
       } finally {
         if (originalEnv === undefined) {
-          delete process.env.CLAUDEMAN_SCREEN_NAME;
+          delete process.env.CLAUDEMAN_MUX_NAME;
         } else {
-          process.env.CLAUDEMAN_SCREEN_NAME = originalEnv;
+          process.env.CLAUDEMAN_MUX_NAME = originalEnv;
         }
       }
     });
 
-    it('should allow kill when CLAUDEMAN_SCREEN_NAME is not set', async () => {
-      const originalEnv = process.env.CLAUDEMAN_SCREEN_NAME;
-      delete process.env.CLAUDEMAN_SCREEN_NAME;
+    it('should allow kill when CLAUDEMAN_MUX_NAME is not set', async () => {
+      const originalEnv = process.env.CLAUDEMAN_MUX_NAME;
+      delete process.env.CLAUDEMAN_MUX_NAME;
 
       try {
         manager.registerSession({
@@ -247,9 +247,9 @@ describe('TmuxManager (unit)', () => {
         expect(result).toBe(true);
       } finally {
         if (originalEnv === undefined) {
-          delete process.env.CLAUDEMAN_SCREEN_NAME;
+          delete process.env.CLAUDEMAN_MUX_NAME;
         } else {
-          process.env.CLAUDEMAN_SCREEN_NAME = originalEnv;
+          process.env.CLAUDEMAN_MUX_NAME = originalEnv;
         }
       }
     });

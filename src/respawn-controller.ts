@@ -1697,7 +1697,7 @@ export class RespawnController extends EventEmitter {
         if (this._state === 'stopped') return;
         const prompt = this.config.kickstartPrompt!;
         this.logAction('command', `Sending kickstart: "${prompt.substring(0, 40)}..."`);
-        await this.session.writeViaScreen(prompt + '\r');  // \r triggers key.return in Ink/Claude CLI
+        await this.session.writeViaMux(prompt + '\r');  // \r triggers key.return in Ink/Claude CLI
         this.emit('stepSent', 'kickstart', prompt);
         this.setState('waiting_kickstart');
         this.promptDetected = false;
@@ -2466,7 +2466,7 @@ export class RespawnController extends EventEmitter {
 
     this.logAction('command', 'Auto-accept: ↵ Enter (plan approved)');
     this.emit('stepSent', 'auto-accept', '↵');
-    void this.session.writeViaScreen('\r');
+    void this.session.writeViaMux('\r');
     this.emit('autoAcceptSent');
     // Reset so we don't keep spamming Enter if Claude doesn't respond
     this.hasReceivedOutput = false;
@@ -2886,7 +2886,7 @@ export class RespawnController extends EventEmitter {
 
         const input = updatePrompt + '\r';  // \r triggers Enter in Ink/Claude CLI
         this.logAction('command', `Sending: "${updatePrompt.substring(0, 50)}..."`);
-        await this.session.writeViaScreen(input);
+        await this.session.writeViaMux(input);
         this.emit('stepSent', 'update', updatePrompt);
         this.setState('waiting_update');
         this.promptDetected = false;
@@ -2914,7 +2914,7 @@ export class RespawnController extends EventEmitter {
         this.stepTimer = null;
         if (this._state === 'stopped') return;
         this.logAction('command', 'Sending: /clear');
-        await this.session.writeViaScreen('/clear\r');  // \r triggers Enter in Ink/Claude CLI
+        await this.session.writeViaMux('/clear\r');  // \r triggers Enter in Ink/Claude CLI
         this.emit('stepSent', 'clear', '/clear');
         this.setState('waiting_clear');
         this.promptDetected = false;
@@ -2958,7 +2958,7 @@ export class RespawnController extends EventEmitter {
         this.stepTimer = null;
         if (this._state === 'stopped') return;
         this.logAction('command', 'Sending: /init');
-        await this.session.writeViaScreen('/init\r');  // \r triggers Enter in Ink/Claude CLI
+        await this.session.writeViaMux('/init\r');  // \r triggers Enter in Ink/Claude CLI
         this.emit('stepSent', 'init', '/init');
         this.setState('waiting_init');
         this.promptDetected = false;

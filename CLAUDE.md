@@ -35,7 +35,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1537 (must match `package.json` for npm publish)
+**Version**: 0.1538 (must match `package.json` for npm publish)
 
 ## Project Overview
 
@@ -78,7 +78,7 @@ journalctl --user -u claudeman-web -f
 ## Common Gotchas
 
 - **`npm run dev` is NOT the web server** — it shows CLI help. Use `npx tsx src/index.ts web`
-- **Single-line prompts only** — `writeViaScreen()` sends text and Enter separately; multi-line breaks Ink
+- **Single-line prompts only** — `writeViaMux()` sends text and Enter separately; multi-line breaks Ink
 - **Don't kill tmux sessions blindly** — Check `$CLAUDEMAN_TMUX` first; you might be inside one
 - **Never run full test suite** — `npx vitest run` spawns/kills tmux sessions and will crash your Claudeman session. Run individual test files only.
 
@@ -98,7 +98,6 @@ journalctl --user -u claudeman-web -f
 | `src/mux-interface.ts` | `TerminalMultiplexer` interface + `MuxSession` type |
 | `src/mux-factory.ts` | Create tmux multiplexer (`CLAUDEMAN_MUX` override for legacy screen) |
 | `src/tmux-manager.ts` | tmux session management |
-| `src/screen-manager.ts` | GNU screen fallback (deprecated) |
 | `src/session-manager.ts` | Session lifecycle, cleanup |
 | `src/state-store.ts` | State persistence to `~/.claudeman/state.json` |
 | `src/respawn-controller.ts` | State machine for autonomous cycling |
@@ -163,9 +162,9 @@ journalctl --user -u claudeman-web -f
 
 ### Key Patterns
 
-**Input to sessions**: Use `session.writeViaScreen()` for programmatic input (respawn, auto-compact). Uses tmux `send-keys -l` (literal text) + `send-keys Enter`. All prompts must be single-line.
+**Input to sessions**: Use `session.writeViaMux()` for programmatic input (respawn, auto-compact). Uses tmux `send-keys -l` (literal text) + `send-keys Enter`. All prompts must be single-line.
 
-**Terminal multiplexer**: `TerminalMultiplexer` interface (`src/mux-interface.ts`) abstracts the backend. `createMultiplexer()` from `src/mux-factory.ts` creates the tmux backend. Legacy screen fallback exists via `CLAUDEMAN_MUX=screen` but is deprecated.
+**Terminal multiplexer**: `TerminalMultiplexer` interface (`src/mux-interface.ts`) abstracts the backend. `createMultiplexer()` from `src/mux-factory.ts` creates the tmux backend.
 
 **Idle detection**: Multi-layer (completion message → AI check → output silence → token stability). See `docs/respawn-state-machine.md`.
 
@@ -337,8 +336,6 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | `scripts/ralph-wizard-prod.mjs` | Production Ralph wizard with HTTPS support |
 | `scripts/browser-comparison.mjs` | Compare Playwright, Puppeteer, and Agent-Browser frameworks |
 | `scripts/ralph-wizard-demo.mjs` | Demo Ralph Loop wizard via visible browser |
-| `scripts/screen-chooser.sh` | Mobile-friendly Screen session picker (`sc` alias) |
-| `scripts/screen-manager.sh` | Interactive GNU Screen session manager (deprecated) |
 | `scripts/test-links-browser.mjs` | Browser test for clickable terminal file links |
 | `scripts/test-patterns.mjs` | Test file path link detection regex patterns |
 | `scripts/watch-subagents.ts` | Real-time subagent transcript watcher (list, follow by session/agent ID) |

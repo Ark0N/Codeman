@@ -12,11 +12,11 @@
  *
  * tmux sessions are named `claudeman-{sessionId}` and stored in ~/.claudeman/mux-sessions.json.
  *
- * Key advantages over GNU Screen:
- * - `send-keys 'text' Enter` eliminates the text+CR split hack (no 100ms delay, no retries)
- * - `list-sessions -F` provides structured queries (no regex parsing)
+ * Key features:
+ * - `send-keys 'text' Enter` sends literal text in a single command
+ * - `list-sessions -F` provides structured queries
  * - `display-message -p '#{pane_pid}'` for reliable PID discovery
- * - Single server architecture vs per-session processes
+ * - Single server architecture
  *
  * @module tmux-manager
  */
@@ -44,7 +44,7 @@ import { findClaudeDir } from './utils/claude-cli-resolver.js';
 /** Timeout for exec commands (5 seconds) */
 const EXEC_TIMEOUT_MS = 5000;
 
-/** Delay after tmux session creation (300ms — faster than screen's 500ms) */
+/** Delay after tmux session creation (300ms) */
 const TMUX_CREATION_WAIT_MS = 300;
 
 /** Delay after tmux kill command (200ms) */
@@ -73,9 +73,6 @@ const IS_TEST_MODE = !!process.env.VITEST;
 
 /** Path to persisted mux session metadata */
 const MUX_SESSIONS_FILE = join(homedir(), '.claudeman', 'mux-sessions.json');
-
-/** Path to legacy screen sessions (for migration) */
-const LEGACY_SCREENS_FILE = join(homedir(), '.claudeman', 'screens.json');
 
 /** Regex to validate tmux session names (only allow safe characters) */
 const SAFE_MUX_NAME_PATTERN = /^claudeman-[a-f0-9-]+$/;
@@ -115,8 +112,7 @@ function isValidPath(path: string): boolean {
 /**
  * Manages tmux sessions that wrap Claude CLI or shell processes.
  *
- * Implements the TerminalMultiplexer interface for use as a drop-in
- * replacement for ScreenManager.
+ * Implements the TerminalMultiplexer interface.
  *
  * @example
  * ```typescript
@@ -162,30 +158,6 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
           for (const session of data) {
             this.sessions.set(session.sessionId, session);
           }
-        }
-      } else if (existsSync(LEGACY_SCREENS_FILE)) {
-        // Migration: load from legacy screens.json
-        console.log('[TmuxManager] Migrating sessions from legacy screens.json');
-        const content = readFileSync(LEGACY_SCREENS_FILE, 'utf-8');
-        const data = JSON.parse(content);
-        if (Array.isArray(data)) {
-          for (const screen of data) {
-            const session: MuxSession = {
-              sessionId: screen.sessionId,
-              muxName: screen.screenName,
-              pid: screen.pid,
-              createdAt: screen.createdAt,
-              workingDir: screen.workingDir,
-              mode: screen.mode,
-              attached: screen.attached,
-              name: screen.name,
-              respawnConfig: screen.respawnConfig,
-              ralphEnabled: screen.ralphEnabled,
-            };
-            this.sessions.set(session.sessionId, session);
-          }
-          this.saveSessions();
-          console.log(`[TmuxManager] Migrated ${data.length} sessions from screens.json`);
         }
       }
     } catch (err) {
@@ -262,9 +234,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const envExports = [
       'unset CLAUDECODE',
       'unset COLORTERM',
-      'export CLAUDEMAN_SCREEN=1',
+      'export CLAUDEMAN_MUX=1',
       `export CLAUDEMAN_SESSION_ID=${sessionId}`,
-      `export CLAUDEMAN_SCREEN_NAME=${muxName}`,
+      `export CLAUDEMAN_MUX_NAME=${muxName}`,
       `export CLAUDEMAN_API_URL=${process.env.CLAUDEMAN_API_URL || 'http://localhost:3000'}`,
     ].join(' && ');
 
@@ -440,7 +412,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
   /**
    * Kill a tmux session and all its child processes.
-   * Uses the same 4-strategy approach as ScreenManager.
+   * Uses a 4-strategy approach (children → process group → tmux kill → SIGKILL).
    * In test mode: removes from memory only (no real kill).
    */
   async killSession(sessionId: string): Promise<boolean> {
@@ -457,7 +429,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     // SAFETY: Never kill the tmux session we're running inside of
-    const currentMuxName = process.env.CLAUDEMAN_SCREEN_NAME;
+    const currentMuxName = process.env.CLAUDEMAN_MUX_NAME;
     if (currentMuxName && session.muxName === currentMuxName) {
       console.error(`[TmuxManager] BLOCKED: Refusing to kill own tmux session: ${session.muxName}`);
       return false;
@@ -899,10 +871,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   /**
    * Send input directly to a tmux session using `send-keys`.
    *
-   * This is significantly simpler than Screen's approach:
+   * Uses tmux send-keys for reliable input delivery:
    * - `-l` flag sends literal text (no key interpretation)
-   * - `Enter` key is sent as a separate argument (not a shell escape)
-   * - Single command, no delay, no retry loop needed
+   * - `Enter` key is sent as a separate argument
+   * - Single command, no delay needed
    */
   async sendInput(sessionId: string, input: string): Promise<boolean> {
     const session = this.sessions.get(sessionId);

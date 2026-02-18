@@ -138,7 +138,7 @@ This means:
 | **tmux** | `--teammate-mode tmux` | Split panes | tmux installed |
 | **iTerm2** | Auto-detected | Native split panes | iTerm2 + `it2` CLI |
 
-**For Claudeman: use `in-process` only.** Claudeman manages its own tmux/screen sessions externally.
+**For Claudeman: use `in-process` only.** Claudeman manages its own tmux sessions externally.
 
 **In-process UI elements:**
 - Status bar: `@main @teammate1 @teammate2 ...` with `shift+↑ to expand`

@@ -23,7 +23,7 @@ class MockSession extends EventEmitter {
     this.writeBuffer.push(data);
   }
 
-  async writeViaScreen(data: string): Promise<boolean> {
+  async writeViaMux(data: string): Promise<boolean> {
     this.writeBuffer.push(data);
     return true;
   }
