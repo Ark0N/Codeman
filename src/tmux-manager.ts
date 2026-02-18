@@ -136,6 +136,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   readonly backend = 'tmux' as const;
   private sessions: Map<string, MuxSession> = new Map();
   private statsInterval: NodeJS.Timeout | null = null;
+  private mouseSyncInterval: NodeJS.Timeout | null = null;
+  /** Track last-known pane count per session to avoid unnecessary tmux set-option calls */
+  private lastPaneCount: Map<string, number> = new Map();
 
   private trueColorConfigured = false;
 
@@ -298,14 +301,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       await new Promise(resolve => setTimeout(resolve, TMUX_CREATION_WAIT_MS));
 
       // Non-critical tmux config — run in parallel to avoid blocking event loop.
-      // These configure UX niceties (no status bar, mouse mode, true color).
+      // These configure UX niceties (no status bar, true color).
+      // Mouse mode is OFF by default so xterm.js handles text selection natively.
+      // It gets enabled dynamically when panes are split (agent teams).
       const configPromises: Promise<void>[] = [
         // Disable tmux status bar — Claudeman's web UI provides session info
         execAsync(`tmux set-option -t "${muxName}" status off`, { timeout: EXEC_TIMEOUT_MS })
           .then(() => {}).catch(() => { /* Non-critical — session still works with status bar */ }),
-        // Enable mouse mode — allows clicking to select tmux panes
-        execAsync(`tmux set-option -t "${muxName}" mouse on`, { timeout: EXEC_TIMEOUT_MS })
-          .then(() => {}).catch(() => { /* Non-critical — pane clicking won't work but keyboard input still does */ }),
       ];
 
       // Enable 24-bit true color passthrough — server-wide, set once per lifetime
@@ -535,6 +537,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       console.error(`[TmuxManager] Warning: Some processes may still be alive for session ${session.muxName}`);
     }
 
+    this.lastPaneCount.delete(session.muxName);
     this.sessions.delete(sessionId);
     this.saveSessions();
     this.emit('sessionKilled', { sessionId });
@@ -813,8 +816,47 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
   }
 
+  /**
+   * Start periodic mouse mode sync for all tracked sessions.
+   * Polls pane counts every 5s and toggles mouse on/off as needed.
+   * Only calls tmux set-option when the pane count actually changes.
+   */
+  startMouseModeSync(intervalMs: number = 5000): void {
+    if (this.mouseSyncInterval) {
+      clearInterval(this.mouseSyncInterval);
+    }
+
+    this.mouseSyncInterval = setInterval(() => {
+      if (IS_TEST_MODE) return;
+      for (const session of this.sessions.values()) {
+        const panes = this.listPanes(session.muxName);
+        const count = panes.length;
+        const prev = this.lastPaneCount.get(session.muxName);
+
+        // Only toggle when pane count crosses the 1↔N boundary
+        if (prev !== count && count > 0) {
+          this.lastPaneCount.set(session.muxName, count);
+          if (count > 1) {
+            this.enableMouseMode(session.muxName);
+          } else {
+            this.disableMouseMode(session.muxName);
+          }
+        }
+      }
+    }, intervalMs);
+  }
+
+  stopMouseModeSync(): void {
+    if (this.mouseSyncInterval) {
+      clearInterval(this.mouseSyncInterval);
+      this.mouseSyncInterval = null;
+    }
+    this.lastPaneCount.clear();
+  }
+
   destroy(): void {
     this.stopStatsCollection();
+    this.stopMouseModeSync();
   }
 
   registerSession(session: MuxSession): void {
@@ -918,6 +960,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   /**
    * Enable mouse mode for an existing tmux session.
    * Allows clicking to select panes in agent team split-pane layouts.
+   * When mouse mode is on, tmux intercepts mouse events (slow selection, no browser copy).
    */
   enableMouseMode(muxName: string): boolean {
     if (IS_TEST_MODE) return true;
@@ -934,6 +977,43 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Disable mouse mode for an existing tmux session.
+   * Restores native xterm.js text selection and browser clipboard copy.
+   */
+  disableMouseMode(muxName: string): boolean {
+    if (IS_TEST_MODE) return true;
+    if (!isValidMuxName(muxName)) {
+      console.error('[TmuxManager] Invalid session name in disableMouseMode:', muxName);
+      return false;
+    }
+
+    try {
+      execSync(
+        `tmux set-option -t "${muxName}" mouse off`,
+        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Sync mouse mode based on pane count: enable if split (>1 pane), disable if single.
+   * Called by TeamWatcher when teammates spawn/despawn panes.
+   * Uses `tmux list-panes` for bulletproof detection — counts actual panes, not config.
+   */
+  syncMouseMode(muxName: string): boolean {
+    if (IS_TEST_MODE) return true;
+    const panes = this.listPanes(muxName);
+    if (panes.length > 1) {
+      return this.enableMouseMode(muxName);
+    } else {
+      return this.disableMouseMode(muxName);
     }
   }
 

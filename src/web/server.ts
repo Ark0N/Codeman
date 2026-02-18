@@ -15,7 +15,7 @@ import fastifyCompress from '@fastify/compress';
 import fastifyStatic from '@fastify/static';
 import path, { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, statSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { homedir, totalmem, freemem, loadavg, cpus } from 'node:os';
@@ -558,13 +558,38 @@ export class WebServer extends EventEmitter {
       });
     }
 
-    // Security headers on every response
-    this.app.addHook('onRequest', (_req, reply, done) => {
+    // Security headers + CORS on every response
+    this.app.addHook('onRequest', (req, reply, done) => {
       reply.header('X-Content-Type-Options', 'nosniff');
       reply.header('X-Frame-Options', 'SAMEORIGIN');
+      reply.header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob:; connect-src 'self'; font-src 'self' https://cdn.jsdelivr.net; frame-ancestors 'self'");
       if (this.https) {
         reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
       }
+
+      // CORS: restrict to same-origin (localhost) only
+      const origin = req.headers.origin;
+      if (origin) {
+        try {
+          const url = new URL(origin);
+          if (url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '::1') {
+            reply.header('Access-Control-Allow-Origin', origin);
+            reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+            reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+            reply.header('Access-Control-Max-Age', '86400');
+          }
+        } catch {
+          // Invalid origin header — do not set CORS headers
+        }
+      }
+
+      // Handle CORS preflight
+      if (req.method === 'OPTIONS') {
+        reply.code(204).send();
+        done();
+        return;
+      }
+
       done();
     });
 
@@ -741,6 +766,18 @@ export class WebServer extends EventEmitter {
       }
       const body = result.data;
       const workingDir = body.workingDir || process.cwd();
+
+      // Validate workingDir exists and is a directory
+      if (body.workingDir) {
+        try {
+          const stat = statSync(workingDir);
+          if (!stat.isDirectory()) {
+            return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir is not a directory');
+          }
+        } catch {
+          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir does not exist');
+        }
+      }
 
       // Write env overrides to .claude/settings.local.json if provided
       if (body.envOverrides && Object.keys(body.envOverrides).length > 0) {
@@ -2117,6 +2154,18 @@ export class WebServer extends EventEmitter {
       }
       const dir = workingDir || process.cwd();
 
+      // Validate workingDir exists and is a directory
+      if (workingDir) {
+        try {
+          const stat = statSync(dir);
+          if (!stat.isDirectory()) {
+            return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir is not a directory');
+          }
+        } catch {
+          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir does not exist');
+        }
+      }
+
       const session = new Session({ workingDir: dir });
       this.sessions.set(session.id, session);
       this.store.incrementSessionsCreated();
@@ -2148,6 +2197,18 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
       }
       const { prompt, workingDir, durationMinutes } = srResult.data;
+
+      // Validate workingDir exists and is a directory
+      if (workingDir) {
+        try {
+          const stat = statSync(workingDir);
+          if (!stat.isDirectory()) {
+            return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir is not a directory');
+          }
+        } catch {
+          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir does not exist');
+        }
+      }
 
       const run = await this.startScheduledRun(prompt, workingDir || process.cwd(), durationMinutes ?? 60);
       return { success: true, run };
@@ -5241,6 +5302,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
         // Start stats collection to show screen info
         this.mux.startStatsCollection(STATS_COLLECTION_INTERVAL_MS);
+
+        // Start mouse mode sync (tmux only) — toggles mouse on/off based on pane count.
+        // Mouse off = native xterm.js selection; mouse on = tmux pane clicking (split layouts).
+        if (this.mux.backend === 'tmux' && 'startMouseModeSync' in this.mux) {
+          (this.mux as { startMouseModeSync: (ms?: number) => void }).startMouseModeSync();
+        }
       }
 
       if (dead.length > 0) {

@@ -1545,6 +1545,7 @@ class ClaudemanApp {
     this.initTerminal();
     this.loadFontSize();
     this.applyHeaderVisibilitySettings();
+    this.applyTabWrapSettings();
     this.applyMonitorVisibility();
     // Remove mobile-init class now that JS has applied visibility settings.
     // The inline <script> in <head> added this to prevent flash-of-content on mobile.
@@ -1569,6 +1570,7 @@ class ClaudemanApp {
     // Load server-stored settings (async, re-applies visibility after load)
     this.loadAppSettingsFromServer().then(() => {
       this.applyHeaderVisibilitySettings();
+      this.applyTabWrapSettings();
       this.applyMonitorVisibility();
     });
   }
@@ -5034,10 +5036,11 @@ class ClaudemanApp {
     prompt += '## If Stuck\n';
     prompt += 'Output `<promise>BLOCKED</promise>` with explanation';
 
-    // Show preview with highlighting
-    const highlightedPrompt = prompt
-      .replace(/<promise>/g, '<span class="preview-highlight">&lt;promise&gt;')
-      .replace(/<\/promise>/g, '&lt;/promise&gt;</span>')
+    // Show preview with highlighting (escape first, then apply formatting)
+    const escapedPrompt = this.escapeHtml(prompt);
+    const highlightedPrompt = escapedPrompt
+      .replace(/&lt;promise&gt;/g, '<span class="preview-highlight">&lt;promise&gt;')
+      .replace(/&lt;\/promise&gt;/g, '&lt;/promise&gt;</span>')
       .replace(/`([^`]+)`/g, '<code>$1</code>');
 
     preview.innerHTML = highlightedPrompt;
@@ -5411,7 +5414,7 @@ class ClaudemanApp {
         if (metadata.synthesisStats?.sourceBreakdown) {
           const sources = metadata.synthesisStats.sourceBreakdown;
           const sourceList = Object.entries(sources)
-            .map(([src, count]) => `${src}: ${count}`)
+            .map(([src, count]) => `${this.escapeHtml(src)}: ${count}`)
             .join(', ');
           statsText += ` · Sources: ${sourceList}`;
         }
@@ -5426,10 +5429,10 @@ class ClaudemanApp {
       if (metadata?.verificationWarnings?.length > 0 || metadata?.verificationGaps?.length > 0) {
         let warningsHtml = '';
         if (metadata.verificationGaps?.length > 0) {
-          warningsHtml += `<div class="plan-gaps"><strong>Gaps identified:</strong> ${metadata.verificationGaps.join('; ')}</div>`;
+          warningsHtml += `<div class="plan-gaps"><strong>Gaps identified:</strong> ${metadata.verificationGaps.map(g => this.escapeHtml(g)).join('; ')}</div>`;
         }
         if (metadata.verificationWarnings?.length > 0) {
-          warningsHtml += `<div class="plan-warnings"><strong>Warnings:</strong> ${metadata.verificationWarnings.join('; ')}</div>`;
+          warningsHtml += `<div class="plan-warnings"><strong>Warnings:</strong> ${metadata.verificationWarnings.map(w => this.escapeHtml(w)).join('; ')}</div>`;
         }
         warningsEl.innerHTML = warningsHtml;
         warningsEl.classList.remove('hidden');
@@ -6005,9 +6008,9 @@ class ClaudemanApp {
 
     win.innerHTML = `
       <div class="plan-subagent-header">
-        <span class="plan-subagent-prompt-link" data-agent-id="${agentId}" data-agent-type="${agentType}" title="Click to view prompt">
+        <span class="plan-subagent-prompt-link" data-agent-id="${this.escapeHtml(agentId)}" data-agent-type="${this.escapeHtml(agentType)}" title="Click to view prompt">
           <span class="plan-subagent-icon">${typeIcons[agentType] || '🤖'}</span>
-          <span class="plan-subagent-title">${typeLabels[agentType] || agentType}</span>
+          <span class="plan-subagent-title">${typeLabels[agentType] || this.escapeHtml(agentType)}</span>
         </span>
         <span class="plan-subagent-model">${model}</span>
       </div>
@@ -8086,8 +8089,8 @@ class ClaudemanApp {
       // Shorter timer name display
       const displayName = name.replace(/-/g, ' ').replace(/^\w/, c => c.toUpperCase());
 
-      html += `<div class="respawn-countdown-timer" title="${timer.reason || ''}">
-        <span class="timer-name">${displayName}</span>
+      html += `<div class="respawn-countdown-timer" title="${this.escapeHtml(timer.reason || '')}">
+        <span class="timer-name">${this.escapeHtml(displayName)}</span>
         <span class="timer-value">${remainingSec}s</span>
         <div class="respawn-timer-bar">
           <div class="respawn-timer-progress" style="width: ${percent}%"></div>
@@ -8123,7 +8126,7 @@ class ClaudemanApp {
       html += `<div class="respawn-action-entry${extraClass}">
         <span class="action-time">${time}</span>
         <span class="action-type">[${action.type}]</span>
-        <span class="action-detail">${action.detail}</span>
+        <span class="action-detail">${this.escapeHtml(action.detail)}</span>
       </div>`;
     }
 
@@ -9405,6 +9408,7 @@ class ClaudemanApp {
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? defaults.subagentTrackingEnabled ?? true;
     document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? defaults.subagentActiveTabOnly ?? true;
     document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? defaults.imageWatcherEnabled ?? false;
+    document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? true;
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
     const allowedToolsRow = document.getElementById('allowedToolsRow');
@@ -9530,6 +9534,7 @@ class ClaudemanApp {
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
       imageWatcherEnabled: document.getElementById('appSettingsImageWatcherEnabled').checked,
+      tabTwoRows: document.getElementById('appSettingsTabTwoRows').checked,
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
       allowedTools: document.getElementById('appSettingsAllowedTools').value.trim(),
@@ -9616,6 +9621,7 @@ class ClaudemanApp {
 
     // Apply header visibility immediately
     this.applyHeaderVisibilitySettings();
+    this.applyTabWrapSettings();
     this._updateTokensImmediate();  // Re-render token display (picks up showCost change)
     this.applyMonitorVisibility();
     this.renderProjectInsightsPanel();  // Re-render to apply visibility setting
@@ -9740,6 +9746,7 @@ class ClaudemanApp {
         subagentActiveTabOnly: true, // Only show subagents for active tab
         imageWatcherEnabled: false,
         ralphTrackerEnabled: false,
+        tabTwoRows: false,
       };
     }
     // Desktop defaults - rely on ?? operators in apply functions
@@ -9808,6 +9815,16 @@ class ClaudemanApp {
     if (!notifEnabled) {
       const drawer = document.getElementById('notifDrawer');
       if (drawer) drawer.classList.remove('open');
+    }
+  }
+
+  applyTabWrapSettings() {
+    const settings = this.loadAppSettingsFromStorage();
+    const defaults = this.getDefaultSettings();
+    const twoRows = settings.tabTwoRows ?? defaults.tabTwoRows ?? true;
+    const tabsEl = document.getElementById('sessionTabs');
+    if (tabsEl) {
+      tabsEl.classList.toggle('tabs-single-row', !twoRows);
     }
   }
 
@@ -9951,7 +9968,7 @@ class ClaudemanApp {
           'showFontControls', 'showSystemStats', 'showTokenCount', 'showCost',
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
           'subagentTrackingEnabled', 'subagentActiveTabOnly',
-          'imageWatcherEnabled', 'ralphTrackerEnabled',
+          'imageWatcherEnabled', 'ralphTrackerEnabled', 'tabTwoRows',
         ]);
         const filteredAppSettings = {};
         for (const [key, value] of Object.entries(appSettings)) {
@@ -11349,19 +11366,19 @@ class ClaudemanApp {
     let html = `
       <div class="ralph-status-block-header">
         <span>RALPH_STATUS</span>
-        <span class="ralph-status-block-status ${statusClass}">${statusBlock.status}</span>
+        <span class="ralph-status-block-status ${statusClass}">${this.escapeHtml(statusBlock.status)}</span>
         ${statusBlock.exitSignal ? '<span style="color: #4caf50;">🚪 EXIT</span>' : ''}
       </div>
       <div class="ralph-status-block-stats">
-        <span>${workIcon} ${statusBlock.workType}</span>
+        <span>${workIcon} ${this.escapeHtml(statusBlock.workType)}</span>
         <span>📁 ${statusBlock.filesModified} files</span>
-        <span>✓ ${statusBlock.tasksCompletedThisLoop} tasks</span>
-        <span>${testsIcon} Tests: ${statusBlock.testsStatus}</span>
+        <span>✓ ${this.escapeHtml(String(statusBlock.tasksCompletedThisLoop))} tasks</span>
+        <span>${testsIcon} Tests: ${this.escapeHtml(statusBlock.testsStatus)}</span>
       </div>
     `;
 
     if (statusBlock.recommendation) {
-      html += `<div class="ralph-status-block-recommendation">${statusBlock.recommendation}</div>`;
+      html += `<div class="ralph-status-block-recommendation">${this.escapeHtml(statusBlock.recommendation)}</div>`;
     }
 
     container.innerHTML = html;
@@ -11765,7 +11782,7 @@ class ClaudemanApp {
       const hasWindow = this.subagentWindows.has(agent.agentId);
       const canKill = agent.status === 'active' || agent.status === 'idle';
       const modelBadge = agent.modelShort
-        ? `<span class="subagent-model-badge ${agent.modelShort}">${agent.modelShort}</span>`
+        ? `<span class="subagent-model-badge ${this.escapeHtml(agent.modelShort)}">${this.escapeHtml(agent.modelShort)}</span>`
         : '';
 
       const teammateInfo = this.getTeammateInfo(agent);
@@ -11869,7 +11886,7 @@ class ClaudemanApp {
 
     const detailTitle = agent.description || `Agent ${agent.agentId}`;
     const modelBadge = agent.modelShort
-      ? `<span class="subagent-model-badge ${agent.modelShort}">${agent.modelShort}</span>`
+      ? `<span class="subagent-model-badge ${this.escapeHtml(agent.modelShort)}">${this.escapeHtml(agent.modelShort)}</span>`
       : '';
     const tokenStats = (agent.totalInputTokens || agent.totalOutputTokens)
       ? `<span>Tokens: ${this.formatTokenCount(agent.totalInputTokens || 0)}↓ ${this.formatTokenCount(agent.totalOutputTokens || 0)}↑</span>`
@@ -12001,14 +12018,14 @@ class ClaudemanApp {
       win.document.write(`
         <html>
           <head>
-            <title>Subagent ${agentId} Transcript</title>
+            <title>Subagent ${this.escapeHtml(agentId)} Transcript</title>
             <style>
               body { background: #1a1a2e; color: #eee; font-family: monospace; padding: 20px; }
               pre { white-space: pre-wrap; word-wrap: break-word; }
             </style>
           </head>
           <body>
-            <h2>Subagent ${agentId} Transcript (${data.data.entryCount} entries)</h2>
+            <h2>Subagent ${this.escapeHtml(agentId)} Transcript (${data.data.entryCount} entries)</h2>
             <pre>${this.escapeHtml(content)}</pre>
           </body>
         </html>

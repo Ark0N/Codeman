@@ -35,7 +35,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1530 (must match `package.json` for npm publish)
+**Version**: 0.1531 (must match `package.json` for npm publish)
 
 ## Project Overview
 
@@ -311,7 +311,7 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **SSE events** | Search `broadcast(` in `server.ts` |
 | **CLI commands** | `claudeman --help` |
 | **Frontend patterns** | `src/web/public/app.js` (subagent windows, notifications) |
-| **Session modes** | `SessionMode` type in `src/types.ts` |
+| **Session statuses** | `SessionStatus` type in `src/types.ts` |
 | **Error codes** | `createErrorResponse()` in `src/types.ts` |
 | **Test utilities** | `test/respawn-test-utils.ts` |
 | **Memory leak patterns** | `test/memory-leak-prevention.test.ts` |

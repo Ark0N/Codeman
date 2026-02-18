@@ -12,7 +12,7 @@
  */
 
 import { spawn, ChildProcess } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, statSync, realpathSync } from 'node:fs';
 import { resolve, relative, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { EventEmitter } from 'node:events';
@@ -158,7 +158,7 @@ export class FileStreamManager extends EventEmitter {
       return { success: false, error: validationResult.error };
     }
 
-    const absolutePath = validationResult.absolutePath!;
+    let absolutePath = validationResult.absolutePath!;
 
     // Check file exists and size
     try {
@@ -172,6 +172,22 @@ export class FileStreamManager extends EventEmitter {
     } catch (err) {
       const errorCode = err instanceof Error && 'code' in err ? (err as NodeJS.ErrnoException).code : 'UNKNOWN';
       console.warn(`[FileStreamManager] Failed to stat file "${absolutePath}" (${errorCode}):`, err instanceof Error ? err.message : String(err));
+      return { success: false, error: 'File not found or not accessible' };
+    }
+
+    // Re-resolve symlinks right before spawn to minimize TOCTOU window.
+    // A symlink could have been swapped between validatePath() and here.
+    try {
+      const resolvedPath = realpathSync(absolutePath);
+      if (resolvedPath !== absolutePath) {
+        // Symlink target changed — re-validate against allowed paths
+        const recheck = this.validatePath(resolvedPath, workingDir);
+        if (!recheck.valid) {
+          return { success: false, error: recheck.error };
+        }
+        absolutePath = resolvedPath;
+      }
+    } catch {
       return { success: false, error: 'File not found or not accessible' };
     }
 
@@ -363,19 +379,27 @@ export class FileStreamManager extends EventEmitter {
     }
 
     // Resolve to absolute path
-    const absolutePath = isAbsolute(expandedPath)
+    let absolutePath = isAbsolute(expandedPath)
       ? resolve(expandedPath)
       : resolve(workingDir, expandedPath);
+
+    // Resolve symlinks to prevent symlink attacks — validate the real target,
+    // not the symlink itself. Fall back to resolved path if file doesn't exist yet.
+    try {
+      absolutePath = realpathSync(absolutePath);
+    } catch {
+      // File may not exist yet (tail -f can wait); keep the resolved path
+      // which will be caught by the existsSync check below
+    }
 
     // Normalize the working directory
     const normalizedWorkingDir = resolve(workingDir);
 
     // Check if the resolved path is within the working directory
-    // or common log directories
+    // or common log directories (/tmp intentionally excluded — world-writable)
     const allowedPaths = [
       normalizedWorkingDir,
       '/var/log',
-      '/tmp',
       resolve(homedir(), '.local/share'),
       resolve(homedir(), '.cache'),
       resolve(homedir(), 'logs'),
@@ -393,10 +417,8 @@ export class FileStreamManager extends EventEmitter {
       };
     }
 
-    // Check for path traversal attempts
-    if (absolutePath.includes('..')) {
-      return { valid: false, error: 'Path traversal not allowed' };
-    }
+    // Note: No need to check for '..' — resolve() already normalizes the path,
+    // and realpathSync() resolves symlinks. Both eliminate traversal sequences.
 
     // Check file exists
     if (!existsSync(absolutePath)) {

@@ -9,6 +9,56 @@
 
 import { z } from 'zod';
 
+// ========== Path Validation ==========
+
+/** Regex to validate working directory paths (no shell metacharacters) — matches tmux-manager.ts */
+const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_\/\-. ~]+$/;
+
+/** Validate a path string: no shell metacharacters, no traversal, must be absolute */
+export function isValidWorkingDir(p: string): boolean {
+  if (!p || !p.startsWith('/')) return false;
+  if (p.includes(';') || p.includes('&') || p.includes('|') ||
+      p.includes('$') || p.includes('`') || p.includes('(') ||
+      p.includes(')') || p.includes('{') || p.includes('}') ||
+      p.includes('<') || p.includes('>') || p.includes("'") ||
+      p.includes('"') || p.includes('\n') || p.includes('\r')) {
+    return false;
+  }
+  if (p.includes('..')) return false;
+  return SAFE_PATH_PATTERN.test(p);
+}
+
+/** Zod refinement for safe absolute path */
+const safePathSchema = z.string().max(1000).refine(isValidWorkingDir, {
+  message: 'Invalid path: must be absolute, no shell metacharacters or traversal',
+});
+
+// ========== Env Var Allowlist ==========
+
+/** Allowlisted env var key prefixes */
+const ALLOWED_ENV_PREFIXES = ['CLAUDE_CODE_'];
+
+/** Env var keys that are always blocked (security-sensitive) */
+const BLOCKED_ENV_KEYS = new Set([
+  'PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'NODE_OPTIONS',
+  'CLAUDEMAN_SCREEN_NAME', 'CLAUDEMAN_TMUX',
+]);
+
+/** Validate that an env var key is allowed */
+function isAllowedEnvKey(key: string): boolean {
+  if (BLOCKED_ENV_KEYS.has(key)) return false;
+  return ALLOWED_ENV_PREFIXES.some(prefix => key.startsWith(prefix));
+}
+
+/** Zod schema for env overrides with allowlist enforcement */
+const safeEnvOverridesSchema = z.record(z.string(), z.string()).optional().refine(
+  (val) => {
+    if (!val) return true;
+    return Object.keys(val).every(isAllowedEnvKey);
+  },
+  { message: 'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_* keys are allowed.' },
+);
+
 // ========== Session Routes ==========
 
 /**
@@ -16,10 +66,10 @@ import { z } from 'zod';
  * Creates a new session with optional working directory, mode, and name.
  */
 export const CreateSessionSchema = z.object({
-  workingDir: z.string().optional(),
+  workingDir: safePathSchema.optional(),
   mode: z.enum(['claude', 'shell']).optional(),
   name: z.string().max(100).optional(),
-  envOverrides: z.record(z.string(), z.string()).optional(),
+  envOverrides: safeEnvOverridesSchema,
 });
 
 /**
@@ -203,13 +253,13 @@ export const FlickerFilterSchema = z.object({
 /** POST /api/run */
 export const QuickRunSchema = z.object({
   prompt: z.string().min(1).max(100000),
-  workingDir: z.string().max(1000).optional(),
+  workingDir: safePathSchema.optional(),
 });
 
 /** POST /api/scheduled */
 export const ScheduledRunSchema = z.object({
   prompt: z.string().min(1).max(100000),
-  workingDir: z.string().max(1000).optional(),
+  workingDir: safePathSchema.optional(),
   durationMinutes: z.number().int().min(1).max(14400).optional(),
 });
 

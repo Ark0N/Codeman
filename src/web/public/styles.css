@@ -183,6 +183,13 @@ body {
   contain: layout;
 }
 
+.session-tabs.tabs-single-row {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-height: none;
+}
+
 .session-tabs::-webkit-scrollbar {
   width: 4px;
 }
