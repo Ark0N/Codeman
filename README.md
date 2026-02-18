@@ -348,9 +348,22 @@ claudeman web
 
 ---
 
-## Mobile — The Best Way to Use Claude Code on Your Phone
+## Mobile — The Best Claude Code Experience on Any Phone
 
-**Forget terminal apps.** Claudeman's web UI gives you a full Claude Code dashboard on your phone — real-time terminals, swipe navigation, smart keyboard handling, and quick commands. Just open your browser.
+**Forget terminal apps.** Claudeman gives you the most responsive Claude Code shell ever built for mobile — with **local echo** that makes typing feel instant, even over high-latency connections.
+
+### Local Echo — Zero-Latency Typing
+
+When you're accessing Claude Code remotely (VPN, Tailscale, SSH tunnel), every keystroke normally takes 200-300ms to echo back from the server. Local echo eliminates this completely:
+
+- **Instant character feedback** — keystrokes appear immediately in a DOM overlay that perfectly matches Claude Code's terminal rendering
+- **Full editing support** — backspace, retype, correct mistakes before sending
+- **Input capture mode** — characters are buffered locally; only the final edited text is sent when you press Enter
+- **Persistent across reconnects** — unsent input survives page reloads and SSE disconnects via localStorage
+- **Block cursor** — pixel-perfect replica of Claude Code's native cursor
+- **Enabled by default on mobile** — works during both idle and busy sessions
+
+> *Built for real-world use: Thailand → Switzerland over Tailscale, 200-300ms RTT, typing feels like localhost.*
 
 <p align="center">
   <img src="docs/screenshots/mobile-main.png" alt="Mobile Dashboard" width="280">
@@ -362,6 +375,7 @@ claudeman web
 
 | Terminal Apps | Claudeman Mobile |
 |:--------------|:-----------------|
+| 200-300ms input lag over remote | **Local echo — instant keystroke feedback** |
 | Tiny text, no context | Full xterm.js terminal, responsive layout |
 | No session management | Swipe between sessions, tab badges show status |
 | No notifications | Push alerts when Claude needs approval or goes idle |
