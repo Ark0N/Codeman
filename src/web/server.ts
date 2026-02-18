@@ -4645,7 +4645,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
   private broadcast(event: string, data: unknown): void {
     // Invalidate caches on any state-changing broadcast
-    if (event.startsWith('session:') || event === 'respawn:') {
+    if (event.startsWith('session:') || event.startsWith('respawn:')) {
       this.cachedLightState = null;
       this.cachedSessionsList = null;
     }

@@ -962,8 +962,30 @@ class NotificationManager {
   notify({ urgency, category, sessionId, sessionName, title, message }) {
     if (!this.preferences.enabled) return;
 
+    // Map notification categories to eventType preference keys
+    const categoryToEventType = {
+      'hook-permission': 'permission_prompt',
+      'hook-elicitation': 'elicitation_dialog',
+      'hook-idle': 'idle_prompt',
+      'hook-stop': 'stop',
+      'session-error': 'session_error',
+      'session-crash': 'session_error',
+      'session-stuck': 'idle_prompt',
+      'respawn-blocked': 'respawn_cycle',
+      'auto-accept': 'respawn_cycle',
+      'auto-clear': 'respawn_cycle',
+      'ralph-complete': 'ralph_complete',
+      'circuit-breaker': 'respawn_cycle',
+      'exit-gate': 'ralph_complete',
+      'subagent-spawn': 'subagent_spawn',
+      'subagent-complete': 'subagent_complete',
+      'hook-teammate-idle': 'idle_prompt',
+      'hook-task-completed': 'stop',
+    };
+    const eventTypeKey = categoryToEventType[category] || category;
+
     // Check per-event-type preferences first
-    const eventPref = this.preferences.eventTypes?.[category];
+    const eventPref = this.preferences.eventTypes?.[eventTypeKey];
     let shouldBrowserNotify = false;
     let shouldAudioAlert = false;
 
@@ -1165,6 +1187,9 @@ class NotificationManager {
     try {
       if (!this.audioCtx) {
         this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (this.audioCtx.state === 'suspended') {
+        this.audioCtx.resume();
       }
       const ctx = this.audioCtx;
       const oscillator = ctx.createOscillator();
@@ -2602,6 +2627,19 @@ class ClaudemanApp {
       }
     });
 
+    addListener('respawn:error', (e) => {
+      const data = JSON.parse(e.data);
+      const session = this.sessions.get(data.sessionId);
+      this.notificationManager?.notify({
+        urgency: 'critical',
+        category: 'session-error',
+        sessionId: data.sessionId,
+        sessionName: session?.name || data.sessionId,
+        title: 'Respawn Error',
+        message: data.error || data.message || 'Respawn encountered an error',
+      });
+    });
+
     addListener('respawn:actionLog', (e) => {
       const data = JSON.parse(e.data);
       const { sessionId, action } = data;
@@ -2882,6 +2920,32 @@ class ClaudemanApp {
       });
     });
 
+    addListener('hook:teammate_idle', (e) => {
+      const data = JSON.parse(e.data);
+      const session = this.sessions.get(data.sessionId);
+      this.notificationManager?.notify({
+        urgency: 'warning',
+        category: 'hook-teammate-idle',
+        sessionId: data.sessionId,
+        sessionName: session?.name || data.sessionId,
+        title: 'Teammate Idle',
+        message: `A teammate is idle in ${session?.name || data.sessionId}`,
+      });
+    });
+
+    addListener('hook:task_completed', (e) => {
+      const data = JSON.parse(e.data);
+      const session = this.sessions.get(data.sessionId);
+      this.notificationManager?.notify({
+        urgency: 'info',
+        category: 'hook-task-completed',
+        sessionId: data.sessionId,
+        sessionName: session?.name || data.sessionId,
+        title: 'Task Completed',
+        message: `A team task completed in ${session?.name || data.sessionId}`,
+      });
+    });
+
     // ========== Subagent Events (Claude Code Background Agents) ==========
 
     addListener('subagent:discovered', (e) => {
@@ -2913,6 +2977,18 @@ class ClaudemanApp {
       // Ensure connection lines are updated after window is created and DOM settles
       requestAnimationFrame(() => {
         this.updateConnectionLines();
+      });
+
+      // Notify about new subagent discovery
+      const parentId = this.subagentParentMap.get(data.agentId);
+      const parentSession = parentId ? this.sessions.get(parentId) : null;
+      this.notificationManager?.notify({
+        urgency: 'info',
+        category: 'subagent-spawn',
+        sessionId: parentId || data.sessionId,
+        sessionName: parentSession?.name || parentId || data.sessionId,
+        title: 'Subagent Spawned',
+        message: data.description || 'New background agent started',
       });
     });
 
@@ -3021,6 +3097,18 @@ class ClaudemanApp {
           this.saveSubagentWindowStates(); // Persist the minimized state
         }
       }
+
+      // Notify about subagent completion
+      const parentId = this.subagentParentMap.get(data.agentId);
+      const parentSession = parentId ? this.sessions.get(parentId) : null;
+      this.notificationManager?.notify({
+        urgency: 'info',
+        category: 'subagent-complete',
+        sessionId: parentId || existing?.sessionId || data.sessionId,
+        sessionName: parentSession?.name || parentId || data.sessionId,
+        title: 'Subagent Completed',
+        message: existing?.description || data.description || 'Background agent finished',
+      });
 
       // Clean up activity/tool data for completed agents after 5 minutes
       // This prevents memory leaks from long-running sessions with many subagents
@@ -9424,7 +9512,7 @@ class ClaudemanApp {
         },
         session_error: {
           enabled: true,
-          browser: document.getElementById('eventPermissionBrowser').checked, // Use permission's browser setting
+          browser: this.notificationManager?.preferences?.eventTypes?.session_error?.browser ?? true,
           audio: false,
         },
         respawn_cycle: {
