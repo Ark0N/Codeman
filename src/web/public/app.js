@@ -838,6 +838,141 @@ class FocusTrap {
 }
 
 /**
+ * Local echo DOM overlay — shows typed characters instantly at the visible prompt
+ * position for high-latency connections. Positioned by scanning the terminal buffer
+ * for the ❯ prompt character, not by trusting buffer.cursorY (which reflects Ink's
+ * internal cursor near the status bar).
+ */
+class LocalEchoOverlay {
+    constructor(terminal) {
+        this.terminal = terminal;
+        this.overlay = document.createElement('span');
+        this.overlay.style.cssText = 'position:absolute;z-index:7;pointer-events:none;white-space:pre;font-kerning:none;overflow:hidden;display:none';
+        this.overlay.style.fontFamily = terminal.options.fontFamily;
+        this.overlay.style.fontSize = terminal.options.fontSize + 'px';
+        this.overlay.style.fontWeight = terminal.options.fontWeight || 'normal';
+        // Match letter-spacing and colors from xterm-rows for DPR compensation
+        const screen = terminal.element.querySelector('.xterm-screen');
+        const rows = terminal.element.querySelector('.xterm-rows');
+        if (rows) {
+            this.overlay.style.letterSpacing = getComputedStyle(rows).letterSpacing;
+            this.overlay.style.color = getComputedStyle(rows).color;
+        }
+        // Opaque background so overlay covers old buffer text underneath.
+        // xterm.js applies bg via internal rendering, not CSS — use theme option.
+        this.overlay.style.backgroundColor = terminal.options?.theme?.background || '#0d0d0d';
+        // Solid bar cursor (no blink — matches Claude Code's input cursor)
+        this._cursor = document.createElement('span');
+        this._cursor.style.cssText = 'display:inline-block;width:1.5px;height:1em;vertical-align:text-bottom;background:currentColor;margin-left:1px';
+        screen.appendChild(this.overlay);
+        this.pendingText = '';
+        this._storageKey = 'claudeman_local_echo_pending';
+        // Restore unsent input from previous session (survives reload/disconnect)
+        try {
+            const saved = localStorage.getItem(this._storageKey);
+            if (saved) {
+                this.pendingText = saved;
+                this._render();
+            }
+        } catch {}
+    }
+
+    _persist() {
+        try {
+            if (this.pendingText) {
+                localStorage.setItem(this._storageKey, this.pendingText);
+            } else {
+                localStorage.removeItem(this._storageKey);
+            }
+        } catch {}
+    }
+
+    // Scan terminal buffer to find the visible ❯ prompt position (bottom-up)
+    _findPrompt() {
+        try {
+            const buffer = this.terminal.buffer.active;
+            const viewportTop = buffer.viewportY;
+            for (let row = this.terminal.rows - 1; row >= 0; row--) {
+                const line = buffer.getLine(viewportTop + row);
+                if (!line) continue;
+                const text = line.translateToString(true);
+                const idx = text.lastIndexOf('\u276f');
+                if (idx >= 0) {
+                    return { row, col: idx };
+                }
+            }
+        } catch {}
+        return null;
+    }
+
+    addChar(char) {
+        this.pendingText += char;
+        this._persist();
+        this._render();
+    }
+
+    removeChar() {
+        if (this.pendingText.length > 0) {
+            this.pendingText = this.pendingText.slice(0, -1);
+            this._persist();
+            if (this.pendingText.length > 0) {
+                this._render();
+            } else {
+                this.clear();
+            }
+        }
+    }
+
+    clear() {
+        this.pendingText = '';
+        this._persist();
+        this.overlay.textContent = '';
+        if (this._cursor.parentNode === this.overlay) {
+            this.overlay.removeChild(this._cursor);
+        }
+        this.overlay.style.display = 'none';
+    }
+
+    _render() {
+        if (!this.pendingText) {
+            this.overlay.style.display = 'none';
+            return;
+        }
+        try {
+            // Re-scan for prompt on EVERY render — Ink can move it between redraws
+            const prompt = this._findPrompt();
+            if (!prompt) { this.overlay.style.display = 'none'; return; }
+
+            const dims = this.terminal._core._renderService.dimensions;
+            const cellW = dims.css.cell.width;
+            const cellH = dims.css.cell.height;
+            // Position right after "❯ " (prompt col + 2)
+            const col = prompt.col + 2;
+            const leftPx = col * cellW;
+            this.overlay.style.left = leftPx + 'px';
+            this.overlay.style.top = (prompt.row * cellH) + 'px';
+            this.overlay.style.height = cellH + 'px';
+            this.overlay.style.lineHeight = cellH + 'px';
+            // Extend to right edge to cover old buffer text with opaque bg
+            this.overlay.style.width = (this.terminal.cols * cellW - leftPx) + 'px';
+            this.overlay.textContent = this.pendingText;
+            // Solid cursor after text
+            this.overlay.appendChild(this._cursor);
+            this.overlay.style.display = '';
+        } catch {
+            this.clear();
+        }
+    }
+
+    get hasPending() { return this.pendingText.length > 0; }
+
+    dispose() {
+        this.clear();
+        this.overlay.remove();
+    }
+}
+
+/**
  * Process data containing DEC 2026 sync markers.
  * Strips markers and returns segments that should be written atomically.
  * Each returned segment represents content between SYNC_START and SYNC_END.
@@ -1418,6 +1553,8 @@ class ClaudemanApp {
     this.writeFrameScheduled = false;
     this._wasAtBottomBeforeWrite = true; // Default to true for sticky scroll
     this.syncWaitTimeout = null; // Timeout for incomplete sync blocks
+    this._isLoadingBuffer = false; // true during chunkedTerminalWrite — blocks live SSE writes
+    this._loadBufferQueue = null;  // queued SSE events during buffer load
 
     // Flicker filter state (buffers output after screen clears)
     this.flickerFilterBuffer = '';
@@ -1452,10 +1589,10 @@ class ClaudemanApp {
     // Sequential input send chain — ensures keystroke ordering across async fetches
     this._inputSendChain = Promise.resolve();
 
-    // No local echo — let PTY/Ink handle all character echoing.
-    // Local echo was removed because it's fundamentally incompatible with Ink's
-    // terminal management (causes chars to leak onto Ink's status bar rows below the prompt,
-    // even when only echoing during idle state).
+    // Local echo overlay — DOM overlay positioned at the visible ❯ prompt
+    // (not at buffer.cursorY, which reflects Ink's internal cursor position)
+    this._localEchoOverlay = null;  // created after terminal.open()
+    this._localEchoEnabled = false; // true when setting on + session active
 
     // Accessibility: Focus trap for modals
     this.activeFocusTrap = null;
@@ -1549,16 +1686,19 @@ class ClaudemanApp {
     // Remove mobile-init class now that JS has applied visibility settings.
     // The inline <script> in <head> added this to prevent flash-of-content on mobile.
     document.documentElement.classList.remove('mobile-init');
-    // Defer heavy terminal canvas creation to next frame — lets browser paint header/skeleton first
+    // Defer heavy terminal canvas creation to next frame — lets browser paint header/skeleton first.
+    // IMPORTANT: connectSSE must run AFTER initTerminal to prevent a race where SSE data
+    // arrives before the terminal exists, orphaning data in pendingWrites and corrupting
+    // escape sequence boundaries when later concatenated with fresh data.
     requestAnimationFrame(() => {
       this.initTerminal();
       this.loadFontSize();
+      this.connectSSE();
+      // Only fetch state if SSE init event hasn't arrived within 3s (avoids duplicate handleInit)
+      this._initFallbackTimer = setTimeout(() => {
+        if (this._initGeneration === 0) this.loadState();
+      }, 3000);
     });
-    this.connectSSE();
-    // Only fetch state if SSE init event hasn't arrived within 3s (avoids duplicate handleInit)
-    this._initFallbackTimer = setTimeout(() => {
-      if (this._initGeneration === 0) this.loadState();
-    }, 3000);
     // Share a single settings fetch between both consumers
     const settingsPromise = fetch('/api/settings').then(r => r.ok ? r.json() : null).catch(() => null);
     this.loadQuickStartCases(null, settingsPromise);
@@ -1628,6 +1768,7 @@ class ClaudemanApp {
 
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
+    this._localEchoOverlay = new LocalEchoOverlay(this.terminal);
 
     // On mobile Safari, delay initial fit() to allow layout to settle
     // This prevents 0-column terminals caused by fit() running before container is sized
@@ -1806,6 +1947,47 @@ class ClaudemanApp {
         // Patterns: \x1b[?...c (DA1), \x1b[>...c (DA2), \x1b[...R (CPR), \x1b[...n (DSR)
         if (/^\x1b\[[\?>=]?[\d;]*[cnR]$/.test(data)) return;
 
+        // ── Local Echo Mode ──
+        // When enabled, keystrokes are captured locally in the overlay.
+        // Nothing is sent to the server until Enter is pressed.
+        // This guarantees what the user sees is exactly what gets sent.
+        if (this._localEchoEnabled) {
+          if (data === '\x7f') {
+            // Backspace: remove last char from overlay (not sent to server)
+            this._localEchoOverlay?.removeChar();
+            return;
+          }
+          if (data === '\r' || data === '\n' || data === '\r\n') {
+            // Enter: send the final edited text + Enter to server
+            const text = this._localEchoOverlay?.pendingText || '';
+            this._localEchoOverlay?.clear();
+            this._pendingInput += text + '\r';
+            if (this._inputFlushTimeout) {
+              clearTimeout(this._inputFlushTimeout);
+              this._inputFlushTimeout = null;
+            }
+            flushInput();
+            return;
+          }
+          if (data.charCodeAt(0) < 32 || data.length > 1) {
+            // Other control chars (Ctrl+C, escape sequences): send raw, clear overlay
+            this._localEchoOverlay?.clear();
+            this._pendingInput += data;
+            if (this._inputFlushTimeout) {
+              clearTimeout(this._inputFlushTimeout);
+              this._inputFlushTimeout = null;
+            }
+            flushInput();
+            return;
+          }
+          if (data.length === 1 && data.charCodeAt(0) >= 32) {
+            // Printable char: add to overlay only (not sent to server)
+            this._localEchoOverlay?.addChar(data);
+            return;
+          }
+        }
+
+        // ── Normal Mode (echo disabled) ──
         this._pendingInput += data;
 
         // Control chars (Enter, Ctrl+C, escape sequences) — flush immediately
@@ -1966,6 +2148,14 @@ class ClaudemanApp {
   }
 
   batchTerminalWrite(data) {
+    // If a buffer load (chunkedTerminalWrite) is in progress, queue live events
+    // to prevent interleaving historical buffer data with live SSE data.
+    // This is critical: interleaving causes cursor position chaos with Ink redraws.
+    if (this._isLoadingBuffer) {
+      if (this._loadBufferQueue) this._loadBufferQueue.push(data);
+      return;
+    }
+
     // Check if at bottom BEFORE adding data (captures user's scroll position)
     // Only update if not already scheduled (preserve the first check's result)
     if (!this.writeFrameScheduled) {
@@ -2077,6 +2267,21 @@ class ClaudemanApp {
   }
 
   /**
+   * Update local echo overlay state based on settings.
+   * Enabled whenever the setting is on — works during idle AND busy.
+   * Position is tracked dynamically by _findPrompt() on every render.
+   */
+  _updateLocalEchoState() {
+      const settings = this.loadAppSettingsFromStorage();
+      const session = this.activeSessionId ? this.sessions.get(this.activeSessionId) : null;
+      const shouldEnable = !!(settings.localEchoEnabled && session);
+      if (this._localEchoEnabled && !shouldEnable) {
+          this._localEchoOverlay?.clear();
+      }
+      this._localEchoEnabled = shouldEnable;
+  }
+
+  /**
    * Flush pending writes to terminal, processing DEC 2026 sync markers.
    * Strips markers and writes content atomically within a single frame.
    */
@@ -2112,18 +2317,28 @@ class ClaudemanApp {
   chunkedTerminalWrite(buffer, chunkSize = TERMINAL_CHUNK_SIZE) {
     return new Promise((resolve) => {
       if (!buffer || buffer.length === 0) {
+        this._finishBufferLoad();
         resolve();
         return;
       }
+
+      // Block live SSE writes during buffer load to prevent interleaving
+      this._isLoadingBuffer = true;
+      this._loadBufferQueue = [];
 
       // Strip any DEC 2026 markers that might be in the buffer
       // (from historical SSE data that was stored with markers)
       const cleanBuffer = buffer.replace(DEC_SYNC_STRIP_RE, '');
 
+      const finish = () => {
+        this._finishBufferLoad();
+        resolve();
+      };
+
       // For small buffers, write directly
       if (cleanBuffer.length <= chunkSize) {
         this.terminal.write(cleanBuffer);
-        resolve();
+        finish();
         return;
       }
 
@@ -2131,7 +2346,7 @@ class ClaudemanApp {
       const writeChunk = () => {
         if (offset >= cleanBuffer.length) {
           // Wait one more frame for xterm to finish rendering before resolving
-          requestAnimationFrame(() => resolve());
+          requestAnimationFrame(finish);
           return;
         }
 
@@ -2146,6 +2361,21 @@ class ClaudemanApp {
       // Start writing
       requestAnimationFrame(writeChunk);
     });
+  }
+
+  /**
+   * Complete a buffer load: unblock live SSE writes and flush any queued events.
+   * Called when chunkedTerminalWrite finishes (or is skipped for empty buffers).
+   */
+  _finishBufferLoad() {
+    const queue = this._loadBufferQueue;
+    this._isLoadingBuffer = false;
+    this._loadBufferQueue = null;
+    if (queue && queue.length > 0) {
+      for (const data of queue) {
+        this.batchTerminalWrite(data);
+      }
+    }
   }
 
   setupEventListeners() {
@@ -2371,6 +2601,25 @@ class ClaudemanApp {
       }
     });
 
+    // Server sends this after SSE backpressure clears — terminal data was dropped,
+    // so reload the buffer to recover from any display corruption.
+    addListener('session:needsRefresh', async () => {
+      if (!this.activeSessionId || !this.terminal) return;
+      try {
+        const tailSize = 256 * 1024;
+        const res = await fetch(`/api/sessions/${this.activeSessionId}/terminal?tail=${tailSize}`);
+        const data = await res.json();
+        if (data.terminalBuffer) {
+          this.terminal.clear();
+          this.terminal.reset();
+          await this.chunkedTerminalWrite(data.terminalBuffer);
+          this.terminal.scrollToBottom();
+        }
+      } catch (err) {
+        console.error('needsRefresh reload failed:', err);
+      }
+    });
+
     addListener('session:clearTerminal', async (e) => {
       const data = JSON.parse(e.data);
       if (data.id === this.activeSessionId) {
@@ -2429,6 +2678,7 @@ class ClaudemanApp {
       if (session) {
         session.status = 'stopped';
         this.renderSessionTabs();
+        if (data.id === this.activeSessionId) this._updateLocalEchoState();
       }
       // Notify on unexpected exit (non-zero code)
       if (data.code && data.code !== 0) {
@@ -2451,6 +2701,7 @@ class ClaudemanApp {
         session.status = 'idle';
         this.renderSessionTabs();
         this.sendPendingCtrlL(data.id);
+        if (data.id === this.activeSessionId) this._updateLocalEchoState();
       }
       // Start stuck detection timer (only if no respawn running)
       if (!this.respawnStatus[data.id]?.enabled) {
@@ -2483,6 +2734,7 @@ class ClaudemanApp {
         }
         this.renderSessionTabs();
         this.sendPendingCtrlL(data.id);
+        if (data.id === this.activeSessionId) this._updateLocalEchoState();
       }
       // Clear stuck detection timer
       const timer = this.idleTimers.get(data.id);
@@ -3431,6 +3683,10 @@ class ClaudemanApp {
     }
     this.pendingWrites = [];
     this.writeFrameScheduled = false;
+    this._isLoadingBuffer = false;
+    this._loadBufferQueue = null;
+    // Clear local echo overlay on SSE reconnect (re-enable via _updateLocalEchoState)
+    this._localEchoOverlay?.clear();
     // Clear pending hooks
     this.pendingHooks.clear();
     // Clear subagent activity/results maps (prevents leaks if data.subagents is missing)
@@ -4157,6 +4413,9 @@ class ClaudemanApp {
     }
     this.pendingWrites = [];
     this.writeFrameScheduled = false;
+    this._isLoadingBuffer = false;
+    this._loadBufferQueue = null;
+    this._localEchoOverlay?.clear();
     this.activeSessionId = sessionId;
     try { localStorage.setItem('claudeman-active-session', sessionId); } catch {}
     this.hideWelcome();
@@ -4165,6 +4424,7 @@ class ClaudemanApp {
     // Instant active-class toggle (no 100ms debounce), then schedule full render for badges/status
     this._updateActiveTabImmediate(sessionId);
     this.renderSessionTabs();
+    this._updateLocalEchoState();
 
     // Glow the newly-active tab
     const activeTab = document.querySelector(`.session-tab.active[data-id="${sessionId}"]`);
@@ -9449,6 +9709,7 @@ class ClaudemanApp {
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? defaults.subagentTrackingEnabled ?? true;
     document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? defaults.subagentActiveTabOnly ?? true;
     document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? defaults.imageWatcherEnabled ?? false;
+    document.getElementById('appSettingsLocalEcho').checked = settings.localEchoEnabled ?? false;
     document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
@@ -9575,6 +9836,7 @@ class ClaudemanApp {
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
       imageWatcherEnabled: document.getElementById('appSettingsImageWatcherEnabled').checked,
+      localEchoEnabled: document.getElementById('appSettingsLocalEcho').checked,
       tabTwoRows: document.getElementById('appSettingsTabTwoRows').checked,
       // Claude CLI settings
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
@@ -9590,6 +9852,7 @@ class ClaudemanApp {
 
     // Save to localStorage
     this.saveAppSettingsToStorage(settings);
+    this._updateLocalEchoState();
 
     // Save notification preferences separately
     const notifPrefsToSave = {

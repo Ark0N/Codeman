@@ -176,7 +176,14 @@ export class BufferAccumulator {
   private trim(): void {
     const full = this.chunks.join('');
     const trimmedBytes = full.length - this.trimSize;
-    const trimmed = full.slice(-this.trimSize);
+    let trimmed = full.slice(-this.trimSize);
+    // Avoid starting mid-ANSI-escape: advance to first newline within 4KB.
+    // A partial escape at the buffer start causes xterm.js to misparse
+    // subsequent cursor movements, corrupting Ink's redraw rendering.
+    const firstNewline = trimmed.indexOf('\n');
+    if (firstNewline > 0 && firstNewline < 4096) {
+      trimmed = trimmed.slice(firstNewline + 1);
+    }
     this.chunks = [trimmed];
     this.totalLength = trimmed.length;
 

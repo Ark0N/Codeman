@@ -1730,6 +1730,13 @@ export class WebServer extends EventEmitter {
       if (tailBytes > 0 && cleanBuffer.length > tailBytes) {
         cleanBuffer = cleanBuffer.slice(-tailBytes);
         truncated = true;
+        // Avoid starting mid-ANSI-escape: find first newline within the first 4KB
+        // and start from there. This prevents xterm.js from parsing a partial escape
+        // sequence which corrupts cursor position for all subsequent Ink redraws.
+        const firstNewline = cleanBuffer.indexOf('\n');
+        if (firstNewline > 0 && firstNewline < 4096) {
+          cleanBuffer = cleanBuffer.slice(firstNewline + 1);
+        }
       }
 
       return {
@@ -4799,7 +4806,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   // Optimized: send pre-formatted SSE message to a client
   // Returns false if client is backpressured or dead
   private sendSSEPreformatted(reply: FastifyReply, message: string): void {
-    // Skip backpressured clients to prevent unbounded memory growth
+    // Skip backpressured clients to prevent unbounded memory growth.
+    // Terminal data dropped here is recovered via session:needsRefresh on drain.
     if (this.backpressuredClients.has(reply)) return;
 
     try {
@@ -4809,6 +4817,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         this.backpressuredClients.add(reply);
         reply.raw.once('drain', () => {
           this.backpressuredClients.delete(reply);
+          // Client may have missed terminal data during backpressure.
+          // Tell it to reload the active session's buffer to recover.
+          try {
+            reply.raw.write(`event: session:needsRefresh\ndata: {}\n\n`);
+          } catch { /* client gone */ }
         });
       }
     } catch {
