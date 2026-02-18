@@ -35,7 +35,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1538 (must match `package.json` for npm publish)
+**Version**: 0.1539 (must match `package.json` for npm publish)
 
 ## Project Overview
 
@@ -96,7 +96,7 @@ journalctl --user -u claudeman-web -f
 |------|---------|
 | `src/session.ts` | PTY wrapper: `runPrompt()`, `startInteractive()`, `startShell()` |
 | `src/mux-interface.ts` | `TerminalMultiplexer` interface + `MuxSession` type |
-| `src/mux-factory.ts` | Create tmux multiplexer (`CLAUDEMAN_MUX` override for legacy screen) |
+| `src/mux-factory.ts` | Create tmux multiplexer instance |
 | `src/tmux-manager.ts` | tmux session management |
 | `src/session-manager.ts` | Session lifecycle, cleanup |
 | `src/state-store.ts` | State persistence to `~/.claudeman/state.json` |
