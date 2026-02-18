@@ -10,8 +10,8 @@
   <!-- DNS preconnect for CDN — saves ~100ms on first load -->
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
-  <link rel="stylesheet" href="styles.css?v=0.1533">
-  <link rel="stylesheet" href="mobile.css?v=0.1533">
+  <link rel="stylesheet" href="styles.css?v=0.1534">
+  <link rel="stylesheet" href="mobile.css?v=0.1534">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
   <!-- Defer CDN scripts — they no longer block initial HTML parsing/paint.
        'defer' preserves execution order (xterm loads before fit addon). -->
@@ -792,8 +792,8 @@
 
               <!-- Tab Bar Section -->
               <div class="settings-section-header">Tab Bar</div>
-              <div class="settings-item" title="Allow tabs to wrap into two rows when there are many sessions">
-                <span class="settings-item-label">Two-Row Tabs</span>
+              <div class="settings-item" title="Show folder path below tab name and allow tab bar to wrap into multiple rows">
+                <span class="settings-item-label">Tall Tabs (Name + Folder)</span>
                 <label class="switch switch-sm">
                   <input type="checkbox" id="appSettingsTabTwoRows">
                   <span class="slider"></span>
@@ -1474,6 +1474,6 @@
     <!-- Lines drawn dynamically -->
   </svg>
 
-  <script defer src="app.js?v=0.1533"></script>
+  <script defer src="app.js?v=0.1534"></script>
 </body>
 </html>

@@ -77,10 +77,13 @@ html.mobile-init .file-browser-panel {
     gap: 0.35rem;
   }
 
-  /* Compact session tabs */
-  .session-tabs {
+  /* Compact session tabs — .tabs-two-rows override needed to match
+     specificity of .session-tabs.tabs-two-rows in styles.css (0,2,0) */
+  .session-tabs,
+  .session-tabs.tabs-two-rows {
     flex-wrap: nowrap;
     overflow-x: auto;
+    overflow-y: hidden;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
     max-height: 52px;
@@ -344,11 +347,14 @@ html.mobile-init .file-browser-panel {
     position: relative;
   }
 
-  /* Ultra-compact session tabs */
-  .session-tabs {
+  /* Ultra-compact session tabs — .tabs-two-rows override needed to match
+     specificity of .session-tabs.tabs-two-rows in styles.css (0,2,0) */
+  .session-tabs,
+  .session-tabs.tabs-two-rows {
     flex: 1;
     flex-wrap: nowrap;
     overflow-x: auto;
+    overflow-y: hidden;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
     max-height: 36px;

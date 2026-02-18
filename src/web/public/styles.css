@@ -309,6 +309,7 @@ body {
   text-overflow: ellipsis;
 }
 
+/* Tab folder path — hidden by default, shown via .tabs-show-folder on container */
 .session-tab .tab-folder {
   font-size: 0.6rem;
   color: var(--text-muted);
@@ -316,12 +317,11 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 1.2;
+  display: none;
 }
 
-@media (max-width: 768px) {
-  .session-tab .tab-folder {
-    display: none;
-  }
+.tabs-show-folder .session-tab .tab-folder {
+  display: block;
 }
 
 .session-tab .tab-close {

@@ -3721,9 +3721,10 @@ class ClaudemanApp {
       const minimizedCount = minimizedAgents?.size || 0;
       const subagentBadge = minimizedCount > 0 ? this.renderSubagentTabBadge(id, minimizedAgents) : '';
 
-      // Show folder name if session has a custom name (to still show the directory context)
+      // Show folder name if session has a custom name AND tall tabs setting is enabled
       const folderName = session.workingDir ? session.workingDir.split('/').pop() || '' : '';
-      const showFolder = session.name && folderName && folderName !== name;
+      const tallTabsEnabled = this._tallTabsEnabled ?? false;
+      const showFolder = tallTabsEnabled && session.name && folderName && folderName !== name;
 
       parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}" data-id="${id}" data-color="${color}" onclick="app.selectSession('${this.escapeHtml(id)}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${this.escapeHtml(id)}')" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-label="${this.escapeHtml(name)} session" ${session.workingDir ? `title="${this.escapeHtml(session.workingDir)}"` : ''}>
           <span class="tab-status ${status}" aria-hidden="true"></span>
@@ -9821,10 +9822,21 @@ class ClaudemanApp {
   applyTabWrapSettings() {
     const settings = this.loadAppSettingsFromStorage();
     const defaults = this.getDefaultSettings();
-    const twoRows = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
+    const deviceType = MobileDetection.getDeviceType();
+    // Two-row tabs disabled on mobile/tablet — not enough screen space
+    const twoRows = deviceType === 'desktop'
+      ? (settings.tabTwoRows ?? defaults.tabTwoRows ?? false)
+      : false;
+    const prevTallTabs = this._tallTabsEnabled;
+    this._tallTabsEnabled = twoRows;
     const tabsEl = document.getElementById('sessionTabs');
     if (tabsEl) {
       tabsEl.classList.toggle('tabs-two-rows', twoRows);
+      tabsEl.classList.toggle('tabs-show-folder', twoRows);
+    }
+    // Re-render tabs if folder visibility changed (folder spans are generated in JS)
+    if (prevTallTabs !== undefined && prevTallTabs !== twoRows) {
+      this._fullRenderSessionTabs();
     }
   }
 
@@ -9970,15 +9982,22 @@ class ClaudemanApp {
           'subagentTrackingEnabled', 'subagentActiveTabOnly',
           'imageWatcherEnabled', 'ralphTrackerEnabled', 'tabTwoRows',
         ]);
-        const filteredAppSettings = {};
+        // Merge settings: non-display keys always sync from server,
+        // display keys only seed from server when localStorage has no value
+        // (prevents cross-device overwrite while fixing settings re-enabling on fresh loads)
+        const localSettings = this.loadAppSettingsFromStorage();
+        const merged = { ...localSettings };
         for (const [key, value] of Object.entries(appSettings)) {
-          if (!displayKeys.has(key)) {
-            filteredAppSettings[key] = value;
+          if (displayKeys.has(key)) {
+            // Display keys: only use server value as initial seed
+            if (!(key in localSettings)) {
+              merged[key] = value;
+            }
+          } else {
+            // Non-display keys: server always wins
+            merged[key] = value;
           }
         }
-        // Merge non-display settings with localStorage (server takes precedence)
-        const localSettings = this.loadAppSettingsFromStorage();
-        const merged = { ...localSettings, ...filteredAppSettings };
         this.saveAppSettingsToStorage(merged);
 
         // Apply notification prefs from server if present (only if localStorage has none)
