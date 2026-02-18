@@ -861,9 +861,9 @@ class LocalEchoOverlay {
         // Opaque background so overlay covers old buffer text underneath.
         // xterm.js applies bg via internal rendering, not CSS — use theme option.
         this.overlay.style.backgroundColor = terminal.options?.theme?.background || '#0d0d0d';
-        // Solid bar cursor (no blink — matches Claude Code's input cursor)
+        // Block cursor matching Claude Code's idle prompt cursor
         this._cursor = document.createElement('span');
-        this._cursor.style.cssText = 'display:inline-block;width:1.5px;height:1em;vertical-align:text-bottom;background:currentColor;margin-left:1px';
+        this._cursor.style.cssText = 'display:inline-block;vertical-align:top';
         screen.appendChild(this.overlay);
         this.pendingText = '';
         this._storageKey = 'claudeman_local_echo_pending';
@@ -955,8 +955,14 @@ class LocalEchoOverlay {
             this.overlay.style.lineHeight = cellH + 'px';
             // Extend to right edge to cover old buffer text with opaque bg
             this.overlay.style.width = (this.terminal.cols * cellW - leftPx) + 'px';
+            // Cover any subpixel seam above overlay with matching box-shadow
+            const bg = this.overlay.style.backgroundColor;
+            this.overlay.style.boxShadow = `0 -1px 0 0 ${bg}`;
             this.overlay.textContent = this.pendingText;
-            // Solid cursor after text
+            // Block cursor: full cell width & height, matching Claude Code's cursor color
+            this._cursor.style.width = cellW + 'px';
+            this._cursor.style.height = cellH + 'px';
+            this._cursor.style.backgroundColor = this.terminal.options?.theme?.cursor || '#e0e0e0';
             this.overlay.appendChild(this._cursor);
             this.overlay.style.display = '';
         } catch {
@@ -1957,16 +1963,27 @@ class ClaudemanApp {
             this._localEchoOverlay?.removeChar();
             return;
           }
-          if (data === '\r' || data === '\n' || data === '\r\n') {
-            // Enter: send the final edited text + Enter to server
+          if (/^[\r\n]+$/.test(data)) {
+            // Enter: send text first, then \r separately (like sendCommand does for /init).
+            // Ink needs them as distinct events — sending "text\r" in one shot causes newline.
             const text = this._localEchoOverlay?.pendingText || '';
             this._localEchoOverlay?.clear();
-            this._pendingInput += text + '\r';
             if (this._inputFlushTimeout) {
               clearTimeout(this._inputFlushTimeout);
               this._inputFlushTimeout = null;
             }
-            flushInput();
+            if (text) {
+              this._pendingInput += text;
+              flushInput();
+              setTimeout(() => {
+                this._pendingInput += '\r';
+                flushInput();
+              }, 120);
+            } else {
+              // No text in overlay — just send Enter
+              this._pendingInput += '\r';
+              flushInput();
+            }
             return;
           }
           if (data.charCodeAt(0) < 32 || data.length > 1) {
@@ -2274,7 +2291,8 @@ class ClaudemanApp {
   _updateLocalEchoState() {
       const settings = this.loadAppSettingsFromStorage();
       const session = this.activeSessionId ? this.sessions.get(this.activeSessionId) : null;
-      const shouldEnable = !!(settings.localEchoEnabled && session);
+      const echoEnabled = settings.localEchoEnabled ?? (MobileDetection.isTouchDevice() || false);
+      const shouldEnable = !!(echoEnabled && session);
       if (this._localEchoEnabled && !shouldEnable) {
           this._localEchoOverlay?.clear();
       }
@@ -9709,7 +9727,7 @@ class ClaudemanApp {
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? defaults.subagentTrackingEnabled ?? true;
     document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? defaults.subagentActiveTabOnly ?? true;
     document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? defaults.imageWatcherEnabled ?? false;
-    document.getElementById('appSettingsLocalEcho').checked = settings.localEchoEnabled ?? false;
+    document.getElementById('appSettingsLocalEcho').checked = settings.localEchoEnabled ?? (MobileDetection.isTouchDevice() || false);
     document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
