@@ -35,7 +35,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1557 (must match `package.json` for npm publish)
+**Version**: 0.1558 (must match `package.json` for npm publish)
 
 ## Project Overview
 
@@ -63,9 +63,9 @@ npx tsx src/index.ts web --https   # With TLS (only needed for remote access)
 npm run typecheck                  # Type check
 tsc --noEmit --watch               # Continuous type checking
 
-# Testing
-npx vitest run                     # All tests
-npx vitest run test/<file>.test.ts # Single file
+# Testing (NEVER run full suite from inside Claudeman — kills tmux sessions)
+# npx vitest run                   # ALL tests — DANGEROUS inside Claudeman
+npx vitest run test/<file>.test.ts # Single file (SAFE)
 npx vitest run -t "pattern"        # Tests matching name
 npm run test:coverage              # With coverage report
 

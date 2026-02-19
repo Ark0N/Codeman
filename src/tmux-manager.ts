@@ -348,6 +348,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   /**
    * Check if a tmux session exists.
    */
+  muxSessionExists(muxName: string): boolean {
+    return this.sessionExists(muxName);
+  }
+
   private sessionExists(muxName: string): boolean {
     if (IS_TEST_MODE) return false;
 

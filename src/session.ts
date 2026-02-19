@@ -849,6 +849,12 @@ export class Session extends EventEmitter {
     // If mux wrapping is enabled, create or attach to a mux session
     if (this._useMux && this._mux) {
       try {
+        // Verify stale mux session — tmux destroys session when command exits
+        // (remain-on-exit is off), but _muxSession reference persists
+        if (this._muxSession && !this._mux.muxSessionExists(this._muxSession.muxName)) {
+          console.log('[Session] Stale mux session detected (tmux gone):', this._muxSession.muxName);
+          this._muxSession = null;
+        }
         // Check if we already have a mux session (restored session)
         const isRestoredSession = this._muxSession !== null;
         if (isRestoredSession) {
@@ -1128,6 +1134,11 @@ export class Session extends EventEmitter {
     // If mux wrapping is enabled, create or attach to a mux session
     if (this._useMux && this._mux) {
       try {
+        // Verify stale mux session — tmux destroys session when command exits
+        if (this._muxSession && !this._mux.muxSessionExists(this._muxSession.muxName)) {
+          console.log('[Session] Stale mux session detected (tmux gone):', this._muxSession.muxName);
+          this._muxSession = null;
+        }
         // Check if we already have a mux session (restored session)
         const isRestoredSession = this._muxSession !== null;
         if (isRestoredSession) {

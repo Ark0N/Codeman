@@ -155,4 +155,7 @@ export interface TerminalMultiplexer extends EventEmitter {
 
   /** Check if the multiplexer binary is available on the system */
   isAvailable(): boolean;
+
+  /** Check if a multiplexer session actually exists (process-level check, not just tracked) */
+  muxSessionExists(muxName: string): boolean;
 }
