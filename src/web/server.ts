@@ -32,6 +32,7 @@ import { writeHooksConfig, updateCaseEnvVars } from '../hooks-config.js';
 import { subagentWatcher, type SubagentInfo, type SubagentToolCall, type SubagentProgress, type SubagentMessage, type SubagentToolResult } from '../subagent-watcher.js';
 import { imageWatcher } from '../image-watcher.js';
 import { TranscriptWatcher } from '../transcript-watcher.js';
+import { TeamWatcher } from '../team-watcher.js';
 import { v4 as uuidv4 } from 'uuid';
 import { createRequire } from 'node:module';
 import { RunSummaryTracker } from '../run-summary.js';
@@ -413,6 +414,13 @@ export class WebServer extends EventEmitter {
     detected: (event: ImageDetectedEvent) => void;
     error: (error: Error, sessionId?: string) => void;
   } | null = null;
+  private teamWatcher: TeamWatcher = new TeamWatcher();
+  private teamWatcherHandlers: {
+    teamCreated: (config: unknown) => void;
+    teamUpdated: (config: unknown) => void;
+    teamRemoved: (config: unknown) => void;
+    taskUpdated: (data: unknown) => void;
+  } | null = null;
   constructor(port: number = 3000, https: boolean = false, testMode: boolean = false) {
     super();
     this.setMaxListeners(0);
@@ -447,6 +455,9 @@ export class WebServer extends EventEmitter {
 
     // Set up image watcher listeners
     this.setupImageWatcherListeners();
+
+    // Set up team watcher listeners
+    this.setupTeamWatcherListeners();
   }
 
   /**
@@ -524,6 +535,37 @@ export class WebServer extends EventEmitter {
       imageWatcher.off('image:detected', this.imageWatcherHandlers.detected);
       imageWatcher.off('image:error', this.imageWatcherHandlers.error);
       this.imageWatcherHandlers = null;
+    }
+  }
+
+  /**
+   * Set up event listeners for team watcher.
+   * Broadcasts team activity events to SSE clients.
+   */
+  private setupTeamWatcherListeners(): void {
+    this.teamWatcherHandlers = {
+      teamCreated: (config: unknown) => this.broadcast('team:created', config),
+      teamUpdated: (config: unknown) => this.broadcast('team:updated', config),
+      teamRemoved: (config: unknown) => this.broadcast('team:removed', config),
+      taskUpdated: (data: unknown) => this.broadcast('team:taskUpdated', data),
+    };
+
+    this.teamWatcher.on('teamCreated', this.teamWatcherHandlers.teamCreated);
+    this.teamWatcher.on('teamUpdated', this.teamWatcherHandlers.teamUpdated);
+    this.teamWatcher.on('teamRemoved', this.teamWatcherHandlers.teamRemoved);
+    this.teamWatcher.on('taskUpdated', this.teamWatcherHandlers.taskUpdated);
+  }
+
+  /**
+   * Clean up team watcher listeners to prevent memory leaks.
+   */
+  private cleanupTeamWatcherListeners(): void {
+    if (this.teamWatcherHandlers) {
+      this.teamWatcher.off('teamCreated', this.teamWatcherHandlers.teamCreated);
+      this.teamWatcher.off('teamUpdated', this.teamWatcherHandlers.teamUpdated);
+      this.teamWatcher.off('teamRemoved', this.teamWatcherHandlers.teamRemoved);
+      this.teamWatcher.off('taskUpdated', this.teamWatcherHandlers.taskUpdated);
+      this.teamWatcherHandlers = null;
     }
   }
 
@@ -3579,6 +3621,20 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     });
 
 
+    // ========== Agent Teams ==========
+
+    // List all discovered teams
+    this.app.get('/api/teams', async () => {
+      return { success: true, data: this.teamWatcher.getTeams() };
+    });
+
+    // Get tasks for a specific team
+    this.app.get('/api/teams/:name/tasks', async (req) => {
+      const { name } = req.params as { name: string };
+      return { success: true, data: this.teamWatcher.getTeamTasks(name) };
+    });
+
+
     // ========== Hook Events ==========
 
     this.app.post('/api/hook-event', async (req) => {
@@ -4324,6 +4380,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   private setupRespawnListeners(sessionId: string, controller: RespawnController): void {
+    // Wire team watcher for team-aware idle detection
+    controller.setTeamWatcher(this.teamWatcher);
+
     // Helper to get tracker lazily (may not exist at setup time for restored sessions)
     const getTracker = () => this.runSummaryTrackers.get(sessionId);
 
@@ -5150,6 +5209,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       console.log('Image watcher disabled by user settings');
     }
 
+    // Start team watcher for agent team awareness (always on — lightweight polling)
+    this.teamWatcher.start();
+    console.log('Team watcher started - monitoring ~/.claude/teams/ for agent team activity');
+
   }
 
   /**
@@ -5462,12 +5525,16 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Clean up watcher listeners to prevent memory leaks
     this.cleanupSubagentWatcherListeners();
     this.cleanupImageWatcherListeners();
+    this.cleanupTeamWatcherListeners();
 
     // Stop subagent watcher
     subagentWatcher.stop();
 
     // Stop image watcher
     imageWatcher.stop();
+
+    // Stop team watcher
+    this.teamWatcher.stop();
 
     // Destroy file stream manager (clears cleanup timer and kills remaining tail processes)
     fileStreamManager.destroy();

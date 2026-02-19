@@ -95,7 +95,7 @@ describe('RespawnController', () => {
     it('should have default configuration', () => {
       const config = controller.getConfig();
       expect(config.enabled).toBe(true);
-      expect(config.updatePrompt).toBe('update all the docs and CLAUDE.md');
+      expect(config.updatePrompt).toBe('write a brief progress summary to CLAUDE.md noting what you accomplished, then continue working.');
     });
 
     it('should allow custom configuration', () => {
@@ -216,7 +216,7 @@ describe('RespawnController', () => {
 
       expect(stepSent).toBe('update');
       expect(session.writeBuffer.length).toBeGreaterThan(0);
-      expect(session.writeBuffer[0]).toContain('update all the docs');
+      expect(session.writeBuffer[0]).toContain('write a brief progress summary');
     });
 
     it('should transition through states during cycle', async () => {

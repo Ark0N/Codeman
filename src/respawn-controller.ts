@@ -39,6 +39,7 @@ import { randomUUID } from 'node:crypto';
 import { Session } from './session.js';
 import { AiIdleChecker, type AiCheckResult, type AiCheckState } from './ai-idle-checker.js';
 import { AiPlanChecker, type AiPlanCheckResult } from './ai-plan-checker.js';
+import type { TeamWatcher } from './team-watcher.js';
 import { BufferAccumulator } from './utils/buffer-accumulator.js';
 import {
   ANSI_ESCAPE_PATTERN_SIMPLE,
@@ -223,7 +224,7 @@ export interface RespawnConfig {
   /**
    * The prompt to send when updating docs.
    * Sent at the start of each respawn cycle.
-   * @default 'update all the docs and CLAUDE.md'
+   * @default 'write a brief progress summary to CLAUDE.md noting what you accomplished, then continue working.'
    */
   updatePrompt: string;
 
@@ -542,7 +543,7 @@ export interface RespawnEvents {
 /** Default configuration values */
 const DEFAULT_CONFIG: RespawnConfig = {
   idleTimeoutMs: 10000,          // 10 seconds of no activity after prompt (legacy, still used as fallback)
-  updatePrompt: 'update all the docs and CLAUDE.md',
+  updatePrompt: 'write a brief progress summary to CLAUDE.md noting what you accomplished, then continue working.',
   interStepDelayMs: 1000,        // 1 second between steps
   enabled: true,
   sendClear: true,               // send /clear after update prompt
@@ -637,6 +638,9 @@ const DEFAULT_CONFIG: RespawnConfig = {
 export class RespawnController extends EventEmitter {
   /** The session being controlled */
   private session: Session;
+
+  /** Optional team watcher for team-aware idle detection */
+  private teamWatcher: TeamWatcher | null = null;
 
   /** Current configuration */
   private config: RespawnConfig;
@@ -1218,6 +1222,11 @@ export class RespawnController extends EventEmitter {
   private log(message: string): void {
     const timestamp = new Date().toISOString();
     this.emit('log', `[${timestamp}] [Respawn] ${message}`);
+  }
+
+  /** Set team watcher for team-aware idle detection */
+  setTeamWatcher(watcher: TeamWatcher): void {
+    this.teamWatcher = watcher;
   }
 
   /**
@@ -2762,6 +2771,19 @@ export class RespawnController extends EventEmitter {
       `tokensStable=${status.tokensStable}, ` +
       `noWorking=${status.workingPatternsAbsent}`);
 
+    // ========== Agent Teams Integration ==========
+    // Check if session has active teammates — don't respawn while team is working
+    if (this.teamWatcher?.hasActiveTeammates(this.session.id)) {
+      const count = this.teamWatcher.getActiveTeammateCount(this.session.id);
+      this.log(`Respawn blocked - ${count} active teammate(s) working`);
+      this.logAction('team', `Active teammates: ${count}`);
+      this.emit('respawnBlocked', { reason: 'active_teammates', details: `${count} teammate(s) still working` });
+      this.setState('watching');
+      this.startNoOutputTimer();
+      this.startPreFilterTimer();
+      return;
+    }
+
     // ========== RALPH_STATUS Integration ==========
     // Check circuit breaker status - if OPEN, pause respawn
     const ralphTracker = this.session.ralphTracker;
@@ -2879,9 +2901,10 @@ export class RespawnController extends EventEmitter {
         let updatePrompt = this.config.updatePrompt;
 
         if (statusBlock?.recommendation) {
-          // Append RECOMMENDATION to the update prompt for context
-          updatePrompt = `${this.config.updatePrompt}\n\nClaude's last recommendation: ${statusBlock.recommendation}`;
-          this.logAction('ralph', `Using RECOMMENDATION: ${statusBlock.recommendation.substring(0, 50)}...`);
+          // Append RECOMMENDATION to the update prompt (single-line — writeViaMux breaks on newlines)
+          const rec = statusBlock.recommendation.replace(/\n/g, ' ').substring(0, 200);
+          updatePrompt = `${this.config.updatePrompt} (Claude's last recommendation: ${rec})`;
+          this.logAction('ralph', `Using RECOMMENDATION: ${rec.substring(0, 50)}...`);
         }
 
         const input = updatePrompt + '\r';  // \r triggers Enter in Ink/Claude CLI

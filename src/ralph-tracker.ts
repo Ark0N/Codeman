@@ -238,6 +238,13 @@ const TODO_TASK_SUMMARY_PATTERN = /✔\s*#(\d+)\s+(.+)/g;
 const TODO_TASK_STATUS_PATTERN = /✔\s*Task\s*#(\d+)\s*updated:\s*status\s*→\s*(in progress|completed|pending)/g;
 
 /**
+ * Matches plain checkmark TodoWrite output without task numbers.
+ * Real Claude Code TodoWrite output: "✔ Create hello.txt with Hello World"
+ * This is the most common format in actual usage.
+ */
+const TODO_PLAIN_CHECKMARK_PATTERN = /✔\s+(.+)/g;
+
+/**
  * Patterns to exclude from todo detection
  * Prevents false positives from tool invocations and Claude commentary
  */
@@ -1613,32 +1620,30 @@ export class RalphTracker extends EventEmitter {
    * @param data - The full data chunk (may contain multiple lines)
    */
   private checkMultiLinePatterns(data: string): void {
-    // If we have a partial promise buffer, prepend it to the new data
-    const combinedData = this._partialPromiseBuffer + data;
-
-    // Try to find a complete promise tag in combined data
-    const promiseMatch = combinedData.match(PROMISE_PATTERN);
-    if (promiseMatch) {
-      // Found complete tag - extract phrase and clear buffer
-      const phrase = promiseMatch[1].trim();
-      this._partialPromiseBuffer = '';
-      this.handleCompletionPhrase(phrase);
-      return;
+    // Only try to complete a cross-chunk promise if we have a partial buffer.
+    // Without a partial buffer, complete tags are already handled by processLine
+    // via detectCompletionPhrase — re-detecting here would double-count.
+    if (this._partialPromiseBuffer) {
+      const combinedData = this._partialPromiseBuffer + data;
+      const promiseMatch = combinedData.match(PROMISE_PATTERN);
+      if (promiseMatch) {
+        const phrase = promiseMatch[1].trim();
+        this._partialPromiseBuffer = '';
+        this.handleCompletionPhrase(phrase);
+        return;
+      }
     }
 
-    // Check for partial promise tag at end of combined data
-    const partialMatch = combinedData.match(PROMISE_PARTIAL_PATTERN);
+    // Check for partial promise tag at end of data (for next chunk)
+    const partialMatch = data.match(PROMISE_PARTIAL_PATTERN);
     if (partialMatch) {
-      // Buffer the partial content (with size limit)
       const partialContent = partialMatch[0];
       if (partialContent.length <= RalphTracker.MAX_PARTIAL_PROMISE_SIZE) {
         this._partialPromiseBuffer = partialContent;
       } else {
-        // Partial is too long, likely malformed - discard
         this._partialPromiseBuffer = '';
       }
     } else {
-      // No partial tag - clear buffer
       this._partialPromiseBuffer = '';
     }
   }
@@ -1782,8 +1787,9 @@ export class RalphTracker extends EventEmitter {
     if (matchedPhrase) {
       // Use the matched phrase (canonical) for tracking
       const canonicalCount = (this._completionPhraseCount.get(matchedPhrase) || 0);
-      // If this is a match of an expected phrase, treat as if we saw it
-      if (canonicalCount >= 1 || this._loopState.active) {
+      // Require 2nd+ occurrence of canonical phrase OR explicitly active loop.
+      // First occurrence (count=1) is the prompt echo — not actual completion.
+      if (canonicalCount >= 2 || this._loopState.active) {
         // Mark as completion
         this._loopState.active = false;
         this._loopState.lastActivity = Date.now();
@@ -2155,6 +2161,23 @@ export class RalphTracker extends EventEmitter {
         const content = this._taskNumberToContent.get(taskNum);
         if (content) {
           this.upsertTodo(content, status);
+          updated = true;
+        }
+      }
+
+      // Plain checkmark: "✔ Create hello.txt" (no task number)
+      // Only match if numbered patterns didn't already match on this line
+      if (!updated) {
+        TODO_PLAIN_CHECKMARK_PATTERN.lastIndex = 0;
+        while ((match = TODO_PLAIN_CHECKMARK_PATTERN.exec(line)) !== null) {
+          const content = match[1].trim();
+          // Skip if content matches exclude patterns
+          const shouldExclude = TODO_EXCLUDE_PATTERNS.some(pattern => pattern.test(content));
+          if (shouldExclude) continue;
+          if (content.length < 5) continue;
+          // Skip status/created/updated prefixed content (already handled above)
+          if (/^(Task\s*#\d+|#\d+)\s/.test(content)) continue;
+          this.upsertTodo(content, 'completed');
           updated = true;
         }
       }

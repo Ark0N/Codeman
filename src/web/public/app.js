@@ -99,11 +99,11 @@ const BUILTIN_RESPAWN_PRESETS = [
     description: 'Unattended overnight runs with full context reset between cycles',
     config: {
       idleTimeoutMs: 10000,
-      updatePrompt: 'summarize what you accomplished so far and write key progress notes to CLAUDE.md, then continue working on the task.',
+      updatePrompt: 'summarize what you accomplished so far and write key progress notes to CLAUDE.md so the next cycle can pick up where you left off.',
       interStepDelayMs: 3000,
       sendClear: true,
       sendInit: true,
-      kickstartPrompt: 'read CLAUDE.md for context on what was accomplished in previous cycles, then pick up where you left off.',
+      kickstartPrompt: 'continue working on the task. Pick up where you left off based on the context above.',
       autoAcceptPrompts: true,
     },
     durationMinutes: 480,
@@ -7471,7 +7471,7 @@ class ClaudemanApp {
       if (config.enableRespawn) {
         const ralphUpdatePrompt = 'Before /clear: Update CLAUDE.md with discoveries and notes, mark completed tasks in @fix_plan.md, write a brief progress summary to a file so the next iteration can continue seamlessly.';
 
-        const ralphKickstartPrompt = `You are in a Ralph Wiggum loop. Read @fix_plan.md for task status, check CLAUDE.md for notes from previous iterations, continue on the next uncompleted task, output <promise>${config.completionPhrase}</promise> when ALL tasks are complete.`;
+        const ralphKickstartPrompt = `You are in a Ralph Wiggum loop. Read @fix_plan.md for task status, continue on the next uncompleted task, output <promise>${config.completionPhrase}</promise> when ALL tasks are complete.`;
 
         await fetch(`/api/sessions/${sessionId}/respawn/enable`, {
           method: 'POST',
