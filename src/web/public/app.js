@@ -2358,7 +2358,7 @@ class ClaudemanApp {
   _updateLocalEchoState() {
       const settings = this.loadAppSettingsFromStorage();
       const session = this.activeSessionId ? this.sessions.get(this.activeSessionId) : null;
-      const echoEnabled = settings.localEchoEnabled ?? (MobileDetection.isTouchDevice() || false);
+      const echoEnabled = settings.localEchoEnabled ?? true;
       const shouldEnable = !!(echoEnabled && session);
       if (this._localEchoEnabled && !shouldEnable) {
           this._localEchoOverlay?.clear();
@@ -9796,7 +9796,7 @@ class ClaudemanApp {
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? defaults.subagentTrackingEnabled ?? true;
     document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? defaults.subagentActiveTabOnly ?? true;
     document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? defaults.imageWatcherEnabled ?? false;
-    document.getElementById('appSettingsLocalEcho').checked = settings.localEchoEnabled ?? (MobileDetection.isTouchDevice() || false);
+    document.getElementById('appSettingsLocalEcho').checked = settings.localEchoEnabled ?? true;
     document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
     // Claude CLI settings
     const claudeModeSelect = document.getElementById('appSettingsClaudeMode');
@@ -9903,6 +9903,64 @@ class ClaudemanApp {
     if (this.activeFocusTrap) {
       this.activeFocusTrap.deactivate();
       this.activeFocusTrap = null;
+    }
+  }
+
+  // ========== Session Lifecycle Log ==========
+
+  openLifecycleLog() {
+    document.getElementById('lifecycleModal').classList.add('active');
+    this.loadLifecycleLog();
+  }
+
+  closeLifecycleLog() {
+    document.getElementById('lifecycleModal').classList.remove('active');
+  }
+
+  async loadLifecycleLog() {
+    const eventFilter = document.getElementById('lifecycleFilterEvent').value;
+    const sessionFilter = document.getElementById('lifecycleFilterSession').value.trim();
+    const params = new URLSearchParams();
+    if (eventFilter) params.set('event', eventFilter);
+    if (sessionFilter) params.set('sessionId', sessionFilter);
+    params.set('limit', '300');
+
+    try {
+      const res = await fetch(`/api/session-lifecycle?${params}`);
+      const data = await res.json();
+      const tbody = document.getElementById('lifecycleTableBody');
+      const empty = document.getElementById('lifecycleEmpty');
+
+      if (!data.entries || data.entries.length === 0) {
+        tbody.innerHTML = '';
+        empty.style.display = '';
+        return;
+      }
+      empty.style.display = 'none';
+
+      const eventColors = {
+        created: '#4ade80', started: '#4ade80', recovered: '#4ade80',
+        exit: '#fbbf24', mux_died: '#f87171', deleted: '#f87171', stale_cleaned: '#f87171',
+        server_started: '#666', server_stopped: '#666',
+      };
+
+      tbody.innerHTML = data.entries.map(e => {
+        const time = new Date(e.ts).toLocaleString();
+        const color = eventColors[e.event] || '#888';
+        const name = e.name || (e.sessionId === '*' ? '—' : e.sessionId.slice(0, 8));
+        const extra = [];
+        if (e.exitCode !== undefined && e.exitCode !== null) extra.push(`code=${e.exitCode}`);
+        if (e.mode) extra.push(e.mode);
+        return `<tr style="border-bottom:1px solid #1a1a2e">
+          <td style="padding:3px 8px;color:#888;white-space:nowrap">${time}</td>
+          <td style="padding:3px 8px;color:${color};font-weight:600">${e.event}</td>
+          <td style="padding:3px 8px;color:#e0e0e0" title="${e.sessionId}">${name}</td>
+          <td style="padding:3px 8px;color:#aaa">${e.reason || ''}</td>
+          <td style="padding:3px 8px;color:#666">${extra.join(', ')}</td>
+        </tr>`;
+      }).join('');
+    } catch (err) {
+      console.error('Failed to load lifecycle log:', err);
     }
   }
 

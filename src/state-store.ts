@@ -368,25 +368,26 @@ export class StateStore {
    * @param activeSessionIds - Set of currently active session IDs
    * @returns Number of sessions cleaned up
    */
-  cleanupStaleSessions(activeSessionIds: Set<string>): number {
+  cleanupStaleSessions(activeSessionIds: Set<string>): { count: number; cleaned: Array<{ id: string; name?: string }> } {
     const allSessionIds = Object.keys(this.state.sessions);
-    let cleanedCount = 0;
+    const cleaned: Array<{ id: string; name?: string }> = [];
 
     for (const sessionId of allSessionIds) {
       if (!activeSessionIds.has(sessionId)) {
+        const name = this.state.sessions[sessionId]?.name;
+        cleaned.push({ id: sessionId, name });
         delete this.state.sessions[sessionId];
         // Also clean up Ralph state for this session
         this.ralphStates.delete(sessionId);
-        cleanedCount++;
       }
     }
 
-    if (cleanedCount > 0) {
-      console.log(`[StateStore] Cleaned up ${cleanedCount} stale session(s) from state`);
+    if (cleaned.length > 0) {
+      console.log(`[StateStore] Cleaned up ${cleaned.length} stale session(s) from state`);
       this.save();
     }
 
-    return cleanedCount;
+    return { count: cleaned.length, cleaned };
   }
 
   /** Returns all task states keyed by task ID. */

@@ -1160,7 +1160,7 @@ export class RespawnController extends EventEmitter {
 
   /**
    * Start periodic detection status updates for UI.
-   * Emits 'detectionUpdate' event every 500ms while running.
+   * Emits 'detectionUpdate' event every 2s while running.
    */
   private startDetectionUpdates(): void {
     this.stopDetectionUpdates();
@@ -1173,7 +1173,7 @@ export class RespawnController extends EventEmitter {
       } catch (err) {
         console.error(`[RespawnController] Error in detectionUpdateTimer:`, err);
       }
-    }, 500);
+    }, 2000);
   }
 
   /**

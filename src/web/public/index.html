@@ -84,6 +84,7 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
           <span class="notification-badge" id="notifBadge" style="display:none;">0</span>
         </button>
+        <button class="btn-icon-header" onclick="app.openLifecycleLog()" title="Session Lifecycle Log" aria-label="Open session lifecycle log" style="font-size:14px;opacity:0.7">&#x1F4CB;</button>
         <button class="btn-icon-header btn-settings" onclick="app.openAppSettings()" title="App Settings" aria-label="Open app settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
         <div class="header-tokens" id="headerTokens" title="Total tokens across all sessions">0 tokens</div>
       </div>
@@ -880,7 +881,7 @@
 
               <!-- Input Options Section -->
               <div class="settings-section-header">Input</div>
-              <div class="settings-item" title="Show typed characters instantly via overlay for high-latency connections. Only active when session is idle.">
+              <div class="settings-item" title="Buffer keystrokes locally and show them instantly via overlay. Text is sent to the server on Enter. Useful for high-latency connections or to compose input before sending.">
                 <span class="settings-item-label">Local Echo</span>
                 <label class="switch switch-sm">
                   <input type="checkbox" id="appSettingsLocalEcho">
@@ -1496,6 +1497,48 @@
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="app.closeSavePresetModal()">Cancel</button>
         <button class="btn btn-primary" onclick="app.confirmSavePreset()">Save Preset</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Session Lifecycle Audit Log Modal -->
+  <div class="modal" id="lifecycleModal">
+    <div class="modal-backdrop" onclick="app.closeLifecycleLog()"></div>
+    <div class="modal-content modal-lg">
+      <div class="modal-header">
+        <h3>Session Lifecycle Log</h3>
+        <button class="modal-close" onclick="app.closeLifecycleLog()" aria-label="Close lifecycle log">&times;</button>
+      </div>
+      <div class="modal-body" style="max-height:70vh;overflow:auto;padding:8px">
+        <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+          <select id="lifecycleFilterEvent" style="background:#1a1a2e;color:#e0e0e0;border:1px solid #333;border-radius:4px;padding:4px 8px;font-size:12px">
+            <option value="">All Events</option>
+            <option value="created">Created</option>
+            <option value="started">Started</option>
+            <option value="exit">Exit</option>
+            <option value="deleted">Deleted</option>
+            <option value="recovered">Recovered</option>
+            <option value="stale_cleaned">Stale Cleaned</option>
+            <option value="mux_died">Mux Died</option>
+            <option value="server_started">Server Started</option>
+            <option value="server_stopped">Server Stopped</option>
+          </select>
+          <input id="lifecycleFilterSession" type="text" placeholder="Filter by session ID..." style="background:#1a1a2e;color:#e0e0e0;border:1px solid #333;border-radius:4px;padding:4px 8px;font-size:12px;flex:1;min-width:120px">
+          <button class="btn btn-sm btn-secondary" onclick="app.loadLifecycleLog()" style="font-size:12px;padding:4px 10px">Refresh</button>
+        </div>
+        <table id="lifecycleTable" style="width:100%;border-collapse:collapse;font-size:12px;font-family:monospace">
+          <thead>
+            <tr style="color:#888;text-align:left;border-bottom:1px solid #333">
+              <th style="padding:4px 8px">Time</th>
+              <th style="padding:4px 8px">Event</th>
+              <th style="padding:4px 8px">Session</th>
+              <th style="padding:4px 8px">Reason</th>
+              <th style="padding:4px 8px">Extra</th>
+            </tr>
+          </thead>
+          <tbody id="lifecycleTableBody"></tbody>
+        </table>
+        <div id="lifecycleEmpty" style="color:#666;text-align:center;padding:20px;display:none">No lifecycle entries found</div>
       </div>
     </div>
   </div>

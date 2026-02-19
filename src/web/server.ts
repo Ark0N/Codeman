@@ -37,6 +37,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { createRequire } from 'node:module';
 import { RunSummaryTracker } from '../run-summary.js';
 import { PlanOrchestrator, type DetailedPlanResult } from '../plan-orchestrator.js';
+import { getLifecycleLog } from '../session-lifecycle-log.js';
 
 // Load version from package.json
 const require = createRequire(import.meta.url);
@@ -110,8 +111,6 @@ interface ScheduledRun {
 
 // Batch terminal data for performance - collect for 16ms (60fps) before sending
 const TERMINAL_BATCH_INTERVAL = 16;
-// Batch session:output events for 50ms
-const OUTPUT_BATCH_INTERVAL = 50;
 // Batch task:updated events for 100ms
 const TASK_UPDATE_BATCH_INTERVAL = 100;
 
@@ -306,7 +305,6 @@ function getOrCreateSelfSignedCert(): { key: string; cert: string } {
 
 /** Stored listener references for session cleanup (prevents memory leaks) */
 interface SessionListenerRefs {
-  output: (data: string) => void;
   terminal: (data: string) => void;
   clearTerminal: () => void;
   message: (msg: ClaudeMessage) => void;
@@ -356,6 +354,7 @@ export class WebServer extends EventEmitter {
   private mux: TerminalMultiplexer;
   // Terminal batching for performance
   private terminalBatches: Map<string, string[]> = new Map();
+  private terminalBatchSizes: Map<string, number> = new Map();  // Running total avoids O(n) reduce per push
   private terminalBatchTimer: NodeJS.Timeout | null = null;
   // Adaptive batching: track rapid events to extend batch window (per-session)
   // StaleExpirationMap auto-cleans entries for sessions that stop generating output
@@ -370,8 +369,6 @@ export class WebServer extends EventEmitter {
   // Scheduled runs cleanup timer
   private scheduledCleanupTimer: NodeJS.Timeout | null = null;
   // SSE event batching
-  private outputBatches: Map<string, string> = new Map();
-  private outputBatchTimer: NodeJS.Timeout | null = null;
   private taskUpdateBatches: Map<string, { sessionId: string; task: BackgroundTask }> = new Map();
   private taskUpdateBatchTimer: NodeJS.Timeout | null = null;
   // State update batching (reduce expensive toDetailedState() serialization)
@@ -444,6 +441,11 @@ export class WebServer extends EventEmitter {
       this.broadcast('mux:killed', data);
     });
     this.mux.on('sessionDied', (data) => {
+      getLifecycleLog().log({
+        event: 'mux_died',
+        sessionId: (data as { sessionId?: string }).sessionId || 'unknown',
+        extra: data as Record<string, unknown>,
+      });
       this.broadcast('mux:died', data);
     });
     this.mux.on('statsUpdated', (sessions) => {
@@ -673,6 +675,19 @@ export class WebServer extends EventEmitter {
       return { success: true, cleanedSessions: cleaned };
     });
 
+    // Session lifecycle audit log
+    this.app.get('/api/session-lifecycle', async (req) => {
+      const query = req.query as { sessionId?: string; event?: string; since?: string; limit?: string };
+      const lifecycleLog = getLifecycleLog();
+      const entries = await lifecycleLog.query({
+        sessionId: query.sessionId,
+        event: query.event as import('../types.js').LifecycleEventType,
+        since: query.since ? Number(query.since) : undefined,
+        limit: query.limit ? Math.min(Number(query.limit), 1000) : 200,
+      });
+      return { success: true, entries };
+    });
+
     // Global stats endpoint
     this.app.get('/api/stats', async () => {
       const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> = {};
@@ -737,7 +752,6 @@ export class WebServer extends EventEmitter {
         transcriptWatchers: this.transcriptWatchers.size,
         scheduledRuns: this.scheduledRuns.size,
         terminalBatches: this.terminalBatches.size,
-        outputBatches: this.outputBatches.size,
         taskUpdateBatches: this.taskUpdateBatches.size,
         stateUpdatePending: this.stateUpdatePending.size,
         lastRecordedTokens: this.lastRecordedTokens.size,
@@ -842,6 +856,7 @@ export class WebServer extends EventEmitter {
       this.store.incrementSessionsCreated();
       this.persistSessionState(session);
       await this.setupSessionListeners(session);
+      getLifecycleLog().log({ event: 'created', sessionId: session.id, name: session.name });
 
       const detailedState = session.toDetailedState();
       this.broadcast('session:created', detailedState);
@@ -905,7 +920,7 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
-      await this.cleanupSession(id, killMux);
+      await this.cleanupSession(id, killMux, 'user_delete');
       return { success: true };
     });
 
@@ -916,7 +931,7 @@ export class WebServer extends EventEmitter {
 
       for (const id of sessionIds) {
         if (this.sessions.has(id)) {
-          await this.cleanupSession(id);
+          await this.cleanupSession(id, true, 'user_bulk_delete');
           killed++;
         }
       }
@@ -1641,6 +1656,7 @@ export class WebServer extends EventEmitter {
         }
 
         await session.startInteractive();
+        getLifecycleLog().log({ event: 'started', sessionId: id, name: session.name, mode: 'claude' });
         this.broadcast('session:interactive', { id });
         this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
 
@@ -1665,6 +1681,7 @@ export class WebServer extends EventEmitter {
 
       try {
         await session.startShell();
+        getLifecycleLog().log({ event: 'started', sessionId: id, name: session.name, mode: 'shell' });
         this.broadcast('session:interactive', { id, mode: 'shell' });
         this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
         return { success: true };
@@ -1988,6 +2005,7 @@ export class WebServer extends EventEmitter {
 
         // Start interactive session
         await session.startInteractive();
+        getLifecycleLog().log({ event: 'started', sessionId: id, name: session.name, mode: 'claude', reason: 'interactive_respawn' });
         this.broadcast('session:interactive', { id });
         this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
 
@@ -2222,17 +2240,18 @@ export class WebServer extends EventEmitter {
       this.store.incrementSessionsCreated();
       this.persistSessionState(session);
       await this.setupSessionListeners(session);
+      getLifecycleLog().log({ event: 'created', sessionId: session.id, name: session.name, reason: 'run_prompt' });
 
       this.broadcast('session:created', session.toDetailedState());
 
       try {
         const result = await session.runPrompt(prompt);
         // Clean up session after completion to prevent memory leak
-        await this.cleanupSession(session.id);
+        await this.cleanupSession(session.id, true, 'run_prompt_complete');
         return { success: true, sessionId: session.id, ...result };
       } catch (err) {
         // Clean up session on error too
-        await this.cleanupSession(session.id);
+        await this.cleanupSession(session.id, true, 'run_prompt_error');
         return { success: false, sessionId: session.id, error: getErrorMessage(err) };
       }
     });
@@ -2640,15 +2659,18 @@ export class WebServer extends EventEmitter {
       this.store.incrementSessionsCreated();
       this.persistSessionState(session);
       await this.setupSessionListeners(session);
+      getLifecycleLog().log({ event: 'created', sessionId: session.id, name: session.name, reason: 'quick_start' });
       this.broadcast('session:created', session.toDetailedState());
 
       // Start in the appropriate mode
       try {
         if (mode === 'shell') {
           await session.startShell();
+          getLifecycleLog().log({ event: 'started', sessionId: session.id, name: session.name, mode: 'shell' });
           this.broadcast('session:interactive', { id: session.id, mode: 'shell' });
         } else {
           await session.startInteractive();
+          getLifecycleLog().log({ event: 'started', sessionId: session.id, name: session.name, mode: 'claude' });
           this.broadcast('session:interactive', { id: session.id });
         }
         this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
@@ -2685,7 +2707,7 @@ export class WebServer extends EventEmitter {
         };
       } catch (err) {
         // Clean up session on error to prevent orphaned resources
-        await this.cleanupSession(session.id);
+        await this.cleanupSession(session.id, true, 'quick_start_error');
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
       }
     });
@@ -3961,20 +3983,28 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   // Track sessions currently being cleaned up to prevent concurrent cleanup races
   private cleaningUp: Set<string> = new Set();
 
-  private async cleanupSession(sessionId: string, killMux: boolean = true): Promise<void> {
+  private async cleanupSession(sessionId: string, killMux: boolean = true, reason?: string): Promise<void> {
     // Guard against concurrent cleanup of the same session
     if (this.cleaningUp.has(sessionId)) return;
     this.cleaningUp.add(sessionId);
 
     try {
-      await this._doCleanupSession(sessionId, killMux);
+      await this._doCleanupSession(sessionId, killMux, reason);
     } finally {
       this.cleaningUp.delete(sessionId);
     }
   }
 
-  private async _doCleanupSession(sessionId: string, killMux: boolean): Promise<void> {
+  private async _doCleanupSession(sessionId: string, killMux: boolean, reason?: string): Promise<void> {
     const session = this.sessions.get(sessionId);
+    const lifecycleLog = getLifecycleLog();
+    lifecycleLog.log({
+      event: 'deleted',
+      sessionId,
+      name: session?.name,
+      mode: session?.mode,
+      reason: reason || 'unknown',
+    });
 
     // Stop watching @fix_plan.md for this session
     if (session) {
@@ -4035,7 +4065,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     // Clear batches and pending state updates
     this.terminalBatches.delete(sessionId);
-    this.outputBatches.delete(sessionId);
+    this.terminalBatchSizes.delete(sessionId);
     this.taskUpdateBatches.delete(sessionId);
     this.stateUpdatePending.delete(sessionId);
     this.lastTerminalEventTime.delete(sessionId);
@@ -4080,7 +4110,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       // Explicitly remove stored listeners to break closure references (prevents memory leak)
       const listeners = this.sessionListenerRefs.get(sessionId);
       if (listeners) {
-        session.off('output', listeners.output);
         session.off('terminal', listeners.terminal);
         session.off('clearTerminal', listeners.clearTerminal);
         session.off('message', listeners.message);
@@ -4142,11 +4171,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Store all listener references for explicit cleanup on session delete
     // This prevents memory leaks from closure references keeping objects alive
     const listeners: SessionListenerRefs = {
-      output: (data) => {
-        // Use batching for better performance at high throughput
-        this.batchOutputData(session.id, data);
-      },
-
       terminal: (data) => {
         // Use batching for better performance at high throughput
         this.batchTerminalData(session.id, data);
@@ -4178,6 +4202,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       },
 
       exit: (code) => {
+        getLifecycleLog().log({ event: 'exit', sessionId: session.id, name: session.name, exitCode: code });
         // Wrap in try/catch to ensure cleanup always happens
         try {
           this.broadcast('session:exit', { id: session.id, code });
@@ -4352,7 +4377,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.sessionListenerRefs.set(session.id, listeners);
 
     // Attach all listeners to the session
-    session.on('output', listeners.output);
     session.on('terminal', listeners.terminal);
     session.on('clearTerminal', listeners.clearTerminal);
     session.on('message', listeners.message);
@@ -4721,7 +4745,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         this.broadcast('scheduled:updated', run);
 
         // Clean up the session after iteration to prevent memory leaks
-        await this.cleanupSession(session.id);
+        await this.cleanupSession(session.id, true, 'scheduled_run');
         run.sessionId = null;
 
         // Small pause between iterations
@@ -4733,7 +4757,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         // Clean up the session on error too
         if (session) {
           try {
-            await this.cleanupSession(session.id);
+            await this.cleanupSession(session.id, true, 'scheduled_run_error');
           } catch {
             // Ignore cleanup errors
           }
@@ -4762,7 +4786,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     // Use cleanupSession for proper resource cleanup (listeners, respawn, etc.)
     if (run.sessionId && this.sessions.has(run.sessionId)) {
-      await this.cleanupSession(run.sessionId);
+      await this.cleanupSession(run.sessionId, true, 'scheduled_run_stopped');
       run.sessionId = null;
     }
 
@@ -4832,7 +4856,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
    */
   private cleanupStaleSessions(): number {
     const activeSessionIds = new Set(this.sessions.keys());
-    return this.store.cleanupStaleSessions(activeSessionIds);
+    const result = this.store.cleanupStaleSessions(activeSessionIds);
+    const lifecycleLog = getLifecycleLog();
+    for (const s of result.cleaned) {
+      lifecycleLog.log({ event: 'stale_cleaned', sessionId: s.id, name: s.name });
+    }
+    return result.count;
   }
 
   /**
@@ -4909,8 +4938,16 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   private broadcast(event: string, data: unknown): void {
-    // Invalidate caches on any state-changing broadcast
-    if (event.startsWith('session:') || event.startsWith('respawn:')) {
+    // Invalidate caches on state-changing broadcasts, but NOT on high-frequency
+    // streaming events that don't change session metadata (terminal data,
+    // detection updates). These fire every 16ms-2s and would make the 1s TTL
+    // caches permanently empty — defeating their purpose.
+    if (
+      (event.startsWith('session:') || event.startsWith('respawn:')) &&
+      event !== 'session:terminal' &&
+      event !== 'session:needsRefresh' &&
+      event !== 'respawn:detectionUpdate'
+    ) {
       this.cachedLightState = null;
       this.cachedSessionsList = null;
     }
@@ -4940,7 +4977,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       this.terminalBatches.set(sessionId, chunks);
     }
     chunks.push(data);
-    const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+    const prevSize = this.terminalBatchSizes.get(sessionId) ?? 0;
+    const totalLength = prevSize + data.length;
+    this.terminalBatchSizes.set(sessionId, totalLength);
 
     // Adaptive batching: detect rapid events and extend batch window (per-session)
     const now = Date.now();
@@ -4991,6 +5030,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Skip if server is stopping (timer may have been queued before stop() was called)
     if (this._isStopping) {
       this.terminalBatches.clear();
+      this.terminalBatchSizes.clear();
       return;
     }
     for (const [sessionId, chunks] of this.terminalBatches) {
@@ -5006,36 +5046,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       }
     }
     this.terminalBatches.clear();
-  }
-
-  // Batch session:output events at 50ms for better performance
-  private batchOutputData(sessionId: string, data: string): void {
-    // Skip if server is stopping
-    if (this._isStopping) return;
-
-    const existing = this.outputBatches.get(sessionId) || '';
-    this.outputBatches.set(sessionId, existing + data);
-
-    if (!this.outputBatchTimer) {
-      this.outputBatchTimer = setTimeout(() => {
-        this.flushOutputBatches();
-        this.outputBatchTimer = null;
-      }, OUTPUT_BATCH_INTERVAL);
-    }
-  }
-
-  private flushOutputBatches(): void {
-    // Skip if server is stopping (timer may have been queued before stop() was called)
-    if (this._isStopping) {
-      this.outputBatches.clear();
-      return;
-    }
-    for (const [sessionId, data] of this.outputBatches) {
-      if (data.length > 0) {
-        this.broadcast('session:output', { id: sessionId, data });
-      }
-    }
-    this.outputBatches.clear();
+    this.terminalBatchSizes.clear();
   }
 
   // Batch task:updated events at 100ms - only send latest update per task
@@ -5160,6 +5171,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
   async start(): Promise<void> {
     await this.setupRoutes();
+
+    const lifecycleLog = getLifecycleLog();
+    lifecycleLog.log({ event: 'server_started', sessionId: '*' });
+    await lifecycleLog.trimIfNeeded();
 
     // Restore mux sessions BEFORE accepting connections
     // This prevents race conditions where clients connect before state is ready
@@ -5391,6 +5406,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
             this.persistSessionState(session);
 
             // Mark it as restored (not started yet - user needs to attach)
+            getLifecycleLog().log({ event: 'recovered', sessionId: session.id, name: session.name });
             console.log(`[Server] Restored session ${session.id} from mux ${muxSession.muxName}`);
           }
         }
@@ -5415,6 +5431,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   async stop(): Promise<void> {
+    getLifecycleLog().log({ event: 'server_stopped', sessionId: '*' });
     // Set stopping flag to prevent new timer creation during shutdown
     this._isStopping = true;
 
@@ -5443,12 +5460,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       this.terminalBatchTimer = null;
     }
     this.terminalBatches.clear();
-
-    if (this.outputBatchTimer) {
-      clearTimeout(this.outputBatchTimer);
-      this.outputBatchTimer = null;
-    }
-    this.outputBatches.clear();
+    this.terminalBatchSizes.clear();
 
     if (this.taskUpdateBatchTimer) {
       clearTimeout(this.taskUpdateBatchTimer);
@@ -5514,7 +5526,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Don't kill mux sessions on server stop - they can be reattached on restart
     // Use Promise.race with a 30s timeout to prevent shutdown from hanging indefinitely
     const sessionCleanup = Promise.allSettled(
-      Array.from(this.sessions.keys()).map(id => this.cleanupSession(id, false))
+      Array.from(this.sessions.keys()).map(id => this.cleanupSession(id, false, 'server_shutdown'))
     );
     const shutdownTimeout = new Promise<void>(resolve => setTimeout(resolve, 30_000));
     await Promise.race([sessionCleanup, shutdownTimeout]);
