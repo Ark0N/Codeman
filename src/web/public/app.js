@@ -1581,6 +1581,7 @@ class ClaudemanApp {
     this.teammateTerminals = new Map(); // Map<agentId, { terminal, fitAddon, paneTarget, sessionId, resizeObserver }>
 
     this.terminalBufferCache = new Map(); // Map<sessionId, string> — client-side cache for instant tab re-visits (max 20)
+    this.localEchoTextCache = new Map(); // Map<sessionId, string> — preserve local echo input across tab switches
     this.ralphStatePanelCollapsed = true; // Default to collapsed
     this.ralphClosedSessions = new Set(); // Sessions where user explicitly closed Ralph panel
 
@@ -4523,6 +4524,15 @@ class ClaudemanApp {
     this.writeFrameScheduled = false;
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
+    // Save local echo text for outgoing session before clear destroys it
+    if (this.activeSessionId) {
+      const echoText = this._localEchoOverlay?.pendingText || '';
+      if (echoText) {
+        this.localEchoTextCache.set(this.activeSessionId, echoText);
+      } else {
+        this.localEchoTextCache.delete(this.activeSessionId);
+      }
+    }
     this._localEchoOverlay?.clear();
     this.activeSessionId = sessionId;
     try { localStorage.setItem('claudeman-active-session', sessionId); } catch {}
@@ -4595,6 +4605,15 @@ class ClaudemanApp {
           const oldest = this.terminalBufferCache.keys().next().value;
           this.terminalBufferCache.delete(oldest);
         }
+      }
+
+      // Restore local echo text for incoming session (saved during previous tab switch)
+      const savedEcho = this.localEchoTextCache.get(sessionId);
+      if (savedEcho && this._localEchoOverlay) {
+        this._localEchoOverlay.pendingText = savedEcho;
+        this._localEchoOverlay._persist();
+        // Delay rerender until buffer is settled and prompt is visible
+        setTimeout(() => this._localEchoOverlay?.rerender(), 100);
       }
 
       // Send resize and Ctrl+L to trigger Claude to redraw at correct size
@@ -4676,6 +4695,7 @@ class ClaudemanApp {
     }
     this.terminalBuffers.delete(sessionId);
     this.terminalBufferCache.delete(sessionId);
+    this.localEchoTextCache.delete(sessionId);
     this._inputQueue.delete(sessionId);
     this.ralphStates.delete(sessionId);
     this.ralphClosedSessions.delete(sessionId);
