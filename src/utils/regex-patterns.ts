@@ -64,10 +64,8 @@ export function stripAnsi(text: string): string {
 }
 
 /**
- * Strips simple ANSI CSI codes from text (faster, less comprehensive).
- * @param text - Text containing ANSI escape codes
- * @returns Text with ANSI CSI codes removed
+ * Regex to validate safe file paths (no shell metacharacters).
+ * Shared by schemas.ts and tmux-manager.ts for consistent path validation.
  */
-export function stripAnsiSimple(text: string): string {
-  return text.replace(ANSI_ESCAPE_PATTERN_SIMPLE, '');
-}
+export const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_\/\-. ~]+$/;
+

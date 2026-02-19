@@ -38,29 +38,6 @@ export interface BufferConfig {
 }
 
 /**
- * Memory metrics for monitoring and debugging.
- * Extends Node.js process.memoryUsage() with application-specific tracking.
- */
-export interface MemoryMetrics {
-  /** Heap memory used by V8 (bytes) */
-  heapUsed: number;
-  /** Total heap size allocated by V8 (bytes) */
-  heapTotal: number;
-  /** Memory used by C++ objects bound to JavaScript (bytes) */
-  external: number;
-  /** Memory used by ArrayBuffers and SharedArrayBuffers (bytes) */
-  arrayBuffers: number;
-  /** Sizes of tracked Maps by name */
-  mapSizes: Record<string, number>;
-  /** Number of active timers (setTimeout/setInterval) */
-  timerCount: number;
-  /** Number of active file system watchers */
-  watcherCount: number;
-  /** Timestamp when metrics were collected */
-  timestamp: number;
-}
-
-/**
  * Resource types that can be registered for cleanup.
  */
 export type CleanupResourceType = 'timer' | 'interval' | 'watcher' | 'listener' | 'stream';
@@ -621,18 +598,6 @@ export interface SessionOutput {
   exitCode: number | null;
 }
 
-/**
- * Task assignment record
- */
-export interface TaskAssignment {
-  /** Session ID that task is assigned to */
-  sessionId: string;
-  /** Task ID being assigned */
-  taskId: string;
-  /** Timestamp of assignment */
-  assignedAt: number;
-}
-
 // ========== API Error Handling ==========
 
 /**
@@ -665,100 +630,10 @@ export const ErrorMessages: Record<ApiErrorCode, string> = {
   [ApiErrorCode.INTERNAL_ERROR]: 'An internal error occurred',
 };
 
-// ========== API Request Types ==========
-
-/**
- * Request to create a new session
- */
-export interface CreateSessionRequest {
-  /** Optional working directory path */
-  workingDir?: string;
-}
-
-/**
- * Request to run a prompt in a session
- */
-export interface RunPromptRequest {
-  /** Prompt to send to Claude */
-  prompt: string;
-}
-
-/**
- * Request to send input to a session
- */
-export interface SessionInputRequest {
-  /** Input string to send */
-  input: string;
-}
-
-/**
- * Request to resize terminal
- */
-export interface ResizeRequest {
-  /** Number of columns */
-  cols: number;
-  /** Number of rows */
-  rows: number;
-}
-
-/**
- * Request to create a new case
- */
-export interface CreateCaseRequest {
-  /** Case name (alphanumeric with hyphens/underscores) */
-  name: string;
-  /** Optional case description */
-  description?: string;
-}
-
-/**
- * Request for quick start (create case + session)
- */
-export interface QuickStartRequest {
-  /** Optional case name, defaults to 'testcase' */
-  caseName?: string;
-  /** Session mode: 'claude' for Claude CLI, 'shell' for bash shell */
-  mode?: 'claude' | 'shell';
-}
-
-/**
- * Request to create a scheduled run
- */
-export interface CreateScheduledRunRequest {
-  /** Prompt to run */
-  prompt: string;
-  /** Optional working directory */
-  workingDir?: string;
-  /** Duration in minutes */
-  durationMinutes: number;
-}
-
-/**
- * Request for quick run (one-shot prompt execution)
- */
-export interface QuickRunRequest {
-  /** Prompt to run */
-  prompt: string;
-  /** Optional working directory */
-  workingDir?: string;
-}
-
 /**
  * Hook event types triggered by Claude Code's hooks system
  */
 export type HookEventType = 'idle_prompt' | 'permission_prompt' | 'elicitation_dialog' | 'stop' | 'teammate_idle' | 'task_completed';
-
-/**
- * Request body for the hook-event API endpoint
- */
-export interface HookEventRequest {
-  /** Type of hook event that fired */
-  event: HookEventType;
-  /** Session ID from CLAUDEMAN_SESSION_ID env var */
-  sessionId: string;
-  /** Additional event data (tool name, command, question, etc.) */
-  data?: Record<string, unknown>;
-}
 
 // ========== API Response Types ==========
 
@@ -781,19 +656,6 @@ export function createErrorResponse(code: ApiErrorCode, details?: string): ApiRe
     success: false,
     error: details || ErrorMessages[code],
     errorCode: code,
-  };
-}
-
-/**
- * Creates a standardized success response
- * @template T Type of the data payload
- * @param data Optional response data
- * @returns Formatted success response
- */
-export function createSuccessResponse<T>(data?: T): ApiResponse<T> {
-  return {
-    success: true,
-    data,
   };
 }
 
@@ -1072,13 +934,6 @@ export interface RalphSessionState {
   todos: RalphTodoItem[];
   /** Timestamp of last update */
   lastUpdated: number;
-}
-
-/**
- * Map of session ID to inner state
- */
-export interface RalphStateRecord {
-  [sessionId: string]: RalphSessionState;
 }
 
 // ========== RALPH_STATUS Block Types ==========

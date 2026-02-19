@@ -261,5 +261,3 @@ export class LRUMap<K, V> extends Map<K, V> {
     return Math.max(0, this.maxSize - super.size);
   }
 }
-
-export default LRUMap;

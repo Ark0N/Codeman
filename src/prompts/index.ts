@@ -7,4 +7,3 @@
 
 export { RESEARCH_AGENT_PROMPT } from './research-agent.js';
 export { PLANNER_PROMPT } from './planner.js';
-export { CODE_REVIEWER_PROMPT } from './code-reviewer.js';

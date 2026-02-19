@@ -293,13 +293,3 @@ export function getSessionManager(): SessionManager {
   return managerInstance;
 }
 
-/**
- * Resets the singleton SessionManager instance.
- * Primarily used for testing to ensure test isolation.
- */
-export async function resetSessionManager(): Promise<void> {
-  if (managerInstance) {
-    await managerInstance.stopAllSessions();
-    managerInstance = null;
-  }
-}

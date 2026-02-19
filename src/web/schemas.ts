@@ -8,11 +8,9 @@
  */
 
 import { z } from 'zod';
+import { SAFE_PATH_PATTERN } from '../utils/regex-patterns.js';
 
 // ========== Path Validation ==========
-
-/** Regex to validate working directory paths (no shell metacharacters) — matches tmux-manager.ts */
-const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_\/\-. ~]+$/;
 
 /** Validate a path string: no shell metacharacters, no traversal, must be absolute */
 export function isValidWorkingDir(p: string): boolean {
@@ -78,15 +76,6 @@ export const CreateSessionSchema = z.object({
  */
 export const RunPromptSchema = z.object({
   prompt: z.string().min(1).max(100000),
-});
-
-/**
- * Schema for POST /api/sessions/:id/input
- * Sends input to an interactive session.
- */
-export const SessionInputSchema = z.object({
-  input: z.string(),
-  useMux: z.boolean().optional(),
 });
 
 /**

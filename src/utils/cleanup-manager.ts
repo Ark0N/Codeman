@@ -326,5 +326,3 @@ export class CleanupManager implements Disposable {
     }
   }
 }
-
-export default CleanupManager;

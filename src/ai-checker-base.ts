@@ -28,7 +28,7 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
-import { getAugmentedPath } from './session.js';
+import { getAugmentedPath } from './utils/claude-cli-resolver.js';
 import { ANSI_ESCAPE_PATTERN_SIMPLE } from './utils/index.js';
 
 // ========== Security Validation ==========
@@ -93,17 +93,6 @@ export interface AiCheckerStateBase<V extends string> {
   consecutiveErrors: number;
   totalChecks: number;
   disabledReason: string | null;
-}
-
-/** Events emitted by AI checkers */
-export interface AiCheckerEvents<R> {
-  checkStarted: () => void;
-  checkCompleted: (result: R) => void;
-  checkFailed: (error: string) => void;
-  cooldownStarted: (endsAt: number) => void;
-  cooldownEnded: () => void;
-  disabled: (reason: string) => void;
-  log: (message: string) => void;
 }
 
 // ========== Constants ==========

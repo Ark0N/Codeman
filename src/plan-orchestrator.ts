@@ -406,7 +406,7 @@ export class PlanOrchestrator {
 
     this.runningSessions.add(session);
 
-    const prompt = RESEARCH_AGENT_PROMPT.replace('{TASK}', taskDescription);
+    const prompt = RESEARCH_AGENT_PROMPT.replace('{TASK}', taskDescription).replace('{WORKING_DIR}', this.workingDir);
 
     // Start progress interval before try block to ensure cleanup in finally
     const progressInterval = setInterval(() => {

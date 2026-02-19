@@ -29,31 +29,17 @@ import {
   type AiCheckerConfigBase,
   type AiCheckerResultBase,
   type AiCheckerStateBase,
-  type AiCheckerStatus,
 } from './ai-checker-base.js';
 
 // ========== Types ==========
 
 export interface AiIdleCheckConfig extends AiCheckerConfigBase {}
 
-// Re-export the status type for backwards compatibility
-export type AiCheckStatus = AiCheckerStatus;
 export type AiCheckVerdict = 'IDLE' | 'WORKING' | 'ERROR';
 
 export interface AiCheckResult extends AiCheckerResultBase<AiCheckVerdict> {}
 
 export interface AiCheckState extends AiCheckerStateBase<AiCheckVerdict> {}
-
-/** Events emitted by AiIdleChecker */
-export interface AiIdleCheckerEvents {
-  checkStarted: () => void;
-  checkCompleted: (result: AiCheckResult) => void;
-  checkFailed: (error: string) => void;
-  cooldownStarted: (endsAt: number) => void;
-  cooldownEnded: () => void;
-  disabled: (reason: string) => void;
-  log: (message: string) => void;
-}
 
 // ========== Constants ==========
 

@@ -4384,11 +4384,6 @@ class ClaudemanApp {
     }
   }
 
-  // Legacy toggle for backwards compat
-  toggleSubagentDropdown(badgeEl) {
-    this.pinSubagentDropdown(badgeEl);
-  }
-
   // Permanently close a minimized subagent (remove from DOM and minimized set)
   permanentlyCloseMinimizedSubagent(agentId, sessionId) {
     // Remove from minimized set
@@ -7305,27 +7300,6 @@ class ClaudemanApp {
       }
       win.remove();
     }
-  }
-
-  skipPlanGeneration() {
-    // Stop any running timers
-    if (this.planLoadingTimer) {
-      clearInterval(this.planLoadingTimer);
-      this.planLoadingTimer = null;
-    }
-    if (this.planPhaseTimer) {
-      clearInterval(this.planPhaseTimer);
-      this.planPhaseTimer = null;
-    }
-
-    this.ralphWizardConfig.skipPlanGeneration = true;
-    this.ralphWizardConfig.planGenerated = false;
-    this.ralphWizardConfig.generatedPlan = null;
-
-    // Generate preview and go to step 3
-    this.updateRalphPromptPreview();
-    this.ralphWizardStep = 3;
-    this.updateRalphWizardUI();
   }
 
   regeneratePlan() {

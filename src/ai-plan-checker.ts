@@ -28,31 +28,17 @@ import {
   type AiCheckerConfigBase,
   type AiCheckerResultBase,
   type AiCheckerStateBase,
-  type AiCheckerStatus,
 } from './ai-checker-base.js';
 
 // ========== Types ==========
 
 export interface AiPlanCheckConfig extends AiCheckerConfigBase {}
 
-// Re-export the status type for backwards compatibility
-export type AiPlanCheckStatus = AiCheckerStatus;
 export type AiPlanCheckVerdict = 'PLAN_MODE' | 'NOT_PLAN_MODE' | 'ERROR';
 
 export interface AiPlanCheckResult extends AiCheckerResultBase<AiPlanCheckVerdict> {}
 
 export interface AiPlanCheckState extends AiCheckerStateBase<AiPlanCheckVerdict> {}
-
-/** Events emitted by AiPlanChecker */
-export interface AiPlanCheckerEvents {
-  checkStarted: () => void;
-  checkCompleted: (result: AiPlanCheckResult) => void;
-  checkFailed: (error: string) => void;
-  cooldownStarted: (endsAt: number) => void;
-  cooldownEnded: () => void;
-  disabled: (reason: string) => void;
-  log: (message: string) => void;
-}
 
 // ========== Constants ==========
 

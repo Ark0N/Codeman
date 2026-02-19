@@ -32,6 +32,7 @@ import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { ProcessStats, PersistedRespawnConfig, getErrorMessage, NiceConfig, DEFAULT_NICE_CONFIG, type PaneInfo } from './types.js';
 import { wrapWithNice } from './utils/nice-wrapper.js';
+import { SAFE_PATH_PATTERN } from './utils/regex-patterns.js';
 import type { TerminalMultiplexer, MuxSession, MuxSessionWithStats } from './mux-interface.js';
 
 // Claude CLI PATH resolution — shared utility
@@ -76,9 +77,6 @@ const MUX_SESSIONS_FILE = join(homedir(), '.claudeman', 'mux-sessions.json');
 
 /** Regex to validate tmux session names (only allow safe characters) */
 const SAFE_MUX_NAME_PATTERN = /^claudeman-[a-f0-9-]+$/;
-
-/** Regex to validate working directory paths (no shell metacharacters) */
-const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_\/\-. ~]+$/;
 
 /** Regex to validate tmux pane targets (e.g., "%0", "%1", "0", "1") */
 const SAFE_PANE_TARGET_PATTERN = /^(%\d+|\d+)$/;
@@ -795,7 +793,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   /**
    * Start periodic mouse mode sync for all tracked sessions.
    * Polls pane counts every 5s and toggles mouse on/off as needed.
-   * Only calls tmux set-option when the pane count actually changes.
+   * Polls every 5s. On pane count change, toggles mouse on (>1 pane) or off (1 pane).
+   * If enableMouseMode/disableMouseMode fails, lastPaneCount is NOT updated so it retries next poll.
    */
   startMouseModeSync(intervalMs: number = 5000): void {
     if (this.mouseSyncInterval) {
@@ -804,18 +803,24 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     this.mouseSyncInterval = setInterval(() => {
       if (IS_TEST_MODE) return;
+
       for (const session of this.sessions.values()) {
         const panes = this.listPanes(session.muxName);
         const count = panes.length;
-        const prev = this.lastPaneCount.get(session.muxName);
+        if (count === 0) continue;
 
-        // Only toggle when pane count crosses the 1↔N boundary
-        if (prev !== count && count > 0) {
-          this.lastPaneCount.set(session.muxName, count);
-          if (count > 1) {
-            this.enableMouseMode(session.muxName);
-          } else {
-            this.disableMouseMode(session.muxName);
+        const prev = this.lastPaneCount.get(session.muxName);
+        if (prev === count) continue;
+
+        // Pane count changed — toggle mouse mode
+        if (count > 1) {
+          if (this.enableMouseMode(session.muxName)) {
+            this.lastPaneCount.set(session.muxName, count);
+          }
+          // If enableMouseMode fails, DON'T update lastPaneCount — retry next poll
+        } else {
+          if (this.disableMouseMode(session.muxName)) {
+            this.lastPaneCount.set(session.muxName, count);
           }
         }
       }
@@ -950,8 +955,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         `tmux set-option -t "${muxName}" mouse on`,
         { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
       );
+      console.log(`[TmuxManager] Mouse mode ON for ${muxName}`);
       return true;
-    } catch {
+    } catch (err) {
+      console.error(`[TmuxManager] Failed to enable mouse mode for ${muxName}:`, err);
       return false;
     }
   }
@@ -972,8 +979,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         `tmux set-option -t "${muxName}" mouse off`,
         { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
       );
+      console.log(`[TmuxManager] Mouse mode OFF for ${muxName}`);
       return true;
-    } catch {
+    } catch (err) {
+      console.error(`[TmuxManager] Failed to disable mouse mode for ${muxName}:`, err);
       return false;
     }
   }

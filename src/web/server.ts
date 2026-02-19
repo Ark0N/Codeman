@@ -13,7 +13,7 @@
 import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
 import fastifyCompress from '@fastify/compress';
 import fastifyStatic from '@fastify/static';
-import path, { join, dirname, resolve, relative, isAbsolute } from 'node:path';
+import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, statSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -89,6 +89,7 @@ import {
   RespawnEnableSchema,
 } from './schemas.js';
 import { StaleExpirationMap } from '../utils/index.js';
+import { MAX_CONCURRENT_SESSIONS } from '../config/map-limits.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -127,8 +128,6 @@ const SESSIONS_LIST_CACHE_TTL = 1000;
 const SCHEDULED_CLEANUP_INTERVAL = 5 * 60 * 1000;
 // Completed scheduled runs max age (1 hour)
 const SCHEDULED_RUN_MAX_AGE = 60 * 60 * 1000;
-// Maximum concurrent sessions to prevent resource exhaustion
-const MAX_CONCURRENT_SESSIONS = 50;
 // SSE client health check interval (every 30 seconds)
 const SSE_HEALTH_CHECK_INTERVAL = 30 * 1000;
 // Maximum allowed input length for session write (64KB)
@@ -1461,7 +1460,7 @@ export class WebServer extends EventEmitter {
       }
 
       const content = session.ralphTracker.generateFixPlanMarkdown();
-      const filePath = path.join(workingDir, '@fix_plan.md');
+      const filePath = join(workingDir, '@fix_plan.md');
 
       try {
         await fs.writeFile(filePath, content, 'utf-8');
@@ -1491,7 +1490,7 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Session has no working directory');
       }
 
-      const filePath = path.join(workingDir, '@fix_plan.md');
+      const filePath = join(workingDir, '@fix_plan.md');
 
       try {
         const content = await fs.readFile(filePath, 'utf-8');
@@ -1534,7 +1533,7 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Session has no working directory');
       }
 
-      const filePath = path.join(workingDir, '@ralph_prompt.md');
+      const filePath = join(workingDir, '@ralph_prompt.md');
 
       try {
         await fs.writeFile(filePath, content, 'utf-8');
@@ -5335,12 +5334,13 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
         // Start stats collection for mux sessions
         this.mux.startStatsCollection(STATS_COLLECTION_INTERVAL_MS);
+      }
 
-        // Start mouse mode sync (tmux only) — toggles mouse on/off based on pane count.
-        // Mouse off = native xterm.js selection; mouse on = tmux pane clicking (split layouts).
-        if ('startMouseModeSync' in this.mux) {
-          (this.mux as { startMouseModeSync: (ms?: number) => void }).startMouseModeSync();
-        }
+      // Start mouse mode sync (tmux only) — toggles mouse on/off based on pane count.
+      // Mouse off = native xterm.js selection; mouse on = tmux pane clicking (split layouts).
+      // Always start, even with no sessions — new sessions may be created later.
+      if ('startMouseModeSync' in this.mux) {
+        (this.mux as { startMouseModeSync: (ms?: number) => void }).startMouseModeSync();
       }
 
       if (dead.length > 0) {

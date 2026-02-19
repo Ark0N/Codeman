@@ -37,16 +37,6 @@ export const MAX_SUBAGENT_ACTIVITY_PER_AGENT = 100;
 export const MAX_TOOL_RESULTS_PER_AGENT = 200;
 
 // ============================================================================
-// Hook Event Limits
-// ============================================================================
-
-/**
- * Maximum pending hook events to queue.
- * Prevents unbounded growth if hook processing is slow.
- */
-export const MAX_PENDING_HOOKS = 50;
-
-// ============================================================================
 // Session Tracking Limits
 // ============================================================================
 
@@ -55,56 +45,6 @@ export const MAX_PENDING_HOOKS = 50;
  * Each session consumes significant resources (PTY, buffers, watchers).
  */
 export const MAX_CONCURRENT_SESSIONS = 50;
-
-/**
- * Maximum session history entries to keep (for analytics).
- */
-export const MAX_SESSION_HISTORY = 100;
-
-// ============================================================================
-// SSE Client Limits
-// ============================================================================
-
-/**
- * Maximum SSE clients per session.
- * Prevents resource exhaustion from many browser tabs.
- */
-export const MAX_SSE_CLIENTS_PER_SESSION = 10;
-
-/**
- * Maximum total SSE clients across all sessions.
- */
-export const MAX_TOTAL_SSE_CLIENTS = 100;
-
-// ============================================================================
-// File Watcher Limits
-// ============================================================================
-
-/**
- * Maximum file watchers (FSWatcher) to allow.
- * Linux default max_user_watches is 8192-65536.
- * We warn at 80% capacity and evict idle watchers.
- */
-export const MAX_FILE_WATCHERS = 500;
-
-/**
- * Warning threshold as percentage of max watchers.
- */
-export const FILE_WATCHER_WARNING_THRESHOLD = 0.8;
-
-// ============================================================================
-// Task Tracking Limits
-// ============================================================================
-
-/**
- * Maximum tasks to keep in the task queue.
- */
-export const MAX_QUEUED_TASKS = 100;
-
-/**
- * Maximum completed tasks to keep for history.
- */
-export const MAX_COMPLETED_TASKS_HISTORY = 50;
 
 // ============================================================================
 // Todo Item Limits (Ralph Tracker)

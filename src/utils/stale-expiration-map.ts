@@ -334,5 +334,3 @@ export class StaleExpirationMap<K, V> implements Disposable {
     }
   }
 }
-
-export default StaleExpirationMap;

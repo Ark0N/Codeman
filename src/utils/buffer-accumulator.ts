@@ -193,5 +193,3 @@ export class BufferAccumulator {
     }
   }
 }
-
-export default BufferAccumulator;

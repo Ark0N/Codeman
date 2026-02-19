@@ -39,9 +39,6 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* Utility classes */
-.mt-sm { margin-top: 0.5rem; }
-
 /* ========== Accessibility: Focus Styles ========== */
 
 /* Skip link for keyboard users */
@@ -1319,22 +1316,7 @@ body {
   white-space: nowrap;
 }
 
-/* Legacy classes for backward compatibility */
-.ralph-progress-section {
-  display: flex;
-  align-items: flex-start;
-  gap: 1.5rem;
-  margin-bottom: 1rem;
-}
-
 /* Large Progress Ring */
-.ralph-ring {
-  position: relative;
-  width: 100px;
-  height: 100px;
-  flex-shrink: 0;
-}
-
 .ralph-ring-svg-large {
   width: 100%;
   height: 100%;
@@ -1376,66 +1358,6 @@ body {
   font-size: 0.6rem;
   color: var(--text-dim);
   margin-top: 0.15rem;
-}
-
-/* Meta Info */
-.ralph-meta {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.ralph-meta-item {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-}
-
-.ralph-meta-label {
-  font-size: 0.65rem;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.ralph-meta code {
-  background: var(--bg-input);
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-  font-family: 'SF Mono', Monaco, monospace;
-  font-size: 0.75rem;
-  color: var(--accent);
-  word-break: break-all;
-}
-
-.ralph-meta-row {
-  display: flex;
-  gap: 1.5rem;
-}
-
-.ralph-meta-item span:not(.ralph-meta-label) {
-  font-size: 0.9rem;
-  font-weight: 500;
-  color: var(--text);
-}
-
-/* Task Cards Section */
-.ralph-tasks-section {
-  background: var(--bg-card);
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.ralph-tasks-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.5rem 0.75rem;
-  background: var(--bg-input);
-  font-weight: 500;
-  color: var(--text);
-  font-size: 0.75rem;
 }
 
 .ralph-tasks-count {
@@ -1886,13 +1808,6 @@ body {
   gap: 0;
 }
 
-.toolbar-divider {
-  width: 1px;
-  height: 20px;
-  background: var(--border);
-  margin: 0 0.5rem;
-}
-
 .btn-toolbar {
   display: flex;
   align-items: center;
@@ -2339,15 +2254,6 @@ body {
   background: var(--bg-hover);
 }
 
-.btn-danger-sm {
-  color: #ff6b6b;
-}
-
-.btn-danger-sm:hover {
-  color: #fff;
-  background: #dc3545;
-}
-
 .settings-section {
   margin-bottom: 1.25rem;
   padding-bottom: 1rem;
@@ -2358,15 +2264,6 @@ body {
   margin-bottom: 0;
   padding-bottom: 0;
   border-bottom: none;
-}
-
-.settings-section-title {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 .form-row {
@@ -2403,17 +2300,6 @@ body {
   border-color: var(--accent);
 }
 
-.form-row-inline {
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-  align-items: center;
-}
-
-.form-row-inline input[type="text"] {
-  flex: 1;
-}
-
 .form-col {
   flex: 1;
 }
@@ -2445,43 +2331,6 @@ body {
   border-radius: 0 4px 4px 0;
   color: var(--text-muted);
   font-size: 0.75rem;
-}
-
-.checkbox-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.checkbox-label {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  cursor: pointer;
-  transition: border-color 0.15s;
-}
-
-.checkbox-label:hover {
-  border-color: var(--border-light);
-}
-
-.checkbox-label input[type="checkbox"] {
-  accent-color: var(--accent);
-}
-
-.checkbox-label span:first-of-type {
-  font-size: 0.8rem;
-  color: var(--text);
-}
-
-.checkbox-hint {
-  font-size: 0.7rem;
-  color: var(--text-muted);
-  margin-left: auto;
 }
 
 .form-hint {
@@ -2667,10 +2516,6 @@ body {
   font-size: 0.75rem;
 }
 
-.settings-item-full {
-  grid-column: 1 / -1;
-}
-
 .settings-item-label {
   color: var(--text);
   white-space: nowrap;
@@ -2722,26 +2567,6 @@ body {
 }
 
 .settings-status.denied {
-  background: rgba(239, 68, 68, 0.2);
-  color: var(--red);
-}
-
-/* CPU limit status indicator */
-.cpu-limit-status {
-  font-size: 0.7rem;
-  padding: 2px 6px;
-  border-radius: 3px;
-  background: var(--bg-hover);
-  color: var(--text-dim);
-  margin-left: 6px;
-}
-
-.cpu-limit-status.available {
-  background: rgba(34, 197, 94, 0.2);
-  color: var(--green);
-}
-
-.cpu-limit-status.unavailable {
   background: rgba(239, 68, 68, 0.2);
   color: var(--red);
 }
@@ -2822,24 +2647,6 @@ body {
   margin-top: 1rem;
   padding: 0.75rem;
   border-top: 1px solid var(--border);
-}
-
-.form-actions-stack {
-  flex-direction: column;
-  align-items: stretch;
-}
-
-.form-actions-stack button {
-  width: 100%;
-}
-
-.btn-warning {
-  background: var(--yellow);
-  color: #000;
-}
-
-.btn-warning:hover {
-  background: #d4a107;
 }
 
 /* Modal */
@@ -3251,13 +3058,6 @@ body {
   padding: 0.25rem 0.5rem;
 }
 
-.modal-footer-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
 .auto-refresh-label {
   display: flex;
   align-items: center;
@@ -3295,32 +3095,6 @@ body {
   font-size: 0.7rem;
   color: var(--text-muted);
   font-family: 'SF Mono', Monaco, monospace;
-}
-
-#runSummaryModal .modal-footer-actions {
-  gap: 0.5rem;
-}
-
-#runSummaryModal .modal-footer-actions .btn-toolbar {
-  font-size: 0.7rem;
-  padding: 0.25rem 0.5rem;
-}
-
-/* Tab summary icon */
-.tab-summary {
-  opacity: 0;
-  cursor: pointer;
-  font-size: 0.85rem;
-  transition: opacity 0.15s;
-  margin-right: 0.25rem;
-}
-
-.session-tab:hover .tab-summary {
-  opacity: 0.5;
-}
-
-.session-tab:hover .tab-summary:hover {
-  opacity: 1;
 }
 
 .modal-warning-text {
@@ -3399,33 +3173,10 @@ body {
   border: 1px solid var(--border);
 }
 
-.session-dir-display {
-  padding: 0.5rem 0.75rem;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text-dim);
-  font-size: 0.8rem;
-  font-family: 'SF Mono', Monaco, monospace;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* Session respawn section in options modal */
 .session-respawn-section {
   padding-top: 0;
   margin-top: 0;
-}
-
-.section-divider {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.5rem;
-  font-size: 0.75rem;
-  font-weight: 500;
-  color: var(--text-dim);
 }
 
 .session-respawn-status {
@@ -3459,11 +3210,6 @@ body {
 }
 
 /* Inline checkbox group */
-.checkbox-group-inline {
-  display: flex;
-  gap: 1rem;
-}
-
 .checkbox-inline {
   display: flex;
   align-items: center;
@@ -3479,13 +3225,6 @@ body {
 
 .checkbox-inline:hover {
   color: var(--text);
-}
-
-/* Auto-clear row */
-.auto-clear-row {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
 }
 
 .input-suffix-sm {
@@ -3579,11 +3318,6 @@ body {
 
 /* Respawn actions in modal */
 .respawn-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.session-respawn-actions {
   display: flex;
   gap: 0.5rem;
 }
@@ -4349,59 +4083,6 @@ kbd {
   transition: opacity 0.1s, color 0.1s;
 }
 
-/* Task Panel */
-.task-panel {
-  position: fixed;
-  bottom: var(--toolbar-height);
-  right: 0.5rem;
-  width: 350px;
-  max-width: calc(100vw - 1rem);
-  /* Performance: GPU-accelerated transforms and isolated paint */
-  contain: layout style;
-  will-change: transform;
-  max-height: 50vh;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4);
-  z-index: 100;
-  transform: translateY(100%);
-  transition: transform 0.2s ease;
-  display: flex;
-  flex-direction: column;
-}
-
-.task-panel.open {
-  transform: translateY(0);
-}
-
-.task-panel-header {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.6rem 1rem;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.8rem;
-  font-weight: 500;
-  flex-shrink: 0;
-}
-
-.task-panel-stats {
-  margin-left: auto;
-  font-size: 0.7rem;
-  color: var(--text-dim);
-  padding: 0.2rem 0.5rem;
-  background: var(--bg-input);
-  border-radius: 10px;
-}
-
-.task-panel-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0.5rem;
-}
-
 .task-empty {
   padding: 1rem;
   text-align: center;
@@ -4520,53 +4201,6 @@ kbd {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--border-light);
-}
-
-/* Process Monitor Panel */
-.process-panel {
-  position: fixed;
-  bottom: var(--toolbar-height);
-  left: 0.5rem;
-  width: 400px;
-  max-width: calc(100vw - 1rem);
-  max-height: 50vh;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4);
-  z-index: 100;
-  transform: translateY(100%);
-  transition: transform 0.2s ease;
-  display: flex;
-  flex-direction: column;
-}
-
-.process-panel.open {
-  transform: translateY(0);
-}
-
-.process-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.6rem 1rem;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.8rem;
-  font-weight: 500;
-  flex-shrink: 0;
-}
-
-.process-panel-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.process-panel-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0.5rem;
 }
 
 .process-empty {
@@ -4714,55 +4348,6 @@ kbd {
   color: var(--text);
 }
 
-.monitor-tabs {
-  display: flex;
-  gap: 0.25rem;
-}
-
-.monitor-tab {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  padding: 0.3rem 0.6rem;
-  font-size: 0.75rem;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: all 0.15s;
-}
-
-.monitor-tab:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-}
-
-.monitor-tab.active {
-  color: white;
-  background: var(--accent);
-}
-
-.monitor-tab-badge {
-  display: inline-block;
-  background: var(--success);
-  color: white;
-  font-size: 0.6rem;
-  padding: 0.1rem 0.35rem;
-  border-radius: 8px;
-  margin-left: 0.25rem;
-  font-weight: 600;
-}
-
-.monitor-tab-badge:empty {
-  display: none;
-}
-
-.monitor-tab-content {
-  display: none;
-}
-
-.monitor-tab-content.active {
-  display: flex;
-}
-
 .monitor-panel-actions {
   display: flex;
   align-items: center;
@@ -4863,47 +4448,6 @@ kbd {
 }
 
 /* ========== Subagent Panel (Claude Code Background Agents) ========== */
-
-/* Toolbar button for subagents tab */
-.toolbar-btn-subagents {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  background: var(--bg-hover);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  font-size: 0.75rem;
-  padding: 0.4rem 0.75rem;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.toolbar-btn-subagents:hover {
-  background: var(--bg-card);
-  border-color: var(--accent);
-  color: var(--text);
-}
-
-.toolbar-btn-subagents.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: white;
-}
-
-.toolbar-badge {
-  background: var(--accent);
-  color: white;
-  font-size: 0.65rem;
-  padding: 0.1rem 0.4rem;
-  border-radius: 8px;
-  min-width: 1.2em;
-  text-align: center;
-}
-
-.toolbar-badge:empty {
-  display: none;
-}
 
 /* ========== Separate Subagents Panel ========== */
 .subagents-panel {
@@ -6312,25 +5856,6 @@ kbd {
   cursor: pointer;
 }
 
-/* Custom tooltip for file links */
-.file-link-tooltip {
-  position: fixed;
-  background: var(--bg-card);
-  border: 1px solid var(--accent);
-  border-radius: 4px;
-  padding: 0.3rem 0.5rem;
-  font-size: 0.75rem;
-  color: var(--text);
-  z-index: 10000;
-  pointer-events: none;
-  box-shadow: var(--shadow-md);
-}
-
-.file-link-tooltip::before {
-  content: "📄 Click to stream: ";
-  color: var(--accent);
-}
-
 /* ========== Ralph Loop Wizard ========== */
 
 /* Wizard Progress Indicator */
@@ -6767,26 +6292,9 @@ kbd {
   margin: 0 0 1rem 0;
 }
 
-.plan-skip-btn {
-  opacity: 0.6;
-}
-
-.plan-skip-btn:hover {
-  opacity: 1;
-}
-
 .plan-error-msg {
   color: var(--red);
   margin-bottom: 1rem;
-}
-
-/* Plan Options (detail level, model) */
-.plan-options {
-  display: flex;
-  gap: 1rem;
-  justify-content: center;
-  margin-bottom: 1rem;
-  flex-wrap: wrap;
 }
 
 .plan-option-group {
@@ -6985,10 +6493,6 @@ kbd {
 .plan-stopped-text {
   font-weight: 500;
   color: var(--text);
-}
-
-.plan-actions-single {
-  justify-content: center;
 }
 
 .plan-skip-hint {
@@ -7446,11 +6950,6 @@ kbd {
   font-weight: 500;
 }
 
-.mode-changed {
-  color: var(--accent);
-  font-weight: 500;
-}
-
 /* Plan warnings and gaps display */
 #planWarnings {
   margin-bottom: 0.75rem;
@@ -7762,55 +7261,6 @@ kbd {
   border-color: var(--accent);
 }
 
-/* Verification criteria tooltip expansion */
-.plan-item-verify-expanded {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(100% + 4px);
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0.5rem;
-  font-size: 0.75rem;
-  color: var(--text);
-  z-index: 10;
-  box-shadow: 0 -2px 8px rgba(0,0,0,0.2);
-  max-width: 300px;
-}
-
-.plan-item-verify-expanded::after {
-  content: '';
-  position: absolute;
-  bottom: -6px;
-  left: 50%;
-  transform: translateX(-50%);
-  border: 5px solid transparent;
-  border-top-color: var(--border);
-}
-
-/* Plan toolbar improvements */
-.plan-editor-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.5rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.plan-toolbar-left {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-
-.plan-toolbar-right {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-}
-
 /* Plan item inline actions */
 .plan-item-actions {
   display: flex;
@@ -7907,36 +7357,6 @@ kbd {
   background: var(--accent);
   color: white;
   border-color: var(--accent);
-}
-
-/* Plan version indicator */
-.plan-version-indicator {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  padding: 0.25rem 0.5rem;
-  background: var(--bg-input);
-  border-radius: 4px;
-}
-
-.plan-version-badge {
-  background: var(--accent);
-  color: white;
-  padding: 0.1rem 0.3rem;
-  border-radius: 3px;
-  font-size: 0.65rem;
-  font-weight: 500;
-}
-
-.plan-version-history {
-  cursor: pointer;
-  color: var(--accent);
-}
-
-.plan-version-history:hover {
-  text-decoration: underline;
 }
 
 /* Plan history dropdown */
@@ -8057,27 +7477,6 @@ kbd {
 }
 
 .textarea-with-assist textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-/* Phrase Input Group */
-.phrase-input-group {
-  position: relative;
-}
-
-.phrase-input-group input {
-  width: 100%;
-  padding: 0.5rem 0.75rem;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--text);
-  font-size: 0.85rem;
-  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
-}
-
-.phrase-input-group input:focus {
   outline: none;
   border-color: var(--accent);
 }

@@ -17,7 +17,6 @@ export {
   createAnsiPatternFull,
   createAnsiPatternSimple,
   stripAnsi,
-  stripAnsiSimple,
 } from './regex-patterns.js';
 export {
   MAX_SESSION_TOKENS,
@@ -25,10 +24,7 @@ export {
   validateTokensAndCost,
 } from './token-validation.js';
 export {
-  levenshteinDistance,
   stringSimilarity,
-  isSimilar,
-  isSimilarByDistance,
   normalizePhrase,
   fuzzyPhraseMatch,
   todoContentHash,

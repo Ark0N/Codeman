@@ -13,7 +13,6 @@
 import { EventEmitter } from 'node:events';
 import { Task, CreateTaskOptions } from './task.js';
 import { getStore } from './state-store.js';
-import { TaskState } from './types.js';
 
 /**
  * Events emitted by TaskQueue
@@ -214,16 +213,16 @@ export class TaskQueue extends EventEmitter {
     ) || null;
   }
 
-  /** Gets counts of tasks by status. */
+  /** Gets counts of tasks by status (single-pass). */
   getCount(): { total: number; pending: number; running: number; completed: number; failed: number } {
-    const tasks = this.getAllTasks();
-    return {
-      total: tasks.length,
-      pending: tasks.filter((t) => t.isPending()).length,
-      running: tasks.filter((t) => t.isRunning()).length,
-      completed: tasks.filter((t) => t.isCompleted()).length,
-      failed: tasks.filter((t) => t.isFailed()).length,
-    };
+    let pending = 0, running = 0, completed = 0, failed = 0;
+    for (const task of this.tasks.values()) {
+      if (task.isPending()) pending++;
+      else if (task.isRunning()) running++;
+      else if (task.isCompleted()) completed++;
+      else if (task.isFailed()) failed++;
+    }
+    return { total: this.tasks.size, pending, running, completed, failed };
   }
 
   /** Removes all completed tasks. Returns count removed. */
@@ -260,10 +259,6 @@ export class TaskQueue extends EventEmitter {
     return count;
   }
 
-  /** Gets tasks from persistent storage. */
-  getStoredTasks(): Record<string, TaskState> {
-    return this.store.getTasks();
-  }
 }
 
 // Singleton instance

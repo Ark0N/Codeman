@@ -85,8 +85,6 @@ const NEWLINE_SPLIT_PATTERN = /\r?\n/;
 
 // Claude CLI PATH resolution — shared utility
 import { getAugmentedPath } from './utils/claude-cli-resolver.js';
-// Re-export for backward compatibility (ai-checker-base imports from session)
-export { getAugmentedPath } from './utils/claude-cli-resolver.js';
 
 /**
  * Wraps a promise with a timeout to prevent indefinite hangs.
@@ -193,6 +191,8 @@ export interface SessionEvents {
   bashToolEnd: (tool: ActiveBashTool) => void;
   /** Active Bash tools list updated */
   bashToolsUpdate: (tools: ActiveBashTool[]) => void;
+  /** CLI info (version, model, account) updated */
+  cliInfoUpdated: (info: { version: string | null; model: string | null; accountType: string | null; latestVersion: string | null }) => void;
 }
 
 /**

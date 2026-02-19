@@ -35,7 +35,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1549 (must match `package.json` for npm publish)
+**Version**: 0.1550 (must match `package.json` for npm publish)
 
 ## Project Overview
 
@@ -81,6 +81,10 @@ journalctl --user -u claudeman-web -f
 - **Single-line prompts only** — `writeViaMux()` sends text and Enter separately; multi-line breaks Ink
 - **Don't kill tmux sessions blindly** — Check `$CLAUDEMAN_TMUX` first; you might be inside one
 - **Never run full test suite** — `npx vitest run` spawns/kills tmux sessions and will crash your Claudeman session. Run individual test files only.
+- **Global regex `lastIndex` sharing** — `ANSI_ESCAPE_PATTERN_FULL/SIMPLE` have `g` flag; use `createAnsiPatternFull/Simple()` factory functions for fresh instances in loops
+- **DEC 2026 sync blocks** — Never discard incomplete sync blocks (START without END); buffer up to 50ms then flush. See `app.js:extractSyncSegments()`
+- **Terminal writes during buffer load** — Live SSE writes are queued while `_isLoadingBuffer` is true to prevent interleaving with historical data
+- **Local echo prompt scanning** — Does NOT use `buffer.cursorY` (Ink moves it); scans buffer bottom-up for visible `>` prompt marker
 
 ## Import Conventions
 
@@ -123,12 +127,12 @@ journalctl --user -u claudeman-web -f
 | `src/prompts/*.ts` | Agent prompts (research-agent, code-reviewer, planner) |
 | `src/templates/claude-md.ts` | CLAUDE.md generation for new cases |
 | `src/cli.ts` | Command-line interface handlers |
-| `src/web/server.ts` | Fastify REST API + SSE at `/api/events` |
-| `src/web/schemas.ts` | Zod v4 validation schemas for API request bodies |
-| `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows |
-| `src/types.ts` | All TypeScript interfaces |
+| `src/web/server.ts` | Fastify REST API + SSE at `/api/events` (~90 routes) |
+| `src/web/schemas.ts` | Zod v4 validation schemas with path/env security allowlists |
+| `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~16K lines) |
+| `src/types.ts` | All TypeScript interfaces (~100 types, ~1500 lines) |
 
-**Large files** (>50KB): `ralph-tracker.ts`, `respawn-controller.ts`, `session.ts`, `subagent-watcher.ts` — these contain complex state machines; read `docs/respawn-state-machine.md` before modifying.
+**Large files** (>50KB): `app.js`, `ralph-tracker.ts`, `respawn-controller.ts`, `session.ts`, `subagent-watcher.ts` — these contain complex state machines; read `docs/respawn-state-machine.md` before modifying.
 
 ### Config Files (`src/config/`)
 
@@ -170,18 +174,89 @@ journalctl --user -u claudeman-web -f
 
 **Token tracking**: Interactive mode parses status line ("123.4k tokens"), estimates 60/40 input/output split.
 
-**Hook events**: Claude Code hooks trigger notifications via `/api/hook-event`. Key events: `permission_prompt` (tool approval needed), `elicitation_dialog` (Claude asking question), `idle_prompt` (waiting for input), `stop` (response complete). See `src/hooks-config.ts`.
+**Hook events**: Claude Code hooks trigger notifications via `/api/hook-event`. Key events: `permission_prompt` (tool approval needed), `elicitation_dialog` (Claude asking question), `idle_prompt` (waiting for input), `stop` (response complete), `teammate_idle` (Agent Teams), `task_completed` (Agent Teams). See `src/hooks-config.ts`.
 
 **Agent Teams (experimental)**: `TeamWatcher` polls `~/.claude/teams/` for team configs and matches teams to sessions via `leadSessionId`. Teammates are in-process threads (not separate OS processes) and appear as standard subagents. RespawnController checks `TeamWatcher.hasActiveTeammates()` before triggering respawn. Enable via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` env var in `settings.local.json`. See `agent-teams/` for full docs.
 
+**Circuit breaker**: Prevents respawn thrashing when Claude is stuck. States: `CLOSED` (normal) → `HALF_OPEN` (testing) → `OPEN` (blocked). Tracks consecutive no-progress, same-error-repeated, and tests-failing-too-long. Reset via API at `/api/sessions/:id/ralph-circuit-breaker/reset`.
+
+**Respawn cycle metrics & health scoring**: `RespawnCycleMetrics` tracks per-cycle outcomes (success, stuck_recovery, blocked, error). `RalphLoopHealthScore` computes 0-100 health with component scores (cycleSuccess, circuitBreaker, iterationProgress, aiChecker, stuckRecovery). Available via respawn status API.
+
+**Subagent-session correlation**: Session parses Task tool output via `BashToolParser` → `SubagentWatcher` discovers new agent → calls `session.findTaskDescriptionNear()` to match description for window title.
+
+### Frontend Architecture (`app.js`)
+
+The frontend is a single 16K-line vanilla JS file with these key systems:
+
+| System | Key Classes/Functions | Purpose |
+|--------|----------------------|---------|
+| **Terminal rendering** | `batchTerminalWrite()`, `flushPendingWrites()`, `chunkedTerminalWrite()` | 60fps batched writes with DEC 2026 sync |
+| **Local echo overlay** | `LocalEchoOverlay` class | DOM overlay for instant mobile keystroke feedback |
+| **Mobile support** | `MobileDetection`, `KeyboardHandler`, `SwipeHandler`, `KeyboardAccessoryBar` | Touch input, viewport adaptation, swipe navigation |
+| **Subagent windows** | `openSubagentWindow()`, `closeSubagentWindow()`, `updateConnectionLines()` | Floating terminal windows with parent connection lines |
+| **Notifications** | `NotificationManager` class | 4-layer: in-app drawer, tab flash, browser API, audio beep |
+| **SSE connection** | `connectSSE()`, `addListener()` | EventSource with exponential backoff (1-30s), offline queue (64KB) |
+| **Settings** | `openAppSettings()`, `apply*Visibility()` | Server-backed + localStorage persistence |
+| **Focus management** | `FocusTrap` class | Modal keyboard navigation with focus restore |
+
+**Z-index layers**: subagent windows (1000), plan agents (1100), log viewers (2000), image popups (3000), local echo overlay (7).
+
+**Built-in respawn presets**: `solo-work` (3s idle, 60min), `subagent-workflow` (45s idle, 240min), `team-lead` (90s idle, 480min), `overnight-autonomous` (10s idle, 480min, full reset).
+
+**Keyboard shortcuts**: Escape (close panels), Ctrl+? (help), Ctrl+Enter (quick start), Ctrl+W (kill session), Ctrl+Tab (next session), Ctrl+K (kill all), Ctrl+L (clear), Ctrl+Shift+R (restore size), Ctrl/Cmd +/- (font size).
+
+### Security
+
+- **HTTP Basic Auth**: Optional via `CLAUDEMAN_USERNAME`/`CLAUDEMAN_PASSWORD` env vars
+- **CORS**: Restricted to localhost only
+- **Security headers**: X-Content-Type-Options, X-Frame-Options, CSP; HSTS if HTTPS
+- **Path validation** (`schemas.ts`): Strict allowlist regex, no shell metacharacters, no traversal, must be absolute
+- **Env var allowlist**: Only `CLAUDE_CODE_*` prefixes allowed; blocks `PATH`, `LD_PRELOAD`, `NODE_OPTIONS`, `CLAUDEMAN_*` keys
+- **File streaming TOCTOU protection**: `FileStreamManager` calls `realpathSync()` twice (at validation and before spawn) to catch symlink swaps
+
+### SSE Event Categories
+
+~80+ event types broadcast via `broadcast()`. Key categories:
+
+| Category | Events | Purpose |
+|----------|--------|---------|
+| Session | `session:created/updated/deleted/working/idle/exit/error/completion` | Lifecycle |
+| Terminal | `session:terminal`, `session:clearTerminal`, `session:needsRefresh` | Output streaming |
+| Respawn | `respawn:stateChanged/cycleStarted/blocked/aiCheck*/planCheck*/timer*` | Respawn state machine |
+| Subagent | `subagent:discovered/updated/completed/tool_call/progress` | Background agents |
+| Ralph | `session:ralphLoopUpdate/ralphTodoUpdate/ralphCompletionDetected` | Ralph tracking |
+| Hooks | `hook:{eventName}` (dynamic) | Claude Code hook events |
+| Plan | `plan:started/progress/completed/cancelled/subagent` | Plan orchestration |
+| Mux | `mux:created/killed/died/statsUpdated` | tmux process monitor |
+| Image | `image:detected` | Screenshot detection |
+
+### API Route Categories
+
+~90 routes in `server.ts:buildServer()`. Key groups:
+
+| Group | Prefix | Count | Key endpoints |
+|-------|--------|-------|---------------|
+| Sessions | `/api/sessions` | ~20 | CRUD, input, resize, interactive, shell |
+| Respawn | `/api/sessions/:id/respawn` | 5 | start, stop, enable, config |
+| Ralph | `/api/sessions/:id/ralph-*` | 6 | state, status, config, circuit-breaker |
+| Plan | `/api/sessions/:id/plan/*` | 5 | task CRUD, checkpoint, history, rollback |
+| Subagents | `/api/subagents` | 7 | list, transcript, kill, cleanup |
+| Cases | `/api/cases` | 5 | CRUD, link, fix-plan |
+| Scheduled | `/api/scheduled` | 4 | CRUD for scheduled runs |
+| System | `/api/status`, `/api/stats`, `/api/config`, `/api/settings` | 8 | App state, config |
+| Files | `/api/sessions/:id/file*`, `tail-file` | 5 | Browser, preview, raw, tail stream |
+| Mux | `/api/mux-sessions` | 4 | tmux management, stats |
+
 ## Adding Features
 
-- **API endpoint**: Types in `types.ts`, route in `server.ts:buildServer()`, use `createErrorResponse()`. Validate request bodies with Zod schemas.
-- **SSE event**: Emit via `broadcast()`, handle in `app.js:handleSSEEvent()`
+- **API endpoint**: Types in `types.ts`, route in `server.ts:buildServer()`, use `createErrorResponse()`. Validate request bodies with Zod schemas in `schemas.ts`.
+- **SSE event**: Emit via `broadcast()`, handle in `app.js` SSE listener section (search `addListener(`)
 - **Session setting**: Add to `SessionState` in `types.ts`, include in `session.toState()`, call `persistSessionState()`
-- **New test**: Pick unique port (see below), add port comment to test file header
+- **Hook event**: Add to `HookEventType` in `types.ts`, add hook command in `hooks-config.ts:generateHooksConfig()`, update `HookEventSchema` in `schemas.ts`
+- **Mobile feature**: Add to relevant mobile singleton (`KeyboardHandler`, `KeyboardAccessoryBar`, etc.), test with `MobileDetection.isMobile()` guard
+- **New test**: Pick unique port (search `const PORT =`), add port comment to test file header. Tests use ports 3150+.
 
-**Validation**: Uses Zod v4 for request validation. Define schemas near route handlers and use `.parse()` or `.safeParse()`. Note: Zod v4 has different API from v3 (e.g., `z.object()` options changed, error formatting differs).
+**Validation**: Uses Zod v4 for request validation. Define schemas in `schemas.ts` and use `.parse()` or `.safeParse()`. Note: Zod v4 has different API from v3 (e.g., `z.object()` options changed, error formatting differs).
 
 ## State Files
 
@@ -261,7 +336,10 @@ The app must stay fast with 20 sessions and 50 agent windows:
 - 60fps terminal (16ms batching + `requestAnimationFrame`)
 - Auto-trimming buffers (2MB terminal max)
 - Debounced state persistence (500ms)
-- SSE batching (16ms)
+- SSE adaptive batching: 16ms (normal), 32ms (moderate), 50ms (rapid); immediate flush at 32KB
+- SSE backpressure handling: skip writes to backpressured clients, recover via `session:needsRefresh` on drain
+- Cached endpoints: `/api/sessions` and `/api/status` use 1s TTL caches to avoid expensive serialization
+- Frontend buffer loads: 128KB chunks via `requestAnimationFrame` to prevent UI jank
 
 ## Terminal Anti-Flicker System
 
@@ -319,6 +397,11 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Plan orchestrator** | `src/plan-orchestrator.ts` file header |
 | **Agent prompts** | `src/prompts/` directory |
 | **Agent Teams (experimental)** | `agent-teams/README.md`, `agent-teams/design.md` |
+| **Local echo overlay** | `docs/local-echo-overlay-plan.md` |
+| **Browser testing** | `docs/browser-testing-guide.md` |
+| **Mobile testing** | `docs/mobile-testing-report.md` |
+| **Run summary design** | `docs/run-summary-plan.md` |
+| **Performance audit** | `docs/perf-audit-first-load.md` |
 
 ## Scripts
 
@@ -339,6 +422,7 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | `scripts/test-links-browser.mjs` | Browser test for clickable terminal file links |
 | `scripts/test-patterns.mjs` | Test file path link detection regex patterns |
 | `scripts/watch-subagents.ts` | Real-time subagent transcript watcher (list, follow by session/agent ID) |
+| `scripts/capture-readme-screenshots.mjs` | Capture screenshots for README |
 | `scripts/claudeman-web.service` | systemd service file for production deployment |
 
 ## Memory Leak Prevention
@@ -351,9 +435,9 @@ When adding new event listeners or timers:
 2. Add cleanup to appropriate `stop()` or `cleanup*()` method
 3. For singleton watchers, store refs in class properties and remove in server `stop()`
 
-**Backend**: Clear Maps in `stop()`, null promise callbacks on error, remove watcher listeners on shutdown.
+**Backend**: Clear Maps in `stop()`, null promise callbacks on error, remove watcher listeners on shutdown. Use `CleanupManager` for centralized disposal — supports timers, intervals, watchers, listeners, streams. Guard async callbacks with `if (this.cleanup.isStopped) return`.
 
-**Frontend**: Store drag/resize handlers on elements, clean up in `close*()` functions. SSE reconnect calls `handleInit()` which resets state.
+**Frontend**: Store drag/resize handlers on elements, clean up in `close*()` functions. SSE reconnect calls `handleInit()` which resets state. SSE listeners are tracked in an array and removed on reconnect to prevent accumulation.
 
 Run `npx vitest run test/memory-leak-prevention.test.ts` to verify patterns.
 
@@ -364,3 +448,7 @@ Run `npx vitest run test/memory-leak-prevention.test.ts` to verify patterns.
 **Adding a new API endpoint**: Define types in `types.ts`, add route in `server.ts:buildServer()`, broadcast SSE events if needed, handle in `app.js:handleSSEEvent()`.
 
 **Modifying respawn behavior**: Study `docs/respawn-state-machine.md` first. The state machine is in `respawn-controller.ts`. Use MockSession from `test/respawn-test-utils.ts` for testing.
+
+**Modifying mobile behavior**: Mobile singletons (`MobileDetection`, `KeyboardHandler`, `SwipeHandler`, `KeyboardAccessoryBar`) all have `init()`/`cleanup()` lifecycle. KeyboardHandler uses `visualViewport` API for iOS keyboard detection (100px threshold for address bar drift). All mobile handlers are re-initialized after SSE reconnect to prevent stale closures.
+
+**Adding a file watcher**: Use `ImageWatcher` as a template pattern — chokidar with `awaitWriteFinish`, burst throttling (max 20/10s), debouncing (200ms), and auto-ignore of `node_modules/.git/dist/`.

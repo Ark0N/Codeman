@@ -112,9 +112,6 @@ export class RunSummaryTracker {
     this.events.push(event);
     this.lastUpdatedAt = event.timestamp;
 
-    // Update stats based on event type
-    this.updateStatsFromEvent(event);
-
     // Trim if needed
     if (this.events.length > MAX_EVENTS) {
       this.events = this.events.slice(-TRIM_TO_EVENTS);
@@ -393,11 +390,6 @@ export class RunSummaryTracker {
   }
 
   // ========== Private Methods ==========
-
-  private updateStatsFromEvent(_event: RunSummaryEvent): void {
-    // Most stats are updated in the specific record* methods
-    // This is for any additional cross-cutting concerns
-  }
 
   private startStateStuckDetection(): void {
     this.stateStuckCheckTimer = setInterval(() => {

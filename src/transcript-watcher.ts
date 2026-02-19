@@ -291,54 +291,41 @@ export class TranscriptWatcher extends EventEmitter {
       }
 
       const entries: TranscriptEntry[] = [];
-      // Read raw buffer to detect actual line endings (LF vs CRLF)
       const transcriptPath = this.transcriptPath;
-      let rawChunks: Buffer[] = [];
-      const rawStream = createReadStream(transcriptPath, {
+
+      const stream = createReadStream(transcriptPath, {
         start: this.filePosition,
+        encoding: 'utf-8',
       });
-      rawStream.on('data', (chunk: Buffer | string) => rawChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-      rawStream.on('end', () => {
-        // Detect if file uses CRLF
-        const raw = Buffer.concat(rawChunks);
-        rawChunks = []; // Free memory
-        const hasCRLF = raw.includes(0x0d); // 0x0d = \r
-        const lineEndingSize = hasCRLF ? 2 : 1;
 
-        const stream = createReadStream(transcriptPath, {
-          start: this.filePosition,
-          encoding: 'utf-8',
-        });
-
-        const rl = createInterface({
-          input: stream,
-          crlfDelay: Infinity,
-        });
-
-        let bytesRead = this.filePosition;
-
-        rl.on('line', (line) => {
-          bytesRead += Buffer.byteLength(line, 'utf-8') + lineEndingSize;
-
-          if (!line.trim()) return;
-
-          try {
-            const entry = JSON.parse(line) as TranscriptEntry;
-            entries.push(entry);
-          } catch {
-            // Skip malformed lines
-          }
-        });
-
-        rl.on('close', () => {
-          this.filePosition = bytesRead;
-          resolve(entries);
-        });
-
-        rl.on('error', reject);
-        stream.on('error', reject);
+      const rl = createInterface({
+        input: stream,
+        crlfDelay: Infinity, // Handles both LF and CRLF
       });
-      rawStream.on('error', reject);
+
+      rl.on('line', (line) => {
+        if (!line.trim()) return;
+
+        try {
+          const entry = JSON.parse(line) as TranscriptEntry;
+          entries.push(entry);
+        } catch {
+          // Skip malformed lines
+        }
+      });
+
+      rl.on('close', () => {
+        // Update position to current file size (accounts for any line ending style)
+        try {
+          this.filePosition = statSync(transcriptPath).size;
+        } catch {
+          // File may have been deleted between read and stat
+        }
+        resolve(entries);
+      });
+
+      rl.on('error', reject);
+      stream.on('error', reject);
     });
   }
 
