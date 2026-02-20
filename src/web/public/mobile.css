@@ -884,6 +884,15 @@ html.mobile-init .file-browser-panel {
     flex-direction: column;
   }
 
+  /* Small modals (confirmations, dialogs) — auto-height, not full-screen */
+  .modal-content.modal-sm {
+    height: auto;
+    max-height: 85vh;
+    border-radius: 12px;
+    margin: 1rem;
+    width: calc(100% - 2rem);
+  }
+
   /* Modal safe area padding - all sides for full-screen modals */
   .ios-device .modal-content {
     padding-top: var(--safe-area-top);
