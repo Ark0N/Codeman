@@ -2990,6 +2990,8 @@ body {
   border-radius: 6px;
   border-left: 2px solid var(--border);
   transition: background 0.15s;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 40px;
 }
 
 .timeline-event:hover {
@@ -3874,6 +3876,8 @@ kbd {
   cursor: pointer;
   transition: background 0.15s;
   animation: notif-slide-in 0.2s ease;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 60px;
 }
 
 .notif-item:hover {
@@ -4631,6 +4635,8 @@ kbd {
   margin-bottom: 0.4rem;
   cursor: pointer;
   transition: background 0.15s;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 48px;
 }
 
 .subagent-item:hover {
@@ -5731,6 +5737,8 @@ kbd {
 
 .log-viewer-window-body .log-line {
   padding: 0.1rem 0;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 20px;
 }
 
 .log-viewer-window-body .log-error {

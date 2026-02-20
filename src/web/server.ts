@@ -632,11 +632,13 @@ export class WebServer extends EventEmitter {
     });
 
     // Serve static files — versioned assets (?v=X) are immutable, cache aggressively
+    // preCompressed: serve pre-built .br/.gz files (from build step) to avoid per-request CPU compression
     await this.app.register(fastifyStatic, {
       root: join(__dirname, 'public'),
       prefix: '/',
       maxAge: '1y',
       immutable: true,
+      preCompressed: true,
     });
 
     // SSE endpoint for real-time updates
@@ -1756,32 +1758,15 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
-      // Clean the buffer: remove junk before actual Claude content
-      let cleanBuffer = session.terminalBuffer;
-
-      // Find where Claude banner starts (has color codes before "Claude")
-      const claudeMatch = cleanBuffer.match(CLAUDE_BANNER_PATTERN);
-      if (claudeMatch && claudeMatch.index !== undefined && claudeMatch.index > 0) {
-        // Find the start of that line
-        let lineStart = claudeMatch.index;
-        while (lineStart > 0 && cleanBuffer[lineStart - 1] !== '\n') {
-          lineStart--;
-        }
-        cleanBuffer = cleanBuffer.slice(lineStart);
-      }
-
-      // Remove Ctrl+L and leading whitespace
-      cleanBuffer = cleanBuffer
-        .replace(CTRL_L_PATTERN, '')
-        .replace(LEADING_WHITESPACE_PATTERN, '');
-
-      // Optionally truncate to last N bytes for faster initial load
       const tailBytes = query.tail ? parseInt(query.tail, 10) : 0;
-      const fullSize = cleanBuffer.length;
+      const fullSize = session.terminalBufferLength;
       let truncated = false;
+      let cleanBuffer: string;
 
-      if (tailBytes > 0 && cleanBuffer.length > tailBytes) {
-        cleanBuffer = cleanBuffer.slice(-tailBytes);
+      if (tailBytes > 0 && fullSize > tailBytes) {
+        // Fast path: tail from the end, skip expensive banner search on full 2MB buffer.
+        // Banner is near the top and gets discarded by tail anyway.
+        cleanBuffer = session.terminalBuffer.slice(-tailBytes);
         truncated = true;
         // Avoid starting mid-ANSI-escape: find first newline within the first 4KB
         // and start from there. This prevents xterm.js from parsing a partial escape
@@ -1790,7 +1775,25 @@ export class WebServer extends EventEmitter {
         if (firstNewline > 0 && firstNewline < 4096) {
           cleanBuffer = cleanBuffer.slice(firstNewline + 1);
         }
+      } else {
+        // Full buffer: clean junk before actual Claude content
+        cleanBuffer = session.terminalBuffer;
+
+        // Find where Claude banner starts (has color codes before "Claude")
+        const claudeMatch = cleanBuffer.match(CLAUDE_BANNER_PATTERN);
+        if (claudeMatch && claudeMatch.index !== undefined && claudeMatch.index > 0) {
+          let lineStart = claudeMatch.index;
+          while (lineStart > 0 && cleanBuffer[lineStart - 1] !== '\n') {
+            lineStart--;
+          }
+          cleanBuffer = cleanBuffer.slice(lineStart);
+        }
       }
+
+      // Remove Ctrl+L and leading whitespace (cheap on tailed subset)
+      cleanBuffer = cleanBuffer
+        .replace(CTRL_L_PATTERN, '')
+        .replace(LEADING_WHITESPACE_PATTERN, '');
 
       return {
         terminalBuffer: cleanBuffer,

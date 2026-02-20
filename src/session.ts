@@ -467,6 +467,10 @@ export class Session extends EventEmitter {
     return this._terminalBuffer.value;
   }
 
+  get terminalBufferLength(): number {
+    return this._terminalBuffer.length;
+  }
+
   get textOutput(): string {
     return this._textOutput.value;
   }

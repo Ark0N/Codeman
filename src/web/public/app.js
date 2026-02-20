@@ -33,6 +33,15 @@ const WINDOW_MIN_WIDTH_PX = 200;
 const WINDOW_MIN_HEIGHT_PX = 200;
 const WINDOW_DEFAULT_WIDTH_PX = 300;
 
+// Scheduler API — prioritize terminal writes over background UI updates.
+// scheduler.postTask('background') defers non-critical work (connection lines, panel renders)
+// so the main thread stays free for terminal rendering at 60fps.
+const _hasScheduler = typeof globalThis.scheduler?.postTask === 'function';
+function scheduleBackground(fn) {
+  if (_hasScheduler) { scheduler.postTask(fn, { priority: 'background' }); }
+  else { requestAnimationFrame(fn); }
+}
+
 // DEC mode 2026 - Synchronized Output
 // Wrap terminal writes with these markers to prevent partial-frame flicker.
 // Terminal buffers all output between markers and renders atomically.
@@ -1871,6 +1880,16 @@ class ClaudemanApp {
 
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
+
+    // Activate WebGL renderer for up to 900% faster rendering (fallback to canvas on failure)
+    if (typeof WebglAddon !== 'undefined') {
+      try {
+        const webglAddon = new WebglAddon.WebglAddon();
+        webglAddon.onContextLoss(() => { webglAddon.dispose(); });
+        this.terminal.loadAddon(webglAddon);
+      } catch (_e) { /* WebGL2 unavailable — canvas renderer used */ }
+    }
+
     this._localEchoOverlay = new LocalEchoOverlay(this.terminal);
 
     // On mobile Safari, delay initial fit() to allow layout to settle
@@ -3624,6 +3643,16 @@ class ClaudemanApp {
           this.subagentToolResults.delete(data.agentId);
         }
       }, 5 * 60 * 1000); // 5 minutes
+
+      // Prune stale completed agents from main maps after 30 minutes
+      // Keeps subagents/subagentParentMap from growing unbounded in 24h sessions
+      setTimeout(() => {
+        const agent = this.subagents.get(data.agentId);
+        if (agent?.status === 'completed' && !this.subagentWindows.has(data.agentId)) {
+          this.subagents.delete(data.agentId);
+          this.subagentParentMap.delete(data.agentId);
+        }
+      }, 30 * 60 * 1000); // 30 minutes
     });
 
     // ========== Image Detection Events (Screenshots & Generated Images) ==========
@@ -12399,7 +12428,7 @@ class ClaudemanApp {
       clearTimeout(this._subagentPanelRenderTimeout);
     }
     this._subagentPanelRenderTimeout = setTimeout(() => {
-      this._renderSubagentPanelImmediate();
+      scheduleBackground(() => this._renderSubagentPanelImmediate());
     }, 150);
   }
 
@@ -12902,10 +12931,11 @@ class ClaudemanApp {
   // This map stores agentId -> sessionId, where sessionId is the tab's data-id.
 
   updateConnectionLines() {
-    // Coalesce multiple calls within the same frame into a single rAF
+    // Coalesce multiple calls — uses background scheduler priority to avoid
+    // competing with terminal writes for main thread time
     if (!this._connectionLinesScheduled) {
       this._connectionLinesScheduled = true;
-      requestAnimationFrame(() => {
+      scheduleBackground(() => {
         this._connectionLinesScheduled = false;
         this._updateConnectionLinesImmediate();
       });
