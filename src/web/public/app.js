@@ -2008,6 +2008,34 @@ class ClaudemanApp {
       }
     };
 
+    // Background keystroke forwarding for local echo mode.
+    // Sends keystrokes to the PTY in the background (50ms debounce) so Tab
+    // completion works and tab-switching doesn't lose PTY state.
+    this._localEchoBgBuffer = '';
+    this._localEchoBgTimer = null;
+
+    const drainBgBuffer = () => {
+      if (this._localEchoBgTimer) {
+        clearTimeout(this._localEchoBgTimer);
+        this._localEchoBgTimer = null;
+      }
+      const buf = this._localEchoBgBuffer;
+      this._localEchoBgBuffer = '';
+      return buf;
+    };
+
+    const scheduleBgFlush = () => {
+      if (this._localEchoBgTimer) return;
+      this._localEchoBgTimer = setTimeout(() => {
+        this._localEchoBgTimer = null;
+        const buf = this._localEchoBgBuffer;
+        this._localEchoBgBuffer = '';
+        if (buf && this.activeSessionId) {
+          this._sendInputAsync(this.activeSessionId, buf);
+        }
+      }, 50);
+    };
+
     this.terminal.onData((data) => {
       if (this.activeSessionId) {
         // Filter out terminal query responses that xterm.js generates automatically.
@@ -2017,41 +2045,43 @@ class ClaudemanApp {
         if (/^\x1b\[[\?>=]?[\d;]*[cnR]$/.test(data)) return;
 
         // ── Local Echo Mode ──
-        // When enabled, keystrokes are captured locally in the overlay.
-        // Nothing is sent to the server until Enter is pressed.
-        // This guarantees what the user sees is exactly what gets sent.
+        // When enabled, keystrokes are captured locally in the overlay for
+        // instant visual feedback AND sent to the PTY in the background
+        // (50ms debounce) so Tab completion and tab-switching work.
         if (this._localEchoEnabled) {
           if (data === '\x7f') {
-            // Backspace: remove last char from overlay (not sent to server)
+            // Backspace: remove last char from overlay, send \x7f to PTY in background
             this._localEchoOverlay?.removeChar();
+            this._localEchoBgBuffer += '\x7f';
+            scheduleBgFlush();
             return;
           }
           if (/^[\r\n]+$/.test(data)) {
-            // Enter: send text first, then \r separately (like sendCommand does for /init).
-            // Ink needs them as distinct events — sending "text\r" in one shot causes newline.
-            const text = this._localEchoOverlay?.pendingText || '';
+            // Enter: drain any background-buffered chars, then send \r after 120ms.
+            // PTY already has the text from background sends; drain catches any remainder.
             this._localEchoOverlay?.clear();
             if (this._inputFlushTimeout) {
               clearTimeout(this._inputFlushTimeout);
               this._inputFlushTimeout = null;
             }
-            if (text) {
-              this._pendingInput += text;
-              flushInput();
-              setTimeout(() => {
-                this._pendingInput += '\r';
-                flushInput();
-              }, 120);
-            } else {
-              // No text in overlay — just send Enter
-              this._pendingInput += '\r';
+            const remainder = drainBgBuffer();
+            if (remainder) {
+              this._pendingInput += remainder;
               flushInput();
             }
+            setTimeout(() => {
+              this._pendingInput += '\r';
+              flushInput();
+            }, 120);
             return;
           }
           if (data.charCodeAt(0) < 32 || data.length > 1) {
-            // Other control chars (Ctrl+C, escape sequences): send raw, clear overlay
+            // Other control chars (Ctrl+C, escape, paste): clear overlay, drain bg, send immediately
             this._localEchoOverlay?.clear();
+            const remainder = drainBgBuffer();
+            if (remainder) {
+              this._pendingInput += remainder;
+            }
             this._pendingInput += data;
             if (this._inputFlushTimeout) {
               clearTimeout(this._inputFlushTimeout);
@@ -2061,8 +2091,10 @@ class ClaudemanApp {
             return;
           }
           if (data.length === 1 && data.charCodeAt(0) >= 32) {
-            // Printable char: add to overlay only (not sent to server)
+            // Printable char: add to overlay + queue for background send to PTY
             this._localEchoOverlay?.addChar(data);
+            this._localEchoBgBuffer += data;
+            scheduleBgFlush();
             return;
           }
         }
@@ -2365,6 +2397,16 @@ class ClaudemanApp {
       const echoEnabled = settings.localEchoEnabled ?? true;
       const shouldEnable = !!(echoEnabled && session);
       if (this._localEchoEnabled && !shouldEnable) {
+          // Flush background-buffered keystrokes before disabling
+          if (this.activeSessionId && this._localEchoBgBuffer) {
+            const remainder = this._localEchoBgBuffer;
+            if (this._localEchoBgTimer) {
+              clearTimeout(this._localEchoBgTimer);
+              this._localEchoBgTimer = null;
+            }
+            this._localEchoBgBuffer = '';
+            this._sendInputAsync(this.activeSessionId, remainder);
+          }
           this._localEchoOverlay?.clear();
       }
       this._localEchoEnabled = shouldEnable;
@@ -4530,6 +4572,16 @@ class ClaudemanApp {
     this.writeFrameScheduled = false;
     this._isLoadingBuffer = false;
     this._loadBufferQueue = null;
+    // Flush any background-buffered keystrokes to the outgoing session's PTY
+    if (this.activeSessionId && this._localEchoBgBuffer) {
+      const remainder = this._localEchoBgBuffer;
+      if (this._localEchoBgTimer) {
+        clearTimeout(this._localEchoBgTimer);
+        this._localEchoBgTimer = null;
+      }
+      this._localEchoBgBuffer = '';
+      this._sendInputAsync(this.activeSessionId, remainder);
+    }
     // Save local echo text for outgoing session before clear destroys it
     if (this.activeSessionId) {
       const echoText = this._localEchoOverlay?.pendingText || '';
@@ -4709,6 +4761,12 @@ class ClaudemanApp {
     this.terminalBuffers.delete(sessionId);
     this.terminalBufferCache.delete(sessionId);
     this.localEchoTextCache.delete(sessionId);
+    // Cancel orphaned background echo timer (discard — session is gone)
+    if (this._localEchoBgTimer) {
+      clearTimeout(this._localEchoBgTimer);
+      this._localEchoBgTimer = null;
+      this._localEchoBgBuffer = '';
+    }
     this._inputQueue.delete(sessionId);
     this.ralphStates.delete(sessionId);
     this.ralphClosedSessions.delete(sessionId);
