@@ -880,6 +880,8 @@ html.mobile-init .file-browser-panel {
     max-height: 100%;
     border-radius: 0;
     margin: 0;
+    display: flex;
+    flex-direction: column;
   }
 
   /* Modal safe area padding - all sides for full-screen modals */
@@ -901,7 +903,9 @@ html.mobile-init .file-browser-panel {
   .modal-body {
     padding: 0.75rem 1rem;
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .modal-footer,
@@ -1090,31 +1094,32 @@ html.mobile-init .file-browser-panel {
     align-items: stretch;
   }
 
-  /* Enable/Stop buttons — full-width touch targets */
+  /* Enable/Stop buttons — compact inline */
   .respawn-header .respawn-actions {
     display: flex;
-    gap: 0.5rem;
+    gap: 0.4rem;
   }
 
   .respawn-header .respawn-actions .btn-toolbar {
     flex: 1;
-    min-height: 44px !important;
-    font-size: 0.85rem !important;
-    border-radius: 8px;
+    min-height: 32px !important;
+    font-size: 0.75rem !important;
+    padding: 0.3rem 0.6rem !important;
+    border-radius: 6px;
   }
 
-  /* Duration preset buttons — 44px touch targets in a grid */
+  /* Duration preset buttons — compact grid */
   .duration-presets {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 0.4rem;
+    gap: 0.3rem;
   }
 
   .duration-preset-btn {
-    min-height: 40px;
-    padding: 0.5rem 0.4rem;
-    font-size: 0.8rem;
-    border-radius: 8px;
+    min-height: 30px;
+    padding: 0.3rem 0.3rem;
+    font-size: 0.7rem;
+    border-radius: 6px;
     text-align: center;
   }
 
@@ -1122,12 +1127,12 @@ html.mobile-init .file-browser-panel {
   .duration-custom {
     grid-column: 1 / -1;
     flex-wrap: wrap;
-    gap: 0.4rem;
+    gap: 0.3rem;
   }
 
   .duration-custom .duration-preset-btn {
     flex: 0 0 auto;
-    min-width: 80px;
+    min-width: 60px;
   }
 
   .duration-custom-input.visible {
@@ -1136,50 +1141,51 @@ html.mobile-init .file-browser-panel {
 
   .duration-custom-input input {
     width: 100%;
-    min-height: 40px;
+    min-height: 30px;
     font-size: 16px; /* Prevents iOS zoom */
   }
 
-  /* Preset selector row — stack vertically */
+  /* Preset selector row — compact inline */
   .preset-selector {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.4rem;
+    gap: 0.3rem;
   }
 
   .preset-selector select {
     width: 100%;
-    min-height: 40px;
+    min-height: 32px;
     font-size: 16px; /* Prevents iOS zoom */
-    border-radius: 8px;
+    border-radius: 6px;
   }
 
   .preset-selector .btn {
     flex: 1;
-    min-height: 40px;
-    font-size: 0.8rem;
-    border-radius: 8px;
+    min-height: 30px;
+    font-size: 0.7rem;
+    border-radius: 6px;
   }
 
-  /* Textareas — prevent iOS zoom with 16px font */
+  /* Textareas — prevent iOS zoom with 16px font, compact height */
   #sessionOptionsModal textarea {
     font-size: 16px;
-    min-height: 56px;
-    border-radius: 8px;
-    padding: 0.5rem 0.75rem;
+    min-height: 36px !important;
+    max-height: 64px;
+    border-radius: 6px;
+    padding: 0.35rem 0.6rem;
   }
 
-  /* Checkboxes — larger touch area */
+  /* Checkboxes — compact touch area */
   #sessionOptionsModal .checkbox-inline {
-    min-height: 40px;
-    font-size: 0.85rem;
-    padding: 0.25rem 0;
-    gap: 0.5rem;
+    min-height: 30px;
+    font-size: 0.75rem;
+    padding: 0.15rem 0;
+    gap: 0.4rem;
   }
 
   #sessionOptionsModal .checkbox-inline input[type="checkbox"] {
-    width: 20px;
-    height: 20px;
+    width: 18px;
+    height: 18px;
   }
 
   /* Respawn options row — stack if needed */
@@ -1187,10 +1193,153 @@ html.mobile-init .file-browser-panel {
     gap: 0.5rem;
   }
 
-  /* Form section headers — more breathing room */
+  /* Form section headers — compact on mobile */
   #sessionOptionsModal .form-section-header {
+    margin-top: 0.75rem;
+    padding-top: 0.5rem;
+    font-size: 0.65rem;
+  }
+
+  /* Form rows — tighter spacing */
+  #sessionOptionsModal .form-row {
+    margin-bottom: 0.5rem;
+  }
+
+  #sessionOptionsModal .form-row label {
+    font-size: 0.65rem;
+    margin-bottom: 0.2rem;
+  }
+
+  /* Form hints — compact */
+  #sessionOptionsModal .form-hint {
+    font-size: 0.6rem;
+    margin-top: 0.2rem;
+  }
+
+  /* ---- Context Tab: Mobile Optimizations ---- */
+
+  /* Context settings cards — tighter padding */
+  .context-setting {
+    padding: 0.625rem;
+  }
+
+  /* Stack context setting header vertically on narrow screens */
+  .context-setting-header {
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .context-setting-header .input-suffix-sm input {
+    width: 60px;
+    font-size: 16px; /* Prevents iOS zoom */
+    min-height: 36px;
+  }
+
+  .context-setting input[type="text"] {
+    font-size: 16px; /* Prevents iOS zoom */
+    min-height: 36px;
+    padding: 0.4rem 0.6rem;
+    border-radius: 6px;
+  }
+
+  /* Color picker — larger swatches for touch */
+  .color-picker {
+    gap: 8px;
+  }
+
+  .color-swatch {
+    width: 36px;
+    height: 36px;
+    border-radius: 6px;
+  }
+
+  /* Toggle switches — larger touch area */
+  .form-row-switch {
+    min-height: 40px;
+    gap: 0.4rem;
+  }
+
+  /* Number inputs in context tab — prevent iOS zoom */
+  .context-settings-grid input[type="number"] {
+    font-size: 16px;
+    min-height: 36px;
+  }
+
+  /* ---- Ralph Tab: Mobile Optimizations ---- */
+
+  /* Ralph limits grid — 2 columns on mobile */
+  .ralph-limits-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+  }
+
+  .ralph-limits-grid .form-col input[type="number"] {
+    font-size: 16px; /* Prevents iOS zoom */
+    min-height: 36px;
+    padding: 0.4rem 0.5rem;
+    border-radius: 6px;
+  }
+
+  /* Ralph phrase input — prevent iOS zoom */
+  #modalRalphPhrase {
+    font-size: 16px;
+    min-height: 40px;
+    border-radius: 6px;
+  }
+
+  /* Save button — full width, proper touch target */
+  .ralph-config-actions {
     margin-top: 1rem;
-    padding-top: 0.75rem;
+  }
+
+  .ralph-config-actions .btn-toolbar {
+    width: 100%;
+    min-height: 44px;
+    font-size: 0.85rem;
+    border-radius: 8px;
+  }
+
+  /* ---- Summary Tab: Mobile Optimizations ---- */
+
+  /* Filter buttons — larger touch targets */
+  .run-summary-filters {
+    gap: 0.3rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .filter-btn {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.7rem;
+    min-height: 32px;
+  }
+
+  /* Timeline events — tighter on mobile */
+  .timeline-event {
+    padding: 0.4rem 0.5rem;
+    margin-bottom: 0.25rem;
+    font-size: 0.7rem;
+  }
+
+  /* Summary footer — stack vertically */
+  .run-summary-footer {
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.5rem 0;
+  }
+
+  .run-summary-actions {
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+
+  .run-summary-actions .btn-toolbar {
+    flex: 1;
+    min-height: 36px;
+    font-size: 0.7rem;
+    white-space: nowrap;
+  }
+
+  .auto-refresh-label {
     font-size: 0.7rem;
   }
 

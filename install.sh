@@ -298,21 +298,25 @@ run_as_root() {
     fi
 }
 
-install_node_macos() {
-    info "Installing Node.js via Homebrew..."
-
-    if ! command -v brew &>/dev/null; then
-        info "Installing Homebrew first..."
-        /bin/bash -c "$(download_to_stdout https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-        # Add Homebrew to PATH for Apple Silicon
-        if [[ -f /opt/homebrew/bin/brew ]]; then
-            eval "$(/opt/homebrew/bin/brew shellenv)"
-        elif [[ -f /usr/local/bin/brew ]]; then
-            eval "$(/usr/local/bin/brew shellenv)"
-        fi
+ensure_homebrew() {
+    if command -v brew &>/dev/null; then
+        return 0
     fi
 
+    info "Installing Homebrew first..."
+    /bin/bash -c "$(download_to_stdout https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+    # Add Homebrew to PATH for Apple Silicon
+    if [[ -f /opt/homebrew/bin/brew ]]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [[ -f /usr/local/bin/brew ]]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+    fi
+}
+
+install_node_macos() {
+    info "Installing Node.js via Homebrew..."
+    ensure_homebrew
     brew install node
 }
 
@@ -344,9 +348,25 @@ install_node_fedora() {
 
     ensure_sudo
 
-    # Use NodeSource for consistent version across Fedora versions
-    download_to_stdout "https://rpm.nodesource.com/setup_$TARGET_NODE_VERSION.x" | run_as_root bash -
-    run_as_root dnf install -y nodejs
+    # Import NodeSource GPG key
+    run_as_root rpm --import https://rpm.nodesource.com/gpgkey/nodesource-repo.gpg.key
+
+    # Create repo file (replaces deprecated setup_XX.x bash script)
+    cat << REPO_EOF | run_as_root tee /etc/yum.repos.d/nodesource.repo > /dev/null
+[nodesource]
+name=Node.js Packages for Linux RPM - nodesource
+baseurl=https://rpm.nodesource.com/pub_${TARGET_NODE_VERSION}.x/nodistro/rpm/\$basearch
+gpgcheck=1
+gpgkey=https://rpm.nodesource.com/gpgkey/nodesource-repo.gpg.key
+enabled=1
+REPO_EOF
+
+    # Use dnf if available (RHEL 8+, Fedora, AL2023), fall back to yum (RHEL 7, AL2)
+    if command -v dnf &>/dev/null; then
+        run_as_root dnf install -y nodejs
+    else
+        run_as_root yum install -y nodejs
+    fi
 }
 
 install_node_arch() {
@@ -367,6 +387,7 @@ install_node_arch() {
 install_node_alpine() {
     info "Installing Node.js via apk..."
 
+    ensure_sudo
     run_as_root apk add --no-cache nodejs npm
 
     # Verify version
@@ -383,13 +404,25 @@ install_node_suse() {
 
     ensure_sudo
 
-    # Use NodeSource for openSUSE
-    download_to_stdout "https://rpm.nodesource.com/setup_$TARGET_NODE_VERSION.x" | run_as_root bash -
+    # Import NodeSource GPG key
+    run_as_root rpm --import https://rpm.nodesource.com/gpgkey/nodesource-repo.gpg.key
+
+    # Create repo file (replaces deprecated setup_XX.x bash script)
+    cat << REPO_EOF | run_as_root tee /etc/zypp/repos.d/nodesource.repo > /dev/null
+[nodesource]
+name=Node.js Packages for Linux RPM - nodesource
+baseurl=https://rpm.nodesource.com/pub_${TARGET_NODE_VERSION}.x/nodistro/rpm/\$basearch
+gpgcheck=1
+gpgkey=https://rpm.nodesource.com/gpgkey/nodesource-repo.gpg.key
+enabled=1
+REPO_EOF
+
     run_as_root zypper install -y nodejs
 }
 
 install_tmux_macos() {
     info "Installing tmux via Homebrew..."
+    ensure_homebrew
     brew install tmux
 }
 
@@ -401,9 +434,13 @@ install_tmux_debian() {
 }
 
 install_tmux_fedora() {
-    info "Installing tmux via dnf..."
+    info "Installing tmux..."
     ensure_sudo
-    run_as_root dnf install -y tmux
+    if command -v dnf &>/dev/null; then
+        run_as_root dnf install -y tmux
+    else
+        run_as_root yum install -y tmux
+    fi
 }
 
 install_tmux_arch() {
@@ -414,6 +451,7 @@ install_tmux_arch() {
 
 install_tmux_alpine() {
     info "Installing tmux via apk..."
+    ensure_sudo
     run_as_root apk add --no-cache tmux
 }
 
@@ -425,6 +463,7 @@ install_tmux_suse() {
 
 install_git_macos() {
     info "Installing Git via Homebrew..."
+    ensure_homebrew
     brew install git
 }
 
@@ -436,9 +475,13 @@ install_git_debian() {
 }
 
 install_git_fedora() {
-    info "Installing Git via dnf..."
+    info "Installing Git..."
     ensure_sudo
-    run_as_root dnf install -y git
+    if command -v dnf &>/dev/null; then
+        run_as_root dnf install -y git
+    else
+        run_as_root yum install -y git
+    fi
 }
 
 install_git_arch() {
@@ -449,6 +492,7 @@ install_git_arch() {
 
 install_git_alpine() {
     info "Installing Git via apk..."
+    ensure_sudo
     run_as_root apk add --no-cache git
 }
 
@@ -588,18 +632,9 @@ setup_sc_alias() {
         return 0
     fi
 
-    local shell_name
-    shell_name="$(basename "${SHELL:-/bin/bash}")"
-
-    if [[ "$shell_name" == "fish" ]]; then
-        echo "" >> "$profile"
-        echo "# Claudeman tmux session shortcut" >> "$profile"
-        echo "alias sc='tmux-chooser'" >> "$profile"
-    else
-        echo "" >> "$profile"
-        echo "# Claudeman tmux session shortcut" >> "$profile"
-        echo "alias sc='tmux-chooser'" >> "$profile"
-    fi
+    echo "" >> "$profile"
+    echo "# Claudeman tmux session shortcut" >> "$profile"
+    echo "alias sc='tmux-chooser'" >> "$profile"
 
     info "Added 'sc' alias for tmux-chooser"
 }
@@ -838,10 +873,7 @@ main() {
     # Add to PATH
     # ========================================================================
 
-    local bin_dir="$INSTALL_DIR/dist"
-    add_to_path "$bin_dir"
-
-    # Create symlink in a common PATH location if possible
+    # Create symlink in a common PATH location
     local symlink_dir="$HOME/.local/bin"
     mkdir -p "$symlink_dir" 2>/dev/null || true
     if [[ -d "$symlink_dir" ]]; then
@@ -861,7 +893,6 @@ main() {
             add_to_path "$symlink_dir"
         fi
     fi
-
 
     # ========================================================================
     # Systemd Service (Linux only)
@@ -923,7 +954,7 @@ main() {
     # Remind to reload shell if PATH was modified
     local profile
     profile=$(detect_shell_profile)
-    if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
+    if [[ ":$PATH:" != *":$symlink_dir:"* ]]; then
         echo -e "  ${DIM}Restart your shell or run: source $profile${NC}"
         echo ""
     fi

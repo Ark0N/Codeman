@@ -390,6 +390,20 @@ Click the chart icon on any session tab to see a complete timeline of what happe
 curl -fsSL https://raw.githubusercontent.com/Ark0N/claudeman/master/install.sh | bash
 ```
 
+### Windows (WSL)
+
+```powershell
+wsl bash -c "curl -fsSL https://raw.githubusercontent.com/Ark0N/claudeman/master/install.sh | bash"
+```
+
+> **Prerequisites:** Claudeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet:
+> 1. Run `wsl --install` in an admin PowerShell, then reboot
+> 2. Open **Ubuntu** from the Start menu to complete setup (create your Linux user)
+> 3. Install Claude CLI inside WSL: `curl -fsSL https://claude.ai/install.sh | bash`
+> 4. Then run the one-liner above
+>
+> After installing, `http://localhost:3000` is accessible from your Windows browser.
+
 ### npm (alternative)
 
 ```bash
