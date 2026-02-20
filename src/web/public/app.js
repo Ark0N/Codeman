@@ -48,13 +48,14 @@ const BUILTIN_RESPAWN_PRESETS = [
   {
     id: 'solo-work',
     name: 'Solo',
-    description: 'Claude working alone — fast respawn cycles',
+    description: 'Claude working alone — fast respawn cycles with context reset',
     config: {
       idleTimeoutMs: 3000,
-      updatePrompt: 'continue',
+      updatePrompt: 'summarize your progress so far before the context reset.',
       interStepDelayMs: 2000,
-      sendClear: false,
-      sendInit: false,
+      sendClear: true,
+      sendInit: true,
+      kickstartPrompt: 'continue working. Pick up where you left off based on the context above.',
       autoAcceptPrompts: true,
     },
     durationMinutes: 60,
@@ -67,10 +68,11 @@ const BUILTIN_RESPAWN_PRESETS = [
     description: 'Lead session with Task tool subagents — longer idle tolerance',
     config: {
       idleTimeoutMs: 45000,
-      updatePrompt: 'check on your running subagents and continue coordinating their work. If all subagents have finished, summarize their results and proceed with the next step.',
+      updatePrompt: 'check on your running subagents and summarize their results before the context reset. If all subagents have finished, note what was completed and what remains.',
       interStepDelayMs: 3000,
-      sendClear: false,
-      sendInit: false,
+      sendClear: true,
+      sendInit: true,
+      kickstartPrompt: 'check on your running subagents and continue coordinating their work. If all subagents have finished, summarize their results and proceed with the next step.',
       autoAcceptPrompts: true,
     },
     durationMinutes: 240,
@@ -83,10 +85,11 @@ const BUILTIN_RESPAWN_PRESETS = [
     description: 'Leading an agent team via TeamCreate — tolerates long silences',
     config: {
       idleTimeoutMs: 90000,
-      updatePrompt: 'check on your teammates by reviewing the task list and any messages in your inbox. Assign new tasks if teammates are idle, or continue coordinating the team effort.',
+      updatePrompt: 'review the task list and teammate progress. Summarize the current state before the context reset.',
       interStepDelayMs: 5000,
-      sendClear: false,
-      sendInit: false,
+      sendClear: true,
+      sendInit: true,
+      kickstartPrompt: 'check on your teammates by reviewing the task list and any messages in your inbox. Assign new tasks if teammates are idle, or continue coordinating the team effort.',
       autoAcceptPrompts: true,
     },
     durationMinutes: 480,
@@ -922,10 +925,18 @@ class LocalEchoOverlay {
         }
     }
 
+    appendText(text) {
+        if (!text) return;
+        this.pendingText += text;
+        this._persist();
+        this._render();
+    }
+
     clear() {
         this.pendingText = '';
         this._persist();
         this._lastRenderKey = '';
+        this._lastPromptPos = null;
         this.overlay.innerHTML = '';
         this.overlay.style.display = 'none';
     }
@@ -955,20 +966,26 @@ class LocalEchoOverlay {
             return;
         }
         try {
-            // Re-scan for prompt on EVERY render — Ink can move it between redraws
+            // Re-scan for prompt on EVERY render — Ink can move it between redraws.
+            // Cache last known position as fallback during Ink redraw flicker.
             const prompt = this._findPrompt();
-            if (!prompt) { this.overlay.style.display = 'none'; return; }
+            if (prompt) {
+                this._lastPromptPos = prompt;
+            } else if (!this._lastPromptPos) {
+                this.overlay.style.display = 'none'; return;
+            }
+            const activePrompt = this._lastPromptPos;
 
             const dims = this.terminal._core._renderService.dimensions;
             const cellW = dims.css.cell.width;
             const cellH = dims.css.cell.height;
             const totalCols = this.terminal.cols;
             // Position right after "❯ " (prompt col + 2)
-            const startCol = Math.min(prompt.col + 2, totalCols - 1);
+            const startCol = Math.min(activePrompt.col + 2, totalCols - 1);
             const firstLineCols = Math.max(1, totalCols - startCol);
 
             // Skip redundant re-renders (e.g. from flushPendingWrites at 60fps)
-            const renderKey = `${this.pendingText.length}:${prompt.row}:${prompt.col}:${totalCols}`;
+            const renderKey = `${this.pendingText.length}:${activePrompt.row}:${activePrompt.col}:${totalCols}`;
             if (renderKey === this._lastRenderKey && this.overlay.style.display !== 'none') return;
             this._lastRenderKey = renderKey;
 
@@ -986,7 +1003,7 @@ class LocalEchoOverlay {
 
             // Position overlay container at prompt row
             this.overlay.style.left = '0px';
-            this.overlay.style.top = (prompt.row * cellH) + 'px';
+            this.overlay.style.top = (activePrompt.row * cellH) + 'px';
             this.overlay.style.boxShadow = 'none';
 
             // Build line elements — recreate on each render (typically 1-3 divs, negligible cost)
@@ -2075,8 +2092,21 @@ class ClaudemanApp {
             }, 120);
             return;
           }
-          if (data.charCodeAt(0) < 32 || data.length > 1) {
-            // Other control chars (Ctrl+C, escape, paste): clear overlay, drain bg, send immediately
+          if (data.length > 1 && data.charCodeAt(0) >= 32) {
+            // Paste: append to overlay + send to PTY immediately
+            this._localEchoOverlay?.appendText(data);
+            const remainder = drainBgBuffer();
+            if (remainder) this._pendingInput += remainder;
+            this._pendingInput += data;
+            if (this._inputFlushTimeout) {
+              clearTimeout(this._inputFlushTimeout);
+              this._inputFlushTimeout = null;
+            }
+            flushInput();
+            return;
+          }
+          if (data.charCodeAt(0) < 32) {
+            // Control chars (Ctrl+C, escape sequences): clear overlay, drain bg, send immediately
             this._localEchoOverlay?.clear();
             const remainder = drainBgBuffer();
             if (remainder) {

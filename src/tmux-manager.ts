@@ -958,8 +958,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    *
    * Uses tmux send-keys for reliable input delivery:
    * - `-l` flag sends literal text (no key interpretation)
-   * - `Enter` key is sent as a separate argument
-   * - Single command, no delay needed
+   * - `Enter` key is sent as a SEPARATE tmux invocation after a small delay
+   * - Ink (Claude CLI) needs text and Enter split to avoid treating Enter as a newline
    */
   async sendInput(sessionId: string, input: string): Promise<boolean> {
     const session = this.sessions.get(sessionId);
@@ -985,10 +985,17 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const textPart = input.replace(/\r/g, '').replace(/\n/g, '').trimEnd();
 
       if (textPart && hasCarriageReturn) {
-        // Send text + Enter in a single tmux invocation (one child process).
-        // tmux's \; separator chains commands within one process spawn.
+        // Send text first, then Enter as a SEPARATE tmux command after a short delay.
+        // Ink (Claude CLI's terminal framework) needs them split — sending both in a
+        // single tmux invocation (via \;) causes Ink to interpret Enter as a newline
+        // character in the input buffer rather than as form submission.
         await execAsync(
-          `tmux send-keys -t "${session.muxName}" -l ${shellescape(textPart)} \\; send-keys -t "${session.muxName}" Enter`,
+          `tmux send-keys -t "${session.muxName}" -l ${shellescape(textPart)}`,
+          { timeout: EXEC_TIMEOUT_MS }
+        );
+        await new Promise(resolve => setTimeout(resolve, 50));
+        await execAsync(
+          `tmux send-keys -t "${session.muxName}" Enter`,
           { timeout: EXEC_TIMEOUT_MS }
         );
       } else if (textPart) {

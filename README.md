@@ -282,6 +282,81 @@ batchTerminalWrite(data) {
 
 ---
 
+### ⌨️ Lag-Free Terminal Input — Local Echo with Background Forwarding
+
+**The problem:** When accessing Claude Code remotely (VPN, Tailscale, SSH tunnel), every keystroke takes 200-300ms to echo back from the server. You type blind, make mistakes you can't see, and the whole experience feels broken. Traditional terminal apps have no solution for this — you're stuck with the round-trip latency.
+
+**The solution:** Claudeman implements a **Mosh-inspired local echo system** that makes typing feel instant, no matter how far away the server is. Keystrokes appear immediately in a pixel-perfect DOM overlay while simultaneously being forwarded to the PTY in the background.
+
+#### Why This Is Hard (and Why Nobody Else Does It)
+
+Claude Code uses [Ink](https://github.com/vadimdemedes/ink) (React for terminals), which **redraws the entire screen on every state change**. This makes the standard approach of writing directly to the terminal buffer impossible — Ink would immediately corrupt any injected characters on its next redraw cycle. Two separate attempts to use `terminal.write()` for local echo both failed for this reason.
+
+#### How It Works
+
+The system has three components working together:
+
+| Component | What It Does |
+|-----------|-------------|
+| **DOM Overlay** | A `<span>` positioned inside xterm.js's `.xterm-screen` at z-index 7. Shows typed characters with pixel-perfect font matching. Completely invisible to Ink because it never touches the terminal buffer. |
+| **Background Forwarding** | Every keystroke is also sent to the PTY in the background (50ms debounced batches). The server's terminal state stays in sync — Tab completion, history, and all shell features work normally. |
+| **Enter Split** | When you press Enter, any remaining buffered keystrokes are flushed first, then Enter is sent separately after 120ms. This ensures the PTY has the complete text before submission. |
+
+#### The Overlay: Why a DOM Element Beats Buffer Writes
+
+```
+xterm.js DOM structure:
+├── .xterm-viewport (scrolling)
+└── .xterm-screen (position: relative)
+      ├── .xterm-rows (z-index: 0)     ← Ink owns this, redraws constantly
+      ├── .xterm-selection (z-index: 1)
+      ├── .xterm-helpers (z-index: 5)
+      └── LOCAL ECHO OVERLAY (z-index: 7)  ← Our overlay, Ink can't touch it
+```
+
+The overlay scans the terminal buffer bottom-up to find Claude Code's `❯` prompt marker, then positions itself right after it. It handles multi-line wrapping when input exceeds the terminal width, renders a block cursor at the end, and uses an opaque background that cleanly covers the server's stale cursor position.
+
+Font matching is critical: the overlay reads `fontFamily`, `fontSize`, `fontWeight`, and `letterSpacing` directly from xterm.js's `.xterm-rows` computed style, so the echo text is visually indistinguishable from real terminal text.
+
+#### Background Forwarding: The Key Innovation
+
+Previous local echo implementations (including our own earlier attempts) buffered input locally and only sent it on Enter. This broke Tab completion, shell history, and any interactive feature that depends on the PTY seeing keystrokes in real-time.
+
+Background forwarding solves this: every character is queued into a 50ms debounce buffer and sent to the PTY silently. The server processes keystrokes normally — Tab completion works, `Ctrl+R` history search works, everything works. The overlay just provides instant visual feedback while the round-trip happens invisibly.
+
+```
+Keystroke Flow:
+                                    ┌─── DOM overlay (instant, 0ms)
+User types 'h' ─── onData('h') ───┤
+                                    └─── Background buffer ──[50ms]──→ PTY
+                                                                        │
+Server echoes 'h' ←────────────────────────────────────────────────────┘
+         │                                                    (200-300ms RTT)
+         └──→ flushPendingWrites() ──→ overlay.clear()
+              (server output replaces overlay — seamless transition)
+```
+
+#### Edge Cases Handled
+
+| Scenario | Behavior |
+|----------|----------|
+| **Paste** (multi-char) | Appended to overlay + sent to PTY immediately (no debounce) |
+| **Backspace** | Removes last overlay char + sends `\x7f` to PTY in background |
+| **Misprediction** | Server output arrives → overlay clears → server redraws correctly |
+| **Tab completion** | Background forwarding means PTY receives Tab keystroke normally |
+| **Ctrl+C / escape** | Overlay clears, control char sent immediately |
+| **Page reload** | Unsent input persisted to `localStorage`, restored on reconnect |
+| **Ink screen redraw** | Overlay is a separate DOM layer — completely unaffected |
+| **Tab switch** | Background buffer flushed to outgoing session before switching |
+
+#### The Result
+
+Typing over a 200-300ms connection feels identical to localhost. The overlay provides instant character feedback while background forwarding keeps the PTY perfectly synchronized. When the server's echo arrives (200-300ms later), the overlay seamlessly disappears and the real terminal text takes over — the transition is invisible.
+
+Enabled by default. Works during both idle and busy sessions.
+
+---
+
 ### 📈 Run Summary ("What Happened While You Were Away")
 
 Click the chart icon on any session tab to see a complete timeline of what happened:

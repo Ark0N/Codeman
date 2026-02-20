@@ -2523,6 +2523,25 @@ body {
   text-overflow: ellipsis;
 }
 
+.settings-item-multiline {
+  align-items: center;
+}
+
+.settings-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.settings-item-desc {
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .settings-item-actions {
   display: flex;
   align-items: center;

@@ -780,6 +780,19 @@
           <!-- Display Tab -->
           <div class="modal-tab-content" id="settings-display">
             <div class="settings-grid">
+              <!-- Input Section -->
+              <div class="settings-section-header">Input</div>
+              <div class="settings-item settings-item-multiline" title="Shows typed characters instantly via overlay while forwarding keystrokes to the server in the background. Enables Tab completion, preserves input across tab switches, and protects against session crashes. Recommended for mobile and high-latency connections.">
+                <div class="settings-item-text">
+                  <span class="settings-item-label">Local Echo</span>
+                  <span class="settings-item-desc">Instant typing feedback with local echo</span>
+                </div>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsLocalEcho">
+                  <span class="slider"></span>
+                </label>
+              </div>
+
               <!-- Header Displays Section -->
               <div class="settings-section-header">Header Displays</div>
               <div class="settings-item" title="Show A-/A+ font size buttons in header">
@@ -886,15 +899,6 @@
                 </label>
               </div>
 
-              <!-- Input Options Section -->
-              <div class="settings-section-header">Input</div>
-              <div class="settings-item" title="Buffer keystrokes locally and show them instantly via overlay. Text is sent to the server on Enter. Useful for high-latency connections or to compose input before sending.">
-                <span class="settings-item-label">Local Echo</span>
-                <label class="switch switch-sm">
-                  <input type="checkbox" id="appSettingsLocalEcho">
-                  <span class="slider"></span>
-                </label>
-              </div>
 
             </div>
           </div>
