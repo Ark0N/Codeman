@@ -354,17 +354,13 @@ export class WebServer extends EventEmitter {
   // Terminal batching for performance
   private terminalBatches: Map<string, string[]> = new Map();
   private terminalBatchSizes: Map<string, number> = new Map();  // Running total avoids O(n) reduce per push
-  private terminalBatchTimer: NodeJS.Timeout | null = null;
+  private terminalBatchTimers: Map<string, NodeJS.Timeout> = new Map();  // Per-session timers (staggered flushes)
   // Adaptive batching: track rapid events to extend batch window (per-session)
   // StaleExpirationMap auto-cleans entries for sessions that stop generating output
   private lastTerminalEventTime: StaleExpirationMap<string, number> = new StaleExpirationMap({
     ttlMs: 5 * 60 * 1000, // 5 minutes - auto-expire stale session timing data
     refreshOnGet: false,   // Don't refresh on reads, only on explicit sets
   });
-  // Per-session adaptive batch intervals (sessions with rapid output get longer batches)
-  private adaptiveBatchIntervals: Map<string, number> = new Map();
-  // Tracked minimum across adaptiveBatchIntervals (avoids spreading into Math.min on every batch)
-  private _minBatchInterval: number = TERMINAL_BATCH_INTERVAL;
   // Scheduled runs cleanup timer
   private scheduledCleanupTimer: NodeJS.Timeout | null = null;
   // SSE event batching
@@ -4059,13 +4055,17 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       this.runSummaryTrackers.delete(sessionId);
     }
 
-    // Clear batches and pending state updates
+    // Clear batches, per-session timers, and pending state updates
     this.terminalBatches.delete(sessionId);
     this.terminalBatchSizes.delete(sessionId);
+    const batchTimer = this.terminalBatchTimers.get(sessionId);
+    if (batchTimer) {
+      clearTimeout(batchTimer);
+      this.terminalBatchTimers.delete(sessionId);
+    }
     this.taskUpdateBatches.delete(sessionId);
     this.stateUpdatePending.delete(sessionId);
     this.lastTerminalEventTime.delete(sessionId);
-    this.adaptiveBatchIntervals.delete(sessionId);
 
     // Reset Ralph tracker on the session before cleanup
     if (session) {
@@ -4967,7 +4967,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   // Batch terminal data for better performance (60fps)
-  // Uses adaptive batching: extends batch window when events are rapid-fire
+  // Uses per-session timers with adaptive intervals to prevent thundering herd:
+  // each session flushes independently rather than all sessions flushing in one burst.
   private batchTerminalData(sessionId: string, data: string): void {
     // Skip if server is stopping
     if (this._isStopping) return;
@@ -4998,56 +4999,55 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     } else {
       sessionInterval = TERMINAL_BATCH_INTERVAL;
     }
-    this.adaptiveBatchIntervals.set(sessionId, sessionInterval);
-    // Track minimum to avoid O(n) spread on every batch event
-    if (sessionInterval < this._minBatchInterval) {
-      this._minBatchInterval = sessionInterval;
-    }
 
     // Flush immediately if batch is large for responsiveness
     if (totalLength > BATCH_FLUSH_THRESHOLD) {
-      if (this.terminalBatchTimer) {
-        clearTimeout(this.terminalBatchTimer);
-        this.terminalBatchTimer = null;
+      const existingTimer = this.terminalBatchTimers.get(sessionId);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+        this.terminalBatchTimers.delete(sessionId);
       }
-      this.flushTerminalBatches();
+      this.flushSessionTerminalBatch(sessionId);
       return;
     }
 
-    // Start batch timer if not already running (uses adaptive interval)
-    // Pick the minimum interval across all pending sessions for responsiveness
-    if (!this.terminalBatchTimer) {
-      this.terminalBatchTimer = setTimeout(() => {
-        this.flushTerminalBatches();
-        this.terminalBatchTimer = null;
-        // Clear per-session intervals after flush (they'll be recalculated on next event)
-        this.adaptiveBatchIntervals.clear();
-        this._minBatchInterval = TERMINAL_BATCH_INTERVAL;
-      }, this._minBatchInterval);
+    // Start per-session batch timer if not already running
+    // Each session flushes independently — prevents one busy session from
+    // forcing all sessions to flush at its rate (thundering herd)
+    if (!this.terminalBatchTimers.has(sessionId)) {
+      this.terminalBatchTimers.set(sessionId, setTimeout(() => {
+        this.terminalBatchTimers.delete(sessionId);
+        this.flushSessionTerminalBatch(sessionId);
+      }, sessionInterval));
     }
   }
 
-  private flushTerminalBatches(): void {
-    // Skip if server is stopping (timer may have been queued before stop() was called)
+  /** Flush a single session's batched terminal data */
+  private flushSessionTerminalBatch(sessionId: string): void {
     if (this._isStopping) {
-      this.terminalBatches.clear();
-      this.terminalBatchSizes.clear();
+      this.terminalBatches.delete(sessionId);
+      this.terminalBatchSizes.delete(sessionId);
       return;
     }
-    for (const [sessionId, chunks] of this.terminalBatches) {
-      if (chunks.length > 0) {
-        // Join chunks only at flush time (avoids O(n^2) string concatenation in batchTerminalData)
-        const data = chunks.join('');
-        // Wrap with DEC mode 2026 synchronized output markers
-        // Terminal buffers all output between markers and renders atomically,
-        // eliminating partial-frame flicker from Ink's full-screen redraws.
-        // Unsupported terminals ignore these sequences harmlessly.
-        const syncData = DEC_SYNC_START + data + DEC_SYNC_END;
-        this.broadcast('session:terminal', { id: sessionId, data: syncData });
+    const chunks = this.terminalBatches.get(sessionId);
+    if (chunks && chunks.length > 0) {
+      // Join chunks only at flush time (avoids O(n^2) string concatenation in batchTerminalData)
+      const data = chunks.join('');
+      // Wrap with DEC mode 2026 synchronized output markers
+      // Terminal buffers all output between markers and renders atomically,
+      // eliminating partial-frame flicker from Ink's full-screen redraws.
+      // Unsupported terminals ignore these sequences harmlessly.
+      const syncData = DEC_SYNC_START + data + DEC_SYNC_END;
+      // Fast path: build SSE message directly without JSON.stringify on wrapper object.
+      // Only the terminal data string needs escaping; sessionId is a UUID (safe to template).
+      const escapedData = JSON.stringify(syncData);
+      const message = `event: session:terminal\ndata: {"id":"${sessionId}","data":${escapedData}}\n\n`;
+      for (const client of this.sseClients) {
+        this.sendSSEPreformatted(client, message);
       }
     }
-    this.terminalBatches.clear();
-    this.terminalBatchSizes.clear();
+    this.terminalBatches.delete(sessionId);
+    this.terminalBatchSizes.delete(sessionId);
   }
 
   // Batch task:updated events at 100ms - only send latest update per task
@@ -5455,11 +5455,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.sseClients.clear();
     this.backpressuredClients.clear();
 
-    // Clear batch timers
-    if (this.terminalBatchTimer) {
-      clearTimeout(this.terminalBatchTimer);
-      this.terminalBatchTimer = null;
+    // Clear per-session batch timers
+    for (const timer of this.terminalBatchTimers.values()) {
+      clearTimeout(timer);
     }
+    this.terminalBatchTimers.clear();
     this.terminalBatches.clear();
     this.terminalBatchSizes.clear();
 
@@ -5606,8 +5606,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.scheduledRuns.clear();
     // Dispose StaleExpirationMap (stops internal cleanup timer)
     this.lastTerminalEventTime.dispose();
-    this.adaptiveBatchIntervals.clear();
-    this._minBatchInterval = TERMINAL_BATCH_INTERVAL;
     this.activePlanOrchestrators.clear();
     this.cleaningUp.clear();
 

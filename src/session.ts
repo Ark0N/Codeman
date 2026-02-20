@@ -353,6 +353,13 @@ export class Session extends EventEmitter {
   // Uses LRUMap for automatic eviction at MAX_TASK_DESCRIPTIONS limit
   private _recentTaskDescriptions: LRUMap<number, string> = new LRUMap({ maxSize: Session.MAX_TASK_DESCRIPTIONS });
 
+  // Throttle expensive PTY processing (Ralph, bash parser, task descriptions)
+  // Accumulates clean data between processing windows to avoid running regex on every chunk
+  private _lastExpensiveProcessTime: number = 0;
+  private _pendingCleanData: string = '';
+  private _expensiveProcessTimer: NodeJS.Timeout | null = null;
+  private static readonly EXPENSIVE_PROCESS_INTERVAL_MS = 150; // Process at most every 150ms
+
   constructor(config: Partial<SessionConfig> & {
     workingDir: string;
     mode?: SessionMode;
@@ -990,17 +997,6 @@ export class Session extends EventEmitter {
         .replace(CTRL_L_PATTERN, '');  // Remove Ctrl+L
       if (!data) return; // Skip if only filtered sequences
 
-      // Lazy ANSI strip: only compute cleanData when a consumer actually needs it.
-      // During active streaming, many consumers early-exit (ralph disabled, cli info parsed,
-      // no 'token' in data, etc.), so we skip the expensive O(n) regex on most chunks.
-      let _cleanData: string | null = null;
-      const getCleanData = (): string => {
-        if (_cleanData === null) {
-          _cleanData = data.replace(ANSI_ESCAPE_PATTERN_FULL, '');
-        }
-        return _cleanData;
-      };
-
       // BufferAccumulator handles auto-trimming when max size exceeded
       this._terminalBuffer.append(data);
       this._lastActivityAt = Date.now();
@@ -1008,36 +1004,7 @@ export class Session extends EventEmitter {
       this.emit('terminal', data);
       this.emit('output', data);
 
-      // Forward to Ralph tracker to detect Ralph loops and todos
-      // Ralph tracker early-exits when disabled + autoEnableDisabled, skipping ANSI strip
-      if (this._ralphTracker.enabled || !this._ralphTracker.autoEnableDisabled) {
-        this._ralphTracker.processCleanData(getCleanData());
-      }
-
-      // Forward to Bash tool parser to detect file-viewing commands
-      // Parser early-exits when disabled, skipping ANSI strip
-      if (this._bashToolParser.enabled) {
-        this._bashToolParser.processCleanData(getCleanData());
-      }
-
-      // Parse token count from status line (e.g., "123.4k tokens" or "5234 tokens")
-      // Pre-check on raw data: 'token' won't appear in ANSI sequences
-      if (data.includes('token')) {
-        this.parseTokensFromStatusLine(getCleanData());
-      }
-
-      // Parse Claude Code CLI info (version, model, account type) from startup
-      // Gated by _cliInfoParsed — only runs during first few chunks
-      if (!this._cliInfoParsed) {
-        this.parseClaudeCodeInfo(getCleanData());
-      }
-
-      // Parse task descriptions from terminal output (e.g., "Explore(Check files)")
-      // Pre-check on raw data: parentheses are safe to check without ANSI strip
-      if (data.includes('(') && data.includes(')')) {
-        this.parseTaskDescriptionsFromTerminalData(getCleanData());
-      }
-
+      // === Idle/working detection runs on every chunk (latency-sensitive) ===
       // Detect if Claude is working or at prompt
       // The prompt line contains "❯" when waiting for input
       if (data.includes('❯') || data.includes('\u276f')) {
@@ -1069,19 +1036,51 @@ export class Session extends EventEmitter {
           data.includes('⠹') || data.includes('⠸') ||
           data.includes('⠼') || data.includes('⠴') ||
           data.includes('⠦') || data.includes('⠧');
-      // Slow path: check text keywords on clean data (avoids false positives from window titles)
-      const hasWorkKeyword = hasSpinner ||
-          getCleanData().includes('Thinking') || getCleanData().includes('Writing') ||
-          getCleanData().includes('Reading') || getCleanData().includes('Running');
-      if (hasWorkKeyword) {
+      if (hasSpinner) {
         if (!this._isWorking) {
           this._isWorking = true;
           this._status = 'busy';
           this.emit('working');
         }
-        // Reset timeout and idle confirmation flag since Claude is active
         this._awaitingIdleConfirmation = false;
         if (this.activityTimeout) clearTimeout(this.activityTimeout);
+      }
+
+      // === Expensive processing (ANSI strip, Ralph, bash parser) is throttled ===
+      // Instead of running regex-heavy parsers on every PTY chunk, we accumulate
+      // raw data and process at most every EXPENSIVE_PROCESS_INTERVAL_MS.
+      // This dramatically reduces CPU load with multiple busy sessions.
+      const now = Date.now();
+      const elapsed = now - this._lastExpensiveProcessTime;
+      if (elapsed >= Session.EXPENSIVE_PROCESS_INTERVAL_MS) {
+        // Process immediately — include any previously accumulated data
+        this._lastExpensiveProcessTime = now;
+        const accumulated = this._pendingCleanData ? this._pendingCleanData + data : data;
+        this._pendingCleanData = '';
+        if (this._expensiveProcessTimer) {
+          clearTimeout(this._expensiveProcessTimer);
+          this._expensiveProcessTimer = null;
+        }
+        this._processExpensiveParsers(accumulated);
+      } else {
+        // Accumulate for deferred processing
+        this._pendingCleanData += data;
+        // Cap accumulated size to prevent unbounded growth
+        if (this._pendingCleanData.length > 64 * 1024) {
+          this._pendingCleanData = this._pendingCleanData.slice(-32 * 1024);
+        }
+        // Schedule deferred processing if not already scheduled
+        if (!this._expensiveProcessTimer) {
+          this._expensiveProcessTimer = setTimeout(() => {
+            this._expensiveProcessTimer = null;
+            this._lastExpensiveProcessTime = Date.now();
+            const pending = this._pendingCleanData;
+            this._pendingCleanData = '';
+            if (pending) {
+              this._processExpensiveParsers(pending);
+            }
+          }, Session.EXPENSIVE_PROCESS_INTERVAL_MS - elapsed);
+        }
       }
     });
 
@@ -1104,12 +1103,73 @@ export class Session extends EventEmitter {
         clearTimeout(this._promptCheckTimeout);
         this._promptCheckTimeout = null;
       }
+      // Clear expensive processing timer and flush any pending data
+      if (this._expensiveProcessTimer) {
+        clearTimeout(this._expensiveProcessTimer);
+        this._expensiveProcessTimer = null;
+      }
+      this._pendingCleanData = '';
       // If using mux, mark the session as detached but don't kill it
       if (this._muxSession && this._mux) {
         this._mux.setAttached(this.id, false);
       }
       this.emit('exit', exitCode);
     });
+  }
+
+  /**
+   * Process expensive parsers (ANSI strip, Ralph, bash tool, token, CLI info, task descriptions).
+   * Called on a throttled schedule (every EXPENSIVE_PROCESS_INTERVAL_MS) instead of on every
+   * PTY data chunk. Receives accumulated raw data to process in one batch.
+   */
+  private _processExpensiveParsers(rawData: string): void {
+    // Lazy ANSI strip: only compute cleanData when a consumer actually needs it.
+    let _cleanData: string | null = null;
+    const getCleanData = (): string => {
+      if (_cleanData === null) {
+        _cleanData = rawData.replace(ANSI_ESCAPE_PATTERN_FULL, '');
+      }
+      return _cleanData;
+    };
+
+    // Forward to Ralph tracker to detect Ralph loops and todos
+    if (this._ralphTracker.enabled || !this._ralphTracker.autoEnableDisabled) {
+      this._ralphTracker.processCleanData(getCleanData());
+    }
+
+    // Forward to Bash tool parser to detect file-viewing commands
+    if (this._bashToolParser.enabled) {
+      this._bashToolParser.processCleanData(getCleanData());
+    }
+
+    // Parse token count from status line (e.g., "123.4k tokens" or "5234 tokens")
+    if (rawData.includes('token')) {
+      this.parseTokensFromStatusLine(getCleanData());
+    }
+
+    // Parse Claude Code CLI info (version, model, account type) from startup
+    if (!this._cliInfoParsed) {
+      this.parseClaudeCodeInfo(getCleanData());
+    }
+
+    // Parse task descriptions from terminal output (e.g., "Explore(Check files)")
+    if (rawData.includes('(') && rawData.includes(')')) {
+      this.parseTaskDescriptionsFromTerminalData(getCleanData());
+    }
+
+    // Work keyword detection (text-based, needs clean data)
+    // Only check if spinner didn't already trigger working state
+    if (!this._isWorking) {
+      const cleanData = getCleanData();
+      if (cleanData.includes('Thinking') || cleanData.includes('Writing') ||
+          cleanData.includes('Reading') || cleanData.includes('Running')) {
+        this._isWorking = true;
+        this._status = 'busy';
+        this.emit('working');
+        this._awaitingIdleConfirmation = false;
+        if (this.activityTimeout) clearTimeout(this.activityTimeout);
+      }
+    }
   }
 
   /**
@@ -2066,6 +2126,13 @@ export class Session extends EventEmitter {
       clearTimeout(this._shellIdleTimer);
       this._shellIdleTimer = null;
     }
+
+    // Clear expensive processing timer
+    if (this._expensiveProcessTimer) {
+      clearTimeout(this._expensiveProcessTimer);
+      this._expensiveProcessTimer = null;
+    }
+    this._pendingCleanData = '';
 
     // Immediately cleanup Promise callbacks to prevent orphaned references
     // during the rest of stop() processing (e.g., if mux kill times out)
