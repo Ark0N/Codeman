@@ -4011,10 +4011,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       session.ralphTracker.stopWatchingFixPlan();
     }
 
-    // Kill all subagents spawned by this session
+    // Kill all subagents spawned by this session (scoped to sessionId to avoid cross-session kills)
     if (session && killMux) {
       try {
-        await subagentWatcher.killSubagentsForSession(session.workingDir);
+        await subagentWatcher.killSubagentsForSession(session.workingDir, sessionId);
       } catch (err) {
         console.error(`[Server] Failed to kill subagents for session ${sessionId}:`, err);
       }
