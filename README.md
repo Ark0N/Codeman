@@ -23,9 +23,8 @@
   <img src="docs/images/subagent-demo.gif" alt="Claudeman — parallel subagent visualization" width="900">
 </p>
 
-<p align="center">
-  <img src="docs/images/claude-overview.png" alt="Claudeman Dashboard" width="900">
-</p>
+---
+
 
 <p align="center">
   <img src="docs/images/claudeman-demo.gif" alt="Claudeman Demo" width="900">
