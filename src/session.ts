@@ -2001,16 +2001,22 @@ export class Session extends EventEmitter {
     return false;
   }
 
+  /** Current PTY dimensions — used to skip no-op resizes that trigger Ink redraws */
+  private _ptyCols = 120;
+  private _ptyRows = 40;
+
   /**
    * Resizes the PTY terminal dimensions.
-   *
-   * Call this when the frontend terminal is resized to keep PTY in sync.
+   * Skips the resize if dimensions haven't changed to avoid triggering
+   * unnecessary Ink full-screen redraws (visible flicker on tab switch).
    *
    * @param cols - Number of columns (width in characters)
    * @param rows - Number of rows (height in lines)
    */
   resize(cols: number, rows: number): void {
-    if (this.ptyProcess) {
+    if (this.ptyProcess && (cols !== this._ptyCols || rows !== this._ptyRows)) {
+      this._ptyCols = cols;
+      this._ptyRows = rows;
       this.ptyProcess.resize(cols, rows);
     }
   }

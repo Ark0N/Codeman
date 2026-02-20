@@ -970,7 +970,7 @@ class LocalEchoOverlay {
     // Create a styled line div with opaque background
     _makeLine(text, leftPx, topPx, widthPx, cellH) {
         const el = document.createElement('div');
-        el.style.cssText = `position:absolute;white-space:pre;font-kerning:none;overflow:hidden;pointer-events:none`;
+        el.style.cssText = `position:absolute;white-space:pre;font-kerning:none;pointer-events:none`;
         el.style.fontFamily = this._fontFamily;
         el.style.fontSize = this._fontSize;
         el.style.fontWeight = this._fontWeight;
@@ -980,7 +980,7 @@ class LocalEchoOverlay {
         el.style.left = leftPx + 'px';
         el.style.top = topPx + 'px';
         el.style.width = widthPx + 'px';
-        el.style.height = cellH + 'px';
+        el.style.height = (cellH + 1) + 'px';
         el.style.lineHeight = cellH + 'px';
         el.textContent = text;
         return el;
@@ -1030,7 +1030,6 @@ class LocalEchoOverlay {
             // Position overlay container at prompt row
             this.overlay.style.left = '0px';
             this.overlay.style.top = (activePrompt.row * cellH) + 'px';
-            this.overlay.style.boxShadow = 'none';
 
             // Build line elements — recreate on each render (typically 1-3 divs, negligible cost)
             this.overlay.innerHTML = '';
@@ -1040,8 +1039,6 @@ class LocalEchoOverlay {
                 const widthPx = i === 0 ? (fullWidthPx - leftPx) : fullWidthPx;
                 const topPx = i * cellH;
                 const lineEl = this._makeLine(lines[i], leftPx, topPx, widthPx, cellH);
-                // Cover subpixel seam above first line only
-                if (i === 0) lineEl.style.boxShadow = `0 -1px 0 0 ${this._bg}`;
                 this.overlay.appendChild(lineEl);
             }
 
@@ -2852,8 +2849,8 @@ class ClaudemanApp {
             await this.chunkedTerminalWrite(cleanBuffer);
           }
 
-          // Send resize to ensure proper dimensions
-          await this.sendResize(data.id);
+          // Fire-and-forget resize — don't block on it
+          this.sendResize(data.id);
           // Re-position local echo overlay at new prompt location
           this._localEchoOverlay?.rerender();
         } catch (err) {
@@ -2911,7 +2908,6 @@ class ClaudemanApp {
 
     addListener('session:idle', (e) => {
       const data = JSON.parse(e.data);
-      console.log('[DEBUG] session:idle event for:', data.id);
       const session = this.sessions.get(data.id);
       if (session) {
         session.status = 'idle';
@@ -2940,7 +2936,6 @@ class ClaudemanApp {
 
     addListener('session:working', (e) => {
       const data = JSON.parse(e.data);
-      console.log('[DEBUG] session:working event for:', data.id);
       const session = this.sessions.get(data.id);
       if (session) {
         session.status = 'busy';
@@ -4719,18 +4714,24 @@ class ClaudemanApp {
       if (selectGen !== this._selectGeneration) return; // stale — newer selectSession won
       const data = await res.json();
 
-      this.terminal.clear();
-      this.terminal.reset();
       if (data.terminalBuffer) {
-        // Show truncation indicator if buffer was cut
-        if (data.truncated) {
-          this.terminal.write('\x1b[90m... (earlier output truncated for performance) ...\x1b[0m\r\n\r\n');
+        // Skip rewrite if fresh buffer matches cache — avoids visible clear+rewrite flash.
+        // On slow connections (mobile 5G), the gap between clear() and chunkedWrite() is
+        // very visible, causing the terminal to flash blank then repaint.
+        const needsRewrite = data.terminalBuffer !== cachedBuffer;
+        if (needsRewrite) {
+          this.terminal.clear();
+          this.terminal.reset();
+          // Show truncation indicator if buffer was cut
+          if (data.truncated) {
+            this.terminal.write('\x1b[90m... (earlier output truncated for performance) ...\x1b[0m\r\n\r\n');
+          }
+          // Use chunked write for large buffers to avoid UI jank
+          await this.chunkedTerminalWrite(data.terminalBuffer);
+          if (selectGen !== this._selectGeneration) return; // stale — skip post-write UI updates
+          // Ensure terminal is scrolled to bottom after buffer load
+          this.terminal.scrollToBottom();
         }
-        // Use chunked write for large buffers to avoid UI jank
-        await this.chunkedTerminalWrite(data.terminalBuffer);
-        if (selectGen !== this._selectGeneration) return; // stale — skip post-write UI updates
-        // Ensure terminal is scrolled to bottom after buffer load
-        this.terminal.scrollToBottom();
 
         // Update cache (cap at 20 entries)
         this.terminalBufferCache.set(sessionId, data.terminalBuffer);
@@ -4739,6 +4740,10 @@ class ClaudemanApp {
           const oldest = this.terminalBufferCache.keys().next().value;
           this.terminalBufferCache.delete(oldest);
         }
+      } else if (!cachedBuffer) {
+        // No fresh buffer and no cache — clear any stale content
+        this.terminal.clear();
+        this.terminal.reset();
       }
 
       // Restore local echo text for incoming session (saved during previous tab switch).
@@ -4757,8 +4762,9 @@ class ClaudemanApp {
         }
       }
 
-      // Send resize and Ctrl+L to trigger Claude to redraw at correct size
-      await this.sendResize(sessionId);
+      // Fire-and-forget resize — don't await to avoid blocking UI.
+      // The resize triggers an Ink redraw in Claude which streams back via SSE.
+      this.sendResize(sessionId);
 
       // Defer secondary panel updates so they don't block the main thread
       // after terminal content is already visible.
