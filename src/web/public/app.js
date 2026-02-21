@@ -1017,25 +1017,9 @@ class LocalEchoOverlay {
             const cellW = dims.css.cell.width;
             const cellH = dims.css.cell.height;
             const totalCols = this.terminal.cols;
-            // Position after existing text on the prompt line.  Normally this is
-            // just "❯ " (col+2), but after a tab switch the flushed text is echoed
-            // by the PTY and sits in the terminal buffer — the overlay must start
-            // AFTER it to avoid covering it with its opaque background.
-            // _flushedOffset provides immediate offset even before echo arrives.
-            let startCol = activePrompt.col + 2 + (this._flushedOffset || 0);
-            try {
-                const buf = this.terminal.buffer.active;
-                const promptLine = buf.getLine(buf.viewportY + activePrompt.row);
-                if (promptLine) {
-                    const existingEnd = promptLine.translateToString(true).trimEnd().length;
-                    if (existingEnd > startCol) startCol = existingEnd;
-                    // Once echo has arrived in the buffer, we can drop the offset
-                    if (this._flushedOffset && existingEnd >= activePrompt.col + 2 + this._flushedOffset) {
-                        this._flushedOffset = 0;
-                    }
-                }
-            } catch {}
-            startCol = Math.min(startCol, totalCols - 1);
+            // Position right after "❯ " (prompt col + 2), plus any chars flushed
+            // to PTY during a tab switch that may not be echoed yet.
+            const startCol = Math.min(activePrompt.col + 2 + (this._flushedOffset || 0), totalCols - 1);
             const firstLineCols = Math.max(1, totalCols - startCol);
 
             // Skip redundant re-renders (e.g. from flushPendingWrites at 60fps)
