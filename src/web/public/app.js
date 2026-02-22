@@ -955,7 +955,33 @@ class LocalEchoOverlay {
         return null;
     }
 
+    // Auto-detect text already on the prompt line in the terminal buffer.
+    // Called on first keystroke when overlay is empty (pendingText='' and
+    // flushedOffset=0).  Handles Tab completion, arrow-key edits, and any
+    // other case where the PTY has prompt text the overlay doesn't know about.
+    // Without this, the overlay's opaque background covers the canvas text.
+    _detectBufferText() {
+        try {
+            const prompt = this._findPrompt();
+            if (!prompt) return;
+            const buf = this.terminal.buffer.active;
+            const absRow = buf.viewportY + prompt.row;
+            const line = buf.getLine(absRow);
+            if (!line) return;
+            const lineText = line.translateToString(true);
+            const textStart = prompt.col + 2; // after "❯ "
+            const afterPrompt = lineText.slice(textStart).trimEnd();
+            if (afterPrompt.length > 0) {
+                this._flushedOffset = afterPrompt.length;
+                this._flushedText = afterPrompt;
+                this._lastPromptPos = prompt;
+            }
+        } catch {}
+    }
+
     addChar(char) {
+        // On first keystroke after overlay was empty, detect existing buffer text
+        if (!this.pendingText && !this._flushedOffset) this._detectBufferText();
         this.pendingText += char;
         this._persist();
         this._render();
@@ -981,6 +1007,7 @@ class LocalEchoOverlay {
 
     appendText(text) {
         if (!text) return;
+        if (!this.pendingText && !this._flushedOffset) this._detectBufferText();
         this.pendingText += text;
         this._persist();
         this._render();
@@ -2227,8 +2254,29 @@ class ClaudemanApp {
               }
               this._pendingInput += data;
               flushInput();
+            } else if (this._localEchoOverlay) {
+              // No pending or flushed text — try detecting buffer text first
+              // (handles Tab completion, arrow edits, etc.)
+              this._localEchoOverlay._detectBufferText();
+              if (this._localEchoOverlay._flushedOffset > 0) {
+                // Found buffer text — delete last char
+                this._localEchoOverlay._flushedOffset--;
+                if (this._localEchoOverlay._flushedText) {
+                  this._localEchoOverlay._flushedText = this._localEchoOverlay._flushedText.slice(0, -1);
+                }
+                this._localEchoOverlay._lastRenderKey = '';
+                if (this._localEchoOverlay._flushedOffset > 0) {
+                  this._localEchoOverlay._render();
+                } else {
+                  this._localEchoOverlay._lastPromptPos = null;
+                  this._localEchoOverlay.overlay.innerHTML = '';
+                  this._localEchoOverlay.overlay.style.display = 'none';
+                }
+                this._pendingInput += data;
+                flushInput();
+              }
+              // else: truly nothing to delete — swallow the backspace
             }
-            // else: nothing to delete — swallow the backspace
             return;
           }
           if (/^[\r\n]+$/.test(data)) {
@@ -4789,16 +4837,19 @@ class ClaudemanApp {
     // the PTY echo arrives in the terminal buffer.
     if (this.activeSessionId) {
       const echoText = this._localEchoOverlay?.pendingText || '';
+      // Include buffer-detected flushed text (from Tab completion, etc.)
+      // so it's preserved across tab switches.
+      const existingFlushed = this._localEchoOverlay?._flushedOffset || 0;
+      const existingFlushedText = this._localEchoOverlay?._flushedText || '';
       if (echoText) {
         this._sendInputAsync(this.activeSessionId, echoText);
-        // Store flushed length AND text PER SESSION so it's available when switching back.
-        // The text is needed because the terminal buffer may be stale after async reload.
+      }
+      const totalOffset = existingFlushed + echoText.length;
+      if (totalOffset > 0) {
         if (!this._flushedOffsets) this._flushedOffsets = new Map();
         if (!this._flushedTexts) this._flushedTexts = new Map();
-        const prev = this._flushedOffsets.get(this.activeSessionId) || 0;
-        const prevText = this._flushedTexts.get(this.activeSessionId) || '';
-        this._flushedOffsets.set(this.activeSessionId, prev + echoText.length);
-        this._flushedTexts.set(this.activeSessionId, prevText + echoText);
+        this._flushedOffsets.set(this.activeSessionId, totalOffset);
+        this._flushedTexts.set(this.activeSessionId, existingFlushedText + echoText);
       }
     }
     this._localEchoOverlay?.clear();
