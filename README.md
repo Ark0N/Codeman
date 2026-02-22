@@ -358,6 +358,8 @@ Typing over a 200-300ms connection feels identical to localhost. The overlay pro
 
 Enabled by default. Works during both idle and busy sessions.
 
+> **Open Source:** The local echo overlay has been extracted into a standalone library — [`xterm-zerolag-input`](https://www.npmjs.com/package/xterm-zerolag-input) — so any developer can add zero-latency input to their xterm.js application. See [Published Packages](#-published-packages) below.
+
 ---
 
 ### 📈 Run Summary ("What Happened While You Were Away")
@@ -674,6 +676,50 @@ npm test                    # Run tests
 ```
 
 See [CLAUDE.md](./CLAUDE.md) for full documentation.
+
+---
+
+## Published Packages
+
+Standalone libraries extracted from Claudeman, available on npm for use in any project:
+
+### [`xterm-zerolag-input`](https://www.npmjs.com/package/xterm-zerolag-input)
+
+[![npm](https://img.shields.io/npm/v/xterm-zerolag-input?style=flat-square&color=22c55e)](https://www.npmjs.com/package/xterm-zerolag-input)
+
+Instant keystroke feedback overlay for xterm.js. Eliminates perceived input latency over high-RTT connections (SSH web clients, cloud IDEs, mobile terminals) by rendering typed characters immediately as a pixel-perfect DOM overlay.
+
+- **Zero dependencies** — works with both `xterm` (pre-5.4) and `@xterm/xterm` (5.4+)
+- **Configurable prompt detection** — character (`$`, `>`, `❯`), regex, or custom function
+- **Full state machine** — pending text, flushed text tracking, tab-switch save/restore, tab completion detection
+- **78 tests** covering every state transition
+
+```bash
+npm install xterm-zerolag-input
+```
+
+```typescript
+import { ZerolagInputAddon } from 'xterm-zerolag-input';
+
+const zerolag = new ZerolagInputAddon({
+  prompt: { type: 'character', char: '$', offset: 2 },
+});
+terminal.loadAddon(zerolag);
+
+terminal.onData((data) => {
+  if (data === '\r') {
+    const text = zerolag.pendingText;
+    zerolag.clear();
+    ws.send(text + '\r');
+  } else if (data === '\x7f') {
+    if (zerolag.removeChar() === 'flushed') ws.send(data);
+  } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
+    zerolag.addChar(data);
+  }
+});
+```
+
+[Full documentation](packages/xterm-zerolag-input/README.md)
 
 ---
 

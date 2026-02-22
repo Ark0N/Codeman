@@ -1,6 +1,6 @@
 {
   "name": "xterm-zerolag-input",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Instant keystroke feedback overlay for xterm.js — eliminates perceived input latency over high-RTT connections",
   "type": "module",
   "main": "dist/index.cjs",
@@ -32,10 +32,10 @@
     "addon"
   ],
   "license": "MIT",
-  "homepage": "https://github.com/nicobailon/claudeman/tree/master/packages/xterm-zerolag-input#readme",
+  "homepage": "https://github.com/Ark0N/Claudeman/tree/master/packages/xterm-zerolag-input#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nicobailon/claudeman.git",
+    "url": "git+https://github.com/Ark0N/Claudeman.git",
     "directory": "packages/xterm-zerolag-input"
   },
   "devDependencies": {
