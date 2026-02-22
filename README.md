@@ -358,7 +358,7 @@ Typing over a 200-300ms connection feels identical to localhost. The overlay pro
 
 Enabled by default. Works during both idle and busy sessions.
 
-> **Open Source:** The local echo overlay has been extracted into a standalone library — [`xterm-zerolag-input`](https://www.npmjs.com/package/xterm-zerolag-input) — so any developer can add zero-latency input to their xterm.js application. See [Published Packages](#-published-packages) below.
+> **Open Source:** The local echo overlay has been extracted into a standalone library — [`xterm-zerolag-input`](https://www.npmjs.com/package/xterm-zerolag-input) — so any developer can add zero-latency input to their xterm.js application. See [Published Packages](#published-packages) below.
 
 ---
 
