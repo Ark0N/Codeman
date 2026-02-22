@@ -961,6 +961,10 @@ class LocalEchoOverlay {
     // other case where the PTY has prompt text the overlay doesn't know about.
     // Without this, the overlay's opaque background covers the canvas text.
     _detectBufferText() {
+        // Skip if we already detected and the user backspaced through it —
+        // the PTY backspace echo is async, so the buffer still has stale text.
+        // Reset on clear() (Enter, Ctrl+C, tab switch).
+        if (this._bufferDetectDone) return;
         try {
             const prompt = this._findPrompt();
             if (!prompt) return;
@@ -975,6 +979,7 @@ class LocalEchoOverlay {
                 this._flushedOffset = afterPrompt.length;
                 this._flushedText = afterPrompt;
                 this._lastPromptPos = prompt;
+                this._bufferDetectDone = true;
             }
         } catch {}
     }
@@ -1017,6 +1022,7 @@ class LocalEchoOverlay {
         this.pendingText = '';
         this._flushedOffset = 0;
         this._flushedText = '';
+        this._bufferDetectDone = false; // allow re-detection after next clear
         this._persist();
         this._lastRenderKey = '';
         this._lastPromptPos = null;
