@@ -867,359 +867,352 @@ class FocusTrap {
 }
 
 /**
- * Local echo DOM overlay — shows typed characters instantly at the visible prompt
- * position for high-latency connections. Positioned by scanning the terminal buffer
- * for the ❯ prompt character, not by trusting buffer.cursorY (which reflects Ink's
- * internal cursor near the status bar).
+ * xterm-zerolag-input — Instant keystroke feedback overlay for xterm.js.
+ * Inlined from packages/xterm-zerolag-input (built output).
+ * See packages/xterm-zerolag-input/README.md for full API documentation.
  */
-class LocalEchoOverlay {
-    constructor(terminal) {
-        this.terminal = terminal;
-        // Container: positioned at prompt row, holds per-line child divs
-        this.overlay = document.createElement('div');
-        this.overlay.style.cssText = 'position:absolute;z-index:7;pointer-events:none;display:none';
-        const screen = terminal.element.querySelector('.xterm-screen');
-        // Cache font/color styles for line divs
-        this._fontFamily = terminal.options.fontFamily;
-        this._fontSize = terminal.options.fontSize + 'px';
-        this._fontWeight = terminal.options.fontWeight || 'normal';
-        this._bg = terminal.options?.theme?.background || '#0d0d0d';
-        this._color = terminal.options?.theme?.foreground || '#eeeeee';
-        this._letterSpacing = '';
-        const rows = terminal.element.querySelector('.xterm-rows');
-        if (rows) {
-            const cs = getComputedStyle(rows);
-            this._letterSpacing = cs.letterSpacing;
-            // Prefer computed color from rendered rows (matches actual rendering),
-            // fall back to theme foreground if the computed value is empty/default.
-            if (cs.color) this._color = cs.color;
-        }
-        screen.appendChild(this.overlay);
-        this.pendingText = '';
-        this._flushedOffset = 0; // chars flushed to PTY during tab switch (echo may not have arrived yet)
-        this._flushedText = '';  // stored flushed text string (avoids reading stale terminal buffer)
-        this._storageKey = 'claudeman_local_echo_pending';
-        // Clear stale text from previous page load.  Persisted text can't be
-        // backspaced (flushedOffset is lost on reload) and ghost-merges with
-        // new input, breaking editing.  Tab-switch text is already flushed to
-        // PTY directly — localStorage persistence is not needed.
-        try { localStorage.removeItem(this._storageKey); } catch {}
-        // Hide overlay when user scrolls away from bottom (prompt not in viewport).
-        // _render() checks viewportY !== baseY, but only on render triggers — scrolling
-        // alone doesn't trigger a render, so the overlay stays visible over wrong content.
-        // Listen on .xterm-viewport DOM element (terminal.onScroll fires on buffer changes).
-        // Debounce the re-render on scroll-to-bottom to avoid loadCell errors when the
-        // buffer is mid-update during rapid scroll events.
-        this._scrollTimer = null;
-        this._scrollHandler = () => {
-            try {
-                const buf = this.terminal.buffer.active;
-                if (buf.viewportY !== buf.baseY) {
-                    this.overlay.style.display = 'none';
-                    if (this._scrollTimer) { clearTimeout(this._scrollTimer); this._scrollTimer = null; }
-                } else if (this.pendingText || this._flushedOffset > 0) {
-                    // Debounce re-render — buffer lines may still be settling
-                    if (this._scrollTimer) clearTimeout(this._scrollTimer);
-                    this._scrollTimer = setTimeout(() => {
-                        this._scrollTimer = null;
-                        this._lastRenderKey = '';
-                        this._render();
-                    }, 50);
-                }
-            } catch {}
-        };
-        const viewport = terminal.element.querySelector('.xterm-viewport');
-        if (viewport) viewport.addEventListener('scroll', this._scrollHandler, { passive: true });
-        this._scrollViewport = viewport;
+
+// --- xterm-zerolag-input library (inlined) ---
+
+function _zl_getCellDimensions(terminal) {
+  const t = terminal;
+  if (t.dimensions?.css?.cell) {
+    return { width: t.dimensions.css.cell.width, height: t.dimensions.css.cell.height };
+  }
+  try {
+    const dims = t._core?._renderService?.dimensions;
+    if (dims?.css?.cell) {
+      return { width: dims.css.cell.width, height: dims.css.cell.height };
     }
+  } catch {}
+  return null;
+}
 
-    // No-op: localStorage persistence removed — stale text from previous page
-    // loads can't be edited (flushedOffset lost) and ghost-merges with new input.
-    _persist() {}
-
-    // Scan terminal buffer to find the visible ❯ prompt position (bottom-up)
-    _findPrompt() {
-        try {
-            const buffer = this.terminal.buffer.active;
-            const viewportTop = buffer.viewportY;
-            for (let row = this.terminal.rows - 1; row >= 0; row--) {
-                const line = buffer.getLine(viewportTop + row);
-                if (!line) continue;
-                const text = line.translateToString(true);
-                const idx = text.lastIndexOf('\u276f');
-                if (idx >= 0) {
-                    return { row, col: idx };
-                }
-            }
-        } catch {}
+function _zl_findPrompt(terminal, finder) {
+  try {
+    const buffer = terminal.buffer.active;
+    const viewportTop = buffer.viewportY;
+    switch (finder.type) {
+      case 'character': {
+        for (let row = terminal.rows - 1; row >= 0; row--) {
+          const line = buffer.getLine(viewportTop + row);
+          if (!line) continue;
+          const text = line.translateToString(true);
+          const idx = text.lastIndexOf(finder.char);
+          if (idx >= 0) return { row, col: idx };
+        }
+        return null;
+      }
+      case 'regex': {
+        const pattern = finder.pattern;
+        const safePattern = pattern.global ? new RegExp(pattern.source, pattern.flags.replace('g', '')) : pattern;
+        for (let row = terminal.rows - 1; row >= 0; row--) {
+          const line = buffer.getLine(viewportTop + row);
+          if (!line) continue;
+          const text = line.translateToString(true);
+          const match = text.match(safePattern);
+          if (match) return { row, col: match.index ?? 0 };
+        }
+        return null;
+      }
+      case 'custom':
+        return finder.find(terminal);
+      default:
         return null;
     }
-
-    // Auto-detect text already on the prompt line in the terminal buffer.
-    // Called on first keystroke when overlay is empty (pendingText='' and
-    // flushedOffset=0).  Handles Tab completion, arrow-key edits, and any
-    // other case where the PTY has prompt text the overlay doesn't know about.
-    // Without this, the overlay's opaque background covers the canvas text.
-    _detectBufferText() {
-        // Skip if we already detected and the user backspaced through it —
-        // the PTY backspace echo is async, so the buffer still has stale text.
-        // Reset on clear() (Enter, Ctrl+C, tab switch).
-        if (this._bufferDetectDone) return;
-        try {
-            const prompt = this._findPrompt();
-            if (!prompt) return;
-            const buf = this.terminal.buffer.active;
-            const absRow = buf.viewportY + prompt.row;
-            const line = buf.getLine(absRow);
-            if (!line) return;
-            const lineText = line.translateToString(true);
-            const textStart = prompt.col + 2; // after "❯ "
-            const afterPrompt = lineText.slice(textStart).trimEnd();
-            if (afterPrompt.length > 0) {
-                this._flushedOffset = afterPrompt.length;
-                this._flushedText = afterPrompt;
-                this._lastPromptPos = prompt;
-                this._bufferDetectDone = true;
-            }
-        } catch {}
-    }
-
-    addChar(char) {
-        // On first keystroke after overlay was empty, detect existing buffer text
-        if (!this.pendingText && !this._flushedOffset) this._detectBufferText();
-        this.pendingText += char;
-        this._persist();
-        this._render();
-    }
-
-    removeChar() {
-        if (this.pendingText.length > 0) {
-            this.pendingText = this.pendingText.slice(0, -1);
-            this._persist();
-            if (this.pendingText.length > 0 || this._flushedOffset > 0) {
-                // Re-render: either pending text remains, or flushed text exists
-                // and should stay visible so the user can continue backspacing.
-                this._render();
-            } else {
-                // Both pending and flushed are empty — hide overlay completely.
-                this._lastRenderKey = '';
-                this._lastPromptPos = null;
-                this.overlay.innerHTML = '';
-                this.overlay.style.display = 'none';
-            }
-        }
-    }
-
-    appendText(text) {
-        if (!text) return;
-        if (!this.pendingText && !this._flushedOffset) this._detectBufferText();
-        this.pendingText += text;
-        this._persist();
-        this._render();
-    }
-
-    clear() {
-        this.pendingText = '';
-        this._flushedOffset = 0;
-        this._flushedText = '';
-        this._bufferDetectDone = false; // allow re-detection after next clear
-        this._persist();
-        this._lastRenderKey = '';
-        this._lastPromptPos = null;
-        this.overlay.innerHTML = '';
-        this.overlay.style.display = 'none';
-    }
-
-    // Create a styled line div with per-character grid positioning.
-    // Each char is placed at exact col*cellW to match xterm's canvas renderer
-    // (DOM text flow drifts vs canvas due to sub-pixel glyph width differences).
-    _makeLine(text, leftPx, topPx, widthPx, cellH, cellW) {
-        const el = document.createElement('div');
-        el.style.cssText = `position:absolute;pointer-events:none`;
-        el.style.backgroundColor = this._bg;
-        el.style.left = leftPx + 'px';
-        el.style.top = topPx + 'px';
-        el.style.width = widthPx + 'px';
-        el.style.height = (cellH + 1) + 'px';
-        el.style.lineHeight = cellH + 'px';
-        // Place each character at its exact grid position
-        for (let i = 0; i < text.length; i++) {
-            const span = document.createElement('span');
-            // Match xterm.js WebGL canvas text rendering as closely as possible:
-            // - antialiased font smoothing (canvas uses grayscale, not LCD subpixel)
-            // - geometricPrecision for consistent glyph sizing
-            // - no ligatures (canvas renders each glyph independently)
-            span.style.cssText = `position:absolute;display:inline-block;text-align:center;pointer-events:none;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:geometricPrecision;font-feature-settings:'liga' 0,'calt' 0`;
-            span.style.left = (i * cellW) + 'px';
-            span.style.width = cellW + 'px';
-            span.style.fontFamily = this._fontFamily;
-            span.style.fontSize = this._fontSize;
-            span.style.fontWeight = this._fontWeight;
-            span.style.color = this._color;
-            if (this._letterSpacing) span.style.letterSpacing = this._letterSpacing;
-            span.textContent = text[i];
-            el.appendChild(span);
-        }
-        return el;
-    }
-
-    _render() {
-        if (!this.pendingText && !(this._flushedOffset > 0)) {
-            this.overlay.style.display = 'none';
-            return;
-        }
-        try {
-            // Hide overlay when scrolled up — the current prompt is at the bottom
-            // of the buffer, not in the visible viewport.  Rendering at a stale
-            // prompt position would overlap unrelated content.
-            const buf = this.terminal.buffer.active;
-            if (buf.viewportY !== buf.baseY) {
-                this.overlay.style.display = 'none';
-                return;
-            }
-
-            // Re-scan for prompt on EVERY render — Ink can move it between redraws.
-            // Cache last known position as fallback during Ink redraw flicker.
-            const prompt = this._findPrompt();
-            if (prompt) {
-                // When flushed text exists, lock the column to prevent jitter from
-                // Ink redraws that temporarily shift the ❯ prompt.  Only allow the
-                // ROW to change (terminal output may scroll the prompt down).
-                if (this._lastPromptPos && (this._flushedOffset || 0) > 0) {
-                    this._lastPromptPos = { row: prompt.row, col: this._lastPromptPos.col };
-                } else {
-                    this._lastPromptPos = prompt;
-                }
-            } else if (!this._lastPromptPos) {
-                this.overlay.style.display = 'none'; return;
-            }
-            const activePrompt = this._lastPromptPos;
-
-            const dims = this.terminal._core._renderService.dimensions;
-            const cellW = dims.css.cell.width;
-            const cellH = dims.css.cell.height;
-            const totalCols = this.terminal.cols;
-
-            // When flushed text exists alongside pending text, both render on the
-            // same prompt line but via different engines (canvas vs DOM), creating a
-            // visible font mismatch.  Fix: read the flushed portion from the terminal
-            // buffer and re-render the ENTIRE line as DOM, covering the canvas text.
-            let displayText = this.pendingText;
-            const flushed = this._flushedOffset || 0;
-            const textStart = activePrompt.col + 2; // right after "❯ "
-            if (flushed > 0) {
-                // Use stored flushed text (reliable) instead of reading from terminal
-                // buffer (which may be stale/wrong after async buffer reload on tab switch).
-                if (this._flushedText && this._flushedText.length === flushed) {
-                    displayText = this._flushedText + this.pendingText;
-                } else {
-                    // Fallback: read flushed chars from terminal buffer
-                    const promptAbsRow = buf.viewportY + activePrompt.row;
-                    const line = buf.getLine(promptAbsRow);
-                    if (line) {
-                        const lineText = line.translateToString(true);
-                        const flushedChars = lineText.slice(textStart, textStart + flushed);
-                        displayText = flushedChars + this.pendingText;
-                    }
-                }
-            }
-
-            const startCol = textStart;
-            const firstLineCols = Math.max(1, totalCols - startCol);
-
-            // Skip redundant re-renders (e.g. from flushPendingWrites at 60fps)
-            const renderKey = `${displayText.length}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}:${flushed}`;
-            if (renderKey === this._lastRenderKey && this.overlay.style.display !== 'none') return;
-            this._lastRenderKey = renderKey;
-
-            // Split text into visual lines matching terminal character-wrap behavior
-            // Line 0: starts after prompt, fits (totalCols - startCol) chars
-            // Line 1+: starts at col 0, fits totalCols chars each
-            const lines = [];
-            let remaining = displayText;
-            lines.push(remaining.slice(0, firstLineCols));
-            remaining = remaining.slice(firstLineCols);
-            while (remaining.length > 0) {
-                lines.push(remaining.slice(0, totalCols));
-                remaining = remaining.slice(totalCols);
-            }
-
-            // Position overlay container at prompt row
-            this.overlay.style.left = '0px';
-            this.overlay.style.top = (activePrompt.row * cellH) + 'px';
-
-            // Build line elements — recreate on each render (typically 1-3 divs, negligible cost)
-            this.overlay.innerHTML = '';
-            const fullWidthPx = totalCols * cellW;
-            for (let i = 0; i < lines.length; i++) {
-                const leftPx = i === 0 ? startCol * cellW : 0;
-                const widthPx = i === 0 ? (fullWidthPx - leftPx) : fullWidthPx;
-                const topPx = i * cellH;
-                const lineEl = this._makeLine(lines[i], leftPx, topPx, widthPx, cellH, cellW);
-                this.overlay.appendChild(lineEl);
-            }
-
-            // Block cursor at end of last line
-            const lastLine = lines[lines.length - 1];
-            const lastLineLeft = lines.length === 1 ? startCol : 0;
-            const cursorCol = lastLineLeft + lastLine.length;
-            if (cursorCol < totalCols) {
-                const cursor = document.createElement('span');
-                cursor.style.cssText = 'position:absolute;display:inline-block';
-                cursor.style.left = (cursorCol * cellW) + 'px';
-                cursor.style.top = ((lines.length - 1) * cellH) + 'px';
-                cursor.style.width = cellW + 'px';
-                cursor.style.height = cellH + 'px';
-                cursor.style.backgroundColor = this.terminal.options?.theme?.cursor || '#e0e0e0';
-                this.overlay.appendChild(cursor);
-            }
-
-            this.overlay.style.display = '';
-        } catch {
-            // Hide overlay on render error but preserve pendingText —
-            // next rerender() (from flushPendingWrites) will retry when terminal is ready.
-            this.overlay.innerHTML = '';
-            this.overlay.style.display = 'none';
-        }
-    }
-
-    // Refresh cached font properties from terminal options.
-    // Call after font size changes, theme changes, etc.
-    refreshFont() {
-        this._fontFamily = this.terminal.options.fontFamily;
-        this._fontSize = this.terminal.options.fontSize + 'px';
-        this._fontWeight = this.terminal.options.fontWeight || 'normal';
-        this._bg = this.terminal.options?.theme?.background || '#0d0d0d';
-        const fg = this.terminal.options?.theme?.foreground || '#eeeeee';
-        this._color = fg;
-        const rows = this.terminal.element?.querySelector('.xterm-rows');
-        if (rows) {
-            const cs = getComputedStyle(rows);
-            this._letterSpacing = cs.letterSpacing;
-            if (cs.color) this._color = cs.color;
-        }
-        // Force full re-render with updated font (clear render cache)
-        this._lastRenderKey = '';
-        if (this.pendingText) this._render();
-    }
-
-    // Re-render overlay at current prompt position without clearing pending text.
-    // Used after terminal resets/redraws that move the prompt.
-    rerender() {
-        if (this.pendingText || this._flushedOffset > 0) this._render();
-    }
-
-    get hasPending() { return this.pendingText.length > 0 || this._flushedOffset > 0; }
-
-    dispose() {
-        this.clear();
-        if (this._scrollTimer) { clearTimeout(this._scrollTimer); this._scrollTimer = null; }
-        if (this._scrollViewport && this._scrollHandler) {
-            this._scrollViewport.removeEventListener('scroll', this._scrollHandler);
-        }
-        this.overlay.remove();
-    }
+  } catch { return null; }
 }
+
+function _zl_readTextAfterPrompt(terminal, prompt, offset) {
+  try {
+    const buffer = terminal.buffer.active;
+    const absRow = buffer.viewportY + prompt.row;
+    const line = buffer.getLine(absRow);
+    if (!line) return '';
+    return line.translateToString(true).slice(prompt.col + offset).trimEnd();
+  } catch { return ''; }
+}
+
+function _zl_renderOverlay(container, params) {
+  const { lines, startCol, totalCols, cellW, cellH, promptRow, font, showCursor, cursorColor } = params;
+  container.style.left = '0px';
+  container.style.top = (promptRow * cellH) + 'px';
+  container.innerHTML = '';
+  const fullWidthPx = totalCols * cellW;
+  for (let i = 0; i < lines.length; i++) {
+    const leftPx = i === 0 ? startCol * cellW : 0;
+    const widthPx = i === 0 ? (fullWidthPx - leftPx) : fullWidthPx;
+    const topPx = i * cellH;
+    const lineEl = _zl_makeLine(lines[i], leftPx, topPx, widthPx, cellH, cellW, font);
+    container.appendChild(lineEl);
+  }
+  if (showCursor) {
+    const lastLine = lines[lines.length - 1];
+    const lastLineLeft = lines.length === 1 ? startCol : 0;
+    const cursorCol = lastLineLeft + lastLine.length;
+    if (cursorCol < totalCols) {
+      const cursor = document.createElement('span');
+      cursor.style.cssText = 'position:absolute;display:inline-block';
+      cursor.style.left = (cursorCol * cellW) + 'px';
+      cursor.style.top = ((lines.length - 1) * cellH) + 'px';
+      cursor.style.width = cellW + 'px';
+      cursor.style.height = cellH + 'px';
+      cursor.style.backgroundColor = cursorColor;
+      container.appendChild(cursor);
+    }
+  }
+  container.style.display = '';
+}
+
+function _zl_makeLine(text, leftPx, topPx, widthPx, cellH, cellW, font) {
+  const el = document.createElement('div');
+  el.style.cssText = 'position:absolute;pointer-events:none';
+  el.style.backgroundColor = font.backgroundColor;
+  el.style.left = leftPx + 'px';
+  el.style.top = topPx + 'px';
+  el.style.width = widthPx + 'px';
+  el.style.height = (cellH + 1) + 'px';
+  el.style.lineHeight = cellH + 'px';
+  for (let i = 0; i < text.length; i++) {
+    const span = document.createElement('span');
+    span.style.cssText = "position:absolute;display:inline-block;text-align:center;pointer-events:none;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:geometricPrecision;font-feature-settings:'liga' 0,'calt' 0";
+    span.style.left = (i * cellW) + 'px';
+    span.style.width = cellW + 'px';
+    span.style.fontFamily = font.fontFamily;
+    span.style.fontSize = font.fontSize;
+    span.style.fontWeight = font.fontWeight;
+    span.style.color = font.color;
+    if (font.letterSpacing) span.style.letterSpacing = font.letterSpacing;
+    span.textContent = text[i];
+    el.appendChild(span);
+  }
+  return el;
+}
+
+const _ZL_DEFAULT_PROMPT = { type: 'character', char: '>', offset: 2 };
+const _ZL_DEFAULT_BG = '#0d0d0d';
+const _ZL_DEFAULT_FG = '#eeeeee';
+const _ZL_DEFAULT_CURSOR = '#e0e0e0';
+
+class ZerolagInputAddon {
+  constructor(options) {
+    this._terminal = null;
+    this._overlay = null;
+    this._pendingText = '';
+    this._flushedOffset = 0;
+    this._flushedText = '';
+    this._bufferDetectDone = false;
+    this._lastRenderKey = '';
+    this._lastPromptPos = null;
+    this._font = { fontFamily: 'monospace', fontSize: '14px', fontWeight: 'normal', color: _ZL_DEFAULT_FG, backgroundColor: _ZL_DEFAULT_BG, letterSpacing: '' };
+    this._scrollTimer = null;
+    this._scrollHandler = null;
+    this._scrollViewport = null;
+    this._options = {
+      prompt: options?.prompt ?? _ZL_DEFAULT_PROMPT,
+      zIndex: options?.zIndex ?? 7,
+      showCursor: options?.showCursor ?? true,
+      scrollDebounceMs: options?.scrollDebounceMs ?? 50,
+      backgroundColor: options?.backgroundColor,
+      foregroundColor: options?.foregroundColor,
+      cursorColor: options?.cursorColor
+    };
+  }
+  activate(terminal) {
+    this._terminal = terminal;
+    this._overlay = document.createElement('div');
+    this._overlay.style.cssText = `position:absolute;z-index:${this._options.zIndex};pointer-events:none;display:none`;
+    const screen = terminal.element?.querySelector('.xterm-screen');
+    if (screen) screen.appendChild(this._overlay);
+    this._cacheFont();
+    this._scrollHandler = () => {
+      try {
+        const buf = this._terminal.buffer.active;
+        if (buf.viewportY !== buf.baseY) {
+          this._overlay.style.display = 'none';
+          if (this._scrollTimer) { clearTimeout(this._scrollTimer); this._scrollTimer = null; }
+        } else if (this._pendingText || this._flushedOffset > 0) {
+          if (this._scrollTimer) clearTimeout(this._scrollTimer);
+          this._scrollTimer = setTimeout(() => { this._scrollTimer = null; this._lastRenderKey = ''; this._render(); }, this._options.scrollDebounceMs);
+        }
+      } catch {}
+    };
+    const viewport = terminal.element?.querySelector('.xterm-viewport');
+    if (viewport) { viewport.addEventListener('scroll', this._scrollHandler, { passive: true }); this._scrollViewport = viewport; }
+  }
+  dispose() {
+    this.clear();
+    if (this._scrollTimer) { clearTimeout(this._scrollTimer); this._scrollTimer = null; }
+    if (this._scrollViewport && this._scrollHandler) this._scrollViewport.removeEventListener('scroll', this._scrollHandler);
+    this._overlay?.remove();
+    this._overlay = null; this._scrollViewport = null; this._scrollHandler = null; this._terminal = null;
+  }
+  addChar(char) {
+    if (!this._pendingText && !this._flushedOffset) this._detectBufferText();
+    this._pendingText += char;
+    this._render();
+  }
+  appendText(text) {
+    if (!text) return;
+    if (!this._pendingText && !this._flushedOffset) this._detectBufferText();
+    this._pendingText += text;
+    this._render();
+  }
+  removeChar() {
+    if (this._pendingText.length > 0) {
+      this._pendingText = this._pendingText.slice(0, -1);
+      if (this._pendingText.length > 0 || this._flushedOffset > 0) this._render(); else this._hide();
+      return 'pending';
+    }
+    if (this._flushedOffset > 0) {
+      this._flushedOffset--; this._flushedText = this._flushedText.slice(0, -1);
+      if (this._flushedOffset > 0) this._render(); else this._hide();
+      return 'flushed';
+    }
+    this._detectBufferText();
+    if (this._flushedOffset > 0) {
+      this._flushedOffset--; this._flushedText = this._flushedText.slice(0, -1);
+      if (this._flushedOffset > 0) this._render(); else this._hide();
+      return 'flushed';
+    }
+    return false;
+  }
+  clear() {
+    this._pendingText = ''; this._flushedOffset = 0; this._flushedText = '';
+    this._bufferDetectDone = false; this._lastRenderKey = ''; this._lastPromptPos = null;
+    this._hide();
+  }
+  setFlushed(count, text, render = true) {
+    this._flushedOffset = count; this._flushedText = text;
+    if (render) this._render();
+  }
+  getFlushed() { return { count: this._flushedOffset, text: this._flushedText }; }
+  clearFlushed() {
+    this._flushedOffset = 0; this._flushedText = '';
+    if (this._pendingText) this._render(); else this._hide();
+  }
+  rerender() {
+    if (this._pendingText || this._flushedOffset > 0) { this._lastRenderKey = ''; this._render(); }
+  }
+  refreshFont() {
+    this._cacheFont(); this._lastRenderKey = '';
+    if (this._pendingText || this._flushedOffset > 0) this._render();
+  }
+  detectBufferText() { return this._detectBufferText(); }
+  resetBufferDetection() { this._bufferDetectDone = false; }
+  undoDetection() { this._flushedOffset = 0; this._flushedText = ''; this._bufferDetectDone = false; }
+  suppressBufferDetection() { this._bufferDetectDone = true; }
+  findPrompt() {
+    if (!this._terminal) return null;
+    return _zl_findPrompt(this._terminal, this._options.prompt ?? _ZL_DEFAULT_PROMPT);
+  }
+  readPromptText() {
+    if (!this._terminal) return null;
+    const prompt = this.findPrompt();
+    if (!prompt) return null;
+    const offset = (this._options.prompt ?? _ZL_DEFAULT_PROMPT).offset ?? 2;
+    const text = _zl_readTextAfterPrompt(this._terminal, prompt, offset);
+    return text || null;
+  }
+  get pendingText() { return this._pendingText; }
+  get hasPending() { return this._pendingText.length > 0 || this._flushedOffset > 0; }
+  get state() {
+    return {
+      pendingText: this._pendingText, flushedLength: this._flushedOffset, flushedText: this._flushedText,
+      visible: this._overlay !== null && this._overlay.style.display !== 'none',
+      promptPosition: this._lastPromptPos ? { ...this._lastPromptPos } : null
+    };
+  }
+  _detectBufferText() {
+    if (this._bufferDetectDone || !this._terminal) return null;
+    try {
+      const prompt = this.findPrompt();
+      if (!prompt) return null;
+      const offset = (this._options.prompt ?? _ZL_DEFAULT_PROMPT).offset ?? 2;
+      const afterPrompt = _zl_readTextAfterPrompt(this._terminal, prompt, offset);
+      if (afterPrompt.length > 0) {
+        this._flushedOffset = afterPrompt.length; this._flushedText = afterPrompt;
+        this._lastPromptPos = prompt; this._bufferDetectDone = true;
+        return afterPrompt;
+      }
+    } catch {}
+    return null;
+  }
+  _cacheFont() {
+    if (!this._terminal) return;
+    const t = this._terminal;
+    this._font.fontFamily = t.options.fontFamily || 'monospace';
+    this._font.fontSize = (t.options.fontSize || 14) + 'px';
+    this._font.fontWeight = String(t.options.fontWeight || 'normal');
+    this._font.backgroundColor = this._options.backgroundColor ?? t.options.theme?.background ?? _ZL_DEFAULT_BG;
+    this._font.color = this._options.foregroundColor ?? t.options.theme?.foreground ?? _ZL_DEFAULT_FG;
+    this._font.letterSpacing = '';
+    const rows = t.element?.querySelector('.xterm-rows');
+    if (rows) {
+      const cs = getComputedStyle(rows);
+      this._font.letterSpacing = cs.letterSpacing;
+      if (!this._options.foregroundColor && cs.color) this._font.color = cs.color;
+    }
+  }
+  _hide() {
+    if (!this._overlay) return;
+    this._lastRenderKey = ''; this._lastPromptPos = null;
+    this._overlay.innerHTML = ''; this._overlay.style.display = 'none';
+  }
+  _render() {
+    if (!this._terminal || !this._overlay) return;
+    if (!this._pendingText && !(this._flushedOffset > 0)) { this._overlay.style.display = 'none'; return; }
+    try {
+      const buf = this._terminal.buffer.active;
+      if (buf.viewportY !== buf.baseY) { this._overlay.style.display = 'none'; return; }
+      const prompt = this.findPrompt();
+      if (prompt) {
+        if (this._lastPromptPos && this._flushedOffset > 0) {
+          this._lastPromptPos = { row: prompt.row, col: this._lastPromptPos.col };
+        } else { this._lastPromptPos = prompt; }
+      } else if (!this._lastPromptPos) { this._overlay.style.display = 'none'; return; }
+      const activePrompt = this._lastPromptPos;
+      const dims = _zl_getCellDimensions(this._terminal);
+      if (!dims) { this._overlay.style.display = 'none'; return; }
+      const { width: cellW, height: cellH } = dims;
+      const totalCols = this._terminal.cols;
+      const offset = (this._options.prompt ?? _ZL_DEFAULT_PROMPT).offset ?? 2;
+      const startCol = activePrompt.col + offset;
+      let displayText = this._pendingText;
+      if (this._flushedOffset > 0) {
+        if (this._flushedText && this._flushedText.length === this._flushedOffset) {
+          displayText = this._flushedText + this._pendingText;
+        } else {
+          const absRow = buf.viewportY + activePrompt.row;
+          const line = buf.getLine(absRow);
+          if (line) { displayText = line.translateToString(true).slice(startCol, startCol + this._flushedOffset) + this._pendingText; }
+        }
+      }
+      const renderKey = `${displayText}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}:${this._flushedOffset}`;
+      if (renderKey === this._lastRenderKey && this._overlay.style.display !== 'none') return;
+      this._lastRenderKey = renderKey;
+      const firstLineCols = Math.max(1, totalCols - startCol);
+      const lines = []; let remaining = displayText;
+      lines.push(remaining.slice(0, firstLineCols)); remaining = remaining.slice(firstLineCols);
+      while (remaining.length > 0) { lines.push(remaining.slice(0, totalCols)); remaining = remaining.slice(totalCols); }
+      const cursorColor = this._options.cursorColor ?? this._terminal.options.theme?.cursor ?? _ZL_DEFAULT_CURSOR;
+      _zl_renderOverlay(this._overlay, { lines, startCol, totalCols, cellW, cellH, promptRow: activePrompt.row, font: this._font, showCursor: this._options.showCursor, cursorColor });
+    } catch {
+      if (this._overlay) { this._overlay.innerHTML = ''; this._overlay.style.display = 'none'; }
+    }
+  }
+}
+
+// --- end xterm-zerolag-input library ---
+
+// Legacy alias — kept so the rest of app.js references work without renaming
+const LocalEchoOverlay = class extends ZerolagInputAddon {
+  constructor(terminal) {
+    super({ prompt: { type: 'character', char: '\u276f', offset: 2 } });
+    this.activate(terminal);
+  }
+};
+
 
 /**
  * Process data containing DEC 2026 sync markers.
@@ -2175,7 +2168,6 @@ class ClaudemanApp {
         this.updateConnectionLines();
         // Re-render local echo overlay at new cell dimensions/positions
         if (this._localEchoOverlay?.hasPending) {
-          this._localEchoOverlay._lastRenderKey = ''; // force re-render (cols changed)
           this._localEchoOverlay.rerender();
         }
       }, 100); // Throttle to 100ms
@@ -2224,65 +2216,24 @@ class ClaudemanApp {
         // (or a control char) is pressed — avoids out-of-order char delivery.
         if (this._localEchoEnabled) {
           if (data === '\x7f') {
-            if (this._localEchoOverlay?.pendingText) {
-              // Backspace with pending overlay text: remove from overlay only
-              this._localEchoOverlay.removeChar();
-            } else if (this._localEchoOverlay?._flushedOffset > 0) {
-              // No pending text but flushed text in PTY — send backspace to PTY
-              // so the user can delete chars that were auto-flushed during tab switch.
-              this._localEchoOverlay._flushedOffset--;
-              // Trim stored flushed text to match
-              if (this._localEchoOverlay._flushedText) {
-                this._localEchoOverlay._flushedText = this._localEchoOverlay._flushedText.slice(0, -1);
-              }
+            const source = this._localEchoOverlay?.removeChar();
+            if (source === 'flushed') {
+              // Sync app-level flushed Maps (per-session state for tab switching)
+              const { count, text } = this._localEchoOverlay.getFlushed();
               if (this._flushedOffsets?.has(this.activeSessionId)) {
-                const prev = this._flushedOffsets.get(this.activeSessionId);
-                if (prev <= 1) {
+                if (count === 0) {
                   this._flushedOffsets.delete(this.activeSessionId);
                   this._flushedTexts?.delete(this.activeSessionId);
                 } else {
-                  this._flushedOffsets.set(this.activeSessionId, prev - 1);
-                  if (this._flushedTexts?.has(this.activeSessionId)) {
-                    this._flushedTexts.set(this.activeSessionId,
-                      this._flushedTexts.get(this.activeSessionId).slice(0, -1));
-                  }
+                  this._flushedOffsets.set(this.activeSessionId, count);
+                  this._flushedTexts?.set(this.activeSessionId, text);
                 }
-              }
-              // Immediate visual feedback — re-render overlay with shortened flushed text
-              this._localEchoOverlay._lastRenderKey = '';
-              if (this._localEchoOverlay._flushedOffset > 0) {
-                this._localEchoOverlay._render();
-              } else {
-                // Fully backspaced through flushed text — hide overlay
-                this._localEchoOverlay._lastPromptPos = null;
-                this._localEchoOverlay.overlay.innerHTML = '';
-                this._localEchoOverlay.overlay.style.display = 'none';
               }
               this._pendingInput += data;
               flushInput();
-            } else if (this._localEchoOverlay) {
-              // No pending or flushed text — try detecting buffer text first
-              // (handles Tab completion, arrow edits, etc.)
-              this._localEchoOverlay._detectBufferText();
-              if (this._localEchoOverlay._flushedOffset > 0) {
-                // Found buffer text — delete last char
-                this._localEchoOverlay._flushedOffset--;
-                if (this._localEchoOverlay._flushedText) {
-                  this._localEchoOverlay._flushedText = this._localEchoOverlay._flushedText.slice(0, -1);
-                }
-                this._localEchoOverlay._lastRenderKey = '';
-                if (this._localEchoOverlay._flushedOffset > 0) {
-                  this._localEchoOverlay._render();
-                } else {
-                  this._localEchoOverlay._lastPromptPos = null;
-                  this._localEchoOverlay.overlay.innerHTML = '';
-                  this._localEchoOverlay.overlay.style.display = 'none';
-                }
-                this._pendingInput += data;
-                flushInput();
-              }
-              // else: truly nothing to delete — swallow the backspace
             }
+            // 'pending' = removed unsent text (no PTY backspace needed)
+            // false = nothing to remove (swallow the backspace)
             return;
           }
           if (/^[\r\n]+$/.test(data)) {
@@ -2356,7 +2307,7 @@ class ClaudemanApp {
               // real Tab completions from pre-existing Claude UI text.
               let baseText = '';
               try {
-                const p = this._localEchoOverlay?._findPrompt?.();
+                const p = this._localEchoOverlay?.findPrompt?.();
                 if (p) {
                   const buf = this.terminal.buffer.active;
                   const line = buf.getLine(buf.viewportY + p.row);
@@ -2380,17 +2331,13 @@ class ClaudemanApp {
                 if (!ov || ov.pendingText) return;
                 selfTab.terminal.write('', () => {
                   if (!selfTab._tabCompletionSessionId) return;
-                  ov._bufferDetectDone = false;
-                  ov._detectBufferText();
-                  if (ov._flushedOffset > 0) {
-                    const detected = ov._flushedText;
-                    if (detected !== selfTab._tabCompletionBaseText) {
-                      selfTab._tabCompletionSessionId = null;
-                      selfTab._tabCompletionRetries = 0;
-                      selfTab._tabCompletionBaseText = null;
-                      ov._lastRenderKey = '';
-                      ov._render();
-                    }
+                  ov.resetBufferDetection();
+                  const detected = ov.detectBufferText();
+                  if (detected && detected !== selfTab._tabCompletionBaseText) {
+                    selfTab._tabCompletionSessionId = null;
+                    selfTab._tabCompletionRetries = 0;
+                    selfTab._tabCompletionBaseText = null;
+                    ov.rerender();
                   }
                 });
               }, 300);
@@ -2771,17 +2718,12 @@ class ClaudemanApp {
       const self = this;
       this.terminal.write('', () => {
         if (!self._tabCompletionSessionId) return; // already resolved
-        overlay._bufferDetectDone = false;
-        overlay._detectBufferText();
-        if (overlay._flushedOffset > 0) {
-          // Compare with pre-Tab snapshot to avoid false positives from
-          // Claude's pre-existing UI text (placeholder hints, etc.).
-          const detected = overlay._flushedText;
+        overlay.resetBufferDetection();
+        const detected = overlay.detectBufferText();
+        if (detected) {
           if (detected === self._tabCompletionBaseText) {
             // Same text as before Tab — no completion yet. Undo and retry.
-            overlay._flushedOffset = 0;
-            overlay._flushedText = '';
-            overlay._bufferDetectDone = false;
+            overlay.undoDetection();
             self._tabCompletionRetries = (self._tabCompletionRetries || 0) + 1;
             if (self._tabCompletionRetries > 60) {
               self._tabCompletionSessionId = null;
@@ -2793,8 +2735,7 @@ class ClaudemanApp {
             self._tabCompletionRetries = 0;
             self._tabCompletionBaseText = null;
             if (self._tabCompletionFallback) { clearTimeout(self._tabCompletionFallback); self._tabCompletionFallback = null; }
-            overlay._lastRenderKey = '';
-            overlay._render();
+            overlay.rerender();
           }
         } else {
           // No text found yet — retry on next flush.
@@ -4957,8 +4898,8 @@ class ClaudemanApp {
       const echoText = this._localEchoOverlay?.pendingText || '';
       // Include buffer-detected flushed text (from Tab completion, etc.)
       // so it's preserved across tab switches.
-      const existingFlushed = this._localEchoOverlay?._flushedOffset || 0;
-      const existingFlushedText = this._localEchoOverlay?._flushedText || '';
+      const existingFlushed = this._localEchoOverlay?.getFlushed()?.count || 0;
+      const existingFlushedText = this._localEchoOverlay?.getFlushed()?.text || '';
       if (echoText) {
         this._sendInputAsync(this.activeSessionId, echoText);
       }
@@ -4977,7 +4918,7 @@ class ClaudemanApp {
     // After the user's first Enter, clear() resets _bufferDetectDone = false,
     // re-enabling detection for tab completion and other legitimate cases.
     if (this._localEchoOverlay && !this._flushedOffsets?.has(sessionId)) {
-      this._localEchoOverlay._bufferDetectDone = true;
+      this._localEchoOverlay.suppressBufferDetection();
     }
     this.activeSessionId = sessionId;
     try { localStorage.setItem('claudeman-active-session', sessionId); } catch {}
@@ -4994,8 +4935,11 @@ class ClaudemanApp {
     // fetch() gap: backspace is swallowed, and typing a space covers the
     // canvas text with an opaque overlay showing only the new char.
     if (this._flushedOffsets?.has(sessionId) && this._localEchoOverlay) {
-      this._localEchoOverlay._flushedOffset = this._flushedOffsets.get(sessionId);
-      this._localEchoOverlay._flushedText = this._flushedTexts?.get(sessionId) || '';
+      this._localEchoOverlay.setFlushed(
+        this._flushedOffsets.get(sessionId),
+        this._flushedTexts?.get(sessionId) || '',
+        false  // render=false: buffer not loaded yet
+      );
     }
 
     // Glow the newly-active tab
@@ -5084,17 +5028,17 @@ class ClaudemanApp {
       // Restore flushed offset and text for this session so the overlay positions
       // correctly even before the PTY echo arrives in the terminal buffer.
       if (this._flushedOffsets?.has(sessionId) && this._localEchoOverlay) {
-        this._localEchoOverlay._flushedOffset = this._flushedOffsets.get(sessionId);
-        this._localEchoOverlay._flushedText = this._flushedTexts?.get(sessionId) || '';
+        this._localEchoOverlay.setFlushed(
+          this._flushedOffsets.get(sessionId),
+          this._flushedTexts?.get(sessionId) || '',
+          false  // render=false: buffer just loaded, defer to rerender
+        );
         // Trigger render after xterm.js finishes processing the buffer data.
         // terminal.write('', callback) fires the callback after ALL previously
-        // queued writes have been parsed — so _findPrompt() can find ❯ in the buffer.
-        const overlay = this._localEchoOverlay;
+        // queued writes have been parsed — so findPrompt() can find ❯ in the buffer.
+        const zl = this._localEchoOverlay;
         this.terminal.write('', () => {
-          if (overlay._flushedOffset > 0) {
-            overlay._lastRenderKey = '';
-            overlay._render();
-          }
+          if (zl.hasPending) zl.rerender();
         });
       }
 
