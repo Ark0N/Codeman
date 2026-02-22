@@ -2336,6 +2336,30 @@ class ClaudemanApp {
               flushInput();
               return;
             }
+            // Tab key: send pending text + Tab to PTY for tab completion.
+            // Set a flag so flushPendingWrites() re-detects buffer text when
+            // the PTY response arrives (event-driven, no fixed timer).
+            if (data === '\t') {
+              const text = this._localEchoOverlay?.pendingText || '';
+              this._localEchoOverlay?.clear();
+              this._flushedOffsets?.delete(this.activeSessionId);
+              this._flushedTexts?.delete(this.activeSessionId);
+              if (text) {
+                this._pendingInput += text;
+              }
+              this._pendingInput += data;
+              if (this._inputFlushTimeout) {
+                clearTimeout(this._inputFlushTimeout);
+                this._inputFlushTimeout = null;
+              }
+              flushInput();
+              // Only arm detection if there was actual text — stray Tabs from
+              // UI navigation (Ctrl+Tab) on an empty prompt should be ignored.
+              if (text) {
+                this._tabCompletionSessionId = this.activeSessionId;
+              }
+              return;
+            }
             // Control chars (Ctrl+C, single ESC): send buffered text + control char immediately
             const text = this._localEchoOverlay?.pendingText || '';
             this._localEchoOverlay?.clear();
@@ -2699,6 +2723,19 @@ class ClaudemanApp {
     // move the ❯ prompt to a different row, making the overlay invisible.
     if (this._localEchoOverlay?.hasPending) {
       this._localEchoOverlay.rerender();
+    }
+
+    // After Tab completion: the PTY response just arrived. Detect the
+    // completed text in the buffer and render it in the overlay.
+    if (this._tabCompletionSessionId && this._tabCompletionSessionId === this.activeSessionId
+        && this._localEchoOverlay && !this._localEchoOverlay.pendingText) {
+      this._tabCompletionSessionId = null;
+      this._localEchoOverlay._bufferDetectDone = false;
+      this._localEchoOverlay._detectBufferText();
+      if (this._localEchoOverlay._flushedOffset > 0) {
+        this._localEchoOverlay._lastRenderKey = '';
+        this._localEchoOverlay._render();
+      }
     }
   }
 
@@ -4812,6 +4849,9 @@ class ClaudemanApp {
     }
     this.flickerFilterBuffer = '';
     this.flickerFilterActive = false;
+
+    // Clear tab completion detection flag — don't carry across sessions
+    this._tabCompletionSessionId = null;
 
     // Clean up pending terminal writes to prevent old session data from appearing in new session
     if (this.syncWaitTimeout) {
