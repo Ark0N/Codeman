@@ -149,13 +149,11 @@ A pixel-perfect DOM overlay inside xterm.js renders keystrokes at 0ms. Backgroun
 
 ---
 
-## Mobile
+## Mobile-Optimized Web UI
 
 The most responsive Claude Code experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work.
 
 <p align="center">
-  <img src="docs/screenshots/mobile-keyboard-closed.png" alt="Mobile — keyboard closed" width="280">
-  &nbsp;&nbsp;
   <img src="docs/screenshots/mobile-keyboard-open.png" alt="Mobile — keyboard open" width="280">
 </p>
 
@@ -182,7 +180,7 @@ claudeman web --https
 # Open on your phone: https://<your-ip>:3000
 ```
 
-> `localhost` works over plain HTTP. Use `--https` when accessing from another device.
+> `localhost` works over plain HTTP. Use `--https` when accessing from another device, or use [Tailscale](https://tailscale.com/) (recommended) — it provides a private network so you can access `http://<tailscale-ip>:3000` from your phone without TLS certificates.
 
 ---
 
