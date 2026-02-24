@@ -66,6 +66,41 @@ Claudeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com
 
 ---
 
+## Mobile-Optimized Web UI
+
+<img src="docs/screenshots/mobile-keyboard-open.png" alt="Mobile — keyboard open" width="280" align="left">
+
+The most responsive Claude Code experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work.
+
+| Terminal Apps | Claudeman Mobile |
+|:--------------|:-----------------|
+| 200-300ms input lag over remote | **Local echo — instant feedback** |
+| Tiny text, no context | Full xterm.js terminal, responsive layout |
+| No session management | Swipe between sessions, status badges |
+| No notifications | Push alerts for approvals and idle |
+| Manual reconnect after drops | tmux persistence — sessions survive anything |
+| No agent visibility | Background agents in real-time |
+| Copy-paste slash commands | One-tap `/init`, `/clear`, `/compact` buttons |
+
+<br clear="both">
+
+- **Swipe navigation** — left/right on the terminal to switch sessions (80px threshold, 300ms)
+- **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons appear above the virtual keyboard with confirmation dialogs for destructive commands
+- **Smart keyboard handling** — toolbar and terminal shift up when keyboard opens (uses `visualViewport` API with 100px threshold for iOS address bar drift)
+- **Safe area support** — respects iPhone notch and home indicator via `env(safe-area-inset-*)`
+- **44px touch targets** — all buttons meet iOS Human Interface Guidelines minimum sizes
+- **Bottom sheet case picker** — slide-up modal replaces the desktop dropdown
+- **Native momentum scrolling** — `-webkit-overflow-scrolling: touch` for buttery scroll
+
+```bash
+claudeman web --https
+# Open on your phone: https://<your-ip>:3000
+```
+
+> `localhost` works over plain HTTP. Use `--https` when accessing from another device, or use [Tailscale](https://tailscale.com/) (recommended) — it provides a private network so you can access `http://<tailscale-ip>:3000` from your phone without TLS certificates.
+
+---
+
 ## Live Agent Visualization
 
 Watch Claude's background agents work in real-time. Claudeman monitors every `Task` tool invocation and displays each agent in a draggable floating window with animated Matrix-style connection lines back to the parent session.
@@ -95,41 +130,6 @@ A pixel-perfect DOM overlay inside xterm.js renders keystrokes at 0ms. Backgroun
 - **Enabled by default** — works on both desktop and mobile, during idle and busy sessions
 
 > Extracted as a standalone library: [`xterm-zerolag-input`](https://www.npmjs.com/package/xterm-zerolag-input) — see [Published Packages](#published-packages).
-
----
-
-## Mobile-Optimized Web UI
-
-The most responsive Claude Code experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work.
-
-<p align="center">
-  <img src="docs/screenshots/mobile-keyboard-open.png" alt="Mobile — keyboard open" width="280">
-</p>
-
-| Terminal Apps | Claudeman Mobile |
-|:--------------|:-----------------|
-| 200-300ms input lag over remote | **Local echo — instant feedback** |
-| Tiny text, no context | Full xterm.js terminal, responsive layout |
-| No session management | Swipe between sessions, status badges |
-| No notifications | Push alerts for approvals and idle |
-| Manual reconnect after drops | tmux persistence — sessions survive anything |
-| No agent visibility | Background agents in real-time |
-| Copy-paste slash commands | One-tap `/init`, `/clear`, `/compact` buttons |
-
-- **Swipe navigation** — left/right on the terminal to switch sessions (80px threshold, 300ms)
-- **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons appear above the virtual keyboard with confirmation dialogs for destructive commands
-- **Smart keyboard handling** — toolbar and terminal shift up when keyboard opens (uses `visualViewport` API with 100px threshold for iOS address bar drift)
-- **Safe area support** — respects iPhone notch and home indicator via `env(safe-area-inset-*)`
-- **44px touch targets** — all buttons meet iOS Human Interface Guidelines minimum sizes
-- **Bottom sheet case picker** — slide-up modal replaces the desktop dropdown
-- **Native momentum scrolling** — `-webkit-overflow-scrolling: touch` for buttery scroll
-
-```bash
-claudeman web --https
-# Open on your phone: https://<your-ip>:3000
-```
-
-> `localhost` works over plain HTTP. Use `--https` when accessing from another device, or use [Tailscale](https://tailscale.com/) (recommended) — it provides a private network so you can access `http://<tailscale-ip>:3000` from your phone without TLS certificates.
 
 ---
 
