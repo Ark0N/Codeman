@@ -619,7 +619,10 @@ add_to_path() {
         echo "export PATH=\"$bin_dir:\$PATH\"" >> "$profile"
     fi
 
-    success "Added to $profile - restart your shell or run: source $profile"
+    # Also export for the current process so claudeman works immediately
+    export PATH="$bin_dir:$PATH"
+
+    success "Added to $profile"
 }
 
 setup_sc_alias() {
@@ -951,11 +954,13 @@ main() {
         echo ""
     fi
 
-    # Remind to reload shell if PATH was modified
+    # Check if PATH needs reload in user's shell
     local profile
     profile=$(detect_shell_profile)
-    if [[ ":$PATH:" != *":$symlink_dir:"* ]]; then
-        echo -e "  ${DIM}Restart your shell or run: source $profile${NC}"
+    if ! command -v claudeman &>/dev/null 2>&1; then
+        echo -e "  ${YELLOW}Run this to start using claudeman now:${NC}"
+        echo ""
+        echo -e "    ${CYAN}source $profile && claudeman web${NC}"
         echo ""
     fi
 }
