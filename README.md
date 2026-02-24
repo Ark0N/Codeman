@@ -22,16 +22,16 @@
 
 ---
 
-## Quick Start
+## Quick Start - Installation
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Ark0N/claudeman/master/install.sh | bash
 ```
 
-This installs Node.js, tmux, and Claude CLI if missing, clones Claudeman to `~/.claudeman/app`, builds it, and optionally sets up a systemd service (Linux) for auto-start. After install:
+This installs Node.js, tmux, and Claude CLI if missing, clones Claudeman to `~/.claudeman/app`, builds it. After install:
 
 ```bash
-claudeman web &
+claudeman web
 # Open http://localhost:3000 — press Ctrl+Enter to start your first session
 ```
 
