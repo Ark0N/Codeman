@@ -861,6 +861,16 @@ const KeyboardAccessoryBar = {
       <button class="accessory-btn" data-action="init" title="/init">/init</button>
       <button class="accessory-btn" data-action="clear" title="/clear">/clear</button>
       <button class="accessory-btn" data-action="compact" title="/compact">/compact</button>
+      <button class="accessory-btn accessory-btn-voice" data-action="voice" title="Voice input"
+              aria-label="Start voice input" aria-pressed="false"
+              style="${VoiceInput.supported ? '' : 'display:none'}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="23"/>
+          <line x1="8" y1="23" x2="16" y2="23"/>
+        </svg>
+      </button>
       <button class="accessory-btn" data-action="paste" title="Paste from clipboard">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
@@ -929,6 +939,9 @@ const KeyboardAccessoryBar = {
         }
         break;
       }
+      case 'voice':
+        VoiceInput.toggle();
+        break;
       case 'paste':
         this.pasteFromClipboard();
         break;
@@ -1420,7 +1433,8 @@ class ZerolagInputAddon {
     if (!this._terminal) return;
     const t = this._terminal;
     this._font.fontFamily = t.options.fontFamily || 'monospace';
-    this._font.fontSize = (t.options.fontSize || 14) + 'px';
+    const baseFontSize = t.options.fontSize || 14;
+    this._font.fontSize = baseFontSize + 'px';
     this._font.fontWeight = String(t.options.fontWeight || 'normal');
     this._font.backgroundColor = this._options.backgroundColor ?? t.options.theme?.background ?? _ZL_DEFAULT_BG;
     this._font.color = this._options.foregroundColor ?? t.options.theme?.foreground ?? _ZL_DEFAULT_FG;
@@ -1430,6 +1444,23 @@ class ZerolagInputAddon {
       const cs = getComputedStyle(rows);
       this._font.letterSpacing = cs.letterSpacing;
       if (!this._options.foregroundColor && cs.color) this._font.color = cs.color;
+    }
+    // Correct font size: DOM text renders larger than xterm's canvas/WebGL text
+    // at the same nominal font-size. Measure actual DOM char width and scale to
+    // match the terminal's cell width so the overlay text matches exactly.
+    const dims = _zl_getCellDimensions(t);
+    if (dims && dims.width > 0) {
+      const probe = document.createElement('span');
+      probe.style.cssText = `position:absolute;visibility:hidden;white-space:pre;font-family:${this._font.fontFamily};font-size:${baseFontSize}px;font-weight:${this._font.fontWeight};font-feature-settings:'liga' 0,'calt' 0`;
+      if (this._font.letterSpacing) probe.style.letterSpacing = this._font.letterSpacing;
+      probe.textContent = 'W';
+      document.body.appendChild(probe);
+      const domCharW = probe.getBoundingClientRect().width;
+      document.body.removeChild(probe);
+      if (domCharW > 0 && Math.abs(domCharW - dims.width) > 0.1) {
+        const corrected = baseFontSize * (dims.width / domCharW);
+        this._font.fontSize = corrected + 'px';
+      }
     }
   }
   _hide() {
@@ -2206,6 +2237,7 @@ class ClaudemanApp {
     KeyboardHandler.init();
     SwipeHandler.init();
     KeyboardAccessoryBar.init();
+    VoiceInput.init();
     this.applyHeaderVisibilitySettings();
     this.applyTabWrapSettings();
     this.applyMonitorVisibility();
@@ -3170,6 +3202,12 @@ class ClaudemanApp {
       if ((e.ctrlKey || e.metaKey) && e.key === '-') {
         e.preventDefault();
         this.decreaseFontSize();
+      }
+
+      // Ctrl/Cmd + Shift + V - toggle voice input
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'V') {
+        e.preventDefault();
+        VoiceInput.toggle();
       }
     }, true); // Use capture phase to handle before terminal
 
@@ -4404,6 +4442,9 @@ class ClaudemanApp {
         headerVersionEl.title = `Claudeman v${data.version}`;
       }
     }
+
+    // Stop any active voice recording on reconnect
+    VoiceInput.cleanup();
 
     this.sessions.clear();
     this.ralphStates.clear();

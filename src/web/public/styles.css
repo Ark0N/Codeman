@@ -1977,6 +1977,58 @@ body {
   border-color: var(--red);
 }
 
+/* Voice Input Button */
+.btn-toolbar.btn-voice {
+  padding: 0.3rem 0.5rem;
+}
+
+.btn-toolbar.btn-voice:hover {
+  color: var(--text);
+  border-color: rgba(59, 130, 246, 0.4);
+}
+
+.btn-toolbar.btn-voice.recording {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #ef4444;
+  animation: voice-pulse 1.5s ease-in-out infinite;
+}
+
+.btn-toolbar.btn-voice.recording:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.7);
+  color: #f87171;
+}
+
+@keyframes voice-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.1); opacity: 0.75; }
+}
+
+/* Voice preview overlay — shows interim transcription */
+.voice-preview {
+  position: fixed;
+  bottom: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.88);
+  color: rgba(255, 255, 255, 0.7);
+  font-style: italic;
+  font-family: var(--font-mono, monospace);
+  padding: 8px 20px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 0.85rem;
+  max-width: 80%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  z-index: 100;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
 .btn-icon-only {
   display: flex;
   align-items: center;

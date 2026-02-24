@@ -746,6 +746,32 @@ html.mobile-init .file-browser-panel {
     background: #3a3a3a;
   }
 
+  /* Voice input button */
+  .accessory-btn-voice {
+    background: #1a2a3f;
+    border-color: rgba(59, 130, 246, 0.25);
+    color: #93c5fd;
+  }
+
+  .accessory-btn-voice:active {
+    background: #2a3a5f;
+  }
+
+  .accessory-btn-voice.recording {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: rgba(239, 68, 68, 0.5);
+    color: #ef4444;
+    animation: voice-pulse 1.5s ease-in-out infinite;
+  }
+
+  /* Voice preview — positioned above accessory bar on mobile */
+  .voice-preview {
+    bottom: calc(var(--safe-area-bottom) + 94px);
+    font-size: 0.8rem;
+    max-width: 90%;
+    padding: 6px 14px;
+  }
+
   /* Add case button - compact (keeping for when shown via menu) */
   .btn-case-add {
     display: none !important;
