@@ -935,9 +935,11 @@ function _zl_readTextAfterPrompt(terminal, prompt, offset) {
 
 // Get visual cell width of a character (CJK wide chars = 2, others = 1)
 function _zl_charCellWidth(ch, terminal) {
-  if (terminal?.unicode?.getStringCellWidth) {
-    return terminal.unicode.getStringCellWidth(ch);
-  }
+  try {
+    if (terminal?.unicode?.getStringCellWidth) {
+      return terminal.unicode.getStringCellWidth(ch);
+    }
+  } catch {}
   const code = ch.codePointAt(0);
   if (code >= 0x1100 && (
     (code <= 0x115F) || // Hangul Jamo
@@ -2043,6 +2045,7 @@ class ClaudemanApp {
       cursorStyle: 'block',
       scrollback: scrollback,
       allowTransparency: true,
+      allowProposedApi: true,
     });
 
     this.fitAddon = new FitAddon.FitAddon();
@@ -14406,6 +14409,7 @@ class ClaudemanApp {
         cursorStyle: 'block',
         scrollback: 5000,
         allowTransparency: true,
+        allowProposedApi: true,
       });
 
       const fitAddon = new FitAddon.FitAddon();
