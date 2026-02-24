@@ -70,7 +70,9 @@ Claudeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com
 
 The most responsive Claude Code experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work.
 
-<img align="left" width="280" src="docs/screenshots/mobile-keyboard-open.png" alt="Mobile — keyboard open">
+<table><tr><td>
+  <img src="docs/screenshots/mobile-keyboard-open.png" alt="Mobile — keyboard open" width="320">
+</td><td>
 
 | Terminal Apps | Claudeman Mobile |
 |:--------------|:-----------------|
@@ -82,7 +84,7 @@ The most responsive Claude Code experience on any phone. Full xterm.js terminal 
 | No agent visibility | Background agents in real-time |
 | Copy-paste slash commands | One-tap `/init`, `/clear`, `/compact` buttons |
 
-<br clear="all">
+</td></tr></table>
 
 - **Swipe navigation** — left/right on the terminal to switch sessions (80px threshold, 300ms)
 - **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard. Destructive commands (`/clear`, `/compact`) require a double-press to confirm — first tap arms the button, second tap executes — so you never fire one by accident on a bumpy commute
