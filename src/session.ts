@@ -18,7 +18,7 @@
 import { EventEmitter } from 'node:events';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
-import { SessionState, SessionStatus, SessionConfig, RalphTrackerState, RalphTodoItem, ActiveBashTool, NiceConfig, DEFAULT_NICE_CONFIG } from './types.js';
+import { SessionState, SessionStatus, SessionConfig, RalphTrackerState, RalphTodoItem, ActiveBashTool, NiceConfig, DEFAULT_NICE_CONFIG, type ClaudeMode } from './types.js';
 import type { TerminalMultiplexer, MuxSession } from './mux-interface.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
@@ -321,6 +321,10 @@ export class Session extends EventEmitter {
   // Claude model override (e.g., 'opus', 'sonnet', 'haiku')
   private _model: string | undefined;
 
+  // Claude CLI startup permission mode
+  private _claudeMode: ClaudeMode = 'dangerously-skip-permissions';
+  private _allowedTools: string | undefined;
+
   // Session color for visual differentiation
   private _color: import('./types.js').SessionColor = 'default';
 
@@ -374,6 +378,10 @@ export class Session extends EventEmitter {
     niceConfig?: NiceConfig;  // Nice prioritying configuration
     /** Claude model override (e.g., 'opus', 'sonnet', 'haiku') */
     model?: string;
+    /** Claude CLI startup permission mode */
+    claudeMode?: ClaudeMode;
+    /** Comma-separated allowed tools (for 'allowedTools' mode) */
+    allowedTools?: string;
   }) {
     super();
     this.setMaxListeners(25);
@@ -407,6 +415,14 @@ export class Session extends EventEmitter {
     // Apply model override if provided
     if (config.model) {
       this._model = config.model;
+    }
+
+    // Apply Claude CLI permission mode
+    if (config.claudeMode) {
+      this._claudeMode = config.claudeMode;
+    }
+    if (config.allowedTools) {
+      this._allowedTools = config.allowedTools;
     }
 
     // Initialize task tracker and forward events (store handlers for cleanup)
@@ -572,6 +588,36 @@ export class Session extends EventEmitter {
   // Nice priority config getters and setters
   get niceConfig(): NiceConfig {
     return { ...this._niceConfig };
+  }
+
+  /** Claude CLI startup permission mode */
+  get claudeMode(): ClaudeMode {
+    return this._claudeMode;
+  }
+
+  /** Allowed tools list (for 'allowedTools' mode) */
+  get allowedTools(): string | undefined {
+    return this._allowedTools;
+  }
+
+  /**
+   * Build Claude CLI permission flags based on the configured mode.
+   * Returns an array of args to pass to the CLI.
+   */
+  private _buildPermissionArgs(): string[] {
+    switch (this._claudeMode) {
+      case 'dangerously-skip-permissions':
+        return ['--dangerously-skip-permissions'];
+      case 'allowedTools':
+        if (this._allowedTools) {
+          return ['--allowedTools', this._allowedTools];
+        }
+        // Fall back to normal mode if no tools specified
+        return [];
+      case 'normal':
+      default:
+        return [];
+    }
   }
 
   /**
@@ -829,9 +875,9 @@ export class Session extends EventEmitter {
   /**
    * Starts an interactive Claude CLI session with full terminal support.
    *
-   * This spawns Claude CLI with `--dangerously-skip-permissions` flag in
-   * interactive mode. If mux wrapping is enabled, the session runs inside
-   * a tmux session for persistence across disconnects.
+   * This spawns Claude CLI in interactive mode with the configured permission
+   * mode (default: `--dangerously-skip-permissions`). If mux wrapping is enabled,
+   * the session runs inside a tmux session for persistence across disconnects.
    *
    * @throws {Error} If a process is already running in this session
    *
@@ -872,7 +918,7 @@ export class Session extends EventEmitter {
         let needsNewSession = false;
         if (this._muxSession && this._mux.isPaneDead(this._muxSession.muxName)) {
           console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
-          const newPid = await this._mux.respawnPane(this.id, this.workingDir, 'claude', this._niceConfig, this._model);
+          const newPid = await this._mux.respawnPane(this.id, this.workingDir, 'claude', this._niceConfig, this._model, this._claudeMode, this._allowedTools);
           if (!newPid) {
             console.error('[Session] Failed to respawn pane, will create new session');
             needsNewSession = true;
@@ -888,7 +934,7 @@ export class Session extends EventEmitter {
           console.log('[Session] Attaching to existing mux session:', this._muxSession!.muxName);
         } else {
           // Create a new mux session
-          this._muxSession = await this._mux.createSession(this.id, this.workingDir, 'claude', this._name, this._niceConfig, this._model);
+          this._muxSession = await this._mux.createSession(this.id, this.workingDir, 'claude', this._name, this._niceConfig, this._model, this._claudeMode, this._allowedTools);
           console.log('[Session] Created mux session:', this._muxSession.muxName);
           // No extra sleep — createSession() already waits for tmux readiness
         }
@@ -961,7 +1007,7 @@ export class Session extends EventEmitter {
       try {
         // Pass --session-id to use the SAME ID as the Claudeman session
         // This ensures subagents can be directly matched to the correct tab
-        const args = ['--dangerously-skip-permissions', '--session-id', this.id];
+        const args = [...this._buildPermissionArgs(), '--session-id', this.id];
         if (this._model) args.push('--model', this._model);
         this.ptyProcess = pty.spawn('claude', args, {
           name: 'xterm-256color',

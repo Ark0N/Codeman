@@ -7,7 +7,7 @@
  */
 
 import type { EventEmitter } from 'node:events';
-import type { ProcessStats, PersistedRespawnConfig, NiceConfig } from './types.js';
+import type { ProcessStats, PersistedRespawnConfig, NiceConfig, ClaudeMode } from './types.js';
 
 /**
  * Multiplexer session metadata.
@@ -71,6 +71,8 @@ export interface TerminalMultiplexer extends EventEmitter {
     name?: string,
     niceConfig?: NiceConfig,
     model?: string,
+    claudeMode?: ClaudeMode,
+    allowedTools?: string,
   ): Promise<MuxSession>;
 
   /**
@@ -163,5 +165,5 @@ export interface TerminalMultiplexer extends EventEmitter {
   isPaneDead(muxName: string): boolean;
 
   /** Respawn a dead pane with a fresh command. Returns the new PID or null on failure. */
-  respawnPane(sessionId: string, workingDir: string, mode: 'claude' | 'shell', niceConfig?: NiceConfig, model?: string): Promise<number | null>;
+  respawnPane(sessionId: string, workingDir: string, mode: 'claude' | 'shell', niceConfig?: NiceConfig, model?: string, claudeMode?: ClaudeMode, allowedTools?: string): Promise<number | null>;
 }

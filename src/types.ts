@@ -106,6 +106,14 @@ export interface LifecycleEntry {
 // ========== Session Types ==========
 
 /**
+ * Claude CLI startup permission mode.
+ * - `'dangerously-skip-permissions'`: Bypass all permission prompts (default)
+ * - `'normal'`: Standard mode with permission prompts
+ * - `'allowedTools'`: Only allow specific tools (requires allowedTools list)
+ */
+export type ClaudeMode = 'dangerously-skip-permissions' | 'normal' | 'allowedTools';
+
+/**
  * Configuration for creating a new session
  */
 export interface SessionConfig {

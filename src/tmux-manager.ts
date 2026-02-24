@@ -30,7 +30,7 @@ import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { ProcessStats, PersistedRespawnConfig, getErrorMessage, NiceConfig, DEFAULT_NICE_CONFIG, type PaneInfo } from './types.js';
+import { ProcessStats, PersistedRespawnConfig, getErrorMessage, NiceConfig, DEFAULT_NICE_CONFIG, type PaneInfo, type ClaudeMode } from './types.js';
 import { wrapWithNice } from './utils/nice-wrapper.js';
 import { SAFE_PATH_PATTERN } from './utils/regex-patterns.js';
 import type { TerminalMultiplexer, MuxSession, MuxSessionWithStats } from './mux-interface.js';
@@ -109,6 +109,31 @@ function isValidPath(path: string): boolean {
     return false;
   }
   return SAFE_PATH_PATTERN.test(path);
+}
+
+/**
+ * Build Claude CLI permission flags for the tmux command string.
+ * Validates allowedTools to prevent command injection.
+ */
+function buildClaudePermissionFlags(claudeMode?: ClaudeMode, allowedTools?: string): string {
+  const mode = claudeMode || 'dangerously-skip-permissions';
+  switch (mode) {
+    case 'dangerously-skip-permissions':
+      return ' --dangerously-skip-permissions';
+    case 'allowedTools':
+      if (allowedTools) {
+        // Sanitize: allow tool names with patterns like Bash(git:*), space/comma-separated
+        // Block shell metacharacters: ; & | $ ` \ { } < > ' " newlines
+        const hasDangerousChars = /[;&|$`\\{}<>'"[\]\n\r]/.test(allowedTools);
+        if (!hasDangerousChars) {
+          return ` --allowedTools "${allowedTools}"`;
+        }
+      }
+      // Fall back to normal mode if tools are invalid or missing
+      return '';
+    case 'normal':
+      return '';
+  }
 }
 
 /**
@@ -204,6 +229,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     name?: string,
     niceConfig?: NiceConfig,
     model?: string,
+    claudeMode?: ClaudeMode,
+    allowedTools?: string,
   ): Promise<MuxSession> {
     const muxName = `claudeman-${sessionId.slice(0, 8)}`;
 
@@ -250,7 +277,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const safeModel = (model && /^[a-zA-Z0-9._-]+$/.test(model)) ? model : undefined;
     const modelFlag = (mode === 'claude' && safeModel) ? ` --model ${safeModel}` : '';
     const baseCmd = mode === 'claude'
-      ? `claude --dangerously-skip-permissions --session-id "${sessionId}"${modelFlag}`
+      ? `claude${buildClaudePermissionFlags(claudeMode, allowedTools)} --session-id "${sessionId}"${modelFlag}`
       : '$SHELL';
 
     const config = niceConfig || DEFAULT_NICE_CONFIG;
@@ -394,7 +421,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Uses `tmux respawn-pane -k` to restart the command in the same pane,
    * preserving the session and its scrollback buffer.
    */
-  async respawnPane(sessionId: string, workingDir: string, mode: 'claude' | 'shell', niceConfig?: NiceConfig, model?: string): Promise<number | null> {
+  async respawnPane(sessionId: string, workingDir: string, mode: 'claude' | 'shell', niceConfig?: NiceConfig, model?: string, claudeMode?: ClaudeMode, allowedTools?: string): Promise<number | null> {
     const session = this.sessions.get(sessionId);
     if (!session) return null;
     const muxName = session.muxName;
@@ -415,7 +442,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const safeModel = (model && /^[a-zA-Z0-9._-]+$/.test(model)) ? model : undefined;
     const modelFlag = (mode === 'claude' && safeModel) ? ` --model ${safeModel}` : '';
     const baseCmd = mode === 'claude'
-      ? `claude --dangerously-skip-permissions --session-id "${sessionId}"${modelFlag}`
+      ? `claude${buildClaudePermissionFlags(claudeMode, allowedTools)} --session-id "${sessionId}"${modelFlag}`
       : '$SHELL';
 
     const config = niceConfig || DEFAULT_NICE_CONFIG;

@@ -21,6 +21,7 @@ import { execSync } from 'node:child_process';
 import { homedir, totalmem, freemem, loadavg, cpus } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { Session, ClaudeMessage, type BackgroundTask, type RalphTrackerState, type RalphTodoItem, type ActiveBashTool } from '../session.js';
+import type { ClaudeMode } from '../types.js';
 import { fileStreamManager } from '../file-stream-manager.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
 import type { TerminalMultiplexer } from '../mux-interface.js';
@@ -839,6 +840,7 @@ export class WebServer extends EventEmitter {
       const globalNice = await this.getGlobalNiceConfig();
       const modelConfig = await this.getModelConfig();
       const model = (body.mode !== 'shell') ? modelConfig?.defaultModel : undefined;
+      const claudeModeConfig = await this.getClaudeModeConfig();
       const session = new Session({
         workingDir,
         mode: body.mode || 'claude',
@@ -847,6 +849,8 @@ export class WebServer extends EventEmitter {
         useMux: true,
         niceConfig: globalNice,
         model,
+        claudeMode: claudeModeConfig.claudeMode,
+        allowedTools: claudeModeConfig.allowedTools,
       });
 
       this.sessions.set(session.id, session);
@@ -2631,6 +2635,7 @@ export class WebServer extends EventEmitter {
       const niceConfig = await this.getGlobalNiceConfig();
       const qsModelConfig = await this.getModelConfig();
       const qsModel = (mode !== 'shell') ? qsModelConfig?.defaultModel : undefined;
+      const qsClaudeModeConfig = await this.getClaudeModeConfig();
       const session = new Session({
         workingDir: casePath,
         mux: this.mux,
@@ -2638,6 +2643,8 @@ export class WebServer extends EventEmitter {
         mode: mode,
         niceConfig: niceConfig,
         model: qsModel,
+        claudeMode: qsClaudeModeConfig.claudeMode,
+        allowedTools: qsClaudeModeConfig.allowedTools,
       });
 
       // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting
@@ -4681,6 +4688,18 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     return undefined;
   }
 
+  // Helper to get Claude CLI startup mode from settings
+  private async getClaudeModeConfig(): Promise<{ claudeMode?: ClaudeMode; allowedTools?: string }> {
+    const settings = await this.readSettings();
+    const claudeMode = settings.claudeMode as string | undefined;
+    const allowedTools = settings.allowedTools as string | undefined;
+    // Only return valid modes
+    if (claudeMode === 'dangerously-skip-permissions' || claudeMode === 'normal' || claudeMode === 'allowedTools') {
+      return { claudeMode, allowedTools };
+    }
+    return {};
+  }
+
   // Helper to get model configuration from settings
   private async getModelConfig(): Promise<{ defaultModel?: string; agentTypeOverrides?: Record<string, string> } | null> {
     const settings = await this.readSettings();
@@ -5309,6 +5328,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
             const sessionName = savedState?.name || muxSession.name || muxSession.muxName;
 
             // Create a session object for this mux session
+            const recoveryClaudeMode = await this.getClaudeModeConfig();
             const session = new Session({
               id: muxSession.sessionId,  // Preserve the original session ID
               workingDir: muxSession.workingDir,
@@ -5316,7 +5336,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
               name: sessionName,
               mux: this.mux,
               useMux: true,
-              muxSession: muxSession  // Pass the existing session so startInteractive() can attach to it
+              muxSession: muxSession,  // Pass the existing session so startInteractive() can attach to it
+              claudeMode: recoveryClaudeMode.claudeMode,
+              allowedTools: recoveryClaudeMode.allowedTools,
             });
 
             // Update session name if it was a "Restored:" placeholder or doesn't match saved name
