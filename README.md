@@ -70,14 +70,7 @@ Claudeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com
 
 The most responsive Claude Code experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work.
 
-<table>
-<tr>
-<td width="440" align="center" valign="top">
-  <br>
-  <img src="docs/screenshots/mobile-keyboard-open.png" alt="Mobile — keyboard open" width="420">
-  <br><br>
-</td>
-<td valign="top">
+<img align="left" width="440" src="docs/screenshots/mobile-keyboard-open.png" alt="Mobile — keyboard open" hspace="16">
 
 | Terminal Apps | Claudeman Mobile |
 |:--------------|:-----------------|
@@ -85,13 +78,11 @@ The most responsive Claude Code experience on any phone. Full xterm.js terminal 
 | Tiny text, no context | Full xterm.js terminal, responsive layout |
 | No session management | Swipe between sessions, status badges |
 | No notifications | Push alerts for approvals and idle |
-| Manual reconnect after drops | tmux persistence |
+| Manual reconnect after drops | tmux persistence — sessions survive anything |
 | No agent visibility | Background agents in real-time |
-| Copy-paste slash commands | One-tap `/init` |
+| Copy-paste slash commands | One-tap `/init`, `/clear`, `/compact` buttons |
 
-</td>
-</tr>
-</table>
+<br clear="all">
 
 - **Swipe navigation** — left/right on the terminal to switch sessions (80px threshold, 300ms)
 - **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard. Destructive commands (`/clear`, `/compact`) require a double-press to confirm — first tap arms the button, second tap executes — so you never fire one by accident on a bumpy commute
