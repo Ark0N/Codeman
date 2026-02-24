@@ -231,6 +231,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const pathExport = claudeDir ? `export PATH="${claudeDir}:$PATH" && ` : '';
 
     const envExports = [
+      'export LANG=en_US.UTF-8',
+      'export LC_ALL=en_US.UTF-8',
       'unset CLAUDECODE',
       'unset COLORTERM',
       'export CLAUDEMAN_MUX=1',
@@ -392,6 +394,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const claudeDir = findClaudeDir();
     const pathExport = claudeDir ? `export PATH="${claudeDir}:$PATH" && ` : '';
     const envExports = [
+      'export LANG=en_US.UTF-8',
+      'export LC_ALL=en_US.UTF-8',
       'unset CLAUDECODE',
       'unset COLORTERM',
       'export CLAUDEMAN_MUX=1',

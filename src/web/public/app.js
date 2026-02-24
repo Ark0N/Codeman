@@ -967,9 +967,43 @@ class LocalEchoOverlay {
         this.overlay.style.display = 'none';
     }
 
+    // Get visual cell width of a character (CJK wide chars = 2, others = 1)
+    _charCellWidth(ch) {
+        if (this.terminal.unicode && this.terminal.unicode.getStringCellWidth) {
+            return this.terminal.unicode.getStringCellWidth(ch);
+        }
+        // Fallback: detect CJK wide characters by Unicode range
+        const code = ch.codePointAt(0);
+        if (code >= 0x1100 && (
+            (code <= 0x115F) || // Hangul Jamo
+            (code >= 0x2E80 && code <= 0x303E) || // CJK Radicals, Kangxi, Ideographic
+            (code >= 0x3040 && code <= 0x33BF) || // Hiragana, Katakana, Bopomofo, CJK Compat
+            (code >= 0x3400 && code <= 0x4DBF) || // CJK Unified Ext A
+            (code >= 0x4E00 && code <= 0xA4CF) || // CJK Unified, Yi
+            (code >= 0xA960 && code <= 0xA97C) || // Hangul Jamo Extended-A
+            (code >= 0xAC00 && code <= 0xD7A3) || // Hangul Syllables
+            (code >= 0xF900 && code <= 0xFAFF) || // CJK Compat Ideographs
+            (code >= 0xFE30 && code <= 0xFE6F) || // CJK Compat Forms
+            (code >= 0xFF01 && code <= 0xFF60) || // Fullwidth Forms
+            (code >= 0xFFE0 && code <= 0xFFE6) || // Fullwidth Signs
+            (code >= 0x1F000 && code <= 0x1FBFF) || // Mahjong, Domino, Emoji
+            (code >= 0x20000 && code <= 0x2FFFF) || // CJK Unified Ext B-F
+            (code >= 0x30000 && code <= 0x3FFFF)    // CJK Unified Ext G+
+        )) return 2;
+        return 1;
+    }
+
+    // Get visual cell width of a string
+    _stringCellWidth(str) {
+        let w = 0;
+        for (const ch of str) w += this._charCellWidth(ch);
+        return w;
+    }
+
     // Create a styled line div with per-character grid positioning.
     // Each char is placed at exact col*cellW to match xterm's canvas renderer
     // (DOM text flow drifts vs canvas due to sub-pixel glyph width differences).
+    // CJK wide characters occupy 2 cell widths.
     _makeLine(text, leftPx, topPx, widthPx, cellH, cellW) {
         const el = document.createElement('div');
         el.style.cssText = `position:absolute;pointer-events:none`;
@@ -979,18 +1013,21 @@ class LocalEchoOverlay {
         el.style.width = widthPx + 'px';
         el.style.height = (cellH + 1) + 'px';
         el.style.lineHeight = cellH + 'px';
-        // Place each character at its exact grid position
-        for (let i = 0; i < text.length; i++) {
+        // Place each character at its exact grid position, respecting wide chars
+        let colOffset = 0;
+        for (const ch of text) {
+            const charWidth = this._charCellWidth(ch);
             const span = document.createElement('span');
             span.style.cssText = `position:absolute;display:inline-block;text-align:center;pointer-events:none`;
-            span.style.left = (i * cellW) + 'px';
-            span.style.width = cellW + 'px';
+            span.style.left = (colOffset * cellW) + 'px';
+            span.style.width = (charWidth * cellW) + 'px';
             span.style.fontFamily = this._fontFamily;
             span.style.fontSize = this._fontSize;
             span.style.fontWeight = this._fontWeight;
             span.style.color = this._color;
-            span.textContent = text[i];
+            span.textContent = ch;
             el.appendChild(span);
+            colOffset += charWidth;
         }
         return el;
     }
@@ -1024,16 +1061,38 @@ class LocalEchoOverlay {
             if (renderKey === this._lastRenderKey && this.overlay.style.display !== 'none') return;
             this._lastRenderKey = renderKey;
 
-            // Split text into visual lines matching terminal character-wrap behavior
-            // Line 0: starts after prompt, fits (totalCols - startCol) chars
-            // Line 1+: starts at col 0, fits totalCols chars each
+            // Split text into visual lines matching terminal character-wrap behavior.
+            // Uses visual column width (CJK wide chars = 2 cols) instead of string length.
+            // Line 0: starts after prompt, fits (totalCols - startCol) visual cols
+            // Line 1+: starts at col 0, fits totalCols visual cols each
             const lines = [];
-            let remaining = this.pendingText;
-            lines.push(remaining.slice(0, firstLineCols));
-            remaining = remaining.slice(firstLineCols);
-            while (remaining.length > 0) {
-                lines.push(remaining.slice(0, totalCols));
-                remaining = remaining.slice(totalCols);
+            const chars = [...this.pendingText]; // proper Unicode iteration
+            let ci = 0;
+            // First line: limited columns after prompt
+            {
+                let lineStr = '';
+                let lineCols = 0;
+                while (ci < chars.length) {
+                    const cw = this._charCellWidth(chars[ci]);
+                    if (lineCols + cw > firstLineCols) break;
+                    lineStr += chars[ci];
+                    lineCols += cw;
+                    ci++;
+                }
+                lines.push(lineStr);
+            }
+            // Subsequent lines: full terminal width
+            while (ci < chars.length) {
+                let lineStr = '';
+                let lineCols = 0;
+                while (ci < chars.length) {
+                    const cw = this._charCellWidth(chars[ci]);
+                    if (lineCols + cw > totalCols) break;
+                    lineStr += chars[ci];
+                    lineCols += cw;
+                    ci++;
+                }
+                lines.push(lineStr);
             }
 
             // Position overlay container at prompt row
@@ -1051,10 +1110,10 @@ class LocalEchoOverlay {
                 this.overlay.appendChild(lineEl);
             }
 
-            // Block cursor at end of last line
+            // Block cursor at end of last line (use visual width for CJK support)
             const lastLine = lines[lines.length - 1];
             const lastLineLeft = lines.length === 1 ? startCol : 0;
-            const cursorCol = lastLineLeft + lastLine.length;
+            const cursorCol = lastLineLeft + this._stringCellWidth(lastLine);
             if (cursorCol < totalCols) {
                 const cursor = document.createElement('span');
                 cursor.style.cssText = 'position:absolute;display:inline-block';
@@ -1883,6 +1942,15 @@ class ClaudemanApp {
 
     this.fitAddon = new FitAddon.FitAddon();
     this.terminal.loadAddon(this.fitAddon);
+
+    // Activate Unicode 11 addon for proper CJK wide character rendering
+    if (typeof Unicode11Addon !== 'undefined') {
+      try {
+        const unicode11Addon = new Unicode11Addon.Unicode11Addon();
+        this.terminal.loadAddon(unicode11Addon);
+        this.terminal.unicode.activeVersion = '11';
+      } catch (_e) { /* Unicode11 addon failed — default Unicode handling used */ }
+    }
 
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
@@ -14092,6 +14160,15 @@ class ClaudemanApp {
 
       const fitAddon = new FitAddon.FitAddon();
       terminal.loadAddon(fitAddon);
+
+      // Activate Unicode 11 for CJK wide character support in teammate terminals
+      if (typeof Unicode11Addon !== 'undefined') {
+        try {
+          const unicode11Addon = new Unicode11Addon.Unicode11Addon();
+          terminal.loadAddon(unicode11Addon);
+          terminal.unicode.activeVersion = '11';
+        } catch (_e) { /* Unicode11 addon failed */ }
+      }
 
       try {
         terminal.open(body);

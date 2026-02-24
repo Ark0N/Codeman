@@ -10,7 +10,7 @@
   },
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
-    "build": "tsc && chmod +x dist/index.js && mkdir -p dist/web dist/templates dist/web/public/vendor && cp -r src/web/public dist/web/ && cp src/templates/case-template.md dist/templates/ && cp node_modules/xterm/css/xterm.css dist/web/public/vendor/ && npx esbuild node_modules/xterm/lib/xterm.js --minify --outfile=dist/web/public/vendor/xterm.min.js && npx esbuild node_modules/xterm-addon-fit/lib/xterm-addon-fit.js --minify --outfile=dist/web/public/vendor/xterm-addon-fit.min.js && cp node_modules/xterm-addon-webgl/lib/xterm-addon-webgl.js dist/web/public/vendor/xterm-addon-webgl.min.js && npx esbuild dist/web/public/app.js --minify --drop:console --outfile=dist/web/public/app.js --allow-overwrite && npx esbuild dist/web/public/styles.css --minify --outfile=dist/web/public/styles.css --allow-overwrite && npx esbuild dist/web/public/mobile.css --minify --outfile=dist/web/public/mobile.css --allow-overwrite && for f in dist/web/public/*.js dist/web/public/*.css dist/web/public/*.html dist/web/public/vendor/*.js dist/web/public/vendor/*.css; do [ -f \"$f\" ] && gzip -9 -k -f \"$f\" && { brotli -9 -k -f \"$f\" 2>/dev/null || true; }; done",
+    "build": "tsc && chmod +x dist/index.js && mkdir -p dist/web dist/templates dist/web/public/vendor && cp -r src/web/public dist/web/ && cp src/templates/case-template.md dist/templates/ && cp node_modules/xterm/css/xterm.css dist/web/public/vendor/ && npx esbuild node_modules/xterm/lib/xterm.js --minify --outfile=dist/web/public/vendor/xterm.min.js && npx esbuild node_modules/xterm-addon-fit/lib/xterm-addon-fit.js --minify --outfile=dist/web/public/vendor/xterm-addon-fit.min.js && cp node_modules/xterm-addon-webgl/lib/xterm-addon-webgl.js dist/web/public/vendor/xterm-addon-webgl.min.js && npx esbuild node_modules/xterm-addon-unicode11/lib/xterm-addon-unicode11.js --minify --outfile=dist/web/public/vendor/xterm-addon-unicode11.min.js && npx esbuild dist/web/public/app.js --minify --drop:console --outfile=dist/web/public/app.js --allow-overwrite && npx esbuild dist/web/public/styles.css --minify --outfile=dist/web/public/styles.css --allow-overwrite && npx esbuild dist/web/public/mobile.css --minify --outfile=dist/web/public/mobile.css --allow-overwrite && for f in dist/web/public/*.js dist/web/public/*.css dist/web/public/*.html dist/web/public/vendor/*.js dist/web/public/vendor/*.css; do [ -f \"$f\" ] && gzip -9 -k -f \"$f\" && { brotli -9 -k -f \"$f\" 2>/dev/null || true; }; done",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "web": "node dist/index.js web",
@@ -47,6 +47,7 @@
     "uuid": "^10.0.0",
     "xterm": "^5.3.0",
     "xterm-addon-fit": "^0.8.0",
+    "xterm-addon-unicode11": "^0.6.0",
     "xterm-addon-webgl": "^0.16.0",
     "zod": "^4.3.6"
   },
