@@ -16005,16 +16005,71 @@ class ClaudemanApp {
       const stats = muxSession.stats || { memoryMB: 0, cpuPercent: 0, childCount: 0 };
       const modeClass = muxSession.mode === 'shell' ? 'shell' : '';
 
+      // Look up rich session data by sessionId
+      const session = this.sessions.get(muxSession.sessionId);
+      const status = session ? session.status : 'unknown';
+      const isWorking = session ? session.isWorking : false;
+
+      // Status badge styling
+      let statusLabel, statusClass;
+      if (status === 'idle' && !isWorking) {
+        statusLabel = 'IDLE';
+        statusClass = 'status-idle';
+      } else if (status === 'busy' || isWorking) {
+        statusLabel = 'WORKING';
+        statusClass = 'status-working';
+      } else if (status === 'stopped') {
+        statusLabel = 'STOPPED';
+        statusClass = 'status-stopped';
+      } else {
+        statusLabel = status.toUpperCase();
+        statusClass = '';
+      }
+
+      // Token and cost info
+      const tokens = session && session.tokens ? session.tokens : null;
+      const totalCost = session ? session.totalCost : 0;
+      const model = session ? (session.cliModel || '') : '';
+      const modelShort = model.includes('opus') ? 'opus' : model.includes('sonnet') ? 'sonnet' : model.includes('haiku') ? 'haiku' : '';
+
+      // Ralph/Todo progress
+      const todoStats = session ? session.ralphTodoStats : null;
+      let todoHtml = '';
+      if (todoStats && todoStats.total > 0) {
+        const pct = Math.round((todoStats.completed / todoStats.total) * 100);
+        todoHtml = `<span class="process-stat todo-progress">${todoStats.completed}/${todoStats.total} (${pct}%)</span>`;
+      }
+
+      // Format tokens
+      let tokenHtml = '';
+      if (tokens && tokens.total > 0) {
+        const totalK = (tokens.total / 1000).toFixed(1);
+        tokenHtml = `<span class="process-stat tokens">${totalK}k tok</span>`;
+      }
+
+      // Format cost
+      let costHtml = '';
+      if (totalCost > 0) {
+        costHtml = `<span class="process-stat cost">$${totalCost.toFixed(2)}</span>`;
+      }
+
+      // Model badge
+      let modelHtml = '';
+      if (modelShort) {
+        modelHtml = `<span class="monitor-model-badge ${modelShort}">${modelShort}</span>`;
+      }
+
       html += `
         <div class="process-item">
-          <span class="process-mode ${modeClass}">${muxSession.mode}</span>
+          <span class="monitor-status-badge ${statusClass}">${statusLabel}</span>
           <div class="process-info">
-            <div class="process-name">${this.escapeHtml(muxSession.name || muxSession.muxName)}</div>
+            <div class="process-name">${modelHtml} ${this.escapeHtml(muxSession.name || muxSession.muxName)}</div>
             <div class="process-meta">
+              ${tokenHtml}
+              ${costHtml}
+              ${todoHtml}
               <span class="process-stat memory">${stats.memoryMB}MB</span>
               <span class="process-stat cpu">${stats.cpuPercent}%</span>
-              <span class="process-stat children">${stats.childCount} children</span>
-              <span>PID: ${muxSession.pid}</span>
             </div>
           </div>
           <div class="process-actions">
@@ -16072,15 +16127,32 @@ class ClaudemanApp {
 
   async killMuxSession(sessionId) {
     if (!confirm('Kill this mux session?')) return;
+    await this._doKillMuxSession(sessionId);
+  }
 
+  async _doKillMuxSession(sessionId) {
     try {
-      await fetch(`/api/mux-sessions/${sessionId}`, { method: 'DELETE' });
-      this.muxSessions = this.muxSessions.filter(s => s.sessionId !== sessionId);
-      this.renderMuxSessions();
-      this.showToast('Tmux session killed', 'success');
+      // Kill via sessions API (cleans up tab + tmux)
+      await fetch('/api/sessions/' + sessionId + '?killMux=true', { method: 'DELETE' });
+      this._cleanupSessionData(sessionId);
+      if (this.activeSessionId === sessionId) {
+        this.activeSessionId = null;
+        try { localStorage.removeItem('claudeman-active-session'); } catch (ignored) {}
+        if (this.sessionOrder.length > 0 && this.sessions.size > 0) {
+          this.selectSession(this.sessionOrder[0]);
+        } else {
+          this.terminal.clear();
+          this.showWelcome();
+        }
+      }
+      this.renderSessionTabs();
     } catch (err) {
-      this.showToast('Failed to kill tmux session', 'error');
+      // Fallback: just kill mux directly
+      try { await fetch('/api/mux-sessions/' + sessionId, { method: 'DELETE' }); } catch (ignored) {}
     }
+    this.muxSessions = this.muxSessions.filter(function(s) { return s.sessionId !== sessionId; });
+    this.renderMuxSessions();
+    this.showToast('Session killed', 'success');
   }
 
   async reconcileMuxSessions() {

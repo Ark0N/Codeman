@@ -4291,6 +4291,53 @@ kbd {
   color: var(--yellow);
 }
 
+/* Monitor status badges */
+.monitor-status-badge {
+  font-size: 0.55rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  min-width: 52px;
+  text-align: center;
+}
+.monitor-status-badge.status-idle {
+  background: rgba(234, 179, 8, 0.2);
+  color: var(--yellow);
+}
+.monitor-status-badge.status-working {
+  background: rgba(74, 222, 128, 0.2);
+  color: var(--green);
+  animation: pulse-working 2s ease-in-out infinite;
+}
+.monitor-status-badge.status-stopped {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--red, #ef4444);
+}
+@keyframes pulse-working {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* Monitor model badges */
+.monitor-model-badge {
+  font-size: 0.55rem;
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.monitor-model-badge.opus { background: rgba(168, 85, 247, 0.2); color: #c084fc; }
+.monitor-model-badge.sonnet { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+.monitor-model-badge.haiku { background: rgba(74, 222, 128, 0.2); color: #4ade80; }
+
+/* Monitor stat colors */
+.process-stat.tokens { color: var(--accent-hover); }
+.process-stat.cost { color: #f59e0b; }
+.process-stat.todo-progress { color: #c084fc; }
+
 /* Combined Monitor Panel (Tmux Sessions + Background Tasks) */
 .monitor-panel {
   position: fixed;
