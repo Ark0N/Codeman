@@ -806,27 +806,19 @@ main() {
         fi
     fi
 
-    # Claude CLI
+    # Claude CLI (required)
     info "Checking Claude CLI..."
     if ! check_claude; then
-        if prompt_yes_no "Claude CLI is not installed. Install it now?"; then
-            info "Installing Claude CLI..."
-            download_to_stdout https://claude.ai/install.sh | bash
-            # Rehash to pick up new binary
-            hash -r 2>/dev/null || true
-            if check_claude; then
-                local claude_path
-                claude_path=$(get_claude_path)
-                success "Claude CLI installed at $claude_path"
-            else
-                warn "Claude CLI installation may have failed. Install manually:"
-                echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}"
-            fi
+        info "Installing Claude CLI..."
+        download_to_stdout https://claude.ai/install.sh | bash
+        # Rehash to pick up new binary
+        hash -r 2>/dev/null || true
+        if check_claude; then
+            local claude_path
+            claude_path=$(get_claude_path)
+            success "Claude CLI installed at $claude_path"
         else
-            warn "Claude CLI is required to run AI sessions."
-            echo -e "  ${DIM}Install later with:${NC}"
-            echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}"
-            echo ""
+            die "Claude CLI installation failed. Install manually with: curl -fsSL https://claude.ai/install.sh | bash"
         fi
     else
         local claude_path

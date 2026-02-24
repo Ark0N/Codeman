@@ -232,6 +232,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     const claudeDir = findClaudeDir();
+    if (!claudeDir && mode === 'claude') {
+      throw new Error('Claude CLI not found. Install it with: curl -fsSL https://claude.ai/install.sh | bash');
+    }
     const pathExport = claudeDir ? `export PATH="${claudeDir}:$PATH" && ` : '';
 
     const envExports = [
@@ -257,18 +260,26 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // Build the full command to run inside tmux
       const fullCmd = `${pathExport}${envExports} && ${cmd}`;
 
-      // Create tmux session in detached mode using execSync so tmux server
-      // cold-start (common on macOS first run) completes before we query it.
-      // -d: don't attach, -s: session name, -c: starting directory
-      // -x/-y: initial window size
-      //
-      // CRITICAL: set remain-on-exit BEFORE spawning the command. If the command
-      // exits quickly (e.g. Claude CLI not found), tmux destroys the session
-      // before we can query it. Setting it as a server default first prevents this.
-      const shellCmd = fullCmd.replace(/'/g, "'\\''");
+      // Create tmux session in two steps to handle cold-start (no server running):
+      // 1. Create session with default shell (starts tmux server, session stays alive)
+      // 2. Set remain-on-exit + other options (server now exists)
+      // 3. Send actual command via send-keys
+      // This avoids the race where the command exits before remain-on-exit is set.
+      const shellCmd = fullCmd.replace(/"/g, '\\"');
       execSync(
-        `tmux set-option -g remain-on-exit on 2>/dev/null; tmux new-session -ds "${muxName}" -c "${workingDir}" -x 120 -y 40 bash -c '${shellCmd}'`,
+        `tmux new-session -ds "${muxName}" -c "${workingDir}" -x 120 -y 40`,
         { cwd: workingDir, timeout: EXEC_TIMEOUT_MS, stdio: 'ignore' }
+      );
+
+      // Set remain-on-exit now that the server is running
+      try {
+        execSync(`tmux set-option -t "${muxName}" remain-on-exit on`, { timeout: EXEC_TIMEOUT_MS, stdio: 'ignore' });
+      } catch { /* Non-critical */ }
+
+      // Send the actual command to the session
+      execSync(
+        `tmux send-keys -t "${muxName}" "${shellCmd}" Enter`,
+        { timeout: EXEC_TIMEOUT_MS, stdio: 'ignore' }
       );
 
       // Wait for tmux session to be queryable
