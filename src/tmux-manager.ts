@@ -260,25 +260,24 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // Build the full command to run inside tmux
       const fullCmd = `${pathExport}${envExports} && ${cmd}`;
 
-      // Create tmux session in two steps to handle cold-start (no server running):
-      // 1. Create session with default shell (starts tmux server, session stays alive)
-      // 2. Set remain-on-exit + other options (server now exists)
-      // 3. Send actual command via send-keys
-      // This avoids the race where the command exits before remain-on-exit is set.
-      const shellCmd = fullCmd.replace(/"/g, '\\"');
+      // Create tmux session in three steps to handle cold-start (no server running)
+      // and avoid the race where the command exits before remain-on-exit is set:
+      // 1. Create session with default shell (starts tmux server, stays alive)
+      // 2. Set remain-on-exit (server now exists, session won't vanish on exit)
+      // 3. Replace shell with actual command via respawn-pane (no terminal echo)
       execSync(
         `tmux new-session -ds "${muxName}" -c "${workingDir}" -x 120 -y 40`,
         { cwd: workingDir, timeout: EXEC_TIMEOUT_MS, stdio: 'ignore' }
       );
 
-      // Set remain-on-exit now that the server is running
+      // Set remain-on-exit now that the server is running — must be before respawn-pane
       try {
         execSync(`tmux set-option -t "${muxName}" remain-on-exit on`, { timeout: EXEC_TIMEOUT_MS, stdio: 'ignore' });
       } catch { /* Non-critical */ }
 
-      // Send the actual command to the session
+      // Replace the shell with the actual command (no echo in terminal)
       execSync(
-        `tmux send-keys -t "${muxName}" "${shellCmd}" Enter`,
+        `tmux respawn-pane -k -t "${muxName}" bash -c ${JSON.stringify(fullCmd)}`,
         { timeout: EXEC_TIMEOUT_MS, stdio: 'ignore' }
       );
 
