@@ -967,5 +967,25 @@ main() {
     fi
 }
 
+update() {
+    if [[ ! -d "$INSTALL_DIR/.git" ]]; then
+        die "Claudeman is not installed at $INSTALL_DIR. Run the installer first."
+    fi
+
+    info "Updating Claudeman..."
+    cd "$INSTALL_DIR"
+    git fetch --quiet origin
+    git reset --hard origin/master --quiet
+    npm install --quiet --no-fund --no-audit 2>/dev/null || npm install --no-fund --no-audit
+    npm run build --quiet 2>/dev/null || npm run build
+    success "Updated to $(node -e "console.log(require('./package.json').version)")"
+    echo ""
+    echo -e "  ${DIM}Restart claudeman web to use the new version.${NC}"
+    echo ""
+}
+
 # Wrap in main to prevent partial execution on curl | bash
-main "$@"
+case "${1:-}" in
+    update) update ;;
+    *)      main "$@" ;;
+esac

@@ -31,12 +31,14 @@ curl -fsSL https://raw.githubusercontent.com/Ark0N/claudeman/master/install.sh |
 This installs Node.js, tmux, and Claude CLI if missing, clones Claudeman to `~/.claudeman/app`, builds it, and optionally sets up a systemd service (Linux) for auto-start. After install:
 
 ```bash
-claudeman web
+claudeman web &
 # Open http://localhost:3000 — press Ctrl+Enter to start your first session
 ```
 
-Stop with Ctrl+C.
-
+**Update to latest version:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/Ark0N/claudeman/master/install.sh | bash -s update
+```
 
 <details>
 <summary><strong>Run as a background service</strong></summary>
