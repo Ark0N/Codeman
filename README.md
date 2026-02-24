@@ -70,9 +70,9 @@ Claudeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com
 
 The most responsive Claude Code experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work.
 
-<table><tr><td width="340" valign="top">
-  <img src="docs/screenshots/mobile-keyboard-open.png" alt="Mobile — keyboard open" width="320">
-</td><td valign="top">
+<table><tr><td width="40%" valign="top">
+  <img src="docs/screenshots/mobile-keyboard-open.png" alt="Mobile — keyboard open">
+</td><td width="60%" valign="top">
 
 | Terminal Apps | Claudeman Mobile |
 |:--------------|:-----------------|
