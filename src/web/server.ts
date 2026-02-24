@@ -3948,10 +3948,25 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   // Get system CPU and memory usage
   private getSystemStats(): { cpu: number; memory: { usedMB: number; totalMB: number; percent: number } } {
     try {
-      // Memory stats
       const totalMem = totalmem();
-      const freeMem = freemem();
-      const usedMem = totalMem - freeMem;
+
+      // macOS: os.freemem() only returns truly free pages, not cached/purgeable memory.
+      // Use vm_stat to get accurate used memory (wired + active + compressed).
+      let usedMem: number;
+      if (process.platform === 'darwin') {
+        try {
+          const vmstat = execSync('vm_stat', { encoding: 'utf-8', timeout: 2000 });
+          const pageSize = parseInt(vmstat.match(/page size of (\d+)/)?.[1] || '4096', 10);
+          const wired = parseInt(vmstat.match(/Pages wired down:\s+(\d+)/)?.[1] || '0', 10);
+          const active = parseInt(vmstat.match(/Pages active:\s+(\d+)/)?.[1] || '0', 10);
+          const compressed = parseInt(vmstat.match(/Pages occupied by compressor:\s+(\d+)/)?.[1] || '0', 10);
+          usedMem = (wired + active + compressed) * pageSize;
+        } catch {
+          usedMem = totalMem - freemem();
+        }
+      } else {
+        usedMem = totalMem - freemem();
+      }
 
       // CPU load average (1 min) as percentage (rough approximation)
       const load = loadavg()[0];
