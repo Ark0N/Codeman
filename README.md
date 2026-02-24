@@ -5,7 +5,7 @@
 <h2 align="center">The missing control plane for Claude Code</h2>
 
 <p align="center">
-  <em>24/7 Autonomous Sessions &bull; Live Agent Visualization &bull; Zero-Lag Input Overlay &bull; Mobile-First UI &bull; Respawn Controller &bull; Multi-Session Dashboard &bull; Ralph Loop Tracking</em>
+  <em>Agent Visualization &bull; Zero-Lag Input Overlay &bull; Mobile-First UI &bull; Respawn Controller &bull; Multi-Session Dashboard </em>
 </p>
 
 <p align="center">
