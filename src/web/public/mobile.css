@@ -320,11 +320,11 @@ html.mobile-init .file-browser-panel {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 40px;
-    height: 40px;
+    width: 26px;
+    height: 26px;
     background: #1a2a3f;
     border: 1px solid rgba(59, 130, 246, 0.3);
-    border-radius: 6px;
+    border-radius: 4px;
     color: #93c5fd;
     cursor: pointer;
     flex-shrink: 0;
@@ -332,8 +332,8 @@ html.mobile-init .file-browser-panel {
   }
 
   .btn-voice-mobile svg {
-    width: 16px;
-    height: 16px;
+    width: 13px;
+    height: 13px;
   }
 
   .btn-voice-mobile:active {
