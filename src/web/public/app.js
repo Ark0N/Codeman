@@ -752,7 +752,7 @@ const VoiceInput = {
         }
         this.stop();
       }
-    }, 5000);
+    }, 3000);
   },
 
   _iosStabilityCheck(transcript) {
@@ -808,14 +808,16 @@ const VoiceInput = {
   },
 
   _showButtons() {
-    // Desktop: show the toolbar button
     const desktopBtn = document.getElementById('voiceInputBtn');
     if (desktopBtn) desktopBtn.style.display = '';
+    const mobileBtn = document.querySelector('[data-action="voice"]');
+    if (mobileBtn) mobileBtn.style.display = '';
   },
 
   /** Cleanup on SSE reconnect or page unload */
   cleanup() {
     if (this.isRecording) this.stop();
+    this.recognition = null;
     if (this.previewEl) {
       this.previewEl.remove();
       this.previewEl = null;
@@ -863,7 +865,7 @@ const KeyboardAccessoryBar = {
       <button class="accessory-btn" data-action="compact" title="/compact">/compact</button>
       <button class="accessory-btn accessory-btn-voice" data-action="voice" title="Voice input"
               aria-label="Start voice input" aria-pressed="false"
-              style="${VoiceInput.supported ? '' : 'display:none'}">
+              style="${!VoiceInput.supported ? 'display:none' : ''}">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
           <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
@@ -2236,8 +2238,8 @@ class ClaudemanApp {
     // Initialize mobile handlers
     KeyboardHandler.init();
     SwipeHandler.init();
-    KeyboardAccessoryBar.init();
     VoiceInput.init();
+    KeyboardAccessoryBar.init();
     this.applyHeaderVisibilitySettings();
     this.applyTabWrapSettings();
     this.applyMonitorVisibility();
