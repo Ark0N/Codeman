@@ -2040,6 +2040,49 @@ body {
   -webkit-backdrop-filter: blur(8px);
 }
 
+.voice-preview-badge {
+  display: inline-block;
+  font-size: 0.6rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: rgba(59, 130, 246, 0.3);
+  color: #60a5fa;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-style: normal;
+  vertical-align: middle;
+}
+
+.voice-provider-status {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.voice-provider-status.active {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.1);
+}
+
+.form-row input[type="password"] {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-family: inherit;
+}
+
+.form-row input[type="password"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .btn-icon-only {
   display: flex;
   align-items: center;

@@ -590,11 +590,185 @@ const SwipeHandler = {
 };
 
 // ============================================================================
-// Voice Input (Web Speech API)
+// Voice Input (Deepgram Nova-3 + Web Speech API fallback)
 // ============================================================================
 
 /**
- * VoiceInput - Speech-to-text using the Web Speech API.
+ * DeepgramProvider - Speech-to-text via Deepgram Nova-3 WebSocket API.
+ * Direct browser-to-Deepgram connection (no server proxy).
+ * Uses MediaRecorder to capture audio and streams via WebSocket.
+ */
+const DeepgramProvider = {
+  _ws: null,
+  _mediaRecorder: null,
+  _stream: null,
+  _silenceTimeout: null,
+  _onResult: null,
+  _onError: null,
+  _onEnd: null,
+
+  /**
+   * Start streaming audio to Deepgram.
+   * @param {object} opts - { apiKey, language, keyterms[], onResult(text, isFinal), onError(msg), onEnd() }
+   */
+  async start(opts) {
+    this._onResult = opts.onResult;
+    this._onError = opts.onError;
+    this._onEnd = opts.onEnd;
+
+    // 1. Get microphone access
+    try {
+      this._stream = await navigator.mediaDevices.getUserMedia({
+        audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true }
+      });
+    } catch (err) {
+      const msg = err.name === 'NotAllowedError'
+        ? 'Microphone access denied. Check browser settings.'
+        : 'Microphone error: ' + err.message;
+      this._onError?.(msg);
+      this._cleanup();
+      return;
+    }
+
+    // 2. Build WebSocket URL
+    const params = new URLSearchParams({
+      model: 'nova-3',
+      smart_format: 'true',
+      punctuate: 'true',
+      interim_results: 'true',
+      utterance_end_ms: '1500',
+      vad_events: 'true',
+    });
+    if (opts.language && opts.language !== 'multi') {
+      params.set('language', opts.language);
+    } else if (opts.language === 'multi') {
+      params.set('detect_language', 'true');
+    }
+    if (opts.keyterms?.length) {
+      for (const term of opts.keyterms) {
+        const trimmed = term.trim();
+        if (trimmed) params.append('keywords', trimmed + ':2');
+      }
+    }
+
+    // 3. Connect WebSocket
+    const wsUrl = `wss://api.deepgram.com/v1/listen?${params}`;
+    try {
+      this._ws = new WebSocket(wsUrl, ['token', opts.apiKey]);
+    } catch (err) {
+      this._onError?.('Failed to connect to Deepgram: ' + err.message);
+      this._cleanup();
+      return;
+    }
+
+    this._ws.onopen = () => {
+      // 4. Start MediaRecorder once connected
+      this._startRecording();
+    };
+
+    this._ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'Results' && data.channel?.alternatives?.[0]) {
+          const alt = data.channel.alternatives[0];
+          const transcript = alt.transcript || '';
+          if (transcript) {
+            const isFinal = data.is_final === true;
+            this._onResult?.(transcript, isFinal);
+            this._resetSilenceTimeout();
+          }
+        }
+      } catch (_e) {
+        // Ignore parse errors for non-JSON messages
+      }
+    };
+
+    this._ws.onerror = () => {
+      // WebSocket onerror doesn't carry useful info — onclose handles it
+    };
+
+    this._ws.onclose = (event) => {
+      if (event.code === 1008) {
+        this._onError?.('Authentication failed. Check your Deepgram API key in Settings > Voice.');
+      } else if (event.code !== 1000) {
+        this._onError?.('Deepgram connection closed: ' + (event.reason || `code ${event.code}`));
+      }
+      this._stopRecording();
+      this._onEnd?.();
+    };
+  },
+
+  _startRecording() {
+    if (!this._stream || !this._ws || this._ws.readyState !== WebSocket.OPEN) return;
+
+    // Pick best supported MIME type
+    const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+    let mimeType;
+    for (const mt of mimeTypes) {
+      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(mt)) {
+        mimeType = mt;
+        break;
+      }
+    }
+
+    const recorderOpts = mimeType ? { mimeType } : {};
+    try {
+      this._mediaRecorder = new MediaRecorder(this._stream, recorderOpts);
+    } catch (err) {
+      this._onError?.('MediaRecorder failed: ' + err.message);
+      this._cleanup();
+      return;
+    }
+
+    this._mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0 && this._ws?.readyState === WebSocket.OPEN) {
+        this._ws.send(event.data);
+      }
+    };
+
+    this._mediaRecorder.start(250); // Send chunks every 250ms
+    this._resetSilenceTimeout();
+  },
+
+  _stopRecording() {
+    if (this._mediaRecorder && this._mediaRecorder.state !== 'inactive') {
+      try { this._mediaRecorder.stop(); } catch (_e) { /* already stopped */ }
+    }
+    // Stop all mic tracks
+    if (this._stream) {
+      this._stream.getTracks().forEach(t => t.stop());
+    }
+  },
+
+  _resetSilenceTimeout() {
+    clearTimeout(this._silenceTimeout);
+    this._silenceTimeout = setTimeout(() => {
+      this.stop();
+    }, 3000);
+  },
+
+  stop() {
+    clearTimeout(this._silenceTimeout);
+    this._silenceTimeout = null;
+    this._stopRecording();
+    if (this._ws && this._ws.readyState === WebSocket.OPEN) {
+      try { this._ws.close(1000); } catch (_e) { /* ignore */ }
+    }
+  },
+
+  _cleanup() {
+    this.stop();
+    this._ws = null;
+    this._mediaRecorder = null;
+    this._stream = null;
+    this._onResult = null;
+    this._onError = null;
+    this._onEnd = null;
+  }
+};
+
+/**
+ * VoiceInput - Speech-to-text with Deepgram Nova-3 (primary) and Web Speech API (fallback).
  * Toggle mode: tap mic to start, tap again to stop. Auto-stops after silence.
  * Shows interim transcription in a floating preview overlay.
  * Inserts final text into the active session (user presses Enter to submit).
@@ -608,11 +782,38 @@ const VoiceInput = {
   _lastTranscript: '',
   _stabilityTimer: null,
   _accumulatedFinal: '',
+  _activeProvider: null, // 'deepgram' | 'webspeech' | null
 
   init() {
     this._initRecognition();
     // Always show buttons — if unsupported, toggle() shows a toast
     this._showButtons();
+  },
+
+  // --- Deepgram config (localStorage only, never sent to server) ---
+
+  _getDeepgramConfig() {
+    try {
+      return JSON.parse(localStorage.getItem('claudeman-voice-settings') || '{}');
+    } catch (_e) {
+      return {};
+    }
+  },
+
+  _saveDeepgramConfig(config) {
+    localStorage.setItem('claudeman-voice-settings', JSON.stringify(config));
+  },
+
+  _shouldUseDeepgram() {
+    const cfg = this._getDeepgramConfig();
+    return !!(cfg.apiKey && cfg.apiKey.trim());
+  },
+
+  /** Get the active provider name for display */
+  getActiveProviderName() {
+    if (this._shouldUseDeepgram()) return 'Deepgram Nova-3';
+    if (this.supported) return 'Web Speech API';
+    return 'None';
   },
 
   /** Try to create a SpeechRecognition instance */
@@ -627,9 +828,9 @@ const VoiceInput = {
     this.recognition.lang = 'en-US';
     this.recognition.maxAlternatives = 1;
 
-    this.recognition.onresult = (e) => this._onResult(e);
-    this.recognition.onerror = (e) => this._onError(e);
-    this.recognition.onend = () => this._onEnd();
+    this.recognition.onresult = (e) => this._onWebSpeechResult(e);
+    this.recognition.onerror = (e) => this._onWebSpeechError(e);
+    this.recognition.onend = () => this._onWebSpeechEnd();
   },
 
   toggle() {
@@ -642,17 +843,78 @@ const VoiceInput = {
 
   start() {
     if (this.isRecording) return;
-    // Lazy-init: retry if recognition was cleaned up or not available at page load
-    if (!this.recognition) this._initRecognition();
-    if (!this.supported) {
-      app.showToast('Voice input not supported in this browser', 'warning');
-      return;
-    }
     if (!app.activeSessionId) {
       app.showToast('No active session', 'warning');
       return;
     }
+
+    if (this._shouldUseDeepgram()) {
+      this._startDeepgram();
+    } else {
+      this._startWebSpeech();
+    }
+  },
+
+  _startDeepgram() {
+    const cfg = this._getDeepgramConfig();
     this.isRecording = true;
+    this._activeProvider = 'deepgram';
+    this._accumulatedFinal = '';
+    this._lastTranscript = '';
+    this._updateButtons('recording');
+    this._showPreview('Listening...', 'deepgram');
+
+    const keyterms = (cfg.keyterms || 'claudeman, tmux, respawn, subagent, ralph, fastify, xterm, pty')
+      .split(',').map(t => t.trim()).filter(Boolean);
+
+    DeepgramProvider.start({
+      apiKey: cfg.apiKey,
+      language: cfg.language || 'en-US',
+      keyterms,
+      onResult: (text, isFinal) => {
+        if (!this.isRecording) return;
+        if (isFinal) {
+          this._accumulatedFinal += text;
+          this._hidePreview();
+          this._insertText(this._accumulatedFinal);
+          this.stop();
+        } else {
+          const display = this._accumulatedFinal + text;
+          this._showPreview(display, 'deepgram');
+        }
+      },
+      onError: (msg) => {
+        const wasRecording = this.isRecording;
+        this.stop();
+        if (wasRecording) app.showToast(msg, 'error');
+      },
+      onEnd: () => {
+        if (this.isRecording) {
+          if (this._accumulatedFinal) {
+            this._insertText(this._accumulatedFinal);
+          }
+          this.stop();
+        }
+      }
+    });
+
+    // Haptic feedback on mobile
+    if (navigator.vibrate) navigator.vibrate(50);
+  },
+
+  _startWebSpeech() {
+    // Lazy-init: retry if recognition was cleaned up or not available at page load
+    if (!this.recognition) this._initRecognition();
+    if (!this.supported) {
+      if (!this._shouldUseDeepgram()) {
+        app.showToast('Voice input not available. Configure Deepgram in Settings > Voice.', 'warning');
+      } else {
+        app.showToast('Voice input not supported in this browser', 'warning');
+      }
+      return;
+    }
+    this.isRecording = true;
+    this._activeProvider = 'webspeech';
     this._accumulatedFinal = '';
     this._lastTranscript = '';
     this._updateButtons('recording');
@@ -681,16 +943,23 @@ const VoiceInput = {
     this._stabilityTimer = null;
     this._updateButtons('idle');
     this._hidePreview();
-    try {
-      this.recognition.stop();
-    } catch (_e) {
-      // Already stopped — ignore
+
+    if (this._activeProvider === 'deepgram') {
+      DeepgramProvider.stop();
+    } else if (this._activeProvider === 'webspeech') {
+      try {
+        this.recognition?.stop();
+      } catch (_e) {
+        // Already stopped — ignore
+      }
     }
+    this._activeProvider = null;
+
     // Haptic feedback on mobile
     if (navigator.vibrate) navigator.vibrate([30, 50, 30]);
   },
 
-  _onResult(event) {
+  _onWebSpeechResult(event) {
     this._resetSilenceTimeout();
     let interim = '';
     let finalText = '';
@@ -717,7 +986,7 @@ const VoiceInput = {
     }
   },
 
-  _onError(event) {
+  _onWebSpeechError(event) {
     const wasRecording = this.isRecording;
     this.stop();
     if (!wasRecording) return;
@@ -740,7 +1009,7 @@ const VoiceInput = {
     }
   },
 
-  _onEnd() {
+  _onWebSpeechEnd() {
     // Recognition ended (browser auto-stopped or we called stop())
     if (this.isRecording) {
       // Ended unexpectedly while still recording — finalize any accumulated text
@@ -753,8 +1022,44 @@ const VoiceInput = {
 
   _insertText(text) {
     if (!app.activeSessionId || !text.trim()) return;
-    // Send text to session input (user presses Enter to submit)
-    app.sendInput(text.trim()).catch(() => {});
+    const trimmed = text.trim();
+    if (app._localEchoEnabled && app._localEchoOverlay) {
+      // Local echo on: inject into overlay so backspace/editing works (same as paste).
+      app._localEchoOverlay.appendText(trimmed);
+      setTimeout(() => { if (app.terminal) app.terminal.focus(); }, 150);
+    } else {
+      // Local echo off: show editable compose overlay before sending to PTY.
+      this._showComposeOverlay(trimmed);
+    }
+  },
+
+  /** Show an editable compose overlay so the user can review/edit before sending */
+  _showComposeOverlay(text) {
+    document.querySelector('.voice-compose-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'voice-compose-overlay paste-overlay';
+    overlay.innerHTML = `
+      <div class="paste-dialog">
+        <textarea class="paste-textarea">${text.replace(/</g, '&lt;')}</textarea>
+        <div class="paste-actions">
+          <button class="paste-cancel">Cancel</button>
+          <button class="paste-send">Send</button>
+        </div>
+      </div>
+    `;
+    const textarea = overlay.querySelector('textarea');
+    const send = () => {
+      const val = textarea.value.trim();
+      overlay.remove();
+      if (val) app.sendInput(val).catch(() => {});
+    };
+    const cancel = () => overlay.remove();
+    overlay.querySelector('.paste-cancel').addEventListener('click', cancel);
+    overlay.querySelector('.paste-send').addEventListener('click', send);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) cancel(); });
+    document.body.appendChild(overlay);
+    textarea.focus();
+    textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
   },
 
   _resetSilenceTimeout() {
@@ -785,14 +1090,23 @@ const VoiceInput = {
     }
   },
 
-  _showPreview(text) {
+  _showPreview(text, provider) {
     if (!this.previewEl) {
       this.previewEl = document.createElement('div');
       this.previewEl.className = 'voice-preview';
       this.previewEl.setAttribute('aria-live', 'polite');
       document.body.appendChild(this.previewEl);
     }
-    this.previewEl.textContent = text || 'Listening...';
+    this.previewEl.textContent = '';
+    // Add provider badge for Deepgram
+    if (provider === 'deepgram') {
+      const badge = document.createElement('span');
+      badge.className = 'voice-preview-badge';
+      badge.textContent = 'DG';
+      this.previewEl.appendChild(badge);
+      this.previewEl.appendChild(document.createTextNode(' '));
+    }
+    this.previewEl.appendChild(document.createTextNode(text || 'Listening...'));
     this.previewEl.style.display = '';
   },
 
@@ -832,7 +1146,9 @@ const VoiceInput = {
   /** Cleanup on SSE reconnect or page unload */
   cleanup() {
     if (this.isRecording) this.stop();
+    DeepgramProvider._cleanup();
     this.recognition = null;
+    this._activeProvider = null;
     if (this.previewEl) {
       this.previewEl.remove();
       this.previewEl = null;
@@ -10674,6 +10990,21 @@ class ClaudemanApp {
       if (perm === 'granted') permStatus.classList.add('granted');
       else if (perm === 'denied') permStatus.classList.add('denied');
     }
+    // Voice settings (loaded from localStorage only)
+    const voiceCfg = VoiceInput._getDeepgramConfig();
+    document.getElementById('voiceDeepgramKey').value = voiceCfg.apiKey || '';
+    document.getElementById('voiceLanguage').value = voiceCfg.language || 'en-US';
+    document.getElementById('voiceKeyterms').value = voiceCfg.keyterms || 'claudeman, tmux, respawn, subagent, ralph, fastify, xterm, pty';
+    // Reset key visibility to hidden
+    const keyInput = document.getElementById('voiceDeepgramKey');
+    keyInput.type = 'password';
+    document.getElementById('voiceKeyToggleBtn').textContent = 'Show';
+    // Update provider status
+    const providerName = VoiceInput.getActiveProviderName();
+    const providerEl = document.getElementById('voiceProviderStatus');
+    providerEl.textContent = providerName;
+    providerEl.className = 'voice-provider-status' + (providerName.startsWith('Deepgram') ? ' active' : '');
+
     // Reset to first tab and wire up tab switching
     this.switchSettingsTab('settings-display');
     const modal = document.getElementById('appSettingsModal');
@@ -10706,6 +11037,18 @@ class ClaudemanApp {
     if (this.activeFocusTrap) {
       this.activeFocusTrap.deactivate();
       this.activeFocusTrap = null;
+    }
+  }
+
+  toggleDeepgramKeyVisibility() {
+    const input = document.getElementById('voiceDeepgramKey');
+    const btn = document.getElementById('voiceKeyToggleBtn');
+    if (input.type === 'password') {
+      input.type = 'text';
+      btn.textContent = 'Hide';
+    } else {
+      input.type = 'password';
+      btn.textContent = 'Show';
     }
   }
 
@@ -10841,6 +11184,13 @@ class ClaudemanApp {
     // Save to localStorage
     this.saveAppSettingsToStorage(settings);
     this._updateLocalEchoState();
+
+    // Save voice settings to localStorage (never sent to server)
+    VoiceInput._saveDeepgramConfig({
+      apiKey: document.getElementById('voiceDeepgramKey').value.trim(),
+      language: document.getElementById('voiceLanguage').value,
+      keyterms: document.getElementById('voiceKeyterms').value.trim(),
+    });
 
     // Save notification preferences separately
     const notifPrefsToSave = {

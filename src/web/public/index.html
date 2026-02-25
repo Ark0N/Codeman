@@ -796,6 +796,7 @@
           <button class="modal-tab-btn" data-tab="settings-models">Models</button>
           <button class="modal-tab-btn" data-tab="settings-paths">Paths</button>
           <button class="modal-tab-btn" data-tab="settings-notifications">Notifications</button>
+          <button class="modal-tab-btn" data-tab="settings-voice">Voice</button>
         </div>
         <div class="modal-body">
           <!-- Display Tab -->
@@ -1162,6 +1163,46 @@
               <input type="checkbox" id="eventSubagentEnabled">
               <input type="checkbox" id="eventSubagentBrowser">
               <input type="checkbox" id="eventSubagentAudio">
+            </div>
+          </div>
+
+          <!-- Voice Tab -->
+          <div class="modal-tab-content hidden" id="settings-voice">
+            <div class="settings-grid">
+              <div class="settings-section-header">Provider</div>
+              <div class="settings-item">
+                <span class="settings-item-label">Active Provider</span>
+                <span class="voice-provider-status" id="voiceProviderStatus">—</span>
+              </div>
+
+              <div class="settings-section-header">Deepgram Nova-3</div>
+              <div class="form-row" style="grid-column: 1 / -1;">
+                <label for="voiceDeepgramKey">API Key</label>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                  <input type="password" id="voiceDeepgramKey" placeholder="Enter Deepgram API key" autocomplete="off" style="flex: 1; width: 100%; padding: 0.5rem 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.8rem; font-family: inherit;">
+                  <button class="btn-toolbar btn-sm" onclick="app.toggleDeepgramKeyVisibility()" id="voiceKeyToggleBtn" type="button">Show</button>
+                </div>
+                <span class="form-hint">Stored locally only, never sent to server. Get a key at <a href="https://console.deepgram.com" target="_blank" rel="noopener" style="color: var(--accent);">console.deepgram.com</a></span>
+              </div>
+
+              <div class="form-row" style="grid-column: 1 / -1;">
+                <label for="voiceLanguage">Language</label>
+                <select id="voiceLanguage" class="form-select">
+                  <option value="en-US">English (US)</option>
+                  <option value="en-GB">English (UK)</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="ja">Japanese</option>
+                  <option value="multi">Auto-detect (multi)</option>
+                </select>
+              </div>
+
+              <div class="form-row" style="grid-column: 1 / -1;">
+                <label for="voiceKeyterms">Domain Keywords</label>
+                <input type="text" id="voiceKeyterms" placeholder="claudeman, tmux, respawn, subagent" style="width: 100%; padding: 0.5rem 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.8rem; font-family: inherit;">
+                <span class="form-hint">Comma-separated terms to boost recognition accuracy</span>
+              </div>
             </div>
           </div>
         </div>
