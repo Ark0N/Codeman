@@ -603,6 +603,7 @@ const DeepgramProvider = {
   _mediaRecorder: null,
   _stream: null,
   _silenceTimeout: null,
+  _keepAliveInterval: null,
   _onResult: null,
   _onError: null,
   _onEnd: null,
@@ -632,11 +633,22 @@ const DeepgramProvider = {
     // Notify caller so it can set up audio level meter
     opts.onStream?.(this._stream);
 
-    // 2. Build WebSocket URL
+    // 2. Detect best supported MIME type for MediaRecorder
+    const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+    this._selectedMime = null;
+    for (const mt of mimeTypes) {
+      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(mt)) {
+        this._selectedMime = mt;
+        break;
+      }
+    }
+
+    // 3. Build WebSocket URL (no encoding param — Deepgram auto-detects from container format)
+
     const params = new URLSearchParams({
       model: 'nova-3',
-      smart_format: 'true',
-      punctuate: 'true',
+      smart_format: 'false',
+      punctuate: 'false',
       interim_results: 'true',
       utterance_end_ms: '1500',
       vad_events: 'true',
@@ -649,14 +661,20 @@ const DeepgramProvider = {
     if (opts.keyterms?.length) {
       for (const term of opts.keyterms) {
         const trimmed = term.trim();
-        if (trimmed) params.append('keywords', trimmed + ':2');
+        if (trimmed) params.append('keyterm', trimmed + ':2');
       }
     }
 
-    // 3. Connect WebSocket
+    // 4. Connect WebSocket (trim API key to avoid whitespace auth failures)
+    const apiKey = (opts.apiKey || '').trim();
+    if (!apiKey) {
+      this._onError?.('No Deepgram API key configured. Add one in Settings > Voice.');
+      this._cleanup();
+      return;
+    }
     const wsUrl = `wss://api.deepgram.com/v1/listen?${params}`;
     try {
-      this._ws = new WebSocket(wsUrl, ['token', opts.apiKey]);
+      this._ws = new WebSocket(wsUrl, ['token', apiKey]);
     } catch (err) {
       this._onError?.('Failed to connect to Deepgram: ' + err.message);
       this._cleanup();
@@ -664,7 +682,14 @@ const DeepgramProvider = {
     }
 
     this._ws.onopen = () => {
-      // 4. Start MediaRecorder once connected
+      // 5. Send KeepAlive every 8s to prevent Deepgram from closing idle connections
+      // (covers the gap before MediaRecorder produces its first chunk)
+      this._keepAliveInterval = setInterval(() => {
+        if (this._ws?.readyState === WebSocket.OPEN) {
+          try { this._ws.send(JSON.stringify({ type: 'KeepAlive' })); } catch (_e) { /* ignore */ }
+        }
+      }, 8000);
+      // 6. Start MediaRecorder once connected
       this._startRecording();
     };
 
@@ -690,8 +715,13 @@ const DeepgramProvider = {
     };
 
     this._ws.onclose = (event) => {
+      clearInterval(this._keepAliveInterval);
+      this._keepAliveInterval = null;
       if (event.code === 1008) {
         this._onError?.('Authentication failed. Check your Deepgram API key in Settings > Voice.');
+      } else if (event.code === 1006) {
+        // 1006 = abnormal closure (no close frame). Usually auth failure, expired key, or no credits.
+        this._onError?.('Deepgram connection failed (1006). Check your API key is valid and has credits in Settings > Voice.');
       } else if (event.code !== 1000) {
         this._onError?.('Deepgram connection closed: ' + (event.reason || `code ${event.code}`));
       }
@@ -703,17 +733,7 @@ const DeepgramProvider = {
   _startRecording() {
     if (!this._stream || !this._ws || this._ws.readyState !== WebSocket.OPEN) return;
 
-    // Pick best supported MIME type
-    const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
-    let mimeType;
-    for (const mt of mimeTypes) {
-      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(mt)) {
-        mimeType = mt;
-        break;
-      }
-    }
-
-    const recorderOpts = mimeType ? { mimeType } : {};
+    const recorderOpts = this._selectedMime ? { mimeType: this._selectedMime } : {};
     try {
       this._mediaRecorder = new MediaRecorder(this._stream, recorderOpts);
     } catch (err) {
@@ -752,6 +772,8 @@ const DeepgramProvider = {
   stop() {
     clearTimeout(this._silenceTimeout);
     this._silenceTimeout = null;
+    clearInterval(this._keepAliveInterval);
+    this._keepAliveInterval = null;
     this._stopRecording();
     if (this._ws && this._ws.readyState === WebSocket.OPEN) {
       try { this._ws.close(1000); } catch (_e) { /* ignore */ }
@@ -763,6 +785,7 @@ const DeepgramProvider = {
     this._ws = null;
     this._mediaRecorder = null;
     this._stream = null;
+    this._selectedMime = null;
     this._onResult = null;
     this._onError = null;
     this._onEnd = null;
@@ -1092,8 +1115,66 @@ const VoiceInput = {
       } else {
         app.sendInput(trimmed).catch(() => {});
       }
+      this._showVoiceSendBtn();
       setTimeout(() => { if (app.terminal) app.terminal.focus(); }, 150);
     }
+  },
+
+  /** Show a green Enter button by transforming the gear icon in-place */
+  _showVoiceSendBtn() {
+    // Find the gear button (mobile or desktop header)
+    const gear = document.querySelector('.btn-settings-mobile') || document.querySelector('.btn-settings');
+    if (!gear || gear.classList.contains('voice-send-active')) return;
+
+    // Remove existing if any
+    this._hideVoiceSendBtn();
+
+    // Save original state
+    this._voiceSendGear = gear;
+    this._voiceSendOriginalHTML = gear.innerHTML;
+    this._voiceSendOriginalOnclick = gear.getAttribute('onclick');
+
+    // Transform into green send button
+    gear.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
+    gear.classList.add('voice-send-active');
+    gear.removeAttribute('onclick');
+    gear.title = 'Send (Enter)';
+
+    // Click handler
+    this._voiceSendHandler = () => {
+      if (!app.activeSessionId) return;
+      // Simulate Enter key: if local echo is active, flush its buffer + send \r;
+      // otherwise just send \r directly to the PTY
+      if (app._localEchoEnabled && app._localEchoOverlay) {
+        const text = app._localEchoOverlay.pendingText || '';
+        app._localEchoOverlay.clear();
+        app._localEchoOverlay.suppressBufferDetection();
+        if (text) app.sendInput(text).catch(() => {});
+        setTimeout(() => app.sendInput('\r').catch(() => {}), 80);
+      } else {
+        app.sendInput('\r').catch(() => {});
+      }
+      // Blink then restore
+      gear.classList.add('voice-send-blink');
+      setTimeout(() => this._hideVoiceSendBtn(), 400);
+    };
+    gear.addEventListener('click', this._voiceSendHandler);
+  },
+
+  _hideVoiceSendBtn() {
+    const gear = this._voiceSendGear;
+    if (!gear) return;
+    gear.removeEventListener('click', this._voiceSendHandler);
+    gear.classList.remove('voice-send-active', 'voice-send-blink');
+    gear.innerHTML = this._voiceSendOriginalHTML || '';
+    if (this._voiceSendOriginalOnclick) {
+      gear.setAttribute('onclick', this._voiceSendOriginalOnclick);
+    }
+    gear.title = 'App Settings';
+    this._voiceSendGear = null;
+    this._voiceSendHandler = null;
+    this._voiceSendOriginalHTML = null;
+    this._voiceSendOriginalOnclick = null;
   },
 
   /** Show an editable compose overlay so the user can review/edit before sending */
@@ -1315,6 +1396,7 @@ const VoiceInput = {
   /** Cleanup on SSE reconnect or page unload */
   cleanup() {
     if (this.isRecording) this.stop();
+    this._hideVoiceSendBtn();
     DeepgramProvider._cleanup();
     this.recognition = null;
     this._activeProvider = null;

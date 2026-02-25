@@ -2142,6 +2142,38 @@ body {
   }
 }
 
+/* Voice send button — gear icon transforms into green Enter after voice input */
+.voice-send-active {
+  background: rgba(34, 197, 94, 0.2) !important;
+  border-color: rgba(34, 197, 94, 0.7) !important;
+  color: #22c55e !important;
+  animation: voice-send-glow 1.4s ease-in-out infinite;
+}
+
+.voice-send-active:active {
+  transform: scale(0.9);
+  background: rgba(34, 197, 94, 0.4) !important;
+}
+
+@keyframes voice-send-glow {
+  0%, 100% { box-shadow: 0 0 4px rgba(34, 197, 94, 0.3); border-color: rgba(34, 197, 94, 0.5) !important; }
+  50% { box-shadow: 0 0 12px rgba(34, 197, 94, 0.6); border-color: rgba(34, 197, 94, 0.9) !important; }
+}
+
+.voice-send-active.voice-send-blink {
+  animation: voice-send-flash 0.4s ease-out !important;
+}
+
+@keyframes voice-send-flash {
+  0% { background: rgba(34, 197, 94, 0.6) !important; box-shadow: 0 0 16px rgba(34, 197, 94, 0.8); }
+  100% { background: transparent !important; box-shadow: none; opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-send-active { animation: none; box-shadow: 0 0 6px rgba(34, 197, 94, 0.4); }
+  .voice-send-active.voice-send-blink { animation: none; }
+}
+
 .form-row input[type="password"] {
   width: 100%;
   padding: 0.5rem 0.75rem;
