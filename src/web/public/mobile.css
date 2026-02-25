@@ -341,10 +341,10 @@ html.mobile-init .file-browser-panel {
   }
 
   .btn-voice-mobile.recording {
-    background: rgba(239, 68, 68, 0.2);
-    border-color: rgba(239, 68, 68, 0.5);
+    background: rgba(239, 68, 68, 0.25);
+    border-color: rgba(239, 68, 68, 0.6);
     color: #ef4444;
-    animation: voice-pulse 1.5s ease-in-out infinite;
+    animation: voice-pulse 1.2s ease-in-out infinite;
   }
 
   /* Mobile app settings gear in toolbar - far right */
@@ -850,7 +850,7 @@ html.mobile-init .file-browser-panel {
     margin-top: 10px;
   }
 
-  .paste-cancel, .paste-send {
+  .paste-cancel, .paste-new, .paste-send {
     padding: 8px 18px;
     border: none;
     border-radius: 8px;
@@ -861,6 +861,12 @@ html.mobile-init .file-browser-panel {
   .paste-cancel {
     background: var(--bg-tertiary, #333);
     color: var(--text-secondary, #aaa);
+  }
+
+  .paste-new {
+    background: var(--bg-tertiary, #333);
+    color: var(--accent-color, #7aa2f7);
+    border: 1px solid var(--accent-color, #7aa2f7);
   }
 
   .paste-send {

@@ -609,7 +609,7 @@ const DeepgramProvider = {
 
   /**
    * Start streaming audio to Deepgram.
-   * @param {object} opts - { apiKey, language, keyterms[], onResult(text, isFinal), onError(msg), onEnd() }
+   * @param {object} opts - { apiKey, language, keyterms[], onResult(text, isFinal), onError(msg), onEnd(), onStream(stream) }
    */
   async start(opts) {
     this._onResult = opts.onResult;
@@ -629,6 +629,8 @@ const DeepgramProvider = {
       this._cleanup();
       return;
     }
+    // Notify caller so it can set up audio level meter
+    opts.onStream?.(this._stream);
 
     // 2. Build WebSocket URL
     const params = new URLSearchParams({
@@ -783,6 +785,14 @@ const VoiceInput = {
   _stabilityTimer: null,
   _accumulatedFinal: '',
   _activeProvider: null, // 'deepgram' | 'webspeech' | null
+  _recordingStartedAt: 0, // timestamp when recording started
+  _retryCount: 0, // auto-retry counter for premature Web Speech API ends
+  _hasReceivedResult: false, // whether any speech result came in this session
+  _durationInterval: null, // timer for updating elapsed time display
+  _analyser: null, // AudioContext analyser for level meter
+  _analyserSource: null, // MediaStreamSource for level meter
+  _audioContext: null, // AudioContext for level meter
+  _levelAnimFrame: null, // rAF handle for level meter
 
   init() {
     this._initRecognition();
@@ -847,6 +857,7 @@ const VoiceInput = {
       app.showToast('No active session', 'warning');
       return;
     }
+    this._retryCount = 0;
 
     if (this._shouldUseDeepgram()) {
       this._startDeepgram();
@@ -861,18 +872,25 @@ const VoiceInput = {
     this._activeProvider = 'deepgram';
     this._accumulatedFinal = '';
     this._lastTranscript = '';
+    this._hasReceivedResult = false;
+    this._recordingStartedAt = Date.now();
     this._updateButtons('recording');
     this._showPreview('Listening...', 'deepgram');
+    this._startDurationTimer();
 
-    const keyterms = (cfg.keyterms || 'claudeman, tmux, respawn, subagent, ralph, fastify, xterm, pty')
+    const keyterms = (cfg.keyterms || 'refactor, endpoint, middleware, callback, async, regex, TypeScript, npm, API, deploy, config, linter, env, webhook, schema, CLI, JSON, CSS, DOM, SSE, backend, frontend, localhost, dependencies, repository, merge, rebase, diff, commit, com')
       .split(',').map(t => t.trim()).filter(Boolean);
 
     DeepgramProvider.start({
       apiKey: cfg.apiKey,
       language: cfg.language || 'en-US',
       keyterms,
+      onStream: (stream) => {
+        this._startLevelMeter(stream);
+      },
       onResult: (text, isFinal) => {
         if (!this.isRecording) return;
+        this._hasReceivedResult = true;
         if (isFinal) {
           this._accumulatedFinal += text;
           this._hidePreview();
@@ -917,8 +935,11 @@ const VoiceInput = {
     this._activeProvider = 'webspeech';
     this._accumulatedFinal = '';
     this._lastTranscript = '';
+    this._hasReceivedResult = false;
+    this._recordingStartedAt = Date.now();
     this._updateButtons('recording');
     this._showPreview('Listening...');
+    this._startDurationTimer();
     try {
       this.recognition.start();
     } catch (e) {
@@ -930,6 +951,15 @@ const VoiceInput = {
       }
     }
     this._resetSilenceTimeout();
+    // Get mic stream for level meter (non-blocking — level meter is cosmetic)
+    navigator.mediaDevices?.getUserMedia({ audio: true }).then(stream => {
+      if (this.isRecording && this._activeProvider === 'webspeech') {
+        this._webSpeechStream = stream;
+        this._startLevelMeter(stream);
+      } else {
+        stream.getTracks().forEach(t => t.stop());
+      }
+    }).catch(() => { /* level meter just won't show */ });
     // Haptic feedback on mobile
     if (navigator.vibrate) navigator.vibrate(50);
   },
@@ -941,6 +971,9 @@ const VoiceInput = {
     clearTimeout(this._stabilityTimer);
     this.silenceTimeout = null;
     this._stabilityTimer = null;
+    this._retryCount = 0;
+    this._stopDurationTimer();
+    this._stopLevelMeter();
     this._updateButtons('idle');
     this._hidePreview();
 
@@ -952,6 +985,11 @@ const VoiceInput = {
       } catch (_e) {
         // Already stopped — ignore
       }
+      // Stop the mic stream we opened for the level meter
+      if (this._webSpeechStream) {
+        this._webSpeechStream.getTracks().forEach(t => t.stop());
+        this._webSpeechStream = null;
+      }
     }
     this._activeProvider = null;
 
@@ -961,6 +999,7 @@ const VoiceInput = {
 
   _onWebSpeechResult(event) {
     if (!this.isRecording) return;
+    this._hasReceivedResult = true;
     this._resetSilenceTimeout();
     let interim = '';
     let finalText = '';
@@ -988,6 +1027,9 @@ const VoiceInput = {
   },
 
   _onWebSpeechError(event) {
+    // During auto-retry, 'aborted' and 'no-speech' errors are expected — ignore them
+    if (this._retryCount > 0 && (event.error === 'aborted' || event.error === 'no-speech')) return;
+
     const wasRecording = this.isRecording;
     this.stop();
     if (!wasRecording) return;
@@ -1012,13 +1054,28 @@ const VoiceInput = {
 
   _onWebSpeechEnd() {
     // Recognition ended (browser auto-stopped or we called stop())
-    if (this.isRecording) {
-      // Ended unexpectedly while still recording — finalize any accumulated text
-      if (this._accumulatedFinal) {
-        this._insertText(this._accumulatedFinal);
+    if (!this.isRecording) return;
+
+    const elapsed = Date.now() - this._recordingStartedAt;
+    // Web Speech API often fires onend prematurely on the first attempt (< 500ms, no results).
+    // Auto-retry up to 2 times to avoid the "needs two clicks" problem.
+    if (elapsed < 500 && !this._hasReceivedResult && this._retryCount < 2) {
+      this._retryCount++;
+      try {
+        this.recognition.start();
+      } catch (_e) {
+        // If restart fails, fall through to stop
+        if (this._accumulatedFinal) this._insertText(this._accumulatedFinal);
+        this.stop();
       }
-      this.stop();
+      return;
     }
+
+    // Genuine end — finalize any accumulated text
+    if (this._accumulatedFinal) {
+      this._insertText(this._accumulatedFinal);
+    }
+    this.stop();
   },
 
   _insertText(text) {
@@ -1049,6 +1106,7 @@ const VoiceInput = {
         <textarea class="paste-textarea">${text.replace(/</g, '&lt;')}</textarea>
         <div class="paste-actions">
           <button class="paste-cancel">Cancel</button>
+          <button class="paste-new"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg> New</button>
           <button class="paste-send">Send</button>
         </div>
       </div>
@@ -1057,10 +1115,16 @@ const VoiceInput = {
     const send = () => {
       const val = textarea.value.trim();
       overlay.remove();
-      if (val) app.sendInput(val).catch(() => {});
+      if (val) app.sendInput(val + '\r').catch(() => {});
     };
     const cancel = () => overlay.remove();
+    const newInput = () => {
+      textarea.value = '';
+      textarea.focus();
+      this.start();
+    };
     overlay.querySelector('.paste-cancel').addEventListener('click', cancel);
+    overlay.querySelector('.paste-new').addEventListener('click', newInput);
     overlay.querySelector('.paste-send').addEventListener('click', send);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) cancel(); });
     document.body.appendChild(overlay);
@@ -1096,6 +1160,77 @@ const VoiceInput = {
     }
   },
 
+  _startDurationTimer() {
+    this._stopDurationTimer();
+    this._durationInterval = setInterval(() => {
+      if (!this.isRecording || !this.previewEl) return;
+      const elapsed = Math.floor((Date.now() - this._recordingStartedAt) / 1000);
+      const mins = Math.floor(elapsed / 60);
+      const secs = elapsed % 60;
+      const timeStr = mins > 0 ? `${mins}:${String(secs).padStart(2, '0')}` : `0:${String(secs).padStart(2, '0')}`;
+      const timerEl = this.previewEl.querySelector('.voice-timer');
+      if (timerEl) timerEl.textContent = timeStr;
+    }, 1000);
+  },
+
+  _stopDurationTimer() {
+    if (this._durationInterval) {
+      clearInterval(this._durationInterval);
+      this._durationInterval = null;
+    }
+  },
+
+  /** Start audio level meter using AnalyserNode — attaches to the active mic stream */
+  _startLevelMeter(stream) {
+    this._stopLevelMeter();
+    try {
+      this._audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      this._analyserSource = this._audioContext.createMediaStreamSource(stream);
+      this._analyser = this._audioContext.createAnalyser();
+      this._analyser.fftSize = 256;
+      this._analyserSource.connect(this._analyser);
+      this._drawLevelMeter();
+    } catch (_e) {
+      // AudioContext not available — level meter just won't show
+    }
+  },
+
+  _stopLevelMeter() {
+    if (this._levelAnimFrame) {
+      cancelAnimationFrame(this._levelAnimFrame);
+      this._levelAnimFrame = null;
+    }
+    if (this._analyserSource) {
+      try { this._analyserSource.disconnect(); } catch (_e) { /* */ }
+      this._analyserSource = null;
+    }
+    if (this._audioContext) {
+      try { this._audioContext.close(); } catch (_e) { /* */ }
+      this._audioContext = null;
+    }
+    this._analyser = null;
+  },
+
+  _drawLevelMeter() {
+    if (!this._analyser || !this.isRecording) return;
+    const dataArray = new Uint8Array(this._analyser.frequencyBinCount);
+    this._analyser.getByteFrequencyData(dataArray);
+    // Compute RMS level 0-1
+    let sum = 0;
+    for (let i = 0; i < dataArray.length; i++) sum += dataArray[i] * dataArray[i];
+    const rms = Math.sqrt(sum / dataArray.length) / 255;
+    // Update the level bars in the preview
+    const barsEl = this.previewEl?.querySelector('.voice-level-bars');
+    if (barsEl) {
+      const bars = barsEl.children;
+      for (let i = 0; i < bars.length; i++) {
+        const threshold = (i + 1) / bars.length;
+        bars[i].classList.toggle('active', rms >= threshold * 0.7);
+      }
+    }
+    this._levelAnimFrame = requestAnimationFrame(() => this._drawLevelMeter());
+  },
+
   _showPreview(text, provider) {
     if (!this.previewEl) {
       this.previewEl = document.createElement('div');
@@ -1103,16 +1238,44 @@ const VoiceInput = {
       this.previewEl.setAttribute('aria-live', 'polite');
       document.body.appendChild(this.previewEl);
     }
-    this.previewEl.textContent = '';
-    // Add provider badge for Deepgram
-    if (provider === 'deepgram') {
-      const badge = document.createElement('span');
-      badge.className = 'voice-preview-badge';
-      badge.textContent = 'DG';
-      this.previewEl.appendChild(badge);
-      this.previewEl.appendChild(document.createTextNode(' '));
+
+    // Build the indicator structure once, then just update the text node
+    if (!this.previewEl.querySelector('.voice-recording-indicator')) {
+      this.previewEl.textContent = '';
+      // Recording indicator: red dot + level bars + timer
+      const indicator = document.createElement('span');
+      indicator.className = 'voice-recording-indicator';
+      indicator.innerHTML = '<span class="voice-rec-dot"></span>';
+      const barsEl = document.createElement('span');
+      barsEl.className = 'voice-level-bars';
+      for (let i = 0; i < 5; i++) {
+        const bar = document.createElement('span');
+        bar.className = 'voice-level-bar';
+        barsEl.appendChild(bar);
+      }
+      indicator.appendChild(barsEl);
+      const timerEl = document.createElement('span');
+      timerEl.className = 'voice-timer';
+      timerEl.textContent = '0:00';
+      indicator.appendChild(timerEl);
+      this.previewEl.appendChild(indicator);
+      // Provider badge for Deepgram
+      if (provider === 'deepgram') {
+        const badge = document.createElement('span');
+        badge.className = 'voice-preview-badge';
+        badge.textContent = 'DG';
+        this.previewEl.appendChild(badge);
+        this.previewEl.appendChild(document.createTextNode(' '));
+      }
+      // Text node for transcript
+      this._previewTextNode = document.createTextNode(text || 'Listening...');
+      this.previewEl.appendChild(this._previewTextNode);
+    } else {
+      // Just update the text content
+      if (this._previewTextNode) {
+        this._previewTextNode.textContent = text || 'Listening...';
+      }
     }
-    this.previewEl.appendChild(document.createTextNode(text || 'Listening...'));
     this.previewEl.style.display = '';
   },
 
@@ -1155,6 +1318,12 @@ const VoiceInput = {
     DeepgramProvider._cleanup();
     this.recognition = null;
     this._activeProvider = null;
+    this._stopDurationTimer();
+    this._stopLevelMeter();
+    if (this._webSpeechStream) {
+      this._webSpeechStream.getTracks().forEach(t => t.stop());
+      this._webSpeechStream = null;
+    }
     if (this.previewEl) {
       this.previewEl.remove();
       this.previewEl = null;
@@ -1165,6 +1334,8 @@ const VoiceInput = {
     this._stabilityTimer = null;
     this._accumulatedFinal = '';
     this._lastTranscript = '';
+    this._retryCount = 0;
+    this._hasReceivedResult = false;
   }
 };
 
@@ -11015,7 +11186,7 @@ class ClaudemanApp {
     const voiceCfg = VoiceInput._getDeepgramConfig();
     document.getElementById('voiceDeepgramKey').value = voiceCfg.apiKey || '';
     document.getElementById('voiceLanguage').value = voiceCfg.language || 'en-US';
-    document.getElementById('voiceKeyterms').value = voiceCfg.keyterms || 'claudeman, tmux, respawn, subagent, ralph, fastify, xterm, pty';
+    document.getElementById('voiceKeyterms').value = voiceCfg.keyterms || 'refactor, endpoint, middleware, callback, async, regex, TypeScript, npm, API, deploy, config, linter, env, webhook, schema, CLI, JSON, CSS, DOM, SSE, backend, frontend, localhost, dependencies, repository, merge, rebase, diff, commit, com';
     document.getElementById('voiceInsertMode').value = voiceCfg.insertMode || 'direct';
     // Reset key visibility to hidden
     const keyInput = document.getElementById('voiceDeepgramKey');

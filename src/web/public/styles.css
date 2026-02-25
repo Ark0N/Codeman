@@ -1993,21 +1993,27 @@ body {
 }
 
 .btn-toolbar.btn-voice.recording {
-  background: rgba(239, 68, 68, 0.15);
-  border-color: rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.6);
   color: #ef4444;
-  animation: voice-pulse 1.5s ease-in-out infinite;
+  animation: voice-pulse 1.2s ease-in-out infinite;
 }
 
 .btn-toolbar.btn-voice.recording:hover {
-  background: rgba(239, 68, 68, 0.25);
-  border-color: rgba(239, 68, 68, 0.7);
+  background: rgba(239, 68, 68, 0.3);
+  border-color: rgba(239, 68, 68, 0.8);
   color: #f87171;
 }
 
 @keyframes voice-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
-  50% { box-shadow: 0 0 0 4px rgba(239, 68, 68, 0); }
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5);
+    background: rgba(239, 68, 68, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(239, 68, 68, 0);
+    background: rgba(239, 68, 68, 0.35);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2065,6 +2071,75 @@ body {
 .voice-provider-status.active {
   color: #4ade80;
   background: rgba(74, 222, 128, 0.1);
+}
+
+/* Voice recording indicator (red dot + level bars + timer) */
+.voice-recording-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.voice-rec-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: voice-rec-blink 1s ease-in-out infinite;
+}
+
+@keyframes voice-rec-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.voice-level-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+}
+
+.voice-level-bar {
+  display: inline-block;
+  width: 3px;
+  background: rgba(239, 68, 68, 0.25);
+  border-radius: 1px;
+  transition: background 0.1s ease, height 0.1s ease;
+}
+
+.voice-level-bar:nth-child(1) { height: 4px; }
+.voice-level-bar:nth-child(2) { height: 7px; }
+.voice-level-bar:nth-child(3) { height: 10px; }
+.voice-level-bar:nth-child(4) { height: 13px; }
+.voice-level-bar:nth-child(5) { height: 14px; }
+
+.voice-level-bar.active {
+  background: #ef4444;
+}
+
+.voice-timer {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #ef4444;
+  font-variant-numeric: tabular-nums;
+  min-width: 2.5em;
+}
+
+/* Enhanced recording state on voice preview */
+.voice-preview:has(.voice-recording-indicator) {
+  border-color: rgba(239, 68, 68, 0.3);
+  background: rgba(20, 0, 0, 0.92);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-rec-dot {
+    animation: none;
+    opacity: 1;
+  }
 }
 
 .form-row input[type="password"] {
