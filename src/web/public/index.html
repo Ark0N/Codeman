@@ -234,16 +234,22 @@
           <h1 class="welcome-title">Claudeman</h1>
           <p class="welcome-desc">Manage AI in persistent tmux sessions.</p>
           <div class="welcome-actions">
-            <button class="welcome-btn welcome-btn-primary" onclick="app.run()">
+            <button class="welcome-btn welcome-btn-claude" onclick="app.setRunMode('claude'); app.runClaude()">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run
+              Run Claude Code
             </button>
+            <button class="welcome-btn welcome-btn-opencode" onclick="app.setRunMode('opencode'); app.runOpenCode()">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Run OpenCode
+            </button>
+          </div>
+          <div class="welcome-actions">
             <button class="welcome-btn welcome-btn-ralph" onclick="app.showRalphWizard()">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
               Start Ralph Loop Wizard
             </button>
           </div>
-          <p class="welcome-hint">Or press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to start Claude</p>
+          <p class="welcome-hint">Or press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to start</p>
         </div>
       </div>
     </main>

@@ -1720,16 +1720,28 @@ body {
   transition: all 0.15s ease;
 }
 
-.welcome-btn-primary {
+.welcome-btn-claude {
   background: linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%);
   border-color: #3b82f6;
   color: #e0e7ff;
 }
 
-.welcome-btn-primary:hover {
+.welcome-btn-claude:hover {
   background: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
   box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
   color: #fff;
+}
+
+.welcome-btn-opencode {
+  background: linear-gradient(135deg, #0a2e2a 0%, #0d4a40 100%);
+  border-color: #10b981;
+  color: #6ee7b7;
+}
+
+.welcome-btn-opencode:hover {
+  background: linear-gradient(135deg, #0d4a40 0%, #116a58 100%);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+  color: #a7f3d0;
 }
 
 .welcome-btn-ralph {
