@@ -19,7 +19,7 @@ import { existsSync, unlinkSync, mkdirSync, statSync, cpSync } from 'fs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, '..');
 const OUTPUT_DIR = join(PROJECT_ROOT, 'docs', 'images');
-const BASE_URL = 'http://localhost:3000';
+const BASE_URL = process.env.CAPTURE_BASE_URL || 'http://localhost:3000';
 const CASE_NAME = 'acme-backend';
 const VIEWPORT = { width: 1440, height: 810 };
 
@@ -31,14 +31,8 @@ const GIF_COLORS = 128;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Prompt that triggers exactly 3 parallel Explore agents with real research work
-const PROMPT = `Analyze this codebase using exactly 3 Explore agents in parallel. IMPORTANT: Launch exactly 3 agents, no more, no fewer. Each agent should do its own research without spawning sub-agents:
-
-1. Agent 1: Find all REST API endpoints and their HTTP methods in server.ts
-2. Agent 2: Analyze the respawn controller state machine in respawn-controller.ts
-3. Agent 3: Find all SSE event types broadcast by the server
-
-Run all three in parallel. After they complete, give me a brief summary.`;
+// Prompt that triggers exactly 3 parallel Explore agents with real research work (MUST be single-line — multi-line breaks Ink via writeViaMux)
+const PROMPT = 'Analyze this codebase using exactly 3 Explore agents in parallel (no more, no fewer, no sub-agents): Agent 1 finds all REST API endpoints in server.ts, Agent 2 analyzes the respawn state machine in respawn-controller.ts, Agent 3 finds all SSE event types. Run all three in parallel then give a brief summary.';
 
 try { mkdirSync(OUTPUT_DIR, { recursive: true }); } catch {}
 
@@ -107,6 +101,7 @@ async function capture() {
         '--disable-setuid-sandbox',
         '--force-color-profile=srgb',
         '--disable-gpu-compositing',
+        '--ignore-certificate-errors',
       ],
     });
 
@@ -153,9 +148,9 @@ async function capture() {
     if (await ourTab.count() > 0) await ourTab.click();
     console.log('✓ Terminal ready');
 
-    // Wait for Claude CLI to initialize
+    // Wait for Claude CLI to initialize (large projects with big CLAUDE.md need extra time)
     console.log('Waiting for Claude CLI...');
-    await sleep(15000);
+    await sleep(25000);
 
     // Send the prompt
     console.log('Sending prompt...');
