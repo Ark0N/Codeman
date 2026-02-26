@@ -243,7 +243,7 @@ afterEach(() => {
 
 The global `test/setup.ts` handles:
 
-1. **Screen Cleanup**: Kills any orphaned `claudeman-*` screens created during tests
+1. **Screen Cleanup**: Kills any orphaned `codeman-*` screens created during tests
 2. **Process Cleanup**: Kills any Claude processes spawned by tests
 3. **Pre-existing Protection**: Never kills screens that existed before tests started
 

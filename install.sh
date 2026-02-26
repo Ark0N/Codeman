@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Claudeman Universal Installer
-# https://github.com/Ark0N/claudeman
+# Codeman Universal Installer
+# https://github.com/Ark0N/Codeman
 #
-# Usage: curl -fsSL https://raw.githubusercontent.com/Ark0N/claudeman/master/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash
 #
 # Environment variables:
-#   CLAUDEMAN_NONINTERACTIVE=1  - Skip all prompts (for CI/automation)
-#   CLAUDEMAN_INSTALL_DIR       - Custom install directory (default: ~/.claudeman/app)
-#   CLAUDEMAN_SKIP_SYSTEMD=1    - Skip systemd service setup prompt
-#   CLAUDEMAN_NODE_VERSION      - Node.js major version to install (default: 22)
+#   CODEMAN_NONINTERACTIVE=1  - Skip all prompts (for CI/automation)
+#   CODEMAN_INSTALL_DIR       - Custom install directory (default: ~/.codeman/app)
+#   CODEMAN_SKIP_SYSTEMD=1    - Skip systemd service setup prompt
+#   CODEMAN_NODE_VERSION      - Node.js major version to install (default: 22)
 
 set -euo pipefail
 
@@ -16,12 +16,12 @@ set -euo pipefail
 # Configuration
 # ============================================================================
 
-INSTALL_DIR="${CLAUDEMAN_INSTALL_DIR:-$HOME/.claudeman/app}"
-REPO_URL="https://github.com/Ark0N/claudeman.git"
+INSTALL_DIR="${CODEMAN_INSTALL_DIR:-$HOME/.codeman/app}"
+REPO_URL="https://github.com/Ark0N/Codeman.git"
 MIN_NODE_VERSION=18
-TARGET_NODE_VERSION="${CLAUDEMAN_NODE_VERSION:-22}"
-NONINTERACTIVE="${CLAUDEMAN_NONINTERACTIVE:-0}"
-SKIP_SYSTEMD="${CLAUDEMAN_SKIP_SYSTEMD:-0}"
+TARGET_NODE_VERSION="${CODEMAN_NODE_VERSION:-22}"
+NONINTERACTIVE="${CODEMAN_NONINTERACTIVE:-0}"
+SKIP_SYSTEMD="${CODEMAN_SKIP_SYSTEMD:-0}"
 
 # Claude CLI search paths (from src/session.ts)
 CLAUDE_SEARCH_PATHS=(
@@ -611,15 +611,15 @@ add_to_path() {
 
     if [[ "$shell_name" == "fish" ]]; then
         echo "" >> "$profile"
-        echo "# Added by Claudeman installer" >> "$profile"
+        echo "# Added by Codeman installer" >> "$profile"
         echo "fish_add_path $bin_dir" >> "$profile"
     else
         echo "" >> "$profile"
-        echo "# Added by Claudeman installer" >> "$profile"
+        echo "# Added by Codeman installer" >> "$profile"
         echo "export PATH=\"$bin_dir:\$PATH\"" >> "$profile"
     fi
 
-    # Also export for the current process so claudeman works immediately
+    # Also export for the current process so codeman works immediately
     export PATH="$bin_dir:$PATH"
 
     success "Added to $profile"
@@ -636,7 +636,7 @@ setup_sc_alias() {
     fi
 
     echo "" >> "$profile"
-    echo "# Claudeman tmux session shortcut" >> "$profile"
+    echo "# Codeman tmux session shortcut" >> "$profile"
     echo "alias sc='tmux-chooser'" >> "$profile"
 
     info "Added 'sc' alias for tmux-chooser"
@@ -648,7 +648,7 @@ setup_sc_alias() {
 
 setup_systemd_service() {
     local service_dir="$HOME/.config/systemd/user"
-    local service_file="$service_dir/claudeman-web.service"
+    local service_file="$service_dir/codeman-web.service"
 
     info "Setting up systemd user service..."
 
@@ -661,7 +661,7 @@ setup_systemd_service() {
     # Create service file
     cat > "$service_file" << EOF
 [Unit]
-Description=Claudeman Web Server
+Description=Codeman Web Server
 After=network.target
 
 [Service]
@@ -681,7 +681,7 @@ EOF
     systemctl --user daemon-reload
 
     # Enable service
-    systemctl --user enable claudeman-web.service 2>/dev/null || true
+    systemctl --user enable codeman-web.service 2>/dev/null || true
 
     # Enable lingering (allows service to run after logout)
     if command -v loginctl &>/dev/null; then
@@ -689,7 +689,7 @@ EOF
     fi
 
     success "Systemd service installed at $service_file"
-    info "Start with: systemctl --user start claudeman-web"
+    info "Start with: systemctl --user start codeman-web"
 }
 
 # ============================================================================
@@ -760,7 +760,7 @@ main() {
         if prompt_yes_no "Git is not installed. Install it now?"; then
             install_dependency "git" "$os" "$distro"
         else
-            die "Git is required to install Claudeman."
+            die "Git is required to install Codeman."
         fi
     else
         success "Git is installed"
@@ -781,7 +781,7 @@ main() {
             # Rehash to pick up new node
             hash -r 2>/dev/null || true
         else
-            die "Node.js $MIN_NODE_VERSION+ is required to run Claudeman."
+            die "Node.js $MIN_NODE_VERSION+ is required to run Codeman."
         fi
     else
         local node_ver
@@ -832,7 +832,7 @@ main() {
     # Clone/Update Repository
     # ========================================================================
 
-    info "Installing Claudeman to $INSTALL_DIR..."
+    info "Installing Codeman to $INSTALL_DIR..."
 
     if [[ -d "$INSTALL_DIR/.git" ]]; then
         info "Existing installation found, updating..."
@@ -882,8 +882,8 @@ main() {
     local symlink_dir="$HOME/.local/bin"
     mkdir -p "$symlink_dir" 2>/dev/null || true
     if [[ -d "$symlink_dir" ]]; then
-        ln -sf "$INSTALL_DIR/dist/index.js" "$symlink_dir/claudeman"
-        info "Created symlink: $symlink_dir/claudeman"
+        ln -sf "$INSTALL_DIR/dist/index.js" "$symlink_dir/codeman"
+        info "Created symlink: $symlink_dir/codeman"
 
         # Install tmux-chooser as 'tmux-chooser' command
         if [[ -f "$INSTALL_DIR/scripts/tmux-chooser.sh" ]]; then
@@ -916,16 +916,16 @@ main() {
 
     echo ""
     echo -e "${GREEN}${BOLD}============================================================${NC}"
-    echo -e "${GREEN}${BOLD}  Claudeman installed successfully!${NC}"
+    echo -e "${GREEN}${BOLD}  Codeman installed successfully!${NC}"
     echo -e "${GREEN}${BOLD}============================================================${NC}"
     echo ""
     echo -e "  ${BOLD}Quick Start:${NC}"
     echo ""
     echo -e "    ${CYAN}# Start the web server${NC}"
-    echo -e "    claudeman web"
+    echo -e "    codeman web"
     echo ""
     echo -e "    ${CYAN}# Start with HTTPS (only needed for remote access)${NC}"
-    echo -e "    claudeman web --https"
+    echo -e "    codeman web --https"
     echo ""
     echo -e "    ${CYAN}# Open in browser${NC}"
     echo -e "    http://localhost:3000"
@@ -937,21 +937,21 @@ main() {
     echo -e "    ${CYAN}sc -h${NC}           # Help"
     echo ""
 
-    if [[ "$os" == "linux" ]] && [[ -f "$HOME/.config/systemd/user/claudeman-web.service" ]]; then
+    if [[ "$os" == "linux" ]] && [[ -f "$HOME/.config/systemd/user/codeman-web.service" ]]; then
         echo -e "  ${BOLD}Systemd Service:${NC}"
         echo ""
-        echo -e "    ${CYAN}systemctl --user start claudeman-web${NC}   # Start"
-        echo -e "    ${CYAN}systemctl --user status claudeman-web${NC}  # Check status"
-        echo -e "    ${CYAN}journalctl --user -u claudeman-web -f${NC}  # View logs"
+        echo -e "    ${CYAN}systemctl --user start codeman-web${NC}   # Start"
+        echo -e "    ${CYAN}systemctl --user status codeman-web${NC}  # Check status"
+        echo -e "    ${CYAN}journalctl --user -u codeman-web -f${NC}  # View logs"
         echo ""
     fi
 
     echo -e "  ${BOLD}Documentation:${NC}"
-    echo -e "    https://github.com/Ark0N/claudeman"
+    echo -e "    https://github.com/Ark0N/Codeman"
     echo ""
 
     if ! check_claude; then
-        echo -e "  ${YELLOW}${BOLD}Reminder:${NC} Install Claude CLI to start using Claudeman:"
+        echo -e "  ${YELLOW}${BOLD}Reminder:${NC} Install Claude CLI to start using Codeman:"
         echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}"
         echo ""
     fi
@@ -959,20 +959,20 @@ main() {
     # Check if PATH needs reload in user's shell
     local profile
     profile=$(detect_shell_profile)
-    if ! command -v claudeman &>/dev/null 2>&1; then
-        echo -e "  ${YELLOW}Run this to start using claudeman now:${NC}"
+    if ! command -v codeman &>/dev/null 2>&1; then
+        echo -e "  ${YELLOW}Run this to start using codeman now:${NC}"
         echo ""
-        echo -e "    ${CYAN}source $profile && claudeman web${NC}"
+        echo -e "    ${CYAN}source $profile && codeman web${NC}"
         echo ""
     fi
 }
 
 update() {
     if [[ ! -d "$INSTALL_DIR/.git" ]]; then
-        die "Claudeman is not installed at $INSTALL_DIR. Run the installer first."
+        die "Codeman is not installed at $INSTALL_DIR. Run the installer first."
     fi
 
-    info "Updating Claudeman..."
+    info "Updating Codeman..."
     cd "$INSTALL_DIR"
     git fetch --quiet origin
     git reset --hard origin/master --quiet
@@ -980,7 +980,7 @@ update() {
     npm run build --quiet 2>/dev/null || npm run build
     success "Updated to $(node -e "console.log(require('./package.json').version)")"
     echo ""
-    echo -e "  ${DIM}Restart claudeman web to use the new version.${NC}"
+    echo -e "  ${DIM}Restart codeman web to use the new version.${NC}"
     echo ""
 }
 

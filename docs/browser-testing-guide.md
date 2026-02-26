@@ -1,6 +1,6 @@
-# Browser Testing Guide for Claudeman
+# Browser Testing Guide for Codeman
 
-This guide documents the browser testing infrastructure, framework comparison results, and best practices for testing the Claudeman web UI.
+This guide documents the browser testing infrastructure, framework comparison results, and best practices for testing the Codeman web UI.
 
 ## Quick Start
 
@@ -14,7 +14,7 @@ npm test -- test/browser-e2e.test.ts
 
 ## Framework Comparison Results
 
-We tested three browser automation frameworks against the Claudeman web UI:
+We tested three browser automation frameworks against the Codeman web UI:
 
 | Framework | Avg Duration | Best For |
 |-----------|--------------|----------|
@@ -114,7 +114,7 @@ await page.waitForSelector('.session-tab', { state: 'visible' });
 
 // Assertions with expect
 await expect(page.locator('.header')).toBeVisible();
-await expect(page).toHaveTitle('Claudeman');
+await expect(page).toHaveTitle('Codeman');
 
 await browser.close();
 ```

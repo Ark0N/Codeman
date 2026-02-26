@@ -1,6 +1,6 @@
 # Codebase Cleanup Findings
 
-Compiled from parallel analysis of the entire Claudeman codebase by 3 research agents (2026-02-19).
+Compiled from parallel analysis of the entire Codeman codebase by 3 research agents (2026-02-19).
 
 ## P0 — Bug Fix
 

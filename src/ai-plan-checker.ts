@@ -8,7 +8,7 @@
  * ## How It Works
  *
  * 1. Generate temp file path for output capture
- * 2. Spawn tmux: `tmux new-session -d -s claudeman-plancheck-<short> bash -c 'claude -p ...'`
+ * 2. Spawn tmux: `tmux new-session -d -s codeman-plancheck-<short> bash -c 'claude -p ...'`
  * 3. Poll the temp file every 500ms for `__PLANCHECK_DONE__` marker
  * 4. Parse the file content for PLAN_MODE/NOT_PLAN_MODE on the first line
  * 5. Kill tmux session and delete temp file
@@ -91,9 +91,9 @@ export class AiPlanChecker extends AiCheckerBase<
   AiPlanCheckResult,
   AiPlanCheckState
 > {
-  protected readonly muxNamePrefix = 'claudeman-plancheck-';
+  protected readonly muxNamePrefix = 'codeman-plancheck-';
   protected readonly doneMarker = '__PLANCHECK_DONE__';
-  protected readonly tempFilePrefix = 'claudeman-plancheck';
+  protected readonly tempFilePrefix = 'codeman-plancheck';
   protected readonly logPrefix = '[AiPlanChecker]';
   protected readonly checkDescription = 'AI plan check';
 

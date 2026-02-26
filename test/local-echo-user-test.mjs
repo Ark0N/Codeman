@@ -241,9 +241,9 @@ async function main() {
 
     // Enable local echo
     await page.evaluate(() => {
-      const s = JSON.parse(localStorage.getItem('claudeman-app-settings') || '{}');
+      const s = JSON.parse(localStorage.getItem('codeman-app-settings') || '{}');
       s.localEchoEnabled = true;
-      localStorage.setItem('claudeman-app-settings', JSON.stringify(s));
+      localStorage.setItem('codeman-app-settings', JSON.stringify(s));
       window.app?._updateLocalEchoState?.();
     });
 
@@ -916,9 +916,9 @@ async function main() {
     await page.evaluate((id) => document.querySelector(`.session-tab[data-id="${id}"]`)?.click(), sA);
     await page.waitForTimeout(2000);
     await page.evaluate(() => {
-      const s = JSON.parse(localStorage.getItem('claudeman-app-settings') || '{}');
+      const s = JSON.parse(localStorage.getItem('codeman-app-settings') || '{}');
       s.localEchoEnabled = true;
-      localStorage.setItem('claudeman-app-settings', JSON.stringify(s));
+      localStorage.setItem('codeman-app-settings', JSON.stringify(s));
       window.app?._updateLocalEchoState?.();
     });
     await page.waitForTimeout(300);

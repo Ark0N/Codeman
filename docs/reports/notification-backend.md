@@ -1,10 +1,10 @@
-# Claudeman Notification System - Backend Research Report
+# Codeman Notification System - Backend Research Report
 
 Date: 2026-02-17
 
 ## Executive Summary
 
-The Claudeman notification system is a **multi-layer, event-driven pipeline** that flows from backend event emitters, through SSE broadcasts, to a frontend `NotificationManager` class. The backend itself has no concept of "notifications" -- it broadcasts structured SSE events, and the frontend decides which events warrant user notification (browser notifications, audio alerts, tab title flashing, in-app notification drawer, tab alert badges).
+The Codeman notification system is a **multi-layer, event-driven pipeline** that flows from backend event emitters, through SSE broadcasts, to a frontend `NotificationManager` class. The backend itself has no concept of "notifications" -- it broadcasts structured SSE events, and the frontend decides which events warrant user notification (browser notifications, audio alerts, tab title flashing, in-app notification drawer, tab alert badges).
 
 The system handles ~25 distinct notification-triggering SSE events across 5 categories: hook events, session lifecycle, respawn state machine, Ralph Loop, and UI actions.
 
@@ -96,14 +96,14 @@ Terminal and output data use separate batching pipelines that bypass `broadcast(
 
 ### 2.1 Hook Configuration Generator (Lines 24-67)
 
-The `generateHooksConfig()` function creates `.claude/settings.local.json` entries that make Claude Code POST to Claudeman when hooks fire:
+The `generateHooksConfig()` function creates `.claude/settings.local.json` entries that make Claude Code POST to Codeman when hooks fire:
 
 ```typescript
 const curlCmd = (event: HookEventType) =>
     `HOOK_DATA=$(cat 2>/dev/null || echo '{}'); ` +
-    `curl -s -X POST "$CLAUDEMAN_API_URL/api/hook-event" ` +
+    `curl -s -X POST "$CODEMAN_API_URL/api/hook-event" ` +
     `-H 'Content-Type: application/json' ` +
-    `-d "{\\"event\\":\\"${event}\\",\\"sessionId\\":\\"$CLAUDEMAN_SESSION_ID\\",\\"data\\":$HOOK_DATA}" ` +
+    `-d "{\\"event\\":\\"${event}\\",\\"sessionId\\":\\"$CODEMAN_SESSION_ID\\",\\"data\\":$HOOK_DATA}" ` +
     `2>/dev/null || true`;
 ```
 
@@ -143,8 +143,8 @@ The `sanitizeHookData()` function limits what gets broadcast:
 ### 2.4 Environment Variables (Lines 70-101)
 
 Two env vars are set per case directory via `updateCaseEnvVars()`:
-- `CLAUDEMAN_API_URL` -- server URL (e.g., `http://localhost:3000`)
-- `CLAUDEMAN_SESSION_ID` -- session identifier
+- `CODEMAN_API_URL` -- server URL (e.g., `http://localhost:3000`)
+- `CODEMAN_SESSION_ID` -- session identifier
 
 These are resolved at runtime by the shell, so the hook config is static per case.
 

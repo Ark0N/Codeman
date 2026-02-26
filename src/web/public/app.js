@@ -1,4 +1,4 @@
-// Claudeman App - Tab-based Terminal UI
+// Codeman App - Tab-based Terminal UI
 
 // ============================================================================
 // Constants
@@ -852,14 +852,14 @@ const VoiceInput = {
 
   _getDeepgramConfig() {
     try {
-      return JSON.parse(localStorage.getItem('claudeman-voice-settings') || '{}');
+      return JSON.parse(localStorage.getItem('codeman-voice-settings') || '{}');
     } catch (_e) {
       return {};
     }
   },
 
   _saveDeepgramConfig(config) {
-    localStorage.setItem('claudeman-voice-settings', JSON.stringify(config));
+    localStorage.setItem('codeman-voice-settings', JSON.stringify(config));
   },
 
   _shouldUseDeepgram() {
@@ -2294,7 +2294,7 @@ class NotificationManager {
   // Get storage key for notification prefs (device-specific)
   getStorageKey() {
     const isMobile = MobileDetection.getDeviceType() === 'mobile';
-    return isMobile ? 'claudeman-notification-prefs-mobile' : 'claudeman-notification-prefs';
+    return isMobile ? 'codeman-notification-prefs-mobile' : 'codeman-notification-prefs';
   }
 
   savePreferences() {
@@ -2449,11 +2449,11 @@ class NotificationManager {
         this.titleFlashInterval = setInterval(() => {
           this.titleFlashState = !this.titleFlashState;
           document.title = this.titleFlashState
-            ? `\u26A0\uFE0F (${this.unreadCount}) Claudeman`
+            ? `\u26A0\uFE0F (${this.unreadCount}) Codeman`
             : this.originalTitle;
         }, TITLE_FLASH_INTERVAL_MS);
         // Set immediately
-        document.title = `\u26A0\uFE0F (${this.unreadCount}) Claudeman`;
+        document.title = `\u26A0\uFE0F (${this.unreadCount}) Codeman`;
       }
     }
   }
@@ -2488,7 +2488,7 @@ class NotificationManager {
     if (now - this.lastBrowserNotifTime < 3000) return;
     this.lastBrowserNotifTime = now;
 
-    const notif = new Notification(`Claudeman: ${title}`, {
+    const notif = new Notification(`Codeman: ${title}`, {
       body,
       tag, // Groups same-tag notifications
       icon: '/favicon.ico',
@@ -2634,7 +2634,7 @@ class NotificationManager {
   }
 }
 
-class ClaudemanApp {
+class CodemanApp {
   constructor() {
     this.sessions = new Map();
     this.sessionOrder = []; // Track tab order for drag-and-drop reordering
@@ -2919,7 +2919,7 @@ class ClaudemanApp {
 
   initTerminal() {
     // Load scrollback setting from localStorage (default 5000)
-    const scrollback = parseInt(localStorage.getItem('claudeman-scrollback')) || DEFAULT_SCROLLBACK;
+    const scrollback = parseInt(localStorage.getItem('codeman-scrollback')) || DEFAULT_SCROLLBACK;
 
     this.terminal = new Terminal({
       theme: {
@@ -4023,7 +4023,7 @@ class ClaudemanApp {
       this._cleanupSessionData(data.id);
       if (this.activeSessionId === data.id) {
         this.activeSessionId = null;
-        try { localStorage.removeItem('claudeman-active-session'); } catch {}
+        try { localStorage.removeItem('codeman-active-session'); } catch {}
         this.terminal.clear();
         this.showWelcome();
       }
@@ -4709,11 +4709,11 @@ class ClaudemanApp {
       }
       this.renderSubagentPanel();
 
-      // Find which Claudeman session owns this subagent (direct claudeSessionId match only)
+      // Find which Codeman session owns this subagent (direct claudeSessionId match only)
       this.findParentSessionForSubagent(data.agentId);
 
-      // Auto-open window for new active agents — but ONLY if they belong to a Claudeman session tab.
-      // Agents from external Claude sessions (not managed by Claudeman) should not pop up.
+      // Auto-open window for new active agents — but ONLY if they belong to a Codeman session tab.
+      // Agents from external Claude sessions (not managed by Codeman) should not pop up.
       if (data.status === 'active') {
         const agentForCheck = this.subagents.get(data.agentId);
         const hasMatchingTab = agentForCheck?.sessionId &&
@@ -5106,11 +5106,11 @@ class ClaudemanApp {
       const headerVersionEl = this.$('headerVersion');
       if (versionEl) {
         versionEl.textContent = `v${data.version}`;
-        versionEl.title = `Claudeman v${data.version}`;
+        versionEl.title = `Codeman v${data.version}`;
       }
       if (headerVersionEl) {
         headerVersionEl.textContent = `v${data.version}`;
-        headerVersionEl.title = `Claudeman v${data.version}`;
+        headerVersionEl.title = `Codeman v${data.version}`;
       }
     }
 
@@ -5299,7 +5299,7 @@ class ClaudemanApp {
       // Priority: current active > localStorage > first session
       let restoreId = previousActiveId;
       if (!restoreId || !this.sessions.has(restoreId)) {
-        try { restoreId = localStorage.getItem('claudeman-active-session'); } catch {}
+        try { restoreId = localStorage.getItem('codeman-active-session'); } catch {}
       }
       if (restoreId && this.sessions.has(restoreId)) {
         this.selectSession(restoreId);
@@ -5605,7 +5605,7 @@ class ClaudemanApp {
   // Load session order from localStorage
   loadSessionOrder() {
     try {
-      const saved = localStorage.getItem('claudeman-session-order');
+      const saved = localStorage.getItem('codeman-session-order');
       return saved ? JSON.parse(saved) : [];
     } catch {
       return [];
@@ -5615,7 +5615,7 @@ class ClaudemanApp {
   // Save session order to localStorage
   saveSessionOrder() {
     try {
-      localStorage.setItem('claudeman-session-order', JSON.stringify(this.sessionOrder));
+      localStorage.setItem('codeman-session-order', JSON.stringify(this.sessionOrder));
     } catch {
       // Ignore storage errors
     }
@@ -5924,7 +5924,7 @@ class ClaudemanApp {
       this._localEchoOverlay.suppressBufferDetection();
     }
     this.activeSessionId = sessionId;
-    try { localStorage.setItem('claudeman-active-session', sessionId); } catch {}
+    try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
     this.hideWelcome();
     // Clear idle hooks on view, but keep action hooks until user interacts
     this.clearPendingHooks(sessionId, 'idle_prompt');
@@ -6160,7 +6160,7 @@ class ClaudemanApp {
 
       if (this.activeSessionId === sessionId) {
         this.activeSessionId = null;
-        try { localStorage.removeItem('claudeman-active-session'); } catch {}
+        try { localStorage.removeItem('codeman-active-session'); } catch {}
         // Select another session or show welcome (use sessionOrder for consistent ordering)
         if (this.sessionOrder.length > 0 && this.sessions.size > 0) {
           const nextSessionId = this.sessionOrder[0];
@@ -6242,7 +6242,7 @@ class ClaudemanApp {
   goHome() {
     // Deselect active session and show welcome screen
     this.activeSessionId = null;
-    try { localStorage.removeItem('claudeman-active-session'); } catch {}
+    try { localStorage.removeItem('codeman-active-session'); } catch {}
     this.terminal.clear();
     this.showWelcome();
     this.renderSessionTabs();
@@ -9250,7 +9250,7 @@ class ClaudemanApp {
       } else {
         // No cases exist yet - show the default case name as directory
         select.value = 'testcase';
-        document.getElementById('dirDisplay').textContent = '~/claudeman-cases/testcase';
+        document.getElementById('dirDisplay').textContent = '~/codeman-cases/testcase';
         this.updateMobileCaseLabel('testcase');
       }
 
@@ -9317,7 +9317,7 @@ class ClaudemanApp {
 
   setRunMode(mode) {
     this._runMode = mode;
-    try { localStorage.setItem('claudeman_runMode', mode); } catch {}
+    try { localStorage.setItem('codeman_runMode', mode); } catch {}
     this._applyRunMode();
     // Close menu
     document.getElementById('runModeMenu')?.classList.remove('active');
@@ -9361,7 +9361,7 @@ class ClaudemanApp {
   }
 
   _initRunMode() {
-    try { this._runMode = localStorage.getItem('claudeman_runMode') || 'claude'; } catch { this._runMode = 'claude'; }
+    try { this._runMode = localStorage.getItem('codeman_runMode') || 'claude'; } catch { this._runMode = 'claude'; }
     this._applyRunMode();
   }
 
@@ -10132,7 +10132,7 @@ class ClaudemanApp {
       this.terminalBuffers.clear();
       this.terminalBufferCache.clear();
       this.activeSessionId = null;
-      try { localStorage.removeItem('claudeman-active-session'); } catch {}
+      try { localStorage.removeItem('codeman-active-session'); } catch {}
       this.respawnStatus = {};
       this.respawnCountdownTimers = {};
       this.respawnActionLogs = {};
@@ -10239,13 +10239,13 @@ class ClaudemanApp {
     this.terminal.options.fontSize = size;
     document.getElementById('fontSizeDisplay').textContent = size;
     this.fitAddon.fit();
-    localStorage.setItem('claudeman-font-size', size);
+    localStorage.setItem('codeman-font-size', size);
     // Update overlay font cache and re-render at new cell dimensions
     this._localEchoOverlay?.refreshFont();
   }
 
   loadFontSize() {
-    const saved = localStorage.getItem('claudeman-font-size');
+    const saved = localStorage.getItem('codeman-font-size');
     if (saved) {
       const size = parseInt(saved, 10);
       if (size >= 10 && size <= 24) {
@@ -10676,7 +10676,7 @@ class ClaudemanApp {
   // ========== Respawn Presets ==========
 
   loadRespawnPresets() {
-    const saved = localStorage.getItem('claudeman-respawn-presets');
+    const saved = localStorage.getItem('codeman-respawn-presets');
     const custom = saved ? JSON.parse(saved) : [];
     return [...BUILTIN_RESPAWN_PRESETS, ...custom];
   }
@@ -10684,7 +10684,7 @@ class ClaudemanApp {
   saveRespawnPresets(presets) {
     // Only save custom presets (not built-in)
     const custom = presets.filter(p => !p.builtIn);
-    localStorage.setItem('claudeman-respawn-presets', JSON.stringify(custom));
+    localStorage.setItem('codeman-respawn-presets', JSON.stringify(custom));
   }
 
   renderPresetDropdown() {
@@ -11842,7 +11842,7 @@ class ClaudemanApp {
   // Get the settings storage key based on device type (mobile vs desktop)
   getSettingsStorageKey() {
     const isMobile = MobileDetection.getDeviceType() === 'mobile';
-    return isMobile ? 'claudeman-app-settings-mobile' : 'claudeman-app-settings';
+    return isMobile ? 'codeman-app-settings-mobile' : 'codeman-app-settings';
   }
 
   // Get default settings based on device type
@@ -12138,7 +12138,7 @@ class ClaudemanApp {
 
         // Sync voice settings from server (seed localStorage if no local API key)
         if (voiceSettings) {
-          const localVoice = localStorage.getItem('claudeman-voice-settings');
+          const localVoice = localStorage.getItem('codeman-voice-settings');
           if (!localVoice || !JSON.parse(localVoice).apiKey) {
             VoiceInput._saveDeepgramConfig(voiceSettings);
           }
@@ -12179,7 +12179,7 @@ class ClaudemanApp {
     const windowStates = { minimized: minimizedState, open: openWindows };
 
     // Save to localStorage for quick restore
-    localStorage.setItem('claudeman-subagent-window-states', JSON.stringify(windowStates));
+    localStorage.setItem('codeman-subagent-window-states', JSON.stringify(windowStates));
 
     // Save to server for cross-browser persistence
     try {
@@ -12206,7 +12206,7 @@ class ClaudemanApp {
       if (res.ok) {
         states = await res.json();
         // Also update localStorage
-        localStorage.setItem('claudeman-subagent-window-states', JSON.stringify(states));
+        localStorage.setItem('codeman-subagent-window-states', JSON.stringify(states));
       }
     } catch (err) {
       console.error('Failed to load subagent window states from server:', err);
@@ -12215,7 +12215,7 @@ class ClaudemanApp {
     // Fallback to localStorage
     if (!states) {
       try {
-        const saved = localStorage.getItem('claudeman-subagent-window-states');
+        const saved = localStorage.getItem('codeman-subagent-window-states');
         if (saved) {
           states = JSON.parse(saved);
         }
@@ -12321,7 +12321,7 @@ class ClaudemanApp {
 
     // Save to localStorage for instant recovery
     try {
-      localStorage.setItem('claudeman-subagent-parents', JSON.stringify(mapData));
+      localStorage.setItem('codeman-subagent-parents', JSON.stringify(mapData));
     } catch (err) {
       console.error('Failed to save subagent parents to localStorage:', err);
     }
@@ -12351,7 +12351,7 @@ class ClaudemanApp {
       if (res.ok) {
         mapData = await res.json();
         // Update localStorage as cache
-        localStorage.setItem('claudeman-subagent-parents', JSON.stringify(mapData));
+        localStorage.setItem('codeman-subagent-parents', JSON.stringify(mapData));
       }
     } catch (err) {
       console.error('Failed to load subagent parents from server:', err);
@@ -12360,7 +12360,7 @@ class ClaudemanApp {
     // Fallback to localStorage
     if (!mapData) {
       try {
-        const saved = localStorage.getItem('claudeman-subagent-parents');
+        const saved = localStorage.getItem('codeman-subagent-parents');
         if (saved) {
           mapData = JSON.parse(saved);
         }
@@ -14670,8 +14670,8 @@ class ClaudemanApp {
     const agent = this.subagents.get(agentId);
     if (!agent) return;
 
-    // Only open windows for agents that belong to a Claudeman-managed session tab.
-    // Agents from external Claude sessions (not tracked by Claudeman) should not pop up.
+    // Only open windows for agents that belong to a Codeman-managed session tab.
+    // Agents from external Claude sessions (not tracked by Codeman) should not pop up.
     if (agent.sessionId) {
       const hasMatchingTab = Array.from(this.sessions.values()).some(s => s.claudeSessionId === agent.sessionId);
       if (!hasMatchingTab) return;
@@ -15610,7 +15610,7 @@ class ClaudemanApp {
 
   /** Open a standalone terminal window for a tmux-pane teammate (no subagent entry needed) */
   openTeammateTerminalWindow(paneData) {
-    // Only open if the session has a tab in Claudeman
+    // Only open if the session has a tab in Codeman
     if (!this.sessions.has(paneData.sessionId)) return;
 
     // Use pane target as the unique ID for this window
@@ -16831,7 +16831,7 @@ class ClaudemanApp {
           this.sessions.clear();
           this.muxSessions = [];
           this.activeSessionId = null;
-          try { localStorage.removeItem('claudeman-active-session'); } catch {}
+          try { localStorage.removeItem('codeman-active-session'); } catch {}
           this.renderSessionTabs();
           this.renderMuxSessions();
           this.terminal.clear();
@@ -16842,7 +16842,7 @@ class ClaudemanApp {
         // Just remove tabs, keep mux sessions running
         this.sessions.clear();
         this.activeSessionId = null;
-        try { localStorage.removeItem('claudeman-active-session'); } catch {}
+        try { localStorage.removeItem('codeman-active-session'); } catch {}
         this.renderSessionTabs();
         this.terminal.clear();
         this.terminal.reset();
@@ -17554,12 +17554,25 @@ class ClaudemanApp {
 
   escapeHtml(text) {
     if (!text) return '';
-    return text.replace(ClaudemanApp._htmlEscapePattern, char => ClaudemanApp._htmlEscapeMap[char]);
+    return text.replace(CodemanApp._htmlEscapePattern, char => CodemanApp._htmlEscapeMap[char]);
   }
 }
 
+// Migrate legacy localStorage keys (claudeman-* → codeman-*)
+try {
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && (key.startsWith('claudeman-') || key.startsWith('claudeman_'))) {
+      const newKey = key.replace(/^claudeman[-_]/, (m) => 'codeman' + m.charAt(m.length - 1));
+      if (localStorage.getItem(newKey) === null) {
+        localStorage.setItem(newKey, localStorage.getItem(key));
+      }
+    }
+  }
+} catch {}
+
 // Initialize
-const app = new ClaudemanApp();
+const app = new CodemanApp();
 
 // Expose for debugging/testing
 window.app = app;

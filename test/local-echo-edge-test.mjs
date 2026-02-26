@@ -120,9 +120,9 @@ async function main() {
 
     // Enable local echo
     await page.evaluate(() => {
-      const s = JSON.parse(localStorage.getItem('claudeman-app-settings') || '{}');
+      const s = JSON.parse(localStorage.getItem('codeman-app-settings') || '{}');
       s.localEchoEnabled = true;
-      localStorage.setItem('claudeman-app-settings', JSON.stringify(s));
+      localStorage.setItem('codeman-app-settings', JSON.stringify(s));
       window.app?._updateLocalEchoState?.();
     });
 
@@ -307,7 +307,7 @@ async function main() {
     await page.keyboard.type('will-be-lost', { delay: 20 });
     await page.waitForTimeout(200);
 
-    const lsBefore = await page.evaluate(() => localStorage.getItem('claudeman_local_echo_pending'));
+    const lsBefore = await page.evaluate(() => localStorage.getItem('codeman_local_echo_pending'));
     if (!lsBefore) pass('localStorage not written (persist is no-op)');
     else fail('localStorage written', `value="${lsBefore}"`);
 

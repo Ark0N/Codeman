@@ -1,4 +1,4 @@
-# Claudeman Agent Teams Integration — Design (Approach C: Hybrid)
+# Codeman Agent Teams Integration — Design (Approach C: Hybrid)
 
 > Updated 2026-02-12 with experiment findings. See `experiment-log.md` for raw data.
 
@@ -15,7 +15,7 @@ Monitors `~/.claude/teams/` for team creation/removal and tracks active teams.
 **Discovery mechanism:**
 - Poll `~/.claude/teams/` for directories (team names) every 3-5 seconds
 - When found: parse `config.json` to get:
-  - `leadSessionId` → map to Claudeman session
+  - `leadSessionId` → map to Codeman session
   - `members` array → teammate names, agentIds, colors, models
 - Watch for directory deletion (cleanup signal)
 
@@ -25,7 +25,7 @@ Monitors `~/.claude/teams/` for team creation/removal and tracks active teams.
 - Teammate transcripts are at `subagents/agent-{id}.jsonl` (standard subagent path), NOT separate session transcripts
 
 **Association:**
-- `config.json.leadSessionId` → Claudeman session ID (direct match!)
+- `config.json.leadSessionId` → Codeman session ID (direct match!)
 - Each member's `agentId` (e.g., `fs-researcher@research-watchers`) → links to subagent files
 - `agentType: "team-lead"` vs `"general-purpose"` distinguishes lead from teammates
 
@@ -37,7 +37,7 @@ Monitors `~/.claude/teams/` for team creation/removal and tracks active teams.
 
 ### 2. Team-Aware Idle Detection (HIGHEST PRIORITY)
 
-**Problem (confirmed by experiment):** Lead session shows status "idle" in Claudeman while teammates are actively working. Token count continues climbing but Claudeman thinks the session is inactive.
+**Problem (confirmed by experiment):** Lead session shows status "idle" in Codeman while teammates are actively working. Token count continues climbing but Codeman thinks the session is inactive.
 
 **Solution:**
 - Before declaring a session idle, check if it's a team lead
@@ -125,7 +125,7 @@ Communication uses filesystem inbox files at `~/.claude/teams/{name}/inboxes/{te
 **Potential for interaction (not tested, future work):**
 - Write to teammate inbox files to inject messages
 - Must respect `.json.lock` directory locking protocol
-- Could enable "nudge" or "redirect" functionality from Claudeman UI
+- Could enable "nudge" or "redirect" functionality from Codeman UI
 
 ## Answered Questions (from experiment)
 
@@ -161,7 +161,7 @@ Communication uses filesystem inbox files at `~/.claude/teams/{name}/inboxes/{te
 3. **Teammate badge in subagent windows** — mark teammate subagents with name/color
 4. **Team tasks API + UI** — `GET /api/sessions/:id/team-tasks` + task list panel
 5. **Inbox monitoring** — watch inbox files, display message timeline
-6. **TeammateIdle/TaskCompleted hooks** — add to Claudeman's hooks config generator
+6. **TeammateIdle/TaskCompleted hooks** — add to Codeman's hooks config generator
 
 ## What We DON'T Need to Build
 

@@ -4,8 +4,8 @@
 
 SESSION_ID="${1:-5ecdf859-3605-42d8-b0a2-f8f0a1b5ff98}"
 DURATION_HOURS="${2:-12}"
-ISSUES_FILE="/home/arkon/default/claudeman/respawn-monitor-issues.md"
-FIXES_FILE="/home/arkon/default/claudeman/respawn-monitor-fixes.md"
+ISSUES_FILE="/home/arkon/default/codeman/respawn-monitor-issues.md"
+FIXES_FILE="/home/arkon/default/codeman/respawn-monitor-fixes.md"
 API_URL="https://localhost:3000"
 POLL_INTERVAL=60  # seconds
 
@@ -54,7 +54,7 @@ while [ $(date +%s) -lt $END_TIME ]; do
 
     if [ -z "$RESP" ]; then
         log_issue "ERROR" "API not responding - server may be down"
-        add_fix "API not responding" "Check if claudeman-web service is running:\n\`\`\`bash\nsystemctl --user status claudeman-web\nsystemctl --user restart claudeman-web\n\`\`\`"
+        add_fix "API not responding" "Check if codeman-web service is running:\n\`\`\`bash\nsystemctl --user status codeman-web\nsystemctl --user restart codeman-web\n\`\`\`"
         sleep $POLL_INTERVAL
         continue
     fi

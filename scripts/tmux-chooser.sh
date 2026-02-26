@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================================
-# Claudeman Sessions - Mobile-friendly Tmux Session Chooser
+# Codeman Sessions - Mobile-friendly Tmux Session Chooser
 # Optimized for iPhone/Termius (portrait ~45 chars, landscape ~95 chars)
 # ============================================================================
 #
@@ -8,7 +8,7 @@
 #   - Single-digit selection (1-9) for fast thumb typing
 #   - Compact display, no wasted space
 #   - Color-coded status for quick scanning
-#   - Names pulled from Claudeman state.json
+#   - Names pulled from Codeman state.json
 #   - Minimal keystrokes to attach
 #
 # Usage:
@@ -29,8 +29,8 @@ set -e
 # Configuration
 # ============================================================================
 
-CLAUDEMAN_STATE="$HOME/.claudeman/state.json"
-CLAUDEMAN_SESSIONS="$HOME/.claudeman/mux-sessions.json"
+CODEMAN_STATE="$HOME/.codeman/state.json"
+CODEMAN_SESSIONS="$HOME/.codeman/mux-sessions.json"
 
 
 # iPhone 17 Pro portrait width (conservative)
@@ -106,22 +106,22 @@ truncate() {
 find_full_session_id() {
     local short_id="$1"
 
-    if [ -f "$CLAUDEMAN_STATE" ]; then
+    if [ -f "$CODEMAN_STATE" ]; then
         local full_id
         full_id=$(jq -r --arg short "$short_id" '
             .sessions | keys[] | select(startswith($short))
-        ' "$CLAUDEMAN_STATE" 2>/dev/null | head -1)
+        ' "$CODEMAN_STATE" 2>/dev/null | head -1)
         if [ -n "$full_id" ]; then
             echo "$full_id"
             return
         fi
     fi
 
-    if [ -f "$CLAUDEMAN_SESSIONS" ]; then
+    if [ -f "$CODEMAN_SESSIONS" ]; then
         local full_id
         full_id=$(jq -r --arg short "$short_id" '
             .[] | select(.sessionId | startswith($short)) | .sessionId
-        ' "$CLAUDEMAN_SESSIONS" 2>/dev/null | head -1)
+        ' "$CODEMAN_SESSIONS" 2>/dev/null | head -1)
         if [ -n "$full_id" ]; then
             echo "$full_id"
             return
@@ -136,22 +136,22 @@ get_session_name() {
     local name=""
     local workdir=""
 
-    if [ -f "$CLAUDEMAN_SESSIONS" ]; then
+    if [ -f "$CODEMAN_SESSIONS" ]; then
         local result
         result=$(jq -r --arg id "$session_id" '
             .[] | select(.sessionId | startswith($id)) | "\(.name // "")\t\(.workingDir // "")"
-        ' "$CLAUDEMAN_SESSIONS" 2>/dev/null | head -1)
+        ' "$CODEMAN_SESSIONS" 2>/dev/null | head -1)
         if [ -n "$result" ]; then
             name="${result%%	*}"
             workdir="${result#*	}"
         fi
     fi
 
-    if [ -z "$name" ] && [ -f "$CLAUDEMAN_STATE" ]; then
+    if [ -z "$name" ] && [ -f "$CODEMAN_STATE" ]; then
         local result
         result=$(jq -r --arg id "$session_id" '
             .sessions | to_entries[] | select(.key | startswith($id)) | "\(.value.name // "")\t\(.value.workingDir // "")"
-        ' "$CLAUDEMAN_STATE" 2>/dev/null | head -1)
+        ' "$CODEMAN_STATE" 2>/dev/null | head -1)
         if [ -n "$result" ]; then
             name="${result%%	*}"
             [ -z "$workdir" ] && workdir="${result#*	}"
@@ -174,22 +174,22 @@ get_session_name() {
 get_working_dir() {
     local session_id="$1"
 
-    if [ -f "$CLAUDEMAN_SESSIONS" ]; then
+    if [ -f "$CODEMAN_SESSIONS" ]; then
         local dir
         dir=$(jq -r --arg id "$session_id" '
             .[] | select(.sessionId | startswith($id)) | .workingDir // empty
-        ' "$CLAUDEMAN_SESSIONS" 2>/dev/null | head -1)
+        ' "$CODEMAN_SESSIONS" 2>/dev/null | head -1)
         if [ -n "$dir" ] && [ "$dir" != "null" ]; then
             echo "${dir/#$HOME/~}"
             return
         fi
     fi
 
-    if [ -f "$CLAUDEMAN_STATE" ]; then
+    if [ -f "$CODEMAN_STATE" ]; then
         local dir
         dir=$(jq -r --arg id "$session_id" '
             .sessions | to_entries[] | select(.key | startswith($id)) | .value.workingDir // empty
-        ' "$CLAUDEMAN_STATE" 2>/dev/null | head -1)
+        ' "$CODEMAN_STATE" 2>/dev/null | head -1)
         if [ -n "$dir" ] && [ "$dir" != "null" ]; then
             echo "${dir/#$HOME/~}"
             return
@@ -201,12 +201,12 @@ get_working_dir() {
 get_tokens() {
     local session_id="$1"
 
-    if [ -f "$CLAUDEMAN_STATE" ]; then
+    if [ -f "$CODEMAN_STATE" ]; then
         local tokens
         tokens=$(jq -r --arg id "$session_id" '
             .sessions | to_entries[] | select(.key | startswith($id)) |
             ((.value.inputTokens // 0) + (.value.outputTokens // 0))
-        ' "$CLAUDEMAN_STATE" 2>/dev/null | head -1)
+        ' "$CODEMAN_STATE" 2>/dev/null | head -1)
 
         if [ -n "$tokens" ] && [ "$tokens" != "null" ] && [ "$tokens" -gt 0 ] 2>/dev/null; then
             if [ "$tokens" -gt 1000 ]; then
@@ -223,11 +223,11 @@ get_tokens() {
 get_respawn_status() {
     local session_id="$1"
 
-    if [ -f "$CLAUDEMAN_SESSIONS" ]; then
+    if [ -f "$CODEMAN_SESSIONS" ]; then
         local respawn_enabled
         respawn_enabled=$(jq -r --arg id "$session_id" '
             .[] | select(.sessionId | startswith($id)) | .respawnConfig.enabled // false
-        ' "$CLAUDEMAN_SESSIONS" 2>/dev/null | head -1)
+        ' "$CODEMAN_SESSIONS" 2>/dev/null | head -1)
 
         if [ "$respawn_enabled" = "true" ]; then
             echo "R"
@@ -273,8 +273,8 @@ parse_sessions() {
     while IFS= read -r line; do
         local session_name="${line%%:*}"
 
-        # Only show claudeman sessions
-        if [[ "$session_name" != claudeman-* ]]; then
+        # Only show codeman sessions
+        if [[ "$session_name" != codeman-* ]]; then
             continue
         fi
 
@@ -292,9 +292,9 @@ parse_sessions() {
         MUX_NAMES+=("$session_name")
         SESSION_STATES+=("$state")
 
-        # Extract session ID from claudeman session name
+        # Extract session ID from codeman session name
         local session_id=""
-        local cm_regex='^claudeman-(.+)$'
+        local cm_regex='^codeman-(.+)$'
         if [[ "$session_name" =~ $cm_regex ]]; then
             session_id="${BASH_REMATCH[1]}"
         fi
@@ -327,7 +327,7 @@ clear_screen() {
 
 print_header() {
     local count=${#SESSION_PIDS[@]}
-    echo -e "${B}${CYAN}Claudeman Sessions${R} ${D}($count)${R}"
+    echo -e "${B}${CYAN}Codeman Sessions${R} ${D}($count)${R}"
     echo -e "${D}$(printf '%.0s─' {1..32})${R}"
 }
 
@@ -395,13 +395,13 @@ print_footer() {
 
 print_no_sessions() {
     clear_screen
-    echo -e "${B}${CYAN}Claudeman Sessions${R}"
+    echo -e "${B}${CYAN}Codeman Sessions${R}"
     echo -e "${D}$(printf '%.0s─' {1..32})${R}"
     echo ""
     echo -e "  ${YELLOW}No tmux sessions found${R}"
     echo ""
     echo -e "  ${D}Start one with:${R}"
-    echo -e "  ${WHITE}claudeman web${R}"
+    echo -e "  ${WHITE}codeman web${R}"
     echo ""
     echo -e "${D}$(printf '%.0s─' {1..32})${R}"
     echo -e " ${GRAY}[${WHITE}r${GRAY}]efresh [${WHITE}q${GRAY}]uit${R}"
@@ -584,7 +584,7 @@ quick_attach() {
 
 show_help() {
     cat << 'EOF'
-Claudeman Sessions - Mobile-friendly Tmux Session Chooser
+Codeman Sessions - Mobile-friendly Tmux Session Chooser
 
 USAGE:
   sc              Interactive chooser
@@ -607,7 +607,7 @@ INDICATORS:
 
 TIPS:
   - Detach from tmux: Ctrl+B D
-  - Session names from Claudeman state
+  - Session names from Codeman state
   - Optimized for Termius/iPhone
 
 EOF

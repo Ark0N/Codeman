@@ -1,7 +1,7 @@
 /**
  * @fileoverview CLAUDE.md template generation
  *
- * Generates CLAUDE.md configuration files for new Claudeman projects.
+ * Generates CLAUDE.md configuration files for new Codeman projects.
  * Reads the bundled case-template.md and performs placeholder substitution.
  * Supports custom templates via settings.json override.
  *

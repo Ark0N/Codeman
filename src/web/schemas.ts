@@ -39,7 +39,7 @@ const ALLOWED_ENV_PREFIXES = ['CLAUDE_CODE_', 'OPENCODE_'];
 /** Env var keys that are always blocked (security-sensitive) */
 const BLOCKED_ENV_KEYS = new Set([
   'PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'NODE_OPTIONS',
-  'CLAUDEMAN_MUX_NAME', 'CLAUDEMAN_TMUX',
+  'CODEMAN_MUX_NAME', 'CODEMAN_TMUX',
   'OPENCODE_SERVER_PASSWORD',  // Security-sensitive: server auth password
 ]);
 

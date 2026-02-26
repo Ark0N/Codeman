@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Capture screenshots and GIFs of Claudeman's subagent visualization
+ * Capture screenshots and GIFs of Codeman's subagent visualization
  *
  * Uses real Claude sessions that spawn actual subagents via the Task tool.
  *
@@ -23,7 +23,7 @@ import { mkdirSync, existsSync, unlinkSync, rmSync } from 'fs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, '..');
 const OUTPUT_DIR = join(PROJECT_ROOT, 'docs', 'images');
-const CASES_DIR = join(process.env.HOME, 'claudeman-cases');
+const CASES_DIR = join(process.env.HOME, 'codeman-cases');
 
 // Configuration
 const PORT = 3198; // Unique port for capture script (avoid 3199 conflicts)
@@ -58,10 +58,10 @@ let serverProcess = null;
 let browser = null;
 
 /**
- * Start the Claudeman web server
+ * Start the Codeman web server
  */
 async function startServer() {
-  console.log(`Starting Claudeman server on port ${PORT}...`);
+  console.log(`Starting Codeman server on port ${PORT}...`);
 
   serverProcess = spawn('npx', ['tsx', 'src/index.ts', 'web', '--port', String(PORT)], {
     cwd: PROJECT_ROOT,
@@ -222,7 +222,7 @@ async function configureSettings(page) {
       subagentActiveTabOnly: false, // Show all subagents regardless of active tab
       showMonitor: true,
     };
-    localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
+    localStorage.setItem('codeman-app-settings', JSON.stringify(settings));
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await sleep(500);
@@ -292,7 +292,7 @@ function convertToGif(inputPath, outputPath) {
  */
 async function capture() {
   console.log('='.repeat(60));
-  console.log('Claudeman Subagent Screenshot Capture');
+  console.log('Codeman Subagent Screenshot Capture');
   console.log('='.repeat(60));
   console.log(`Output directory: ${OUTPUT_DIR}`);
   console.log(`Case name: ${CASE_NAME}`);
@@ -323,8 +323,8 @@ async function capture() {
     const page = await context.newPage();
     page.setDefaultTimeout(30000);
 
-    // Navigate to Claudeman
-    console.log('Loading Claudeman...');
+    // Navigate to Codeman
+    console.log('Loading Codeman...');
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
     await sleep(1000);
 

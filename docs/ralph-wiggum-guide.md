@@ -19,7 +19,7 @@
 8. [Prompt Templates](#prompt-templates)
 9. [When to Use (and Not Use)](#when-to-use-and-not-use)
 10. [Real-World Examples](#real-world-examples)
-11. [Claudeman Implementation](#claudeman-implementation)
+11. [Codeman Implementation](#codeman-implementation)
 12. [Troubleshooting](#troubleshooting)
 
 ---
@@ -148,18 +148,18 @@ The completion phrase pattern is the core contract between Claude and the loop s
 
 ### False Positive Prevention
 
-The official implementation (and Claudeman) prevents false positives when completion phrases appear in:
+The official implementation (and Codeman) prevents false positives when completion phrases appear in:
 - Initial prompts
 - Documentation or examples
 - Comments
 
-**Solution**: Claudeman uses **occurrence-based detection** to distinguish prompts from actual completions:
+**Solution**: Codeman uses **occurrence-based detection** to distinguish prompts from actual completions:
 - **1st occurrence**: Store as expected phrase (likely in the prompt)
 - **2nd occurrence**: Emit `completionDetected` (actual completion)
 - **If loop already active**: Emit immediately (explicit loop start via `/ralph-loop:ralph-loop`)
 
 ```typescript
-// From claudeman/src/ralph-tracker.ts
+// From codeman/src/ralph-tracker.ts
 private handleCompletionPhrase(phrase: string): void {
   const count = (this._completionPhraseCount.get(phrase) || 0) + 1;
   this._completionPhraseCount.set(phrase, count);
@@ -631,9 +631,9 @@ Ask yourself:
 
 ---
 
-## Claudeman Implementation
+## Codeman Implementation
 
-Claudeman implements Ralph Wiggum tracking via the `RalphTracker` class in `src/ralph-tracker.ts`.
+Codeman implements Ralph Wiggum tracking via the `RalphTracker` class in `src/ralph-tracker.ts`.
 
 ### Auto-Detection Patterns
 
@@ -833,7 +833,7 @@ POST /api/sessions/:id/auto-clear
 - [Claude Fast - Autonomous Agent Loops](https://claudefa.st/blog/guide/mechanics/autonomous-agent-loops)
 - [DeepWiki - Ralph Loop](https://deepwiki.com/anthropics/claude-plugins-official/5.2.2-ralph-loop)
 
-### Related Claudeman Files
+### Related Codeman Files
 - `src/ralph-tracker.ts` - Core detection engine
 - `src/ralph-loop.ts` - Task orchestration
 - `src/respawn-controller.ts` - Session cycling
@@ -843,4 +843,4 @@ POST /api/sessions/:id/auto-clear
 
 ---
 
-*This documentation is maintained as part of the Claudeman project. For updates, see the main [CLAUDE.md](../CLAUDE.md).*
+*This documentation is maintained as part of the Codeman project. For updates, see the main [CLAUDE.md](../CLAUDE.md).*

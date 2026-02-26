@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 const TEST_PORT = 3115;
-const CASES_DIR = join(homedir(), 'claudeman-cases');
+const CASES_DIR = join(homedir(), 'codeman-cases');
 
 /**
  * Integration tests for complete user flows

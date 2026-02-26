@@ -1,12 +1,12 @@
 {
-  "name": "claudeman",
+  "name": "codeman",
   "version": "0.1650",
   "description": "The missing control plane for Claude Code - run 20 autonomous agents with real-time monitoring and session persistence",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "claudeman": "./dist/index.js"
+    "codeman": "./dist/index.js"
   },
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
@@ -71,12 +71,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Ark0N/claudeman.git"
+    "url": "git+https://github.com/Ark0N/Codeman.git"
   },
   "bugs": {
-    "url": "https://github.com/Ark0N/claudeman/issues"
+    "url": "https://github.com/Ark0N/Codeman/issues"
   },
-  "homepage": "https://github.com/Ark0N/claudeman#readme",
+  "homepage": "https://github.com/Ark0N/Codeman#readme",
   "files": [
     "dist",
     "scripts/postinstall.js",

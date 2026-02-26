@@ -17,7 +17,7 @@ import type { AppState, SessionState, TaskState, RalphSessionState } from '../sr
 import { StateStore, getStore } from '../src/state-store.js';
 
 describe('StateStore', () => {
-  const testDir = join(tmpdir(), 'claudeman-test-' + Date.now());
+  const testDir = join(tmpdir(), 'codeman-test-' + Date.now());
   const testFilePath = join(testDir, 'state.json');
   const testInnerPath = join(testDir, 'state-inner.json');
 

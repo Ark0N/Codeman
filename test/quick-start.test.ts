@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 const TEST_PORT = 3099;
-const CASES_DIR = join(homedir(), 'claudeman-cases');
+const CASES_DIR = join(homedir(), 'codeman-cases');
 
 describe('Quick Start API', () => {
   let server: WebServer;

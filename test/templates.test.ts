@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { generateClaudeMd } from '../src/templates/claude-md.js';
 
 describe('generateClaudeMd', () => {
-  const testDir = join(tmpdir(), 'claudeman-template-test-' + Date.now());
+  const testDir = join(tmpdir(), 'codeman-template-test-' + Date.now());
 
   beforeEach(() => {
     if (!existsSync(testDir)) {
@@ -54,11 +54,11 @@ describe('generateClaudeMd', () => {
       expect(result).toContain(`**Last Updated**: ${today}`);
     });
 
-    it('should include Claudeman environment section', () => {
+    it('should include Codeman environment section', () => {
       const result = generateClaudeMd('my-project');
 
-      expect(result).toContain('## Claudeman Environment');
-      expect(result).toContain('CLAUDEMAN_MUX=1');
+      expect(result).toContain('## Codeman Environment');
+      expect(result).toContain('CODEMAN_MUX=1');
     });
 
     it('should include work principles', () => {
@@ -146,20 +146,20 @@ About [PROJECT_NAME]: [PROJECT_DESCRIPTION]
       const result = generateClaudeMd('my-project', 'desc', '/nonexistent/template.md');
 
       // Should get default template content
-      expect(result).toContain('## Claudeman Environment');
+      expect(result).toContain('## Codeman Environment');
       expect(result).toContain('**Project Name**: my-project');
     });
 
     it('should fall back to default template if custom path is empty', () => {
       const result = generateClaudeMd('my-project', 'desc', '');
 
-      expect(result).toContain('## Claudeman Environment');
+      expect(result).toContain('## Codeman Environment');
     });
 
     it('should fall back to default template if custom path is undefined', () => {
       const result = generateClaudeMd('my-project', 'desc', undefined);
 
-      expect(result).toContain('## Claudeman Environment');
+      expect(result).toContain('## Codeman Environment');
     });
   });
 });

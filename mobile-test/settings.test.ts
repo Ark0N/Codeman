@@ -43,7 +43,7 @@ describe('Settings Modal', () => {
       await context.close();
     });
 
-    it('uses claudeman-app-settings-mobile localStorage key', async () => {
+    it('uses codeman-app-settings-mobile localStorage key', async () => {
       const key = await page.evaluate(() => {
         return (window as any).app?.getSettingsStorageKey?.() ?? null;
       });
@@ -53,10 +53,10 @@ describe('Settings Modal', () => {
       } else {
         // Verify by checking what key is used when saving settings
         await page.evaluate(() => {
-          localStorage.setItem('claudeman-app-settings-mobile', JSON.stringify({ testFlag: true }));
+          localStorage.setItem('codeman-app-settings-mobile', JSON.stringify({ testFlag: true }));
         });
         const stored = await page.evaluate(() => {
-          return localStorage.getItem('claudeman-app-settings-mobile');
+          return localStorage.getItem('codeman-app-settings-mobile');
         });
         expect(stored).toContain('testFlag');
       }

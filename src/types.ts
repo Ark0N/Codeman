@@ -1,8 +1,8 @@
 /**
- * @fileoverview Type definitions for Claudeman
+ * @fileoverview Type definitions for Codeman
  *
  * This module contains all TypeScript interfaces, types, and enums used
- * throughout the Claudeman application. It provides type safety for:
+ * throughout the Codeman application. It provides type safety for:
  * - Session management
  * - Task queue operations
  * - Ralph Loop configuration
@@ -859,7 +859,7 @@ export const DEFAULT_CONFIG: AppConfig = {
  * Types for tracking Ralph Wiggum loops and todo lists
  * running inside Claude Code sessions.
  *
- * This allows Claudeman to detect and display when Claude Code
+ * This allows Codeman to detect and display when Claude Code
  * is running its own autonomous loops internally.
  */
 
@@ -1369,7 +1369,7 @@ export interface ActiveBashTool {
  * Used to trigger automatic image popup display in the web UI.
  */
 export interface ImageDetectedEvent {
-  /** Claudeman session ID where the image was detected */
+  /** Codeman session ID where the image was detected */
   sessionId: string;
   /** Full path to the detected image file */
   filePath: string;

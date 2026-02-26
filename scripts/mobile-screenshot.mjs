@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Take mobile screenshots of Claudeman using Playwright
+ * Take mobile screenshots of Codeman using Playwright
  * Emulates iPhone 15 Pro (closest to iPhone 17 Pro)
  * Includes keyboard simulation
  */

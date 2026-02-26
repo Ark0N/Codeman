@@ -4,7 +4,7 @@ Date: 2026-02-17
 
 ## Scope
 
-Full audit of the Claudeman notification system covering:
+Full audit of the Codeman notification system covering:
 - Backend event pipeline (server.ts, hooks-config.ts, team-watcher.ts, subagent-watcher.ts)
 - Frontend notification manager (app.js NotificationManager class, 4-layer architecture)
 - Settings UI and persistence (localStorage + server backup)

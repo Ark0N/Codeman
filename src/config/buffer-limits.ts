@@ -2,7 +2,7 @@
  * @fileoverview Centralized buffer size limits for memory management.
  *
  * These constants define the maximum sizes for various buffers throughout
- * Claudeman. Consolidating them here ensures consistent limits and makes
+ * Codeman. Consolidating them here ensures consistent limits and makes
  * it easy to tune memory usage.
  *
  * Memory Budget Rationale (for 20 concurrent sessions):

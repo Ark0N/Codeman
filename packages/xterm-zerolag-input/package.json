@@ -32,10 +32,10 @@
     "addon"
   ],
   "license": "MIT",
-  "homepage": "https://github.com/Ark0N/Claudeman/tree/master/packages/xterm-zerolag-input#readme",
+  "homepage": "https://github.com/Ark0N/Codeman/tree/master/packages/xterm-zerolag-input#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Ark0N/Claudeman.git",
+    "url": "git+https://github.com/Ark0N/Codeman.git",
     "directory": "packages/xterm-zerolag-input"
   },
   "devDependencies": {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Capture a GIF of subagent spawning on the LIVE Claudeman server.
+ * Capture a GIF of subagent spawning on the LIVE Codeman server.
  *
  * Connects to the running server on port 3000, creates a test session,
  * sends a prompt that spawns 3 parallel agents, and captures a tight
@@ -69,7 +69,7 @@ async function capture() {
   try {
     // Create case and seed with real source files
     console.log(`Creating case: ${CASE_NAME}`);
-    const caseDir = join(process.env.HOME, 'claudeman-cases', CASE_NAME);
+    const caseDir = join(process.env.HOME, 'codeman-cases', CASE_NAME);
     const caseSrc = join(caseDir, 'src');
     const caseTest = join(caseDir, 'test');
     mkdirSync(caseSrc, { recursive: true });
@@ -123,7 +123,7 @@ async function capture() {
 
     // Configure settings: enable subagents, disable Files pane
     await setupPage.evaluate(() => {
-      const existing = JSON.parse(localStorage.getItem('claudeman-app-settings') || '{}');
+      const existing = JSON.parse(localStorage.getItem('codeman-app-settings') || '{}');
       Object.assign(existing, {
         showSubagents: true,
         subagentTrackingEnabled: true,
@@ -132,7 +132,7 @@ async function capture() {
         showProjectInsights: false,
         showFileBrowser: false,
       });
-      localStorage.setItem('claudeman-app-settings', JSON.stringify(existing));
+      localStorage.setItem('codeman-app-settings', JSON.stringify(existing));
     });
     await setupPage.reload({ waitUntil: 'domcontentloaded' });
     await sleep(1000);
@@ -227,7 +227,7 @@ async function capture() {
 
     // Re-apply settings (new context = fresh localStorage)
     await recordPage.evaluate(() => {
-      const existing = JSON.parse(localStorage.getItem('claudeman-app-settings') || '{}');
+      const existing = JSON.parse(localStorage.getItem('codeman-app-settings') || '{}');
       Object.assign(existing, {
         showSubagents: true,
         subagentTrackingEnabled: true,
@@ -236,7 +236,7 @@ async function capture() {
         showProjectInsights: false,
         showFileBrowser: false,
       });
-      localStorage.setItem('claudeman-app-settings', JSON.stringify(existing));
+      localStorage.setItem('codeman-app-settings', JSON.stringify(existing));
     });
     await recordPage.reload({ waitUntil: 'domcontentloaded' });
     await sleep(1000);

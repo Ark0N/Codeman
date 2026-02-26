@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 const TEST_PORT = 3125;
-const CASES_DIR = join(homedir(), 'claudeman-cases');
+const CASES_DIR = join(homedir(), 'codeman-cases');
 
 describe('Ralph Integration Tests', () => {
   let server: WebServer;

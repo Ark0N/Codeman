@@ -2,7 +2,7 @@
  * @fileoverview Agent Teams Watcher
  *
  * Polls ~/.claude/teams/ and ~/.claude/tasks/ for agent team activity.
- * Matches teams to Claudeman sessions via leadSessionId and emits
+ * Matches teams to Codeman sessions via leadSessionId and emits
  * events for UI updates and team-aware idle detection.
  *
  * @module team-watcher
@@ -70,7 +70,7 @@ export class TeamWatcher extends EventEmitter {
     return Array.from(this.teams.values());
   }
 
-  /** Get team associated with a Claudeman session (matched by leadSessionId) */
+  /** Get team associated with a Codeman session (matched by leadSessionId) */
   getTeamForSession(sessionId: string): TeamConfig | undefined {
     const teamName = this.sessionToTeam.get(sessionId);
     if (teamName) {

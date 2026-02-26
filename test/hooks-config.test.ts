@@ -54,8 +54,8 @@ describe('generateHooksConfig', () => {
     const config = generateHooksConfig();
     const notifHooks = config.hooks.Notification as Array<{ hooks: Array<{ command: string }> }>;
     const cmd = notifHooks[0].hooks[0].command;
-    expect(cmd).toContain('$CLAUDEMAN_API_URL');
-    expect(cmd).toContain('$CLAUDEMAN_SESSION_ID');
+    expect(cmd).toContain('$CODEMAN_API_URL');
+    expect(cmd).toContain('$CODEMAN_SESSION_ID');
     expect(cmd).not.toContain('localhost');
   });
 
@@ -99,7 +99,7 @@ describe('generateHooksConfig', () => {
 });
 
 describe('writeHooksConfig', () => {
-  const testDir = join(tmpdir(), 'claudeman-hooks-test-' + Date.now());
+  const testDir = join(tmpdir(), 'codeman-hooks-test-' + Date.now());
 
   beforeEach(() => {
     if (!existsSync(testDir)) {
@@ -648,8 +648,8 @@ describe('Hook Config Generation - Extended', () => {
     const config = generateHooksConfig();
     const notifHooks = config.hooks.Notification as Array<{ hooks: Array<{ command: string }> }>;
     const cmd = notifHooks[0].hooks[0].command;
-    expect(cmd).toContain('$CLAUDEMAN_API_URL');
-    expect(cmd).toContain('$CLAUDEMAN_SESSION_ID');
+    expect(cmd).toContain('$CODEMAN_API_URL');
+    expect(cmd).toContain('$CODEMAN_SESSION_ID');
   });
 
   it('should generate POST curl commands', () => {

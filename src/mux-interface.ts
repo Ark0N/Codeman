@@ -13,9 +13,9 @@ import type { ProcessStats, PersistedRespawnConfig, NiceConfig, ClaudeMode, Sess
  * Multiplexer session metadata.
  */
 export interface MuxSession {
-  /** Claudeman session ID */
+  /** Codeman session ID */
   sessionId: string;
-  /** Multiplexer session name (e.g., "claudeman-abc12345") */
+  /** Multiplexer session name (e.g., "codeman-abc12345") */
   muxName: string;
   /** Process PID */
   pid: number;
@@ -105,7 +105,7 @@ export interface TerminalMultiplexer extends EventEmitter {
   /** Get all tracked sessions */
   getSessions(): MuxSession[];
 
-  /** Get a session by Claudeman session ID */
+  /** Get a session by Codeman session ID */
   getSession(sessionId: string): MuxSession | undefined;
 
   /** Get all sessions with process resource statistics */

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This plan details improvements to Claudeman's Ralph Loop system based on best practices from the Ralph Claude Code repository (https://github.com/frankbria/ralph-claude-code).
+This plan details improvements to Codeman's Ralph Loop system based on best practices from the Ralph Claude Code repository (https://github.com/frankbria/ralph-claude-code).
 
 ## Key Concepts to Implement
 
@@ -181,7 +181,7 @@ Three states: CLOSED → HALF_OPEN → OPEN
 ### 3.1 Template Library
 - Bug Fix, Feature, Refactoring, Test Coverage, Documentation templates
 - Template selector in wizard
-- Custom templates in `~/.claudeman/templates/`
+- Custom templates in `~/.codeman/templates/`
 
 ### 3.2 Tool Permissions
 - Configure allowed Claude tools per loop

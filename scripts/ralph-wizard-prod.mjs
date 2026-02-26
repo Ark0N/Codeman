@@ -10,8 +10,8 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 const BASE_URL = 'https://localhost:3000';
-const CASE_NAME = 'claudeman-ios';
-const CASE_PATH = join(homedir(), 'claudeman-cases', CASE_NAME);
+const CASE_NAME = 'codeman-ios';
+const CASE_PATH = join(homedir(), 'codeman-cases', CASE_NAME);
 
 async function main() {
   // Read initprompt.md
@@ -49,7 +49,7 @@ async function main() {
   page.on('pageerror', err => console.log(`[Browser Error] ${err.message}`));
 
   try {
-    console.log('[1/10] Navigating to Claudeman...');
+    console.log('[1/10] Navigating to Codeman...');
     await page.goto(BASE_URL, { timeout: 10000 });
 
     console.log('[2/10] Clicking Ralph Loop button (.btn-ralph)...');
@@ -122,7 +122,7 @@ async function main() {
       });
 
       session = sessions
-        .filter(s => s.workingDir?.includes('claudeman-ios'))
+        .filter(s => s.workingDir?.includes('codeman-ios'))
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
 
       if (session) {
@@ -151,7 +151,7 @@ async function main() {
     console.log('SUCCESS! Ralph Loop started.');
     console.log('========================================');
     console.log(`Session ID: ${session?.id}`);
-    console.log(`Screen: claudeman-${session?.id?.slice(0, 8)}`);
+    console.log(`Screen: codeman-${session?.id?.slice(0, 8)}`);
     console.log(`Status: ${session?.status}`);
     console.log('');
     console.log('Session is now running. View at: https://localhost:3000');

@@ -15,7 +15,7 @@ When local echo is enabled, keystrokes accumulate in the `LocalEchoOverlay.pendi
 When local echo is enabled, keystrokes accumulate **only** in `LocalEchoOverlay.pendingText` (a client-side string). Nothing reaches the server PTY until Enter is pressed. This creates three failure modes:
 
 1. **Tab switch loses PTY state** — switching sessions saves overlay text to `localEchoTextCache` (a Map), but the actual Claude Code Ink process has no knowledge of what was typed. If respawn or `/clear` fires on that session, the cached text is meaningless.
-2. **Session death loses input** — if the session crashes or respawns while text is pending in the overlay, that input is gone (localStorage backup `claudeman_local_echo_pending` only survives page reloads, not session resets).
+2. **Session death loses input** — if the session crashes or respawns while text is pending in the overlay, that input is gone (localStorage backup `codeman_local_echo_pending` only survives page reloads, not session resets).
 3. **Tab completion impossible** — pressing Tab with pending overlay text sends the raw Tab character to a PTY that has no knowledge of the typed text, so completion fails.
 
 ## Goal

@@ -2,7 +2,7 @@
 
 ## Context
 
-User accesses Claudeman remotely from Thailand to Switzerland over Tailscale (~200-300ms RTT).
+User accesses Codeman remotely from Thailand to Switzerland over Tailscale (~200-300ms RTT).
 Every keystroke is invisible for 200-300ms before the server echoes it back. This makes typing
 painfully slow on mobile. Previous attempts to write directly to xterm.js buffer failed because
 Ink (Claude Code's terminal framework) does full-screen redraws that corrupt injected characters.

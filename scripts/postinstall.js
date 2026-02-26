@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Claudeman postinstall verification script
+ * Codeman postinstall verification script
  * Runs after `npm install` to check environment readiness
  */
 
@@ -94,7 +94,7 @@ function getTmuxInstallInstructions() {
 // Main Checks
 // ============================================================================
 
-console.log(colors.bold('Claudeman postinstall check...'));
+console.log(colors.bold('Codeman postinstall check...'));
 console.log('');
 
 let hasWarnings = false;
@@ -259,11 +259,11 @@ if (hasErrors) {
 
 console.log(colors.bold('Next steps:'));
 if (isGlobalInstall) {
-    console.log(colors.dim('  1. Start:  ') + colors.cyan('claudeman web'));
+    console.log(colors.dim('  1. Start:  ') + colors.cyan('codeman web'));
     console.log(colors.dim('  2. Open:   ') + colors.cyan('http://localhost:3000'));
 } else {
     console.log(colors.dim('  1. Build:  ') + colors.cyan('npm run build'));
-    console.log(colors.dim('  2. Start:  ') + colors.cyan('claudeman web'));
+    console.log(colors.dim('  2. Start:  ') + colors.cyan('codeman web'));
     console.log(colors.dim('  3. Open:   ') + colors.cyan('http://localhost:3000'));
 }
 

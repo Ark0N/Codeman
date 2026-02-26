@@ -1,12 +1,12 @@
-# Claudeman Mobile Test Suite
+# Codeman Mobile Test Suite
 
-Comprehensive mobile UI testing for Claudeman's web interface using Playwright with dual-engine support (Chromium + WebKit).
+Comprehensive mobile UI testing for Codeman's web interface using Playwright with dual-engine support (Chromium + WebKit).
 
 **325 tests across 135 devices — all passing.**
 
 ## Purpose
 
-Validates Claudeman's mobile UI across 135 devices, covering:
+Validates Codeman's mobile UI across 135 devices, covering:
 
 - **Keyboard simulation** — 3-layer approach to emulate virtual keyboards in headless browsers
 - **Touch/swipe interactions** — CDP trusted events (Chromium) + synthetic fallback (WebKit)

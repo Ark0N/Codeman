@@ -537,7 +537,7 @@ describe('API Response Structures', () => {
     it('should validate case info', () => {
       const caseInfo: CaseInfo = {
         name: 'my-project',
-        path: '/home/user/claudeman-cases/my-project',
+        path: '/home/user/codeman-cases/my-project',
         hasClaudeMd: true,
       };
 
@@ -549,7 +549,7 @@ describe('API Response Structures', () => {
     it('should handle optional hasClaudeMd', () => {
       const caseInfo: CaseInfo = {
         name: 'new-project',
-        path: '/home/user/claudeman-cases/new-project',
+        path: '/home/user/codeman-cases/new-project',
       };
 
       expect(caseInfo.hasClaudeMd).toBeUndefined();

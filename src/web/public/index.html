@@ -6,7 +6,7 @@
   <meta name="description" content="Claude Code session manager with web interface">
   <meta name="theme-color" content="#0a0a0a">
   <meta name="google" content="notranslate">
-  <title>Claudeman</title>
+  <title>Codeman</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2360a5fa'/%3E%3Cstop offset='100%25' stop-color='%233b82f6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0a'/%3E%3Cpath d='M18 4L8 18h6l-2 10 10-14h-6z' fill='url(%23g)'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css?v=0.1631">
   <link rel="stylesheet" href="mobile.css?v=0.1631" media="(max-width: 1023px)">
@@ -37,7 +37,7 @@
   <!-- Loading skeleton — visible instantly before CSS/JS loads, hidden by app-loaded class -->
   <div class="loading-skeleton">
     <div class="skeleton-header">
-      <span class="skeleton-brand">Claudeman</span>
+      <span class="skeleton-brand">Codeman</span>
       <div class="skeleton-tabs"><div class="skeleton-tab"></div></div>
     </div>
     <div class="skeleton-terminal"></div>
@@ -49,7 +49,7 @@
     <!-- Compact Header with Session Tabs -->
     <header class="header">
       <div class="header-brand">
-        <span class="logo" onclick="app.goHome()" title="Go to main page">Claudeman</span>
+        <span class="logo" onclick="app.goHome()" title="Go to main page">Codeman</span>
       </div>
 
       <!-- Session Tabs -->
@@ -231,7 +231,7 @@
       <!-- Welcome Overlay (shown when no session active) -->
       <div class="welcome-overlay" id="welcomeOverlay">
         <div class="welcome-content">
-          <h1 class="welcome-title">Claudeman</h1>
+          <h1 class="welcome-title">Codeman</h1>
           <p class="welcome-desc">Manage AI Coding tools in persistent tmux sessions.</p>
           <div class="welcome-actions">
             <button class="welcome-btn welcome-btn-claude" onclick="app.setRunMode('claude'); app.runClaude()">
@@ -379,7 +379,7 @@
       </div>
 
       <div class="toolbar-center">
-        <span class="version-display" id="versionDisplay" title="Claudeman version">v0.0.0</span>
+        <span class="version-display" id="versionDisplay" title="Codeman version">v0.0.0</span>
       </div>
 
       <div class="toolbar-right">
@@ -1086,7 +1086,7 @@
                   <span class="settings-status" id="notifPermissionStatus">?</span>
                 </div>
               </div>
-              <span class="form-hint" style="grid-column: 1 / -1; margin-top: -8px;">For remote access, HTTPS is required. Start with: <code>claudeman web --https</code></span>
+              <span class="form-hint" style="grid-column: 1 / -1; margin-top: -8px;">For remote access, HTTPS is required. Start with: <code>codeman web --https</code></span>
 
               <!-- Alerts Section -->
               <div class="settings-section-header">Alerts</div>
@@ -1222,7 +1222,7 @@
 
               <div class="form-row" style="grid-column: 1 / -1;">
                 <label for="voiceKeyterms">Domain Keywords</label>
-                <input type="text" id="voiceKeyterms" placeholder="claudeman, tmux, respawn, subagent" style="width: 100%; padding: 0.5rem 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.8rem; font-family: inherit;">
+                <input type="text" id="voiceKeyterms" placeholder="codeman, tmux, respawn, subagent" style="width: 100%; padding: 0.5rem 0.75rem; background: var(--bg-input); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 0.8rem; font-family: inherit;">
                 <span class="form-hint">Comma-separated terms to boost recognition accuracy</span>
               </div>
             </div>
@@ -1253,7 +1253,7 @@
             <div class="form-row">
               <label>Case Name</label>
               <input type="text" id="newCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
-              <span class="form-hint">Letters, numbers, hyphens, underscores only. Created in ~/claudeman-cases/</span>
+              <span class="form-hint">Letters, numbers, hyphens, underscores only. Created in ~/codeman-cases/</span>
             </div>
             <div class="form-row">
               <label>Description (optional)</label>
@@ -1265,7 +1265,7 @@
             <div class="form-row">
               <label>Case Name</label>
               <input type="text" id="linkCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
-              <span class="form-hint">Name to identify this case in Claudeman</span>
+              <span class="form-hint">Name to identify this case in Codeman</span>
             </div>
             <div class="form-row">
               <label>Folder Path</label>

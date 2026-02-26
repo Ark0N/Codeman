@@ -9,13 +9,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Dev server | `npx tsx src/index.ts web` |
 | Type check | `tsc --noEmit` |
 | Single test | `npx vitest run test/<file>.test.ts` |
-| Production | `npm run build && systemctl --user restart claudeman-web` |
+| Production | `npm run build && systemctl --user restart codeman-web` |
 
 ## CRITICAL: Session Safety
 
-**You may be running inside a Claudeman-managed tmux session.** Before killing ANY tmux or Claude process:
+**You may be running inside a Codeman-managed tmux session.** Before killing ANY tmux or Claude process:
 
-1. Check: `echo $CLAUDEMAN_TMUX` - if `1`, you're in a managed session
+1. Check: `echo $CODEMAN_TMUX` - if `1`, you're in a managed session
 2. **NEVER** run `tmux kill-session`, `pkill tmux`, or `pkill claude` without confirming
 3. Use the web UI or `./scripts/tmux-manager.sh` instead of direct kill commands
 
@@ -33,13 +33,13 @@ The production server caches static files for 1 hour (`maxAge: '1h'` in `server.
 
 When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
-2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
+2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart codeman-web`
 
 **Version**: 0.1650 (must match `package.json`)
 
 ## Project Overview
 
-Claudeman is a Claude Code session manager with web interface and autonomous Ralph Loop. Spawns Claude CLI via PTY, streams via SSE, supports respawn cycling for 24+ hour autonomous runs.
+Codeman is a Claude Code session manager with web interface and autonomous Ralph Loop. Spawns Claude CLI via PTY, streams via SSE, supports respawn cycling for 24+ hour autonomous runs.
 
 **Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, node-pty, xterm.js
 
@@ -63,24 +63,24 @@ npx tsx src/index.ts web --https   # With TLS (only needed for remote access)
 npm run typecheck                  # Type check
 tsc --noEmit --watch               # Continuous type checking
 
-# Testing (NEVER run full suite from inside Claudeman — kills tmux sessions)
-# npx vitest run                   # ALL tests — DANGEROUS inside Claudeman
+# Testing (NEVER run full suite from inside Codeman — kills tmux sessions)
+# npx vitest run                   # ALL tests — DANGEROUS inside Codeman
 npx vitest run test/<file>.test.ts # Single file (SAFE)
 npx vitest run -t "pattern"        # Tests matching name
 npm run test:coverage              # With coverage report
 
 # Production
 npm run build
-systemctl --user restart claudeman-web
-journalctl --user -u claudeman-web -f
+systemctl --user restart codeman-web
+journalctl --user -u codeman-web -f
 ```
 
 ## Common Gotchas
 
 - **`npm run dev` is NOT the web server** — it shows CLI help. Use `npx tsx src/index.ts web`
 - **Single-line prompts only** — `writeViaMux()` sends text and Enter separately; multi-line breaks Ink
-- **Don't kill tmux sessions blindly** — Check `$CLAUDEMAN_TMUX` first; you might be inside one
-- **Never run full test suite** — `npx vitest run` spawns/kills tmux sessions and will crash your Claudeman session. Run individual test files only.
+- **Don't kill tmux sessions blindly** — Check `$CODEMAN_TMUX` first; you might be inside one
+- **Never run full test suite** — `npx vitest run` spawns/kills tmux sessions and will crash your Codeman session. Run individual test files only.
 - **Global regex `lastIndex` sharing** — `ANSI_ESCAPE_PATTERN_FULL/SIMPLE` have `g` flag; use `createAnsiPatternFull/Simple()` factory functions for fresh instances in loops
 - **DEC 2026 sync blocks** — Never discard incomplete sync blocks (START without END); buffer up to 50ms then flush. See `app.js:extractSyncSegments()`
 - **Terminal writes during buffer load** — Live SSE writes are queued while `_isLoadingBuffer` is true to prevent interleaving with historical data
@@ -103,7 +103,7 @@ journalctl --user -u claudeman-web -f
 | `src/mux-factory.ts` | Create tmux multiplexer instance |
 | `src/tmux-manager.ts` | tmux session management |
 | `src/session-manager.ts` | Session lifecycle, cleanup |
-| `src/state-store.ts` | State persistence to `~/.claudeman/state.json` |
+| `src/state-store.ts` | State persistence to `~/.codeman/state.json` |
 | `src/respawn-controller.ts` | State machine for autonomous cycling |
 | `src/ralph-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos |
 | `src/ralph-loop.ts` | Autonomous task execution loop (polls queue, assigns tasks) |
@@ -120,7 +120,7 @@ journalctl --user -u claudeman-web -f
 | `src/bash-tool-parser.ts` | Parses Claude's bash tool invocations from output |
 | `src/transcript-watcher.ts` | Watches Claude's transcript files for changes |
 | `src/hooks-config.ts` | Manages `.claude/settings.local.json` hook configuration |
-| `src/session-lifecycle-log.ts` | Append-only JSONL audit log at `~/.claudeman/session-lifecycle.jsonl` |
+| `src/session-lifecycle-log.ts` | Append-only JSONL audit log at `~/.codeman/session-lifecycle.jsonl` |
 | `src/image-watcher.ts` | Watches for image file creation (screenshots, etc.) |
 | `src/file-stream-manager.ts` | Manages `tail -f` processes for live log viewing |
 | `src/plan-orchestrator.ts` | Multi-agent plan generation with research and planning phases |
@@ -169,7 +169,7 @@ journalctl --user -u claudeman-web -f
 1. Session spawns `claude --dangerously-skip-permissions` via node-pty
 2. PTY output buffered, ANSI stripped, parsed for JSON messages
 3. WebServer broadcasts to SSE clients at `/api/events`
-4. State persists to `~/.claudeman/state.json` via StateStore
+4. State persists to `~/.codeman/state.json` via StateStore
 
 ### Key Patterns
 
@@ -214,11 +214,11 @@ The frontend is a single 16K-line vanilla JS file with these key systems:
 
 ### Security
 
-- **HTTP Basic Auth**: Optional via `CLAUDEMAN_USERNAME`/`CLAUDEMAN_PASSWORD` env vars
+- **HTTP Basic Auth**: Optional via `CODEMAN_USERNAME`/`CODEMAN_PASSWORD` env vars
 - **CORS**: Restricted to localhost only
 - **Security headers**: X-Content-Type-Options, X-Frame-Options, CSP; HSTS if HTTPS
 - **Path validation** (`schemas.ts`): Strict allowlist regex, no shell metacharacters, no traversal, must be absolute
-- **Env var allowlist**: Only `CLAUDE_CODE_*` prefixes allowed; blocks `PATH`, `LD_PRELOAD`, `NODE_OPTIONS`, `CLAUDEMAN_*` keys
+- **Env var allowlist**: Only `CLAUDE_CODE_*` prefixes allowed; blocks `PATH`, `LD_PRELOAD`, `NODE_OPTIONS`, `CODEMAN_*` keys
 - **File streaming TOCTOU protection**: `FileStreamManager` calls `realpathSync()` twice (at validation and before spawn) to catch symlink swaps
 
 ### SSE Event Categories
@@ -269,9 +269,9 @@ The frontend is a single 16K-line vanilla JS file with these key systems:
 
 | File | Purpose |
 |------|---------|
-| `~/.claudeman/state.json` | Sessions, settings, tokens, respawn config |
-| `~/.claudeman/mux-sessions.json` | Tmux session metadata for recovery |
-| `~/.claudeman/settings.json` | User preferences |
+| `~/.codeman/state.json` | Sessions, settings, tokens, respawn config |
+| `~/.codeman/mux-sessions.json` | Tmux session metadata for recovery |
+| `~/.codeman/settings.json` | User preferences |
 
 ## Default Settings
 
@@ -281,7 +281,7 @@ UI defaults are set in `src/web/public/app.js` using `??` fallbacks. To change d
 
 ## Testing
 
-**CRITICAL: You are running inside a Claudeman-managed tmux session.** Never run `npx vitest run` (full suite) — it spawns/kills tmux sessions and will crash your own session. Instead:
+**CRITICAL: You are running inside a Codeman-managed tmux session.** Never run `npx vitest run` (full suite) — it spawns/kills tmux sessions and will crash your own session. Instead:
 
 ```bash
 # Safe: run individual test files
@@ -290,7 +290,7 @@ npx vitest run test/<specific-file>.test.ts
 # Safe: run tests matching a pattern
 npx vitest run -t "pattern"
 
-# DANGEROUS from inside Claudeman — will kill your tmux session:
+# DANGEROUS from inside Codeman — will kill your tmux session:
 # npx vitest run          ← DON'T DO THIS
 ```
 
@@ -306,10 +306,10 @@ npx vitest run -t "pattern"
 
 ## Screenshots ("sc")
 
-When the user says "check the sc", "screenshot", or "sc", they mean uploaded screenshots from their mobile device. Screenshots are saved to `~/.claudeman/screenshots/` and uploaded via `/upload.html` on the Claudeman web UI. To view them, use the Read tool on the image files:
+When the user says "check the sc", "screenshot", or "sc", they mean uploaded screenshots from their mobile device. Screenshots are saved to `~/.codeman/screenshots/` and uploaded via `/upload.html` on the Codeman web UI. To view them, use the Read tool on the image files:
 
 ```bash
-ls ~/.claudeman/screenshots/        # List uploaded screenshots
+ls ~/.codeman/screenshots/        # List uploaded screenshots
 # Then use Read tool on individual files — Claude Code can view images natively
 ```
 
@@ -322,7 +322,7 @@ tmux list-sessions                  # List tmux sessions
 tmux attach-session -t <name>       # Attach (Ctrl+B D to detach)
 curl localhost:3000/api/sessions    # Check sessions
 curl localhost:3000/api/status | jq # Full app state
-cat ~/.claudeman/state.json | jq    # View persisted state
+cat ~/.codeman/state.json | jq    # View persisted state
 curl localhost:3000/api/subagents   # List background agents
 curl localhost:3000/api/sessions/:id/run-summary | jq  # Session timeline
 ```
@@ -337,7 +337,7 @@ curl localhost:3000/api/sessions/:id/run-summary | jq  # Session timeline
 | Respawn not triggering | Session settings → Respawn enabled? | Enable respawn, check idle timeout config |
 | Terminal blank on tab switch | Network tab for `/api/sessions/:id/buffer` | Check session exists, restart server |
 | Tests failing on session limits | `tmux list-sessions \| wc -l` | Clean up: `tmux list-sessions \| grep test \| awk -F: '{print $1}' \| xargs -I{} tmux kill-session -t {}` |
-| State not persisting | `cat ~/.claudeman/state.json` | Check file permissions, disk space |
+| State not persisting | `cat ~/.codeman/state.json` | Check file permissions, disk space |
 
 ## Performance Constraints
 
@@ -352,7 +352,7 @@ The app must stay fast with 20 sessions and 50 agent windows:
 
 ## Terminal Anti-Flicker System
 
-Claude Code uses Ink (React for terminals), which redraws the screen on every state change. Claudeman implements a 6-layer anti-flicker pipeline for smooth 60fps output:
+Claude Code uses Ink (React for terminals), which redraws the screen on every state change. Codeman implements a 6-layer anti-flicker pipeline for smooth 60fps output:
 
 ```
 PTY Output → Server Batching (16-50ms) → DEC 2026 Wrap → SSE → Client rAF → xterm.js
@@ -395,14 +395,14 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Terminal anti-flicker** | `docs/terminal-anti-flicker.md` |
 | **API routes** | `src/web/server.ts:buildServer()` or README.md (full endpoint tables) |
 | **SSE events** | Search `broadcast(` in `server.ts` |
-| **CLI commands** | `claudeman --help` |
+| **CLI commands** | `codeman --help` |
 | **Frontend patterns** | `src/web/public/app.js` (subagent windows, notifications) |
 | **Session statuses** | `SessionStatus` type in `src/types.ts` |
 | **Error codes** | `createErrorResponse()` in `src/types.ts` |
 | **Test utilities** | `test/respawn-test-utils.ts` |
 | **Memory leak patterns** | `test/memory-leak-prevention.test.ts` |
 | **Keyboard shortcuts** | README.md or App Settings in web UI |
-| **Mobile/SSH access** | README.md (Claudeman Sessions / `sc` command) |
+| **Mobile/SSH access** | README.md (Codeman Sessions / `sc` command) |
 | **Plan orchestrator** | `src/plan-orchestrator.ts` file header |
 | **Agent prompts** | `src/prompts/` directory |
 | **Agent Teams (experimental)** | `agent-teams/README.md`, `agent-teams/design.md` |
@@ -444,7 +444,7 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | `scripts/test-patterns.mjs` | Test file path link detection regex patterns |
 | `scripts/watch-subagents.ts` | Real-time subagent transcript watcher (list, follow by session/agent ID) |
 | `scripts/capture-readme-screenshots.mjs` | Capture screenshots for README |
-| `scripts/claudeman-web.service` | systemd service file for production deployment |
+| `scripts/codeman-web.service` | systemd service file for production deployment |
 
 ## Memory Leak Prevention
 
@@ -464,7 +464,7 @@ Run `npx vitest run test/memory-leak-prevention.test.ts` to verify patterns.
 
 ## Common Workflows
 
-**Investigating a bug**: Start dev server (`npx tsx src/index.ts web`), reproduce in browser, check terminal output and `~/.claudeman/state.json` for clues.
+**Investigating a bug**: Start dev server (`npx tsx src/index.ts web`), reproduce in browser, check terminal output and `~/.codeman/state.json` for clues.
 
 **Adding a new API endpoint**: Define types in `types.ts`, add route in `server.ts:buildServer()`, broadcast SSE events if needed, handle in `app.js:handleSSEEvent()`.
 

@@ -56,7 +56,7 @@ The blue-tinted voice button in the accessory bar is distinctive but subtle. Whe
 
 Confirmed by research: Web Speech API is the right choice.
 - **Free, fast (150-300ms interim), trivial complexity**
-- Chrome + Safari = ~70% of users, ~95% of Claudeman's target audience (devs on Chrome)
+- Chrome + Safari = ~70% of users, ~95% of Codeman's target audience (devs on Chrome)
 - Works on localhost without HTTPS
 - Accuracy is adequate for English command dictation
 - Deepgram streaming (Phase 2 optional) only if accuracy complaints arise

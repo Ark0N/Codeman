@@ -2,7 +2,7 @@
 
 ## Overview
 
-Claudeman implements a **4-layer notification system** managed by the `NotificationManager` class (app.js lines 860-1265). The layers are:
+Codeman implements a **4-layer notification system** managed by the `NotificationManager` class (app.js lines 860-1265). The layers are:
 
 1. **In-app notification drawer** (Layer 1) - badge + list UI
 2. **Document title flashing** (Layer 2) - tab title blinks when hidden
@@ -32,19 +32,19 @@ updateTabTitle() {
       this.titleFlashInterval = setInterval(() => {
         this.titleFlashState = !this.titleFlashState;
         document.title = this.titleFlashState
-          ? `\u26A0\uFE0F (${this.unreadCount}) Claudeman`
+          ? `\u26A0\uFE0F (${this.unreadCount}) Codeman`
           : this.originalTitle;
       }, TITLE_FLASH_INTERVAL_MS);
       // Set immediately
-      document.title = `\u26A0\uFE0F (${this.unreadCount}) Claudeman`;
+      document.title = `\u26A0\uFE0F (${this.unreadCount}) Codeman`;
     }
   }
 }
 ```
 
 The title alternates between:
-- Warning emoji + unread count: `"(3) Claudeman"`
-- Original title: `"Claudeman"`
+- Warning emoji + unread count: `"(3) Codeman"`
+- Original title: `"Codeman"`
 
 ### What Triggers It
 Title flashing starts when `notify()` is called **while the tab is not visible** (`!this.isTabVisible`). The check is at lines 1026-1028:
@@ -126,7 +126,7 @@ It shows a lightning bolt icon on a dark background. The favicon is **static** a
 
 Browser notifications reference `/favicon.ico` as their icon (line 1130):
 ```js
-const notif = new Notification(`Claudeman: ${title}`, {
+const notif = new Notification(`Codeman: ${title}`, {
   body,
   tag,
   icon: '/favicon.ico',
@@ -306,7 +306,7 @@ Key detail: Title flash always stops when tab becomes visible, but **unread coun
 ## 5. Focus/Blur Handling
 
 ### No window focus/blur listeners
-Claudeman does **not** use `window.addEventListener('focus')` or `window.addEventListener('blur')`. It relies solely on the Page Visibility API (`visibilitychange` + `pageshow`).
+Codeman does **not** use `window.addEventListener('focus')` or `window.addEventListener('blur')`. It relies solely on the Page Visibility API (`visibilitychange` + `pageshow`).
 
 This is the correct modern approach. The `focus`/`blur` events are unreliable (fire for devtools, iframe changes, etc.) while `visibilitychange` accurately reflects whether the user can see the tab.
 

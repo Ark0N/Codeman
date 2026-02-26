@@ -1,4 +1,4 @@
-# OpenCode Integration Plan for Claudeman
+# OpenCode Integration Plan for Codeman
 
 > **Author**: Claude Opus 4.6 | **Date**: 2026-02-26
 > **Status**: Draft — Re-reviewed, MVP scope finalized. NOT pushed to GitHub
@@ -36,13 +36,13 @@
 23. [Appendix A: OpenCode CLI Reference](#appendix-a-opencode-cli-reference)
 24. [Appendix B: OpenCode Plugin Events](#appendix-b-opencode-plugin-events)
 25. [Appendix C: OpenCode Permission Config](#appendix-c-opencode-permission-config)
-26. [Appendix D: Current Claudeman Session Spawn Flow (Annotated)](#appendix-d-current-claudeman-session-spawn-flow-annotated)
+26. [Appendix D: Current Codeman Session Spawn Flow (Annotated)](#appendix-d-current-codeman-session-spawn-flow-annotated)
 
 ---
 
 ## 1. Executive Summary
 
-This plan details how to integrate [OpenCode](https://opencode.ai) — the popular open-source AI coding CLI (111k+ GitHub stars, 75+ model providers) — into Claudeman as a first-class session type alongside Claude Code and shell sessions.
+This plan details how to integrate [OpenCode](https://opencode.ai) — the popular open-source AI coding CLI (111k+ GitHub stars, 75+ model providers) — into Codeman as a first-class session type alongside Claude Code and shell sessions.
 
 ### Core Approach
 
@@ -53,7 +53,7 @@ Extend the existing `SessionMode` type from `'claude' | 'shell'` to `'claude' | 
 | Strategy | Approach | Complexity | Value |
 |----------|----------|------------|-------|
 | **A: TUI-in-tmux** | Spawn `opencode` CLI in tmux, render in xterm.js | Medium | Full visual parity with Claude Code |
-| **B: Server API bridge** | Run `opencode serve` + proxy its API through Claudeman | High | Structured data, session control, token tracking |
+| **B: Server API bridge** | Run `opencode serve` + proxy its API through Codeman | High | Structured data, session control, token tracking |
 
 **Recommended path**: Start with Strategy A (TUI-in-tmux) since it mirrors the existing Claude Code pattern exactly. Then layer Strategy B on top for advanced features like structured token tracking and model switching.
 
@@ -71,7 +71,7 @@ Extend the existing `SessionMode` type from `'claude' | 'shell'` to `'claude' | 
 > | **Hooks plugin bridge** | Plugin event names are speculative/unverified. Requires Phase 0 validation that hasn't happened. | Phase 0 plugin verification |
 > | **AI idle checker** | Spawns `claude -p` for analysis. Won't work if only OpenCode is installed. | Claude CLI availability or `opencode run` fallback |
 >
-> **What ships in the MVP**: Phases 0-3 (spawn in tmux, render in xterm.js) + Phase 5 (API routes, mode selector, tab badges, create/kill sessions). Users can interact with OpenCode manually — type prompts, see output, manage sessions from the Claudeman web UI. This alone is the core value: multi-model AI sessions in one management interface.
+> **What ships in the MVP**: Phases 0-3 (spawn in tmux, render in xterm.js) + Phase 5 (API routes, mode selector, tab badges, create/kill sessions). Users can interact with OpenCode manually — type prompts, see output, manage sessions from the Codeman web UI. This alone is the core value: multi-model AI sessions in one management interface.
 
 ### Why OpenCode?
 
@@ -79,7 +79,7 @@ Extend the existing `SessionMode` type from `'claude' | 'shell'` to `'claude' | 
 - **Privacy-first**: Can run fully local via Ollama — no code ever leaves the machine
 - **Open source**: MIT licensed, active community (700+ contributors)
 - **Client/server**: Built-in `opencode serve` mode enables richer programmatic integration
-- **Plugin system**: JS/TS plugins with rich event hooks (including `session.idle` — perfect for Claudeman)
+- **Plugin system**: JS/TS plugins with rich event hooks (including `session.idle` — perfect for Codeman)
 
 ---
 
@@ -222,7 +222,7 @@ OPENCODE_CLIENT=...            # Client identifier (default: "cli")
 
 ## 3. Architecture Comparison: Claude Code vs OpenCode
 
-### Current Claudeman Session Flow (Claude Code)
+### Current Codeman Session Flow (Claude Code)
 
 ```
 POST /api/sessions           →  new Session({mode: 'claude', mux: TmuxManager})
@@ -230,10 +230,10 @@ POST /api/sessions/:id/interactive  →  session.startInteractive()
                                               ↓
                                     TmuxManager.createSession()
                                               ↓
-                                    tmux new-session -ds "claudeman-<id>"
+                                    tmux new-session -ds "codeman-<id>"
                                     tmux respawn-pane -k -t ... "claude --dangerously-skip-permissions --session-id <id>"
                                               ↓
-                                    pty.spawn('tmux', ['attach-session', '-t', 'claudeman-<id>'])
+                                    pty.spawn('tmux', ['attach-session', '-t', 'codeman-<id>'])
                                               ↓
                                     ptyProcess.onData() → emit('terminal') → SSE broadcast → xterm.js
 ```
@@ -246,10 +246,10 @@ POST /api/sessions/:id/interactive  →  session.startInteractive()
                                               ↓
                                     TmuxManager.createSession()
                                               ↓
-                                    tmux new-session -ds "claudeman-<id>"
+                                    tmux new-session -ds "codeman-<id>"
                                     tmux respawn-pane -k -t ... "opencode --model <model>"
                                               ↓
-                                    pty.spawn('tmux', ['attach-session', '-t', 'claudeman-<id>'])
+                                    pty.spawn('tmux', ['attach-session', '-t', 'codeman-<id>'])
                                               ↓
                                     ptyProcess.onData() → emit('terminal') → SSE broadcast → xterm.js
 ```
@@ -268,7 +268,7 @@ Strategy A (TUI-in-tmux) for terminal rendering
      +
 opencode serve (background, port 4096+N)
      ↓
-Claudeman proxy routes → GET /session/current, POST /session/message, SSE /events
+Codeman proxy routes → GET /session/current, POST /session/message, SSE /events
      ↓
 Structured data for: token tracking, session management, model switching
 ```
@@ -301,7 +301,7 @@ These systems work identically for OpenCode sessions:
 - Terminal data streaming via `ptyProcess.onData()`
 - SSE event broadcasting via `broadcast()`
 - xterm.js terminal rendering in the browser
-- State persistence to `~/.claudeman/state.json`
+- State persistence to `~/.codeman/state.json`
 - Session CRUD API routes (create, get, delete)
 - Tab management in frontend
 - Session kill/cleanup logic (`TmuxManager.killSession()`)
@@ -324,7 +324,7 @@ These systems work identically for OpenCode sessions:
 | Subagent detection | `BashToolParser` + `SubagentWatcher` | Different tool output format | DEFERRED |
 | Ralph completion | `<promise>PHRASE</promise>` tags | Not applicable (needs alternative) | DEFERRED |
 | Hooks events | `permission_prompt`, `idle_prompt`, `stop` | `permission.asked`, `session.idle`, `session.status` | DEFERRED |
-| Auto-compact | Claudeman sends `/compact` at token threshold | OpenCode has built-in `compaction.auto: true` | DEFERRED |
+| Auto-compact | Codeman sends `/compact` at token threshold | OpenCode has built-in `compaction.auto: true` | DEFERRED |
 
 ---
 
@@ -346,7 +346,7 @@ opencode --version
 # 3. Test interactive TUI
 opencode
 
-# 4. Test in tmux (simulating Claudeman's spawn pattern)
+# 4. Test in tmux (simulating Codeman's spawn pattern)
 tmux new-session -ds "test-opencode" -c /tmp -x 120 -y 40
 tmux set-option -t "test-opencode" remain-on-exit on
 tmux respawn-pane -k -t "test-opencode" 'opencode --model anthropic/claude-sonnet-4-5'
@@ -774,10 +774,10 @@ function buildEnvExports(mode: string, sessionId: string, muxName: string, openC
     `export LANG=en_US.UTF-8`,
     `export LC_ALL=en_US.UTF-8`,
     `unset COLORTERM`,  // Prevent color issues in tmux
-    `export CLAUDEMAN_MUX=1`,
-    `export CLAUDEMAN_SESSION_ID=${sessionId}`,
-    `export CLAUDEMAN_MUX_NAME=${muxName}`,
-    `export CLAUDEMAN_API_URL=${process.env.CLAUDEMAN_API_URL || 'http://localhost:3000'}`,
+    `export CODEMAN_MUX=1`,
+    `export CODEMAN_SESSION_ID=${sessionId}`,
+    `export CODEMAN_MUX_NAME=${muxName}`,
+    `export CODEMAN_API_URL=${process.env.CODEMAN_API_URL || 'http://localhost:3000'}`,
   ];
 
   if (mode === 'opencode') {
@@ -905,7 +905,7 @@ const mode = cmd.includes('opencode') ? 'opencode' : 'claude';
 
 ### Known Limitations (from review)
 
-> **[REVIEW P1-6]** OpenCode does not have `--session-id <claudeman-id>` for initial session creation (only `--session <id>` for continuing existing sessions). This means:
+> **[REVIEW P1-6]** OpenCode does not have `--session-id <codeman-id>` for initial session creation (only `--session <id>` for continuing existing sessions). This means:
 > - `_claudeSessionId = this.id` correlation (session.ts:405) won't work for OpenCode
 > - Subagent-session correlation via Session ID matching won't work
 > - Transcript watching via Claude session ID path won't work
@@ -1121,7 +1121,7 @@ private parseTokens(data: string): void {
 
 ### Working/Idle State Tracking
 
-For Claude, Claudeman uses spinner characters and keywords. For OpenCode:
+For Claude, Codeman uses spinner characters and keywords. For OpenCode:
 
 > **[REVIEW]** The original logic had a bug: `Date.now() - this._lastActivityAt > 100` is checked AFTER setting `_lastActivityAt = Date.now()`, so the condition would never be true (0 > 100 = false). Fixed below.
 
@@ -1373,7 +1373,7 @@ if (session.mode === 'claude' && session.pid) {
 > **[REVIEW C3] Phase reordered**: This was originally Phase 7 but has been moved before Respawn. The plugin bridge provides the reliable `session.idle` event that the respawn controller needs. Without it, respawn relies on output-silence-only detection, which is unreliable with Bubble Tea TUIs (see Review C1). **Do not implement respawn (Phase 7) until this phase is complete and tested.**
 
 ### Goal
-Bridge Claudeman's hook system with OpenCode's plugin system for rich event forwarding.
+Bridge Codeman's hook system with OpenCode's plugin system for rich event forwarding.
 
 ### Background: Two Different Approaches
 
@@ -1383,19 +1383,19 @@ Bridge Claudeman's hook system with OpenCode's plugin system for rich event forw
 | Trigger | Hook name matches event type | Event name subscription |
 | Key events | `stop`, `idle_prompt`, `permission_prompt`, `elicitation_dialog` | `session.idle`, `permission.asked`, `session.status` |
 | Communication | Exit codes + environment variables | Function context + return values |
-| Install | Auto-generated by Claudeman | Must be placed in `.opencode/plugins/` |
+| Install | Auto-generated by Codeman | Must be placed in `.opencode/plugins/` |
 
-### Claudeman Plugin for OpenCode
+### Codeman Plugin for OpenCode
 
-Create a Claudeman plugin that OpenCode loads, which communicates back to Claudeman's API:
+Create a Codeman plugin that OpenCode loads, which communicates back to Codeman's API:
 
-**File: `.opencode/plugins/claudeman-bridge.js`** (generated per session)
+**File: `.opencode/plugins/codeman-bridge.js`** (generated per session)
 
 ```javascript
-// This plugin bridges OpenCode events to Claudeman's API
-export const claudemanBridge = async ({ project, $ }) => {
-  const apiUrl = process.env.CLAUDEMAN_API_URL || 'http://localhost:3000';
-  const sessionId = process.env.CLAUDEMAN_SESSION_ID;
+// This plugin bridges OpenCode events to Codeman's API
+export const codemanBridge = async ({ project, $ }) => {
+  const apiUrl = process.env.CODEMAN_API_URL || 'http://localhost:3000';
+  const sessionId = process.env.CODEMAN_SESSION_ID;
 
   if (!sessionId) return {};
 
@@ -1440,7 +1440,7 @@ export const claudemanBridge = async ({ project, $ }) => {
 
 ### Plugin Installation
 
-When creating an OpenCode session, Claudeman generates this plugin in the project's `.opencode/plugins/` directory:
+When creating an OpenCode session, Codeman generates this plugin in the project's `.opencode/plugins/` directory:
 
 ```typescript
 // In session.ts or a new opencode-hooks.ts:
@@ -1448,8 +1448,8 @@ async function installOpenCodePlugin(workingDir: string, sessionId: string): Pro
   const pluginDir = join(workingDir, '.opencode', 'plugins');
   await mkdirp(pluginDir);
 
-  const pluginContent = generateClaudemanBridgePlugin(sessionId);
-  await writeFile(join(pluginDir, 'claudeman-bridge.js'), pluginContent);
+  const pluginContent = generateCodemanBridgePlugin(sessionId);
+  await writeFile(join(pluginDir, 'codeman-bridge.js'), pluginContent);
 }
 ```
 
@@ -1458,7 +1458,7 @@ async function installOpenCodePlugin(workingDir: string, sessionId: string): Pro
 > **[REVIEW]** Add `session.compacted` to the plugin bridge — it's free and useful for tracking when OpenCode auto-compacts (relevant for token tracking and respawn timing).
 
 ```javascript
-// Add to claudeman-bridge.js return object:
+// Add to codeman-bridge.js return object:
 'session.compacted': async (info) => {
   await notifyClademan('session_compacted', { info });
 },
@@ -1472,12 +1472,12 @@ async function installOpenCodePlugin(workingDir: string, sessionId: string): Pro
 
 ### Benefits of the Plugin Bridge
 
-Once installed, Claudeman receives structured events from OpenCode:
+Once installed, Codeman receives structured events from OpenCode:
 - **`session.idle`** → Definitive idle detection (replaces output-silence guessing)
-- **`permission.asked`** → Show permission prompts in Claudeman UI
+- **`permission.asked`** → Show permission prompts in Codeman UI
 - **`tool.execute.*`** → Tool call tracking (similar to BashToolParser for Claude)
-- **`todo.updated`** → OpenCode's built-in todo system → Claudeman can display it
-- **`session.error`** → Error surfacing in Claudeman UI
+- **`todo.updated`** → OpenCode's built-in todo system → Codeman can display it
+- **`session.error`** → Error surfacing in Codeman UI
 - **`session.compacted`** → Track auto-compaction events
 
 ---
@@ -1664,7 +1664,7 @@ tmux session ─── opencode TUI (interactive, port N/A)
                      │
                      ├── xterm.js (terminal rendering, Strategy A)
                      │
-Claudeman ──── opencode serve (port 4096+N, background process)
+Codeman ──── opencode serve (port 4096+N, background process)
                      │
                      ├── GET  /session/*      → structured session data
                      ├── POST /session/message → send prompt programmatically
@@ -1678,7 +1678,7 @@ Claudeman ──── opencode serve (port 4096+N, background process)
 > **[REVIEW M8]** Running both `opencode` (TUI) and `opencode serve` in the same project directory creates a **shared SQLite state problem**. The TUI creates sessions in SQLite; the server reads from the same SQLite. But they're separate processes — there's no guarantee of session ID consistency between them.
 >
 > **Consider alternatives**:
-> - (a) Use `opencode serve` INSTEAD of the TUI (not alongside it) — server becomes the single backend, Claudeman renders its own UI
+> - (a) Use `opencode serve` INSTEAD of the TUI (not alongside it) — server becomes the single backend, Codeman renders its own UI
 > - (b) Use `opencode attach` to connect the TUI to the server, making the server the single source of truth
 > - (c) Accept the dual-process model with explicit documentation of limitations
 >
@@ -1805,7 +1805,7 @@ if (this.mode === 'opencode' && this._openCodeConfig?.serverPort) {
 |------|---------|-------|--------|
 | `src/utils/ansi-content-filter.ts` | Strip cosmetic ANSI sequences for idle detection | 4 | DEFERRED |
 | `src/completion-detector.ts` | `CompletionDetector` interface + implementations | 7 | DEFERRED |
-| `src/opencode-plugin-generator.ts` | Generate `.opencode/plugins/claudeman-bridge.js` | 6 | DEFERRED |
+| `src/opencode-plugin-generator.ts` | Generate `.opencode/plugins/codeman-bridge.js` | 6 | DEFERRED |
 | `src/opencode-api-client.ts` | Client for OpenCode's REST API (Strategy B) | 8 | DEFERRED |
 | `test/opencode-respawn.test.ts` | Tests for OpenCode respawn cycle (port 3156) | 7 | DEFERRED |
 | `test/ansi-content-filter.test.ts` | Tests for ANSI content filter | 4 | DEFERRED |
@@ -1898,7 +1898,7 @@ npx vitest run test/opencode-respawn.test.ts
 
 ### Safety Rules
 
-- **Never run OpenCode tests that spawn real tmux sessions inside Claudeman** (same safety rule as Claude tests)
+- **Never run OpenCode tests that spawn real tmux sessions inside Codeman** (same safety rule as Claude tests)
 - **Use MockSession** from `test/respawn-test-utils.ts` for respawn testing
 - **Mock the opencode binary** for unit tests (`jest.mock` or stub)
 - **Use unique test ports** (3155+) — never port 3000
@@ -1939,12 +1939,12 @@ npx vitest run test/opencode-respawn.test.ts
 
 5. **Should we auto-generate `opencode.json` in the working directory?**
    - Option A: Let OpenCode use existing project config (respect user settings)
-   - Option B: Generate a temporary one with Claudeman's settings
-   - Recommendation: Option A (use `OPENCODE_CONFIG_CONTENT` env var for Claudeman-specific overrides, don't modify project files)
+   - Option B: Generate a temporary one with Codeman's settings
+   - Recommendation: Option A (use `OPENCODE_CONFIG_CONTENT` env var for Codeman-specific overrides, don't modify project files)
 
-6. **How should OpenCode session IDs map to Claudeman session IDs?**
+6. **How should OpenCode session IDs map to Codeman session IDs?**
    - OpenCode manages its own sessions (SQLite DB)
-   - We could pass `--session <claudeman-id>` but OpenCode IDs have different format
+   - We could pass `--session <codeman-id>` but OpenCode IDs have different format
    - Recommendation: Let OpenCode manage its own sessions, store the mapping in SessionState
 
 ---
@@ -1970,7 +1970,7 @@ Phase 3: Tmux spawn (2-3 hours) ← CRITICAL INTEGRATION POINT
   ↓
 Phase 5: API + frontend (2-3 hours) ← FIRST USER-VISIBLE RESULT
   ↓
-  ✅ MVP COMPLETE — OpenCode sessions managed from Claudeman web UI
+  ✅ MVP COMPLETE — OpenCode sessions managed from Codeman web UI
 
 ═══════════════════════════════════════════════════════
   DEFERRED (requires real PTY data + verified APIs)
@@ -1991,7 +1991,7 @@ Phase 8: Server API — DEFERRED, optional advanced feature
 
 | Milestone | Phase | What You Can Do | Scope |
 |-----------|-------|-----------------|-------|
-| **M1: "It renders"** | 0-3 | OpenCode TUI visible in xterm.js via Claudeman | **MVP** |
+| **M1: "It renders"** | 0-3 | OpenCode TUI visible in xterm.js via Codeman | **MVP** |
 | **M2: "It's usable"** | 5 | Create OpenCode sessions from web UI, type and interact, manage tabs | **MVP** |
 | **M3: "It's observable"** | 4 | Idle/working state detection, ANSI content filter | Deferred |
 | **M4: "It's smart"** | 6 | Plugin bridge provides definitive idle/permission/tool events | Deferred |
@@ -2012,7 +2012,7 @@ Phase 8: Server API — DEFERRED, optional advanced feature
 
 ## 21. Review Findings
 
-> **Reviewed**: 2026-02-26 by a 4-agent team. Each agent reviewed a different area of the plan against the actual Claudeman codebase.
+> **Reviewed**: 2026-02-26 by a 4-agent team. Each agent reviewed a different area of the plan against the actual Codeman codebase.
 
 ### Review Team
 
@@ -2182,7 +2182,7 @@ Environment Variables:
 
 Full list of subscribable events in OpenCode's plugin system:
 
-| Category | Event | Description | Claudeman Relevance |
+| Category | Event | Description | Codeman Relevance |
 |----------|-------|-------------|---------------------|
 | **Command** | `command.executed` | Slash command run | Low |
 | **Files** | `file.edited` | File modified | Medium (track changes) |
@@ -2194,7 +2194,7 @@ Full list of subscribable events in OpenCode's plugin system:
 | | `message.updated` | Complete message | High (completion detection) |
 | | `message.removed` | Message deleted | Low |
 | | `message.part.removed` | Part deleted | Low |
-| **Permissions** | `permission.asked` | Tool approval needed | **Critical** (show in Claudeman) |
+| **Permissions** | `permission.asked` | Tool approval needed | **Critical** (show in Codeman) |
 | | `permission.replied` | User responded | High (track approvals) |
 | **Server** | `server.connected` | Server started | Medium |
 | **Sessions** | `session.idle` | Agent finished working | **Critical** (idle detection!) |
@@ -2254,7 +2254,7 @@ Full list of subscribable events in OpenCode's plugin system:
 - `"ask"` — Prompt user for approval
 - `"deny"` — Block the action
 
-### Delivery Method for Claudeman
+### Delivery Method for Codeman
 
 Use `OPENCODE_CONFIG_CONTENT` environment variable to inject permissions without modifying project files:
 
@@ -2265,7 +2265,7 @@ opencode --model anthropic/claude-sonnet-4-5
 
 ---
 
-## Appendix D: Current Claudeman Session Spawn Flow (Annotated)
+## Appendix D: Current Codeman Session Spawn Flow (Annotated)
 
 ### Exact Code Path (for reference during implementation)
 
@@ -2285,15 +2285,15 @@ opencode --model anthropic/claude-sonnet-4-5
    → If none: this._mux.createSession(id, workingDir, 'claude', ...)
 
 4. TmuxManager.createSession() (tmux-manager.ts:225)
-   → tmux new-session -ds "claudeman-<shortId>" -c <workingDir> -x 120 -y 40
-   → tmux set-option -t "claudeman-<shortId>" remain-on-exit on
+   → tmux new-session -ds "codeman-<shortId>" -c <workingDir> -x 120 -y 40
+   → tmux set-option -t "codeman-<shortId>" remain-on-exit on
    → Build command: "export PATH=... && export LANG=... && claude --dangerously-skip-permissions --session-id <id>"
-   → tmux respawn-pane -k -t "claudeman-<shortId>" '<command>'
+   → tmux respawn-pane -k -t "codeman-<shortId>" '<command>'
    → Wait 100ms, configure tmux, get PID
    → Return MuxSession { muxName, pid, mode }
 
 5. Back in startInteractive() (session.ts:~950)
-   → pty.spawn('tmux', ['attach-session', '-t', 'claudeman-<shortId>'], {
+   → pty.spawn('tmux', ['attach-session', '-t', 'codeman-<shortId>'], {
        name: 'xterm-256color',
        cols: 120, rows: 40,
        env: { LANG, LC_ALL, TERM }

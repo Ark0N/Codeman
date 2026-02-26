@@ -2,7 +2,7 @@
  * @fileoverview Tests for memory leak prevention patterns
  *
  * These tests verify the cleanup patterns used to prevent memory leaks
- * in long-running Claudeman sessions (P1 improvements from P0 fixes).
+ * in long-running Codeman sessions (P1 improvements from P0 fixes).
  *
  * Port: N/A (unit tests, no server)
  */

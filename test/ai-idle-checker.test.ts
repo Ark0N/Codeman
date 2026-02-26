@@ -149,7 +149,7 @@ describe('AiIdleChecker', () => {
       // Verify tmux was spawned with correct args
       expect(mockedSpawn).toHaveBeenCalledWith(
         'tmux',
-        expect.arrayContaining(['new-session', '-d', '-s', expect.stringContaining('claudeman-aicheck-')]),
+        expect.arrayContaining(['new-session', '-d', '-s', expect.stringContaining('codeman-aicheck-')]),
         expect.objectContaining({ detached: true, stdio: 'ignore' })
       );
     });
@@ -163,7 +163,7 @@ describe('AiIdleChecker', () => {
 
       // First call should try to kill existing session
       expect(mockedExecSync).toHaveBeenCalledWith(
-        expect.stringContaining('tmux kill-session -t "claudeman-aicheck-'),
+        expect.stringContaining('tmux kill-session -t "codeman-aicheck-'),
         expect.any(Object)
       );
     });
@@ -176,7 +176,7 @@ describe('AiIdleChecker', () => {
       await checkPromise;
 
       expect(mockedWriteFileSync).toHaveBeenCalledWith(
-        expect.stringContaining('claudeman-aicheck-'),
+        expect.stringContaining('codeman-aicheck-'),
         ''
       );
     });

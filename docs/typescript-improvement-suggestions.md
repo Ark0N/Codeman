@@ -1,4 +1,4 @@
-# Claudeman TypeScript Improvement Suggestions
+# Codeman TypeScript Improvement Suggestions
 
 **Generated**: February 2026
 **Based on**: Research into TypeScript best practices (2024-2025) and codebase analysis
@@ -229,33 +229,33 @@ Replace string-based errors with typed errors:
 
 ```typescript
 // src/errors.ts
-export class ClaudemanError extends Error {
+export class CodemanError extends Error {
   constructor(
     message: string,
     public code: string,
     public context?: Record<string, unknown>
   ) {
     super(message);
-    Object.setPrototypeOf(this, ClaudemanError.prototype);
-    this.name = 'ClaudemanError';
+    Object.setPrototypeOf(this, CodemanError.prototype);
+    this.name = 'CodemanError';
   }
 }
 
-export class SessionError extends ClaudemanError {
+export class SessionError extends CodemanError {
   constructor(message: string, code: string, public sessionId: string) {
     super(message, code, { sessionId });
     this.name = 'SessionError';
   }
 }
 
-export class ValidationError extends ClaudemanError {
+export class ValidationError extends CodemanError {
   constructor(message: string, public field: string, public value: unknown) {
     super(message, 'VALIDATION_ERROR', { field, value });
     this.name = 'ValidationError';
   }
 }
 
-export class ScreenError extends ClaudemanError {
+export class ScreenError extends CodemanError {
   constructor(message: string, public screenName: string, public operation: string) {
     super(message, 'SCREEN_ERROR', { screenName, operation });
     this.name = 'ScreenError';
@@ -324,7 +324,7 @@ Enforce ID formats at compile time:
 
 ```typescript
 type CycleIdFormat = `${string}:cycle-${number}`;
-type ScreenSessionName = `claudeman-${string}`;
+type ScreenSessionName = `codeman-${string}`;
 
 interface RespawnCycleMetrics {
   cycleId: CycleIdFormat; // Enforces format at compile time

@@ -1,8 +1,8 @@
 /**
- * @fileoverview Persistent JSON state storage for Claudeman.
+ * @fileoverview Persistent JSON state storage for Codeman.
  *
  * This module provides the StateStore class which persists application state
- * to `~/.claudeman/state.json` with debounced writes to prevent excessive disk I/O.
+ * to `~/.codeman/state.json` with debounced writes to prevent excessive disk I/O.
  *
  * State is split into two files:
  * - `state.json`: Main app state (sessions, tasks, config)
@@ -68,7 +68,23 @@ export class StateStore {
   private _saveInFlight: Promise<void> | null = null;
 
   constructor(filePath?: string) {
-    this.filePath = filePath || join(homedir(), '.claudeman', 'state.json');
+    // Migrate legacy data directory (~/.claudeman → ~/.codeman)
+    if (!filePath) {
+      const legacyDir = join(homedir(), '.claudeman');
+      const newDir = join(homedir(), '.codeman');
+      if (existsSync(legacyDir) && !existsSync(newDir)) {
+        console.log(`[state-store] Migrating data directory: ${legacyDir} → ${newDir}`);
+        renameSync(legacyDir, newDir);
+      }
+      const legacyCasesDir = join(homedir(), 'claudeman-cases');
+      const newCasesDir = join(homedir(), 'codeman-cases');
+      if (existsSync(legacyCasesDir) && !existsSync(newCasesDir)) {
+        console.log(`[state-store] Migrating cases directory: ${legacyCasesDir} → ${newCasesDir}`);
+        renameSync(legacyCasesDir, newCasesDir);
+      }
+    }
+
+    this.filePath = filePath || join(homedir(), '.codeman', 'state.json');
     this.ralphStatePath = this.filePath.replace('.json', '-inner.json');
     this.state = this.load();
     this.state.config.stateFilePath = this.filePath;

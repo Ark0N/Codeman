@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/claudeman-title.svg" alt="Claudeman" height="60">
+  <img src="docs/images/codeman-title.svg" alt="Codeman" height="60">
 </p>
 
 <h2 align="center">The missing control plane for Claude Code</h2>
@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/subagent-demo.gif" alt="Claudeman — parallel subagent visualization" width="900">
+  <img src="docs/images/subagent-demo.gif" alt="Codeman — parallel subagent visualization" width="900">
 </p>
 
 ---
@@ -25,19 +25,19 @@
 ## Quick Start - Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Ark0N/claudeman/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash
 ```
 
-This installs Node.js, tmux, and Claude CLI if missing, clones Claudeman to `~/.claudeman/app`, builds it. After install:
+This installs Node.js, tmux, and Claude CLI if missing, clones Codeman to `~/.codeman/app`, builds it. After install:
 
 ```bash
-claudeman web
+codeman web
 # Open http://localhost:3000 — press Ctrl+Enter to start your first session
 ```
 
 **Update to latest version:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Ark0N/claudeman/master/install.sh | bash -s update
+curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash -s update
 ```
 
 <details>
@@ -45,12 +45,12 @@ curl -fsSL https://raw.githubusercontent.com/Ark0N/claudeman/master/install.sh |
 
 **Linux (systemd):**
 ```bash
-mkdir -p ~/.config/systemd/user && printf '[Unit]\nDescription=Claudeman Web Server\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=%s %s/dist/index.js web\nRestart=always\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n' "$(which node)" "$HOME/.claudeman/app" > ~/.config/systemd/user/claudeman-web.service && systemctl --user daemon-reload && systemctl --user enable --now claudeman-web && loginctl enable-linger $USER
+mkdir -p ~/.config/systemd/user && printf '[Unit]\nDescription=Codeman Web Server\nAfter=network.target\n\n[Service]\nType=simple\nExecStart=%s %s/dist/index.js web\nRestart=always\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n' "$(which node)" "$HOME/.codeman/app" > ~/.config/systemd/user/codeman-web.service && systemctl --user daemon-reload && systemctl --user enable --now codeman-web && loginctl enable-linger $USER
 ```
 
 **macOS (launchd):**
 ```bash
-mkdir -p ~/Library/LaunchAgents && printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>com.claudeman.web</string><key>ProgramArguments</key><array><string>%s</string><string>%s/dist/index.js</string><string>web</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>StandardOutPath</key><string>/tmp/claudeman.log</string><key>StandardErrorPath</key><string>/tmp/claudeman.log</string></dict></plist>\n' "$(which node)" "$HOME/.claudeman/app" > ~/Library/LaunchAgents/com.claudeman.web.plist && launchctl load ~/Library/LaunchAgents/com.claudeman.web.plist
+mkdir -p ~/Library/LaunchAgents && printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>Label</key><string>com.codeman.web</string><key>ProgramArguments</key><array><string>%s</string><string>%s/dist/index.js</string><string>web</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>StandardOutPath</key><string>/tmp/codeman.log</string><key>StandardErrorPath</key><string>/tmp/codeman.log</string></dict></plist>\n' "$(which node)" "$HOME/.codeman/app" > ~/Library/LaunchAgents/com.codeman.web.plist && launchctl load ~/Library/LaunchAgents/com.codeman.web.plist
 ```
 </details>
 
@@ -58,10 +58,10 @@ mkdir -p ~/Library/LaunchAgents && printf '<?xml version="1.0" encoding="UTF-8"?
 <summary><strong>Windows (WSL)</strong></summary>
 
 ```powershell
-wsl bash -c "curl -fsSL https://raw.githubusercontent.com/Ark0N/claudeman/master/install.sh | bash"
+wsl bash -c "curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash"
 ```
 
-Claudeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet: run `wsl --install` in an admin PowerShell, reboot, open Ubuntu, then install Claude CLI inside WSL: `curl -fsSL https://claude.ai/install.sh | bash`. After installing, `http://localhost:3000` is accessible from your Windows browser.
+Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/en-us/windows/wsl/install). If you don't have WSL yet: run `wsl --install` in an admin PowerShell, reboot, open Ubuntu, then install Claude CLI inside WSL: `curl -fsSL https://claude.ai/install.sh | bash`. After installing, `http://localhost:3000` is accessible from your Windows browser.
 </details>
 
 ---
@@ -74,7 +74,7 @@ The most responsive Claude Code experience on any phone. Full xterm.js terminal 
 <tr>
 <td rowspan="8" width="320"><img src="docs/screenshots/mobile-keyboard-open.png" alt="Mobile — keyboard open" width="300"></td>
 <th>Terminal Apps</th>
-<th>Claudeman Mobile</th>
+<th>Codeman Mobile</th>
 </tr>
 <tr><td>200-300ms input lag over remote</td><td><b>Local echo — instant feedback</b></td></tr>
 <tr><td>Tiny text, no context</td><td>Full xterm.js terminal</td></tr>
@@ -94,7 +94,7 @@ The most responsive Claude Code experience on any phone. Full xterm.js terminal 
 - **Native momentum scrolling** — `-webkit-overflow-scrolling: touch` for buttery scroll
 
 ```bash
-claudeman web --https
+codeman web --https
 # Open on your phone: https://<your-ip>:3000
 ```
 
@@ -104,7 +104,7 @@ claudeman web --https
 
 ## Live Agent Visualization
 
-Watch Claude's background agents work in real-time. Claudeman monitors every `Task` tool invocation and displays each agent in a draggable floating window with animated Matrix-style connection lines back to the parent session.
+Watch Claude's background agents work in real-time. Codeman monitors every `Task` tool invocation and displays each agent in a draggable floating window with animated Matrix-style connection lines back to the parent session.
 
 <p align="center">
   <img src="docs/images/subagent-spawn.png" alt="Subagent Visualization" width="900">
@@ -120,7 +120,7 @@ Watch Claude's background agents work in real-time. Claudeman monitors every `Ta
 
 ## Zero-Lag Input Overlay
 
-When accessing Claude Code remotely (VPN, Tailscale, SSH tunnel), every keystroke normally takes 200-300ms to round-trip. Claudeman implements a **Mosh-inspired local echo system** that makes typing feel instant regardless of latency.
+When accessing Claude Code remotely (VPN, Tailscale, SSH tunnel), every keystroke normally takes 200-300ms to round-trip. Codeman implements a **Mosh-inspired local echo system** that makes typing feel instant regardless of latency.
 
 A pixel-perfect DOM overlay inside xterm.js renders keystrokes at 0ms. Background forwarding silently sends every character to the PTY in 50ms debounced batches, so Tab completion, `Ctrl+R` history search, and all shell features work normally. When the server echo arrives 200-300ms later, the overlay seamlessly disappears and the real terminal text takes over — the transition is invisible.
 
@@ -186,7 +186,7 @@ Click the chart icon on any session tab to see a timeline of everything that hap
 
 ### Zero-Flicker Terminal
 
-Claude Code uses Ink (React for terminals) which redraws the entire screen on every state change. Claudeman implements a 6-layer anti-flicker pipeline for smooth 60fps output across all sessions:
+Claude Code uses Ink (React for terminals) which redraws the entire screen on every state change. Codeman implements a 6-layer anti-flicker pipeline for smooth 60fps output across all sessions:
 
 ```
 PTY Output → 16ms Server Batch → DEC 2026 Wrap → SSE → Client rAF → xterm.js (60fps)
@@ -268,7 +268,7 @@ Single-digit selection (1-9), color-coded status, token counts, auto-refresh. De
 
 ```mermaid
 flowchart TB
-    subgraph Claudeman["CLAUDEMAN"]
+    subgraph Codeman["CODEMAN"]
         subgraph Frontend["Frontend Layer"]
             UI["Web UI<br/><small>xterm.js + Agent Windows</small>"]
             API["REST API<br/><small>Fastify</small>"]

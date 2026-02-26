@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 const BASE_URL = 'https://localhost:3000';
-const CASE_NAME = 'claudeman-ios';
+const CASE_NAME = 'codeman-ios';
 
 async function main() {
   console.log('Starting Ralph Loop via wizard on production server...\n');
@@ -21,7 +21,7 @@ async function main() {
   const context = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await context.newPage();
 
-  console.log('1. Opening Claudeman web UI...');
+  console.log('1. Opening Codeman web UI...');
   await page.goto(BASE_URL);
   await page.waitForLoadState('networkidle');
 
@@ -36,8 +36,8 @@ async function main() {
   await page.selectOption('#ralphCaseSelect', CASE_NAME);
 
   // Load initprompt.md
-  const initPromptPath = join(homedir(), 'claudeman-cases', CASE_NAME, 'initprompt.md');
-  let taskDescription = 'Build an awesome iOS app for Claudeman!';
+  const initPromptPath = join(homedir(), 'codeman-cases', CASE_NAME, 'initprompt.md');
+  let taskDescription = 'Build an awesome iOS app for Codeman!';
   if (existsSync(initPromptPath)) {
     taskDescription = readFileSync(initPromptPath, 'utf-8').trim();
     console.log(`5. Loaded initprompt.md (${taskDescription.length} chars)`);
@@ -87,13 +87,13 @@ async function main() {
     return res.json();
   });
 
-  const iosSession = sessions.find(s => s.workingDir?.includes('claudeman-ios'));
+  const iosSession = sessions.find(s => s.workingDir?.includes('codeman-ios'));
 
   console.log('\n========================================');
   console.log('SUCCESS! Ralph Loop started.');
   console.log('========================================');
   console.log(`Session ID: ${iosSession?.id}`);
-  console.log(`Screen: claudeman-${iosSession?.id?.slice(0, 8)}`);
+  console.log(`Screen: codeman-${iosSession?.id?.slice(0, 8)}`);
   console.log(`Working Dir: ${iosSession?.workingDir}`);
   console.log('\nThe session is now running on your production server.');
   console.log('View it at: https://localhost:3000');

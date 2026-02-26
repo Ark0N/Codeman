@@ -78,8 +78,8 @@ describe('TmuxManager (unit)', () => {
 
   describe('getAttachArgs', () => {
     it('should return attach-session args', () => {
-      const args = manager.getAttachArgs('claudeman-abc12345');
-      expect(args).toEqual(['attach-session', '-t', 'claudeman-abc12345']);
+      const args = manager.getAttachArgs('codeman-abc12345');
+      expect(args).toEqual(['attach-session', '-t', 'codeman-abc12345']);
     });
   });
 
@@ -111,7 +111,7 @@ describe('TmuxManager (unit)', () => {
     beforeEach(() => {
       manager.registerSession({
         sessionId: 'test-id',
-        muxName: 'claudeman-1e571234',
+        muxName: 'codeman-1e571234',
         pid: 12345,
         createdAt: Date.now(),
         workingDir: '/tmp',
@@ -145,7 +145,7 @@ describe('TmuxManager (unit)', () => {
     it('should return all registered sessions as alive', async () => {
       manager.registerSession({
         sessionId: 'alive-1',
-        muxName: 'claudeman-a11ce111',
+        muxName: 'codeman-a11ce111',
         pid: 100,
         createdAt: Date.now(),
         workingDir: '/tmp',
@@ -181,7 +181,7 @@ describe('TmuxManager (unit)', () => {
     it('should remove session from memory in test mode', async () => {
       manager.registerSession({
         sessionId: 'kill-test',
-        muxName: 'claudeman-5e1f1111',
+        muxName: 'codeman-5e1f1111',
         pid: 999,
         createdAt: Date.now(),
         workingDir: '/tmp',
@@ -194,14 +194,14 @@ describe('TmuxManager (unit)', () => {
       expect(manager.getSession('kill-test')).toBeUndefined();
     });
 
-    it('should allow kill when session does NOT match CLAUDEMAN_MUX_NAME', async () => {
-      const originalEnv = process.env.CLAUDEMAN_MUX_NAME;
-      process.env.CLAUDEMAN_MUX_NAME = 'claudeman-0ther1111';
+    it('should allow kill when session does NOT match CODEMAN_MUX_NAME', async () => {
+      const originalEnv = process.env.CODEMAN_MUX_NAME;
+      process.env.CODEMAN_MUX_NAME = 'codeman-0ther1111';
 
       try {
         manager.registerSession({
           sessionId: 'other-kill-test',
-          muxName: 'claudeman-d1ff1111',
+          muxName: 'codeman-d1ff1111',
           pid: 888,
           createdAt: Date.now(),
           workingDir: '/tmp',
@@ -219,21 +219,21 @@ describe('TmuxManager (unit)', () => {
         expect(manager.getSession('other-kill-test')).toBeUndefined();
       } finally {
         if (originalEnv === undefined) {
-          delete process.env.CLAUDEMAN_MUX_NAME;
+          delete process.env.CODEMAN_MUX_NAME;
         } else {
-          process.env.CLAUDEMAN_MUX_NAME = originalEnv;
+          process.env.CODEMAN_MUX_NAME = originalEnv;
         }
       }
     });
 
-    it('should allow kill when CLAUDEMAN_MUX_NAME is not set', async () => {
-      const originalEnv = process.env.CLAUDEMAN_MUX_NAME;
-      delete process.env.CLAUDEMAN_MUX_NAME;
+    it('should allow kill when CODEMAN_MUX_NAME is not set', async () => {
+      const originalEnv = process.env.CODEMAN_MUX_NAME;
+      delete process.env.CODEMAN_MUX_NAME;
 
       try {
         manager.registerSession({
           sessionId: 'no-env-test',
-          muxName: 'claudeman-aaa11111',
+          muxName: 'codeman-aaa11111',
           pid: 777,
           createdAt: Date.now(),
           workingDir: '/tmp',
@@ -247,9 +247,9 @@ describe('TmuxManager (unit)', () => {
         expect(result).toBe(true);
       } finally {
         if (originalEnv === undefined) {
-          delete process.env.CLAUDEMAN_MUX_NAME;
+          delete process.env.CODEMAN_MUX_NAME;
         } else {
-          process.env.CLAUDEMAN_MUX_NAME = originalEnv;
+          process.env.CODEMAN_MUX_NAME = originalEnv;
         }
       }
     });
@@ -259,7 +259,7 @@ describe('TmuxManager (unit)', () => {
     beforeEach(() => {
       manager.registerSession({
         sessionId: 'meta-test',
-        muxName: 'claudeman-ae1a1234',
+        muxName: 'codeman-ae1a1234',
         pid: 300,
         createdAt: Date.now(),
         workingDir: '/tmp',
@@ -308,7 +308,7 @@ describe('TmuxManager (unit)', () => {
     it('should return all registered sessions', () => {
       manager.registerSession({
         sessionId: 's1',
-        muxName: 'claudeman-51111111',
+        muxName: 'codeman-51111111',
         pid: 1,
         createdAt: Date.now(),
         workingDir: '/tmp',
@@ -317,7 +317,7 @@ describe('TmuxManager (unit)', () => {
       });
       manager.registerSession({
         sessionId: 's2',
-        muxName: 'claudeman-52222222',
+        muxName: 'codeman-52222222',
         pid: 2,
         createdAt: Date.now(),
         workingDir: '/tmp',

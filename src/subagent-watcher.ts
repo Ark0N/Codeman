@@ -310,7 +310,7 @@ export class SubagentWatcher extends EventEmitter {
   /**
    * Run pgrep once and read /proc info for all Claude PIDs in parallel.
    * Returns a Map of pid -> { environ, cmdline } for subagent processes only.
-   * Excludes main Claudeman-managed Claude processes (CLAUDEMAN_MUX=1).
+   * Excludes main Codeman-managed Claude processes (CODEMAN_MUX=1).
    * Also updates cached PIDs on tracked agents when a match is found.
    */
   private async getClaudePids(): Promise<Map<number, { environ: string; cmdline: string }>> {
@@ -330,8 +330,8 @@ export class SubagentWatcher extends EventEmitter {
         let cmdline = '';
         try { environ = await readFile(`/proc/${pid}/environ`, 'utf8'); } catch { /* skip */ }
         try { cmdline = await readFile(`/proc/${pid}/cmdline`, 'utf8'); } catch { /* skip */ }
-        // Skip main Claudeman-managed Claude processes — only track subagents
-        if (environ.includes('CLAUDEMAN_MUX=1')) return;
+        // Skip main Codeman-managed Claude processes — only track subagents
+        if (environ.includes('CODEMAN_MUX=1')) return;
         if (environ || cmdline) {
           result.set(pid, { environ, cmdline });
         }
@@ -562,8 +562,8 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
-   * Get subagents for a specific Claudeman session
-   * Maps Claudeman working directory to Claude's project hash
+   * Get subagents for a specific Codeman session
+   * Maps Codeman working directory to Claude's project hash
    */
   getSubagentsForSession(workingDir: string): SubagentInfo[] {
     const projectHash = this.getProjectHash(workingDir);
@@ -677,7 +677,7 @@ export class SubagentWatcher extends EventEmitter {
   }
 
   /**
-   * Kill all subagents for a specific Claudeman session.
+   * Kill all subagents for a specific Codeman session.
    * IMPORTANT: Must scope to sessionId to avoid cross-session kills.
    * All sessions in the same workingDir share a projectHash, so filtering
    * by workingDir alone would kill subagents belonging to OTHER sessions.
@@ -696,7 +696,7 @@ export class SubagentWatcher extends EventEmitter {
   /**
    * Find the process ID of a Claude subagent by its session ID.
    * Searches /proc for claude processes with matching session ID in environment.
-   * Skips main Claudeman-managed Claude processes (identified by CLAUDEMAN_MUX=1).
+   * Skips main Codeman-managed Claude processes (identified by CODEMAN_MUX=1).
    * Caches the discovered PID on the matching agent info for future fast checks.
    */
   private async findSubagentProcess(sessionId: string): Promise<number | null> {
@@ -721,9 +721,9 @@ export class SubagentWatcher extends EventEmitter {
           // Can't read this process's environ - skip
         }
 
-        // Defense-in-depth: never kill a main Claudeman-managed Claude process.
-        // Main processes have CLAUDEMAN_MUX=1 in their environment; subagents don't.
-        if (environ.includes('CLAUDEMAN_MUX=1')) continue;
+        // Defense-in-depth: never kill a main Codeman-managed Claude process.
+        // Main processes have CODEMAN_MUX=1 in their environment; subagents don't.
+        if (environ.includes('CODEMAN_MUX=1')) continue;
 
         if (environ.includes(sessionId)) {
           // Cache PID on the matching agent

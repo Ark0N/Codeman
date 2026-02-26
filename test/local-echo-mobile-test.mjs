@@ -227,7 +227,7 @@ async function main() {
 
   try {
     // ── SETUP ──
-    console.log('Opening Claudeman...');
+    console.log('Opening Codeman...');
     await page.goto(BASE, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.xterm-screen', { timeout: 10000 });
     await page.waitForTimeout(2000);
@@ -235,9 +235,9 @@ async function main() {
     // Enable local echo via settings
     console.log('Enabling local echo...');
     await page.evaluate(() => {
-      const settings = JSON.parse(localStorage.getItem('claudeman-app-settings') || '{}');
+      const settings = JSON.parse(localStorage.getItem('codeman-app-settings') || '{}');
       settings.localEchoEnabled = true;
-      localStorage.setItem('claudeman-app-settings', JSON.stringify(settings));
+      localStorage.setItem('codeman-app-settings', JSON.stringify(settings));
       window.app?._updateLocalEchoState?.();
     });
     await page.waitForTimeout(300);

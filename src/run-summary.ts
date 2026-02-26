@@ -1,5 +1,5 @@
 /**
- * @fileoverview Run Summary Tracker for Claudeman sessions
+ * @fileoverview Run Summary Tracker for Codeman sessions
  *
  * Tracks significant events during a session's lifetime to provide users
  * with a consolidated "what happened while I was away" view.

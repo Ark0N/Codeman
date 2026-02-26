@@ -2,9 +2,9 @@
  * @fileoverview Claude Code hooks configuration generator
  *
  * Generates .claude/settings.local.json with hook definitions that POST
- * to Claudeman's /api/hook-event endpoint when Claude Code fires
- * notification or stop hooks. Uses $CLAUDEMAN_API_URL and
- * $CLAUDEMAN_SESSION_ID env vars (set on every managed session) so the
+ * to Codeman's /api/hook-event endpoint when Claude Code fires
+ * notification or stop hooks. Uses $CODEMAN_API_URL and
+ * $CODEMAN_SESSION_ID env vars (set on every managed session) so the
  * config is static per case directory.
  */
 
@@ -18,7 +18,7 @@ import type { HookEventType } from './types.js';
  * Generates the hooks section for .claude/settings.local.json
  *
  * The hook commands read stdin JSON from Claude Code (contains tool_name,
- * tool_input, etc.) and forward it as the `data` field to Claudeman's API.
+ * tool_input, etc.) and forward it as the `data` field to Codeman's API.
  * Env vars are resolved at runtime by the shell, so the config is static
  * per case directory.
  */
@@ -27,9 +27,9 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
   // Falls back to empty object if stdin is unavailable or malformed.
   const curlCmd = (event: HookEventType) =>
     `HOOK_DATA=$(cat 2>/dev/null || echo '{}'); ` +
-    `curl -s -X POST "$CLAUDEMAN_API_URL/api/hook-event" ` +
+    `curl -s -X POST "$CODEMAN_API_URL/api/hook-event" ` +
     `-H 'Content-Type: application/json' ` +
-    `-d "{\\"event\\":\\"${event}\\",\\"sessionId\\":\\"$CLAUDEMAN_SESSION_ID\\",\\"data\\":$HOOK_DATA}" ` +
+    `-d "{\\"event\\":\\"${event}\\",\\"sessionId\\":\\"$CODEMAN_SESSION_ID\\",\\"data\\":$HOOK_DATA}" ` +
     `2>/dev/null || true`;
 
   return {

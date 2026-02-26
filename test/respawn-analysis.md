@@ -2,10 +2,10 @@
 
 **Date**: 2026-01-25
 **Analyzed Files**:
-- `/home/arkon/default/claudeman/src/respawn-controller.ts`
-- `/home/arkon/default/claudeman/src/ai-idle-checker.ts`
-- `/home/arkon/default/claudeman/src/ai-plan-checker.ts`
-- `/home/arkon/default/claudeman/test/respawn-controller.test.ts`
+- `/home/arkon/default/codeman/src/respawn-controller.ts`
+- `/home/arkon/default/codeman/src/ai-idle-checker.ts`
+- `/home/arkon/default/codeman/src/ai-plan-checker.ts`
+- `/home/arkon/default/codeman/test/respawn-controller.test.ts`
 
 ---
 
@@ -55,7 +55,7 @@ The following areas lack test coverage:
 
 ### Issue 1: E2BIG Error in ai-plan-checker.ts (HIGH)
 
-**File**: `/home/arkon/default/claudeman/src/ai-plan-checker.ts`
+**File**: `/home/arkon/default/codeman/src/ai-plan-checker.ts`
 **Lines**: 341-346
 **Severity**: HIGH
 
@@ -84,7 +84,7 @@ const claudeCmd = `cat "${this.checkPromptFile}" | claude -p ${modelArg} --outpu
 
 ### Issue 2: Missing Prompt File Cleanup on Timeout (MEDIUM)
 
-**File**: `/home/arkon/default/claudeman/src/ai-idle-checker.ts`
+**File**: `/home/arkon/default/codeman/src/ai-idle-checker.ts`
 **Lines**: 392-398
 **Severity**: MEDIUM
 
@@ -98,7 +98,7 @@ const claudeCmd = `cat "${this.checkPromptFile}" | claude -p ${modelArg} --outpu
 
 ### Issue 3: Race Condition in cancel() with Promise Resolution (MEDIUM)
 
-**File**: `/home/arkon/default/claudeman/src/ai-idle-checker.ts`
+**File**: `/home/arkon/default/codeman/src/ai-idle-checker.ts`
 **Lines**: 265-279
 **Severity**: MEDIUM
 
@@ -127,7 +127,7 @@ cancel(): void {
 
 ### Issue 4: Stale Screen Name Collision (LOW)
 
-**File**: `/home/arkon/default/claudeman/src/ai-idle-checker.ts`, `ai-plan-checker.ts`
+**File**: `/home/arkon/default/codeman/src/ai-idle-checker.ts`, `ai-plan-checker.ts`
 **Lines**: 326-329 (idle), 333-336 (plan)
 **Severity**: LOW
 
@@ -135,21 +135,21 @@ cancel(): void {
 
 **Code**:
 ```typescript
-this.checkScreenName = `claudeman-aicheck-${shortId}`;
+this.checkScreenName = `codeman-aicheck-${shortId}`;
 ```
 
 **Impact**: Very unlikely in practice since checks have cooldowns, but theoretically possible.
 
 **Suggested Fix**: Already partially mitigated by the `timestamp` in temp file names. Could add timestamp to screen name too:
 ```typescript
-this.checkScreenName = `claudeman-aicheck-${shortId}-${timestamp}`;
+this.checkScreenName = `codeman-aicheck-${shortId}-${timestamp}`;
 ```
 
 ---
 
 ### Issue 5: DetectionStatus Calculation During ai_checking State (LOW)
 
-**File**: `/home/arkon/default/claudeman/src/respawn-controller.ts`
+**File**: `/home/arkon/default/codeman/src/respawn-controller.ts`
 **Lines**: 759-762
 **Severity**: LOW
 

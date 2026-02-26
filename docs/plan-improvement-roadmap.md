@@ -244,4 +244,4 @@ At iterations 5, 10, 20, 30, 50:
 
 ---
 
-*This document is part of the Claudeman project. See [CLAUDE.md](../CLAUDE.md) for main documentation.*
+*This document is part of the Codeman project. See [CLAUDE.md](../CLAUDE.md) for main documentation.*

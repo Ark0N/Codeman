@@ -1,7 +1,7 @@
 # Performance Audit: First Page Load
 
 **Date**: 2026-02-18
-**Scope**: Browser first-load of Claudeman web UI (`/`)
+**Scope**: Browser first-load of Codeman web UI (`/`)
 **Method**: Static analysis by 4 parallel audit agents (server, frontend, SSE/xterm, asset pipeline)
 
 ---
@@ -40,7 +40,7 @@ Browser hits /
 │
 │   [FIRST PAINT blocked until ALL CSS downloaded + parsed]
 │
-├── JS executes: new ClaudemanApp().init()
+├── JS executes: new CodemanApp().init()
 │   ├── initTerminal() ................... (SYNC: new Terminal() + terminal.open() → canvas creation)
 │   ├── connectSSE() → /api/events ....... (SSE → fires 'init' with getLightState())
 │   ├── loadState() → /api/status ........ (DUPLICATE #1: same data as SSE init!)

@@ -98,7 +98,7 @@ function makeSession(id, name, mode, status, extra = {}) {
     id,
     pid: status === 'idle' ? null : 12345 + Math.floor(Math.random() * 10000),
     status,
-    workingDir: '/home/arkon/claudeman-cases/testcase',
+    workingDir: '/home/arkon/codeman-cases/testcase',
     currentTaskId: null,
     createdAt: Date.now() - 3600000,
     lastActivityAt: Date.now() - (status === 'idle' ? 60000 : 5000),
@@ -336,7 +336,7 @@ const TERMINAL_INIT = [
   '',
   `  ${RED}████${RST}    ${BOLD}Claude Code${RST} v2.1.47`,
   `  ${RED}████${RST}    ${GRY}Opus 4.6${RST} ${DIM}·${RST} ${GRY}Claude Max${RST}`,
-  `  ${RED}██${RST} ${RED}██${RST}    ${GRY}~/claudeman-cases/testcase${RST}`,
+  `  ${RED}██${RST} ${RED}██${RST}    ${GRY}~/codeman-cases/testcase${RST}`,
   '',
   '',
   `${GRY}❯ Try "how do I log an error?"${RST}`,
@@ -353,7 +353,7 @@ const TERMINAL_WORKING = [
   `${GRN}●${RST} The codebase is essentially a template/scaffold with just a CLAUDE.md file and empty ${BOLD}src/${RST} directory. Since there's already a comprehensive`,
   `CLAUDE.md file present, let me read it fully and suggest improvements based on the /init command requirements:`,
   '',
-  `${GRN}●${RST} ${BOLD}Read${RST}(/home/arkon/claudeman-cases/testcase/CLAUDE.md)`,
+  `${GRN}●${RST} ${BOLD}Read${RST}(/home/arkon/codeman-cases/testcase/CLAUDE.md)`,
   `  ${GRY}░${RST} Read ${BOLD}407${RST} lines`,
   '',
   `${GRN}●${RST} Now I understand the situation. This is a ${BOLD}template CLAUDE.md file${RST} designed for the Claude Code framework with the "Ralph Loop" autonomous work`,
@@ -420,15 +420,15 @@ const TERMINAL_RALPH = [
 const SUBAGENT_ACTIVITY = {
   'agent-001': [
     { type: 'tool', tool: 'Glob', input: { pattern: 'src/**/*.ts' }, timestamp: new Date().toISOString(), agentId: 'agent-001' },
-    { type: 'tool', tool: 'Read', input: { file_path: '/home/arkon/claudeman/src/web/server.ts' }, timestamp: new Date().toISOString(), agentId: 'agent-001' },
+    { type: 'tool', tool: 'Read', input: { file_path: '/home/arkon/codeman/src/web/server.ts' }, timestamp: new Date().toISOString(), agentId: 'agent-001' },
     { type: 'tool', tool: 'Grep', input: { pattern: 'app\\.get|app\\.post|app\\.put|app\\.delete', path: 'src/' }, timestamp: new Date().toISOString(), agentId: 'agent-001' },
-    { type: 'tool', tool: 'Read', input: { file_path: '/home/arkon/claudeman/src/web/schemas.ts' }, timestamp: new Date().toISOString(), agentId: 'agent-001' },
+    { type: 'tool', tool: 'Read', input: { file_path: '/home/arkon/codeman/src/web/schemas.ts' }, timestamp: new Date().toISOString(), agentId: 'agent-001' },
     { type: 'message', role: 'assistant', text: 'Found 47 API endpoints across server.ts. Documenting REST paths...', timestamp: new Date().toISOString(), agentId: 'agent-001' },
   ],
   'agent-002': [
     { type: 'tool', tool: 'Glob', input: { pattern: 'test/**/*.test.ts' }, timestamp: new Date().toISOString(), agentId: 'agent-002' },
-    { type: 'tool', tool: 'Read', input: { file_path: '/home/arkon/claudeman/test/respawn-test-utils.ts' }, timestamp: new Date().toISOString(), agentId: 'agent-002' },
-    { type: 'tool', tool: 'Read', input: { file_path: '/home/arkon/claudeman/vitest.config.ts' }, timestamp: new Date().toISOString(), agentId: 'agent-002' },
+    { type: 'tool', tool: 'Read', input: { file_path: '/home/arkon/codeman/test/respawn-test-utils.ts' }, timestamp: new Date().toISOString(), agentId: 'agent-002' },
+    { type: 'tool', tool: 'Read', input: { file_path: '/home/arkon/codeman/vitest.config.ts' }, timestamp: new Date().toISOString(), agentId: 'agent-002' },
     { type: 'message', role: 'assistant', text: 'Analyzing test patterns: MockSession, unique ports, fileParallelism: false...', timestamp: new Date().toISOString(), agentId: 'agent-002' },
   ],
 };
@@ -436,9 +436,9 @@ const SUBAGENT_ACTIVITY = {
 // Subagent spawn terminal content
 const TERMINAL_SUBAGENT = [
   '',
-  `${GRN}●${RST} Working on ${CYN}/home/arkon/claudeman-cases/testcase${RST} - I'll use the ${BOLD}Task tool${RST} to spawn parallel agents.`,
+  `${GRN}●${RST} Working on ${CYN}/home/arkon/codeman-cases/testcase${RST} - I'll use the ${BOLD}Task tool${RST} to spawn parallel agents.`,
   '',
-  `${GRN}●${RST} ${BOLD}Read${RST}(/home/arkon/claudeman-cases/testcase/CLAUDE.md)`,
+  `${GRN}●${RST} ${BOLD}Read${RST}(/home/arkon/codeman-cases/testcase/CLAUDE.md)`,
   `  ${GRY}░${RST} Read ${BOLD}127${RST} lines ${GRY}│${RST} ${CYN}1.2KB${RST}`,
   '',
   `${GRN}●${RST} ${BOLD}Bash${RST}(find . -name "*.ts" -not -path "*/node_modules/*" | head -20)`,
@@ -864,7 +864,7 @@ async function captureMultiSessionMonitor(page) {
 
 async function main() {
   console.log('='.repeat(60));
-  console.log('Claudeman README Screenshot Capture');
+  console.log('Codeman README Screenshot Capture');
   console.log('='.repeat(60));
   console.log(`Port: ${PORT} | Viewport: ${VIEWPORT.width}x${VIEWPORT.height}`);
   console.log('');

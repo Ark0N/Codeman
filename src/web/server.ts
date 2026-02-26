@@ -1,5 +1,5 @@
 /**
- * @fileoverview Claudeman web server and REST API
+ * @fileoverview Codeman web server and REST API
  *
  * Provides a Fastify-based web server with:
  * - REST API for session management, respawn control, and monitoring
@@ -142,7 +142,7 @@ const MAX_HOOK_DATA_SIZE = 8 * 1024;
 // Maximum screenshot upload size (10MB)
 const MAX_SCREENSHOT_SIZE = 10 * 1024 * 1024;
 // Screenshots directory
-const SCREENSHOTS_DIR = join(homedir(), '.claudeman', 'screenshots');
+const SCREENSHOTS_DIR = join(homedir(), '.codeman', 'screenshots');
 // Stats collection interval (2 seconds)
 const STATS_COLLECTION_INTERVAL_MS = 2000;
 // Session limit wait time before retrying (5 seconds)
@@ -272,10 +272,10 @@ function autoConfigureRalph(session: Session, workingDir: string, broadcast: (ev
 
 /**
  * Get or generate a self-signed TLS certificate for HTTPS.
- * Certs are stored in ~/.claudeman/certs/ and reused across restarts.
+ * Certs are stored in ~/.codeman/certs/ and reused across restarts.
  */
 function getOrCreateSelfSignedCert(): { key: string; cert: string } {
-  const certsDir = join(homedir(), '.claudeman', 'certs');
+  const certsDir = join(homedir(), '.codeman', 'certs');
   const keyPath = join(certsDir, 'server.key');
   const certPath = join(certsDir, 'server.crt');
 
@@ -292,7 +292,7 @@ function getOrCreateSelfSignedCert(): { key: string; cert: string } {
   execSync(
     `openssl req -x509 -newkey rsa:2048 -nodes ` +
     `-keyout "${keyPath}" -out "${certPath}" ` +
-    `-days 365 -subj "/CN=claudeman" ` +
+    `-days 365 -subj "/CN=codeman" ` +
     `-addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:0.0.0.0"`,
     { stdio: 'pipe' }
   );
@@ -582,10 +582,10 @@ export class WebServer extends EventEmitter {
       threshold: 1024,
     });
 
-    // Optional HTTP Basic Auth (set CLAUDEMAN_PASSWORD env var to enable)
-    const authPassword = process.env.CLAUDEMAN_PASSWORD;
+    // Optional HTTP Basic Auth (set CODEMAN_PASSWORD env var to enable)
+    const authPassword = process.env.CODEMAN_PASSWORD;
     if (authPassword) {
-      const authUsername = process.env.CLAUDEMAN_USERNAME || 'admin';
+      const authUsername = process.env.CODEMAN_USERNAME || 'admin';
       const expectedHeader = 'Basic ' + Buffer.from(`${authUsername}:${authPassword}`).toString('base64');
       this.app.addHook('onRequest', (req, reply, done) => {
         const auth = req.headers.authorization;
@@ -593,7 +593,7 @@ export class WebServer extends EventEmitter {
           done();
           return;
         }
-        reply.header('WWW-Authenticate', 'Basic realm="Claudeman"');
+        reply.header('WWW-Authenticate', 'Basic realm="Codeman"');
         reply.code(401).send('Unauthorized');
       });
     }
@@ -2350,7 +2350,7 @@ export class WebServer extends EventEmitter {
     });
 
     // Case management
-    const casesDir = join(homedir(), 'claudeman-cases');
+    const casesDir = join(homedir(), 'codeman-cases');
 
     this.app.get('/api/cases', async (): Promise<CaseInfo[]> => {
       const cases: CaseInfo[] = [];
@@ -2372,7 +2372,7 @@ export class WebServer extends EventEmitter {
       }
 
       // Get linked cases
-      const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
+      const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
       try {
         const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
         for (const [name, path] of Object.entries(linkedCases)) {
@@ -2456,11 +2456,11 @@ export class WebServer extends EventEmitter {
       // Check if case name already exists in casesDir
       const casePath = join(casesDir, name);
       if (existsSync(casePath)) {
-        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'A case with this name already exists in claudeman-cases.');
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'A case with this name already exists in codeman-cases.');
       }
 
       // Load existing linked cases
-      const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
+      const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
       let linkedCases: Record<string, string> = {};
       try {
         linkedCases = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
@@ -2478,9 +2478,9 @@ export class WebServer extends EventEmitter {
       // Save the linked case
       linkedCases[name] = expandedPath;
       try {
-        const claudemanDir = join(homedir(), '.claudeman');
-        if (!existsSync(claudemanDir)) {
-          mkdirSync(claudemanDir, { recursive: true });
+        const codemanDir = join(homedir(), '.codeman');
+        if (!existsSync(codemanDir)) {
+          mkdirSync(codemanDir, { recursive: true });
         }
         await fs.writeFile(linkedCasesFile, JSON.stringify(linkedCases, null, 2));
         this.broadcast('case:linked', { name, path: expandedPath });
@@ -2494,7 +2494,7 @@ export class WebServer extends EventEmitter {
       const { name } = req.params as { name: string };
 
       // First check linked cases
-      const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
+      const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
       try {
         const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
         if (linkedCases[name]) {
@@ -2531,7 +2531,7 @@ export class WebServer extends EventEmitter {
       // Get case path (check linked cases first, then casesDir)
       let casePath: string | null = null;
 
-      const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
+      const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
       try {
         const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
         if (linkedCases[name]) {
@@ -2737,7 +2737,7 @@ export class WebServer extends EventEmitter {
 
         // Save lastUsedCase to settings for TUI/web sync
         try {
-          const settingsFilePath = join(homedir(), '.claudeman', 'settings.json');
+          const settingsFilePath = join(homedir(), '.codeman', 'settings.json');
           let settings: Record<string, unknown> = {};
           try {
             settings = JSON.parse(await fs.readFile(settingsFilePath, 'utf-8'));
@@ -2974,7 +2974,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       // Determine output directory for saving wizard results
       let outputDir: string | undefined;
       if (caseName) {
-        const casesDir = join(homedir(), 'claudeman-cases');
+        const casesDir = join(homedir(), 'codeman-cases');
         const casePath = join(casesDir, caseName);
         // Security: Path traversal protection - use relative path check
         const resolvedCase = resolve(casePath);
@@ -3101,7 +3101,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Get ralph-wizard files for a case (prompts and results)
     this.app.get('/api/cases/:caseName/ralph-wizard/files', async (req) => {
       const { caseName } = req.params as { caseName: string };
-      const casesDir = join(homedir(), 'claudeman-cases');
+      const casesDir = join(homedir(), 'codeman-cases');
       let casePath = join(casesDir, caseName);
 
       // Security: Path traversal protection - use relative path check
@@ -3114,7 +3114,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
       // Check linked cases if path doesn't exist
       if (!existsSync(casePath)) {
-        const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
+        const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
         try {
           const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
           if (linkedCases[caseName]) {
@@ -3162,7 +3162,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Cache disabled to ensure fresh prompts when starting new plan generations
     this.app.get('/api/cases/:caseName/ralph-wizard/file/:filePath', async (req, reply) => {
       const { caseName, filePath } = req.params as { caseName: string; filePath: string };
-      const casesDir = join(homedir(), 'claudeman-cases');
+      const casesDir = join(homedir(), 'codeman-cases');
       let casePath = join(casesDir, caseName);
 
       // Prevent browser caching - prompts change between plan generations
@@ -3180,7 +3180,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
       // Check linked cases if path doesn't exist
       if (!existsSync(casePath)) {
-        const linkedCasesFile = join(homedir(), '.claudeman', 'linked-cases.json');
+        const linkedCasesFile = join(homedir(), '.codeman', 'linked-cases.json');
         try {
           const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
           if (linkedCases[caseName]) {
@@ -3369,7 +3369,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     });
 
     // ============ App Settings Endpoints ============
-    const settingsPath = join(homedir(), '.claudeman', 'settings.json');
+    const settingsPath = join(homedir(), '.codeman', 'settings.json');
 
     this.app.get('/api/settings', async () => {
       try {
@@ -3520,7 +3520,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     // ============ Subagent Window State Endpoints ============
     // Persists minimized/open window states for cross-browser sync
-    const windowStatesPath = join(homedir(), '.claudeman', 'subagent-window-states.json');
+    const windowStatesPath = join(homedir(), '.codeman', 'subagent-window-states.json');
 
     this.app.get('/api/subagent-window-states', async () => {
       try {
@@ -3555,7 +3555,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // ============ Subagent Parent Associations ============
     // Persists which TAB each agent window connects to.
     // This is the PERMANENT record of agent -> tab associations.
-    const parentMapPath = join(homedir(), '.claudeman', 'subagent-parents.json');
+    const parentMapPath = join(homedir(), '.codeman', 'subagent-parents.json');
 
     this.app.get('/api/subagent-parents', async () => {
       try {
@@ -3836,7 +3836,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         ext = map[ctMatch[1].toLowerCase()] ?? ext;
       }
 
-      // Save to ~/.claudeman/screenshots/
+      // Save to ~/.codeman/screenshots/
       if (!existsSync(SCREENSHOTS_DIR)) {
         mkdirSync(SCREENSHOTS_DIR, { recursive: true });
       }
@@ -4707,7 +4707,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
   // Helper to get custom CLAUDE.md template path from settings
   private async getDefaultClaudeMdPath(): Promise<string | undefined> {
-    const settingsPath = join(homedir(), '.claudeman', 'settings.json');
+    const settingsPath = join(homedir(), '.codeman', 'settings.json');
 
     try {
       const content = await fs.readFile(settingsPath, 'utf-8');
@@ -4723,7 +4723,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     return undefined;
   }
 
-  // Read ~/.claudeman/settings.json once and return the parsed object.
+  // Read ~/.codeman/settings.json once and return the parsed object.
   // Cached for 2s to avoid redundant reads during session creation bursts.
   private _settingsCache: { data: Record<string, unknown>; ts: number } | null = null;
   private async readSettings(): Promise<Record<string, unknown>> {
@@ -4731,7 +4731,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     if (this._settingsCache && now - this._settingsCache.ts < 2000) {
       return this._settingsCache.data;
     }
-    const settingsPath = join(homedir(), '.claudeman', 'settings.json');
+    const settingsPath = join(homedir(), '.codeman', 'settings.json');
     try {
       const content = await fs.readFile(settingsPath, 'utf-8');
       const data = JSON.parse(content) as Record<string, unknown>;
@@ -5293,10 +5293,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
     await this.app.listen({ port: this.port, host: '0.0.0.0' });
     const protocol = this.https ? 'https' : 'http';
-    console.log(`Claudeman web interface running at ${protocol}://localhost:${this.port}`);
+    console.log(`Codeman web interface running at ${protocol}://localhost:${this.port}`);
 
     // Set API URL for child processes (MCP server, spawned sessions)
-    process.env.CLAUDEMAN_API_URL = `${protocol}://localhost:${this.port}`;
+    process.env.CODEMAN_API_URL = `${protocol}://localhost:${this.port}`;
 
     // Start scheduled runs cleanup timer
     this.scheduledCleanupTimer = setInterval(() => {
@@ -5339,7 +5339,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
    * Check if subagent tracking is enabled in settings (default: true)
    */
   private async isSubagentTrackingEnabled(): Promise<boolean> {
-    const settingsPath = join(homedir(), '.claudeman', 'settings.json');
+    const settingsPath = join(homedir(), '.codeman', 'settings.json');
     try {
       const content = await fs.readFile(settingsPath, 'utf-8');
       const settings = JSON.parse(content);
@@ -5357,7 +5357,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
    * Check if image watcher is enabled in settings (default: false)
    */
   private async isImageWatcherEnabled(): Promise<boolean> {
-    const settingsPath = join(homedir(), '.claudeman', 'settings.json');
+    const settingsPath = join(homedir(), '.codeman', 'settings.json');
     try {
       const content = await fs.readFile(settingsPath, 'utf-8');
       const settings = JSON.parse(content);

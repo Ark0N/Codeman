@@ -39,7 +39,7 @@ Server echoes 'h' ←───────────────────�
 
 ## Origin
 
-This library was extracted from [Claudeman](https://github.com/Ark0N/Claudeman), a Claude Code session manager that runs 20+ autonomous AI agents over 24-hour sessions. The local echo system was built to make mobile and remote access feel instant, then battle-tested across thousands of hours of real usage. After 3 deep code audits, it was extracted into this standalone library with 78 tests covering every state transition.
+This library was extracted from [Codeman](https://github.com/Ark0N/Codeman), a Claude Code session manager that runs 20+ autonomous AI agents over 24-hour sessions. The local echo system was built to make mobile and remote access feel instant, then battle-tested across thousands of hours of real usage. After 3 deep code audits, it was extracted into this standalone library with 78 tests covering every state transition.
 
 ## Install
 
@@ -375,4 +375,4 @@ Overlay hides when scrolled up (`viewportY !== baseY`). Debounced re-render when
 
 ## License
 
-MIT — [Claudeman](https://github.com/Ark0N/Claudeman) Contributors
+MIT — [Codeman](https://github.com/Ark0N/Codeman) Contributors

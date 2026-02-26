@@ -2,7 +2,7 @@
  * @fileoverview Append-only JSONL audit log for session lifecycle events.
  *
  * Records every session creation, start, exit, deletion, recovery, and server
- * start/stop to ~/.claudeman/session-lifecycle.jsonl. Survives server restarts
+ * start/stop to ~/.codeman/session-lifecycle.jsonl. Survives server restarts
  * (unlike RunSummary which is in-memory only).
  *
  * @module session-lifecycle-log
@@ -22,7 +22,7 @@ export class SessionLifecycleLog {
   private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(filePath?: string) {
-    this.filePath = filePath || join(homedir(), '.claudeman', 'session-lifecycle.jsonl');
+    this.filePath = filePath || join(homedir(), '.codeman', 'session-lifecycle.jsonl');
     const dir = dirname(this.filePath);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true, mode: 0o700 });

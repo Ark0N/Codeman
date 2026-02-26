@@ -1,6 +1,6 @@
 # Terminal Anti-Flicker System
 
-Claude Code uses [Ink](https://github.com/vadimdemedes/ink) (React for terminals), which redraws the entire screen on every state change. Without special handling, users see constant flickering. Claudeman implements a 6-layer anti-flicker pipeline.
+Claude Code uses [Ink](https://github.com/vadimdemedes/ink) (React for terminals), which redraws the entire screen on every state change. Without special handling, users see constant flickering. Codeman implements a 6-layer anti-flicker pipeline.
 
 ## Pipeline Overview
 

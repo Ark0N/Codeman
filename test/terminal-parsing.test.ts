@@ -2,7 +2,7 @@
  * @fileoverview Tests for terminal output parsing utilities
  *
  * Tests various terminal output parsing patterns used throughout
- * the Claudeman application.
+ * the Codeman application.
  */
 
 import { describe, it, expect } from 'vitest';

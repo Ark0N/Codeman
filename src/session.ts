@@ -400,8 +400,8 @@ export class Session extends EventEmitter {
     this.mode = config.mode || 'claude';
     this._name = config.name || '';
     this._lastActivityAt = this.createdAt;
-    // Set claudeSessionId immediately — Claudeman always passes --session-id ${this.id}
-    // to Claude CLI, so the Claude session ID always matches the Claudeman session ID.
+    // Set claudeSessionId immediately — Codeman always passes --session-id ${this.id}
+    // to Claude CLI, so the Claude session ID always matches the Codeman session ID.
     // This ensures subagent matching works even for recovered sessions (where
     // startInteractive() hasn't been called yet).
     this._claudeSessionId = this.id;
@@ -1041,7 +1041,7 @@ export class Session extends EventEmitter {
         throw new Error('OpenCode sessions require tmux. Direct PTY fallback is not supported.');
       }
       try {
-        // Pass --session-id to use the SAME ID as the Claudeman session
+        // Pass --session-id to use the SAME ID as the Codeman session
         // This ensures subagents can be directly matched to the correct tab
         const args = [...this._buildPermissionArgs(), '--session-id', this.id];
         if (this._model) args.push('--model', this._model);
@@ -1058,10 +1058,10 @@ export class Session extends EventEmitter {
             TERM: 'xterm-256color',
             COLORTERM: undefined,
             CLAUDECODE: undefined,
-            // Inform Claude it's running within Claudeman (helps prevent self-termination)
-            CLAUDEMAN_MUX: '1',
-            CLAUDEMAN_SESSION_ID: this.id,
-            CLAUDEMAN_API_URL: process.env.CLAUDEMAN_API_URL || 'http://localhost:3000',
+            // Inform Claude it's running within Codeman (helps prevent self-termination)
+            CODEMAN_MUX: '1',
+            CODEMAN_SESSION_ID: this.id,
+            CODEMAN_API_URL: process.env.CODEMAN_API_URL || 'http://localhost:3000',
           },
         });
       } catch (spawnErr) {
@@ -1376,9 +1376,9 @@ export class Session extends EventEmitter {
             LANG: 'en_US.UTF-8',
             LC_ALL: 'en_US.UTF-8',
             TERM: 'xterm-256color',
-            CLAUDEMAN_MUX: '1',
-            CLAUDEMAN_SESSION_ID: this.id,
-            CLAUDEMAN_API_URL: process.env.CLAUDEMAN_API_URL || 'http://localhost:3000',
+            CODEMAN_MUX: '1',
+            CODEMAN_SESSION_ID: this.id,
+            CODEMAN_API_URL: process.env.CODEMAN_API_URL || 'http://localhost:3000',
           },
         });
       } catch (spawnErr) {
@@ -1509,10 +1509,10 @@ export class Session extends EventEmitter {
               TERM: 'xterm-256color',
               COLORTERM: undefined,
               CLAUDECODE: undefined,
-              // Inform Claude it's running within Claudeman
-              CLAUDEMAN_MUX: '1',
-              CLAUDEMAN_SESSION_ID: this.id,
-              CLAUDEMAN_API_URL: process.env.CLAUDEMAN_API_URL || 'http://localhost:3000',
+              // Inform Claude it's running within Codeman
+              CODEMAN_MUX: '1',
+              CODEMAN_SESSION_ID: this.id,
+              CODEMAN_API_URL: process.env.CODEMAN_API_URL || 'http://localhost:3000',
             },
           });
         } catch (spawnErr) {
@@ -1867,7 +1867,7 @@ export class Session extends EventEmitter {
   }
 
   // Parse Claude Code CLI info from terminal startup output
-  // Extracts version, model, and account type for display in Claudeman UI
+  // Extracts version, model, and account type for display in Codeman UI
   // Note: Expects cleanData with ANSI codes already stripped by caller
   private parseClaudeCodeInfo(cleanData: string): void {
     // Only parse once per session (during startup)

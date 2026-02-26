@@ -10,7 +10,7 @@
  * - **Reliable input**: `send-keys -l` sends literal text in a single command
  * - **Teammate support**: Immutable pane IDs enable targeting individual teammates
  *
- * tmux sessions are named `claudeman-{sessionId}` and stored in ~/.claudeman/mux-sessions.json.
+ * tmux sessions are named `codeman-{sessionId}` and stored in ~/.codeman/mux-sessions.json.
  *
  * Key features:
  * - `send-keys 'text' Enter` sends literal text in a single command
@@ -74,15 +74,18 @@ const DEFAULT_STATS_INTERVAL_MS = 2000;
  * - Create a tmux session
  * - Send input to a tmux session
  * - Discover/reconcile real tmux sessions
- * - Read/write ~/.claudeman/mux-sessions.json
+ * - Read/write ~/.codeman/mux-sessions.json
  */
 const IS_TEST_MODE = !!process.env.VITEST;
 
 /** Path to persisted mux session metadata */
-const MUX_SESSIONS_FILE = join(homedir(), '.claudeman', 'mux-sessions.json');
+const MUX_SESSIONS_FILE = join(homedir(), '.codeman', 'mux-sessions.json');
 
 /** Regex to validate tmux session names (only allow safe characters) */
-const SAFE_MUX_NAME_PATTERN = /^claudeman-[a-f0-9-]+$/;
+const SAFE_MUX_NAME_PATTERN = /^codeman-[a-f0-9-]+$/;
+
+/** Legacy pattern for pre-rename sessions (claudeman- prefix) */
+const LEGACY_MUX_NAME_PATTERN = /^claudeman-[a-f0-9-]+$/;
 
 /** Regex to validate tmux pane targets (e.g., "%0", "%1", "0", "1") */
 const SAFE_PANE_TARGET_PATTERN = /^(%\d+|\d+)$/;
@@ -92,7 +95,7 @@ const SAFE_PANE_TARGET_PATTERN = /^(%\d+|\d+)$/;
  * Prevents command injection via malformed session IDs.
  */
 function isValidMuxName(name: string): boolean {
-  return SAFE_MUX_NAME_PATTERN.test(name);
+  return SAFE_MUX_NAME_PATTERN.test(name) || LEGACY_MUX_NAME_PATTERN.test(name);
 }
 
 /**
@@ -336,7 +339,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    */
   async createSession(options: CreateSessionOptions): Promise<MuxSession> {
     const { sessionId, workingDir, mode, name, niceConfig, model, claudeMode, allowedTools, openCodeConfig } = options;
-    const muxName = `claudeman-${sessionId.slice(0, 8)}`;
+    const muxName = `codeman-${sessionId.slice(0, 8)}`;
 
     if (!isValidMuxName(muxName)) {
       throw new Error('Invalid session name: contains unsafe characters');
@@ -382,10 +385,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       'export LANG=en_US.UTF-8',
       'export LC_ALL=en_US.UTF-8',
       'unset COLORTERM',
-      'export CLAUDEMAN_MUX=1',
-      `export CLAUDEMAN_SESSION_ID=${sessionId}`,
-      `export CLAUDEMAN_MUX_NAME=${muxName}`,
-      `export CLAUDEMAN_API_URL=${process.env.CLAUDEMAN_API_URL || 'http://localhost:3000'}`,
+      'export CODEMAN_MUX=1',
+      `export CODEMAN_SESSION_ID=${sessionId}`,
+      `export CODEMAN_MUX_NAME=${muxName}`,
+      `export CODEMAN_API_URL=${process.env.CODEMAN_API_URL || 'http://localhost:3000'}`,
     ];
     // Only unset CLAUDECODE for Claude sessions
     if (mode === 'claude') envExports.splice(2, 0, 'unset CLAUDECODE');
@@ -440,7 +443,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // Mouse mode is OFF by default so xterm.js handles text selection natively.
       // It gets enabled dynamically when panes are split (agent teams).
       const configPromises: Promise<void>[] = [
-        // Disable tmux status bar — Claudeman's web UI provides session info
+        // Disable tmux status bar — Codeman's web UI provides session info
         execAsync(`tmux set-option -t "${muxName}" status off`, { timeout: EXEC_TIMEOUT_MS })
           .then(() => {}).catch(() => { /* Non-critical — session still works with status bar */ }),
         // Override global remain-on-exit with session-level setting
@@ -567,10 +570,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       'export LANG=en_US.UTF-8',
       'export LC_ALL=en_US.UTF-8',
       'unset COLORTERM',
-      'export CLAUDEMAN_MUX=1',
-      `export CLAUDEMAN_SESSION_ID=${sessionId}`,
-      `export CLAUDEMAN_MUX_NAME=${muxName}`,
-      `export CLAUDEMAN_API_URL=${process.env.CLAUDEMAN_API_URL || 'http://localhost:3000'}`,
+      'export CODEMAN_MUX=1',
+      `export CODEMAN_SESSION_ID=${sessionId}`,
+      `export CODEMAN_MUX_NAME=${muxName}`,
+      `export CODEMAN_API_URL=${process.env.CODEMAN_API_URL || 'http://localhost:3000'}`,
     ];
     if (mode === 'claude') envExports.splice(2, 0, 'unset CLAUDECODE');
     const envExportsStr = envExports.join(' && ');
@@ -685,7 +688,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     // SAFETY: Never kill the tmux session we're running inside of
-    const currentMuxName = process.env.CLAUDEMAN_MUX_NAME;
+    const currentMuxName = process.env.CODEMAN_MUX_NAME;
     if (currentMuxName && session.muxName === currentMuxName) {
       console.error(`[TmuxManager] BLOCKED: Refusing to kill own tmux session: ${session.muxName}`);
       return false;
@@ -824,7 +827,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       }
     }
 
-    // Discover unknown claudeman sessions
+    // Discover unknown codeman sessions
     try {
       const output = execSync(
         "tmux list-sessions -F '#{session_name}' 2>/dev/null || true",
@@ -833,7 +836,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
       for (const line of output.split('\n')) {
         const sessionName = line.trim();
-        if (!sessionName || !sessionName.startsWith('claudeman-')) continue;
+        if (!sessionName || (!sessionName.startsWith('codeman-') && !sessionName.startsWith('claudeman-'))) continue;
 
         // Check if this session is already known
         let isKnown = false;
@@ -846,7 +849,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
         if (!isKnown) {
           // Extract session ID fragment from name
-          const fragment = sessionName.replace('claudeman-', '');
+          const fragment = sessionName.replace(/^(?:codeman|claudeman)-/, '');
           const sessionId = `restored-${fragment}`;
           const pid = this.getPanePid(sessionName);
 
@@ -1310,7 +1313,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return false;
     }
 
-    // Build target: sessionName.paneId (e.g., "claudeman-abc12345.%1")
+    // Build target: sessionName.paneId (e.g., "codeman-abc12345.%1")
     const target = paneTarget.startsWith('%')
       ? `${muxName}.${paneTarget}`
       : `${muxName}.%${paneTarget}`;

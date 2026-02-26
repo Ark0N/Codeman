@@ -96,7 +96,7 @@ async function main() {
   page.on('console', msg => consoleLogs.push(`[${msg.type()}] ${msg.text()}`));
 
   try {
-    console.log('Opening Claudeman...');
+    console.log('Opening Codeman...');
     await page.goto(BASE);
     await page.waitForSelector('.xterm-screen', { timeout: 10000 });
     await page.waitForTimeout(2000);

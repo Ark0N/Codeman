@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 const TEST_PORT = 3110;
-const CASES_DIR = join(homedir(), 'claudeman-cases');
+const CASES_DIR = join(homedir(), 'codeman-cases');
 
 describe('Edge Cases and Error Handling', () => {
   let server: WebServer;
@@ -349,7 +349,7 @@ describe('Concurrent Session Handling', () => {
     const { join } = await import('node:path');
     const { homedir } = await import('node:os');
     for (const name of createdCases) {
-      const path = join(homedir(), 'claudeman-cases', name);
+      const path = join(homedir(), 'codeman-cases', name);
       if (existsSync(path)) {
         rmSync(path, { recursive: true, force: true });
       }

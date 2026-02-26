@@ -1,8 +1,8 @@
 #!/bin/bash
 #
-# Claudeman Tmux Session Manager
+# Codeman Tmux Session Manager
 # Interactive tool with arrow key navigation
-# Reads from ~/.claudeman/mux-sessions.json
+# Reads from ~/.codeman/mux-sessions.json
 #
 
 # Colors
@@ -17,8 +17,8 @@ DIM='\033[2m'
 NC='\033[0m'
 REVERSE='\033[7m'
 
-# Use the same path as claudeman (src/tmux-manager.ts)
-SESSIONS_FILE="${HOME}/.claudeman/mux-sessions.json"
+# Use the same path as codeman (src/tmux-manager.ts)
+SESSIONS_FILE="${HOME}/.codeman/mux-sessions.json"
 
 
 # Cached data
@@ -133,7 +133,7 @@ kill_session() {
 # Draw header (only once)
 draw_header() {
     echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}${CYAN}║         Claudeman Tmux Session Manager                   ║${NC}"
+    echo -e "${BOLD}${CYAN}║         Codeman Tmux Session Manager                   ║${NC}"
     echo -e "${BOLD}${CYAN}║              ${DIM}Press q or Esc to exit${CYAN}                      ║${NC}"
     echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -401,11 +401,11 @@ quick_list() {
     local now=$(date +%s)
 
     if [[ $CACHED_COUNT -eq 0 ]]; then
-        echo "No claudeman sessions found."
+        echo "No codeman sessions found."
         exit 0
     fi
 
-    echo "Claudeman Sessions ($SESSIONS_FILE):"
+    echo "Codeman Sessions ($SESSIONS_FILE):"
     echo ""
     printf "%-4s %-22s %-14s %-10s %-8s\n" "#" "NAME" "RUNNING" "STATUS" "MODE"
     echo "─────────────────────────────────────────────────────────────────"
@@ -432,7 +432,7 @@ quick_list() {
 # Usage
 usage() {
     cat << EOF
-Claudeman Tmux Session Manager
+Codeman Tmux Session Manager
 
 Reads from: $SESSIONS_FILE
 

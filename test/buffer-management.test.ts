@@ -1,7 +1,7 @@
 /**
  * @fileoverview Tests for buffer management and memory limits
  *
- * Tests the buffer management strategies used in Claudeman sessions
+ * Tests the buffer management strategies used in Codeman sessions
  * for handling large terminal output and message storage.
  */
 

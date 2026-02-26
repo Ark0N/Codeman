@@ -318,7 +318,7 @@ describe('CLI Command Parsing', () => {
 
   describe('Help Text Generation', () => {
     const generateHelp = (command: string, description: string, options: string[]): string => {
-      let help = `Usage: claudeman ${command}\n\n`;
+      let help = `Usage: codeman ${command}\n\n`;
       help += `${description}\n`;
       if (options.length > 0) {
         help += '\nOptions:\n';
@@ -331,7 +331,7 @@ describe('CLI Command Parsing', () => {
 
     it('should generate basic help', () => {
       const help = generateHelp('status', 'Show overall status', []);
-      expect(help).toContain('Usage: claudeman status');
+      expect(help).toContain('Usage: codeman status');
       expect(help).toContain('Show overall status');
     });
 
@@ -724,8 +724,8 @@ describe('CLI Configuration', () => {
       maxConcurrentSessions: 5,
       defaultPort: 3000,
       defaultHost: '0.0.0.0',
-      casesDirectory: '~/claudeman-cases',
-      stateDirectory: '~/.claudeman',
+      casesDirectory: '~/codeman-cases',
+      stateDirectory: '~/.codeman',
     };
 
     const expandPath = (path: string): string => {
@@ -742,8 +742,8 @@ describe('CLI Configuration', () => {
     });
 
     it('should expand home directory paths', () => {
-      expect(expandPath('~/claudeman-cases')).toBe('/home/user/claudeman-cases');
-      expect(expandPath('~/.claudeman')).toBe('/home/user/.claudeman');
+      expect(expandPath('~/codeman-cases')).toBe('/home/user/codeman-cases');
+      expect(expandPath('~/.codeman')).toBe('/home/user/.codeman');
     });
 
     it('should not modify absolute paths', () => {

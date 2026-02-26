@@ -98,7 +98,7 @@ export class MockSession extends EventEmitter {
   constructor(id: string = 'mock-session-id') {
     super();
     this.id = id;
-    this._muxName = `claudeman-test-${id.slice(0, 8)}`;
+    this._muxName = `codeman-test-${id.slice(0, 8)}`;
   }
 
   /** Direct PTY write (used by session.write()) */

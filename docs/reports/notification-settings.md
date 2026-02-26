@@ -17,7 +17,7 @@ The App Settings modal has tabs: Display, Claude CLI, Models, Paths, **Notificat
 
 The Browser row includes an "Ask" button that calls `requestPermission()` and a status badge showing the current `Notification.permission` state.
 
-There is also a hint: _"For remote access, HTTPS is required. Start with: `claudeman web --https`"_
+There is also a hint: _"For remote access, HTTPS is required. Start with: `codeman web --https`"_
 
 #### Alerts Section
 | Setting | Element ID | Type | Default |
@@ -54,16 +54,16 @@ Notification preferences are stored in **two places simultaneously**:
 
 #### Layer 1: localStorage (primary, device-specific)
 
-- **Storage key**: `claudeman-notification-prefs` (desktop) or `claudeman-notification-prefs-mobile` (mobile)
+- **Storage key**: `codeman-notification-prefs` (desktop) or `codeman-notification-prefs-mobile` (mobile)
 - Determined by `NotificationManager.getStorageKey()` at line 953, which calls `MobileDetection.getDeviceType()`
 - Device type is based on `window.innerWidth`: `<430` = mobile, `430-768` = tablet, `>=768` = desktop
 - Read in `loadPreferences()` (line 896), written in `savePreferences()` (line 958)
 
-#### Layer 2: Server-side (`~/.claudeman/settings.json`)
+#### Layer 2: Server-side (`~/.codeman/settings.json`)
 
 - On save, notification prefs are bundled with app settings: `{ ...settings, notificationPreferences: notifPrefsToSave }` (line 9475)
 - Sent via `PUT /api/settings` to the Fastify server
-- Server does a shallow merge: `const merged = { ...existing, ...settings }` then writes to `~/.claudeman/settings.json` (line 3098 of server.ts)
+- Server does a shallow merge: `const merged = { ...existing, ...settings }` then writes to `~/.codeman/settings.json` (line 3098 of server.ts)
 - The `notificationPreferences` key sits at the top level of the settings JSON alongside app settings
 
 #### Load priority
@@ -109,8 +109,8 @@ On startup, `loadAppSettingsFromServer()` (line 9787) fetches from server and:
 ### App settings (separate from notification prefs)
 
 App settings use a different device-specific localStorage key:
-- Desktop: `claudeman-app-settings`
-- Mobile: `claudeman-app-settings-mobile`
+- Desktop: `codeman-app-settings`
+- Mobile: `codeman-app-settings-mobile`
 - Determined by `getSettingsStorageKey()` at line 9562
 
 
@@ -213,8 +213,8 @@ const AUTO_CLOSE_NOTIFICATION_MS = 8000;    // Auto-close browser notifications
 ### Separate storage keys - YES
 
 Desktop and mobile use completely separate localStorage keys:
-- **Notification prefs**: `claudeman-notification-prefs` vs `claudeman-notification-prefs-mobile`
-- **App settings**: `claudeman-app-settings` vs `claudeman-app-settings-mobile`
+- **Notification prefs**: `codeman-notification-prefs` vs `codeman-notification-prefs-mobile`
+- **App settings**: `codeman-app-settings` vs `codeman-app-settings-mobile`
 
 ### Different defaults - YES
 
@@ -303,7 +303,7 @@ The settings UI shows the current permission state via a status badge:
 
 ### HTTPS requirement
 
-Browser notifications require HTTPS for remote access. The settings UI includes a hint: _"For remote access, HTTPS is required. Start with: `claudeman web --https`"_. On localhost, HTTP works fine.
+Browser notifications require HTTPS for remote access. The settings UI includes a hint: _"For remote access, HTTPS is required. Start with: `codeman web --https`"_. On localhost, HTTP works fine.
 
 
 ## 7. Audio Setting
@@ -354,7 +354,7 @@ Yes, given the prerequisites above are met. However, due to the category key mis
 
 Notification preferences are **strictly global**. There is no per-session notification configuration.
 
-- The `NotificationManager` is a singleton on the `ClaudemanApp` instance (line 1404)
+- The `NotificationManager` is a singleton on the `CodemanApp` instance (line 1404)
 - Preferences are loaded once from localStorage (line 878)
 - All sessions share the same notification rules
 

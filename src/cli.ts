@@ -1,5 +1,5 @@
 /**
- * @fileoverview Claudeman CLI command definitions
+ * @fileoverview Codeman CLI command definitions
  *
  * Defines all CLI commands and subcommands for managing Claude sessions,
  * tasks, Ralph loops, and the web server.
@@ -22,7 +22,7 @@ const pkg = require('../package.json') as { version: string };
 const program = new Command();
 
 program
-  .name('claudeman')
+  .name('codeman')
   .description('Claude Code session manager with autonomous Ralph Loop')
   .version(pkg.version);
 
@@ -407,7 +407,7 @@ program
       ? sessions.filter((s) => s.isBusy()).length
       : storedValues.filter((s) => s.status === 'busy').length;
 
-    console.log(chalk.bold('\nClaudeman Status'));
+    console.log(chalk.bold('\nCodeman Status'));
     console.log('─'.repeat(40));
 
     console.log(chalk.bold('\nSessions:'));
@@ -504,7 +504,7 @@ program
     const https = !!options.https;
     const protocol = https ? 'https' : 'http';
 
-    console.log(chalk.cyan(`Starting Claudeman web interface on port ${port}${https ? ' (HTTPS)' : ''}...`));
+    console.log(chalk.cyan(`Starting Codeman web interface on port ${port}${https ? ' (HTTPS)' : ''}...`));
 
     try {
       const server = await startWebServer(port, https);

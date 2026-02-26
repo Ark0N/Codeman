@@ -280,41 +280,41 @@ describe('Session State Management', () => {
 
   describe('Mux Session Environment', () => {
     interface MuxEnv {
-      CLAUDEMAN_MUX: string;
-      CLAUDEMAN_SESSION_ID: string;
-      CLAUDEMAN_MUX_NAME: string;
+      CODEMAN_MUX: string;
+      CODEMAN_SESSION_ID: string;
+      CODEMAN_MUX_NAME: string;
     }
 
     const createMuxEnv = (sessionId: string, muxName: string): MuxEnv => ({
-      CLAUDEMAN_MUX: '1',
-      CLAUDEMAN_SESSION_ID: sessionId,
-      CLAUDEMAN_MUX_NAME: muxName,
+      CODEMAN_MUX: '1',
+      CODEMAN_SESSION_ID: sessionId,
+      CODEMAN_MUX_NAME: muxName,
     });
 
-    const isClaudemanSession = (env: Record<string, string | undefined>): boolean => {
-      return env.CLAUDEMAN_MUX === '1';
+    const isCodemanSession = (env: Record<string, string | undefined>): boolean => {
+      return env.CODEMAN_MUX === '1';
     };
 
     it('should create valid mux environment', () => {
-      const env = createMuxEnv('session-123', 'claudeman-test');
-      expect(env.CLAUDEMAN_MUX).toBe('1');
-      expect(env.CLAUDEMAN_SESSION_ID).toBe('session-123');
-      expect(env.CLAUDEMAN_MUX_NAME).toBe('claudeman-test');
+      const env = createMuxEnv('session-123', 'codeman-test');
+      expect(env.CODEMAN_MUX).toBe('1');
+      expect(env.CODEMAN_SESSION_ID).toBe('session-123');
+      expect(env.CODEMAN_MUX_NAME).toBe('codeman-test');
     });
 
-    it('should detect claudeman session', () => {
-      const env = createMuxEnv('session-123', 'claudeman-test');
-      expect(isClaudemanSession(env)).toBe(true);
+    it('should detect codeman session', () => {
+      const env = createMuxEnv('session-123', 'codeman-test');
+      expect(isCodemanSession(env)).toBe(true);
     });
 
-    it('should detect non-claudeman session', () => {
-      const env = { CLAUDEMAN_MUX: '0' };
-      expect(isClaudemanSession(env)).toBe(false);
+    it('should detect non-codeman session', () => {
+      const env = { CODEMAN_MUX: '0' };
+      expect(isCodemanSession(env)).toBe(false);
     });
 
     it('should handle missing environment variable', () => {
       const env = {};
-      expect(isClaudemanSession(env)).toBe(false);
+      expect(isCodemanSession(env)).toBe(false);
     });
   });
 

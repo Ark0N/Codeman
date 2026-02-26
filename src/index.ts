@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * @fileoverview Claudeman CLI entry point
+ * @fileoverview Codeman CLI entry point
  *
- * This is the main executable entry point for the Claudeman CLI.
+ * This is the main executable entry point for the Codeman CLI.
  * It sets up global error handlers and invokes the CLI parser.
  *
  * @module index

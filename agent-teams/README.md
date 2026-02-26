@@ -68,7 +68,7 @@ Note: Teammate transcripts appear in the **standard subagent directory** under t
 }
 ```
 
-Key fields: `agentId` format is `{name}@{teamName}`, `leadSessionId` links to Claudeman session, `backendType` indicates display mode, `color` for UI theming.
+Key fields: `agentId` format is `{name}@{teamName}`, `leadSessionId` links to Codeman session, `backendType` indicates display mode, `color` for UI theming.
 
 ### Task file format (verified)
 
@@ -122,7 +122,7 @@ Message types observed:
 
 **Teammates are IN-PROCESS THREADS, not separate OS processes.**
 
-In `in-process` mode (the default), all teammates run as threads within the single `claude` process. Only 1 claude process exists per Claudeman session, regardless of team size.
+In `in-process` mode (the default), all teammates run as threads within the single `claude` process. Only 1 claude process exists per Codeman session, regardless of team size.
 
 This means:
 - No separate PIDs to track per teammate
@@ -138,7 +138,7 @@ This means:
 | **tmux** | `--teammate-mode tmux` | Split panes | tmux installed |
 | **iTerm2** | Auto-detected | Native split panes | iTerm2 + `it2` CLI |
 
-**For Claudeman: use `in-process` only.** Claudeman manages its own tmux sessions externally.
+**For Codeman: use `in-process` only.** Codeman manages its own tmux sessions externally.
 
 **In-process UI elements:**
 - Status bar: `@main @teammate1 @teammate2 ...` with `shift+↑ to expand`
@@ -159,7 +159,7 @@ Fires when a task is being marked complete.
 - Exit code 0: Allow completion
 - Exit code 2: Prevent completion, send feedback
 
-These are configured in `.claude/settings.local.json` alongside existing Claudeman hooks.
+These are configured in `.claude/settings.local.json` alongside existing Codeman hooks.
 
 ## Subagent-Watcher Compatibility (Verified)
 
@@ -168,7 +168,7 @@ These are configured in `.claude/settings.local.json` alongside existing Claudem
 ~/.claude/projects/{hash}/{leadSessionId}/subagents/agent-{id}.jsonl
 ```
 
-Claudeman's existing `subagent-watcher.ts` discovers them automatically. They appear in `/api/subagents` with status "active".
+Codeman's existing `subagent-watcher.ts` discovers them automatically. They appear in `/api/subagents` with status "active".
 
 **Distinguishing teammates from regular subagents:**
 - Description field starts with `<teammate-message teammate_id= team`

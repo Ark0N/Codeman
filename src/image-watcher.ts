@@ -137,7 +137,7 @@ export class ImageWatcher extends EventEmitter {
   /**
    * Start watching a session's working directory for new images.
    *
-   * @param sessionId - Claudeman session ID
+   * @param sessionId - Codeman session ID
    * @param workingDir - Path to the session's working directory
    */
   watchSession(sessionId: string, workingDir: string): void {
@@ -200,7 +200,7 @@ export class ImageWatcher extends EventEmitter {
   /**
    * Stop watching a session's working directory.
    *
-   * @param sessionId - Claudeman session ID to stop watching
+   * @param sessionId - Codeman session ID to stop watching
    */
   unwatchSession(sessionId: string): void {
     const watcher = this.sessionWatchers.get(sessionId);

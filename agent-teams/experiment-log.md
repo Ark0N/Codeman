@@ -1,7 +1,7 @@
 # Agent Teams Experiment Log
 
 > Experiment date: 2026-02-12
-> Test case: `~/claudeman-cases/agent-teams-test/`
+> Test case: `~/codeman-cases/agent-teams-test/`
 > Team name: `research-watchers`
 > Teammates: 3 (fs-researcher, perf-researcher, api-researcher)
 > Lead session: `461daa80-94ec-4e5e-a1bb-0518f78311bc`
@@ -56,7 +56,7 @@ Name the team research-watchers.
 
 Subagent transcripts also appear in the standard subagent directory:
 ```
-~/.claude/projects/-home-arkon-claudeman-cases-agent-teams-test/
+~/.claude/projects/-home-arkon-codeman-cases-agent-teams-test/
 └── 461daa80.../
     ├── 461daa80...jsonl                 # Lead session transcript
     └── subagents/
@@ -102,7 +102,7 @@ Key observations:
 - **File locking** via `.json.lock` directories (mkdir-based atomic lock, created then deleted)
 - Lead also has an inbox (`team-lead.json`) for receiving messages FROM teammates
 
-**Implication for Claudeman:** We CAN intercept messages by watching inbox JSON files! We can also potentially inject messages by writing to inbox files.
+**Implication for Codeman:** We CAN intercept messages by watching inbox JSON files! We can also potentially inject messages by writing to inbox files.
 
 ---
 
@@ -119,7 +119,7 @@ Teammates create transcript files at:
 
 This is the **exact same path pattern** that regular Task tool subagents use. The existing `subagent-watcher.ts` successfully discovers them.
 
-Claudeman's `/api/subagents` endpoint returned them with status "active":
+Codeman's `/api/subagents` endpoint returned them with status "active":
 ```
 Agent: ae50544  Status: active  Tools: 8   Model: claude-opus-4-6
   Desc: <teammate-message teammate_id= team
@@ -156,7 +156,7 @@ Agent: a29de32  Status: active  Tools: 7   Model: claude-opus-4-6
             "model": "claude-opus-4-6",
             "joinedAt": 1770875105373,
             "tmuxPaneId": "",
-            "cwd": "/home/arkon/claudeman-cases/agent-teams-test",
+            "cwd": "/home/arkon/codeman-cases/agent-teams-test",
             "subscriptions": []
         },
         {
@@ -169,7 +169,7 @@ Agent: a29de32  Status: active  Tools: 7   Model: claude-opus-4-6
             "planModeRequired": false,
             "joinedAt": 1770875126680,
             "tmuxPaneId": "in-process",
-            "cwd": "/home/arkon/claudeman-cases/agent-teams-test",
+            "cwd": "/home/arkon/codeman-cases/agent-teams-test",
             "subscriptions": [],
             "backendType": "in-process"
         },
@@ -183,7 +183,7 @@ Agent: a29de32  Status: active  Tools: 7   Model: claude-opus-4-6
             "planModeRequired": false,
             "joinedAt": 1770875130344,
             "tmuxPaneId": "in-process",
-            "cwd": "/home/arkon/claudeman-cases/agent-teams-test",
+            "cwd": "/home/arkon/codeman-cases/agent-teams-test",
             "subscriptions": [],
             "backendType": "in-process"
         },
@@ -197,7 +197,7 @@ Agent: a29de32  Status: active  Tools: 7   Model: claude-opus-4-6
             "planModeRequired": false,
             "joinedAt": 1770875134997,
             "tmuxPaneId": "in-process",
-            "cwd": "/home/arkon/claudeman-cases/agent-teams-test",
+            "cwd": "/home/arkon/codeman-cases/agent-teams-test",
             "subscriptions": [],
             "backendType": "in-process"
         }
@@ -280,21 +280,21 @@ Evidence supporting external writes:
 
 ---
 
-## Question 7: What happens to Claudeman's idle detection with active teammates?
+## Question 7: What happens to Codeman's idle detection with active teammates?
 
 **Expected:** Lead may appear idle while teammates work
 
-**Actual: Lead stays "idle" in Claudeman's view, but terminal shows active status**
+**Actual: Lead stays "idle" in Codeman's view, but terminal shows active status**
 
 Observations:
-- Claudeman session status showed `"idle"` throughout the experiment
+- Codeman session status showed `"idle"` throughout the experiment
 - The terminal output continued updating (task list checkboxes, teammate progress messages)
 - Lead displayed "Befuddling..." spinner while waiting for teammates
 - Token count climbed from 27k → 33k during the experiment
 - The `stop` hook DID fire at the end when the team was cleaned up
 
 **Implication:** Current idle detection may trigger prematurely if:
-- It only checks Claudeman's session status (which stays "idle")
+- It only checks Codeman's session status (which stays "idle")
 - It doesn't account for active teammates
 
 **What we need:** Check `~/.claude/teams/*/config.json` for active members before declaring idle.
@@ -308,7 +308,7 @@ Observations:
 **Actual: ZERO separate processes! Teammates are in-process threads.**
 
 ```
-# Only 2 claude processes (both Claudeman sessions, none for teammates):
+# Only 2 claude processes (both Codeman sessions, none for teammates):
 25405 claude --dangerously-skip-permissions --session-id 236f004f...  (our main session)
 383633 claude --dangerously-skip-permissions --session-id 461daa80... (test session + 3 teammates)
 
@@ -327,7 +327,7 @@ claude(383633)─┬─{claude}(383635)
 
 ---
 
-## Question 9: Do teammates inherit Claudeman env vars (hook events)?
+## Question 9: Do teammates inherit Codeman env vars (hook events)?
 
 **Expected:** Yes, if child processes
 
@@ -335,10 +335,10 @@ claude(383633)─┬─{claude}(383635)
 
 Since teammates are threads in the lead's process (PID 383633), they share the exact same environment:
 ```
-CLAUDEMAN_SCREEN=1
-CLAUDEMAN_SESSION_ID=461daa80-94ec-4e5e-a1bb-0518f78311bc
-CLAUDEMAN_SCREEN_NAME=claudeman-461daa80
-CLAUDEMAN_API_URL=http://localhost:3000
+CODEMAN_SCREEN=1
+CODEMAN_SESSION_ID=461daa80-94ec-4e5e-a1bb-0518f78311bc
+CODEMAN_SCREEN_NAME=codeman-461daa80
+CODEMAN_API_URL=http://localhost:3000
 ```
 
 The `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` env var was set via `settings.local.json`'s `env` key, which Claude Code reads at startup and sets on its process.
@@ -358,7 +358,7 @@ Teammates create transcript files in the standard subagent path:
 ~/.claude/projects/{hash}/{leadSessionId}/subagents/agent-{id}.jsonl
 ```
 
-Claudeman's `/api/subagents` endpoint returned all 3 teammates as active subagents. They're indistinguishable from regular Task tool subagents except:
+Codeman's `/api/subagents` endpoint returned all 3 teammates as active subagents. They're indistinguishable from regular Task tool subagents except:
 1. Their `description` field starts with `<teammate-message teammate_id= team`
 2. They can be cross-referenced with `~/.claude/teams/{name}/config.json`
 3. They tend to be longer-lived than regular subagents
@@ -419,7 +419,7 @@ Claudeman's `/api/subagents` endpoint returned all 3 teammates as active subagen
 - Standard bypass permissions and token count still visible
 
 **Subagent floating windows:**
-- Teammates DID appear as subagent floating windows in Claudeman's web UI
+- Teammates DID appear as subagent floating windows in Codeman's web UI
 - They show the standard subagent info (model, tool calls, description)
 - Sub-subagents (teammates' own Task tool usage) also appear
 
@@ -443,7 +443,7 @@ Claudeman's `/api/subagents` endpoint returned all 3 teammates as active subagen
 7. **Sub-subagents** — teammates can spawn their own Task tool subagents (3-level hierarchy).
 8. **`teammateMode` is NOT a valid settings key** — display mode defaults to `in-process`.
 
-### Design implications for Claudeman
+### Design implications for Codeman
 
 1. **TeamWatcher can be simple** — just poll `~/.claude/teams/` for directories + parse config.json
 2. **Subagent-watcher already works** — no new infrastructure needed for teammate transcript tailing

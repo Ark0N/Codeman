@@ -2,7 +2,7 @@
  * @fileoverview Tests for TeamWatcher - Agent Teams filesystem polling
  *
  * Test port: 3150 (if server needed)
- * SAFETY: Never uses port 3000, never kills w1-claudeman/w2/w3-claudeman
+ * SAFETY: Never uses port 3000, never kills w1-codeman/w2/w3-codeman
  */
 
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
@@ -13,7 +13,7 @@ import { TeamWatcher } from '../src/team-watcher.js';
 import type { TeamConfig, TeamTask, InboxMessage } from '../src/types.js';
 
 // Unique temp dir per test run
-const TEST_BASE = join(tmpdir(), `claudeman-test-teams-${randomUUID().substring(0, 8)}`);
+const TEST_BASE = join(tmpdir(), `codeman-test-teams-${randomUUID().substring(0, 8)}`);
 const TEAMS_DIR = join(TEST_BASE, 'teams');
 const TASKS_DIR = join(TEST_BASE, 'tasks');
 

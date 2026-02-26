@@ -126,7 +126,7 @@ export const BODY_CLASSES = {
 
 // Settings localStorage keys
 export const STORAGE_KEYS = {
-  SETTINGS_MOBILE: 'claudeman-app-settings-mobile',
-  SETTINGS_DESKTOP: 'claudeman-app-settings',
-  NOTIFICATION_PREFS_MOBILE: 'claudeman-notification-prefs-mobile',
+  SETTINGS_MOBILE: 'codeman-app-settings-mobile',
+  SETTINGS_DESKTOP: 'codeman-app-settings',
+  NOTIFICATION_PREFS_MOBILE: 'codeman-notification-prefs-mobile',
 } as const;

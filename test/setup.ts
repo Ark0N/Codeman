@@ -1,5 +1,5 @@
 /**
- * @fileoverview Global test setup for Claudeman tests
+ * @fileoverview Global test setup for Codeman tests
  *
  * SAFETY: TmuxManager has built-in test mode detection
  * (via process.env.VITEST) that makes ALL shell commands no-ops.

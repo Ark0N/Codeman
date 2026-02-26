@@ -2,7 +2,7 @@
 
 **Date**: 2026-02-18
 **Audit by**: 4-agent team (css-analyst, js-analyst, server-analyst, deps-analyst)
-**Scope**: First browser load of Claudeman web UI at `/`
+**Scope**: First browser load of Codeman web UI at `/`
 
 ---
 

@@ -293,7 +293,7 @@ describe('SSE Event Types', () => {
       const { join } = await import('node:path');
       const { homedir } = await import('node:os');
       try {
-        rmSync(join(homedir(), 'claudeman-cases', caseName), { recursive: true });
+        rmSync(join(homedir(), 'codeman-cases', caseName), { recursive: true });
       } catch {}
     });
   });

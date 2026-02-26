@@ -1,10 +1,10 @@
 [Unit]
-Description=Claudeman Web Server
+Description=Codeman Web Server
 After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/arkon/default/claudeman
+WorkingDirectory=/home/arkon/default/codeman
 ExecStart=/usr/bin/node dist/index.js web --https
 Restart=always
 RestartSec=5
@@ -15,7 +15,7 @@ Environment=HOME=/home/arkon
 # Logging
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=claudeman
+SyslogIdentifier=codeman
 
 # Resource limits
 LimitNOFILE=65536

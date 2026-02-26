@@ -1,14 +1,14 @@
-# Claudeman Performance Investigation Report
+# Codeman Performance Investigation Report
 
 **Date**: 2026-02-20
-**Scope**: Why Claudeman feels sluggish when multiple Claude tabs are very busy
+**Scope**: Why Codeman feels sluggish when multiple Claude tabs are very busy
 **Method**: 4-agent parallel analysis of server, PTY pipeline, frontend, and background systems
 
 ---
 
 ## Executive Summary
 
-When multiple Claude sessions are actively producing heavy terminal output (e.g., building, writing files, running tests), Claudeman's UI becomes sluggish. This investigation identified **14 bottlenecks** across 4 layers of the stack. The root cause is **cumulative event loop blocking** — no single operation is catastrophically slow, but dozens of small synchronous operations run on every PTY data chunk, and with N busy sessions producing chunks every few milliseconds, the event loop gets saturated.
+When multiple Claude sessions are actively producing heavy terminal output (e.g., building, writing files, running tests), Codeman's UI becomes sluggish. This investigation identified **14 bottlenecks** across 4 layers of the stack. The root cause is **cumulative event loop blocking** — no single operation is catastrophically slow, but dozens of small synchronous operations run on every PTY data chunk, and with N busy sessions producing chunks every few milliseconds, the event loop gets saturated.
 
 The most impactful findings are ranked by severity below.
 

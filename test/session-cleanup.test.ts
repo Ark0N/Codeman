@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 const TEST_PORT = 3120;
-const CASES_DIR = join(homedir(), 'claudeman-cases');
+const CASES_DIR = join(homedir(), 'codeman-cases');
 
 /**
  * Session Cleanup Tests
