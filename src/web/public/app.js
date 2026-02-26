@@ -3466,6 +3466,7 @@ class CodemanApp {
     const overlay = document.getElementById('welcomeOverlay');
     if (overlay) {
       overlay.classList.add('visible');
+      this.loadTunnelStatus();
     }
   }
 
@@ -3473,6 +3474,12 @@ class CodemanApp {
     const overlay = document.getElementById('welcomeOverlay');
     if (overlay) {
       overlay.classList.remove('visible');
+    }
+    // Collapse expanded QR when leaving welcome screen
+    const qrWrap = document.getElementById('welcomeQr');
+    if (qrWrap) {
+      clearTimeout(this._welcomeQrShrinkTimer);
+      qrWrap.classList.remove('expanded');
     }
   }
 
@@ -4892,6 +4899,57 @@ class CodemanApp {
       const data = JSON.parse(e.data);
       console.log('[Image Detected]', data);
       this.openImagePopup(data);
+    });
+
+    // ========== Tunnel Events ==========
+
+    addListener('tunnel:started', (e) => {
+      const data = JSON.parse(e.data);
+      console.log('[Tunnel] Started:', data.url);
+      this._dismissTunnelConnecting();
+      this._updateTunnelUrlDisplay(data.url);
+      const welcomeVisible = document.getElementById('welcomeOverlay')?.classList.contains('visible');
+      if (welcomeVisible) {
+        // On welcome screen: QR appears inline, expanded first
+        this._updateWelcomeTunnelBtn(true, data.url, true);
+        this.showToast(`Tunnel active`, 'success');
+      } else {
+        // Not on welcome screen: popup QR overlay
+        this._updateWelcomeTunnelBtn(true, data.url);
+        this.showToast(`Tunnel active: ${data.url}`, 'success');
+        this.showTunnelQR();
+      }
+    });
+
+    addListener('tunnel:stopped', () => {
+      console.log('[Tunnel] Stopped');
+      this._dismissTunnelConnecting();
+      this._updateTunnelUrlDisplay(null);
+      this._updateWelcomeTunnelBtn(false);
+      this.closeTunnelQR();
+    });
+
+    addListener('tunnel:progress', (e) => {
+      const data = JSON.parse(e.data);
+      console.log('[Tunnel] Progress:', data.message);
+      const toast = document.getElementById('tunnelConnectingToast');
+      if (toast) {
+        toast.innerHTML = `<span class="tunnel-spinner"></span> ${data.message}`;
+      }
+      // Also update button text if on welcome screen
+      const btn = document.getElementById('welcomeTunnelBtn');
+      if (btn?.classList.contains('connecting')) {
+        btn.innerHTML = `<span class="tunnel-spinner"></span> ${data.message}`;
+      }
+    });
+
+    addListener('tunnel:error', (e) => {
+      const data = JSON.parse(e.data);
+      console.warn('[Tunnel] Error:', data.message);
+      this._dismissTunnelConnecting();
+      this.showToast(`Tunnel error: ${data.message}`, 'error');
+      const btn = document.getElementById('welcomeTunnelBtn');
+      if (btn) { btn.disabled = false; btn.classList.remove('connecting'); }
     });
 
     // Plan subagent visibility events (show Opus agents during plan generation)
@@ -11389,6 +11447,8 @@ class CodemanApp {
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? defaults.subagentTrackingEnabled ?? true;
     document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? defaults.subagentActiveTabOnly ?? true;
     document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? defaults.imageWatcherEnabled ?? false;
+    document.getElementById('appSettingsTunnelEnabled').checked = settings.tunnelEnabled ?? false;
+    this.loadTunnelStatus();
     document.getElementById('appSettingsLocalEcho').checked = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
     document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
     // Claude CLI settings
@@ -11512,6 +11572,229 @@ class CodemanApp {
     if (this.activeFocusTrap) {
       this.activeFocusTrap.deactivate();
       this.activeFocusTrap = null;
+    }
+  }
+
+  async loadTunnelStatus() {
+    try {
+      const res = await fetch('/api/tunnel/status');
+      const status = await res.json();
+      const active = status.running && status.url;
+      this._updateTunnelUrlDisplay(active ? status.url : null);
+      this._updateWelcomeTunnelBtn(!!active, active ? status.url : null);
+    } catch {
+      this._updateTunnelUrlDisplay(null);
+      this._updateWelcomeTunnelBtn(false);
+    }
+  }
+
+  _updateTunnelUrlDisplay(url) {
+    const row = document.getElementById('tunnelUrlRow');
+    const display = document.getElementById('tunnelUrlDisplay');
+    if (!row || !display) return;
+    if (url) {
+      row.style.display = '';
+      display.textContent = url;
+      display.onclick = () => {
+        navigator.clipboard.writeText(url).then(() => {
+          this.showToast('Tunnel URL copied', 'success');
+        });
+      };
+    } else {
+      row.style.display = 'none';
+      display.textContent = '';
+      display.onclick = null;
+    }
+  }
+
+  showTunnelQR() {
+    // Close existing popup if open
+    this.closeTunnelQR();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'tunnelQrOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:5000;display:flex;align-items:center;justify-content:center;cursor:pointer';
+    overlay.onclick = (e) => { if (e.target === overlay) this.closeTunnelQR(); };
+
+    const card = document.createElement('div');
+    card.style.cssText = 'background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:24px;text-align:center;max-width:340px;width:90vw;box-shadow:var(--shadow-lg);cursor:default';
+
+    card.innerHTML = `
+      <div style="font-size:14px;font-weight:600;color:var(--text-primary);margin-bottom:16px">Scan to connect</div>
+      <div id="tunnelQrContainer" style="background:#fff;border-radius:8px;padding:16px;display:inline-block">
+        <div style="color:#666;font-size:12px">Loading...</div>
+      </div>
+      <div id="tunnelQrUrl" style="margin-top:12px;font-family:monospace;font-size:11px;color:var(--text-muted);word-break:break-all;cursor:pointer" title="Click to copy"></div>
+      <button onclick="app.closeTunnelQR()" style="margin-top:16px;padding:6px 20px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;color:var(--text-primary);cursor:pointer;font-size:13px">Close</button>
+    `;
+
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    // Fetch QR SVG from server
+    fetch('/api/tunnel/qr')
+      .then(res => {
+        if (!res.ok) throw new Error('Tunnel not running');
+        return res.json();
+      })
+      .then(data => {
+        const container = document.getElementById('tunnelQrContainer');
+        if (container && data.svg) container.innerHTML = data.svg;
+      })
+      .catch(() => {
+        const container = document.getElementById('tunnelQrContainer');
+        if (container) container.innerHTML = '<div style="color:#c00;font-size:12px;padding:20px">Tunnel not active</div>';
+      });
+
+    // Fetch URL for display
+    fetch('/api/tunnel/status')
+      .then(r => r.json())
+      .then(status => {
+        const urlEl = document.getElementById('tunnelQrUrl');
+        if (urlEl && status.url) {
+          urlEl.textContent = status.url;
+          urlEl.onclick = () => {
+            navigator.clipboard.writeText(status.url).then(() => {
+              this.showToast('Tunnel URL copied', 'success');
+            });
+          };
+        }
+      })
+      .catch(() => {});
+
+    // Close on Escape
+    this._tunnelQrEscHandler = (e) => { if (e.key === 'Escape') this.closeTunnelQR(); };
+    document.addEventListener('keydown', this._tunnelQrEscHandler);
+  }
+
+  closeTunnelQR() {
+    const overlay = document.getElementById('tunnelQrOverlay');
+    if (overlay) overlay.remove();
+    if (this._tunnelQrEscHandler) {
+      document.removeEventListener('keydown', this._tunnelQrEscHandler);
+      this._tunnelQrEscHandler = null;
+    }
+  }
+
+  async toggleTunnelFromWelcome() {
+    const btn = document.getElementById('welcomeTunnelBtn');
+    if (!btn) return;
+    const isActive = btn.classList.contains('active');
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/settings');
+      const current = res.ok ? await res.json() : {};
+      const newEnabled = !isActive;
+      current.tunnelEnabled = newEnabled;
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(current),
+      });
+      if (newEnabled) {
+        this._showTunnelConnecting();
+      } else {
+        this._dismissTunnelConnecting();
+        this.showToast('Tunnel stopped', 'info');
+        this._updateWelcomeTunnelBtn(false);
+        btn.disabled = false;
+      }
+    } catch (err) {
+      this._dismissTunnelConnecting();
+      this.showToast('Failed to toggle tunnel', 'error');
+      btn.disabled = false;
+    }
+  }
+
+  _showTunnelConnecting() {
+    const btn = document.getElementById('welcomeTunnelBtn');
+    if (btn) {
+      btn.classList.add('connecting');
+      btn.innerHTML = `
+        <span class="tunnel-spinner"></span>
+        Connecting...`;
+    }
+    // Persistent toast with spinner
+    this._dismissTunnelConnecting();
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-info show';
+    toast.id = 'tunnelConnectingToast';
+    toast.innerHTML = '<span class="tunnel-spinner"></span> Cloudflare Tunnel connecting...';
+    toast.style.pointerEvents = 'auto';
+    if (!this._toastContainer) {
+      this._toastContainer = document.querySelector('.toast-container');
+      if (!this._toastContainer) {
+        this._toastContainer = document.createElement('div');
+        this._toastContainer.className = 'toast-container';
+        document.body.appendChild(this._toastContainer);
+      }
+    }
+    this._toastContainer.appendChild(toast);
+  }
+
+  _dismissTunnelConnecting() {
+    const toast = document.getElementById('tunnelConnectingToast');
+    if (toast) {
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 200);
+    }
+    const btn = document.getElementById('welcomeTunnelBtn');
+    if (btn) btn.classList.remove('connecting');
+  }
+
+  _updateWelcomeTunnelBtn(active, url, firstAppear = false) {
+    const btn = document.getElementById('welcomeTunnelBtn');
+    if (btn) {
+      btn.disabled = false;
+      if (active) {
+        btn.classList.remove('connecting');
+        btn.classList.add('active');
+        btn.innerHTML = `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          Tunnel Active`;
+      } else {
+        btn.classList.remove('active', 'connecting');
+        btn.innerHTML = `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          Cloudflare Tunnel`;
+      }
+    }
+    // Update welcome QR code
+    const qrWrap = document.getElementById('welcomeQr');
+    const qrInner = document.getElementById('welcomeQrInner');
+    const qrUrl = document.getElementById('welcomeQrUrl');
+    if (!qrWrap || !qrInner) return;
+    if (active) {
+      qrWrap.classList.add('visible');
+      // First appear: start expanded, auto-shrink after 8s
+      if (firstAppear) {
+        qrWrap.classList.add('expanded');
+        clearTimeout(this._welcomeQrShrinkTimer);
+        this._welcomeQrShrinkTimer = setTimeout(() => {
+          qrWrap.classList.remove('expanded');
+        }, 8000);
+      }
+      if (url) {
+        qrUrl.textContent = url;
+        qrUrl.title = 'Click QR to enlarge';
+      }
+      fetch('/api/tunnel/qr')
+        .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+        .then(data => { if (data.svg) qrInner.innerHTML = data.svg; })
+        .catch(() => { qrInner.innerHTML = '<div style="color:#999;font-size:11px;padding:20px">QR unavailable</div>'; });
+    } else {
+      clearTimeout(this._welcomeQrShrinkTimer);
+      qrWrap.classList.remove('visible', 'expanded');
+      qrInner.innerHTML = '';
+      if (qrUrl) qrUrl.textContent = '';
+    }
+  }
+
+  toggleWelcomeQrSize() {
+    const qrWrap = document.getElementById('welcomeQr');
+    if (qrWrap) {
+      clearTimeout(this._welcomeQrShrinkTimer);
+      qrWrap.classList.toggle('expanded');
     }
   }
 
@@ -11642,6 +11925,7 @@ class CodemanApp {
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
       imageWatcherEnabled: document.getElementById('appSettingsImageWatcherEnabled').checked,
+      tunnelEnabled: document.getElementById('appSettingsTunnelEnabled').checked,
       localEchoEnabled: document.getElementById('appSettingsLocalEcho').checked,
       tabTwoRows: document.getElementById('appSettingsTabTwoRows').checked,
       // Claude CLI settings
@@ -11760,6 +12044,11 @@ class CodemanApp {
       await this.saveModelConfigFromSettings();
 
       this.showToast('Settings saved', 'success');
+
+      // Show tunnel-specific feedback if toggled on
+      if (settings.tunnelEnabled) {
+        this.showToast('Tunnel starting — QR code will appear when ready...', 'info');
+      }
     } catch (err) {
       // Server save failed but localStorage succeeded
       this.showToast('Settings saved locally', 'warning');

@@ -1,0 +1,19 @@
+[Unit]
+Description=Codeman Cloudflare Tunnel
+After=network-online.target codeman-web.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c 'exec %h/.local/bin/cloudflared tunnel --url https://localhost:3000 --no-tls-verify 2>&1 | tee %h/.codeman/tunnel.log'
+Restart=always
+RestartSec=5
+KillMode=process
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=codeman-tunnel
+
+[Install]
+WantedBy=default.target

@@ -12,12 +12,14 @@
 
 import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
 import fastifyCompress from '@fastify/compress';
+import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, statSync, mkdirSync, writeFileSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { homedir, totalmem, freemem, loadavg, cpus } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { Session, ClaudeMessage, type BackgroundTask, type RalphTrackerState, type RalphTodoItem, type ActiveBashTool } from '../session.js';
@@ -34,6 +36,7 @@ import { subagentWatcher, type SubagentInfo, type SubagentToolCall, type Subagen
 import { imageWatcher } from '../image-watcher.js';
 import { TranscriptWatcher } from '../transcript-watcher.js';
 import { TeamWatcher } from '../team-watcher.js';
+import { TunnelManager } from '../tunnel-manager.js';
 import { v4 as uuidv4 } from 'uuid';
 import { createRequire } from 'node:module';
 import { RunSummaryTracker } from '../run-summary.js';
@@ -89,6 +92,7 @@ import {
   SubagentParentMapSchema,
   InteractiveRespawnSchema,
   RespawnEnableSchema,
+  isValidWorkingDir,
 } from './schemas.js';
 import { StaleExpirationMap } from '../utils/index.js';
 import { MAX_CONCURRENT_SESSIONS } from '../config/map-limits.js';
@@ -141,6 +145,16 @@ const MAX_SESSION_NAME_LENGTH = 128;
 const MAX_HOOK_DATA_SIZE = 8 * 1024;
 // Maximum screenshot upload size (10MB)
 const MAX_SCREENSHOT_SIZE = 10 * 1024 * 1024;
+// Auth session cookie TTL (24h — matches autonomous run length)
+const AUTH_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+// Auth session cookie name
+const AUTH_COOKIE_NAME = 'codeman_session';
+// Max concurrent auth sessions
+const MAX_AUTH_SESSIONS = 100;
+// Max failed auth attempts per IP before rate-limiting
+const AUTH_FAILURE_MAX = 10;
+// Failed auth attempt tracking window (15 minutes)
+const AUTH_FAILURE_WINDOW_MS = 15 * 60 * 1000;
 // Screenshots directory
 const SCREENSHOTS_DIR = join(homedir(), '.codeman', 'screenshots');
 // Stats collection interval (2 seconds)
@@ -408,6 +422,9 @@ export class WebServer extends EventEmitter {
     detected: (event: ImageDetectedEvent) => void;
     error: (error: Error, sessionId?: string) => void;
   } | null = null;
+  private tunnelManager: TunnelManager = new TunnelManager();
+  private authSessions: StaleExpirationMap<string, string> | null = null;
+  private authFailures: StaleExpirationMap<string, number> | null = null;
   private teamWatcher: TeamWatcher = new TeamWatcher();
   private teamWatcherHandlers: {
     teamCreated: (config: unknown) => void;
@@ -457,6 +474,20 @@ export class WebServer extends EventEmitter {
 
     // Set up team watcher listeners
     this.setupTeamWatcherListeners();
+
+    // Set up tunnel manager listeners
+    this.tunnelManager.on('started', (data: { url: string }) => {
+      this.broadcast('tunnel:started', data);
+    });
+    this.tunnelManager.on('stopped', () => {
+      this.broadcast('tunnel:stopped', {});
+    });
+    this.tunnelManager.on('error', (message: string) => {
+      this.broadcast('tunnel:error', { message });
+    });
+    this.tunnelManager.on('progress', (data: { message: string }) => {
+      this.broadcast('tunnel:progress', data);
+    });
   }
 
   /**
@@ -582,17 +613,82 @@ export class WebServer extends EventEmitter {
       threshold: 1024,
     });
 
-    // Optional HTTP Basic Auth (set CODEMAN_PASSWORD env var to enable)
+    // Cookie plugin (needed for auth session tokens)
+    await this.app.register(fastifyCookie);
+
+    // Optional HTTP Basic Auth with session cookies and rate limiting
     const authPassword = process.env.CODEMAN_PASSWORD;
     if (authPassword) {
       const authUsername = process.env.CODEMAN_USERNAME || 'admin';
       const expectedHeader = 'Basic ' + Buffer.from(`${authUsername}:${authPassword}`).toString('base64');
+
+      // Session token store — active sessions extend TTL on access
+      this.authSessions = new StaleExpirationMap<string, string>({
+        ttlMs: AUTH_SESSION_TTL_MS,
+        refreshOnGet: true,
+      });
+
+      // Failure counter per IP — decay naturally after 15 minutes
+      this.authFailures = new StaleExpirationMap<string, number>({
+        ttlMs: AUTH_FAILURE_WINDOW_MS,
+        refreshOnGet: false,
+      });
+
       this.app.addHook('onRequest', (req, reply, done) => {
-        const auth = req.headers.authorization;
-        if (auth === expectedHeader) {
+        // Hook events come from local Claude Code hooks (curl from localhost) — no auth headers available.
+        // Safe: validated by HookEventSchema, only triggers broadcasts.
+        if (req.url === '/api/hook-event' && req.method === 'POST') {
           done();
           return;
         }
+
+        const clientIp = req.ip;
+
+        // Rate limit: reject if too many failed attempts from this IP
+        const failures = this.authFailures!.get(clientIp) ?? 0;
+        if (failures >= AUTH_FAILURE_MAX) {
+          reply.code(429).send('Too Many Requests — try again later');
+          return;
+        }
+
+        // Check session cookie first (avoids re-sending credentials on every request)
+        const sessionToken = req.cookies[AUTH_COOKIE_NAME];
+        if (sessionToken && this.authSessions!.has(sessionToken)) {
+          done();
+          return;
+        }
+
+        // Check Basic Auth header
+        const auth = req.headers.authorization;
+        if (auth === expectedHeader) {
+          // Issue session token cookie so browser doesn't need to re-send credentials
+          const token = randomBytes(32).toString('hex');
+
+          // Evict oldest if at capacity (prevent unbounded growth)
+          if (this.authSessions!.size >= MAX_AUTH_SESSIONS) {
+            const oldestKey = this.authSessions!.keys().next().value;
+            if (oldestKey !== undefined) this.authSessions!.delete(oldestKey);
+          }
+
+          this.authSessions!.set(token, clientIp);
+
+          // Reset failure count on successful auth
+          this.authFailures!.delete(clientIp);
+
+          reply.setCookie(AUTH_COOKIE_NAME, token, {
+            httpOnly: true,
+            secure: this.https,
+            sameSite: 'lax',
+            maxAge: AUTH_SESSION_TTL_MS / 1000, // seconds
+            path: '/',
+          });
+          done();
+          return;
+        }
+
+        // Auth failed — track failure count
+        this.authFailures!.set(clientIp, failures + 1);
+
         reply.header('WWW-Authenticate', 'Basic realm="Codeman"');
         reply.code(401).send('Unauthorized');
       });
@@ -667,6 +763,23 @@ export class WebServer extends EventEmitter {
 
     // API Routes
     this.app.get('/api/status', async () => this.getLightState());
+
+    this.app.get('/api/tunnel/status', async () => this.tunnelManager.getStatus());
+
+    this.app.get('/api/tunnel/qr', async (_req, reply) => {
+      const url = this.tunnelManager.getUrl();
+      if (!url) {
+        return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Tunnel not running'));
+      }
+      try {
+        const QRCode = require('qrcode');
+        const svg: string = await QRCode.toString(url, { type: 'svg', margin: 2, width: 256 });
+        // Return as data URI to avoid Fastify compress issues with SVG content-type
+        return { svg };
+      } catch (err) {
+        return reply.code(500).send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err)));
+      }
+    });
 
     // OpenCode CLI availability check
     this.app.get('/api/opencode/status', async () => {
@@ -3426,6 +3539,18 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
           console.log('Image watcher stopped via settings change');
         }
 
+        // Handle tunnel toggle dynamically
+        if ('tunnelEnabled' in settings) {
+          const tunnelEnabled = settings.tunnelEnabled as boolean;
+          if (tunnelEnabled && !this.tunnelManager.isRunning()) {
+            this.tunnelManager.start(this.port, this.https);
+            console.log('Tunnel started via settings change');
+          } else if (!tunnelEnabled && this.tunnelManager.isRunning()) {
+            this.tunnelManager.stop();
+            console.log('Tunnel stopped via settings change');
+          }
+        }
+
         return { success: true };
       } catch (err) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
@@ -3744,10 +3869,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         }
       }
 
-      // Start transcript watching if transcript_path is provided
+      // Start transcript watching if transcript_path is provided and safe
       if (data && 'transcript_path' in data) {
         const transcriptPath = String(data.transcript_path);
-        if (transcriptPath) {
+        if (transcriptPath && isValidWorkingDir(transcriptPath)) {
           this.startTranscriptWatcher(sessionId, transcriptPath);
         }
       }
@@ -5329,6 +5454,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       console.log('Image watcher disabled by user settings');
     }
 
+    // Start Cloudflare tunnel if enabled in settings
+    if (await this.isTunnelEnabled()) {
+      this.tunnelManager.start(this.port, this.https);
+      console.log('Cloudflare tunnel starting on boot (enabled in settings)');
+    }
+
     // Start team watcher for agent team awareness (always on — lightweight polling)
     this.teamWatcher.start();
     console.log('Team watcher started - monitoring ~/.claude/teams/ for agent team activity');
@@ -5369,6 +5500,23 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       }
     }
     return false; // Default disabled (matches UI default)
+  }
+
+  /**
+   * Check if Cloudflare tunnel is enabled in settings (default: false)
+   */
+  private async isTunnelEnabled(): Promise<boolean> {
+    const settingsPath = join(homedir(), '.codeman', 'settings.json');
+    try {
+      const content = await fs.readFile(settingsPath, 'utf-8');
+      const settings = JSON.parse(content);
+      return settings.tunnelEnabled ?? false;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.error('Failed to read tunnel setting:', err);
+      }
+    }
+    return false;
   }
 
   private async restoreMuxSessions(): Promise<void> {
@@ -5694,6 +5842,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Stop team watcher
     this.teamWatcher.stop();
 
+    // Stop tunnel
+    this.tunnelManager.stop();
+    this.tunnelManager.removeAllListeners();
+
     // Destroy file stream manager (clears cleanup timer and kills remaining tail processes)
     fileStreamManager.destroy();
 
@@ -5715,8 +5867,16 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.transcriptWatchers.clear();
     this.sessionListenerRefs.clear();
     this.scheduledRuns.clear();
-    // Dispose StaleExpirationMap (stops internal cleanup timer)
+    // Dispose StaleExpirationMaps (stops internal cleanup timers)
     this.lastTerminalEventTime.dispose();
+    if (this.authSessions) {
+      this.authSessions.dispose();
+      this.authSessions = null;
+    }
+    if (this.authFailures) {
+      this.authFailures.dispose();
+      this.authFailures = null;
+    }
     this.activePlanOrchestrators.clear();
     this.cleaningUp.clear();
 

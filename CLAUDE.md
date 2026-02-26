@@ -35,13 +35,13 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart codeman-web`
 
-**Version**: 0.1651 (must match `package.json`)
+**Version**: 0.1652 (must match `package.json`)
 
 ## Project Overview
 
 Codeman is a Claude Code session manager with web interface and autonomous Ralph Loop. Spawns Claude CLI via PTY, streams via SSE, supports respawn cycling for 24+ hour autonomous runs.
 
-**Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, node-pty, xterm.js
+**Tech Stack**: TypeScript (ES2022/NodeNext, strict mode), Node.js, Fastify, node-pty, xterm.js. Supports both Claude Code and OpenCode AI CLIs via pluggable CLI resolvers.
 
 **TypeScript Strictness** (see `tsconfig.json`): `noUnusedLocals`, `noUnusedParameters`, `noImplicitReturns`, `noImplicitOverride`, `noFallthroughCasesInSwitch`, `allowUnreachableCode: false`, `allowUnusedLabels: false`. Note: `src/tui` is excluded from compilation (legacy/deprecated code path).
 
@@ -128,10 +128,10 @@ journalctl --user -u codeman-web -f
 | `src/prompts/*.ts` | Agent prompts (research-agent, planner) |
 | `src/templates/claude-md.ts` | CLAUDE.md generation for new cases |
 | `src/cli.ts` | Command-line interface handlers |
-| `src/web/server.ts` | Fastify REST API + SSE at `/api/events` (~99 routes) |
+| `src/web/server.ts` | Fastify REST API + SSE at `/api/events` (~101 routes) |
 | `src/web/schemas.ts` | Zod v4 validation schemas with path/env security allowlists |
 | `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~17K lines) |
-| `src/types.ts` | All TypeScript interfaces (~100 types, ~1400 lines) |
+| `src/types.ts` | All TypeScript interfaces (~70 type/interface/enum defs, ~1450 lines) |
 
 **Large files** (>50KB): `app.js`, `ralph-tracker.ts`, `respawn-controller.ts`, `session.ts`, `subagent-watcher.ts` — these contain complex state machines; read `docs/respawn-state-machine.md` before modifying.
 
@@ -163,6 +163,7 @@ journalctl --user -u codeman-web -f
 | `token-validation.ts` | Token count parsing and validation |
 | `regex-patterns.ts` | Shared regex patterns for parsing |
 | `type-safety.ts` | `assertNever()` for exhaustive switch/case type checking |
+| `opencode-cli-resolver.ts` | Resolve OpenCode CLI binary across install paths |
 
 ### Data Flow
 
@@ -191,9 +192,20 @@ journalctl --user -u codeman-web -f
 
 **Subagent-session correlation**: Session parses Task tool output via `BashToolParser` → `SubagentWatcher` discovers new agent → calls `session.findTaskDescriptionNear()` to match description for window title.
 
+### Frontend Files
+
+| File | Purpose |
+|------|---------|
+| `src/web/public/index.html` | HTML entry point with inline critical CSS and async vendor loading |
+| `src/web/public/app.js` | Core UI: xterm.js, tab management, subagent windows, mobile support (~17.5K lines) |
+| `src/web/public/styles.css` | Main styling (dark theme, layout, components) |
+| `src/web/public/mobile.css` | Responsive overrides for screens <1024px (loaded conditionally via `media` attribute) |
+| `src/web/public/upload.html` | Screenshot upload page served at `/upload.html` |
+| `src/web/public/vendor/` | Self-hosted xterm.js + addons (eliminates CDN latency) |
+
 ### Frontend Architecture (`app.js`)
 
-The frontend is a single 16K-line vanilla JS file with these key systems:
+The frontend is a single ~17.5K-line vanilla JS file with these key systems:
 
 | System | Key Classes/Functions | Purpose |
 |--------|----------------------|---------|
@@ -215,6 +227,9 @@ The frontend is a single 16K-line vanilla JS file with these key systems:
 ### Security
 
 - **HTTP Basic Auth**: Optional via `CODEMAN_USERNAME`/`CODEMAN_PASSWORD` env vars
+- **Session cookies**: After Basic Auth, a 24h session cookie (`codeman_session`) is issued so credentials aren't re-sent on every request. Active sessions auto-extend. SSE works via same-origin cookie (`EventSource` can't send custom headers).
+- **Rate limiting**: 10 failed auth attempts per IP triggers 429 rejection (15-minute decay window). Manual `StaleExpirationMap` counter — no `@fastify/rate-limit` needed.
+- **Hook bypass**: `/api/hook-event` POST is exempt from auth — Claude Code hooks curl this from localhost and can't present credentials. Safe: validated by `HookEventSchema`, only triggers broadcasts.
 - **CORS**: Restricted to localhost only
 - **Security headers**: X-Content-Type-Options, X-Frame-Options, CSP; HSTS if HTTPS
 - **Path validation** (`schemas.ts`): Strict allowlist regex, no shell metacharacters, no traversal, must be absolute
@@ -239,7 +254,7 @@ The frontend is a single 16K-line vanilla JS file with these key systems:
 
 ### API Route Categories
 
-~99 routes in `server.ts:buildServer()`. Key groups:
+~101 routes in `server.ts:buildServer()`. Key groups:
 
 | Group | Prefix | Count | Key endpoints |
 |-------|--------|-------|---------------|
@@ -473,3 +488,50 @@ Run `npx vitest run test/memory-leak-prevention.test.ts` to verify patterns.
 **Modifying mobile behavior**: Mobile singletons (`MobileDetection`, `KeyboardHandler`, `SwipeHandler`, `KeyboardAccessoryBar`) all have `init()`/`cleanup()` lifecycle. KeyboardHandler uses `visualViewport` API for iOS keyboard detection (100px threshold for address bar drift). All mobile handlers are re-initialized after SSE reconnect to prevent stale closures.
 
 **Adding a file watcher**: Use `ImageWatcher` as a template pattern — chokidar with `awaitWriteFinish`, burst throttling (max 20/10s), debouncing (200ms), and auto-ignore of `node_modules/.git/dist/`.
+
+## Tunnel Setup (Remote Access)
+
+Access Codeman from mobile/remote devices via Cloudflare quick tunnel.
+
+```
+Browser → Cloudflare Edge (HTTPS) → cloudflared → localhost:3000
+```
+
+**Prerequisites**: `cloudflared` installed (`cloudflared --version`), `CODEMAN_PASSWORD` set in environment.
+
+### Quick Start
+
+```bash
+# Via CLI
+./scripts/tunnel.sh start      # Start tunnel, prints public URL
+./scripts/tunnel.sh url        # Show current URL
+./scripts/tunnel.sh stop       # Stop tunnel
+
+# Via web UI: Settings → Tunnel → Toggle On
+```
+
+### systemd Service (Persistent)
+
+```bash
+# Install and enable
+cp scripts/codeman-tunnel.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now codeman-tunnel
+
+# Check logs
+journalctl --user -u codeman-tunnel -f
+```
+
+### Auth Flow
+
+1. First request → browser shows Basic Auth prompt (username: `admin` or `CODEMAN_USERNAME`)
+2. On success → server issues `codeman_session` HttpOnly cookie (24h TTL, auto-extends on activity)
+3. Subsequent requests → cookie authenticates silently (no more prompts)
+4. SSE works automatically — `EventSource` sends same-origin cookies
+5. 10 failed attempts per IP → 429 rate limit (15-minute decay)
+
+### Security Requirements
+
+- **Always set `CODEMAN_PASSWORD`** before exposing via tunnel — without it, anyone with the URL has full access
+- Session cookies are `Secure` when using `--https` flag; through Cloudflare tunnel without `--https`, cookies are non-Secure but traffic is still encrypted end-to-end via Cloudflare
+- `/api/hook-event` bypasses auth (localhost-only Claude Code hooks need unauthenticated access)

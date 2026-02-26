@@ -1685,11 +1685,11 @@ body {
 }
 
 .welcome-title {
-  font-size: 1.75rem;
-  font-weight: 600;
+  font-size: 3.5rem;
+  font-weight: 700;
   color: var(--accent-hover);
   margin-bottom: 1rem;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.03em;
 }
 
 .welcome-desc {
@@ -1703,6 +1703,7 @@ body {
   display: flex;
   gap: 1rem;
   justify-content: center;
+  flex-wrap: wrap;
   margin-top: 2rem;
   margin-bottom: 1.5rem;
 }
@@ -1744,6 +1745,52 @@ body {
   color: #a7f3d0;
 }
 
+.welcome-btn-tunnel {
+  background: linear-gradient(135deg, #2a1a3e 0%, #6d28d9 100%);
+  border-color: #7c3aed;
+  color: #ddd6fe;
+}
+
+.welcome-btn-tunnel:hover {
+  background: linear-gradient(135deg, #6d28d9 0%, #7c3aed 100%);
+  box-shadow: 0 0 12px rgba(124, 58, 237, 0.4);
+  color: #fff;
+}
+
+.welcome-btn-tunnel.active {
+  background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+  border-color: #34d399;
+  color: #ecfdf5;
+}
+
+.welcome-btn-tunnel.active:hover {
+  background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+  box-shadow: 0 0 12px rgba(52, 211, 153, 0.4);
+  color: #fff;
+}
+
+.welcome-btn-tunnel.connecting {
+  background: linear-gradient(135deg, #1e1e3a 0%, #4338ca 100%);
+  border-color: #6366f1;
+  color: #c7d2fe;
+  cursor: wait;
+}
+
+.tunnel-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255,255,255,0.25);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: tunnel-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes tunnel-spin {
+  to { transform: rotate(360deg); }
+}
+
 .welcome-btn-ralph {
   background: linear-gradient(135deg, #3d3415 0%, #4a3f1a 100%);
   border-color: #6b5a1e;
@@ -1755,6 +1802,50 @@ body {
   border-color: #8b7a2e;
   box-shadow: 0 0 12px rgba(234, 179, 8, 0.4);
   color: #fcd34d;
+}
+
+.welcome-qr {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+
+.welcome-qr.visible {
+  display: flex;
+}
+
+.welcome-qr-inner {
+  background: #fff;
+  border-radius: 10px;
+  padding: 12px;
+  width: 140px;
+  height: 140px;
+  transition: width 0.25s ease, height 0.25s ease, padding 0.25s ease;
+}
+
+.welcome-qr-inner svg {
+  width: 100%;
+  height: 100%;
+}
+
+.welcome-qr.expanded .welcome-qr-inner {
+  width: 280px;
+  height: 280px;
+  padding: 16px;
+}
+
+.welcome-qr-url {
+  margin-top: 8px;
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  word-break: break-all;
+  max-width: 320px;
+  text-align: center;
 }
 
 .welcome-hint {
@@ -1804,13 +1895,14 @@ body {
 
 .version-display {
   font-family: 'SF Mono', Monaco, monospace;
-  font-size: 0.7rem;
+  font-size: 0.6rem;
   color: var(--text-muted);
-  padding: 0.2rem 0.5rem;
+  padding: 0.15rem 0.4rem;
   background: rgba(255, 255, 255, 0.05);
   border-radius: 3px;
   cursor: default;
   user-select: none;
+  opacity: 0.7;
 }
 
 .toolbar-group {
@@ -2081,9 +2173,15 @@ body {
   border-color: var(--red);
 }
 
-/* Voice Input Button */
+/* Voice Input Button — desktop only (mobile uses .btn-voice-mobile) */
 .btn-toolbar.btn-voice {
   padding: 0.3rem 0.5rem;
+}
+
+@media (max-width: 1023px) {
+  .toolbar-center .btn-toolbar.btn-voice {
+    display: none !important;
+  }
 }
 
 .btn-toolbar.btn-voice:hover {

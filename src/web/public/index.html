@@ -238,10 +238,18 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Run Claude Code
             </button>
+            <button class="welcome-btn welcome-btn-tunnel" id="welcomeTunnelBtn" onclick="app.toggleTunnelFromWelcome()">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+              Cloudflare Tunnel
+            </button>
             <button class="welcome-btn welcome-btn-opencode" onclick="app.setRunMode('opencode'); app.runOpenCode()">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Run OpenCode
             </button>
+          </div>
+          <div class="welcome-qr" id="welcomeQr" onclick="app.toggleWelcomeQrSize()">
+            <div class="welcome-qr-inner" id="welcomeQrInner"></div>
+            <div class="welcome-qr-url" id="welcomeQrUrl"></div>
           </div>
           <p class="welcome-hint">Or press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> to start</p>
         </div>
@@ -379,10 +387,6 @@
       </div>
 
       <div class="toolbar-center">
-        <span class="version-display" id="versionDisplay" title="Codeman version">v0.0.0</span>
-      </div>
-
-      <div class="toolbar-right">
         <button class="btn-toolbar btn-sm btn-voice" id="voiceInputBtn" onclick="VoiceInput.toggle()"
                 title="Voice input (Ctrl+Shift+V)" aria-label="Start voice input" aria-pressed="false">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -392,6 +396,10 @@
             <line x1="8" y1="23" x2="16" y2="23"/>
           </svg>
         </button>
+      </div>
+
+      <div class="toolbar-right">
+        <span class="version-display" id="versionDisplay" title="Codeman version">v0.0.0</span>
       </div>
     </footer>
 
@@ -934,6 +942,22 @@
                 </label>
               </div>
 
+              <!-- Remote Access Section -->
+              <div class="settings-section-header">Remote Access</div>
+              <div class="settings-item" title="Expose Codeman via Cloudflare Tunnel for remote access">
+                <span class="settings-item-label">Cloudflare Tunnel</span>
+                <label class="switch switch-sm">
+                  <input type="checkbox" id="appSettingsTunnelEnabled">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div class="settings-item" id="tunnelUrlRow" style="display:none">
+                <span class="settings-item-label">Tunnel URL</span>
+                <div style="display:flex; align-items:center; gap:8px">
+                  <span id="tunnelUrlDisplay" class="settings-item-value" style="cursor:pointer; text-decoration:underline; font-family:monospace; font-size:12px" title="Click to copy"></span>
+                  <button class="btn-icon-sm" id="tunnelQrBtn" onclick="app.showTunnelQR()" title="Show QR code" style="font-size:16px; padding:2px 6px; background:none; border:1px solid var(--border); border-radius:4px; cursor:pointer; color:var(--text-secondary)">⊞</button>
+                </div>
+              </div>
 
             </div>
           </div>
