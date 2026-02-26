@@ -5440,7 +5440,7 @@ class ClaudemanApp {
           <span class="tab-status ${status}" aria-hidden="true"></span>
           <span class="tab-info">
             <span class="tab-name-row">
-              ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : ''}
+              ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : ''}
               <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
             </span>
             ${showFolder ? `<span class="tab-folder">\u{1F4C1} ${this.escapeHtml(folderName)}</span>` : ''}
@@ -9507,6 +9507,48 @@ class ClaudemanApp {
     }
   }
 
+  async runOpenCode() {
+    const caseName = document.getElementById('quickStartCase').value || 'testcase';
+
+    this.terminal.clear();
+    this.terminal.writeln(`\x1b[1;32m Starting OpenCode session in ${caseName}...\x1b[0m`);
+    this.terminal.writeln('');
+
+    try {
+      // Check if OpenCode is available
+      const statusRes = await fetch('/api/opencode/status');
+      const status = await statusRes.json();
+      if (!status.available) {
+        this.terminal.writeln('\x1b[1;31m OpenCode CLI not found.\x1b[0m');
+        this.terminal.writeln('\x1b[90m Install with: curl -fsSL https://opencode.ai/install | bash\x1b[0m');
+        return;
+      }
+
+      // Quick-start with opencode mode (auto-allow tools by default)
+      const res = await fetch('/api/quick-start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          caseName,
+          mode: 'opencode',
+          openCodeConfig: { autoAllowTools: true },
+        })
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Failed to start OpenCode');
+
+      // Switch to the new session
+      if (data.sessionId) {
+        this.activeSessionId = data.sessionId;
+        await this.selectSession(data.sessionId);
+      }
+
+      this.terminal.focus();
+    } catch (err) {
+      this.terminal.writeln(`\x1b[1;31m Error: ${err.message}\x1b[0m`);
+    }
+  }
+
   // ========== Directory Input ==========
 
   toggleDirInput() {
@@ -10263,8 +10305,8 @@ class ClaudemanApp {
 
     this.editingSessionId = sessionId;
 
-    // Reset to Respawn tab
-    this.switchOptionsTab('respawn');
+    // Reset to an appropriate tab — Summary for OpenCode (Respawn/Ralph are Claude-only)
+    this.switchOptionsTab(session.mode === 'opencode' ? 'summary' : 'respawn');
 
     // Update respawn status display and buttons
     const respawnStatus = document.getElementById('sessionRespawnStatus');
@@ -10291,6 +10333,11 @@ class ClaudemanApp {
     } else {
       respawnSection.style.display = 'none';
     }
+
+    // Hide Claude-specific options for OpenCode sessions
+    const isOpenCode = session.mode === 'opencode';
+    const claudeOnlyEls = document.querySelectorAll('[data-claude-only]');
+    claudeOnlyEls.forEach(el => { el.style.display = isOpenCode ? 'none' : ''; });
 
     // Reset duration presets to default (unlimited)
     this.selectDurationPreset('');

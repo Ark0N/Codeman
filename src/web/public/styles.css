@@ -616,6 +616,11 @@ body {
   color: var(--yellow);
 }
 
+.session-tab .tab-mode.opencode {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+}
+
 /* Timer Banner - Compact */
 .timer-banner {
   display: flex;
@@ -1727,6 +1732,19 @@ body {
   color: #fff;
 }
 
+.welcome-btn-opencode {
+  background: linear-gradient(135deg, #0a2e2a 0%, #0d4a40 100%);
+  border-color: #10b981;
+  color: #6ee7b7;
+}
+
+.welcome-btn-opencode:hover {
+  background: linear-gradient(135deg, #0d4a40 0%, #116a58 100%);
+  border-color: #34d399;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
+  color: #a7f3d0;
+}
+
 .welcome-btn-ralph {
   background: linear-gradient(135deg, #3d3415 0%, #4a3f1a 100%);
   border-color: #6b5a1e;
@@ -1874,6 +1892,20 @@ body {
   border-color: #3d7a3d;
   box-shadow: 0 0 8px rgba(34, 139, 34, 0.4);
   color: #a8d8a8;
+}
+
+.btn-toolbar.btn-opencode {
+  background: linear-gradient(135deg, #0a2e2a 0%, #0d4a40 100%);
+  border-color: #10b981;
+  color: #6ee7b7;
+  font-weight: 500;
+}
+
+.btn-toolbar.btn-opencode:hover {
+  background: linear-gradient(135deg, #0d4a40 0%, #116a58 100%);
+  border-color: #34d399;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+  color: #a7f3d0;
 }
 
 /* Stop button - hidden on desktop, shown on mobile */

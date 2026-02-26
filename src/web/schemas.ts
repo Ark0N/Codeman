@@ -34,12 +34,13 @@ const safePathSchema = z.string().max(1000).refine(isValidWorkingDir, {
 // ========== Env Var Allowlist ==========
 
 /** Allowlisted env var key prefixes */
-const ALLOWED_ENV_PREFIXES = ['CLAUDE_CODE_'];
+const ALLOWED_ENV_PREFIXES = ['CLAUDE_CODE_', 'OPENCODE_'];
 
 /** Env var keys that are always blocked (security-sensitive) */
 const BLOCKED_ENV_KEYS = new Set([
   'PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'NODE_OPTIONS',
   'CLAUDEMAN_MUX_NAME', 'CLAUDEMAN_TMUX',
+  'OPENCODE_SERVER_PASSWORD',  // Security-sensitive: server auth password
 ]);
 
 /** Validate that an env var key is allowed */
@@ -54,7 +55,7 @@ const safeEnvOverridesSchema = z.record(z.string(), z.string()).optional().refin
     if (!val) return true;
     return Object.keys(val).every(isAllowedEnvKey);
   },
-  { message: 'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_* keys are allowed.' },
+  { message: 'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_* and OPENCODE_* keys are allowed.' },
 );
 
 // ========== Session Routes ==========
@@ -63,11 +64,21 @@ const safeEnvOverridesSchema = z.record(z.string(), z.string()).optional().refin
  * Schema for POST /api/sessions
  * Creates a new session with optional working directory, mode, and name.
  */
+/** Schema for OpenCode-specific configuration */
+const OpenCodeConfigSchema = z.object({
+  model: z.string().max(100).regex(/^[a-zA-Z0-9._\-/]+$/).optional(),
+  autoAllowTools: z.boolean().optional(),
+  continueSession: z.string().max(100).regex(/^[a-zA-Z0-9_-]+$/).optional(),
+  forkSession: z.boolean().optional(),
+  configContent: z.string().max(10000).optional(),
+}).optional();
+
 export const CreateSessionSchema = z.object({
   workingDir: safePathSchema.optional(),
-  mode: z.enum(['claude', 'shell']).optional(),
+  mode: z.enum(['claude', 'shell', 'opencode']).optional(),
   name: z.string().max(100).optional(),
   envOverrides: safeEnvOverridesSchema,
+  openCodeConfig: OpenCodeConfigSchema,
 });
 
 /**
@@ -106,7 +117,8 @@ export const CreateCaseSchema = z.object({
  */
 export const QuickStartSchema = z.object({
   caseName: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format. Use only letters, numbers, hyphens, underscores.').optional(),
-  mode: z.enum(['claude', 'shell']).optional(),
+  mode: z.enum(['claude', 'shell', 'opencode']).optional(),
+  openCodeConfig: OpenCodeConfigSchema,
 });
 
 // ========== Hook Events ==========

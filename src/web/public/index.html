@@ -238,6 +238,10 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Run Claude
             </button>
+            <button class="welcome-btn welcome-btn-opencode" onclick="app.runOpenCode()">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 12h8M12 8v8"/></svg>
+              Run OpenCode
+            </button>
             <button class="welcome-btn welcome-btn-ralph" onclick="app.showRalphWizard()">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
               Start Ralph Loop Wizard
@@ -317,6 +321,9 @@
             <input type="number" id="shellCount" class="tab-count-input" value="1" min="1" max="20" readonly>
             <button class="tab-count-btn" onclick="app.incrementShellCount()">+</button>
           </div>
+          <button class="btn-toolbar btn-opencode" onclick="app.runOpenCode()" title="Run OpenCode (multi-model)">
+            Run OC
+          </button>
           <div class="case-select-group">
             <select id="quickStartCase" class="toolbar-select" title="Select case">
               <option value="testcase">testcase</option>
@@ -496,9 +503,9 @@
         </div>
         <!-- Modal Tabs -->
         <div class="modal-tabs">
-          <button class="modal-tab-btn active" data-tab="respawn" onclick="app.switchOptionsTab('respawn')">Respawn</button>
-          <button class="modal-tab-btn" data-tab="context" onclick="app.switchOptionsTab('context')">Context</button>
-          <button class="modal-tab-btn" data-tab="ralph" onclick="app.switchOptionsTab('ralph')">Ralph / Todo</button>
+          <button class="modal-tab-btn active" data-tab="respawn" data-claude-only onclick="app.switchOptionsTab('respawn')">Respawn</button>
+          <button class="modal-tab-btn" data-tab="context" data-claude-only onclick="app.switchOptionsTab('context')">Context</button>
+          <button class="modal-tab-btn" data-tab="ralph" data-claude-only onclick="app.switchOptionsTab('ralph')">Ralph / Todo</button>
           <button class="modal-tab-btn" data-tab="summary" onclick="app.switchOptionsTab('summary')">Summary</button>
         </div>
         <div class="modal-body">

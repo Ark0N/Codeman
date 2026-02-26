@@ -667,6 +667,15 @@ export class WebServer extends EventEmitter {
     // API Routes
     this.app.get('/api/status', async () => this.getLightState());
 
+    // OpenCode CLI availability check
+    this.app.get('/api/opencode/status', async () => {
+      const { isOpenCodeAvailable, resolveOpenCodeDir } = await import('../utils/opencode-cli-resolver.js');
+      return {
+        available: isOpenCodeAvailable(),
+        path: resolveOpenCodeDir(),
+      };
+    });
+
     // Cleanup stale sessions from state file
     this.app.post('/api/cleanup-state', async () => {
       const cleaned = this.cleanupStaleSessions();
@@ -837,13 +846,24 @@ export class WebServer extends EventEmitter {
         await updateCaseEnvVars(workingDir, body.envOverrides);
       }
 
+      // Check OpenCode availability if requested
+      if (body.mode === 'opencode') {
+        const { isOpenCodeAvailable } = await import('../utils/opencode-cli-resolver.js');
+        if (!isOpenCodeAvailable()) {
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash');
+        }
+      }
+
       const globalNice = await this.getGlobalNiceConfig();
       const modelConfig = await this.getModelConfig();
-      const model = (body.mode !== 'shell') ? modelConfig?.defaultModel : undefined;
+      const mode = body.mode || 'claude';
+      const model = mode === 'opencode'
+        ? body.openCodeConfig?.model
+        : (mode !== 'shell' ? modelConfig?.defaultModel : undefined);
       const claudeModeConfig = await this.getClaudeModeConfig();
       const session = new Session({
         workingDir,
-        mode: body.mode || 'claude',
+        mode,
         name: body.name || '',
         mux: this.mux,
         useMux: true,
@@ -851,6 +871,7 @@ export class WebServer extends EventEmitter {
         model,
         claudeMode: claudeModeConfig.claudeMode,
         allowedTools: claudeModeConfig.allowedTools,
+        openCodeConfig: mode === 'opencode' ? body.openCodeConfig : undefined,
       });
 
       this.sessions.set(session.id, session);
@@ -1654,7 +1675,7 @@ export class WebServer extends EventEmitter {
         }
 
         await session.startInteractive();
-        getLifecycleLog().log({ event: 'started', sessionId: id, name: session.name, mode: 'claude' });
+        getLifecycleLog().log({ event: 'started', sessionId: id, name: session.name, mode: session.mode });
         this.broadcast('session:interactive', { id });
         this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
 
@@ -2004,7 +2025,7 @@ export class WebServer extends EventEmitter {
 
         // Start interactive session
         await session.startInteractive();
-        getLifecycleLog().log({ event: 'started', sessionId: id, name: session.name, mode: 'claude', reason: 'interactive_respawn' });
+        getLifecycleLog().log({ event: 'started', sessionId: id, name: session.name, mode: session.mode, reason: 'interactive_respawn' });
         this.broadcast('session:interactive', { id });
         this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
 
@@ -2598,7 +2619,15 @@ export class WebServer extends EventEmitter {
       if (!result.success) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, result.error.issues[0]?.message ?? 'Validation failed');
       }
-      const { caseName = 'testcase', mode = 'claude' } = result.data;
+      const { caseName = 'testcase', mode = 'claude', openCodeConfig } = result.data;
+
+      // Check OpenCode availability if requested
+      if (mode === 'opencode') {
+        const { isOpenCodeAvailable } = await import('../utils/opencode-cli-resolver.js');
+        if (!isOpenCodeAvailable()) {
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash');
+        }
+      }
 
       const casePath = join(casesDir, caseName);
 
@@ -2622,7 +2651,10 @@ export class WebServer extends EventEmitter {
           writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
 
           // Write .claude/settings.local.json with hooks for desktop notifications
-          await writeHooksConfig(casePath);
+          // (Claude-specific — OpenCode uses its own plugin system)
+          if (mode !== 'opencode') {
+            await writeHooksConfig(casePath);
+          }
 
           this.broadcast('case:created', { name: caseName, path: casePath });
         } catch (err) {
@@ -2634,7 +2666,9 @@ export class WebServer extends EventEmitter {
       // Apply global Nice priority config and model config from settings
       const niceConfig = await this.getGlobalNiceConfig();
       const qsModelConfig = await this.getModelConfig();
-      const qsModel = (mode !== 'shell') ? qsModelConfig?.defaultModel : undefined;
+      const qsModel = mode === 'opencode'
+        ? openCodeConfig?.model
+        : (mode !== 'shell' ? qsModelConfig?.defaultModel : undefined);
       const qsClaudeModeConfig = await this.getClaudeModeConfig();
       const session = new Session({
         workingDir: casePath,
@@ -2645,6 +2679,7 @@ export class WebServer extends EventEmitter {
         model: qsModel,
         claudeMode: qsClaudeModeConfig.claudeMode,
         allowedTools: qsClaudeModeConfig.allowedTools,
+        openCodeConfig: mode === 'opencode' ? openCodeConfig : undefined,
       });
 
       // Auto-detect completion phrase from CLAUDE.md BEFORE broadcasting
@@ -2671,9 +2706,10 @@ export class WebServer extends EventEmitter {
           getLifecycleLog().log({ event: 'started', sessionId: session.id, name: session.name, mode: 'shell' });
           this.broadcast('session:interactive', { id: session.id, mode: 'shell' });
         } else {
+          // Both 'claude' and 'opencode' modes use startInteractive()
           await session.startInteractive();
-          getLifecycleLog().log({ event: 'started', sessionId: session.id, name: session.name, mode: 'claude' });
-          this.broadcast('session:interactive', { id: session.id });
+          getLifecycleLog().log({ event: 'started', sessionId: session.id, name: session.name, mode });
+          this.broadcast('session:interactive', { id: session.id, mode });
         }
         this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
 
