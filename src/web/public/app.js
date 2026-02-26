@@ -2878,6 +2878,7 @@ class ClaudemanApp {
     // Share a single settings fetch between both consumers
     const settingsPromise = fetch('/api/settings').then(r => r.ok ? r.json() : null).catch(() => null);
     this.loadQuickStartCases(null, settingsPromise);
+    this._initRunMode();
     this.setupEventListeners();
     // Mobile: ensure button taps register even when keyboard is visible.
     // On mobile, tapping a button while the soft keyboard is up causes the
@@ -9286,8 +9287,69 @@ class ClaudemanApp {
   }
 
   async quickStart() {
-    // Alias for backward compatibility
+    return this.run();
+  }
+
+  /** Run using the selected mode (Claude Code or OpenCode) */
+  async run() {
+    const mode = this._runMode || 'claude';
+    if (mode === 'opencode') {
+      return this.runOpenCode();
+    }
     return this.runClaude();
+  }
+
+  /** Get/set the run mode, persisted in localStorage */
+  get runMode() { return this._runMode || 'claude'; }
+
+  setRunMode(mode) {
+    this._runMode = mode;
+    try { localStorage.setItem('claudeman_runMode', mode); } catch {}
+    this._applyRunMode();
+    // Close menu
+    document.getElementById('runModeMenu')?.classList.remove('active');
+  }
+
+  toggleRunModeMenu(e) {
+    e?.stopPropagation();
+    const menu = document.getElementById('runModeMenu');
+    if (!menu) return;
+    menu.classList.toggle('active');
+    // Update selected state
+    menu.querySelectorAll('.run-mode-option').forEach(btn => {
+      btn.classList.toggle('selected', btn.dataset.mode === this.runMode);
+    });
+    // Close on click outside
+    if (menu.classList.contains('active')) {
+      const close = (ev) => {
+        if (!menu.contains(ev.target)) {
+          menu.classList.remove('active');
+          document.removeEventListener('click', close);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', close), 0);
+    }
+  }
+
+  _applyRunMode() {
+    const mode = this.runMode;
+    const runBtn = document.getElementById('runBtn');
+    const gearBtn = runBtn?.nextElementSibling;
+    const label = document.getElementById('runBtnLabel');
+    if (runBtn) {
+      runBtn.className = `btn-toolbar btn-run mode-${mode}`;
+    }
+    if (gearBtn) {
+      gearBtn.className = `btn-toolbar btn-run-gear mode-${mode}`;
+    }
+    if (label) {
+      label.textContent = mode === 'opencode' ? 'Run OC' : 'Run';
+    }
+  }
+
+  _initRunMode() {
+    try { this._runMode = localStorage.getItem('claudeman_runMode') || 'claude'; } catch { this._runMode = 'claude'; }
+    this._applyRunMode();
   }
 
   // Tab count stepper functions

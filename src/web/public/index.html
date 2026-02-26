@@ -232,15 +232,11 @@
       <div class="welcome-overlay" id="welcomeOverlay">
         <div class="welcome-content">
           <h1 class="welcome-title">Claudeman</h1>
-          <p class="welcome-desc">Manage Claude Code in persistent tmux sessions.</p>
+          <p class="welcome-desc">Manage AI in persistent tmux sessions.</p>
           <div class="welcome-actions">
-            <button class="welcome-btn welcome-btn-primary" onclick="app.runClaude()">
+            <button class="welcome-btn welcome-btn-primary" onclick="app.run()">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run Claude
-            </button>
-            <button class="welcome-btn welcome-btn-opencode" onclick="app.runOpenCode()">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 12h8M12 8v8"/></svg>
-              Run OpenCode
+              Run
             </button>
             <button class="welcome-btn welcome-btn-ralph" onclick="app.showRalphWizard()">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
@@ -299,12 +295,25 @@
     <!-- Bottom Toolbar -->
     <footer class="toolbar">
       <div class="toolbar-left">
-        <!-- Run Claude -->
+        <!-- Run AI -->
         <div class="toolbar-group">
-          <button class="btn-toolbar btn-claude" onclick="app.runClaude()" title="Run Claude (Ctrl+Enter)">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            Run Claude
-          </button>
+          <div class="run-btn-group">
+            <button class="btn-toolbar btn-run" id="runBtn" onclick="app.run()" title="Run (Ctrl+Enter)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              <span id="runBtnLabel">Run</span>
+            </button>
+            <button class="btn-toolbar btn-run-gear" onclick="app.toggleRunModeMenu(event)" title="Select AI backend">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <div class="run-mode-menu" id="runModeMenu">
+              <button class="run-mode-option" data-mode="claude" onclick="app.setRunMode('claude')">
+                <span class="run-mode-dot claude"></span>Claude Code
+              </button>
+              <button class="run-mode-option" data-mode="opencode" onclick="app.setRunMode('opencode')">
+                <span class="run-mode-dot opencode"></span>OpenCode
+              </button>
+            </div>
+          </div>
           <div class="tab-count-group" title="Instance count">
             <button class="tab-count-btn" onclick="app.decrementTabCount()">−</button>
             <input type="number" id="tabCount" class="tab-count-input" value="1" min="1" max="20" readonly>
@@ -321,9 +330,6 @@
             <input type="number" id="shellCount" class="tab-count-input" value="1" min="1" max="20" readonly>
             <button class="tab-count-btn" onclick="app.incrementShellCount()">+</button>
           </div>
-          <button class="btn-toolbar btn-opencode" onclick="app.runOpenCode()" title="Run OpenCode (multi-model)">
-            Run OC
-          </button>
           <div class="case-select-group">
             <select id="quickStartCase" class="toolbar-select" title="Select case">
               <option value="testcase">testcase</option>
