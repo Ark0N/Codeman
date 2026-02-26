@@ -1389,6 +1389,11 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
+      // Ralph tracker is not supported for opencode sessions
+      if (session.mode === 'opencode') {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Ralph tracker is not supported for opencode sessions');
+      }
+
       // Handle reset first (before other config)
       if (reset) {
         if (reset === 'full') {
@@ -1668,7 +1673,8 @@ export class WebServer extends EventEmitter {
 
       try {
         // Auto-detect completion phrase from CLAUDE.md BEFORE starting (only if globally enabled and not explicitly disabled by user)
-        if (this.store.getConfig().ralphEnabled && !session.ralphTracker.autoEnableDisabled) {
+        // Ralph tracker is not supported for opencode sessions
+        if (session.mode !== 'opencode' && this.store.getConfig().ralphEnabled && !session.ralphTracker.autoEnableDisabled) {
           autoConfigureRalph(session, session.workingDir, () => {});
           if (!session.ralphTracker.enabled) {
             session.ralphTracker.enable();
@@ -1881,6 +1887,11 @@ export class WebServer extends EventEmitter {
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Session not found');
       }
 
+      // Respawn is not supported for opencode sessions
+      if (session.mode === 'opencode') {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Respawn is not supported for opencode sessions');
+      }
+
       // Create or get existing controller
       let controller = this.respawnControllers.get(id);
       if (!controller) {
@@ -2017,7 +2028,8 @@ export class WebServer extends EventEmitter {
 
       try {
         // Auto-detect completion phrase from CLAUDE.md BEFORE starting (only if globally enabled and not explicitly disabled by user)
-        if (this.store.getConfig().ralphEnabled && !session.ralphTracker.autoEnableDisabled) {
+        // Ralph tracker is not supported for opencode sessions
+        if (session.mode !== 'opencode' && this.store.getConfig().ralphEnabled && !session.ralphTracker.autoEnableDisabled) {
           autoConfigureRalph(session, session.workingDir, () => {});
           if (!session.ralphTracker.enabled) {
             session.ralphTracker.enable();
@@ -4219,8 +4231,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.runSummaryTrackers.set(session.id, summaryTracker);
     summaryTracker.recordSessionStarted(session.mode, session.workingDir);
 
-    // Set working directory for Ralph tracker to auto-load @fix_plan.md
-    session.ralphTracker.setWorkingDir(session.workingDir);
+    // Set working directory for Ralph tracker to auto-load @fix_plan.md (not supported for opencode sessions)
+    if (session.mode !== 'opencode') {
+      session.ralphTracker.setWorkingDir(session.workingDir);
+    }
 
     // Start watching for new images in this session's working directory (if enabled globally and per-session)
     if (await this.isImageWatcherEnabled() && session.imageWatcherEnabled) {
@@ -5422,20 +5436,22 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
                   console.log(`[Server] Restored tokens for session ${session.id}: ${totalTokens} tokens, $${(savedState.totalCost ?? 0).toFixed(4)}`);
                 }
               }
-              // Ralph / Todo tracker
-              if (savedState.ralphAutoEnableDisabled) {
-                session.ralphTracker.disableAutoEnable();
-                console.log(`[Server] Restored Ralph auto-enable disabled for session ${session.id}`);
-              } else if (savedState.ralphEnabled) {
-                // If Ralph was enabled and not explicitly disabled, allow re-enabling on restart
-                session.ralphTracker.enableAutoEnable();
-              }
-              if (savedState.ralphEnabled) {
-                session.ralphTracker.enable();
-                if (savedState.ralphCompletionPhrase) {
-                  session.ralphTracker.startLoop(savedState.ralphCompletionPhrase);
+              // Ralph / Todo tracker (not supported for opencode sessions)
+              if (session.mode !== 'opencode') {
+                if (savedState.ralphAutoEnableDisabled) {
+                  session.ralphTracker.disableAutoEnable();
+                  console.log(`[Server] Restored Ralph auto-enable disabled for session ${session.id}`);
+                } else if (savedState.ralphEnabled) {
+                  // If Ralph was enabled and not explicitly disabled, allow re-enabling on restart
+                  session.ralphTracker.enableAutoEnable();
                 }
-                console.log(`[Server] Restored Ralph tracker for session ${session.id} (phrase: ${savedState.ralphCompletionPhrase || 'none'})`);
+                if (savedState.ralphEnabled) {
+                  session.ralphTracker.enable();
+                  if (savedState.ralphCompletionPhrase) {
+                    session.ralphTracker.startLoop(savedState.ralphCompletionPhrase);
+                  }
+                  console.log(`[Server] Restored Ralph tracker for session ${session.id} (phrase: ${savedState.ralphCompletionPhrase || 'none'})`);
+                }
               }
               // Nice priority config
               if (savedState.niceEnabled !== undefined) {
@@ -5448,8 +5464,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
               if (savedState.flickerFilterEnabled !== undefined) {
                 session.flickerFilterEnabled = savedState.flickerFilterEnabled;
               }
-              // Respawn controller
-              if (savedState.respawnEnabled && savedState.respawnConfig) {
+              // Respawn controller (not supported for opencode sessions)
+              if (session.mode !== 'opencode' && savedState.respawnEnabled && savedState.respawnConfig) {
                 try {
                   this.restoreRespawnController(session, savedState.respawnConfig, 'state.json');
                 } catch (err) {
@@ -5458,8 +5474,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
               }
             }
 
-            // Fallback: restore respawn from mux-sessions.json if state.json didn't have it
-            if (!this.respawnControllers.has(session.id) && muxSession.respawnConfig?.enabled) {
+            // Fallback: restore respawn from mux-sessions.json if state.json didn't have it (not supported for opencode)
+            if (session.mode !== 'opencode' && !this.respawnControllers.has(session.id) && muxSession.respawnConfig?.enabled) {
               try {
                 this.restoreRespawnController(session, muxSession.respawnConfig, 'mux-sessions.json');
               } catch (err) {
@@ -5468,7 +5484,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
             }
 
             // Fallback: restore Ralph state from state-inner.json if not already set and not explicitly disabled
-            if (!session.ralphTracker.enabled && !session.ralphTracker.autoEnableDisabled) {
+            // Ralph tracker is not supported for opencode sessions
+            if (session.mode !== 'opencode' && !session.ralphTracker.enabled && !session.ralphTracker.autoEnableDisabled) {
               const ralphState = this.store.getRalphState(muxSession.sessionId);
               if (ralphState?.loop?.enabled) {
                 session.ralphTracker.restoreState(ralphState.loop, ralphState.todos);
@@ -5476,8 +5493,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
               }
             }
 
-            // Fallback: auto-detect completion phrase from CLAUDE.md
-            if (session.ralphTracker.enabled && !session.ralphTracker.loopState.completionPhrase) {
+            // Fallback: auto-detect completion phrase from CLAUDE.md (not supported for opencode)
+            if (session.mode !== 'opencode' && session.ralphTracker.enabled && !session.ralphTracker.loopState.completionPhrase) {
               const claudeMdPath = join(session.workingDir, 'CLAUDE.md');
               const completionPhrase = extractCompletionPhrase(claudeMdPath);
               if (completionPhrase) {

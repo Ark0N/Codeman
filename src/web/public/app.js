@@ -4056,6 +4056,11 @@ class ClaudemanApp {
           this.terminal.scrollToBottom();
           // Re-position local echo overlay at new prompt location
           this._localEchoOverlay?.rerender();
+          // Resize PTY to match actual browser dimensions (critical for OpenCode
+          // TUI sessions that render at fixed 120x40 until told the real size)
+          if (this.activeSessionId) {
+            this.sendResize(this.activeSessionId);
+          }
         }
       } catch (err) {
         console.error('needsRefresh reload failed:', err);
@@ -6190,6 +6195,14 @@ class ClaudemanApp {
     const name = this.getSessionName(session);
     const sessionNameEl = document.getElementById('closeConfirmSessionName');
     sessionNameEl.textContent = name;
+
+    // Update kill button text based on session mode
+    const killTitle = document.getElementById('closeConfirmKillTitle');
+    if (killTitle) {
+      killTitle.textContent = session.mode === 'opencode'
+        ? 'Kill Tmux & OpenCode'
+        : 'Kill Tmux & Claude Code';
+    }
 
     document.getElementById('closeConfirmModal').classList.add('active');
   }
@@ -9629,9 +9642,9 @@ class ClaudemanApp {
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Failed to start OpenCode');
 
-      // Switch to the new session
+      // Switch to the new session (don't pre-set activeSessionId — selectSession
+      // early-returns when IDs match, skipping buffer load and sendResize)
       if (data.sessionId) {
-        this.activeSessionId = data.sessionId;
         await this.selectSession(data.sessionId);
       }
 
@@ -10461,13 +10474,28 @@ class ClaudemanApp {
     document.getElementById('respawnPresetSelect').value = '';
     document.getElementById('presetDescriptionHint').textContent = '';
 
-    // Populate Ralph Wiggum form with current session values
-    const ralphState = this.ralphStates.get(sessionId);
-    this.populateRalphForm({
-      enabled: ralphState?.loop?.enabled ?? session.ralphLoop?.enabled ?? false,
-      completionPhrase: ralphState?.loop?.completionPhrase || session.ralphLoop?.completionPhrase || '',
-      maxIterations: ralphState?.loop?.maxIterations || session.ralphLoop?.maxIterations || 0,
-    });
+    // Hide Ralph/Todo tab and Respawn tab for opencode sessions (not supported)
+    const ralphTabBtn = document.querySelector('#sessionOptionsModal .modal-tab-btn[data-tab="ralph"]');
+    const respawnTabBtn = document.querySelector('#sessionOptionsModal .modal-tab-btn[data-tab="respawn"]');
+    if (isOpenCode) {
+      if (ralphTabBtn) ralphTabBtn.style.display = 'none';
+      if (respawnTabBtn) respawnTabBtn.style.display = 'none';
+      // Default to Context tab for opencode sessions since Respawn is hidden
+      this.switchOptionsTab('context');
+    } else {
+      if (ralphTabBtn) ralphTabBtn.style.display = '';
+      if (respawnTabBtn) respawnTabBtn.style.display = '';
+    }
+
+    // Populate Ralph Wiggum form with current session values (skip for opencode)
+    if (!isOpenCode) {
+      const ralphState = this.ralphStates.get(sessionId);
+      this.populateRalphForm({
+        enabled: ralphState?.loop?.enabled ?? session.ralphLoop?.enabled ?? false,
+        completionPhrase: ralphState?.loop?.completionPhrase || session.ralphLoop?.completionPhrase || '',
+        maxIterations: ralphState?.loop?.maxIterations || session.ralphLoop?.maxIterations || 0,
+      });
+    }
 
     const modal = document.getElementById('sessionOptionsModal');
     modal.classList.add('active');

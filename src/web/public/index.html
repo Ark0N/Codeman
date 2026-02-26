@@ -782,10 +782,10 @@
         <div class="close-options">
           <button class="close-option" onclick="app.confirmCloseSession(false)">
             <span class="close-option-title">Remove Tab</span>
-            <span class="close-option-desc">Screen session keeps running in background</span>
+            <span class="close-option-desc">Tmux session keeps running in background</span>
           </button>
           <button class="close-option close-option-danger" onclick="app.confirmCloseSession(true)">
-            <span class="close-option-title">Kill Tmux & Claude Code</span>
+            <span class="close-option-title" id="closeConfirmKillTitle">Kill Tmux & Claude Code</span>
             <span class="close-option-desc">Terminate the session completely</span>
           </button>
         </div>

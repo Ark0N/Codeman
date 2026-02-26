@@ -560,26 +560,78 @@ html.mobile-init .file-browser-panel {
     color: #fff;
   }
 
-  /* Primary action button - Run Claude (matches arrow button blue) */
-  .btn-toolbar.btn-claude {
+  /* Run button group — split button with dropdown */
+  .run-btn-group {
+    display: flex;
     flex: 0 0 auto;
-    padding: 0 0.75rem !important;
-    background: #1e3a5f;
-    border: 1px solid rgba(59, 130, 246, 0.3);
-    color: #93c5fd;
-    font-weight: 500;
   }
 
-  .btn-toolbar.btn-claude:hover,
-  .btn-toolbar.btn-claude:active {
+  .btn-toolbar.btn-run {
+    flex: 0 0 auto;
+    padding: 0 0.6rem !important;
+    font-weight: 500;
+    border-radius: 4px 0 0 4px !important;
+    border-right: none !important;
+  }
+
+  .btn-toolbar.btn-run svg {
+    width: 10px;
+    height: 10px;
+    margin-right: 3px;
+  }
+
+  .btn-toolbar.btn-run-gear {
+    flex: 0 0 auto;
+    padding: 0 0.35rem !important;
+    min-width: unset !important;
+    border-radius: 0 4px 4px 0 !important;
+    border-left: 1px solid rgba(255,255,255,0.15) !important;
+  }
+
+  .btn-toolbar.btn-run-gear svg {
+    width: 10px;
+    height: 10px;
+  }
+
+  /* Claude mode colors on mobile */
+  .btn-toolbar.btn-run.mode-claude,
+  .btn-toolbar.btn-run-gear.mode-claude {
+    background: #1e3a5f;
+    border-color: rgba(59, 130, 246, 0.3);
+    color: #93c5fd;
+  }
+
+  .btn-toolbar.btn-run.mode-claude:active,
+  .btn-toolbar.btn-run-gear.mode-claude:active {
     background: #2563eb;
     border-color: rgba(59, 130, 246, 0.5);
   }
 
-  .btn-toolbar.btn-claude svg {
-    width: 10px;
-    height: 10px;
-    margin-right: 4px;
+  /* OpenCode mode colors on mobile */
+  .btn-toolbar.btn-run.mode-opencode,
+  .btn-toolbar.btn-run-gear.mode-opencode {
+    background: #0a2e2a;
+    border-color: rgba(16, 185, 129, 0.3);
+    color: #6ee7b7;
+  }
+
+  .btn-toolbar.btn-run.mode-opencode:active,
+  .btn-toolbar.btn-run-gear.mode-opencode:active {
+    background: #0d4a40;
+    border-color: rgba(16, 185, 129, 0.5);
+  }
+
+  /* Run mode dropdown menu — positioned above toolbar on mobile */
+  .run-mode-menu {
+    bottom: 100%;
+    left: 0;
+    margin-bottom: 6px;
+    min-width: 140px;
+  }
+
+  .run-mode-option {
+    padding: 10px 12px;
+    font-size: 0.8rem;
   }
 
   /* Stop button - visible on mobile, icon-only */
@@ -617,17 +669,10 @@ html.mobile-init .file-browser-panel {
     display: none !important;
   }
 
-  /* Simplified toolbar layout - Run Claude, Shell, and Case */
+  /* Simplified toolbar layout — Run, Shell, and Case */
   .toolbar-left .toolbar-group:first-child {
     width: 100%;
     gap: 8px;
-  }
-
-  .btn-toolbar.btn-claude {
-    flex: 0 0 auto;
-    min-width: fit-content;
-    white-space: nowrap;
-    padding: 0 10px !important;
   }
 
   .btn-toolbar.btn-shell {
@@ -643,7 +688,7 @@ html.mobile-init .file-browser-panel {
     flex: 1 1 0 !important;
     min-width: 0;
     padding: 0 8px !important;
-    order: 2; /* Between Run Claude and Run Shell */
+    order: 2; /* Between Run and Run Shell */
     overflow: hidden;
     justify-content: center;
     gap: 4px;
@@ -656,7 +701,7 @@ html.mobile-init .file-browser-panel {
     white-space: nowrap;
   }
 
-  /* Mobile case settings gear button - next to Run Claude */
+  /* Mobile case settings gear button - next to Run */
   .btn-case-settings-mobile {
     display: inline-flex !important;
     align-items: center;
@@ -669,7 +714,7 @@ html.mobile-init .file-browser-panel {
     color: #9ca3af;
     cursor: pointer;
     flex-shrink: 0;
-    order: 1; /* Next to Run Claude */
+    order: 1; /* Next to Run */
   }
 
   .btn-case-settings-mobile:active {

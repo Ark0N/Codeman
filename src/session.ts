@@ -1218,6 +1218,7 @@ export class Session extends EventEmitter {
     };
 
     // Forward to Ralph tracker to detect Ralph loops and todos
+    // (opencode sessions already returned early at line 1209)
     if (this._ralphTracker.enabled || !this._ralphTracker.autoEnableDisabled) {
       this._ralphTracker.processCleanData(getCleanData());
     }
