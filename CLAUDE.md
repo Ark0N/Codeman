@@ -35,7 +35,7 @@ When user says "COM":
 1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
 2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart claudeman-web`
 
-**Version**: 0.1646 (must match `package.json`)
+**Version**: 0.1647 (must match `package.json`)
 
 ## Project Overview
 
@@ -130,10 +130,16 @@ journalctl --user -u claudeman-web -f
 | `src/cli.ts` | Command-line interface handlers |
 | `src/web/server.ts` | Fastify REST API + SSE at `/api/events` (~99 routes) |
 | `src/web/schemas.ts` | Zod v4 validation schemas with path/env security allowlists |
-| `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~16K lines) |
+| `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~17K lines) |
 | `src/types.ts` | All TypeScript interfaces (~100 types, ~1400 lines) |
 
 **Large files** (>50KB): `app.js`, `ralph-tracker.ts`, `respawn-controller.ts`, `session.ts`, `subagent-watcher.ts` — these contain complex state machines; read `docs/respawn-state-machine.md` before modifying.
+
+### Local Packages
+
+| Package | Purpose |
+|---------|---------|
+| `packages/xterm-zerolag-input/` | Instant keystroke feedback overlay for xterm.js — eliminates perceived input latency over high-RTT connections. Source of truth for `LocalEchoOverlay`; a copy is embedded in `app.js`. Build: `npm run build` (tsup). |
 
 ### Config Files (`src/config/`)
 
@@ -408,6 +414,14 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **First-load optimization** | `docs/first-load-optimization-plan.md` |
 | **Dead code audit** | `docs/cleanup-findings.md` |
 | **Mobile test suite** | `mobile-test/README.md` |
+| **Voice input** | `docs/voice-input-plan.md` |
+| **Background keystroke forwarding** | `docs/background-keystroke-forwarding-merged-plan.md` |
+| **Respawn improvements** | `docs/respawn-improvement-plan.md` |
+| **Ralph improvements** | `docs/ralph-improvement-plan.md`, `docs/ralph-phase1-implementation.md` |
+| **Performance investigation** | `docs/performance-investigation-report.md` |
+| **Plan improvements** | `docs/plan-improvement-roadmap.md` |
+| **TypeScript improvements** | `docs/typescript-improvement-suggestions.md` |
+| **OpenCode integration** | `docs/opencode-integration.md` |
 
 ## Scripts
 
@@ -419,7 +433,8 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | `scripts/postinstall.js` | npm postinstall hook for setup |
 | `scripts/data-generator.sh` | Generate test data for development |
 | `scripts/test-tail-links.sh` | Test clickable file links in tail output |
-| `scripts/capture-subagent-screenshots.mjs` | Capture subagent screenshots/GIFs for README (uses real Claude sessions) |
+| `scripts/capture-subagent-screenshots.mjs` | Capture subagent screenshots for README (uses real Claude sessions) |
+| `scripts/capture-subagent-gif.mjs` | Capture subagent GIF animations for README |
 | `scripts/mobile-screenshot.mjs` | Capture mobile UI screenshots |
 | `scripts/ralph-wizard-start.mjs` | Automate Ralph Loop startup via headless browser |
 | `scripts/ralph-wizard-prod.mjs` | Production Ralph wizard with HTTPS support |

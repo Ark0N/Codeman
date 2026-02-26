@@ -1,9 +1,11 @@
 # OpenCode Integration Plan for Claudeman
 
 > **Author**: Claude Opus 4.6 | **Date**: 2026-02-26
-> **Status**: Draft — NOT pushed to GitHub
+> **Status**: Draft — Re-reviewed, MVP scope finalized. NOT pushed to GitHub
 > **Saved at**: `docs/opencode-integration.md`
 > **Related**: `plan.json` (48-task TDD breakdown, also not pushed)
+> **Reviewed**: 2026-02-26 — 4-agent team review (arch, parsing, respawn, API). See [Section 21: Review Findings](#21-review-findings)
+> **Re-reviewed**: 2026-02-26 — 4-agent team re-review (types, parsing, respawn, API). See [Section 22: Re-Review Findings](#22-re-review-findings)
 
 ---
 
@@ -19,8 +21,8 @@
 8. [Phase 3: Tmux Spawn Integration](#8-phase-3-tmux-spawn-integration)
 9. [Phase 4: Output Parsing & Idle Detection](#9-phase-4-output-parsing--idle-detection)
 10. [Phase 5: API Routes & Frontend UI](#10-phase-5-api-routes--frontend-ui)
-11. [Phase 6: Respawn & Ralph Loop Adaptation](#11-phase-6-respawn--ralph-loop-adaptation)
-12. [Phase 7: Hooks & Plugin Bridge](#12-phase-7-hooks--plugin-bridge)
+11. [Phase 6: Hooks & Plugin Bridge](#11-phase-6-hooks--plugin-bridge) *(was Phase 7 — reordered, see review)*
+12. [Phase 7: Respawn & Ralph Loop Adaptation](#12-phase-7-respawn--ralph-loop-adaptation) *(was Phase 6 — reordered, see review)*
 13. [Phase 8: OpenCode Server API Integration (Advanced)](#13-phase-8-opencode-server-api-integration-advanced)
 14. [Files to Modify](#14-files-to-modify)
 15. [Files to Create](#15-files-to-create)
@@ -29,10 +31,12 @@
 18. [Testing Strategy](#18-testing-strategy)
 19. [Open Questions & Decisions](#19-open-questions--decisions)
 20. [Implementation Order](#20-implementation-order)
-21. [Appendix A: OpenCode CLI Reference](#appendix-a-opencode-cli-reference)
-22. [Appendix B: OpenCode Plugin Events](#appendix-b-opencode-plugin-events)
-23. [Appendix C: OpenCode Permission Config](#appendix-c-opencode-permission-config)
-24. [Appendix D: Current Claudeman Session Spawn Flow (Annotated)](#appendix-d-current-claudeman-session-spawn-flow-annotated)
+21. [Review Findings](#21-review-findings)
+22. [Re-Review Findings](#22-re-review-findings)
+23. [Appendix A: OpenCode CLI Reference](#appendix-a-opencode-cli-reference)
+24. [Appendix B: OpenCode Plugin Events](#appendix-b-opencode-plugin-events)
+25. [Appendix C: OpenCode Permission Config](#appendix-c-opencode-permission-config)
+26. [Appendix D: Current Claudeman Session Spawn Flow (Annotated)](#appendix-d-current-claudeman-session-spawn-flow-annotated)
 
 ---
 
@@ -52,6 +56,22 @@ Extend the existing `SessionMode` type from `'claude' | 'shell'` to `'claude' | 
 | **B: Server API bridge** | Run `opencode serve` + proxy its API through Claudeman | High | Structured data, session control, token tracking |
 
 **Recommended path**: Start with Strategy A (TUI-in-tmux) since it mirrors the existing Claude Code pattern exactly. Then layer Strategy B on top for advanced features like structured token tracking and model switching.
+
+### Scope Decision: MVP First, Claude-Coupled Systems Later
+
+> **Decision (2026-02-26)**: The first integration ships **spawn + render + basic UI only**. The following Claude-coupled systems are **explicitly out of scope** for the initial integration and should NOT be attempted until OpenCode sessions are stable and we have real PTY output data to calibrate against:
+>
+> | System | Why Excluded | Prerequisite |
+> |--------|-------------|--------------|
+> | **Token tracking** | Claude-specific status line format. OpenCode uses different format inside Bubble Tea TUI. 75+ model providers = different cost/token semantics per model. | Phase 8 server API or verified TUI regex |
+> | **Respawn controller** | 3,500 lines, 13 states, deeply coupled to Claude's output patterns (`Worked for Xm Xs`, spinner chars, `❯` prompt, `/clear`/`/init` commands). Entire cycle logic is Claude-specific. | Plugin bridge `session.idle` event verified + Phase 0 PTY data |
+> | **Ralph Loop** | Depends entirely on `<promise>PHRASE</promise>` tags and `---RALPH_STATUS---` blocks — custom Claude protocols that don't exist in OpenCode. Would be a broken timeout-based prompt repeater. | Alternative completion signaling mechanism |
+> | **Ralph Tracker** | Parses Claude-specific output: `<promise>` tags, `TodoWrite` tool detection, `RALPH_STATUS` blocks, `@fix_plan.md` workflow. None exist in OpenCode. | OpenCode-native equivalent signals |
+> | **Circuit breaker** | Signals (`consecutiveNoProgress`, `consecutiveTestsFailure`, `BLOCKED`) all come from `RALPH_STATUS` blocks. No OpenCode equivalent. | Ralph Tracker adaptation |
+> | **Hooks plugin bridge** | Plugin event names are speculative/unverified. Requires Phase 0 validation that hasn't happened. | Phase 0 plugin verification |
+> | **AI idle checker** | Spawns `claude -p` for analysis. Won't work if only OpenCode is installed. | Claude CLI availability or `opencode run` fallback |
+>
+> **What ships in the MVP**: Phases 0-3 (spawn in tmux, render in xterm.js) + Phase 5 (API routes, mode selector, tab badges, create/kill sessions). Users can interact with OpenCode manually — type prompts, see output, manage sessions from the Claudeman web UI. This alone is the core value: multi-model AI sessions in one management interface.
 
 ### Why OpenCode?
 
@@ -259,17 +279,19 @@ Structured data for: token tracking, session management, model switching
 
 ### Phase Breakdown
 
-| Phase | Scope | Effort | Dependencies |
-|-------|-------|--------|-------------|
-| **0** | Install OpenCode, manual tmux validation | 30 min | None |
-| **1** | Type system extension + (optional) backend abstraction | Small | None |
-| **2** | OpenCode CLI resolver | Small | Phase 1 |
-| **3** | TmuxManager: spawn `opencode` in tmux | Medium | Phase 2 |
-| **4** | Output parsing, idle detection, prompt detection | Medium | Phase 3 |
-| **5** | API routes + frontend UI (mode selector, badges) | Medium | Phase 4 |
-| **6** | Respawn controller + Ralph Loop adaptation | Medium | Phase 5 |
-| **7** | Hooks & plugin bridge | Medium | Phase 5 |
-| **8** | OpenCode server API bridge (optional, advanced) | Large | Phase 5 |
+| Phase | Scope | Effort | Dependencies | MVP? |
+|-------|-------|--------|-------------|------|
+| **0** | Install OpenCode, manual tmux validation | 30 min | None | **YES** |
+| **1** | Type system extension + (optional) backend abstraction | Small | None | **YES** |
+| **2** | OpenCode CLI resolver | Small | Phase 1 | **YES** |
+| **3** | TmuxManager: spawn `opencode` in tmux | Medium | Phase 2 | **YES** |
+| **4** | Output parsing, idle detection, prompt detection | Medium | Phase 3 | **DEFERRED** — only basic ready detection needed for MVP |
+| **5** | API routes + frontend UI (mode selector, badges) | Medium | Phase 3 | **YES** |
+| **6** | Hooks & plugin bridge | Medium | Phase 5 | **DEFERRED** — unverified plugin API |
+| **7** | Respawn controller + Ralph Loop adaptation | Medium | Phase 6 | **DEFERRED** — Claude-coupled, needs real PTY data |
+| **8** | OpenCode server API bridge (optional, advanced) | Large | Phase 5 | **DEFERRED** — future enhancement |
+
+> **MVP scope**: Phases 0, 1, 2, 3, 5 only. Phase 4 reduced to basic `waitForOpenCodeReady()` only (no idle/working/token detection). Phases 6-8 deferred until MVP is stable.
 
 ### What Stays Exactly the Same (Zero Changes)
 
@@ -289,20 +311,20 @@ These systems work identically for OpenCode sessions:
 
 ### What Needs Adaptation
 
-| System | Current (Claude-specific) | OpenCode Equivalent |
-|--------|---------------------------|---------------------|
-| CLI binary | `claude` | `opencode` |
-| CLI args | `--dangerously-skip-permissions --session-id <id>` | `--model <m>` + `opencode.json` for permissions |
-| Prompt marker | `❯` (U+276F) | Bubble Tea TUI prompt (different rendering) |
-| Working indicator | Spinner + "Thinking...", "Writing..." keywords | Bubble Tea spinner (different characters) |
-| Completion message | `"Worked for Xm Xs"` | Different format (needs empirical testing) |
-| Token display | Status line: `123.4k tokens` | TUI status: `~27s · 275.9k tokens` |
-| Slash commands | `/clear`, `/compact`, `/init`, `/update` | `/clear`, `/model`, `/sessions`, `/compact` |
-| Hooks | `.claude/settings.local.json` shell commands | JS/TS plugin system in `.opencode/plugins/` |
-| Subagent detection | `BashToolParser` + `SubagentWatcher` | Different tool output format |
-| Ralph completion | `<promise>PHRASE</promise>` tags | Not applicable (needs alternative) |
-| Hooks events | `permission_prompt`, `idle_prompt`, `stop` | `permission.asked`, `session.idle`, `session.status` |
-| Auto-compact | Claudeman sends `/compact` at token threshold | OpenCode has built-in `compaction.auto: true` |
+| System | Current (Claude-specific) | OpenCode Equivalent | MVP? |
+|--------|---------------------------|---------------------|------|
+| CLI binary | `claude` | `opencode` | **YES** |
+| CLI args | `--dangerously-skip-permissions --session-id <id>` | `--model <m>` + `opencode.json` for permissions | **YES** |
+| Prompt marker | `❯` (U+276F) | Bubble Tea TUI prompt (different rendering) | DEFERRED |
+| Working indicator | Spinner + "Thinking...", "Writing..." keywords | Bubble Tea spinner (different characters) | DEFERRED |
+| Completion message | `"Worked for Xm Xs"` | Different format (needs empirical testing) | DEFERRED |
+| Token display | Status line: `123.4k tokens` | TUI status: `~27s · 275.9k tokens` | DEFERRED |
+| Slash commands | `/clear`, `/compact`, `/init`, `/update` | `/clear`, `/model`, `/sessions`, `/compact` | DEFERRED |
+| Hooks | `.claude/settings.local.json` shell commands | JS/TS plugin system in `.opencode/plugins/` | DEFERRED |
+| Subagent detection | `BashToolParser` + `SubagentWatcher` | Different tool output format | DEFERRED |
+| Ralph completion | `<promise>PHRASE</promise>` tags | Not applicable (needs alternative) | DEFERRED |
+| Hooks events | `permission_prompt`, `idle_prompt`, `stop` | `permission.asked`, `session.idle`, `session.status` | DEFERRED |
+| Auto-compact | Claudeman sends `/compact` at token threshold | OpenCode has built-in `compaction.auto: true` | DEFERRED |
 
 ---
 
@@ -358,6 +380,18 @@ tmux kill-session -t "test-opencode"
 - [ ] Non-interactive `opencode run` produces JSON output
 - [ ] xterm.js renders the TUI (manually test by piping PTY output)
 
+### Additional Validation Items (from review)
+
+> **[REVIEW]** Multiple reviewers emphasized that Phase 0 findings are critical prerequisites for Phases 4-7. Do not write any code until these pass.
+
+- [ ] **Capture raw PTY output** from an OpenCode session for idle detection calibration — record 5+ minutes of working vs idle output to measure actual patterns
+- [ ] **Verify `writeViaMux()` input delivery** — Bubble Tea (Go) may handle `\r` (Enter) differently than Ink (React). Test `tmux send-keys -l "Hello"` followed by `tmux send-keys Enter` and confirm prompt submission works
+- [ ] **Measure TUI redraw frequency** during idle state — does Bubble Tea emit cursor/timer redraws when the AI model is idle? This determines whether output-silence detection is viable at all
+- [ ] **Test mouse protocol output** — Bubble Tea can enable mouse reporting (`CSI ?1000h`/`CSI ?1006h`), generating PTY output on mouse movements. This would defeat silence-based idle detection
+- [ ] **Install a test OpenCode plugin** — write a minimal `.opencode/plugins/test.js` plugin, verify which events actually fire, confirm exact event names and callback signatures (the event names in Appendix B are speculative)
+- [ ] **Test OpenCode auto-compaction behavior** — trigger compaction during a session, observe TUI output pattern (could appear as "working" to idle detector)
+- [ ] **Check `opencode --version`** — record version for compatibility tracking. OpenCode is rapidly evolving; CLI flags and plugin API may change between versions
+
 ### Critical Finding: xterm.js Compatibility
 
 OpenCode uses Bubble Tea (Go's charmbracelet framework), which renders using:
@@ -391,16 +425,48 @@ There are two paths (both represented in the codebase):
 
 **Recommendation**: Start with Option A, refactor to Option B later if a third backend is ever needed.
 
+### Prerequisite Refactors (from review)
+
+> **[REVIEW C5]** `SessionMode` is a named type export in `session.ts:204` (`export type SessionMode = 'claude' | 'shell'`). `types.ts:162` has an **inline anonymous union** (`mode?: 'claude' | 'shell'`) inside `SessionState` — NOT a named `SessionMode` type. Additionally, `mux-interface.ts` has 3 inline `'claude' | 'shell'` unions (MuxSession.mode, createSession param, respawnPane param). All 5 locations must stay in sync. **Fix**: Create `SessionMode` in `types.ts`, import and use it in `session.ts` and `mux-interface.ts`.
+
+> **[REVIEW M6]** `createSession()` already has 8 positional parameters. Adding `openCodeConfig` as the 9th is a code smell. **Fix**: Refactor `createSession()` and `respawnPane()` in `TerminalMultiplexer` to accept an options object before adding OpenCode. This also eliminates the need to keep parameter order in sync.
+
+```typescript
+// BEFORE (8 positional params):
+createSession(sessionId, workingDir, mode, name, niceConfig, model, claudeMode, allowedTools)
+
+// AFTER (options object):
+interface CreateSessionOptions {
+  sessionId: string;
+  workingDir: string;
+  mode: SessionMode;
+  name?: string;
+  niceConfig?: NiceConfig;
+  model?: string;
+  claudeMode?: ClaudeMode;
+  allowedTools?: string;
+  openCodeConfig?: OpenCodeConfig;
+}
+createSession(options: CreateSessionOptions): Promise<MuxSession>;
+```
+
 ### Changes
+
+#### `src/types.ts` — Unify `SessionMode` and add `OpenCodeConfig`
+
+```typescript
+// Move SessionMode here (single source of truth):
+export type SessionMode = 'claude' | 'shell' | 'opencode';
+```
 
 #### `src/session.ts` (line 204)
 
 ```typescript
-// BEFORE
+// BEFORE (delete this):
 export type SessionMode = 'claude' | 'shell';
 
-// AFTER
-export type SessionMode = 'claude' | 'shell' | 'opencode';
+// AFTER (import from types.ts):
+import type { SessionMode } from './types.js';
 ```
 
 #### `src/types.ts` — Add `OpenCodeConfig` interface
@@ -431,38 +497,45 @@ Add `openCodeConfig` to `SessionState`:
 openCodeConfig?: OpenCodeConfig;
 ```
 
-#### `src/mux-interface.ts` — Update mode types
+#### `src/mux-interface.ts` — Update mode types and refactor to options object
 
 ```typescript
-// All occurrences of 'claude' | 'shell' → 'claude' | 'shell' | 'opencode'
+// Import unified SessionMode from types.ts:
+import type { SessionMode, OpenCodeConfig } from './types.js';
+
 // In MuxSession type (line 27):
-mode: 'claude' | 'shell' | 'opencode';
+mode: SessionMode;
 
-// In TerminalMultiplexer interface methods (lines 70, 168):
-// Add openCodeConfig parameter to createSession() and respawnPane()
-createSession(
-  sessionId: string,
-  workingDir: string,
-  mode: 'claude' | 'shell' | 'opencode',
-  name?: string,
-  niceConfig?: NiceConfig,
-  model?: string,
-  claudeMode?: ClaudeMode,
-  allowedTools?: string,
-  openCodeConfig?: OpenCodeConfig,  // NEW
-): Promise<MuxSession>;
+// Refactor to options object (per review M6):
+interface CreateSessionOptions {
+  sessionId: string;
+  workingDir: string;
+  mode: SessionMode;
+  name?: string;
+  niceConfig?: NiceConfig;
+  model?: string;
+  claudeMode?: ClaudeMode;
+  allowedTools?: string;
+  openCodeConfig?: OpenCodeConfig;
+}
 
-respawnPane(
-  sessionId: string,
-  workingDir: string,
-  mode: 'claude' | 'shell' | 'opencode',
-  niceConfig?: NiceConfig,
-  model?: string,
-  claudeMode?: ClaudeMode,
-  allowedTools?: string,
-  openCodeConfig?: OpenCodeConfig,  // NEW
-): Promise<number | null>;
+interface RespawnPaneOptions {
+  sessionId: string;
+  workingDir: string;
+  mode: SessionMode;
+  niceConfig?: NiceConfig;
+  model?: string;
+  claudeMode?: ClaudeMode;
+  allowedTools?: string;
+  openCodeConfig?: OpenCodeConfig;
+}
+
+// In TerminalMultiplexer interface:
+createSession(options: CreateSessionOptions): Promise<MuxSession>;
+respawnPane(options: RespawnPaneOptions): Promise<number | null>;
 ```
+
+> **Note**: `mux-factory.ts` does NOT need changes — it just instantiates `TmuxManager` with no parameters.
 
 #### `src/web/schemas.ts` — Update Zod schemas
 
@@ -500,7 +573,7 @@ Create a resolver for the `opencode` binary, mirroring `claude-cli-resolver.ts`.
  */
 
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname, delimiter } from 'node:path';
 import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
 
@@ -532,7 +605,8 @@ export function resolveOpenCodeDir(): string | null {
       stdio: ['pipe', 'pipe', 'pipe'],
     }).trim();
     if (path) {
-      _openCodeDir = path.replace(/\/opencode$/, '');
+      // [REVIEW] Use dirname() like claude-cli-resolver.ts, not regex
+      _openCodeDir = dirname(path);
       return _openCodeDir;
     }
   } catch { /* not in PATH */ }
@@ -563,7 +637,8 @@ export function getOpenCodeAugmentedPath(): string {
   if (!dir) return process.env.PATH || '';
   const current = process.env.PATH || '';
   if (current.includes(dir)) return current;
-  return `${dir}:${current}`;
+  // [REVIEW] Use delimiter from node:path, not hardcoded ':'
+  return `${dir}${delimiter}${current}`;
 }
 
 /**
@@ -589,6 +664,33 @@ export { resolveOpenCodeDir, isOpenCodeAvailable, getOpenCodeAugmentedPath } fro
 Make `TmuxManager.createSession()` and `respawnPane()` support `mode: 'opencode'`.
 
 This is the **critical integration point** — once OpenCode runs in tmux, everything downstream (PTY attachment, SSE streaming, xterm.js rendering) works automatically.
+
+### Prerequisite Refactor: Extract Shared Command Builder (from review)
+
+> **[REVIEW]** `createSession()` and `respawnPane()` already duplicate Claude command construction (lines 261-311 vs 426-454). Adding OpenCode creates a 3rd branch in both. **Fix**: Extract a shared `buildSpawnCommand(mode, options)` helper that both methods call.
+
+```typescript
+// New shared helper in tmux-manager.ts:
+interface SpawnCommandOptions {
+  mode: SessionMode;
+  sessionId: string;
+  model?: string;
+  claudeMode?: ClaudeMode;
+  allowedTools?: string;
+  openCodeConfig?: OpenCodeConfig;
+}
+
+function buildSpawnCommand(options: SpawnCommandOptions): string {
+  if (options.mode === 'claude') {
+    const modelFlag = options.model ? ` --model ${options.model}` : '';
+    return `claude${buildClaudePermissionFlags(options.claudeMode, options.allowedTools)} --session-id "${options.sessionId}"${modelFlag}`;
+  }
+  if (options.mode === 'opencode') {
+    return buildOpenCodeCommand(options.openCodeConfig);
+  }
+  return '$SHELL';
+}
+```
 
 ### Changes to `src/tmux-manager.ts`
 
@@ -679,32 +781,47 @@ function buildEnvExports(mode: string, sessionId: string, muxName: string, openC
   ];
 
   if (mode === 'opencode') {
-    // Pass through API keys from Claudeman's environment
-    const apiKeyExports = [];
-    if (process.env.ANTHROPIC_API_KEY) apiKeyExports.push(`export ANTHROPIC_API_KEY="${process.env.ANTHROPIC_API_KEY}"`);
-    if (process.env.OPENAI_API_KEY) apiKeyExports.push(`export OPENAI_API_KEY="${process.env.OPENAI_API_KEY}"`);
-    if (process.env.GOOGLE_API_KEY) apiKeyExports.push(`export GOOGLE_API_KEY="${process.env.GOOGLE_API_KEY}"`);
+    // [REVIEW M7] Use tmux setenv for API keys instead of inline export.
+    // Inline `export KEY=val` in the tmux command is visible in `ps` output and tmux history.
+    // tmux setenv sets environment variables on the session, inherited by all panes.
+    // Call this BEFORE respawnPane():
+    //   tmux setenv -t <session> ANTHROPIC_API_KEY <value>
+    //   tmux setenv -t <session> OPENAI_API_KEY <value>
+    //   etc.
+    // See new helper: setOpenCodeEnvVars() below.
 
+    const configExports: string[] = []; // Non-secret env vars only
+
+    // [RE-REVIEW] SECURITY: configContent is user-supplied JSON. NEVER embed it
+    // directly in a shell command string — shell metacharacters (;, &&, $()) execute.
+    // Instead: (1) validate it is parseable JSON, (2) pass via tmux setenv, which
+    // does NOT interpret shell metacharacters.
     // Inline config for permission auto-allow
     if (openCodeConfig?.autoAllowTools) {
-      const permConfig = JSON.stringify({ permission: { '*': 'allow' } });
-      // Merge with any existing configContent
+      const permConfig = { permission: { '*': 'allow' } };
+      let merged = permConfig;
       if (openCodeConfig.configContent) {
         try {
           const existing = JSON.parse(openCodeConfig.configContent);
-          existing.permission = { '*': 'allow' };
-          apiKeyExports.push(`export OPENCODE_CONFIG_CONTENT='${JSON.stringify(existing).replace(/'/g, "'\\''")}'`);
-        } catch {
-          apiKeyExports.push(`export OPENCODE_CONFIG_CONTENT='${permConfig.replace(/'/g, "'\\''")}'`);
-        }
-      } else {
-        apiKeyExports.push(`export OPENCODE_CONFIG_CONTENT='${permConfig.replace(/'/g, "'\\''")}'`);
+          merged = { ...existing, permission: { '*': 'allow' } };
+        } catch { /* invalid JSON, use default permConfig */ }
       }
+      // Pass via tmux setenv (called BEFORE respawnPane), NOT inline export
+      // setOpenCodeConfigContent(muxName, JSON.stringify(merged));
+      configExports.push(`# OPENCODE_CONFIG_CONTENT set via tmux setenv — see setOpenCodeConfigContent()`);
     } else if (openCodeConfig?.configContent) {
-      apiKeyExports.push(`export OPENCODE_CONFIG_CONTENT='${openCodeConfig.configContent.replace(/'/g, "'\\''")}'`);
+      // Validate JSON first — reject if unparseable
+      try {
+        JSON.parse(openCodeConfig.configContent);
+        // Pass via tmux setenv (called BEFORE respawnPane)
+        // setOpenCodeConfigContent(muxName, openCodeConfig.configContent);
+      } catch {
+        throw new Error('Invalid JSON in openCodeConfig.configContent');
+      }
+      configExports.push(`# OPENCODE_CONFIG_CONTENT set via tmux setenv — see setOpenCodeConfigContent()`);
     }
 
-    return [...common, ...apiKeyExports].join(' && ');
+    return [...common, ...configExports].join(' && ');
   }
 
   if (mode === 'claude') {
@@ -712,6 +829,58 @@ function buildEnvExports(mode: string, sessionId: string, muxName: string, openC
   }
 
   return common.join(' && ');
+}
+```
+
+#### New Helper: `setOpenCodeEnvVars()` (from review)
+
+> **[REVIEW M7]** API keys passed via inline `export` in the tmux command are visible in `ps` output and tmux history. Use `tmux setenv` to set sensitive vars on the session instead.
+
+```typescript
+/**
+ * Set sensitive environment variables on a tmux session via setenv.
+ * These are inherited by panes but not visible in ps or tmux history.
+ *
+ * [RE-REVIEW] API keys may contain ", $, or other shell metacharacters.
+ * Use single-quote wrapping with escaped inner single quotes to prevent injection.
+ */
+function setOpenCodeEnvVars(muxName: string): void {
+  const sensitiveVars = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY'];
+  for (const key of sensitiveVars) {
+    const val = process.env[key];
+    if (val) {
+      // Shell-escape: wrap in single quotes, escape any inner single quotes
+      const escaped = val.replace(/'/g, "'\\''");
+      execSync(`tmux setenv -t '${muxName}' ${key} '${escaped}'`, {
+        encoding: 'utf8',
+        timeout: 3000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    }
+  }
+}
+```
+
+#### New Helper: `setOpenCodeConfigContent()` (from re-review)
+
+> **[RE-REVIEW]** `OPENCODE_CONFIG_CONTENT` must NEVER be embedded in a shell command string — user-supplied JSON can contain shell metacharacters (`$()`, `;`, `&&`). Use `tmux setenv` instead, which treats the value as a raw string.
+
+```typescript
+/**
+ * Set OPENCODE_CONFIG_CONTENT on a tmux session via setenv.
+ * Call BEFORE respawnPane().
+ */
+function setOpenCodeConfigContent(muxName: string, jsonContent: string): void {
+  // Validate JSON to prevent garbage config
+  JSON.parse(jsonContent); // throws if invalid
+
+  // Shell-escape for the tmux command
+  const escaped = jsonContent.replace(/'/g, "'\\''");
+  execSync(`tmux setenv -t '${muxName}' OPENCODE_CONFIG_CONTENT '${escaped}'`, {
+    encoding: 'utf8',
+    timeout: 3000,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
 }
 ```
 
@@ -729,11 +898,27 @@ In `reconcileSessions()` (line 700+), discovered unknown sessions currently defa
 // If it's 'opencode', set mode accordingly
 const cmd = execSync(`tmux display-message -t "${muxName}" -p '#{pane_current_command}'`, ...).trim();
 const mode = cmd.includes('opencode') ? 'opencode' : 'claude';
+// [REVIEW] For recovered sessions, prefer the persisted MuxSession.mode over command sniffing.
+// #{pane_current_command} only shows the foreground binary name — if OpenCode spawns a child
+// process (e.g., bash), it will show 'bash', not 'opencode'.
 ```
+
+### Known Limitations (from review)
+
+> **[REVIEW P1-6]** OpenCode does not have `--session-id <claudeman-id>` for initial session creation (only `--session <id>` for continuing existing sessions). This means:
+> - `_claudeSessionId = this.id` correlation (session.ts:405) won't work for OpenCode
+> - Subagent-session correlation via Session ID matching won't work
+> - Transcript watching via Claude session ID path won't work
+>
+> **Mitigation**: Let OpenCode manage its own sessions. Store the OpenCode session ID mapping in `SessionState` after the first session is created.
+
+> **[REVIEW P1-7]** The `toState()` method in `session.ts:782-816` must be updated to include `openCodeConfig` in the serialized state. Without this, state persistence silently drops the config and OpenCode sessions can't be restored after server restart.
 
 ---
 
-## 9. Phase 4: Output Parsing & Idle Detection
+## 9. Phase 4: Output Parsing & Idle Detection *(DEFERRED — not in MVP)*
+
+> **DEFERRED**: This entire phase (except `waitForOpenCodeReady()`) is out of MVP scope. Idle detection, ANSI content filter, working/busy state tracking, and token parsing are all deferred until we have real PTY output data from stable OpenCode sessions. Only the basic TUI ready detection from `waitForOpenCodeReady()` is needed for the MVP and is included in Phase 3.
 
 ### Goal
 Detect OpenCode's state from terminal output (idle, working, ready).
@@ -742,30 +927,119 @@ Detect OpenCode's state from terminal output (idle, working, ready).
 
 Unlike Claude Code (Ink), OpenCode uses Bubble Tea (Go), which:
 - Uses alternate screen buffer (`\x1b[?1049h`)
-- Redraws the entire screen on each update (cursor movements + clear sequences)
+- Redraws the entire screen on each update — Bubble Tea does full `View()` redraws, not differential (cursor movements + clear sequences)
 - Has a different visual structure (sidebar, message area, input area)
+- May enable mouse event reporting (`CSI ?1000h`/`CSI ?1006h`), generating PTY output on mouse movements
 
 **Key insight**: We don't need to parse the TUI visually. We just need to detect:
 1. When the TUI is ready (initial render complete)
 2. When OpenCode is working vs idle (for respawn)
 3. When output has stopped changing (for completion detection)
 
+### CRITICAL: ANSI Content Filter Required (from review)
+
+> **[REVIEW C1]** Bubble Tea redraws the **entire screen** on every update. Even when the AI model is idle, Bubble Tea may emit cursor blinking/repositioning sequences, timer-based redraws (e.g., clock display updates), and mouse protocol output. This means `lastActivityAt` will be constantly reset by TUI maintenance redraws, and the silence threshold will **never trigger**.
+>
+> **Mandatory fix**: Add an ANSI content-change filter between the PTY and idle detection. Only treat actual text content changes (not cursor movements, screen redraws, or mouse protocol output) as "real output".
+
+```typescript
+// New utility: src/utils/ansi-content-filter.ts
+// Strips non-content ANSI sequences so idle detection only sees real text changes
+
+const CURSOR_MOVEMENT = /\x1b\[\??[\d;]*[HJKfABCDEFGnsurlm]/g;
+const SCREEN_MODE = /\x1b\[\?[\d;]*[hlst]/g;      // alternate screen, mouse, etc.
+const MOUSE_EVENT = /\x1b\[M.../g;                  // mouse button events
+const MOUSE_SGR = /\x1b\[<[\d;]+[mM]/g;             // SGR mouse events
+const ERASE_DISPLAY = /\x1b\[[\d]*J/g;              // clear screen variants
+const ERASE_LINE = /\x1b\[[\d]*K/g;                 // clear line variants
+const CURSOR_POSITION = /\x1b\[\d+;\d+H/g;          // absolute cursor positioning
+const CURSOR_SAVE_RESTORE = /\x1b[78]/g;             // save/restore cursor
+
+/**
+ * Extract only meaningful text content changes from PTY output.
+ * Returns empty string if the output was purely cosmetic (redraws, cursor moves).
+ */
+export function extractContentChanges(data: string): string {
+  return data
+    .replace(CURSOR_MOVEMENT, '')
+    .replace(SCREEN_MODE, '')
+    .replace(MOUSE_EVENT, '')
+    .replace(MOUSE_SGR, '')
+    .replace(ERASE_DISPLAY, '')
+    .replace(ERASE_LINE, '')
+    .replace(CURSOR_POSITION, '')
+    .replace(CURSOR_SAVE_RESTORE, '')
+    .replace(/\x1b\[[\d;]*m/g, '') // SGR color/style
+    .trim();
+}
+```
+
+```typescript
+// In session.ts onData handler for OpenCode mode:
+// Only update lastActivityAt when there are REAL content changes
+if (this.mode === 'opencode') {
+  const content = extractContentChanges(data);
+  if (content.length > 0) {
+    this._lastActivityAt = Date.now();
+  }
+  // Don't update for cosmetic-only redraws
+}
+```
+
+### `_idleConfig` Property Initialization (from re-review)
+
+> **[RE-REVIEW]** The code snippets below reference `this._idleConfig.silenceThresholdMs` but `_idleConfig` does not exist on `Session`. The `getIdleDetectionConfig()` helper's return value must be stored as a private property, initialized in the constructor:
+
+```typescript
+// In session.ts constructor:
+private _idleConfig: ReturnType<Session['getIdleDetectionConfig']>;
+
+constructor(options: SessionOptions) {
+  // ...existing init...
+  this._idleConfig = this.getIdleDetectionConfig();
+}
+```
+
+### Gate `_processExpensiveParsers()` for OpenCode (from re-review)
+
+> **[RE-REVIEW]** The 150ms-throttled `_processExpensiveParsers()` path in session.ts handles Ralph tracking, bash tool parsing, and token parsing — all Claude-specific. For OpenCode sessions, these must be gated:
+
+```typescript
+// In _processExpensiveParsers():
+private _processExpensiveParsers(strippedData: string): void {
+  if (this.mode === 'opencode') {
+    // Skip Claude-specific parsers: Ralph tracker, BashToolParser, token parsing
+    // These depend on Claude's output format and would produce false positives
+    return;
+  }
+  // ...existing Claude parsing logic...
+}
+```
+
 ### Prompt Detection — `waitForOpenCodeReady()`
 
 OpenCode's TUI takes longer to initialize than Claude's prompt:
+
+> **[REVIEW M5]** 500ms silence threshold is too short — Bubble Tea may pause between component renders, triggering a false "ready" signal. Increased to 2000ms. Also: do NOT clear the terminal after ready detection — unlike Claude Code, the OpenCode TUI's initial render IS the useful content.
 
 ```typescript
 // In session.ts, add OpenCode-specific ready detection
 private async waitForOpenCodeReady(): Promise<void> {
   // OpenCode's Bubble Tea TUI renders asynchronously.
-  // Wait for output to stabilize (no new data for 500ms after initial burst).
-  const maxWait = 10000; // OpenCode TUI can take up to 10s
-  const stabilityThreshold = 500; // ms of silence = ready
-  const checkInterval = 50;
+  // Wait for output to stabilize (no new data for 2s after initial burst).
+  const maxWait = 15000; // OpenCode TUI can take up to 15s
+  const stabilityThreshold = 2000; // [REVIEW] 2s stability, not 500ms — TUI pauses between component renders
+  const checkInterval = 100;
   let elapsed = 0;
-  let lastOutputTime = Date.now();
+  let lastContentTime = Date.now();
 
-  const onOutput = () => { lastOutputTime = Date.now(); };
+  const onOutput = (_data: string) => {
+    // [REVIEW C1] Only track content changes, not cosmetic redraws
+    const content = extractContentChanges(_data);
+    if (content.length > 0) {
+      lastContentTime = Date.now();
+    }
+  };
   this.on('terminal', onOutput);
 
   try {
@@ -773,7 +1047,7 @@ private async waitForOpenCodeReady(): Promise<void> {
       await new Promise(r => setTimeout(r, checkInterval));
       elapsed += checkInterval;
 
-      const silentMs = Date.now() - lastOutputTime;
+      const silentMs = Date.now() - lastContentTime;
       if (silentMs >= stabilityThreshold && this._terminalBuffer.length > 200) {
         // TUI has rendered and stabilized
         break;
@@ -783,8 +1057,9 @@ private async waitForOpenCodeReady(): Promise<void> {
     this.off('terminal', onOutput);
   }
 
-  // Clear the terminal buffer of initialization junk
-  this.emit('clearTerminal');
+  // [REVIEW] Do NOT clear the terminal — OpenCode's TUI initial render IS the useful content.
+  // Unlike Claude Code where initialization junk should be cleared, the Bubble Tea TUI
+  // continuously redraws, so clearing would just cause a flash.
 }
 ```
 
@@ -810,12 +1085,18 @@ private getIdleDetectionConfig() {
     };
   }
   // Existing Claude defaults
+  // [RE-REVIEW] Corrected: actual Claude idle detection uses:
+  //   - Prompt char ❯ detection → _awaitingIdleConfirmation → 2s debounce → emit 'idle'
+  //   - Spinner chars (Braille ⠋⠙⠹⠸⠼⠴⠦⠧) → immediately sets _isWorking=true, _status='busy'
+  //   - Keywords (Thinking, Writing, Reading, Running) in throttled 150ms parser
+  //   - NO completionPattern in session.ts (that's in respawn-controller.ts)
+  // This config object is for the NEW OpenCode-compatible detection system.
   return {
     silenceThresholdMs: 3000,
     promptPattern: /[❯\u276f]/,
-    workingKeywords: ['Thinking', 'Writing', 'Reading', 'Searching'],
+    workingKeywords: ['Thinking', 'Writing', 'Reading', 'Running', 'Searching'],
     useAIChecker: true,
-    completionPattern: /Worked for \d+[ms]/,
+    completionPattern: null, // completion detection lives in respawn-controller, not session
   };
 }
 ```
@@ -842,15 +1123,24 @@ private parseTokens(data: string): void {
 
 For Claude, Claudeman uses spinner characters and keywords. For OpenCode:
 
+> **[REVIEW]** The original logic had a bug: `Date.now() - this._lastActivityAt > 100` is checked AFTER setting `_lastActivityAt = Date.now()`, so the condition would never be true (0 > 100 = false). Fixed below.
+
+> **[REVIEW M1]** The `session.isWorking` property is used by the respawn controller as a final safety check. For Claude, it's set by detecting JSON messages and working patterns. For OpenCode, `isWorking` must be driven by the ANSI content filter — mark working when real content appears after a period of silence.
+
 ```typescript
 // In session.ts onData handler:
 if (this.mode === 'opencode') {
-  // Simple: track last output time for silence-based idle detection
-  this._lastOutputTime = Date.now();
+  // [REVIEW C1] Only track content changes, not cosmetic TUI redraws
+  const content = extractContentChanges(data);
+  if (content.length === 0) return; // Cosmetic-only redraw, ignore
 
-  // If we had no output for >silenceThreshold and now get output → mark working
-  if (this._status === 'idle' && Date.now() - this._lastOutputTime > 100) {
-    this._status = 'working';
+  const timeSinceLastOutput = Date.now() - this._lastActivityAt;
+  this._lastActivityAt = Date.now();
+
+  // If we had no real content for >silenceThreshold and now get content → mark busy
+  if (this._status === 'idle' && timeSinceLastOutput > this._idleConfig.silenceThresholdMs) {
+    this._status = 'busy';
+    this._isWorking = true;
     this.emit('working');
   }
 } else {
@@ -914,20 +1204,33 @@ this.broadcast('session:interactive', { id, mode: session.mode });
 
 **Quick-start for OpenCode:**
 
+> **[RE-REVIEW]** `writeHooksConfig(casePath)` is called unconditionally at line 2625 in quick-start. Must guard with `mode !== 'opencode'` — Claude hooks are irrelevant for OpenCode sessions.
+> Also: lifecycle logs at lines 1657 and 2675 hardcode `mode: 'claude'` — should use `session.mode`.
+
 ```typescript
 // POST /api/quick-start — extend to handle opencode mode:
 if (mode === 'opencode') {
   // Skip Claude-specific setup (hooks, CLAUDE.md generation)
+  // [RE-REVIEW] writeHooksConfig() must NOT be called for OpenCode sessions
   // But do set up opencode.json permission config if autoAllowTools
   await session.startInteractive();
 } else if (mode === 'shell') {
   await session.startShell();
 } else {
+  // Claude mode — write hooks config as before
+  writeHooksConfig(casePath);
   await session.startInteractive();
 }
+
+// [RE-REVIEW] Use session.mode in lifecycle log, NOT hardcoded 'claude':
+getLifecycleLog().log({ event: 'started', sessionId: id, name: session.name, mode: session.mode });
 ```
 
 #### `src/web/schemas.ts`
+
+> **[REVIEW C4]** Also update `ALLOWED_ENV_PREFIXES` to include `'OPENCODE_'`, and add `OPENCODE_SERVER_PASSWORD` to `BLOCKED_ENV_KEYS` (security-sensitive). Also update `QuickStartSchema` to include `'opencode'` mode and `openCodeConfig` field.
+>
+> **[RE-REVIEW]** These MUST be an atomic change — shipping the `OPENCODE_` prefix addition without simultaneously blocking `OPENCODE_SERVER_PASSWORD` creates a security window where the server password can be set via API.
 
 Update `CreateSessionSchema` and `QuickStartSchema`:
 
@@ -1025,7 +1328,7 @@ function getModeBadge(mode) {
 }
 ```
 
-**Feature gating** — Disable Claude-specific features for OpenCode:
+**Feature gating** — Disable Claude-specific features for OpenCode (MVP):
 
 ```javascript
 // Functions to check session capabilities:
@@ -1033,115 +1336,41 @@ function isClaudeSession(session) { return session.mode === 'claude'; }
 function isOpenCodeSession(session) { return session.mode === 'opencode'; }
 function isAgentSession(session) { return session.mode === 'claude' || session.mode === 'opencode'; }
 
-// UI sections to gate:
-// - Hooks panel: hide for OpenCode (Phase 7 adds plugin bridge)
-// - Auto-compact button: hide for OpenCode (has built-in compaction)
-// - Ralph tracker settings: show for both (works via tmux input)
-// - Subagent panel: hide for OpenCode initially
-// - Token display: hide for OpenCode (Phase 8 adds API tracking)
-// - Respawn: show for both (with adapted detection)
-// - Input/resize/kill: show for all modes
+// UI sections to gate for MVP:
+// - Hooks panel: HIDE for OpenCode (no plugin bridge yet)
+// - Auto-compact button: HIDE for OpenCode (has built-in compaction)
+// - Ralph tracker settings: HIDE for OpenCode (no <promise> tags, no RALPH_STATUS)
+// - Subagent panel: HIDE for OpenCode (no BashToolParser/SubagentWatcher integration)
+// - Token display: HIDE for OpenCode (no token parsing)
+// - Respawn: HIDE for OpenCode (respawn controller is deferred)
+// - Circuit breaker: HIDE for OpenCode (depends on Ralph Tracker)
+// - Input/resize/kill: SHOW for all modes ✓
+// - Tab badges: SHOW for all modes ✓
+// - Terminal rendering: SHOW for all modes ✓
 ```
 
-**Respawn section visibility:**
+**Respawn section visibility (MVP — hide for OpenCode):**
 
 ```javascript
-// CURRENT (line 10254):
+// CURRENT (line ~10289):
 if (session.mode === 'claude' && session.pid) {
   respawnSection.style.display = '';
 }
 
-// PROPOSED:
-if ((session.mode === 'claude' || session.mode === 'opencode') && session.pid) {
-  respawnSection.style.display = '';
-}
+// MVP: No change needed — already gated to 'claude' only.
+// When respawn is eventually supported for OpenCode (Phase 7), update to:
+// if ((session.mode === 'claude' || session.mode === 'opencode') && session.pid) {
+//   respawnSection.style.display = '';
+// }
 ```
 
 ---
 
-## 11. Phase 6: Respawn & Ralph Loop Adaptation
+## 11. Phase 6: Hooks & Plugin Bridge *(DEFERRED — not in MVP)*
 
-### Respawn Controller
-
-The respawn controller sends Claude CLI commands (`/clear`, `/compact`, `/init`, `/update`) which are Claude-specific. For OpenCode, we need alternative commands.
-
-#### Command Mapping
-
-| Claude Code | OpenCode Equivalent | Notes |
-|-------------|---------------------|-------|
-| `/clear` | `/clear` | Same command! Clears conversation |
-| `/compact` | `Ctrl+X c` | Or opencode handles auto-compaction |
-| `/init` | N/A | OpenCode doesn't have this |
-| `/update prompt` | Just type the prompt | Direct text input |
-| `/resume` | `--continue` flag on restart | Handled at spawn time |
-
-#### Changes to `src/respawn-controller.ts`
-
-```typescript
-// In the respawn cycle method:
-private async startRespawnCycle(): Promise<void> {
-  if (this.session.mode === 'opencode') {
-    // OpenCode respawn: simpler cycle
-    // 1. Wait for idle (output silence)
-    // 2. Optionally compact: skip (OpenCode manages this internally via compaction.auto)
-    // 3. Send new prompt via writeViaMux()
-    // 4. Wait for completion (output silence again)
-
-    // Send prompt directly — OpenCode TUI accepts typed text
-    await this.session.writeViaMux(this.config.prompt);
-    return;
-  }
-
-  // Existing Claude respawn logic...
-}
-
-// Completion detection:
-private isCompletionDetected(): boolean {
-  if (this.session.mode === 'opencode') {
-    // For OpenCode: rely on output silence
-    return Date.now() - this.session.lastOutputTime > (this.config.completionSilenceMs || 8000);
-  }
-  // Existing Claude completion pattern matching
-}
-```
-
-### Ralph Loop
-
-The Ralph Loop mechanism (send prompt → detect completion → send next prompt) is fundamentally CLI-agnostic since it operates via `writeViaMux()`. The main adaptation needed:
-
-```typescript
-// In ralph-loop.ts:
-// Completion detection for OpenCode:
-if (session.mode === 'opencode') {
-  // Use silence-based completion detection
-  // OpenCode doesn't emit <promise>PHRASE</promise> tags
-  // Ralph tracker's completion phrase detection is skipped
-}
-```
-
-### Respawn Presets for OpenCode
-
-```javascript
-// In app.js, add OpenCode-specific presets:
-const OPENCODE_RESPAWN_PRESETS = {
-  'opencode-solo': {
-    label: 'OpenCode Solo Work',
-    idleTimeoutSec: 8,    // Longer than Claude (TUI rendering creates brief output bursts)
-    maxDurationMin: 60,
-    completionSilenceMs: 8000,
-  },
-  'opencode-autonomous': {
-    label: 'OpenCode Autonomous',
-    idleTimeoutSec: 15,
-    maxDurationMin: 480,
-    completionSilenceMs: 10000,
-  },
-};
-```
-
----
-
-## 12. Phase 7: Hooks & Plugin Bridge
+> **DEFERRED**: Plugin event names are speculative and unverified. This phase requires Phase 0 plugin verification first. The entire hooks/plugin system is out of MVP scope — OpenCode sessions in the MVP are manual-interaction only.
+>
+> **[REVIEW C3] Phase reordered**: This was originally Phase 7 but has been moved before Respawn. The plugin bridge provides the reliable `session.idle` event that the respawn controller needs. Without it, respawn relies on output-silence-only detection, which is unreliable with Bubble Tea TUIs (see Review C1). **Do not implement respawn (Phase 7) until this phase is complete and tested.**
 
 ### Goal
 Bridge Claudeman's hook system with OpenCode's plugin system for rich event forwarding.
@@ -1224,6 +1453,23 @@ async function installOpenCodePlugin(workingDir: string, sessionId: string): Pro
 }
 ```
 
+### Additional Plugin Events (from review)
+
+> **[REVIEW]** Add `session.compacted` to the plugin bridge — it's free and useful for tracking when OpenCode auto-compacts (relevant for token tracking and respawn timing).
+
+```javascript
+// Add to claudeman-bridge.js return object:
+'session.compacted': async (info) => {
+  await notifyClademan('session_compacted', { info });
+},
+```
+
+### Plugin Event Verification Warning
+
+> **[REVIEW M3]** The event names in this section and Appendix B are speculative — they have not been verified against OpenCode's actual plugin API. Event names, callback signatures, and firing timing may differ from what's documented here.
+>
+> **HARD PREREQUISITE**: Before implementing this phase, complete Phase 0's plugin verification checklist — install a test plugin and confirm which events actually fire and when. The `session.idle` event is particularly critical: does it fire when the model finishes generating, or when the TUI returns to the input prompt? This distinction matters enormously for idle detection timing.
+
 ### Benefits of the Plugin Bridge
 
 Once installed, Claudeman receives structured events from OpenCode:
@@ -1232,10 +1478,181 @@ Once installed, Claudeman receives structured events from OpenCode:
 - **`tool.execute.*`** → Tool call tracking (similar to BashToolParser for Claude)
 - **`todo.updated`** → OpenCode's built-in todo system → Claudeman can display it
 - **`session.error`** → Error surfacing in Claudeman UI
+- **`session.compacted`** → Track auto-compaction events
 
 ---
 
-## 13. Phase 8: OpenCode Server API Integration (Advanced)
+## 12. Phase 7: Respawn & Ralph Loop Adaptation *(DEFERRED — not in MVP)*
+
+> **DEFERRED**: Respawn controller (3,500 lines, 13 states), Ralph Loop, and Ralph Tracker are all deeply coupled to Claude's output protocols (`Worked for Xm Xs`, `<promise>` tags, `---RALPH_STATUS---` blocks, spinner chars, `❯` prompt). With 75+ model providers in OpenCode producing different output formats, these systems will break in unpredictable ways. Deferring until we have: (1) stable OpenCode sessions with real PTY data, (2) verified plugin bridge from Phase 6, (3) empirical idle detection calibration.
+>
+> **[REVIEW C3] Phase reordered**: This was originally Phase 6 but has been moved after Plugin Bridge. The plugin bridge's `session.idle` event is the primary reliable idle signal for OpenCode sessions. Implementing respawn before the bridge exists means relying on output-silence-only detection, which is unreliable.
+>
+> **[REVIEW]** Respawn should ship **disabled by default** for OpenCode sessions. Enable only after the plugin bridge (Phase 6) is proven to work reliably.
+
+### Architectural Change: CompletionDetector Interface (from review)
+
+> **[REVIEW C2]** The RespawnController is ~3,500 lines with 13 states, `assertNever()` exhaustive switches in multiple places, and dozens of methods. Sprinkling `if (mode === 'opencode')` throughout would be unmaintainable. **Fix**: Create a `CompletionDetector` interface.
+
+```typescript
+// New interface in src/types.ts or src/completion-detector.ts:
+interface CompletionDetector {
+  /** Check if terminal output indicates the AI has finished */
+  isCompletionMessage(data: string): boolean;
+  /** Check if terminal output indicates the AI is currently working */
+  hasWorkingPattern(data: string): boolean;
+  /** Get the idle timeout for this backend */
+  getIdleTimeoutMs(): number;
+  /** Get the completion silence threshold */
+  getCompletionSilenceMs(): number;
+  /** Whether this detector supports AI-powered idle checking */
+  supportsAIChecker(): boolean;
+}
+
+class ClaudeCompletionDetector implements CompletionDetector {
+  isCompletionMessage(data: string): boolean {
+    return /\bWorked\s+for\s+\d+[hms](\s*\d+[hms])*/i.test(data);
+  }
+  hasWorkingPattern(data: string): boolean {
+    return /Thinking|Writing|Reading|Running|Searching|Editing|Creating/.test(data);
+  }
+  getIdleTimeoutMs(): number { return 3000; }
+  getCompletionSilenceMs(): number { return 5000; }
+  supportsAIChecker(): boolean { return true; }
+}
+
+class OpenCodeCompletionDetector implements CompletionDetector {
+  isCompletionMessage(data: string): boolean {
+    // OpenCode doesn't emit "Worked for Xm Xs" — rely on plugin bridge's session.idle event
+    // or fall back to output silence (via ANSI content filter)
+    return false; // Never matches — idle detection is event-driven
+  }
+  hasWorkingPattern(data: string): boolean {
+    // OpenCode working patterns TBD — needs Phase 0 empirical data
+    // Bubble Tea TUI uses different status indicators than Claude
+    return false;
+  }
+  getIdleTimeoutMs(): number { return 8000; } // Conservative for TUI redraws
+  getCompletionSilenceMs(): number { return 10000; }
+  supportsAIChecker(): boolean { return false; } // AI checker requires Claude CLI
+}
+```
+
+```typescript
+// In RespawnController constructor:
+this._completionDetector = session.mode === 'opencode'
+  ? new OpenCodeCompletionDetector()
+  : new ClaudeCompletionDetector();
+
+// Then use throughout instead of mode checks:
+if (this._completionDetector.isCompletionMessage(data)) { ... }
+if (this._completionDetector.hasWorkingPattern(data)) { ... }
+```
+
+### Respawn Controller
+
+The respawn controller sends Claude CLI commands (`/clear`, `/compact`, `/init`, `/update`) which are Claude-specific. For OpenCode, we need alternative commands.
+
+#### Command Mapping
+
+| Claude Code | OpenCode Equivalent | Notes |
+|-------------|---------------------|-------|
+| `/clear` | `/clear` | Same command! Clears conversation |
+| `/compact` | `Ctrl+X c` | Or opencode handles auto-compaction |
+| `/init` | N/A | OpenCode doesn't have this |
+| `/update prompt` | Just type the prompt | Direct text input |
+| `/resume` | `--continue` flag on restart | Handled at spawn time |
+
+> **[REVIEW M4]** `writeViaMux()` sends `\r` for Enter — it is untested whether Bubble Tea handles this correctly. This is a Phase 0 validation item. If Bubble Tea requires a different key sequence, the entire respawn command delivery mechanism fails.
+
+#### Changes to `src/respawn-controller.ts`
+
+> **[REVIEW]** Use the `CompletionDetector` interface instead of inline mode checks.
+
+```typescript
+// In the respawn cycle method:
+private async startRespawnCycle(): Promise<void> {
+  if (this.session.mode === 'opencode') {
+    // OpenCode respawn: simpler cycle
+    // 1. Wait for idle (plugin bridge session.idle event OR output silence via content filter)
+    // 2. Optionally compact: skip (OpenCode manages this internally via compaction.auto)
+    // 3. Send new prompt via writeViaMux()
+    // 4. Wait for completion (plugin bridge session.idle event again)
+
+    // Send prompt directly — OpenCode TUI accepts typed text
+    await this.session.writeViaMux(this.config.prompt);
+    return;
+  }
+
+  // Existing Claude respawn logic...
+}
+
+// Completion detection — now uses CompletionDetector:
+private isCompletionDetected(): boolean {
+  if (this._completionDetector.isCompletionMessage(this._lastOutput)) {
+    return true;
+  }
+  // Fallback: silence-based detection (for both backends)
+  return Date.now() - this.session.lastActivityAt > this._completionDetector.getCompletionSilenceMs();
+}
+```
+
+### Missing Respawn Items (from review)
+
+> **[REVIEW]** These items are NOT addressed above and need design work:
+>
+> 1. **Circuit breaker signals for OpenCode**: The circuit breaker tracks `no-progress`, `same-error-repeated`, and `tests-failing-too-long`. These signals come from Ralph tracker's `RALPH_STATUS` blocks, which are Claude-specific output patterns. Need alternative signal sources for OpenCode (possibly via plugin bridge `session.error` events).
+>
+> 2. **`/compact` equivalent**: The plan says "OpenCode handles this internally via `compaction.auto`" — but the respawn controller may need to trigger compaction at specific points in the cycle. No programmatic compaction control is available without Phase 8's server API.
+>
+> 3. **`sendUpdateDocs()` equivalent**: The respawn cycle starts by sending a progress-summary prompt that writes to CLAUDE.md. For OpenCode, what prompt makes sense? OpenCode uses `opencode.json`, not CLAUDE.md.
+>
+> 4. **No `elicitation_dialog` equivalent**: Claude Code has hooks that signal when Claude asks the user a question. The respawn controller uses this to skip auto-accept. OpenCode may not have an equivalent — if auto-accept is enabled, it could accept prompts that are actually questions.
+
+### Ralph Loop
+
+> **[REVIEW]** Ralph Loop for OpenCode should be marked **experimental** and deferred to a later phase. Without `<promise>PHRASE</promise>` tags, Ralph loses its primary completion signal and becomes a timeout-based prompt repeater — a significantly degraded experience.
+
+The Ralph Loop's polling/assignment mechanism is CLI-agnostic (it uses `session.sendInput()` and `writeViaMux()`). However, its completion signaling is Claude-specific: `sessionCompletion` events are only emitted when ralph-tracker detects `<promise>PHRASE</promise>` tags in output, which is a custom Claude protocol. The main adaptation needed:
+
+```typescript
+// In ralph-loop.ts:
+// Completion detection for OpenCode:
+if (session.mode === 'opencode') {
+  // Use plugin bridge session.idle event (preferred) or silence-based detection (fallback)
+  // OpenCode doesn't emit <promise>PHRASE</promise> tags
+  // Ralph tracker's completion phrase detection is skipped
+  // WARNING: This makes Ralph Loop significantly less reliable for OpenCode
+}
+```
+
+### Respawn Presets for OpenCode *(DEFERRED)*
+
+> These presets are deferred with the rest of Phase 7. Values below are speculative — they need calibration against real PTY output data from stable OpenCode sessions.
+
+```javascript
+// DEFERRED — add to app.js when Phase 7 ships:
+const OPENCODE_RESPAWN_PRESETS = {
+  'opencode-solo': {
+    label: 'OpenCode Solo Work',
+    idleTimeoutSec: 8,    // Longer than Claude (TUI rendering creates brief output bursts)
+    maxDurationMin: 60,
+    completionSilenceMs: 8000,
+  },
+  'opencode-autonomous': {
+    label: 'OpenCode Autonomous',
+    idleTimeoutSec: 15,
+    maxDurationMin: 480,
+    completionSilenceMs: 10000,
+  },
+};
+```
+
+---
+
+## 13. Phase 8: OpenCode Server API Integration (Advanced) *(DEFERRED — not in MVP)*
+
+> **DEFERRED**: Advanced feature. Requires stable MVP sessions first, plus resolution of shared SQLite state problem (TUI + serve dual-process).
 
 ### Goal
 For each OpenCode session, optionally run `opencode serve` alongside the TUI for structured API access.
@@ -1256,15 +1673,32 @@ Claudeman ──── opencode serve (port 4096+N, background process)
                      └── GET  /config/*        → model/provider info
 ```
 
+### Architecture Warning (from review)
+
+> **[REVIEW M8]** Running both `opencode` (TUI) and `opencode serve` in the same project directory creates a **shared SQLite state problem**. The TUI creates sessions in SQLite; the server reads from the same SQLite. But they're separate processes — there's no guarantee of session ID consistency between them.
+>
+> **Consider alternatives**:
+> - (a) Use `opencode serve` INSTEAD of the TUI (not alongside it) — server becomes the single backend, Claudeman renders its own UI
+> - (b) Use `opencode attach` to connect the TUI to the server, making the server the single source of truth
+> - (c) Accept the dual-process model with explicit documentation of limitations
+>
+> **Also**: In containerized/firewalled environments, `opencode serve` binding to ports may be blocked.
+
 ### Port Assignment
+
+> **[REVIEW]** The original `Array.from(this.sessions.keys()).indexOf(this.id)` is fragile — session deletion creates gaps, concurrent creation can collide. Use an incrementing counter or port pool instead.
 
 ```typescript
 // Each OpenCode session gets a unique port for its server
-// Start at 4100, increment per session
+// Use a port pool with allocation/release
+private static _nextPort = 4100;
+private static _releasedPorts: number[] = [];
+
 private allocateOpenCodePort(): number {
-  const basePort = 4100;
-  const sessionIndex = Array.from(this.sessions.keys()).indexOf(this.id);
-  return basePort + sessionIndex;
+  if (OpenCodePortAllocator._releasedPorts.length > 0) {
+    return OpenCodePortAllocator._releasedPorts.pop()!;
+  }
+  return OpenCodePortAllocator._nextPort++;
 }
 ```
 
@@ -1284,18 +1718,26 @@ if (this.mode === 'opencode' && this._openCodeConfig?.serverPort) {
     cwd: this.workingDir,
     env: {
       ...process.env,
-      OPENCODE_SERVER_PASSWORD: generateSessionToken(),
+      OPENCODE_SERVER_PASSWORD: crypto.randomUUID() /* generateSessionToken() does not exist — use crypto.randomUUID() */,
     },
     stdio: 'ignore',
     detached: true,
   });
 
-  // Clean up on session stop
-  this.once('exit', () => {
+  // [REVIEW] Register with CleanupManager for centralized disposal.
+  // The once('exit') handler alone is insufficient — if the server crashes
+  // without triggering exit, the opencode serve process becomes a zombie.
+  // [RE-REVIEW] API is registerCleanup(type, fn, description), NOT addCustom().
+  this.cleanup.registerCleanup('stream', () => {
     if (this._openCodeServer && !this._openCodeServer.killed) {
       this._openCodeServer.kill('SIGTERM');
     }
-  });
+  }, 'opencode serve process');
+
+  // Also add auth headers for proxy routes:
+  // [REVIEW] OpenCode uses HTTP Basic Auth (username: "opencode").
+  // The proxy needs to inject: Authorization: Basic base64("opencode:" + password)
+  this._openCodeServerAuth = Buffer.from(`opencode:${crypto.randomUUID() /* generateSessionToken() does not exist — use crypto.randomUUID() */}`).toString('base64');
 }
 ```
 
@@ -1321,34 +1763,52 @@ if (this.mode === 'opencode' && this._openCodeConfig?.serverPort) {
 
 ## 14. Files to Modify
 
+### MVP Files (Phases 0, 1, 2, 3, 5)
+
 | File | Changes | Phase |
 |------|---------|-------|
-| `src/types.ts` | Add `OpenCodeConfig` interface, extend `SessionState` | 1 |
-| `src/session.ts` | Extend `SessionMode`, add OpenCode startup/idle/ready logic | 1, 3, 4 |
-| `src/mux-interface.ts` | Update mode type to 3-way union, add `openCodeConfig` params | 1 |
-| `src/mux-factory.ts` | Pass through `openCodeConfig` | 1 |
-| `src/tmux-manager.ts` | Add `buildOpenCodeCommand()`, env var exports, PATH resolution | 3 |
-| `src/web/schemas.ts` | Update mode enum, add `OpenCodeConfigSchema` | 1, 5 |
-| `src/web/server.ts` | New routes, mode checks, OpenCode availability endpoint | 5 |
-| `src/web/public/app.js` | Mode selector, tab badges, model picker, feature gating | 5 |
-| `src/respawn-controller.ts` | Mode-aware idle/completion detection, command adaptation | 6 |
-| `src/ralph-loop.ts` | Mode-aware completion detection | 6 |
-| `src/ralph-tracker.ts` | Skip Claude-specific patterns for OpenCode sessions | 6 |
+| `src/types.ts` | Add `SessionMode` (unified), `OpenCodeConfig`, extend `SessionState` | 1 |
+| `src/session.ts` | Import `SessionMode` from types (remove duplicate), add OpenCode startup + basic `waitForOpenCodeReady()`, `toState()` update | 1, 3 |
+| `src/mux-interface.ts` | Import `SessionMode`, refactor to options objects (`CreateSessionOptions`, `RespawnPaneOptions`) | 1 |
+| `src/tmux-manager.ts` | Extract `buildSpawnCommand()`, add `buildOpenCodeCommand()`, `setOpenCodeEnvVars()`, `setOpenCodeConfigContent()`, env var exports, PATH resolution. Refactor `createSession()`/`respawnPane()` to match new options-object signatures. | 1, 3 |
+| `src/web/schemas.ts` | Update mode enum, add `OpenCodeConfigSchema`, add `OPENCODE_` to `ALLOWED_ENV_PREFIXES` (atomic with `OPENCODE_SERVER_PASSWORD` block), update `QuickStartSchema` | 1, 5 |
+| `src/web/server.ts` | New routes, mode checks, OpenCode availability endpoint, `writeHooksConfig` guard | 5 |
+| `src/web/public/app.js` | Mode selector, tab badges, model picker, feature gating (hide respawn/Ralph for OpenCode) | 5 |
 | `src/state-store.ts` | Persist `openCodeConfig` in session state | 1 |
-| `src/hooks-config.ts` | Skip Claude hook generation for OpenCode sessions | 7 |
 | `src/utils/index.ts` | Re-export OpenCode resolver | 2 |
-| `src/session-lifecycle-log.ts` | Log OpenCode-specific events | 3 |
+| `src/session-lifecycle-log.ts` | Log OpenCode-specific events, fix hardcoded `mode: 'claude'` | 3 |
+
+### Deferred Files (Phases 4, 6, 7, 8)
+
+| File | Changes | Phase | Status |
+|------|---------|-------|--------|
+| `src/respawn-controller.ts` | `CompletionDetector` interface, OpenCode respawn cycle | 7 | DEFERRED |
+| `src/ralph-loop.ts` | Mode-aware completion detection | 7 | DEFERRED |
+| `src/ralph-tracker.ts` | Skip Claude-specific patterns for OpenCode | 7 | DEFERRED |
+| `src/hooks-config.ts` | Skip Claude hook generation for OpenCode | 6 | DEFERRED |
+
+> **[REVIEW]** `mux-factory.ts` does NOT need changes — it just instantiates `TmuxManager` with no parameters.
 
 ## 15. Files to Create
+
+### MVP Files
 
 | File | Purpose | Phase |
 |------|---------|-------|
 | `src/utils/opencode-cli-resolver.ts` | Resolve `opencode` binary location | 2 |
-| `src/opencode-plugin-generator.ts` | Generate `.opencode/plugins/claudeman-bridge.js` | 7 |
-| `src/opencode-api-client.ts` | Client for OpenCode's REST API (Strategy B) | 8 |
 | `test/opencode-resolver.test.ts` | Tests for binary resolution | 2 |
 | `test/opencode-session.test.ts` | Tests for OpenCode session spawning (port 3155) | 3 |
-| `test/opencode-respawn.test.ts` | Tests for OpenCode respawn cycle (port 3156) | 6 |
+
+### Deferred Files
+
+| File | Purpose | Phase | Status |
+|------|---------|-------|--------|
+| `src/utils/ansi-content-filter.ts` | Strip cosmetic ANSI sequences for idle detection | 4 | DEFERRED |
+| `src/completion-detector.ts` | `CompletionDetector` interface + implementations | 7 | DEFERRED |
+| `src/opencode-plugin-generator.ts` | Generate `.opencode/plugins/claudeman-bridge.js` | 6 | DEFERRED |
+| `src/opencode-api-client.ts` | Client for OpenCode's REST API (Strategy B) | 8 | DEFERRED |
+| `test/opencode-respawn.test.ts` | Tests for OpenCode respawn cycle (port 3156) | 7 | DEFERRED |
+| `test/ansi-content-filter.test.ts` | Tests for ANSI content filter | 4 | DEFERRED |
 
 ---
 
@@ -1362,6 +1822,8 @@ The file `plan.json` at the project root contains a 48-task TDD breakdown for th
 
 The `plan.json` approach is more heavyweight (full backend abstraction with DI), suitable if we plan to add more backends. This document recommends the simpler "mode extension" approach for initial implementation.
 
+> **[REVIEW]** `plan.json` and this document are somewhat contradictory — plan.json recommends Option B (full DI abstraction with `LLMBackend`, `ClaudeBackend`, `OpenCodeBackend`, `BackendFactory`) while this document recommends Option A (simple mode extension). The P0 tasks in plan.json (14 tasks for backend abstraction) should be marked "skip for now" or removed. Some P1 tasks reference `BackendFactory` while others just extend `SessionMode`. **Reconcile before implementation begins.**
+
 ---
 
 ## 17. Risk Assessment
@@ -1374,21 +1836,35 @@ The `plan.json` approach is more heavyweight (full backend abstraction with DI),
 
 ### Medium Risk
 - **Tmux command construction** (Phase 3) — Must handle: missing binary, bad model string, env var escaping, shell metacharacter injection. Mitigated by following the exact Claude pattern and input validation.
-- **Idle detection** (Phase 4) — Output silence is less precise than prompt detection. May trigger false positives (TUI redraws create brief output) or false negatives (slow model responses). Mitigated by conservative timeouts (5-8s).
-- **Respawn loop** (Phase 6) — Without Claude-quality completion detection, respawn may be less reliable. Mitigated by longer idle timeouts and the plugin bridge (Phase 7) providing definitive `session.idle` events.
+- **Idle detection** (Phase 4) — Output silence is less precise than prompt detection. **[REVIEW C1]** Bubble Tea's continuous screen redraws mean raw output silence will never trigger — the ANSI content filter (mandatory) mitigates this but needs Phase 0 calibration.
+- **`configContent` field** (Phase 3) — Arbitrary JSON passed as `OPENCODE_CONFIG_CONTENT`. A malicious client could inject any OpenCode config, including custom tool definitions or MCP servers. Mitigated by shell escaping, but consider validating JSON structure (whitelist allowed keys) or marking as admin-only.
 
 ### High Risk
 - **OpenCode TUI in xterm.js** — Bubble Tea uses alternate screen buffer, mouse events, and complex cursor manipulation. **Must validate manually in Phase 0** before any coding.
-- **OpenCode server API** (Phase 8) — Running a second HTTP server per session increases complexity (port conflicts, zombie processes, resource usage). Mitigated by making it optional.
-- **Plugin bridge reliability** (Phase 7) — The generated plugin depends on OpenCode loading it correctly and the fetch calls not failing silently. Need error handling and fallback.
+- **Respawn for OpenCode** (Phase 7) — **[REVIEW C2, C3]** The respawn controller is 3,500 lines with 13 states. Without the plugin bridge's `session.idle` event, idle detection relies solely on output silence through the ANSI filter — the weakest possible detection. **Mitigated by**: shipping respawn disabled by default for OpenCode, requiring Phase 6 plugin bridge first, using `CompletionDetector` interface instead of mode-check spaghetti.
+- **OpenCode server API** (Phase 8) — **[REVIEW M8]** Running TUI + serve alongside creates a shared SQLite state problem. Port allocation races, zombie processes, auth header injection needed. Mitigated by making it optional and considering serve-only alternative.
+- **Plugin bridge reliability** (Phase 6) — **[REVIEW M3]** Plugin event names are speculative. The generated plugin depends on OpenCode loading it correctly and the fetch calls not failing silently. Need Phase 0 verification of actual event names and signatures.
+- **Ralph Loop for OpenCode** — **[REVIEW]** Without `<promise>` tags, Ralph loses its primary completion signal. Becomes a timeout-based prompt repeater — significantly degraded experience. Should be marked experimental.
 
 ### Unknowns (Resolved by Phase 0 Manual Testing)
 - OpenCode's TUI escape sequences — Does xterm.js render them correctly?
 - OpenCode's SIGWINCH handling — Does resize work through tmux?
-- OpenCode's stdin behavior — Does `tmux send-keys -l` work for typing?
-- Separate `send-keys Enter` — Does it trigger prompt submission in OpenCode's TUI?
+- OpenCode's stdin behavior — Does `tmux send-keys -l` work for typing? Does `send-keys Enter` trigger prompt submission?
 - `remain-on-exit` behavior — Does the tmux session stay alive when OpenCode exits?
 - `opencode.json` conflicts — If one exists in the project, do CLI flags override it?
+- **[REVIEW]** Bubble Tea TUI redraw frequency during idle state — does it emit maintenance redraws?
+- **[REVIEW]** Mouse protocol output — does Bubble Tea enable mouse reporting?
+- **[REVIEW]** Plugin event names and callback signatures — are the names in Appendix B correct?
+- **[REVIEW]** `writeViaMux()` `\r` handling — does Bubble Tea handle Enter the same way as Ink?
+- **[REVIEW]** OpenCode auto-compaction behavior — what does TUI output look like during compaction?
+- **[REVIEW]** OpenCode version compatibility — CLI flags and plugin API may change between versions
+
+### Additional Risks (from review)
+
+- **API key exposure** — **[REVIEW M7]** Passing API keys via inline `export` in tmux commands exposes them in `ps` output and tmux history. Mitigated by using `tmux setenv` instead.
+- **Network firewall risk** — **[REVIEW]** OpenCode's `opencode serve` binds to ports — in containerized/firewalled environments, this may be blocked.
+- **OpenCode version compatibility** — **[REVIEW]** No version pinning or check. OpenCode is rapidly evolving; CLI flags, plugin API, and serve endpoints could change between versions. Add version detection in CLI resolver and document minimum supported version.
+- **No `elicitation_dialog` equivalent** — **[REVIEW]** Claude Code has hooks that signal when Claude asks a question. OpenCode may not have equivalent. If auto-accept is enabled for OpenCode, it could accept prompts that are actually questions to the user.
 
 ---
 
@@ -1448,8 +1924,8 @@ npx vitest run test/opencode-respawn.test.ts
 
 2. **Should Ralph Loop work with OpenCode?**
    - Technically possible (send prompts via tmux, detect completion by silence + plugin events)
-   - May be less reliable without completion phrase detection
-   - Recommendation: Support it with longer timeouts and clear documentation
+   - **[REVIEW]** Without `<promise>` tags, Ralph becomes a timeout-based prompt repeater — significantly degraded
+   - Recommendation: Mark as **experimental** for OpenCode. Support with longer timeouts but clearly warn users about reduced reliability
 
 3. **What about OpenCode's built-in agent system?**
    - OpenCode has "build", "task", "title" agents plus custom agents
@@ -1457,7 +1933,9 @@ npx vitest run test/opencode-respawn.test.ts
 
 4. **Should AI checkers use Claude or OpenCode for analysis?**
    - AI checkers currently always spawn `claude -p` for analysis
-   - Recommendation: Always use Claude for AI checks (if available), since it's purpose-built for analysis
+   - **[REVIEW]** If only OpenCode is installed (no Claude CLI), AI checkers silently fail — removing two important safety layers
+   - **[REVIEW]** `opencode run --format json` could serve as an alternative AI checker backend
+   - Recommendation: Always use Claude for AI checks if available. If Claude CLI is not available but OpenCode is, consider using `opencode run` as a fallback. Document this limitation.
 
 5. **Should we auto-generate `opencode.json` in the working directory?**
    - Option A: Let OpenCode use existing project config (respect user settings)
@@ -1473,45 +1951,170 @@ npx vitest run test/opencode-respawn.test.ts
 
 ## 20. Implementation Order
 
-### Recommended Sequence
+### Recommended Sequence (updated per re-review — MVP-first approach)
+
+> **[SCOPE DECISION]** Token tracking, respawn controller, Ralph Loop/Tracker, circuit breaker, hooks plugin bridge, and AI idle checker are **all deferred**. These systems are deeply coupled to Claude's output format and protocols. With 75+ model providers in OpenCode, they will break in unpredictable ways. Ship spawn + render + basic UI first, then layer intelligence on top with real PTY data.
 
 ```
-Phase 0: Manual validation (30 min)
+═══════════════════════════════════════════════════════
+  MVP SCOPE (ship first)
+═══════════════════════════════════════════════════════
+
+Phase 0: Manual validation (1-2 hours)
   ↓
-Phase 1: Type system (1 hour)
+Phase 1: Type system + refactors (2-3 hours)
   ↓
 Phase 2: CLI resolver (30 min)
   ↓
 Phase 3: Tmux spawn (2-3 hours) ← CRITICAL INTEGRATION POINT
   ↓
-Phase 4: Idle detection (1-2 hours)
-  ↓
 Phase 5: API + frontend (2-3 hours) ← FIRST USER-VISIBLE RESULT
   ↓
-Phase 6: Respawn adaptation (2-3 hours)
+  ✅ MVP COMPLETE — OpenCode sessions managed from Claudeman web UI
+
+═══════════════════════════════════════════════════════
+  DEFERRED (requires real PTY data + verified APIs)
+═══════════════════════════════════════════════════════
+
+Phase 4: Idle detection + ANSI filter — DEFERRED until PTY behavior characterized
   ↓
-Phase 7: Plugin bridge (2-3 hours) ← QUALITY IMPROVEMENT
+Phase 6: Plugin bridge — DEFERRED until plugin API verified in Phase 0
   ↓
-Phase 8: Server API (4-6 hours) ← OPTIONAL ADVANCED
+Phase 7: Respawn adaptation — DEFERRED until Phase 6 proven reliable
+  ↓
+Phase 8: Server API — DEFERRED, optional advanced feature
 ```
+
+> **Note on Phase 4**: Only `waitForOpenCodeReady()` (basic TUI ready detection) is needed for the MVP. The full idle detection, ANSI content filter, working/busy state tracking, and token parsing are all deferred. The MVP treats OpenCode sessions as "manual interaction only" — no automated idle/completion detection.
 
 ### Milestones
 
-| Milestone | Phase | What You Can Do |
-|-----------|-------|-----------------|
-| **M1: "It renders"** | 0-3 | OpenCode TUI visible in xterm.js via Claudeman |
-| **M2: "It's usable"** | 4-5 | Create OpenCode sessions from web UI, type and interact |
-| **M3: "It's autonomous"** | 6 | Respawn and Ralph Loop work with OpenCode |
-| **M4: "It's smart"** | 7 | Plugin bridge provides definitive idle detection |
-| **M5: "It's rich"** | 8 | Token tracking, conversation history, model switching via API |
+| Milestone | Phase | What You Can Do | Scope |
+|-----------|-------|-----------------|-------|
+| **M1: "It renders"** | 0-3 | OpenCode TUI visible in xterm.js via Claudeman | **MVP** |
+| **M2: "It's usable"** | 5 | Create OpenCode sessions from web UI, type and interact, manage tabs | **MVP** |
+| **M3: "It's observable"** | 4 | Idle/working state detection, ANSI content filter | Deferred |
+| **M4: "It's smart"** | 6 | Plugin bridge provides definitive idle/permission/tool events | Deferred |
+| **M5: "It's autonomous"** | 7 | Respawn works with OpenCode. Ralph Loop experimental. | Deferred |
+| **M6: "It's rich"** | 8 | Token tracking, conversation history, model switching via API | Deferred |
 
 ### Total Effort Estimate
 
-- **Phases 0-5** (MVP): ~8-10 hours
-- **Phase 6** (Respawn): ~2-3 hours
-- **Phase 7** (Plugins): ~2-3 hours
-- **Phase 8** (Server API): ~4-6 hours
-- **Total**: ~16-22 hours for full integration
+- **Phases 0-3, 5** (MVP): ~6-9 hours
+- **Phase 4** (Idle detection): ~2-3 hours (deferred)
+- **Phase 6** (Plugin bridge): ~2-3 hours (deferred)
+- **Phase 7** (Respawn): ~3-4 hours (deferred)
+- **Phase 8** (Server API): ~4-6 hours (deferred)
+- **MVP total**: ~6-9 hours
+- **Full integration total**: ~17-25 hours
+
+---
+
+## 21. Review Findings
+
+> **Reviewed**: 2026-02-26 by a 4-agent team. Each agent reviewed a different area of the plan against the actual Claudeman codebase.
+
+### Review Team
+
+| Agent | Focus Area | Key Findings |
+|-------|-----------|--------------|
+| **arch-reviewer** | Type system, backend abstraction, CLI resolution (Phases 1-3) | Duplicate `SessionMode` types, parameter explosion, CLI resolver inconsistencies |
+| **parsing-reviewer** | Output parsing, idle detection, OpenCode TUI behavior (Phase 4) | Alternate screen buffer breaks ALL silence-based detection, `waitForOpenCodeReady` too simplistic, working/idle logic bug |
+| **respawn-reviewer** | Respawn state machine, Ralph Loop, hooks (Phases 6-7) | Respawn complexity massively underestimated, phase ordering wrong, CompletionDetector needed |
+| **api-reviewer** | API routes, frontend, task breakdown, security (Phases 5, 8) | Env var allowlist blocks OpenCode, API key exposure, Phase 8 shared-state problem |
+
+### Critical Issues (5)
+
+| ID | Issue | Resolution |
+|----|-------|------------|
+| C1 | Bubble Tea alternate screen buffer redraws break output-silence idle detection | Added mandatory ANSI content filter (`ansi-content-filter.ts`) in Phase 4 |
+| C2 | Respawn controller is ~3,500 lines with 13 states (`watching`, `confirming_idle`, `ai_checking`, `sending_update`, `waiting_update`, `sending_clear`, `waiting_clear`, `sending_init`, `waiting_init`, `monitoring_init`, `sending_kickstart`, `waiting_kickstart`, `stopped`) — can't just add `if (mode === 'opencode')` | Added `CompletionDetector` interface pattern in Phase 7 |
+| C3 | Phase 6 (Respawn) depends on Phase 7 (Plugin Bridge) for reliable idle detection | Swapped phases: Plugin Bridge is now Phase 6, Respawn is Phase 7 |
+| C4 | `schemas.ts` env var allowlist blocks `OPENCODE_*` vars | Added `OPENCODE_` to `ALLOWED_ENV_PREFIXES`, `OPENCODE_SERVER_PASSWORD` to `BLOCKED_ENV_KEYS` |
+| C5 | `SessionMode` defined separately in `session.ts` and `types.ts` — will drift | Unified: move to `types.ts`, import in `session.ts` |
+
+### Major Issues (8)
+
+| ID | Issue | Resolution |
+|----|-------|------------|
+| M1 | No `session.isWorking` strategy for OpenCode | Added ANSI content filter-driven `isWorking` logic in Phase 4 |
+| M2 | Working pattern detection is Claude-specific | Deferred to Phase 0 empirical data + OpenCodeCompletionDetector |
+| M3 | Plugin event names are speculative / unverified | Added hard prerequisite: Phase 0 must verify events via test plugin |
+| M4 | `writeViaMux()` `\r` handling untested with Bubble Tea | Added to Phase 0 validation checklist |
+| M5 | `waitForOpenCodeReady()` 500ms threshold too short | Increased to 2000ms, added content-change-only tracking |
+| M6 | `createSession()`/`respawnPane()` have 8 positional params | Refactored to options objects (`CreateSessionOptions`, `RespawnPaneOptions`) |
+| M7 | API keys exposed in `ps` output via inline `export` | Use `tmux setenv` for sensitive vars instead |
+| M8 | Phase 8 TUI + serve dual-process has shared SQLite problem | Documented alternatives (serve-only, attach pattern), port pool allocation |
+
+### Key Design Decisions Made During Review
+
+1. **Simple extension (Option A) confirmed** — correct YAGNI call over full DI abstraction
+2. **`CompletionDetector` interface** — clean abstraction boundary between respawn controller and backend-specific detection
+3. **ANSI content filter** — mandatory new component, not a nice-to-have
+4. **Respawn disabled by default** for OpenCode — opt-in only after plugin bridge proven
+5. **Ralph Loop marked experimental** for OpenCode — without `<promise>` tags, it's a degraded experience
+6. **`tmux setenv`** for API keys — security improvement over inline exports
+7. **Phase 0 expanded** — additional validation items make it 1-2 hours instead of 30 minutes
+8. **plan.json needs reconciliation** — contradicts this document's approach (DI vs simple extension)
+
+---
+
+## 22. Re-Review Findings
+
+> **Re-reviewed**: 2026-02-26 by a 4-agent team (types-reviewer, parsing-reviewer, respawn-reviewer, api-reviewer). Each agent cross-referenced specific plan sections against the actual codebase.
+
+### Re-Review Team
+
+| Agent | Focus Area | Key Findings |
+|-------|-----------|--------------|
+| **types-reviewer** | Types, CLI resolver, tmux spawn (Phases 1-3) | SessionMode duplicate claim imprecise, setOpenCodeEnvVars injection risk, mux-interface has 3 inline unions |
+| **parsing-reviewer** | Output parsing, idle detection (Phase 4) | 6 bugs in code snippets: wrong property names, invalid status value, missing property init, misdescribed Claude detection |
+| **respawn-reviewer** | Respawn, Ralph Loop, hooks (Phases 6-7) | 13 states not 11, Ralph Loop "agnostic" overstated, CompletionDetector feasible but scope underestimated |
+| **api-reviewer** | API routes, frontend, schemas, security (Phases 5, 8) | configContent shell injection, missing writeHooksConfig guard, wrong CleanupManager API, missing generateSessionToken |
+
+### Critical Issues (4)
+
+| ID | Issue | Resolution |
+|----|-------|------------|
+| RC1 | `_lastOutputTime` property does not exist — actual is `_lastActivityAt`. All Phase 4 snippets used wrong name. | Find-and-replace applied throughout |
+| RC2 | `_status = 'working'` is invalid — `SessionStatus` is `'idle' \| 'busy' \| 'stopped' \| 'error'`. Must be `'busy'`. | Fixed in code snippets |
+| RC3 | `configContent` shell injection — user-supplied JSON embedded in `bash -c` string allows `;`, `&&`, `$()` execution | Replaced with `tmux setenv` approach + JSON validation. Added `setOpenCodeConfigContent()` helper |
+| RC4 | `OPENCODE_SERVER_PASSWORD` must be blocked simultaneously with adding `OPENCODE_` to `ALLOWED_ENV_PREFIXES` | Added atomic-change note to schemas section |
+
+### High Issues (7)
+
+| ID | Issue | Resolution |
+|----|-------|------------|
+| RH1 | 13 respawn states, not 11 — plan undercounted by 2 (`monitoring_init`, `sending_kickstart`) | Fixed all references to 13 |
+| RH2 | Missing `_idleConfig` property — referenced but never initialized | Added constructor initialization code |
+| RH3 | `_processExpensiveParsers()` not addressed — Ralph/bash/token parsers fire for all modes | Added mode-gating section to Phase 4 |
+| RH4 | `this.cleanup.addCustom()` doesn't exist — real API is `registerCleanup(type, fn, description)` | Fixed in Phase 8 code |
+| RH5 | `generateSessionToken()` doesn't exist anywhere in codebase | Replaced with `crypto.randomUUID()` |
+| RH6 | `setOpenCodeEnvVars()` — API keys with `"` or `$` break the tmux setenv command | Added single-quote escaping with inner quote escape |
+| RH7 | `writeHooksConfig()` called unconditionally in quick-start — generates Claude hooks for OpenCode sessions | Added `mode !== 'opencode'` guard |
+
+### Medium Issues (6)
+
+| ID | Issue | Resolution |
+|----|-------|------------|
+| RM1 | "Duplicate SessionMode" (C5) imprecise — types.ts has inline union, not named export. mux-interface.ts has 3 locations, not 2. | Corrected description in C5 note |
+| RM2 | Claude idle detection misdescribed — uses prompt char + debounce + spinner, NOT silence threshold. No `completionPattern` in session.ts. | Added correction comment to `getIdleDetectionConfig()` |
+| RM3 | Ralph Loop "CLI-agnostic" overstated — polling is agnostic but completion signaling depends on Claude-specific `<promise>` tags | Reworded in Phase 7 |
+| RM4 | Lifecycle logs hardcode `mode: 'claude'` at 2 locations in server.ts | Added note + fix in Phase 5 quick-start section |
+| RM5 | Respawn section line number wrong (10254 → ~10289) | Fixed |
+| RM6 | `completionPattern: /Worked for \d+[ms]/` shown in session.ts config but actually lives in respawn-controller.ts | Fixed — set to `null` in session config with comment |
+
+### Confirmed Correct (from original review)
+
+All items confirmed correct by the original review remain valid. Additionally confirmed:
+- `createSession()` has 8 positional params, `respawnPane()` has 7 (no `name` param)
+- `mux-factory.ts` needs no changes
+- CLI resolver correctly mirrors `claude-cli-resolver.ts`
+- `assertNever()` at 2 locations in respawn-controller (lines ~1461, ~1563)
+- Plugin bridge approach is sound; Phase 0 plugin verification is essential prerequisite
+- Phase ordering (plugin bridge before respawn) confirmed critical
+- Circuit breaker signals are fully Claude-specific (RALPH_STATUS blocks)
+- All schema additions (mode enum, OpenCodeConfigSchema, env prefix) necessary
 
 ---
 
