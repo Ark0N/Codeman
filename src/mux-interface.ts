@@ -7,7 +7,7 @@
  */
 
 import type { EventEmitter } from 'node:events';
-import type { ProcessStats, PersistedRespawnConfig, NiceConfig, ClaudeMode } from './types.js';
+import type { ProcessStats, PersistedRespawnConfig, NiceConfig, ClaudeMode, SessionMode, OpenCodeConfig } from './types.js';
 
 /**
  * Multiplexer session metadata.
@@ -23,8 +23,8 @@ export interface MuxSession {
   createdAt: number;
   /** Working directory */
   workingDir: string;
-  /** Session mode: claude or shell */
-  mode: 'claude' | 'shell';
+  /** Session mode */
+  mode: SessionMode;
   /** Whether webserver is attached to this session */
   attached: boolean;
   /** Session display name (tab name) */
@@ -41,6 +41,31 @@ export interface MuxSession {
 export interface MuxSessionWithStats extends MuxSession {
   /** Optional resource statistics */
   stats?: ProcessStats;
+}
+
+/** Options for creating a new multiplexer session. */
+export interface CreateSessionOptions {
+  sessionId: string;
+  workingDir: string;
+  mode: SessionMode;
+  name?: string;
+  niceConfig?: NiceConfig;
+  model?: string;
+  claudeMode?: ClaudeMode;
+  allowedTools?: string;
+  openCodeConfig?: OpenCodeConfig;
+}
+
+/** Options for respawning a dead pane. */
+export interface RespawnPaneOptions {
+  sessionId: string;
+  workingDir: string;
+  mode: SessionMode;
+  niceConfig?: NiceConfig;
+  model?: string;
+  claudeMode?: ClaudeMode;
+  allowedTools?: string;
+  openCodeConfig?: OpenCodeConfig;
 }
 
 /**
@@ -62,18 +87,9 @@ export interface TerminalMultiplexer extends EventEmitter {
 
   /**
    * Create a new multiplexer session.
-   * The session runs the appropriate command (claude or shell) in detached mode.
+   * The session runs the appropriate command (claude, opencode, or shell) in detached mode.
    */
-  createSession(
-    sessionId: string,
-    workingDir: string,
-    mode: 'claude' | 'shell',
-    name?: string,
-    niceConfig?: NiceConfig,
-    model?: string,
-    claudeMode?: ClaudeMode,
-    allowedTools?: string,
-  ): Promise<MuxSession>;
+  createSession(options: CreateSessionOptions): Promise<MuxSession>;
 
   /**
    * Kill a session and all its child processes.
@@ -165,5 +181,5 @@ export interface TerminalMultiplexer extends EventEmitter {
   isPaneDead(muxName: string): boolean;
 
   /** Respawn a dead pane with a fresh command. Returns the new PID or null on failure. */
-  respawnPane(sessionId: string, workingDir: string, mode: 'claude' | 'shell', niceConfig?: NiceConfig, model?: string, claudeMode?: ClaudeMode, allowedTools?: string): Promise<number | null>;
+  respawnPane(options: RespawnPaneOptions): Promise<number | null>;
 }

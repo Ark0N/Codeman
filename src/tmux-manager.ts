@@ -30,13 +30,15 @@ import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { ProcessStats, PersistedRespawnConfig, getErrorMessage, NiceConfig, DEFAULT_NICE_CONFIG, type PaneInfo, type ClaudeMode } from './types.js';
+import { ProcessStats, PersistedRespawnConfig, getErrorMessage, DEFAULT_NICE_CONFIG, type PaneInfo, type ClaudeMode, type SessionMode, type OpenCodeConfig } from './types.js';
 import { wrapWithNice } from './utils/nice-wrapper.js';
 import { SAFE_PATH_PATTERN } from './utils/regex-patterns.js';
-import type { TerminalMultiplexer, MuxSession, MuxSessionWithStats } from './mux-interface.js';
+import type { TerminalMultiplexer, MuxSession, MuxSessionWithStats, CreateSessionOptions, RespawnPaneOptions } from './mux-interface.js';
 
 // Claude CLI PATH resolution — shared utility
 import { findClaudeDir } from './utils/claude-cli-resolver.js';
+// OpenCode CLI PATH resolution
+import { resolveOpenCodeDir } from './utils/opencode-cli-resolver.js';
 
 // ============================================================================
 // Timing Constants
@@ -137,6 +139,116 @@ function buildClaudePermissionFlags(claudeMode?: ClaudeMode, allowedTools?: stri
 }
 
 /**
+ * Build the opencode CLI command with appropriate flags.
+ */
+function buildOpenCodeCommand(config?: OpenCodeConfig): string {
+  const parts = ['opencode'];
+
+  // Model selection — allow provider/model format (alphanumeric, dots, hyphens, slashes)
+  if (config?.model) {
+    const safeModel = /^[a-zA-Z0-9._\-/]+$/.test(config.model) ? config.model : undefined;
+    if (safeModel) parts.push('--model', safeModel);
+  }
+
+  // Continue existing session
+  if (config?.continueSession) {
+    const safeId = /^[a-zA-Z0-9_-]+$/.test(config.continueSession) ? config.continueSession : undefined;
+    if (safeId) parts.push('--session', safeId);
+    if (config.forkSession) parts.push('--fork');
+  }
+
+  return parts.join(' ');
+}
+
+/**
+ * Build the spawn command for any session mode.
+ * Shared by createSession() and respawnPane() to avoid duplication.
+ */
+function buildSpawnCommand(options: {
+  mode: SessionMode;
+  sessionId: string;
+  model?: string;
+  claudeMode?: ClaudeMode;
+  allowedTools?: string;
+  openCodeConfig?: OpenCodeConfig;
+}): string {
+  if (options.mode === 'claude') {
+    // Validate model to prevent command injection
+    const safeModel = (options.model && /^[a-zA-Z0-9._-]+$/.test(options.model)) ? options.model : undefined;
+    const modelFlag = safeModel ? ` --model ${safeModel}` : '';
+    return `claude${buildClaudePermissionFlags(options.claudeMode, options.allowedTools)} --session-id "${options.sessionId}"${modelFlag}`;
+  }
+  if (options.mode === 'opencode') {
+    return buildOpenCodeCommand(options.openCodeConfig);
+  }
+  return '$SHELL';
+}
+
+/**
+ * Set sensitive environment variables on a tmux session via setenv.
+ * These are inherited by panes but not visible in ps output or tmux history.
+ */
+function setOpenCodeEnvVars(muxName: string): void {
+  const sensitiveVars = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY'];
+  for (const key of sensitiveVars) {
+    const val = process.env[key];
+    if (val) {
+      // Shell-escape: wrap in single quotes, escape any inner single quotes
+      const escaped = val.replace(/'/g, "'\\''");
+      try {
+        execSync(`tmux setenv -t '${muxName}' ${key} '${escaped}'`, {
+          encoding: 'utf8',
+          timeout: EXEC_TIMEOUT_MS,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+      } catch { /* Non-critical — key may not be needed */ }
+    }
+  }
+}
+
+/**
+ * Set OPENCODE_CONFIG_CONTENT on a tmux session via setenv.
+ * Uses tmux setenv to avoid shell metacharacter injection from user-supplied JSON.
+ */
+function setOpenCodeConfigContent(muxName: string, config?: OpenCodeConfig): void {
+  if (!config) return;
+
+  let jsonContent: string | undefined;
+
+  if (config.autoAllowTools) {
+    const permConfig: Record<string, unknown> = { permission: { '*': 'allow' } };
+    if (config.configContent) {
+      try {
+        const existing = JSON.parse(config.configContent) as Record<string, unknown>;
+        Object.assign(permConfig, existing);
+        permConfig.permission = { '*': 'allow' };
+      } catch { /* invalid JSON, use default permConfig */ }
+    }
+    jsonContent = JSON.stringify(permConfig);
+  } else if (config.configContent) {
+    // Validate JSON to prevent garbage config
+    try {
+      JSON.parse(config.configContent);
+      jsonContent = config.configContent;
+    } catch {
+      console.error('[TmuxManager] Invalid JSON in openCodeConfig.configContent, skipping');
+      return;
+    }
+  }
+
+  if (jsonContent) {
+    const escaped = jsonContent.replace(/'/g, "'\\''");
+    try {
+      execSync(`tmux setenv -t '${muxName}' OPENCODE_CONFIG_CONTENT '${escaped}'`, {
+        encoding: 'utf8',
+        timeout: EXEC_TIMEOUT_MS,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch { /* Non-critical */ }
+  }
+}
+
+/**
  * Manages tmux sessions that wrap Claude CLI or shell processes.
  *
  * Implements the TerminalMultiplexer interface.
@@ -222,16 +334,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Creates a new tmux session wrapping Claude CLI or a shell.
    * In test mode: creates an in-memory session only (no real tmux session).
    */
-  async createSession(
-    sessionId: string,
-    workingDir: string,
-    mode: 'claude' | 'shell',
-    name?: string,
-    niceConfig?: NiceConfig,
-    model?: string,
-    claudeMode?: ClaudeMode,
-    allowedTools?: string,
-  ): Promise<MuxSession> {
+  async createSession(options: CreateSessionOptions): Promise<MuxSession> {
+    const { sessionId, workingDir, mode, name, niceConfig, model, claudeMode, allowedTools, openCodeConfig } = options;
     const muxName = `claudeman-${sessionId.slice(0, 8)}`;
 
     if (!isValidMuxName(muxName)) {
@@ -258,36 +362,43 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return session;
     }
 
-    const claudeDir = findClaudeDir();
-    if (!claudeDir && mode === 'claude') {
-      throw new Error('Claude CLI not found. Install it with: curl -fsSL https://claude.ai/install.sh | bash');
+    // Resolve CLI binary directory based on mode
+    let pathExport = '';
+    if (mode === 'claude') {
+      const claudeDir = findClaudeDir();
+      if (!claudeDir) {
+        throw new Error('Claude CLI not found. Install it with: curl -fsSL https://claude.ai/install.sh | bash');
+      }
+      pathExport = `export PATH="${claudeDir}:$PATH" && `;
+    } else if (mode === 'opencode') {
+      const openCodeDir = resolveOpenCodeDir();
+      if (!openCodeDir) {
+        throw new Error('OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash');
+      }
+      pathExport = `export PATH="${openCodeDir}:$PATH" && `;
     }
-    const pathExport = claudeDir ? `export PATH="${claudeDir}:$PATH" && ` : '';
 
     const envExports = [
       'export LANG=en_US.UTF-8',
       'export LC_ALL=en_US.UTF-8',
-      'unset CLAUDECODE',
       'unset COLORTERM',
       'export CLAUDEMAN_MUX=1',
       `export CLAUDEMAN_SESSION_ID=${sessionId}`,
       `export CLAUDEMAN_MUX_NAME=${muxName}`,
       `export CLAUDEMAN_API_URL=${process.env.CLAUDEMAN_API_URL || 'http://localhost:3000'}`,
-    ].join(' && ');
+    ];
+    // Only unset CLAUDECODE for Claude sessions
+    if (mode === 'claude') envExports.splice(2, 0, 'unset CLAUDECODE');
+    const envExportsStr = envExports.join(' && ');
 
-    // Validate model to prevent command injection (only allow alphanumeric, hyphens, dots)
-    const safeModel = (model && /^[a-zA-Z0-9._-]+$/.test(model)) ? model : undefined;
-    const modelFlag = (mode === 'claude' && safeModel) ? ` --model ${safeModel}` : '';
-    const baseCmd = mode === 'claude'
-      ? `claude${buildClaudePermissionFlags(claudeMode, allowedTools)} --session-id "${sessionId}"${modelFlag}`
-      : '$SHELL';
+    const baseCmd = buildSpawnCommand({ mode, sessionId, model, claudeMode, allowedTools, openCodeConfig });
 
     const config = niceConfig || DEFAULT_NICE_CONFIG;
     const cmd = wrapWithNice(baseCmd, config);
 
     try {
       // Build the full command to run inside tmux
-      const fullCmd = `${pathExport}${envExports} && ${cmd}`;
+      const fullCmd = `${pathExport}${envExportsStr} && ${cmd}`;
 
       // Create tmux session in three steps to handle cold-start (no server running)
       // and avoid the race where the command exits before remain-on-exit is set:
@@ -303,6 +414,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       try {
         execSync(`tmux set-option -t "${muxName}" remain-on-exit on`, { timeout: EXEC_TIMEOUT_MS, stdio: 'ignore' });
       } catch { /* Non-critical */ }
+
+      // For OpenCode: set sensitive env vars and config via tmux setenv
+      // (not visible in ps output or tmux history, inherited by panes)
+      if (mode === 'opencode') {
+        setOpenCodeEnvVars(muxName);
+        setOpenCodeConfigContent(muxName, openCodeConfig);
+      }
 
       // Replace the shell with the actual command (no echo in terminal)
       execSync(
@@ -423,37 +541,48 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * Uses `tmux respawn-pane -k` to restart the command in the same pane,
    * preserving the session and its scrollback buffer.
    */
-  async respawnPane(sessionId: string, workingDir: string, mode: 'claude' | 'shell', niceConfig?: NiceConfig, model?: string, claudeMode?: ClaudeMode, allowedTools?: string): Promise<number | null> {
+  async respawnPane(options: RespawnPaneOptions): Promise<number | null> {
+    const { sessionId, workingDir, mode, niceConfig, model, claudeMode, allowedTools, openCodeConfig } = options;
     const session = this.sessions.get(sessionId);
     if (!session) return null;
     const muxName = session.muxName;
 
     if (!isValidMuxName(muxName) || !isValidPath(workingDir)) return null;
 
-    const claudeDir = findClaudeDir();
-    const pathExport = claudeDir ? `export PATH="${claudeDir}:$PATH" && ` : '';
+    // Resolve CLI binary directory based on mode
+    let pathExport = '';
+    if (mode === 'claude') {
+      const claudeDir = findClaudeDir();
+      pathExport = claudeDir ? `export PATH="${claudeDir}:$PATH" && ` : '';
+    } else if (mode === 'opencode') {
+      const openCodeDir = resolveOpenCodeDir();
+      pathExport = openCodeDir ? `export PATH="${openCodeDir}:$PATH" && ` : '';
+    }
+
     const envExports = [
       'export LANG=en_US.UTF-8',
       'export LC_ALL=en_US.UTF-8',
-      'unset CLAUDECODE',
       'unset COLORTERM',
       'export CLAUDEMAN_MUX=1',
       `export CLAUDEMAN_SESSION_ID=${sessionId}`,
       `export CLAUDEMAN_MUX_NAME=${muxName}`,
       `export CLAUDEMAN_API_URL=${process.env.CLAUDEMAN_API_URL || 'http://localhost:3000'}`,
-    ].join(' && ');
+    ];
+    if (mode === 'claude') envExports.splice(2, 0, 'unset CLAUDECODE');
+    const envExportsStr = envExports.join(' && ');
 
-    const safeModel = (model && /^[a-zA-Z0-9._-]+$/.test(model)) ? model : undefined;
-    const modelFlag = (mode === 'claude' && safeModel) ? ` --model ${safeModel}` : '';
-    const baseCmd = mode === 'claude'
-      ? `claude${buildClaudePermissionFlags(claudeMode, allowedTools)} --session-id "${sessionId}"${modelFlag}`
-      : '$SHELL';
-
+    const baseCmd = buildSpawnCommand({ mode, sessionId, model, claudeMode, allowedTools, openCodeConfig });
     const config = niceConfig || DEFAULT_NICE_CONFIG;
     const cmd = wrapWithNice(baseCmd, config);
-    const fullCmd = `${pathExport}${envExports} && ${cmd}`;
+    const fullCmd = `${pathExport}${envExportsStr} && ${cmd}`;
 
     try {
+      // For OpenCode: set sensitive env vars via tmux setenv before respawn
+      if (mode === 'opencode') {
+        setOpenCodeEnvVars(muxName);
+        setOpenCodeConfigContent(muxName, openCodeConfig);
+      }
+
       await execAsync(
         `tmux respawn-pane -k -t "${muxName}" bash -c ${JSON.stringify(fullCmd)}`,
         { timeout: EXEC_TIMEOUT_MS }

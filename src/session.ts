@@ -18,7 +18,7 @@
 import { EventEmitter } from 'node:events';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
-import { SessionState, SessionStatus, SessionConfig, RalphTrackerState, RalphTodoItem, ActiveBashTool, NiceConfig, DEFAULT_NICE_CONFIG, type ClaudeMode } from './types.js';
+import { SessionState, SessionStatus, SessionConfig, RalphTrackerState, RalphTodoItem, ActiveBashTool, NiceConfig, DEFAULT_NICE_CONFIG, type ClaudeMode, type SessionMode, type OpenCodeConfig } from './types.js';
 import type { TerminalMultiplexer, MuxSession } from './mux-interface.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
@@ -196,12 +196,9 @@ export interface SessionEvents {
   cliInfoUpdated: (info: { version: string | null; model: string | null; accountType: string | null; latestVersion: string | null }) => void;
 }
 
-/**
- * Session operation mode.
- * - `'claude'`: Runs Claude CLI for AI interactions (default)
- * - `'shell'`: Runs a plain bash shell for debugging/testing
- */
-export type SessionMode = 'claude' | 'shell';
+// SessionMode is imported from types.ts (single source of truth)
+// Re-export for backwards compatibility with any external consumers
+export type { SessionMode } from './types.js';
 
 /**
  * Core session class that wraps a PTY process running Claude CLI or a shell.
@@ -325,6 +322,9 @@ export class Session extends EventEmitter {
   private _claudeMode: ClaudeMode = 'dangerously-skip-permissions';
   private _allowedTools: string | undefined;
 
+  // OpenCode configuration (only for mode === 'opencode')
+  private _openCodeConfig: OpenCodeConfig | undefined;
+
   // Session color for visual differentiation
   private _color: import('./types.js').SessionColor = 'default';
 
@@ -382,6 +382,8 @@ export class Session extends EventEmitter {
     claudeMode?: ClaudeMode;
     /** Comma-separated allowed tools (for 'allowedTools' mode) */
     allowedTools?: string;
+    /** OpenCode configuration (only for mode === 'opencode') */
+    openCodeConfig?: OpenCodeConfig;
   }) {
     super();
     this.setMaxListeners(25);
@@ -423,6 +425,11 @@ export class Session extends EventEmitter {
     }
     if (config.allowedTools) {
       this._allowedTools = config.allowedTools;
+    }
+
+    // Apply OpenCode configuration
+    if (config.openCodeConfig) {
+      this._openCodeConfig = config.openCodeConfig;
     }
 
     // Initialize task tracker and forward events (store handlers for cleanup)
@@ -812,6 +819,7 @@ export class Session extends EventEmitter {
       cliModel: this._cliModel || undefined,
       cliAccountType: this._cliAccountType || undefined,
       cliLatestVersion: this._cliLatestVersion || undefined,
+      openCodeConfig: this._openCodeConfig,
     };
   }
 
@@ -902,7 +910,8 @@ export class Session extends EventEmitter {
     this._lineBuffer = '';
     this._lastActivityAt = Date.now();
 
-    console.log('[Session] Starting interactive Claude session' + (this._useMux ? ` (with ${this._mux!.backend})` : ''));
+    const modeLabel = this.mode === 'opencode' ? 'OpenCode' : 'Claude';
+    console.log(`[Session] Starting interactive ${modeLabel} session` + (this._useMux ? ` (with ${this._mux!.backend})` : ''));
 
     // If mux wrapping is enabled, create or attach to a mux session
     if (this._useMux && this._mux) {
@@ -918,7 +927,11 @@ export class Session extends EventEmitter {
         let needsNewSession = false;
         if (this._muxSession && this._mux.isPaneDead(this._muxSession.muxName)) {
           console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
-          const newPid = await this._mux.respawnPane(this.id, this.workingDir, 'claude', this._niceConfig, this._model, this._claudeMode, this._allowedTools);
+          const newPid = await this._mux.respawnPane({
+            sessionId: this.id, workingDir: this.workingDir, mode: this.mode,
+            niceConfig: this._niceConfig, model: this._model, claudeMode: this._claudeMode,
+            allowedTools: this._allowedTools, openCodeConfig: this._openCodeConfig,
+          });
           if (!newPid) {
             console.error('[Session] Failed to respawn pane, will create new session');
             needsNewSession = true;
@@ -934,7 +947,12 @@ export class Session extends EventEmitter {
           console.log('[Session] Attaching to existing mux session:', this._muxSession!.muxName);
         } else {
           // Create a new mux session
-          this._muxSession = await this._mux.createSession(this.id, this.workingDir, 'claude', this._name, this._niceConfig, this._model, this._claudeMode, this._allowedTools);
+          this._muxSession = await this._mux.createSession({
+            sessionId: this.id, workingDir: this.workingDir, mode: this.mode,
+            name: this._name, niceConfig: this._niceConfig, model: this._model,
+            claudeMode: this._claudeMode, allowedTools: this._allowedTools,
+            openCodeConfig: this._openCodeConfig,
+          });
           console.log('[Session] Created mux session:', this._muxSession.muxName);
           // No extra sleep — createSession() already waits for tmux readiness
         }
@@ -961,39 +979,50 @@ export class Session extends EventEmitter {
           throw spawnErr;
         }
 
-        // For NEW mux sessions: wait for prompt to appear then clean buffer
+        // For NEW mux sessions: wait for readiness then clean buffer
         // For RESTORED mux sessions: don't do anything - client will fetch buffer on tab switch
         if (!isRestoredSession) {
-          this._promptCheckInterval = setInterval(() => {
-            // Wait for the prompt character (❯) which means Claude is fully initialized
-            const bufferValue = this._terminalBuffer.value;
-            if (bufferValue.includes('❯') || bufferValue.includes('\u276f')) {
+          if (this.mode === 'opencode') {
+            // OpenCode uses Bubble Tea TUI — no ❯ prompt to detect.
+            // Wait for TUI to stabilize (output stops changing), then mark ready.
+            // Don't clear the buffer — the TUI's initial render IS the useful content.
+            this._promptCheckTimeout = setTimeout(() => {
+              this._promptCheckTimeout = null;
+              this._status = 'idle';
+            }, 3000);
+          } else {
+            // Claude mode: wait for ❯ prompt
+            this._promptCheckInterval = setInterval(() => {
+              // Wait for the prompt character (❯) which means Claude is fully initialized
+              const bufferValue = this._terminalBuffer.value;
+              if (bufferValue.includes('❯') || bufferValue.includes('\u276f')) {
+                if (this._promptCheckInterval) {
+                  clearInterval(this._promptCheckInterval);
+                  this._promptCheckInterval = null;
+                }
+                if (this._promptCheckTimeout) {
+                  clearTimeout(this._promptCheckTimeout);
+                  this._promptCheckTimeout = null;
+                }
+                // Clean the buffer - remove mux init junk before actual content
+                // Strip: cursor movement (\x1b[nA/B/C/D), positioning (\x1b[n;nH),
+                // clear screen (\x1b[2J), scroll region (\x1b[n;nr), and whitespace
+                this._terminalBuffer.set(
+                  bufferValue.replace(LEADING_ANSI_WHITESPACE_PATTERN, '')
+                );
+                // Signal client to refresh
+                this.emit('clearTerminal');
+              }
+            }, 50);
+            // Timeout after 5 seconds if prompt not found
+            this._promptCheckTimeout = setTimeout(() => {
               if (this._promptCheckInterval) {
                 clearInterval(this._promptCheckInterval);
                 this._promptCheckInterval = null;
               }
-              if (this._promptCheckTimeout) {
-                clearTimeout(this._promptCheckTimeout);
-                this._promptCheckTimeout = null;
-              }
-              // Clean the buffer - remove mux init junk before actual content
-              // Strip: cursor movement (\x1b[nA/B/C/D), positioning (\x1b[n;nH),
-              // clear screen (\x1b[2J), scroll region (\x1b[n;nr), and whitespace
-              this._terminalBuffer.set(
-                bufferValue.replace(LEADING_ANSI_WHITESPACE_PATTERN, '')
-              );
-              // Signal client to refresh
-              this.emit('clearTerminal');
-            }
-          }, 50);
-          // Timeout after 5 seconds if prompt not found
-          this._promptCheckTimeout = setTimeout(() => {
-            if (this._promptCheckInterval) {
-              clearInterval(this._promptCheckInterval);
-              this._promptCheckInterval = null;
-            }
-            this._promptCheckTimeout = null;
-          }, 5000);
+              this._promptCheckTimeout = null;
+            }, 5000);
+          }
         }
       } catch (err) {
         console.error('[Session] Failed to create mux session, falling back to direct PTY:', err);
@@ -1173,6 +1202,10 @@ export class Session extends EventEmitter {
    * PTY data chunk. Receives accumulated raw data to process in one batch.
    */
   private _processExpensiveParsers(rawData: string): void {
+    // Skip Claude-specific parsers for OpenCode sessions — Ralph tracker, BashToolParser,
+    // token parsing, and CLI info parsing all depend on Claude's output format.
+    if (this.mode === 'opencode') return;
+
     // Lazy ANSI strip: only compute cleanData when a consumer actually needs it.
     let _cleanData: string | null = null;
     const getCleanData = (): string => {
@@ -1267,7 +1300,7 @@ export class Session extends EventEmitter {
         let needsNewSession = false;
         if (this._muxSession && this._mux.isPaneDead(this._muxSession.muxName)) {
           console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
-          const newPid = await this._mux.respawnPane(this.id, this.workingDir, 'shell', this._niceConfig);
+          const newPid = await this._mux.respawnPane({ sessionId: this.id, workingDir: this.workingDir, mode: 'shell', niceConfig: this._niceConfig });
           if (!newPid) {
             console.error('[Session] Failed to respawn pane, will create new session');
             needsNewSession = true;
@@ -1282,7 +1315,7 @@ export class Session extends EventEmitter {
           console.log('[Session] Attaching to existing mux session:', this._muxSession!.muxName);
         } else {
           // Create a new mux session
-          this._muxSession = await this._mux.createSession(this.id, this.workingDir, 'shell', this._name, this._niceConfig);
+          this._muxSession = await this._mux.createSession({ sessionId: this.id, workingDir: this.workingDir, mode: 'shell', name: this._name, niceConfig: this._niceConfig });
           console.log('[Session] Created mux session:', this._muxSession.muxName);
           // No extra sleep — createSession() already waits for tmux readiness
         }

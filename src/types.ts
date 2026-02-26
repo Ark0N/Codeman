@@ -113,6 +113,23 @@ export interface LifecycleEntry {
  */
 export type ClaudeMode = 'dangerously-skip-permissions' | 'normal' | 'allowedTools';
 
+/** Session mode: which CLI backend a session runs */
+export type SessionMode = 'claude' | 'shell' | 'opencode';
+
+/** OpenCode session configuration */
+export interface OpenCodeConfig {
+  /** Model identifier (e.g., "anthropic/claude-sonnet-4-5", "openai/gpt-5.2", "ollama/codellama") */
+  model?: string;
+  /** Whether to auto-allow all tool executions (sets permission.* = allow) */
+  autoAllowTools?: boolean;
+  /** Session ID to continue from */
+  continueSession?: string;
+  /** Whether to fork when continuing (branch the conversation) */
+  forkSession?: boolean;
+  /** Custom inline config JSON (passed via OPENCODE_CONFIG_CONTENT) */
+  configContent?: string;
+}
+
 /**
  * Configuration for creating a new session
  */
@@ -158,8 +175,8 @@ export interface SessionState {
   lastActivityAt: number;
   /** Session display name */
   name?: string;
-  /** Session mode: 'claude' or 'shell' */
-  mode?: 'claude' | 'shell';
+  /** Session mode */
+  mode?: SessionMode;
   /** Auto-clear enabled */
   autoClearEnabled?: boolean;
   /** Auto-clear token threshold */
@@ -208,6 +225,8 @@ export interface SessionState {
   cliAccountType?: string;
   /** Latest CLI version available (parsed from version check) */
   cliLatestVersion?: string;
+  /** OpenCode-specific configuration (only for mode === 'opencode') */
+  openCodeConfig?: OpenCodeConfig;
 }
 
 // ========== Global Stats Types ==========
