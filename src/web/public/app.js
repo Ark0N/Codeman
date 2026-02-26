@@ -2005,6 +2005,8 @@ class ZerolagInputAddon {
   resetBufferDetection() { this._bufferDetectDone = false; }
   undoDetection() { this._flushedOffset = 0; this._flushedText = ''; this._bufferDetectDone = false; }
   suppressBufferDetection() { this._bufferDetectDone = true; }
+  /** Update the prompt finder at runtime (e.g., when switching between Claude and OpenCode sessions) */
+  setPrompt(finder) { this._options.prompt = finder; this._lastPromptPos = null; }
   findPrompt() {
     if (!this._terminal) return null;
     return _zl_findPrompt(this._terminal, this._options.prompt ?? _ZL_DEFAULT_PROMPT);
@@ -3622,14 +3624,39 @@ class ClaudemanApp {
       const settings = this.loadAppSettingsFromStorage();
       const session = this.activeSessionId ? this.sessions.get(this.activeSessionId) : null;
       const echoEnabled = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
-      // Disable local echo for OpenCode sessions — Bubble Tea TUI has no '>' prompt
-      // for the overlay to anchor to, so keystrokes buffer invisibly
-      const isOpenCode = session?.mode === 'opencode';
-      const shouldEnable = !!(echoEnabled && session && !isOpenCode);
+      const shouldEnable = !!(echoEnabled && session);
       if (this._localEchoEnabled && !shouldEnable) {
           this._localEchoOverlay?.clear();
       }
       this._localEchoEnabled = shouldEnable;
+
+      // Swap prompt finder based on session mode
+      if (this._localEchoOverlay && session) {
+        if (session.mode === 'opencode') {
+          // OpenCode (Bubble Tea TUI): find the ┃ border on the cursor's row.
+          // The input area is "┃  <text>" — the ┃ is the anchor, offset 3 skips "┃  ".
+          // We use the cursor row (cursorY) to find the right line, then scan for ┃.
+          this._localEchoOverlay.setPrompt({
+            type: 'custom',
+            offset: 3,
+            find: (terminal) => {
+              try {
+                const buf = terminal.buffer.active;
+                const row = buf.cursorY;
+                const line = buf.getLine(buf.viewportY + row);
+                if (!line) return null;
+                const text = line.translateToString(true);
+                const idx = text.indexOf('\u2503'); // ┃ (BOX DRAWINGS HEAVY VERTICAL)
+                if (idx >= 0) return { row, col: idx };
+                return null;
+              } catch { return null; }
+            }
+          });
+        } else {
+          // Claude Code: scan for ❯ prompt character
+          this._localEchoOverlay.setPrompt({ type: 'character', char: '\u276f', offset: 2 });
+        }
+      }
   }
 
   /**
