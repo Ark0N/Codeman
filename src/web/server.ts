@@ -6165,10 +6165,17 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       console.log('Image watcher disabled by user settings');
     }
 
-    // Start Cloudflare tunnel if enabled in settings
+    // Tunnel only starts when user clicks the toggle in the UI — never on boot.
+    // Reset persisted tunnelEnabled so the UI toggle reflects actual state.
     if (await this.isTunnelEnabled()) {
-      this.tunnelManager.start(this.port, this.https);
-      console.log('Cloudflare tunnel starting on boot (enabled in settings)');
+      const settingsPath = join(homedir(), '.codeman', 'settings.json');
+      try {
+        const content = await fs.readFile(settingsPath, 'utf-8');
+        const settings = JSON.parse(content);
+        settings.tunnelEnabled = false;
+        await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
+      } catch { /* ignore */ }
+      console.log('Cloudflare tunnel setting reset (tunnel only starts on explicit UI toggle)');
     }
 
     // Start team watcher for agent team awareness (always on — lightweight polling)

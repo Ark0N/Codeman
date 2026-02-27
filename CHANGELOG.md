@@ -1,5 +1,11 @@
 # codeman
 
+## 0.2.6
+
+### Patch Changes
+
+- Disable tunnel auto-start on boot; tunnel now only starts when user clicks the UI toggle
+
 ## 0.2.5
 
 ### Patch Changes
