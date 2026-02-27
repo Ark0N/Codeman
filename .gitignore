@@ -1,5 +1,6 @@
-# Claude Code skills (local tooling, not project code)
+# Claude Code local files
 .agents/
+skills-lock.json
 
 # Dependencies
 node_modules/
