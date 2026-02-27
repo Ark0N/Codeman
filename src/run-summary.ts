@@ -139,13 +139,10 @@ export class RunSummaryTracker {
     // Record state transition
     if (oldState && oldState !== newState) {
       this.stats.stateTransitions++;
-      this.addEvent(
-        'respawn_state_change',
-        'info',
-        `State: ${oldState} → ${newState}`,
-        details,
-        { from: oldState, to: newState }
-      );
+      this.addEvent('respawn_state_change', 'info', `State: ${oldState} → ${newState}`, details, {
+        from: oldState,
+        to: newState,
+      });
     }
 
     // Update state tracking
@@ -214,7 +211,11 @@ export class RunSummaryTracker {
         'info',
         `Token milestone: ${this.formatTokens(currentMilestone)}`,
         `Input: ${this.formatTokens(inputTokens)}, Output: ${this.formatTokens(outputTokens)}`,
-        { total, input: inputTokens, output: outputTokens }
+        {
+          total,
+          input: inputTokens,
+          output: outputTokens,
+        }
       );
     }
   }
@@ -264,13 +265,9 @@ export class RunSummaryTracker {
    * Record a Ralph completion detection.
    */
   recordRalphCompletion(phrase: string): void {
-    this.addEvent(
-      'ralph_completion',
-      'success',
-      'Ralph completion detected',
-      `Phrase: ${phrase}`,
-      { phrase }
-    );
+    this.addEvent('ralph_completion', 'success', 'Ralph completion detected', `Phrase: ${phrase}`, {
+      phrase,
+    });
   }
 
   /**
@@ -278,9 +275,7 @@ export class RunSummaryTracker {
    */
   recordHookEvent(eventType: string, data?: Record<string, unknown>): void {
     const severity: RunSummaryEventSeverity =
-      eventType === 'stop' ? 'warning' :
-      eventType === 'permission_prompt' ? 'info' :
-      'info';
+      eventType === 'stop' ? 'warning' : eventType === 'permission_prompt' ? 'info' : 'info';
 
     this.addEvent(
       'hook_event',
@@ -311,13 +306,10 @@ export class RunSummaryTracker {
    * Record session started.
    */
   recordSessionStarted(mode: string, workingDir: string): void {
-    this.addEvent(
-      'session_started',
-      'success',
-      'Session started',
-      `Mode: ${mode}, Dir: ${workingDir}`,
-      { mode, workingDir }
-    );
+    this.addEvent('session_started', 'success', 'Session started', `Mode: ${mode}, Dir: ${workingDir}`, {
+      mode,
+      workingDir,
+    });
   }
 
   /**

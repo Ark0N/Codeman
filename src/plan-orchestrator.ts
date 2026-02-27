@@ -19,10 +19,7 @@ import { Session } from './session.js';
 import type { TerminalMultiplexer } from './mux-interface.js';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  RESEARCH_AGENT_PROMPT,
-  PLANNER_PROMPT,
-} from './prompts/index.js';
+import { RESEARCH_AGENT_PROMPT, PLANNER_PROMPT } from './prompts/index.js';
 import { PlanTaskStatus, TddPhase } from './types.js';
 
 // ============================================================================
@@ -170,7 +167,7 @@ export class PlanOrchestrator {
     mux: TerminalMultiplexer,
     workingDir: string = process.cwd(),
     outputDir?: string,
-    modelConfig?: { defaultModel?: string; agentTypeOverrides?: Record<string, string> },
+    modelConfig?: { defaultModel?: string; agentTypeOverrides?: Record<string, string> }
   ) {
     this.mux = mux;
     this.workingDir = workingDir;
@@ -193,7 +190,11 @@ export class PlanOrchestrator {
       }
 
       const promptPath = join(agentDir, 'prompt.md');
-      writeFileSync(promptPath, `# ${agentType} Agent Prompt\n\nGenerated: ${new Date().toISOString()}\nDuration: ${(durationMs / 1000).toFixed(1)}s\n\n## Task\n${this.taskDescription}\n\n## Prompt\n${prompt}\n`, 'utf-8');
+      writeFileSync(
+        promptPath,
+        `# ${agentType} Agent Prompt\n\nGenerated: ${new Date().toISOString()}\nDuration: ${(durationMs / 1000).toFixed(1)}s\n\n## Task\n${this.taskDescription}\n\n## Prompt\n${prompt}\n`,
+        'utf-8'
+      );
 
       const resultPath = join(agentDir, 'result.json');
       writeFileSync(resultPath, JSON.stringify(result, null, 2), 'utf-8');
@@ -227,9 +228,9 @@ export class PlanOrchestrator {
 
   private generateSummary(result: DetailedPlanResult): string {
     const items = result.items || [];
-    const p0 = items.filter(i => i.priority === 'P0');
-    const p1 = items.filter(i => i.priority === 'P1');
-    const p2 = items.filter(i => i.priority === 'P2');
+    const p0 = items.filter((i) => i.priority === 'P0');
+    const p1 = items.filter((i) => i.priority === 'P1');
+    const p2 = items.filter((i) => i.priority === 'P2');
 
     let md = `# Plan Summary\n\n`;
     md += `Generated: ${new Date().toISOString()}\n`;
@@ -392,10 +393,29 @@ export class PlanOrchestrator {
     const startTime = Date.now();
 
     if (this.cancelled) {
-      return { success: false, findings: { externalResources: [], codebasePatterns: [], technicalRecommendations: [], potentialChallenges: [], recommendedTools: [] }, enrichedTaskDescription: taskDescription, error: 'Cancelled', durationMs: 0 };
+      return {
+        success: false,
+        findings: {
+          externalResources: [],
+          codebasePatterns: [],
+          technicalRecommendations: [],
+          potentialChallenges: [],
+          recommendedTools: [],
+        },
+        enrichedTaskDescription: taskDescription,
+        error: 'Cancelled',
+        durationMs: 0,
+      };
     }
 
-    onSubagent?.({ type: 'started', agentId, agentType: 'research', model: this.researchModel, status: 'running', detail: 'Researching...' });
+    onSubagent?.({
+      type: 'started',
+      agentId,
+      agentType: 'research',
+      model: this.researchModel,
+      status: 'running',
+      detail: 'Researching...',
+    });
 
     const session = new Session({
       workingDir: this.workingDir,
@@ -411,7 +431,14 @@ export class PlanOrchestrator {
     // Start progress interval before try block to ensure cleanup in finally
     const progressInterval = setInterval(() => {
       const elapsed = Math.floor((Date.now() - startTime) / 1000);
-      onSubagent?.({ type: 'progress', agentId, agentType: 'research', model: this.researchModel, status: 'running', detail: `${elapsed}s elapsed` });
+      onSubagent?.({
+        type: 'progress',
+        agentId,
+        agentType: 'research',
+        model: this.researchModel,
+        status: 'running',
+        detail: `${elapsed}s elapsed`,
+      });
     }, 30000);
 
     try {
@@ -424,14 +451,54 @@ export class PlanOrchestrator {
       // Extract JSON from response
       const jsonMatch = response.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
-        onSubagent?.({ type: 'failed', agentId, agentType: 'research', model: this.researchModel, status: 'failed', error: 'No JSON found', durationMs });
-        return { success: false, findings: { externalResources: [], codebasePatterns: [], technicalRecommendations: [], potentialChallenges: [], recommendedTools: [] }, enrichedTaskDescription: taskDescription, error: 'No JSON in response', durationMs };
+        onSubagent?.({
+          type: 'failed',
+          agentId,
+          agentType: 'research',
+          model: this.researchModel,
+          status: 'failed',
+          error: 'No JSON found',
+          durationMs,
+        });
+        return {
+          success: false,
+          findings: {
+            externalResources: [],
+            codebasePatterns: [],
+            technicalRecommendations: [],
+            potentialChallenges: [],
+            recommendedTools: [],
+          },
+          enrichedTaskDescription: taskDescription,
+          error: 'No JSON in response',
+          durationMs,
+        };
       }
 
       const parsed = tryParseJSON(jsonMatch[0]);
       if (!parsed.success) {
-        onSubagent?.({ type: 'failed', agentId, agentType: 'research', model: this.researchModel, status: 'failed', error: parsed.error, durationMs });
-        return { success: false, findings: { externalResources: [], codebasePatterns: [], technicalRecommendations: [], potentialChallenges: [], recommendedTools: [] }, enrichedTaskDescription: taskDescription, error: parsed.error, durationMs };
+        onSubagent?.({
+          type: 'failed',
+          agentId,
+          agentType: 'research',
+          model: this.researchModel,
+          status: 'failed',
+          error: parsed.error,
+          durationMs,
+        });
+        return {
+          success: false,
+          findings: {
+            externalResources: [],
+            codebasePatterns: [],
+            technicalRecommendations: [],
+            potentialChallenges: [],
+            recommendedTools: [],
+          },
+          enrichedTaskDescription: taskDescription,
+          error: parsed.error,
+          durationMs,
+        };
       }
 
       const data = parsed.data as Record<string, unknown>;
@@ -444,20 +511,48 @@ export class PlanOrchestrator {
           potentialChallenges: Array.isArray(data.potentialChallenges) ? data.potentialChallenges : [],
           recommendedTools: Array.isArray(data.recommendedTools) ? data.recommendedTools : [],
         },
-        enrichedTaskDescription: typeof data.enrichedTaskDescription === 'string' ? data.enrichedTaskDescription : taskDescription,
+        enrichedTaskDescription:
+          typeof data.enrichedTaskDescription === 'string' ? data.enrichedTaskDescription : taskDescription,
         durationMs,
       };
 
       this.saveAgentOutput('research', prompt, result, durationMs);
-      onSubagent?.({ type: 'completed', agentId, agentType: 'research', model: this.researchModel, status: 'completed', durationMs });
+      onSubagent?.({
+        type: 'completed',
+        agentId,
+        agentType: 'research',
+        model: this.researchModel,
+        status: 'completed',
+        durationMs,
+      });
 
       return result;
     } catch (err) {
       this.runningSessions.delete(session);
       const durationMs = Date.now() - startTime;
       const error = err instanceof Error ? err.message : String(err);
-      onSubagent?.({ type: 'failed', agentId, agentType: 'research', model: this.researchModel, status: 'failed', error, durationMs });
-      return { success: false, findings: { externalResources: [], codebasePatterns: [], technicalRecommendations: [], potentialChallenges: [], recommendedTools: [] }, enrichedTaskDescription: taskDescription, error, durationMs };
+      onSubagent?.({
+        type: 'failed',
+        agentId,
+        agentType: 'research',
+        model: this.researchModel,
+        status: 'failed',
+        error,
+        durationMs,
+      });
+      return {
+        success: false,
+        findings: {
+          externalResources: [],
+          codebasePatterns: [],
+          technicalRecommendations: [],
+          potentialChallenges: [],
+          recommendedTools: [],
+        },
+        enrichedTaskDescription: taskDescription,
+        error,
+        durationMs,
+      };
     } finally {
       // Always clear the progress interval to prevent memory leaks
       clearInterval(progressInterval);
@@ -469,7 +564,13 @@ export class PlanOrchestrator {
     researchContext: string,
     onProgress?: ProgressCallback,
     onSubagent?: SubagentCallback
-  ): Promise<{ success: boolean; items?: PlanItem[]; gaps?: string[]; warnings?: string[]; error?: string }> {
+  ): Promise<{
+    success: boolean;
+    items?: PlanItem[];
+    gaps?: string[];
+    warnings?: string[];
+    error?: string;
+  }> {
     const agentId = `planner-${Date.now()}`;
     const startTime = Date.now();
 
@@ -477,7 +578,14 @@ export class PlanOrchestrator {
       return { success: false, error: 'Cancelled' };
     }
 
-    onSubagent?.({ type: 'started', agentId, agentType: 'planner', model: this.plannerModel, status: 'running', detail: 'Generating plan...' });
+    onSubagent?.({
+      type: 'started',
+      agentId,
+      agentType: 'planner',
+      model: this.plannerModel,
+      status: 'running',
+      detail: 'Generating plan...',
+    });
 
     const session = new Session({
       workingDir: this.workingDir,
@@ -488,14 +596,22 @@ export class PlanOrchestrator {
 
     this.runningSessions.add(session);
 
-    const prompt = PLANNER_PROMPT
-      .replace('{TASK}', taskDescription)
-      .replace('{RESEARCH_CONTEXT}', researchContext || '');
+    const prompt = PLANNER_PROMPT.replace('{TASK}', taskDescription).replace(
+      '{RESEARCH_CONTEXT}',
+      researchContext || ''
+    );
 
     // Start progress interval before try block to ensure cleanup in finally
     const progressInterval = setInterval(() => {
       const elapsed = Math.floor((Date.now() - startTime) / 1000);
-      onSubagent?.({ type: 'progress', agentId, agentType: 'planner', model: this.plannerModel, status: 'running', detail: `${elapsed}s elapsed` });
+      onSubagent?.({
+        type: 'progress',
+        agentId,
+        agentType: 'planner',
+        model: this.plannerModel,
+        status: 'running',
+        detail: `${elapsed}s elapsed`,
+      });
     }, 30000);
 
     try {
@@ -508,13 +624,29 @@ export class PlanOrchestrator {
       // Extract JSON from response
       const jsonMatch = response.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
-        onSubagent?.({ type: 'failed', agentId, agentType: 'planner', model: this.plannerModel, status: 'failed', error: 'No JSON found', durationMs });
+        onSubagent?.({
+          type: 'failed',
+          agentId,
+          agentType: 'planner',
+          model: this.plannerModel,
+          status: 'failed',
+          error: 'No JSON found',
+          durationMs,
+        });
         return { success: false, error: 'No JSON in response' };
       }
 
       const parsed = tryParseJSON(jsonMatch[0]);
       if (!parsed.success) {
-        onSubagent?.({ type: 'failed', agentId, agentType: 'planner', model: this.plannerModel, status: 'failed', error: parsed.error, durationMs });
+        onSubagent?.({
+          type: 'failed',
+          agentId,
+          agentType: 'planner',
+          model: this.plannerModel,
+          status: 'failed',
+          error: parsed.error,
+          durationMs,
+        });
         return { success: false, error: parsed.error };
       }
 
@@ -524,7 +656,15 @@ export class PlanOrchestrator {
       const warnings: string[] = Array.isArray(data.warnings) ? data.warnings : [];
 
       this.saveAgentOutput('planner', prompt, { items, gaps, warnings }, durationMs);
-      onSubagent?.({ type: 'completed', agentId, agentType: 'planner', model: this.plannerModel, status: 'completed', itemCount: items.length, durationMs });
+      onSubagent?.({
+        type: 'completed',
+        agentId,
+        agentType: 'planner',
+        model: this.plannerModel,
+        status: 'completed',
+        itemCount: items.length,
+        durationMs,
+      });
 
       onProgress?.('planning', `Generated ${items.length} tasks`);
 
@@ -533,7 +673,15 @@ export class PlanOrchestrator {
       this.runningSessions.delete(session);
       const durationMs = Date.now() - startTime;
       const error = err instanceof Error ? err.message : String(err);
-      onSubagent?.({ type: 'failed', agentId, agentType: 'planner', model: this.plannerModel, status: 'failed', error, durationMs });
+      onSubagent?.({
+        type: 'failed',
+        agentId,
+        agentType: 'planner',
+        model: this.plannerModel,
+        status: 'failed',
+        error,
+        durationMs,
+      });
       return { success: false, error };
     } finally {
       // Always clear the progress interval to prevent memory leaks

@@ -51,21 +51,13 @@ const MAX_PENDING_TOOL_USES = 100;
  * Used as fallback when JSON parsing doesn't capture the launch.
  * Capture group 1: Agent/task type name
  */
-const LAUNCH_PATTERNS = [
-  /Launching\s+(\w+)\s+agent/i,
-  /Starting\s+(\w+)\s+task/i,
-  /Spawning\s+(\w+)\s+agent/i,
-];
+const LAUNCH_PATTERNS = [/Launching\s+(\w+)\s+agent/i, /Starting\s+(\w+)\s+task/i, /Spawning\s+(\w+)\s+agent/i];
 
 /**
  * Patterns that indicate a task has completed.
  * Used as fallback when JSON parsing doesn't capture the result.
  */
-const COMPLETE_PATTERNS = [
-  /Task\s+completed/i,
-  /Agent\s+finished/i,
-  /Background\s+task\s+done/i,
-];
+const COMPLETE_PATTERNS = [/Task\s+completed/i, /Agent\s+finished/i, /Background\s+task\s+done/i];
 
 // ========== Type Definitions ==========
 
@@ -218,7 +210,10 @@ export class TaskTracker extends EventEmitter {
   private taskStack: string[] = [];
 
   /** Pending tool_use blocks waiting for results (with timestamp for cleanup) */
-  private pendingToolUses: Map<string, { description: string; subagentType: string; parentId: string | null; createdAt: number }> = new Map();
+  private pendingToolUses: Map<
+    string,
+    { description: string; subagentType: string; parentId: string | null; createdAt: number }
+  > = new Map();
 
   /**
    * Creates a new TaskTracker instance.
@@ -316,7 +311,12 @@ export class TaskTracker extends EventEmitter {
     const parentId = this.taskStack.length > 0 ? this.taskStack[this.taskStack.length - 1] : null;
 
     // Store pending tool use - task starts when we see activity
-    this.pendingToolUses.set(toolUseId, { description, subagentType, parentId, createdAt: Date.now() });
+    this.pendingToolUses.set(toolUseId, {
+      description,
+      subagentType,
+      parentId,
+      createdAt: Date.now(),
+    });
 
     // Clean up old pending entries to prevent unbounded growth
     this.cleanupOldPendingToolUses();
@@ -361,9 +361,7 @@ export class TaskTracker extends EventEmitter {
     if (task) {
       task.status = block.is_error ? 'failed' : 'completed';
       task.endTime = Date.now();
-      task.output = typeof block.content === 'string'
-        ? block.content
-        : JSON.stringify(block.content);
+      task.output = typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
 
       // Remove from stack
       const stackIndex = this.taskStack.indexOf(toolUseId);
@@ -610,13 +608,21 @@ export class TaskTracker extends EventEmitter {
    *   - failed: Tasks that ended with errors
    */
   getStats(): { total: number; running: number; completed: number; failed: number } {
-    let running = 0, completed = 0, failed = 0;
+    let running = 0,
+      completed = 0,
+      failed = 0;
 
     for (const task of this.tasks.values()) {
       switch (task.status) {
-        case 'running': running++; break;
-        case 'completed': completed++; break;
-        case 'failed': failed++; break;
+        case 'running':
+          running++;
+          break;
+        case 'completed':
+          completed++;
+          break;
+        case 'failed':
+          failed++;
+          break;
         default:
           assertNever(task.status, `Unhandled BackgroundTask status: ${task.status}`);
       }

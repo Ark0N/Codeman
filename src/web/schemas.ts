@@ -15,11 +15,23 @@ import { SAFE_PATH_PATTERN } from '../utils/regex-patterns.js';
 /** Validate a path string: no shell metacharacters, no traversal, must be absolute */
 export function isValidWorkingDir(p: string): boolean {
   if (!p || !p.startsWith('/')) return false;
-  if (p.includes(';') || p.includes('&') || p.includes('|') ||
-      p.includes('$') || p.includes('`') || p.includes('(') ||
-      p.includes(')') || p.includes('{') || p.includes('}') ||
-      p.includes('<') || p.includes('>') || p.includes("'") ||
-      p.includes('"') || p.includes('\n') || p.includes('\r')) {
+  if (
+    p.includes(';') ||
+    p.includes('&') ||
+    p.includes('|') ||
+    p.includes('$') ||
+    p.includes('`') ||
+    p.includes('(') ||
+    p.includes(')') ||
+    p.includes('{') ||
+    p.includes('}') ||
+    p.includes('<') ||
+    p.includes('>') ||
+    p.includes("'") ||
+    p.includes('"') ||
+    p.includes('\n') ||
+    p.includes('\r')
+  ) {
     return false;
   }
   if (p.includes('..')) return false;
@@ -38,25 +50,35 @@ const ALLOWED_ENV_PREFIXES = ['CLAUDE_CODE_', 'OPENCODE_'];
 
 /** Env var keys that are always blocked (security-sensitive) */
 const BLOCKED_ENV_KEYS = new Set([
-  'PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'NODE_OPTIONS',
-  'CODEMAN_MUX_NAME', 'CODEMAN_TMUX',
-  'OPENCODE_SERVER_PASSWORD',  // Security-sensitive: server auth password
+  'PATH',
+  'LD_PRELOAD',
+  'LD_LIBRARY_PATH',
+  'NODE_OPTIONS',
+  'CODEMAN_MUX_NAME',
+  'CODEMAN_TMUX',
+  'OPENCODE_SERVER_PASSWORD', // Security-sensitive: server auth password
 ]);
 
 /** Validate that an env var key is allowed */
 function isAllowedEnvKey(key: string): boolean {
   if (BLOCKED_ENV_KEYS.has(key)) return false;
-  return ALLOWED_ENV_PREFIXES.some(prefix => key.startsWith(prefix));
+  return ALLOWED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
 /** Zod schema for env overrides with allowlist enforcement */
-const safeEnvOverridesSchema = z.record(z.string(), z.string()).optional().refine(
-  (val) => {
-    if (!val) return true;
-    return Object.keys(val).every(isAllowedEnvKey);
-  },
-  { message: 'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_* and OPENCODE_* keys are allowed.' },
-);
+const safeEnvOverridesSchema = z
+  .record(z.string(), z.string())
+  .optional()
+  .refine(
+    (val) => {
+      if (!val) return true;
+      return Object.keys(val).every(isAllowedEnvKey);
+    },
+    {
+      message:
+        'envOverrides contains blocked or disallowed env var keys. Only CLAUDE_CODE_* and OPENCODE_* keys are allowed.',
+    }
+  );
 
 // ========== Session Routes ==========
 
@@ -65,16 +87,37 @@ const safeEnvOverridesSchema = z.record(z.string(), z.string()).optional().refin
  * Creates a new session with optional working directory, mode, and name.
  */
 /** Schema for OpenCode-specific configuration */
-const OpenCodeConfigSchema = z.object({
-  model: z.string().max(100).regex(/^[a-zA-Z0-9._\-/]+$/).optional(),
-  autoAllowTools: z.boolean().optional(),
-  continueSession: z.string().max(100).regex(/^[a-zA-Z0-9_-]+$/).optional(),
-  forkSession: z.boolean().optional(),
-  configContent: z.string().max(10000).refine(
-    (val) => { try { JSON.parse(val); return true; } catch { return false; } },
-    { message: 'configContent must be valid JSON' },
-  ).optional(),
-}).optional();
+const OpenCodeConfigSchema = z
+  .object({
+    model: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9._\-/]+$/)
+      .optional(),
+    autoAllowTools: z.boolean().optional(),
+    continueSession: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9_-]+$/)
+      .optional(),
+    forkSession: z.boolean().optional(),
+    configContent: z
+      .string()
+      .max(10000)
+      .refine(
+        (val) => {
+          try {
+            JSON.parse(val);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        { message: 'configContent must be valid JSON' }
+      )
+      .optional(),
+  })
+  .optional();
 
 export const CreateSessionSchema = z.object({
   workingDir: safePathSchema.optional(),
@@ -108,7 +151,9 @@ export const ResizeSchema = z.object({
  * Creates a new case folder.
  */
 export const CreateCaseSchema = z.object({
-  name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format. Use only letters, numbers, hyphens, underscores.'),
+  name: z
+    .string()
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format. Use only letters, numbers, hyphens, underscores.'),
   description: z.string().max(1000).optional(),
 });
 
@@ -119,7 +164,10 @@ export const CreateCaseSchema = z.object({
  * Creates case (if needed) and starts interactive session.
  */
 export const QuickStartSchema = z.object({
-  caseName: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format. Use only letters, numbers, hyphens, underscores.').optional(),
+  caseName: z
+    .string()
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format. Use only letters, numbers, hyphens, underscores.')
+    .optional(),
   mode: z.enum(['claude', 'shell', 'opencode']).optional(),
   openCodeConfig: OpenCodeConfigSchema,
 });
@@ -175,86 +223,100 @@ export const RespawnConfigSchema = z.object({
  * Schema for PUT /api/config
  * Updates application configuration with whitelist of allowed fields.
  */
-export const ConfigUpdateSchema = z.object({
-  pollIntervalMs: z.number().int().min(100).max(60000).optional(),
-  defaultTimeoutMs: z.number().int().min(1000).max(3600000).optional(),
-  maxConcurrentSessions: z.number().int().min(1).max(50).optional(),
-  respawn: RespawnConfigSchema.optional(),
-}).strict();
+export const ConfigUpdateSchema = z
+  .object({
+    pollIntervalMs: z.number().int().min(100).max(60000).optional(),
+    defaultTimeoutMs: z.number().int().min(1000).max(3600000).optional(),
+    maxConcurrentSessions: z.number().int().min(1).max(50).optional(),
+    respawn: RespawnConfigSchema.optional(),
+  })
+  .strict();
 
 /**
  * Schema for PUT /api/settings
  * Explicit allowlist of known settings fields — prevents arbitrary key persistence.
  */
-const NotificationEventSchema = z.object({
-  enabled: z.boolean().optional(),
-  browser: z.boolean().optional(),
-  audio: z.boolean().optional(),
-  push: z.boolean().optional(),
-}).optional();
+const NotificationEventSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    browser: z.boolean().optional(),
+    audio: z.boolean().optional(),
+    push: z.boolean().optional(),
+  })
+  .optional();
 
-export const SettingsUpdateSchema = z.object({
-  // Paths
-  defaultClaudeMdPath: z.string().max(500).optional(),
-  defaultWorkingDir: z.string().max(500).optional(),
-  lastUsedCase: z.string().max(200).optional(),
-  // Feature toggles
-  ralphTrackerEnabled: z.boolean().optional(),
-  subagentTrackingEnabled: z.boolean().optional(),
-  subagentActiveTabOnly: z.boolean().optional(),
-  imageWatcherEnabled: z.boolean().optional(),
-  tunnelEnabled: z.boolean().optional(),
-  tabTwoRows: z.boolean().optional(),
-  agentTeamsEnabled: z.boolean().optional(),
-  // UI visibility
-  showFontControls: z.boolean().optional(),
-  showSystemStats: z.boolean().optional(),
-  showTokenCount: z.boolean().optional(),
-  showCost: z.boolean().optional(),
-  showLifecycleLog: z.boolean().optional(),
-  showMonitor: z.boolean().optional(),
-  showProjectInsights: z.boolean().optional(),
-  showFileBrowser: z.boolean().optional(),
-  showSubagents: z.boolean().optional(),
-  // Claude CLI settings
-  claudeMode: z.string().max(50).optional(),
-  allowedTools: z.string().max(2000).optional(),
-  // CPU priority
-  nice: z.object({
-    enabled: z.boolean().optional(),
-    niceValue: z.number().int().min(-20).max(19).optional(),
-  }).optional(),
-  // Notification preferences (cross-device sync)
-  notificationPreferences: z.object({
-    enabled: z.boolean().optional(),
-    browserNotifications: z.boolean().optional(),
-    audioAlerts: z.boolean().optional(),
-    stuckThresholdMs: z.number().optional(),
-    muteCritical: z.boolean().optional(),
-    muteWarning: z.boolean().optional(),
-    muteInfo: z.boolean().optional(),
-    eventTypes: z.object({
-      permission_prompt: NotificationEventSchema,
-      elicitation_dialog: NotificationEventSchema,
-      idle_prompt: NotificationEventSchema,
-      stop: NotificationEventSchema,
-      session_error: NotificationEventSchema,
-      respawn_cycle: NotificationEventSchema,
-      token_milestone: NotificationEventSchema,
-      ralph_complete: NotificationEventSchema,
-      subagent_spawn: NotificationEventSchema,
-      subagent_complete: NotificationEventSchema,
-    }).optional(),
-    _version: z.number().optional(),
-  }).optional(),
-  // Voice settings (cross-device sync)
-  voiceSettings: z.object({
-    apiKey: z.string().max(200).optional(),
-    language: z.string().max(20).optional(),
-    keyterms: z.string().max(500).optional(),
-    insertMode: z.string().max(20).optional(),
-  }).optional(),
-}).strict();
+export const SettingsUpdateSchema = z
+  .object({
+    // Paths
+    defaultClaudeMdPath: z.string().max(500).optional(),
+    defaultWorkingDir: z.string().max(500).optional(),
+    lastUsedCase: z.string().max(200).optional(),
+    // Feature toggles
+    ralphTrackerEnabled: z.boolean().optional(),
+    subagentTrackingEnabled: z.boolean().optional(),
+    subagentActiveTabOnly: z.boolean().optional(),
+    imageWatcherEnabled: z.boolean().optional(),
+    tunnelEnabled: z.boolean().optional(),
+    tabTwoRows: z.boolean().optional(),
+    agentTeamsEnabled: z.boolean().optional(),
+    // UI visibility
+    showFontControls: z.boolean().optional(),
+    showSystemStats: z.boolean().optional(),
+    showTokenCount: z.boolean().optional(),
+    showCost: z.boolean().optional(),
+    showLifecycleLog: z.boolean().optional(),
+    showMonitor: z.boolean().optional(),
+    showProjectInsights: z.boolean().optional(),
+    showFileBrowser: z.boolean().optional(),
+    showSubagents: z.boolean().optional(),
+    // Claude CLI settings
+    claudeMode: z.string().max(50).optional(),
+    allowedTools: z.string().max(2000).optional(),
+    // CPU priority
+    nice: z
+      .object({
+        enabled: z.boolean().optional(),
+        niceValue: z.number().int().min(-20).max(19).optional(),
+      })
+      .optional(),
+    // Notification preferences (cross-device sync)
+    notificationPreferences: z
+      .object({
+        enabled: z.boolean().optional(),
+        browserNotifications: z.boolean().optional(),
+        audioAlerts: z.boolean().optional(),
+        stuckThresholdMs: z.number().optional(),
+        muteCritical: z.boolean().optional(),
+        muteWarning: z.boolean().optional(),
+        muteInfo: z.boolean().optional(),
+        eventTypes: z
+          .object({
+            permission_prompt: NotificationEventSchema,
+            elicitation_dialog: NotificationEventSchema,
+            idle_prompt: NotificationEventSchema,
+            stop: NotificationEventSchema,
+            session_error: NotificationEventSchema,
+            respawn_cycle: NotificationEventSchema,
+            token_milestone: NotificationEventSchema,
+            ralph_complete: NotificationEventSchema,
+            subagent_spawn: NotificationEventSchema,
+            subagent_complete: NotificationEventSchema,
+          })
+          .optional(),
+        _version: z.number().optional(),
+      })
+      .optional(),
+    // Voice settings (cross-device sync)
+    voiceSettings: z
+      .object({
+        apiKey: z.string().max(200).optional(),
+        language: z.string().max(20).optional(),
+        keyterms: z.string().max(500).optional(),
+        insertMode: z.string().max(20).optional(),
+      })
+      .optional(),
+  })
+  .strict();
 
 /**
  * Schema for POST /api/sessions/:id/input with length limit
@@ -381,10 +443,12 @@ export const CpuLimitSchema = z.object({
 export const ModelConfigUpdateSchema = z.record(z.string(), z.unknown());
 
 /** PUT /api/subagent-window-states */
-export const SubagentWindowStatesSchema = z.object({
-  minimized: z.record(z.string(), z.boolean()).optional(),
-  open: z.array(z.string()).optional(),
-}).passthrough();
+export const SubagentWindowStatesSchema = z
+  .object({
+    minimized: z.record(z.string(), z.boolean()).optional(),
+    open: z.array(z.string()).optional(),
+  })
+  .passthrough();
 
 /** PUT /api/subagent-parents */
 export const SubagentParentMapSchema = z.record(z.string(), z.string());
@@ -423,14 +487,22 @@ export const PushPreferencesUpdateSchema = z.object({
 
 /** POST /api/ralph-loop/start */
 export const RalphLoopStartSchema = z.object({
-  caseName: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format').optional().default('testcase'),
+  caseName: z
+    .string()
+    .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format')
+    .optional()
+    .default('testcase'),
   taskDescription: z.string().min(1).max(100000),
   completionPhrase: z.string().max(100).default('COMPLETE'),
   maxIterations: z.number().int().min(0).max(1000).nullable().default(10),
   enableRespawn: z.boolean().default(false),
-  planItems: z.array(z.object({
-    content: z.string(),
-    priority: z.string().optional(),
-    enabled: z.boolean().default(true),
-  })).optional(),
+  planItems: z
+    .array(
+      z.object({
+        content: z.string(),
+        priority: z.string().optional(),
+        enabled: z.boolean().default(true),
+      })
+    )
+    .optional(),
 });

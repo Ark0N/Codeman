@@ -115,7 +115,7 @@ export abstract class AiCheckerBase<
   V extends string,
   C extends AiCheckerConfigBase,
   R extends AiCheckerResultBase<V>,
-  S extends AiCheckerStateBase<V>
+  S extends AiCheckerStateBase<V>,
 > extends EventEmitter {
   protected config: C;
   protected sessionId: string;
@@ -205,9 +205,7 @@ export abstract class AiCheckerBase<
     super();
     this.sessionId = sessionId;
     // Filter out undefined values to prevent overwriting defaults
-    const filteredConfig = Object.fromEntries(
-      Object.entries(config).filter(([, v]) => v !== undefined)
-    ) as Partial<C>;
+    const filteredConfig = Object.fromEntries(Object.entries(config).filter(([, v]) => v !== undefined)) as Partial<C>;
     this.config = { ...defaultConfig, ...filteredConfig };
   }
 
@@ -342,9 +340,7 @@ export abstract class AiCheckerBase<
   /** Update configuration at runtime */
   updateConfig(config: Partial<C>): void {
     // Filter out undefined values to prevent overwriting existing config
-    const filteredConfig = Object.fromEntries(
-      Object.entries(config).filter(([, v]) => v !== undefined)
-    ) as Partial<C>;
+    const filteredConfig = Object.fromEntries(Object.entries(config).filter(([, v]) => v !== undefined)) as Partial<C>;
     this.config = { ...this.config, ...filteredConfig };
     if (config.enabled === false) {
       this.disable('Disabled by config');
@@ -369,9 +365,8 @@ export abstract class AiCheckerBase<
 
     // Prepare the terminal buffer (strip ANSI, trim to maxContextChars)
     const stripped = terminalBuffer.replace(ANSI_ESCAPE_PATTERN_SIMPLE, '');
-    const trimmed = stripped.length > this.config.maxContextChars
-      ? stripped.slice(-this.config.maxContextChars)
-      : stripped;
+    const trimmed =
+      stripped.length > this.config.maxContextChars ? stripped.slice(-this.config.maxContextChars) : stripped;
 
     // Build the prompt
     const prompt = this.buildPrompt(trimmed);
@@ -411,16 +406,15 @@ export abstract class AiCheckerBase<
         // No existing session, that's fine
       }
 
-      const muxProcess = childSpawn('tmux', [
-        'new-session', '-d', '-s', this.checkMuxName,
-        'bash', '-c', fullCmd
-      ], {
+      const muxProcess = childSpawn('tmux', ['new-session', '-d', '-s', this.checkMuxName, 'bash', '-c', fullCmd], {
         detached: true,
         stdio: 'ignore',
       });
       muxProcess.unref();
     } catch (err) {
-      throw new Error(`Failed to spawn ${this.checkDescription} tmux session: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(
+        `Failed to spawn ${this.checkDescription} tmux session: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
 
     // Poll the temp file for completion
@@ -530,7 +524,9 @@ export abstract class AiCheckerBase<
 
   private handleError(errorMsg: string): void {
     this.consecutiveErrors++;
-    this.log(`${this.checkDescription} error (${this.consecutiveErrors}/${this.config.maxConsecutiveErrors}): ${errorMsg}`);
+    this.log(
+      `${this.checkDescription} error (${this.consecutiveErrors}/${this.config.maxConsecutiveErrors}): ${errorMsg}`
+    );
 
     if (this.consecutiveErrors >= this.config.maxConsecutiveErrors) {
       this.disable(`${this.config.maxConsecutiveErrors} consecutive errors: ${errorMsg}`);

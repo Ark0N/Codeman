@@ -33,13 +33,13 @@ import {
 
 // ========== Types ==========
 
-export interface AiIdleCheckConfig extends AiCheckerConfigBase {}
+export type AiIdleCheckConfig = AiCheckerConfigBase;
 
 export type AiCheckVerdict = 'IDLE' | 'WORKING' | 'ERROR';
 
-export interface AiCheckResult extends AiCheckerResultBase<AiCheckVerdict> {}
+export type AiCheckResult = AiCheckerResultBase<AiCheckVerdict>;
 
-export interface AiCheckState extends AiCheckerStateBase<AiCheckVerdict> {}
+export type AiCheckState = AiCheckerStateBase<AiCheckVerdict>;
 
 // ========== Constants ==========
 
@@ -123,12 +123,7 @@ Remember: When uncertain, answer WORKING.`;
  * Manages AI-powered idle detection by spawning a fresh Claude CLI session
  * to analyze terminal output and provide a definitive IDLE/WORKING verdict.
  */
-export class AiIdleChecker extends AiCheckerBase<
-  AiCheckVerdict,
-  AiIdleCheckConfig,
-  AiCheckResult,
-  AiCheckState
-> {
+export class AiIdleChecker extends AiCheckerBase<AiCheckVerdict, AiIdleCheckConfig, AiCheckResult, AiCheckState> {
   protected readonly muxNamePrefix = 'codeman-aicheck-';
   protected readonly doneMarker = '__AICHECK_DONE__';
   protected readonly tempFilePrefix = 'codeman-aicheck';

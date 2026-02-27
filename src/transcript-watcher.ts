@@ -86,12 +86,7 @@ const POLL_INTERVAL_MS = 1000;
 const MAX_MESSAGE_LENGTH = 500;
 
 /** Patterns that indicate plan mode / approval prompt */
-const PLAN_MODE_PATTERNS = [
-  /ExitPlanMode/i,
-  /AskUserQuestion/i,
-  /Ready for user approval/i,
-  /approve.*plan/i,
-];
+const PLAN_MODE_PATTERNS = [/ExitPlanMode/i, /AskUserQuestion/i, /Ready for user approval/i, /approve.*plan/i];
 
 // ========== TranscriptWatcher Class ==========
 
@@ -410,12 +405,13 @@ export class TranscriptWatcher extends EventEmitter {
     if (entry.type !== 'assistant' || !entry.message?.content) return;
 
     const content = entry.message.content;
-    const textToCheck = typeof content === 'string'
-      ? content
-      : content
-          .filter((b): b is { type: 'text'; text: string } => b.type === 'text' && !!b.text)
-          .map(b => b.text)
-          .join(' ');
+    const textToCheck =
+      typeof content === 'string'
+        ? content
+        : content
+            .filter((b): b is { type: 'text'; text: string } => b.type === 'text' && !!b.text)
+            .map((b) => b.text)
+            .join(' ');
 
     // Also check for tool_use with ExitPlanMode or AskUserQuestion
     if (Array.isArray(content)) {

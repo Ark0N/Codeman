@@ -112,7 +112,10 @@ export class TunnelManager extends EventEmitter {
 
     const binary = this.resolveCloudflared();
     if (!binary) {
-      this.emit('error', 'cloudflared not found. Install from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/');
+      this.emit(
+        'error',
+        'cloudflared not found. Install from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/'
+      );
       return;
     }
 

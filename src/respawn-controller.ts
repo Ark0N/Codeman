@@ -41,15 +41,8 @@ import { AiIdleChecker, type AiCheckResult, type AiCheckState } from './ai-idle-
 import { AiPlanChecker, type AiPlanCheckResult } from './ai-plan-checker.js';
 import type { TeamWatcher } from './team-watcher.js';
 import { BufferAccumulator } from './utils/buffer-accumulator.js';
-import {
-  ANSI_ESCAPE_PATTERN_SIMPLE,
-  TOKEN_PATTERN,
-  assertNever,
-} from './utils/index.js';
-import {
-  MAX_RESPAWN_BUFFER_SIZE,
-  TRIM_RESPAWN_BUFFER_TO as RESPAWN_BUFFER_TRIM_SIZE,
-} from './config/buffer-limits.js';
+import { ANSI_ESCAPE_PATTERN_SIMPLE, TOKEN_PATTERN, assertNever } from './utils/index.js';
+import { MAX_RESPAWN_BUFFER_SIZE, TRIM_RESPAWN_BUFFER_TO as RESPAWN_BUFFER_TRIM_SIZE } from './config/buffer-limits.js';
 import type {
   RespawnCycleMetrics,
   RespawnAggregateMetrics,
@@ -542,45 +535,45 @@ export interface RespawnEvents {
 
 /** Default configuration values */
 const DEFAULT_CONFIG: RespawnConfig = {
-  idleTimeoutMs: 10000,          // 10 seconds of no activity after prompt (legacy, still used as fallback)
+  idleTimeoutMs: 10000, // 10 seconds of no activity after prompt (legacy, still used as fallback)
   updatePrompt: 'write a brief progress summary to CLAUDE.md noting what you accomplished, then continue working.',
-  interStepDelayMs: 1000,        // 1 second between steps
+  interStepDelayMs: 1000, // 1 second between steps
   enabled: true,
-  sendClear: true,               // send /clear after update prompt
-  sendInit: true,                // send /init after /clear
-  completionConfirmMs: 10000,    // 10 seconds of silence after completion message
-  noOutputTimeoutMs: 30000,      // 30 seconds fallback if no output at all
-  autoAcceptPrompts: true,       // auto-accept plan mode prompts (not questions)
-  autoAcceptDelayMs: 8000,       // 8 seconds before auto-accepting
-  aiIdleCheckEnabled: true,      // use AI to confirm idle state
+  sendClear: true, // send /clear after update prompt
+  sendInit: true, // send /init after /clear
+  completionConfirmMs: 10000, // 10 seconds of silence after completion message
+  noOutputTimeoutMs: 30000, // 30 seconds fallback if no output at all
+  autoAcceptPrompts: true, // auto-accept plan mode prompts (not questions)
+  autoAcceptDelayMs: 8000, // 8 seconds before auto-accepting
+  aiIdleCheckEnabled: true, // use AI to confirm idle state
   aiIdleCheckModel: 'claude-opus-4-5-20251101',
-  aiIdleCheckMaxContext: 16000,  // ~4k tokens
-  aiIdleCheckTimeoutMs: 90000,   // 90 seconds (thinking can be slow)
+  aiIdleCheckMaxContext: 16000, // ~4k tokens
+  aiIdleCheckTimeoutMs: 90000, // 90 seconds (thinking can be slow)
   aiIdleCheckCooldownMs: 180000, // 3 minutes after WORKING verdict
-  aiPlanCheckEnabled: true,      // use AI to confirm plan mode before auto-accept
+  aiPlanCheckEnabled: true, // use AI to confirm plan mode before auto-accept
   aiPlanCheckModel: 'claude-opus-4-5-20251101',
-  aiPlanCheckMaxContext: 8000,   // ~2k tokens (plan mode UI is compact)
-  aiPlanCheckTimeoutMs: 60000,   // 60 seconds (thinking can be slow)
-  aiPlanCheckCooldownMs: 30000,  // 30 seconds after NOT_PLAN_MODE
-  stuckStateDetectionEnabled: true,  // detect stuck states
-  stuckStateWarningMs: 300000,       // 5 minutes warning threshold
-  stuckStateRecoveryMs: 600000,      // 10 minutes recovery threshold
-  maxStuckRecoveries: 3,             // max recovery attempts
+  aiPlanCheckMaxContext: 8000, // ~2k tokens (plan mode UI is compact)
+  aiPlanCheckTimeoutMs: 60000, // 60 seconds (thinking can be slow)
+  aiPlanCheckCooldownMs: 30000, // 30 seconds after NOT_PLAN_MODE
+  stuckStateDetectionEnabled: true, // detect stuck states
+  stuckStateWarningMs: 300000, // 5 minutes warning threshold
+  stuckStateRecoveryMs: 600000, // 10 minutes recovery threshold
+  maxStuckRecoveries: 3, // max recovery attempts
   // P2-001: Adaptive timing
-  adaptiveTimingEnabled: true,       // Use adaptive timing based on historical patterns
-  adaptiveMinConfirmMs: 5000,        // Minimum 5 seconds
-  adaptiveMaxConfirmMs: 30000,       // Maximum 30 seconds
+  adaptiveTimingEnabled: true, // Use adaptive timing based on historical patterns
+  adaptiveMinConfirmMs: 5000, // Minimum 5 seconds
+  adaptiveMaxConfirmMs: 30000, // Maximum 30 seconds
   // P2-002: Skip-clear optimization
-  skipClearWhenLowContext: true,     // Skip /clear when token count is low
-  skipClearThresholdPercent: 30,     // Skip if below 30% of max context
+  skipClearWhenLowContext: true, // Skip /clear when token count is low
+  skipClearThresholdPercent: 30, // Skip if below 30% of max context
   // P2-004: Cycle metrics
-  trackCycleMetrics: true,           // Track and persist cycle metrics
+  trackCycleMetrics: true, // Track and persist cycle metrics
   // P2-001: Confidence scoring
-  minIdleConfidence: 65,             // Minimum confidence to trigger idle (0-100)
-  confidenceWeightCompletion: 40,    // Weight for completion message
-  confidenceWeightSilence: 25,       // Weight for output silence
-  confidenceWeightTokens: 20,        // Weight for token stability
-  confidenceWeightNoWorking: 15,     // Weight for working pattern absence
+  minIdleConfidence: 65, // Minimum confidence to trigger idle (0-100)
+  confidenceWeightCompletion: 40, // Weight for completion message
+  confidenceWeightSilence: 25, // Weight for output silence
+  confidenceWeightTokens: 20, // Weight for token stability
+  confidenceWeightNoWorking: 15, // Weight for working pattern absence
 };
 
 /**
@@ -737,7 +730,8 @@ export class RespawnController extends EventEmitter {
   // ========== Timer Tracking for UI Countdown Display ==========
 
   /** Active timers being tracked for UI display */
-  private activeTimers: Map<string, { name: string; startedAt: number; durationMs: number; endsAt: number }> = new Map();
+  private activeTimers: Map<string, { name: string; startedAt: number; durationMs: number; endsAt: number }> =
+    new Map();
 
   /** Recent action log entries (for UI display, max 20) */
   private recentActions: ActionLogEntry[] = [];
@@ -818,9 +812,9 @@ export class RespawnController extends EventEmitter {
    * Used as secondary signals, not primary detection.
    */
   private readonly PROMPT_PATTERNS = [
-    '❯',        // Standard prompt
-    '\u276f',   // Unicode variant
-    '⏵',        // Claude Code prompt variant
+    '❯', // Standard prompt
+    '\u276f', // Unicode variant
+    '⏵', // Claude Code prompt variant
   ];
 
   /**
@@ -829,15 +823,55 @@ export class RespawnController extends EventEmitter {
    * Note: ✻ and ✽ removed - they appear in completion messages too.
    */
   private readonly WORKING_PATTERNS = [
-    'Thinking', 'Writing', 'Reading', 'Running', 'Searching',
-    'Editing', 'Creating', 'Deleting', 'Analyzing', 'Executing',
-    'Synthesizing', 'Brewing',  // Claude's processing indicators
-    'Compiling', 'Building', 'Installing', 'Fetching', 'Downloading',
-    'Processing', 'Generating', 'Loading', 'Starting', 'Updating',
-    'Checking', 'Validating', 'Testing', 'Formatting', 'Linting',
-    '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏',  // Spinner chars
-    '◐', '◓', '◑', '◒',  // Alternative spinners
-    '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷',  // Braille spinners
+    'Thinking',
+    'Writing',
+    'Reading',
+    'Running',
+    'Searching',
+    'Editing',
+    'Creating',
+    'Deleting',
+    'Analyzing',
+    'Executing',
+    'Synthesizing',
+    'Brewing', // Claude's processing indicators
+    'Compiling',
+    'Building',
+    'Installing',
+    'Fetching',
+    'Downloading',
+    'Processing',
+    'Generating',
+    'Loading',
+    'Starting',
+    'Updating',
+    'Checking',
+    'Validating',
+    'Testing',
+    'Formatting',
+    'Linting',
+    '⠋',
+    '⠙',
+    '⠹',
+    '⠸',
+    '⠼',
+    '⠴',
+    '⠦',
+    '⠧',
+    '⠇',
+    '⠏', // Spinner chars
+    '◐',
+    '◓',
+    '◑',
+    '◒', // Alternative spinners
+    '⣾',
+    '⣽',
+    '⣻',
+    '⢿',
+    '⡿',
+    '⣟',
+    '⣯',
+    '⣷', // Braille spinners
   ];
 
   /**
@@ -1200,7 +1234,7 @@ export class RespawnController extends EventEmitter {
     const prevState = this._state;
     this._state = newState;
     this.stateEnteredAt = Date.now();
-    this.stuckStateWarned = false;  // Reset warning for new state
+    this.stuckStateWarned = false; // Reset warning for new state
     this.log(`State: ${prevState} → ${newState}`);
     this.logAction('state', `${prevState} → ${newState}`);
     this.emit('stateChanged', newState, prevState);
@@ -1518,7 +1552,9 @@ export class RespawnController extends EventEmitter {
           this.setState('watching');
         } else {
           // Real content (not just escape codes or single chars) - cancel confirmation
-          this.log(`Substantial output during confirmation ("${stripped.substring(0, 40)}..."), cancelling idle detection`);
+          this.log(
+            `Substantial output during confirmation ("${stripped.substring(0, 40)}..."), cancelling idle detection`
+          );
           this.cancelCompletionConfirm();
         }
         return;
@@ -1526,7 +1562,7 @@ export class RespawnController extends EventEmitter {
     }
 
     // Legacy fallback: detect prompt characters (still useful for waiting_* states)
-    const hasPrompt = this.PROMPT_PATTERNS.some(pattern => data.includes(pattern));
+    const hasPrompt = this.PROMPT_PATTERNS.some((pattern) => data.includes(pattern));
     if (hasPrompt) {
       this.promptDetected = true;
       this.workingDetected = false;
@@ -1706,7 +1742,7 @@ export class RespawnController extends EventEmitter {
         if (this._state === 'stopped') return;
         const prompt = this.config.kickstartPrompt!;
         this.logAction('command', `Sending kickstart: "${prompt.substring(0, 40)}..."`);
-        await this.session.writeViaMux(prompt + '\r');  // \r triggers key.return in Ink/Claude CLI
+        await this.session.writeViaMux(prompt + '\r'); // \r triggers key.return in Ink/Claude CLI
         this.emit('stepSent', 'kickstart', prompt);
         this.setState('waiting_kickstart');
         this.promptDetected = false;
@@ -1831,11 +1867,16 @@ export class RespawnController extends EventEmitter {
       if (this.stuckRecoveryCount < this.config.maxStuckRecoveries) {
         this.stuckRecoveryCount++;
         this.logAction('stuck', `Recovery attempt ${this.stuckRecoveryCount}/${this.config.maxStuckRecoveries}`);
-        this.log(`Stuck-state recovery triggered (state: ${this._state}, duration: ${Math.round(durationMs / 1000)}s, attempt: ${this.stuckRecoveryCount})`);
+        this.log(
+          `Stuck-state recovery triggered (state: ${this._state}, duration: ${Math.round(durationMs / 1000)}s, attempt: ${this.stuckRecoveryCount})`
+        );
         this.emit('stuckStateRecovery', this._state, durationMs, this.stuckRecoveryCount);
         this.handleStuckStateRecovery();
       } else {
-        this.logAction('stuck', `Max recoveries (${this.config.maxStuckRecoveries}) reached - manual intervention needed`);
+        this.logAction(
+          'stuck',
+          `Max recoveries (${this.config.maxStuckRecoveries}) reached - manual intervention needed`
+        );
         this.log(`Stuck-state: max recoveries reached, manual intervention needed`);
       }
       return;
@@ -1950,12 +1991,7 @@ export class RespawnController extends EventEmitter {
    * Start a tracked timer with UI countdown support.
    * Emits timerStarted event and tracks the timer for UI display.
    */
-  private startTrackedTimer(
-    name: string,
-    durationMs: number,
-    callback: () => void,
-    reason?: string
-  ): NodeJS.Timeout {
+  private startTrackedTimer(name: string, durationMs: number, callback: () => void, reason?: string): NodeJS.Timeout {
     const now = Date.now();
     const endsAt = now + durationMs;
 
@@ -1989,7 +2025,7 @@ export class RespawnController extends EventEmitter {
    */
   getActiveTimers(): ActiveTimerInfo[] {
     const now = Date.now();
-    return Array.from(this.activeTimers.values()).map(t => ({
+    return Array.from(this.activeTimers.values()).map((t) => ({
       name: t.name,
       remainingMs: Math.max(0, t.endsAt - now),
       totalMs: t.durationMs,
@@ -2038,7 +2074,7 @@ export class RespawnController extends EventEmitter {
     }
 
     // Check the rolling window (includes current data, catches both complete and split patterns)
-    return this.WORKING_PATTERNS.some(pattern => this.workingPatternWindow.includes(pattern));
+    return this.WORKING_PATTERNS.some((pattern) => this.workingPatternWindow.includes(pattern));
   }
 
   /**
@@ -2175,7 +2211,9 @@ export class RespawnController extends EventEmitter {
 
     // If on cooldown, don't start check - wait for cooldown to expire
     if (this.aiChecker.isOnCooldown()) {
-      this.log(`AI check on cooldown (${Math.ceil(this.aiChecker.getCooldownRemainingMs() / 1000)}s remaining), waiting...`);
+      this.log(
+        `AI check on cooldown (${Math.ceil(this.aiChecker.getCooldownRemainingMs() / 1000)}s remaining), waiting...`
+      );
       return;
     }
 
@@ -2207,67 +2245,70 @@ export class RespawnController extends EventEmitter {
     // Get the terminal buffer for analysis
     const buffer = this.terminalBuffer.value;
 
-    this.aiChecker.check(buffer).then((result) => {
-      // If state changed while checking (e.g., cancelled), ignore result
-      if (this._state !== 'ai_checking') {
-        this.log(`AI check result ignored (state is now ${this._state})`);
-        return;
-      }
+    this.aiChecker
+      .check(buffer)
+      .then((result) => {
+        // If state changed while checking (e.g., cancelled), ignore result
+        if (this._state !== 'ai_checking') {
+          this.log(`AI check result ignored (state is now ${this._state})`);
+          return;
+        }
 
-      // Validate this is the result for the current check (not a stale one)
-      if (this._currentAiCheckId !== checkId) {
-        this.log(`AI check result ignored (stale check ID: ${checkId.substring(0, 8)})`);
-        return;
-      }
+        // Validate this is the result for the current check (not a stale one)
+        if (this._currentAiCheckId !== checkId) {
+          this.log(`AI check result ignored (stale check ID: ${checkId.substring(0, 8)})`);
+          return;
+        }
 
-      if (result.verdict === 'IDLE') {
-        // Cancel any pending confirmation timers - AI has spoken
-        this.cancelTrackedTimer('completion-confirm', this.completionConfirmTimer, 'AI verdict: IDLE');
-        this.completionConfirmTimer = null;
-        this.cancelTrackedTimer('pre-filter', this.preFilterTimer, 'AI verdict: IDLE');
-        this.preFilterTimer = null;
+        if (result.verdict === 'IDLE') {
+          // Cancel any pending confirmation timers - AI has spoken
+          this.cancelTrackedTimer('completion-confirm', this.completionConfirmTimer, 'AI verdict: IDLE');
+          this.completionConfirmTimer = null;
+          this.cancelTrackedTimer('pre-filter', this.preFilterTimer, 'AI verdict: IDLE');
+          this.preFilterTimer = null;
 
-        this.logAction('ai-check', `Verdict: IDLE - ${result.reasoning}`);
-        this.emit('aiCheckCompleted', result);
-        this.onIdleConfirmed(`ai-check: idle (${result.reasoning})`);
-      } else if (result.verdict === 'WORKING') {
-        // Cancel timers and go to cooldown
-        this.cancelTrackedTimer('completion-confirm', this.completionConfirmTimer, 'AI verdict: WORKING');
-        this.completionConfirmTimer = null;
+          this.logAction('ai-check', `Verdict: IDLE - ${result.reasoning}`);
+          this.emit('aiCheckCompleted', result);
+          this.onIdleConfirmed(`ai-check: idle (${result.reasoning})`);
+        } else if (result.verdict === 'WORKING') {
+          // Cancel timers and go to cooldown
+          this.cancelTrackedTimer('completion-confirm', this.completionConfirmTimer, 'AI verdict: WORKING');
+          this.completionConfirmTimer = null;
 
-        this.logAction('ai-check', `Verdict: WORKING - ${result.reasoning}`);
-        this.emit('aiCheckCompleted', result);
-        this.setState('watching');
-        this.log(`AI check says WORKING, returning to watching with ${this.config.aiIdleCheckCooldownMs}ms cooldown`);
-        // Restart timers so the controller retries after cooldown expires
-        this.startNoOutputTimer();
-        this.startPreFilterTimer();
-      } else {
-        // ERROR verdict
-        this.logAction('ai-check', `Error: ${result.reasoning}`);
-        this.emit('aiCheckFailed', result.reasoning);
-        this.setState('watching');
-        // Restart timers to allow retry
-        this.startNoOutputTimer();
-        this.startPreFilterTimer();
-      }
-    }).catch((err) => {
-      // Validate this is the error for the current check
-      if (this._currentAiCheckId !== checkId) {
-        return; // Stale check, ignore error
-      }
-      if (this._state === 'stopped') return; // Guard against stopped state
-      if (this._state === 'ai_checking') {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        this.logAction('ai-check', `Failed: ${errorMsg.substring(0, 50)}`);
-        this.emit('aiCheckFailed', errorMsg);
-        this.setState('watching');
-        this.log(`AI check error: ${errorMsg}`);
-        // Restart timers to allow retry
-        this.startNoOutputTimer();
-        this.startPreFilterTimer();
-      }
-    });
+          this.logAction('ai-check', `Verdict: WORKING - ${result.reasoning}`);
+          this.emit('aiCheckCompleted', result);
+          this.setState('watching');
+          this.log(`AI check says WORKING, returning to watching with ${this.config.aiIdleCheckCooldownMs}ms cooldown`);
+          // Restart timers so the controller retries after cooldown expires
+          this.startNoOutputTimer();
+          this.startPreFilterTimer();
+        } else {
+          // ERROR verdict
+          this.logAction('ai-check', `Error: ${result.reasoning}`);
+          this.emit('aiCheckFailed', result.reasoning);
+          this.setState('watching');
+          // Restart timers to allow retry
+          this.startNoOutputTimer();
+          this.startPreFilterTimer();
+        }
+      })
+      .catch((err) => {
+        // Validate this is the error for the current check
+        if (this._currentAiCheckId !== checkId) {
+          return; // Stale check, ignore error
+        }
+        if (this._state === 'stopped') return; // Guard against stopped state
+        if (this._state === 'ai_checking') {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          this.logAction('ai-check', `Failed: ${errorMsg.substring(0, 50)}`);
+          this.emit('aiCheckFailed', errorMsg);
+          this.setState('watching');
+          this.log(`AI check error: ${errorMsg}`);
+          // Restart timers to allow retry
+          this.startNoOutputTimer();
+          this.startPreFilterTimer();
+        }
+      });
   }
 
   // ========== Auto-Accept Prompt Methods ==========
@@ -2351,7 +2392,9 @@ export class RespawnController extends EventEmitter {
     // Stage 2: AI confirmation (if enabled and available)
     if (this.config.aiPlanCheckEnabled && this.planChecker.status !== 'disabled') {
       if (this.planChecker.isOnCooldown()) {
-        this.log(`Skipping auto-accept: plan checker on cooldown (${Math.ceil(this.planChecker.getCooldownRemainingMs() / 1000)}s remaining)`);
+        this.log(
+          `Skipping auto-accept: plan checker on cooldown (${Math.ceil(this.planChecker.getCooldownRemainingMs() / 1000)}s remaining)`
+        );
         return;
       }
       if (this.planChecker.status === 'checking') {
@@ -2396,7 +2439,7 @@ export class RespawnController extends EventEmitter {
     // Working patterns before the selector are from earlier work and don't matter.
     const selectorIndex = stripped.lastIndexOf(selectorMatch[0]);
     const afterSelector = stripped.slice(selectorIndex + selectorMatch[0].length);
-    const hasWorking = this.WORKING_PATTERNS.some(pattern => afterSelector.includes(pattern));
+    const hasWorking = this.WORKING_PATTERNS.some((pattern) => afterSelector.includes(pattern));
     if (hasWorking) return false;
 
     return true;
@@ -2416,36 +2459,39 @@ export class RespawnController extends EventEmitter {
     this.logAction('plan-check', 'Spawning AI plan checker');
     this.emit('planCheckStarted');
 
-    this.planChecker.check(buffer).then((result) => {
-      // Discard stale result if new output arrived during check
-      if (this.lastOutputTime > this.planCheckStartTime) {
-        this.logAction('plan-check', 'Result discarded (output arrived during check)');
-        return;
-      }
-
-      if (result.verdict === 'PLAN_MODE') {
-        // Don't send Enter if state changed (e.g., AI idle check started or respawn cycle began)
-        if (this._state !== 'watching') {
-          this.logAction('plan-check', `Verdict: PLAN_MODE but state is ${this._state}, not sending Enter`);
+    this.planChecker
+      .check(buffer)
+      .then((result) => {
+        // Discard stale result if new output arrived during check
+        if (this.lastOutputTime > this.planCheckStartTime) {
+          this.logAction('plan-check', 'Result discarded (output arrived during check)');
           return;
         }
-        this.emit('planCheckCompleted', result);
-        this.logAction('plan-check', 'Verdict: PLAN_MODE - sending Enter immediately');
-        this.sendAutoAcceptEnter();
-        // No cooldown needed - we're taking action
-      } else if (result.verdict === 'NOT_PLAN_MODE') {
-        this.emit('planCheckCompleted', result);
-        this.logAction('plan-check', `Verdict: NOT_PLAN_MODE - ${result.reasoning}`);
-      } else {
-        // ERROR verdict
-        this.emit('planCheckFailed', result.reasoning);
-        this.logAction('plan-check', `Error: ${result.reasoning}`);
-      }
-    }).catch((err) => {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      this.emit('planCheckFailed', errorMsg);
-      this.logAction('plan-check', `Failed: ${errorMsg.substring(0, 50)}`);
-    });
+
+        if (result.verdict === 'PLAN_MODE') {
+          // Don't send Enter if state changed (e.g., AI idle check started or respawn cycle began)
+          if (this._state !== 'watching') {
+            this.logAction('plan-check', `Verdict: PLAN_MODE but state is ${this._state}, not sending Enter`);
+            return;
+          }
+          this.emit('planCheckCompleted', result);
+          this.logAction('plan-check', 'Verdict: PLAN_MODE - sending Enter immediately');
+          this.sendAutoAcceptEnter();
+          // No cooldown needed - we're taking action
+        } else if (result.verdict === 'NOT_PLAN_MODE') {
+          this.emit('planCheckCompleted', result);
+          this.logAction('plan-check', `Verdict: NOT_PLAN_MODE - ${result.reasoning}`);
+        } else {
+          // ERROR verdict
+          this.emit('planCheckFailed', result.reasoning);
+          this.logAction('plan-check', `Error: ${result.reasoning}`);
+        }
+      })
+      .catch((err) => {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        this.emit('planCheckFailed', errorMsg);
+        this.logAction('plan-check', `Failed: ${errorMsg.substring(0, 50)}`);
+      });
   }
 
   /**
@@ -2765,11 +2811,13 @@ export class RespawnController extends EventEmitter {
 
     this.log(`Idle confirmed via: ${reason}`);
     const status = this.getDetectionStatus();
-    this.log(`Detection status: confidence=${status.confidenceLevel}%, ` +
-      `completion=${status.completionMessageDetected}, ` +
-      `silent=${status.outputSilent}, ` +
-      `tokensStable=${status.tokensStable}, ` +
-      `noWorking=${status.workingPatternsAbsent}`);
+    this.log(
+      `Detection status: confidence=${status.confidenceLevel}%, ` +
+        `completion=${status.completionMessageDetected}, ` +
+        `silent=${status.outputSilent}, ` +
+        `tokensStable=${status.tokensStable}, ` +
+        `noWorking=${status.workingPatternsAbsent}`
+    );
 
     // ========== Agent Teams Integration ==========
     // Check if session has active teammates — don't respawn while team is working
@@ -2777,7 +2825,10 @@ export class RespawnController extends EventEmitter {
       const count = this.teamWatcher.getActiveTeammateCount(this.session.id);
       this.log(`Respawn blocked - ${count} active teammate(s) working`);
       this.logAction('team', `Active teammates: ${count}`);
-      this.emit('respawnBlocked', { reason: 'active_teammates', details: `${count} teammate(s) still working` });
+      this.emit('respawnBlocked', {
+        reason: 'active_teammates',
+        details: `${count} teammate(s) still working`,
+      });
       this.setState('watching');
       this.startNoOutputTimer();
       this.startPreFilterTimer();
@@ -2792,7 +2843,10 @@ export class RespawnController extends EventEmitter {
       if (circuitBreaker.state === 'OPEN') {
         this.log(`Respawn blocked - Circuit breaker OPEN: ${circuitBreaker.reason}`);
         this.logAction('ralph', `Circuit breaker OPEN: ${circuitBreaker.reason}`);
-        this.emit('respawnBlocked', { reason: 'circuit_breaker_open', details: circuitBreaker.reason });
+        this.emit('respawnBlocked', {
+          reason: 'circuit_breaker_open',
+          details: circuitBreaker.reason,
+        });
         this.setState('watching');
         // Don't restart timers - wait for manual reset or circuit breaker resolution
         return;
@@ -2804,7 +2858,10 @@ export class RespawnController extends EventEmitter {
     if (statusBlock?.exitSignal) {
       this.log(`Respawn paused - RALPH_STATUS EXIT_SIGNAL=true`);
       this.logAction('ralph', `Exit signal detected: ${statusBlock.recommendation || 'Task complete'}`);
-      this.emit('respawnBlocked', { reason: 'exit_signal', details: statusBlock.recommendation || 'Task complete' });
+      this.emit('respawnBlocked', {
+        reason: 'exit_signal',
+        details: statusBlock.recommendation || 'Task complete',
+      });
       this.setState('watching');
       // Don't restart timers - loop is complete
       return;
@@ -2814,7 +2871,10 @@ export class RespawnController extends EventEmitter {
     if (statusBlock?.status === 'BLOCKED') {
       this.log(`Respawn blocked - RALPH_STATUS reports BLOCKED`);
       this.logAction('ralph', `Claude reported BLOCKED: ${statusBlock.recommendation || 'Needs human intervention'}`);
-      this.emit('respawnBlocked', { reason: 'status_blocked', details: statusBlock.recommendation || 'Needs human intervention' });
+      this.emit('respawnBlocked', {
+        reason: 'status_blocked',
+        details: statusBlock.recommendation || 'Needs human intervention',
+      });
       this.setState('watching');
       return;
     }
@@ -2846,7 +2906,10 @@ export class RespawnController extends EventEmitter {
     if (this.session.status === 'error') {
       this.log('Skipping respawn cycle - session is in error state');
       this.logAction('health', 'Respawn skipped: Session error state');
-      this.emit('respawnBlocked', { reason: 'session_error', details: 'Session is in error state' });
+      this.emit('respawnBlocked', {
+        reason: 'session_error',
+        details: 'Session is in error state',
+      });
       this.setState('watching');
       return;
     }
@@ -2907,7 +2970,7 @@ export class RespawnController extends EventEmitter {
           this.logAction('ralph', `Using RECOMMENDATION: ${rec.substring(0, 50)}...`);
         }
 
-        const input = updatePrompt + '\r';  // \r triggers Enter in Ink/Claude CLI
+        const input = updatePrompt + '\r'; // \r triggers Enter in Ink/Claude CLI
         this.logAction('command', `Sending: "${updatePrompt.substring(0, 50)}..."`);
         await this.session.writeViaMux(input);
         this.emit('stepSent', 'update', updatePrompt);
@@ -2937,7 +3000,7 @@ export class RespawnController extends EventEmitter {
         this.stepTimer = null;
         if (this._state === 'stopped') return;
         this.logAction('command', 'Sending: /clear');
-        await this.session.writeViaMux('/clear\r');  // \r triggers Enter in Ink/Claude CLI
+        await this.session.writeViaMux('/clear\r'); // \r triggers Enter in Ink/Claude CLI
         this.emit('stepSent', 'clear', '/clear');
         this.setState('waiting_clear');
         this.promptDetected = false;
@@ -2981,7 +3044,7 @@ export class RespawnController extends EventEmitter {
         this.stepTimer = null;
         if (this._state === 'stopped') return;
         this.logAction('command', 'Sending: /init');
-        await this.session.writeViaMux('/init\r');  // \r triggers Enter in Ink/Claude CLI
+        await this.session.writeViaMux('/init\r'); // \r triggers Enter in Ink/Claude CLI
         this.emit('stepSent', 'init', '/init');
         this.setState('waiting_init');
         this.promptDetected = false;
@@ -3052,9 +3115,13 @@ export class RespawnController extends EventEmitter {
     this.config = { ...this.config, ...filteredConfig };
 
     // Sync AI checker config if relevant fields changed
-    if (config.aiIdleCheckEnabled !== undefined || config.aiIdleCheckModel !== undefined ||
-        config.aiIdleCheckMaxContext !== undefined || config.aiIdleCheckTimeoutMs !== undefined ||
-        config.aiIdleCheckCooldownMs !== undefined) {
+    if (
+      config.aiIdleCheckEnabled !== undefined ||
+      config.aiIdleCheckModel !== undefined ||
+      config.aiIdleCheckMaxContext !== undefined ||
+      config.aiIdleCheckTimeoutMs !== undefined ||
+      config.aiIdleCheckCooldownMs !== undefined
+    ) {
       this.aiChecker.updateConfig({
         enabled: this.config.aiIdleCheckEnabled,
         model: this.config.aiIdleCheckModel,
@@ -3065,9 +3132,13 @@ export class RespawnController extends EventEmitter {
     }
 
     // Sync plan checker config if relevant fields changed
-    if (config.aiPlanCheckEnabled !== undefined || config.aiPlanCheckModel !== undefined ||
-        config.aiPlanCheckMaxContext !== undefined || config.aiPlanCheckTimeoutMs !== undefined ||
-        config.aiPlanCheckCooldownMs !== undefined) {
+    if (
+      config.aiPlanCheckEnabled !== undefined ||
+      config.aiPlanCheckModel !== undefined ||
+      config.aiPlanCheckMaxContext !== undefined ||
+      config.aiPlanCheckTimeoutMs !== undefined ||
+      config.aiPlanCheckCooldownMs !== undefined
+    ) {
       this.planChecker.updateConfig({
         enabled: this.config.aiPlanCheckEnabled,
         model: this.config.aiPlanCheckModel,
@@ -3276,7 +3347,7 @@ export class RespawnController extends EventEmitter {
 
     const now = Date.now();
     const metrics: RespawnCycleMetrics = {
-      ...this.currentCycleMetrics as RespawnCycleMetrics,
+      ...(this.currentCycleMetrics as RespawnCycleMetrics),
       completedAt: now,
       durationMs: now - (this.currentCycleMetrics.startedAt ?? now),
       outcome,
@@ -3299,7 +3370,9 @@ export class RespawnController extends EventEmitter {
     // Clear current cycle
     this.currentCycleMetrics = null;
 
-    this.log(`Cycle #${metrics.cycleNumber} metrics: ${outcome}, duration=${metrics.durationMs}ms, idle_detection=${metrics.idleDetectionMs}ms`);
+    this.log(
+      `Cycle #${metrics.cycleNumber} metrics: ${outcome}, duration=${metrics.durationMs}ms, idle_detection=${metrics.idleDetectionMs}ms`
+    );
   }
 
   /**
@@ -3333,8 +3406,8 @@ export class RespawnController extends EventEmitter {
     }
 
     // Recalculate averages using all recent metrics
-    const durations = this.recentCycleMetrics.map(m => m.durationMs);
-    const idleTimes = this.recentCycleMetrics.map(m => m.idleDetectionMs);
+    const durations = this.recentCycleMetrics.map((m) => m.durationMs);
+    const idleTimes = this.recentCycleMetrics.map((m) => m.idleDetectionMs);
 
     if (durations.length > 0) {
       agg.avgCycleDurationMs = Math.round(durations.reduce((a, b) => a + b, 0) / durations.length);
@@ -3347,9 +3420,7 @@ export class RespawnController extends EventEmitter {
     }
 
     // Calculate success rate
-    agg.successRate = agg.totalCycles > 0
-      ? Math.round((agg.successfulCycles / agg.totalCycles) * 100)
-      : 100;
+    agg.successRate = agg.totalCycles > 0 ? Math.round((agg.successfulCycles / agg.totalCycles) * 100) : 100;
 
     agg.lastUpdatedAt = Date.now();
   }
@@ -3392,18 +3463,18 @@ export class RespawnController extends EventEmitter {
     // Weighted average (cycle success is most important)
     const weights = {
       cycleSuccess: 0.35,
-      circuitBreaker: 0.20,
-      iterationProgress: 0.20,
+      circuitBreaker: 0.2,
+      iterationProgress: 0.2,
       aiChecker: 0.15,
-      stuckRecovery: 0.10,
+      stuckRecovery: 0.1,
     };
 
     const score = Math.round(
       components.cycleSuccess * weights.cycleSuccess +
-      components.circuitBreaker * weights.circuitBreaker +
-      components.iterationProgress * weights.iterationProgress +
-      components.aiChecker * weights.aiChecker +
-      components.stuckRecovery * weights.stuckRecovery
+        components.circuitBreaker * weights.circuitBreaker +
+        components.iterationProgress * weights.iterationProgress +
+        components.aiChecker * weights.aiChecker +
+        components.stuckRecovery * weights.stuckRecovery
     );
 
     // Determine status
@@ -3446,10 +3517,14 @@ export class RespawnController extends EventEmitter {
 
     const cb = tracker.circuitBreakerStatus;
     switch (cb.state) {
-      case 'CLOSED': return 100;
-      case 'HALF_OPEN': return 50;
-      case 'OPEN': return 0;
-      default: return 100;
+      case 'CLOSED':
+        return 100;
+      case 'HALF_OPEN':
+        return 50;
+      case 'OPEN':
+        return 0;
+      default:
+        return 100;
     }
   }
 
@@ -3527,8 +3602,10 @@ export class RespawnController extends EventEmitter {
     status: HealthStatus,
     components: RalphLoopHealthScore['components']
   ): string {
-    const lowest = Object.entries(components).reduce((min, [key, val]) =>
-      val < min.val ? { key, val } : min, { key: '', val: 100 });
+    const lowest = Object.entries(components).reduce((min, [key, val]) => (val < min.val ? { key, val } : min), {
+      key: '',
+      val: 100,
+    });
 
     if (status === 'excellent') {
       return `Ralph Loop is operating excellently (${score}/100). All systems healthy.`;

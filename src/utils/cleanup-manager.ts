@@ -115,11 +115,7 @@ export class CleanupManager implements Disposable {
    * @param options - Optional configuration
    * @returns Timer ID for manual clearing if needed
    */
-  setTimeout(
-    callback: () => void,
-    delay: number,
-    options?: TimerOptions
-  ): string {
+  setTimeout(callback: () => void, delay: number, options?: TimerOptions): string {
     const id = uuidv4();
     const timeoutId = setTimeout(() => {
       // Remove registration when timer fires naturally
@@ -148,11 +144,7 @@ export class CleanupManager implements Disposable {
    * @param options - Optional configuration
    * @returns Interval ID for manual clearing if needed
    */
-  setInterval(
-    callback: () => void,
-    delay: number,
-    options?: TimerOptions
-  ): string {
+  setInterval(callback: () => void, delay: number, options?: TimerOptions): string {
     const id = uuidv4();
     const intervalId = setInterval(() => {
       // Don't execute if stopped
@@ -179,11 +171,7 @@ export class CleanupManager implements Disposable {
    * @param description - Human-readable description
    * @returns Registration ID for manual removal if needed
    */
-  registerCleanup(
-    type: CleanupResourceType,
-    cleanup: () => void,
-    description: string
-  ): string {
+  registerCleanup(type: CleanupResourceType, cleanup: () => void, description: string): string {
     const id = uuidv4();
     this.register({
       id,
@@ -202,10 +190,7 @@ export class CleanupManager implements Disposable {
    * @param description - Human-readable description
    * @returns Registration ID
    */
-  registerWatcher(
-    watcher: { close: () => void },
-    description: string
-  ): string {
+  registerWatcher(watcher: { close: () => void }, description: string): string {
     return this.registerCleanup('watcher', () => watcher.close(), description);
   }
 
@@ -218,19 +203,23 @@ export class CleanupManager implements Disposable {
    * @param description - Human-readable description
    * @returns Registration ID
    */
-  registerListener<T extends { removeListener?: (event: string, listener: () => void) => void; off?: (event: string, listener: () => void) => void }>(
-    emitter: T,
-    event: string,
-    listener: () => void,
-    description: string
-  ): string {
-    return this.registerCleanup('listener', () => {
-      if (emitter.removeListener) {
-        emitter.removeListener(event, listener);
-      } else if (emitter.off) {
-        emitter.off(event, listener);
-      }
-    }, description);
+  registerListener<
+    T extends {
+      removeListener?: (event: string, listener: () => void) => void;
+      off?: (event: string, listener: () => void) => void;
+    },
+  >(emitter: T, event: string, listener: () => void, description: string): string {
+    return this.registerCleanup(
+      'listener',
+      () => {
+        if (emitter.removeListener) {
+          emitter.removeListener(event, listener);
+        } else if (emitter.off) {
+          emitter.off(event, listener);
+        }
+      },
+      description
+    );
   }
 
   /**
@@ -240,17 +229,18 @@ export class CleanupManager implements Disposable {
    * @param description - Human-readable description
    * @returns Registration ID
    */
-  registerStream(
-    stream: { destroy?: () => void; close?: () => void },
-    description: string
-  ): string {
-    return this.registerCleanup('stream', () => {
-      if (stream.destroy) {
-        stream.destroy();
-      } else if (stream.close) {
-        stream.close();
-      }
-    }, description);
+  registerStream(stream: { destroy?: () => void; close?: () => void }, description: string): string {
+    return this.registerCleanup(
+      'stream',
+      () => {
+        if (stream.destroy) {
+          stream.destroy();
+        } else if (stream.close) {
+          stream.close();
+        }
+      },
+      description
+    );
   }
 
   /**
@@ -297,8 +287,10 @@ export class CleanupManager implements Disposable {
     this.registrations.clear();
 
     if (errors.length > 0) {
-      console.error(`[CleanupManager] ${errors.length} errors during disposal:`,
-        errors.map(e => e.description).join(', '));
+      console.error(
+        `[CleanupManager] ${errors.length} errors during disposal:`,
+        errors.map((e) => e.description).join(', ')
+      );
     }
   }
 

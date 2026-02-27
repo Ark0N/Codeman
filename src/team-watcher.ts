@@ -86,13 +86,13 @@ export class TeamWatcher extends EventEmitter {
   getTeamTasks(teamName: string): TeamTask[] {
     const tasks = this.teamTasks.get(teamName);
     if (!tasks) return [];
-    return tasks.filter(t => !t.metadata?._internal);
+    return tasks.filter((t) => !t.metadata?._internal);
   }
 
   /** Count active (non-completed) tasks for a team */
   getActiveTaskCount(teamName: string): number {
     const tasks = this.getTeamTasks(teamName);
-    return tasks.filter(t => t.status !== 'completed').length;
+    return tasks.filter((t) => t.status !== 'completed').length;
   }
 
   /** Get inbox messages for a team member (or all members) */
@@ -108,9 +108,7 @@ export class TeamWatcher extends EventEmitter {
         messages.push(...msgs);
       }
     }
-    return messages.sort((a, b) =>
-      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    );
+    return messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   }
 
   /** Check if a session has active teammates (for idle detection) */
@@ -119,7 +117,7 @@ export class TeamWatcher extends EventEmitter {
     if (!team) return false;
 
     // Check if any non-lead members exist (they are active by definition while present)
-    const teammates = team.members.filter(m => m.agentType !== 'team-lead');
+    const teammates = team.members.filter((m) => m.agentType !== 'team-lead');
     if (teammates.length === 0) return false;
 
     // Check if team has active (non-completed) tasks
@@ -132,19 +130,17 @@ export class TeamWatcher extends EventEmitter {
     const team = this.teams.get(teamName);
     if (!team) return [];
 
-    return team.members
-      .filter((m): m is TeamMember & { tmuxPaneId: string } =>
-        m.agentType !== 'team-lead' &&
-        !!m.tmuxPaneId &&
-        m.tmuxPaneId !== 'in-process'
-      );
+    return team.members.filter(
+      (m): m is TeamMember & { tmuxPaneId: string } =>
+        m.agentType !== 'team-lead' && !!m.tmuxPaneId && m.tmuxPaneId !== 'in-process'
+    );
   }
 
   /** Get count of active teammates for a session */
   getActiveTeammateCount(sessionId: string): number {
     const team = this.getTeamForSession(sessionId);
     if (!team) return 0;
-    return team.members.filter(m => m.agentType !== 'team-lead').length;
+    return team.members.filter((m) => m.agentType !== 'team-lead').length;
   }
 
   // ========== Private Methods ==========
@@ -257,7 +253,7 @@ export class TeamWatcher extends EventEmitter {
 
       let taskFiles: string[];
       try {
-        taskFiles = (await readdir(teamTaskDir)).filter(f => f.endsWith('.json') && f !== '.lock');
+        taskFiles = (await readdir(teamTaskDir)).filter((f) => f.endsWith('.json') && f !== '.lock');
       } catch {
         continue;
       }
@@ -285,7 +281,7 @@ export class TeamWatcher extends EventEmitter {
 
       let inboxFiles: string[];
       try {
-        inboxFiles = (await readdir(inboxDir)).filter(f => f.endsWith('.json'));
+        inboxFiles = (await readdir(inboxDir)).filter((f) => f.endsWith('.json'));
       } catch {
         continue;
       }
@@ -314,7 +310,7 @@ export class TeamWatcher extends EventEmitter {
         this.inboxCache.set(cacheKey, messages);
 
         // Emit new messages — compare by timestamp to handle deletions/reordering
-        const prevTimestamps = new Set(previous?.map(m => m.timestamp) || []);
+        const prevTimestamps = new Set(previous?.map((m) => m.timestamp) || []);
         for (const msg of messages) {
           if (!prevTimestamps.has(msg.timestamp)) {
             this.emit('inboxMessage', { teamName, member: memberName, message: msg });

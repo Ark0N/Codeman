@@ -171,7 +171,10 @@ export class FileStreamManager extends EventEmitter {
       }
     } catch (err) {
       const errorCode = err instanceof Error && 'code' in err ? (err as NodeJS.ErrnoException).code : 'UNKNOWN';
-      console.warn(`[FileStreamManager] Failed to stat file "${absolutePath}" (${errorCode}):`, err instanceof Error ? err.message : String(err));
+      console.warn(
+        `[FileStreamManager] Failed to stat file "${absolutePath}" (${errorCode}):`,
+        err instanceof Error ? err.message : String(err)
+      );
       return { success: false, error: 'File not found or not accessible' };
     }
 
@@ -379,9 +382,7 @@ export class FileStreamManager extends EventEmitter {
     }
 
     // Resolve to absolute path
-    let absolutePath = isAbsolute(expandedPath)
-      ? resolve(expandedPath)
-      : resolve(workingDir, expandedPath);
+    let absolutePath = isAbsolute(expandedPath) ? resolve(expandedPath) : resolve(workingDir, expandedPath);
 
     // Resolve symlinks to prevent symlink attacks — validate the real target,
     // not the symlink itself. Fall back to resolved path if file doesn't exist yet.

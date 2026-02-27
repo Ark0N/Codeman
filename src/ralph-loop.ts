@@ -282,10 +282,7 @@ export class RalphLoop extends EventEmitter {
     this.store.setRalphLoopState({ lastCheckAt: Date.now() });
 
     // Run independent checks in parallel for better performance
-    await Promise.all([
-      this.checkTimeouts(),
-      this.assignTasks(),
-    ]);
+    await Promise.all([this.checkTimeouts(), this.assignTasks()]);
 
     // Check if we should auto-generate tasks (depends on assignment results)
     if (this.autoGenerateTasks && this.shouldGenerateTasks()) {
@@ -409,11 +406,7 @@ export class RalphLoop extends EventEmitter {
     // 2. Min duration not reached
     // 3. We have idle sessions
     const counts = this.taskQueue.getCount();
-    return (
-      counts.pending === 0 &&
-      !this.isMinDurationReached() &&
-      this.sessionManager.getIdleSessions().length > 0
-    );
+    return counts.pending === 0 && !this.isMinDurationReached() && this.sessionManager.getIdleSessions().length > 0;
   }
 
   private async generateFollowUpTasks(): Promise<void> {

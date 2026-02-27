@@ -21,17 +21,11 @@ const pkg = require('../package.json') as { version: string };
 
 const program = new Command();
 
-program
-  .name('codeman')
-  .description('Claude Code session manager with autonomous Ralph Loop')
-  .version(pkg.version);
+program.name('codeman').description('Claude Code session manager with autonomous Ralph Loop').version(pkg.version);
 
 // ============ Session Commands ============
 
-const sessionCmd = program
-  .command('session')
-  .alias('s')
-  .description('Manage Claude sessions');
+const sessionCmd = program.command('session').alias('s').description('Manage Claude sessions');
 
 sessionCmd
   .command('start')
@@ -83,11 +77,12 @@ sessionCmd
       console.log('  (none)');
     } else {
       for (const session of sessions) {
-        const status = session.status === 'idle'
-          ? chalk.green('idle')
-          : session.status === 'busy'
-            ? chalk.yellow('busy')
-            : chalk.red(session.status);
+        const status =
+          session.status === 'idle'
+            ? chalk.green('idle')
+            : session.status === 'busy'
+              ? chalk.yellow('busy')
+              : chalk.red(session.status);
         console.log(`  ${chalk.cyan(session.id.slice(0, 8))} ${status} ${session.workingDir}`);
       }
     }
@@ -106,11 +101,12 @@ sessionCmd
     if (sessions.length === 0 && activeSessions.length > 0) {
       console.log(chalk.bold('\nActive Sessions (from web server):'));
       for (const session of activeSessions) {
-        const status = session.status === 'idle'
-          ? chalk.green('idle')
-          : session.status === 'busy'
-            ? chalk.yellow('busy')
-            : chalk.red(session.status);
+        const status =
+          session.status === 'idle'
+            ? chalk.green('idle')
+            : session.status === 'busy'
+              ? chalk.yellow('busy')
+              : chalk.red(session.status);
         const name = session.name ? ` (${session.name})` : '';
         const mode = session.mode === 'shell' ? chalk.gray(' [shell]') : '';
         const cost = session.totalCost ? chalk.gray(` $${session.totalCost.toFixed(4)}`) : '';
@@ -126,9 +122,7 @@ sessionCmd
   .option('-e, --errors', 'Show stderr instead of stdout')
   .action((id, options) => {
     const manager = getSessionManager();
-    const output = options.errors
-      ? manager.getSessionError(id)
-      : manager.getSessionOutput(id);
+    const output = options.errors ? manager.getSessionError(id) : manager.getSessionOutput(id);
 
     if (output === null) {
       console.log(chalk.yellow(`Session ${id} not found or not active`));
@@ -145,10 +139,7 @@ sessionCmd
 
 // ============ Task Commands ============
 
-const taskCmd = program
-  .command('task')
-  .alias('t')
-  .description('Manage tasks');
+const taskCmd = program.command('task').alias('t').description('Manage tasks');
 
 taskCmd
   .command('add <prompt>')
@@ -205,7 +196,9 @@ taskCmd
 
     const counts = queue.getCount();
     console.log(chalk.bold('\nSummary:'));
-    console.log(`  Pending: ${counts.pending}, Running: ${counts.running}, Completed: ${counts.completed}, Failed: ${counts.failed}`);
+    console.log(
+      `  Pending: ${counts.pending}, Running: ${counts.running}, Completed: ${counts.completed}, Failed: ${counts.failed}`
+    );
     console.log('');
   });
 
@@ -276,10 +269,7 @@ taskCmd
 
 // ============ Ralph Loop Commands ============
 
-const ralphCmd = program
-  .command('ralph')
-  .alias('r')
-  .description('Control the Ralph autonomous loop');
+const ralphCmd = program.command('ralph').alias('r').description('Control the Ralph autonomous loop');
 
 ralphCmd
   .command('start')
@@ -355,17 +345,16 @@ ralphCmd
   });
 
 function printStats(stats: ReturnType<ReturnType<typeof getRalphLoop>['getStats']>) {
-  const statusColor =
-    stats.status === 'running' ? chalk.green :
-    stats.status === 'paused' ? chalk.yellow :
-    chalk.gray;
+  const statusColor = stats.status === 'running' ? chalk.green : stats.status === 'paused' ? chalk.yellow : chalk.gray;
 
   console.log(chalk.bold('\nRalph Loop Status:'));
   console.log(`  Status: ${statusColor(stats.status)}`);
   console.log(`  Elapsed: ${stats.elapsedHours.toFixed(2)} hours`);
   if (stats.minDurationMs) {
     const minHours = stats.minDurationMs / (1000 * 60 * 60);
-    console.log(`  Min Duration: ${minHours.toFixed(2)} hours (${stats.minDurationReached ? 'reached' : 'not reached'})`);
+    console.log(
+      `  Min Duration: ${minHours.toFixed(2)} hours (${stats.minDurationReached ? 'reached' : 'not reached'})`
+    );
   }
 
   console.log(chalk.bold('\nTasks:'));
@@ -422,10 +411,7 @@ program
     console.log(`  Completed: ${taskCounts.completed}`);
     console.log(`  Failed: ${taskCounts.failed}`);
 
-    const statusColor =
-      loopStatus === 'running' ? chalk.green :
-      loopStatus === 'paused' ? chalk.yellow :
-      chalk.gray;
+    const statusColor = loopStatus === 'running' ? chalk.green : loopStatus === 'paused' ? chalk.yellow : chalk.gray;
     console.log(chalk.bold('\nRalph Loop:'));
     console.log(`  Status: ${statusColor(loopStatus)}`);
     console.log('');
@@ -481,11 +467,12 @@ program
       console.log('  (none)');
     } else {
       for (const session of sessions) {
-        const status = session.status === 'idle'
-          ? chalk.green('idle')
-          : session.status === 'busy'
-            ? chalk.yellow('busy')
-            : chalk.red(session.status);
+        const status =
+          session.status === 'idle'
+            ? chalk.green('idle')
+            : session.status === 'busy'
+              ? chalk.yellow('busy')
+              : chalk.red(session.status);
         console.log(`  ${chalk.cyan(session.id.slice(0, 8))} ${status} ${session.workingDir}`);
       }
     }

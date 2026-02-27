@@ -32,13 +32,13 @@ import {
 
 // ========== Types ==========
 
-export interface AiPlanCheckConfig extends AiCheckerConfigBase {}
+export type AiPlanCheckConfig = AiCheckerConfigBase;
 
 export type AiPlanCheckVerdict = 'PLAN_MODE' | 'NOT_PLAN_MODE' | 'ERROR';
 
-export interface AiPlanCheckResult extends AiCheckerResultBase<AiPlanCheckVerdict> {}
+export type AiPlanCheckResult = AiCheckerResultBase<AiPlanCheckVerdict>;
 
-export interface AiPlanCheckState extends AiCheckerStateBase<AiPlanCheckVerdict> {}
+export type AiPlanCheckState = AiCheckerStateBase<AiPlanCheckVerdict>;
 
 // ========== Constants ==========
 

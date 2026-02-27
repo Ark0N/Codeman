@@ -18,7 +18,16 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkS
 import { writeFile, rename, unlink, copyFile, access } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { AppState, createInitialState, RalphSessionState, createInitialRalphSessionState, GlobalStats, createInitialGlobalStats, TokenStats, TokenUsageEntry } from './types.js';
+import {
+  AppState,
+  createInitialState,
+  RalphSessionState,
+  createInitialRalphSessionState,
+  GlobalStats,
+  createInitialGlobalStats,
+  TokenStats,
+  TokenUsageEntry,
+} from './types.js';
 import { MAX_SESSION_TOKENS } from './utils/index.js';
 
 /** Debounce delay for batching state writes (ms) */
@@ -299,7 +308,11 @@ export class StateStore {
     } catch (err) {
       console.error('[StateStore] Failed to write state file:', err);
       this.consecutiveSaveFailures++;
-      try { if (existsSync(tempPath)) unlinkSync(tempPath); } catch { /* ignore */ }
+      try {
+        if (existsSync(tempPath)) unlinkSync(tempPath);
+      } catch {
+        /* ignore */
+      }
       if (this.consecutiveSaveFailures >= MAX_CONSECUTIVE_FAILURES) {
         console.error('[StateStore] Circuit breaker OPEN - writes failing repeatedly');
         this.circuitBreakerOpen = true;
@@ -384,7 +397,10 @@ export class StateStore {
    * @param activeSessionIds - Set of currently active session IDs
    * @returns Number of sessions cleaned up
    */
-  cleanupStaleSessions(activeSessionIds: Set<string>): { count: number; cleaned: Array<{ id: string; name?: string }> } {
+  cleanupStaleSessions(activeSessionIds: Set<string>): {
+    count: number;
+    cleaned: Array<{ id: string; name?: string }>;
+  } {
     const allSessionIds = Object.keys(this.state.sessions);
     const cleaned: Array<{ id: string; name?: string }> = [];
 
@@ -481,7 +497,9 @@ export class StateStore {
     }
     // Reject negative values
     if (inputTokens < 0 || outputTokens < 0 || cost < 0) {
-      console.warn(`[StateStore] Rejected negative global stats: input=${inputTokens}, output=${outputTokens}, cost=${cost}`);
+      console.warn(
+        `[StateStore] Rejected negative global stats: input=${inputTokens}, output=${outputTokens}, cost=${cost}`
+      );
       return;
     }
 
@@ -505,7 +523,9 @@ export class StateStore {
    * Returns aggregate stats combining global (deleted sessions) + active sessions.
    * @param activeSessions Map of active session states
    */
-  getAggregateStats(activeSessions: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }>): {
+  getAggregateStats(
+    activeSessions: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }>
+  ): {
     totalInputTokens: number;
     totalOutputTokens: number;
     totalCost: number;
@@ -602,7 +622,7 @@ export class StateStore {
     }
 
     // Find or create today's entry
-    let todayEntry = stats.daily.find(e => e.date === today);
+    let todayEntry = stats.daily.find((e) => e.date === today);
     if (!todayEntry) {
       todayEntry = {
         date: today,
@@ -617,10 +637,7 @@ export class StateStore {
     // Accumulate tokens
     todayEntry.inputTokens += inputTokens;
     todayEntry.outputTokens += outputTokens;
-    todayEntry.estimatedCost = this.calculateEstimatedCost(
-      todayEntry.inputTokens,
-      todayEntry.outputTokens
-    );
+    todayEntry.estimatedCost = this.calculateEstimatedCost(todayEntry.inputTokens, todayEntry.outputTokens);
 
     // Only increment session count for unique sessions
     if (sessionId && !this.dailySessionIds.has(sessionId)) {

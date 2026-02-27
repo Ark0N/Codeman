@@ -64,7 +64,7 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 
 ## Commands
 
-**CRITICAL**: `npm run dev` shows CLI help, NOT the web server.
+**Note**: `npm run dev` starts the web server (equivalent to `npx tsx src/index.ts web`).
 
 **Default port**: `3000` (web UI at `http://localhost:3000`)
 
@@ -92,7 +92,6 @@ journalctl --user -u codeman-web -f
 
 ## Common Gotchas
 
-- **`npm run dev` is NOT the web server** — it shows CLI help. Use `npx tsx src/index.ts web`
 - **Single-line prompts only** — `writeViaMux()` sends text and Enter separately; multi-line breaks Ink
 - **Don't kill tmux sessions blindly** — Check `$CODEMAN_TMUX` first; you might be inside one
 - **Never run full test suite** — `npx vitest run` spawns/kills tmux sessions and will crash your Codeman session. Run individual test files only.

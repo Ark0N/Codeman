@@ -22,7 +22,14 @@ import { execSync } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { homedir, totalmem, freemem, loadavg, cpus } from 'node:os';
 import { EventEmitter } from 'node:events';
-import { Session, ClaudeMessage, type BackgroundTask, type RalphTrackerState, type RalphTodoItem, type ActiveBashTool } from '../session.js';
+import {
+  Session,
+  ClaudeMessage,
+  type BackgroundTask,
+  type RalphTrackerState,
+  type RalphTodoItem,
+  type ActiveBashTool,
+} from '../session.js';
 import type { ClaudeMode } from '../types.js';
 import { fileStreamManager } from '../file-stream-manager.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
@@ -32,7 +39,14 @@ import { getStore } from '../state-store.js';
 import { generateClaudeMd } from '../templates/claude-md.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
 import { writeHooksConfig, updateCaseEnvVars } from '../hooks-config.js';
-import { subagentWatcher, type SubagentInfo, type SubagentToolCall, type SubagentProgress, type SubagentMessage, type SubagentToolResult } from '../subagent-watcher.js';
+import {
+  subagentWatcher,
+  type SubagentInfo,
+  type SubagentToolCall,
+  type SubagentProgress,
+  type SubagentMessage,
+  type SubagentToolResult,
+} from '../subagent-watcher.js';
 import { imageWatcher } from '../image-watcher.js';
 import { TranscriptWatcher } from '../transcript-watcher.js';
 import { TeamWatcher } from '../team-watcher.js';
@@ -127,8 +141,8 @@ const TASK_UPDATE_BATCH_INTERVAL = 100;
 // When terminal supports this, it buffers all output between start/end markers
 // and renders atomically, eliminating partial-frame flicker from Ink redraws.
 // Supported by: WezTerm, Kitty, Ghostty, iTerm2 3.5+, Windows Terminal, VSCode terminal
-const DEC_SYNC_START = '\x1b[?2026h';  // Begin synchronized update
-const DEC_SYNC_END = '\x1b[?2026l';    // End synchronized update (flush to screen)
+const DEC_SYNC_START = '\x1b[?2026h'; // Begin synchronized update
+const DEC_SYNC_END = '\x1b[?2026l'; // End synchronized update (flush to screen)
 // State update debounce interval (batch expensive toDetailedState() calls)
 const STATE_UPDATE_DEBOUNCE_INTERVAL = 500;
 // Cache TTL for getLightSessionsState() — avoids re-serializing all sessions on every SSE init / /api/sessions call
@@ -172,7 +186,9 @@ const ITERATION_PAUSE_MS = 2000;
 // Set high (32KB) to allow effective batching; avg Ink events are ~14KB
 const BATCH_FLUSH_THRESHOLD = 32 * 1024;
 // Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
+// eslint-disable-next-line no-control-regex
 const CLAUDE_BANNER_PATTERN = /\x1b\[1mClaud/;
+// eslint-disable-next-line no-control-regex
 const CTRL_L_PATTERN = /\x0c/g;
 const LEADING_WHITESPACE_PATTERN = /^[\s\r\n]+/;
 
@@ -205,8 +221,14 @@ function sanitizeHookData(data: Record<string, unknown> | null | undefined): Rec
   // Only forward known safe fields from Claude Code hook stdin
   const safeFields: Record<string, unknown> = {};
   const allowedKeys = [
-    'hook_event_name', 'tool_name', 'tool_input', 'session_id',
-    'cwd', 'permission_mode', 'stop_hook_active', 'transcript_path',
+    'hook_event_name',
+    'tool_name',
+    'tool_input',
+    'session_id',
+    'cwd',
+    'permission_mode',
+    'stop_hook_active',
+    'transcript_path',
   ];
 
   for (const key of allowedKeys) {
@@ -248,16 +270,17 @@ function sanitizeHookData(data: Record<string, unknown> | null | undefined): Rec
  * The ralph-loop.local.md file has priority because it contains
  * the exact configuration from an active Ralph loop session.
  */
-function autoConfigureRalph(session: Session, workingDir: string, broadcast: (event: string, data: unknown) => void): void {
+function autoConfigureRalph(
+  session: Session,
+  workingDir: string,
+  broadcast: (event: string, data: unknown) => void
+): void {
   // First, try to read the official Ralph Wiggum plugin state file
   const ralphConfig = parseRalphLoopConfig(workingDir);
 
   if (ralphConfig && ralphConfig.completionPromise) {
     session.ralphTracker.enable();
-    session.ralphTracker.startLoop(
-      ralphConfig.completionPromise,
-      ralphConfig.maxIterations ?? undefined
-    );
+    session.ralphTracker.startLoop(ralphConfig.completionPromise, ralphConfig.maxIterations ?? undefined);
 
     // Restore iteration count if available
     if (ralphConfig.iteration > 0) {
@@ -266,7 +289,9 @@ function autoConfigureRalph(session: Session, workingDir: string, broadcast: (ev
       console.log(`[auto-detect] Ralph loop at iteration ${ralphConfig.iteration}/${ralphConfig.maxIterations ?? '∞'}`);
     }
 
-    console.log(`[auto-detect] Configured Ralph loop for session ${session.id} from ralph-loop.local.md: ${ralphConfig.completionPromise}`);
+    console.log(
+      `[auto-detect] Configured Ralph loop for session ${session.id} from ralph-loop.local.md: ${ralphConfig.completionPromise}`
+    );
     broadcast('session:ralphLoopUpdate', {
       sessionId: session.id,
       state: session.ralphTracker.loopState,
@@ -310,9 +335,9 @@ function getOrCreateSelfSignedCert(): { key: string; cert: string } {
   // Generate self-signed cert valid for 365 days, covering localhost and common LAN access patterns
   execSync(
     `openssl req -x509 -newkey rsa:2048 -nodes ` +
-    `-keyout "${keyPath}" -out "${certPath}" ` +
-    `-days 365 -subj "/CN=codeman" ` +
-    `-addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:0.0.0.0"`,
+      `-keyout "${keyPath}" -out "${certPath}" ` +
+      `-days 365 -subj "/CN=codeman" ` +
+      `-addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:0.0.0.0"`,
     { stdio: 'pipe' }
   );
 
@@ -377,13 +402,13 @@ export class WebServer extends EventEmitter {
   private mux: TerminalMultiplexer;
   // Terminal batching for performance
   private terminalBatches: Map<string, string[]> = new Map();
-  private terminalBatchSizes: Map<string, number> = new Map();  // Running total avoids O(n) reduce per push
-  private terminalBatchTimers: Map<string, NodeJS.Timeout> = new Map();  // Per-session timers (staggered flushes)
+  private terminalBatchSizes: Map<string, number> = new Map(); // Running total avoids O(n) reduce per push
+  private terminalBatchTimers: Map<string, NodeJS.Timeout> = new Map(); // Per-session timers (staggered flushes)
   // Adaptive batching: track rapid events to extend batch window (per-session)
   // StaleExpirationMap auto-cleans entries for sessions that stop generating output
   private lastTerminalEventTime: StaleExpirationMap<string, number> = new StaleExpirationMap({
     ttlMs: 5 * 60 * 1000, // 5 minutes - auto-expire stale session timing data
-    refreshOnGet: false,   // Don't refresh on reads, only on explicit sets
+    refreshOnGet: false, // Don't refresh on reads, only on explicit sets
   });
   // Scheduled runs cleanup timer
   private scheduledCleanupTimer: NodeJS.Timeout | null = null;
@@ -398,7 +423,6 @@ export class WebServer extends EventEmitter {
   // Flag to prevent new timers during shutdown
   private _isStopping: boolean = false;
   // Cached light state for SSE init (avoids rebuilding on every reconnect)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private cachedLightState: { data: Record<string, unknown>; timestamp: number } | null = null;
   private static readonly LIGHT_STATE_CACHE_TTL_MS = 1000;
   // Cached sessions list for getLightSessionsState() (avoids re-serializing all sessions on every call)
@@ -715,7 +739,10 @@ export class WebServer extends EventEmitter {
     this.app.addHook('onRequest', (req, reply, done) => {
       reply.header('X-Content-Type-Options', 'nosniff');
       reply.header('X-Frame-Options', 'SAMEORIGIN');
-      reply.header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob:; connect-src 'self' wss://api.deepgram.com; font-src 'self' https://cdn.jsdelivr.net; frame-ancestors 'self'");
+      reply.header(
+        'Content-Security-Policy',
+        "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob:; connect-src 'self' wss://api.deepgram.com; font-src 'self' https://cdn.jsdelivr.net; frame-ancestors 'self'"
+      );
       if (this.https) {
         reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
       }
@@ -776,7 +803,7 @@ export class WebServer extends EventEmitter {
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
+        Connection: 'keep-alive',
         'X-Accel-Buffering': 'no', // Disable nginx buffering
       });
 
@@ -841,7 +868,12 @@ export class WebServer extends EventEmitter {
 
     // Session lifecycle audit log
     this.app.get('/api/session-lifecycle', async (req) => {
-      const query = req.query as { sessionId?: string; event?: string; since?: string; limit?: string };
+      const query = req.query as {
+        sessionId?: string;
+        event?: string;
+        since?: string;
+        limit?: string;
+      };
       const lifecycleLog = getLifecycleLog();
       const entries = await lifecycleLog.query({
         sessionId: query.sessionId,
@@ -854,7 +886,8 @@ export class WebServer extends EventEmitter {
 
     // Global stats endpoint
     this.app.get('/api/stats', async () => {
-      const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> = {};
+      const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> =
+        {};
       for (const [sessionId, session] of this.sessions) {
         activeSessionTokens[sessionId] = {
           inputTokens: session.inputTokens,
@@ -872,7 +905,8 @@ export class WebServer extends EventEmitter {
     // Token stats with daily history
     this.app.get('/api/token-stats', async () => {
       // Get aggregate totals (global + active sessions)
-      const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> = {};
+      const activeSessionTokens: Record<string, { inputTokens?: number; outputTokens?: number; totalCost?: number }> =
+        {};
       for (const [sessionId, session] of this.sessions) {
         activeSessionTokens[sessionId] = {
           inputTokens: session.inputTokens,
@@ -931,15 +965,15 @@ export class WebServer extends EventEmitter {
       return {
         memory: {
           rss: mem.rss,
-          rssMB: Math.round(mem.rss / 1024 / 1024 * 10) / 10,
+          rssMB: Math.round((mem.rss / 1024 / 1024) * 10) / 10,
           heapUsed: mem.heapUsed,
-          heapUsedMB: Math.round(mem.heapUsed / 1024 / 1024 * 10) / 10,
+          heapUsedMB: Math.round((mem.heapUsed / 1024 / 1024) * 10) / 10,
           heapTotal: mem.heapTotal,
-          heapTotalMB: Math.round(mem.heapTotal / 1024 / 1024 * 10) / 10,
+          heapTotalMB: Math.round((mem.heapTotal / 1024 / 1024) * 10) / 10,
           external: mem.external,
-          externalMB: Math.round(mem.external / 1024 / 1024 * 10) / 10,
+          externalMB: Math.round((mem.external / 1024 / 1024) * 10) / 10,
           arrayBuffers: mem.arrayBuffers,
-          arrayBuffersMB: Math.round(mem.arrayBuffers / 1024 / 1024 * 10) / 10,
+          arrayBuffersMB: Math.round((mem.arrayBuffers / 1024 / 1024) * 10) / 10,
         },
         mapSizes: {
           server: serverMapSizes,
@@ -976,7 +1010,10 @@ export class WebServer extends EventEmitter {
     this.app.post('/api/sessions', async (req) => {
       // Prevent unbounded session creation
       if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
-        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached. Delete some sessions first.`);
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached. Delete some sessions first.`
+        );
       }
 
       const result = CreateSessionSchema.safeParse(req.body);
@@ -1007,16 +1044,18 @@ export class WebServer extends EventEmitter {
       if (body.mode === 'opencode') {
         const { isOpenCodeAvailable } = await import('../utils/opencode-cli-resolver.js');
         if (!isOpenCodeAvailable()) {
-          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash');
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
+          );
         }
       }
 
       const globalNice = await this.getGlobalNiceConfig();
       const modelConfig = await this.getModelConfig();
       const mode = body.mode || 'claude';
-      const model = mode === 'opencode'
-        ? body.openCodeConfig?.model
-        : (mode !== 'shell' ? modelConfig?.defaultModel : undefined);
+      const model =
+        mode === 'opencode' ? body.openCodeConfig?.model : mode !== 'shell' ? modelConfig?.defaultModel : undefined;
       const claudeModeConfig = await this.getClaudeModeConfig();
       const session = new Session({
         workingDir,
@@ -1147,7 +1186,7 @@ export class WebServer extends EventEmitter {
           textOutput: session.textOutput,
           messages: session.messages,
           errorBuffer: session.errorBuffer,
-        }
+        },
       };
     });
 
@@ -1166,7 +1205,7 @@ export class WebServer extends EventEmitter {
           loop: session.ralphLoopState,
           todos: session.ralphTodos,
           todoStats: session.ralphTodoStats,
-        }
+        },
       };
     });
 
@@ -1206,7 +1245,7 @@ export class WebServer extends EventEmitter {
         success: true,
         data: {
           tools: session.activeTools,
-        }
+        },
       };
     });
 
@@ -1225,7 +1264,22 @@ export class WebServer extends EventEmitter {
       const workingDir = session.workingDir;
 
       // Default excludes - large/generated directories
-      const excludeDirs = new Set(['.git', 'node_modules', 'dist', 'build', '__pycache__', '.cache', '.next', '.nuxt', 'coverage', '.venv', 'venv', '.tox', 'target', 'vendor']);
+      const excludeDirs = new Set([
+        '.git',
+        'node_modules',
+        'dist',
+        'build',
+        '__pycache__',
+        '.cache',
+        '.next',
+        '.nuxt',
+        'coverage',
+        '.venv',
+        'venv',
+        '.tox',
+        'target',
+        'vendor',
+      ]);
 
       interface FileTreeNode {
         name: string;
@@ -1319,7 +1373,7 @@ export class WebServer extends EventEmitter {
           totalFiles,
           totalDirectories,
           truncated,
-        }
+        },
       };
     });
 
@@ -1349,7 +1403,34 @@ export class WebServer extends EventEmitter {
 
         // Check if it's a binary/media file
         const ext = filePath.split('.').pop()?.toLowerCase() || '';
-        const binaryExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'svg', 'bmp', 'mp4', 'webm', 'mov', 'avi', 'mp3', 'wav', 'ogg', 'pdf', 'zip', 'tar', 'gz', 'exe', 'dll', 'so', 'woff', 'woff2', 'ttf', 'eot']);
+        const binaryExts = new Set([
+          'png',
+          'jpg',
+          'jpeg',
+          'gif',
+          'webp',
+          'ico',
+          'svg',
+          'bmp',
+          'mp4',
+          'webm',
+          'mov',
+          'avi',
+          'mp3',
+          'wav',
+          'ogg',
+          'pdf',
+          'zip',
+          'tar',
+          'gz',
+          'exe',
+          'dll',
+          'so',
+          'woff',
+          'woff2',
+          'ttf',
+          'eot',
+        ]);
         const imageExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico']);
         const videoExts = new Set(['mp4', 'webm', 'mov', 'avi']);
 
@@ -1363,14 +1444,17 @@ export class WebServer extends EventEmitter {
               type: imageExts.has(ext) ? 'image' : videoExts.has(ext) ? 'video' : 'binary',
               extension: ext,
               url: `/api/sessions/${id}/file-raw?path=${encodeURIComponent(filePath)}`,
-            }
+            },
           };
         }
 
         // Validate file size before reading (DoS protection - prevent memory exhaustion)
         const MAX_TEXT_FILE_SIZE = 10 * 1024 * 1024; // 10MB
         if (stat.size > MAX_TEXT_FILE_SIZE) {
-          return createErrorResponse(ApiErrorCode.INVALID_INPUT, `File too large (${Math.round(stat.size / 1024 / 1024)}MB > ${MAX_TEXT_FILE_SIZE / 1024 / 1024}MB limit)`);
+          return createErrorResponse(
+            ApiErrorCode.INVALID_INPUT,
+            `File too large (${Math.round(stat.size / 1024 / 1024)}MB > ${MAX_TEXT_FILE_SIZE / 1024 / 1024}MB limit)`
+          );
         }
 
         // Read text file with line limit (bounded to prevent DoS)
@@ -1390,7 +1474,7 @@ export class WebServer extends EventEmitter {
             totalLines: allLines.length,
             truncated: truncatedContent,
             extension: ext,
-          }
+          },
         };
       } catch (err) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`);
@@ -1426,24 +1510,44 @@ export class WebServer extends EventEmitter {
         const MAX_RAW_FILE_SIZE = 50 * 1024 * 1024; // 50MB for raw files
         const stat = await fs.stat(fullPath);
         if (stat.size > MAX_RAW_FILE_SIZE) {
-          reply.code(400).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, `File too large (${Math.round(stat.size / 1024 / 1024)}MB > ${MAX_RAW_FILE_SIZE / 1024 / 1024}MB limit)`));
+          reply
+            .code(400)
+            .send(
+              createErrorResponse(
+                ApiErrorCode.INVALID_INPUT,
+                `File too large (${Math.round(stat.size / 1024 / 1024)}MB > ${MAX_RAW_FILE_SIZE / 1024 / 1024}MB limit)`
+              )
+            );
           return;
         }
 
         const ext = filePath.split('.').pop()?.toLowerCase() || '';
         const mimeTypes: Record<string, string> = {
-          'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'gif': 'image/gif',
-          'webp': 'image/webp', 'svg': 'image/svg+xml', 'ico': 'image/x-icon', 'bmp': 'image/bmp',
-          'mp4': 'video/mp4', 'webm': 'video/webm', 'mov': 'video/quicktime',
-          'mp3': 'audio/mpeg', 'wav': 'audio/wav', 'ogg': 'audio/ogg',
-          'pdf': 'application/pdf', 'json': 'application/json',
+          png: 'image/png',
+          jpg: 'image/jpeg',
+          jpeg: 'image/jpeg',
+          gif: 'image/gif',
+          webp: 'image/webp',
+          svg: 'image/svg+xml',
+          ico: 'image/x-icon',
+          bmp: 'image/bmp',
+          mp4: 'video/mp4',
+          webm: 'video/webm',
+          mov: 'video/quicktime',
+          mp3: 'audio/mpeg',
+          wav: 'audio/wav',
+          ogg: 'audio/ogg',
+          pdf: 'application/pdf',
+          json: 'application/json',
         };
 
         const content = await fs.readFile(fullPath);
         reply.header('Content-Type', mimeTypes[ext] || 'application/octet-stream');
         reply.send(content);
       } catch (err) {
-        reply.code(500).send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`));
+        reply
+          .code(500)
+          .send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to read file: ${getErrorMessage(err)}`));
       }
     });
 
@@ -1467,7 +1571,7 @@ export class WebServer extends EventEmitter {
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
+        Connection: 'keep-alive',
         'X-Accel-Buffering': 'no',
       });
 
@@ -1599,7 +1703,7 @@ export class WebServer extends EventEmitter {
       this.persistSessionState(session);
       this.broadcast('session:ralphLoopUpdate', {
         sessionId: id,
-        state: session.ralphLoopState
+        state: session.ralphLoopState,
       });
 
       return { success: true };
@@ -1634,7 +1738,7 @@ export class WebServer extends EventEmitter {
           circuitBreaker: session.ralphTracker.circuitBreakerStatus,
           cumulativeStats: session.ralphTracker.cumulativeStats,
           exitGateMet: session.ralphTracker.exitGateMet,
-        }
+        },
       };
     });
 
@@ -1653,7 +1757,7 @@ export class WebServer extends EventEmitter {
         data: {
           content,
           todoCount: session.ralphTracker.todos.length,
-        }
+        },
       };
     });
 
@@ -1679,7 +1783,7 @@ export class WebServer extends EventEmitter {
         data: {
           importedCount,
           todos: session.ralphTracker.todos,
-        }
+        },
       };
     });
 
@@ -1707,7 +1811,7 @@ export class WebServer extends EventEmitter {
           data: {
             filePath,
             todoCount: session.ralphTracker.todos.length,
-          }
+          },
         };
       } catch (error) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to write file: ${error}`);
@@ -1741,7 +1845,7 @@ export class WebServer extends EventEmitter {
             filePath,
             importedCount,
             todos: session.ralphTracker.todos,
-          }
+          },
         };
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -1780,7 +1884,7 @@ export class WebServer extends EventEmitter {
           data: {
             filePath,
             contentLength: content.length,
-          }
+          },
         };
       } catch (error) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to write file: ${error}`);
@@ -1806,7 +1910,7 @@ export class WebServer extends EventEmitter {
       }
 
       // Run async, don't wait
-      session.runPrompt(prompt).catch(err => {
+      session.runPrompt(prompt).catch((err) => {
         this.broadcast('session:error', { id, error: err.message });
       });
 
@@ -1830,7 +1934,11 @@ export class WebServer extends EventEmitter {
       try {
         // Auto-detect completion phrase from CLAUDE.md BEFORE starting (only if globally enabled and not explicitly disabled by user)
         // Ralph tracker is not supported for opencode sessions
-        if (session.mode !== 'opencode' && this.store.getConfig().ralphEnabled && !session.ralphTracker.autoEnableDisabled) {
+        if (
+          session.mode !== 'opencode' &&
+          this.store.getConfig().ralphEnabled &&
+          !session.ralphTracker.autoEnableDisabled
+        ) {
           autoConfigureRalph(session, session.workingDir, () => {});
           if (!session.ralphTracker.enabled) {
             session.ralphTracker.enable();
@@ -1838,7 +1946,12 @@ export class WebServer extends EventEmitter {
         }
 
         await session.startInteractive();
-        getLifecycleLog().log({ event: 'started', sessionId: id, name: session.name, mode: session.mode });
+        getLifecycleLog().log({
+          event: 'started',
+          sessionId: id,
+          name: session.name,
+          mode: session.mode,
+        });
         this.broadcast('session:interactive', { id });
         this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
 
@@ -1863,7 +1976,12 @@ export class WebServer extends EventEmitter {
 
       try {
         await session.startShell();
-        getLifecycleLog().log({ event: 'started', sessionId: id, name: session.name, mode: 'shell' });
+        getLifecycleLog().log({
+          event: 'started',
+          sessionId: id,
+          name: session.name,
+          mode: 'shell',
+        });
         this.broadcast('session:interactive', { id, mode: 'shell' });
         this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
         return { success: true };
@@ -1889,7 +2007,10 @@ export class WebServer extends EventEmitter {
 
       const inputStr = String(input);
       if (inputStr.length > MAX_INPUT_LENGTH) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Input exceeds maximum length (${MAX_INPUT_LENGTH} bytes)`);
+        return createErrorResponse(
+          ApiErrorCode.INVALID_INPUT,
+          `Input exceeds maximum length (${MAX_INPUT_LENGTH} bytes)`
+        );
       }
 
       // Write input to PTY. Direct write is synchronous; writeViaMux
@@ -1897,14 +2018,17 @@ export class WebServer extends EventEmitter {
       if (useMux) {
         // Fire-and-forget: don't block HTTP response on tmux child process.
         // Fallback to direct write on failure.
-        session.writeViaMux(inputStr).then(ok => {
-          if (!ok) {
-            console.warn(`[Server] writeViaMux failed for session ${id}, falling back to direct write`);
+        session
+          .writeViaMux(inputStr)
+          .then((ok) => {
+            if (!ok) {
+              console.warn(`[Server] writeViaMux failed for session ${id}, falling back to direct write`);
+              session.write(inputStr);
+            }
+          })
+          .catch(() => {
             session.write(inputStr);
-          }
-        }).catch(() => {
-          session.write(inputStr);
-        });
+          });
       } else {
         session.write(inputStr);
       }
@@ -1927,7 +2051,10 @@ export class WebServer extends EventEmitter {
 
       // Note: Zod already validates that cols and rows are positive integers within bounds
       if (cols > MAX_TERMINAL_COLS || rows > MAX_TERMINAL_ROWS) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Terminal dimensions exceed maximum (${MAX_TERMINAL_COLS}x${MAX_TERMINAL_ROWS})`);
+        return createErrorResponse(
+          ApiErrorCode.INVALID_INPUT,
+          `Terminal dimensions exceed maximum (${MAX_TERMINAL_COLS}x${MAX_TERMINAL_ROWS})`
+        );
       }
 
       session.resize(cols, rows);
@@ -1979,9 +2106,7 @@ export class WebServer extends EventEmitter {
       }
 
       // Remove Ctrl+L and leading whitespace (cheap on tailed subset)
-      cleanBuffer = cleanBuffer
-        .replace(CTRL_L_PATTERN, '')
-        .replace(LEADING_WHITESPACE_PATTERN, '');
+      cleanBuffer = cleanBuffer.replace(CTRL_L_PATTERN, '').replace(LEADING_WHITESPACE_PATTERN, '');
 
       return {
         terminalBuffer: cleanBuffer,
@@ -2171,7 +2296,10 @@ export class WebServer extends EventEmitter {
       if (!irResult.success) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
       }
-      const body = irResult.data as { respawnConfig?: Partial<RespawnConfig>; durationMinutes?: number };
+      const body = irResult.data as {
+        respawnConfig?: Partial<RespawnConfig>;
+        durationMinutes?: number;
+      };
       const session = this.sessions.get(id);
 
       if (!session) {
@@ -2198,7 +2326,13 @@ export class WebServer extends EventEmitter {
 
         // Start interactive session
         await session.startInteractive();
-        getLifecycleLog().log({ event: 'started', sessionId: id, name: session.name, mode: session.mode, reason: 'interactive_respawn' });
+        getLifecycleLog().log({
+          event: 'started',
+          sessionId: id,
+          name: session.name,
+          mode: session.mode,
+          reason: 'interactive_respawn',
+        });
         this.broadcast('session:interactive', { id });
         this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
 
@@ -2407,7 +2541,10 @@ export class WebServer extends EventEmitter {
     this.app.post('/api/run', async (req) => {
       // Prevent unbounded session creation
       if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
-        return createErrorResponse(ApiErrorCode.SESSION_BUSY, `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached`);
+        return createErrorResponse(
+          ApiErrorCode.SESSION_BUSY,
+          `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached`
+        );
       }
 
       const qrResult = QuickRunSchema.safeParse(req.body);
@@ -2438,7 +2575,12 @@ export class WebServer extends EventEmitter {
       this.store.incrementSessionsCreated();
       this.persistSessionState(session);
       await this.setupSessionListeners(session);
-      getLifecycleLog().log({ event: 'created', sessionId: session.id, name: session.name, reason: 'run_prompt' });
+      getLifecycleLog().log({
+        event: 'created',
+        sessionId: session.id,
+        name: session.name,
+        reason: 'run_prompt',
+      });
 
       this.broadcast('session:created', this.getSessionStateWithRespawn(session));
 
@@ -2459,28 +2601,31 @@ export class WebServer extends EventEmitter {
       return Array.from(this.scheduledRuns.values());
     });
 
-    this.app.post('/api/scheduled', async (req): Promise<{ success: boolean; run: ScheduledRun } | ApiResponse<never>> => {
-      const srResult = ScheduledRunSchema.safeParse(req.body);
-      if (!srResult.success) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
-      }
-      const { prompt, workingDir, durationMinutes } = srResult.data;
-
-      // Validate workingDir exists and is a directory
-      if (workingDir) {
-        try {
-          const stat = statSync(workingDir);
-          if (!stat.isDirectory()) {
-            return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir is not a directory');
-          }
-        } catch {
-          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir does not exist');
+    this.app.post(
+      '/api/scheduled',
+      async (req): Promise<{ success: boolean; run: ScheduledRun } | ApiResponse<never>> => {
+        const srResult = ScheduledRunSchema.safeParse(req.body);
+        if (!srResult.success) {
+          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
         }
-      }
+        const { prompt, workingDir, durationMinutes } = srResult.data;
 
-      const run = await this.startScheduledRun(prompt, workingDir || process.cwd(), durationMinutes ?? 60);
-      return { success: true, run };
-    });
+        // Validate workingDir exists and is a directory
+        if (workingDir) {
+          try {
+            const stat = statSync(workingDir);
+            if (!stat.isDirectory()) {
+              return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir is not a directory');
+            }
+          } catch {
+            return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir does not exist');
+          }
+        }
+
+        const run = await this.startScheduledRun(prompt, workingDir || process.cwd(), durationMinutes ?? 60);
+        return { success: true, run };
+      }
+    );
 
     this.app.delete('/api/scheduled/:id', async (req) => {
       const { id } = req.params as { id: string };
@@ -2533,7 +2678,7 @@ export class WebServer extends EventEmitter {
         const linkedCases: Record<string, string> = JSON.parse(await fs.readFile(linkedCasesFile, 'utf-8'));
         for (const [name, path] of Object.entries(linkedCases)) {
           // Only add if not already in cases (avoid duplicates) and path exists
-          if (!cases.some(c => c.name === name) && existsSync(path)) {
+          if (!cases.some((c) => c.name === name) && existsSync(path)) {
             cases.push({
               name,
               path,
@@ -2600,9 +2745,7 @@ export class WebServer extends EventEmitter {
       const { name, path: folderPath } = lcResult.data;
 
       // Expand ~ to home directory
-      const expandedPath = folderPath.startsWith('~')
-        ? join(homedir(), folderPath.slice(1))
-        : folderPath;
+      const expandedPath = folderPath.startsWith('~') ? join(homedir(), folderPath.slice(1)) : folderPath;
 
       // Validate the folder exists
       if (!existsSync(expandedPath)) {
@@ -2612,7 +2755,10 @@ export class WebServer extends EventEmitter {
       // Check if case name already exists in casesDir
       const casePath = join(casesDir, name);
       if (existsSync(casePath)) {
-        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'A case with this name already exists in codeman-cases.');
+        return createErrorResponse(
+          ApiErrorCode.ALREADY_EXISTS,
+          'A case with this name already exists in codeman-cases.'
+        );
       }
 
       // Load existing linked cases
@@ -2628,7 +2774,10 @@ export class WebServer extends EventEmitter {
 
       // Check if name is already linked
       if (linkedCases[name]) {
-        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `Case "${name}" is already linked to ${linkedCases[name]}`);
+        return createErrorResponse(
+          ApiErrorCode.ALREADY_EXISTS,
+          `Case "${name}" is already linked to ${linkedCases[name]}`
+        );
       }
 
       // Save the linked case
@@ -2711,8 +2860,12 @@ export class WebServer extends EventEmitter {
         const content = await fs.readFile(fixPlanPath, 'utf-8');
 
         // Parse todos from the content (similar to ralph-tracker's importFixPlanMarkdown)
-        const todos: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed'; priority: string | null }> = [];
-        const todoPattern = /^-\s*\[([ xX\-])\]\s*(.+)$/;
+        const todos: Array<{
+          content: string;
+          status: 'pending' | 'in_progress' | 'completed';
+          priority: string | null;
+        }> = [];
+        const todoPattern = /^-\s*\[([ xX-])\]\s*(.+)$/;
         const p0HeaderPattern = /^##\s*(High Priority|Critical|P0|Critical Path)/i;
         const p1HeaderPattern = /^##\s*(Standard|P1|Medium Priority)/i;
         const p2HeaderPattern = /^##\s*(Nice to Have|P2|Low Priority)/i;
@@ -2766,7 +2919,9 @@ export class WebServer extends EventEmitter {
         }
 
         // Calculate stats in a single pass for better performance
-        let pending = 0, inProgress = 0, completed = 0;
+        let pending = 0,
+          inProgress = 0,
+          completed = 0;
         for (const t of todos) {
           if (t.status === 'pending') pending++;
           else if (t.status === 'in_progress') inProgress++;
@@ -2790,7 +2945,10 @@ export class WebServer extends EventEmitter {
     this.app.post('/api/quick-start', async (req): Promise<QuickStartResponse> => {
       // Prevent unbounded session creation
       if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
-        return createErrorResponse(ApiErrorCode.SESSION_BUSY, `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.`);
+        return createErrorResponse(
+          ApiErrorCode.SESSION_BUSY,
+          `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.`
+        );
       }
 
       const result = QuickStartSchema.safeParse(req.body);
@@ -2803,7 +2961,10 @@ export class WebServer extends EventEmitter {
       if (mode === 'opencode') {
         const { isOpenCodeAvailable } = await import('../utils/opencode-cli-resolver.js');
         if (!isOpenCodeAvailable()) {
-          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash');
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
+          );
         }
       }
 
@@ -2844,9 +3005,8 @@ export class WebServer extends EventEmitter {
       // Apply global Nice priority config and model config from settings
       const niceConfig = await this.getGlobalNiceConfig();
       const qsModelConfig = await this.getModelConfig();
-      const qsModel = mode === 'opencode'
-        ? openCodeConfig?.model
-        : (mode !== 'shell' ? qsModelConfig?.defaultModel : undefined);
+      const qsModel =
+        mode === 'opencode' ? openCodeConfig?.model : mode !== 'shell' ? qsModelConfig?.defaultModel : undefined;
       const qsClaudeModeConfig = await this.getClaudeModeConfig();
       const session = new Session({
         workingDir: casePath,
@@ -2874,19 +3034,34 @@ export class WebServer extends EventEmitter {
       this.store.incrementSessionsCreated();
       this.persistSessionState(session);
       await this.setupSessionListeners(session);
-      getLifecycleLog().log({ event: 'created', sessionId: session.id, name: session.name, reason: 'quick_start' });
+      getLifecycleLog().log({
+        event: 'created',
+        sessionId: session.id,
+        name: session.name,
+        reason: 'quick_start',
+      });
       this.broadcast('session:created', this.getSessionStateWithRespawn(session));
 
       // Start in the appropriate mode
       try {
         if (mode === 'shell') {
           await session.startShell();
-          getLifecycleLog().log({ event: 'started', sessionId: session.id, name: session.name, mode: 'shell' });
+          getLifecycleLog().log({
+            event: 'started',
+            sessionId: session.id,
+            name: session.name,
+            mode: 'shell',
+          });
           this.broadcast('session:interactive', { id: session.id, mode: 'shell' });
         } else {
           // Both 'claude' and 'opencode' modes use startInteractive()
           await session.startInteractive();
-          getLifecycleLog().log({ event: 'started', sessionId: session.id, name: session.name, mode });
+          getLifecycleLog().log({
+            event: 'started',
+            sessionId: session.id,
+            name: session.name,
+            mode,
+          });
           this.broadcast('session:interactive', { id: session.id, mode });
         }
         this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
@@ -2933,12 +3108,18 @@ export class WebServer extends EventEmitter {
     this.app.post('/api/ralph-loop/start', async (req): Promise<ApiResponse> => {
       // Prevent unbounded session creation
       if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
-        return createErrorResponse(ApiErrorCode.SESSION_BUSY, `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.`);
+        return createErrorResponse(
+          ApiErrorCode.SESSION_BUSY,
+          `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.`
+        );
       }
 
       const rlResult = RalphLoopStartSchema.safeParse(req.body);
       if (!rlResult.success) {
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, rlResult.error.issues[0]?.message ?? 'Validation failed');
+        return createErrorResponse(
+          ApiErrorCode.INVALID_INPUT,
+          rlResult.error.issues[0]?.message ?? 'Validation failed'
+        );
       }
       const { caseName, taskDescription, completionPhrase, maxIterations, enableRespawn, planItems } = rlResult.data;
 
@@ -2991,19 +3172,43 @@ export class WebServer extends EventEmitter {
       session.ralphTracker.startLoop(completionPhrase, maxIterations ?? undefined);
 
       // Build fix_plan markdown from plan items if provided
-      const enabledItems = planItems?.filter(i => i.enabled) ?? [];
+      const enabledItems = planItems?.filter((i) => i.enabled) ?? [];
       let planContent = '';
       if (enabledItems.length > 0) {
-        const p0 = enabledItems.filter(i => i.priority === 'P0');
-        const p1 = enabledItems.filter(i => i.priority === 'P1');
-        const p2 = enabledItems.filter(i => i.priority === 'P2');
-        const noPri = enabledItems.filter(i => !i.priority);
+        const p0 = enabledItems.filter((i) => i.priority === 'P0');
+        const p1 = enabledItems.filter((i) => i.priority === 'P1');
+        const p2 = enabledItems.filter((i) => i.priority === 'P2');
+        const noPri = enabledItems.filter((i) => !i.priority);
         planContent = '# Implementation Plan\n\n';
         planContent += `Generated: ${new Date().toISOString().slice(0, 10)}\n\n`;
-        if (p0.length > 0) { planContent += '## Critical Path (P0)\n\n'; p0.forEach(i => { planContent += `- [ ] ${i.content}\n`; }); planContent += '\n'; }
-        if (p1.length > 0) { planContent += '## Standard (P1)\n\n'; p1.forEach(i => { planContent += `- [ ] ${i.content}\n`; }); planContent += '\n'; }
-        if (p2.length > 0) { planContent += '## Nice-to-Have (P2)\n\n'; p2.forEach(i => { planContent += `- [ ] ${i.content}\n`; }); planContent += '\n'; }
-        if (noPri.length > 0) { planContent += '## Tasks\n\n'; noPri.forEach(i => { planContent += `- [ ] ${i.content}\n`; }); planContent += '\n'; }
+        if (p0.length > 0) {
+          planContent += '## Critical Path (P0)\n\n';
+          p0.forEach((i) => {
+            planContent += `- [ ] ${i.content}\n`;
+          });
+          planContent += '\n';
+        }
+        if (p1.length > 0) {
+          planContent += '## Standard (P1)\n\n';
+          p1.forEach((i) => {
+            planContent += `- [ ] ${i.content}\n`;
+          });
+          planContent += '\n';
+        }
+        if (p2.length > 0) {
+          planContent += '## Nice-to-Have (P2)\n\n';
+          p2.forEach((i) => {
+            planContent += `- [ ] ${i.content}\n`;
+          });
+          planContent += '\n';
+        }
+        if (noPri.length > 0) {
+          planContent += '## Tasks\n\n';
+          noPri.forEach((i) => {
+            planContent += `- [ ] ${i.content}\n`;
+          });
+          planContent += '\n';
+        }
 
         // Import into tracker and write to disk
         session.ralphTracker.importFixPlanMarkdown(planContent);
@@ -3038,7 +3243,7 @@ export class WebServer extends EventEmitter {
       fullPrompt += '- Changes are committed\n\n';
       fullPrompt += '## If Stuck\n\n';
       fullPrompt += 'If you encounter the same error for 3+ iterations:\n';
-      fullPrompt += '1. Document what you\'ve tried\n';
+      fullPrompt += "1. Document what you've tried\n";
       fullPrompt += '2. Identify the specific blocker\n';
       fullPrompt += '3. Try an alternative approach\n';
       fullPrompt += '4. If truly blocked, output `<promise>BLOCKED</promise>` with an explanation\n';
@@ -3052,13 +3257,23 @@ export class WebServer extends EventEmitter {
       this.store.incrementSessionsCreated();
       this.persistSessionState(session);
       await this.setupSessionListeners(session);
-      getLifecycleLog().log({ event: 'created', sessionId: session.id, name: session.name, reason: 'ralph_loop_start' });
+      getLifecycleLog().log({
+        event: 'created',
+        sessionId: session.id,
+        name: session.name,
+        reason: 'ralph_loop_start',
+      });
       this.broadcast('session:created', this.getSessionStateWithRespawn(session));
 
       // Start interactive mode
       try {
         await session.startInteractive();
-        getLifecycleLog().log({ event: 'started', sessionId: session.id, name: session.name, mode: 'claude' });
+        getLifecycleLog().log({
+          event: 'started',
+          sessionId: session.id,
+          name: session.name,
+          mode: 'claude',
+        });
         this.broadcast('session:interactive', { id: session.id, mode: 'claude' });
         this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
       } catch (err) {
@@ -3068,7 +3283,8 @@ export class WebServer extends EventEmitter {
 
       // Enable respawn if requested
       if (enableRespawn) {
-        const ralphUpdatePrompt = 'Before /clear: Update CLAUDE.md with discoveries and notes, mark completed tasks in @fix_plan.md, write a brief progress summary to a file so the next iteration can continue seamlessly.';
+        const ralphUpdatePrompt =
+          'Before /clear: Update CLAUDE.md with discoveries and notes, mark completed tasks in @fix_plan.md, write a brief progress summary to a file so the next iteration can continue seamlessly.';
         const ralphKickstartPrompt = `You are in a Ralph Wiggum loop. Read @fix_plan.md for task status, continue on the next uncompleted task, output <promise>${completionPhrase}</promise> when ALL tasks are complete.`;
         const controller = new RespawnController(session, {
           updatePrompt: ralphUpdatePrompt,
@@ -3081,19 +3297,28 @@ export class WebServer extends EventEmitter {
         controller.start();
         this.saveRespawnConfig(session.id, controller.getConfig());
         this.persistSessionState(session);
-        this.broadcast('respawn:started', { sessionId: session.id, status: controller.getStatus() });
+        this.broadcast('respawn:started', {
+          sessionId: session.id,
+          status: controller.getStatus(),
+        });
       }
 
       // Save lastUsedCase
       try {
         const settingsFilePath = join(homedir(), '.codeman', 'settings.json');
         let settings: Record<string, unknown> = {};
-        try { settings = JSON.parse(await fs.readFile(settingsFilePath, 'utf-8')); } catch { /* ignore */ }
+        try {
+          settings = JSON.parse(await fs.readFile(settingsFilePath, 'utf-8'));
+        } catch {
+          /* ignore */
+        }
         settings.lastUsedCase = caseName;
         const dir = dirname(settingsFilePath);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
         fs.writeFile(settingsFilePath, JSON.stringify(settings, null, 2)).catch(() => {});
-      } catch { /* non-critical */ }
+      } catch {
+        /* non-critical */
+      }
 
       const sessionId = session.id;
 
@@ -3101,7 +3326,7 @@ export class WebServer extends EventEmitter {
       setImmediate(() => {
         const pollReady = async () => {
           for (let attempt = 0; attempt < 60; attempt++) {
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise((r) => setTimeout(r, 500));
             const s = this.sessions.get(sessionId);
             if (!s) return; // session was deleted
             // Check terminal output for prompt indicator
@@ -3111,7 +3336,7 @@ export class WebServer extends EventEmitter {
             }
           }
           // Small extra delay for CLI to settle
-          await new Promise(r => setTimeout(r, 2000));
+          await new Promise((r) => setTimeout(r, 2000));
           const s = this.sessions.get(sessionId);
           if (!s) return;
           try {
@@ -3120,7 +3345,7 @@ export class WebServer extends EventEmitter {
             console.warn(`[RalphLoop] Failed to send prompt to session ${sessionId}:`, getErrorMessage(err));
           }
         };
-        pollReady().catch(err => console.error('[RalphLoop] pollReady error:', err));
+        pollReady().catch((err) => console.error('[RalphLoop] pollReady error:', err));
       });
 
       return {
@@ -3137,16 +3362,16 @@ export class WebServer extends EventEmitter {
       if (!gpResult.success) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid request body');
       }
-      const {
-        taskDescription,
-        detailLevel = 'standard'
-      } = gpResult.data;
+      const { taskDescription, detailLevel = 'standard' } = gpResult.data;
 
       // Build sophisticated prompt based on Ralph Wiggum methodology
       const detailConfig = {
         brief: { style: 'high-level milestones', testDepth: 'basic' },
         standard: { style: 'balanced implementation steps', testDepth: 'thorough' },
-        detailed: { style: 'granular sub-tasks with full TDD coverage', testDepth: 'comprehensive' },
+        detailed: {
+          style: 'granular sub-tasks with full TDD coverage',
+          testDepth: 'comprehensive',
+        },
       };
       const levelConfig = detailConfig[detailLevel] || detailConfig.standard;
 
@@ -3278,7 +3503,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
             // Parse tddPhase
             let tddPhase: 'setup' | 'test' | 'impl' | 'verify' | undefined;
-            if (obj.tddPhase === 'setup' || obj.tddPhase === 'test' || obj.tddPhase === 'impl' || obj.tddPhase === 'verify') {
+            if (
+              obj.tddPhase === 'setup' ||
+              obj.tddPhase === 'test' ||
+              obj.tddPhase === 'impl' ||
+              obj.tddPhase === 'verify'
+            ) {
               tddPhase = obj.tddPhase;
             }
 
@@ -3286,9 +3516,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
               id: obj.id ? String(obj.id) : `task-${idx}`,
               content,
               priority,
-              verificationCriteria: typeof obj.verificationCriteria === 'string'
-                ? obj.verificationCriteria
-                : 'Task completed successfully',
+              verificationCriteria:
+                typeof obj.verificationCriteria === 'string' ? obj.verificationCriteria : 'Task completed successfully',
               tddPhase,
               dependencies: Array.isArray(obj.dependencies) ? obj.dependencies.map(String) : [],
               status: 'pending' as const,
@@ -3297,16 +3526,17 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
             };
           });
           // No artificial limit - let Claude generate what's needed
-
         } catch (parseErr) {
-          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Failed to parse plan JSON: ' + getErrorMessage(parseErr));
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            'Failed to parse plan JSON: ' + getErrorMessage(parseErr)
+          );
         }
 
         return {
           success: true,
           data: { items, costUsd: cost },
         };
-
       } catch (err) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Plan generation failed: ' + getErrorMessage(err));
       } finally {
@@ -3416,8 +3646,15 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       } catch (err) {
         // Clean up on error too
         this.activePlanOrchestrators.delete(orchestratorId);
-        this.broadcast('plan:completed', { orchestratorId, success: false, error: getErrorMessage(err) });
-        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Detailed plan generation failed: ' + getErrorMessage(err));
+        this.broadcast('plan:completed', {
+          orchestratorId,
+          success: false,
+          error: getErrorMessage(err),
+        });
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          'Detailed plan generation failed: ' + getErrorMessage(err)
+        );
       }
     });
 
@@ -3589,8 +3826,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
                 .replace(/\n/g, '\\n')
                 .replace(/\r/g, '\\r')
                 .replace(/\t/g, '\\t')
-                // eslint-disable-next-line no-control-regex
-                .replace(/[\x00-\x1f]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+                .replace(
+                  // eslint-disable-next-line no-control-regex
+                  /[\x00-\x1f]/g,
+                  (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`
+                );
             });
             parsed = JSON.parse(repaired);
           } catch {
@@ -3753,7 +3993,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
           mkdirSync(dir, { recursive: true });
         }
         let existing: Record<string, unknown> = {};
-        try { existing = JSON.parse(await fs.readFile(settingsPath, 'utf-8')); } catch { /* ignore */ }
+        try {
+          existing = JSON.parse(await fs.readFile(settingsPath, 'utf-8'));
+        } catch {
+          /* ignore */
+        }
         const merged = { ...existing, ...settings };
         await fs.writeFile(settingsPath, JSON.stringify(merged, null, 2));
 
@@ -3963,7 +4207,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       const sessions = await this.mux.getSessionsWithStats();
       return {
         sessions,
-        muxAvailable: this.mux.isAvailable()
+        muxAvailable: this.mux.isAvailable(),
       };
     });
 
@@ -4071,7 +4315,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       return { success: true, data: { cleared } };
     });
 
-
     // ========== Agent Teams ==========
 
     // List all discovered teams
@@ -4084,7 +4327,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       const { name } = req.params as { name: string };
       return { success: true, data: this.teamWatcher.getTeamTasks(name) };
     });
-
 
     // ========== Hook Events ==========
 
@@ -4237,7 +4479,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         pos = nextBoundary === -1 ? body.length : nextBoundary;
       }
 
-      const filePart = parts.find(p => p.headers.includes('name="file"'));
+      const filePart = parts.find((p) => p.headers.includes('name="file"'));
       if (!filePart || filePart.data.length === 0) {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'No file uploaded');
       }
@@ -4251,7 +4493,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       }
       const ctMatch = filePart.headers.match(/Content-Type:\s*image\/(png|jpeg|webp|gif)/i);
       if (ctMatch) {
-        const map: Record<string, string> = { png: '.png', jpeg: '.jpg', webp: '.webp', gif: '.gif' };
+        const map: Record<string, string> = {
+          png: '.png',
+          jpeg: '.jpg',
+          webp: '.webp',
+          gif: '.gif',
+        };
         ext = map[ctMatch[1].toLowerCase()] ?? ext;
       }
 
@@ -4273,11 +4520,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         return { files: [] };
       }
       const files = readdirSync(SCREENSHOTS_DIR)
-        .filter(f => /\.(png|jpg|jpeg|webp|gif)$/i.test(f))
+        .filter((f) => /\.(png|jpg|jpeg|webp|gif)$/i.test(f))
         .sort()
         .reverse()
         .slice(0, 50)
-        .map(name => ({ name, path: join(SCREENSHOTS_DIR, name) }));
+        .map((name) => ({ name, path: join(SCREENSHOTS_DIR, name) }));
       return { files };
     });
 
@@ -4295,7 +4542,13 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Screenshot not found');
       }
       const ext = name.match(/\.(png|jpg|jpeg|webp|gif)$/i)?.[1]?.toLowerCase() ?? 'png';
-      const mimeMap: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' };
+      const mimeMap: Record<string, string> = {
+        png: 'image/png',
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        webp: 'image/webp',
+        gif: 'image/gif',
+      };
       reply.type(mimeMap[ext] ?? 'image/png');
       return fs.readFile(filepath);
     });
@@ -4333,7 +4586,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       });
 
       watcher.on('transcript:tool_end', (toolName: string, isError: boolean) => {
-        this.broadcast('transcript:tool_end', { sessionId, toolName, isError, timestamp: Date.now() });
+        this.broadcast('transcript:tool_end', {
+          sessionId,
+          toolName,
+          isError,
+          timestamp: Date.now(),
+        });
       });
 
       watcher.on('transcript:error', (error: Error) => {
@@ -4353,7 +4611,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   private stopTranscriptWatcher(sessionId: string): void {
     const watcher = this.transcriptWatchers.get(sessionId);
     if (watcher) {
-      watcher.removeAllListeners();  // Prevent memory leaks from attached listeners
+      watcher.removeAllListeners(); // Prevent memory leaks from attached listeners
       watcher.stop();
       this.transcriptWatchers.delete(sessionId);
     }
@@ -4363,13 +4621,16 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   private persistSessionState(session: Session): void {
     const existing = this.persistDebounceTimers.get(session.id);
     if (existing) clearTimeout(existing);
-    this.persistDebounceTimers.set(session.id, setTimeout(() => {
-      this.persistDebounceTimers.delete(session.id);
-      // Session may have been removed during debounce
-      if (this.sessions.has(session.id)) {
-        this._persistSessionStateNow(session);
-      }
-    }, 100));
+    this.persistDebounceTimers.set(
+      session.id,
+      setTimeout(() => {
+        this.persistDebounceTimers.delete(session.id);
+        // Session may have been removed during debounce
+        if (this.sessions.has(session.id)) {
+          this._persistSessionStateNow(session);
+        }
+      }, 100)
+    );
   }
 
   /** Persists full session state including respawn config to state.json */
@@ -4379,9 +4640,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     if (controller) {
       const config = controller.getConfig();
       const timerInfo = this.respawnTimers.get(session.id);
-      const durationMinutes = timerInfo
-        ? Math.round((timerInfo.endAt - timerInfo.startedAt) / 60000)
-        : undefined;
+      const durationMinutes = timerInfo ? Math.round((timerInfo.endAt - timerInfo.startedAt) / 60000) : undefined;
       state.respawnConfig = { ...config, durationMinutes };
       // Use config.enabled instead of controller.state - this way the respawn
       // will be restored on server restart even if it was temporarily stopped
@@ -4430,7 +4689,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   // Get system CPU and memory usage
-  private getSystemStats(): { cpu: number; memory: { usedMB: number; totalMB: number; percent: number } } {
+  private getSystemStats(): {
+    cpu: number;
+    memory: { usedMB: number; totalMB: number; percent: number };
+  } {
     try {
       const totalMem = totalmem();
 
@@ -4462,13 +4724,13 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         memory: {
           usedMB: Math.round(usedMem / (1024 * 1024)),
           totalMB: Math.round(totalMem / (1024 * 1024)),
-          percent: Math.round((usedMem / totalMem) * 100)
-        }
+          percent: Math.round((usedMem / totalMem) * 100),
+        },
       };
     } catch {
       return {
         cpu: 0,
-        memory: { usedMB: 0, totalMB: 0, percent: 0 }
+        memory: { usedMB: 0, totalMB: 0, percent: 0 },
       };
     }
   }
@@ -4520,9 +4782,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       // Save the config BEFORE removing controller, so it can be restored on restart
       const config = controller.getConfig();
       const timerInfo = this.respawnTimers.get(sessionId);
-      const durationMinutes = timerInfo
-        ? Math.round((timerInfo.endAt - timerInfo.startedAt) / 60000)
-        : undefined;
+      const durationMinutes = timerInfo ? Math.round((timerInfo.endAt - timerInfo.startedAt) / 60000) : undefined;
       this.saveRespawnConfig(sessionId, config, durationMinutes);
 
       controller.stop();
@@ -4580,12 +4840,21 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Broadcast Ralph cleared to update UI
     this.broadcast('session:ralphLoopUpdate', {
       sessionId,
-      state: { enabled: false, active: false, completionPhrase: null, startedAt: null, cycleCount: 0, maxIterations: null, lastActivity: Date.now(), elapsedHours: null }
+      state: {
+        enabled: false,
+        active: false,
+        completionPhrase: null,
+        startedAt: null,
+        cycleCount: 0,
+        maxIterations: null,
+        lastActivity: Date.now(),
+        elapsedHours: null,
+      },
     });
     this.broadcast('session:ralphTodoUpdate', {
       sessionId,
       todos: [],
-      stats: { total: 0, pending: 0, inProgress: 0, completed: 0 }
+      stats: { total: 0, pending: 0, inProgress: 0, completed: 0 },
     });
 
     // Stop session and remove listeners
@@ -4602,7 +4871,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
           this.store.recordDailyUsage(deltaInput, deltaOutput, sessionId);
         }
         this.lastRecordedTokens.delete(sessionId);
-        console.log(`[Server] Added to global stats: ${session.inputTokens + session.outputTokens} tokens, $${session.totalCost.toFixed(4)} from session ${sessionId}`);
+        console.log(
+          `[Server] Added to global stats: ${session.inputTokens + session.outputTokens} tokens, $${session.totalCost.toFixed(4)} from session ${sessionId}`
+        );
       }
 
       // Explicitly remove stored listeners to break closure references (prevents memory leak)
@@ -4665,7 +4936,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }
 
     // Start watching for new images in this session's working directory (if enabled globally and per-session)
-    if (await this.isImageWatcherEnabled() && session.imageWatcherEnabled) {
+    if ((await this.isImageWatcherEnabled()) && session.imageWatcherEnabled) {
       imageWatcher.watchSession(session.id, session.workingDir);
     }
 
@@ -4693,7 +4964,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
       error: (error) => {
         this.broadcast('session:error', { id: session.id, error });
-        this.sendPushNotifications('session:error', { sessionId: session.id, sessionName: session.name, error: String(error) });
+        this.sendPushNotifications('session:error', {
+          sessionId: session.id,
+          sessionName: session.name,
+          error: String(error),
+        });
         // Track in run summary
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) tracker.recordError('Session error', String(error));
@@ -4709,7 +4984,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       },
 
       exit: (code) => {
-        getLifecycleLog().log({ event: 'exit', sessionId: session.id, name: session.name, exitCode: code });
+        getLifecycleLog().log({
+          event: 'exit',
+          sessionId: session.id,
+          name: session.name,
+          exitCode: code,
+        });
         // Wrap in try/catch to ensure cleanup always happens
         try {
           this.broadcast('session:exit', { id: session.id, code });
@@ -4818,7 +5098,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
       ralphCompletionDetected: (phrase: string) => {
         this.broadcast('session:ralphCompletionDetected', { sessionId: session.id, phrase });
-        this.sendPushNotifications('session:ralphCompletionDetected', { sessionId: session.id, sessionName: session.name, phrase });
+        this.sendPushNotifications('session:ralphCompletionDetected', {
+          sessionId: session.id,
+          sessionName: session.name,
+          phrase,
+        });
         // Track in run summary
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) tracker.recordRalphCompletion(phrase);
@@ -4844,12 +5128,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         // Track state changes in run summary
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker && status.state === 'OPEN') {
-          tracker.addEvent(
-            'warning',
-            'warning',
-            'Circuit Breaker Opened',
-            status.reason
-          );
+          tracker.addEvent('warning', 'warning', 'Circuit Breaker Opened', status.reason);
         }
       },
 
@@ -4937,7 +5216,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     controller.on('respawnBlocked', (data: { reason: string; details: string }) => {
       this.broadcast('respawn:blocked', { sessionId, reason: data.reason, details: data.details });
       const sessionForPush = this.sessions.get(sessionId);
-      this.sendPushNotifications('respawn:blocked', { sessionId, sessionName: sessionForPush?.name ?? sessionId.slice(0, 8), reason: data.reason });
+      this.sendPushNotifications('respawn:blocked', {
+        sessionId,
+        sessionName: sessionForPush?.name ?? sessionId.slice(0, 8),
+        reason: data.reason,
+      });
       // Track in run summary (lazy lookup)
       const tracker = getTracker();
       if (tracker) tracker.recordWarning(`Respawn blocked: ${data.reason}`, data.details);
@@ -4964,7 +5247,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     });
 
     controller.on('aiCheckCompleted', (result: { verdict: string; reasoning: string; durationMs: number }) => {
-      this.broadcast('respawn:aiCheckCompleted', { sessionId, verdict: result.verdict, reasoning: result.reasoning, durationMs: result.durationMs });
+      this.broadcast('respawn:aiCheckCompleted', {
+        sessionId,
+        verdict: result.verdict,
+        reasoning: result.reasoning,
+        durationMs: result.durationMs,
+      });
       // Track in run summary (lazy lookup)
       const tracker = getTracker();
       if (tracker) tracker.recordAiCheckResult(result.verdict);
@@ -4986,7 +5274,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     });
 
     controller.on('planCheckCompleted', (result: { verdict: string; reasoning: string; durationMs: number }) => {
-      this.broadcast('respawn:planCheckCompleted', { sessionId, verdict: result.verdict, reasoning: result.reasoning, durationMs: result.durationMs });
+      this.broadcast('respawn:planCheckCompleted', {
+        sessionId,
+        verdict: result.verdict,
+        reasoning: result.reasoning,
+        durationMs: result.durationMs,
+      });
     });
 
     controller.on('planCheckFailed', (error: string) => {
@@ -5032,27 +5325,29 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     const now = Date.now();
     const endAt = now + durationMinutes * 60 * 1000;
 
-    const timer = setTimeout(() => {
-      // Stop respawn when time is up
-      const controller = this.respawnControllers.get(sessionId);
-      if (controller) {
-        controller.stop();
-        controller.removeAllListeners();
-        this.respawnControllers.delete(sessionId);
-        this.broadcast('respawn:stopped', { sessionId, reason: 'duration_expired' });
-      }
-      this.respawnTimers.delete(sessionId);
-      // Update persisted state (respawn no longer active)
-      const session = this.sessions.get(sessionId);
-      if (session) {
-        this.persistSessionState(session);
-      }
-    }, durationMinutes * 60 * 1000);
+    const timer = setTimeout(
+      () => {
+        // Stop respawn when time is up
+        const controller = this.respawnControllers.get(sessionId);
+        if (controller) {
+          controller.stop();
+          controller.removeAllListeners();
+          this.respawnControllers.delete(sessionId);
+          this.broadcast('respawn:stopped', { sessionId, reason: 'duration_expired' });
+        }
+        this.respawnTimers.delete(sessionId);
+        // Update persisted state (respawn no longer active)
+        const session = this.sessions.get(sessionId);
+        if (session) {
+          this.persistSessionState(session);
+        }
+      },
+      durationMinutes * 60 * 1000
+    );
 
     this.respawnTimers.set(sessionId, { timer, endAt, startedAt: now });
     this.broadcast('respawn:timerStarted', { sessionId, durationMinutes, endAt, startedAt: now });
   }
-
 
   /**
    * Restore a RespawnController from persisted configuration.
@@ -5062,11 +5357,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
    * @param config - The persisted respawn configuration
    * @param source - Source of the config for logging (e.g., 'state.json' or 'mux-sessions.json')
    */
-  private restoreRespawnController(
-    session: Session,
-    config: PersistedRespawnConfig,
-    source: string
-  ): void {
+  private restoreRespawnController(session: Session, config: PersistedRespawnConfig, source: string): void {
     const controller = new RespawnController(session, {
       idleTimeoutMs: config.idleTimeoutMs,
       updatePrompt: config.updatePrompt,
@@ -5100,7 +5391,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     const delayMs = Math.max(0, WebServer.RESPAWN_RESTORE_GRACE_PERIOD_MS - timeSinceStart);
 
     if (delayMs > 0) {
-      console.log(`[Server] Restored respawn controller for session ${session.id} from ${source} (will start in ${Math.ceil(delayMs / 1000)}s)`);
+      console.log(
+        `[Server] Restored respawn controller for session ${session.id} from ${source} (will start in ${Math.ceil(delayMs / 1000)}s)`
+      );
       const timer = setTimeout(() => {
         this.pendingRespawnStarts.delete(session.id);
         // Verify session still exists (may have been deleted during grace period)
@@ -5120,7 +5413,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     } else {
       // Grace period has passed, start immediately
       controller.start();
-      console.log(`[Server] Restored respawn controller for session ${session.id} from ${source} (started immediately)`);
+      console.log(
+        `[Server] Restored respawn controller for session ${session.id} from ${source} (started immediately)`
+      );
     }
 
     if (config.durationMinutes && config.durationMinutes > 0) {
@@ -5191,9 +5486,17 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 
   // Helper to get model configuration from settings
-  private async getModelConfig(): Promise<{ defaultModel?: string; agentTypeOverrides?: Record<string, string> } | null> {
+  private async getModelConfig(): Promise<{
+    defaultModel?: string;
+    agentTypeOverrides?: Record<string, string>;
+  } | null> {
     const settings = await this.readSettings();
-    return (settings.modelConfig as { defaultModel?: string; agentTypeOverrides?: Record<string, string> }) || null;
+    return (
+      (settings.modelConfig as {
+        defaultModel?: string;
+        agentTypeOverrides?: Record<string, string>;
+      }) || null
+    );
   }
 
   private async startScheduledRun(prompt: string, workingDir: string, durationMinutes: number): Promise<ScheduledRun> {
@@ -5244,7 +5547,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       // Check session limit before creating new session
       if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
         addLog(`Waiting: maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached`);
-        await new Promise(r => setTimeout(r, SESSION_LIMIT_WAIT_MS));
+        await new Promise((r) => setTimeout(r, SESSION_LIMIT_WAIT_MS));
         continue;
       }
 
@@ -5277,7 +5580,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         run.sessionId = null;
 
         // Small pause between iterations
-        await new Promise(r => setTimeout(r, ITERATION_PAUSE_MS));
+        await new Promise((r) => setTimeout(r, ITERATION_PAUSE_MS));
       } catch (err) {
         addLog(`Error: ${getErrorMessage(err)}`);
         this.broadcast('scheduled:updated', run);
@@ -5293,7 +5596,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         }
 
         // Continue despite errors
-        await new Promise(r => setTimeout(r, SESSION_LIMIT_WAIT_MS));
+        await new Promise((r) => setTimeout(r, SESSION_LIMIT_WAIT_MS));
       }
     }
 
@@ -5342,12 +5645,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
    */
   private getLightSessionsState() {
     const now = Date.now();
-    if (this.cachedSessionsList && (now - this.cachedSessionsList.timestamp) < SESSIONS_LIST_CACHE_TTL) {
+    if (this.cachedSessionsList && now - this.cachedSessionsList.timestamp < SESSIONS_LIST_CACHE_TTL) {
       return this.cachedSessionsList.data;
     }
     // getSessionStateWithRespawn already uses toLightDetailedState() which
     // excludes terminalBuffer and textOutput — no extra stripping needed
-    const data = Array.from(this.sessions.values()).map(s => this.getSessionStateWithRespawn(s));
+    const data = Array.from(this.sessions.values()).map((s) => this.getSessionStateWithRespawn(s));
     this.cachedSessionsList = { data, timestamp: now };
     return data;
   }
@@ -5456,7 +5759,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
           // Tell it to reload the active session's buffer to recover.
           try {
             reply.raw.write(`event: session:needsRefresh\ndata: {}\n\n`);
-          } catch { /* client gone */ }
+          } catch {
+            /* client gone */
+          }
         });
       }
     } catch {
@@ -5542,10 +5847,13 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Each session flushes independently — prevents one busy session from
     // forcing all sessions to flush at its rate (thundering herd)
     if (!this.terminalBatchTimers.has(sessionId)) {
-      this.terminalBatchTimers.set(sessionId, setTimeout(() => {
-        this.terminalBatchTimers.delete(sessionId);
-        this.flushSessionTerminalBatch(sessionId);
-      }, sessionInterval));
+      this.terminalBatchTimers.set(
+        sessionId,
+        setTimeout(() => {
+          this.terminalBatchTimers.delete(sessionId);
+          this.flushSessionTerminalBatch(sessionId);
+        }, sessionInterval)
+      );
     }
   }
 
@@ -5645,8 +5953,18 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   // ========== Web Push ==========
 
   /** Map SSE event names to push notification payloads */
-  private static readonly PUSH_EVENT_MAP: Record<string, { title: string; urgency: string; actions?: Array<{ action: string; title: string }> }> = {
-    'hook:permission_prompt': { title: 'Permission Required', urgency: 'critical', actions: [{ action: 'approve', title: 'Approve' }, { action: 'deny', title: 'Deny' }] },
+  private static readonly PUSH_EVENT_MAP: Record<
+    string,
+    { title: string; urgency: string; actions?: Array<{ action: string; title: string }> }
+  > = {
+    'hook:permission_prompt': {
+      title: 'Permission Required',
+      urgency: 'critical',
+      actions: [
+        { action: 'approve', title: 'Approve' },
+        { action: 'deny', title: 'Deny' },
+      ],
+    },
     'hook:elicitation_dialog': { title: 'Question Asked', urgency: 'critical' },
     'hook:idle_prompt': { title: 'Waiting for Input', urgency: 'warning' },
     'hook:stop': { title: 'Response Complete', urgency: 'info' },
@@ -5813,9 +6131,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }, SSE_HEALTH_CHECK_INTERVAL);
 
     // Start token recording timer (every 5 minutes for long-running sessions)
-    this.tokenRecordingTimer = setInterval(() => {
-      this.recordPeriodicTokenUsage();
-    }, 5 * 60 * 1000);
+    this.tokenRecordingTimer = setInterval(
+      () => {
+        this.recordPeriodicTokenUsage();
+      },
+      5 * 60 * 1000
+    );
 
     // Start subagent watcher for Claude Code background agent visibility (if enabled)
     if (await this.isSubagentTrackingEnabled()) {
@@ -5842,7 +6163,6 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     // Start team watcher for agent team awareness (always on — lightweight polling)
     this.teamWatcher.start();
     console.log('Team watcher started - monitoring ~/.claude/teams/ for agent team activity');
-
   }
 
   /**
@@ -5924,13 +6244,13 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
             // Create a session object for this mux session
             const recoveryClaudeMode = await this.getClaudeModeConfig();
             const session = new Session({
-              id: muxSession.sessionId,  // Preserve the original session ID
+              id: muxSession.sessionId, // Preserve the original session ID
               workingDir: muxSession.workingDir,
               mode: muxSession.mode,
               name: sessionName,
               mux: this.mux,
               useMux: true,
-              muxSession: muxSession,  // Pass the existing session so startInteractive() can attach to it
+              muxSession: muxSession, // Pass the existing session so startInteractive() can attach to it
               claudeMode: recoveryClaudeMode.claudeMode,
               allowedTools: recoveryClaudeMode.allowedTools,
             });
@@ -5950,13 +6270,14 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
               }
               // Auto-clear
               if (savedState.autoClearEnabled !== undefined || savedState.autoClearThreshold !== undefined) {
-                session.setAutoClear(
-                  savedState.autoClearEnabled ?? false,
-                  savedState.autoClearThreshold
-                );
+                session.setAutoClear(savedState.autoClearEnabled ?? false, savedState.autoClearThreshold);
               }
               // Token tracking
-              if (savedState.inputTokens !== undefined || savedState.outputTokens !== undefined || savedState.totalCost !== undefined) {
+              if (
+                savedState.inputTokens !== undefined ||
+                savedState.outputTokens !== undefined ||
+                savedState.totalCost !== undefined
+              ) {
                 session.restoreTokens(
                   savedState.inputTokens ?? 0,
                   savedState.outputTokens ?? 0,
@@ -5969,7 +6290,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
                 });
                 const totalTokens = (savedState.inputTokens ?? 0) + (savedState.outputTokens ?? 0);
                 if (totalTokens > 0) {
-                  console.log(`[Server] Restored tokens for session ${session.id}: ${totalTokens} tokens, $${(savedState.totalCost ?? 0).toFixed(4)}`);
+                  console.log(
+                    `[Server] Restored tokens for session ${session.id}: ${totalTokens} tokens, $${(savedState.totalCost ?? 0).toFixed(4)}`
+                  );
                 }
               }
               // Ralph / Todo tracker (not supported for opencode sessions)
@@ -5986,7 +6309,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
                   if (savedState.ralphCompletionPhrase) {
                     session.ralphTracker.startLoop(savedState.ralphCompletionPhrase);
                   }
-                  console.log(`[Server] Restored Ralph tracker for session ${session.id} (phrase: ${savedState.ralphCompletionPhrase || 'none'})`);
+                  console.log(
+                    `[Server] Restored Ralph tracker for session ${session.id} (phrase: ${savedState.ralphCompletionPhrase || 'none'})`
+                  );
                 }
               }
               // Nice priority config
@@ -6011,17 +6336,28 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
             }
 
             // Fallback: restore respawn from mux-sessions.json if state.json didn't have it (not supported for opencode)
-            if (session.mode !== 'opencode' && !this.respawnControllers.has(session.id) && muxSession.respawnConfig?.enabled) {
+            if (
+              session.mode !== 'opencode' &&
+              !this.respawnControllers.has(session.id) &&
+              muxSession.respawnConfig?.enabled
+            ) {
               try {
                 this.restoreRespawnController(session, muxSession.respawnConfig, 'mux-sessions.json');
               } catch (err) {
-                console.error(`[Server] Failed to restore respawn from mux-sessions.json for session ${session.id}:`, err);
+                console.error(
+                  `[Server] Failed to restore respawn from mux-sessions.json for session ${session.id}:`,
+                  err
+                );
               }
             }
 
             // Fallback: restore Ralph state from state-inner.json if not already set and not explicitly disabled
             // Ralph tracker is not supported for opencode sessions
-            if (session.mode !== 'opencode' && !session.ralphTracker.enabled && !session.ralphTracker.autoEnableDisabled) {
+            if (
+              session.mode !== 'opencode' &&
+              !session.ralphTracker.enabled &&
+              !session.ralphTracker.autoEnableDisabled
+            ) {
               const ralphState = this.store.getRalphState(muxSession.sessionId);
               if (ralphState?.loop?.enabled) {
                 session.ralphTracker.restoreState(ralphState.loop, ralphState.todos);
@@ -6030,7 +6366,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
             }
 
             // Fallback: auto-detect completion phrase from CLAUDE.md (not supported for opencode)
-            if (session.mode !== 'opencode' && session.ralphTracker.enabled && !session.ralphTracker.loopState.completionPhrase) {
+            if (
+              session.mode !== 'opencode' &&
+              session.ralphTracker.enabled &&
+              !session.ralphTracker.loopState.completionPhrase
+            ) {
               const claudeMdPath = join(session.workingDir, 'CLAUDE.md');
               const completionPhrase = extractCompletionPhrase(claudeMdPath);
               if (completionPhrase) {
@@ -6044,7 +6384,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
             this.persistSessionState(session);
 
             // Mark it as restored (not started yet - user needs to attach)
-            getLifecycleLog().log({ event: 'recovered', sessionId: session.id, name: session.name });
+            getLifecycleLog().log({
+              event: 'recovered',
+              sessionId: session.id,
+              name: session.name,
+            });
             console.log(`[Server] Restored session ${session.id} from mux ${muxSession.muxName}`);
           }
         }
@@ -6156,9 +6500,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     this.respawnControllers.clear();
 
     // Stop all scheduled runs first (they have their own session cleanup)
-    await Promise.allSettled(
-      Array.from(this.scheduledRuns.keys()).map(id => this.stopScheduledRun(id))
-    );
+    await Promise.allSettled(Array.from(this.scheduledRuns.keys()).map((id) => this.stopScheduledRun(id)));
 
     // On server shutdown, DO NOT call cleanupSession — it tears down session state,
     // removes listeners, kills PTY processes, and broadcasts session:deleted.
@@ -6266,7 +6608,11 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
   }
 }
 
-export async function startWebServer(port: number = 3000, https: boolean = false, testMode: boolean = false): Promise<WebServer> {
+export async function startWebServer(
+  port: number = 3000,
+  https: boolean = false,
+  testMode: boolean = false
+): Promise<WebServer> {
   const server = new WebServer(port, https, testMode);
   await server.start();
   return server;

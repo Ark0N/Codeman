@@ -41,6 +41,14 @@ Thumbs.db
 *.tmp
 *.temp
 
+# Generated output
+out/
+screenshots-echo-diag/
+tools/remotion/out/
+
+# Claude Code plan tracking
+plan.json
+
 # Unfinished TUI (local development only)
 src/tui/
 .claude/

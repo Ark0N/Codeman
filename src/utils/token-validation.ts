@@ -21,10 +21,7 @@ export const MAX_SESSION_TOKENS = 500_000;
  * @param outputTokens - Output token count to validate
  * @returns Object with isValid flag and optional error reason
  */
-export function validateTokenCounts(
-  inputTokens: number,
-  outputTokens: number
-): { isValid: boolean; reason?: string } {
+export function validateTokenCounts(inputTokens: number, outputTokens: number): { isValid: boolean; reason?: string } {
   if (inputTokens < 0 || outputTokens < 0) {
     return {
       isValid: false,

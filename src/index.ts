@@ -23,7 +23,9 @@ let errorResetTimer: ReturnType<typeof setTimeout> | null = null;
 function trackError(): void {
   consecutiveErrors++;
   if (errorResetTimer) clearTimeout(errorResetTimer);
-  errorResetTimer = setTimeout(() => { consecutiveErrors = 0; }, ERROR_RESET_MS);
+  errorResetTimer = setTimeout(() => {
+    consecutiveErrors = 0;
+  }, ERROR_RESET_MS);
 
   if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
     console.error(`[FATAL] ${MAX_CONSECUTIVE_ERRORS} consecutive unhandled errors — exiting for systemd restart`);

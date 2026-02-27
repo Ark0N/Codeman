@@ -17,13 +17,13 @@ const EXEC_TIMEOUT_MS = 5000;
 
 /** Common directories where the OpenCode CLI binary may be installed */
 const OPENCODE_SEARCH_DIRS = [
-  join(homedir(), '.opencode', 'bin'),    // Default install location
-  join(homedir(), '.local', 'bin'),       // Alternative install location
-  '/usr/local/bin',                       // Homebrew / system
-  join(homedir(), 'go', 'bin'),           // Go install
-  join(homedir(), '.bun', 'bin'),         // Bun global
-  join(homedir(), '.npm-global', 'bin'),  // npm global
-  join(homedir(), 'bin'),                 // User bin
+  join(homedir(), '.opencode', 'bin'), // Default install location
+  join(homedir(), '.local', 'bin'), // Alternative install location
+  '/usr/local/bin', // Homebrew / system
+  join(homedir(), 'go', 'bin'), // Go install
+  join(homedir(), '.bun', 'bin'), // Bun global
+  join(homedir(), '.npm-global', 'bin'), // npm global
+  join(homedir(), 'bin'), // User bin
 ];
 
 /** Cached directory containing the opencode binary (empty string = searched but not found) */
@@ -41,7 +41,10 @@ export function resolveOpenCodeDir(): string | null {
 
   // Try `which` first (respects current PATH)
   try {
-    const result = execSync('which opencode', { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }).trim();
+    const result = execSync('which opencode', {
+      encoding: 'utf-8',
+      timeout: EXEC_TIMEOUT_MS,
+    }).trim();
     if (result && existsSync(result)) {
       _openCodeDir = dirname(result);
       return _openCodeDir;
@@ -58,7 +61,7 @@ export function resolveOpenCodeDir(): string | null {
     }
   }
 
-  _openCodeDir = '';  // mark as searched, not found
+  _openCodeDir = ''; // mark as searched, not found
   return null;
 }
 
