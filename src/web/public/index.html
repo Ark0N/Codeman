@@ -1360,11 +1360,6 @@
         <div class="modal-header">
           <h3>Start Ralph Loop</h3>
           <div class="modal-header-actions">
-            <button class="wizard-minimize-agents" id="wizardMinimizeAgentsBtn" onclick="app.togglePlanAgentsMinimized()" style="display: none;">
-              <span class="icon">🤖</span>
-              <span class="agent-count" id="wizardAgentCount">0</span>
-            </button>
-            <button class="btn-icon-only wizard-minimize-btn" id="wizardMinimizeBtn" onclick="app.minimizeRalphWizard()" title="Minimize wizard">&#x2012;</button>
             <button class="modal-close" onclick="app.closeRalphWizard()" aria-label="Close Ralph wizard">&times;</button>
           </div>
         </div>
@@ -1447,7 +1442,7 @@
               <!-- Auto-start toggle visible during generation -->
               <div class="plan-autostart-toggle">
                 <label class="plan-autostart-label">
-                  <input type="checkbox" id="ralphAutoStartStep2" onchange="app.syncAutoStartCheckbox(this)">
+                  <input type="checkbox" id="ralphAutoStartStep2" onchange="app.ralphWizardConfig.autoStart = this.checked">
                   <span class="plan-autostart-text">Auto-launch when plan completes</span>
                 </label>
               </div>
@@ -1474,23 +1469,14 @@
                   <div class="plan-option-group">
                     <label>Detail:</label>
                     <div class="plan-detail-btns">
-                      <button type="button" class="plan-detail-btn" data-detail="brief" onclick="app.setPlanDetail('brief')" title="High-level milestones only">Brief</button>
                       <button type="button" class="plan-detail-btn" data-detail="standard" onclick="app.setPlanDetail('standard')" title="Single-pass generation with Opus 4.5">Standard</button>
-                      <button type="button" class="plan-detail-btn active" data-detail="detailed" onclick="app.setPlanDetail('detailed')" title="Enhanced: 4 parallel subagents + verification (slower but more thorough)">Enhanced</button>
+                      <button type="button" class="plan-detail-btn active" data-detail="detailed" onclick="app.setPlanDetail('detailed')" title="Enhanced: parallel subagents + verification (slower but more thorough)">Enhanced</button>
                     </div>
                   </div>
                   <button class="btn-toolbar btn-sm" onclick="app.regeneratePlan()">Regenerate</button>
                 </div>
               </div>
-              <div id="planWarnings" class="hidden"></div>
               <div id="planItemsList" class="plan-items-list"></div>
-              <div class="plan-editor-footer">
-                <button class="btn-toolbar btn-sm" onclick="app.addPlanItem()">+ Add Step</button>
-                <div class="plan-view-toggle">
-                  <button type="button" class="plan-view-btn active" data-view="list" onclick="app.setPlanViewMode('list')" title="Flat list">&#x2630;</button>
-                  <button type="button" class="plan-view-btn" data-view="grouped" onclick="app.setPlanViewMode('grouped')" title="Group by TDD phase">&#x229E;</button>
-                </div>
-              </div>
             </div>
           </div>
 

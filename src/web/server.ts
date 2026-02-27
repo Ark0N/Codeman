@@ -3100,7 +3100,6 @@ export class WebServer extends EventEmitter {
       // Async: poll for CLI readiness, then send prompt
       setImmediate(() => {
         const pollReady = async () => {
-          let ready = false;
           for (let attempt = 0; attempt < 60; attempt++) {
             await new Promise(r => setTimeout(r, 500));
             const s = this.sessions.get(sessionId);
@@ -3108,7 +3107,6 @@ export class WebServer extends EventEmitter {
             // Check terminal output for prompt indicator
             const termBuf = s.getTerminalBuffer().slice(-2048);
             if (termBuf.includes('❯') || termBuf.includes('tokens')) {
-              ready = true;
               break;
             }
           }
@@ -3127,8 +3125,7 @@ export class WebServer extends EventEmitter {
 
       return {
         success: true,
-        sessionId,
-        caseName,
+        data: { sessionId, caseName },
       };
     });
 
