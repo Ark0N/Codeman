@@ -1,5 +1,11 @@
 # codeman
 
+## 0.2.2
+
+### Patch Changes
+
+- Update CLAUDE.md app.js line count references
+
 ## 0.2.1
 
 ### Patch Changes

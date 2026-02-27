@@ -50,7 +50,7 @@ When user says "COM":
 4. **Sync CLAUDE.md version**: Update the `**Version**` line below to match the new version from `package.json`
 5. **Commit and deploy**: `git add -A && git commit -m "chore: version packages" && git push && npm run build && systemctl --user restart codeman-web`
 
-**Version**: 0.2.1 (must match `package.json`)
+**Version**: 0.2.2 (must match `package.json`)
 
 ## Project Overview
 
@@ -145,7 +145,7 @@ journalctl --user -u codeman-web -f
 | `src/cli.ts` | Command-line interface handlers |
 | `src/web/server.ts` | Fastify REST API + SSE at `/api/events` (~105 routes) |
 | `src/web/schemas.ts` | Zod v4 validation schemas with path/env security allowlists |
-| `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~17K lines) |
+| `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~15K lines) |
 | `src/types.ts` | All TypeScript interfaces (~70 type/interface/enum defs, ~1450 lines) |
 
 **Large files** (>50KB): `app.js`, `ralph-tracker.ts`, `respawn-controller.ts`, `session.ts`, `subagent-watcher.ts` — these contain complex state machines; read `docs/respawn-state-machine.md` before modifying.
@@ -214,7 +214,7 @@ journalctl --user -u codeman-web -f
 | File | Purpose |
 |------|---------|
 | `src/web/public/index.html` | HTML entry point with inline critical CSS and async vendor loading |
-| `src/web/public/app.js` | Core UI: xterm.js, tab management, subagent windows, mobile support (~17.5K lines) |
+| `src/web/public/app.js` | Core UI: xterm.js, tab management, subagent windows, mobile support (~15K lines) |
 | `src/web/public/styles.css` | Main styling (dark theme, layout, components) |
 | `src/web/public/mobile.css` | Responsive overrides for screens <1024px (loaded conditionally via `media` attribute) |
 | `src/web/public/upload.html` | Screenshot upload page served at `/upload.html` |
@@ -224,7 +224,7 @@ journalctl --user -u codeman-web -f
 
 ### Frontend Architecture (`app.js`)
 
-The frontend is a single ~17.5K-line vanilla JS file with these key systems:
+The frontend is a single ~15K-line vanilla JS file with these key systems:
 
 | System | Key Classes/Functions | Purpose |
 |--------|----------------------|---------|
