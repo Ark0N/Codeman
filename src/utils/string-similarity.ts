@@ -139,7 +139,7 @@ export function isSimilarByDistance(a: string, b: string, maxDistance = 2): bool
 export function normalizePhrase(phrase: string): string {
   return phrase
     .toUpperCase()
-    .replace(/[\s_\-\.]+/g, '') // Remove whitespace, underscores, hyphens, dots
+    .replace(/[\s_\-.]+/g, '') // Remove whitespace, underscores, hyphens, dots
     .trim();
 }
 

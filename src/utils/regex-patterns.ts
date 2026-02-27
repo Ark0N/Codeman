@@ -17,8 +17,8 @@
  * Use this when you need complete ANSI stripping including OSC sequences.
  * Note: Has global flag - reset lastIndex before exec() if reusing.
  */
-export const ANSI_ESCAPE_PATTERN_FULL =
-  /\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[=>])/g;
+// eslint-disable-next-line no-control-regex
+export const ANSI_ESCAPE_PATTERN_FULL = /\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[=>])/g;
 
 /**
  * Simple ANSI CSI-only pattern for basic escape code stripping.
@@ -27,6 +27,7 @@ export const ANSI_ESCAPE_PATTERN_FULL =
  * Use this for faster stripping when OSC sequences aren't a concern.
  * Note: Has global flag - reset lastIndex before exec() if reusing.
  */
+// eslint-disable-next-line no-control-regex
 export const ANSI_ESCAPE_PATTERN_SIMPLE = /\x1b\[[0-9;]*[A-Za-z]/g;
 
 /**
@@ -44,6 +45,7 @@ export const TOKEN_PATTERN = /(\d+(?:\.\d+)?)\s*([kKmM])?\s*tokens/;
  * Use when you need a pattern without shared lastIndex state.
  */
 export function createAnsiPatternFull(): RegExp {
+  // eslint-disable-next-line no-control-regex
   return /\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[=>])/g;
 }
 
@@ -52,6 +54,7 @@ export function createAnsiPatternFull(): RegExp {
  * Use when you need a pattern without shared lastIndex state.
  */
 export function createAnsiPatternSimple(): RegExp {
+  // eslint-disable-next-line no-control-regex
   return /\x1b\[[0-9;]*[A-Za-z]/g;
 }
 
@@ -75,4 +78,4 @@ export function stripAnsi(text: string): string {
  */
 export const SPINNER_PATTERN = /[⠋⠙⠹⠸⠼⠴⠦⠧]/;
 
-export const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_\/\-. ~]+$/;
+export const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_/\-. ~]+$/;

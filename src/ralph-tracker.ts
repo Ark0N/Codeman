@@ -1892,7 +1892,7 @@ export class RalphTracker extends EventEmitter {
    * @fires phraseValidationWarning - When a risky phrase is detected
    */
   private validateCompletionPhrase(phrase: string): void {
-    const normalized = phrase.toUpperCase().replace(/[\s_\-\.]+/g, '');
+    const normalized = phrase.toUpperCase().replace(/[\s_\-.]+/g, '');
 
     // Generate a suggested unique phrase
     const uniqueSuffix = Date.now().toString(36).slice(-4).toUpperCase();
@@ -3520,7 +3520,7 @@ export class RalphTracker extends EventEmitter {
     const tasksHeaderPattern = /^##\s*Tasks/i;
 
     // Pattern for todo items
-    const todoPattern = /^-\s*\[([ x\-])\]\s*(.+)$/;
+    const todoPattern = /^-\s*\[([ x-])\]\s*(.+)$/;
 
     let inCompletedSection = false;
 

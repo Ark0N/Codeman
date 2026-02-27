@@ -894,7 +894,7 @@ export class SubagentWatcher extends EventEmitter {
     const MAX_LEN = SMART_TITLE_MAX_LENGTH;
 
     // Get first line/sentence
-    let title = text.split('\n')[0].trim();
+    const title = text.split('\n')[0].trim();
 
     // If already short enough, use it
     if (title.length <= MAX_LEN) {

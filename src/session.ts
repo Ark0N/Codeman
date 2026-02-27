@@ -80,6 +80,7 @@ const GRACEFUL_SHUTDOWN_DELAY_MS = 100;
 
 // Filter out terminal focus escape sequences (focus in/out reports)
 // ^[[I (focus in), ^[[O (focus out), and the enable/disable sequences
+// eslint-disable-next-line no-control-regex
 const FOCUS_ESCAPE_FILTER = /\x1b\[\?1004[hl]|\x1b\[[IO]/g;
 
 // Pattern to match Task tool invocations in terminal output
@@ -90,8 +91,10 @@ const TASK_TOOL_PATTERN = /\b(Explore|Task|Bash|Plan|general-purpose)\(([^)]+)\)
 
 // Pre-compiled patterns for hot paths (avoid regex compilation per call)
 /** Pattern to strip leading ANSI escapes and whitespace from terminal buffer */
+// eslint-disable-next-line no-control-regex
 const LEADING_ANSI_WHITESPACE_PATTERN = /^(\x1b\[\??[\d;]*[A-Za-z]|[\s\r\n])+/;
 /** Pattern to match Ctrl+L (form feed) characters */
+// eslint-disable-next-line no-control-regex
 const CTRL_L_PATTERN = /\x0c/g;
 /** Pattern to split by newlines (CR or LF) */
 const NEWLINE_SPLIT_PATTERN = /\r?\n/;

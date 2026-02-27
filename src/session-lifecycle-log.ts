@@ -62,7 +62,7 @@ export class SessionLifecycleLog {
     }
 
     const lines = raw.trim().split('\n').filter(Boolean);
-    let entries: LifecycleEntry[] = [];
+    const entries: LifecycleEntry[] = [];
 
     // Parse in reverse (newest first) for efficiency with limit
     for (let i = lines.length - 1; i >= 0 && entries.length < limit; i--) {

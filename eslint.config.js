@@ -7,7 +7,7 @@ export default tseslint.config(
   tseslint.configs.recommended,
   {
     rules: {
-      'no-console': 'warn',
+      'no-console': 'off',
       'no-debugger': 'error',
       // Relax some rules that conflict with existing patterns
       '@typescript-eslint/no-explicit-any': 'warn',

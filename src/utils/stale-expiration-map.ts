@@ -245,29 +245,23 @@ export class StaleExpirationMap<K, V> implements Disposable {
   /**
    * Get all keys (non-expired).
    */
-  keys(): IterableIterator<K> {
-    const self = this;
-    return (function* () {
-      for (const [key, entry] of self.entries) {
-        if (!self.isExpired(entry)) {
-          yield key;
-        }
+  *keys(): IterableIterator<K> {
+    for (const [key, entry] of this.entries) {
+      if (!this.isExpired(entry)) {
+        yield key;
       }
-    })();
+    }
   }
 
   /**
    * Get all values (non-expired).
    */
-  values(): IterableIterator<V> {
-    const self = this;
-    return (function* () {
-      for (const [, entry] of self.entries) {
-        if (!self.isExpired(entry)) {
-          yield entry.value;
-        }
+  *values(): IterableIterator<V> {
+    for (const [, entry] of this.entries) {
+      if (!this.isExpired(entry)) {
+        yield entry.value;
       }
-    })();
+    }
   }
 
   /**

@@ -195,7 +195,9 @@ const ITERATION_PAUSE_MS = 2000;
 // Set high (32KB) to allow effective batching; avg Ink events are ~14KB
 const BATCH_FLUSH_THRESHOLD = 32 * 1024;
 // Pre-compiled regex for terminal buffer cleaning (avoids per-request compilation)
+// eslint-disable-next-line no-control-regex
 const CLAUDE_BANNER_PATTERN = /\x1b\[1mClaud/;
+// eslint-disable-next-line no-control-regex
 const CTRL_L_PATTERN = /\x0c/g;
 const LEADING_WHITESPACE_PATTERN = /^[\s\r\n]+/;
 
@@ -445,7 +447,6 @@ export class WebServer extends EventEmitter {
   // Flag to prevent new timers during shutdown
   private _isStopping: boolean = false;
   // Cached light state for SSE init (avoids rebuilding on every reconnect)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private cachedLightState: { data: Record<string, unknown>; timestamp: number } | null = null;
   private static readonly LIGHT_STATE_CACHE_TTL_MS = 1000;
   // Cached sessions list for getLightSessionsState() (avoids re-serializing all sessions on every call)
@@ -3019,7 +3020,7 @@ export class WebServer extends EventEmitter {
           status: 'pending' | 'in_progress' | 'completed';
           priority: string | null;
         }> = [];
-        const todoPattern = /^-\s*\[([ xX\-])\]\s*(.+)$/;
+        const todoPattern = /^-\s*\[([ xX-])\]\s*(.+)$/;
         const p0HeaderPattern = /^##\s*(High Priority|Critical|P0|Critical Path)/i;
         const p1HeaderPattern = /^##\s*(Standard|P1|Medium Priority)/i;
         const p2HeaderPattern = /^##\s*(Nice to Have|P2|Low Priority)/i;
@@ -4040,8 +4041,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
                   .replace(/\n/g, '\\n')
                   .replace(/\r/g, '\\r')
                   .replace(/\t/g, '\\t')
-                  // eslint-disable-next-line no-control-regex
                   .replace(
+                    // eslint-disable-next-line no-control-regex
                     /[\x00-\x1f]/g,
                     (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`
                   )
