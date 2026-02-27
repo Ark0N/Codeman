@@ -96,6 +96,7 @@ import {
   RespawnEnableSchema,
   PushSubscribeSchema,
   PushPreferencesUpdateSchema,
+  RalphLoopStartSchema,
   isValidWorkingDir,
 } from './schemas.js';
 import { StaleExpirationMap } from '../utils/index.js';
@@ -2925,6 +2926,210 @@ export class WebServer extends EventEmitter {
         await this.cleanupSession(session.id, true, 'quick_start_error');
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
       }
+    });
+
+    // ========== Ralph Loop Start (replaces 6-8 serial API calls from frontend) ==========
+
+    this.app.post('/api/ralph-loop/start', async (req): Promise<ApiResponse> => {
+      // Prevent unbounded session creation
+      if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
+        return createErrorResponse(ApiErrorCode.SESSION_BUSY, `Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached.`);
+      }
+
+      const rlResult = RalphLoopStartSchema.safeParse(req.body);
+      if (!rlResult.success) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, rlResult.error.issues[0]?.message ?? 'Validation failed');
+      }
+      const { caseName, taskDescription, completionPhrase, maxIterations, enableRespawn, planItems } = rlResult.data;
+
+      const casePath = join(casesDir, caseName);
+
+      // Security: Path traversal protection
+      const rlResolvedPath = resolve(casePath);
+      const rlResolvedBase = resolve(casesDir);
+      const rlRelPath = relative(rlResolvedBase, rlResolvedPath);
+      if (rlRelPath.startsWith('..') || isAbsolute(rlRelPath)) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Invalid case path');
+      }
+
+      // Create case folder if it doesn't exist (reuse quick-start logic)
+      if (!existsSync(casePath)) {
+        try {
+          mkdirSync(casePath, { recursive: true });
+          mkdirSync(join(casePath, 'src'), { recursive: true });
+          const templatePath = await this.getDefaultClaudeMdPath();
+          const claudeMd = generateClaudeMd(caseName, '', templatePath);
+          writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
+          await writeHooksConfig(casePath);
+          this.broadcast('case:created', { name: caseName, path: casePath });
+        } catch (err) {
+          return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
+        }
+      }
+
+      // Create session
+      const niceConfig = await this.getGlobalNiceConfig();
+      const rlModelConfig = await this.getModelConfig();
+      const rlClaudeModeConfig = await this.getClaudeModeConfig();
+      const session = new Session({
+        workingDir: casePath,
+        mux: this.mux,
+        useMux: true,
+        mode: 'claude',
+        niceConfig,
+        model: rlModelConfig?.defaultModel,
+        claudeMode: rlClaudeModeConfig.claudeMode,
+        allowedTools: rlClaudeModeConfig.allowedTools,
+      });
+
+      // Configure Ralph tracker
+      autoConfigureRalph(session, casePath, () => {});
+      if (!session.ralphTracker.enabled) {
+        session.ralphTracker.enable();
+        session.ralphTracker.enableAutoEnable();
+      }
+      session.ralphTracker.startLoop(completionPhrase, maxIterations ?? undefined);
+
+      // Build fix_plan markdown from plan items if provided
+      const enabledItems = planItems?.filter(i => i.enabled) ?? [];
+      let planContent = '';
+      if (enabledItems.length > 0) {
+        const p0 = enabledItems.filter(i => i.priority === 'P0');
+        const p1 = enabledItems.filter(i => i.priority === 'P1');
+        const p2 = enabledItems.filter(i => i.priority === 'P2');
+        const noPri = enabledItems.filter(i => !i.priority);
+        planContent = '# Implementation Plan\n\n';
+        planContent += `Generated: ${new Date().toISOString().slice(0, 10)}\n\n`;
+        if (p0.length > 0) { planContent += '## Critical Path (P0)\n\n'; p0.forEach(i => { planContent += `- [ ] ${i.content}\n`; }); planContent += '\n'; }
+        if (p1.length > 0) { planContent += '## Standard (P1)\n\n'; p1.forEach(i => { planContent += `- [ ] ${i.content}\n`; }); planContent += '\n'; }
+        if (p2.length > 0) { planContent += '## Nice-to-Have (P2)\n\n'; p2.forEach(i => { planContent += `- [ ] ${i.content}\n`; }); planContent += '\n'; }
+        if (noPri.length > 0) { planContent += '## Tasks\n\n'; noPri.forEach(i => { planContent += `- [ ] ${i.content}\n`; }); planContent += '\n'; }
+
+        // Import into tracker and write to disk
+        session.ralphTracker.importFixPlanMarkdown(planContent);
+        const fixPlanPath = join(casePath, '@fix_plan.md');
+        writeFileSync(fixPlanPath, planContent, 'utf-8');
+      }
+
+      // Build full prompt
+      const hasPlan = enabledItems.length > 0;
+      let fullPrompt = taskDescription + '\n\n---\n\n';
+      if (hasPlan) {
+        fullPrompt += '## Task Plan\n\n';
+        fullPrompt += 'A task plan has been written to `@fix_plan.md`. Use this to track progress:\n';
+        fullPrompt += '- Reference the plan at the start of each iteration\n';
+        fullPrompt += '- Update task checkboxes as you complete items\n';
+        fullPrompt += '- Work through items in priority order (P0 > P1 > P2)\n\n';
+      }
+      fullPrompt += '## Iteration Protocol\n\n';
+      fullPrompt += 'This is an autonomous loop. Files from previous iterations persist. On each iteration:\n';
+      fullPrompt += '1. Check what work has already been done\n';
+      fullPrompt += '2. Make incremental progress toward completion\n';
+      fullPrompt += '3. Commit meaningful changes with descriptive messages\n\n';
+      fullPrompt += '## Verification\n\n';
+      fullPrompt += 'After each significant change:\n';
+      fullPrompt += '- Run tests to verify (npm test, pytest, etc.)\n';
+      fullPrompt += '- Check for type/lint errors if applicable\n';
+      fullPrompt += '- If tests fail, read the error, fix it, and retry\n\n';
+      fullPrompt += '## Completion Criteria\n\n';
+      fullPrompt += `Output \`<promise>${completionPhrase}</promise>\` when ALL of the following are true:\n`;
+      fullPrompt += '- All requirements from the task description are implemented\n';
+      fullPrompt += '- All tests pass\n';
+      fullPrompt += '- Changes are committed\n\n';
+      fullPrompt += '## If Stuck\n\n';
+      fullPrompt += 'If you encounter the same error for 3+ iterations:\n';
+      fullPrompt += '1. Document what you\'ve tried\n';
+      fullPrompt += '2. Identify the specific blocker\n';
+      fullPrompt += '3. Try an alternative approach\n';
+      fullPrompt += '4. If truly blocked, output `<promise>BLOCKED</promise>` with an explanation\n';
+
+      // Write prompt to file
+      const promptPath = join(casePath, '@ralph_prompt.md');
+      writeFileSync(promptPath, fullPrompt, 'utf-8');
+
+      // Register session
+      this.sessions.set(session.id, session);
+      this.store.incrementSessionsCreated();
+      this.persistSessionState(session);
+      await this.setupSessionListeners(session);
+      getLifecycleLog().log({ event: 'created', sessionId: session.id, name: session.name, reason: 'ralph_loop_start' });
+      this.broadcast('session:created', this.getSessionStateWithRespawn(session));
+
+      // Start interactive mode
+      try {
+        await session.startInteractive();
+        getLifecycleLog().log({ event: 'started', sessionId: session.id, name: session.name, mode: 'claude' });
+        this.broadcast('session:interactive', { id: session.id, mode: 'claude' });
+        this.broadcast('session:updated', { session: this.getSessionStateWithRespawn(session) });
+      } catch (err) {
+        await this.cleanupSession(session.id, true, 'ralph_loop_start_error');
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+      }
+
+      // Enable respawn if requested
+      if (enableRespawn) {
+        const ralphUpdatePrompt = 'Before /clear: Update CLAUDE.md with discoveries and notes, mark completed tasks in @fix_plan.md, write a brief progress summary to a file so the next iteration can continue seamlessly.';
+        const ralphKickstartPrompt = `You are in a Ralph Wiggum loop. Read @fix_plan.md for task status, continue on the next uncompleted task, output <promise>${completionPhrase}</promise> when ALL tasks are complete.`;
+        const controller = new RespawnController(session, {
+          updatePrompt: ralphUpdatePrompt,
+          sendClear: true,
+          sendInit: true,
+          kickstartPrompt: ralphKickstartPrompt,
+        });
+        this.respawnControllers.set(session.id, controller);
+        this.setupRespawnListeners(session.id, controller);
+        controller.start();
+        this.saveRespawnConfig(session.id, controller.getConfig());
+        this.persistSessionState(session);
+        this.broadcast('respawn:started', { sessionId: session.id, status: controller.getStatus() });
+      }
+
+      // Save lastUsedCase
+      try {
+        const settingsFilePath = join(homedir(), '.codeman', 'settings.json');
+        let settings: Record<string, unknown> = {};
+        try { settings = JSON.parse(await fs.readFile(settingsFilePath, 'utf-8')); } catch { /* ignore */ }
+        settings.lastUsedCase = caseName;
+        const dir = dirname(settingsFilePath);
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+        fs.writeFile(settingsFilePath, JSON.stringify(settings, null, 2)).catch(() => {});
+      } catch { /* non-critical */ }
+
+      const sessionId = session.id;
+
+      // Async: poll for CLI readiness, then send prompt
+      setImmediate(() => {
+        const pollReady = async () => {
+          let ready = false;
+          for (let attempt = 0; attempt < 60; attempt++) {
+            await new Promise(r => setTimeout(r, 500));
+            const s = this.sessions.get(sessionId);
+            if (!s) return; // session was deleted
+            // Check terminal output for prompt indicator
+            const termBuf = s.getTerminalBuffer().slice(-2048);
+            if (termBuf.includes('❯') || termBuf.includes('tokens')) {
+              ready = true;
+              break;
+            }
+          }
+          // Small extra delay for CLI to settle
+          await new Promise(r => setTimeout(r, 2000));
+          const s = this.sessions.get(sessionId);
+          if (!s) return;
+          try {
+            await s.writeViaMux('Read @ralph_prompt.md and follow the instructions. Start working immediately.\r');
+          } catch (err) {
+            console.warn(`[RalphLoop] Failed to send prompt to session ${sessionId}:`, getErrorMessage(err));
+          }
+        };
+        pollReady().catch(err => console.error('[RalphLoop] pollReady error:', err));
+      });
+
+      return {
+        success: true,
+        sessionId,
+        caseName,
+      };
     });
 
     // Use enhanced PlanItem from orchestrator (has verification, dependencies, tracking)

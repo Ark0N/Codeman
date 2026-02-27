@@ -7,6 +7,10 @@
  *
  * Follows the same lifecycle pattern as ImageWatcher/SubagentWatcher:
  * extends EventEmitter, start()/stop(), emits typed events.
+ *
+ * Lifecycle states:
+ *   IDLE → STARTING → RUNNING → (crash) → RESTARTING → STARTING → ...
+ *   Any state → stop() → IDLE
  */
 
 import { EventEmitter } from 'node:events';
@@ -33,6 +37,9 @@ const URL_TIMEOUT_MS = 30_000;
 /** Restart delay after unexpected exit (ms) */
 const RESTART_DELAY_MS = 5_000;
 
+/** Force-kill timeout after SIGTERM (ms) */
+const FORCE_KILL_MS = 5_000;
+
 // ========== TunnelManager Class ==========
 
 export class TunnelManager extends EventEmitter {
@@ -41,7 +48,9 @@ export class TunnelManager extends EventEmitter {
   private cloudflaredPath: string | null = null;
   private urlTimeoutTimer: NodeJS.Timeout | null = null;
   private restartTimer: NodeJS.Timeout | null = null;
-  private stopping = false;
+  private forceKillTimer: NodeJS.Timeout | null = null;
+  /** True when the user explicitly requested stop — suppresses auto-restart */
+  private stopped = true;
   private localPort = 3000;
   private useHttps = false;
 
@@ -71,6 +80,22 @@ export class TunnelManager extends EventEmitter {
     return 'cloudflared';
   }
 
+  /** Clear all pending timers */
+  private clearTimers(): void {
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    if (this.urlTimeoutTimer) {
+      clearTimeout(this.urlTimeoutTimer);
+      this.urlTimeoutTimer = null;
+    }
+    if (this.forceKillTimer) {
+      clearTimeout(this.forceKillTimer);
+      this.forceKillTimer = null;
+    }
+  }
+
   /**
    * Start the cloudflared tunnel process.
    */
@@ -79,7 +104,9 @@ export class TunnelManager extends EventEmitter {
       return; // Already running
     }
 
-    this.stopping = false;
+    // Cancel any pending restart — we're starting fresh
+    this.clearTimers();
+    this.stopped = false;
     this.localPort = localPort;
     this.useHttps = https;
 
@@ -147,31 +174,40 @@ export class TunnelManager extends EventEmitter {
     this.process.stdout?.on('data', handleOutput);
     this.process.stderr?.on('data', handleOutput);
 
+    // Guard: both 'error' and 'exit' can fire — only handle once
+    let exited = false;
+
     this.process.on('error', (err) => {
+      if (exited) return;
+      exited = true;
       console.error(`[TunnelManager] Process error:`, err.message);
-      this.cleanup();
+      this.process = null;
+      this.url = null;
       this.emit('error', `cloudflared error: ${err.message}`);
+      this.maybeScheduleRestart();
     });
 
     this.process.on('exit', (code, signal) => {
+      if (exited) return;
+      exited = true;
       console.log(`[TunnelManager] Process exited (code=${code}, signal=${signal})`);
       const wasRunning = this.url !== null;
-      this.cleanup();
+      this.process = null;
+      this.url = null;
+      if (this.forceKillTimer) {
+        clearTimeout(this.forceKillTimer);
+        this.forceKillTimer = null;
+      }
 
-      if (!this.stopping) {
-        // Unexpected exit — attempt restart
+      if (this.stopped) {
+        // User requested stop — clean exit
+        this.emit('stopped', {});
+      } else {
+        // Unexpected exit — attempt restart if the tunnel had been working
         this.emit('error', `cloudflared exited unexpectedly (code=${code})`);
         if (wasRunning) {
-          console.log(`[TunnelManager] Scheduling restart in ${RESTART_DELAY_MS}ms`);
-          this.restartTimer = setTimeout(() => {
-            this.restartTimer = null;
-            if (!this.stopping && !this.process) {
-              this.start(this.localPort, this.useHttps);
-            }
-          }, RESTART_DELAY_MS);
+          this.maybeScheduleRestart();
         }
-      } else {
-        this.emit('stopped', {});
       }
     });
 
@@ -185,54 +221,48 @@ export class TunnelManager extends EventEmitter {
   }
 
   /**
-   * Stop the cloudflared tunnel process.
+   * Schedule an auto-restart if the user hasn't requested stop.
+   */
+  private maybeScheduleRestart(): void {
+    if (this.stopped || this.restartTimer || this.process) return;
+    console.log(`[TunnelManager] Scheduling restart in ${RESTART_DELAY_MS}ms`);
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (!this.stopped && !this.process) {
+        this.start(this.localPort, this.useHttps);
+      }
+    }, RESTART_DELAY_MS);
+  }
+
+  /**
+   * Stop the cloudflared tunnel process. Safe to call from any state.
    */
   stop(): void {
-    this.stopping = true;
-
-    if (this.restartTimer) {
-      clearTimeout(this.restartTimer);
-      this.restartTimer = null;
-    }
-
-    if (this.urlTimeoutTimer) {
-      clearTimeout(this.urlTimeoutTimer);
-      this.urlTimeoutTimer = null;
-    }
+    this.stopped = true;
+    this.clearTimers();
 
     if (this.process) {
-      console.log(`[TunnelManager] Stopping tunnel (PID ${this.process.pid})`);
-      this.process.kill('SIGTERM');
-      // Force kill after 5s if still alive
       const pid = this.process.pid;
-      const forceTimer = setTimeout(() => {
+      console.log(`[TunnelManager] Stopping tunnel (PID ${pid})`);
+      this.process.kill('SIGTERM');
+      // Force kill after timeout if still alive
+      this.forceKillTimer = setTimeout(() => {
+        this.forceKillTimer = null;
         try {
           if (pid) process.kill(pid, 'SIGKILL');
         } catch {
           // Process already gone
         }
-      }, 5000);
-      this.process.once('exit', () => clearTimeout(forceTimer));
+      }, FORCE_KILL_MS);
     } else {
-      this.cleanup();
+      // No process running (maybe in restart delay) — just emit stopped
+      this.url = null;
       this.emit('stopped', {});
     }
   }
 
-  /**
-   * Clean up internal state after process exit.
-   */
-  private cleanup(): void {
-    this.process = null;
-    this.url = null;
-    if (this.urlTimeoutTimer) {
-      clearTimeout(this.urlTimeoutTimer);
-      this.urlTimeoutTimer = null;
-    }
-  }
-
   isRunning(): boolean {
-    return this.process !== null;
+    return this.process !== null || this.restartTimer !== null;
   }
 
   getUrl(): string | null {
@@ -241,7 +271,7 @@ export class TunnelManager extends EventEmitter {
 
   getStatus(): TunnelStatus {
     return {
-      running: this.process !== null,
+      running: this.process !== null || this.restartTimer !== null,
       url: this.url,
     };
   }

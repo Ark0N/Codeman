@@ -418,3 +418,19 @@ export const PushSubscribeSchema = z.object({
 export const PushPreferencesUpdateSchema = z.object({
   pushPreferences: z.record(z.string(), z.boolean()),
 });
+
+// ========== Ralph Loop ==========
+
+/** POST /api/ralph-loop/start */
+export const RalphLoopStartSchema = z.object({
+  caseName: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format').optional().default('testcase'),
+  taskDescription: z.string().min(1).max(100000),
+  completionPhrase: z.string().max(100).default('COMPLETE'),
+  maxIterations: z.number().int().min(0).max(1000).nullable().default(10),
+  enableRespawn: z.boolean().default(false),
+  planItems: z.array(z.object({
+    content: z.string(),
+    priority: z.string().optional(),
+    enabled: z.boolean().default(true),
+  })).optional(),
+});
