@@ -31,11 +31,26 @@ The production server caches static files for 1 hour (`maxAge: '1h'` in `server.
 
 ## COM Shorthand (Deployment)
 
-When user says "COM":
-1. Increment version in BOTH `package.json` AND `CLAUDE.md` (verify they match with `grep version package.json && grep Version CLAUDE.md`)
-2. Run: `git add -A && git commit -m "chore: bump version to X.XXXX" && git push && npm run build && systemctl --user restart codeman-web`
+Uses [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`) via `@changesets/cli`.
 
-**Version**: 0.1658 (must match `package.json`)
+When user says "COM":
+1. **Determine bump type**: `COM` = patch (default), `COM minor` = minor, `COM major` = major
+2. **Create a changeset file** (no interactive prompts). Write a `.md` file in `.changeset/` with a random filename:
+   ```bash
+   cat > .changeset/$(openssl rand -hex 4).md << 'CHANGESET'
+   ---
+   "codeman": patch
+   ---
+
+   Description of changes
+   CHANGESET
+   ```
+   Replace `patch` with `minor` or `major` as needed. Include `"xterm-zerolag-input": patch` on a separate line if that package changed too.
+3. **Consume the changeset**: `npm run version-packages` (bumps versions in `package.json` files and updates `CHANGELOG.md`)
+4. **Sync CLAUDE.md version**: Update the `**Version**` line below to match the new version from `package.json`
+5. **Commit and deploy**: `git add -A && git commit -m "chore: version packages" && git push && npm run build && systemctl --user restart codeman-web`
+
+**Version**: 0.2.1 (must match `package.json`)
 
 ## Project Overview
 

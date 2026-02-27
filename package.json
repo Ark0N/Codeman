@@ -1,6 +1,6 @@
 {
   "name": "codeman",
-  "version": "0.1658",
+  "version": "0.2.1",
   "description": "The missing control plane for AI coding agents - run 20 autonomous agents with real-time monitoring and session persistence",
   "type": "module",
   "main": "dist/index.js",
@@ -19,7 +19,10 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "capture:subagents": "node scripts/capture-subagent-screenshots.mjs"
+    "capture:subagents": "node scripts/capture-subagent-screenshots.mjs",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "changeset publish"
   },
   "keywords": [
     "claude",
@@ -58,6 +61,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.29.8",
     "@types/node": "^20.19.33",
     "@types/pngjs": "^6.0.5",
     "@types/react": "^19.2.14",

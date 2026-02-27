@@ -23,13 +23,24 @@ TARGET_NODE_VERSION="${CODEMAN_NODE_VERSION:-22}"
 NONINTERACTIVE="${CODEMAN_NONINTERACTIVE:-0}"
 SKIP_SYSTEMD="${CODEMAN_SKIP_SYSTEMD:-0}"
 
-# Claude CLI search paths (from src/session.ts)
+# Claude CLI search paths (from src/utils/claude-cli-resolver.ts)
 CLAUDE_SEARCH_PATHS=(
     "$HOME/.local/bin/claude"
     "$HOME/.claude/local/claude"
     "/usr/local/bin/claude"
     "$HOME/.npm-global/bin/claude"
     "$HOME/bin/claude"
+)
+
+# OpenCode CLI search paths (from src/utils/opencode-cli-resolver.ts)
+OPENCODE_SEARCH_PATHS=(
+    "$HOME/.opencode/bin/opencode"
+    "$HOME/.local/bin/opencode"
+    "/usr/local/bin/opencode"
+    "$HOME/go/bin/opencode"
+    "$HOME/.bun/bin/opencode"
+    "$HOME/.npm-global/bin/opencode"
+    "$HOME/bin/opencode"
 )
 
 # ============================================================================
@@ -266,6 +277,34 @@ get_claude_path() {
     fi
 
     for path in "${CLAUDE_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]]; then
+            echo "$path"
+            return
+        fi
+    done
+}
+
+check_opencode() {
+    if command -v opencode &>/dev/null; then
+        return 0
+    fi
+
+    for path in "${OPENCODE_SEARCH_PATHS[@]}"; do
+        if [[ -x "$path" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+get_opencode_path() {
+    if command -v opencode &>/dev/null; then
+        command -v opencode
+        return
+    fi
+
+    for path in "${OPENCODE_SEARCH_PATHS[@]}"; do
         if [[ -x "$path" ]]; then
             echo "$path"
             return
@@ -688,8 +727,10 @@ EOF
         loginctl enable-linger "$USER" 2>/dev/null || true
     fi
 
-    success "Systemd service installed at $service_file"
-    info "Start with: systemctl --user start codeman-web"
+    # Start the service immediately
+    systemctl --user start codeman-web.service 2>/dev/null || true
+
+    success "Systemd service installed and started"
 }
 
 # ============================================================================
@@ -806,24 +847,72 @@ main() {
         fi
     fi
 
-    # Claude CLI (required)
-    info "Checking Claude CLI..."
-    if ! check_claude; then
-        info "Installing Claude CLI..."
-        download_to_stdout https://claude.ai/install.sh | bash
-        # Rehash to pick up new binary
-        hash -r 2>/dev/null || true
-        if check_claude; then
-            local claude_path
-            claude_path=$(get_claude_path)
-            success "Claude CLI installed at $claude_path"
+    # AI CLI (at least one required: Claude Code or OpenCode)
+    local has_claude=false
+    local has_opencode=false
+
+    info "Checking AI CLI tools..."
+    if check_claude; then
+        has_claude=true
+        success "Claude Code found at $(get_claude_path)"
+    fi
+    if check_opencode; then
+        has_opencode=true
+        success "OpenCode found at $(get_opencode_path)"
+    fi
+
+    if [[ "$has_claude" == "false" ]] && [[ "$has_opencode" == "false" ]]; then
+        echo ""
+        warn "No AI CLI found. Codeman requires at least one: Claude Code or OpenCode."
+        echo ""
+        echo -e "  ${BOLD}Which AI CLI would you like to install?${NC}"
+        echo -e "    ${CYAN}1)${NC} Claude Code  (Anthropic)"
+        echo -e "    ${CYAN}2)${NC} OpenCode     (open-source)"
+        echo -e "    ${CYAN}3)${NC} Both"
+        echo ""
+
+        local cli_choice=""
+        if [[ "$NONINTERACTIVE" == "1" ]] || [[ ! -t 0 ]]; then
+            # Non-interactive: default to Claude Code
+            cli_choice="1"
         else
-            die "Claude CLI installation failed. Install manually with: curl -fsSL https://claude.ai/install.sh | bash"
+            while true; do
+                echo -en "${CYAN}Choose [1/2/3]:${NC} " >&2
+                read -r cli_choice
+                case "$cli_choice" in
+                    1|2|3) break ;;
+                    *) echo "Please enter 1, 2, or 3." >&2 ;;
+                esac
+            done
         fi
-    else
-        local claude_path
-        claude_path=$(get_claude_path)
-        success "Claude CLI found at $claude_path"
+
+        if [[ "$cli_choice" == "1" ]] || [[ "$cli_choice" == "3" ]]; then
+            info "Installing Claude Code CLI..."
+            download_to_stdout https://claude.ai/install.sh | bash
+            hash -r 2>/dev/null || true
+            if check_claude; then
+                has_claude=true
+                success "Claude Code installed at $(get_claude_path)"
+            else
+                warn "Claude Code installation failed."
+            fi
+        fi
+
+        if [[ "$cli_choice" == "2" ]] || [[ "$cli_choice" == "3" ]]; then
+            info "Installing OpenCode CLI..."
+            download_to_stdout https://opencode.ai/install | bash
+            hash -r 2>/dev/null || true
+            if check_opencode; then
+                has_opencode=true
+                success "OpenCode installed at $(get_opencode_path)"
+            else
+                warn "OpenCode installation failed."
+            fi
+        fi
+
+        if [[ "$has_claude" == "false" ]] && [[ "$has_opencode" == "false" ]]; then
+            die "At least one AI CLI is required. Install manually and re-run the installer."
+        fi
     fi
 
     echo ""
@@ -919,17 +1008,40 @@ main() {
     echo -e "${GREEN}${BOLD}  Codeman installed successfully!${NC}"
     echo -e "${GREEN}${BOLD}============================================================${NC}"
     echo ""
-    echo -e "  ${BOLD}Quick Start:${NC}"
-    echo ""
-    echo -e "    ${CYAN}# Start the web server${NC}"
-    echo -e "    codeman web"
-    echo ""
-    echo -e "    ${CYAN}# Start with HTTPS (only needed for remote access)${NC}"
-    echo -e "    codeman web --https"
-    echo ""
-    echo -e "    ${CYAN}# Open in browser${NC}"
-    echo -e "    http://localhost:3000"
-    echo ""
+
+    # Check if systemd service is running (we just started it above)
+    local service_running=false
+    if systemctl --user is-active codeman-web.service &>/dev/null; then
+        service_running=true
+    fi
+
+    if [[ "$service_running" == "true" ]]; then
+        echo -e "  ${GREEN}${BOLD}Codeman is running now!${NC}"
+        echo ""
+        echo -e "    ${CYAN}# Open in browser${NC}"
+        echo -e "    http://localhost:3000"
+        echo ""
+        echo -e "  ${BOLD}Manage the service:${NC}"
+        echo ""
+        echo -e "    ${CYAN}systemctl --user stop codeman-web${NC}    # Stop"
+        echo -e "    ${CYAN}systemctl --user restart codeman-web${NC} # Restart"
+        echo -e "    ${CYAN}systemctl --user status codeman-web${NC}  # Check status"
+        echo -e "    ${CYAN}journalctl --user -u codeman-web -f${NC}  # View logs"
+        echo ""
+    else
+        echo -e "  ${BOLD}Quick Start:${NC}"
+        echo ""
+        echo -e "    ${CYAN}# Start the web server${NC}"
+        echo -e "    codeman web"
+        echo ""
+        echo -e "    ${CYAN}# Start with HTTPS (only needed for remote access)${NC}"
+        echo -e "    codeman web --https"
+        echo ""
+        echo -e "    ${CYAN}# Open in browser${NC}"
+        echo -e "    http://localhost:3000"
+        echo ""
+    fi
+
     echo -e "  ${BOLD}Mobile Access (Termius/SSH):${NC}"
     echo ""
     echo -e "    ${CYAN}sc${NC}              # Interactive tmux session chooser"
@@ -937,33 +1049,27 @@ main() {
     echo -e "    ${CYAN}sc -h${NC}           # Help"
     echo ""
 
-    if [[ "$os" == "linux" ]] && [[ -f "$HOME/.config/systemd/user/codeman-web.service" ]]; then
-        echo -e "  ${BOLD}Systemd Service:${NC}"
-        echo ""
-        echo -e "    ${CYAN}systemctl --user start codeman-web${NC}   # Start"
-        echo -e "    ${CYAN}systemctl --user status codeman-web${NC}  # Check status"
-        echo -e "    ${CYAN}journalctl --user -u codeman-web -f${NC}  # View logs"
-        echo ""
-    fi
-
     echo -e "  ${BOLD}Documentation:${NC}"
     echo -e "    https://github.com/Ark0N/Codeman"
     echo ""
 
-    if ! check_claude; then
-        echo -e "  ${YELLOW}${BOLD}Reminder:${NC} Install Claude CLI to start using Codeman:"
-        echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}"
+    if ! check_claude && ! check_opencode; then
+        echo -e "  ${YELLOW}${BOLD}Reminder:${NC} Install at least one AI CLI to start using Codeman:"
+        echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}  # Claude Code"
+        echo -e "    ${CYAN}curl -fsSL https://opencode.ai/install | bash${NC}   # OpenCode"
         echo ""
     fi
 
-    # Check if PATH needs reload in user's shell
-    local profile
-    profile=$(detect_shell_profile)
-    if ! command -v codeman &>/dev/null 2>&1; then
-        echo -e "  ${YELLOW}Run this to start using codeman now:${NC}"
-        echo ""
-        echo -e "    ${CYAN}source $profile && codeman web${NC}"
-        echo ""
+    # Check if PATH needs reload in user's shell (only relevant if service not running)
+    if [[ "$service_running" != "true" ]]; then
+        local profile
+        profile=$(detect_shell_profile)
+        if ! command -v codeman &>/dev/null 2>&1; then
+            echo -e "  ${YELLOW}Run this to start using codeman now:${NC}"
+            echo ""
+            echo -e "    ${CYAN}source $profile && codeman web${NC}"
+            echo ""
+        fi
     fi
 }
 
@@ -984,8 +1090,71 @@ update() {
     echo ""
 }
 
+uninstall() {
+    print_banner
+    info "Uninstalling Codeman..."
+    echo ""
+
+    # Stop and remove systemd service
+    if systemctl --user is-active codeman-web.service &>/dev/null; then
+        info "Stopping codeman-web service..."
+        systemctl --user stop codeman-web.service
+    fi
+    if systemctl --user is-enabled codeman-web.service &>/dev/null 2>&1; then
+        info "Disabling codeman-web service..."
+        systemctl --user disable codeman-web.service 2>/dev/null || true
+    fi
+    local service_file="$HOME/.config/systemd/user/codeman-web.service"
+    if [[ -f "$service_file" ]]; then
+        rm -f "$service_file"
+        systemctl --user daemon-reload 2>/dev/null || true
+        success "Systemd service removed"
+    fi
+
+    # Remove symlinks
+    local symlink_dir="$HOME/.local/bin"
+    if [[ -L "$symlink_dir/codeman" ]]; then
+        rm -f "$symlink_dir/codeman"
+        success "Removed symlink: $symlink_dir/codeman"
+    fi
+    if [[ -L "$symlink_dir/tmux-chooser" ]]; then
+        rm -f "$symlink_dir/tmux-chooser"
+        success "Removed symlink: $symlink_dir/tmux-chooser"
+    fi
+
+    # Remove install directory
+    if [[ -d "$INSTALL_DIR" ]]; then
+        if prompt_yes_no "Remove installation directory ($INSTALL_DIR)?"; then
+            rm -rf "$INSTALL_DIR"
+            success "Removed $INSTALL_DIR"
+        else
+            info "Kept $INSTALL_DIR"
+        fi
+    fi
+
+    # Ask about data directory
+    local data_dir="$HOME/.codeman"
+    if [[ -d "$data_dir" ]]; then
+        warn "Data directory exists at $data_dir (contains sessions, settings, state)"
+        if prompt_yes_no "Remove data directory ($data_dir)?" "n"; then
+            rm -rf "$data_dir"
+            success "Removed $data_dir"
+        else
+            info "Kept $data_dir"
+        fi
+    fi
+
+    echo ""
+    success "Codeman uninstalled."
+    echo ""
+    echo -e "  ${DIM}Note: Shell profile entries (PATH, sc alias) were not removed.${NC}"
+    echo -e "  ${DIM}You can remove them manually from $(detect_shell_profile)${NC}"
+    echo ""
+}
+
 # Wrap in main to prevent partial execution on curl | bash
 case "${1:-}" in
-    update) update ;;
-    *)      main "$@" ;;
+    update)    update ;;
+    uninstall) uninstall ;;
+    *)         main "$@" ;;
 esac
