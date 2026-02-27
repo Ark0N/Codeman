@@ -95,7 +95,10 @@ export class PushSubscriptionStore {
   }
 
   /** Update push preferences for a subscription */
-  updatePreferences(id: string, preferences: Record<string, boolean>): PushSubscriptionRecord | null {
+  updatePreferences(
+    id: string,
+    preferences: Record<string, boolean>
+  ): PushSubscriptionRecord | null {
     const sub = this.subscriptions.get(id);
     if (!sub) return null;
     sub.pushPreferences = preferences;

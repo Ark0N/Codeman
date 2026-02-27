@@ -73,25 +73,27 @@ const FOLLOW_MODE_PATTERN = /\s-[A-Za-z]*f[A-Za-z]*\s|\s--follow\s/;
  * Note: This is a simpler approach - we run it on each command string
  * rather than trying to match globally.
  */
-const FILE_PATH_PATTERN = /(?:^|\s|['"]|=)([\/~][^\s'"<>|;&\n]+)/g;
+const FILE_PATH_PATTERN = /(?:^|\s|['"]|=)([/~][^\s'"<>|;&\n]+)/g;
 
 /**
  * Pattern to detect paths that are likely not real files (flags, etc.)
  */
-const INVALID_PATH_PATTERN = /^[\/~]-|\/dev\/null$/;
+const INVALID_PATH_PATTERN = /^[/~]-|\/dev\/null$/;
 
 /**
  * Pattern to detect command suggestions in plain text output.
  * Matches lines like "tail -f /path/to/file" without the ● Bash() wrapper.
  * This catches commands Claude mentions but doesn't execute.
  */
-const TEXT_COMMAND_PATTERN = /^\s*(tail|cat|head|less|grep|watch|multitail)\s+(?:-[^\s]+\s+)*([\/~][^\s'"<>|;&\n]+)/;
+const TEXT_COMMAND_PATTERN =
+  /^\s*(tail|cat|head|less|grep|watch|multitail)\s+(?:-[^\s]+\s+)*([/~][^\s'"<>|;&\n]+)/;
 
 /**
  * Pattern to detect log file paths mentioned in text (even without commands).
  * Matches paths ending in .log, .txt, .out, or in common log directories.
  */
-const LOG_FILE_MENTION_PATTERN = /([\/~][^\s'"<>|;&\n]*(?:\.log|\.txt|\.out|\/log\/[^\s'"<>|;&\n]+))/g;
+const LOG_FILE_MENTION_PATTERN =
+  /([/~][^\s'"<>|;&\n]*(?:\.log|\.txt|\.out|\/log\/[^\s'"<>|;&\n]+))/g;
 
 // ========== Event Interfaces ==========
 
@@ -245,7 +247,7 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
    */
   private isShallowRootPath(path: string): boolean {
     if (!path.startsWith('/')) return false;
-    const parts = path.split('/').filter(p => p !== '');
+    const parts = path.split('/').filter((p) => p !== '');
     return parts.length === 1;
   }
 
@@ -354,10 +356,10 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
   isFilePathTracked(filePath: string): boolean {
     const normalizedNew = this.normalizePath(filePath);
 
-    return Array.from(this._activeTools.values()).some(t => {
+    return Array.from(this._activeTools.values()).some((t) => {
       if (t.status !== 'running') return false;
 
-      return t.filePaths.some(existingPath => {
+      return t.filePaths.some((existingPath) => {
         const normalizedExisting = this.normalizePath(existingPath);
         return normalizedExisting === normalizedNew;
       });
@@ -418,9 +420,10 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
     // Prevent unbounded growth
     if (this._lineBuffer.length > MAX_LINE_BUFFER_SIZE) {
       const trimPoint = this._lineBuffer.lastIndexOf('\n', MAX_LINE_BUFFER_SIZE / 2);
-      this._lineBuffer = trimPoint > 0
-        ? this._lineBuffer.slice(trimPoint + 1)
-        : this._lineBuffer.slice(-MAX_LINE_BUFFER_SIZE / 2);
+      this._lineBuffer =
+        trimPoint > 0
+          ? this._lineBuffer.slice(trimPoint + 1)
+          : this._lineBuffer.slice(-MAX_LINE_BUFFER_SIZE / 2);
     }
 
     // Process complete lines
@@ -445,9 +448,10 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
 
     if (this._lineBuffer.length > MAX_LINE_BUFFER_SIZE) {
       const trimPoint = this._lineBuffer.lastIndexOf('\n', MAX_LINE_BUFFER_SIZE / 2);
-      this._lineBuffer = trimPoint > 0
-        ? this._lineBuffer.slice(trimPoint + 1)
-        : this._lineBuffer.slice(-MAX_LINE_BUFFER_SIZE / 2);
+      this._lineBuffer =
+        trimPoint > 0
+          ? this._lineBuffer.slice(trimPoint + 1)
+          : this._lineBuffer.slice(-MAX_LINE_BUFFER_SIZE / 2);
     }
 
     const lines = this._lineBuffer.split('\n');
@@ -472,7 +476,6 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
    * Process a single pre-stripped line of terminal output.
    */
   private processCleanLine(cleanLine: string): void {
-
     // Check for tool start
     const startMatch = cleanLine.match(BASH_TOOL_START_PATTERN);
     if (startMatch) {
@@ -484,7 +487,7 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
         const filePaths = this.extractFilePaths(command);
 
         // Skip if any file path is already tracked (cross-pattern dedup)
-        if (filePaths.some(fp => this.isFilePathTracked(fp))) {
+        if (filePaths.some((fp) => this.isFilePathTracked(fp))) {
           return;
         }
 
@@ -502,8 +505,9 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
           // Enforce max tools limit
           if (this._activeTools.size >= MAX_ACTIVE_TOOLS) {
             // Remove oldest tool
-            const oldest = Array.from(this._activeTools.entries())
-              .sort((a, b) => a[1].startedAt - b[1].startedAt)[0];
+            const oldest = Array.from(this._activeTools.entries()).sort(
+              (a, b) => a[1].startedAt - b[1].startedAt
+            )[0];
             if (oldest) {
               this._activeTools.delete(oldest[0]);
             }
@@ -671,6 +675,7 @@ export class BashToolParser extends EventEmitter<BashToolParserEvents> {
    */
   private stripAnsi(str: string): string {
     // Comprehensive ANSI pattern
+    // eslint-disable-next-line no-control-regex
     return str.replace(/\x1b(?:\[[0-9;?]*[A-Za-z]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[=>])/g, '');
   }
 

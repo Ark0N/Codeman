@@ -149,7 +149,7 @@ export class BufferAccumulator {
    * @returns True if buffer ends with the suffix
    */
   endsWith(suffix: string): boolean {
-    if (!suffix) return true;  // All strings end with empty string
+    if (!suffix) return true; // All strings end with empty string
     if (suffix.length > this.totalLength) return false;
     return this.tail(suffix.length) === suffix;
   }

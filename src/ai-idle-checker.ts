@@ -33,13 +33,13 @@ import {
 
 // ========== Types ==========
 
-export interface AiIdleCheckConfig extends AiCheckerConfigBase {}
+export type AiIdleCheckConfig = AiCheckerConfigBase;
 
 export type AiCheckVerdict = 'IDLE' | 'WORKING' | 'ERROR';
 
-export interface AiCheckResult extends AiCheckerResultBase<AiCheckVerdict> {}
+export type AiCheckResult = AiCheckerResultBase<AiCheckVerdict>;
 
-export interface AiCheckState extends AiCheckerStateBase<AiCheckVerdict> {}
+export type AiCheckState = AiCheckerStateBase<AiCheckVerdict>;
 
 // ========== Constants ==========
 
@@ -170,7 +170,11 @@ export class AiIdleChecker extends AiCheckerBase<
     return { verdict: 'ERROR', reasoning, durationMs };
   }
 
-  protected createResult(verdict: AiCheckVerdict, reasoning: string, durationMs: number): AiCheckResult {
+  protected createResult(
+    verdict: AiCheckVerdict,
+    reasoning: string,
+    durationMs: number
+  ): AiCheckResult {
     return { verdict, reasoning, durationMs };
   }
 }

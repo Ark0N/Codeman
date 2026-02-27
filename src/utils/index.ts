@@ -33,4 +33,8 @@ export {
 export { assertNever } from './type-safety.js';
 export { wrapWithNice } from './nice-wrapper.js';
 export { findClaudeDir, getAugmentedPath } from './claude-cli-resolver.js';
-export { resolveOpenCodeDir, isOpenCodeAvailable, getOpenCodeAugmentedPath } from './opencode-cli-resolver.js';
+export {
+  resolveOpenCodeDir,
+  isOpenCodeAvailable,
+  getOpenCodeAugmentedPath,
+} from './opencode-cli-resolver.js';

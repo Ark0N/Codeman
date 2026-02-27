@@ -30,10 +30,25 @@ import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
-import { ProcessStats, PersistedRespawnConfig, getErrorMessage, DEFAULT_NICE_CONFIG, type PaneInfo, type ClaudeMode, type SessionMode, type OpenCodeConfig } from './types.js';
+import {
+  ProcessStats,
+  PersistedRespawnConfig,
+  getErrorMessage,
+  DEFAULT_NICE_CONFIG,
+  type PaneInfo,
+  type ClaudeMode,
+  type SessionMode,
+  type OpenCodeConfig,
+} from './types.js';
 import { wrapWithNice } from './utils/nice-wrapper.js';
 import { SAFE_PATH_PATTERN } from './utils/regex-patterns.js';
-import type { TerminalMultiplexer, MuxSession, MuxSessionWithStats, CreateSessionOptions, RespawnPaneOptions } from './mux-interface.js';
+import type {
+  TerminalMultiplexer,
+  MuxSession,
+  MuxSessionWithStats,
+  CreateSessionOptions,
+  RespawnPaneOptions,
+} from './mux-interface.js';
 
 // Claude CLI PATH resolution — shared utility
 import { findClaudeDir } from './utils/claude-cli-resolver.js';
@@ -103,11 +118,23 @@ function isValidMuxName(name: string): boolean {
  * Prevents command injection via malformed paths.
  */
 function isValidPath(path: string): boolean {
-  if (path.includes(';') || path.includes('&') || path.includes('|') ||
-      path.includes('$') || path.includes('`') || path.includes('(') ||
-      path.includes(')') || path.includes('{') || path.includes('}') ||
-      path.includes('<') || path.includes('>') || path.includes("'") ||
-      path.includes('"') || path.includes('\n') || path.includes('\r')) {
+  if (
+    path.includes(';') ||
+    path.includes('&') ||
+    path.includes('|') ||
+    path.includes('$') ||
+    path.includes('`') ||
+    path.includes('(') ||
+    path.includes(')') ||
+    path.includes('{') ||
+    path.includes('}') ||
+    path.includes('<') ||
+    path.includes('>') ||
+    path.includes("'") ||
+    path.includes('"') ||
+    path.includes('\n') ||
+    path.includes('\r')
+  ) {
     return false;
   }
   if (path.includes('..')) {
@@ -155,7 +182,9 @@ function buildOpenCodeCommand(config?: OpenCodeConfig): string {
 
   // Continue existing session
   if (config?.continueSession) {
-    const safeId = /^[a-zA-Z0-9_-]+$/.test(config.continueSession) ? config.continueSession : undefined;
+    const safeId = /^[a-zA-Z0-9_-]+$/.test(config.continueSession)
+      ? config.continueSession
+      : undefined;
     if (safeId) parts.push('--session', safeId);
     if (safeId && config.forkSession) parts.push('--fork');
   }
@@ -177,7 +206,8 @@ function buildSpawnCommand(options: {
 }): string {
   if (options.mode === 'claude') {
     // Validate model to prevent command injection
-    const safeModel = (options.model && /^[a-zA-Z0-9._-]+$/.test(options.model)) ? options.model : undefined;
+    const safeModel =
+      options.model && /^[a-zA-Z0-9._-]+$/.test(options.model) ? options.model : undefined;
     const modelFlag = safeModel ? ` --model ${safeModel}` : '';
     return `claude${buildClaudePermissionFlags(options.claudeMode, options.allowedTools)} --session-id "${options.sessionId}"${modelFlag}`;
   }
@@ -204,7 +234,9 @@ function setOpenCodeEnvVars(muxName: string): void {
           timeout: EXEC_TIMEOUT_MS,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
-      } catch { /* Non-critical — key may not be needed */ }
+      } catch {
+        /* Non-critical — key may not be needed */
+      }
     }
   }
 }
@@ -225,7 +257,9 @@ function setOpenCodeConfigContent(muxName: string, config?: OpenCodeConfig): voi
         const existing = JSON.parse(config.configContent) as Record<string, unknown>;
         Object.assign(permConfig, existing);
         permConfig.permission = { '*': 'allow' };
-      } catch { /* invalid JSON, use default permConfig */ }
+      } catch {
+        /* invalid JSON, use default permConfig */
+      }
     }
     jsonContent = JSON.stringify(permConfig);
   } else if (config.configContent) {
@@ -247,7 +281,9 @@ function setOpenCodeConfigContent(muxName: string, config?: OpenCodeConfig): voi
         timeout: EXEC_TIMEOUT_MS,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-    } catch { /* Non-critical */ }
+    } catch {
+      /* Non-critical */
+    }
   }
 }
 
@@ -338,7 +374,17 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * In test mode: creates an in-memory session only (no real tmux session).
    */
   async createSession(options: CreateSessionOptions): Promise<MuxSession> {
-    const { sessionId, workingDir, mode, name, niceConfig, model, claudeMode, allowedTools, openCodeConfig } = options;
+    const {
+      sessionId,
+      workingDir,
+      mode,
+      name,
+      niceConfig,
+      model,
+      claudeMode,
+      allowedTools,
+      openCodeConfig,
+    } = options;
     const muxName = `codeman-${sessionId.slice(0, 8)}`;
 
     if (!isValidMuxName(muxName)) {
@@ -370,13 +416,17 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     if (mode === 'claude') {
       const claudeDir = findClaudeDir();
       if (!claudeDir) {
-        throw new Error('Claude CLI not found. Install it with: curl -fsSL https://claude.ai/install.sh | bash');
+        throw new Error(
+          'Claude CLI not found. Install it with: curl -fsSL https://claude.ai/install.sh | bash'
+        );
       }
       pathExport = `export PATH="${claudeDir}:$PATH" && `;
     } else if (mode === 'opencode') {
       const openCodeDir = resolveOpenCodeDir();
       if (!openCodeDir) {
-        throw new Error('OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash');
+        throw new Error(
+          'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
+        );
       }
       pathExport = `export PATH="${openCodeDir}:$PATH" && `;
     }
@@ -394,7 +444,14 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     if (mode === 'claude') envExports.splice(2, 0, 'unset CLAUDECODE');
     const envExportsStr = envExports.join(' && ');
 
-    const baseCmd = buildSpawnCommand({ mode, sessionId, model, claudeMode, allowedTools, openCodeConfig });
+    const baseCmd = buildSpawnCommand({
+      mode,
+      sessionId,
+      model,
+      claudeMode,
+      allowedTools,
+      openCodeConfig,
+    });
 
     const config = niceConfig || DEFAULT_NICE_CONFIG;
     const cmd = wrapWithNice(baseCmd, config);
@@ -412,15 +469,22 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // (Production uses systemd which has a clean env, but dev/test may be nested.)
       const cleanEnv = { ...process.env };
       delete cleanEnv.TMUX;
-      execSync(
-        `tmux new-session -ds "${muxName}" -c "${workingDir}" -x 120 -y 40`,
-        { cwd: workingDir, timeout: EXEC_TIMEOUT_MS, stdio: 'ignore', env: cleanEnv }
-      );
+      execSync(`tmux new-session -ds "${muxName}" -c "${workingDir}" -x 120 -y 40`, {
+        cwd: workingDir,
+        timeout: EXEC_TIMEOUT_MS,
+        stdio: 'ignore',
+        env: cleanEnv,
+      });
 
       // Set remain-on-exit now that the server is running — must be before respawn-pane
       try {
-        execSync(`tmux set-option -t "${muxName}" remain-on-exit on`, { timeout: EXEC_TIMEOUT_MS, stdio: 'ignore' });
-      } catch { /* Non-critical */ }
+        execSync(`tmux set-option -t "${muxName}" remain-on-exit on`, {
+          timeout: EXEC_TIMEOUT_MS,
+          stdio: 'ignore',
+        });
+      } catch {
+        /* Non-critical */
+      }
 
       // For OpenCode: set sensitive env vars and config via tmux setenv
       // (not visible in ps output or tmux history, inherited by panes)
@@ -430,13 +494,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       }
 
       // Replace the shell with the actual command (no echo in terminal)
-      execSync(
-        `tmux respawn-pane -k -t "${muxName}" bash -c ${JSON.stringify(fullCmd)}`,
-        { timeout: EXEC_TIMEOUT_MS, stdio: 'ignore' }
-      );
+      execSync(`tmux respawn-pane -k -t "${muxName}" bash -c ${JSON.stringify(fullCmd)}`, {
+        timeout: EXEC_TIMEOUT_MS,
+        stdio: 'ignore',
+      });
 
       // Wait for tmux session to be queryable
-      await new Promise(resolve => setTimeout(resolve, TMUX_CREATION_WAIT_MS));
+      await new Promise((resolve) => setTimeout(resolve, TMUX_CREATION_WAIT_MS));
 
       // Non-critical tmux config — run in parallel to avoid blocking event loop.
       // These configure UX niceties (no status bar, true color).
@@ -445,18 +509,28 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const configPromises: Promise<void>[] = [
         // Disable tmux status bar — Codeman's web UI provides session info
         execAsync(`tmux set-option -t "${muxName}" status off`, { timeout: EXEC_TIMEOUT_MS })
-          .then(() => {}).catch(() => { /* Non-critical — session still works with status bar */ }),
+          .then(() => {})
+          .catch(() => {
+            /* Non-critical — session still works with status bar */
+          }),
         // Override global remain-on-exit with session-level setting
         execAsync(`tmux set-option -t "${muxName}" remain-on-exit on`, { timeout: EXEC_TIMEOUT_MS })
-          .then(() => {}).catch(() => { /* Already set globally as fallback */ }),
+          .then(() => {})
+          .catch(() => {
+            /* Already set globally as fallback */
+          }),
       ];
 
       // Enable 24-bit true color passthrough — server-wide, set once per lifetime
       if (!this.trueColorConfigured) {
         configPromises.push(
           execAsync(`tmux set-option -sa terminal-overrides ",*:Tc"`, { timeout: EXEC_TIMEOUT_MS })
-            .then(() => { this.trueColorConfigured = true; })
-            .catch(() => { /* Non-critical — colors limited to 256 */ })
+            .then(() => {
+              this.trueColorConfigured = true;
+            })
+            .catch(() => {
+              /* Non-critical — colors limited to 256 */
+            })
         );
       }
 
@@ -467,7 +541,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       // Get the PID of the pane process (retry for tmux server cold-start)
       let pid = this.getPanePid(muxName);
       for (let i = 0; !pid && i < GET_PID_MAX_RETRIES; i++) {
-        await new Promise(resolve => setTimeout(resolve, GET_PID_RETRY_MS));
+        await new Promise((resolve) => setTimeout(resolve, GET_PID_RETRY_MS));
         pid = this.getPanePid(muxName);
       }
       if (!pid) {
@@ -507,10 +581,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     try {
-      const output = execSync(
-        `tmux display-message -t "${muxName}" -p '#{pane_pid}'`,
-        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-      ).trim();
+      const output = execSync(`tmux display-message -t "${muxName}" -p '#{pane_pid}'`, {
+        encoding: 'utf-8',
+        timeout: EXEC_TIMEOUT_MS,
+      }).trim();
       const pid = parseInt(output, 10);
       return Number.isNaN(pid) ? null : pid;
     } catch {
@@ -533,10 +607,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     if (IS_TEST_MODE) return false;
     if (!isValidMuxName(muxName)) return false;
     try {
-      const output = execSync(
-        `tmux display-message -t "${muxName}" -p '#{pane_dead}'`,
-        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-      ).trim();
+      const output = execSync(`tmux display-message -t "${muxName}" -p '#{pane_dead}'`, {
+        encoding: 'utf-8',
+        timeout: EXEC_TIMEOUT_MS,
+      }).trim();
       return output === '1';
     } catch {
       return false;
@@ -549,7 +623,16 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * preserving the session and its scrollback buffer.
    */
   async respawnPane(options: RespawnPaneOptions): Promise<number | null> {
-    const { sessionId, workingDir, mode, niceConfig, model, claudeMode, allowedTools, openCodeConfig } = options;
+    const {
+      sessionId,
+      workingDir,
+      mode,
+      niceConfig,
+      model,
+      claudeMode,
+      allowedTools,
+      openCodeConfig,
+    } = options;
     const session = this.sessions.get(sessionId);
     if (!session) return null;
     const muxName = session.muxName;
@@ -578,7 +661,14 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     if (mode === 'claude') envExports.splice(2, 0, 'unset CLAUDECODE');
     const envExportsStr = envExports.join(' && ');
 
-    const baseCmd = buildSpawnCommand({ mode, sessionId, model, claudeMode, allowedTools, openCodeConfig });
+    const baseCmd = buildSpawnCommand({
+      mode,
+      sessionId,
+      model,
+      claudeMode,
+      allowedTools,
+      openCodeConfig,
+    });
     const config = niceConfig || DEFAULT_NICE_CONFIG;
     const cmd = wrapWithNice(baseCmd, config);
     const fullCmd = `${pathExport}${envExportsStr} && ${cmd}`;
@@ -590,12 +680,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         setOpenCodeConfigContent(muxName, openCodeConfig);
       }
 
-      await execAsync(
-        `tmux respawn-pane -k -t "${muxName}" bash -c ${JSON.stringify(fullCmd)}`,
-        { timeout: EXEC_TIMEOUT_MS }
-      );
+      await execAsync(`tmux respawn-pane -k -t "${muxName}" bash -c ${JSON.stringify(fullCmd)}`, {
+        timeout: EXEC_TIMEOUT_MS,
+      });
       // Wait for the respawned process to start
-      await new Promise(resolve => setTimeout(resolve, TMUX_CREATION_WAIT_MS));
+      await new Promise((resolve) => setTimeout(resolve, TMUX_CREATION_WAIT_MS));
       const pid = this.getPanePid(muxName);
       if (pid) session.pid = pid;
       return pid;
@@ -628,7 +717,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         timeout: EXEC_TIMEOUT_MS,
       }).trim();
       if (output) {
-        for (const childPid of output.split('\n').map(p => parseInt(p, 10)).filter(p => !Number.isNaN(p))) {
+        for (const childPid of output
+          .split('\n')
+          .map((p) => parseInt(p, 10))
+          .filter((p) => !Number.isNaN(p))) {
           pids.push(childPid);
           pids.push(...this.getChildPids(childPid));
         }
@@ -655,16 +747,18 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const checkInterval = 100;
 
     while (Date.now() - startTime < maxWaitMs) {
-      const aliveCount = pids.filter(pid => this.isProcessAlive(pid)).length;
+      const aliveCount = pids.filter((pid) => this.isProcessAlive(pid)).length;
       if (aliveCount === 0) {
         return true;
       }
-      await new Promise(resolve => setTimeout(resolve, checkInterval));
+      await new Promise((resolve) => setTimeout(resolve, checkInterval));
     }
 
-    const stillAlive = pids.filter(pid => this.isProcessAlive(pid));
+    const stillAlive = pids.filter((pid) => this.isProcessAlive(pid));
     if (stillAlive.length > 0) {
-      console.warn(`[TmuxManager] ${stillAlive.length} processes still alive after kill: ${stillAlive.join(', ')}`);
+      console.warn(
+        `[TmuxManager] ${stillAlive.length} processes still alive after kill: ${stillAlive.join(', ')}`
+      );
     }
     return stillAlive.length === 0;
   }
@@ -717,7 +811,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         }
       }
 
-      await new Promise(resolve => setTimeout(resolve, TMUX_KILL_WAIT_MS));
+      await new Promise((resolve) => setTimeout(resolve, TMUX_KILL_WAIT_MS));
 
       childPids = this.getChildPids(currentPid);
       for (const childPid of childPids) {
@@ -735,7 +829,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     if (this.isProcessAlive(currentPid)) {
       try {
         process.kill(-currentPid, 'SIGTERM');
-        await new Promise(resolve => setTimeout(resolve, GRACEFUL_SHUTDOWN_WAIT_MS));
+        await new Promise((resolve) => setTimeout(resolve, GRACEFUL_SHUTDOWN_WAIT_MS));
         if (this.isProcessAlive(currentPid)) {
           process.kill(-currentPid, 'SIGKILL');
         }
@@ -765,7 +859,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     // Verify all processes are dead
     const allDead = await this.verifyProcessesDead(allPids, 2000);
     if (!allDead) {
-      console.error(`[TmuxManager] Warning: Some processes may still be alive for session ${session.muxName}`);
+      console.error(
+        `[TmuxManager] Warning: Some processes may still be alive for session ${session.muxName}`
+      );
     }
 
     this.lastPaneCount.delete(session.muxName);
@@ -829,14 +925,18 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
     // Discover unknown codeman sessions
     try {
-      const output = execSync(
-        "tmux list-sessions -F '#{session_name}' 2>/dev/null || true",
-        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-      ).trim();
+      const output = execSync("tmux list-sessions -F '#{session_name}' 2>/dev/null || true", {
+        encoding: 'utf-8',
+        timeout: EXEC_TIMEOUT_MS,
+      }).trim();
 
       for (const line of output.split('\n')) {
         const sessionName = line.trim();
-        if (!sessionName || (!sessionName.startsWith('codeman-') && !sessionName.startsWith('claudeman-'))) continue;
+        if (
+          !sessionName ||
+          (!sessionName.startsWith('codeman-') && !sessionName.startsWith('claudeman-'))
+        )
+          continue;
 
         // Check if this session is already known
         let isKnown = false;
@@ -866,7 +966,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
             };
             this.sessions.set(sessionId, session);
             discovered.push(sessionId);
-            console.log(`[TmuxManager] Discovered unknown tmux session: ${sessionName} (PID ${pid})`);
+            console.log(
+              `[TmuxManager] Discovered unknown tmux session: ${sessionName} (PID ${pid})`
+            );
           }
         }
       }
@@ -890,26 +992,26 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     try {
-      const psOutput = execSync(
-        `ps -o rss=,pcpu= -p ${session.pid} 2>/dev/null || echo "0 0"`,
-        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-      ).trim();
+      const psOutput = execSync(`ps -o rss=,pcpu= -p ${session.pid} 2>/dev/null || echo "0 0"`, {
+        encoding: 'utf-8',
+        timeout: EXEC_TIMEOUT_MS,
+      }).trim();
 
-      const [rss, cpu] = psOutput.split(/\s+/).map(x => parseFloat(x) || 0);
+      const [rss, cpu] = psOutput.split(/\s+/).map((x) => parseFloat(x) || 0);
 
       let childCount = 0;
       try {
-        const childOutput = execSync(
-          `pgrep -P ${session.pid} | wc -l`,
-          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-        ).trim();
+        const childOutput = execSync(`pgrep -P ${session.pid} | wc -l`, {
+          encoding: 'utf-8',
+          timeout: EXEC_TIMEOUT_MS,
+        }).trim();
         childCount = parseInt(childOutput, 10) || 0;
       } catch {
         // No children or command failed
       }
 
       return {
-        memoryMB: Math.round(rss / 1024 * 10) / 10,
+        memoryMB: Math.round((rss / 1024) * 10) / 10,
         cpuPercent: Math.round(cpu * 10) / 10,
         childCount,
         updatedAt: Date.now(),
@@ -921,7 +1023,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
   async getSessionsWithStats(): Promise<MuxSessionWithStats[]> {
     if (IS_TEST_MODE) {
-      return Array.from(this.sessions.values()).map(s => ({
+      return Array.from(this.sessions.values()).map((s) => ({
         ...s,
         stats: { memoryMB: 0, cpuPercent: 0, childCount: 0, updatedAt: Date.now() },
       }));
@@ -932,7 +1034,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return [];
     }
 
-    const sessionPids = sessions.map(s => s.pid);
+    const sessionPids = sessions.map((s) => s.pid);
     const statsMap = new Map<number, ProcessStats>();
 
     try {
@@ -950,8 +1052,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         if (!Number.isNaN(sessionPid)) {
           const children = (childrenStr || '')
             .split(',')
-            .map(s => parseInt(s.trim(), 10))
-            .filter(n => !Number.isNaN(n) && n > 0);
+            .map((s) => parseInt(s.trim(), 10))
+            .filter((n) => !Number.isNaN(n) && n > 0);
           descendantMap.set(sessionPid, children);
         }
       }
@@ -1002,7 +1104,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
           }
 
           statsMap.set(sessionPid, {
-            memoryMB: Math.round(totalRss / 1024 * 10) / 10,
+            memoryMB: Math.round((totalRss / 1024) * 10) / 10,
             cpuPercent: Math.round(totalCpu * 10) / 10,
             childCount: children.length,
             updatedAt: Date.now(),
@@ -1011,7 +1113,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       }
     } catch {
       // Fall back to individual queries
-      const statsPromises = sessions.map(session => this.getProcessStats(session.sessionId));
+      const statsPromises = sessions.map((session) => this.getProcessStats(session.sessionId));
       const results = await Promise.allSettled(statsPromises);
       return sessions.map((session, i) => ({
         ...session,
@@ -1019,7 +1121,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       }));
     }
 
-    return sessions.map(session => ({
+    return sessions.map((session) => ({
       ...session,
       stats: statsMap.get(session.pid) || undefined,
     }));
@@ -1145,7 +1247,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   async sendInput(sessionId: string, input: string): Promise<boolean> {
     const session = this.sessions.get(sessionId);
     if (!session) {
-      console.error(`[TmuxManager] sendInput failed: no session found for ${sessionId}. Known: ${Array.from(this.sessions.keys()).join(', ')}`);
+      console.error(
+        `[TmuxManager] sendInput failed: no session found for ${sessionId}. Known: ${Array.from(this.sessions.keys()).join(', ')}`
+      );
       return false;
     }
 
@@ -1154,7 +1258,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       return true;
     }
 
-    console.log(`[TmuxManager] sendInput to ${session.muxName}, input length: ${input.length}, hasCarriageReturn: ${input.includes('\r')}`);
+    console.log(
+      `[TmuxManager] sendInput to ${session.muxName}, input length: ${input.length}, hasCarriageReturn: ${input.includes('\r')}`
+    );
 
     if (!isValidMuxName(session.muxName)) {
       console.error('[TmuxManager] Invalid session name in sendInput:', session.muxName);
@@ -1170,27 +1276,23 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         // Ink (Claude CLI's terminal framework) needs them split — sending both in a
         // single tmux invocation (via \;) causes Ink to interpret Enter as a newline
         // character in the input buffer rather than as form submission.
-        await execAsync(
-          `tmux send-keys -t "${session.muxName}" -l ${shellescape(textPart)}`,
-          { timeout: EXEC_TIMEOUT_MS }
-        );
-        await new Promise(resolve => setTimeout(resolve, 50));
-        await execAsync(
-          `tmux send-keys -t "${session.muxName}" Enter`,
-          { timeout: EXEC_TIMEOUT_MS }
-        );
+        await execAsync(`tmux send-keys -t "${session.muxName}" -l ${shellescape(textPart)}`, {
+          timeout: EXEC_TIMEOUT_MS,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        await execAsync(`tmux send-keys -t "${session.muxName}" Enter`, {
+          timeout: EXEC_TIMEOUT_MS,
+        });
       } else if (textPart) {
         // Text only, no Enter
-        await execAsync(
-          `tmux send-keys -t "${session.muxName}" -l ${shellescape(textPart)}`,
-          { timeout: EXEC_TIMEOUT_MS }
-        );
+        await execAsync(`tmux send-keys -t "${session.muxName}" -l ${shellescape(textPart)}`, {
+          timeout: EXEC_TIMEOUT_MS,
+        });
       } else if (hasCarriageReturn) {
         // Enter only
-        await execAsync(
-          `tmux send-keys -t "${session.muxName}" Enter`,
-          { timeout: EXEC_TIMEOUT_MS }
-        );
+        await execAsync(`tmux send-keys -t "${session.muxName}" Enter`, {
+          timeout: EXEC_TIMEOUT_MS,
+        });
       }
 
       return true;
@@ -1215,10 +1317,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     try {
-      execSync(
-        `tmux set-option -t "${muxName}" mouse on`,
-        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-      );
+      execSync(`tmux set-option -t "${muxName}" mouse on`, {
+        encoding: 'utf-8',
+        timeout: EXEC_TIMEOUT_MS,
+      });
       console.log(`[TmuxManager] Mouse mode ON for ${muxName}`);
       return true;
     } catch (err) {
@@ -1239,10 +1341,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     try {
-      execSync(
-        `tmux set-option -t "${muxName}" mouse off`,
-        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-      );
+      execSync(`tmux set-option -t "${muxName}" mouse off`, {
+        encoding: 'utf-8',
+        timeout: EXEC_TIMEOUT_MS,
+      });
       console.log(`[TmuxManager] Mouse mode OFF for ${muxName}`);
       return true;
     } catch (err) {
@@ -1283,16 +1385,19 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
       ).trim();
 
-      return output.split('\n').map(line => {
-        const [paneId, indexStr, pidStr, widthStr, heightStr] = line.split(':');
-        return {
-          paneId,
-          paneIndex: parseInt(indexStr, 10),
-          panePid: parseInt(pidStr, 10),
-          width: parseInt(widthStr, 10),
-          height: parseInt(heightStr, 10),
-        };
-      }).filter(p => !Number.isNaN(p.paneIndex));
+      return output
+        .split('\n')
+        .map((line) => {
+          const [paneId, indexStr, pidStr, widthStr, heightStr] = line.split(':');
+          return {
+            paneId,
+            paneIndex: parseInt(indexStr, 10),
+            panePid: parseInt(pidStr, 10),
+            width: parseInt(widthStr, 10),
+            height: parseInt(heightStr, 10),
+          };
+        })
+        .filter((p) => !Number.isNaN(p.paneIndex));
     } catch {
       return [];
     }
@@ -1323,24 +1428,24 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const textPart = input.replace(/\r/g, '').replace(/\n/g, '').trimEnd();
 
       if (textPart && hasCarriageReturn) {
-        execSync(
-          `tmux send-keys -t ${shellescape(target)} -l ${shellescape(textPart)}`,
-          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-        );
-        execSync(
-          `tmux send-keys -t ${shellescape(target)} Enter`,
-          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-        );
+        execSync(`tmux send-keys -t ${shellescape(target)} -l ${shellescape(textPart)}`, {
+          encoding: 'utf-8',
+          timeout: EXEC_TIMEOUT_MS,
+        });
+        execSync(`tmux send-keys -t ${shellescape(target)} Enter`, {
+          encoding: 'utf-8',
+          timeout: EXEC_TIMEOUT_MS,
+        });
       } else if (textPart) {
-        execSync(
-          `tmux send-keys -t ${shellescape(target)} -l ${shellescape(textPart)}`,
-          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-        );
+        execSync(`tmux send-keys -t ${shellescape(target)} -l ${shellescape(textPart)}`, {
+          encoding: 'utf-8',
+          timeout: EXEC_TIMEOUT_MS,
+        });
       } else if (hasCarriageReturn) {
-        execSync(
-          `tmux send-keys -t ${shellescape(target)} Enter`,
-          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-        );
+        execSync(`tmux send-keys -t ${shellescape(target)} Enter`, {
+          encoding: 'utf-8',
+          timeout: EXEC_TIMEOUT_MS,
+        });
       }
 
       return true;
@@ -1370,10 +1475,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       : `${muxName}.%${paneTarget}`;
 
     try {
-      return execSync(
-        `tmux capture-pane -p -e -t ${shellescape(target)} -S -5000`,
-        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-      );
+      return execSync(`tmux capture-pane -p -e -t ${shellescape(target)} -S -5000`, {
+        encoding: 'utf-8',
+        timeout: EXEC_TIMEOUT_MS,
+      });
     } catch (err) {
       console.error('[TmuxManager] Failed to capture pane buffer:', err);
       return null;
@@ -1434,10 +1539,10 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       : `${muxName}.%${paneTarget}`;
 
     try {
-      execSync(
-        `tmux pipe-pane -t ${shellescape(target)}`,
-        { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
-      );
+      execSync(`tmux pipe-pane -t ${shellescape(target)}`, {
+        encoding: 'utf-8',
+        timeout: EXEC_TIMEOUT_MS,
+      });
       return true;
     } catch (err) {
       console.error('[TmuxManager] Failed to stop pipe-pane:', err);

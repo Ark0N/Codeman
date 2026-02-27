@@ -55,8 +55,8 @@ export function levenshteinDistance(a: string, b: string): number {
     for (let i = 1; i <= m; i++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
       curr[i] = Math.min(
-        prev[i] + 1,      // deletion
-        curr[i - 1] + 1,  // insertion
+        prev[i] + 1, // deletion
+        curr[i - 1] + 1, // insertion
         prev[i - 1] + cost // substitution
       );
     }
@@ -161,11 +161,7 @@ export function normalizePhrase(phrase: string): string {
  * fuzzyPhraseMatch('TASK_DONE', 'TASKDONE')       // true (separator)
  * fuzzyPhraseMatch('COMPLETE', 'FINISHED')        // false (different word)
  */
-export function fuzzyPhraseMatch(
-  phrase1: string,
-  phrase2: string,
-  maxDistance = 2
-): boolean {
+export function fuzzyPhraseMatch(phrase1: string, phrase2: string, maxDistance = 2): boolean {
   const norm1 = normalizePhrase(phrase1);
   const norm2 = normalizePhrase(phrase2);
 
@@ -201,7 +197,7 @@ export function todoContentHash(content: string): string {
   let hash = 0;
   for (let i = 0; i < normalized.length; i++) {
     const char = normalized.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
+    hash = (hash << 5) - hash + char;
     hash = hash & hash; // Convert to 32-bit integer
   }
   return hash.toString(36);

@@ -24,15 +24,7 @@ export interface ImageWatcherEvents {
 // ========== Constants ==========
 
 /** Supported image file extensions (lowercase) */
-const IMAGE_EXTENSIONS = new Set([
-  '.png',
-  '.jpg',
-  '.jpeg',
-  '.gif',
-  '.webp',
-  '.bmp',
-  '.svg',
-]);
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg']);
 
 /** Time to wait for file writes to stabilize (ms) */
 const STABILITY_THRESHOLD_MS = 500;
@@ -119,7 +111,11 @@ export class ImageWatcher extends EventEmitter {
       try {
         watcher.close();
       } catch (error) {
-        this.emit('image:error', error instanceof Error ? error : new Error(String(error)), sessionId);
+        this.emit(
+          'image:error',
+          error instanceof Error ? error : new Error(String(error)),
+          sessionId
+        );
       }
     }
     this.sessionWatchers.clear();
@@ -171,7 +167,12 @@ export class ImageWatcher extends EventEmitter {
         // Ignore common heavy directories for performance
         ignored: (path: string) => {
           // Skip node_modules, .git, and other heavy directories
-          if (path.includes('/node_modules/') || path.includes('/.git/') || path.includes('/dist/') || path.includes('/.next/')) {
+          if (
+            path.includes('/node_modules/') ||
+            path.includes('/.git/') ||
+            path.includes('/dist/') ||
+            path.includes('/.next/')
+          ) {
             return true;
           }
           const ext = extname(path).toLowerCase();
@@ -193,7 +194,11 @@ export class ImageWatcher extends EventEmitter {
 
       this.sessionWatchers.set(sessionId, watcher);
     } catch (error) {
-      this.emit('image:error', error instanceof Error ? error : new Error(String(error)), sessionId);
+      this.emit(
+        'image:error',
+        error instanceof Error ? error : new Error(String(error)),
+        sessionId
+      );
     }
   }
 
@@ -208,7 +213,11 @@ export class ImageWatcher extends EventEmitter {
       try {
         watcher.close();
       } catch (error) {
-        this.emit('image:error', error instanceof Error ? error : new Error(String(error)), sessionId);
+        this.emit(
+          'image:error',
+          error instanceof Error ? error : new Error(String(error)),
+          sessionId
+        );
       }
       this.sessionWatchers.delete(sessionId);
     }
@@ -313,7 +322,11 @@ export class ImageWatcher extends EventEmitter {
       this.emit('image:detected', event);
     } catch (error) {
       // File may have been deleted between detection and stat
-      this.emit('image:error', error instanceof Error ? error : new Error(String(error)), sessionId);
+      this.emit(
+        'image:error',
+        error instanceof Error ? error : new Error(String(error)),
+        sessionId
+      );
     }
   }
 }

@@ -28,10 +28,7 @@ program
 
 // ============ Session Commands ============
 
-const sessionCmd = program
-  .command('session')
-  .alias('s')
-  .description('Manage Claude sessions');
+const sessionCmd = program.command('session').alias('s').description('Manage Claude sessions');
 
 sessionCmd
   .command('start')
@@ -83,11 +80,12 @@ sessionCmd
       console.log('  (none)');
     } else {
       for (const session of sessions) {
-        const status = session.status === 'idle'
-          ? chalk.green('idle')
-          : session.status === 'busy'
-            ? chalk.yellow('busy')
-            : chalk.red(session.status);
+        const status =
+          session.status === 'idle'
+            ? chalk.green('idle')
+            : session.status === 'busy'
+              ? chalk.yellow('busy')
+              : chalk.red(session.status);
         console.log(`  ${chalk.cyan(session.id.slice(0, 8))} ${status} ${session.workingDir}`);
       }
     }
@@ -97,7 +95,9 @@ sessionCmd
       console.log(chalk.bold('\nStopped Sessions:'));
       for (const session of stoppedSessions) {
         const name = session.name ? ` (${session.name})` : '';
-        console.log(`  ${chalk.gray(session.id.slice(0, 8))} ${chalk.gray('stopped')}${name} ${session.workingDir}`);
+        console.log(
+          `  ${chalk.gray(session.id.slice(0, 8))} ${chalk.gray('stopped')}${name} ${session.workingDir}`
+        );
       }
     }
 
@@ -106,15 +106,18 @@ sessionCmd
     if (sessions.length === 0 && activeSessions.length > 0) {
       console.log(chalk.bold('\nActive Sessions (from web server):'));
       for (const session of activeSessions) {
-        const status = session.status === 'idle'
-          ? chalk.green('idle')
-          : session.status === 'busy'
-            ? chalk.yellow('busy')
-            : chalk.red(session.status);
+        const status =
+          session.status === 'idle'
+            ? chalk.green('idle')
+            : session.status === 'busy'
+              ? chalk.yellow('busy')
+              : chalk.red(session.status);
         const name = session.name ? ` (${session.name})` : '';
         const mode = session.mode === 'shell' ? chalk.gray(' [shell]') : '';
         const cost = session.totalCost ? chalk.gray(` $${session.totalCost.toFixed(4)}`) : '';
-        console.log(`  ${chalk.cyan(session.id.slice(0, 8))} ${status}${name}${mode}${cost} ${session.workingDir}`);
+        console.log(
+          `  ${chalk.cyan(session.id.slice(0, 8))} ${status}${name}${mode}${cost} ${session.workingDir}`
+        );
       }
     }
     console.log('');
@@ -126,9 +129,7 @@ sessionCmd
   .option('-e, --errors', 'Show stderr instead of stdout')
   .action((id, options) => {
     const manager = getSessionManager();
-    const output = options.errors
-      ? manager.getSessionError(id)
-      : manager.getSessionOutput(id);
+    const output = options.errors ? manager.getSessionError(id) : manager.getSessionOutput(id);
 
     if (output === null) {
       console.log(chalk.yellow(`Session ${id} not found or not active`));
@@ -145,10 +146,7 @@ sessionCmd
 
 // ============ Task Commands ============
 
-const taskCmd = program
-  .command('task')
-  .alias('t')
-  .description('Manage tasks');
+const taskCmd = program.command('task').alias('t').description('Manage tasks');
 
 taskCmd
   .command('add <prompt>')
@@ -200,12 +198,16 @@ taskCmd
     for (const task of tasks) {
       const color = statusColors[task.status];
       const prompt = task.prompt.slice(0, 40) + (task.prompt.length > 40 ? '...' : '');
-      console.log(`  ${chalk.cyan(task.id.slice(0, 8))} ${color(task.status.padEnd(10))} [${task.priority}] ${prompt}`);
+      console.log(
+        `  ${chalk.cyan(task.id.slice(0, 8))} ${color(task.status.padEnd(10))} [${task.priority}] ${prompt}`
+      );
     }
 
     const counts = queue.getCount();
     console.log(chalk.bold('\nSummary:'));
-    console.log(`  Pending: ${counts.pending}, Running: ${counts.running}, Completed: ${counts.completed}, Failed: ${counts.failed}`);
+    console.log(
+      `  Pending: ${counts.pending}, Running: ${counts.running}, Completed: ${counts.completed}, Failed: ${counts.failed}`
+    );
     console.log('');
   });
 
@@ -301,7 +303,9 @@ ralphCmd
     }
 
     loop.on('taskAssigned', (taskId, sessionId) => {
-      console.log(chalk.cyan(`→ Task ${taskId.slice(0, 8)} assigned to session ${sessionId.slice(0, 8)}`));
+      console.log(
+        chalk.cyan(`→ Task ${taskId.slice(0, 8)} assigned to session ${sessionId.slice(0, 8)}`)
+      );
     });
 
     loop.on('taskCompleted', (taskId) => {
@@ -356,16 +360,20 @@ ralphCmd
 
 function printStats(stats: ReturnType<ReturnType<typeof getRalphLoop>['getStats']>) {
   const statusColor =
-    stats.status === 'running' ? chalk.green :
-    stats.status === 'paused' ? chalk.yellow :
-    chalk.gray;
+    stats.status === 'running'
+      ? chalk.green
+      : stats.status === 'paused'
+        ? chalk.yellow
+        : chalk.gray;
 
   console.log(chalk.bold('\nRalph Loop Status:'));
   console.log(`  Status: ${statusColor(stats.status)}`);
   console.log(`  Elapsed: ${stats.elapsedHours.toFixed(2)} hours`);
   if (stats.minDurationMs) {
     const minHours = stats.minDurationMs / (1000 * 60 * 60);
-    console.log(`  Min Duration: ${minHours.toFixed(2)} hours (${stats.minDurationReached ? 'reached' : 'not reached'})`);
+    console.log(
+      `  Min Duration: ${minHours.toFixed(2)} hours (${stats.minDurationReached ? 'reached' : 'not reached'})`
+    );
   }
 
   console.log(chalk.bold('\nTasks:'));
@@ -399,7 +407,8 @@ program
     const loopStatus = loop.status;
 
     // Use live sessions if available, otherwise fall back to stored state
-    const activeCount = sessions.length || storedValues.filter((s) => s.status !== 'stopped').length;
+    const activeCount =
+      sessions.length || storedValues.filter((s) => s.status !== 'stopped').length;
     const idleCount = sessions.length
       ? sessions.filter((s) => s.isIdle()).length
       : storedValues.filter((s) => s.status === 'idle').length;
@@ -423,9 +432,7 @@ program
     console.log(`  Failed: ${taskCounts.failed}`);
 
     const statusColor =
-      loopStatus === 'running' ? chalk.green :
-      loopStatus === 'paused' ? chalk.yellow :
-      chalk.gray;
+      loopStatus === 'running' ? chalk.green : loopStatus === 'paused' ? chalk.yellow : chalk.gray;
     console.log(chalk.bold('\nRalph Loop:'));
     console.log(`  Status: ${statusColor(loopStatus)}`);
     console.log('');
@@ -481,11 +488,12 @@ program
       console.log('  (none)');
     } else {
       for (const session of sessions) {
-        const status = session.status === 'idle'
-          ? chalk.green('idle')
-          : session.status === 'busy'
-            ? chalk.yellow('busy')
-            : chalk.red(session.status);
+        const status =
+          session.status === 'idle'
+            ? chalk.green('idle')
+            : session.status === 'busy'
+              ? chalk.yellow('busy')
+              : chalk.red(session.status);
         console.log(`  ${chalk.cyan(session.id.slice(0, 8))} ${status} ${session.workingDir}`);
       }
     }
@@ -497,20 +505,27 @@ program
   .command('web')
   .description('Start the web interface')
   .option('-p, --port <port>', 'Port to listen on', '3000')
-  .option('--https', 'Enable HTTPS with self-signed certificate (only needed for remote access, not localhost)')
+  .option(
+    '--https',
+    'Enable HTTPS with self-signed certificate (only needed for remote access, not localhost)'
+  )
   .action(async (options) => {
     const { startWebServer } = await import('./web/server.js');
     const port = parseInt(options.port, 10);
     const https = !!options.https;
     const protocol = https ? 'https' : 'http';
 
-    console.log(chalk.cyan(`Starting Codeman web interface on port ${port}${https ? ' (HTTPS)' : ''}...`));
+    console.log(
+      chalk.cyan(`Starting Codeman web interface on port ${port}${https ? ' (HTTPS)' : ''}...`)
+    );
 
     try {
       const server = await startWebServer(port, https);
       console.log(chalk.green(`\n✓ Web interface running at ${protocol}://localhost:${port}`));
       if (https) {
-        console.log(chalk.yellow('  Note: Accept the self-signed certificate in your browser on first visit'));
+        console.log(
+          chalk.yellow('  Note: Accept the self-signed certificate in your browser on first visit')
+        );
       }
       console.log(chalk.gray('  Press Ctrl+C to stop\n'));
 

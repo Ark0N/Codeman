@@ -102,7 +102,7 @@ export class SessionManager extends EventEmitter {
     // Create a new lock promise that others will wait on
     // Define unlock first to ensure it's always in scope before promise assignment
     let unlock!: () => void;
-    const lockPromise = new Promise<void>(resolve => {
+    const lockPromise = new Promise<void>((resolve) => {
       unlock = resolve;
     });
     this._sessionCreationLock = lockPromise;
@@ -196,9 +196,7 @@ export class SessionManager extends EventEmitter {
    * Uses Promise.allSettled to ensure all sessions are stopped even if some fail.
    */
   async stopAllSessions(): Promise<void> {
-    const stopPromises = Array.from(this.sessions.keys()).map((id) =>
-      this.stopSession(id)
-    );
+    const stopPromises = Array.from(this.sessions.keys()).map((id) => this.stopSession(id));
     const results = await Promise.allSettled(stopPromises);
     // Log any failures but don't throw - best effort cleanup
     for (const result of results) {
@@ -292,4 +290,3 @@ export function getSessionManager(): SessionManager {
   }
   return managerInstance;
 }
-

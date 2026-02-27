@@ -44,7 +44,11 @@ const MINIMAL_FALLBACK = `# CLAUDE.md - Project Configuration
  * @param templatePath - Optional path to a custom template file (from settings.json)
  * @returns The generated CLAUDE.md content
  */
-export function generateClaudeMd(caseName: string, description: string = '', templatePath?: string): string {
+export function generateClaudeMd(
+  caseName: string,
+  description: string = '',
+  templatePath?: string
+): string {
   const date = new Date().toISOString().split('T')[0];
 
   // 1. Try custom template from settings.json
@@ -71,7 +75,12 @@ export function generateClaudeMd(caseName: string, description: string = '', tem
   return replacePlaceholders(MINIMAL_FALLBACK, caseName, description, date);
 }
 
-function replacePlaceholders(template: string, caseName: string, description: string, date: string): string {
+function replacePlaceholders(
+  template: string,
+  caseName: string,
+  description: string,
+  date: string
+): string {
   return template
     .replace(/\[PROJECT_NAME\]/g, caseName)
     .replace(/\[PROJECT_DESCRIPTION\]/g, description || 'A new project')

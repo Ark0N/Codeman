@@ -112,7 +112,10 @@ export class TunnelManager extends EventEmitter {
 
     const binary = this.resolveCloudflared();
     if (!binary) {
-      this.emit('error', 'cloudflared not found. Install from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/');
+      this.emit(
+        'error',
+        'cloudflared not found. Install from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/'
+      );
       return;
     }
 
@@ -130,7 +133,10 @@ export class TunnelManager extends EventEmitter {
         detached: false,
       });
     } catch (err) {
-      this.emit('error', `Failed to spawn cloudflared: ${err instanceof Error ? err.message : String(err)}`);
+      this.emit(
+        'error',
+        `Failed to spawn cloudflared: ${err instanceof Error ? err.message : String(err)}`
+      );
       return;
     }
 

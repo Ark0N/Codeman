@@ -166,7 +166,11 @@ export class TaskQueue extends EventEmitter {
    * @param visited - Set of already visited nodes (for DFS)
    * @returns true if adding this dependency would create a cycle
    */
-  private wouldCreateCycle(taskId: string, depId: string, visited: Set<string> = new Set()): boolean {
+  private wouldCreateCycle(
+    taskId: string,
+    depId: string,
+    visited: Set<string> = new Set()
+  ): boolean {
     // Direct self-reference
     if (depId === taskId) return true;
     // Already visited this node in current path
@@ -196,7 +200,9 @@ export class TaskQueue extends EventEmitter {
   private validateDependencies(taskId: string, dependencies: string[]): void {
     for (const depId of dependencies) {
       if (this.wouldCreateCycle(taskId, depId)) {
-        throw new Error(`Circular dependency detected: adding dependency ${depId} to task ${taskId} would create a cycle`);
+        throw new Error(
+          `Circular dependency detected: adding dependency ${depId} to task ${taskId} would create a cycle`
+        );
       }
     }
   }
@@ -208,14 +214,23 @@ export class TaskQueue extends EventEmitter {
 
   /** Gets the currently running task for a session, if any. */
   getRunningTaskForSession(sessionId: string): Task | null {
-    return this.getAllTasks().find(
-      (t) => t.isRunning() && t.assignedSessionId === sessionId
-    ) || null;
+    return (
+      this.getAllTasks().find((t) => t.isRunning() && t.assignedSessionId === sessionId) || null
+    );
   }
 
   /** Gets counts of tasks by status (single-pass). */
-  getCount(): { total: number; pending: number; running: number; completed: number; failed: number } {
-    let pending = 0, running = 0, completed = 0, failed = 0;
+  getCount(): {
+    total: number;
+    pending: number;
+    running: number;
+    completed: number;
+    failed: number;
+  } {
+    let pending = 0,
+      running = 0,
+      completed = 0,
+      failed = 0;
     for (const task of this.tasks.values()) {
       if (task.isPending()) pending++;
       else if (task.isRunning()) running++;
@@ -258,7 +273,6 @@ export class TaskQueue extends EventEmitter {
     this.tasks.clear();
     return count;
   }
-
 }
 
 // Singleton instance

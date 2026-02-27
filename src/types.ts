@@ -80,16 +80,16 @@ export type TddPhase = 'setup' | 'test' | 'impl' | 'verify' | 'review';
 
 /** Types of session lifecycle events recorded to the audit log */
 export type LifecycleEventType =
-  | 'created'           // Session object created
-  | 'started'           // PTY process launched (interactive/shell/prompt)
-  | 'exit'              // PTY process exited (with exit code)
-  | 'deleted'           // cleanupSession() called — session removed
-  | 'detached'          // Server shutdown — PTY left alive in tmux for recovery
-  | 'recovered'         // Session restored from tmux on server restart
-  | 'stale_cleaned'     // Removed from state.json by cleanupStaleSessions()
-  | 'mux_died'          // tmux session died (detected by reconciliation)
-  | 'server_started'    // Server started (marker for restart detection)
-  | 'server_stopped';   // Server shutting down
+  | 'created' // Session object created
+  | 'started' // PTY process launched (interactive/shell/prompt)
+  | 'exit' // PTY process exited (with exit code)
+  | 'deleted' // cleanupSession() called — session removed
+  | 'detached' // Server shutdown — PTY left alive in tmux for recovery
+  | 'recovered' // Session restored from tmux on server restart
+  | 'stale_cleaned' // Removed from state.json by cleanupStaleSessions()
+  | 'mux_died' // tmux session died (detected by reconciliation)
+  | 'server_started' // Server started (marker for restart detection)
+  | 'server_stopped'; // Server shutting down
 
 /** A single entry in the session lifecycle audit log */
 export interface LifecycleEntry {
@@ -472,11 +472,11 @@ export interface RespawnConfig {
  * Outcome of a respawn cycle
  */
 export type CycleOutcome =
-  | 'success'           // Cycle completed normally
-  | 'stuck_recovery'    // Stuck-state recovery triggered
-  | 'blocked'           // Blocked by circuit breaker or exit signal
-  | 'error'             // Error during cycle
-  | 'cancelled';        // Cancelled (e.g., controller stopped)
+  | 'success' // Cycle completed normally
+  | 'stuck_recovery' // Stuck-state recovery triggered
+  | 'blocked' // Blocked by circuit breaker or exit signal
+  | 'error' // Error during cycle
+  | 'cancelled'; // Cancelled (e.g., controller stopped)
 
 /**
  * Metrics for a single respawn cycle.
@@ -687,7 +687,13 @@ export const ErrorMessages: Record<ApiErrorCode, string> = {
 /**
  * Hook event types triggered by Claude Code's hooks system
  */
-export type HookEventType = 'idle_prompt' | 'permission_prompt' | 'elicitation_dialog' | 'stop' | 'teammate_idle' | 'task_completed';
+export type HookEventType =
+  | 'idle_prompt'
+  | 'permission_prompt'
+  | 'elicitation_dialog'
+  | 'stop'
+  | 'teammate_idle'
+  | 'task_completed';
 
 // ========== API Response Types ==========
 
@@ -842,12 +848,12 @@ export const DEFAULT_CONFIG: AppConfig = {
   maxConcurrentSessions: 5,
   stateFilePath: '',
   respawn: {
-    idleTimeoutMs: 5000,           // 5 seconds of no activity after prompt
+    idleTimeoutMs: 5000, // 5 seconds of no activity after prompt
     updatePrompt: 'update all the docs and CLAUDE.md',
-    interStepDelayMs: 1000,        // 1 second between steps
-    enabled: false,                // disabled by default
-    sendClear: true,               // send /clear after update prompt
-    sendInit: true,                // send /init after /clear
+    interStepDelayMs: 1000, // 1 second between steps
+    enabled: false, // disabled by default
+    sendClear: true, // send /clear after update prompt
+    sendInit: true, // send /init after /clear
   },
   lastUsedCase: null,
   ralphEnabled: false,
@@ -1117,7 +1123,7 @@ export function createInitialCircuitBreakerStatus(): CircuitBreakerStatus {
  */
 export function createInitialRalphTrackerState(): RalphTrackerState {
   return {
-    enabled: false,  // Disabled by default, auto-enables when Ralph patterns detected
+    enabled: false, // Disabled by default, auto-enables when Ralph patterns detected
     active: false,
     completionPhrase: null,
     startedAt: null,

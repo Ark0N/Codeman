@@ -7,7 +7,14 @@
  */
 
 import type { EventEmitter } from 'node:events';
-import type { ProcessStats, PersistedRespawnConfig, NiceConfig, ClaudeMode, SessionMode, OpenCodeConfig } from './types.js';
+import type {
+  ProcessStats,
+  PersistedRespawnConfig,
+  NiceConfig,
+  ClaudeMode,
+  SessionMode,
+  OpenCodeConfig,
+} from './types.js';
 
 /**
  * Multiplexer session metadata.

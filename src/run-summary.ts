@@ -139,13 +139,10 @@ export class RunSummaryTracker {
     // Record state transition
     if (oldState && oldState !== newState) {
       this.stats.stateTransitions++;
-      this.addEvent(
-        'respawn_state_change',
-        'info',
-        `State: ${oldState} → ${newState}`,
-        details,
-        { from: oldState, to: newState }
-      );
+      this.addEvent('respawn_state_change', 'info', `State: ${oldState} → ${newState}`, details, {
+        from: oldState,
+        to: newState,
+      });
     }
 
     // Update state tracking
@@ -206,7 +203,8 @@ export class RunSummaryTracker {
     }
 
     // Check for milestone
-    const currentMilestone = Math.floor(total / TOKEN_MILESTONE_INTERVAL) * TOKEN_MILESTONE_INTERVAL;
+    const currentMilestone =
+      Math.floor(total / TOKEN_MILESTONE_INTERVAL) * TOKEN_MILESTONE_INTERVAL;
     if (currentMilestone > this.lastTokenMilestone && currentMilestone > 0) {
       this.lastTokenMilestone = currentMilestone;
       this.addEvent(
@@ -264,13 +262,9 @@ export class RunSummaryTracker {
    * Record a Ralph completion detection.
    */
   recordRalphCompletion(phrase: string): void {
-    this.addEvent(
-      'ralph_completion',
-      'success',
-      'Ralph completion detected',
-      `Phrase: ${phrase}`,
-      { phrase }
-    );
+    this.addEvent('ralph_completion', 'success', 'Ralph completion detected', `Phrase: ${phrase}`, {
+      phrase,
+    });
   }
 
   /**
@@ -278,9 +272,7 @@ export class RunSummaryTracker {
    */
   recordHookEvent(eventType: string, data?: Record<string, unknown>): void {
     const severity: RunSummaryEventSeverity =
-      eventType === 'stop' ? 'warning' :
-      eventType === 'permission_prompt' ? 'info' :
-      'info';
+      eventType === 'stop' ? 'warning' : eventType === 'permission_prompt' ? 'info' : 'info';
 
     this.addEvent(
       'hook_event',

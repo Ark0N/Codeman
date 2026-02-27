@@ -141,7 +141,15 @@ export class FileStreamManager extends EventEmitter {
    * @returns Result with stream ID on success, error on failure
    */
   async createStream(options: CreateStreamOptions): Promise<CreateStreamResult> {
-    const { sessionId, filePath, workingDir, lines = DEFAULT_TAIL_LINES, onData, onEnd, onError } = options;
+    const {
+      sessionId,
+      filePath,
+      workingDir,
+      lines = DEFAULT_TAIL_LINES,
+      onData,
+      onEnd,
+      onError,
+    } = options;
 
     // Check concurrent stream limit for this session
     const currentCount = this.sessionStreamCounts.get(sessionId) || 0;
@@ -170,8 +178,12 @@ export class FileStreamManager extends EventEmitter {
         };
       }
     } catch (err) {
-      const errorCode = err instanceof Error && 'code' in err ? (err as NodeJS.ErrnoException).code : 'UNKNOWN';
-      console.warn(`[FileStreamManager] Failed to stat file "${absolutePath}" (${errorCode}):`, err instanceof Error ? err.message : String(err));
+      const errorCode =
+        err instanceof Error && 'code' in err ? (err as NodeJS.ErrnoException).code : 'UNKNOWN';
+      console.warn(
+        `[FileStreamManager] Failed to stat file "${absolutePath}" (${errorCode}):`,
+        err instanceof Error ? err.message : String(err)
+      );
       return { success: false, error: 'File not found or not accessible' };
     }
 

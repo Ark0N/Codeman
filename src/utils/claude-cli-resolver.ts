@@ -57,7 +57,7 @@ export function findClaudeDir(): string | null {
     }
   }
 
-  _claudeDir = '';  // mark as searched, not found
+  _claudeDir = ''; // mark as searched, not found
   return null;
 }
 

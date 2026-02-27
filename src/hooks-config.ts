@@ -71,7 +71,10 @@ export function generateHooksConfig(): { hooks: Record<string, unknown[]> } {
  * Updates env vars in .claude/settings.local.json for the given case path.
  * Merges with existing env field; removes vars set to empty string.
  */
-export async function updateCaseEnvVars(casePath: string, envVars: Record<string, string>): Promise<void> {
+export async function updateCaseEnvVars(
+  casePath: string,
+  envVars: Record<string, string>
+): Promise<void> {
   const claudeDir = join(casePath, '.claude');
   if (!existsSync(claudeDir)) {
     await mkdir(claudeDir, { recursive: true });

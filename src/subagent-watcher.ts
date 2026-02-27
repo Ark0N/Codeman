@@ -77,16 +77,18 @@ export interface SubagentTranscriptEntry {
       input_tokens?: number;
       output_tokens?: number;
     };
-    content: string | Array<{
-      type: 'text' | 'tool_use' | 'tool_result';
-      text?: string;
-      name?: string;
-      id?: string; // tool_use_id for tool_use blocks
-      tool_use_id?: string; // tool_use_id for tool_result blocks
-      input?: Record<string, unknown>;
-      content?: string | Array<{ type: string; text?: string }>; // tool_result content
-      is_error?: boolean; // For tool_result errors
-    }>;
+    content:
+      | string
+      | Array<{
+          type: 'text' | 'tool_use' | 'tool_result';
+          text?: string;
+          name?: string;
+          id?: string; // tool_use_id for tool_use blocks
+          tool_use_id?: string; // tool_use_id for tool_result blocks
+          input?: Record<string, unknown>;
+          content?: string | Array<{ type: string; text?: string }>; // tool_result content
+          is_error?: boolean; // For tool_result errors
+        }>;
   };
   data?: {
     type: string;
@@ -135,11 +137,11 @@ const MAX_TRACKED_AGENTS = 500; // Maximum agents to track (LRU eviction when ex
 
 // Internal Claude Code agent patterns to filter out (not real user-initiated subagents)
 const INTERNAL_AGENT_PATTERNS = [
-  /^\[?SUGGESTION MODE/i,  // Claude Code's internal suggestion mode
-  /^Suggest what user might/i,  // Suggestion mode prompt variant
-  /aprompt/i,  // Internal prompt agent (anywhere in string)
-  /^a\s?prompt/i,  // Variants of internal prompt agent
-  /^prompt$/i,  // Just "prompt"
+  /^\[?SUGGESTION MODE/i, // Claude Code's internal suggestion mode
+  /^Suggest what user might/i, // Suggestion mode prompt variant
+  /aprompt/i, // Internal prompt agent (anywhere in string)
+  /^a\s?prompt/i, // Variants of internal prompt agent
+  /^prompt$/i, // Just "prompt"
 ];
 
 // Minimum description length - very short descriptions are likely internal or malformed
@@ -168,14 +170,20 @@ export class SubagentWatcher extends EventEmitter {
   private knownSubagentDirs = new Set<string>();
   // Map of agentId -> Map of toolUseId -> { toolName, timestamp } (for linking tool_result to tool_call)
   // Includes timestamp for TTL-based cleanup of orphaned entries
-  private pendingToolCalls = new Map<string, Map<string, { toolName: string; timestamp: number }>>();
+  private pendingToolCalls = new Map<
+    string,
+    Map<string, { toolName: string; timestamp: number }>
+  >();
   // Guard to prevent concurrent liveness checks (prevents duplicate completed events)
   private _isCheckingLiveness = false;
   // Counter for throttling full directory scans (only scan every FULL_SCAN_EVERY_N_POLLS)
   private _pollCount = 0;
   // Short-lived cache for parsed parent transcript descriptions (TTL: 5s)
   // Key: "{projectHash}/{sessionId}", Value: { descriptions: Map<agentId, description>, timestamp }
-  private parentDescriptionCache = new Map<string, { descriptions: Map<string, string>; timestamp: number }>();
+  private parentDescriptionCache = new Map<
+    string,
+    { descriptions: Map<string, string>; timestamp: number }
+  >();
   // Store error handlers for FSWatchers to enable proper cleanup (prevent memory leaks)
   private dirWatcherErrorHandlers = new Map<string, (error: Error) => void>();
   private fileWatcherErrorHandlers = new Map<string, (error: Error) => void>();
@@ -194,7 +202,7 @@ export class SubagentWatcher extends EventEmitter {
     if (!description) return false;
     // Filter out very short descriptions (likely internal or malformed)
     if (description.length < MIN_DESCRIPTION_LENGTH) return true;
-    return INTERNAL_AGENT_PATTERNS.some(pattern => pattern.test(description));
+    return INTERNAL_AGENT_PATTERNS.some((pattern) => pattern.test(description));
   }
 
   /**
@@ -263,7 +271,7 @@ export class SubagentWatcher extends EventEmitter {
           if (await this.checkSubagentFileAlive(info)) continue;
 
           // Tier 2: Cached PID check (~0.1ms per agent)
-          if (info.pid && await this.checkPidAlive(info.pid)) continue;
+          if (info.pid && (await this.checkPidAlive(info.pid))) continue;
 
           // Tiers 1+2 failed — need expensive scan for this agent
           needsFullScan.push(info);
@@ -322,26 +330,44 @@ export class SubagentWatcher extends EventEmitter {
           resolve(stdout);
         });
       });
-      const pids = pgrepOutput.trim().split('\n').filter(Boolean).map(s => parseInt(s, 10)).filter(n => !Number.isNaN(n));
+      const pids = pgrepOutput
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((s) => parseInt(s, 10))
+        .filter((n) => !Number.isNaN(n));
 
       // Read /proc for all PIDs in parallel
-      await Promise.all(pids.map(async (pid) => {
-        let environ = '';
-        let cmdline = '';
-        try { environ = await readFile(`/proc/${pid}/environ`, 'utf8'); } catch { /* skip */ }
-        try { cmdline = await readFile(`/proc/${pid}/cmdline`, 'utf8'); } catch { /* skip */ }
-        // Skip main Codeman-managed Claude processes — only track subagents
-        if (environ.includes('CODEMAN_MUX=1')) return;
-        if (environ || cmdline) {
-          result.set(pid, { environ, cmdline });
-        }
-      }));
+      await Promise.all(
+        pids.map(async (pid) => {
+          let environ = '';
+          let cmdline = '';
+          try {
+            environ = await readFile(`/proc/${pid}/environ`, 'utf8');
+          } catch {
+            /* skip */
+          }
+          try {
+            cmdline = await readFile(`/proc/${pid}/cmdline`, 'utf8');
+          } catch {
+            /* skip */
+          }
+          // Skip main Codeman-managed Claude processes — only track subagents
+          if (environ.includes('CODEMAN_MUX=1')) return;
+          if (environ || cmdline) {
+            result.set(pid, { environ, cmdline });
+          }
+        })
+      );
 
       // Update cached PIDs on tracked agents
       for (const [pid, procInfo] of result) {
         for (const [_agentId, info] of this.agentInfo) {
           if (info.status !== 'active' && info.status !== 'idle') continue;
-          if (procInfo.environ.includes(info.sessionId) || procInfo.cmdline.includes(info.sessionId)) {
+          if (
+            procInfo.environ.includes(info.sessionId) ||
+            procInfo.cmdline.includes(info.sessionId)
+          ) {
             info.pid = pid;
             break; // Each PID belongs to at most one agent
           }
@@ -567,9 +593,7 @@ export class SubagentWatcher extends EventEmitter {
    */
   getSubagentsForSession(workingDir: string): SubagentInfo[] {
     const projectHash = this.getProjectHash(workingDir);
-    return Array.from(this.agentInfo.values()).filter(
-      (info) => info.projectHash === projectHash
-    );
+    return Array.from(this.agentInfo.values()).filter((info) => info.projectHash === projectHash);
   }
 
   /**
@@ -805,7 +829,10 @@ export class SubagentWatcher extends EventEmitter {
         if (typeof entry.message.content === 'string') {
           const text = entry.message.content.trim();
           if (text.length > 0) {
-            const preview = text.length > TEXT_PREVIEW_LENGTH ? text.substring(0, TEXT_PREVIEW_LENGTH) + '...' : text;
+            const preview =
+              text.length > TEXT_PREVIEW_LENGTH
+                ? text.substring(0, TEXT_PREVIEW_LENGTH) + '...'
+                : text;
             lines.push(`${this.formatTime(entry.timestamp)} 💬 ${preview.replace(/\n/g, ' ')}`);
           }
         } else {
@@ -815,7 +842,10 @@ export class SubagentWatcher extends EventEmitter {
             } else if (content.type === 'text' && content.text) {
               const text = content.text.trim();
               if (text.length > 0) {
-                const preview = text.length > TEXT_PREVIEW_LENGTH ? text.substring(0, TEXT_PREVIEW_LENGTH) + '...' : text;
+                const preview =
+                  text.length > TEXT_PREVIEW_LENGTH
+                    ? text.substring(0, TEXT_PREVIEW_LENGTH) + '...'
+                    : text;
                 lines.push(`${this.formatTime(entry.timestamp)} 💬 ${preview.replace(/\n/g, ' ')}`);
               }
             }
@@ -826,14 +856,18 @@ export class SubagentWatcher extends EventEmitter {
         if (typeof entry.message.content === 'string') {
           const text = entry.message.content.trim();
           if (text.length < 100 && !text.includes('{')) {
-            lines.push(`${this.formatTime(entry.timestamp)} 📥 User: ${text.substring(0, USER_TEXT_PREVIEW_LENGTH)}`);
+            lines.push(
+              `${this.formatTime(entry.timestamp)} 📥 User: ${text.substring(0, USER_TEXT_PREVIEW_LENGTH)}`
+            );
           }
         } else {
           const firstContent = entry.message.content[0];
           if (firstContent?.type === 'text' && firstContent.text) {
             const text = firstContent.text.trim();
             if (text.length < 100 && !text.includes('{')) {
-              lines.push(`${this.formatTime(entry.timestamp)} 📥 User: ${text.substring(0, USER_TEXT_PREVIEW_LENGTH)}`);
+              lines.push(
+                `${this.formatTime(entry.timestamp)} 📥 User: ${text.substring(0, USER_TEXT_PREVIEW_LENGTH)}`
+              );
             }
           }
         }
@@ -932,14 +966,18 @@ export class SubagentWatcher extends EventEmitter {
 
     // Check cache first (covers burst of simultaneous agent discoveries)
     const cached = this.parentDescriptionCache.get(cacheKey);
-    if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
       return cached.descriptions.get(agentId);
     }
 
     try {
       // The parent session's transcript is at: ~/.claude/projects/{projectHash}/{sessionId}.jsonl
       const transcriptPath = join(CLAUDE_PROJECTS_DIR, projectHash, `${sessionId}.jsonl`);
-      try { await statAsync(transcriptPath); } catch { return undefined; }
+      try {
+        await statAsync(transcriptPath);
+      } catch {
+        return undefined;
+      }
 
       const content = await readFile(transcriptPath, 'utf8');
       const lines = content.split('\n').filter((l) => l.trim());
@@ -982,7 +1020,11 @@ export class SubagentWatcher extends EventEmitter {
         let lineCount = 0;
         let resolved = false;
         rl.on('line', (line) => {
-          if (resolved || lineCount >= 5) { rl.close(); stream.destroy(); return; }
+          if (resolved || lineCount >= 5) {
+            rl.close();
+            stream.destroy();
+            return;
+          }
           lineCount++;
           if (!line.trim()) return;
           try {
@@ -1008,8 +1050,12 @@ export class SubagentWatcher extends EventEmitter {
             // Skip malformed lines
           }
         });
-        rl.on('close', () => { if (!resolved) resolve(undefined); });
-        rl.on('error', () => { if (!resolved) resolve(undefined); });
+        rl.on('close', () => {
+          if (!resolved) resolve(undefined);
+        });
+        rl.on('error', () => {
+          if (!resolved) resolve(undefined);
+        });
       });
     } catch {
       // Failed to read file
@@ -1021,7 +1067,11 @@ export class SubagentWatcher extends EventEmitter {
    * Scan for all subagent directories (async to avoid blocking event loop)
    */
   private async scanForSubagents(): Promise<void> {
-    try { await statAsync(CLAUDE_PROJECTS_DIR); } catch { return; }
+    try {
+      await statAsync(CLAUDE_PROJECTS_DIR);
+    } catch {
+      return;
+    }
 
     try {
       const projects = await readdir(CLAUDE_PROJECTS_DIR);
@@ -1065,7 +1115,11 @@ export class SubagentWatcher extends EventEmitter {
   /**
    * Watch a subagent directory for new/updated files
    */
-  private async watchSubagentDir(dir: string, projectHash: string, sessionId: string): Promise<void> {
+  private async watchSubagentDir(
+    dir: string,
+    projectHash: string,
+    sessionId: string
+  ): Promise<void> {
     if (this.knownSubagentDirs.has(dir)) return;
     this.knownSubagentDirs.add(dir);
 
@@ -1123,7 +1177,12 @@ export class SubagentWatcher extends EventEmitter {
    * @param sessionId Claude session ID
    * @param isInitialScan If true, skip files older than STARTUP_MAX_FILE_AGE_MS
    */
-  private async watchAgentFile(filePath: string, projectHash: string, sessionId: string, isInitialScan: boolean = false): Promise<void> {
+  private async watchAgentFile(
+    filePath: string,
+    projectHash: string,
+    sessionId: string,
+    isInitialScan: boolean = false
+  ): Promise<void> {
     if (this.fileWatchers.has(filePath)) return;
 
     const agentId = basename(filePath).replace('agent-', '').replace('.jsonl', '');
@@ -1147,7 +1206,11 @@ export class SubagentWatcher extends EventEmitter {
 
     // Extract description - prefer reading from parent transcript (most reliable)
     // The parent transcript has the exact Task tool call with description parameter
-    let description = await this.extractDescriptionFromParentTranscript(projectHash, sessionId, agentId);
+    let description = await this.extractDescriptionFromParentTranscript(
+      projectHash,
+      sessionId,
+      agentId
+    );
 
     // Fallback: extract a smart title from the subagent's prompt if parent lookup failed
     if (!description) {
@@ -1192,12 +1255,14 @@ export class SubagentWatcher extends EventEmitter {
     this.emit('subagent:discovered', info);
 
     // Read existing content
-    this.tailFile(filePath, agentId, sessionId, 0).then((position) => {
-      this.filePositions.set(filePath, position);
-    }).catch((err) => {
-      // Log but don't throw - non-critical background operation
-      console.warn(`[SubagentWatcher] Failed to read initial content for ${agentId}:`, err);
-    });
+    this.tailFile(filePath, agentId, sessionId, 0)
+      .then((position) => {
+        this.filePositions.set(filePath, position);
+      })
+      .catch((err) => {
+        // Log but don't throw - non-critical background operation
+        console.warn(`[SubagentWatcher] Failed to read initial content for ${agentId}:`, err);
+      });
 
     // Watch for changes
     try {
@@ -1251,7 +1316,11 @@ export class SubagentWatcher extends EventEmitter {
       // Handle watcher errors to prevent unhandled exceptions
       // Store handler reference for proper cleanup
       const errorHandler = (error: Error) => {
-        this.emit('subagent:error', error instanceof Error ? error : new Error(String(error)), agentId);
+        this.emit(
+          'subagent:error',
+          error instanceof Error ? error : new Error(String(error)),
+          agentId
+        );
         watcher.close();
         this.fileWatcherErrorHandlers.delete(filePath);
         this.fileWatchers.delete(filePath);
@@ -1314,7 +1383,11 @@ export class SubagentWatcher extends EventEmitter {
   /**
    * Process a transcript entry and emit appropriate events
    */
-  private async processEntry(entry: SubagentTranscriptEntry, agentId: string, sessionId: string): Promise<void> {
+  private async processEntry(
+    entry: SubagentTranscriptEntry,
+    agentId: string,
+    sessionId: string
+  ): Promise<void> {
     const info = this.agentInfo.get(agentId);
 
     // Extract model from assistant messages (first one sets the model)
@@ -1378,9 +1451,11 @@ export class SubagentWatcher extends EventEmitter {
         resultCount: entry.data.resultCount,
         // Extract hook event info if present
         hookEvent: entry.data.hookEvent,
-        hookName: entry.data.hookName || (entry.data.hookEvent && entry.data.tool_name
-          ? `${entry.data.hookEvent}:${entry.data.tool_name}`
-          : undefined),
+        hookName:
+          entry.data.hookName ||
+          (entry.data.hookEvent && entry.data.tool_name
+            ? `${entry.data.hookEvent}:${entry.data.tool_name}`
+            : undefined),
       };
       this.emit('subagent:progress', progress);
     } else if (entry.type === 'assistant' && entry.message?.content) {
@@ -1526,13 +1601,15 @@ export class SubagentWatcher extends EventEmitter {
   /**
    * Extract text content from tool_result content field
    */
-  private extractToolResultContent(content: string | Array<{ type: string; text?: string }> | undefined): string {
+  private extractToolResultContent(
+    content: string | Array<{ type: string; text?: string }> | undefined
+  ): string {
     if (!content) return '';
     if (typeof content === 'string') return content;
     if (Array.isArray(content)) {
       return content
-        .filter(c => c.type === 'text' && c.text)
-        .map(c => c.text)
+        .filter((c) => c.type === 'text' && c.text)
+        .map((c) => c.text)
         .join('\n');
     }
     return '';
@@ -1541,7 +1618,10 @@ export class SubagentWatcher extends EventEmitter {
   /**
    * Get truncated input for display (keeps primary param, truncates large content)
    */
-  private getTruncatedInput(_tool: string, input: Record<string, unknown>): Record<string, unknown> {
+  private getTruncatedInput(
+    _tool: string,
+    input: Record<string, unknown>
+  ): Record<string, unknown> {
     const truncated: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(input)) {
       if (typeof value === 'string' && value.length > INPUT_TRUNCATE_LENGTH) {
@@ -1608,7 +1688,10 @@ export class SubagentWatcher extends EventEmitter {
       details = input.file_path as string;
     } else if (name === 'Bash' && input.command) {
       const cmd = input.command as string;
-      details = cmd.length > COMMAND_DISPLAY_LENGTH ? cmd.substring(0, COMMAND_DISPLAY_LENGTH) + '...' : cmd;
+      details =
+        cmd.length > COMMAND_DISPLAY_LENGTH
+          ? cmd.substring(0, COMMAND_DISPLAY_LENGTH) + '...'
+          : cmd;
     } else if (name === 'Glob' && input.pattern) {
       details = input.pattern as string;
     } else if (name === 'Grep' && input.pattern) {

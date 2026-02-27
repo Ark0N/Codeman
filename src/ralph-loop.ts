@@ -282,10 +282,7 @@ export class RalphLoop extends EventEmitter {
     this.store.setRalphLoopState({ lastCheckAt: Date.now() });
 
     // Run independent checks in parallel for better performance
-    await Promise.all([
-      this.checkTimeouts(),
-      this.assignTasks(),
-    ]);
+    await Promise.all([this.checkTimeouts(), this.assignTasks()]);
 
     // Check if we should auto-generate tasks (depends on assignment results)
     if (this.autoGenerateTasks && this.shouldGenerateTasks()) {

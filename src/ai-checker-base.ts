@@ -115,7 +115,7 @@ export abstract class AiCheckerBase<
   V extends string,
   C extends AiCheckerConfigBase,
   R extends AiCheckerResultBase<V>,
-  S extends AiCheckerStateBase<V>
+  S extends AiCheckerStateBase<V>,
 > extends EventEmitter {
   protected config: C;
   protected sessionId: string;
@@ -283,11 +283,15 @@ export abstract class AiCheckerBase<
       if (result.verdict === this.getPositiveVerdict()) {
         this.consecutiveErrors = 0;
         this._status = 'ready';
-        this.log(`${this.checkDescription} verdict: ${result.verdict} (${result.durationMs}ms) - ${result.reasoning}`);
+        this.log(
+          `${this.checkDescription} verdict: ${result.verdict} (${result.durationMs}ms) - ${result.reasoning}`
+        );
       } else if (result.verdict === this.getNegativeVerdict()) {
         this.consecutiveErrors = 0;
         this.startCooldown(this.config.cooldownMs);
-        this.log(`${this.checkDescription} verdict: ${result.verdict} (${result.durationMs}ms) - ${result.reasoning}`);
+        this.log(
+          `${this.checkDescription} verdict: ${result.verdict} (${result.durationMs}ms) - ${result.reasoning}`
+        );
       } else {
         this.handleError('Unexpected verdict');
       }
@@ -369,9 +373,10 @@ export abstract class AiCheckerBase<
 
     // Prepare the terminal buffer (strip ANSI, trim to maxContextChars)
     const stripped = terminalBuffer.replace(ANSI_ESCAPE_PATTERN_SIMPLE, '');
-    const trimmed = stripped.length > this.config.maxContextChars
-      ? stripped.slice(-this.config.maxContextChars)
-      : stripped;
+    const trimmed =
+      stripped.length > this.config.maxContextChars
+        ? stripped.slice(-this.config.maxContextChars)
+        : stripped;
 
     // Build the prompt
     const prompt = this.buildPrompt(trimmed);
@@ -380,7 +385,10 @@ export abstract class AiCheckerBase<
     const shortId = this.sessionId.slice(0, 8);
     const timestamp = Date.now();
     this.checkTempFile = join(tmpdir(), `${this.tempFilePrefix}-${shortId}-${timestamp}.txt`);
-    this.checkPromptFile = join(tmpdir(), `${this.tempFilePrefix}-prompt-${shortId}-${timestamp}.txt`);
+    this.checkPromptFile = join(
+      tmpdir(),
+      `${this.tempFilePrefix}-prompt-${shortId}-${timestamp}.txt`
+    );
     this.checkMuxName = `${this.muxNamePrefix}${shortId}`;
 
     // Security: Validate mux name before use in shell commands
@@ -411,16 +419,19 @@ export abstract class AiCheckerBase<
         // No existing session, that's fine
       }
 
-      const muxProcess = childSpawn('tmux', [
-        'new-session', '-d', '-s', this.checkMuxName,
-        'bash', '-c', fullCmd
-      ], {
-        detached: true,
-        stdio: 'ignore',
-      });
+      const muxProcess = childSpawn(
+        'tmux',
+        ['new-session', '-d', '-s', this.checkMuxName, 'bash', '-c', fullCmd],
+        {
+          detached: true,
+          stdio: 'ignore',
+        }
+      );
       muxProcess.unref();
     } catch (err) {
-      throw new Error(`Failed to spawn ${this.checkDescription} tmux session: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(
+        `Failed to spawn ${this.checkDescription} tmux session: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
 
     // Poll the temp file for completion
@@ -457,7 +468,9 @@ export abstract class AiCheckerBase<
         if (this._status === 'checking' && !this.checkCancelled && !resolved) {
           resolved = true; // Mark as resolved first to prevent poll race
           this.checkResolve = null;
-          reject(new Error(`${this.checkDescription} timed out after ${this.config.checkTimeoutMs}ms`));
+          reject(
+            new Error(`${this.checkDescription} timed out after ${this.config.checkTimeoutMs}ms`)
+          );
         }
       }, this.config.checkTimeoutMs);
     });
@@ -474,7 +487,10 @@ export abstract class AiCheckerBase<
     // Delegate to subclass for verdict parsing
     const parsed = this.parseVerdict(output);
     if (!parsed) {
-      return this.createErrorResult(`Could not parse verdict from: "${output.substring(0, 100)}"`, durationMs);
+      return this.createErrorResult(
+        `Could not parse verdict from: "${output.substring(0, 100)}"`,
+        durationMs
+      );
     }
 
     return this.createResult(parsed.verdict, parsed.reasoning, durationMs);
@@ -530,7 +546,9 @@ export abstract class AiCheckerBase<
 
   private handleError(errorMsg: string): void {
     this.consecutiveErrors++;
-    this.log(`${this.checkDescription} error (${this.consecutiveErrors}/${this.config.maxConsecutiveErrors}): ${errorMsg}`);
+    this.log(
+      `${this.checkDescription} error (${this.consecutiveErrors}/${this.config.maxConsecutiveErrors}): ${errorMsg}`
+    );
 
     if (this.consecutiveErrors >= this.config.maxConsecutiveErrors) {
       this.disable(`${this.config.maxConsecutiveErrors} consecutive errors: ${errorMsg}`);
@@ -542,7 +560,9 @@ export abstract class AiCheckerBase<
         this.config.errorCooldownMs * backoffMultiplier,
         5 * 60 * 1000 // Max 5 minutes
       );
-      this.log(`Exponential backoff: ${Math.round(backoffCooldownMs / 1000)}s (error #${this.consecutiveErrors})`);
+      this.log(
+        `Exponential backoff: ${Math.round(backoffCooldownMs / 1000)}s (error #${this.consecutiveErrors})`
+      );
       this.startCooldown(backoffCooldownMs);
     }
   }
