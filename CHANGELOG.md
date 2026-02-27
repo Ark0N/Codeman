@@ -1,5 +1,11 @@
 # codeman
 
+## 0.2.3
+
+### Patch Changes
+
+- Fix tunnel button stuck on "Connecting..." when tunnel is already running on the server
+
 ## 0.2.2
 
 ### Patch Changes

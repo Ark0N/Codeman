@@ -4033,6 +4033,10 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
           if (tunnelEnabled && !this.tunnelManager.isRunning()) {
             this.tunnelManager.start(this.port, this.https);
             console.log('Tunnel started via settings change');
+          } else if (tunnelEnabled && this.tunnelManager.isRunning() && this.tunnelManager.getUrl()) {
+            // Tunnel already running — re-emit so the client gets the URL
+            this.broadcast('tunnel:started', { url: this.tunnelManager.getUrl() });
+            console.log('Tunnel already running, re-broadcast URL to client');
           } else if (!tunnelEnabled && this.tunnelManager.isRunning()) {
             this.tunnelManager.stop();
             console.log('Tunnel stopped via settings change');
