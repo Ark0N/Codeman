@@ -42,3 +42,25 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Rename release tag to codeman
+        if: steps.changesets.outputs.published == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          OLD_TAG="aicodeman@${VERSION}"
+          NEW_TAG="codeman@${VERSION}"
+
+          # Retag
+          git tag "$NEW_TAG" "$OLD_TAG" 2>/dev/null || true
+          git tag -d "$OLD_TAG" 2>/dev/null || true
+          git push origin "$NEW_TAG" ":refs/tags/$OLD_TAG" 2>/dev/null || true
+
+          # Update the GitHub release to use the new tag
+          RELEASE_ID=$(gh release view "$OLD_TAG" --json id -q .id 2>/dev/null || true)
+          if [ -n "$RELEASE_ID" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/releases/${RELEASE_ID}" \
+              -f tag_name="$NEW_TAG" \
+              -f name="$NEW_TAG"
+          fi
