@@ -209,6 +209,30 @@ export interface RouteContext {
 
   /** Batch a task update for SSE broadcasting */
   batchTaskUpdate(sessionId: string, task: unknown): void;
+
+  // === Config Getters (used by session create, quick-start, ralph-loop, plan routes) ===
+
+  /** Get global nice/ionice config from settings */
+  getGlobalNiceConfig(): Promise<NiceConfig | undefined>;
+
+  /** Get model config (defaultModel, etc.) from settings */
+  getModelConfig(): Promise<{ defaultModel?: string } | undefined>;
+
+  /** Get Claude mode config (claudeMode, allowedTools) from settings */
+  getClaudeModeConfig(): Promise<{ claudeMode?: string; allowedTools?: string[] }>;
+
+  // === Scheduling (used by scheduled-routes) ===
+
+  /** Start a scheduled run (creates session, runs prompt, manages lifecycle) */
+  startScheduledRun(prompt: string, workingDir: string, durationMinutes: number): Promise<ScheduledRun>;
+
+  /** Stop a scheduled run by ID */
+  stopScheduledRun(id: string): Promise<void>;
+
+  // === Notifications (used by hook-event route) ===
+
+  /** Send push notifications to all subscribed clients */
+  sendPushNotifications(event: string, data: Record<string, unknown>): void;
 }
 
 /**
@@ -257,20 +281,26 @@ private createRouteContext(): RouteContext {
     batchTerminalData: this.batchTerminalData.bind(this),
     broadcastSessionStateDebounced: this.broadcastSessionStateDebounced.bind(this),
     batchTaskUpdate: this.batchTaskUpdate.bind(this),
+    getGlobalNiceConfig: this.getGlobalNiceConfig.bind(this),
+    getModelConfig: this.getModelConfig.bind(this),
+    getClaudeModeConfig: this.getClaudeModeConfig.bind(this),
+    startScheduledRun: this.startScheduledRun.bind(this),
+    stopScheduledRun: this.stopScheduledRun.bind(this),
+    sendPushNotifications: this.sendPushNotifications.bind(this),
   };
 }
 ```
 
 ### Helper: findSessionOrFail
 
-Add a shared helper to `route-context.ts` (replaces 189 repetitions of the session-not-found pattern):
+Add a shared helper to `route-context.ts` (replaces ~43 repetitions of the session-not-found pattern):
 
 ```typescript
 import { createErrorResponse, ApiErrorCode } from '../types.js';
 
 /**
  * Look up a session by ID, throwing a structured error if not found.
- * Route handlers call this to avoid 189 repetitions of the NOT_FOUND pattern.
+ * Route handlers call this to avoid ~43 repetitions of the NOT_FOUND pattern.
  */
 export function findSessionOrFail(ctx: RouteContext, sessionId: string): Session {
   const session = ctx.sessions.get(sessionId);
@@ -300,9 +330,26 @@ this.app.setErrorHandler((error, _req, reply) => {
 });
 ```
 
+### Error Pattern Convention
+
+**Use `findSessionOrFail` (throw) consistently for session lookups.** For other not-found patterns (scheduled runs, subagents, etc.), continue using the existing early-return pattern (`if (!x) return createErrorResponse(...)`). This avoids a full rewrite of all error handling while still eliminating the most common repetition.
+
+Do NOT mix thrown and returned errors within the same route handler — pick one per handler. `findSessionOrFail` at the top of a handler (throw), then early-returns for everything else.
+
+### Module-Level Singletons
+
+Two singletons are imported at the module level in `server.ts` (not on `this`) and used directly by route handlers:
+
+| Singleton | Import | Used By Routes |
+|-----------|--------|---------------|
+| `imageWatcher` | `import { imageWatcher } from '../image-watcher.js'` | POST /api/sessions/:id/image-watcher, PUT /api/settings |
+| `fileStreamManager` | `import { fileStreamManager } from '../file-stream-manager.js'` | GET /api/sessions/:id/tail-file, DELETE /api/sessions/:id/tail-file/:streamId |
+
+**Convention**: Route modules should import these singletons directly (not via RouteContext). They are already module-level singletons with no `this` binding, so direct import is simpler and consistent with their existing usage.
+
 ### ScheduledRun type
 
-The `ScheduledRun` type is currently defined locally in `server.ts` (around line 372-389). Move it to `route-context.ts` or a shared types location since route modules need it.
+The `ScheduledRun` type is currently defined locally in `server.ts` (around line 131-143). Move it to `route-context.ts` or a shared types location since route modules need it.
 
 ### Verification
 
@@ -563,7 +610,10 @@ These routes access WebServer state that must be exposed via RouteContext:
 | `this.getSessionStateWithRespawn()` | Get session details |
 | `this.batchTerminalData()` | (Indirectly via session listeners) |
 | `this.runSummaryTrackers` | Run summary GET |
-| `imageWatcher` | Image watcher toggle |
+| `this.getGlobalNiceConfig()` | Create session (nice/ionice config) |
+| `this.getModelConfig()` | Create session (default model) |
+| `this.getClaudeModeConfig()` | Create session (claude mode, allowed tools) |
+| `imageWatcher` | Image watcher toggle (import directly, not via ctx) |
 
 ### Session Creation Helper
 
@@ -802,6 +852,8 @@ The `getSystemStats()` helper (lines 4710-4753) moves to `system-routes.ts` sinc
 
 File routes are the most self-contained group — they use `fs` operations, path validation, and `fileStreamManager`. The only ctx dependencies are `ctx.sessions` (to verify session exists and get working dir) and `ctx.broadcast()` (for screenshot upload notification).
 
+**Module-level singletons**: `fileStreamManager` is imported directly from `'../file-stream-manager.js'` — import it directly in `file-routes.ts`, not via RouteContext. Similarly, the image watcher toggle route in session-routes uses `imageWatcher` from `'../image-watcher.js'` — import directly.
+
 **TOCTOU security**: The file-raw route has a critical `realpathSync()` double-check for symlink TOCTOU protection. Preserve this exactly when moving.
 
 ### Push Routes
@@ -834,7 +886,7 @@ Quick-start (line 2965, ~160 LOC) is complex: it creates a case directory, write
 |--------|------|------|---------|
 | POST | `/api/hook-event` | 4357 | Receive Claude Code hook events |
 
-This route is special: it's exempt from auth (localhost-only), validates with `HookEventSchema`, and broadcasts `hook:{eventName}` events. It also handles Web Push notifications. Place it in `system-routes.ts` or its own `hook-routes.ts`.
+This route is special: it's exempt from auth (localhost-only), validates with `HookEventSchema`, and broadcasts `hook:{eventName}` events. It also handles Web Push notifications via `ctx.sendPushNotifications()`. Place it in `system-routes.ts` or its own `hook-routes.ts`.
 
 ### SSE Route
 
