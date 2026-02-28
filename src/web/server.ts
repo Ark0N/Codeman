@@ -5885,11 +5885,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     //   1. The debounced session:updated follows within 500ms with the new state
     //   2. These caches serve /api/sessions and SSE init — neither is polled rapidly
     //   3. Invalidating on every working/idle transition makes the 1s TTL useless
-    if (
-      event === 'session:created' ||
-      event === 'session:deleted' ||
-      event === 'session:updated'
-    ) {
+    if (event === 'session:created' || event === 'session:deleted' || event === 'session:updated') {
       this.cachedLightState = null;
       this.cachedSessionsList = null;
     }
