@@ -1,5 +1,11 @@
 # codeman
 
+## 0.2.8
+
+### Patch Changes
+
+- Remove 159 lines of dead code: unused interfaces, functions, config constants, legacy no-op timer, and stale barrel re-exports
+
 ## 0.2.7
 
 ### Patch Changes
@@ -24,7 +30,7 @@
 
 ### Patch Changes
 
-- Fix 3 minor memory leaks: clear respawn timers in stop(), clean up persistDebounceTimers on session cleanup, reset _parentNameCache on SSE reconnect
+- Fix 3 minor memory leaks: clear respawn timers in stop(), clean up persistDebounceTimers on session cleanup, reset \_parentNameCache on SSE reconnect
 
 ## 0.2.4
 
