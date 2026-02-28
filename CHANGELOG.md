@@ -1,4 +1,4 @@
-# aicodeman
+# codemanager
 
 ## 0.2.8
 

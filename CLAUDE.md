@@ -41,7 +41,7 @@ When user says "COM":
    ```bash
    cat > .changeset/$(openssl rand -hex 4).md << 'CHANGESET'
    ---
-   "aicodeman": patch
+   "codemanager": patch
    ---
 
    Description of changes
