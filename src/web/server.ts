@@ -6174,7 +6174,9 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
         const settings = JSON.parse(content);
         settings.tunnelEnabled = false;
         await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2));
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       console.log('Cloudflare tunnel setting reset (tunnel only starts on explicit UI toggle)');
     }
 
