@@ -49,7 +49,6 @@ import {
 
 export type { BackgroundTask } from './task-tracker.js';
 export type { RalphTrackerState, RalphTodoItem, ActiveBashTool } from './types.js';
-export { withTimeout };
 
 /** Line buffer flush interval (100ms) - forces processing of partial lines */
 const LINE_BUFFER_FLUSH_INTERVAL = 100;
@@ -96,29 +95,6 @@ const NEWLINE_SPLIT_PATTERN = /\r?\n/;
 
 // Claude CLI PATH resolution — shared utility
 import { getAugmentedPath } from './utils/claude-cli-resolver.js';
-
-/**
- * Wraps a promise with a timeout to prevent indefinite hangs.
- * If the promise doesn't resolve within the timeout, rejects with TimeoutError.
- *
- * @param promise - The promise to wrap
- * @param timeoutMs - Timeout in milliseconds
- * @param operation - Description of the operation for error messages
- * @returns Promise that resolves/rejects with the original result or timeout error
- */
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
-  let timeoutId: NodeJS.Timeout;
-
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => {
-      reject(new Error(`${operation} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-  });
-
-  return Promise.race([promise, timeoutPromise]).finally(() => {
-    clearTimeout(timeoutId);
-  });
-}
 
 /**
  * Represents a JSON message from Claude CLI's stream-json output format.

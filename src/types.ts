@@ -667,7 +667,7 @@ export enum ApiErrorCode {
 /**
  * User-friendly error messages for each error code
  */
-export const ErrorMessages: Record<ApiErrorCode, string> = {
+const ErrorMessages: Record<ApiErrorCode, string> = {
   [ApiErrorCode.NOT_FOUND]: 'The requested resource was not found',
   [ApiErrorCode.INVALID_INPUT]: 'Invalid input provided',
   [ApiErrorCode.SESSION_BUSY]: 'Session is currently busy',
@@ -709,29 +709,6 @@ export function createErrorResponse(code: ApiErrorCode, details?: string): ApiRe
     error: details || ErrorMessages[code],
     errorCode: code,
   };
-}
-
-/**
- * Response for session operations
- */
-export interface SessionResponse {
-  /** Whether the request succeeded */
-  success: boolean;
-  /** Session details if successful (light state — no full buffers) */
-  session?: SessionState & {
-    /** Claude session ID from CLI */
-    claudeSessionId: string | null;
-    /** Total API cost */
-    totalCost: number;
-    /** Number of messages */
-    messageCount: number;
-    /** Whether Claude is working */
-    isWorking: boolean;
-    /** Timestamp of last prompt */
-    lastPromptTime: number;
-  };
-  /** Error message if failed */
-  error?: string;
 }
 
 /**

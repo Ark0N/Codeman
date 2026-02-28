@@ -9,7 +9,7 @@
 
 import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { delimiter, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 
 /** Timeout for exec commands (5 seconds) */
@@ -70,29 +70,4 @@ export function resolveOpenCodeDir(): string | null {
  */
 export function isOpenCodeAvailable(): boolean {
   return resolveOpenCodeDir() !== null;
-}
-
-/**
- * Returns a PATH string that includes the directory containing `opencode`.
- *
- * Finds the opencode binary (via `which` or common install locations), then
- * prepends its directory to the current PATH if not already present.
- * Result is cached for subsequent calls.
- */
-export function getOpenCodeAugmentedPath(): string {
-  const currentPath = process.env.PATH || '';
-  const dir = resolveOpenCodeDir();
-
-  if (dir && !currentPath.split(delimiter).includes(dir)) {
-    return `${dir}${delimiter}${currentPath}`;
-  }
-
-  return currentPath;
-}
-
-/**
- * Reset cached resolution (for testing).
- */
-export function resetOpenCodeCache(): void {
-  _openCodeDir = null;
 }

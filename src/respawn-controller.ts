@@ -641,9 +641,6 @@ export class RespawnController extends EventEmitter {
   /** Current state machine state */
   private _state: RespawnState = 'stopped';
 
-  /** Timer for idle detection timeout */
-  private idleTimer: NodeJS.Timeout | null = null;
-
   /** Timer for step delays */
   private stepTimer: NodeJS.Timeout | null = null;
 
@@ -1505,7 +1502,6 @@ export class RespawnController extends EventEmitter {
       this.elicitationDetected = false; // Clear on new work cycle
       this.resetHookState(); // Clear hook signals on new work
       this.lastWorkingPatternTime = now;
-      this.clearIdleTimer();
 
       // Cancel hook confirmation timer if running
       this.cancelTrackedTimer('hook-confirm', this.hookConfirmTimer, 'working patterns detected');
@@ -1608,7 +1604,6 @@ export class RespawnController extends EventEmitter {
    * @fires stepCompleted - With step 'update'
    */
   private checkUpdateComplete(): void {
-    this.clearIdleTimer();
     this.log('Update completed (ready indicator)');
     this.emit('stepCompleted', 'update');
 
@@ -1643,7 +1638,6 @@ export class RespawnController extends EventEmitter {
    * @fires stepCompleted - With step 'clear'
    */
   private checkClearComplete(): void {
-    this.clearIdleTimer();
     // Clear the fallback timer since we got prompt detection
     this.cancelTrackedTimer('clear-fallback', this.clearFallbackTimer, 'prompt detected');
     this.clearFallbackTimer = null;
@@ -1667,7 +1661,6 @@ export class RespawnController extends EventEmitter {
    * @fires stepCompleted - With step 'init' (if no kickstart)
    */
   private checkInitComplete(): void {
-    this.clearIdleTimer();
     this.log('/init completed (ready indicator)');
 
     // P2-004: Record step completion
@@ -1715,7 +1708,6 @@ export class RespawnController extends EventEmitter {
    * @fires stepCompleted - With step 'init'
    */
   private checkMonitoringInitIdle(): void {
-    this.clearIdleTimer();
     if (this.stepTimer) {
       clearTimeout(this.stepTimer);
       this.stepTimer = null;
@@ -1757,7 +1749,6 @@ export class RespawnController extends EventEmitter {
    * @fires stepCompleted - With step 'kickstart'
    */
   private checkKickstartComplete(): void {
-    this.clearIdleTimer();
     this.log('Kickstart completed (ready indicator)');
     this.emit('stepCompleted', 'kickstart');
 
@@ -1767,22 +1758,10 @@ export class RespawnController extends EventEmitter {
     this.completeCycle();
   }
 
-  // Note: Legacy startIdleTimer removed - now using completion-based detection
-  // with startCompletionConfirmTimer() and startNoOutputTimer() instead.
-
-  /** Clear the idle detection timer if running (legacy cleanup) */
-  private clearIdleTimer(): void {
-    if (this.idleTimer) {
-      clearTimeout(this.idleTimer);
-      this.idleTimer = null;
-    }
-  }
-
-  /** Clear all timers (idle, step, completion confirm, no-output, pre-filter, step confirm, auto-accept, hook confirm, and clear fallback) */
+  /** Clear all timers (step, completion confirm, no-output, pre-filter, step confirm, auto-accept, hook confirm, and clear fallback) */
   private clearTimers(): void {
     // Clear tracked timers map first to avoid stale entries during individual cleanup
     this.activeTimers.clear();
-    this.clearIdleTimer();
     if (this.stepTimer) {
       clearTimeout(this.stepTimer);
       this.stepTimer = null;

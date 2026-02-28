@@ -85,26 +85,3 @@ export const MAX_RESPAWN_BUFFER_SIZE = 1 * 1024 * 1024; // 1MB
  * Size to trim respawn buffer to when max is exceeded.
  */
 export const TRIM_RESPAWN_BUFFER_TO = 512 * 1024; // 512KB
-
-// ============================================================================
-// Run Summary Limits
-// ============================================================================
-
-/**
- * Maximum number of events to keep in run summary.
- */
-export const MAX_RUN_SUMMARY_EVENTS = 1000;
-
-/**
- * Number of events to keep when trimming run summary.
- */
-export const TRIM_RUN_SUMMARY_TO = 800;
-
-// ============================================================================
-// Spawn Message Limits
-// ============================================================================
-
-/**
- * Maximum messages per spawn communication channel.
- */
-export const MAX_MESSAGES_PER_CHANNEL = 100;

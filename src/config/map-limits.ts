@@ -15,28 +15,6 @@
  */
 
 // ============================================================================
-// Agent Tracking Limits
-// ============================================================================
-
-/**
- * Maximum number of agents to track across all sessions.
- * Oldest agents are evicted when limit is exceeded (LRU policy).
- */
-export const MAX_TRACKED_AGENTS = 500;
-
-/**
- * Maximum activity entries to keep per agent.
- * Includes tool calls, status updates, progress reports.
- */
-export const MAX_SUBAGENT_ACTIVITY_PER_AGENT = 100;
-
-/**
- * Maximum tool results to keep per agent.
- * Prevents memory growth from long-running agents with many tool calls.
- */
-export const MAX_TOOL_RESULTS_PER_AGENT = 200;
-
-// ============================================================================
 // Session Tracking Limits
 // ============================================================================
 
@@ -64,11 +42,6 @@ export const MAX_SSE_CLIENTS = 100;
  * Maximum todo items to track per session.
  */
 export const MAX_TODOS_PER_SESSION = 500;
-
-/**
- * TTL for completed todo items before cleanup (1 hour).
- */
-export const COMPLETED_TODO_TTL_MS = 60 * 60 * 1000;
 
 // ============================================================================
 // Pending Tool Calls Limits

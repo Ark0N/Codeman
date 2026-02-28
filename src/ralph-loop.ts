@@ -509,7 +509,7 @@ export function getRalphLoop(options?: RalphLoopOptions): RalphLoop {
 }
 
 /** Destroys the singleton instance. Use in tests or for cleanup. */
-export function destroyRalphLoop(): void {
+function destroyRalphLoop(): void {
   if (loopInstance) {
     loopInstance.destroy();
     loopInstance = null;

@@ -79,12 +79,6 @@ export interface ResearchResult {
   durationMs: number;
 }
 
-export interface PlannerResult {
-  items: PlanItem[];
-  gaps: string[];
-  warnings: string[];
-}
-
 export interface DetailedPlanResult {
   success: boolean;
   items?: PlanItem[];
