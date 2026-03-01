@@ -5587,11 +5587,6 @@ class CodemanApp {
     }
   }
 
-  formatTokens(tokens) {
-    if (tokens >= 1000000) return `${(tokens / 1000000).toFixed(1)}M`;
-    if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`;
-    return String(tokens || 0);
-  }
 
   formatDuration(ms) {
     if (!ms || ms < 0) return '0s';
@@ -8091,14 +8086,6 @@ class CodemanApp {
     cbContainer.onclick = () => this.resetCircuitBreaker();
   }
 
-  async resetCircuitBreaker() {
-    if (!this.activeSessionId) return;
-    try {
-      await this._apiPost(`/api/sessions/${this.activeSessionId}/ralph-circuit-breaker/reset`, {});
-    } catch (err) {
-      console.error('Failed to reset circuit breaker:', err);
-    }
-  }
 
   updateRalphStats(loop, completed, total) {
     // Time stat
@@ -10703,7 +10690,7 @@ class CodemanApp {
     }
   }
 
-  killAllSessions() {
+  killAllMuxSessions() {
     const count = this.muxSessions?.length || 0;
     if (count === 0) {
       alert('No sessions to kill');

@@ -101,7 +101,7 @@ export function createMockRouteContext(options?: { sessionId?: string }) {
     runSummaryTrackers: new Map(),
     activePlanOrchestrators: new Map(),
     scheduledRuns: new Map(),
-    teamWatcher: { getTeams: vi.fn(() => []), hasActiveTeammates: vi.fn(() => false) },
+    teamWatcher: { getTeams: vi.fn(() => []), getTeamTasks: vi.fn(() => []), hasActiveTeammates: vi.fn(() => false) },
     tunnelManager: null,
     pushStore: null,
     startScheduledRun: vi.fn(),

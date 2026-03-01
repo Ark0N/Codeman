@@ -137,6 +137,10 @@ export interface ZerolagInputState {
 export interface CellDimensions {
     width: number;
     height: number;
+    /** Vertical offset (px) from cell top to where characters render. */
+    charTop: number;
+    /** Height of the character rendering area (px). */
+    charHeight: number;
 }
 
 /** Parameters for the overlay renderer. */
@@ -146,6 +150,10 @@ export interface RenderParams {
     totalCols: number;
     cellW: number;
     cellH: number;
+    /** Vertical offset (px) from cell top to character rendering area. */
+    charTop: number;
+    /** Height of the character rendering area (px). */
+    charHeight: number;
     promptRow: number;
     font: FontStyle;
     showCursor: boolean;

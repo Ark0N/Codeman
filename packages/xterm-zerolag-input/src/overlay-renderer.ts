@@ -8,9 +8,9 @@ import type { RenderParams, FontStyle } from './types.js';
  * occurs with normal DOM text flow.
  */
 export function renderOverlay(container: HTMLDivElement, params: RenderParams): void {
-    const { lines, startCol, totalCols, cellW, cellH, promptRow, font, showCursor, cursorColor } = params;
+    const { lines, startCol, totalCols, cellW, cellH, charTop, charHeight, promptRow, font, showCursor, cursorColor } = params;
 
-    // Position container at prompt row
+    // Position container at prompt row.
     container.style.left = '0px';
     container.style.top = (promptRow * cellH) + 'px';
 
@@ -22,7 +22,7 @@ export function renderOverlay(container: HTMLDivElement, params: RenderParams): 
         const leftPx = i === 0 ? startCol * cellW : 0;
         const widthPx = i === 0 ? (fullWidthPx - leftPx) : fullWidthPx;
         const topPx = i * cellH;
-        const lineEl = makeLine(lines[i], leftPx, topPx, widthPx, cellH, cellW, font);
+        const lineEl = makeLine(lines[i], leftPx, topPx, widthPx, cellH, cellW, charTop, charHeight, font);
         container.appendChild(lineEl);
     }
 
@@ -60,6 +60,8 @@ function makeLine(
     widthPx: number,
     cellH: number,
     cellW: number,
+    charTop: number,
+    charHeight: number,
     font: FontStyle,
 ): HTMLDivElement {
     const el = document.createElement('div');
@@ -68,21 +70,28 @@ function makeLine(
     el.style.left = leftPx + 'px';
     el.style.top = topPx + 'px';
     el.style.width = widthPx + 'px';
+    // Extend background 1px past cell boundary to cover the compositing
+    // seam between the overlay layer (z-index:7) and the canvas layer below.
+    // The extra 1px lands in the next row's charTop gap (empty area before
+    // text rendering starts), so no canvas content is obscured.
     el.style.height = (cellH + 1) + 'px';
-    el.style.lineHeight = cellH + 'px';
+
+    // Spans fill the full cell height with matching lineHeight for natural
+    // CSS vertical centering.  No transform — any sub-pixel overhang past
+    // the line div causes visible anti-aliasing artifacts at the boundary.
+    // The ≤0.5px difference from canvas ceil() rounding is imperceptible.
 
     for (let i = 0; i < text.length; i++) {
         const span = document.createElement('span');
-        // Match xterm.js canvas text rendering:
-        // - antialiased smoothing (canvas uses grayscale, not LCD subpixel)
-        // - geometricPrecision for consistent glyph sizing
-        // - no ligatures (canvas renders each glyph independently)
+        // No ligatures — canvas renders each glyph independently.
         span.style.cssText =
             'position:absolute;display:inline-block;text-align:center;pointer-events:none;' +
-            '-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;' +
-            "text-rendering:geometricPrecision;font-feature-settings:'liga' 0,'calt' 0";
+            "font-feature-settings:'liga' 0,'calt' 0";
         span.style.left = (i * cellW) + 'px';
+        span.style.top = '0px';
         span.style.width = cellW + 'px';
+        span.style.height = cellH + 'px';
+        span.style.lineHeight = cellH + 'px';
         span.style.fontFamily = font.fontFamily;
         span.style.fontSize = font.fontSize;
         span.style.fontWeight = font.fontWeight;

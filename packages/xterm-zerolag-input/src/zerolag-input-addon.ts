@@ -380,6 +380,20 @@ export class ZerolagInputAddon implements XtermAddon {
         this._bufferDetectDone = true;
     }
 
+    // ─── Prompt configuration ──────────────────────────────────────────
+
+    /**
+     * Change the prompt detection strategy at runtime.
+     * Call this when switching between CLI modes (e.g., Claude Code vs OpenCode)
+     * that use different prompt characters.
+     */
+    setPrompt(finder: PromptFinder): void {
+        this._options.prompt = finder;
+        this._lastPromptPos = null;
+        this._lastRenderKey = '';
+        if (this._pendingText || this._flushedOffset > 0) this._render();
+    }
+
     // ─── Prompt utilities ─────────────────────────────────────────────
 
     /**
@@ -531,7 +545,7 @@ export class ZerolagInputAddon implements XtermAddon {
                 return;
             }
 
-            const { width: cellW, height: cellH } = dims;
+            const { width: cellW, height: cellH, charTop, charHeight } = dims;
             const totalCols = this._terminal.cols;
             const offset = this._getPromptOffset();
             const startCol = activePrompt.col + offset;
@@ -581,6 +595,8 @@ export class ZerolagInputAddon implements XtermAddon {
                 totalCols,
                 cellW,
                 cellH,
+                charTop,
+                charHeight,
                 promptRow: activePrompt.row,
                 font: this._font,
                 showCursor: this._options.showCursor,
