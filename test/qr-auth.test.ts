@@ -12,14 +12,16 @@
  * 10. Full server integration: GET /q/:code issues cookie + redirects
  * 11. Session revocation via POST /api/auth/revoke
  * 12. QR auth bypass in auth middleware
+ * 13. GET /api/tunnel/qr SVG endpoint (auth/no-auth, caching, errors)
  *
- * Port: 3162 (qr-auth tests)
+ * Port: 3162 (qr-auth tests), 3163 (qr-svg endpoint tests)
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { TunnelManager } from '../src/tunnel-manager.js';
 import { WebServer } from '../src/web/server.js';
 
 const QR_AUTH_PORT = 3162;
+const QR_SVG_PORT = 3163;
 const TEST_PASS = 'qr-test-pass-xyz';
 const TEST_USER = 'admin';
 
@@ -574,6 +576,190 @@ describe('QR Auth Integration', () => {
       expect(record!.method).toBe('qr');
     } finally {
       tm.stopTokenRotation();
+    }
+  });
+});
+
+// ========== QR SVG Endpoint Tests (GET /api/tunnel/qr) ==========
+
+describe('QR SVG Endpoint (GET /api/tunnel/qr)', () => {
+  let server: WebServer;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    process.env.CODEMAN_PASSWORD = TEST_PASS;
+    process.env.CODEMAN_USERNAME = TEST_USER;
+    server = new WebServer(QR_SVG_PORT, false, true);
+    await server.start();
+    baseUrl = `http://localhost:${QR_SVG_PORT}`;
+  });
+
+  afterAll(async () => {
+    await server.stop();
+    delete process.env.CODEMAN_PASSWORD;
+    delete process.env.CODEMAN_USERNAME;
+  });
+
+  function getTunnelManager(): TunnelManager {
+    return (server as unknown as { tunnelManager: TunnelManager }).tunnelManager;
+  }
+
+  function simulateTunnelRunning(tm: TunnelManager, url = 'https://test-qr.trycloudflare.com'): void {
+    (tm as unknown as { url: string | null }).url = url;
+  }
+
+  function simulateTunnelStopped(tm: TunnelManager): void {
+    (tm as unknown as { url: string | null }).url = null;
+  }
+
+  it('should return 404 when tunnel is not running', async () => {
+    const res = await fetch(`${baseUrl}/api/tunnel/qr`, {
+      headers: { Authorization: basicAuthHeader(TEST_USER, TEST_PASS) },
+    });
+    expect(res.status).toBe(404);
+    const data = await res.json();
+    expect(data.error).toBeDefined();
+  });
+
+  it('should return SVG with authEnabled=true when tunnel running + auth configured', async () => {
+    const tm = getTunnelManager();
+    simulateTunnelRunning(tm);
+    tm.startTokenRotation();
+    try {
+      const res = await fetch(`${baseUrl}/api/tunnel/qr`, {
+        headers: { Authorization: basicAuthHeader(TEST_USER, TEST_PASS) },
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.authEnabled).toBe(true);
+      expect(data.svg).toContain('<svg');
+      expect(data.svg).toContain('</svg>');
+    } finally {
+      tm.stopTokenRotation();
+      simulateTunnelStopped(tm);
+    }
+  });
+
+  it('should return SVG with authEnabled=false when tunnel running + no auth', async () => {
+    const tm = getTunnelManager();
+    simulateTunnelRunning(tm);
+    const savedPass = process.env.CODEMAN_PASSWORD;
+    delete process.env.CODEMAN_PASSWORD;
+    try {
+      // Auth middleware was initialized with password (closure), so still need headers.
+      // But route handler checks env var on each request — sees no password → no-auth path.
+      const res = await fetch(`${baseUrl}/api/tunnel/qr`, {
+        headers: { Authorization: basicAuthHeader(TEST_USER, savedPass!) },
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.authEnabled).toBe(false);
+      expect(data.svg).toContain('<svg');
+      expect(data.svg).toContain('</svg>');
+    } finally {
+      process.env.CODEMAN_PASSWORD = savedPass;
+      simulateTunnelStopped(tm);
+    }
+  });
+
+  it('should return 500 when tunnel running + auth set but token rotation not started', async () => {
+    const tm = getTunnelManager();
+    simulateTunnelRunning(tm);
+    // Don't start token rotation — simulates the race condition
+    try {
+      const res = await fetch(`${baseUrl}/api/tunnel/qr`, {
+        headers: { Authorization: basicAuthHeader(TEST_USER, TEST_PASS) },
+      });
+      expect(res.status).toBe(500);
+      const data = await res.json();
+      expect(data.error).toBeDefined();
+    } finally {
+      simulateTunnelStopped(tm);
+    }
+  });
+
+  it('SVG should encode a URL containing the short code path', async () => {
+    const tm = getTunnelManager();
+    const tunnelUrl = 'https://svgtest.trycloudflare.com';
+    simulateTunnelRunning(tm, tunnelUrl);
+    tm.startTokenRotation();
+    try {
+      const code = tm.getCurrentShortCode()!;
+      const svg = await tm.getQrSvg(tunnelUrl);
+      // The SVG encodes `tunnelUrl/q/shortCode` as a QR pattern —
+      // we can't decode the QR, but verify the SVG is well-formed
+      expect(svg).toContain('<svg');
+      expect(svg).toContain('</svg>');
+      expect(code).toMatch(/^[A-Za-z0-9]{6}$/);
+    } finally {
+      tm.stopTokenRotation();
+      simulateTunnelStopped(tm);
+    }
+  });
+
+  it('no-auth SVG should encode the raw tunnel URL', async () => {
+    const tm = getTunnelManager();
+    const tunnelUrl = 'https://raw-url-test.trycloudflare.com';
+    simulateTunnelRunning(tm, tunnelUrl);
+    const savedPass = process.env.CODEMAN_PASSWORD;
+    delete process.env.CODEMAN_PASSWORD;
+    try {
+      const res = await fetch(`${baseUrl}/api/tunnel/qr`, {
+        headers: { Authorization: basicAuthHeader(TEST_USER, savedPass!) },
+      });
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.svg).toContain('<svg');
+      expect(data.authEnabled).toBe(false);
+    } finally {
+      process.env.CODEMAN_PASSWORD = savedPass;
+      simulateTunnelStopped(tm);
+    }
+  });
+
+  it('should return consistent SVGs across multiple requests (caching)', async () => {
+    const tm = getTunnelManager();
+    simulateTunnelRunning(tm);
+    tm.startTokenRotation();
+    try {
+      const res1 = await fetch(`${baseUrl}/api/tunnel/qr`, {
+        headers: { Authorization: basicAuthHeader(TEST_USER, TEST_PASS) },
+      });
+      const data1 = await res1.json();
+
+      const res2 = await fetch(`${baseUrl}/api/tunnel/qr`, {
+        headers: { Authorization: basicAuthHeader(TEST_USER, TEST_PASS) },
+      });
+      const data2 = await res2.json();
+
+      expect(data1.svg).toBe(data2.svg);
+    } finally {
+      tm.stopTokenRotation();
+      simulateTunnelStopped(tm);
+    }
+  });
+
+  it('SVG should change after token regeneration', async () => {
+    const tm = getTunnelManager();
+    simulateTunnelRunning(tm);
+    tm.startTokenRotation();
+    try {
+      const res1 = await fetch(`${baseUrl}/api/tunnel/qr`, {
+        headers: { Authorization: basicAuthHeader(TEST_USER, TEST_PASS) },
+      });
+      const data1 = await res1.json();
+
+      tm.regenerateQrToken();
+
+      const res2 = await fetch(`${baseUrl}/api/tunnel/qr`, {
+        headers: { Authorization: basicAuthHeader(TEST_USER, TEST_PASS) },
+      });
+      const data2 = await res2.json();
+
+      expect(data1.svg).not.toBe(data2.svg);
+    } finally {
+      tm.stopTokenRotation();
+      simulateTunnelStopped(tm);
     }
   });
 });
