@@ -110,7 +110,7 @@ journalctl --user -u codeman-web -f
 ## Import Conventions
 
 - **Utilities**: Import from `./utils` (re-exports all): `import { LRUMap, stripAnsi } from './utils'`
-- **Types**: Use type imports: `import type { SessionState } from './types'`
+- **Types**: Use type imports from barrel: `import type { SessionState } from './types'` (re-exports from `src/types/` domain files)
 - **Config**: Import from specific files: `import { MAX_TERMINAL_BUFFER_SIZE } from './config/buffer-limits'`
 
 ## Architecture
@@ -146,16 +146,18 @@ journalctl --user -u codeman-web -f
 | `src/session-lifecycle-log.ts` | Append-only JSONL audit log at `~/.codeman/session-lifecycle.jsonl` |
 | `src/image-watcher.ts` | Watches for image file creation (screenshots, etc.) |
 | `src/file-stream-manager.ts` | Manages `tail -f` processes for live log viewing |
-| `src/plan-orchestrator.ts` | Multi-agent plan generation with research and planning phases |
+| `src/plan-orchestrator.ts` | 2-agent plan generation: optional research agent → planner agent |
 | `src/prompts/index.ts` | Barrel export for all agent prompts |
 | `src/prompts/*.ts` | Agent prompts (research-agent, planner) |
 | `src/templates/claude-md.ts` | CLAUDE.md generation for new cases |
 | `src/tunnel-manager.ts` | Manages cloudflared child process for Cloudflare tunnel remote access |
 | `src/cli.ts` | Command-line interface handlers |
-| `src/web/server.ts` | Fastify REST API + SSE at `/api/events` (~280 routes) |
+| `src/web/server.ts` | Fastify server setup, SSE at `/api/events`, delegates to route modules |
+| `src/web/routes/*.ts` | 13 domain route modules (session, respawn, ralph, plan, etc.) — each exports `register*Routes()` |
+| `src/web/route-helpers.ts` | Shared helper utilities for route modules |
 | `src/web/schemas.ts` | Zod v4 validation schemas with path/env security allowlists |
 | `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~15K lines) |
-| `src/types.ts` | All TypeScript interfaces (~70 type/interface/enum defs, ~1450 lines) |
+| `src/types.ts` | Barrel re-export from `src/types/` — 14 domain files (session, task, respawn, ralph, api, etc.) |
 
 **Large files** (>50KB): `app.js`, `ralph-tracker.ts`, `respawn-controller.ts`, `session.ts`, `subagent-watcher.ts` — these contain complex state machines; read `docs/respawn-state-machine.md` before modifying.
 
@@ -284,7 +286,7 @@ The frontend is a single ~15K-line vanilla JS file with these key systems:
 
 ### API Route Categories
 
-~280 route handlers in `server.ts:buildServer()`. Key groups:
+~280 route handlers split across `src/web/routes/` domain modules. Key groups:
 
 | Group | Prefix | Count | Key endpoints |
 |-------|--------|-------|---------------|
@@ -302,7 +304,7 @@ The frontend is a single ~15K-line vanilla JS file with these key systems:
 
 ## Adding Features
 
-- **API endpoint**: Types in `types.ts`, route in `server.ts:buildServer()`, use `createErrorResponse()`. Validate request bodies with Zod schemas in `schemas.ts`.
+- **API endpoint**: Types in `src/types/` (domain file), route in the appropriate `src/web/routes/*-routes.ts` module, use `createErrorResponse()`. Validate request bodies with Zod schemas in `schemas.ts`.
 - **SSE event**: Emit via `broadcast()`, handle in `app.js` SSE listener section (search `addListener(`)
 - **Session setting**: Add to `SessionState` in `types.ts`, include in `session.toState()`, call `persistSessionState()`
 - **Hook event**: Add to `HookEventType` in `types.ts`, add hook command in `hooks-config.ts:generateHooksConfig()`, update `HookEventSchema` in `schemas.ts`
@@ -442,10 +444,11 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Claude Code hooks** | `docs/claude-code-hooks-reference.md` |
 | **Terminal anti-flicker** | `docs/terminal-anti-flicker.md` |
 | **Agent Teams (experimental)** | `agent-teams/README.md`, `agent-teams/design.md` |
-| **API routes** | `src/web/server.ts:buildServer()` or README.md |
-| **SSE events** | Search `broadcast(` in `server.ts` |
-| **Session statuses** | `SessionStatus` type in `src/types.ts` |
-| **Error codes** | `createErrorResponse()` in `src/types.ts` |
+| **API routes** | `src/web/routes/` domain modules, or README.md |
+| **SSE events** | Search `broadcast(` in `server.ts` and route modules |
+| **Session statuses** | `SessionStatus` in `src/types/session.ts` |
+| **Error codes** | `createErrorResponse()` in `src/types/api.ts` |
+| **Refactoring phases** | `docs/phase1-implementation-plan.md` through `docs/phase-4-domain-splitting-plan.md` |
 | **Test utilities** | `test/respawn-test-utils.ts` |
 | **Mobile test suite** | `mobile-test/README.md` |
 | **OpenCode integration** | `docs/opencode-integration.md` |
@@ -498,7 +501,7 @@ Run `npx vitest run test/memory-leak-prevention.test.ts` to verify patterns.
 
 **Investigating a bug**: Start dev server (`npx tsx src/index.ts web`), reproduce in browser, check terminal output and `~/.codeman/state.json` for clues.
 
-**Adding a new API endpoint**: Define types in `types.ts`, add route in `server.ts:buildServer()`, broadcast SSE events if needed, handle in `app.js:handleSSEEvent()`.
+**Adding a new API endpoint**: Define types in the appropriate `src/types/*.ts` domain file, add route in the matching `src/web/routes/*-routes.ts` module, broadcast SSE events if needed, handle in `app.js:handleSSEEvent()`.
 
 **Modifying respawn behavior**: Study `docs/respawn-state-machine.md` first. The state machine is in `respawn-controller.ts`. Use MockSession from `test/respawn-test-utils.ts` for testing.
 

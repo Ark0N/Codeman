@@ -36,7 +36,6 @@ import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
 import { BashToolParser } from './bash-tool-parser.js';
 import { BufferAccumulator } from './utils/buffer-accumulator.js';
-import { LRUMap } from './utils/lru-map.js';
 import { ANSI_ESCAPE_PATTERN_FULL, TOKEN_PATTERN, SPINNER_PATTERN, MAX_SESSION_TOKENS } from './utils/index.js';
 import {
   MAX_TERMINAL_BUFFER_SIZE,
@@ -46,6 +45,15 @@ import {
   MAX_MESSAGES,
   MAX_LINE_BUFFER_SIZE,
 } from './config/buffer-limits.js';
+import {
+  buildInteractiveArgs,
+  buildPromptArgs,
+  buildClaudeEnv,
+  buildMuxAttachEnv,
+  buildShellEnv,
+} from './session-cli-builder.js';
+import { SessionAutoOps } from './session-auto-ops.js';
+import { SessionTaskCache } from './session-task-cache.js';
 
 export type { BackgroundTask } from './task-tracker.js';
 export type { RalphTrackerState, RalphTodoItem, ActiveBashTool } from './types.js';
@@ -63,11 +71,7 @@ const MUX_STARTUP_DELAY_MS = 300;
 /** Delay before declaring session idle after last output (2 seconds) */
 const IDLE_DETECTION_DELAY_MS = 2000;
 
-/** Delay for auto-compact/clear retry attempts (2 seconds) */
-const AUTO_RETRY_DELAY_MS = 2000;
-
-/** Delay for auto-compact/clear initial check (1 second) */
-const AUTO_INITIAL_DELAY_MS = 1000;
+// Note: Auto-compact/clear timing constants moved to session-auto-ops.ts
 
 /** Graceful shutdown delay when stopping session (100ms) */
 const GRACEFUL_SHUTDOWN_DELAY_MS = 100;
@@ -93,8 +97,7 @@ const CTRL_L_PATTERN = /\x0c/g;
 /** Pattern to split by newlines (CR or LF) */
 const NEWLINE_SPLIT_PATTERN = /\r?\n/;
 
-// Claude CLI PATH resolution — shared utility
-import { getAugmentedPath } from './utils/claude-cli-resolver.js';
+// Note: Claude CLI PATH resolution moved to session-cli-builder.ts (buildClaudeEnv)
 
 /**
  * Represents a JSON message from Claude CLI's stream-json output format.
@@ -224,9 +227,8 @@ export class Session extends EventEmitter {
   readonly createdAt: number;
   readonly mode: SessionMode;
 
-  /** Maximum number of task descriptions to keep (LRUMap handles size limit automatically) */
-  private static readonly MAX_TASK_DESCRIPTIONS = 100;
-  private static readonly TASK_DESCRIPTION_MAX_AGE_MS = 30000; // Keep descriptions for 30 seconds
+  // Task description cache (extracted to SessionTaskCache)
+  private _taskCache = new SessionTaskCache();
 
   private _name: string;
   private ptyProcess: pty.IPty | null = null;
@@ -255,15 +257,9 @@ export class Session extends EventEmitter {
   // Token tracking for auto-clear
   private _totalInputTokens: number = 0;
   private _totalOutputTokens: number = 0;
-  private _autoClearThreshold: number = 140000; // Default 140k tokens
-  private _autoClearEnabled: boolean = false;
-  private _isClearing: boolean = false; // Prevent recursive clearing
 
-  // Auto-compact settings
-  private _autoCompactThreshold: number = 110000; // Default 110k tokens (lower than clear)
-  private _autoCompactEnabled: boolean = false;
-  private _autoCompactPrompt: string = ''; // Optional prompt for compact
-  private _isCompacting: boolean = false; // Prevent recursive compacting
+  // Auto-compact/auto-clear automation (extracted to SessionAutoOps)
+  private _autoOps!: SessionAutoOps;
 
   // Image watcher setting (per-session toggle)
   private _imageWatcherEnabled: boolean = false;
@@ -279,8 +275,6 @@ export class Session extends EventEmitter {
   private _cliInfoParsed: boolean = false; // Only parse once per session
 
   // Timer tracking for cleanup (prevents memory leaks)
-  private _autoCompactTimer: NodeJS.Timeout | null = null;
-  private _autoClearTimer: NodeJS.Timeout | null = null;
   private _promptCheckInterval: NodeJS.Timeout | null = null;
   private _promptCheckTimeout: NodeJS.Timeout | null = null;
   private _shellIdleTimer: NodeJS.Timeout | null = null;
@@ -340,12 +334,7 @@ export class Session extends EventEmitter {
     toolsUpdate: (tools: ActiveBashTool[]) => void;
   } | null = null;
 
-  // Task descriptions parsed from terminal output (e.g., "Explore(Description)")
-  // Used to correlate with SubagentWatcher discoveries for better window titles
-  // Uses LRUMap for automatic eviction at MAX_TASK_DESCRIPTIONS limit
-  private _recentTaskDescriptions: LRUMap<number, string> = new LRUMap({
-    maxSize: Session.MAX_TASK_DESCRIPTIONS,
-  });
+  // Task descriptions parsed from terminal output — delegated to SessionTaskCache
 
   // Throttle expensive PTY processing (Ralph, bash parser, task descriptions)
   // Accumulates clean data between processing windows to avoid running regex on every chunk
@@ -463,6 +452,22 @@ export class Session extends EventEmitter {
     this._bashToolParser.on('toolStart', this._bashToolHandlers.toolStart);
     this._bashToolParser.on('toolEnd', this._bashToolHandlers.toolEnd);
     this._bashToolParser.on('toolsUpdate', this._bashToolHandlers.toolsUpdate);
+
+    // Initialize auto-compact/auto-clear automation and forward events
+    this._autoOps = new SessionAutoOps({
+      writeCommand: (cmd) => this.writeViaMux(cmd),
+      isWorking: () => this._isWorking,
+      isStopped: () => this._isStopped,
+      getTotalTokens: () => this._totalInputTokens + this._totalOutputTokens,
+      getSessionId: () => this.id,
+    });
+    this._autoOps.on('autoCompact', (data) => this.emit('autoCompact', data));
+    this._autoOps.on('autoClear', (data) => {
+      // Reset token counts on clear
+      this._totalInputTokens = 0;
+      this._totalOutputTokens = 0;
+      this.emit('autoClear', data);
+    });
   }
 
   get status(): SessionStatus {
@@ -597,25 +602,7 @@ export class Session extends EventEmitter {
     return this._allowedTools;
   }
 
-  /**
-   * Build Claude CLI permission flags based on the configured mode.
-   * Returns an array of args to pass to the CLI.
-   */
-  private _buildPermissionArgs(): string[] {
-    switch (this._claudeMode) {
-      case 'dangerously-skip-permissions':
-        return ['--dangerously-skip-permissions'];
-      case 'allowedTools':
-        if (this._allowedTools) {
-          return ['--allowedTools', this._allowedTools];
-        }
-        // Fall back to normal mode if no tools specified
-        return [];
-      case 'normal':
-      default:
-        return [];
-    }
-  }
+  // Note: _buildPermissionArgs removed — now using buildInteractiveArgs from session-cli-builder.ts
 
   /**
    * Set CPU priority configuration.
@@ -689,11 +676,11 @@ export class Session extends EventEmitter {
   }
 
   get autoClearThreshold(): number {
-    return this._autoClearThreshold;
+    return this._autoOps.autoClearThreshold;
   }
 
   get autoClearEnabled(): boolean {
-    return this._autoClearEnabled;
+    return this._autoOps.autoClearEnabled;
   }
 
   get name(): string {
@@ -704,58 +691,24 @@ export class Session extends EventEmitter {
     this._name = value;
   }
 
-  /** Minimum valid threshold for auto-clear/compact (1000 tokens) */
-  private static readonly MIN_AUTO_THRESHOLD = 1000;
-  /** Maximum valid threshold for auto-clear/compact (500k tokens) */
-  private static readonly MAX_AUTO_THRESHOLD = 500_000;
-  /** Default auto-clear threshold when invalid value provided */
-  private static readonly DEFAULT_AUTO_CLEAR_THRESHOLD = 140_000;
-  /** Default auto-compact threshold when invalid value provided */
-  private static readonly DEFAULT_AUTO_COMPACT_THRESHOLD = 110_000;
-
   setAutoClear(enabled: boolean, threshold?: number): void {
-    this._autoClearEnabled = enabled;
-    if (threshold !== undefined) {
-      // Validate threshold bounds
-      if (threshold < Session.MIN_AUTO_THRESHOLD || threshold > Session.MAX_AUTO_THRESHOLD) {
-        console.warn(
-          `[Session ${this.id}] Invalid autoClear threshold ${threshold}, must be between ${Session.MIN_AUTO_THRESHOLD} and ${Session.MAX_AUTO_THRESHOLD}. Using default ${Session.DEFAULT_AUTO_CLEAR_THRESHOLD}.`
-        );
-        this._autoClearThreshold = Session.DEFAULT_AUTO_CLEAR_THRESHOLD;
-      } else {
-        this._autoClearThreshold = threshold;
-      }
-    }
+    this._autoOps.setAutoClear(enabled, threshold);
   }
 
   get autoCompactThreshold(): number {
-    return this._autoCompactThreshold;
+    return this._autoOps.autoCompactThreshold;
   }
 
   get autoCompactEnabled(): boolean {
-    return this._autoCompactEnabled;
+    return this._autoOps.autoCompactEnabled;
   }
 
   get autoCompactPrompt(): string {
-    return this._autoCompactPrompt;
+    return this._autoOps.autoCompactPrompt;
   }
 
   setAutoCompact(enabled: boolean, threshold?: number, prompt?: string): void {
-    this._autoCompactEnabled = enabled;
-    if (threshold !== undefined) {
-      // Validate threshold bounds
-      if (threshold < Session.MIN_AUTO_THRESHOLD || threshold > Session.MAX_AUTO_THRESHOLD) {
-        console.warn(
-          `[Session ${this.id}] Invalid autoCompact threshold ${threshold}, must be between ${Session.MIN_AUTO_THRESHOLD} and ${Session.MAX_AUTO_THRESHOLD}. Using default ${Session.DEFAULT_AUTO_COMPACT_THRESHOLD}.`
-        );
-        this._autoCompactThreshold = Session.DEFAULT_AUTO_COMPACT_THRESHOLD;
-      } else {
-        this._autoCompactThreshold = threshold;
-      }
-    }
-    if (prompt !== undefined) {
-      this._autoCompactPrompt = prompt;
-    }
+    this._autoOps.setAutoCompact(enabled, threshold, prompt);
   }
 
   get imageWatcherEnabled(): boolean {
@@ -797,11 +750,11 @@ export class Session extends EventEmitter {
       lastActivityAt: this._lastActivityAt,
       name: this._name,
       mode: this.mode,
-      autoClearEnabled: this._autoClearEnabled,
-      autoClearThreshold: this._autoClearThreshold,
-      autoCompactEnabled: this._autoCompactEnabled,
-      autoCompactThreshold: this._autoCompactThreshold,
-      autoCompactPrompt: this._autoCompactPrompt,
+      autoClearEnabled: this._autoOps.autoClearEnabled,
+      autoClearThreshold: this._autoOps.autoClearThreshold,
+      autoCompactEnabled: this._autoOps.autoCompactEnabled,
+      autoCompactThreshold: this._autoOps.autoCompactThreshold,
+      autoCompactPrompt: this._autoOps.autoCompactPrompt,
       imageWatcherEnabled: this._imageWatcherEnabled,
       totalCost: this._totalCost,
       inputTokens: this._totalInputTokens,
@@ -865,8 +818,8 @@ export class Session extends EventEmitter {
         total: this._totalInputTokens + this._totalOutputTokens,
       },
       autoClear: {
-        enabled: this._autoClearEnabled,
-        threshold: this._autoClearThreshold,
+        enabled: this._autoOps.autoClearEnabled,
+        threshold: this._autoOps.autoClearThreshold,
       },
       // CPU priority configuration
       nice: {
@@ -979,14 +932,7 @@ export class Session extends EventEmitter {
               cols: 120,
               rows: 40,
               cwd: this.workingDir,
-              env: {
-                ...process.env,
-                LANG: 'en_US.UTF-8',
-                LC_ALL: 'en_US.UTF-8',
-                TERM: 'xterm-256color',
-                COLORTERM: undefined,
-                CLAUDECODE: undefined,
-              },
+              env: buildMuxAttachEnv(),
             }
           );
 
@@ -1061,26 +1007,13 @@ export class Session extends EventEmitter {
       try {
         // Pass --session-id to use the SAME ID as the Codeman session
         // This ensures subagents can be directly matched to the correct tab
-        const args = [...this._buildPermissionArgs(), '--session-id', this.id];
-        if (this._model) args.push('--model', this._model);
+        const args = buildInteractiveArgs(this.id, this._claudeMode, this._model, this._allowedTools);
         this.ptyProcess = pty.spawn('claude', args, {
           name: 'xterm-256color',
           cols: 120,
           rows: 40,
           cwd: this.workingDir,
-          env: {
-            ...process.env,
-            LANG: 'en_US.UTF-8',
-            LC_ALL: 'en_US.UTF-8',
-            PATH: getAugmentedPath(),
-            TERM: 'xterm-256color',
-            COLORTERM: undefined,
-            CLAUDECODE: undefined,
-            // Inform Claude it's running within Codeman (helps prevent self-termination)
-            CODEMAN_MUX: '1',
-            CODEMAN_SESSION_ID: this.id,
-            CODEMAN_API_URL: process.env.CODEMAN_API_URL || 'http://localhost:3000',
-          },
+          env: buildClaudeEnv(this.id),
         });
       } catch (spawnErr) {
         console.error('[Session] Failed to spawn Claude PTY:', spawnErr);
@@ -1372,14 +1305,7 @@ export class Session extends EventEmitter {
               cols: 120,
               rows: 40,
               cwd: this.workingDir,
-              env: {
-                ...process.env,
-                LANG: 'en_US.UTF-8',
-                LC_ALL: 'en_US.UTF-8',
-                TERM: 'xterm-256color',
-                COLORTERM: undefined,
-                CLAUDECODE: undefined,
-              },
+              env: buildMuxAttachEnv(),
             }
           );
         } catch (spawnErr) {
@@ -1413,15 +1339,7 @@ export class Session extends EventEmitter {
           cols: 120,
           rows: 40,
           cwd: this.workingDir,
-          env: {
-            ...process.env,
-            LANG: 'en_US.UTF-8',
-            LC_ALL: 'en_US.UTF-8',
-            TERM: 'xterm-256color',
-            CODEMAN_MUX: '1',
-            CODEMAN_SESSION_ID: this.id,
-            CODEMAN_API_URL: process.env.CODEMAN_API_URL || 'http://localhost:3000',
-          },
+          env: buildShellEnv(this.id),
         });
       } catch (spawnErr) {
         console.error('[Session] Failed to spawn shell PTY:', spawnErr);
@@ -1530,11 +1448,7 @@ export class Session extends EventEmitter {
           model ? `(model: ${model})` : ''
         );
 
-        const args = ['-p', '--verbose', '--dangerously-skip-permissions', '--output-format', 'stream-json'];
-        if (model) {
-          args.push('--model', model);
-        }
-        args.push(prompt);
+        const args = buildPromptArgs(prompt, model);
 
         try {
           this.ptyProcess = pty.spawn('claude', args, {
@@ -1542,19 +1456,7 @@ export class Session extends EventEmitter {
             cols: 120,
             rows: 40,
             cwd: this.workingDir,
-            env: {
-              ...process.env,
-              LANG: 'en_US.UTF-8',
-              LC_ALL: 'en_US.UTF-8',
-              PATH: getAugmentedPath(),
-              TERM: 'xterm-256color',
-              COLORTERM: undefined,
-              CLAUDECODE: undefined,
-              // Inform Claude it's running within Codeman
-              CODEMAN_MUX: '1',
-              CODEMAN_SESSION_ID: this.id,
-              CODEMAN_API_URL: process.env.CODEMAN_API_URL || 'http://localhost:3000',
-            },
+            env: buildClaudeEnv(this.id),
           });
         } catch (spawnErr) {
           console.error('[Session] Failed to spawn Claude PTY for runPrompt:', spawnErr);
@@ -1725,8 +1627,8 @@ export class Session extends EventEmitter {
               }
 
               // Check if we should auto-compact or auto-clear
-              this.checkAutoCompact();
-              this.checkAutoClear();
+              this._autoOps.checkAutoCompact();
+              this._autoOps.checkAutoClear();
             }
           }
 
@@ -1784,30 +1686,7 @@ export class Session extends EventEmitter {
     while ((match = TASK_TOOL_PATTERN.exec(cleanLine)) !== null) {
       const description = match[2].trim();
       if (description && description.length > 0) {
-        const now = Date.now();
-        this._recentTaskDescriptions.set(now, description);
-
-        // Cleanup old entries
-        this.cleanupOldTaskDescriptions();
-      }
-    }
-  }
-
-  /**
-   * Remove task descriptions older than TASK_DESCRIPTION_MAX_AGE_MS.
-   * Size limit is handled automatically by LRUMap eviction on set().
-   */
-  private cleanupOldTaskDescriptions(): void {
-    const cutoff = Date.now() - Session.TASK_DESCRIPTION_MAX_AGE_MS;
-    // Keys are timestamps - iterate and delete expired entries
-    // LRUMap maintains insertion order, so we can break early once we find a non-expired entry
-    for (const timestamp of this._recentTaskDescriptions.keysInOrder()) {
-      if (timestamp < cutoff) {
-        this._recentTaskDescriptions.delete(timestamp);
-      } else {
-        // Keys are ordered by insertion time (which is the timestamp)
-        // Once we find a non-expired one, all subsequent are also non-expired
-        break;
+        this._taskCache.add(Date.now(), description);
       }
     }
   }
@@ -1817,12 +1696,7 @@ export class Session extends EventEmitter {
    * Returns descriptions sorted by timestamp (most recent first).
    */
   getRecentTaskDescriptions(): Array<{ timestamp: number; description: string }> {
-    this.cleanupOldTaskDescriptions();
-    const results: Array<{ timestamp: number; description: string }> = [];
-    for (const [timestamp, description] of this._recentTaskDescriptions) {
-      results.push({ timestamp, description });
-    }
-    return results.sort((a, b) => b.timestamp - a.timestamp);
+    return this._taskCache.getAll();
   }
 
   /**
@@ -1834,21 +1708,7 @@ export class Session extends EventEmitter {
    * @returns The matching description or undefined
    */
   findTaskDescriptionNear(subagentStartTime: number, maxAgeMs: number = 10000): string | undefined {
-    this.cleanupOldTaskDescriptions();
-
-    // Find the most recent description that was parsed before or around the subagent start time
-    let bestMatch: { timestamp: number; description: string } | undefined;
-    let bestDiff = Infinity;
-
-    for (const [timestamp, description] of this._recentTaskDescriptions) {
-      const diff = Math.abs(subagentStartTime - timestamp);
-      if (diff < maxAgeMs && diff < bestDiff) {
-        bestMatch = { timestamp, description };
-        bestDiff = diff;
-      }
-    }
-
-    return bestMatch?.description;
+    return this._taskCache.findNear(subagentStartTime, maxAgeMs);
   }
 
   // Parse token count from Claude's status line in interactive mode
@@ -1913,8 +1773,8 @@ export class Session extends EventEmitter {
         this._totalOutputTokens += Math.round(delta * 0.4);
 
         // Check if we should auto-compact or auto-clear
-        this.checkAutoCompact();
-        this.checkAutoClear();
+        this._autoOps.checkAutoCompact();
+        this._autoOps.checkAutoClear();
       }
     }
   }
@@ -1997,107 +1857,7 @@ export class Session extends EventEmitter {
     }
   }
 
-  // Check if we should auto-compact based on token threshold
-  private checkAutoCompact(): void {
-    if (this._isStopped) return; // Early exit check
-    if (!this._autoCompactEnabled || this._isCompacting || this._isClearing) return;
-
-    const totalTokens = this._totalInputTokens + this._totalOutputTokens;
-    if (totalTokens >= this._autoCompactThreshold) {
-      this._isCompacting = true;
-      console.log(`[Session] Auto-compact triggered: ${totalTokens} tokens >= ${this._autoCompactThreshold} threshold`);
-
-      // Wait for Claude to be idle before compacting
-      const checkAndCompact = async () => {
-        // Check if session is still valid (not stopped) - must be first check
-        if (this._isStopped) return;
-        if (!this._isCompacting) return;
-
-        if (!this._isWorking) {
-          // Re-check stopped state after async operation might have completed
-          if (this._isStopped) return;
-
-          // Send /compact command with optional prompt
-          const compactCmd = this._autoCompactPrompt ? `/compact ${this._autoCompactPrompt}\r` : '/compact\r';
-          await this.writeViaMux(compactCmd);
-          this.emit('autoCompact', {
-            tokens: totalTokens,
-            threshold: this._autoCompactThreshold,
-            prompt: this._autoCompactPrompt || undefined,
-          });
-
-          // Wait a moment then re-enable (longer than clear since compact takes time)
-          if (!this._isStopped) {
-            this._autoCompactTimer = setTimeout(() => {
-              if (this._isStopped) return; // Check at callback start
-              this._autoCompactTimer = null;
-              this._isCompacting = false;
-            }, 10000);
-          }
-        } else {
-          // Check again after delay
-          if (!this._isStopped) {
-            this._autoCompactTimer = setTimeout(checkAndCompact, AUTO_RETRY_DELAY_MS);
-          }
-        }
-      };
-
-      // Start checking after a short delay
-      if (!this._isStopped) {
-        this._autoCompactTimer = setTimeout(checkAndCompact, AUTO_INITIAL_DELAY_MS);
-      }
-    }
-  }
-
-  // Check if we should auto-clear based on token threshold
-  private checkAutoClear(): void {
-    if (this._isStopped) return; // Early exit check
-    if (!this._autoClearEnabled || this._isClearing || this._isCompacting) return;
-
-    const totalTokens = this._totalInputTokens + this._totalOutputTokens;
-    if (totalTokens >= this._autoClearThreshold) {
-      this._isClearing = true;
-      console.log(`[Session] Auto-clear triggered: ${totalTokens} tokens >= ${this._autoClearThreshold} threshold`);
-
-      // Wait for Claude to be idle before clearing
-      const checkAndClear = async () => {
-        // Check if session is still valid (not stopped) - must be first check
-        if (this._isStopped) return;
-        if (!this._isClearing) return;
-
-        if (!this._isWorking) {
-          // Re-check stopped state after async operation might have completed
-          if (this._isStopped) return;
-
-          // Send /clear command
-          await this.writeViaMux('/clear\r');
-          // Reset token counts
-          this._totalInputTokens = 0;
-          this._totalOutputTokens = 0;
-          this.emit('autoClear', { tokens: totalTokens, threshold: this._autoClearThreshold });
-
-          // Wait a moment then re-enable
-          if (!this._isStopped) {
-            this._autoClearTimer = setTimeout(() => {
-              if (this._isStopped) return; // Check at callback start
-              this._autoClearTimer = null;
-              this._isClearing = false;
-            }, 5000);
-          }
-        } else {
-          // Check again after delay
-          if (!this._isStopped) {
-            this._autoClearTimer = setTimeout(checkAndClear, AUTO_RETRY_DELAY_MS);
-          }
-        }
-      };
-
-      // Start checking after a short delay
-      if (!this._isStopped) {
-        this._autoClearTimer = setTimeout(checkAndClear, AUTO_INITIAL_DELAY_MS);
-      }
-    }
-  }
+  // Note: checkAutoCompact/checkAutoClear moved to SessionAutoOps (this._autoOps)
 
   /**
    * Sends input directly to the PTY process.
@@ -2265,18 +2025,8 @@ export class Session extends EventEmitter {
       this._lineBufferFlushTimer = null;
     }
 
-    // Clear auto-compact/auto-clear timers to prevent memory leaks
-    if (this._autoCompactTimer) {
-      clearTimeout(this._autoCompactTimer);
-      this._autoCompactTimer = null;
-    }
-    this._isCompacting = false;
-
-    if (this._autoClearTimer) {
-      clearTimeout(this._autoClearTimer);
-      this._autoClearTimer = null;
-    }
-    this._isClearing = false;
+    // Destroy auto-compact/auto-clear automation (clears its timers)
+    this._autoOps.destroy();
 
     // Clear prompt check timers
     if (this._promptCheckInterval) {
@@ -2357,7 +2107,7 @@ export class Session extends EventEmitter {
     this._currentTaskId = null;
 
     // Clear task description cache and agent tree to prevent memory leak
-    this._recentTaskDescriptions.clear();
+    this._taskCache.clear();
     this._childAgentIds = [];
 
     // Kill the associated mux session if requested
@@ -2413,6 +2163,6 @@ export class Session extends EventEmitter {
     this._messages = [];
     this._taskTracker.clear();
     this._ralphTracker.clear();
-    this._recentTaskDescriptions.clear();
+    this._taskCache.clear();
   }
 }
