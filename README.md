@@ -450,6 +450,23 @@ See [CLAUDE.md](./CLAUDE.md) for full documentation.
 
 ---
 
+## Codebase Quality
+
+The codebase went through a comprehensive 7-phase refactoring that eliminated god objects, centralized configuration, and established modular architecture:
+
+| Phase | What changed | Impact |
+|-------|-------------|--------|
+| **Performance** | Cached endpoints, SSE adaptive batching, buffer chunking | Sub-16ms terminal latency |
+| **Route extraction** | `server.ts` split into 12 domain route modules + auth middleware + port interfaces | **−60%** server.ts LOC (6,736 → 2,697) |
+| **Domain splitting** | `types.ts` → 14 domain files, `ralph-tracker` → 7 files, `respawn-controller` → 5 files, `session` → 6 files | No more god files |
+| **Frontend modules** | `app.js` → 8 extracted modules (constants, mobile, voice, notifications, keyboard, API, subagent windows) | **−24%** app.js LOC (15.2K → 11.5K) |
+| **Config consolidation** | ~70 scattered magic numbers → 9 domain-focused config files | Zero cross-file duplicates |
+| **Test infrastructure** | Shared mock library, 12 route test files, consolidated MockSession | Testable route handlers via `app.inject()` |
+
+Full details: [`docs/code-structure-findings.md`](docs/code-structure-findings.md)
+
+---
+
 ## Published Packages
 
 ### [`xterm-zerolag-input`](https://www.npmjs.com/package/xterm-zerolag-input)

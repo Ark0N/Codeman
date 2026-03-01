@@ -485,13 +485,14 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **SSE events** | Search `broadcast(` in `server.ts` and route modules |
 | **Session statuses** | `SessionStatus` in `src/types/session.ts` |
 | **Error codes** | `createErrorResponse()` in `src/types/api.ts` |
-| **Refactoring phases** | `docs/phase1-implementation-plan.md` through `docs/phase5-frontend-modularization-plan.md` |
+| **Refactoring phases** | `docs/phase1-implementation-plan.md` through `docs/phase7-test-infrastructure-plan.md` |
 | **Test utilities** | `test/respawn-test-utils.ts` |
 | **Mobile test suite** | `mobile-test/README.md` |
 | **OpenCode integration** | `docs/opencode-integration.md` |
 | **Local echo overlay** | `docs/local-echo-overlay-plan.md` |
 | **Performance investigation** | `docs/performance-investigation-report.md` |
 | **First-load optimization** | `docs/first-load-optimization-plan.md`, `docs/perf-audit-first-load.md` |
+| **Codebase quality / refactoring summary** | `docs/code-structure-findings.md` |
 | **Dead code audit** | `docs/cleanup-findings.md` |
 | **TypeScript improvements** | `docs/typescript-improvement-suggestions.md` |
 | **Browser testing** | `docs/browser-testing-guide.md` |

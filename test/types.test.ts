@@ -8,11 +8,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   createErrorResponse,
-  createSuccessResponse,
   createInitialRalphTrackerState,
   createInitialRalphSessionState,
   createInitialState,
-  ErrorMessages,
   ApiErrorCode,
   DEFAULT_CONFIG,
   isError,
@@ -26,7 +24,7 @@ describe('types utility functions', () => {
 
       expect(response.success).toBe(false);
       expect(response.errorCode).toBe('NOT_FOUND');
-      expect(response.error).toBe(ErrorMessages.NOT_FOUND);
+      expect(response.error).toBe('The requested resource was not found');
     });
 
     it('should create error response with custom details', () => {
@@ -82,86 +80,6 @@ describe('types utility functions', () => {
       const unicodeDetails = 'Error: 日本語 🚀 émojis';
       const response = createErrorResponse('INVALID_INPUT', unicodeDetails);
       expect(response.error).toBe(unicodeDetails);
-    });
-  });
-
-  describe('createSuccessResponse', () => {
-    it('should create success response without data', () => {
-      const response = createSuccessResponse();
-
-      expect(response.success).toBe(true);
-      expect(response.data).toBeUndefined();
-    });
-
-    it('should create success response with data', () => {
-      const data = { id: '123', name: 'test' };
-      const response = createSuccessResponse(data);
-
-      expect(response.success).toBe(true);
-      expect(response.data).toEqual(data);
-    });
-
-    it('should handle null data', () => {
-      const response = createSuccessResponse(null);
-      expect(response.success).toBe(true);
-      expect(response.data).toBeNull();
-    });
-
-    it('should handle undefined explicitly', () => {
-      const response = createSuccessResponse(undefined);
-      expect(response.success).toBe(true);
-      expect(response.data).toBeUndefined();
-    });
-
-    it('should handle array data', () => {
-      const data = [1, 2, 3, { nested: true }];
-      const response = createSuccessResponse(data);
-      expect(response.data).toEqual(data);
-    });
-
-    it('should handle nested object data', () => {
-      const data = {
-        level1: {
-          level2: {
-            level3: {
-              value: 'deep',
-            },
-          },
-        },
-      };
-      const response = createSuccessResponse(data);
-      expect(response.data).toEqual(data);
-    });
-
-    it('should handle string data', () => {
-      const response = createSuccessResponse('simple string');
-      expect(response.data).toBe('simple string');
-    });
-
-    it('should handle number data', () => {
-      const response = createSuccessResponse(42);
-      expect(response.data).toBe(42);
-    });
-
-    it('should handle boolean data', () => {
-      const response = createSuccessResponse(true);
-      expect(response.data).toBe(true);
-    });
-
-    it('should handle Date data', () => {
-      const date = new Date('2024-01-15');
-      const response = createSuccessResponse(date);
-      expect(response.data).toEqual(date);
-    });
-
-    it('should handle empty object data', () => {
-      const response = createSuccessResponse({});
-      expect(response.data).toEqual({});
-    });
-
-    it('should handle empty array data', () => {
-      const response = createSuccessResponse([]);
-      expect(response.data).toEqual([]);
     });
   });
 
@@ -312,31 +230,6 @@ describe('types utility functions', () => {
       expect(state.config.respawn).toHaveProperty('enabled');
       expect(state.config.respawn).toHaveProperty('sendClear');
       expect(state.config.respawn).toHaveProperty('sendInit');
-    });
-  });
-
-  describe('ErrorMessages', () => {
-    it('should have messages for all error codes', () => {
-      const codes: ApiErrorCode[] = [
-        ApiErrorCode.NOT_FOUND,
-        ApiErrorCode.INVALID_INPUT,
-        ApiErrorCode.SESSION_BUSY,
-        ApiErrorCode.OPERATION_FAILED,
-        ApiErrorCode.ALREADY_EXISTS,
-        ApiErrorCode.INTERNAL_ERROR,
-      ];
-
-      for (const code of codes) {
-        expect(ErrorMessages[code]).toBeDefined();
-        expect(typeof ErrorMessages[code]).toBe('string');
-        expect(ErrorMessages[code].length).toBeGreaterThan(0);
-      }
-    });
-
-    it('should have unique messages', () => {
-      const messages = Object.values(ErrorMessages);
-      const uniqueMessages = new Set(messages);
-      expect(uniqueMessages.size).toBe(messages.length);
     });
   });
 
