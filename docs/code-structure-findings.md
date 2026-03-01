@@ -854,19 +854,19 @@ execSync(`tmux kill-session -t "${this.checkMuxName}"`, { timeout: 3000 });
 
 ## 18. Scorecard & Prioritized Roadmap
 
-### Overall Scores
+### Overall Scores (Post-Implementation)
 
-| Category | Score | Notes |
-|----------|-------|-------|
-| TypeScript Safety | 8.5/10 | 0 `any`, 0 `@ts-ignore`, 37 non-null assertions |
-| Error Handling | 8/10 | Consistent helpers, proper type guards, no untyped catches |
-| Async/Promise Safety | 9.5/10 | Zero unhandled rejections, all async properly guarded |
-| Resource Cleanup | 7/10 | Good patterns but CleanupManager unused |
-| Module Organization | 5/10 | 3 god files, types.ts too large |
-| Test Coverage | 6/10 | Core logic tested, server.ts untested |
-| Config Centralization | 6/10 | Partially done, 40+ scattered values |
-| Frontend Architecture | 4/10 | 15K monolith, 60+ Maps, no modularity |
-| Code Duplication | 5/10 | Debounce patterns, fetch calls, mocks |
+| Category | Before | After | Notes |
+|----------|--------|-------|-------|
+| TypeScript Safety | 8.5/10 | 9/10 | 0 `any`, 0 `@ts-ignore`, Zod `z.infer` eliminates type drift |
+| Error Handling | 8/10 | 8/10 | Unchanged — already strong |
+| Async/Promise Safety | 9.5/10 | 9.5/10 | Unchanged — already strong |
+| Resource Cleanup | 7/10 | 9/10 | CleanupManager adopted across 6+ files; Debouncer utility eliminates manual timer patterns |
+| Module Organization | 5/10 | 8/10 | Routes extracted (12 modules), types split (14 domain files), domain files split (ralph: 7, respawn: 5, session: 6) |
+| Test Coverage | 6/10 | 7/10 | Shared mock infrastructure, 3 route test files with 58 tests, MockSession/MockStateStore consolidated |
+| Config Centralization | 6/10 | 9/10 | 9 config files, ~65 constants centralized, 0 cross-file duplicates |
+| Frontend Architecture | 4/10 | 7/10 | 8 extracted modules (3,453 LOC), app.js reduced 24% (15.2K → 11.5K), xterm-zerolag-input vendor build |
+| Code Duplication | 5/10 | 8/10 | Debouncer utility, shared test mocks, barrel exports, config consolidation |
 
 ### Implementation Phases
 
@@ -884,59 +884,81 @@ execSync(`tmux kill-session -t "${this.checkMuxName}"`, { timeout: 3000 });
 4. ✅ Migrate server.ts timer cleanup to CleanupManager (~2 hours) — 5 standalone timers migrated to `CleanupManager`; terminal batch timers and pending respawn starts left as manual Maps (complex lifecycle)
 5. ✅ Migrate remaining files (~2 hours) — `ralph-tracker.ts` (watcher + stall timer → CleanupManager), `bash-tool-parser.ts` (auto-remove timers → CleanupManager), `subagent-watcher.ts` (intervals + watchers → CleanupManager); ~30 manual timer fields eliminated, ~200+ lines of boilerplate removed
 
-**Phase 3 - server.ts Route Extraction (3-4 days)**
-1. Create `src/web/routes/` directory structure
-2. Extract session routes (~2 hours)
-3. Extract respawn routes (~1 hour)
-4. Extract subagent routes (~1 hour)
-5. Extract remaining route groups (~4 hours)
-6. Create auth middleware (~1 hour)
-7. Create error handler middleware (~1 hour)
-8. Reduce server.ts to ~1,500 LOC
+**Phase 3 - server.ts Route Extraction (3-4 days)** ✅ COMPLETE
+1. ✅ Created `src/web/routes/` with 12 domain route modules + index barrel (4,090 LOC total): session (909), system (768), ralph (533), plan (459), respawn (315), case, file, hook-event, mux, push, scheduled, team
+2. ✅ Created `src/web/middleware/auth.ts` (193 LOC) — Basic Auth, session cookies, rate limiting, security headers, CORS
+3. ✅ Created `src/web/ports/` with 7 typed port interfaces (142 LOC) — SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort, AuthPort; routes declare dependencies via intersection types
+4. ✅ Created `src/web/route-helpers.ts` (154 LOC) — `findSessionOrFail()`, `formatUptime()`, `sanitizeHookData()`, `autoConfigureRalph()`
+5. ✅ Reduced `server.ts` from 6,736 → 2,697 LOC (60% reduction). Remaining LOC is justified infrastructure: session lifecycle, SSE broadcast engine, terminal batching, respawn integration, resource cleanup
 
-**Phase 4 - Domain File Splitting (2-3 days)**
-1. Split types.ts into types/ directory (~2 hours)
-2. Split ralph-tracker.ts into 4 files (~4 hours)
-3. Split respawn-controller.ts into 3 files (~4 hours)
-4. Split session.ts into 3 files (~3 hours)
+**Phase 4 - Domain File Splitting (2-3 days)** ✅ COMPLETE
+1. ✅ Split `types.ts` into `src/types/` directory — 14 domain files (1,469 LOC total): common, session, task, app-state, respawn, ralph, api, lifecycle, run-summary, tools, teams, push, plan + index barrel. Original `types.ts` is now a 1-line re-export
+2. ✅ Split `ralph-tracker.ts` into 7 files (exceeded plan of 4) — ralph-tracker (2,391), ralph-plan-tracker (477), ralph-status-parser (552), ralph-fix-plan-watcher (366), ralph-stall-detector (166), ralph-config (153), ralph-loop (522)
+3. ✅ Split `respawn-controller.ts` into 5 files (exceeded plan of 3) — respawn-controller (3,228), respawn-health (229), respawn-metrics (229), respawn-patterns (131), respawn-adaptive-timing (134)
+4. ✅ Split `session.ts` into 6 files (exceeded plan of 3) — session (2,168), session-manager (298), session-auto-ops (284), session-cli-builder (132), session-task-cache (101), session-lifecycle-log (114)
 
-**Phase 5 - Frontend Modularization (3-4 days)**
-1. Extract mobile handlers to mobile.js (~2 hours)
-2. Extract voice input to voice.js (~3 hours)
-3. Extract NotificationManager to notifications.js (~2 hours)
-4. Extract KeyboardAccessoryBar (~1 hour)
-5. Create ApiClient wrapper (~2 hours)
-6. Create config.js for magic numbers (~1 hour)
-7. Remove inlined xterm-zerolag-input copy (~1 hour)
+**Phase 5 - Frontend Modularization (3-4 days)** ✅ COMPLETE
+1. ✅ Extracted `constants.js` (238 LOC) — shared constants, timing values, Z-index layers, `escapeHtml()`, `extractSyncSegments()`
+2. ✅ Extracted `mobile-handlers.js` (449 LOC) — `MobileDetection`, `KeyboardHandler`, `SwipeHandler`
+3. ✅ Extracted `voice-input.js` (853 LOC) — `DeepgramProvider`, `VoiceInput`
+4. ✅ Extracted `notification-manager.js` (445 LOC) — `NotificationManager` class (5-layer system)
+5. ✅ Extracted `keyboard-accessory.js` (279 LOC) — `KeyboardAccessoryBar`, `FocusTrap`
+6. ✅ Extracted `api-client.js` (70 LOC) — `_api()`, `_apiJson()`, `_apiPost()`, `_apiPut()`
+7. ✅ Extracted `subagent-windows.js` (1,119 LOC) — 13 subagent window methods
+8. ✅ Removed inlined xterm-zerolag-input copy → built to `vendor/xterm-zerolag-input.js` from `packages/xterm-zerolag-input/`
+9. ✅ Reduced `app.js` from ~15,200 → 11,473 LOC (24% reduction). All scripts loaded in correct dependency order in `index.html`
 
-**Phase 6 - Config Consolidation (1 day)**
-1. Create `src/config/server-config.ts` (~1 hour)
-2. Create `src/config/timing-config.ts` (~1 hour)
-3. Move scattered constants from 10+ files (~3 hours)
+**Phase 6 - Config Consolidation (1 day)** ✅ COMPLETE
+1. ✅ Created 6 new domain-focused config files (better than plan's 2 generic files): `server-timing.ts` (13 constants), `auth-config.ts` (5 constants), `tunnel-config.ts` (8 constants), `terminal-limits.ts` (4 constants), `ai-defaults.ts` (3 constants), `team-config.ts` (3 constants)
+2. ✅ Total: 9 config files in `src/config/`, ~65 constants centralized
+3. ✅ Eliminated all cross-file duplicates: `STATS_COLLECTION_INTERVAL_MS` (was in 2 files), `timeout: 10000` (was 6× inline in hooks-config.ts → `HOOK_TIMEOUT_MS`), AI model string (was in 5 files → `AI_CHECK_MODEL`), `MAX_TRACKED_AGENTS` (was shadowed in subagent-watcher.ts)
+4. ✅ CLAUDE.md updated with config files table, import conventions, resource limits references
 
-**Phase 7 - Test Infrastructure (2-3 days)**
-1. Consolidate MockSession into single shared mock (~2 hours)
-2. Create `test/mocks/` with barrel export (~1 hour)
-3. Import unused respawn-test-utils where needed (~1 hour)
-4. Add server.ts route tests (ongoing, ~8+ hours)
+**Phase 7 - Test Infrastructure (2-3 days)** ✅ COMPLETE
+1. ✅ Created `test/mocks/` directory with 5 files (541 LOC): `mock-session.ts` (312), `mock-state-store.ts` (60), `mock-route-context.ts` (121), `test-helpers.ts` (37), `index.ts` (11 — barrel export)
+2. ✅ Consolidated MockSession into single shared definition — no duplicate class definitions remain (2 `vi.mock()`-based copies intentionally left in session-manager.test.ts and ralph-loop.test.ts)
+3. ✅ `respawn-test-utils.ts` converted to backward-compatibility shim — re-exports from `test/mocks/`, retains respawn-specific utilities (MockAiIdleChecker, TimeController, etc.)
+4. ✅ Created 3 route test files with 58 total tests: `session-routes.test.ts` (34 tests), `respawn-routes.test.ts` (13 tests), `system-routes.test.ts` (11 tests). Route test harness uses `app.inject()` — no real ports needed
+5. ⚠️ Remaining: 9 of 12 route modules still lack dedicated tests (ralph, plan, push, team, mux, file, scheduled, hook-event, case)
 
 ---
 
-## Appendix: File Size Inventory
+## Appendix: File Size Inventory (Post-Implementation)
 
-| File | Lines | Category |
-|------|-------|----------|
-| `src/web/public/app.js` | 15,196 | Frontend |
-| `src/web/server.ts` | 6,736 | Backend |
-| `src/ralph-tracker.ts` | 3,905 | Domain |
-| `src/respawn-controller.ts` | 3,611 | Domain |
-| `src/session.ts` | 2,418 | Domain |
-| `src/subagent-watcher.ts` | 1,689 | Domain |
-| `src/types.ts` | 1,443 | Types |
-| `src/state-store.ts` | 910 | Infrastructure |
-| `src/ralph-loop.ts` | ~600 | Domain |
-| `src/web/schemas.ts` | 508 | Validation |
-| All other src/ files | <500 each | Various |
+### Before vs After
+
+| File | Before | After | Change |
+|------|--------|-------|--------|
+| `src/web/server.ts` | 6,736 | 2,697 | **−60%** (routes, auth, ports extracted) |
+| `src/web/public/app.js` | 15,196 | 11,473 | **−24%** (8 modules extracted) |
+| `src/ralph-tracker.ts` | 3,905 | 2,391 | **−39%** (6 companion files extracted) |
+| `src/respawn-controller.ts` | 3,611 | 3,228 | **−11%** (4 companion files extracted) |
+| `src/session.ts` | 2,418 | 2,168 | **−10%** (5 companion files extracted) |
+| `src/types.ts` | 1,443 | 1 | **−99%** (14 domain files in `src/types/`) |
+
+### New Infrastructure Created
+
+| Directory | Files | Total LOC | Purpose |
+|-----------|-------|-----------|---------|
+| `src/web/routes/` | 13 | 4,090 | Domain route modules |
+| `src/web/ports/` | 7 | 142 | Port interfaces for DI |
+| `src/web/middleware/` | 1 | 193 | Auth middleware |
+| `src/types/` | 14 | 1,469 | Domain type files |
+| `src/config/` | 9 | ~450 | Centralized config |
+| `test/mocks/` | 5 | 541 | Shared test mocks |
+| `test/routes/` | 4 | ~500 | Route handler tests |
+
+### Extracted Frontend Modules
+
+| Module | Lines | Purpose |
+|--------|-------|---------|
+| `subagent-windows.js` | 1,119 | Subagent window management |
+| `voice-input.js` | 853 | DeepgramProvider, VoiceInput |
+| `mobile-handlers.js` | 449 | MobileDetection, KeyboardHandler, SwipeHandler |
+| `notification-manager.js` | 445 | 5-layer notification system |
+| `keyboard-accessory.js` | 279 | KeyboardAccessoryBar, FocusTrap |
+| `constants.js` | 238 | Shared constants, timing, Z-index |
+| `api-client.js` | 70 | API fetch wrapper |
 
 ### What's Working Well
 
@@ -949,3 +971,7 @@ These patterns should be **preserved, not refactored**:
 - `StaleExpirationMap` and `LRUMap` for bounded collections
 - State persistence circuit breaker pattern
 - TypeScript strict mode with all safety flags enabled
+- `CleanupManager` for centralized timer/watcher disposal
+- `Debouncer`/`KeyedDebouncer` for consistent debounce patterns
+- Port interfaces for route module dependency injection
+- `Object.assign(CodemanApp.prototype, ...)` for frontend module composition
