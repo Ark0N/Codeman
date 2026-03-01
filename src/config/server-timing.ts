@@ -21,8 +21,15 @@ export const BATCH_FLUSH_THRESHOLD = 32 * 1024;
 /** Task event batching interval (ms) */
 export const TASK_UPDATE_BATCH_INTERVAL = 100;
 
-/** SSE client health check interval (ms) */
-export const SSE_HEALTH_CHECK_INTERVAL = 30 * 1000;
+/** SSE heartbeat interval — sends padded keepalive to flush proxy buffers (ms).
+ * 15s is fast enough to keep Cloudflare tunnel buffers flushed while avoiding
+ * excessive bandwidth. Also serves as dead-client detection. */
+export const SSE_HEARTBEAT_INTERVAL = 15 * 1000;
+
+/** SSE padding size (bytes). Cloudflare quick tunnels buffer small SSE events;
+ * appending ~8KB of SSE comment padding forces the proxy to flush immediately.
+ * SSE comments (lines starting with ':') are silently ignored by EventSource. */
+export const SSE_PADDING_SIZE = 8 * 1024;
 
 // ============================================================================
 // State Persistence

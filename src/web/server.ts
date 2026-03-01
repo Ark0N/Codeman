@@ -96,7 +96,8 @@ import {
   SESSIONS_LIST_CACHE_TTL,
   SCHEDULED_CLEANUP_INTERVAL,
   SCHEDULED_RUN_MAX_AGE,
-  SSE_HEALTH_CHECK_INTERVAL,
+  SSE_HEARTBEAT_INTERVAL,
+  SSE_PADDING_SIZE,
   SESSION_LIMIT_WAIT_MS,
   ITERATION_PAUSE_MS,
   BATCH_FLUSH_THRESHOLD,
@@ -109,6 +110,12 @@ import {
 // Supported by: WezTerm, Kitty, Ghostty, iTerm2 3.5+, Windows Terminal, VSCode terminal
 const DEC_SYNC_START = '\x1b[?2026h'; // Begin synchronized update
 const DEC_SYNC_END = '\x1b[?2026l'; // End synchronized update (flush to screen)
+
+// SSE padding for Cloudflare tunnel buffer flushing.
+// Cloudflare quick tunnels buffer small SSE responses, causing lag for real-time events.
+// Appending SSE comment padding (ignored by EventSource) forces the proxy to flush.
+// Pre-computed once at startup to avoid repeated string allocation.
+const SSE_PADDING = ':' + 'p'.repeat(SSE_PADDING_SIZE) + '\n';
 
 /**
  * Get or generate a self-signed TLS certificate for HTTPS.
@@ -574,6 +581,9 @@ export class WebServer extends EventEmitter {
       // Use light state for SSE init to avoid sending 2MB+ terminal buffers
       // Buffers are fetched on-demand when switching tabs
       this.sendSSE(reply, 'init', this.getLightState());
+      // Flush Cloudflare tunnel buffer with padding — ensures the init event
+      // (and any immediately following events) are delivered without proxy delay.
+      try { reply.raw.write(SSE_PADDING); } catch { /* client gone */ }
 
       req.raw.on('close', () => {
         this.sseClients.delete(reply);
@@ -1855,10 +1865,12 @@ export class WebServer extends EventEmitter {
       this.cachedLightState = null;
       this.cachedSessionsList = null;
     }
-    // Performance optimization: serialize JSON once for all clients
+    // Performance optimization: serialize JSON once for all clients.
+    // Append padding to flush Cloudflare tunnel buffers for all non-terminal events.
+    // Terminal data is high-volume and already exceeds buffer thresholds naturally.
     let message: string;
     try {
-      message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+      message = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n` + SSE_PADDING;
     } catch (err) {
       // Handle circular references or non-serializable values
       console.error(`[Server] Failed to serialize SSE event "${event}":`, err);
@@ -2128,8 +2140,9 @@ export class WebServer extends EventEmitter {
         if (!socket || socket.destroyed || !socket.writable) {
           deadClients.push(client);
         } else {
-          // Send SSE comment as keep-alive (comments start with ':')
-          client.raw.write(':keepalive\n\n');
+          // Send padded SSE comment as keep-alive — the padding flushes
+          // Cloudflare tunnel buffers so subsequent events arrive promptly.
+          client.raw.write(':keepalive\n' + SSE_PADDING);
         }
       } catch {
         // Error accessing socket means client is dead
@@ -2213,8 +2226,8 @@ export class WebServer extends EventEmitter {
       () => {
         this.cleanupDeadSSEClients();
       },
-      SSE_HEALTH_CHECK_INTERVAL,
-      { description: 'SSE client health check' }
+      SSE_HEARTBEAT_INTERVAL,
+      { description: 'SSE heartbeat + dead client cleanup' }
     );
 
     // Start token recording timer (every 5 minutes for long-running sessions)
