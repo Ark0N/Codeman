@@ -41,7 +41,7 @@ import { AiIdleChecker, type AiCheckResult, type AiCheckState } from './ai-idle-
 import { AiPlanChecker, type AiPlanCheckResult } from './ai-plan-checker.js';
 import type { TeamWatcher } from './team-watcher.js';
 import { BufferAccumulator } from './utils/buffer-accumulator.js';
-import { ANSI_ESCAPE_PATTERN_SIMPLE, assertNever } from './utils/index.js';
+import { ANSI_ESCAPE_PATTERN_SIMPLE, assertNever, CleanupManager } from './utils/index.js';
 import { MAX_RESPAWN_BUFFER_SIZE, TRIM_RESPAWN_BUFFER_TO as RESPAWN_BUFFER_TRIM_SIZE } from './config/buffer-limits.js';
 import {
   isCompletionMessage,
@@ -643,26 +643,14 @@ export class RespawnController extends EventEmitter {
   /** Current state machine state */
   private _state: RespawnState = 'stopped';
 
-  /** Timer for step delays */
-  private stepTimer: NodeJS.Timeout | null = null;
+  /** Centralized timer lifecycle manager — disposed and recreated on clearTimers() */
+  private cleanup = new CleanupManager();
 
-  /** Timer for completion confirmation (Layer 2) */
-  private completionConfirmTimer: NodeJS.Timeout | null = null;
-
-  /** Timer for no-output fallback (Layer 5) */
-  private noOutputTimer: NodeJS.Timeout | null = null;
-
-  /** Timer for periodic detection status updates */
-  private detectionUpdateTimer: NodeJS.Timeout | null = null;
+  /** Maps timer names to CleanupManager registration IDs (for individual cancel) */
+  private timerIds = new Map<string, string>();
 
   /** Cached key fields from last emitted detection status (for dedup) */
   private lastEmittedDetectionKey: string = '';
-
-  /** Timer for auto-accepting plan mode prompts */
-  private autoAcceptTimer: NodeJS.Timeout | null = null;
-
-  /** Timer for pre-filter silence detection (triggers AI check) */
-  private preFilterTimer: NodeJS.Timeout | null = null;
 
   /** Whether any terminal output has been received since start/last-auto-accept */
   private hasReceivedOutput: boolean = false;
@@ -683,9 +671,6 @@ export class RespawnController extends EventEmitter {
 
   /** Timestamp when idle_prompt was received */
   private idlePromptTime: number | null = null;
-
-  /** Timer for short confirmation after hook signal (handles race conditions) */
-  private hookConfirmTimer: NodeJS.Timeout | null = null;
 
   /** Confirmation delay after hook signal before confirming idle (ms) */
   private static readonly HOOK_CONFIRM_DELAY_MS = 3000;
@@ -720,12 +705,6 @@ export class RespawnController extends EventEmitter {
   /** Unique ID for current AI check request (to detect stale results) */
   private _currentAiCheckId: string | null = null;
 
-  /** Timer for /clear step fallback (sends /init if no prompt detected) */
-  private clearFallbackTimer: NodeJS.Timeout | null = null;
-
-  /** Timer for step completion confirmation (waits for silence after completion) */
-  private stepConfirmTimer: NodeJS.Timeout | null = null;
-
   /** Fallback timeout for /clear step (ms) - sends /init without waiting for prompt */
   private static readonly CLEAR_FALLBACK_TIMEOUT_MS = 10000;
 
@@ -742,9 +721,6 @@ export class RespawnController extends EventEmitter {
 
   /** Timestamp when the current state was entered */
   private stateEnteredAt: number = 0;
-
-  /** Timer for stuck-state detection */
-  private stuckStateTimer: NodeJS.Timeout | null = null;
 
   /** Whether a stuck-state warning has been emitted for current state */
   private stuckStateWarned: boolean = false;
@@ -1116,7 +1092,7 @@ export class RespawnController extends EventEmitter {
     this.stopDetectionUpdates();
     if (this._state === 'stopped') return;
     this.lastEmittedDetectionKey = '';
-    this.detectionUpdateTimer = setInterval(() => {
+    const id = this.cleanup.setInterval(() => {
       try {
         if (this._state !== 'stopped') {
           const status = this.getDetectionStatus();
@@ -1131,17 +1107,15 @@ export class RespawnController extends EventEmitter {
       } catch (err) {
         console.error(`[RespawnController] Error in detectionUpdateTimer:`, err);
       }
-    }, 2000);
+    }, 2000, { description: 'detection-update' });
+    this.timerIds.set('detection-update', id);
   }
 
   /**
    * Stop periodic detection status updates.
    */
   private stopDetectionUpdates(): void {
-    if (this.detectionUpdateTimer) {
-      clearInterval(this.detectionUpdateTimer);
-      this.detectionUpdateTimer = null;
-    }
+    this.cancelTrackedTimer('detection-update');
   }
 
   /**
@@ -1266,7 +1240,6 @@ export class RespawnController extends EventEmitter {
     this.aiChecker.removeAllListeners();
     this.planChecker.removeAllListeners();
     this.clearTimers();
-    this.stopDetectionUpdates();
     this.recentActions.length = 0;
     this.setState('stopped');
     if (this.terminalHandler) {
@@ -1431,8 +1404,8 @@ export class RespawnController extends EventEmitter {
       this.lastWorkingPatternTime = now;
 
       // Cancel hook confirmation timer if running
-      this.cancelTrackedTimer('hook-confirm', this.hookConfirmTimer, 'working patterns detected');
-      this.hookConfirmTimer = null;
+      this.cancelTrackedTimer('hook-confirm','working patterns detected');
+
 
       // Cancel any pending completion confirmation
       this.cancelCompletionConfirm();
@@ -1564,8 +1537,8 @@ export class RespawnController extends EventEmitter {
    */
   private checkClearComplete(): void {
     // Clear the fallback timer since we got prompt detection
-    this.cancelTrackedTimer('clear-fallback', this.clearFallbackTimer, 'prompt detected');
-    this.clearFallbackTimer = null;
+    this.cancelTrackedTimer('clear-fallback','prompt detected');
+
     this.logAction('step', '/clear completed');
     this.emit('stepCompleted', 'clear');
 
@@ -1613,11 +1586,11 @@ export class RespawnController extends EventEmitter {
     this.logAction('step', 'Monitoring if /init triggered work...');
 
     // Give Claude a moment to start working before checking for idle
-    this.stepTimer = this.startTrackedTimer(
+    this.startTrackedTimer(
       'init-monitor',
       3000,
       () => {
-        this.stepTimer = null;
+
         // If still in monitoring state and no work detected, consider it idle
         if (this._state === 'monitoring_init' && !this.workingDetected) {
           this.checkMonitoringInitIdle();
@@ -1633,10 +1606,7 @@ export class RespawnController extends EventEmitter {
    * @fires stepCompleted - With step 'init'
    */
   private checkMonitoringInitIdle(): void {
-    if (this.stepTimer) {
-      clearTimeout(this.stepTimer);
-      this.stepTimer = null;
-    }
+    this.cancelTrackedTimer('init-monitor');
     this.log('/init did not trigger work, sending kickstart prompt');
     this.emit('stepCompleted', 'init');
     this.sendKickstart();
@@ -1651,11 +1621,11 @@ export class RespawnController extends EventEmitter {
     this.terminalBuffer.clear();
     this.clearWorkingPatternWindow();
 
-    this.stepTimer = this.startTrackedTimer(
+    this.startTrackedTimer(
       'step-delay',
       this.config.interStepDelayMs,
       async () => {
-        this.stepTimer = null;
+
         if (this._state === 'stopped') return;
         const prompt = this.config.kickstartPrompt!;
         this.logAction('command', `Sending kickstart: "${prompt.substring(0, 40)}..."`);
@@ -1685,48 +1655,10 @@ export class RespawnController extends EventEmitter {
 
   /** Clear all timers (step, completion confirm, no-output, pre-filter, step confirm, auto-accept, hook confirm, and clear fallback) */
   private clearTimers(): void {
-    // Clear tracked timers map first to avoid stale entries during individual cleanup
     this.activeTimers.clear();
-    if (this.stepTimer) {
-      clearTimeout(this.stepTimer);
-      this.stepTimer = null;
-    }
-    if (this.clearFallbackTimer) {
-      clearTimeout(this.clearFallbackTimer);
-      this.clearFallbackTimer = null;
-    }
-    if (this.completionConfirmTimer) {
-      clearTimeout(this.completionConfirmTimer);
-      this.completionConfirmTimer = null;
-    }
-    if (this.stepConfirmTimer) {
-      clearTimeout(this.stepConfirmTimer);
-      this.stepConfirmTimer = null;
-    }
-    if (this.autoAcceptTimer) {
-      clearTimeout(this.autoAcceptTimer);
-      this.autoAcceptTimer = null;
-    }
-    if (this.preFilterTimer) {
-      clearTimeout(this.preFilterTimer);
-      this.preFilterTimer = null;
-    }
-    if (this.noOutputTimer) {
-      clearTimeout(this.noOutputTimer);
-      this.noOutputTimer = null;
-    }
-    if (this.hookConfirmTimer) {
-      clearTimeout(this.hookConfirmTimer);
-      this.hookConfirmTimer = null;
-    }
-    if (this.stuckStateTimer) {
-      clearInterval(this.stuckStateTimer);
-      this.stuckStateTimer = null;
-    }
-    if (this.detectionUpdateTimer) {
-      clearInterval(this.detectionUpdateTimer);
-      this.detectionUpdateTimer = null;
-    }
+    this.timerIds.clear();
+    this.cleanup.dispose();
+    this.cleanup = new CleanupManager();
   }
 
   // ========== Stuck-State Detection Methods ==========
@@ -1740,21 +1672,19 @@ export class RespawnController extends EventEmitter {
     if (this._state === 'stopped') return;
 
     // Clear existing timer
-    if (this.stuckStateTimer) {
-      clearInterval(this.stuckStateTimer);
-      this.stuckStateTimer = null;
-    }
+    this.cancelTrackedTimer('stuck-state');
 
     // Check interval for stuck state
     const checkIntervalMs = Math.min(this.config.stuckStateWarningMs, 60000); // Check every minute max
 
-    this.stuckStateTimer = setInterval(() => {
+    const id = this.cleanup.setInterval(() => {
       try {
         this.checkStuckState();
       } catch (err) {
         console.error(`[RespawnController] Error in stuckStateTimer:`, err);
       }
-    }, checkIntervalMs);
+    }, checkIntervalMs, { description: 'stuck-state' });
+    this.timerIds.set('stuck-state', id);
   }
 
   /**
@@ -1895,7 +1825,10 @@ export class RespawnController extends EventEmitter {
    * Start a tracked timer with UI countdown support.
    * Emits timerStarted event and tracks the timer for UI display.
    */
-  private startTrackedTimer(name: string, durationMs: number, callback: () => void, reason?: string): NodeJS.Timeout {
+  private startTrackedTimer(name: string, durationMs: number, callback: () => void, reason?: string): void {
+    // Cancel any existing timer with this name
+    this.cancelTrackedTimer(name);
+
     const now = Date.now();
     const endsAt = now + durationMs;
 
@@ -1903,19 +1836,23 @@ export class RespawnController extends EventEmitter {
     this.emit('timerStarted', { name, durationMs, endsAt, reason });
     this.logAction('timer', `Started ${name}: ${Math.round(durationMs / 1000)}s${reason ? ` (${reason})` : ''}`);
 
-    return setTimeout(() => {
+    const id = this.cleanup.setTimeout(() => {
+      this.timerIds.delete(name);
       this.activeTimers.delete(name);
       this.emit('timerCompleted', name);
       callback();
-    }, durationMs);
+    }, durationMs, { description: name });
+    this.timerIds.set(name, id);
   }
 
   /**
    * Cancel a tracked timer and emit cancellation event.
    */
-  private cancelTrackedTimer(name: string, timerRef: NodeJS.Timeout | null, reason?: string): void {
-    if (timerRef) {
-      clearTimeout(timerRef);
+  private cancelTrackedTimer(name: string, reason?: string): void {
+    const id = this.timerIds.get(name);
+    if (id) {
+      this.cleanup.unregister(id);
+      this.timerIds.delete(name);
       if (this.activeTimers.has(name)) {
         this.activeTimers.delete(name);
         this.emit('timerCancelled', name, reason);
@@ -1988,14 +1925,14 @@ export class RespawnController extends EventEmitter {
    * (used when AI check is disabled or has too many errors).
    */
   private startNoOutputTimer(): void {
-    this.cancelTrackedTimer('no-output-fallback', this.noOutputTimer, 'restarting');
-    this.noOutputTimer = null;
+    this.cancelTrackedTimer('no-output-fallback','restarting');
 
-    this.noOutputTimer = this.startTrackedTimer(
+
+    this.startTrackedTimer(
       'no-output-fallback',
       this.config.noOutputTimeoutMs,
       () => {
-        this.noOutputTimer = null;
+    
         if (this._state === 'watching' || this._state === 'confirming_idle') {
           const msSinceOutput = Date.now() - this.lastOutputTime;
           this.logAction('detection', `No-output fallback: ${Math.round(msSinceOutput / 1000)}s silence`);
@@ -2028,17 +1965,17 @@ export class RespawnController extends EventEmitter {
    * This provides an additional path to AI check even without a completion message.
    */
   private startPreFilterTimer(): void {
-    this.cancelTrackedTimer('pre-filter', this.preFilterTimer, 'restarting');
-    this.preFilterTimer = null;
+    this.cancelTrackedTimer('pre-filter','restarting');
+
 
     // Only set up pre-filter when AI check is enabled
     if (!this.config.aiIdleCheckEnabled) return;
 
-    this.preFilterTimer = this.startTrackedTimer(
+    this.startTrackedTimer(
       'pre-filter',
       this.config.completionConfirmMs,
       () => {
-        this.preFilterTimer = null;
+    
         if (this._state === 'watching') {
           const now = Date.now();
           const msSinceOutput = now - this.lastOutputTime;
@@ -2143,18 +2080,18 @@ export class RespawnController extends EventEmitter {
 
         if (result.verdict === 'IDLE') {
           // Cancel any pending confirmation timers - AI has spoken
-          this.cancelTrackedTimer('completion-confirm', this.completionConfirmTimer, 'AI verdict: IDLE');
-          this.completionConfirmTimer = null;
-          this.cancelTrackedTimer('pre-filter', this.preFilterTimer, 'AI verdict: IDLE');
-          this.preFilterTimer = null;
+          this.cancelTrackedTimer('completion-confirm','AI verdict: IDLE');
+
+          this.cancelTrackedTimer('pre-filter','AI verdict: IDLE');
+      
 
           this.logAction('ai-check', `Verdict: IDLE - ${result.reasoning}`);
           this.emit('aiCheckCompleted', result);
           this.onIdleConfirmed(`ai-check: idle (${result.reasoning})`);
         } else if (result.verdict === 'WORKING') {
           // Cancel timers and go to cooldown
-          this.cancelTrackedTimer('completion-confirm', this.completionConfirmTimer, 'AI verdict: WORKING');
-          this.completionConfirmTimer = null;
+          this.cancelTrackedTimer('completion-confirm','AI verdict: WORKING');
+
 
           this.logAction('ai-check', `Verdict: WORKING - ${result.reasoning}`);
           this.emit('aiCheckCompleted', result);
@@ -2210,14 +2147,14 @@ export class RespawnController extends EventEmitter {
    * and no elicitation dialog was detected. Only handles plan mode approvals.
    */
   private startAutoAcceptTimer(): void {
-    this.cancelTrackedTimer('auto-accept', this.autoAcceptTimer, 'restarting');
-    this.autoAcceptTimer = null;
+    this.cancelTrackedTimer('auto-accept','restarting');
 
-    this.autoAcceptTimer = this.startTrackedTimer(
+
+    this.startTrackedTimer(
       'auto-accept',
       this.config.autoAcceptDelayMs,
       () => {
-        this.autoAcceptTimer = null;
+    
         this.tryAutoAccept();
       },
       'plan mode detection'
@@ -2229,8 +2166,8 @@ export class RespawnController extends EventEmitter {
    * Called when a completion message is detected (normal idle flow handles it).
    */
   private cancelAutoAcceptTimer(): void {
-    this.cancelTrackedTimer('auto-accept', this.autoAcceptTimer, 'cancelled');
-    this.autoAcceptTimer = null;
+    this.cancelTrackedTimer('auto-accept','cancelled');
+
   }
 
   /**
@@ -2391,8 +2328,8 @@ export class RespawnController extends EventEmitter {
     }
 
     // Cancel completion confirmation - auto-accept takes precedence
-    this.cancelTrackedTimer('completion-confirm', this.completionConfirmTimer, 'auto-accept');
-    this.completionConfirmTimer = null;
+    this.cancelTrackedTimer('completion-confirm','auto-accept');
+
     this.completionMessageTime = null;
 
     // Ensure we're in watching state (not confirming_idle or ai_checking)
@@ -2446,12 +2383,12 @@ export class RespawnController extends EventEmitter {
     }
 
     // Cancel completion confirm timer - hook takes precedence
-    this.cancelTrackedTimer('completion-confirm', this.completionConfirmTimer, 'Stop hook received');
-    this.completionConfirmTimer = null;
+    this.cancelTrackedTimer('completion-confirm','Stop hook received');
+
 
     // Cancel pre-filter timer - hook takes precedence
-    this.cancelTrackedTimer('pre-filter', this.preFilterTimer, 'Stop hook received');
-    this.preFilterTimer = null;
+    this.cancelTrackedTimer('pre-filter','Stop hook received');
+
 
     // Start short confirmation timer to handle race conditions
     // (e.g., Stop hook arrives but Claude immediately starts new work)
@@ -2485,12 +2422,12 @@ export class RespawnController extends EventEmitter {
     }
 
     // Cancel all other detection timers - this is definitive
-    this.cancelTrackedTimer('completion-confirm', this.completionConfirmTimer, 'idle_prompt received');
-    this.completionConfirmTimer = null;
-    this.cancelTrackedTimer('pre-filter', this.preFilterTimer, 'idle_prompt received');
-    this.preFilterTimer = null;
-    this.cancelTrackedTimer('no-output-fallback', this.noOutputTimer, 'idle_prompt received');
-    this.noOutputTimer = null;
+    this.cancelTrackedTimer('completion-confirm','idle_prompt received');
+
+    this.cancelTrackedTimer('pre-filter','idle_prompt received');
+
+    this.cancelTrackedTimer('no-output-fallback','idle_prompt received');
+
 
     // idle_prompt is an even stronger signal than Stop hook (60s+ idle)
     // Skip confirmation and go directly to idle
@@ -2504,14 +2441,14 @@ export class RespawnController extends EventEmitter {
    * @param hookType - Which hook triggered this ('stop' or 'idle_prompt')
    */
   private startHookConfirmTimer(hookType: 'stop' | 'idle_prompt'): void {
-    this.cancelTrackedTimer('hook-confirm', this.hookConfirmTimer, 'restarting');
-    this.hookConfirmTimer = null;
+    this.cancelTrackedTimer('hook-confirm','restarting');
 
-    this.hookConfirmTimer = this.startTrackedTimer(
+
+    this.startTrackedTimer(
       'hook-confirm',
       RespawnController.HOOK_CONFIRM_DELAY_MS,
       () => {
-        this.hookConfirmTimer = null;
+  
 
         // Verify we haven't received new output since the hook arrived
         const hookTime = hookType === 'stop' ? this.stopHookTime : this.idlePromptTime;
@@ -2585,17 +2522,17 @@ export class RespawnController extends EventEmitter {
    * After completion message, waits for output silence then triggers AI check.
    */
   private startCompletionConfirmTimer(): void {
-    this.cancelTrackedTimer('completion-confirm', this.completionConfirmTimer, 'restarting');
-    this.completionConfirmTimer = null;
+    this.cancelTrackedTimer('completion-confirm','restarting');
+
 
     this.setState('confirming_idle');
     this.logAction('detection', 'Completion message found in output');
 
-    this.completionConfirmTimer = this.startTrackedTimer(
+    this.startTrackedTimer(
       'completion-confirm',
       this.config.completionConfirmMs,
       () => {
-        this.completionConfirmTimer = null;
+    
         if (this._state === 'stopped') return;
         const msSinceOutput = Date.now() - this.lastOutputTime;
         if (msSinceOutput >= this.config.completionConfirmMs) {
@@ -2616,8 +2553,8 @@ export class RespawnController extends EventEmitter {
    * Cancel completion confirmation if new activity detected.
    */
   private cancelCompletionConfirm(): void {
-    this.cancelTrackedTimer('completion-confirm', this.completionConfirmTimer, 'activity detected');
-    this.completionConfirmTimer = null;
+    this.cancelTrackedTimer('completion-confirm','activity detected');
+
     if (this._state === 'confirming_idle') {
       this.setState('watching');
       this.completionMessageTime = null;
@@ -2630,14 +2567,14 @@ export class RespawnController extends EventEmitter {
    * This ensures Claude has finished processing before we send the next command.
    */
   private startStepConfirmTimer(step: 'update' | 'init' | 'kickstart'): void {
-    this.cancelTrackedTimer('step-confirm', this.stepConfirmTimer, 'restarting');
-    this.stepConfirmTimer = null;
+    this.cancelTrackedTimer('step-confirm','restarting');
 
-    this.stepConfirmTimer = this.startTrackedTimer(
+
+    this.startTrackedTimer(
       'step-confirm',
       this.config.completionConfirmMs,
       () => {
-        this.stepConfirmTimer = null;
+    
         if (this._state === 'stopped') return;
         const msSinceOutput = Date.now() - this.lastOutputTime;
 
@@ -2670,8 +2607,8 @@ export class RespawnController extends EventEmitter {
    * Cancel step confirmation if working patterns detected.
    */
   private cancelStepConfirm(): void {
-    this.cancelTrackedTimer('step-confirm', this.stepConfirmTimer, 'working detected');
-    this.stepConfirmTimer = null;
+    this.cancelTrackedTimer('step-confirm','working detected');
+
   }
 
   /**
@@ -2833,11 +2770,11 @@ export class RespawnController extends EventEmitter {
     this.terminalBuffer.clear(); // Clear buffer for fresh detection
     this.clearWorkingPatternWindow(); // Clear rolling window
 
-    this.stepTimer = this.startTrackedTimer(
+    this.startTrackedTimer(
       'step-delay',
       this.config.interStepDelayMs,
       async () => {
-        this.stepTimer = null;
+
         if (this._state === 'stopped') return;
 
         // Use RALPH_STATUS RECOMMENDATION if available, otherwise fall back to config
@@ -2874,11 +2811,11 @@ export class RespawnController extends EventEmitter {
     this.terminalBuffer.clear();
     this.clearWorkingPatternWindow();
 
-    this.stepTimer = this.startTrackedTimer(
+    this.startTrackedTimer(
       'step-delay',
       this.config.interStepDelayMs,
       async () => {
-        this.stepTimer = null;
+
         if (this._state === 'stopped') return;
         this.logAction('command', 'Sending: /clear');
         await this.session.writeViaMux('/clear\r'); // \r triggers Enter in Ink/Claude CLI
@@ -2887,11 +2824,11 @@ export class RespawnController extends EventEmitter {
         this.promptDetected = false;
 
         // Start fallback timer - if no prompt detected after 10s, proceed to /init anyway
-        this.clearFallbackTimer = this.startTrackedTimer(
+        this.startTrackedTimer(
           'clear-fallback',
           RespawnController.CLEAR_FALLBACK_TIMEOUT_MS,
           () => {
-            this.clearFallbackTimer = null;
+        
             if (this._state === 'waiting_clear') {
               this.logAction('step', '/clear fallback: proceeding to /init');
               this.emit('stepCompleted', 'clear');
@@ -2918,11 +2855,11 @@ export class RespawnController extends EventEmitter {
     this.terminalBuffer.clear();
     this.clearWorkingPatternWindow();
 
-    this.stepTimer = this.startTrackedTimer(
+    this.startTrackedTimer(
       'step-delay',
       this.config.interStepDelayMs,
       async () => {
-        this.stepTimer = null;
+
         if (this._state === 'stopped') return;
         this.logAction('command', 'Sending: /init');
         await this.session.writeViaMux('/init\r'); // \r triggers Enter in Ink/Claude CLI

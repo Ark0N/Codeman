@@ -877,12 +877,12 @@ execSync(`tmux kill-session -t "${this.checkMuxName}"`, { timeout: 3000 });
 4. ✅ Add `z.infer` to Zod schemas (~2 hours) — `src/web/schemas.ts` now has 36 `z.infer` type exports (lines 512-547) covering all schemas
 5. ✅ Fix 10 weak "not.toThrow()" tests (~1 hour) — All `not.toThrow()` calls now have behavior assertions: `task-tracker.test.ts` (6 instances all followed by state checks), `image-watcher.test.ts` (1 instance followed by length check), `session-manager.test.ts` (1 instance followed by count check)
 
-**Phase 2 - CleanupManager & Debounce (2-3 days)** ⚠️ PARTIALLY COMPLETE
+**Phase 2 - CleanupManager & Debounce (2-3 days)** ✅ COMPLETE
 1. ✅ Create `Debouncer` utility class (~1 hour) — Created `src/utils/debouncer.ts` with `Debouncer` and `KeyedDebouncer` classes; exported from `src/utils/index.ts`
-2. ⚠️ Migrate 6 of 8 files from manual debounce to Debouncer — `state-store.ts` (2 Debouncers), `push-store.ts` (1 Debouncer), `bash-tool-parser.ts` (1 Debouncer), `image-watcher.ts` (1 KeyedDebouncer), `subagent-watcher.ts` (2 KeyedDebouncers), `server.ts` (1 KeyedDebouncer for persist timers). **Not migrated**: `ralph-tracker.ts` (still has 2 manual timer fields: `_todoUpdateTimer`, `_loopUpdateTimer`)
-3. ❌ Migrate respawn-controller to CleanupManager — **NOT DONE**. Still has 10+ manual timer fields (`stepTimer`, `completionConfirmTimer`, `noOutputTimer`, `detectionUpdateTimer`, `autoAcceptTimer`, `preFilterTimer`, `hookConfirmTimer`, `clearFallbackTimer`, `stepConfirmTimer`, `stuckStateTimer`). Uses custom `startTrackedTimer()`/`cancelTrackedTimer()` helpers instead.
+2. ✅ Migrate all 8 files from manual debounce to Debouncer — `state-store.ts` (2 Debouncers), `push-store.ts` (1 Debouncer), `bash-tool-parser.ts` (1 Debouncer), `image-watcher.ts` (1 KeyedDebouncer), `subagent-watcher.ts` (2 KeyedDebouncers), `server.ts` (1 KeyedDebouncer for persist timers), `ralph-tracker.ts` (2 Debouncers replacing 4 manual fields: `_todoUpdateTimer`, `_loopUpdateTimer`, `_todoUpdatePending`, `_loopUpdatePending`)
+3. ✅ Migrate respawn-controller to CleanupManager — 10 manual timer fields replaced with single `CleanupManager` instance + `timerIds` Map. `startTrackedTimer()`/`cancelTrackedTimer()` preserved as wrappers for UI countdown display and timer events. `clearTimers()` uses dispose-and-recreate pattern for state transitions.
 4. ✅ Migrate server.ts timer cleanup to CleanupManager (~2 hours) — `private cleanup = new CleanupManager()` present; terminal batch timers and pending respawn starts left as manual Maps (complex lifecycle)
-5. ⚠️ Migrate remaining files — `bash-tool-parser.ts` (CleanupManager ✅), `subagent-watcher.ts` (CleanupManager ✅). **Not migrated**: `ralph-tracker.ts` (no CleanupManager, still uses manual timer clearing)
+5. ✅ Migrate remaining files — `bash-tool-parser.ts` (CleanupManager ✅), `subagent-watcher.ts` (CleanupManager ✅), `ralph-tracker.ts` (Debouncer ✅)
 
 **Phase 3 - server.ts Route Extraction (3-4 days)** ✅ COMPLETE
 1. ✅ Created `src/web/routes/` with 12 domain route modules + index barrel (4,090 LOC total): session (909), system (768), ralph (533), plan (459), respawn (315), case, file, hook-event, mux, push, scheduled, team
