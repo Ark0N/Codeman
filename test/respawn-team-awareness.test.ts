@@ -11,32 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { RespawnController } from '../src/respawn-controller.js';
 import { Session } from '../src/session.js';
 import { TeamWatcher } from '../src/team-watcher.js';
-import { EventEmitter } from 'node:events';
-
-// ========== Mock Session ==========
-
-class MockSession extends EventEmitter {
-  id = 'test-session-123';
-  workingDir = '/tmp/test';
-  status = 'idle';
-  pid = 12345;
-  isWorking = false;
-  writeBuffer: string[] = [];
-  ralphTracker: null = null;
-
-  async writeViaMux(data: string): Promise<boolean> {
-    this.writeBuffer.push(data);
-    return true;
-  }
-
-  write(data: string): void {
-    this.writeBuffer.push(data);
-  }
-
-  simulateCompletionMessage(): void {
-    this.emit('terminal', '✻ Worked for 2m 46s');
-  }
-}
+import { MockSession } from './mocks/index.js';
 
 // ========== Mock TeamWatcher ==========
 

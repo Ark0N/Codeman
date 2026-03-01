@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { RespawnController, RespawnState, RespawnConfig } from '../src/respawn-controller.js';
 import { Session } from '../src/session.js';
-import { EventEmitter } from 'node:events';
+import { MockSession } from './mocks/index.js';
 
 /**
  * RespawnController Tests
@@ -9,63 +9,6 @@ import { EventEmitter } from 'node:events';
  * Tests the state machine that manages automatic respawning of Claude sessions
  * State flow: WATCHING → SENDING_UPDATE → WAITING_UPDATE → SENDING_CLEAR → WAITING_CLEAR → SENDING_INIT → WAITING_INIT → WATCHING
  */
-
-// Mock Session for testing
-class MockSession extends EventEmitter {
-  id = 'mock-session-id';
-  workingDir = '/tmp';
-  status = 'idle';
-  pid = 12345; // Mock PID for P1-006 health check
-  isWorking = false; // P0-006 Session.isWorking integration
-  writeBuffer: string[] = [];
-
-  write(data: string): void {
-    this.writeBuffer.push(data);
-  }
-
-  async writeViaMux(data: string): Promise<boolean> {
-    this.writeBuffer.push(data);
-    return true;
-  }
-
-  // Simulate terminal output
-  simulateTerminalOutput(data: string): void {
-    this.emit('terminal', data);
-  }
-
-  // Simulate prompt appearing (basic prompt character) - legacy fallback
-  simulatePrompt(): void {
-    this.emit('terminal', '❯ ');
-  }
-
-  // Simulate ready state with the definitive indicator - legacy fallback
-  simulateReady(): void {
-    this.emit('terminal', '↵ send');
-  }
-
-  // Simulate completion message (NEW - primary idle detection in Claude Code 2024+)
-  // This pattern triggers the multi-layer detection: "for Xm Xs" indicates work finished
-  simulateCompletionMessage(): void {
-    this.emit('terminal', '✻ Worked for 2m 46s');
-  }
-
-  // Simulate working state
-  simulateWorking(): void {
-    this.emit('terminal', 'Thinking... ⠋');
-  }
-
-  // Simulate clear completion (followed by completion message)
-  simulateClearComplete(): void {
-    this.emit('terminal', 'conversation cleared');
-    setTimeout(() => this.simulateCompletionMessage(), 50);
-  }
-
-  // Simulate init completion (followed by completion message)
-  simulateInitComplete(): void {
-    this.emit('terminal', 'Analyzing CLAUDE.md...');
-    setTimeout(() => this.simulateCompletionMessage(), 100);
-  }
-}
 
 describe('RespawnController', () => {
   let session: MockSession;

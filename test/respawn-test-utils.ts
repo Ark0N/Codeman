@@ -1,17 +1,11 @@
 /**
  * @fileoverview Test Utilities for RespawnController Tests
  *
- * Provides mocks, helpers, and utilities for testing the RespawnController
- * and its related AI checker components without spawning real Claude CLI processes.
+ * Provides respawn-specific mocks, helpers, and utilities for testing the
+ * RespawnController and its related AI checker components.
  *
- * ## Contents
- *
- * - MockSession: Enhanced mock session for testing
- * - MockAiIdleChecker: Mock for AI idle checker with configurable verdicts
- * - MockAiPlanChecker: Mock for AI plan mode checker with configurable verdicts
- * - State transition helpers
- * - Time manipulation utilities
- * - Factory functions for pre-configured controllers
+ * General-purpose mocks (MockSession, terminalOutputs, etc.) have been moved
+ * to test/mocks/ — re-exported here for backward compatibility.
  *
  * @module test/respawn-test-utils
  */
@@ -19,7 +13,7 @@
 import { EventEmitter } from 'node:events';
 import { vi } from 'vitest';
 import type { Session } from '../src/session.js';
-import type { RespawnConfig, RespawnState, DetectionStatus } from '../src/respawn-controller.js';
+import type { RespawnConfig, RespawnState } from '../src/respawn-controller.js';
 import type {
   AiCheckResult,
   AiCheckState,
@@ -34,6 +28,10 @@ import type {
   AiPlanCheckVerdict,
   AiPlanCheckConfig,
 } from '../src/ai-plan-checker.js';
+
+// Re-export shared mocks for backward compatibility
+export { MockSession, createMockSession, terminalOutputs } from './mocks/mock-session.js';
+export { waitForEvent, createDeferred } from './mocks/test-helpers.js';
 
 // ========== Time Manipulation Utilities ==========
 
@@ -80,166 +78,6 @@ export function createTimeController(): TimeController {
   };
 }
 
-// ========== MockSession ==========
-
-/**
- * Enhanced mock session for testing RespawnController.
- * Extends the existing MockSession pattern with additional utilities.
- */
-export class MockSession extends EventEmitter {
-  id: string;
-  workingDir: string = '/tmp/test-workdir';
-  status: 'idle' | 'working' = 'idle';
-  writeBuffer: string[] = [];
-  terminalBuffer: string = '';
-
-  private _muxName: string | null = null;
-
-  constructor(id: string = 'mock-session-id') {
-    super();
-    this.id = id;
-    this._muxName = `codeman-test-${id.slice(0, 8)}`;
-  }
-
-  /** Direct PTY write (used by session.write()) */
-  write(data: string): void {
-    this.writeBuffer.push(data);
-  }
-
-  /** Write via mux (used by respawn controller) */
-  async writeViaMux(data: string): Promise<boolean> {
-    this.writeBuffer.push(data);
-    return true;
-  }
-
-  /** Get the last written data */
-  get lastWrite(): string | undefined {
-    return this.writeBuffer[this.writeBuffer.length - 1];
-  }
-
-  /** Clear the write buffer */
-  clearWriteBuffer(): void {
-    this.writeBuffer = [];
-  }
-
-  /** Check if a specific command was written */
-  hasWritten(pattern: string | RegExp): boolean {
-    return this.writeBuffer.some(data =>
-      typeof pattern === 'string' ? data.includes(pattern) : pattern.test(data)
-    );
-  }
-
-  // ========== Terminal Output Simulation ==========
-
-  /** Simulate raw terminal output */
-  simulateTerminalOutput(data: string): void {
-    this.terminalBuffer += data;
-    this.emit('terminal', data);
-  }
-
-  /** Simulate prompt appearing (legacy fallback signal) */
-  simulatePrompt(): void {
-    this.simulateTerminalOutput('\u276f ');
-    this.status = 'idle';
-    this.emit('idle');
-  }
-
-  /** Simulate ready state with definitive indicator (legacy) */
-  simulateReady(): void {
-    this.simulateTerminalOutput('\u21b5 send');
-    this.status = 'idle';
-    this.emit('idle');
-  }
-
-  /**
-   * Simulate completion message (primary idle detection in Claude Code 2024+).
-   * This triggers the multi-layer detection flow.
-   */
-  simulateCompletionMessage(duration: string = '2m 46s'): void {
-    this.simulateTerminalOutput(`\u273b Worked for ${duration}`);
-    this.status = 'idle';
-  }
-
-  /** Simulate working state with spinner */
-  simulateWorking(text: string = 'Thinking'): void {
-    this.simulateTerminalOutput(`${text}... \u280b`);
-    this.status = 'working';
-    this.emit('working');
-  }
-
-  /** Simulate /clear completion */
-  simulateClearComplete(): void {
-    this.simulateTerminalOutput('conversation cleared');
-    setTimeout(() => this.simulateCompletionMessage(), 50);
-  }
-
-  /** Simulate /init completion */
-  simulateInitComplete(): void {
-    this.simulateTerminalOutput('Analyzing CLAUDE.md...');
-    setTimeout(() => this.simulateCompletionMessage(), 100);
-  }
-
-  /**
-   * Simulate plan mode approval prompt.
-   * This triggers auto-accept detection.
-   */
-  simulatePlanModePrompt(): void {
-    this.simulateTerminalOutput(
-      'Would you like to proceed with this plan?\n' +
-      '\u276f 1. Yes\n' +
-      '  2. No\n' +
-      '  3. Type your own\n'
-    );
-  }
-
-  /**
-   * Simulate elicitation dialog (AskUserQuestion).
-   * This should block auto-accept.
-   */
-  simulateElicitationDialog(): void {
-    this.simulateTerminalOutput(
-      'What would you like to name the new file?\n' +
-      '> '
-    );
-  }
-
-  /** Simulate token count display */
-  simulateTokenCount(tokens: number | string): void {
-    const formatted = typeof tokens === 'number'
-      ? tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens)
-      : tokens;
-    this.simulateTerminalOutput(`${formatted} tokens used`);
-  }
-
-  /** Simulate ANSI escape codes */
-  simulateAnsiOutput(text: string, color: 'green' | 'red' | 'blue' = 'green'): void {
-    const codes: Record<string, string> = {
-      green: '\x1b[32m',
-      red: '\x1b[31m',
-      blue: '\x1b[34m',
-    };
-    this.simulateTerminalOutput(`${codes[color]}${text}\x1b[0m`);
-  }
-
-  /** Clear terminal buffer */
-  clearTerminalBuffer(): void {
-    this.terminalBuffer = '';
-  }
-
-  // ========== Session Lifecycle ==========
-
-  /** Simulate session closing */
-  close(): void {
-    this.emit('exit', 0);
-    this.removeAllListeners();
-  }
-
-  /** Get mux name (for mux-based operations) */
-  get muxName(): string | null {
-    return this._muxName;
-  }
-}
-
 // ========== MockAiIdleChecker ==========
 
 /**
@@ -281,7 +119,7 @@ export class MockAiIdleChecker extends EventEmitter {
   constructor(
     public sessionId: string,
     config: Partial<AiIdleCheckConfig> = {},
-    options: MockAiIdleCheckerOptions = {}
+    options: MockAiIdleCheckerOptions = {},
   ) {
     super();
     this.config = {
@@ -334,24 +172,14 @@ export class MockAiIdleChecker extends EventEmitter {
     return Math.max(0, this._cooldownEndsAt - Date.now());
   }
 
-  /**
-   * Queue a result to be returned on the next check() call.
-   * Results are consumed in FIFO order.
-   */
   queueResult(result: AiCheckResult): void {
     this.queuedResults.push(result);
   }
 
-  /**
-   * Queue multiple results for sequential check() calls.
-   */
   queueResults(...results: AiCheckResult[]): void {
     this.queuedResults.push(...results);
   }
 
-  /**
-   * Set the next check to return IDLE verdict.
-   */
   setNextIdle(reasoning: string = 'Mock: IDLE'): void {
     this.queueResult({
       verdict: 'IDLE',
@@ -360,9 +188,6 @@ export class MockAiIdleChecker extends EventEmitter {
     });
   }
 
-  /**
-   * Set the next check to return WORKING verdict.
-   */
   setNextWorking(reasoning: string = 'Mock: WORKING'): void {
     this.queueResult({
       verdict: 'WORKING',
@@ -371,9 +196,6 @@ export class MockAiIdleChecker extends EventEmitter {
     });
   }
 
-  /**
-   * Set the next check to return ERROR verdict.
-   */
   setNextError(reasoning: string = 'Mock: ERROR'): void {
     this.queueResult({
       verdict: 'ERROR',
@@ -400,7 +222,7 @@ export class MockAiIdleChecker extends EventEmitter {
     this.emit('checkStarted');
 
     // Simulate async check
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Get result from queue or use default
     const result = this.queuedResults.shift() || {
@@ -454,7 +276,7 @@ export class MockAiIdleChecker extends EventEmitter {
 
   updateConfig(config: Partial<AiIdleCheckConfig>): void {
     const filteredConfig = Object.fromEntries(
-      Object.entries(config).filter(([, v]) => v !== undefined)
+      Object.entries(config).filter(([, v]) => v !== undefined),
     ) as Partial<AiIdleCheckConfig>;
     this.config = { ...this.config, ...filteredConfig };
     if (config.enabled === false) {
@@ -472,19 +294,16 @@ export class MockAiIdleChecker extends EventEmitter {
 
   // ========== Test Helpers ==========
 
-  /** Force into cooldown state for testing */
   forceCooldown(durationMs: number): void {
     this.startCooldown(durationMs);
   }
 
-  /** Force into disabled state for testing */
   forceDisabled(reason: string = 'Forced disabled for testing'): void {
     this._status = 'disabled';
     this._disabledReason = reason;
     this.emit('disabled', reason);
   }
 
-  /** Force ready state for testing */
   forceReady(): void {
     this.clearCooldown();
     this._status = 'ready';
@@ -557,7 +376,7 @@ export class MockAiPlanChecker extends EventEmitter {
   constructor(
     public sessionId: string,
     config: Partial<AiPlanCheckConfig> = {},
-    options: MockAiPlanCheckerOptions = {}
+    options: MockAiPlanCheckerOptions = {},
   ) {
     super();
     this.config = {
@@ -610,23 +429,14 @@ export class MockAiPlanChecker extends EventEmitter {
     return Math.max(0, this._cooldownEndsAt - Date.now());
   }
 
-  /**
-   * Queue a result to be returned on the next check() call.
-   */
   queueResult(result: AiPlanCheckResult): void {
     this.queuedResults.push(result);
   }
 
-  /**
-   * Queue multiple results for sequential check() calls.
-   */
   queueResults(...results: AiPlanCheckResult[]): void {
     this.queuedResults.push(...results);
   }
 
-  /**
-   * Set the next check to return PLAN_MODE verdict.
-   */
   setNextPlanMode(reasoning: string = 'Mock: PLAN_MODE'): void {
     this.queueResult({
       verdict: 'PLAN_MODE',
@@ -635,9 +445,6 @@ export class MockAiPlanChecker extends EventEmitter {
     });
   }
 
-  /**
-   * Set the next check to return NOT_PLAN_MODE verdict.
-   */
   setNextNotPlanMode(reasoning: string = 'Mock: NOT_PLAN_MODE'): void {
     this.queueResult({
       verdict: 'NOT_PLAN_MODE',
@@ -646,9 +453,6 @@ export class MockAiPlanChecker extends EventEmitter {
     });
   }
 
-  /**
-   * Set the next check to return ERROR verdict.
-   */
   setNextError(reasoning: string = 'Mock: ERROR'): void {
     this.queueResult({
       verdict: 'ERROR',
@@ -675,7 +479,7 @@ export class MockAiPlanChecker extends EventEmitter {
     this.emit('checkStarted');
 
     // Simulate async check
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Get result from queue or use default
     const result = this.queuedResults.shift() || {
@@ -729,7 +533,7 @@ export class MockAiPlanChecker extends EventEmitter {
 
   updateConfig(config: Partial<AiPlanCheckConfig>): void {
     const filteredConfig = Object.fromEntries(
-      Object.entries(config).filter(([, v]) => v !== undefined)
+      Object.entries(config).filter(([, v]) => v !== undefined),
     ) as Partial<AiPlanCheckConfig>;
     this.config = { ...this.config, ...filteredConfig };
     if (config.enabled === false) {
@@ -747,19 +551,16 @@ export class MockAiPlanChecker extends EventEmitter {
 
   // ========== Test Helpers ==========
 
-  /** Force into cooldown state for testing */
   forceCooldown(durationMs: number): void {
     this.startCooldown(durationMs);
   }
 
-  /** Force into disabled state for testing */
   forceDisabled(reason: string = 'Forced disabled for testing'): void {
     this._status = 'disabled';
     this._disabledReason = reason;
     this.emit('disabled', reason);
   }
 
-  /** Force ready state for testing */
   forceReady(): void {
     this.clearCooldown();
     this._status = 'ready';
@@ -810,37 +611,24 @@ export function createStateTracker() {
   const transitions: StateTransition[] = [];
 
   return {
-    /** Record a state transition (use as event handler) */
     record(to: RespawnState, from: RespawnState): void {
       transitions.push({ from, to, timestamp: Date.now() });
     },
-
-    /** Get all recorded transitions */
     getTransitions(): StateTransition[] {
       return [...transitions];
     },
-
-    /** Get only the state values (not timestamps) */
     getStates(): RespawnState[] {
-      return transitions.map(t => t.to);
+      return transitions.map((t) => t.to);
     },
-
-    /** Check if a specific state was visited */
     hasVisited(state: RespawnState): boolean {
-      return transitions.some(t => t.to === state);
+      return transitions.some((t) => t.to === state);
     },
-
-    /** Check if a specific transition occurred */
     hasTransition(from: RespawnState, to: RespawnState): boolean {
-      return transitions.some(t => t.from === from && t.to === to);
+      return transitions.some((t) => t.from === from && t.to === to);
     },
-
-    /** Get the most recent state */
     getCurrentState(): RespawnState | undefined {
       return transitions.length > 0 ? transitions[transitions.length - 1].to : undefined;
     },
-
-    /** Clear all recorded transitions */
     clear(): void {
       transitions.length = 0;
     },
@@ -854,34 +642,23 @@ export function createEventRecorder() {
   const events: Array<{ type: string; args: unknown[]; timestamp: number }> = [];
 
   return {
-    /** Create a handler for a specific event type */
     handler(type: string): (...args: unknown[]) => void {
       return (...args: unknown[]) => {
         events.push({ type, args, timestamp: Date.now() });
       };
     },
-
-    /** Get all recorded events */
     getEvents(): Array<{ type: string; args: unknown[]; timestamp: number }> {
       return [...events];
     },
-
-    /** Get events of a specific type */
     getEventsOfType(type: string): Array<{ type: string; args: unknown[]; timestamp: number }> {
-      return events.filter(e => e.type === type);
+      return events.filter((e) => e.type === type);
     },
-
-    /** Check if an event type was emitted */
     hasEvent(type: string): boolean {
-      return events.some(e => e.type === type);
+      return events.some((e) => e.type === type);
     },
-
-    /** Count events of a specific type */
     countEvents(type: string): number {
-      return events.filter(e => e.type === type).length;
+      return events.filter((e) => e.type === type).length;
     },
-
-    /** Clear all recorded events */
     clear(): void {
       events.length = 0;
     },
@@ -917,13 +694,6 @@ export const AI_ENABLED_TEST_CONFIG: Partial<RespawnConfig> = {
   aiPlanCheckCooldownMs: 200,
 };
 
-/**
- * Create a mock session typed as Session for use with RespawnController.
- */
-export function createMockSession(id?: string): MockSession & Session {
-  return new MockSession(id) as MockSession & Session;
-}
-
 // ========== Test Assertion Helpers ==========
 
 /**
@@ -931,9 +701,12 @@ export function createMockSession(id?: string): MockSession & Session {
  * Useful for async state transition testing.
  */
 export async function waitForState(
-  controller: { state: RespawnState; on: (event: string, handler: (state: RespawnState) => void) => void },
+  controller: {
+    state: RespawnState;
+    on: (event: string, handler: (state: RespawnState) => void) => void;
+  },
   targetState: RespawnState,
-  timeoutMs: number = 1000
+  timeoutMs: number = 1000,
 ): Promise<void> {
   if (controller.state === targetState) return;
 
@@ -952,94 +725,3 @@ export async function waitForState(
     controller.on('stateChanged', handler);
   });
 }
-
-/**
- * Wait for a specific event to be emitted.
- */
-export async function waitForEvent<T = unknown>(
-  emitter: EventEmitter,
-  eventName: string,
-  timeoutMs: number = 1000
-): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error(`Timeout waiting for event ${eventName}`));
-    }, timeoutMs);
-
-    emitter.once(eventName, (...args: unknown[]) => {
-      clearTimeout(timeout);
-      resolve(args[0] as T);
-    });
-  });
-}
-
-/**
- * Create a deferred promise for controlled async testing.
- */
-export function createDeferred<T = void>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (error: Error) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
-// ========== Terminal Output Generators ==========
-
-/**
- * Generate realistic terminal output for testing.
- */
-export const terminalOutputs = {
-  /** Standard completion message */
-  completion(duration: string = '2m 46s'): string {
-    return `\n\u273b Worked for ${duration}\n  123.4k tokens used\n`;
-  },
-
-  /** Working spinner output */
-  working(activity: string = 'Thinking'): string {
-    return `${activity}... \u280b`;
-  },
-
-  /** Plan mode prompt */
-  planMode(question: string = 'Would you like to proceed?'): string {
-    return [
-      `\n${question}\n`,
-      '\u276f 1. Yes\n',
-      '  2. No\n',
-      '  3. Type your own\n',
-    ].join('');
-  },
-
-  /** Prompt character */
-  prompt(): string {
-    return '\n\u276f ';
-  },
-
-  /** Token count display */
-  tokens(count: number): string {
-    const formatted = count >= 1000000
-      ? `${(count / 1000000).toFixed(1)}M`
-      : count >= 1000
-        ? `${(count / 1000).toFixed(1)}k`
-        : String(count);
-    return `  ${formatted} tokens\n`;
-  },
-
-  /** Large output for buffer testing */
-  largeOutput(sizeKb: number = 100): string {
-    const baseText = 'Lorem ipsum dolor sit amet. '.repeat(100);
-    const repetitions = Math.ceil((sizeKb * 1024) / baseText.length);
-    return baseText.repeat(repetitions).slice(0, sizeKb * 1024);
-  },
-
-  /** ANSI colored output */
-  ansiColored(text: string): string {
-    return `\x1b[32m${text}\x1b[0m`;
-  },
-};
