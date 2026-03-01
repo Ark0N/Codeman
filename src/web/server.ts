@@ -583,7 +583,11 @@ export class WebServer extends EventEmitter {
       this.sendSSE(reply, 'init', this.getLightState());
       // Flush Cloudflare tunnel buffer with padding — ensures the init event
       // (and any immediately following events) are delivered without proxy delay.
-      try { reply.raw.write(SSE_PADDING); } catch { /* client gone */ }
+      try {
+        reply.raw.write(SSE_PADDING);
+      } catch {
+        /* client gone */
+      }
 
       req.raw.on('close', () => {
         this.sseClients.delete(reply);
