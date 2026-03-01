@@ -50,6 +50,16 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
+   * PUT JSON to an API endpoint.
+   * @param {string} path - API path
+   * @param {object} body - JSON body
+   * @returns {Promise<Response|null>}
+   */
+  async _apiPut(path, body) {
+    return this._api(path, { method: 'PUT', body });
+  },
+
+  /**
    * DELETE an API resource.
    * @param {string} path - API path
    * @returns {Promise<Response|null>}

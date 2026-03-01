@@ -11,6 +11,7 @@
 import { FastifyInstance } from 'fastify';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { StaleExpirationMap } from '../../utils/index.js';
+import type { AuthSessionRecord } from '../ports/auth-port.js';
 
 // Auth session cookie TTL (24h — matches autonomous run length)
 const AUTH_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -25,8 +26,9 @@ const AUTH_FAILURE_WINDOW_MS = 15 * 60 * 1000;
 
 /** State returned from registerAuthMiddleware for cleanup in server stop() */
 export interface AuthState {
-  authSessions: StaleExpirationMap<string, string> | null;
+  authSessions: StaleExpirationMap<string, AuthSessionRecord> | null;
   authFailures: StaleExpirationMap<string, number> | null;
+  qrAuthFailures: StaleExpirationMap<string, number> | null;
 }
 
 /**
@@ -39,6 +41,7 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean): Au
   const state: AuthState = {
     authSessions: null,
     authFailures: null,
+    qrAuthFailures: null,
   };
 
   const authPassword = process.env.CODEMAN_PASSWORD;
@@ -48,13 +51,19 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean): Au
   const expectedHeader = 'Basic ' + Buffer.from(`${authUsername}:${authPassword}`).toString('base64');
 
   // Session token store — active sessions extend TTL on access
-  state.authSessions = new StaleExpirationMap<string, string>({
+  state.authSessions = new StaleExpirationMap<string, AuthSessionRecord>({
     ttlMs: AUTH_SESSION_TTL_MS,
     refreshOnGet: true,
   });
 
   // Failure counter per IP — decay naturally after 15 minutes
   state.authFailures = new StaleExpirationMap<string, number>({
+    ttlMs: AUTH_FAILURE_WINDOW_MS,
+    refreshOnGet: false,
+  });
+
+  // Separate QR auth failure counter — independent from Basic Auth failures
+  state.qrAuthFailures = new StaleExpirationMap<string, number>({
     ttlMs: AUTH_FAILURE_WINDOW_MS,
     refreshOnGet: false,
   });
@@ -73,6 +82,12 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean): Au
         return;
       }
       // Non-localhost hook requests fall through to normal auth
+    }
+
+    // QR auth path — handled by the route itself (token validation + rate limiting)
+    if (req.url?.startsWith('/q/')) {
+      done();
+      return;
     }
 
     const clientIp = req.ip;
@@ -106,7 +121,12 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean): Au
         if (oldestKey !== undefined) authSessions.delete(oldestKey);
       }
 
-      authSessions.set(token, clientIp);
+      authSessions.set(token, {
+        ip: clientIp,
+        ua: req.headers['user-agent'] ?? '',
+        createdAt: Date.now(),
+        method: 'basic',
+      });
 
       // Reset failure count on successful auth
       authFailures.delete(clientIp);

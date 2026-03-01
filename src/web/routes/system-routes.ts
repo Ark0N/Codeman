@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { homedir, totalmem, freemem, loadavg, cpus } from 'node:os';
 import { execSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type NiceConfig } from '../../types.js';
 import {
   ConfigUpdateSchema,
@@ -23,7 +24,8 @@ import { subagentWatcher } from '../../subagent-watcher.js';
 import { imageWatcher } from '../../image-watcher.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import { findSessionOrFail, formatUptime, SETTINGS_PATH } from '../route-helpers.js';
-import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
+import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
+import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 
 // Maximum screenshot upload size (10MB)
 const MAX_SCREENSHOT_SIZE = 10 * 1024 * 1024;
@@ -81,7 +83,7 @@ function getSystemStats(): {
 
 export function registerSystemRoutes(
   app: FastifyInstance,
-  ctx: SessionPort & EventPort & ConfigPort & InfraPort
+  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort
 ): void {
   const windowStatesPath = join(homedir(), '.codeman', 'subagent-window-states.json');
   const parentMapPath = join(homedir(), '.codeman', 'subagent-parents.json');
@@ -100,13 +102,106 @@ export function registerSystemRoutes(
       return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'Tunnel not running'));
     }
     try {
+      const authPassword = process.env.CODEMAN_PASSWORD;
+      if (authPassword) {
+        // Auth enabled — use cached SVG with embedded short code
+        const svg = await ctx.tunnelManager.getQrSvg(url);
+        return { svg, authEnabled: true };
+      }
+      // No auth — just encode the raw tunnel URL
       // eslint-disable-next-line @typescript-eslint/no-require-imports -- dynamic optional dependency
       const QRCode = require('qrcode');
       const svg: string = await QRCode.toString(url, { type: 'svg', margin: 2, width: 256 });
-      return { svg };
+      return { svg, authEnabled: false };
     } catch (err) {
       return reply.code(500).send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err)));
     }
+  });
+
+  // ========== QR Auth Route ==========
+
+  app.get('/q/:code', async (req, reply) => {
+    const shortCode = (req.params as { code: string }).code;
+    const authPassword = process.env.CODEMAN_PASSWORD;
+
+    // No point if auth isn't enabled — just redirect
+    if (!authPassword) {
+      return reply.redirect('/');
+    }
+
+    const clientIp = req.ip;
+
+    // Per-IP rate limit (separate counter from Basic Auth failures)
+    const qrFailures = ctx.qrAuthFailures?.get(clientIp) ?? 0;
+    if (qrFailures >= 10) {
+      return reply.code(429).send('Too Many Requests');
+    }
+
+    // Validate and atomically consume the token
+    if (!shortCode || !ctx.tunnelManager.consumeToken(shortCode)) {
+      ctx.qrAuthFailures?.set(clientIp, qrFailures + 1);
+      return reply.code(401).send('Invalid or expired QR code');
+    }
+
+    // Issue session cookie (same pattern as Basic Auth success path)
+    const sessionToken = randomBytes(32).toString('hex');
+    const clientUA = req.headers['user-agent'] ?? '';
+    ctx.authSessions?.set(sessionToken, {
+      ip: clientIp,
+      ua: clientUA,
+      createdAt: Date.now(),
+      method: 'qr',
+    });
+    ctx.qrAuthFailures?.delete(clientIp);
+
+    // Audit log
+    const lifecycleLog = getLifecycleLog();
+    lifecycleLog.log({
+      event: 'qr_auth',
+      sessionId: 'system',
+      extra: {
+        ip: clientIp,
+        ua: clientUA,
+        shortCodePrefix: shortCode.slice(0, 3) + '***',
+      },
+    });
+
+    reply.setCookie(AUTH_COOKIE_NAME, sessionToken, {
+      httpOnly: true,
+      secure: ctx.https,
+      sameSite: 'lax',
+      maxAge: 86400, // 24h
+      path: '/',
+    });
+
+    // Broadcast auth notification — desktop sees who authenticated
+    ctx.broadcast('tunnel:qrAuthUsed', {
+      ip: clientIp,
+      ua: clientUA,
+      timestamp: Date.now(),
+    });
+
+    return reply.redirect('/');
+  });
+
+  // ========== QR Regeneration ==========
+
+  app.post('/api/tunnel/qr/regenerate', async () => {
+    ctx.tunnelManager.regenerateQrToken();
+    return { success: true };
+  });
+
+  // ========== Auth Session Revocation ==========
+
+  app.post('/api/auth/revoke', async (req) => {
+    const body = req.body as { sessionToken?: string } | undefined;
+    if (body?.sessionToken) {
+      ctx.authSessions?.delete(body.sessionToken);
+    } else {
+      // Revoke all sessions (nuclear option)
+      ctx.authSessions?.clear();
+    }
+    return { success: true };
   });
 
   // ========== OpenCode ==========

@@ -13,7 +13,8 @@ export type LifecycleEventType =
   | 'stale_cleaned' // Removed from state.json by cleanupStaleSessions()
   | 'mux_died' // tmux session died (detected by reconciliation)
   | 'server_started' // Server started (marker for restart detection)
-  | 'server_stopped'; // Server shutting down
+  | 'server_stopped' // Server shutting down
+  | 'qr_auth'; // Device authenticated via QR code scan
 
 /** A single entry in the session lifecycle audit log */
 export interface LifecycleEntry {

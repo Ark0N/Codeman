@@ -255,8 +255,9 @@ export class WebServer extends EventEmitter {
     error: (error: Error, sessionId?: string) => void;
   } | null = null;
   private tunnelManager: TunnelManager = new TunnelManager();
-  private authSessions: StaleExpirationMap<string, string> | null = null;
+  private authSessions: StaleExpirationMap<string, import('./ports/auth-port.js').AuthSessionRecord> | null = null;
   private authFailures: StaleExpirationMap<string, number> | null = null;
+  private qrAuthFailures: StaleExpirationMap<string, number> | null = null;
   private pushStore: PushSubscriptionStore = new PushSubscriptionStore();
   private teamWatcher: TeamWatcher = new TeamWatcher();
   private teamWatcherHandlers: {
@@ -320,6 +321,31 @@ export class WebServer extends EventEmitter {
     });
     this.tunnelManager.on('progress', (data: { message: string }) => {
       this.broadcast('tunnel:progress', data);
+    });
+
+    // QR token rotation — broadcast inline SVG for instant desktop refresh
+    this.tunnelManager.on('qrTokenRotated', async () => {
+      const url = this.tunnelManager.getUrl();
+      if (url && process.env.CODEMAN_PASSWORD) {
+        try {
+          const svg = await this.tunnelManager.getQrSvg(url);
+          this.broadcast('tunnel:qrRotated', { svg });
+        } catch {
+          // QR generation failed — skip this rotation
+        }
+      }
+    });
+
+    this.tunnelManager.on('qrTokenRegenerated', async () => {
+      const url = this.tunnelManager.getUrl();
+      if (url && process.env.CODEMAN_PASSWORD) {
+        try {
+          const svg = await this.tunnelManager.getQrSvg(url);
+          this.broadcast('tunnel:qrRegenerated', { svg });
+        } catch {
+          // QR generation failed — skip
+        }
+      }
     });
   }
 
@@ -485,6 +511,9 @@ export class WebServer extends EventEmitter {
       pushStore: this.pushStore,
       startScheduledRun: this.startScheduledRun.bind(this),
       stopScheduledRun: this.stopScheduledRun.bind(this),
+      // AuthPort
+      authSessions: this.authSessions,
+      qrAuthFailures: this.qrAuthFailures,
     };
   }
 
@@ -510,6 +539,7 @@ export class WebServer extends EventEmitter {
     if (authState) {
       this.authSessions = authState.authSessions;
       this.authFailures = authState.authFailures;
+      this.qrAuthFailures = authState.qrAuthFailures;
     }
 
     // Security headers + CORS
@@ -2651,6 +2681,10 @@ export class WebServer extends EventEmitter {
     if (this.authFailures) {
       this.authFailures.dispose();
       this.authFailures = null;
+    }
+    if (this.qrAuthFailures) {
+      this.qrAuthFailures.dispose();
+      this.qrAuthFailures = null;
     }
     this.activePlanOrchestrators.clear();
     this.cleaningUp.clear();

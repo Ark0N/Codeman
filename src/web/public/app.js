@@ -2326,6 +2326,48 @@ class CodemanApp {
       if (btn) { btn.disabled = false; btn.classList.remove('connecting'); }
     });
 
+    // QR auto-refresh — inline SVG from SSE (no extra fetch)
+    addListener('tunnel:qrRotated', (e) => {
+      const data = JSON.parse(e.data);
+      if (data.svg) {
+        const container = document.getElementById('tunnelQrContainer');
+        if (container) container.innerHTML = data.svg;
+        const welcomeInner = document.getElementById('welcomeQrInner');
+        if (welcomeInner) welcomeInner.innerHTML = data.svg;
+      } else {
+        this._refreshTunnelQrFromApi();
+      }
+      this._resetQrCountdown();
+    });
+
+    addListener('tunnel:qrRegenerated', (e) => {
+      const data = JSON.parse(e.data);
+      if (data.svg) {
+        const container = document.getElementById('tunnelQrContainer');
+        if (container) container.innerHTML = data.svg;
+        const welcomeInner = document.getElementById('welcomeQrInner');
+        if (welcomeInner) welcomeInner.innerHTML = data.svg;
+      } else {
+        this._refreshTunnelQrFromApi();
+      }
+      this._resetQrCountdown();
+    });
+
+    // QR auth consumed — notify desktop user (QRLjacking detection)
+    addListener('tunnel:qrAuthUsed', (e) => {
+      const data = JSON.parse(e.data);
+      const ua = data.ua || 'Unknown device';
+      const family = ua.match(/Chrome|Firefox|Safari|Edge|Mobile/)?.[0] || 'Browser';
+      this.showToast(`Device authenticated via QR (${family}, ${data.ip}). Not you?`, 'warning', {
+        duration: 10000,
+        action: { label: 'Revoke All', onClick: () => {
+          fetch('/api/auth/revoke', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+            .then(() => this.showToast('All sessions revoked', 'success'))
+            .catch(() => this.showToast('Failed to revoke sessions', 'error'));
+        }},
+      });
+    });
+
     // Plan subagent visibility events (show Opus agents during plan generation)
     addListener('plan:subagent', (e) => {
       const data = JSON.parse(e.data);
@@ -2459,16 +2501,8 @@ class CodemanApp {
     this._updateConnectionIndicator();
 
     for (const [sessionId, input] of queued) {
-      try {
-        const resp = await fetch(`/api/sessions/${sessionId}/input`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ input })
-        });
-        if (!resp.ok) {
-          this._enqueueInput(sessionId, input);
-        }
-      } catch {
+      const resp = await this._apiPost(`/api/sessions/${sessionId}/input`, { input });
+      if (!resp?.ok) {
         this._enqueueInput(sessionId, input);
       }
     }
@@ -3107,94 +3141,6 @@ class CodemanApp {
   }
 
 
-  // Show subagent dropdown on hover
-  showSubagentDropdown(badgeEl) {
-    this.cancelHideSubagentDropdown();
-    const dropdown = badgeEl.querySelector('.subagent-dropdown');
-    if (!dropdown || dropdown.classList.contains('open')) return;
-
-    // Close other dropdowns first
-    document.querySelectorAll('.subagent-dropdown.open').forEach(d => {
-      d.classList.remove('open', 'pinned');
-      if (d.parentElement === document.body && d._originalParent) {
-        d._originalParent.appendChild(d);
-      }
-    });
-
-    // Move to body to escape clipping
-    dropdown._originalParent = badgeEl;
-    document.body.appendChild(dropdown);
-
-    // Position below badge
-    const rect = badgeEl.getBoundingClientRect();
-    dropdown.style.top = `${rect.bottom + 2}px`;
-    dropdown.style.left = `${rect.left + rect.width / 2}px`;
-    dropdown.style.transform = 'translateX(-50%)';
-    dropdown.classList.add('open');
-  }
-
-  // Schedule hide after delay (allows moving mouse to dropdown)
-  scheduleHideSubagentDropdown(badgeEl) {
-    this._subagentHideTimeout = setTimeout(() => {
-      const dropdown = badgeEl?.querySelector?.('.subagent-dropdown') ||
-                       document.querySelector('.subagent-dropdown.open');
-      if (dropdown && !dropdown.classList.contains('pinned')) {
-        dropdown.classList.remove('open');
-        if (dropdown._originalParent) {
-          dropdown._originalParent.appendChild(dropdown);
-        }
-      }
-    }, 150);
-  }
-
-  // Cancel scheduled hide
-  cancelHideSubagentDropdown() {
-    if (this._subagentHideTimeout) {
-      clearTimeout(this._subagentHideTimeout);
-      this._subagentHideTimeout = null;
-    }
-  }
-
-  // Pin dropdown open on click (stays until clicking outside)
-  pinSubagentDropdown(badgeEl) {
-    const dropdown = document.querySelector('.subagent-dropdown.open');
-    if (!dropdown) {
-      this.showSubagentDropdown(badgeEl);
-      // On mobile/touch, pin immediately so onmouseleave doesn't close it
-      const openedDropdown = document.querySelector('.subagent-dropdown.open');
-      if (openedDropdown) {
-        openedDropdown.classList.add('pinned');
-        const closeHandler = (e) => {
-          if (!badgeEl.contains(e.target) && !openedDropdown.contains(e.target)) {
-            openedDropdown.classList.remove('open', 'pinned');
-            if (openedDropdown._originalParent) {
-              openedDropdown._originalParent.appendChild(openedDropdown);
-            }
-            document.removeEventListener('click', closeHandler);
-          }
-        };
-        setTimeout(() => document.addEventListener('click', closeHandler), 0);
-      }
-      return;
-    }
-    dropdown.classList.toggle('pinned');
-
-    if (dropdown.classList.contains('pinned')) {
-      // Close on outside click
-      const closeHandler = (e) => {
-        if (!badgeEl.contains(e.target) && !dropdown.contains(e.target)) {
-          dropdown.classList.remove('open', 'pinned');
-          if (dropdown._originalParent) {
-            dropdown._originalParent.appendChild(dropdown);
-          }
-          document.removeEventListener('click', closeHandler);
-        }
-      };
-      setTimeout(() => document.addEventListener('click', closeHandler), 0);
-    }
-  }
-
-
   getSessionName(session) {
     // Use custom name if set
     if (session.name) {
@@ -3514,7 +3460,7 @@ class CodemanApp {
 
   async closeSession(sessionId, killMux = true) {
     try {
-      await fetch(`/api/sessions/${sessionId}?killMux=${killMux}`, { method: 'DELETE' });
+      await this._apiDelete(`/api/sessions/${sessionId}?killMux=${killMux}`);
       this._cleanupSessionData(sessionId);
 
       if (this.activeSessionId === sessionId) {
@@ -4543,7 +4489,7 @@ class CodemanApp {
   async stopRespawn() {
     if (!this.activeSessionId) return;
     try {
-      await fetch(`/api/sessions/${this.activeSessionId}/respawn/stop`, { method: 'POST' });
+      await this._apiPost(`/api/sessions/${this.activeSessionId}/respawn/stop`, {});
       delete this.respawnTimers[this.activeSessionId];
       this.clearCountdownTimers(this.activeSessionId);
     } catch (err) {
@@ -4567,7 +4513,7 @@ class CodemanApp {
     if (!confirm(`Kill all ${this.sessions.size} session(s)?`)) return;
 
     try {
-      await fetch('/api/sessions', { method: 'DELETE' });
+      await this._apiDelete('/api/sessions');
       this.sessions.clear();
       this.terminalBuffers.clear();
       this.terminalBufferCache.clear();
@@ -4949,11 +4895,7 @@ class CodemanApp {
     if (!this.editingSessionId) return;
     const name = document.getElementById('modalSessionName').value.trim();
     try {
-      await fetch(`/api/sessions/${this.editingSessionId}/name`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-      });
+      await this._apiPut(`/api/sessions/${this.editingSessionId}/name`, { name });
     } catch (err) {
       this.showToast('Failed to save session name: ' + err.message, 'error');
     }
@@ -4962,14 +4904,10 @@ class CodemanApp {
   async autoSaveAutoCompact() {
     if (!this.editingSessionId) return;
     try {
-      await fetch(`/api/sessions/${this.editingSessionId}/auto-compact`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          enabled: document.getElementById('modalAutoCompactEnabled').checked,
-          threshold: parseInt(document.getElementById('modalAutoCompactThreshold').value) || 110000,
-          prompt: document.getElementById('modalAutoCompactPrompt').value.trim() || undefined
-        })
+      await this._apiPost(`/api/sessions/${this.editingSessionId}/auto-compact`, {
+        enabled: document.getElementById('modalAutoCompactEnabled').checked,
+        threshold: parseInt(document.getElementById('modalAutoCompactThreshold').value) || 110000,
+        prompt: document.getElementById('modalAutoCompactPrompt').value.trim() || undefined
       });
     } catch { /* silent */ }
   }
@@ -4977,13 +4915,9 @@ class CodemanApp {
   async autoSaveAutoClear() {
     if (!this.editingSessionId) return;
     try {
-      await fetch(`/api/sessions/${this.editingSessionId}/auto-clear`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          enabled: document.getElementById('modalAutoClearEnabled').checked,
-          threshold: parseInt(document.getElementById('modalAutoClearThreshold').value) || 140000
-        })
+      await this._apiPost(`/api/sessions/${this.editingSessionId}/auto-clear`, {
+        enabled: document.getElementById('modalAutoClearEnabled').checked,
+        threshold: parseInt(document.getElementById('modalAutoClearThreshold').value) || 140000
       });
     } catch { /* silent */ }
   }
@@ -4992,11 +4926,7 @@ class CodemanApp {
     if (!this.editingSessionId) return;
     const enabled = document.getElementById('modalImageWatcherEnabled').checked;
     try {
-      await fetch(`/api/sessions/${this.editingSessionId}/image-watcher`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled })
-      });
+      await this._apiPost(`/api/sessions/${this.editingSessionId}/image-watcher`, { enabled });
       // Update local session state
       const session = this.sessions.get(this.editingSessionId);
       if (session) {
@@ -5012,11 +4942,7 @@ class CodemanApp {
     if (!this.editingSessionId) return;
     const enabled = document.getElementById('modalFlickerFilterEnabled').checked;
     try {
-      await fetch(`/api/sessions/${this.editingSessionId}/flicker-filter`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled })
-      });
+      await this._apiPost(`/api/sessions/${this.editingSessionId}/flicker-filter`, { enabled });
       // Update local session state
       const session = this.sessions.get(this.editingSessionId);
       if (session) {
@@ -5038,11 +4964,7 @@ class CodemanApp {
       autoAcceptPrompts: document.getElementById('modalRespawnAutoAccept').checked,
     };
     try {
-      await fetch(`/api/sessions/${this.editingSessionId}/respawn/config`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config)
-      });
+      await this._apiPut(`/api/sessions/${this.editingSessionId}/respawn/config`, config);
     } catch {
       // Silent save - don't interrupt user
     }
@@ -5841,9 +5763,8 @@ class CodemanApp {
     }
     try {
       // Get VAPID public key from server
-      const keyRes = await fetch('/api/push/vapid-key');
-      const keyData = await keyRes.json();
-      if (!keyData.success) throw new Error('Failed to get VAPID key');
+      const keyData = await this._apiJson('/api/push/vapid-key');
+      if (!keyData?.success) throw new Error('Failed to get VAPID key');
 
       const applicationServerKey = urlBase64ToUint8Array(keyData.data.publicKey);
       const subscription = await this._swRegistration.pushManager.subscribe({
@@ -5853,18 +5774,16 @@ class CodemanApp {
 
       // Send subscription to server
       const subJson = subscription.toJSON();
-      const res = await fetch('/api/push/subscribe', {
+      const data = await this._apiJson('/api/push/subscribe', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           endpoint: subJson.endpoint,
           keys: subJson.keys,
           userAgent: navigator.userAgent,
           pushPreferences: this._buildPushPreferences(),
-        }),
+        },
       });
-      const data = await res.json();
-      if (!data.success) throw new Error('Failed to register subscription');
+      if (!data?.success) throw new Error('Failed to register subscription');
 
       this._pushSubscription = subscription;
       this._pushSubscriptionId = data.data.id;
@@ -6175,6 +6094,27 @@ class CodemanApp {
       .then(data => {
         const container = document.getElementById('tunnelQrContainer');
         if (container && data.svg) container.innerHTML = data.svg;
+        // Show auth badge, countdown, and regenerate button when auth is enabled
+        if (data.authEnabled) {
+          const badge = document.createElement('div');
+          badge.id = 'tunnelQrBadge';
+          badge.style.cssText = 'margin-top:8px;font-size:11px;color:var(--text-muted)';
+          badge.textContent = 'Single-use auth \u00b7 expires in 60s';
+          const regenBtn = document.createElement('button');
+          regenBtn.textContent = 'Regenerate QR';
+          regenBtn.style.cssText = 'margin-top:8px;padding:4px 12px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;font-size:11px';
+          regenBtn.onclick = () => {
+            fetch('/api/tunnel/qr/regenerate', { method: 'POST' })
+              .then(() => this.showToast('QR code regenerated', 'success'))
+              .catch(() => this.showToast('Failed to regenerate QR', 'error'));
+          };
+          const card = container.parentElement;
+          if (card) {
+            card.appendChild(badge);
+            card.appendChild(regenBtn);
+          }
+          this._resetQrCountdown();
+        }
       })
       .catch(() => {
         const container = document.getElementById('tunnelQrContainer');
@@ -6208,6 +6148,50 @@ class CodemanApp {
     if (this._tunnelQrEscHandler) {
       document.removeEventListener('keydown', this._tunnelQrEscHandler);
       this._tunnelQrEscHandler = null;
+    }
+    this._clearQrCountdown();
+  }
+
+  /** Fallback: fetch QR SVG from API when SSE payload lacks it */
+  _refreshTunnelQrFromApi() {
+    fetch('/api/tunnel/qr')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (!data?.svg) return;
+        const container = document.getElementById('tunnelQrContainer');
+        if (container) container.innerHTML = data.svg;
+        const welcomeInner = document.getElementById('welcomeQrInner');
+        if (welcomeInner) welcomeInner.innerHTML = data.svg;
+      })
+      .catch(() => {});
+  }
+
+  /** Start or reset the 60s countdown on the QR badge */
+  _resetQrCountdown() {
+    this._clearQrCountdown();
+    this._qrCountdownSec = 60;
+    this._updateQrCountdownText();
+    this._qrCountdownTimer = setInterval(() => {
+      this._qrCountdownSec--;
+      if (this._qrCountdownSec <= 0) {
+        this._clearQrCountdown();
+        return;
+      }
+      this._updateQrCountdownText();
+    }, 1000);
+  }
+
+  _updateQrCountdownText() {
+    const badge = document.getElementById('tunnelQrBadge');
+    if (badge) {
+      badge.textContent = `Single-use auth \u00b7 expires in ${this._qrCountdownSec}s`;
+    }
+  }
+
+  _clearQrCountdown() {
+    if (this._qrCountdownTimer) {
+      clearInterval(this._qrCountdownTimer);
+      this._qrCountdownTimer = null;
     }
   }
 
@@ -6613,11 +6597,7 @@ class CodemanApp {
     // Strip device-specific keys — localEchoEnabled is per-platform (touch default differs)
     const { localEchoEnabled: _leo, ...serverSettings } = settings;
     try {
-      await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...serverSettings, notificationPreferences: notifPrefsToSave, voiceSettings })
-      });
+      await this._apiPut('/api/settings', { ...serverSettings, notificationPreferences: notifPrefsToSave, voiceSettings });
 
       // Save model configuration separately
       await this.saveModelConfigFromSettings();
@@ -7666,11 +7646,7 @@ class CodemanApp {
     this.ralphClosedSessions.add(this.activeSessionId);
 
     // Disable tracker via API
-    await fetch(`/api/sessions/${this.activeSessionId}/ralph-config`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: false })
-    });
+    await this._apiPost(`/api/sessions/${this.activeSessionId}/ralph-config`, { enabled: false });
 
     // Clear local state and hide panel
     this.ralphStates.delete(this.activeSessionId);
@@ -7697,12 +7673,10 @@ class CodemanApp {
     if (!this.activeSessionId) return;
 
     try {
-      const response = await fetch(`/api/sessions/${this.activeSessionId}/ralph-circuit-breaker/reset`, {
-        method: 'POST',
-      });
-      const data = await response.json();
+      const response = await this._apiPost(`/api/sessions/${this.activeSessionId}/ralph-circuit-breaker/reset`, {});
+      const data = await response?.json();
 
-      if (data.success) {
+      if (data?.success) {
         this.notificationManager?.notify({
           urgency: 'info',
           category: 'circuit-breaker',
@@ -8120,12 +8094,7 @@ class CodemanApp {
   async resetCircuitBreaker() {
     if (!this.activeSessionId) return;
     try {
-      const response = await fetch(`/api/sessions/${this.activeSessionId}/ralph-circuit-breaker/reset`, {
-        method: 'POST',
-      });
-      if (response.ok) {
-        console.log('Circuit breaker reset');
-      }
+      await this._apiPost(`/api/sessions/${this.activeSessionId}/ralph-circuit-breaker/reset`, {});
     } catch (err) {
       console.error('Failed to reset circuit breaker:', err);
     }
@@ -8882,9 +8851,9 @@ class CodemanApp {
 
   async killSubagent(agentId) {
     try {
-      const res = await fetch(`/api/subagents/${agentId}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (data.success) {
+      const res = await this._apiDelete(`/api/subagents/${agentId}`);
+      const data = await res?.json();
+      if (data?.success) {
         // Update local state
         const agent = this.subagents.get(agentId);
         if (agent) {
@@ -11384,10 +11353,22 @@ class CodemanApp {
     return this.showToast(message, type);
   }
 
-  showToast(message, type = 'info') {
+  showToast(message, type = 'info', opts = {}) {
+    const { duration = 3000, action } = opts;
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
-    toast.textContent = message;
+
+    const msgSpan = document.createElement('span');
+    msgSpan.textContent = message;
+    toast.appendChild(msgSpan);
+
+    if (action) {
+      const btn = document.createElement('button');
+      btn.textContent = action.label;
+      btn.style.cssText = 'margin-left:12px;padding:2px 10px;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:3px;color:inherit;cursor:pointer;font-size:12px';
+      btn.onclick = (e) => { e.stopPropagation(); action.onClick(); toast.remove(); };
+      toast.appendChild(btn);
+    }
 
     // Cache toast container reference
     if (!this._toastContainer) {
@@ -11405,7 +11386,7 @@ class CodemanApp {
     setTimeout(() => {
       toast.classList.remove('show');
       setTimeout(() => toast.remove(), 200);
-    }, 3000);
+    }, duration);
   }
 
   // ========== System Stats ==========

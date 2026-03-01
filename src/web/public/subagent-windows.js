@@ -1029,4 +1029,91 @@ Object.assign(CodemanApp.prototype, {
     // Return listener references for cleanup
     return { move: moveListener, up: upListener, touchMove: touchMoveListener };
   },
+
+  // Show subagent dropdown on hover
+  showSubagentDropdown(badgeEl) {
+    this.cancelHideSubagentDropdown();
+    const dropdown = badgeEl.querySelector('.subagent-dropdown');
+    if (!dropdown || dropdown.classList.contains('open')) return;
+
+    // Close other dropdowns first
+    document.querySelectorAll('.subagent-dropdown.open').forEach(d => {
+      d.classList.remove('open', 'pinned');
+      if (d.parentElement === document.body && d._originalParent) {
+        d._originalParent.appendChild(d);
+      }
+    });
+
+    // Move to body to escape clipping
+    dropdown._originalParent = badgeEl;
+    document.body.appendChild(dropdown);
+
+    // Position below badge
+    const rect = badgeEl.getBoundingClientRect();
+    dropdown.style.top = `${rect.bottom + 2}px`;
+    dropdown.style.left = `${rect.left + rect.width / 2}px`;
+    dropdown.style.transform = 'translateX(-50%)';
+    dropdown.classList.add('open');
+  },
+
+  // Schedule hide after delay (allows moving mouse to dropdown)
+  scheduleHideSubagentDropdown(badgeEl) {
+    this._subagentHideTimeout = setTimeout(() => {
+      const dropdown = badgeEl?.querySelector?.('.subagent-dropdown') ||
+                       document.querySelector('.subagent-dropdown.open');
+      if (dropdown && !dropdown.classList.contains('pinned')) {
+        dropdown.classList.remove('open');
+        if (dropdown._originalParent) {
+          dropdown._originalParent.appendChild(dropdown);
+        }
+      }
+    }, 150);
+  },
+
+  // Cancel scheduled hide
+  cancelHideSubagentDropdown() {
+    if (this._subagentHideTimeout) {
+      clearTimeout(this._subagentHideTimeout);
+      this._subagentHideTimeout = null;
+    }
+  },
+
+  // Pin dropdown open on click (stays until clicking outside)
+  pinSubagentDropdown(badgeEl) {
+    const dropdown = document.querySelector('.subagent-dropdown.open');
+    if (!dropdown) {
+      this.showSubagentDropdown(badgeEl);
+      // On mobile/touch, pin immediately so onmouseleave doesn't close it
+      const openedDropdown = document.querySelector('.subagent-dropdown.open');
+      if (openedDropdown) {
+        openedDropdown.classList.add('pinned');
+        const closeHandler = (e) => {
+          if (!badgeEl.contains(e.target) && !openedDropdown.contains(e.target)) {
+            openedDropdown.classList.remove('open', 'pinned');
+            if (openedDropdown._originalParent) {
+              openedDropdown._originalParent.appendChild(openedDropdown);
+            }
+            document.removeEventListener('click', closeHandler);
+          }
+        };
+        setTimeout(() => document.addEventListener('click', closeHandler), 0);
+      }
+      return;
+    }
+    dropdown.classList.toggle('pinned');
+
+    if (dropdown.classList.contains('pinned')) {
+      // Close on outside click
+      const closeHandler = (e) => {
+        if (!badgeEl.contains(e.target) && !dropdown.contains(e.target)) {
+          dropdown.classList.remove('open', 'pinned');
+          if (dropdown._originalParent) {
+            dropdown._originalParent.appendChild(dropdown);
+          }
+          document.removeEventListener('click', closeHandler);
+        }
+      };
+      setTimeout(() => document.addEventListener('click', closeHandler), 0);
+    }
+  },
 });

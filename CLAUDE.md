@@ -161,10 +161,10 @@ journalctl --user -u codeman-web -f
 | `src/prompts/index.ts` | Barrel export for all agent prompts |
 | `src/prompts/*.ts` | Agent prompts (research-agent, planner) |
 | `src/templates/claude-md.ts` | CLAUDE.md generation for new cases |
-| `src/tunnel-manager.ts` | Manages cloudflared child process for Cloudflare tunnel remote access |
+| `src/tunnel-manager.ts` | Manages cloudflared child process for Cloudflare tunnel + QR auth token rotation |
 | `src/cli.ts` | Command-line interface handlers |
 | `src/web/server.ts` | Fastify server setup, SSE at `/api/events`, delegates to route modules |
-| `src/web/routes/*.ts` | 12 domain route modules (session, respawn, ralph, plan, etc.) — each exports `register*Routes()` |
+| `src/web/routes/*.ts` | 13 domain route modules (session, respawn, ralph, plan, etc.) — each exports `register*Routes()` |
 | `src/web/ports/*.ts` | Port interfaces (SessionPort, EventPort, etc.) — route modules declare dependencies via intersection types |
 | `src/web/middleware/auth.ts` | Auth middleware: Basic Auth, session cookies, rate limiting, security headers, CORS |
 | `src/web/route-helpers.ts` | Shared helper utilities for route modules |
@@ -244,7 +244,7 @@ Re-exported via `src/utils/index.ts`. Key exports:
 |------|---------|
 | `src/web/public/index.html` | HTML entry point with inline critical CSS and async vendor loading |
 | `src/web/public/constants.js` | Shared constants, timing values, Z-index layers, Web Push utilities |
-| `src/web/public/api-client.js` | API fetch wrapper (`_api`, `_apiJson`, `_apiPost`) |
+| `src/web/public/api-client.js` | API fetch wrapper (`_api`, `_apiJson`, `_apiPost`, `_apiPut`) |
 | `src/web/public/mobile-handlers.js` | `MobileDetection`, `KeyboardHandler`, `SwipeHandler` objects |
 | `src/web/public/voice-input.js` | `DeepgramProvider`, `VoiceInput` objects for speech-to-text |
 | `src/web/public/notification-manager.js` | `NotificationManager` class (5-layer notification system) |
@@ -286,8 +286,10 @@ The frontend is split across multiple vanilla JS modules (extracted from the ori
 ### Security
 
 - **HTTP Basic Auth**: Optional via `CODEMAN_USERNAME`/`CODEMAN_PASSWORD` env vars
-- **Session cookies**: After Basic Auth, a 24h session cookie (`codeman_session`) is issued so credentials aren't re-sent on every request. Active sessions auto-extend. SSE works via same-origin cookie (`EventSource` can't send custom headers).
-- **Rate limiting**: 10 failed auth attempts per IP triggers 429 rejection (15-minute decay window). Manual `StaleExpirationMap` counter — no `@fastify/rate-limit` needed.
+- **QR Auth**: Single-use ephemeral 6-char tokens (60s TTL, 90s grace) for tunnel login without typing passwords. `TunnelManager` rotates tokens, serves cached SVG at `GET /api/tunnel/qr`, validates at `GET /q/:code`. Separate per-IP rate limit (10/15min) + global path limit (30/min). Desktop notification on consumption (QRLjacking detection). Audit logged as `qr_auth` in `session-lifecycle.jsonl`. See `docs/qr-auth-plan.md`.
+- **Session cookies**: After Basic Auth or QR Auth, a 24h session cookie (`codeman_session`) is issued so credentials aren't re-sent on every request. Active sessions auto-extend. SSE works via same-origin cookie (`EventSource` can't send custom headers). Sessions store device context (IP + User-Agent) for audit via `AuthSessionRecord`.
+- **Session revocation**: `POST /api/auth/revoke` revokes individual sessions or all sessions.
+- **Rate limiting**: 10 failed auth attempts per IP triggers 429 rejection (15-minute decay window). Manual `StaleExpirationMap` counter — no `@fastify/rate-limit` needed. QR auth has its own separate rate limiter.
 - **Hook bypass**: `/api/hook-event` POST is exempt from auth — Claude Code hooks curl this from localhost and can't present credentials. Safe: validated by `HookEventSchema`, only triggers broadcasts.
 - **CORS**: Restricted to localhost only
 - **Security headers**: X-Content-Type-Options, X-Frame-Options, CSP; HSTS if HTTPS
@@ -309,6 +311,7 @@ The frontend is split across multiple vanilla JS modules (extracted from the ori
 | Hooks | `hook:{eventName}` (dynamic) | Claude Code hook events |
 | Plan | `plan:started/progress/completed/cancelled/subagent` | Plan orchestration |
 | Mux | `mux:created/killed/died/statsUpdated` | tmux process monitor |
+| Tunnel | `tunnel:qrRotated/qrRegenerated/qrAuthUsed` | QR token lifecycle |
 | Image | `image:detected` | Screenshot detection |
 
 ### API Route Categories
@@ -328,6 +331,7 @@ The frontend is split across multiple vanilla JS modules (extracted from the ori
 | Mux | `/api/mux-sessions` | 5 | tmux management, stats |
 | Scheduled | `/api/scheduled` | 4 | CRUD for scheduled runs |
 | Push | `/api/push` | 4 | VAPID key, subscribe, update prefs, unsubscribe |
+| Auth | `/api/auth`, `/q/:code` | 3 | QR validation, session revocation |
 | Teams | `/api/teams` | 2 | list teams, get team tasks |
 
 ## Adding Features
@@ -490,6 +494,7 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Voice input** | `docs/voice-input-plan.md` |
 | **Improvement roadmaps** | `docs/respawn-improvement-plan.md`, `docs/ralph-improvement-plan.md`, `docs/plan-improvement-roadmap.md` |
 | **Background keystroke forwarding** | `docs/background-keystroke-forwarding-merged-plan.md` |
+| **QR auth design** | `docs/qr-auth-plan.md` |
 | **Run summary** | `docs/run-summary-plan.md` |
 
 Additional design docs and investigation reports are in the `docs/` directory.
@@ -572,7 +577,7 @@ journalctl --user -u codeman-tunnel -f
 
 ### Auth Flow
 
-1. First request → browser shows Basic Auth prompt (username: `admin` or `CODEMAN_USERNAME`)
+1. First request → browser shows Basic Auth prompt (username: `admin` or `CODEMAN_USERNAME`), or scan QR code from tunnel settings panel
 2. On success → server issues `codeman_session` HttpOnly cookie (24h TTL, auto-extends on activity)
 3. Subsequent requests → cookie authenticates silently (no more prompts)
 4. SSE works automatically — `EventSource` sends same-origin cookies

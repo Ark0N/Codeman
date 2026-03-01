@@ -37,7 +37,7 @@ import { writeHooksConfig, updateCaseEnvVars } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { imageWatcher } from '../../image-watcher.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
-import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
+import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
 import { MAX_CONCURRENT_SESSIONS } from '../../config/map-limits.js';
 import { RunSummaryTracker } from '../../run-summary.js';
 
@@ -56,11 +56,16 @@ const LEADING_WHITESPACE_PATTERN = /^[\s\r\n]+/;
 
 export function registerSessionRoutes(
   app: FastifyInstance,
-  ctx: SessionPort & EventPort & ConfigPort & InfraPort
+  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort
 ): void {
   // ========== Logout ==========
 
-  app.post('/api/logout', async (_req, reply) => {
+  app.post('/api/logout', async (req, reply) => {
+    // Invalidate server-side session token (not just the browser cookie)
+    const sessionToken = req.cookies[AUTH_COOKIE_NAME];
+    if (sessionToken) {
+      ctx.authSessions?.delete(sessionToken);
+    }
     reply.clearCookie(AUTH_COOKIE_NAME, { path: '/' });
     return { success: true };
   });

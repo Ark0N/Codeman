@@ -18,6 +18,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { randomBytes } from 'node:crypto';
 
 // ========== Types ==========
 
@@ -26,7 +27,40 @@ export interface TunnelStatus {
   url: string | null;
 }
 
+interface QrTokenRecord {
+  token: string; // 64 hex chars (256 bits)
+  shortCode: string; // 6 chars base62 (for URL path)
+  createdAt: number; // Date.now()
+  consumed: boolean; // single-use flag
+}
+
 // ========== Constants ==========
+
+/** QR token auto-rotation interval */
+const QR_TOKEN_TTL_MS = 60_000;
+/** Grace period for previous token (scan-during-rotation race) */
+const QR_TOKEN_GRACE_MS = 90_000;
+/** Length of short code in QR URL path */
+const SHORT_CODE_LENGTH = 6;
+/** Global rate limit for QR attempts across all IPs */
+const QR_RATE_LIMIT_MAX = 30;
+/** Global rate limit reset window */
+const QR_RATE_LIMIT_WINDOW_MS = 60_000;
+
+/** Rejection-sampled base62 short code — no modulo bias */
+function generateShortCode(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const maxUnbiased = 248; // largest multiple of 62 that fits in a byte (248 = 62 * 4)
+  const result: string[] = [];
+  while (result.length < SHORT_CODE_LENGTH) {
+    const [byte] = randomBytes(1);
+    if (byte < maxUnbiased) result.push(chars[byte % 62]);
+    // else: discard and re-draw (rejection sampling)
+  }
+  return result.join('');
+}
+
+// ========== Constants (Tunnel) ==========
 
 /** Regex to extract the trycloudflare.com URL from cloudflared output */
 const TUNNEL_URL_REGEX = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
@@ -53,6 +87,17 @@ export class TunnelManager extends EventEmitter {
   private stopped = true;
   private localPort = 3000;
   private useHttps = false;
+
+  // ========== QR Token State ==========
+  /** Map-based lookup: shortCode → QrTokenRecord (hash-based, timing-safe) */
+  private qrTokensByCode = new Map<string, QrTokenRecord>();
+  private currentShortCode: string | null = null;
+  private rotationTimer: ReturnType<typeof setInterval> | null = null;
+  /** SVG cache — regenerated only on token rotation, not per request */
+  private cachedQrSvg: { shortCode: string; svg: string } | null = null;
+  /** Global rate limit counter (separate from Basic Auth rate limiting) */
+  private qrAttemptCount = 0;
+  private qrRateLimitResetTimer: ReturnType<typeof setInterval> | null = null;
 
   /**
    * Resolve cloudflared binary path.
@@ -170,6 +215,10 @@ export class TunnelManager extends EventEmitter {
         // Detach listeners — no need to parse further output
         this.process?.stdout?.off('data', handleOutput);
         this.process?.stderr?.off('data', handleOutput);
+        // Start QR token rotation when tunnel URL is acquired (only if auth enabled)
+        if (process.env.CODEMAN_PASSWORD) {
+          this.startTokenRotation();
+        }
         this.emit('started', { url: this.url });
       }
     };
@@ -243,6 +292,7 @@ export class TunnelManager extends EventEmitter {
   stop(): void {
     this.stopped = true;
     this.clearTimers();
+    this.stopTokenRotation();
 
     if (this.process) {
       const pid = this.process.pid;
@@ -262,6 +312,111 @@ export class TunnelManager extends EventEmitter {
       this.url = null;
       this.emit('stopped', {});
     }
+  }
+
+  // ========== QR Token Management ==========
+
+  /** Start token rotation — called after tunnel URL is acquired */
+  startTokenRotation(): void {
+    this.stopTokenRotation();
+    this.rotateToken();
+    this.rotationTimer = setInterval(() => this.rotateToken(), QR_TOKEN_TTL_MS);
+    this.qrRateLimitResetTimer = setInterval(() => {
+      this.qrAttemptCount = 0;
+    }, QR_RATE_LIMIT_WINDOW_MS);
+  }
+
+  /** Stop token rotation and clear all tokens */
+  stopTokenRotation(): void {
+    if (this.rotationTimer) {
+      clearInterval(this.rotationTimer);
+      this.rotationTimer = null;
+    }
+    if (this.qrRateLimitResetTimer) {
+      clearInterval(this.qrRateLimitResetTimer);
+      this.qrRateLimitResetTimer = null;
+    }
+    this.qrTokensByCode.clear();
+    this.currentShortCode = null;
+    this.cachedQrSvg = null;
+    this.qrAttemptCount = 0;
+  }
+
+  /** Create a new token, evict expired/consumed ones, emit rotation event */
+  private rotateToken(): void {
+    const record: QrTokenRecord = {
+      token: randomBytes(32).toString('hex'),
+      shortCode: generateShortCode(),
+      createdAt: Date.now(),
+      consumed: false,
+    };
+
+    // Evict expired or consumed tokens
+    const now = Date.now();
+    for (const [code, rec] of this.qrTokensByCode) {
+      if (now - rec.createdAt > QR_TOKEN_GRACE_MS || rec.consumed) {
+        this.qrTokensByCode.delete(code);
+      }
+    }
+
+    this.qrTokensByCode.set(record.shortCode, record);
+    this.currentShortCode = record.shortCode;
+    this.cachedQrSvg = null; // invalidate SVG cache
+    this.emit('qrTokenRotated');
+  }
+
+  /** Get the current (newest) token's short code for QR URL */
+  getCurrentShortCode(): string | undefined {
+    return this.currentShortCode ?? undefined;
+  }
+
+  /** Get cached QR SVG, regenerating only if the short code changed */
+  async getQrSvg(tunnelUrl: string): Promise<string> {
+    const code = this.currentShortCode;
+    if (!code) throw new Error('No QR token available');
+    if (this.cachedQrSvg?.shortCode === code) return this.cachedQrSvg.svg;
+
+    // eslint-disable-next-line @typescript-eslint/no-require-imports -- dynamic optional dependency
+    const QRCode = require('qrcode');
+    const svg: string = await QRCode.toString(`${tunnelUrl}/q/${code}`, {
+      type: 'svg',
+      margin: 2,
+      width: 256,
+    });
+    this.cachedQrSvg = { shortCode: code, svg };
+    return svg;
+  }
+
+  /**
+   * Validate and atomically consume a token by short code.
+   * Map.get() is hash-based — no timing side-channel from string comparison.
+   */
+  consumeToken(shortCode: string): boolean {
+    // Global rate limit (across all IPs)
+    if (this.qrAttemptCount >= QR_RATE_LIMIT_MAX) return false;
+    this.qrAttemptCount++;
+
+    const record = this.qrTokensByCode.get(shortCode);
+    if (!record) return false;
+    if (record.consumed) return false;
+
+    const now = Date.now();
+    if (now - record.createdAt > QR_TOKEN_GRACE_MS) return false;
+
+    // Atomic consume (single-threaded JS = no race)
+    record.consumed = true;
+    // Immediately rotate so desktop gets a fresh QR
+    this.rotateToken();
+    this.emit('qrTokenRegenerated');
+    return true;
+  }
+
+  /** Force-regenerate (manual revocation via API) */
+  regenerateQrToken(): void {
+    this.qrTokensByCode.clear();
+    this.currentShortCode = null;
+    this.rotateToken();
+    this.emit('qrTokenRegenerated');
   }
 
   isRunning(): boolean {
