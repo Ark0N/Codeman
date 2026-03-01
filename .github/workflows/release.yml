@@ -52,15 +52,15 @@ jobs:
           OLD_TAG="aicodeman@${VERSION}"
           NEW_TAG="codeman@${VERSION}"
 
-          # Retag
-          git tag "$NEW_TAG" "$OLD_TAG" 2>/dev/null || true
-          git tag -d "$OLD_TAG" 2>/dev/null || true
-          git push origin "$NEW_TAG" ":refs/tags/$OLD_TAG" 2>/dev/null || true
-
-          # Update the GitHub release to use the new tag
-          RELEASE_ID=$(gh release view "$OLD_TAG" --json id -q .id 2>/dev/null || true)
+          # Update the GitHub release BEFORE deleting the old tag
+          RELEASE_ID=$(gh release view "$OLD_TAG" --json databaseId -q .databaseId 2>/dev/null || true)
           if [ -n "$RELEASE_ID" ]; then
             gh api -X PATCH "repos/${{ github.repository }}/releases/${RELEASE_ID}" \
               -f tag_name="$NEW_TAG" \
               -f name="$NEW_TAG"
           fi
+
+          # Retag
+          git tag "$NEW_TAG" "$OLD_TAG" 2>/dev/null || true
+          git tag -d "$OLD_TAG" 2>/dev/null || true
+          git push origin "$NEW_TAG" ":refs/tags/$OLD_TAG" 2>/dev/null || true
