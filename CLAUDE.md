@@ -125,11 +125,22 @@ journalctl --user -u codeman-web -f
 | `src/mux-factory.ts` | Create tmux multiplexer instance |
 | `src/tmux-manager.ts` | tmux session management |
 | `src/session-manager.ts` | Session lifecycle, cleanup |
+| `src/session-auto-ops.ts` | Automatic session operations (auto-compact, etc.) |
+| `src/session-cli-builder.ts` | CLI argument construction for session spawning |
+| `src/session-task-cache.ts` | Task description caching for subagent correlation |
 | `src/state-store.ts` | State persistence to `~/.codeman/state.json` |
 | `src/respawn-controller.ts` | State machine for autonomous cycling |
+| `src/respawn-adaptive-timing.ts` | Adaptive idle timing calculation |
+| `src/respawn-health.ts` | Health scoring (0-100) for respawn loops |
+| `src/respawn-metrics.ts` | Per-cycle outcome metrics tracking |
+| `src/respawn-patterns.ts` | Pattern matching for stuck/error states |
 | `src/ralph-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos |
 | `src/ralph-loop.ts` | Autonomous task execution loop (polls queue, assigns tasks) |
 | `src/ralph-config.ts` | Parses `.claude/ralph-loop.local.md` plugin config |
+| `src/ralph-fix-plan-watcher.ts` | Watches `@fix_plan.md` for changes |
+| `src/ralph-plan-tracker.ts` | Plan iteration tracking |
+| `src/ralph-stall-detector.ts` | Detects stuck Ralph loops |
+| `src/ralph-status-parser.ts` | Parses Ralph status messages |
 | `src/task.ts` | Task model for prompt execution |
 | `src/task-queue.ts` | Priority queue for tasks with dependencies |
 | `src/task-tracker.ts` | Background task tracker for subagent detection |
@@ -153,10 +164,12 @@ journalctl --user -u codeman-web -f
 | `src/tunnel-manager.ts` | Manages cloudflared child process for Cloudflare tunnel remote access |
 | `src/cli.ts` | Command-line interface handlers |
 | `src/web/server.ts` | Fastify server setup, SSE at `/api/events`, delegates to route modules |
-| `src/web/routes/*.ts` | 13 domain route modules (session, respawn, ralph, plan, etc.) — each exports `register*Routes()` |
+| `src/web/routes/*.ts` | 12 domain route modules (session, respawn, ralph, plan, etc.) — each exports `register*Routes()` |
+| `src/web/ports/*.ts` | Port interfaces (SessionPort, EventPort, etc.) — route modules declare dependencies via intersection types |
+| `src/web/middleware/auth.ts` | Auth middleware: Basic Auth, session cookies, rate limiting, security headers, CORS |
 | `src/web/route-helpers.ts` | Shared helper utilities for route modules |
 | `src/web/schemas.ts` | Zod v4 validation schemas with path/env security allowlists |
-| `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~15K lines) |
+| `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~12K lines) |
 | `src/types.ts` | Barrel re-export from `src/types/` — 14 domain files (session, task, respawn, ralph, api, etc.) |
 
 **Large files** (>50KB): `app.js`, `ralph-tracker.ts`, `respawn-controller.ts`, `session.ts`, `subagent-watcher.ts` — these contain complex state machines; read `docs/respawn-state-machine.md` before modifying.
@@ -173,6 +186,7 @@ journalctl --user -u codeman-web -f
 |------|---------|
 | `buffer-limits.ts` | Terminal/text buffer size limits |
 | `map-limits.ts` | Global limits for Maps, sessions, watchers |
+| `exec-timeout.ts` | Execution timeout configuration |
 
 ### Utilities (`src/utils/`)
 
@@ -191,6 +205,7 @@ Re-exported via `src/utils/index.ts`. Key exports:
 | `token-validation.ts` | `validateTokenCounts`, `validateTokensAndCost` |
 | `nice-wrapper.ts` | `wrapWithNice` — wraps commands with `nice`/`ionice` for lower priority |
 | `type-safety.ts` | `assertNever` — exhaustive switch/case guard |
+| `debouncer.ts` | `Debouncer` — reusable debounce utility |
 
 ### Data Flow
 
@@ -220,6 +235,8 @@ Re-exported via `src/utils/index.ts`. Key exports:
 **Respawn cycle metrics & health scoring**: `RespawnCycleMetrics` tracks per-cycle outcomes (success, stuck_recovery, blocked, error). `RalphLoopHealthScore` computes 0-100 health with component scores (cycleSuccess, circuitBreaker, iterationProgress, aiChecker, stuckRecovery). Available via respawn status API.
 
 **Subagent-session correlation**: Session parses Task tool output via `BashToolParser` → `SubagentWatcher` discovers new agent → calls `session.findTaskDescriptionNear()` to match description for window title.
+
+**Port interfaces**: Route modules declare their dependencies via port interfaces (`src/web/ports/`). `WebServer` implements all ports; routes use TypeScript intersection types (e.g., `SessionPort & EventPort`) to specify only what they need. This enables loose coupling between routes and the server.
 
 ### Frontend Files
 
