@@ -20,6 +20,7 @@
   <script defer src="vendor/xterm-addon-fit.min.js"></script>
   <script defer src="vendor/xterm-addon-webgl.min.js"></script>
   <script defer src="vendor/xterm-addon-unicode11.min.js"></script>
+  <script defer src="vendor/xterm-zerolag-input.js?v=0.2.9"></script>
   <!-- Synchronous mobile detection — runs before first paint to prevent panel flash -->
   <script>if(window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024))document.documentElement.classList.add('mobile-init');</script>
   <!-- Inline critical CSS for instant skeleton paint (before styles.css loads) -->
@@ -1669,7 +1670,14 @@
     <!-- Lines drawn dynamically -->
   </svg>
 
-  <script defer src="app.js?v=0.1631"></script>
-  <script defer src="ralph-wizard.js?v=0.1631"></script>
+  <script defer src="constants.js?v=0.2.9"></script>
+  <script defer src="mobile-handlers.js?v=0.2.9"></script>
+  <script defer src="voice-input.js?v=0.2.9"></script>
+  <script defer src="notification-manager.js?v=0.2.9"></script>
+  <script defer src="keyboard-accessory.js?v=0.2.9"></script>
+  <script defer src="app.js?v=0.2.9"></script>
+  <script defer src="ralph-wizard.js?v=0.2.9"></script>
+  <script defer src="api-client.js?v=0.2.9"></script>
+  <script defer src="subagent-windows.js?v=0.2.9"></script>
 </body>
 </html>

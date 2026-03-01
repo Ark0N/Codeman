@@ -361,7 +361,7 @@ Object.assign(CodemanApp.prototype, {
     prompt += 'Output `<promise>BLOCKED</promise>` with explanation';
 
     // Show preview with highlighting (escape first, then apply formatting)
-    const escapedPrompt = this.escapeHtml(prompt);
+    const escapedPrompt = escapeHtml(prompt);
     const highlightedPrompt = escapedPrompt
       .replace(/&lt;promise&gt;/g, '<span class="preview-highlight">&lt;promise&gt;')
       .replace(/&lt;\/promise&gt;/g, '&lt;/promise&gt;</span>')
@@ -724,7 +724,7 @@ Object.assign(CodemanApp.prototype, {
         <input type="checkbox" class="plan-item-checkbox" ${item.enabled ? 'checked' : ''}
           onchange="app.togglePlanItem(${index})">
         ${item.priority ? `<span class="plan-item-priority-badge">${item.priority}</span>` : ''}
-        <span class="plan-item-text">${this.escapeHtml(item.content)}</span>
+        <span class="plan-item-text">${escapeHtml(item.content)}</span>
       `;
       fragment.appendChild(row);
     });
@@ -847,7 +847,7 @@ Object.assign(CodemanApp.prototype, {
       <div class="plan-subagent-header">
         <span>
           <span class="plan-subagent-icon">${typeIcons[agentType] || '🤖'}</span>
-          <span class="plan-subagent-title">${typeLabels[agentType] || this.escapeHtml(agentType)}</span>
+          <span class="plan-subagent-title">${typeLabels[agentType] || escapeHtml(agentType)}</span>
         </span>
         <span class="plan-subagent-model">${model}</span>
       </div>

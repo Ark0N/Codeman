@@ -1,2666 +1,10 @@
 // Codeman App - Tab-based Terminal UI
+// Constants, utilities, and escapeHtml() are in constants.js (loaded before this file)
+// MobileDetection, KeyboardHandler, SwipeHandler are in mobile-handlers.js
+// DeepgramProvider, VoiceInput are in voice-input.js
 
-// ============================================================================
-// Web Push Utilities
-// ============================================================================
 
-/** Convert a base64-encoded VAPID key to Uint8Array for pushManager.subscribe() */
-function urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - base64String.length % 4) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
-}
 
-// ============================================================================
-// Constants
-// ============================================================================
-
-// Default terminal scrollback (can be changed via settings)
-const DEFAULT_SCROLLBACK = 5000;
-
-// Timing constants
-const STUCK_THRESHOLD_DEFAULT_MS = 600000;  // 10 minutes - default for stuck detection
-const GROUPING_TIMEOUT_MS = 5000;           // 5 seconds - notification grouping window
-const NOTIFICATION_LIST_CAP = 100;          // Max notifications in list
-const TITLE_FLASH_INTERVAL_MS = 1500;       // Title flash rate
-const BROWSER_NOTIF_RATE_LIMIT_MS = 3000;   // Rate limit for browser notifications
-const AUTO_CLOSE_NOTIFICATION_MS = 8000;    // Auto-close browser notifications
-const THROTTLE_DELAY_MS = 100;              // General UI throttle delay
-const TERMINAL_CHUNK_SIZE = 128 * 1024;     // 128KB chunks for terminal data
-const TERMINAL_TAIL_SIZE = 256 * 1024;      // 256KB tail for initial load
-const SYNC_WAIT_TIMEOUT_MS = 50;            // Wait timeout for terminal sync
-const STATS_POLLING_INTERVAL_MS = 2000;     // System stats polling
-
-// Z-index base values for layered floating windows
-const ZINDEX_SUBAGENT_BASE = 1000;
-const ZINDEX_PLAN_SUBAGENT_BASE = 1100;
-const ZINDEX_LOG_VIEWER_BASE = 2000;
-const ZINDEX_IMAGE_POPUP_BASE = 3000;
-
-// Subagent/floating window layout
-const WINDOW_INITIAL_TOP_PX = 120;
-const WINDOW_CASCADE_OFFSET_PX = 30;
-const WINDOW_MIN_WIDTH_PX = 200;
-const WINDOW_MIN_HEIGHT_PX = 200;
-const WINDOW_DEFAULT_WIDTH_PX = 300;
-
-// Scheduler API — prioritize terminal writes over background UI updates.
-// scheduler.postTask('background') defers non-critical work (connection lines, panel renders)
-// so the main thread stays free for terminal rendering at 60fps.
-const _hasScheduler = typeof globalThis.scheduler?.postTask === 'function';
-function scheduleBackground(fn) {
-  if (_hasScheduler) { scheduler.postTask(fn, { priority: 'background' }); }
-  else { requestAnimationFrame(fn); }
-}
-
-// DEC mode 2026 - Synchronized Output
-// Wrap terminal writes with these markers to prevent partial-frame flicker.
-// Terminal buffers all output between markers and renders atomically.
-// Supported by: WezTerm, Kitty, Ghostty, iTerm2 3.5+, Windows Terminal, VSCode terminal
-// xterm.js doesn't support DEC 2026 natively, so we implement buffering ourselves.
-const DEC_SYNC_START = '\x1b[?2026h';
-const DEC_SYNC_END = '\x1b[?2026l';
-// Pre-compiled regex for stripping DEC 2026 markers (single pass instead of two replaceAll calls)
-const DEC_SYNC_STRIP_RE = /\x1b\[\?2026[hl]/g;
-
-// Built-in respawn configuration presets
-const BUILTIN_RESPAWN_PRESETS = [
-  {
-    id: 'solo-work',
-    name: 'Solo',
-    description: 'Claude working alone — fast respawn cycles with context reset',
-    config: {
-      idleTimeoutMs: 3000,
-      updatePrompt: 'summarize your progress so far before the context reset.',
-      interStepDelayMs: 2000,
-      sendClear: true,
-      sendInit: true,
-      kickstartPrompt: 'continue working. Pick up where you left off based on the context above.',
-      autoAcceptPrompts: true,
-    },
-    durationMinutes: 60,
-    builtIn: true,
-    createdAt: 0,
-  },
-  {
-    id: 'subagent-workflow',
-    name: 'Subagents',
-    description: 'Lead session with Task tool subagents — longer idle tolerance',
-    config: {
-      idleTimeoutMs: 45000,
-      updatePrompt: 'check on your running subagents and summarize their results before the context reset. If all subagents have finished, note what was completed and what remains.',
-      interStepDelayMs: 3000,
-      sendClear: true,
-      sendInit: true,
-      kickstartPrompt: 'check on your running subagents and continue coordinating their work. If all subagents have finished, summarize their results and proceed with the next step.',
-      autoAcceptPrompts: true,
-    },
-    durationMinutes: 240,
-    builtIn: true,
-    createdAt: 0,
-  },
-  {
-    id: 'team-lead',
-    name: 'Team',
-    description: 'Leading an agent team via TeamCreate — tolerates long silences',
-    config: {
-      idleTimeoutMs: 90000,
-      updatePrompt: 'review the task list and teammate progress. Summarize the current state before the context reset.',
-      interStepDelayMs: 5000,
-      sendClear: true,
-      sendInit: true,
-      kickstartPrompt: 'check on your teammates by reviewing the task list and any messages in your inbox. Assign new tasks if teammates are idle, or continue coordinating the team effort.',
-      autoAcceptPrompts: true,
-    },
-    durationMinutes: 480,
-    builtIn: true,
-    createdAt: 0,
-  },
-  {
-    id: 'ralph-todo',
-    name: 'Ralph/Todo',
-    description: 'Ralph Loop task list — works through todos with progress tracking',
-    config: {
-      idleTimeoutMs: 8000,
-      updatePrompt: 'update CLAUDE.md with discoveries and progress notes, mark completed tasks in @fix_plan.md, write a brief summary so the next cycle can continue seamlessly.',
-      interStepDelayMs: 3000,
-      sendClear: true,
-      sendInit: true,
-      kickstartPrompt: 'read @fix_plan.md for task status, continue on the next uncompleted task. When ALL tasks are complete, output <promise>COMPLETE</promise>.',
-      autoAcceptPrompts: true,
-    },
-    durationMinutes: 480,
-    builtIn: true,
-    createdAt: 0,
-  },
-  {
-    id: 'overnight-autonomous',
-    name: 'Overnight',
-    description: 'Unattended overnight runs with full context reset between cycles',
-    config: {
-      idleTimeoutMs: 10000,
-      updatePrompt: 'summarize what you accomplished so far and write key progress notes to CLAUDE.md so the next cycle can pick up where you left off.',
-      interStepDelayMs: 3000,
-      sendClear: true,
-      sendInit: true,
-      kickstartPrompt: 'continue working on the task. Pick up where you left off based on the context above.',
-      autoAcceptPrompts: true,
-    },
-    durationMinutes: 480,
-    builtIn: true,
-    createdAt: 0,
-  },
-];
-
-// ============================================================================
-// Mobile Detection
-// ============================================================================
-
-/**
- * MobileDetection - Detects device type and touch capability.
- * Updates body classes for CSS targeting.
- */
-const MobileDetection = {
-  /** Check if device supports touch input */
-  isTouchDevice() {
-    return 'ontouchstart' in window ||
-      navigator.maxTouchPoints > 0 ||
-      (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
-  },
-
-  /** Check if device is iOS (iPhone, iPad, iPod) */
-  isIOS() {
-    return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  },
-
-  /** Check if browser is Safari */
-  isSafari() {
-    return /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-  },
-
-  /** Check if screen is small (phone-sized, <430px) */
-  isSmallScreen() {
-    return window.innerWidth < 430;
-  },
-
-  /** Check if screen is medium (tablet-sized, 430-768px) */
-  isMediumScreen() {
-    return window.innerWidth >= 430 && window.innerWidth < 768;
-  },
-
-  /** Get device type based on screen width */
-  getDeviceType() {
-    const width = window.innerWidth;
-    if (width < 430) return 'mobile';
-    if (width < 768) return 'tablet';
-    return 'desktop';
-  },
-
-  /** Update body classes based on device detection */
-  updateBodyClass() {
-    const body = document.body;
-    const deviceType = this.getDeviceType();
-    const isTouch = this.isTouchDevice();
-
-    // Remove existing device classes
-    body.classList.remove('device-mobile', 'device-tablet', 'device-desktop', 'touch-device', 'ios-device', 'safari-browser');
-
-    // Add current device class
-    body.classList.add(`device-${deviceType}`);
-
-    // Add touch device class if applicable
-    if (isTouch) {
-      body.classList.add('touch-device');
-    }
-
-    // Add iOS-specific class for safe area handling
-    if (this.isIOS()) {
-      body.classList.add('ios-device');
-    }
-
-    // Add Safari class for browser-specific fixes
-    if (this.isSafari()) {
-      body.classList.add('safari-browser');
-    }
-  },
-
-  /** Initialize mobile detection and set up resize listener */
-  init() {
-    this.updateBodyClass();
-    // Debounced resize handler
-    let resizeTimeout;
-    this._resizeHandler = () => {
-      clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(() => this.updateBodyClass(), 100);
-    };
-    window.addEventListener('resize', this._resizeHandler);
-
-    // iOS: prevent pinch-to-zoom (Safari ignores user-scalable=no since iOS 10)
-    if (this.isIOS()) {
-      this._gestureStartHandler = (e) => e.preventDefault();
-      this._gestureChangeHandler = (e) => e.preventDefault();
-      document.addEventListener('gesturestart', this._gestureStartHandler);
-      document.addEventListener('gesturechange', this._gestureChangeHandler);
-    }
-  },
-
-  /** Remove event listeners */
-  cleanup() {
-    if (this._resizeHandler) {
-      window.removeEventListener('resize', this._resizeHandler);
-      this._resizeHandler = null;
-    }
-    if (this._gestureStartHandler) {
-      document.removeEventListener('gesturestart', this._gestureStartHandler);
-      document.removeEventListener('gesturechange', this._gestureChangeHandler);
-      this._gestureStartHandler = null;
-      this._gestureChangeHandler = null;
-    }
-  }
-};
-
-/**
- * Get unified coordinates from mouse or touch event.
- * @param {MouseEvent|TouchEvent} e - The event
- * @returns {{ clientX: number, clientY: number }} Coordinates
- */
-function getEventCoords(e) {
-  if (e.touches && e.touches.length > 0) {
-    return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
-  }
-  if (e.changedTouches && e.changedTouches.length > 0) {
-    return { clientX: e.changedTouches[0].clientX, clientY: e.changedTouches[0].clientY };
-  }
-  return { clientX: e.clientX, clientY: e.clientY };
-}
-
-// ============================================================================
-// Mobile Keyboard Handler
-// ============================================================================
-
-/**
- * KeyboardHandler - Simple handler to scroll inputs into view when keyboard appears.
- * Uses focusin event and scrollIntoView - keeps it simple and reliable.
- * Also handles terminal scrolling and toolbar repositioning via visualViewport API.
- */
-const KeyboardHandler = {
-  lastViewportHeight: 0,
-  keyboardVisible: false,
-  initialViewportHeight: 0,
-
-  /** Initialize keyboard handling */
-  init() {
-    // Only initialize on touch devices
-    if (!MobileDetection.isTouchDevice()) return;
-
-    this.initialViewportHeight = window.visualViewport?.height || window.innerHeight;
-    this.lastViewportHeight = this.initialViewportHeight;
-
-    // Simple focus handler - scroll input into view after keyboard appears
-    this._focusinHandler = (e) => {
-      const target = e.target;
-      if (!this.isInputElement(target)) return;
-
-      // Wait for keyboard animation, then scroll input into view
-      setTimeout(() => {
-        this.scrollInputIntoView(target);
-      }, 400);
-    };
-    document.addEventListener('focusin', this._focusinHandler);
-
-    // Use visualViewport to detect keyboard and reposition toolbar
-    if (window.visualViewport) {
-      this._viewportResizeHandler = () => {
-        this.handleViewportResize();
-      };
-      this._viewportScrollHandler = () => {
-        this.updateLayoutForKeyboard();
-      };
-      window.visualViewport.addEventListener('resize', this._viewportResizeHandler);
-      // Also handle scroll (iOS scrolls viewport when keyboard appears)
-      window.visualViewport.addEventListener('scroll', this._viewportScrollHandler);
-    }
-  },
-
-  /** Remove event listeners */
-  cleanup() {
-    if (this._focusinHandler) {
-      document.removeEventListener('focusin', this._focusinHandler);
-      this._focusinHandler = null;
-    }
-    if (this._viewportResizeHandler && window.visualViewport) {
-      window.visualViewport.removeEventListener('resize', this._viewportResizeHandler);
-      this._viewportResizeHandler = null;
-    }
-    if (this._viewportScrollHandler && window.visualViewport) {
-      window.visualViewport.removeEventListener('scroll', this._viewportScrollHandler);
-      this._viewportScrollHandler = null;
-    }
-  },
-
-  /** Handle viewport resize (keyboard show/hide) */
-  handleViewportResize() {
-    const currentHeight = window.visualViewport?.height || window.innerHeight;
-    const heightDiff = this.initialViewportHeight - currentHeight;
-
-    // Keyboard appeared (viewport shrunk by more than 150px)
-    if (heightDiff > 150 && !this.keyboardVisible) {
-      this.keyboardVisible = true;
-      document.body.classList.add('keyboard-visible');
-      this.onKeyboardShow();
-    }
-    // Keyboard hidden (viewport grew back close to initial)
-    // Use 100px threshold (not 50) to handle iOS address bar drift,
-    // iOS 26's persistent 24px discrepancy, and Safari bottom bar changes
-    else if (heightDiff < 100 && this.keyboardVisible) {
-      this.keyboardVisible = false;
-      document.body.classList.remove('keyboard-visible');
-      this.onKeyboardHide();
-    }
-
-    // Update baseline when keyboard is not visible — adapts to address bar
-    // state changes, orientation changes, and other viewport shifts
-    if (!this.keyboardVisible) {
-      this.initialViewportHeight = currentHeight;
-    }
-
-    this.updateLayoutForKeyboard();
-    this.lastViewportHeight = currentHeight;
-  },
-
-  /** Update layout when keyboard shows/hides */
-  updateLayoutForKeyboard() {
-    if (!window.visualViewport) return;
-
-    // Only adjust on mobile
-    if (!MobileDetection.isSmallScreen() && !MobileDetection.isMediumScreen()) {
-      this.resetLayout();
-      return;
-    }
-
-    const toolbar = document.querySelector('.toolbar');
-    const accessoryBar = document.querySelector('.keyboard-accessory-bar');
-    const main = document.querySelector('.main');
-
-    if (this.keyboardVisible) {
-      // Calculate keyboard offset
-      const layoutHeight = window.innerHeight;
-      const visualBottom = window.visualViewport.offsetTop + window.visualViewport.height;
-      const keyboardOffset = layoutHeight - visualBottom;
-
-      // Safety: if keyboard is supposedly visible but offset is 0 or negative,
-      // the keyboard is actually gone — force dismiss. This catches cases where
-      // visualViewport.resize fires late or with intermediate values on iOS.
-      if (keyboardOffset <= 0) {
-        this.keyboardVisible = false;
-        document.body.classList.remove('keyboard-visible');
-        this.onKeyboardHide();
-        return;
-      }
-
-      // Move toolbar up above keyboard
-      if (toolbar) {
-        toolbar.style.transform = `translateY(${-keyboardOffset}px)`;
-      }
-
-      // Move accessory bar up (it sits above toolbar)
-      if (accessoryBar) {
-        accessoryBar.style.transform = `translateY(${-keyboardOffset}px)`;
-      }
-
-      // Shrink main content area so terminal doesn't extend behind keyboard
-      // Account for keyboard height + toolbar height (40px) + accessory bar (44px)
-      if (main) {
-        main.style.paddingBottom = `${keyboardOffset + 94}px`;
-      }
-    } else {
-      this.resetLayout();
-    }
-  },
-
-  /** Reset layout to normal (no keyboard) */
-  resetLayout() {
-    const toolbar = document.querySelector('.toolbar');
-    const accessoryBar = document.querySelector('.keyboard-accessory-bar');
-    const main = document.querySelector('.main');
-
-    if (toolbar) {
-      toolbar.style.transform = '';
-    }
-    if (accessoryBar) {
-      accessoryBar.style.transform = '';
-    }
-    if (main) {
-      main.style.paddingBottom = '';
-    }
-  },
-
-  /** Called when keyboard appears */
-  onKeyboardShow() {
-    // Show keyboard accessory bar
-    if (typeof KeyboardAccessoryBar !== 'undefined') {
-      KeyboardAccessoryBar.show();
-    }
-
-    // Refit terminal locally AND send resize to server so Claude Code (Ink)
-    // knows the actual terminal dimensions. Without this, Ink redraws at the
-    // old (larger) row count when the user types, causing content to scroll
-    // off the visible area with each keystroke.
-    // Note: the throttledResize handler still suppresses ongoing resize events
-    // while keyboard is up — this one-shot resize on open/close is sufficient.
-    setTimeout(() => {
-      if (typeof app !== 'undefined' && app.terminal) {
-        if (app.fitAddon) try { app.fitAddon.fit(); } catch {}
-        app.terminal.scrollToBottom();
-        // Send resize to server so PTY dimensions match xterm
-        this._sendTerminalResize();
-      }
-    }, 150);
-
-    // Reposition subagent windows to stack from bottom (above keyboard)
-    if (typeof app !== 'undefined') app.relayoutMobileSubagentWindows();
-  },
-
-  /** Called when keyboard hides */
-  onKeyboardHide() {
-    // Hide keyboard accessory bar
-    if (typeof KeyboardAccessoryBar !== 'undefined') {
-      KeyboardAccessoryBar.hide();
-    }
-
-    this.resetLayout();
-
-    // Refit terminal, scroll to bottom, and send resize to restore original dimensions
-    setTimeout(() => {
-      if (typeof app !== 'undefined' && app.fitAddon) {
-        try { app.fitAddon.fit(); } catch {}
-        if (app.terminal) app.terminal.scrollToBottom();
-        // Send resize to server to restore full terminal size
-        this._sendTerminalResize();
-      }
-    }, 100);
-
-    // Reposition subagent windows to stack from top (below header)
-    if (typeof app !== 'undefined') app.relayoutMobileSubagentWindows();
-  },
-
-  /** Send current terminal dimensions to the server (one-shot, for keyboard open/close) */
-  _sendTerminalResize() {
-    if (typeof app === 'undefined' || !app.activeSessionId || !app.fitAddon) return;
-    try {
-      const dims = app.fitAddon.proposeDimensions();
-      if (dims) {
-        const cols = Math.max(dims.cols, 40);
-        const rows = Math.max(dims.rows, 10);
-        app._lastResizeDims = { cols, rows };
-        fetch(`/api/sessions/${app.activeSessionId}/resize`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cols, rows })
-        }).catch(() => {});
-      }
-    } catch {}
-  },
-
-  /** Check if element is an input that triggers keyboard (excludes terminal) */
-  isInputElement(el) {
-    if (!el) return false;
-
-    // Exclude xterm.js terminal inputs (they handle their own scroll)
-    if (el.closest('.xterm') || el.closest('.terminal-container')) {
-      return false;
-    }
-
-    const tagName = el.tagName?.toLowerCase();
-    // Exclude type=range, type=checkbox, type=radio (don't trigger keyboard)
-    if (tagName === 'input') {
-      const type = el.type?.toLowerCase();
-      if (type === 'checkbox' || type === 'radio' || type === 'range' || type === 'file') {
-        return false;
-      }
-    }
-    return (
-      tagName === 'input' ||
-      tagName === 'textarea' ||
-      el.isContentEditable
-    );
-  },
-
-  /** Scroll input into view above the keyboard */
-  scrollInputIntoView(input) {
-    // Check if input is still focused (user might have tapped away)
-    if (document.activeElement !== input) return;
-
-    // Find if we're in a modal
-    const modal = input.closest('.modal.active');
-    const modalBody = modal?.querySelector('.modal-body');
-
-    if (modalBody) {
-      // For modals - scroll within the modal body
-      const inputRect = input.getBoundingClientRect();
-      const modalRect = modalBody.getBoundingClientRect();
-
-      // If input is below middle of modal, scroll it up
-      if (inputRect.top > modalRect.top + modalRect.height * 0.4) {
-        const scrollAmount = inputRect.top - modalRect.top - 100;
-        modalBody.scrollBy({ top: scrollAmount, behavior: 'smooth' });
-      }
-    } else {
-      // For page-level - use scrollIntoView
-      input.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    }
-  }
-};
-
-// ============================================================================
-// Mobile Swipe Handler
-// ============================================================================
-
-/**
- * SwipeHandler - Detects horizontal swipes on terminal to switch sessions.
- * Only active on mobile/touch devices.
- */
-const SwipeHandler = {
-  startX: 0,
-  startY: 0,
-  startTime: 0,
-  minSwipeDistance: 80,  // Minimum pixels for a valid swipe
-  maxSwipeTime: 300,     // Maximum ms for a swipe gesture
-  maxVerticalDrift: 100, // Max vertical movement allowed
-
-  /** Initialize swipe handling */
-  init() {
-    // Only on touch devices
-    if (!MobileDetection.isTouchDevice()) return;
-
-    const terminal = document.querySelector('.main');
-    if (!terminal) return;
-
-    terminal.addEventListener('touchstart', (e) => this.onTouchStart(e), { passive: true });
-    terminal.addEventListener('touchend', (e) => this.onTouchEnd(e), { passive: true });
-  },
-
-  onTouchStart(e) {
-    if (!e.touches || e.touches.length !== 1) return;
-    this.startX = e.touches[0].clientX;
-    this.startY = e.touches[0].clientY;
-    this.startTime = Date.now();
-  },
-
-  onTouchEnd(e) {
-    if (!e.changedTouches || e.changedTouches.length !== 1) return;
-
-    const endX = e.changedTouches[0].clientX;
-    const endY = e.changedTouches[0].clientY;
-    const elapsed = Date.now() - this.startTime;
-
-    // Check if it's a valid swipe
-    const deltaX = endX - this.startX;
-    const deltaY = Math.abs(endY - this.startY);
-
-    if (elapsed > this.maxSwipeTime) return;  // Too slow
-    if (deltaY > this.maxVerticalDrift) return;  // Too much vertical movement
-    if (Math.abs(deltaX) < this.minSwipeDistance) return;  // Too short
-
-    // Valid swipe detected
-    if (deltaX > 0) {
-      // Swipe right -> previous session
-      if (typeof app !== 'undefined') app.prevSession();
-    } else {
-      // Swipe left -> next session
-      if (typeof app !== 'undefined') app.nextSession();
-    }
-  }
-};
-
-// ============================================================================
-// Voice Input (Deepgram Nova-3 + Web Speech API fallback)
-// ============================================================================
-
-/**
- * DeepgramProvider - Speech-to-text via Deepgram Nova-3 WebSocket API.
- * Direct browser-to-Deepgram connection (no server proxy).
- * Uses MediaRecorder to capture audio and streams via WebSocket.
- */
-const DeepgramProvider = {
-  _ws: null,
-  _mediaRecorder: null,
-  _stream: null,
-  _silenceTimeout: null,
-  _keepAliveInterval: null,
-  _onResult: null,
-  _onError: null,
-  _onEnd: null,
-
-  /**
-   * Start streaming audio to Deepgram.
-   * @param {object} opts - { apiKey, language, keyterms[], onResult(text, isFinal), onError(msg), onEnd(), onStream(stream) }
-   */
-  async start(opts) {
-    this._onResult = opts.onResult;
-    this._onError = opts.onError;
-    this._onEnd = opts.onEnd;
-
-    // 1. Get microphone access
-    try {
-      this._stream = await navigator.mediaDevices.getUserMedia({
-        audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true }
-      });
-    } catch (err) {
-      const msg = err.name === 'NotAllowedError'
-        ? 'Microphone access denied. Check browser settings.'
-        : 'Microphone error: ' + err.message;
-      this._onError?.(msg);
-      this._cleanup();
-      return;
-    }
-    // Notify caller so it can set up audio level meter
-    opts.onStream?.(this._stream);
-
-    // 2. Detect best supported MIME type for MediaRecorder
-    const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
-    this._selectedMime = null;
-    for (const mt of mimeTypes) {
-      if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(mt)) {
-        this._selectedMime = mt;
-        break;
-      }
-    }
-
-    // 3. Build WebSocket URL (no encoding param — Deepgram auto-detects from container format)
-
-    const params = new URLSearchParams({
-      model: 'nova-3',
-      smart_format: 'false',
-      punctuate: 'false',
-      interim_results: 'true',
-      utterance_end_ms: '1500',
-      vad_events: 'true',
-    });
-    if (opts.language && opts.language !== 'multi') {
-      params.set('language', opts.language);
-    } else if (opts.language === 'multi') {
-      params.set('detect_language', 'true');
-    }
-    if (opts.keyterms?.length) {
-      for (const term of opts.keyterms) {
-        const trimmed = term.trim();
-        if (trimmed) params.append('keyterm', trimmed + ':2');
-      }
-    }
-
-    // 4. Connect WebSocket (trim API key to avoid whitespace auth failures)
-    const apiKey = (opts.apiKey || '').trim();
-    if (!apiKey) {
-      this._onError?.('No Deepgram API key configured. Add one in Settings > Voice.');
-      this._cleanup();
-      return;
-    }
-    const wsUrl = `wss://api.deepgram.com/v1/listen?${params}`;
-    try {
-      this._ws = new WebSocket(wsUrl, ['token', apiKey]);
-    } catch (err) {
-      this._onError?.('Failed to connect to Deepgram: ' + err.message);
-      this._cleanup();
-      return;
-    }
-
-    this._ws.onopen = () => {
-      // 5. Send KeepAlive every 8s to prevent Deepgram from closing idle connections
-      // (covers the gap before MediaRecorder produces its first chunk)
-      this._keepAliveInterval = setInterval(() => {
-        if (this._ws?.readyState === WebSocket.OPEN) {
-          try { this._ws.send(JSON.stringify({ type: 'KeepAlive' })); } catch (_e) { /* ignore */ }
-        }
-      }, 8000);
-      // 6. Start MediaRecorder once connected
-      this._startRecording();
-    };
-
-    this._ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'Results' && data.channel?.alternatives?.[0]) {
-          const alt = data.channel.alternatives[0];
-          const transcript = alt.transcript || '';
-          if (transcript) {
-            const isFinal = data.is_final === true;
-            this._onResult?.(transcript, isFinal);
-            this._resetSilenceTimeout();
-          }
-        }
-      } catch (_e) {
-        // Ignore parse errors for non-JSON messages
-      }
-    };
-
-    this._ws.onerror = () => {
-      // WebSocket onerror doesn't carry useful info — onclose handles it
-    };
-
-    this._ws.onclose = (event) => {
-      clearInterval(this._keepAliveInterval);
-      this._keepAliveInterval = null;
-      if (event.code === 1008) {
-        this._onError?.('Authentication failed. Check your Deepgram API key in Settings > Voice.');
-      } else if (event.code === 1006) {
-        // 1006 = abnormal closure (no close frame). Usually auth failure, expired key, or no credits.
-        this._onError?.('Deepgram connection failed (1006). Check your API key is valid and has credits in Settings > Voice.');
-      } else if (event.code !== 1000) {
-        this._onError?.('Deepgram connection closed: ' + (event.reason || `code ${event.code}`));
-      }
-      this._stopRecording();
-      this._onEnd?.();
-    };
-  },
-
-  _startRecording() {
-    if (!this._stream || !this._ws || this._ws.readyState !== WebSocket.OPEN) return;
-
-    const recorderOpts = this._selectedMime ? { mimeType: this._selectedMime } : {};
-    try {
-      this._mediaRecorder = new MediaRecorder(this._stream, recorderOpts);
-    } catch (err) {
-      this._onError?.('MediaRecorder failed: ' + err.message);
-      this._cleanup();
-      return;
-    }
-
-    this._mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0 && this._ws?.readyState === WebSocket.OPEN) {
-        this._ws.send(event.data);
-      }
-    };
-
-    this._mediaRecorder.start(250); // Send chunks every 250ms
-    this._resetSilenceTimeout();
-  },
-
-  _stopRecording() {
-    if (this._mediaRecorder && this._mediaRecorder.state !== 'inactive') {
-      try { this._mediaRecorder.stop(); } catch (_e) { /* already stopped */ }
-    }
-    // Stop all mic tracks
-    if (this._stream) {
-      this._stream.getTracks().forEach(t => t.stop());
-    }
-  },
-
-  _resetSilenceTimeout() {
-    clearTimeout(this._silenceTimeout);
-    this._silenceTimeout = setTimeout(() => {
-      this.stop();
-    }, 3000);
-  },
-
-  stop() {
-    clearTimeout(this._silenceTimeout);
-    this._silenceTimeout = null;
-    clearInterval(this._keepAliveInterval);
-    this._keepAliveInterval = null;
-    this._stopRecording();
-    // Detach WS handlers before closing to prevent stale onclose from
-    // killing a subsequent recording that starts before the close completes
-    if (this._ws) {
-      this._ws.onclose = null;
-      this._ws.onmessage = null;
-      this._ws.onerror = null;
-      if (this._ws.readyState === WebSocket.OPEN) {
-        try { this._ws.close(1000); } catch (_e) { /* ignore */ }
-      }
-      this._ws = null;
-    }
-    // Save onEnd before nulling — must notify VoiceInput when silence timeout
-    // triggers stop internally (VoiceInput.onEnd guards with isRecording check)
-    const onEnd = this._onEnd;
-    this._onResult = null;
-    this._onError = null;
-    this._onEnd = null;
-    onEnd?.();
-  },
-
-  _cleanup() {
-    this.stop();
-    this._mediaRecorder = null;
-    this._stream = null;
-    this._selectedMime = null;
-  }
-};
-
-/**
- * VoiceInput - Speech-to-text with Deepgram Nova-3 (primary) and Web Speech API (fallback).
- * Toggle mode: tap mic to start, tap again to stop. Auto-stops after silence.
- * Shows interim transcription in a floating preview overlay.
- * Inserts final text into the active session (user presses Enter to submit).
- */
-const VoiceInput = {
-  recognition: null,
-  isRecording: false,
-  supported: false,
-  silenceTimeout: null,
-  previewEl: null,
-  _lastTranscript: '',
-  _stabilityTimer: null,
-  _accumulatedFinal: '',
-  _activeProvider: null, // 'deepgram' | 'webspeech' | null
-  _recordingStartedAt: 0, // timestamp when recording started
-  _retryCount: 0, // auto-retry counter for premature Web Speech API ends
-  _hasReceivedResult: false, // whether any speech result came in this session
-  _durationInterval: null, // timer for updating elapsed time display
-  _analyser: null, // AudioContext analyser for level meter
-  _analyserSource: null, // MediaStreamSource for level meter
-  _audioContext: null, // AudioContext for level meter
-  _levelAnimFrame: null, // rAF handle for level meter
-
-  init() {
-    this._initRecognition();
-    // Always show buttons — if unsupported, toggle() shows a toast
-    this._showButtons();
-  },
-
-  // --- Deepgram config (localStorage only, never sent to server) ---
-
-  _getDeepgramConfig() {
-    try {
-      return JSON.parse(localStorage.getItem('codeman-voice-settings') || '{}');
-    } catch (_e) {
-      return {};
-    }
-  },
-
-  _saveDeepgramConfig(config) {
-    localStorage.setItem('codeman-voice-settings', JSON.stringify(config));
-  },
-
-  _shouldUseDeepgram() {
-    const cfg = this._getDeepgramConfig();
-    return !!(cfg.apiKey && cfg.apiKey.trim());
-  },
-
-  /** Get the active provider name for display */
-  getActiveProviderName() {
-    if (this._shouldUseDeepgram()) return 'Deepgram Nova-3';
-    if (this.supported) return 'Web Speech API';
-    return 'None';
-  },
-
-  /** Try to create a SpeechRecognition instance */
-  _initRecognition() {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    this.supported = !!SR;
-    if (!this.supported) return;
-
-    this.recognition = new SR();
-    this.recognition.continuous = true;
-    this.recognition.interimResults = true;
-    this.recognition.lang = 'en-US';
-    this.recognition.maxAlternatives = 1;
-
-    this.recognition.onresult = (e) => this._onWebSpeechResult(e);
-    this.recognition.onerror = (e) => this._onWebSpeechError(e);
-    this.recognition.onend = () => this._onWebSpeechEnd();
-  },
-
-  toggle() {
-    if (this.isRecording) {
-      this.stop();
-    } else {
-      this.start();
-    }
-  },
-
-  start() {
-    if (this.isRecording) return;
-    if (!app.activeSessionId) {
-      app.showToast('No active session', 'warning');
-      return;
-    }
-    this._retryCount = 0;
-
-    if (this._shouldUseDeepgram()) {
-      this._startDeepgram();
-    } else {
-      this._startWebSpeech();
-    }
-  },
-
-  _startDeepgram() {
-    const cfg = this._getDeepgramConfig();
-    this.isRecording = true;
-    this._activeProvider = 'deepgram';
-    this._accumulatedFinal = '';
-    this._lastTranscript = '';
-    this._hasReceivedResult = false;
-    this._recordingStartedAt = Date.now();
-    this._updateButtons('recording');
-    this._showPreview('Listening...', 'deepgram');
-    this._startDurationTimer();
-
-    const keyterms = (cfg.keyterms || 'refactor, endpoint, middleware, callback, async, regex, TypeScript, npm, API, deploy, config, linter, env, webhook, schema, CLI, JSON, CSS, DOM, SSE, backend, frontend, localhost, dependencies, repository, merge, rebase, diff, commit, com')
-      .split(',').map(t => t.trim()).filter(Boolean);
-
-    DeepgramProvider.start({
-      apiKey: cfg.apiKey,
-      language: cfg.language || 'en-US',
-      keyterms,
-      onStream: (stream) => {
-        this._startLevelMeter(stream);
-      },
-      onResult: (text, isFinal) => {
-        if (!this.isRecording) return;
-        this._hasReceivedResult = true;
-        if (isFinal) {
-          this._accumulatedFinal += text;
-          this._hidePreview();
-          this._insertText(this._accumulatedFinal);
-          this.stop();
-        } else {
-          const display = this._accumulatedFinal + text;
-          this._showPreview(display, 'deepgram');
-        }
-      },
-      onError: (msg) => {
-        const wasRecording = this.isRecording;
-        this.stop();
-        if (wasRecording) app.showToast(msg, 'error');
-      },
-      onEnd: () => {
-        if (this.isRecording) {
-          if (this._accumulatedFinal) {
-            this._insertText(this._accumulatedFinal);
-          }
-          this.stop();
-        }
-      }
-    });
-
-    // Haptic feedback on mobile
-    if (navigator.vibrate) navigator.vibrate(50);
-  },
-
-  _startWebSpeech() {
-    // Lazy-init: retry if recognition was cleaned up or not available at page load
-    if (!this.recognition) this._initRecognition();
-    if (!this.supported) {
-      if (!this._shouldUseDeepgram()) {
-        app.showToast('Voice input not available. Configure Deepgram in Settings > Voice.', 'warning');
-      } else {
-        app.showToast('Voice input not supported in this browser', 'warning');
-      }
-      return;
-    }
-    this.isRecording = true;
-    this._activeProvider = 'webspeech';
-    this._accumulatedFinal = '';
-    this._lastTranscript = '';
-    this._hasReceivedResult = false;
-    this._recordingStartedAt = Date.now();
-    this._updateButtons('recording');
-    this._showPreview('Listening...');
-    this._startDurationTimer();
-    try {
-      this.recognition.start();
-    } catch (e) {
-      // InvalidStateError = already started — ignore. Other errors = genuine failure.
-      if (e.name !== 'InvalidStateError') {
-        this.stop();
-        app.showToast('Voice input failed to start: ' + e.message, 'error');
-        return;
-      }
-    }
-    this._resetSilenceTimeout();
-    // Get mic stream for level meter (non-blocking — level meter is cosmetic)
-    navigator.mediaDevices?.getUserMedia({ audio: true }).then(stream => {
-      if (this.isRecording && this._activeProvider === 'webspeech') {
-        this._webSpeechStream = stream;
-        this._startLevelMeter(stream);
-      } else {
-        stream.getTracks().forEach(t => t.stop());
-      }
-    }).catch(() => { /* level meter just won't show */ });
-    // Haptic feedback on mobile
-    if (navigator.vibrate) navigator.vibrate(50);
-  },
-
-  stop() {
-    if (!this.isRecording) return;
-    this.isRecording = false;
-    clearTimeout(this.silenceTimeout);
-    clearTimeout(this._stabilityTimer);
-    this.silenceTimeout = null;
-    this._stabilityTimer = null;
-    this._retryCount = 0;
-    this._stopDurationTimer();
-    this._stopLevelMeter();
-    this._updateButtons('idle');
-    this._hidePreview();
-
-    if (this._activeProvider === 'deepgram') {
-      DeepgramProvider.stop();
-    } else if (this._activeProvider === 'webspeech') {
-      try {
-        this.recognition?.stop();
-      } catch (_e) {
-        // Already stopped — ignore
-      }
-      // Stop the mic stream we opened for the level meter
-      if (this._webSpeechStream) {
-        this._webSpeechStream.getTracks().forEach(t => t.stop());
-        this._webSpeechStream = null;
-      }
-    }
-    this._activeProvider = null;
-
-    // Haptic feedback on mobile
-    if (navigator.vibrate) navigator.vibrate([30, 50, 30]);
-  },
-
-  _onWebSpeechResult(event) {
-    if (!this.isRecording) return;
-    this._hasReceivedResult = true;
-    this._resetSilenceTimeout();
-    let interim = '';
-    let finalText = '';
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const transcript = event.results[i][0].transcript;
-      if (event.results[i].isFinal) {
-        finalText += transcript;
-      } else {
-        interim += transcript;
-      }
-    }
-
-    if (finalText) {
-      this._accumulatedFinal += finalText;
-      this._hidePreview();
-      this._insertText(this._accumulatedFinal);
-      this.stop();
-    } else if (interim) {
-      const display = this._accumulatedFinal + interim;
-      this._showPreview(display);
-      // iOS Safari workaround: isFinal is always false.
-      // Detect when interim results stop changing for 750ms → treat as final.
-      this._iosStabilityCheck(interim);
-    }
-  },
-
-  _onWebSpeechError(event) {
-    // During auto-retry, 'aborted' and 'no-speech' errors are expected — ignore them
-    if (this._retryCount > 0 && (event.error === 'aborted' || event.error === 'no-speech')) return;
-
-    const wasRecording = this.isRecording;
-    this.stop();
-    if (!wasRecording) return;
-
-    switch (event.error) {
-      case 'not-allowed':
-        app.showToast('Microphone access denied. Check browser settings.', 'error');
-        break;
-      case 'no-speech':
-        // Silent — auto-stop is enough feedback
-        break;
-      case 'network':
-        app.showToast('Voice input requires internet connection.', 'error');
-        break;
-      case 'aborted':
-        // User cancelled — no message needed
-        break;
-      default:
-        app.showToast('Voice input error: ' + event.error, 'error');
-    }
-  },
-
-  _onWebSpeechEnd() {
-    // Recognition ended (browser auto-stopped or we called stop())
-    if (!this.isRecording) return;
-
-    const elapsed = Date.now() - this._recordingStartedAt;
-    // Web Speech API often fires onend prematurely on the first attempt (< 500ms, no results).
-    // Auto-retry up to 2 times to avoid the "needs two clicks" problem.
-    if (elapsed < 500 && !this._hasReceivedResult && this._retryCount < 2) {
-      this._retryCount++;
-      try {
-        this.recognition.start();
-      } catch (_e) {
-        // If restart fails, fall through to stop
-        if (this._accumulatedFinal) this._insertText(this._accumulatedFinal);
-        this.stop();
-      }
-      return;
-    }
-
-    // Genuine end — finalize any accumulated text
-    if (this._accumulatedFinal) {
-      this._insertText(this._accumulatedFinal);
-    }
-    this.stop();
-  },
-
-  _insertText(text) {
-    if (!app.activeSessionId || !text.trim()) return;
-    const trimmed = text.trim();
-    const mode = this._getDeepgramConfig().insertMode || 'direct';
-
-    if (mode === 'compose') {
-      // If a compose overlay is already open, populate its textarea instead of recreating
-      const existingTextarea = document.querySelector('.voice-compose-overlay .paste-textarea');
-      if (existingTextarea) {
-        existingTextarea.value = trimmed;
-        existingTextarea.focus();
-        existingTextarea.selectionStart = existingTextarea.selectionEnd = trimmed.length;
-      } else {
-        this._showComposeOverlay(trimmed);
-      }
-    } else {
-      // Direct mode: inject into local echo overlay if available, else send to PTY
-      if (app._localEchoEnabled && app._localEchoOverlay) {
-        app._localEchoOverlay.appendText(trimmed);
-      } else {
-        app.sendInput(trimmed).catch(() => {});
-      }
-      this._showVoiceSendBtn();
-      setTimeout(() => { if (app.terminal) app.terminal.focus(); }, 150);
-    }
-  },
-
-  /** Show a green Enter button by transforming the gear icon in-place */
-  _showVoiceSendBtn() {
-    // Find the gear button (mobile or desktop header)
-    const gear = document.querySelector('.btn-settings-mobile') || document.querySelector('.btn-settings');
-    if (!gear || gear.classList.contains('voice-send-active')) return;
-
-    // Remove existing if any
-    this._hideVoiceSendBtn();
-
-    // Save original state
-    this._voiceSendGear = gear;
-    this._voiceSendOriginalHTML = gear.innerHTML;
-    this._voiceSendOriginalOnclick = gear.getAttribute('onclick');
-
-    // Transform into green send button
-    gear.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
-    gear.classList.add('voice-send-active');
-    gear.removeAttribute('onclick');
-    gear.title = 'Send (Enter)';
-
-    // Click handler
-    this._voiceSendHandler = () => {
-      if (!app.activeSessionId) return;
-      // Simulate Enter key: if local echo is active, flush its buffer + send \r;
-      // otherwise just send \r directly to the PTY
-      if (app._localEchoEnabled && app._localEchoOverlay) {
-        const text = app._localEchoOverlay.pendingText || '';
-        app._localEchoOverlay.clear();
-        app._localEchoOverlay.suppressBufferDetection();
-        if (text) app.sendInput(text).catch(() => {});
-        setTimeout(() => app.sendInput('\r').catch(() => {}), 80);
-      } else {
-        app.sendInput('\r').catch(() => {});
-      }
-      // Blink then restore
-      gear.classList.add('voice-send-blink');
-      setTimeout(() => this._hideVoiceSendBtn(), 400);
-    };
-    gear.addEventListener('click', this._voiceSendHandler);
-  },
-
-  _hideVoiceSendBtn() {
-    const gear = this._voiceSendGear;
-    if (!gear) return;
-    gear.removeEventListener('click', this._voiceSendHandler);
-    gear.classList.remove('voice-send-active', 'voice-send-blink');
-    gear.innerHTML = this._voiceSendOriginalHTML || '';
-    if (this._voiceSendOriginalOnclick) {
-      gear.setAttribute('onclick', this._voiceSendOriginalOnclick);
-    }
-    gear.title = 'App Settings';
-    this._voiceSendGear = null;
-    this._voiceSendHandler = null;
-    this._voiceSendOriginalHTML = null;
-    this._voiceSendOriginalOnclick = null;
-  },
-
-  /** Show an editable compose overlay so the user can review/edit before sending */
-  _showComposeOverlay(text) {
-    document.querySelector('.voice-compose-overlay')?.remove();
-    const overlay = document.createElement('div');
-    overlay.className = 'voice-compose-overlay paste-overlay';
-    overlay.innerHTML = `
-      <div class="paste-dialog">
-        <textarea class="paste-textarea">${text.replace(/</g, '&lt;')}</textarea>
-        <div class="paste-actions">
-          <button class="paste-cancel">Cancel</button>
-          <button class="paste-new"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg> New</button>
-          <button class="paste-send">Send</button>
-        </div>
-      </div>
-    `;
-    const textarea = overlay.querySelector('textarea');
-    const send = () => {
-      const val = textarea.value.trim();
-      overlay.remove();
-      if (val) app.sendInput(val + '\r').catch(() => {});
-    };
-    const cancel = () => overlay.remove();
-    const newInput = () => {
-      textarea.value = '';
-      textarea.blur();
-      this.start();
-    };
-    overlay.querySelector('.paste-cancel').addEventListener('click', cancel);
-    overlay.querySelector('.paste-new').addEventListener('click', newInput);
-    overlay.querySelector('.paste-send').addEventListener('click', send);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) cancel(); });
-    document.body.appendChild(overlay);
-    textarea.focus();
-    textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
-  },
-
-  _resetSilenceTimeout() {
-    clearTimeout(this.silenceTimeout);
-    this.silenceTimeout = setTimeout(() => {
-      if (this.isRecording) {
-        // Finalize any accumulated text before stopping
-        if (this._accumulatedFinal) {
-          this._insertText(this._accumulatedFinal);
-        }
-        this.stop();
-      }
-    }, 3000);
-  },
-
-  _iosStabilityCheck(transcript) {
-    if (transcript !== this._lastTranscript) {
-      this._lastTranscript = transcript;
-      clearTimeout(this._stabilityTimer);
-      this._stabilityTimer = setTimeout(() => {
-        if (this.isRecording) {
-          const finalText = this._accumulatedFinal + transcript;
-          this._hidePreview();
-          this._insertText(finalText);
-          this.stop();
-        }
-      }, 750);
-    }
-  },
-
-  _startDurationTimer() {
-    this._stopDurationTimer();
-    this._durationInterval = setInterval(() => {
-      if (!this.isRecording || !this.previewEl) return;
-      const elapsed = Math.floor((Date.now() - this._recordingStartedAt) / 1000);
-      const mins = Math.floor(elapsed / 60);
-      const secs = elapsed % 60;
-      const timeStr = mins > 0 ? `${mins}:${String(secs).padStart(2, '0')}` : `0:${String(secs).padStart(2, '0')}`;
-      const timerEl = this.previewEl.querySelector('.voice-timer');
-      if (timerEl) timerEl.textContent = timeStr;
-    }, 1000);
-  },
-
-  _stopDurationTimer() {
-    if (this._durationInterval) {
-      clearInterval(this._durationInterval);
-      this._durationInterval = null;
-    }
-  },
-
-  /** Start audio level meter using AnalyserNode — attaches to the active mic stream */
-  _startLevelMeter(stream) {
-    this._stopLevelMeter();
-    try {
-      this._audioContext = new (window.AudioContext || window.webkitAudioContext)();
-      this._analyserSource = this._audioContext.createMediaStreamSource(stream);
-      this._analyser = this._audioContext.createAnalyser();
-      this._analyser.fftSize = 256;
-      this._analyserSource.connect(this._analyser);
-      this._drawLevelMeter();
-    } catch (_e) {
-      // AudioContext not available — level meter just won't show
-    }
-  },
-
-  _stopLevelMeter() {
-    if (this._levelAnimFrame) {
-      cancelAnimationFrame(this._levelAnimFrame);
-      this._levelAnimFrame = null;
-    }
-    if (this._analyserSource) {
-      try { this._analyserSource.disconnect(); } catch (_e) { /* */ }
-      this._analyserSource = null;
-    }
-    if (this._audioContext) {
-      try { this._audioContext.close(); } catch (_e) { /* */ }
-      this._audioContext = null;
-    }
-    this._analyser = null;
-  },
-
-  _drawLevelMeter() {
-    if (!this._analyser || !this.isRecording) return;
-    const dataArray = new Uint8Array(this._analyser.frequencyBinCount);
-    this._analyser.getByteFrequencyData(dataArray);
-    // Compute RMS level 0-1
-    let sum = 0;
-    for (let i = 0; i < dataArray.length; i++) sum += dataArray[i] * dataArray[i];
-    const rms = Math.sqrt(sum / dataArray.length) / 255;
-    // Update the level bars in the preview
-    const barsEl = this.previewEl?.querySelector('.voice-level-bars');
-    if (barsEl) {
-      const bars = barsEl.children;
-      for (let i = 0; i < bars.length; i++) {
-        const threshold = (i + 1) / bars.length;
-        bars[i].classList.toggle('active', rms >= threshold * 0.7);
-      }
-    }
-    this._levelAnimFrame = requestAnimationFrame(() => this._drawLevelMeter());
-  },
-
-  _showPreview(text, provider) {
-    if (!this.previewEl) {
-      this.previewEl = document.createElement('div');
-      this.previewEl.className = 'voice-preview';
-      this.previewEl.setAttribute('aria-live', 'polite');
-      document.body.appendChild(this.previewEl);
-    }
-
-    // Build the indicator structure once, then just update the text node
-    if (!this.previewEl.querySelector('.voice-recording-indicator')) {
-      this.previewEl.textContent = '';
-      // Recording indicator: red dot + level bars + timer
-      const indicator = document.createElement('span');
-      indicator.className = 'voice-recording-indicator';
-      indicator.innerHTML = '<span class="voice-rec-dot"></span>';
-      const barsEl = document.createElement('span');
-      barsEl.className = 'voice-level-bars';
-      for (let i = 0; i < 5; i++) {
-        const bar = document.createElement('span');
-        bar.className = 'voice-level-bar';
-        barsEl.appendChild(bar);
-      }
-      indicator.appendChild(barsEl);
-      const timerEl = document.createElement('span');
-      timerEl.className = 'voice-timer';
-      timerEl.textContent = '0:00';
-      indicator.appendChild(timerEl);
-      this.previewEl.appendChild(indicator);
-      // Provider badge for Deepgram
-      if (provider === 'deepgram') {
-        const badge = document.createElement('span');
-        badge.className = 'voice-preview-badge';
-        badge.textContent = 'DG';
-        this.previewEl.appendChild(badge);
-        this.previewEl.appendChild(document.createTextNode(' '));
-      }
-      // Text node for transcript
-      this._previewTextNode = document.createTextNode(text || 'Listening...');
-      this.previewEl.appendChild(this._previewTextNode);
-    } else {
-      // Just update the text content
-      if (this._previewTextNode) {
-        this._previewTextNode.textContent = text || 'Listening...';
-      }
-    }
-    this.previewEl.style.display = '';
-  },
-
-  _hidePreview() {
-    if (this.previewEl) {
-      this.previewEl.style.display = 'none';
-      this.previewEl.textContent = '';
-    }
-  },
-
-  _updateButtons(state) {
-    const isRecording = state === 'recording';
-    // Desktop button
-    const desktopBtn = document.getElementById('voiceInputBtn');
-    if (desktopBtn) {
-      desktopBtn.classList.toggle('recording', isRecording);
-      desktopBtn.setAttribute('aria-pressed', String(isRecording));
-      desktopBtn.setAttribute('aria-label', isRecording ? 'Stop voice input' : 'Start voice input');
-      desktopBtn.title = isRecording ? 'Stop voice input (Ctrl+Shift+V)' : 'Voice input (Ctrl+Shift+V)';
-    }
-    // Mobile toolbar button (always visible on mobile)
-    const mobileToolbarBtn = document.getElementById('voiceInputBtnMobile');
-    if (mobileToolbarBtn) {
-      mobileToolbarBtn.classList.toggle('recording', isRecording);
-      mobileToolbarBtn.setAttribute('aria-pressed', String(isRecording));
-      mobileToolbarBtn.setAttribute('aria-label', isRecording ? 'Stop voice input' : 'Start voice input');
-    }
-  },
-
-  _showButtons() {
-    const desktopBtn = document.getElementById('voiceInputBtn');
-    if (desktopBtn) desktopBtn.style.display = '';
-    const mobileToolbarBtn = document.getElementById('voiceInputBtnMobile');
-    if (mobileToolbarBtn) mobileToolbarBtn.style.display = '';
-  },
-
-  /** Cleanup on SSE reconnect or page unload */
-  cleanup() {
-    if (this.isRecording) this.stop();
-    this._hideVoiceSendBtn();
-    DeepgramProvider._cleanup();
-    this.recognition = null;
-    this._activeProvider = null;
-    this._stopDurationTimer();
-    this._stopLevelMeter();
-    if (this._webSpeechStream) {
-      this._webSpeechStream.getTracks().forEach(t => t.stop());
-      this._webSpeechStream = null;
-    }
-    if (this.previewEl) {
-      this.previewEl.remove();
-      this.previewEl = null;
-    }
-    clearTimeout(this.silenceTimeout);
-    clearTimeout(this._stabilityTimer);
-    this.silenceTimeout = null;
-    this._stabilityTimer = null;
-    this._accumulatedFinal = '';
-    this._lastTranscript = '';
-    this._retryCount = 0;
-    this._hasReceivedResult = false;
-  }
-};
-
-// ============================================================================
-// Mobile Keyboard Accessory Bar
-// ============================================================================
-
-/**
- * KeyboardAccessoryBar - Quick action buttons shown above keyboard when typing.
- */
-const KeyboardAccessoryBar = {
-  element: null,
-
-  /** Create and inject the accessory bar */
-  init() {
-    // Only on mobile
-    if (!MobileDetection.isTouchDevice()) return;
-
-    // Create accessory bar element
-    this.element = document.createElement('div');
-    this.element.className = 'keyboard-accessory-bar';
-    this.element.innerHTML = `
-      <button class="accessory-btn accessory-btn-arrow" data-action="scroll-up" title="Arrow up">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <path d="M5 15l7-7 7 7"/>
-        </svg>
-      </button>
-      <button class="accessory-btn accessory-btn-arrow" data-action="scroll-down" title="Arrow down">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <path d="M19 9l-7 7-7-7"/>
-        </svg>
-      </button>
-      <button class="accessory-btn" data-action="init" title="/init">/init</button>
-      <button class="accessory-btn" data-action="clear" title="/clear">/clear</button>
-      <button class="accessory-btn" data-action="compact" title="/compact">/compact</button>
-      <button class="accessory-btn" data-action="paste" title="Paste from clipboard">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-          <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
-        </svg>
-      </button>
-      <button class="accessory-btn accessory-btn-dismiss" data-action="dismiss" title="Dismiss keyboard">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-          <path d="M19 9l-7 7-7-7"/>
-        </svg>
-      </button>
-    `;
-
-    // Add click handlers — preventDefault stops event from reaching terminal
-    this.element.addEventListener('click', (e) => {
-      const btn = e.target.closest('.accessory-btn');
-      if (!btn) return;
-      e.preventDefault();
-      e.stopPropagation();
-
-      const action = btn.dataset.action;
-      this.handleAction(action, btn);
-
-      // Refocus terminal so keyboard stays open (tap blurs terminal → keyboard dismisses → toolbar shifts)
-      if ((action === 'scroll-up' || action === 'scroll-down') ||
-          ((action === 'clear' || action === 'compact') && this._confirmAction)) {
-        if (typeof app !== 'undefined' && app.terminal) {
-          app.terminal.focus();
-        }
-      }
-    });
-
-    // Insert before toolbar
-    const toolbar = document.querySelector('.toolbar');
-    if (toolbar && toolbar.parentNode) {
-      toolbar.parentNode.insertBefore(this.element, toolbar);
-    }
-  },
-
-  _confirmTimer: null,
-  _confirmAction: null,
-
-  /** Handle accessory button actions */
-  handleAction(action, btn) {
-    if (typeof app === 'undefined' || !app.activeSessionId) return;
-
-    switch (action) {
-      case 'scroll-up':
-        this.sendKey('\x1b[A');
-        break;
-      case 'scroll-down':
-        this.sendKey('\x1b[B');
-        break;
-      case 'init':
-        this.sendCommand('/init');
-        break;
-      case 'clear':
-      case 'compact': {
-        // Require double-tap: first tap turns amber, second tap within 2s sends
-        const cmd = action === 'clear' ? '/clear' : '/compact';
-        if (this._confirmAction === action && this._confirmTimer) {
-          this.clearConfirm();
-          this.sendCommand(cmd);
-        } else {
-          this.setConfirm(action, btn);
-        }
-        break;
-      }
-      case 'paste':
-        this.pasteFromClipboard();
-        break;
-      case 'dismiss':
-        // Blur active element to dismiss keyboard
-        document.activeElement?.blur();
-        break;
-    }
-  },
-
-  /** Enter confirm state: button turns amber for 2s waiting for second tap */
-  setConfirm(action, btn) {
-    this.clearConfirm();
-    this._confirmAction = action;
-    if (btn) {
-      btn.classList.add('confirming');
-      btn.dataset.origHtml = btn.innerHTML;
-      btn.textContent = 'Tap again';
-    }
-    this._confirmTimer = setTimeout(() => this.clearConfirm(), 2000);
-  },
-
-  /** Reset confirm state */
-  clearConfirm() {
-    if (this._confirmTimer) {
-      clearTimeout(this._confirmTimer);
-      this._confirmTimer = null;
-    }
-    if (this._confirmAction && this.element) {
-      const btn = this.element.querySelector(`[data-action="${this._confirmAction}"]`);
-      if (btn && btn.dataset.origHtml) {
-        btn.innerHTML = btn.dataset.origHtml;
-        delete btn.dataset.origHtml;
-      }
-      if (btn) btn.classList.remove('confirming');
-    }
-    this._confirmAction = null;
-  },
-
-  /** Send a slash command to the active session.
-   *  Sends text and Enter separately so Ink processes them as distinct events. */
-  sendCommand(command) {
-    if (!app.activeSessionId) return;
-    // Send command text first (without Enter)
-    app.sendInput(command);
-    // Send Enter separately after a brief delay so Ink has time to process the text.
-    setTimeout(() => app.sendInput('\r'), 120);
-  },
-
-  /** Send a special key (arrow, escape, etc.) directly to the PTY.
-   *  Bypasses tmux send-keys -l (literal mode) since escape sequences
-   *  must be written raw to be interpreted as key presses by Ink. */
-  sendKey(escapeSequence) {
-    if (!app.activeSessionId) return;
-    fetch(`/api/sessions/${app.activeSessionId}/input`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ input: escapeSequence })
-    }).catch(() => {});
-  },
-
-  /** Read clipboard and send contents as input */
-  /** Show a paste overlay with a textarea for iOS compatibility */
-  pasteFromClipboard() {
-    if (typeof app === 'undefined' || !app.activeSessionId) return;
-
-    // Create overlay
-    const overlay = document.createElement('div');
-    overlay.className = 'paste-overlay';
-    overlay.innerHTML = `
-      <div class="paste-dialog">
-        <textarea class="paste-textarea" placeholder="Long-press here and tap Paste"></textarea>
-        <div class="paste-actions">
-          <button class="paste-cancel">Cancel</button>
-          <button class="paste-send">Send</button>
-        </div>
-      </div>
-    `;
-
-    const textarea = overlay.querySelector('.paste-textarea');
-    const send = () => {
-      const text = textarea.value;
-      overlay.remove();
-      if (text) app.sendInput(text);
-    };
-    overlay.querySelector('.paste-cancel').addEventListener('click', () => overlay.remove());
-    overlay.querySelector('.paste-send').addEventListener('click', send);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-
-    document.body.appendChild(overlay);
-    textarea.focus();
-  },
-
-  /** Show the accessory bar */
-  show() {
-    if (this.element) {
-      this.element.classList.add('visible');
-    }
-  },
-
-  /** Hide the accessory bar */
-  hide() {
-    if (this.element) {
-      this.element.classList.remove('visible');
-    }
-  }
-};
-
-// ============================================================================
-// Accessibility: Focus Trap for Modals
-// ============================================================================
-
-/**
- * FocusTrap - Traps keyboard focus within an element (typically a modal).
- * Saves the previously focused element and restores focus when deactivated.
- */
-class FocusTrap {
-  constructor(element) {
-    this.element = element;
-    this.previouslyFocused = null;
-    this.boundHandleKeydown = this.handleKeydown.bind(this);
-  }
-
-  activate() {
-    this.previouslyFocused = document.activeElement;
-    this.element.addEventListener('keydown', this.boundHandleKeydown);
-
-    // Focus first focusable element after a brief delay (for CSS transitions)
-    requestAnimationFrame(() => {
-      const focusable = this.getFocusableElements();
-      if (focusable.length) {
-        focusable[0].focus();
-      }
-    });
-  }
-
-  deactivate() {
-    this.element.removeEventListener('keydown', this.boundHandleKeydown);
-    if (this.previouslyFocused && typeof this.previouslyFocused.focus === 'function') {
-      this.previouslyFocused.focus();
-    }
-  }
-
-  getFocusableElements() {
-    const selector = [
-      'button:not([disabled]):not([tabindex="-1"])',
-      'input:not([disabled]):not([tabindex="-1"])',
-      'select:not([disabled]):not([tabindex="-1"])',
-      'textarea:not([disabled]):not([tabindex="-1"])',
-      'a[href]:not([tabindex="-1"])',
-      '[tabindex]:not([tabindex="-1"]):not([disabled])'
-    ].join(', ');
-
-    return [...this.element.querySelectorAll(selector)].filter(
-      el => el.offsetParent !== null // Exclude hidden elements
-    );
-  }
-
-  handleKeydown(e) {
-    if (e.key !== 'Tab') return;
-
-    const focusable = this.getFocusableElements();
-    if (focusable.length === 0) return;
-
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  }
-}
-
-/**
- * xterm-zerolag-input — Instant keystroke feedback overlay for xterm.js.
- * Inlined from packages/xterm-zerolag-input (built output).
- * See packages/xterm-zerolag-input/README.md for full API documentation.
- */
-
-// --- xterm-zerolag-input library (inlined) ---
-
-function _zl_getCellDimensions(terminal) {
-  const t = terminal;
-  if (t.dimensions?.css?.cell) {
-    return { width: t.dimensions.css.cell.width, height: t.dimensions.css.cell.height };
-  }
-  try {
-    const dims = t._core?._renderService?.dimensions;
-    if (dims?.css?.cell) {
-      return { width: dims.css.cell.width, height: dims.css.cell.height };
-    }
-  } catch {}
-  return null;
-}
-
-function _zl_findPrompt(terminal, finder) {
-  try {
-    const buffer = terminal.buffer.active;
-    const viewportTop = buffer.viewportY;
-    switch (finder.type) {
-      case 'character': {
-        for (let row = terminal.rows - 1; row >= 0; row--) {
-          const line = buffer.getLine(viewportTop + row);
-          if (!line) continue;
-          const text = line.translateToString(true);
-          const idx = text.lastIndexOf(finder.char);
-          if (idx >= 0) return { row, col: idx };
-        }
-        return null;
-      }
-      case 'regex': {
-        const pattern = finder.pattern;
-        const safePattern = pattern.global ? new RegExp(pattern.source, pattern.flags.replace('g', '')) : pattern;
-        for (let row = terminal.rows - 1; row >= 0; row--) {
-          const line = buffer.getLine(viewportTop + row);
-          if (!line) continue;
-          const text = line.translateToString(true);
-          const match = text.match(safePattern);
-          if (match) return { row, col: match.index ?? 0 };
-        }
-        return null;
-      }
-      case 'custom':
-        return finder.find(terminal);
-      default:
-        return null;
-    }
-  } catch { return null; }
-}
-
-function _zl_readTextAfterPrompt(terminal, prompt, offset) {
-  try {
-    const buffer = terminal.buffer.active;
-    const absRow = buffer.viewportY + prompt.row;
-    const line = buffer.getLine(absRow);
-    if (!line) return '';
-    return line.translateToString(true).slice(prompt.col + offset).trimEnd();
-  } catch { return ''; }
-}
-
-// Get visual cell width of a character (CJK wide chars = 2, others = 1)
-function _zl_charCellWidth(ch, terminal) {
-  try {
-    if (terminal?.unicode?.getStringCellWidth) {
-      return terminal.unicode.getStringCellWidth(ch);
-    }
-  } catch {}
-  const code = ch.codePointAt(0);
-  if (code >= 0x1100 && (
-    (code <= 0x115F) || // Hangul Jamo
-    (code >= 0x2E80 && code <= 0x303E) || // CJK Radicals, Kangxi, Ideographic
-    (code >= 0x3040 && code <= 0x33BF) || // Hiragana, Katakana, Bopomofo, CJK Compat
-    (code >= 0x3400 && code <= 0x4DBF) || // CJK Unified Ext A
-    (code >= 0x4E00 && code <= 0xA4CF) || // CJK Unified, Yi
-    (code >= 0xA960 && code <= 0xA97C) || // Hangul Jamo Extended-A
-    (code >= 0xAC00 && code <= 0xD7A3) || // Hangul Syllables
-    (code >= 0xF900 && code <= 0xFAFF) || // CJK Compat Ideographs
-    (code >= 0xFE30 && code <= 0xFE6F) || // CJK Compat Forms
-    (code >= 0xFF01 && code <= 0xFF60) || // Fullwidth Forms
-    (code >= 0xFFE0 && code <= 0xFFE6) || // Fullwidth Signs
-    (code >= 0x1F000 && code <= 0x1FBFF) || // Mahjong, Domino, Emoji
-    (code >= 0x20000 && code <= 0x2FFFF) || // CJK Unified Ext B-F
-    (code >= 0x30000 && code <= 0x3FFFF)    // CJK Unified Ext G+
-  )) return 2;
-  return 1;
-}
-
-function _zl_stringCellWidth(str, terminal) {
-  let w = 0;
-  for (const ch of str) w += _zl_charCellWidth(ch, terminal);
-  return w;
-}
-
-function _zl_renderOverlay(container, params) {
-  const { lines, startCol, totalCols, cellW, cellH, promptRow, font, showCursor, cursorColor, terminal } = params;
-  container.style.left = '0px';
-  container.style.top = (promptRow * cellH) + 'px';
-  container.innerHTML = '';
-  const fullWidthPx = totalCols * cellW;
-  for (let i = 0; i < lines.length; i++) {
-    const leftPx = i === 0 ? startCol * cellW : 0;
-    const widthPx = i === 0 ? (fullWidthPx - leftPx) : fullWidthPx;
-    const topPx = i * cellH;
-    const lineEl = _zl_makeLine(lines[i], leftPx, topPx, widthPx, cellH, cellW, font, terminal);
-    container.appendChild(lineEl);
-  }
-  if (showCursor) {
-    const lastLine = lines[lines.length - 1];
-    const lastLineLeft = lines.length === 1 ? startCol : 0;
-    const cursorCol = lastLineLeft + _zl_stringCellWidth(lastLine, terminal);
-    if (cursorCol < totalCols) {
-      const cursor = document.createElement('span');
-      cursor.style.cssText = 'position:absolute;display:inline-block';
-      cursor.style.left = (cursorCol * cellW) + 'px';
-      cursor.style.top = ((lines.length - 1) * cellH) + 'px';
-      cursor.style.width = cellW + 'px';
-      cursor.style.height = cellH + 'px';
-      cursor.style.backgroundColor = cursorColor;
-      container.appendChild(cursor);
-    }
-  }
-  container.style.display = '';
-}
-
-function _zl_makeLine(text, leftPx, topPx, widthPx, cellH, cellW, font, terminal) {
-  const el = document.createElement('div');
-  el.style.cssText = 'position:absolute;pointer-events:none';
-  el.style.backgroundColor = font.backgroundColor;
-  el.style.left = leftPx + 'px';
-  el.style.top = topPx + 'px';
-  el.style.width = widthPx + 'px';
-  el.style.height = (cellH + 1) + 'px';
-  el.style.lineHeight = cellH + 'px';
-  let colOffset = 0;
-  for (const ch of text) {
-    const charWidth = _zl_charCellWidth(ch, terminal);
-    const span = document.createElement('span');
-    span.style.cssText = "position:absolute;display:inline-block;text-align:center;pointer-events:none;font-feature-settings:'liga' 0,'calt' 0";
-    span.style.left = (colOffset * cellW) + 'px';
-    span.style.width = (charWidth * cellW) + 'px';
-    span.style.fontFamily = font.fontFamily;
-    span.style.fontSize = font.fontSize;
-    span.style.fontWeight = font.fontWeight;
-    span.style.color = font.color;
-    span.style.height = cellH + 'px';
-    span.style.lineHeight = cellH + 'px';
-    if (font.letterSpacing) span.style.letterSpacing = font.letterSpacing;
-    span.textContent = ch;
-    el.appendChild(span);
-    colOffset += charWidth;
-  }
-  return el;
-}
-
-const _ZL_DEFAULT_PROMPT = { type: 'character', char: '>', offset: 2 };
-const _ZL_DEFAULT_BG = '#0d0d0d';
-const _ZL_DEFAULT_FG = '#eeeeee';
-const _ZL_DEFAULT_CURSOR = '#e0e0e0';
-
-class ZerolagInputAddon {
-  constructor(options) {
-    this._terminal = null;
-    this._overlay = null;
-    this._pendingText = '';
-    this._flushedOffset = 0;
-    this._flushedText = '';
-    this._bufferDetectDone = false;
-    this._lastRenderKey = '';
-    this._lastPromptPos = null;
-    this._font = { fontFamily: 'monospace', fontSize: '14px', fontWeight: 'normal', color: _ZL_DEFAULT_FG, backgroundColor: _ZL_DEFAULT_BG, letterSpacing: '' };
-    this._scrollTimer = null;
-    this._scrollHandler = null;
-    this._scrollViewport = null;
-    this._options = {
-      prompt: options?.prompt ?? _ZL_DEFAULT_PROMPT,
-      zIndex: options?.zIndex ?? 7,
-      showCursor: options?.showCursor ?? true,
-      scrollDebounceMs: options?.scrollDebounceMs ?? 50,
-      backgroundColor: options?.backgroundColor,
-      foregroundColor: options?.foregroundColor,
-      cursorColor: options?.cursorColor
-    };
-  }
-  activate(terminal) {
-    this._terminal = terminal;
-    this._overlay = document.createElement('div');
-    this._overlay.style.cssText = `position:absolute;z-index:${this._options.zIndex};pointer-events:none;display:none`;
-    const screen = terminal.element?.querySelector('.xterm-screen');
-    if (screen) screen.appendChild(this._overlay);
-    this._cacheFont();
-    this._scrollHandler = () => {
-      try {
-        const buf = this._terminal.buffer.active;
-        if (buf.viewportY !== buf.baseY) {
-          this._overlay.style.display = 'none';
-          if (this._scrollTimer) { clearTimeout(this._scrollTimer); this._scrollTimer = null; }
-        } else if (this._pendingText || this._flushedOffset > 0) {
-          if (this._scrollTimer) clearTimeout(this._scrollTimer);
-          this._scrollTimer = setTimeout(() => { this._scrollTimer = null; this._lastRenderKey = ''; this._render(); }, this._options.scrollDebounceMs);
-        }
-      } catch {}
-    };
-    const viewport = terminal.element?.querySelector('.xterm-viewport');
-    if (viewport) { viewport.addEventListener('scroll', this._scrollHandler, { passive: true }); this._scrollViewport = viewport; }
-  }
-  dispose() {
-    this.clear();
-    if (this._scrollTimer) { clearTimeout(this._scrollTimer); this._scrollTimer = null; }
-    if (this._scrollViewport && this._scrollHandler) this._scrollViewport.removeEventListener('scroll', this._scrollHandler);
-    this._overlay?.remove();
-    this._overlay = null; this._scrollViewport = null; this._scrollHandler = null; this._terminal = null;
-  }
-  addChar(char) {
-    if (!this._pendingText && !this._flushedOffset) this._detectBufferText();
-    this._pendingText += char;
-    this._render();
-  }
-  appendText(text) {
-    if (!text) return;
-    if (!this._pendingText && !this._flushedOffset) this._detectBufferText();
-    this._pendingText += text;
-    this._render();
-  }
-  removeChar() {
-    if (this._pendingText.length > 0) {
-      this._pendingText = this._pendingText.slice(0, -1);
-      if (this._pendingText.length > 0 || this._flushedOffset > 0) this._render(); else this._hide();
-      return 'pending';
-    }
-    if (this._flushedOffset > 0) {
-      this._flushedOffset--; this._flushedText = this._flushedText.slice(0, -1);
-      if (this._flushedOffset > 0) this._render(); else this._hide();
-      return 'flushed';
-    }
-    this._detectBufferText();
-    if (this._flushedOffset > 0) {
-      this._flushedOffset--; this._flushedText = this._flushedText.slice(0, -1);
-      if (this._flushedOffset > 0) this._render(); else this._hide();
-      return 'flushed';
-    }
-    return false;
-  }
-  clear() {
-    this._pendingText = ''; this._flushedOffset = 0; this._flushedText = '';
-    this._bufferDetectDone = false; this._lastRenderKey = ''; this._lastPromptPos = null;
-    this._hide();
-  }
-  setFlushed(count, text, render = true) {
-    this._flushedOffset = count; this._flushedText = text;
-    if (render) this._render();
-  }
-  getFlushed() { return { count: this._flushedOffset, text: this._flushedText }; }
-  clearFlushed() {
-    this._flushedOffset = 0; this._flushedText = '';
-    if (this._pendingText) this._render(); else this._hide();
-  }
-  rerender() {
-    if (this._pendingText || this._flushedOffset > 0) { this._lastRenderKey = ''; this._render(); }
-  }
-  refreshFont() {
-    this._cacheFont(); this._lastRenderKey = '';
-    if (this._pendingText || this._flushedOffset > 0) this._render();
-  }
-  detectBufferText() { return this._detectBufferText(); }
-  resetBufferDetection() { this._bufferDetectDone = false; }
-  undoDetection() { this._flushedOffset = 0; this._flushedText = ''; this._bufferDetectDone = false; }
-  suppressBufferDetection() { this._bufferDetectDone = true; }
-  /** Update the prompt finder at runtime (e.g., when switching between Claude and OpenCode sessions) */
-  setPrompt(finder) { this._options.prompt = finder; this._lastPromptPos = null; }
-  findPrompt() {
-    if (!this._terminal) return null;
-    return _zl_findPrompt(this._terminal, this._options.prompt ?? _ZL_DEFAULT_PROMPT);
-  }
-  readPromptText() {
-    if (!this._terminal) return null;
-    const prompt = this.findPrompt();
-    if (!prompt) return null;
-    const offset = (this._options.prompt ?? _ZL_DEFAULT_PROMPT).offset ?? 2;
-    const text = _zl_readTextAfterPrompt(this._terminal, prompt, offset);
-    return text || null;
-  }
-  get pendingText() { return this._pendingText; }
-  get hasPending() { return this._pendingText.length > 0 || this._flushedOffset > 0; }
-  get state() {
-    return {
-      pendingText: this._pendingText, flushedLength: this._flushedOffset, flushedText: this._flushedText,
-      visible: this._overlay !== null && this._overlay.style.display !== 'none',
-      promptPosition: this._lastPromptPos ? { ...this._lastPromptPos } : null
-    };
-  }
-  _detectBufferText() {
-    if (this._bufferDetectDone || !this._terminal) return null;
-    // Mark as done regardless of result — prevents repeated scans from picking
-    // up PTY-echoed text or Ink redraws that appear between keystrokes.
-    // Explicit resetBufferDetection() is needed to re-enable (e.g., Tab completion).
-    this._bufferDetectDone = true;
-    try {
-      const prompt = this.findPrompt();
-      if (!prompt) return null;
-      const offset = (this._options.prompt ?? _ZL_DEFAULT_PROMPT).offset ?? 2;
-      const afterPrompt = _zl_readTextAfterPrompt(this._terminal, prompt, offset);
-      if (afterPrompt.length > 0) {
-        this._flushedOffset = afterPrompt.length; this._flushedText = afterPrompt;
-        this._lastPromptPos = prompt;
-        return afterPrompt;
-      }
-    } catch {}
-    return null;
-  }
-  _cacheFont() {
-    if (!this._terminal) return;
-    const t = this._terminal;
-    this._font.fontFamily = t.options.fontFamily || 'monospace';
-    const baseFontSize = t.options.fontSize || 14;
-    this._font.fontSize = baseFontSize + 'px';
-    this._font.fontWeight = String(t.options.fontWeight || 'normal');
-    this._font.backgroundColor = this._options.backgroundColor ?? t.options.theme?.background ?? _ZL_DEFAULT_BG;
-    this._font.color = this._options.foregroundColor ?? t.options.theme?.foreground ?? _ZL_DEFAULT_FG;
-    this._font.letterSpacing = '';
-    const rows = t.element?.querySelector('.xterm-rows');
-    if (rows) {
-      const cs = getComputedStyle(rows);
-      this._font.letterSpacing = cs.letterSpacing;
-      if (!this._options.foregroundColor && cs.color) this._font.color = cs.color;
-    }
-    // Correct font size: DOM text renders larger than xterm's canvas/WebGL text
-    // at the same nominal font-size. Measure actual DOM char width and scale to
-    // match the terminal's cell width so the overlay text matches exactly.
-    const dims = _zl_getCellDimensions(t);
-    if (dims && dims.width > 0) {
-      const probe = document.createElement('span');
-      probe.style.cssText = `position:absolute;visibility:hidden;white-space:pre;font-family:${this._font.fontFamily};font-size:${baseFontSize}px;font-weight:${this._font.fontWeight};font-feature-settings:'liga' 0,'calt' 0`;
-      if (this._font.letterSpacing) probe.style.letterSpacing = this._font.letterSpacing;
-      probe.textContent = 'W';
-      document.body.appendChild(probe);
-      const domCharW = probe.getBoundingClientRect().width;
-      document.body.removeChild(probe);
-      if (domCharW > 0 && Math.abs(domCharW - dims.width) > 0.1) {
-        const corrected = baseFontSize * (dims.width / domCharW);
-        this._font.fontSize = corrected + 'px';
-      }
-    }
-  }
-  _hide() {
-    if (!this._overlay) return;
-    this._lastRenderKey = ''; this._lastPromptPos = null;
-    this._overlay.innerHTML = ''; this._overlay.style.display = 'none';
-  }
-  _render() {
-    if (!this._terminal || !this._overlay) return;
-    if (!this._pendingText && !(this._flushedOffset > 0)) { this._overlay.style.display = 'none'; return; }
-    try {
-      const buf = this._terminal.buffer.active;
-      if (buf.viewportY !== buf.baseY) { this._overlay.style.display = 'none'; return; }
-      const prompt = this.findPrompt();
-      if (prompt) {
-        if (this._lastPromptPos && this._flushedOffset > 0) {
-          this._lastPromptPos = { row: prompt.row, col: this._lastPromptPos.col };
-        } else { this._lastPromptPos = prompt; }
-      } else if (!this._lastPromptPos) { this._overlay.style.display = 'none'; return; }
-      const activePrompt = this._lastPromptPos;
-      const dims = _zl_getCellDimensions(this._terminal);
-      if (!dims) { this._overlay.style.display = 'none'; return; }
-      const { width: cellW, height: cellH } = dims;
-      const totalCols = this._terminal.cols;
-      const offset = (this._options.prompt ?? _ZL_DEFAULT_PROMPT).offset ?? 2;
-      const startCol = activePrompt.col + offset;
-      let displayText = this._pendingText;
-      if (this._flushedOffset > 0) {
-        if (this._flushedText && this._flushedText.length === this._flushedOffset) {
-          displayText = this._flushedText + this._pendingText;
-        } else {
-          const absRow = buf.viewportY + activePrompt.row;
-          const line = buf.getLine(absRow);
-          if (line) { displayText = line.translateToString(true).slice(startCol, startCol + this._flushedOffset) + this._pendingText; }
-        }
-      }
-      const renderKey = `${displayText}:${startCol}:${activePrompt.row}:${activePrompt.col}:${totalCols}:${this._flushedOffset}`;
-      if (renderKey === this._lastRenderKey && this._overlay.style.display !== 'none') return;
-      this._lastRenderKey = renderKey;
-      const firstLineCols = Math.max(1, totalCols - startCol);
-      const lines = []; const chars = [...displayText]; let ci = 0;
-      { let lineStr = '', lineCols = 0;
-        while (ci < chars.length) { const cw = _zl_charCellWidth(chars[ci], this._terminal); if (lineCols + cw > firstLineCols) break; lineStr += chars[ci]; lineCols += cw; ci++; }
-        lines.push(lineStr); }
-      while (ci < chars.length) { let lineStr = '', lineCols = 0;
-        while (ci < chars.length) { const cw = _zl_charCellWidth(chars[ci], this._terminal); if (lineCols + cw > totalCols) break; lineStr += chars[ci]; lineCols += cw; ci++; }
-        lines.push(lineStr); }
-      const cursorColor = this._options.cursorColor ?? this._terminal.options.theme?.cursor ?? _ZL_DEFAULT_CURSOR;
-      _zl_renderOverlay(this._overlay, { lines, startCol, totalCols, cellW, cellH, promptRow: activePrompt.row, font: this._font, showCursor: this._options.showCursor, cursorColor, terminal: this._terminal });
-    } catch {
-      if (this._overlay) { this._overlay.innerHTML = ''; this._overlay.style.display = 'none'; }
-    }
-  }
-}
-
-// --- end xterm-zerolag-input library ---
-
-// Legacy alias — kept so the rest of app.js references work without renaming
-const LocalEchoOverlay = class extends ZerolagInputAddon {
-  constructor(terminal) {
-    super({ prompt: { type: 'character', char: '\u276f', offset: 2 } });
-    this.activate(terminal);
-  }
-};
-
-
-/**
- * Process data containing DEC 2026 sync markers.
- * Strips markers and returns segments that should be written atomically.
- * Each returned segment represents content between SYNC_START and SYNC_END.
- * Content outside sync blocks is returned as-is.
- *
- * @param {string} data - Raw terminal data with potential sync markers
- * @returns {string[]} - Array of content segments to write (markers stripped)
- */
-function extractSyncSegments(data) {
-  const segments = [];
-  let remaining = data;
-
-  while (remaining.length > 0) {
-    const startIdx = remaining.indexOf(DEC_SYNC_START);
-
-    if (startIdx === -1) {
-      // No more sync blocks, return rest as-is
-      if (remaining.length > 0) {
-        segments.push(remaining);
-      }
-      break;
-    }
-
-    // Content before sync block (if any)
-    if (startIdx > 0) {
-      segments.push(remaining.slice(0, startIdx));
-    }
-
-    // Find matching end marker
-    const afterStart = remaining.slice(startIdx + DEC_SYNC_START.length);
-    const endIdx = afterStart.indexOf(DEC_SYNC_END);
-
-    if (endIdx === -1) {
-      // No end marker found - sync block continues in next chunk
-      // Include the start marker so it can be handled when more data arrives
-      segments.push(remaining.slice(startIdx));
-      break;
-    }
-
-    // Extract synchronized content (without markers)
-    const syncContent = afterStart.slice(0, endIdx);
-    if (syncContent.length > 0) {
-      segments.push(syncContent);
-    }
-
-    // Continue with content after end marker
-    remaining = afterStart.slice(endIdx + DEC_SYNC_END.length);
-  }
-
-  return segments;
-}
-
-// Notification Manager - Multi-layer browser notification system
-class NotificationManager {
-  constructor(app) {
-    this.app = app;
-    this.notifications = [];
-    this.unreadCount = 0;
-    this.isTabVisible = !document.hidden;
-    this.isDrawerOpen = false;
-    this.originalTitle = document.title;
-    this.titleFlashInterval = null;
-    this.titleFlashState = false;
-    this.lastBrowserNotifTime = 0;
-    this.audioCtx = null;
-    this.renderScheduled = false;
-
-    // Debounce grouping: Map<key, {notification, timeout}>
-    this.groupingMap = new Map();
-
-    // Load preferences
-    this.preferences = this.loadPreferences();
-
-    // Visibility tracking
-    document.addEventListener('visibilitychange', () => {
-      this.isTabVisible = !document.hidden;
-      if (this.isTabVisible) {
-        this.onTabVisible();
-      }
-    });
-    // iOS Safari: pageshow fires on back-forward cache restore (bfcache)
-    window.addEventListener('pageshow', (e) => {
-      if (e.persisted) {
-        this.isTabVisible = true;
-        this.onTabVisible();
-      }
-    });
-  }
-
-  loadPreferences() {
-    const defaultEventTypes = {
-      permission_prompt: { enabled: true, browser: true, audio: true, push: false },
-      elicitation_dialog: { enabled: true, browser: true, audio: true, push: false },
-      idle_prompt: { enabled: true, browser: true, audio: false, push: false },
-      stop: { enabled: true, browser: false, audio: false, push: false },
-      session_error: { enabled: true, browser: true, audio: false, push: false },
-      respawn_cycle: { enabled: true, browser: false, audio: false, push: false },
-      token_milestone: { enabled: true, browser: false, audio: false, push: false },
-      ralph_complete: { enabled: true, browser: true, audio: true, push: false },
-      subagent_spawn: { enabled: false, browser: false, audio: false, push: false },
-      subagent_complete: { enabled: false, browser: false, audio: false, push: false },
-    };
-
-    // Device-specific defaults: mobile has notifications disabled by default
-    const isMobile = MobileDetection.getDeviceType() === 'mobile';
-    const defaults = {
-      enabled: !isMobile, // Disabled on mobile by default
-      browserNotifications: !isMobile,
-      audioAlerts: false,
-      stuckThresholdMs: STUCK_THRESHOLD_DEFAULT_MS,
-      // Legacy urgency muting (keep for backwards compat)
-      muteCritical: false,
-      muteWarning: false,
-      muteInfo: false,
-      // Per-event-type preferences
-      eventTypes: defaultEventTypes,
-      _version: 4,
-    };
-    try {
-      const storageKey = this.getStorageKey();
-      const saved = localStorage.getItem(storageKey);
-      if (saved) {
-        const prefs = JSON.parse(saved);
-        // Migrate: v1 had browserNotifications defaulting to false
-        if (!prefs._version || prefs._version < 2) {
-          prefs.browserNotifications = true;
-          prefs._version = 2;
-        }
-        // Migrate: v2 -> v3 adds eventTypes
-        if (prefs._version < 3) {
-          prefs.eventTypes = defaultEventTypes;
-          prefs._version = 3;
-          localStorage.setItem(storageKey, JSON.stringify(prefs));
-        }
-        // Migrate: v3 -> v4 adds push field to all eventTypes
-        if (prefs._version < 4) {
-          if (prefs.eventTypes) {
-            for (const key of Object.keys(prefs.eventTypes)) {
-              if (prefs.eventTypes[key] && prefs.eventTypes[key].push === undefined) {
-                prefs.eventTypes[key].push = false;
-              }
-            }
-          }
-          prefs._version = 4;
-          localStorage.setItem(storageKey, JSON.stringify(prefs));
-        }
-        // Merge with defaults to ensure all eventTypes exist
-        return {
-          ...defaults,
-          ...prefs,
-          eventTypes: { ...defaultEventTypes, ...prefs.eventTypes },
-        };
-      }
-    } catch (_e) { /* ignore */ }
-    return defaults;
-  }
-
-  // Get storage key for notification prefs (device-specific)
-  getStorageKey() {
-    const isMobile = MobileDetection.getDeviceType() === 'mobile';
-    return isMobile ? 'codeman-notification-prefs-mobile' : 'codeman-notification-prefs';
-  }
-
-  savePreferences() {
-    localStorage.setItem(this.getStorageKey(), JSON.stringify(this.preferences));
-  }
-
-  notify({ urgency, category, sessionId, sessionName, title, message }) {
-    if (!this.preferences.enabled) return;
-
-    // Map notification categories to eventType preference keys
-    const categoryToEventType = {
-      'hook-permission': 'permission_prompt',
-      'hook-elicitation': 'elicitation_dialog',
-      'hook-idle': 'idle_prompt',
-      'hook-stop': 'stop',
-      'session-error': 'session_error',
-      'session-crash': 'session_error',
-      'session-stuck': 'idle_prompt',
-      'respawn-blocked': 'respawn_cycle',
-      'auto-accept': 'respawn_cycle',
-      'auto-clear': 'respawn_cycle',
-      'ralph-complete': 'ralph_complete',
-      'circuit-breaker': 'respawn_cycle',
-      'exit-gate': 'ralph_complete',
-      'subagent-spawn': 'subagent_spawn',
-      'subagent-complete': 'subagent_complete',
-      'hook-teammate-idle': 'idle_prompt',
-      'hook-task-completed': 'stop',
-    };
-    const eventTypeKey = categoryToEventType[category] || category;
-
-    // Check per-event-type preferences first
-    const eventPref = this.preferences.eventTypes?.[eventTypeKey];
-    let shouldBrowserNotify = false;
-    let shouldAudioAlert = false;
-
-    if (eventPref) {
-      // Event type found - use its specific preferences
-      if (!eventPref.enabled) return;
-      shouldBrowserNotify = eventPref.browser && this.preferences.browserNotifications;
-      shouldAudioAlert = eventPref.audio && this.preferences.audioAlerts;
-    } else {
-      // Fall back to urgency-based muting for unknown categories
-      if (urgency === 'critical' && this.preferences.muteCritical) return;
-      if (urgency === 'warning' && this.preferences.muteWarning) return;
-      if (urgency === 'info' && this.preferences.muteInfo) return;
-      // Default browser/audio behavior based on urgency
-      shouldBrowserNotify = this.preferences.browserNotifications &&
-        (urgency === 'critical' || urgency === 'warning' || !this.isTabVisible);
-      shouldAudioAlert = urgency === 'critical' && this.preferences.audioAlerts;
-    }
-
-    // Grouping: same category+session within 5s updates count instead of new entry
-    const groupKey = `${category}:${sessionId || 'global'}`;
-    const existing = this.groupingMap.get(groupKey);
-    if (existing) {
-      existing.notification.count = (existing.notification.count || 1) + 1;
-      existing.notification.message = message;
-      existing.notification.timestamp = Date.now();
-      clearTimeout(existing.timeout);
-      existing.timeout = setTimeout(() => this.groupingMap.delete(groupKey), GROUPING_TIMEOUT_MS);
-      this.scheduleRender();
-      return;
-    }
-
-    const notification = {
-      id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
-      urgency,
-      category,
-      sessionId,
-      sessionName,
-      title,
-      message,
-      timestamp: Date.now(),
-      read: false,
-      count: 1,
-    };
-
-    // Add to log (cap at 100)
-    this.notifications.unshift(notification);
-    if (this.notifications.length > 100) this.notifications.pop();
-
-    // Track for grouping
-    const timeout = setTimeout(() => this.groupingMap.delete(groupKey), GROUPING_TIMEOUT_MS);
-    this.groupingMap.set(groupKey, { notification, timeout });
-
-    // Update unread
-    this.unreadCount++;
-    this.updateBadge();
-    this.scheduleRender();
-
-    // Layer 2: Tab title (when tab unfocused)
-    if (!this.isTabVisible) {
-      this.updateTabTitle();
-    }
-
-    // Layer 3: Browser notification
-    if (shouldBrowserNotify) {
-      this.sendBrowserNotif(title, message, category, sessionId);
-    }
-
-    // Layer 4: Audio alert
-    if (shouldAudioAlert) {
-      this.playAudioAlert();
-    }
-  }
-
-  // Layer 1: Drawer rendering
-  scheduleRender() {
-    if (this.renderScheduled) return;
-    this.renderScheduled = true;
-    requestAnimationFrame(() => {
-      this.renderScheduled = false;
-      this.renderDrawer();
-    });
-  }
-
-  renderDrawer() {
-    const list = document.getElementById('notifList');
-    const empty = document.getElementById('notifEmpty');
-    if (!list || !empty) return;
-
-    if (this.notifications.length === 0) {
-      list.style.display = 'none';
-      empty.style.display = 'flex';
-      return;
-    }
-
-    list.style.display = 'block';
-    empty.style.display = 'none';
-
-    list.innerHTML = this.notifications.map(n => {
-      const urgencyClass = `notif-item-${n.urgency}`;
-      const readClass = n.read ? '' : ' unread';
-      const countLabel = n.count > 1 ? `<span class="notif-item-count">&times;${n.count}</span>` : '';
-      const sessionChip = n.sessionName ? `<span class="notif-item-session">${this.escapeHtml(n.sessionName)}</span>` : '';
-      return `<div class="notif-item ${urgencyClass}${readClass}" data-notif-id="${n.id}" data-session-id="${n.sessionId || ''}" onclick="app.notificationManager.clickNotification('${this.escapeHtml(n.id)}')">
-        <div class="notif-item-header">
-          <span class="notif-item-title">${this.escapeHtml(n.title)}${countLabel}</span>
-          <span class="notif-item-time">${this.relativeTime(n.timestamp)}</span>
-        </div>
-        <div class="notif-item-message">${this.escapeHtml(n.message)}</div>
-        ${sessionChip}
-      </div>`;
-    }).join('');
-  }
-
-  // Layer 2: Tab title with unread count
-  updateTabTitle() {
-    if (this.unreadCount > 0 && !this.isTabVisible) {
-      if (!this.titleFlashInterval) {
-        this.titleFlashInterval = setInterval(() => {
-          this.titleFlashState = !this.titleFlashState;
-          document.title = this.titleFlashState
-            ? `\u26A0\uFE0F (${this.unreadCount}) Codeman`
-            : this.originalTitle;
-        }, TITLE_FLASH_INTERVAL_MS);
-        // Set immediately
-        document.title = `\u26A0\uFE0F (${this.unreadCount}) Codeman`;
-      }
-    }
-  }
-
-  stopTitleFlash() {
-    if (this.titleFlashInterval) {
-      clearInterval(this.titleFlashInterval);
-      this.titleFlashInterval = null;
-      this.titleFlashState = false;
-      document.title = this.originalTitle;
-    }
-  }
-
-  // Layer 3: Web Notification API
-  sendBrowserNotif(title, body, tag, sessionId) {
-    if (!this.preferences.browserNotifications) return;
-    if (typeof Notification === 'undefined') return;
-    if (Notification.permission === 'default') {
-      // Auto-request on first notification attempt
-      Notification.requestPermission().then(result => {
-        if (result === 'granted') {
-          // Re-send this notification now that we have permission
-          this.sendBrowserNotif(title, body, tag, sessionId);
-        }
-      });
-      return;
-    }
-    if (Notification.permission !== 'granted') return;
-
-    // Rate limit: max 1 per 3 seconds
-    const now = Date.now();
-    if (now - this.lastBrowserNotifTime < 3000) return;
-    this.lastBrowserNotifTime = now;
-
-    const notif = new Notification(`Codeman: ${title}`, {
-      body,
-      tag, // Groups same-tag notifications
-      icon: '/favicon.ico',
-      silent: true, // We handle audio ourselves
-    });
-
-    notif.onclick = () => {
-      window.focus();
-      if (sessionId && this.app.sessions.has(sessionId)) {
-        this.app.selectSession(sessionId);
-      }
-      notif.close();
-    };
-
-    // Auto-close after 8s
-    setTimeout(() => notif.close(), 8000);
-  }
-
-  async requestPermission() {
-    if (typeof Notification === 'undefined') {
-      this.app.showToast('Browser notifications not supported', 'warning');
-      return;
-    }
-    const result = await Notification.requestPermission();
-    const statusEl = document.getElementById('notifPermissionStatus');
-    if (statusEl) statusEl.textContent = `Status: ${result}`;
-    if (result === 'granted') {
-      this.preferences.browserNotifications = true;
-      this.savePreferences();
-      this.app.showToast('Notifications enabled', 'success');
-    } else {
-      this.app.showToast(`Permission ${result}`, 'warning');
-    }
-  }
-
-  // Layer 4: Audio alert via Web Audio API
-  playAudioAlert() {
-    try {
-      if (!this.audioCtx) {
-        this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      if (this.audioCtx.state === 'suspended') {
-        this.audioCtx.resume();
-      }
-      const ctx = this.audioCtx;
-      const oscillator = ctx.createOscillator();
-      const gain = ctx.createGain();
-      oscillator.connect(gain);
-      gain.connect(ctx.destination);
-      oscillator.type = 'sine';
-      oscillator.frequency.setValueAtTime(660, ctx.currentTime);
-      gain.gain.setValueAtTime(0.15, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
-      oscillator.start(ctx.currentTime);
-      oscillator.stop(ctx.currentTime + 0.15);
-    } catch (_e) { /* Audio not available */ }
-  }
-
-  // UI interactions
-  toggleDrawer() {
-    const drawer = document.getElementById('notifDrawer');
-    if (!drawer) return;
-    this.isDrawerOpen = !this.isDrawerOpen;
-    drawer.classList.toggle('open', this.isDrawerOpen);
-    if (this.isDrawerOpen) {
-      this.renderDrawer();
-    }
-  }
-
-  clickNotification(notifId) {
-    const notif = this.notifications.find(n => n.id === notifId);
-    if (!notif) return;
-
-    // Mark as read
-    if (!notif.read) {
-      notif.read = true;
-      this.unreadCount = Math.max(0, this.unreadCount - 1);
-      this.updateBadge();
-    }
-
-    // Switch to session if available
-    if (notif.sessionId && this.app.sessions.has(notif.sessionId)) {
-      this.app.selectSession(notif.sessionId);
-      this.toggleDrawer();
-    }
-
-    this.scheduleRender();
-  }
-
-  markAllRead() {
-    this.notifications.forEach(n => { n.read = true; });
-    this.unreadCount = 0;
-    this.updateBadge();
-    this.stopTitleFlash();
-    this.scheduleRender();
-  }
-
-  clearAll() {
-    this.notifications = [];
-    this.unreadCount = 0;
-    this.updateBadge();
-    this.stopTitleFlash();
-    this.scheduleRender();
-  }
-
-  updateBadge() {
-    const badge = document.getElementById('notifBadge');
-    if (!badge) return;
-    if (this.unreadCount > 0) {
-      badge.style.display = 'flex';
-      badge.textContent = this.unreadCount > 99 ? '99+' : String(this.unreadCount);
-    } else {
-      badge.style.display = 'none';
-    }
-  }
-
-  onTabVisible() {
-    this.stopTitleFlash();
-    // If drawer is open, mark all as read
-    if (this.isDrawerOpen) {
-      this.markAllRead();
-    }
-    // Re-fit terminal and send resize to PTY so this client's dimensions win.
-    // Fixes broken layout when switching between desktop and mobile on the same session.
-    if (this.app?.fitAddon && this.app?.activeSessionId) {
-      this.app.fitAddon.fit();
-      this.app.sendResize(this.app.activeSessionId);
-    }
-  }
-
-  // Utilities
-  relativeTime(ts) {
-    const diff = Math.floor((Date.now() - ts) / 1000);
-    if (diff < 60) return 'now';
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    return `${Math.floor(diff / 86400)}d ago`;
-  }
-
-  escapeHtml(text) {
-    if (!text) return '';
-    return text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-  }
-}
 
 class CodemanApp {
   constructor() {
@@ -5562,19 +2906,19 @@ class CodemanApp {
       const tallTabsEnabled = this._tallTabsEnabled ?? false;
       const showFolder = tallTabsEnabled && session.name && folderName && folderName !== name;
 
-      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}" data-id="${id}" data-color="${color}" onclick="app.selectSession('${this.escapeHtml(id)}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${this.escapeHtml(id)}')" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-label="${this.escapeHtml(name)} session" ${session.workingDir ? `title="${this.escapeHtml(session.workingDir)}"` : ''}>
+      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}" data-id="${id}" data-color="${color}" onclick="app.selectSession('${escapeHtml(id)}')" oncontextmenu="event.preventDefault(); app.startInlineRename('${escapeHtml(id)}')" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-label="${escapeHtml(name)} session" ${session.workingDir ? `title="${escapeHtml(session.workingDir)}"` : ''}>
           <span class="tab-status ${status}" aria-hidden="true"></span>
           <span class="tab-info">
             <span class="tab-name-row">
               ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : ''}
-              <span class="tab-name" data-session-id="${id}">${this.escapeHtml(name)}</span>
+              <span class="tab-name" data-session-id="${id}">${escapeHtml(name)}</span>
             </span>
-            ${showFolder ? `<span class="tab-folder">\u{1F4C1} ${this.escapeHtml(folderName)}</span>` : ''}
+            ${showFolder ? `<span class="tab-folder">\u{1F4C1} ${escapeHtml(folderName)}</span>` : ''}
           </span>
           ${hasRunningTasks ? `<span class="tab-badge" onclick="event.stopPropagation(); app.toggleTaskPanel()" aria-label="${taskStats.running} running tasks">${taskStats.running}</span>` : ''}
           ${subagentBadge}
-          <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${this.escapeHtml(id)}')" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span>
-          <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${this.escapeHtml(id)}')" title="Close session" aria-label="Close session" tabindex="0">&times;</span>
+          <span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions('${escapeHtml(id)}')" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span>
+          <span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession('${escapeHtml(id)}')" title="Close session" aria-label="Close session" tabindex="0">&times;</span>
         </div>`);
     }
 
@@ -5638,40 +2982,6 @@ class CodemanApp {
     container.addEventListener('keydown', this._tabKeydownHandler);
   }
 
-  // Render subagent badge with dropdown for minimized agents on a tab
-  renderSubagentTabBadge(sessionId, minimizedAgents) {
-    if (!minimizedAgents || minimizedAgents.size === 0) return '';
-
-    const agentItems = [];
-    for (const agentId of minimizedAgents) {
-      const agent = this.subagents.get(agentId);
-      const displayName = agent?.description || agentId.substring(0, 12);
-      const truncatedName = displayName.length > 25 ? displayName.substring(0, 25) + '…' : displayName;
-      const statusClass = agent?.status || 'idle';
-      agentItems.push(`
-        <div class="subagent-dropdown-item" onclick="event.stopPropagation(); app.restoreMinimizedSubagent('${this.escapeHtml(agentId)}', '${this.escapeHtml(sessionId)}')" title="Click to restore">
-          <span class="subagent-dropdown-status ${statusClass}"></span>
-          <span class="subagent-dropdown-name">${this.escapeHtml(truncatedName)}</span>
-          <span class="subagent-dropdown-close" onclick="event.stopPropagation(); app.permanentlyCloseMinimizedSubagent('${this.escapeHtml(agentId)}', '${this.escapeHtml(sessionId)}')" title="Dismiss">&times;</span>
-        </div>
-      `);
-    }
-
-    // Compact badge - shows on hover, click to pin open
-    const count = minimizedAgents.size;
-    const label = count === 1 ? 'AGENT' : `AGENTS (${count})`;
-    return `
-      <span class="tab-subagent-badge"
-            onmouseenter="app.showSubagentDropdown(this)"
-            onmouseleave="app.scheduleHideSubagentDropdown(this)"
-            onclick="event.stopPropagation(); app.pinSubagentDropdown(this);">
-        <span class="subagent-label">${label}</span>
-        <div class="subagent-dropdown" onmouseenter="app.cancelHideSubagentDropdown()" onmouseleave="app.scheduleHideSubagentDropdown(this.parentElement)">
-          ${agentItems.join('')}
-        </div>
-      </span>
-    `;
-  }
 
   // ========== Tab Order and Drag-and-Drop ==========
 
@@ -5796,26 +3106,6 @@ class CodemanApp {
     });
   }
 
-  // Restore a minimized subagent window
-  restoreMinimizedSubagent(agentId, sessionId) {
-    // Remove from minimized set
-    const minimizedAgents = this.minimizedSubagents.get(sessionId);
-    if (minimizedAgents) {
-      minimizedAgents.delete(agentId);
-      if (minimizedAgents.size === 0) {
-        this.minimizedSubagents.delete(sessionId);
-      }
-    }
-
-    // Restore the window
-    this.restoreSubagentWindow(agentId);
-
-    // Re-render tabs to update badge
-    this.renderSessionTabs();
-
-    // Persist the state change
-    this.saveSubagentWindowStates();
-  }
 
   // Show subagent dropdown on hover
   showSubagentDropdown(badgeEl) {
@@ -5904,27 +3194,6 @@ class CodemanApp {
     }
   }
 
-  // Permanently close a minimized subagent (remove from DOM and minimized set)
-  permanentlyCloseMinimizedSubagent(agentId, sessionId) {
-    // Remove from minimized set
-    const minimizedAgents = this.minimizedSubagents.get(sessionId);
-    if (minimizedAgents) {
-      minimizedAgents.delete(agentId);
-      if (minimizedAgents.size === 0) {
-        this.minimizedSubagents.delete(sessionId);
-      }
-    }
-
-    // Force close the window (removes from DOM)
-    this.forceCloseSubagentWindow(agentId);
-
-    // Re-render tabs to update badge
-    this.renderSessionTabs();
-    this.updateConnectionLines();
-
-    // Persist the state change
-    this.saveSubagentWindowStates();
-  }
 
   getSessionName(session) {
     // Use custom name if set
@@ -6391,7 +3660,7 @@ class CodemanApp {
         const displayName = c.name.length > maxNameLength
           ? c.name.substring(0, maxNameLength) + '…'
           : c.name;
-        options += `<option value="${this.escapeHtml(c.name)}">${this.escapeHtml(displayName)}</option>`;
+        options += `<option value="${escapeHtml(c.name)}">${escapeHtml(displayName)}</option>`;
       });
 
       // Add testcase option if it doesn't exist (will be created on first run)
@@ -7218,8 +4487,8 @@ class CodemanApp {
       // Shorter timer name display
       const displayName = name.replace(/-/g, ' ').replace(/^\w/, c => c.toUpperCase());
 
-      html += `<div class="respawn-countdown-timer" title="${this.escapeHtml(timer.reason || '')}">
-        <span class="timer-name">${this.escapeHtml(displayName)}</span>
+      html += `<div class="respawn-countdown-timer" title="${escapeHtml(timer.reason || '')}">
+        <span class="timer-name">${escapeHtml(displayName)}</span>
         <span class="timer-value">${remainingSec}s</span>
         <div class="respawn-timer-bar">
           <div class="respawn-timer-progress" style="width: ${percent}%"></div>
@@ -7255,7 +4524,7 @@ class CodemanApp {
       html += `<div class="respawn-action-entry${extraClass}">
         <span class="action-time">${time}</span>
         <span class="action-type">[${action.type}]</span>
-        <span class="action-detail">${this.escapeHtml(action.detail)}</span>
+        <span class="action-detail">${escapeHtml(action.detail)}</span>
       </div>`;
     }
 
@@ -8291,7 +5560,7 @@ class CodemanApp {
       const data = await response.json();
 
       if (!data.success) {
-        timeline.innerHTML = `<p class="empty-message">Failed to load summary: ${this.escapeHtml(data.error)}</p>`;
+        timeline.innerHTML = `<p class="empty-message">Failed to load summary: ${escapeHtml(data.error)}</p>`;
         return;
       }
 
@@ -8364,10 +5633,10 @@ class CodemanApp {
           <div class="event-icon">${icon}</div>
           <div class="event-content">
             <div class="event-header">
-              <span class="event-title">${this.escapeHtml(event.title)}</span>
+              <span class="event-title">${escapeHtml(event.title)}</span>
               <span class="event-time">${time}</span>
             </div>
-            ${event.details ? `<div class="event-details">${this.escapeHtml(event.details)}</div>` : ''}
+            ${event.details ? `<div class="event-details">${escapeHtml(event.details)}</div>` : ''}
           </div>
         </div>
       `;
@@ -9751,46 +7020,6 @@ class CodemanApp {
     return this.loadAppSettingsFromStorage();
   }
 
-  // ========== Subagent Window State Persistence ==========
-
-  /**
-   * Save subagent window states (minimized/open) to server for cross-browser persistence.
-   * Called when a window is minimized, restored, or auto-minimized on completion.
-   */
-  async saveSubagentWindowStates() {
-    // Build state object: which agents are minimized per session
-    const minimizedState = {};
-    for (const [sessionId, agentIds] of this.minimizedSubagents) {
-      minimizedState[sessionId] = Array.from(agentIds);
-    }
-
-    // Also track which windows are open (not minimized)
-    const openWindows = [];
-    for (const [agentId, windowData] of this.subagentWindows) {
-      if (!windowData.minimized) {
-        openWindows.push({
-          agentId,
-          position: windowData.position || null
-        });
-      }
-    }
-
-    const windowStates = { minimized: minimizedState, open: openWindows };
-
-    // Save to localStorage for quick restore
-    localStorage.setItem('codeman-subagent-window-states', JSON.stringify(windowStates));
-
-    // Save to server for cross-browser persistence
-    try {
-      await fetch('/api/subagent-window-states', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(windowStates)
-      });
-    } catch (err) {
-      console.error('Failed to save subagent window states to server:', err);
-    }
-  }
 
   /**
    * Load subagent window states from server (or localStorage fallback).
@@ -9826,86 +7055,6 @@ class CodemanApp {
     return states || { minimized: {}, open: [] };
   }
 
-  /**
-   * Restore subagent window states after loading subagents.
-   * Opens windows that were open before, keeps minimized ones minimized.
-   * IMPORTANT: Parent associations are loaded from subagentParentMap BEFORE this is called.
-   */
-  async restoreSubagentWindowStates() {
-    const states = await this.loadSubagentWindowStates();
-
-    // Restore minimized state using the PERSISTENT parent map
-    // Skip old agents from previous runs to avoid confusion
-    const cutoffTime = Date.now() - 10 * 60 * 1000; // 10 minutes
-    for (const [savedSessionId, agentIds] of Object.entries(states.minimized || {})) {
-      if (Array.isArray(agentIds) && agentIds.length > 0) {
-        for (const agentId of agentIds) {
-          const agent = this.subagents.get(agentId);
-          if (!agent) continue; // Agent no longer exists
-
-          // Skip completed or old agents
-          const agentStartTime = agent.startedAt || 0;
-          if (agent.status === 'completed' || agentStartTime < cutoffTime) continue;
-
-          // Use the PERSISTENT parent map (THE source of truth)
-          // Fall back to saved sessionId only if it exists in current sessions
-          const parentFromMap = this.subagentParentMap.get(agentId);
-          const correctSessionId = parentFromMap ||
-            (this.sessions.has(savedSessionId) ? savedSessionId : null);
-
-          if (correctSessionId) {
-            // Ensure the parent map has this association
-            if (!parentFromMap && this.sessions.has(savedSessionId)) {
-              this.setAgentParentSessionId(agentId, savedSessionId);
-            }
-
-            if (!this.minimizedSubagents.has(correctSessionId)) {
-              this.minimizedSubagents.set(correctSessionId, new Set());
-            }
-            this.minimizedSubagents.get(correctSessionId).add(agentId);
-          }
-        }
-      }
-    }
-
-    // Restore open windows (for recent, non-completed agents only)
-    const now = Date.now();
-    const maxAgeMs = 10 * 60 * 1000; // 10 minutes - don't restore windows for old agents
-    for (const { agentId, position } of (states.open || [])) {
-      const agent = this.subagents.get(agentId);
-      // Only restore window if agent exists, is recent, and is still active/idle
-      const agentAge = agent?.startedAt ? now - agent.startedAt : Infinity;
-      if (agent && agent.status !== 'completed' && agentAge < maxAgeMs) {
-        this.openSubagentWindow(agentId);
-        // Restore position if saved (with viewport bounds check)
-        if (position) {
-          const windowData = this.subagentWindows.get(agentId);
-          if (windowData && windowData.element) {
-            // Parse position values and clamp to viewport
-            let left = parseInt(position.left, 10) || 50;
-            let top = parseInt(position.top, 10) || 120;
-            const viewportWidth = window.innerWidth;
-            const viewportHeight = window.innerHeight;
-            const windowWidth = 420;
-            const windowHeight = 350;
-            left = Math.max(10, Math.min(left, viewportWidth - windowWidth - 10));
-            top = Math.max(10, Math.min(top, viewportHeight - windowHeight - 10));
-            windowData.element.style.left = `${left}px`;
-            windowData.element.style.top = `${top}px`;
-            windowData.position = { left: `${left}px`, top: `${top}px` };
-          }
-        }
-      }
-    }
-
-    this.renderSessionTabs(); // Update tab badges
-    this.saveSubagentWindowStates(); // Persist corrected mappings
-
-    // Update connection lines after all windows are restored (use rAF to ensure DOM is ready)
-    requestAnimationFrame(() => {
-      this.updateConnectionLines();
-    });
-  }
 
   // ========== Persistent Parent Associations ==========
   // This is the ROCK-SOLID system for tracking which tab an agent belongs to.
@@ -10443,7 +7592,7 @@ class CodemanApp {
         <div class="task-item">
           <span class="task-status-icon ${task.status}">${statusIcon}</span>
           <div class="task-info">
-            <div class="task-description">${this.escapeHtml(task.description)}</div>
+            <div class="task-description">${escapeHtml(task.description)}</div>
             <div class="task-meta">
               <span class="task-type">${task.subagentType}</span>
               <span>${duration}</span>
@@ -11119,19 +8268,19 @@ class CodemanApp {
     let html = `
       <div class="ralph-status-block-header">
         <span>RALPH_STATUS</span>
-        <span class="ralph-status-block-status ${statusClass}">${this.escapeHtml(statusBlock.status)}</span>
+        <span class="ralph-status-block-status ${statusClass}">${escapeHtml(statusBlock.status)}</span>
         ${statusBlock.exitSignal ? '<span style="color: #4caf50;">🚪 EXIT</span>' : ''}
       </div>
       <div class="ralph-status-block-stats">
-        <span>${workIcon} ${this.escapeHtml(statusBlock.workType)}</span>
+        <span>${workIcon} ${escapeHtml(statusBlock.workType)}</span>
         <span>📁 ${statusBlock.filesModified} files</span>
-        <span>✓ ${this.escapeHtml(String(statusBlock.tasksCompletedThisLoop))} tasks</span>
-        <span>${testsIcon} Tests: ${this.escapeHtml(statusBlock.testsStatus)}</span>
+        <span>✓ ${escapeHtml(String(statusBlock.tasksCompletedThisLoop))} tasks</span>
+        <span>${testsIcon} Tests: ${escapeHtml(statusBlock.testsStatus)}</span>
       </div>
     `;
 
     if (statusBlock.recommendation) {
-      html += `<div class="ralph-status-block-recommendation">${this.escapeHtml(statusBlock.recommendation)}</div>`;
+      html += `<div class="ralph-status-block-recommendation">${escapeHtml(statusBlock.recommendation)}</div>`;
     }
 
     container.innerHTML = html;
@@ -11535,7 +8684,7 @@ class CodemanApp {
       const hasWindow = this.subagentWindows.has(agent.agentId);
       const canKill = agent.status === 'active' || agent.status === 'idle';
       const modelBadge = agent.modelShort
-        ? `<span class="subagent-model-badge ${this.escapeHtml(agent.modelShort)}">${this.escapeHtml(agent.modelShort)}</span>`
+        ? `<span class="subagent-model-badge ${escapeHtml(agent.modelShort)}">${escapeHtml(agent.modelShort)}</span>`
         : '';
 
       const teammateInfo = this.getTeammateInfo(agent);
@@ -11544,17 +8693,17 @@ class CodemanApp {
       const agentIcon = teammateInfo ? `<span class="subagent-icon teammate-dot teammate-color-${teammateInfo.color}">●</span>` : '<span class="subagent-icon">🤖</span>';
       html.push(`
         <div class="subagent-item ${statusClass} ${isActive ? 'selected' : ''}${teammateInfo ? ' is-teammate' : ''}"
-             onclick="app.selectSubagent('${this.escapeHtml(agent.agentId)}')"
-             ondblclick="app.openSubagentWindow('${this.escapeHtml(agent.agentId)}')"
+             onclick="app.selectSubagent('${escapeHtml(agent.agentId)}')"
+             ondblclick="app.openSubagentWindow('${escapeHtml(agent.agentId)}')"
              title="Double-click to open tracking window">
           <div class="subagent-header">
             ${agentIcon}
-            <span class="subagent-id" title="${this.escapeHtml(agent.description || agent.agentId)}">${this.escapeHtml(displayName.length > 40 ? displayName.substring(0, 40) + '...' : displayName)}</span>
+            <span class="subagent-id" title="${escapeHtml(agent.description || agent.agentId)}">${escapeHtml(displayName.length > 40 ? displayName.substring(0, 40) + '...' : displayName)}</span>
             ${teammateBadge}
             ${modelBadge}
             <span class="subagent-status ${statusClass}">${agent.status}</span>
-            ${canKill ? `<button class="subagent-kill-btn" onclick="event.stopPropagation(); app.killSubagent('${this.escapeHtml(agent.agentId)}')" title="Kill agent">&#x2715;</button>` : ''}
-            <button class="subagent-window-btn" onclick="event.stopPropagation(); app.${hasWindow ? 'closeSubagentWindow' : 'openSubagentWindow'}('${this.escapeHtml(agent.agentId)}')" title="${hasWindow ? 'Close window' : 'Open in window'}">
+            ${canKill ? `<button class="subagent-kill-btn" onclick="event.stopPropagation(); app.killSubagent('${escapeHtml(agent.agentId)}')" title="Kill agent">&#x2715;</button>` : ''}
+            <button class="subagent-window-btn" onclick="event.stopPropagation(); app.${hasWindow ? 'closeSubagentWindow' : 'openSubagentWindow'}('${escapeHtml(agent.agentId)}')" title="${hasWindow ? 'Close window' : 'Open in window'}">
               ${hasWindow ? '✕' : '⧉'}
             </button>
           </div>
@@ -11601,8 +8750,8 @@ class CodemanApp {
           <span class="icon">${this.getToolIcon(a.tool)}</span>
           <span class="name">${a.tool}</span>
           <span class="detail">${toolDetail.primary}</span>
-          ${toolDetail.hasMore ? `<button class="tool-expand-btn" onclick="app.toggleToolParams('${this.escapeHtml(a.toolUseId)}')">▶</button>` : ''}
-          ${toolDetail.hasMore ? `<div class="tool-params-expanded" id="tool-params-${a.toolUseId}" style="display:none;"><pre>${this.escapeHtml(JSON.stringify(a.fullInput || a.input, null, 2))}</pre></div>` : ''}
+          ${toolDetail.hasMore ? `<button class="tool-expand-btn" onclick="app.toggleToolParams('${escapeHtml(a.toolUseId)}')">▶</button>` : ''}
+          ${toolDetail.hasMore ? `<div class="tool-params-expanded" id="tool-params-${a.toolUseId}" style="display:none;"><pre>${escapeHtml(JSON.stringify(a.fullInput || a.input, null, 2))}</pre></div>` : ''}
         </div>`;
       } else if (a.type === 'tool_result') {
         const icon = a.isError ? '❌' : '📄';
@@ -11613,7 +8762,7 @@ class CodemanApp {
           <span class="time">${time}</span>
           <span class="icon">${icon}</span>
           <span class="name">${a.tool || 'result'}</span>
-          <span class="detail">${this.escapeHtml(preview)}${sizeInfo}</span>
+          <span class="detail">${escapeHtml(preview)}${sizeInfo}</span>
         </div>`;
       } else if (a.type === 'progress') {
         // Check for hook events
@@ -11631,7 +8780,7 @@ class CodemanApp {
         return `<div class="subagent-activity message">
           <span class="time">${time}</span>
           <span class="icon">💬</span>
-          <span class="detail">${this.escapeHtml(preview)}</span>
+          <span class="detail">${escapeHtml(preview)}</span>
         </div>`;
       }
       return '';
@@ -11639,7 +8788,7 @@ class CodemanApp {
 
     const detailTitle = agent.description || `Agent ${agent.agentId}`;
     const modelBadge = agent.modelShort
-      ? `<span class="subagent-model-badge ${this.escapeHtml(agent.modelShort)}">${this.escapeHtml(agent.modelShort)}</span>`
+      ? `<span class="subagent-model-badge ${escapeHtml(agent.modelShort)}">${escapeHtml(agent.modelShort)}</span>`
       : '';
     const tokenStats = (agent.totalInputTokens || agent.totalOutputTokens)
       ? `<span>Tokens: ${this.formatTokenCount(agent.totalInputTokens || 0)}↓ ${this.formatTokenCount(agent.totalOutputTokens || 0)}↑</span>`
@@ -11647,10 +8796,10 @@ class CodemanApp {
 
     detail.innerHTML = `
       <div class="subagent-detail-header">
-        <span class="subagent-id" title="${this.escapeHtml(agent.description || agent.agentId)}">${this.escapeHtml(detailTitle.length > 60 ? detailTitle.substring(0, 60) + '...' : detailTitle)}</span>
+        <span class="subagent-id" title="${escapeHtml(agent.description || agent.agentId)}">${escapeHtml(detailTitle.length > 60 ? detailTitle.substring(0, 60) + '...' : detailTitle)}</span>
         ${modelBadge}
         <span class="subagent-status ${agent.status}">${agent.status}</span>
-        <button class="subagent-transcript-btn" onclick="app.viewSubagentTranscript('${this.escapeHtml(agent.agentId)}')">
+        <button class="subagent-transcript-btn" onclick="app.viewSubagentTranscript('${escapeHtml(agent.agentId)}')">
           View Full Transcript
         </button>
       </div>
@@ -11771,15 +8920,15 @@ class CodemanApp {
       win.document.write(`
         <html>
           <head>
-            <title>Subagent ${this.escapeHtml(agentId)} Transcript</title>
+            <title>Subagent ${escapeHtml(agentId)} Transcript</title>
             <style>
               body { background: #1a1a2e; color: #eee; font-family: monospace; padding: 20px; }
               pre { white-space: pre-wrap; word-wrap: break-word; }
             </style>
           </head>
           <body>
-            <h2>Subagent ${this.escapeHtml(agentId)} Transcript (${data.data.entryCount} entries)</h2>
-            <pre>${this.escapeHtml(content)}</pre>
+            <h2>Subagent ${escapeHtml(agentId)} Transcript (${data.data.entryCount} entries)</h2>
+            <pre>${escapeHtml(content)}</pre>
           </body>
         </html>
       `);
@@ -11983,247 +9132,12 @@ class CodemanApp {
       parentDiv.dataset.parentSession = parentSessionId;
       parentDiv.innerHTML = `
         <span class="parent-label">from</span>
-        <span class="parent-name" onclick="app.selectSession('${this.escapeHtml(parentSessionId)}')">${this.escapeHtml(parentName)}</span>
+        <span class="parent-name" onclick="app.selectSession('${escapeHtml(parentSessionId)}')">${escapeHtml(parentName)}</span>
       `;
       header.insertAdjacentElement('afterend', parentDiv);
     }
   }
 
-  // ========== Subagent Connection Lines ==========
-  //
-  // Connection lines are drawn from agent windows to their parent TABs.
-  // The parent TAB is determined by the PERSISTENT subagentParentMap.
-  // This map stores agentId -> sessionId, where sessionId is the tab's data-id.
-
-  updateConnectionLines() {
-    // Coalesce multiple calls — uses background scheduler priority to avoid
-    // competing with terminal writes for main thread time
-    if (!this._connectionLinesScheduled) {
-      this._connectionLinesScheduled = true;
-      scheduleBackground(() => {
-        this._connectionLinesScheduled = false;
-        this._updateConnectionLinesImmediate();
-      });
-    }
-  }
-
-  _updateConnectionLinesImmediate() {
-    const svg = document.getElementById('connectionLines');
-    if (!svg) return;
-
-    // Check if Ralph wizard modal is open
-    const wizardModal = document.getElementById('ralphWizardModal');
-    const wizardOpen = wizardModal?.classList.contains('active');
-    const wizardContent = wizardOpen ? wizardModal.querySelector('.modal-content') : null;
-
-    // Collect visible regular subagent windows
-    const visibleSubagentWindows = [];
-    for (const [agentId, windowInfo] of this.subagentWindows) {
-      if (windowInfo.minimized || windowInfo.hidden) continue;
-      const win = windowInfo.element;
-      if (!win) continue;
-      visibleSubagentWindows.push({ agentId, windowInfo, win });
-    }
-
-    // Get plan subagent windows as array for distribution
-    const planSubagentArray = Array.from(this.planSubagents.entries())
-      .filter(([, data]) => data.element)
-      .map(([id, data]) => ({ id, ...data }));
-
-    // === PHASE 1: Batch all layout reads (getBoundingClientRect) ===
-    // Reading layout properties forces the browser to calculate layout.
-    // By batching all reads before any writes, we avoid repeated forced reflows.
-    const rects = new Map();
-
-    // Read all subagent window rects
-    for (const { agentId, win } of visibleSubagentWindows) {
-      rects.set('sub:' + agentId, win.getBoundingClientRect());
-    }
-
-    // Read all plan subagent rects
-    for (const planAgent of planSubagentArray) {
-      rects.set('plan:' + planAgent.id, planAgent.element.getBoundingClientRect());
-    }
-
-    // Read wizard rect (if open)
-    let wizardRect = null;
-    if (wizardOpen && wizardContent) {
-      wizardRect = wizardContent.getBoundingClientRect();
-    }
-
-    // Read tab rects for normal mode (only tabs that are actually needed)
-    if (!wizardOpen) {
-      for (const { agentId } of visibleSubagentWindows) {
-        const parentSessionId = this.subagentParentMap.get(agentId);
-        if (!parentSessionId || rects.has('tab:' + parentSessionId)) continue;
-        const tab = document.querySelector(`.session-tab[data-id="${parentSessionId}"]`);
-        if (tab) rects.set('tab:' + parentSessionId, tab.getBoundingClientRect());
-      }
-    }
-
-    // Read plan window rects for wizard-to-plan lines
-    if (wizardOpen && wizardContent && this.planSubagents.size > 0 && !this.planAgentsMinimized) {
-      for (const [agentId, windowData] of this.planSubagents) {
-        if (!windowData.element) continue;
-        const key = 'planwin:' + agentId;
-        if (!rects.has(key)) rects.set(key, windowData.element.getBoundingClientRect());
-      }
-    }
-
-    // === PHASE 2: DOM writes using cached rects (no more layout reads) ===
-    svg.innerHTML = '';
-
-    for (const { agentId } of visibleSubagentWindows) {
-      const winRect = rects.get('sub:' + agentId);
-
-      // If wizard is open with plan subagents, connect regular subagents to plan subagent windows
-      if (wizardOpen && wizardContent && planSubagentArray.length > 0) {
-        // Find the nearest plan subagent window to connect to
-        let nearestPlanAgent = null;
-        let nearestDistance = Infinity;
-
-        for (const planAgent of planSubagentArray) {
-          const planRect = rects.get('plan:' + planAgent.id);
-          const planCenterX = planRect.left + planRect.width / 2;
-          const planCenterY = planRect.top + planRect.height / 2;
-          const winCenterX = winRect.left + winRect.width / 2;
-          const winCenterY = winRect.top + winRect.height / 2;
-          const distance = Math.hypot(planCenterX - winCenterX, planCenterY - winCenterY);
-
-          if (distance < nearestDistance) {
-            nearestDistance = distance;
-            nearestPlanAgent = planAgent;
-          }
-        }
-
-        if (nearestPlanAgent) {
-          const planRect = rects.get('plan:' + nearestPlanAgent.id);
-
-          // Draw line from plan subagent window to regular subagent window
-          let x1, y1, x2, y2;
-          const planCenterX = planRect.left + planRect.width / 2;
-          const winCenterX = winRect.left + winRect.width / 2;
-
-          if (winCenterX < planCenterX) {
-            x1 = planRect.left;
-            y1 = planRect.top + planRect.height / 2;
-            x2 = winRect.right;
-            y2 = winRect.top + winRect.height / 2;
-          } else {
-            x1 = planRect.right;
-            y1 = planRect.top + planRect.height / 2;
-            x2 = winRect.left;
-            y2 = winRect.top + winRect.height / 2;
-          }
-
-          const midX = (x1 + x2) / 2;
-          const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
-
-          const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-          line.setAttribute('d', path);
-          line.setAttribute('class', 'connection-line plan-to-subagent-line');
-          line.setAttribute('data-agent-id', agentId);
-          line.setAttribute('data-plan-agent-id', nearestPlanAgent.id);
-          svg.appendChild(line);
-        }
-      } else if (wizardOpen && wizardContent) {
-        // Wizard open but no plan subagents - connect directly to wizard
-        const winCenterX = winRect.left + winRect.width / 2;
-        const wizardCenterX = wizardRect.left + wizardRect.width / 2;
-
-        let x1, y1, x2, y2;
-
-        if (winCenterX < wizardCenterX) {
-          x1 = wizardRect.left;
-          y1 = wizardRect.top + wizardRect.height / 2;
-          x2 = winRect.right;
-          y2 = winRect.top + winRect.height / 2;
-        } else {
-          x1 = wizardRect.right;
-          y1 = wizardRect.top + wizardRect.height / 2;
-          x2 = winRect.left;
-          y2 = winRect.top + winRect.height / 2;
-        }
-
-        const midX = (x1 + x2) / 2;
-        const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
-
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        line.setAttribute('d', path);
-        line.setAttribute('class', 'connection-line wizard-connection');
-        line.setAttribute('data-agent-id', agentId);
-        svg.appendChild(line);
-      } else {
-        // NORMAL MODE: Connect agent window to its parent TAB
-        // Use the PERSISTENT subagentParentMap as the ONLY source of truth
-        const parentSessionId = this.subagentParentMap.get(agentId);
-
-        if (!parentSessionId) {
-          // No parent known yet - skip this agent
-          continue;
-        }
-
-        const tabRect = rects.get('tab:' + parentSessionId);
-        if (!tabRect) {
-          // Tab not in DOM (might be scrolled out or session closed)
-          continue;
-        }
-
-        // Draw curved line from TAB bottom-center to window top-center
-        const x1 = tabRect.left + tabRect.width / 2;
-        const y1 = tabRect.bottom;
-        const x2 = winRect.left + winRect.width / 2;
-        const y2 = winRect.top;
-
-        // Bezier curve control points for smooth curve
-        const midY = (y1 + y2) / 2;
-        const path = `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`;
-
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        line.setAttribute('d', path);
-        line.setAttribute('class', 'connection-line');
-        line.setAttribute('data-agent-id', agentId);
-        line.setAttribute('data-parent-tab', parentSessionId);
-        svg.appendChild(line);
-      }
-    }
-
-    // Draw lines from wizard to plan subagent windows (Opus agents during plan generation)
-    // Skip if agents are minimized to tab
-    if (wizardOpen && wizardContent && this.planSubagents.size > 0 && !this.planAgentsMinimized) {
-      for (const [agentId] of this.planSubagents) {
-        const winRect = rects.get('planwin:' + agentId);
-        if (!winRect) continue;
-
-        // Determine which side of wizard the window is on
-        const winCenterX = winRect.left + winRect.width / 2;
-        const wizardCenterX = wizardRect.left + wizardRect.width / 2;
-
-        let x1, y1, x2, y2;
-
-        if (winCenterX < wizardCenterX) {
-          x1 = wizardRect.left;
-          y1 = wizardRect.top + wizardRect.height / 3 + (this.planSubagents.size > 3 ? 0 : 50);
-          x2 = winRect.right;
-          y2 = winRect.top + winRect.height / 2;
-        } else {
-          x1 = wizardRect.right;
-          y1 = wizardRect.top + wizardRect.height / 3 + (this.planSubagents.size > 3 ? 0 : 50);
-          x2 = winRect.left;
-          y2 = winRect.top + winRect.height / 2;
-        }
-
-        const midX = (x1 + x2) / 2;
-        const path = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`;
-
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-        line.setAttribute('d', path);
-        line.setAttribute('class', 'connection-line wizard-connection plan-subagent-line');
-        line.setAttribute('data-plan-agent-id', agentId);
-        svg.appendChild(line);
-      }
-    }
-  }
 
   /**
    * Show/hide subagent windows based on active session.
@@ -12269,350 +9183,6 @@ class CodemanApp {
     this.relayoutMobileSubagentWindows();
   }
 
-  // ========== Subagent Floating Windows ==========
-
-  openSubagentWindow(agentId) {
-    // If window already exists, focus it
-    if (this.subagentWindows.has(agentId)) {
-      const existing = this.subagentWindows.get(agentId);
-      const agent = this.subagents.get(agentId);
-      const settings = this.loadAppSettingsFromStorage();
-      const activeTabOnly = settings.subagentActiveTabOnly ?? true;
-
-      // If window is hidden (different tab) and activeTabOnly is enabled, switch to parent tab
-      if (existing.hidden && agent?.parentSessionId && activeTabOnly) {
-        this.selectSession(agent.parentSessionId);
-        return;
-      }
-
-      // If not activeTabOnly mode, just show the window
-      if (existing.hidden && !activeTabOnly) {
-        existing.element.style.display = 'flex';
-        existing.hidden = false;
-      }
-
-      existing.element.style.zIndex = ++this.subagentWindowZIndex;
-      if (existing.minimized) {
-        this.restoreSubagentWindow(agentId);
-      }
-      return;
-    }
-
-    const agent = this.subagents.get(agentId);
-    if (!agent) return;
-
-    // Only open windows for agents that belong to a Codeman-managed session tab.
-    // Agents from external Claude sessions (not tracked by Codeman) should not pop up.
-    if (agent.sessionId) {
-      const hasMatchingTab = Array.from(this.sessions.values()).some(s => s.claudeSessionId === agent.sessionId);
-      if (!hasMatchingTab) return;
-    }
-
-    // Calculate final position - grid layout to avoid overlaps
-    const windowCount = this.subagentWindows.size;
-    const isMobile = MobileDetection.getDeviceType() === 'mobile';
-    const mobileCardHeight = 110;
-    const mobileCardGap = 4;
-    const windowWidth = isMobile ? window.innerWidth : 420;
-    const windowHeight = isMobile ? mobileCardHeight : 350;
-    const gap = 20;
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-
-    let finalX = 0;
-    let finalY = 0;
-
-    if (isMobile) {
-      // Mobile: stack compact cards. Count visible (non-minimized) windows.
-      let visibleCount = 0;
-      for (const [, data] of this.subagentWindows) {
-        if (!data.minimized && !data.hidden) visibleCount++;
-      }
-      finalX = 4;
-      const keyboardUp = typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible;
-      if (keyboardUp) {
-        // Keyboard visible: stack from bottom above toolbar
-        const toolbarHeight = 40;
-        const bottomOffset = toolbarHeight + visibleCount * (mobileCardHeight + mobileCardGap);
-        finalY = viewportHeight - bottomOffset - mobileCardHeight;
-      } else {
-        // Keyboard hidden: stack from top below header with spacing
-        const headerHeight = document.querySelector('.header')?.offsetHeight || 36;
-        const topStart = headerHeight + 8;
-        finalY = topStart + visibleCount * (mobileCardHeight + mobileCardGap);
-      }
-    } else {
-      // Check if Ralph wizard modal is open - if so, position windows on the sides
-      const wizardModal = document.getElementById('ralphWizardModal');
-      const wizardOpen = wizardModal?.classList.contains('active');
-
-      let startX, startY, maxCols;
-
-      if (wizardOpen) {
-        // Wizard is ~720px wide, centered. Position windows on left/right sides
-        const wizardWidth = 720;
-        const centerX = viewportWidth / 2;
-        const wizardLeft = centerX - wizardWidth / 2;
-        const wizardRight = centerX + wizardWidth / 2;
-
-        // Alternate between left and right sides of the wizard
-        const leftSideSpace = wizardLeft - 20;
-        const rightSideSpace = viewportWidth - wizardRight - 20;
-
-        if (windowCount % 2 === 0 && rightSideSpace >= windowWidth) {
-          // Even windows go to the right
-          startX = wizardRight + 20;
-          maxCols = Math.floor(rightSideSpace / (windowWidth + gap)) || 1;
-        } else if (leftSideSpace >= windowWidth) {
-          // Odd windows go to the left
-          startX = Math.max(10, wizardLeft - windowWidth - 20);
-          maxCols = 1; // Usually only room for 1 column on left
-        } else {
-          // Not enough side space, use right side
-          startX = wizardRight + 20;
-          maxCols = 1;
-        }
-        startY = 80; // Start higher when wizard is open
-      } else {
-        // Normal positioning
-        startX = 50;
-        startY = 120;
-        maxCols = Math.floor((viewportWidth - startX - 50) / (windowWidth + gap)) || 1;
-      }
-
-      const maxRows = Math.floor((viewportHeight - startY - 50) / (windowHeight + gap)) || 1;
-      const col = windowCount % maxCols;
-      const row = Math.floor(windowCount / maxCols) % maxRows; // Wrap rows to stay in viewport
-      finalX = startX + col * (windowWidth + gap);
-      finalY = startY + row * (windowHeight + gap);
-
-      // Ensure window stays within viewport bounds
-      finalX = Math.max(10, Math.min(finalX, viewportWidth - windowWidth - 10));
-      finalY = Math.max(10, Math.min(finalY, viewportHeight - windowHeight - 10));
-    }
-
-    // Get parent session from PERSISTENT map (THE source of truth for tab connections)
-    const parentSessionId = this.subagentParentMap.get(agentId) || agent.parentSessionId;
-    let parentSessionName = null;
-
-    if (parentSessionId) {
-      const parentSession = this.sessions.get(parentSessionId);
-      if (parentSession) {
-        parentSessionName = this.getSessionName(parentSession);
-        // Ensure the agent object is also updated for consistency
-        if (!agent.parentSessionId) {
-          agent.parentSessionId = parentSessionId;
-          agent.parentSessionName = parentSessionName;
-          this.subagents.set(agentId, agent);
-        }
-      }
-    }
-
-    // Get parent TAB element for spawn animation
-    const parentTab = parentSessionId
-      ? document.querySelector(`.session-tab[data-id="${parentSessionId}"]`)
-      : null;
-
-    // Create window element
-    const win = document.createElement('div');
-    win.className = 'subagent-window';
-    win.id = `subagent-window-${agentId}`;
-    win.style.zIndex = ++this.subagentWindowZIndex;
-
-    // Build parent header if we have parent info
-    const parentHeader = parentSessionId && parentSessionName
-      ? `<div class="subagent-window-parent" data-parent-session="${parentSessionId}">
-          <span class="parent-label">from</span>
-          <span class="parent-name" onclick="app.selectSession('${this.escapeHtml(parentSessionId)}')">${this.escapeHtml(parentSessionName)}</span>
-        </div>`
-      : '';
-
-    const teammateInfo = this.getTeammateInfo(agent);
-    const windowTitle = teammateInfo ? teammateInfo.name : (agent.description || agentId.substring(0, 7));
-    const maxTitleLen = isMobile ? 30 : 50;
-    const truncatedTitle = windowTitle.length > maxTitleLen ? windowTitle.substring(0, maxTitleLen) + '...' : windowTitle;
-    const modelBadge = agent.modelShort
-      ? `<span class="subagent-model-badge ${agent.modelShort}">${agent.modelShort}</span>`
-      : '';
-    win.innerHTML = `
-      <div class="subagent-window-header">
-        <div class="subagent-window-title" title="${this.escapeHtml(agent.description || agentId)}">
-          <span class="icon">🤖</span>
-          <span class="id">${this.escapeHtml(truncatedTitle)}</span>
-          ${modelBadge}
-          <span class="status ${agent.status}">${agent.status}</span>
-        </div>
-        <div class="subagent-window-actions">
-          <button onclick="app.closeSubagentWindow('${this.escapeHtml(agentId)}')" title="Minimize to tab">─</button>
-        </div>
-      </div>
-      ${parentHeader}
-      <div class="subagent-window-body" id="subagent-window-body-${agentId}">
-        <div class="subagent-empty">Loading activity...</div>
-      </div>
-    `;
-
-    // If we have a parent tab, start window at tab position for spawn animation
-    if (isMobile) {
-      // Mobile: position using top (keyboard-aware positioning calculated above)
-      win.style.top = `${finalY}px`;
-      win.style.bottom = 'auto';
-    } else if (parentTab) {
-      const tabRect = parentTab.getBoundingClientRect();
-      win.style.left = `${tabRect.left}px`;
-      win.style.top = `${tabRect.bottom}px`;
-      win.style.transform = 'scale(0.3)';
-      win.style.opacity = '0';
-      win.classList.add('spawning');
-    } else {
-      // No parent tab, just position normally (desktop/tablet)
-      win.style.left = `${finalX}px`;
-      win.style.top = `${finalY}px`;
-    }
-
-    document.body.appendChild(win);
-
-    // Make draggable (returns listener refs for cleanup)
-    const dragListeners = this.makeWindowDraggable(win, win.querySelector('.subagent-window-header'));
-
-    // Check if this window should be visible based on settings
-    // Use the PERSISTENT parent map for accurate tab-based visibility
-    const settings = this.loadAppSettingsFromStorage();
-    const activeTabOnly = settings.subagentActiveTabOnly ?? true;
-    let shouldHide = false;
-    if (activeTabOnly) {
-      const storedParent = this.subagentParentMap.get(agentId);
-      const hasKnownParent = storedParent || agent.parentSessionId;
-      const parentId = storedParent || agent.parentSessionId;
-      const isForActiveSession = !hasKnownParent || parentId === this.activeSessionId;
-      shouldHide = !isForActiveSession;
-    }
-
-    // Store reference (including drag listeners for cleanup)
-    this.subagentWindows.set(agentId, {
-      element: win,
-      minimized: false,
-      hidden: shouldHide,
-      dragListeners, // Store for cleanup to prevent memory leaks
-    });
-
-    // Hide window if not for active session
-    if (shouldHide) {
-      win.style.display = 'none';
-    }
-
-    // Render content — check if this teammate has a tmux pane
-    const paneInfo = teammateInfo ? this.teammatePanesByName.get(teammateInfo.name) : null;
-    if (paneInfo) {
-      this.initTeammateTerminal(agentId, paneInfo, win);
-    } else {
-      this.renderSubagentWindowContent(agentId);
-    }
-
-    // Focus on click
-    win.addEventListener('mousedown', () => {
-      win.style.zIndex = ++this.subagentWindowZIndex;
-    });
-
-    // Update connection lines when window is resized
-    const resizeObserver = new ResizeObserver(() => {
-      this.updateConnectionLines();
-    });
-    resizeObserver.observe(win);
-
-    // Store observer for cleanup
-    this.subagentWindows.get(agentId).resizeObserver = resizeObserver;
-
-    // Animate to final position if spawning from tab (desktop only)
-    if (parentTab && !isMobile) {
-      requestAnimationFrame(() => {
-        win.style.transition = 'all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)';
-        win.style.left = `${finalX}px`;
-        win.style.top = `${finalY}px`;
-        win.style.transform = 'scale(1)';
-        win.style.opacity = '1';
-
-        // Clean up after animation
-        setTimeout(() => {
-          win.style.transition = '';
-          win.classList.remove('spawning');
-          this.updateConnectionLines();
-        }, 400);
-      });
-    } else {
-      // No animation (mobile uses CSS positioning), just update connection lines
-      this.updateConnectionLines();
-    }
-
-    // Persist the state change (new window opened)
-    this.saveSubagentWindowStates();
-  }
-
-  closeSubagentWindow(agentId) {
-    const windowData = this.subagentWindows.get(agentId);
-    if (!windowData) return;
-
-    const agent = this.subagents.get(agentId);
-
-    // Get parent from PERSISTENT map (THE source of truth)
-    // Fall back to agent's parentSessionId, then to active session
-    const storedParent = this.subagentParentMap.get(agentId);
-    let parentSessionId = storedParent || agent?.parentSessionId || this.activeSessionId;
-
-    // If we don't have a stored parent yet, store it now
-    if (!storedParent && parentSessionId && this.sessions.has(parentSessionId)) {
-      this.setAgentParentSessionId(agentId, parentSessionId);
-    }
-
-    // Always minimize to tab
-    windowData.element.style.display = 'none';
-    windowData.minimized = true;
-
-    // Track minimized agent for the session (use the TAB's session ID)
-    if (parentSessionId) {
-      if (!this.minimizedSubagents.has(parentSessionId)) {
-        this.minimizedSubagents.set(parentSessionId, new Set());
-      }
-      this.minimizedSubagents.get(parentSessionId).add(agentId);
-
-      // Update tab badge to show minimized agents
-      this.renderSessionTabs();
-    }
-
-    // Persist the state change
-    this.saveSubagentWindowStates();
-    this.updateConnectionLines();
-    // Restack remaining visible mobile windows to fill the gap
-    this.relayoutMobileSubagentWindows();
-  }
-
-  /** Reposition all visible mobile subagent windows (called on keyboard show/hide). */
-  relayoutMobileSubagentWindows() {
-    if (MobileDetection.getDeviceType() !== 'mobile') return;
-    const mobileCardHeight = 110;
-    const mobileCardGap = 4;
-    const keyboardUp = typeof KeyboardHandler !== 'undefined' && KeyboardHandler.keyboardVisible;
-    let idx = 0;
-    for (const [, data] of this.subagentWindows) {
-      if (data.minimized || data.hidden) continue;
-      const el = data.element;
-      // Reset left to proper position (drag may have set an arbitrary value)
-      el.style.left = '4px';
-      if (keyboardUp) {
-        // Stack from bottom above toolbar
-        const bottomPx = 40 + idx * (mobileCardHeight + mobileCardGap);
-        el.style.bottom = `${bottomPx}px`;
-        el.style.top = 'auto';
-      } else {
-        // Stack from top below header
-        const headerHeight = document.querySelector('.header')?.offsetHeight || 36;
-        const topPx = headerHeight + 8 + idx * (mobileCardHeight + mobileCardGap);
-        el.style.top = `${topPx}px`;
-        el.style.bottom = 'auto';
-      }
-      idx++;
-    }
-  }
 
   // Close all subagent windows for a session (fully removes them, not minimize)
   // If cleanupData is true, also remove activity and toolResults data to prevent memory leaks
@@ -12676,128 +9246,6 @@ class CodemanApp {
     }
   }
 
-  // Clean up ALL floating windows (called during handleInit to prevent memory leaks on reconnect)
-  cleanupAllFloatingWindows() {
-    // Clean up all subagent windows with their ResizeObservers and drag listeners
-    for (const [agentId, windowData] of this.subagentWindows) {
-      if (windowData.resizeObserver) {
-        windowData.resizeObserver.disconnect();
-      }
-      if (windowData.dragListeners) {
-        document.removeEventListener('mousemove', windowData.dragListeners.move);
-        document.removeEventListener('mouseup', windowData.dragListeners.up);
-        if (windowData.dragListeners.touchMove) {
-          document.removeEventListener('touchmove', windowData.dragListeners.touchMove);
-          document.removeEventListener('touchend', windowData.dragListeners.up);
-          document.removeEventListener('touchcancel', windowData.dragListeners.up);
-        }
-      }
-      windowData.element.remove();
-    }
-    this.subagentWindows.clear();
-
-    // Clean up all teammate terminals
-    for (const [, termData] of this.teammateTerminals) {
-      if (termData.resizeObserver) termData.resizeObserver.disconnect();
-      if (termData.terminal) {
-        try { termData.terminal.dispose(); } catch {}
-      }
-    }
-    this.teammateTerminals.clear();
-    this.teammatePanesByName.clear();
-
-    // Clean up all log viewer windows with their EventSources and drag listeners
-    for (const [windowId, data] of this.logViewerWindows) {
-      if (data.eventSource) {
-        data.eventSource.close();
-      }
-      if (data.dragListeners) {
-        document.removeEventListener('mousemove', data.dragListeners.move);
-        document.removeEventListener('mouseup', data.dragListeners.up);
-        if (data.dragListeners.touchMove) {
-          document.removeEventListener('touchmove', data.dragListeners.touchMove);
-          document.removeEventListener('touchend', data.dragListeners.up);
-          document.removeEventListener('touchcancel', data.dragListeners.up);
-        }
-      }
-      data.element.remove();
-    }
-    this.logViewerWindows.clear();
-
-    // Clean up plan subagent windows (wizard agents)
-    if (this.planSubagents) {
-      for (const [agentId, windowData] of this.planSubagents) {
-        if (windowData.dragListeners) {
-          document.removeEventListener('mousemove', windowData.dragListeners.move);
-          document.removeEventListener('mouseup', windowData.dragListeners.up);
-        }
-        if (windowData.element) {
-          windowData.element.remove();
-        }
-      }
-      this.planSubagents.clear();
-    }
-
-    // Clean up all image popup windows with their drag listeners
-    for (const [imageId, popupData] of this.imagePopups) {
-      if (popupData.dragListeners) {
-        document.removeEventListener('mousemove', popupData.dragListeners.move);
-        document.removeEventListener('mouseup', popupData.dragListeners.up);
-        if (popupData.dragListeners.touchMove) {
-          document.removeEventListener('touchmove', popupData.dragListeners.touchMove);
-          document.removeEventListener('touchend', popupData.dragListeners.up);
-          document.removeEventListener('touchcancel', popupData.dragListeners.up);
-        }
-      }
-      popupData.element.remove();
-    }
-    this.imagePopups.clear();
-
-    // Clear orphaned plan generation state
-    this.activePlanOrchestratorId = null;
-    this._planProgressHandler = null;
-    this.planGenerationStopped = true;
-    if (this.planGenerationAbortController) {
-      this.planGenerationAbortController.abort();
-      this.planGenerationAbortController = null;
-    }
-
-    // Clean up wizard-specific timers (leak fix: not cleared on SSE reconnect)
-    if (this.wizardMinimizedTimer) {
-      clearInterval(this.wizardMinimizedTimer);
-      this.wizardMinimizedTimer = null;
-    }
-
-    // Clean up wizard drag listeners (leak fix: document-level handlers)
-    this.cleanupWizardDragging();
-
-    // Deactivate focus trap if wizard was open (leak fix: keydown listener)
-    if (this.activeFocusTrap) {
-      this.activeFocusTrap.deactivate();
-      this.activeFocusTrap = null;
-    }
-
-    // Clean up team tasks panel drag listeners
-    if (this.teamTasksDragListeners) {
-      document.removeEventListener('mousemove', this.teamTasksDragListeners.move);
-      document.removeEventListener('mouseup', this.teamTasksDragListeners.up);
-      if (this.teamTasksDragListeners.touchMove) {
-        document.removeEventListener('touchmove', this.teamTasksDragListeners.touchMove);
-        document.removeEventListener('touchend', this.teamTasksDragListeners.up);
-        document.removeEventListener('touchcancel', this.teamTasksDragListeners.up);
-      }
-      this.teamTasksDragListeners = null;
-    }
-
-    // Clear minimized agents tracking
-    this.minimizedSubagents.clear();
-
-    // Update monitor panel
-    this.renderMonitorPlanAgents();
-
-    // Update connection lines (should be empty now)
-    this.updateConnectionLines();
-  }
 
   minimizeSubagentWindow(agentId) {
     const windowData = this.subagentWindows.get(agentId);
@@ -12808,129 +9256,6 @@ class CodemanApp {
     }
   }
 
-  restoreSubagentWindow(agentId) {
-    const windowData = this.subagentWindows.get(agentId);
-    const agent = this.subagents.get(agentId);
-
-    // If window doesn't exist but agent does, recreate it
-    if (!windowData && agent) {
-      this.openSubagentWindow(agentId);
-      return;
-    }
-
-    if (windowData) {
-      const settings = this.loadAppSettingsFromStorage();
-      const activeTabOnly = settings.subagentActiveTabOnly ?? true;
-
-      // Get parent from PERSISTENT map (THE source of truth)
-      const storedParent = this.subagentParentMap.get(agentId);
-      const parentSessionId = storedParent || agent?.parentSessionId;
-
-      // Determine if we should show the window
-      let shouldShow = true;
-      if (activeTabOnly) {
-        // Only restore if the window belongs to the active session (or has no parent)
-        shouldShow = !parentSessionId || parentSessionId === this.activeSessionId;
-      }
-
-      if (shouldShow) {
-        windowData.element.style.display = 'flex';
-        windowData.element.style.zIndex = ++this.subagentWindowZIndex;
-        windowData.hidden = false;
-      }
-      windowData.minimized = false;
-      this.updateConnectionLines();
-      // Restack all visible mobile windows so restored ones don't overlap
-      this.relayoutMobileSubagentWindows();
-    }
-  }
-
-  // Returns drag listener references for cleanup (prevents memory leaks)
-  makeWindowDraggable(win, handle) {
-    let isDragging = false;
-    let startX, startY, startLeft, startTop;
-    let dragUpdateScheduled = false;
-
-    const startDrag = (clientX, clientY) => {
-      isDragging = true;
-      startX = clientX;
-      startY = clientY;
-      startLeft = parseInt(win.style.left) || win.getBoundingClientRect().left;
-      startTop = parseInt(win.style.top) || win.getBoundingClientRect().top;
-      // On drag start, switch from bottom-positioned to top-positioned so left/top work
-      win.style.bottom = 'auto';
-    };
-
-    const moveDrag = (clientX, clientY) => {
-      if (!isDragging) return;
-      const dx = clientX - startX;
-      const dy = clientY - startY;
-      // Constrain to viewport bounds
-      const winWidth = win.offsetWidth || 420;
-      const winHeight = win.offsetHeight || 350;
-      const maxX = window.innerWidth - winWidth - 4;
-      const maxY = window.innerHeight - winHeight - 4;
-      const newLeft = Math.max(4, Math.min(startLeft + dx, maxX));
-      const newTop = Math.max(4, Math.min(startTop + dy, maxY));
-      win.style.left = `${newLeft}px`;
-      win.style.top = `${newTop}px`;
-      // Throttle connection line updates during drag
-      if (!dragUpdateScheduled) {
-        dragUpdateScheduled = true;
-        requestAnimationFrame(() => {
-          this.updateConnectionLines();
-          dragUpdateScheduled = false;
-        });
-      }
-    };
-
-    const endDrag = () => {
-      if (isDragging) {
-        isDragging = false;
-        // Save position after drag ends
-        this.saveSubagentWindowStates();
-      }
-    };
-
-    // Mouse events
-    handle.addEventListener('mousedown', (e) => {
-      if (e.target.tagName === 'BUTTON') return;
-      startDrag(e.clientX, e.clientY);
-      e.preventDefault();
-    });
-
-    // Touch events
-    handle.addEventListener('touchstart', (e) => {
-      if (e.target.tagName === 'BUTTON') return;
-      const touch = e.touches[0];
-      startDrag(touch.clientX, touch.clientY);
-    }, { passive: true });
-
-    // Store references to document-level listeners so they can be removed on window close
-    const moveListener = (e) => {
-      moveDrag(e.clientX, e.clientY);
-    };
-
-    const touchMoveListener = (e) => {
-      if (!isDragging) return;
-      e.preventDefault(); // Prevent page scroll while dragging
-      const touch = e.touches[0];
-      moveDrag(touch.clientX, touch.clientY);
-    };
-
-    const upListener = () => {
-      endDrag();
-    };
-
-    document.addEventListener('mousemove', moveListener);
-    document.addEventListener('mouseup', upListener);
-    document.addEventListener('touchmove', touchMoveListener, { passive: false });
-    document.addEventListener('touchend', upListener);
-    document.addEventListener('touchcancel', upListener);
-
-    // Return listener references for cleanup
-    return { move: moveListener, up: upListener, touchMove: touchMoveListener };
-  }
 
   renderSubagentWindowContent(agentId) {
     // Skip if this window has a live terminal (don't overwrite xterm with activity HTML)
@@ -12983,7 +9308,7 @@ class CodemanApp {
         <span class="time">${time}</span>
         <span class="tool-icon">${this.getToolIcon(a.tool)}</span>
         <span class="tool-name">${a.tool}</span>
-        <span class="tool-detail">${this.escapeHtml(this.getToolDetail(a.tool, a.input))}</span>
+        <span class="tool-detail">${escapeHtml(this.getToolDetail(a.tool, a.input))}</span>
       </div>`;
     } else if (a.type === 'tool_result') {
       const icon = a.isError ? '❌' : '📄';
@@ -12994,7 +9319,7 @@ class CodemanApp {
         <span class="time">${time}</span>
         <span class="tool-icon">${icon}</span>
         <span class="tool-name">${a.tool || '→'}</span>
-        <span class="tool-detail">${this.escapeHtml(preview)}${sizeInfo}</span>
+        <span class="tool-detail">${escapeHtml(preview)}${sizeInfo}</span>
       </div>`;
     } else if (a.type === 'progress') {
       const isHook = a.hookEvent || a.hookName;
@@ -13003,12 +9328,12 @@ class CodemanApp {
       return `<div class="activity-line progress-line${isHook ? ' hook-line' : ''}">
         <span class="time">${time}</span>
         <span class="tool-icon">${icon}</span>
-        <span class="tool-detail">${this.escapeHtml(displayText)}</span>
+        <span class="tool-detail">${escapeHtml(displayText)}</span>
       </div>`;
     } else if (a.type === 'message') {
       const preview = a.text.length > 150 ? a.text.substring(0, 150) + '...' : a.text;
       return `<div class="message-line">
-        <span class="time">${time}</span> 💬 ${this.escapeHtml(preview)}
+        <span class="time">${time}</span> 💬 ${escapeHtml(preview)}
       </div>`;
     }
     return '';
@@ -13279,13 +9604,13 @@ class CodemanApp {
     win.style.height = `${windowHeight}px`;
     win.innerHTML = `
       <div class="subagent-window-header">
-        <div class="subagent-window-title" title="Teammate terminal: ${this.escapeHtml(paneData.teammateName)} (pane ${paneData.paneTarget})">
+        <div class="subagent-window-title" title="Teammate terminal: ${escapeHtml(paneData.teammateName)} (pane ${paneData.paneTarget})">
           <span class="icon" style="color: var(--team-color-${colorClass}, #339af0)">⬤</span>
-          <span class="id">${this.escapeHtml(paneData.teammateName)}</span>
+          <span class="id">${escapeHtml(paneData.teammateName)}</span>
           <span class="status running">terminal</span>
         </div>
         <div class="subagent-window-actions">
-          <button onclick="app.closeSubagentWindow('${this.escapeHtml(windowId)}')" title="Minimize to tab">─</button>
+          <button onclick="app.closeSubagentWindow('${escapeHtml(windowId)}')" title="Minimize to tab">─</button>
         </div>
       </div>
       <div class="subagent-window-body teammate-terminal-body" id="subagent-window-body-${windowId}">
@@ -13380,7 +9705,7 @@ class CodemanApp {
   getTeammateBadgeHtml(agent) {
     const info = this.getTeammateInfo(agent);
     if (!info) return '';
-    return `<span class="teammate-badge teammate-color-${info.color}" title="Team: ${this.escapeHtml(info.teamName)}">@${this.escapeHtml(info.name)}</span>`;
+    return `<span class="teammate-badge teammate-color-${info.color}" title="Team: ${escapeHtml(info.teamName)}">@${escapeHtml(info.name)}</span>`;
   }
 
   /** Render the team tasks panel */
@@ -13456,11 +9781,11 @@ class CodemanApp {
       const statusIcon = task.status === 'completed' ? '✓' : task.status === 'in_progress' ? '◉' : '○';
       const statusClass = task.status.replace('_', '-');
       const ownerBadge = task.owner
-        ? `<span class="team-task-owner teammate-color-${this.getTeammateColor(task.owner)}">${this.escapeHtml(task.owner)}</span>`
+        ? `<span class="team-task-owner teammate-color-${this.getTeammateColor(task.owner)}">${escapeHtml(task.owner)}</span>`
         : '';
       return `<div class="team-task-item ${statusClass}">
         <span class="team-task-status">${statusIcon}</span>
-        <span class="team-task-subject">${this.escapeHtml(task.subject)}</span>
+        <span class="team-task-subject">${escapeHtml(task.subject)}</span>
         ${ownerBadge}
       </div>`;
     }).join('');
@@ -13770,9 +10095,9 @@ class CodemanApp {
         <div class="project-insight-item" data-tool-id="${tool.id}">
           <div class="project-insight-command">
             <span class="icon">💻</span>
-            <span class="cmd" title="${this.escapeHtml(tool.command)}">${this.escapeHtml(cmdDisplay)}</span>
+            <span class="cmd" title="${escapeHtml(tool.command)}">${escapeHtml(cmdDisplay)}</span>
             <span class="project-insight-status ${tool.status}">${tool.status}</span>
-            ${tool.timeout ? `<span class="project-insight-timeout">${this.escapeHtml(tool.timeout)}</span>` : ''}
+            ${tool.timeout ? `<span class="project-insight-timeout">${escapeHtml(tool.timeout)}</span>` : ''}
           </div>
           <div class="project-insight-paths">
       `);
@@ -13781,8 +10106,8 @@ class CodemanApp {
         const fileName = path.split('/').pop();
         html.push(`
             <span class="project-insight-filepath"
-                  onclick="app.openLogViewerWindow('${this.escapeHtml(path)}', '${this.escapeHtml(tool.sessionId)}')"
-                  title="${this.escapeHtml(path)}">${this.escapeHtml(fileName)}</span>
+                  onclick="app.openLogViewerWindow('${escapeHtml(path)}', '${escapeHtml(tool.sessionId)}')"
+                  title="${escapeHtml(path)}">${escapeHtml(fileName)}</span>
         `);
       }
 
@@ -13839,7 +10164,7 @@ class CodemanApp {
       }
     } catch (err) {
       console.error('Failed to load file browser:', err);
-      treeEl.innerHTML = `<div class="file-browser-empty">Failed to load files: ${this.escapeHtml(err.message)}</div>`;
+      treeEl.innerHTML = `<div class="file-browser-empty">Failed to load files: ${escapeHtml(err.message)}</div>`;
     }
   }
 
@@ -13885,10 +10210,10 @@ class CodemanApp {
       const nameClass = isDir ? 'file-tree-name directory' : 'file-tree-name';
 
       html.push(`
-        <div class="file-tree-item${hiddenClass}" data-path="${this.escapeHtml(node.path)}" data-type="${node.type}" data-depth="${depth}">
+        <div class="file-tree-item${hiddenClass}" data-path="${escapeHtml(node.path)}" data-type="${node.type}" data-depth="${depth}">
           ${expandIcon}
           <span class="file-tree-icon">${icon}</span>
-          <span class="${nameClass}">${this.escapeHtml(node.name)}</span>
+          <span class="${nameClass}">${escapeHtml(node.name)}</span>
           ${sizeStr}
         </div>
       `);
@@ -14026,7 +10351,7 @@ class CodemanApp {
       const data = result.data;
 
       if (data.type === 'image') {
-        bodyEl.innerHTML = `<img src="${data.url}" alt="${this.escapeHtml(filePath)}">`;
+        bodyEl.innerHTML = `<img src="${data.url}" alt="${escapeHtml(filePath)}">`;
         footerEl.textContent = `${this.formatFileSize(data.size)} \u2022 ${data.extension}`;
       } else if (data.type === 'video') {
         bodyEl.innerHTML = `<video src="${data.url}" controls autoplay></video>`;
@@ -14037,13 +10362,13 @@ class CodemanApp {
       } else {
         // Text content
         this.filePreviewContent = data.content;
-        bodyEl.innerHTML = `<pre><code>${this.escapeHtml(data.content)}</code></pre>`;
+        bodyEl.innerHTML = `<pre><code>${escapeHtml(data.content)}</code></pre>`;
         const truncNote = data.truncated ? ` (showing 500/${data.totalLines} lines)` : '';
         footerEl.textContent = `${data.totalLines} lines \u2022 ${this.formatFileSize(data.size)}${truncNote}`;
       }
     } catch (err) {
       console.error('Failed to preview file:', err);
-      bodyEl.innerHTML = `<div class="binary-message">Error: ${this.escapeHtml(err.message)}</div>`;
+      bodyEl.innerHTML = `<div class="binary-message">Error: ${escapeHtml(err.message)}</div>`;
     }
   }
 
@@ -14144,17 +10469,17 @@ class CodemanApp {
 
     win.innerHTML = `
       <div class="log-viewer-window-header">
-        <div class="log-viewer-window-title" title="${this.escapeHtml(filePath)}">
+        <div class="log-viewer-window-title" title="${escapeHtml(filePath)}">
           <span class="icon">📄</span>
-          <span class="filename">${this.escapeHtml(fileName)}</span>
+          <span class="filename">${escapeHtml(fileName)}</span>
           <span class="status streaming">streaming</span>
         </div>
         <div class="log-viewer-window-actions">
-          <button onclick="app.closeLogViewerWindow('${this.escapeHtml(windowId)}')" title="Close">×</button>
+          <button onclick="app.closeLogViewerWindow('${escapeHtml(windowId)}')" title="Close">×</button>
         </div>
       </div>
       <div class="log-viewer-window-body" id="log-viewer-body-${windowId}">
-        <div class="log-info">Connecting to ${this.escapeHtml(filePath)}...</div>
+        <div class="log-info">Connecting to ${escapeHtml(filePath)}...</div>
       </div>
     `;
 
@@ -14180,7 +10505,7 @@ class CodemanApp {
         case 'data':
           // Append data, auto-scroll
           const wasAtBottom = body.scrollTop + body.clientHeight >= body.scrollHeight - 10;
-          const content = this.escapeHtml(data.content);
+          const content = escapeHtml(data.content);
           body.innerHTML += content;
           if (wasAtBottom) {
             body.scrollTop = body.scrollHeight;
@@ -14194,7 +10519,7 @@ class CodemanApp {
           this.updateLogViewerStatus(windowId, 'disconnected', 'ended');
           break;
         case 'error':
-          body.innerHTML += `<div class="log-error">${this.escapeHtml(data.error)}</div>`;
+          body.innerHTML += `<div class="log-error">${escapeHtml(data.error)}</div>`;
           this.updateLogViewerStatus(windowId, 'error', 'error');
           break;
       }
@@ -14312,21 +10637,21 @@ class CodemanApp {
 
     win.innerHTML = `
       <div class="image-popup-header">
-        <div class="image-popup-title" title="${this.escapeHtml(filePath)}">
+        <div class="image-popup-title" title="${escapeHtml(filePath)}">
           <span class="icon">🖼️</span>
-          <span class="filename">${this.escapeHtml(fileName)}</span>
-          <span class="session-badge">${this.escapeHtml(sessionName)}</span>
+          <span class="filename">${escapeHtml(fileName)}</span>
+          <span class="session-badge">${escapeHtml(sessionName)}</span>
           <span class="size-badge">${sizeKB} KB</span>
         </div>
         <div class="image-popup-actions">
-          <button onclick="app.openImageInNewTab('${this.escapeHtml(imageUrl)}')" title="Open in new tab">↗</button>
-          <button onclick="app.closeImagePopup('${this.escapeHtml(imageId)}')" title="Close">×</button>
+          <button onclick="app.openImageInNewTab('${escapeHtml(imageUrl)}')" title="Open in new tab">↗</button>
+          <button onclick="app.closeImagePopup('${escapeHtml(imageId)}')" title="Close">×</button>
         </div>
       </div>
       <div class="image-popup-body">
-        <img src="${imageUrl}" alt="${this.escapeHtml(fileName)}"
+        <img src="${imageUrl}" alt="${escapeHtml(fileName)}"
              onerror="this.parentElement.innerHTML='<div class=\\'image-error\\'>Failed to load image</div>'"
-             onclick="app.openImageInNewTab('${this.escapeHtml(imageUrl)}')" />
+             onclick="app.openImageInNewTab('${escapeHtml(imageUrl)}')" />
       </div>
     `;
 
@@ -14724,13 +11049,13 @@ class CodemanApp {
       const isSelected = c.name === currentCase;
       html += `
         <button class="mobile-case-item ${isSelected ? 'selected' : ''}"
-                onclick="app.selectMobileCase('${this.escapeHtml(c.name)}')">
+                onclick="app.selectMobileCase('${escapeHtml(c.name)}')">
           <span class="mobile-case-item-icon">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
             </svg>
           </span>
-          <span class="mobile-case-item-name">${this.escapeHtml(c.name)}</span>
+          <span class="mobile-case-item-name">${escapeHtml(c.name)}</span>
           <span class="mobile-case-item-check">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
               <polyline points="20 6 9 17 4 12"/>
@@ -14867,7 +11192,7 @@ class CodemanApp {
         <div class="process-item">
           <span class="monitor-status-badge ${statusClass}">${statusLabel}</span>
           <div class="process-info">
-            <div class="process-name">${modelHtml} ${this.escapeHtml(muxSession.name || muxSession.muxName)}</div>
+            <div class="process-name">${modelHtml} ${escapeHtml(muxSession.name || muxSession.muxName)}</div>
             <div class="process-meta">
               ${tokenHtml}
               ${costHtml}
@@ -14877,7 +11202,7 @@ class CodemanApp {
             </div>
           </div>
           <div class="process-actions">
-            <button class="btn-toolbar btn-sm btn-danger" onclick="app.killMuxSession('${this.escapeHtml(muxSession.sessionId)}')" title="Kill session">Kill</button>
+            <button class="btn-toolbar btn-sm btn-danger" onclick="app.killMuxSession('${escapeHtml(muxSession.sessionId)}')" title="Kill session">Kill</button>
           </div>
         </div>
       `;
@@ -14907,7 +11232,7 @@ class CodemanApp {
     for (const agent of subagents) {
       const statusClass = agent.status === 'active' ? 'active' : agent.status === 'idle' ? 'idle' : 'completed';
       const modelBadge = agent.modelShort ? `<span class="model-badge ${agent.modelShort}">${agent.modelShort}</span>` : '';
-      const desc = agent.description ? this.escapeHtml(agent.description.substring(0, 40)) : agent.agentId;
+      const desc = agent.description ? escapeHtml(agent.description.substring(0, 40)) : agent.agentId;
 
       html += `
         <div class="process-item">
@@ -14920,7 +11245,7 @@ class CodemanApp {
             </div>
           </div>
           <div class="process-actions">
-            ${agent.status !== 'completed' ? `<button class="btn-toolbar btn-sm btn-danger" onclick="app.killSubagent('${this.escapeHtml(agent.agentId)}')" title="Kill agent">Kill</button>` : ''}
+            ${agent.status !== 'completed' ? `<button class="btn-toolbar btn-sm btn-danger" onclick="app.killSubagent('${escapeHtml(agent.agentId)}')" title="Kill agent">Kill</button>` : ''}
           </div>
         </div>
       `;
@@ -15001,7 +11326,7 @@ class CodemanApp {
       const statusClass = agent.status === 'running' ? 'active' : agent.status === 'completed' ? 'completed' : 'error';
       const agentLabel = agent.agentType || agent.agentId;
       const modelBadge = agent.model ? `<span class="model-badge opus">opus</span>` : '';
-      const detail = agent.detail ? this.escapeHtml(agent.detail.substring(0, 50)) : '';
+      const detail = agent.detail ? escapeHtml(agent.detail.substring(0, 50)) : '';
       const duration = agent.durationMs ? `${(agent.durationMs / 1000).toFixed(1)}s` : '';
       const itemCount = agent.itemCount ? `${agent.itemCount} items` : '';
 
@@ -15009,7 +11334,7 @@ class CodemanApp {
         <div class="process-item">
           <span class="process-mode ${statusClass}">${agent.status || 'pending'}</span>
           <div class="process-info">
-            <div class="process-name">${modelBadge} ${this.escapeHtml(agentLabel)}</div>
+            <div class="process-name">${modelBadge} ${escapeHtml(agentLabel)}</div>
             <div class="process-meta">
               ${detail ? `<span>${detail}</span>` : ''}
               ${itemCount ? `<span>${itemCount}</span>` : ''}
@@ -15157,22 +11482,6 @@ class CodemanApp {
     }
   }
 
-  // ========== Utility ==========
-
-  // Pre-compiled HTML escape map for performance (avoids DOM element creation)
-  static _htmlEscapeMap = {
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
-  };
-  static _htmlEscapePattern = /[&<>"']/g;
-
-  escapeHtml(text) {
-    if (!text) return '';
-    return text.replace(CodemanApp._htmlEscapePattern, char => CodemanApp._htmlEscapeMap[char]);
-  }
 }
 
 // Migrate legacy localStorage keys (claudeman-* → codeman-*)

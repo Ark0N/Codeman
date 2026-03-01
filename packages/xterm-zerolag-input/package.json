@@ -17,7 +17,7 @@
     "dist/"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "build": "tsup",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"

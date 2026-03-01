@@ -226,8 +226,15 @@ Re-exported via `src/utils/index.ts`. Key exports:
 | File | Purpose |
 |------|---------|
 | `src/web/public/index.html` | HTML entry point with inline critical CSS and async vendor loading |
-| `src/web/public/app.js` | Core UI: xterm.js, tab management, subagent windows, mobile support (~15K lines) |
-| `src/web/public/ralph-wizard.js` | Ralph Loop wizard UI extracted from app.js (~1K lines) |
+| `src/web/public/constants.js` | Shared constants, timing values, Z-index layers, Web Push utilities |
+| `src/web/public/api-client.js` | API fetch wrapper (`_api`, `_apiJson`, `_apiPost`) |
+| `src/web/public/mobile-handlers.js` | `MobileDetection`, `KeyboardHandler`, `SwipeHandler` objects |
+| `src/web/public/voice-input.js` | `DeepgramProvider`, `VoiceInput` objects for speech-to-text |
+| `src/web/public/notification-manager.js` | `NotificationManager` class (5-layer notification system) |
+| `src/web/public/keyboard-accessory.js` | `KeyboardAccessoryBar` and `FocusTrap` classes |
+| `src/web/public/subagent-windows.js` | Subagent window management (open, close, drag, connection lines) |
+| `src/web/public/app.js` | Core UI: xterm.js, tab management, settings |
+| `src/web/public/ralph-wizard.js` | Ralph Loop wizard UI |
 | `src/web/public/styles.css` | Main styling (dark theme, layout, components) |
 | `src/web/public/mobile.css` | Responsive overrides for screens <1024px (loaded conditionally via `media` attribute) |
 | `src/web/public/upload.html` | Screenshot upload page served at `/upload.html` |
@@ -235,20 +242,23 @@ Re-exported via `src/utils/index.ts`. Key exports:
 | `src/web/public/manifest.json` | Minimal PWA manifest (required for push on Android) |
 | `src/web/public/vendor/` | Self-hosted xterm.js + addons (eliminates CDN latency) |
 
-### Frontend Architecture (`app.js`)
+**Script loading order** (index.html): `constants.js` → `mobile-handlers.js` → `voice-input.js` → `notification-manager.js` → `keyboard-accessory.js` → `app.js` → `ralph-wizard.js` → `api-client.js` → `subagent-windows.js`. All modules share global scope — order matters for dependencies.
 
-The frontend is a single ~15K-line vanilla JS file with these key systems:
+### Frontend Architecture
 
-| System | Key Classes/Functions | Purpose |
-|--------|----------------------|---------|
-| **Terminal rendering** | `batchTerminalWrite()`, `flushPendingWrites()`, `chunkedTerminalWrite()` | 60fps batched writes with DEC 2026 sync |
-| **Local echo overlay** | `LocalEchoOverlay` class | DOM overlay for instant mobile keystroke feedback |
-| **Mobile support** | `MobileDetection`, `KeyboardHandler`, `SwipeHandler`, `KeyboardAccessoryBar` | Touch input, viewport adaptation, swipe navigation |
-| **Subagent windows** | `openSubagentWindow()`, `closeSubagentWindow()`, `updateConnectionLines()` | Floating terminal windows with parent connection lines |
-| **Notifications** | `NotificationManager` class | 5-layer: in-app drawer, tab flash, browser API, web push, audio beep |
-| **SSE connection** | `connectSSE()`, `addListener()` | EventSource with exponential backoff (1-30s), offline queue (64KB) |
-| **Settings** | `openAppSettings()`, `apply*Visibility()` | Server-backed + localStorage persistence |
-| **Focus management** | `FocusTrap` class | Modal keyboard navigation with focus restore |
+The frontend is split across multiple vanilla JS modules (extracted from the original monolithic `app.js`). Key systems:
+
+| System | Module | Key Classes/Functions | Purpose |
+|--------|--------|----------------------|---------|
+| **Terminal rendering** | `app.js` | `batchTerminalWrite()`, `flushPendingWrites()`, `chunkedTerminalWrite()` | 60fps batched writes with DEC 2026 sync |
+| **Local echo overlay** | `app.js` | `LocalEchoOverlay` class | DOM overlay for instant mobile keystroke feedback |
+| **Mobile support** | `mobile-handlers.js` | `MobileDetection`, `KeyboardHandler`, `SwipeHandler` | Touch input, viewport adaptation, swipe navigation |
+| **Keyboard accessory** | `keyboard-accessory.js` | `KeyboardAccessoryBar`, `FocusTrap` | Mobile keyboard toolbar, modal focus management |
+| **Subagent windows** | `subagent-windows.js` | `openSubagentWindow()`, `closeSubagentWindow()`, `updateConnectionLines()` | Floating terminal windows with parent connection lines |
+| **Notifications** | `notification-manager.js` | `NotificationManager` class | 5-layer: in-app drawer, tab flash, browser API, web push, audio beep |
+| **Voice input** | `voice-input.js` | `DeepgramProvider`, `VoiceInput` | Speech-to-text via Deepgram WebSocket |
+| **SSE connection** | `app.js` | `connectSSE()`, `addListener()` | EventSource with exponential backoff (1-30s), offline queue (64KB) |
+| **Settings** | `app.js` | `openAppSettings()`, `apply*Visibility()` | Server-backed + localStorage persistence |
 
 **Z-index layers**: subagent windows (1000), plan agents (1100), log viewers (2000), image popups (3000), local echo overlay (7).
 
@@ -286,21 +296,22 @@ The frontend is a single ~15K-line vanilla JS file with these key systems:
 
 ### API Route Categories
 
-~280 route handlers split across `src/web/routes/` domain modules. Key groups:
+~110 route handlers split across `src/web/routes/` domain modules. Key groups:
 
 | Group | Prefix | Count | Key endpoints |
 |-------|--------|-------|---------------|
-| Sessions | `/api/sessions` | ~20 | CRUD, input, resize, interactive, shell |
-| Respawn | `/api/sessions/:id/respawn` | 5 | start, stop, enable, config |
-| Ralph | `/api/sessions/:id/ralph-*` | 6 | state, status, config, circuit-breaker |
-| Plan | `/api/sessions/:id/plan/*` | 5 | task CRUD, checkpoint, history, rollback |
+| Sessions | `/api/sessions` | ~24 | CRUD, input, resize, interactive, shell |
+| System | `/api/status`, `/api/stats`, `/api/config`, `/api/settings` | ~32 | App state, config |
+| Ralph | `/api/sessions/:id/ralph-*` | 9 | state, status, config, circuit-breaker |
+| Plan | `/api/sessions/:id/plan/*` | 8 | task CRUD, checkpoint, history, rollback |
+| Respawn | `/api/sessions/:id/respawn` | 7 | start, stop, enable, config |
 | Subagents | `/api/subagents` | 7 | list, transcript, kill, cleanup |
-| Cases | `/api/cases` | 5 | CRUD, link, fix-plan |
+| Cases | `/api/cases` | 7 | CRUD, link, fix-plan |
+| Files | `/api/sessions/:id/file*`, `tail-file` | 5 | Browser, preview, raw, tail stream |
+| Mux | `/api/mux-sessions` | 5 | tmux management, stats |
 | Scheduled | `/api/scheduled` | 4 | CRUD for scheduled runs |
 | Push | `/api/push` | 4 | VAPID key, subscribe, update prefs, unsubscribe |
-| System | `/api/status`, `/api/stats`, `/api/config`, `/api/settings` | 8 | App state, config |
-| Files | `/api/sessions/:id/file*`, `tail-file` | 5 | Browser, preview, raw, tail stream |
-| Mux | `/api/mux-sessions` | 4 | tmux management, stats |
+| Teams | `/api/teams` | 2 | list teams, get team tasks |
 
 ## Adding Features
 
@@ -448,7 +459,7 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **SSE events** | Search `broadcast(` in `server.ts` and route modules |
 | **Session statuses** | `SessionStatus` in `src/types/session.ts` |
 | **Error codes** | `createErrorResponse()` in `src/types/api.ts` |
-| **Refactoring phases** | `docs/phase1-implementation-plan.md` through `docs/phase-4-domain-splitting-plan.md` |
+| **Refactoring phases** | `docs/phase1-implementation-plan.md` through `docs/phase5-frontend-modularization-plan.md` |
 | **Test utilities** | `test/respawn-test-utils.ts` |
 | **Mobile test suite** | `mobile-test/README.md` |
 | **OpenCode integration** | `docs/opencode-integration.md` |
