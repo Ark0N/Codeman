@@ -1,5 +1,11 @@
 # aicodeman
 
+## 0.3.0
+
+### Minor Changes
+
+- QR code authentication for tunnel access, 7-phase codebase refactor (route extraction, type domain modules, frontend module split, config consolidation, managed timers, test infrastructure), overlay rendering fixes, and security hardening
+
 ## 0.2.9
 
 ### Patch Changes
