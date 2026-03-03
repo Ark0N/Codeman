@@ -158,6 +158,112 @@ const BUILTIN_RESPAWN_PRESETS = [
 ];
 
 // ============================================================================
+// SSE Event Types
+// ============================================================================
+
+/** @type {Record<string, string>} Centralized SSE event type constants */
+const SSE_EVENTS = {
+  // Core
+  INIT: 'init',
+
+  // Session lifecycle
+  SESSION_CREATED: 'session:created',
+  SESSION_UPDATED: 'session:updated',
+  SESSION_DELETED: 'session:deleted',
+  SESSION_TERMINAL: 'session:terminal',
+  SESSION_NEEDS_REFRESH: 'session:needsRefresh',
+  SESSION_CLEAR_TERMINAL: 'session:clearTerminal',
+  SESSION_COMPLETION: 'session:completion',
+  SESSION_ERROR: 'session:error',
+  SESSION_EXIT: 'session:exit',
+  SESSION_IDLE: 'session:idle',
+  SESSION_WORKING: 'session:working',
+  SESSION_AUTO_CLEAR: 'session:autoClear',
+  SESSION_CLI_INFO: 'session:cliInfo',
+
+  // Scheduled runs
+  SCHEDULED_CREATED: 'scheduled:created',
+  SCHEDULED_UPDATED: 'scheduled:updated',
+  SCHEDULED_COMPLETED: 'scheduled:completed',
+  SCHEDULED_STOPPED: 'scheduled:stopped',
+
+  // Respawn
+  RESPAWN_STARTED: 'respawn:started',
+  RESPAWN_STOPPED: 'respawn:stopped',
+  RESPAWN_STATE_CHANGED: 'respawn:stateChanged',
+  RESPAWN_CYCLE_STARTED: 'respawn:cycleStarted',
+  RESPAWN_BLOCKED: 'respawn:blocked',
+  RESPAWN_AUTO_ACCEPT_SENT: 'respawn:autoAcceptSent',
+  RESPAWN_DETECTION_UPDATE: 'respawn:detectionUpdate',
+  RESPAWN_TIMER_STARTED: 'respawn:timerStarted',
+  RESPAWN_TIMER_CANCELLED: 'respawn:timerCancelled',
+  RESPAWN_TIMER_COMPLETED: 'respawn:timerCompleted',
+  RESPAWN_ERROR: 'respawn:error',
+  RESPAWN_ACTION_LOG: 'respawn:actionLog',
+
+  // Tasks
+  TASK_CREATED: 'task:created',
+  TASK_COMPLETED: 'task:completed',
+  TASK_FAILED: 'task:failed',
+  TASK_UPDATED: 'task:updated',
+
+  // Mux (tmux)
+  MUX_CREATED: 'mux:created',
+  MUX_KILLED: 'mux:killed',
+  MUX_DIED: 'mux:died',
+  MUX_STATS_UPDATED: 'mux:statsUpdated',
+
+  // Ralph
+  SESSION_RALPH_LOOP_UPDATE: 'session:ralphLoopUpdate',
+  SESSION_RALPH_TODO_UPDATE: 'session:ralphTodoUpdate',
+  SESSION_RALPH_COMPLETION_DETECTED: 'session:ralphCompletionDetected',
+  SESSION_RALPH_STATUS_UPDATE: 'session:ralphStatusUpdate',
+  SESSION_CIRCUIT_BREAKER_UPDATE: 'session:circuitBreakerUpdate',
+  SESSION_EXIT_GATE_MET: 'session:exitGateMet',
+
+  // Bash tools
+  SESSION_BASH_TOOL_START: 'session:bashToolStart',
+  SESSION_BASH_TOOL_END: 'session:bashToolEnd',
+  SESSION_BASH_TOOLS_UPDATE: 'session:bashToolsUpdate',
+
+  // Hooks (Claude Code hook events)
+  HOOK_IDLE_PROMPT: 'hook:idle_prompt',
+  HOOK_PERMISSION_PROMPT: 'hook:permission_prompt',
+  HOOK_ELICITATION_DIALOG: 'hook:elicitation_dialog',
+  HOOK_STOP: 'hook:stop',
+  HOOK_TEAMMATE_IDLE: 'hook:teammate_idle',
+  HOOK_TASK_COMPLETED: 'hook:task_completed',
+
+  // Subagents (Claude Code background agents)
+  SUBAGENT_DISCOVERED: 'subagent:discovered',
+  SUBAGENT_UPDATED: 'subagent:updated',
+  SUBAGENT_TOOL_CALL: 'subagent:tool_call',
+  SUBAGENT_PROGRESS: 'subagent:progress',
+  SUBAGENT_MESSAGE: 'subagent:message',
+  SUBAGENT_TOOL_RESULT: 'subagent:tool_result',
+  SUBAGENT_COMPLETED: 'subagent:completed',
+
+  // Images
+  IMAGE_DETECTED: 'image:detected',
+
+  // Tunnel
+  TUNNEL_STARTED: 'tunnel:started',
+  TUNNEL_STOPPED: 'tunnel:stopped',
+  TUNNEL_PROGRESS: 'tunnel:progress',
+  TUNNEL_ERROR: 'tunnel:error',
+  TUNNEL_QR_ROTATED: 'tunnel:qrRotated',
+  TUNNEL_QR_REGENERATED: 'tunnel:qrRegenerated',
+  TUNNEL_QR_AUTH_USED: 'tunnel:qrAuthUsed',
+
+  // Plan orchestration
+  PLAN_SUBAGENT: 'plan:subagent',
+  PLAN_PROGRESS: 'plan:progress',
+  PLAN_STARTED: 'plan:started',
+  PLAN_CANCELLED: 'plan:cancelled',
+  PLAN_COMPLETED: 'plan:completed',
+};
+
+// ============================================================================
 // Utility Functions
 // ============================================================================
 
