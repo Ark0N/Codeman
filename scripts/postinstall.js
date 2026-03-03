@@ -180,6 +180,37 @@ if (majorVersion >= 22) {
 }
 
 // ----------------------------------------------------------------------------
+// 1d. Verify rollup native binding for current platform/arch
+// ----------------------------------------------------------------------------
+
+const ROLLUP_NATIVE_PACKAGES = {
+    'darwin-arm64': '@rollup/rollup-darwin-arm64',
+    'darwin-x64':   '@rollup/rollup-darwin-x64',
+    'linux-x64':    '@rollup/rollup-linux-x64-gnu',
+    'linux-arm64':  '@rollup/rollup-linux-arm64-gnu',
+};
+
+const platformArch = `${platform()}-${process.arch}`;
+const expectedRollupPkg = ROLLUP_NATIVE_PACKAGES[platformArch];
+
+if (!expectedRollupPkg) {
+    hasErrors = true;
+    console.log(colors.red(`✗ Unsupported platform for rollup native bindings: ${platformArch}`));
+    console.log(colors.dim(`  Supported: ${Object.keys(ROLLUP_NATIVE_PACKAGES).join(', ')}`));
+} else {
+    try {
+        const require = createRequire(import.meta.url);
+        require.resolve(expectedRollupPkg);
+        console.log(colors.green(`✓ rollup native binding installed`) + colors.dim(` (${expectedRollupPkg})`));
+    } catch {
+        hasErrors = true;
+        console.log(colors.red(`✗ rollup native binding not installed: ${expectedRollupPkg}`));
+        console.log(colors.dim(`  Run: npm install`));
+        console.log(colors.dim(`  If the error persists, your npm version may not support optionalDependencies filtering.`));
+    }
+}
+
+// ----------------------------------------------------------------------------
 // 2. Check if terminal multiplexer is installed (tmux preferred, screen fallback)
 // ----------------------------------------------------------------------------
 

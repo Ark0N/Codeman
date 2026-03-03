@@ -51,7 +51,6 @@
     "@fastify/compress": "^8.3.1",
     "@fastify/cookie": "^11.0.2",
     "@fastify/static": "^8.0.0",
-    "@rollup/rollup-linux-x64-gnu": "^4.59.0",
     "chalk": "^5.3.0",
     "chokidar": "^3.6.0",
     "commander": "^12.1.0",
@@ -91,6 +90,12 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.0.0",
     "vitest": "^4.0.18"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-darwin-arm64": "^4.59.0",
+    "@rollup/rollup-darwin-x64": "^4.59.0",
+    "@rollup/rollup-linux-x64-gnu": "^4.59.0",
+    "@rollup/rollup-linux-arm64-gnu": "^4.59.0"
   },
   "engines": {
     "node": ">=18.0.0"
