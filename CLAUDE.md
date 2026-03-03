@@ -96,7 +96,9 @@ systemctl --user restart codeman-web
 journalctl --user -u codeman-web -f
 ```
 
-**CI**: `.github/workflows/ci.yml` runs `typecheck`, `lint`, and `format:check` on push to master. Tests are intentionally excluded from CI (they spawn tmux).
+**CI**: `.github/workflows/ci.yml` runs `typecheck`, `lint`, and `format:check` on push to master (Node 22). Tests are intentionally excluded from CI (they spawn tmux).
+
+**Code style**: Prettier with `singleQuote: true`, `printWidth: 120`, `trailingComma: "es5"`. ESLint allows `no-console`, warns on `@typescript-eslint/no-explicit-any`. ESLint does not lint `app.js` or `scripts/**/*.mjs`.
 
 ## Common Gotchas
 
@@ -106,6 +108,8 @@ journalctl --user -u codeman-web -f
 - **DEC 2026 sync blocks** — Never discard incomplete sync blocks (START without END); buffer up to 50ms then flush. See `app.js:extractSyncSegments()`
 - **Terminal writes during buffer load** — Live SSE writes are queued while `_isLoadingBuffer` is true to prevent interleaving with historical data
 - **Local echo prompt scanning** — Does NOT use `buffer.cursorY` (Ink moves it); scans buffer bottom-up for visible `>` prompt marker
+- **ESM dynamic imports** — Never use `require()` in this codebase; it breaks in production ESM builds. Use `await import()` for dynamic imports. (`tsx` masks this in dev by shimming CJS/ESM)
+- **Package name vs product name** — npm package is `aicodeman`, product is **Codeman**. Release workflow renames `aicodeman@X.Y.Z` tags to `codeman@X.Y.Z`
 
 ## Import Conventions
 
@@ -169,8 +173,8 @@ journalctl --user -u codeman-web -f
 | `src/web/middleware/auth.ts` | Auth middleware: Basic Auth, session cookies, rate limiting, security headers, CORS |
 | `src/web/route-helpers.ts` | Shared helper utilities for route modules |
 | `src/web/schemas.ts` | Zod v4 validation schemas with path/env security allowlists |
-| `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~12K lines) |
-| `src/types.ts` | Barrel re-export from `src/types/` — 13 domain files (session, task, respawn, ralph, api, etc.) |
+| `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~11.5K lines) |
+| `src/types/index.ts` | Barrel re-export from `src/types/` — 13 domain files (session, task, respawn, ralph, api, etc.) |
 
 **Large files** (>50KB): `app.js`, `ralph-tracker.ts`, `respawn-controller.ts`, `session.ts`, `subagent-watcher.ts` — these contain complex state machines; read `docs/respawn-state-machine.md` before modifying.
 
@@ -291,6 +295,7 @@ The frontend is split across multiple vanilla JS modules (extracted from the ori
 
 ### Security
 
+- **Environment variables**: `CODEMAN_USERNAME`/`CODEMAN_PASSWORD` (auth), `CODEMAN_MUX` (set if inside managed session), `CODEMAN_API_URL` (auto-set by server at startup, injected into spawned sessions for hook callbacks), `CODEMAN_MUX_NAME` (set by tmux-manager for session identification)
 - **HTTP Basic Auth**: Optional via `CODEMAN_USERNAME`/`CODEMAN_PASSWORD` env vars
 - **QR Auth**: Single-use ephemeral 6-char tokens (60s TTL, 90s grace) for tunnel login without typing passwords. `TunnelManager` rotates tokens, serves cached SVG at `GET /api/tunnel/qr`, validates at `GET /q/:code`. Separate per-IP rate limit (10/15min) + global path limit (30/min). Desktop notification on consumption (QRLjacking detection). Audit logged as `qr_auth` in `session-lifecycle.jsonl`. See `docs/qr-auth-plan.md`.
 - **Session cookies**: After Basic Auth or QR Auth, a 24h session cookie (`codeman_session`) is issued so credentials aren't re-sent on every request. Active sessions auto-extend. SSE works via same-origin cookie (`EventSource` can't send custom headers). Sessions store device context (IP + User-Agent) for audit via `AuthSessionRecord`.
@@ -322,22 +327,22 @@ The frontend is split across multiple vanilla JS modules (extracted from the ori
 
 ### API Route Categories
 
-~113 route handlers split across `src/web/routes/` domain modules. Key groups:
+~111 route handlers split across `src/web/routes/` domain modules. Key groups:
 
 | Group | Prefix | Count | Key endpoints |
 |-------|--------|-------|---------------|
-| Sessions | `/api/sessions` | 43 | CRUD, input, resize, interactive, shell |
-| System | `/api/status`, `/api/stats`, `/api/config`, `/api/settings`, `/api/subagents` | 38 | App state, config, subagents |
-| Ralph | `/api/sessions/:id/ralph-*` | 19 | state, status, config, circuit-breaker |
-| Respawn | `/api/sessions/:id/respawn` | 17 | start, stop, enable, config |
-| Plan | `/api/sessions/:id/plan/*` | 12 | task CRUD, checkpoint, history, rollback |
+| System | `/api/status`, `/api/stats`, `/api/config`, `/api/settings`, `/api/subagents` | 35 | App state, config, subagents |
+| Sessions | `/api/sessions` | 24 | CRUD, input, resize, interactive, shell |
+| Ralph | `/api/sessions/:id/ralph-*` | 9 | state, status, config, circuit-breaker |
+| Plan | `/api/sessions/:id/plan/*` | 8 | task CRUD, checkpoint, history, rollback |
+| Respawn | `/api/sessions/:id/respawn` | 7 | start, stop, enable, config |
 | Cases | `/api/cases` | 7 | CRUD, link, fix-plan |
-| Scheduled | `/api/scheduled` | 6 | CRUD for scheduled runs |
 | Files | `/api/sessions/:id/file*`, `tail-file` | 5 | Browser, preview, raw, tail stream |
 | Mux | `/api/mux-sessions` | 5 | tmux management, stats |
+| Scheduled | `/api/scheduled` | 4 | CRUD for scheduled runs |
 | Push | `/api/push` | 4 | VAPID key, subscribe, update prefs, unsubscribe |
-| Hooks | `/api/hook-event` | 4 | Hook event ingestion |
 | Teams | `/api/teams` | 2 | list teams, get team tasks |
+| Hooks | `/api/hook-event` | 1 | Hook event ingestion |
 
 ## Adding Features
 
@@ -346,7 +351,7 @@ The frontend is split across multiple vanilla JS modules (extracted from the ori
 - **Session setting**: Add to `SessionState` in `types.ts`, include in `session.toState()`, call `persistSessionState()`
 - **Hook event**: Add to `HookEventType` in `types.ts`, add hook command in `hooks-config.ts:generateHooksConfig()`, update `HookEventSchema` in `schemas.ts`
 - **Mobile feature**: Add to relevant mobile singleton (`KeyboardHandler`, `KeyboardAccessoryBar`, etc.), test with `MobileDetection.isMobile()` guard
-- **New test**: Pick unique port (search `const PORT =`), add port comment to test file header. Tests use ports 3150+.
+- **New test**: Pick unique port (search `const PORT =` across `test/`), add port comment to test file header. Integration tests use ports 3099-3211. Route tests in `test/routes/` use `app.inject()` (no real port needed) — see `test/routes/_route-test-utils.ts`.
 
 **Validation**: Uses Zod v4 for request validation. Define schemas in `schemas.ts` and use `.parse()` or `.safeParse()`. Note: Zod v4 has different API from v3 (e.g., `z.object()` options changed, error formatting differs).
 
@@ -359,6 +364,7 @@ The frontend is split across multiple vanilla JS modules (extracted from the ori
 | `~/.codeman/settings.json` | User preferences |
 | `~/.codeman/push-keys.json` | VAPID key pair for Web Push (auto-generated) |
 | `~/.codeman/push-subscriptions.json` | Registered push notification subscriptions |
+| `~/.codeman/session-lifecycle.jsonl` | Append-only JSONL audit log (QR auth, session events) |
 
 ## Default Settings
 
@@ -383,11 +389,13 @@ npx vitest run -t "pattern"
 
 **Ports**: Unit tests pick unique ports manually. Search `const PORT =` before adding new tests.
 
-**Config**: Vitest with `globals: true`, `fileParallelism: false`. Unit timeout 30s.
+**Config**: Vitest with `globals: true`, `fileParallelism: false`. Unit timeout 30s, teardown timeout 60s.
 
 **Safety**: `test/setup.ts` snapshots pre-existing tmux sessions at load time and never kills them. Only sessions registered via `registerTestTmuxSession()` get cleaned up.
 
 **Respawn tests**: Use MockSession from `test/respawn-test-utils.ts` to avoid spawning real Claude processes.
+
+**Route tests**: `test/routes/` uses Fastify's `app.inject()` for fast in-process testing (no real ports). See `test/routes/_route-test-utils.ts` for the shared setup helper.
 
 **Mobile tests**: Separate Playwright-based suite in `mobile-test/` with 135 device profiles. Run via `npx vitest run --config mobile-test/vitest.config.ts`. See `mobile-test/README.md`.
 
