@@ -25,6 +25,7 @@ import { subagentWatcher } from '../../subagent-watcher.js';
 import { imageWatcher } from '../../image-watcher.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import { findSessionOrFail, formatUptime, SETTINGS_PATH } from '../route-helpers.js';
+import { SseEvent } from '../sse-events.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
 import { QR_AUTH_FAILURE_MAX } from '../../config/tunnel-config.js';
@@ -91,6 +92,10 @@ export function registerSystemRoutes(
   const windowStatesPath = join(homedir(), '.codeman', 'subagent-window-states.json');
   const parentMapPath = join(homedir(), '.codeman', 'subagent-parents.json');
 
+  // ═══════════════════════════════════════════════════════════════
+  // System Status & Health
+  // ═══════════════════════════════════════════════════════════════
+
   // ========== Status ==========
 
   app.get('/api/status', async () => ctx.getLightState());
@@ -119,6 +124,10 @@ export function registerSystemRoutes(
       return reply.code(500).send(createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err)));
     }
   });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Authentication (QR auth, session revocation)
+  // ═══════════════════════════════════════════════════════════════
 
   // ========== QR Auth Route ==========
 
@@ -177,7 +186,7 @@ export function registerSystemRoutes(
     });
 
     // Broadcast auth notification — desktop sees who authenticated
-    ctx.broadcast('tunnel:qrAuthUsed', {
+    ctx.broadcast(SseEvent.TunnelQrAuthUsed, {
       ip: clientIp,
       ua: clientUA,
       timestamp: Date.now(),
@@ -206,6 +215,10 @@ export function registerSystemRoutes(
     return { success: true };
   });
 
+  // ═══════════════════════════════════════════════════════════════
+  // CLI Integrations (OpenCode)
+  // ═══════════════════════════════════════════════════════════════
+
   // ========== OpenCode ==========
 
   app.get('/api/opencode/status', async () => {
@@ -215,6 +228,10 @@ export function registerSystemRoutes(
       path: resolveOpenCodeDir(),
     };
   });
+
+  // ═══════════════════════════════════════════════════════════════
+  // State & Lifecycle (cleanup, lifecycle log, stats)
+  // ═══════════════════════════════════════════════════════════════
 
   // ========== State & Lifecycle ==========
 
@@ -278,6 +295,10 @@ export function registerSystemRoutes(
       totals: ctx.store.getAggregateStats(activeSessionTokens),
     };
   });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Configuration & Settings (config, settings, model config, CPU priority)
+  // ═══════════════════════════════════════════════════════════════
 
   // ========== Config ==========
 
@@ -424,7 +445,7 @@ export function registerSystemRoutes(
           console.log('Tunnel started via settings change');
         } else if (tunnelEnabled && ctx.tunnelManager.isRunning() && ctx.tunnelManager.getUrl()) {
           // Tunnel already running — re-emit so the client gets the URL
-          ctx.broadcast('tunnel:started', { url: ctx.tunnelManager.getUrl() });
+          ctx.broadcast(SseEvent.TunnelStarted, { url: ctx.tunnelManager.getUrl() });
           console.log('Tunnel already running, re-broadcast URL to client');
         } else if (!tunnelEnabled && ctx.tunnelManager.isRunning()) {
           ctx.tunnelManager.stop();
@@ -506,7 +527,7 @@ export function registerSystemRoutes(
 
     session.setNice(body);
     ctx.persistSessionState(session);
-    ctx.broadcast('session:updated', { session: ctx.getSessionStateWithRespawn(session) });
+    ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
 
     return {
       success: true,
@@ -514,6 +535,10 @@ export function registerSystemRoutes(
       note: 'Nice priority only affects newly created mux sessions, not currently running ones.',
     };
   });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Subagent Management (window states, parents, monitoring, transcripts)
+  // ═══════════════════════════════════════════════════════════════
 
   // ========== Subagent Window State Persistence ==========
 
@@ -642,6 +667,10 @@ export function registerSystemRoutes(
     const cleared = subagentWatcher.clearAll();
     return { success: true, data: { cleared } };
   });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Screenshots (upload, list, serve)
+  // ═══════════════════════════════════════════════════════════════
 
   // ========== Screenshots ==========
 

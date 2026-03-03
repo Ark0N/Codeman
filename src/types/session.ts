@@ -1,5 +1,27 @@
 /**
- * @fileoverview Session type definitions
+ * @fileoverview Session type definitions.
+ *
+ * Core domain type — SessionState is the primary entity in the system.
+ *
+ * Key exports:
+ * - SessionState — full session state (status, tokens, respawn, ralph, CLI metadata)
+ * - SessionConfig — creation-time config (id, workingDir, createdAt)
+ * - SessionOutput — captured stdout/stderr/exitCode
+ * - SessionStatus — 'idle' | 'busy' | 'stopped' | 'error'
+ * - SessionMode — 'claude' | 'shell' | 'opencode' (which CLI backend)
+ * - ClaudeMode — CLI permission mode ('dangerously-skip-permissions' | 'normal' | 'allowedTools')
+ * - SessionColor — visual differentiation color
+ * - OpenCodeConfig — OpenCode-specific settings (model, autoAllowTools, continueSession)
+ *
+ * Cross-domain relationships:
+ * - SessionState.respawnConfig embeds RespawnConfig (respawn domain)
+ * - SessionState.id is referenced by: RalphSessionState.sessionId (ralph),
+ *   RunSummary.sessionId (run-summary), ActiveBashTool.sessionId (tools),
+ *   TeamConfig.leadSessionId (teams), RespawnCycleMetrics.sessionId (respawn),
+ *   TaskState.assignedSessionId (task)
+ *
+ * Persisted to `~/.codeman/state.json`. Served at `GET /api/sessions` and
+ * `GET /api/sessions/:id`.
  */
 
 import type { RespawnConfig } from './respawn.js';

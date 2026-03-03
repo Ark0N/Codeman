@@ -15,10 +15,15 @@ import { CreateCaseSchema, LinkCaseSchema } from '../schemas.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { writeHooksConfig } from '../../hooks-config.js';
 import { CASES_DIR } from '../route-helpers.js';
+import { SseEvent } from '../sse-events.js';
 import type { EventPort, ConfigPort } from '../ports/index.js';
 
 export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & ConfigPort): void {
-  // ============ Case CRUD ============
+  // ═══════════════════════════════════════════════════════════════
+  // Case CRUD (list, create, link, detail, fix-plan)
+  // ═══════════════════════════════════════════════════════════════
+
+  // ========== List Cases ==========
 
   app.get('/api/cases', async (): Promise<CaseInfo[]> => {
     const cases: CaseInfo[] = [];
@@ -95,7 +100,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       // Write .claude/settings.local.json with hooks for desktop notifications
       await writeHooksConfig(casePath);
 
-      ctx.broadcast('case:created', { name, path: casePath });
+      ctx.broadcast(SseEvent.CaseCreated, { name, path: casePath });
 
       return { success: true, data: { case: { name, path: casePath } } };
     } catch (err) {
@@ -152,7 +157,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         mkdirSync(codemanDir, { recursive: true });
       }
       await fs.writeFile(linkedCasesFile, JSON.stringify(linkedCases, null, 2));
-      ctx.broadcast('case:linked', { name, path: expandedPath });
+      ctx.broadcast(SseEvent.CaseLinked, { name, path: expandedPath });
       return { success: true, data: { case: { name, path: expandedPath } } };
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
@@ -321,7 +326,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     }
   });
 
-  // ============ Ralph Wizard File Endpoints ============
+  // ═══════════════════════════════════════════════════════════════
+  // Ralph Wizard Files (per-case prompt/result serving)
+  // ═══════════════════════════════════════════════════════════════
+
+  // ========== List Wizard Files ==========
 
   app.get('/api/cases/:caseName/ralph-wizard/files', async (req) => {
     const { caseName } = req.params as { caseName: string };

@@ -17,6 +17,7 @@ import {
   type SessionColor,
 } from '../../types.js';
 import { Session } from '../../session.js';
+import { SseEvent } from '../sse-events.js';
 import {
   CreateSessionSchema,
   SessionNameSchema,
@@ -54,6 +55,10 @@ export function registerSessionRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort
 ): void {
+  // ═══════════════════════════════════════════════════════════════
+  // Auth
+  // ═══════════════════════════════════════════════════════════════
+
   // ========== Logout ==========
 
   app.post('/api/logout', async (req, reply) => {
@@ -65,6 +70,10 @@ export function registerSessionRoutes(
     reply.clearCookie(AUTH_COOKIE_NAME, { path: '/' });
     return { success: true };
   });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Session CRUD (list, create, rename, color, delete, detail)
+  // ═══════════════════════════════════════════════════════════════
 
   // ========== Session Listing ==========
 
@@ -146,7 +155,7 @@ export function registerSessionRoutes(
     // Use light state for broadcast + response — buffers are fetched on-demand via /terminal.
     // Avoids serializing 2-3MB of terminal+text buffers per session creation.
     const lightState = ctx.getSessionStateWithRespawn(session);
-    ctx.broadcast('session:created', lightState);
+    ctx.broadcast(SseEvent.SessionCreated, lightState);
     return { success: true, session: lightState };
   });
 
@@ -170,7 +179,7 @@ export function registerSessionRoutes(
     // Also update the mux session name if applicable
     ctx.mux.updateSessionName(id, session.name);
     ctx.persistSessionState(session);
-    ctx.broadcast('session:updated', ctx.getSessionStateWithRespawn(session));
+    ctx.broadcast(SseEvent.SessionUpdated, ctx.getSessionStateWithRespawn(session));
     return { success: true, name: session.name };
   });
 
@@ -196,7 +205,7 @@ export function registerSessionRoutes(
 
     session.setColor(body.color as SessionColor);
     ctx.persistSessionState(session);
-    ctx.broadcast('session:updated', ctx.getSessionStateWithRespawn(session));
+    ctx.broadcast(SseEvent.SessionUpdated, ctx.getSessionStateWithRespawn(session));
     return { success: true, color: session.color };
   });
 
@@ -245,6 +254,10 @@ export function registerSessionRoutes(
     // Full buffers were 2-3MB and caused slowness when polled frequently (e.g. Ralph wizard).
     return ctx.getSessionStateWithRespawn(session);
   });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Session Data (output, ralph state, run summary, active tools)
+  // ═══════════════════════════════════════════════════════════════
 
   // ========== Get Session Output ==========
 
@@ -328,6 +341,10 @@ export function registerSessionRoutes(
     };
   });
 
+  // ═══════════════════════════════════════════════════════════════
+  // Session Execution (run prompt, interactive mode, shell mode)
+  // ═══════════════════════════════════════════════════════════════
+
   // ========== Run Prompt ==========
 
   app.post('/api/sessions/:id/run', async (req): Promise<ApiResponse> => {
@@ -349,10 +366,10 @@ export function registerSessionRoutes(
 
     // Run async, don't wait
     session.runPrompt(prompt).catch((err) => {
-      ctx.broadcast('session:error', { id, error: err.message });
+      ctx.broadcast(SseEvent.SessionError, { id, error: err.message });
     });
 
-    ctx.broadcast('session:running', { id, prompt });
+    ctx.broadcast(SseEvent.SessionRunning, { id, prompt });
     return { success: true };
   });
 
@@ -391,8 +408,8 @@ export function registerSessionRoutes(
         name: session.name,
         mode: session.mode,
       });
-      ctx.broadcast('session:interactive', { id });
-      ctx.broadcast('session:updated', { session: ctx.getSessionStateWithRespawn(session) });
+      ctx.broadcast(SseEvent.SessionInteractive, { id });
+      ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
 
       return { success: true };
     } catch (err) {
@@ -422,13 +439,17 @@ export function registerSessionRoutes(
         name: session.name,
         mode: 'shell',
       });
-      ctx.broadcast('session:interactive', { id, mode: 'shell' });
-      ctx.broadcast('session:updated', { session: ctx.getSessionStateWithRespawn(session) });
+      ctx.broadcast(SseEvent.SessionInteractive, { id, mode: 'shell' });
+      ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
       return { success: true };
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
     }
   });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Terminal I/O (input, resize, buffer)
+  // ═══════════════════════════════════════════════════════════════
 
   // ========== Send Input ==========
 
@@ -550,6 +571,10 @@ export function registerSessionRoutes(
     };
   });
 
+  // ═══════════════════════════════════════════════════════════════
+  // Session Settings (auto-clear, auto-compact, image watcher, flicker filter)
+  // ═══════════════════════════════════════════════════════════════
+
   // ========== Auto-Clear ==========
 
   app.post('/api/sessions/:id/auto-clear', async (req) => {
@@ -567,7 +592,7 @@ export function registerSessionRoutes(
 
     session.setAutoClear(body.enabled, body.threshold);
     ctx.persistSessionState(session);
-    ctx.broadcast('session:updated', ctx.getSessionStateWithRespawn(session));
+    ctx.broadcast(SseEvent.SessionUpdated, ctx.getSessionStateWithRespawn(session));
 
     return {
       success: true,
@@ -597,7 +622,7 @@ export function registerSessionRoutes(
 
     session.setAutoCompact(body.enabled, body.threshold, body.prompt);
     ctx.persistSessionState(session);
-    ctx.broadcast('session:updated', ctx.getSessionStateWithRespawn(session));
+    ctx.broadcast(SseEvent.SessionUpdated, ctx.getSessionStateWithRespawn(session));
 
     return {
       success: true,
@@ -661,7 +686,7 @@ export function registerSessionRoutes(
 
     session.flickerFilterEnabled = body.enabled;
     ctx.persistSessionState(session);
-    ctx.broadcast('session:updated', ctx.getSessionStateWithRespawn(session));
+    ctx.broadcast(SseEvent.SessionUpdated, ctx.getSessionStateWithRespawn(session));
 
     return {
       success: true,
@@ -670,6 +695,10 @@ export function registerSessionRoutes(
       },
     };
   });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Quick Actions (quick-run, quick-start)
+  // ═══════════════════════════════════════════════════════════════
 
   // ========== Quick Run ==========
 
@@ -717,7 +746,7 @@ export function registerSessionRoutes(
       reason: 'run_prompt',
     });
 
-    ctx.broadcast('session:created', ctx.getSessionStateWithRespawn(session));
+    ctx.broadcast(SseEvent.SessionCreated, ctx.getSessionStateWithRespawn(session));
 
     try {
       const result = await session.runPrompt(prompt);
@@ -786,7 +815,7 @@ export function registerSessionRoutes(
           await writeHooksConfig(casePath);
         }
 
-        ctx.broadcast('case:created', { name: caseName, path: casePath });
+        ctx.broadcast(SseEvent.CaseCreated, { name: caseName, path: casePath });
       } catch (err) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
       }
@@ -831,7 +860,7 @@ export function registerSessionRoutes(
       name: session.name,
       reason: 'quick_start',
     });
-    ctx.broadcast('session:created', ctx.getSessionStateWithRespawn(session));
+    ctx.broadcast(SseEvent.SessionCreated, ctx.getSessionStateWithRespawn(session));
 
     // Start in the appropriate mode
     try {
@@ -843,7 +872,7 @@ export function registerSessionRoutes(
           name: session.name,
           mode: 'shell',
         });
-        ctx.broadcast('session:interactive', { id: session.id, mode: 'shell' });
+        ctx.broadcast(SseEvent.SessionInteractive, { id: session.id, mode: 'shell' });
       } else {
         // Both 'claude' and 'opencode' modes use startInteractive()
         await session.startInteractive();
@@ -853,9 +882,9 @@ export function registerSessionRoutes(
           name: session.name,
           mode,
         });
-        ctx.broadcast('session:interactive', { id: session.id, mode });
+        ctx.broadcast(SseEvent.SessionInteractive, { id: session.id, mode });
       }
-      ctx.broadcast('session:updated', { session: ctx.getSessionStateWithRespawn(session) });
+      ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
 
       // Save lastUsedCase to settings for TUI/web sync
       try {

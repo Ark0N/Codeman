@@ -1,5 +1,26 @@
 /**
- * @fileoverview Respawn controller type definitions
+ * @fileoverview Respawn controller type definitions.
+ *
+ * Covers the autonomous session cycling system: configuration, presets,
+ * per-cycle metrics, aggregate health scoring, and adaptive timing.
+ *
+ * Key exports:
+ * - RespawnConfig — full respawn settings (idle timeout, AI checks, adaptive timing, skip-clear)
+ * - PersistedRespawnConfig — subset saved to disk for mux session recovery
+ * - RespawnPreset — named preset for quick setup (solo-work, team-lead, overnight-autonomous, etc.)
+ * - RespawnCycleMetrics — per-cycle outcome tracking (duration, idle reason, steps, tokens)
+ * - RespawnAggregateMetrics — aggregate stats across cycles (success rate, p90 duration)
+ * - RalphLoopHealthScore — composite 0-100 health score with 5 component scores
+ * - HealthStatus — 'excellent' | 'good' | 'degraded' | 'critical'
+ * - TimingHistory — rolling window of timing data for adaptive adjustments
+ * - CycleOutcome — 'success' | 'stuck_recovery' | 'blocked' | 'error' | 'cancelled'
+ *
+ * Cross-domain relationships:
+ * - RespawnConfig is embedded in AppConfig.respawn (app-state) and SessionState.respawnConfig (session)
+ * - RalphLoopHealthScore.components.circuitBreaker derives from CircuitBreakerStatus (ralph domain)
+ * - RespawnCycleMetrics.sessionId links to SessionState.id (session domain)
+ *
+ * Served at `GET /api/sessions/:id/respawn` (config + state).
  */
 
 /**

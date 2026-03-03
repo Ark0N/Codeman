@@ -1,9 +1,33 @@
+/**
+ * @fileoverview Mobile device support: detection, keyboard handling, and swipe navigation.
+ *
+ * Defines three singleton objects that manage mobile-specific behavior:
+ *
+ * - MobileDetection — Device type detection (mobile/tablet/desktop), touch capability,
+ *   iOS/Safari identification, and body class management for CSS targeting.
+ * - KeyboardHandler — Virtual keyboard show/hide detection via visualViewport API,
+ *   toolbar/accessory bar repositioning, terminal resize on keyboard open/close,
+ *   and input scroll-into-view. Uses 100px threshold for iOS address bar drift.
+ * - SwipeHandler — Horizontal swipe detection on the terminal area for session switching.
+ *   80px minimum distance, 300ms maximum time, 100px max vertical drift.
+ *
+ * All three have init()/cleanup() lifecycle methods. They are re-initialized after SSE
+ * reconnect (in handleInit) to prevent stale closures.
+ *
+ * @globals {object} MobileDetection
+ * @globals {object} KeyboardHandler
+ * @globals {object} SwipeHandler
+ *
+ * @dependency constants.js (KeyboardAccessoryBar reference in KeyboardHandler.onKeyboardShow)
+ * @loadorder 2 of 9 — loaded after constants.js, before voice-input.js
+ */
+
 // Codeman — Mobile detection, keyboard handling, and swipe navigation
 // Loaded after constants.js, before app.js
 
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 // Mobile Detection
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 
 /**
  * MobileDetection - Detects device type and touch capability.
@@ -109,9 +133,9 @@ const MobileDetection = {
   }
 };
 
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 // Mobile Keyboard Handler
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 
 /**
  * KeyboardHandler - Simple handler to scroll inputs into view when keyboard appears.
@@ -387,9 +411,9 @@ const KeyboardHandler = {
   }
 };
 
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 // Mobile Swipe Handler
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 
 /**
  * SwipeHandler - Detects horizontal swipes on terminal to switch sessions.

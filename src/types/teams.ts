@@ -1,5 +1,23 @@
 /**
- * @fileoverview Agent Teams type definitions
+ * @fileoverview Agent Teams type definitions (experimental).
+ *
+ * Types for Claude Code's Agent Teams feature: team configuration,
+ * member metadata, task tracking, and inbox messaging.
+ *
+ * Key exports:
+ * - TeamConfig — team from `~/.claude/teams/{name}/config.json` (name, leadSessionId, members[])
+ * - TeamMember — member entry (agentId, name, agentType, color)
+ * - TeamTask — task from `~/.claude/tasks/{name}/{N}.json` (subject, status, blocks/blockedBy, owner)
+ * - InboxMessage — message from `~/.claude/teams/{name}/inboxes/{member}.json`
+ * - PaneInfo — tmux pane metadata for teammate pane management
+ *
+ * Cross-domain relationships:
+ * - TeamConfig.leadSessionId links to SessionState.id (session domain)
+ * - Teammates appear as standard subagents (detected by SubagentWatcher)
+ *
+ * Served at `GET /api/teams` (list) and `GET /api/teams/:name/tasks`.
+ * Requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` env var.
+ * No dependencies on other domain modules.
  */
 
 /** Team configuration from ~/.claude/teams/{name}/config.json */

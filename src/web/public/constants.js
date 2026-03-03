@@ -1,8 +1,29 @@
+/**
+ * @fileoverview Shared constants, utility functions, and SSE event type registry for all frontend modules.
+ *
+ * This is the first script loaded in index.html. Every other frontend module depends on the
+ * globals defined here: timing constants, Z-index layers, DEC 2026 sync markers, respawn
+ * preset definitions, the SSE_EVENTS registry, and shared utilities (escapeHtml, extractSyncSegments,
+ * getEventCoords, scheduleBackground, urlBase64ToUint8Array).
+ *
+ * @globals {function} urlBase64ToUint8Array - VAPID key conversion for Web Push
+ * @globals {function} scheduleBackground - scheduler.postTask wrapper (background priority)
+ * @globals {function} extractSyncSegments - DEC 2026 terminal sync marker parser
+ * @globals {function} getEventCoords - Unified mouse/touch coordinate extractor
+ * @globals {function} escapeHtml - XSS-safe HTML escaping
+ * @globals {object} SSE_EVENTS - Centralized SSE event type constants (~65 event types)
+ * @globals {Array} BUILTIN_RESPAWN_PRESETS - Built-in respawn configuration presets
+ *
+ * @dependency None (first in load order)
+ * @loadorder 1 of 9 — constants.js → mobile-handlers.js → voice-input.js → notification-manager.js
+ *   → keyboard-accessory.js → app.js → ralph-wizard.js → api-client.js → subagent-windows.js
+ */
+
 // Codeman — Shared constants and utility functions for frontend modules
 
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 // Web Push Utilities
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 
 /** Convert a base64-encoded VAPID key to Uint8Array for pushManager.subscribe() */
 function urlBase64ToUint8Array(base64String) {
@@ -16,9 +37,9 @@ function urlBase64ToUint8Array(base64String) {
   return outputArray;
 }
 
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 // Constants
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 
 // Default terminal scrollback (can be changed via settings)
 const DEFAULT_SCROLLBACK = 5000;
@@ -157,9 +178,9 @@ const BUILTIN_RESPAWN_PRESETS = [
   },
 ];
 
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 // SSE Event Types
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 
 /** @type {Record<string, string>} Centralized SSE event type constants */
 const SSE_EVENTS = {
@@ -263,9 +284,9 @@ const SSE_EVENTS = {
   PLAN_COMPLETED: 'plan:completed',
 };
 
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 // Utility Functions
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 
 /**
  * Get unified coordinates from mouse or touch event.

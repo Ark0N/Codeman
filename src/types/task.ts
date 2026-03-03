@@ -1,5 +1,19 @@
 /**
- * @fileoverview Task queue type definitions
+ * @fileoverview Task queue type definitions.
+ *
+ * Types for the prompt execution queue: TaskDefinition (input) and
+ * TaskState (persisted state with execution details).
+ *
+ * Key exports:
+ * - TaskDefinition — input type for creating a task (prompt, workingDir, priority, dependencies)
+ * - TaskState — persisted state with execution details (status, assignedSessionId, output, error)
+ * - TaskStatus — 'pending' | 'running' | 'completed' | 'failed'
+ *
+ * Cross-domain relationships:
+ * - TaskState.assignedSessionId links to SessionState.id (session domain)
+ * - TaskState is stored in AppState.tasks (app-state domain)
+ *
+ * Persisted to `~/.codeman/state.json`. No dependencies on other domain modules.
  */
 
 /** Status of a task in the queue */

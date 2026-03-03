@@ -1,5 +1,16 @@
 /**
- * @fileoverview Session lifecycle audit types
+ * @fileoverview Session lifecycle audit types.
+ *
+ * Types for the append-only JSONL audit log at `~/.codeman/session-lifecycle.jsonl`.
+ * Records session creation, PTY launch/exit, server start/stop, tmux recovery,
+ * and QR auth events. Written by `SessionLifecycleLog`, read for debugging.
+ *
+ * Key exports:
+ * - LifecycleEventType — union of 11 event types (created, started, exit, qr_auth, etc.)
+ * - LifecycleEntry — a single timestamped log entry with event, sessionId, and optional metadata
+ *
+ * No dependencies on other domain modules. LifecycleEntry.sessionId links
+ * back to SessionState.id for correlation.
  */
 
 /** Types of session lifecycle events recorded to the audit log */

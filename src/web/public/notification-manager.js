@@ -1,3 +1,30 @@
+/**
+ * @fileoverview Five-layer notification system for session events and alerts.
+ *
+ * The NotificationManager class implements five notification layers:
+ *   1. In-app notification drawer (slide-out panel with grouped notifications)
+ *   2. Tab title flash (alternating "(*) Codeman" when tab is hidden)
+ *   3. Browser Notification API (desktop push with auto-close after 8s)
+ *   4. Web Push via service worker (OS-level notifications when tab is closed)
+ *   5. Audio alerts (Web Audio API beep, user-opt-in)
+ *
+ * Features:
+ * - Per-event-type preferences (enabled, browser, audio, push) with v1→v4 migration
+ * - Device-specific defaults (notifications disabled on mobile by default)
+ * - 5s notification grouping window to batch rapid-fire events
+ * - 100-notification cap with oldest eviction
+ * - Rate limiting: 3s between browser notifications
+ * - Visibility tracking (pauses title flash when tab becomes visible)
+ * - iOS Safari bfcache support via pageshow event
+ *
+ * @class NotificationManager
+ * @param {CodemanApp} app - Reference to the main app instance
+ *
+ * @dependency constants.js (STUCK_THRESHOLD_DEFAULT_MS, timing constants)
+ * @dependency mobile-handlers.js (MobileDetection.getDeviceType for device-specific defaults)
+ * @loadorder 4 of 9 — loaded after voice-input.js, before keyboard-accessory.js
+ */
+
 // Codeman — Multi-layer notification system
 // Loaded after mobile-handlers.js, before app.js
 

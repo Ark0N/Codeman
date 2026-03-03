@@ -1,5 +1,20 @@
 /**
- * @fileoverview Run summary type definitions
+ * @fileoverview Run summary type definitions.
+ *
+ * Types for the "what happened while away" session timeline. RunSummary
+ * aggregates events (respawn cycles, errors, token milestones, AI checks)
+ * into a per-session historical view.
+ *
+ * Key exports:
+ * - RunSummary — complete per-session summary (events timeline + aggregated stats)
+ * - RunSummaryEvent — a single timestamped event (16 event types, 4 severity levels)
+ * - RunSummaryStats — aggregated metrics (cycles, tokens, active/idle time, error count)
+ * - RunSummaryEventType — union of event types (session_started, respawn_cycle_*, error, etc.)
+ * - RunSummaryEventSeverity — 'info' | 'warning' | 'error' | 'success'
+ * - createInitialRunSummaryStats() — factory for fresh stats
+ *
+ * Cross-domain: RunSummary.sessionId links to SessionState.id (session domain).
+ * In-memory only (not persisted to disk). Served at `GET /api/sessions/:id/run-summary`.
  */
 
 /**

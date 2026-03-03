@@ -7,6 +7,7 @@ import { FastifyInstance } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type PersistedRespawnConfig } from '../../types.js';
 import { RespawnController, type RespawnConfig } from '../../respawn-controller.js';
 import { RespawnConfigSchema, InteractiveRespawnSchema, RespawnEnableSchema } from '../schemas.js';
+import { SseEvent } from '../sse-events.js';
 import { findSessionOrFail, autoConfigureRalph } from '../route-helpers.js';
 import type { SessionPort, EventPort, RespawnPort, ConfigPort, InfraPort } from '../ports/index.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
@@ -25,7 +26,12 @@ export function registerRespawnRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & RespawnPort & ConfigPort & InfraPort
 ): void {
-  // Get respawn status for a session
+  // ═══════════════════════════════════════════════════════════════
+  // Respawn Status & Config
+  // ═══════════════════════════════════════════════════════════════
+
+  // ========== Get Respawn Status ==========
+
   app.get('/api/sessions/:id/respawn', async (req) => {
     const { id } = req.params as { id: string };
     const controller = ctx.respawnControllers.get(id);
@@ -40,7 +46,8 @@ export function registerRespawnRoutes(
     };
   });
 
-  // Get respawn config (from running controller or pre-saved)
+  // ========== Get Respawn Config ==========
+
   app.get('/api/sessions/:id/respawn/config', async (req) => {
     const { id } = req.params as { id: string };
     const controller = ctx.respawnControllers.get(id);
@@ -58,7 +65,12 @@ export function registerRespawnRoutes(
     return { success: true, config: null, active: false };
   });
 
-  // Start respawn controller for a session
+  // ═══════════════════════════════════════════════════════════════
+  // Respawn Start & Stop
+  // ═══════════════════════════════════════════════════════════════
+
+  // ========== Start Respawn ==========
+
   app.post('/api/sessions/:id/respawn/start', async (req) => {
     const { id } = req.params as { id: string };
     let body: Partial<RespawnConfig> | undefined;
@@ -95,12 +107,13 @@ export function registerRespawnRoutes(
     ctx.saveRespawnConfig(id, controller.getConfig());
     ctx.persistSessionState(session);
 
-    ctx.broadcast('respawn:started', { sessionId: id, status: controller.getStatus() });
+    ctx.broadcast(SseEvent.RespawnStarted, { sessionId: id, status: controller.getStatus() });
 
     return { success: true, status: controller.getStatus() };
   });
 
-  // Stop respawn controller for a session
+  // ========== Stop Respawn ==========
+
   app.post('/api/sessions/:id/respawn/stop', async (req) => {
     const { id } = req.params as { id: string };
     const controller = ctx.respawnControllers.get(id);
@@ -130,12 +143,13 @@ export function registerRespawnRoutes(
       ctx.persistSessionState(session);
     }
 
-    ctx.broadcast('respawn:stopped', { sessionId: id });
+    ctx.broadcast(SseEvent.RespawnStopped, { sessionId: id });
 
     return { success: true };
   });
 
-  // Update respawn configuration (works with or without running controller)
+  // ========== Update Respawn Config ==========
+
   app.put('/api/sessions/:id/respawn/config', async (req) => {
     const { id } = req.params as { id: string };
     // Validate respawn config to prevent arbitrary field injection
@@ -153,7 +167,7 @@ export function registerRespawnRoutes(
       controller.updateConfig(config);
       ctx.saveRespawnConfig(id, controller.getConfig());
       ctx.persistSessionState(session);
-      ctx.broadcast('respawn:configUpdated', { sessionId: id, config: controller.getConfig() });
+      ctx.broadcast(SseEvent.RespawnConfigUpdated, { sessionId: id, config: controller.getConfig() });
       return { success: true, config: controller.getConfig() };
     }
 
@@ -186,11 +200,16 @@ export function registerRespawnRoutes(
     };
     ctx.mux.updateRespawnConfig(id, merged);
     ctx.persistSessionState(session);
-    ctx.broadcast('respawn:configUpdated', { sessionId: id, config: merged });
+    ctx.broadcast(SseEvent.RespawnConfigUpdated, { sessionId: id, config: merged });
     return { success: true, config: merged };
   });
 
-  // Start interactive session WITH respawn enabled
+  // ═══════════════════════════════════════════════════════════════
+  // Composite Actions (interactive-respawn, enable on existing)
+  // ═══════════════════════════════════════════════════════════════
+
+  // ========== Interactive Respawn (start session + respawn in one call) ==========
+
   app.post('/api/sessions/:id/interactive-respawn', async (req) => {
     const { id } = req.params as { id: string };
     const irResult = req.body ? InteractiveRespawnSchema.safeParse(req.body) : { success: true as const, data: {} };
@@ -230,8 +249,8 @@ export function registerRespawnRoutes(
         mode: session.mode,
         reason: 'interactive_respawn',
       });
-      ctx.broadcast('session:interactive', { id });
-      ctx.broadcast('session:updated', { session: ctx.getSessionStateWithRespawn(session) });
+      ctx.broadcast(SseEvent.SessionInteractive, { id });
+      ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
 
       // Create and start respawn controller
       const controller = new RespawnController(session, body?.respawnConfig);
@@ -247,7 +266,7 @@ export function registerRespawnRoutes(
       // Persist full session state with respawn config
       ctx.persistSessionState(session);
 
-      ctx.broadcast('respawn:started', { sessionId: id, status: controller.getStatus() });
+      ctx.broadcast(SseEvent.RespawnStarted, { sessionId: id, status: controller.getStatus() });
 
       return {
         success: true,
@@ -261,7 +280,8 @@ export function registerRespawnRoutes(
     }
   });
 
-  // Enable respawn on an EXISTING interactive session
+  // ========== Enable Respawn on Existing Session ==========
+
   app.post('/api/sessions/:id/respawn/enable', async (req) => {
     const { id } = req.params as { id: string };
     const reResult = req.body ? RespawnEnableSchema.safeParse(req.body) : { success: true as const, data: {} };
@@ -304,7 +324,7 @@ export function registerRespawnRoutes(
     ctx.saveRespawnConfig(id, controller.getConfig(), body?.durationMinutes);
     ctx.persistSessionState(session);
 
-    ctx.broadcast('respawn:started', { sessionId: id, status: controller.getStatus() });
+    ctx.broadcast(SseEvent.RespawnStarted, { sessionId: id, status: controller.getStatus() });
 
     return {
       success: true,

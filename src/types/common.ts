@@ -1,5 +1,14 @@
 /**
- * @fileoverview Common/shared type definitions
+ * @fileoverview Common/shared type definitions.
+ *
+ * Base types used across multiple domains. No dependencies on other domain modules.
+ *
+ * Key exports:
+ * - Disposable — interface for objects requiring explicit cleanup (timers, watchers)
+ * - BufferConfig — size-limited storage config (terminal: 2MB, text: 1MB)
+ * - CleanupRegistration / CleanupResourceType — entries for the centralized CleanupManager
+ * - NiceConfig / DEFAULT_NICE_CONFIG — process priority settings for `nice`/`ionice`
+ * - ProcessStats — memory/CPU/child-count snapshot for resource monitoring
  */
 
 /**

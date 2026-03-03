@@ -12,6 +12,7 @@ import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } 
 import { Session } from '../../session.js';
 import { RespawnController } from '../../respawn-controller.js';
 import { RalphConfigSchema, FixPlanImportSchema, RalphPromptWriteSchema, RalphLoopStartSchema } from '../schemas.js';
+import { SseEvent } from '../sse-events.js';
 import { autoConfigureRalph, CASES_DIR, SETTINGS_PATH } from '../route-helpers.js';
 import { writeHooksConfig } from '../../hooks-config.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
@@ -23,6 +24,10 @@ export function registerRalphRoutes(
   app: FastifyInstance,
   ctx: SessionPort & EventPort & RespawnPort & ConfigPort & InfraPort
 ): void {
+  // ═══════════════════════════════════════════════════════════════
+  // Ralph Tracker Configuration & Status
+  // ═══════════════════════════════════════════════════════════════
+
   // Configure Ralph tracker for a session
   app.post('/api/sessions/:id/ralph-config', async (req) => {
     const { id } = req.params as { id: string };
@@ -95,7 +100,7 @@ export function registerRalphRoutes(
 
     // Persist and broadcast the update
     ctx.persistSessionState(session);
-    ctx.broadcast('session:ralphLoopUpdate', {
+    ctx.broadcast(SseEvent.SessionRalphLoopUpdate, {
       sessionId: id,
       state: session.ralphLoopState,
     });
@@ -135,6 +140,10 @@ export function registerRalphRoutes(
       },
     };
   });
+
+  // ═══════════════════════════════════════════════════════════════
+  // Fix Plan CRUD (@fix_plan.md generation, import, read/write)
+  // ═══════════════════════════════════════════════════════════════
 
   // Generate @fix_plan.md content from todos
   app.get('/api/sessions/:id/fix-plan', async (req) => {
@@ -249,6 +258,10 @@ export function registerRalphRoutes(
     }
   });
 
+  // ═══════════════════════════════════════════════════════════════
+  // Ralph Prompt & Loop (prompt write, loop start)
+  // ═══════════════════════════════════════════════════════════════
+
   // Write Ralph prompt to file in session's working directory
   // This avoids mux input escaping issues with long multi-line prompts
   app.post('/api/sessions/:id/ralph-prompt/write', async (req) => {
@@ -320,7 +333,7 @@ export function registerRalphRoutes(
         const claudeMd = generateClaudeMd(caseName, '', templatePath);
         writeFileSync(join(casePath, 'CLAUDE.md'), claudeMd);
         await writeHooksConfig(casePath);
-        ctx.broadcast('case:created', { name: caseName, path: casePath });
+        ctx.broadcast(SseEvent.CaseCreated, { name: caseName, path: casePath });
       } catch (err) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to create case: ${getErrorMessage(err)}`);
       }
@@ -441,7 +454,7 @@ export function registerRalphRoutes(
       name: session.name,
       reason: 'ralph_loop_start',
     });
-    ctx.broadcast('session:created', ctx.getSessionStateWithRespawn(session));
+    ctx.broadcast(SseEvent.SessionCreated, ctx.getSessionStateWithRespawn(session));
 
     // Start interactive mode
     try {
@@ -452,8 +465,8 @@ export function registerRalphRoutes(
         name: session.name,
         mode: 'claude',
       });
-      ctx.broadcast('session:interactive', { id: session.id, mode: 'claude' });
-      ctx.broadcast('session:updated', { session: ctx.getSessionStateWithRespawn(session) });
+      ctx.broadcast(SseEvent.SessionInteractive, { id: session.id, mode: 'claude' });
+      ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
     } catch (err) {
       await ctx.cleanupSession(session.id, true, 'ralph_loop_start_error');
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
@@ -475,7 +488,7 @@ export function registerRalphRoutes(
       controller.start();
       ctx.saveRespawnConfig(session.id, controller.getConfig());
       ctx.persistSessionState(session);
-      ctx.broadcast('respawn:started', {
+      ctx.broadcast(SseEvent.RespawnStarted, {
         sessionId: session.id,
         status: controller.getStatus(),
       });

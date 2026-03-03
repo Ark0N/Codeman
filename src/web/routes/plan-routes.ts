@@ -18,10 +18,15 @@ import {
   PlanTaskAddSchema,
 } from '../schemas.js';
 import { findSessionOrFail, CASES_DIR } from '../route-helpers.js';
+import { SseEvent } from '../sse-events.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort } from '../ports/index.js';
 
 export function registerPlanRoutes(app: FastifyInstance, ctx: SessionPort & EventPort & ConfigPort & InfraPort): void {
-  // ============ Plan Generation Endpoints ============
+  // ═══════════════════════════════════════════════════════════════
+  // Plan Generation (simple AI + detailed orchestration)
+  // ═══════════════════════════════════════════════════════════════
+
+  // ========== Generate Plan (Simple) ==========
 
   app.post('/api/generate-plan', async (req): Promise<ApiResponse> => {
     const gpResult = GeneratePlanSchema.safeParse(req.body);
@@ -215,8 +220,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }
   });
 
-  // Generate detailed implementation plan using subagent orchestration
-  // This spawns multiple specialist subagents in parallel for thorough analysis
+  // ========== Generate Plan (Detailed Orchestration) ==========
+
   app.post('/api/generate-plan-detailed', async (req): Promise<ApiResponse> => {
     const gpdResult = GeneratePlanDetailedSchema.safeParse(req.body);
     if (!gpdResult.success) {
@@ -257,7 +262,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     ctx.activePlanOrchestrators.set(orchestratorId, orchestrator);
 
     // Broadcast the orchestrator ID so frontend can cancel if needed
-    ctx.broadcast('plan:started', { orchestratorId });
+    ctx.broadcast(SseEvent.PlanStarted, { orchestratorId });
 
     // Track progress for SSE updates
     const progressUpdates: Array<{ phase: string; detail: string; timestamp: number }> = [];
@@ -265,7 +270,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       const update = { phase, detail, timestamp: Date.now() };
       progressUpdates.push(update);
       // Broadcast progress to connected clients
-      ctx.broadcast('plan:progress', update);
+      ctx.broadcast(SseEvent.PlanProgress, update);
     };
 
     // Broadcast plan subagent events for UI visibility
@@ -280,7 +285,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       durationMs?: number;
       error?: string;
     }) => {
-      ctx.broadcast('plan:subagent', event);
+      ctx.broadcast(SseEvent.PlanSubagent, event);
     };
 
     try {
@@ -292,7 +297,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
 
       // Clean up orchestrator from active map
       ctx.activePlanOrchestrators.delete(orchestratorId);
-      ctx.broadcast('plan:completed', { orchestratorId, success: result.success });
+      ctx.broadcast(SseEvent.PlanCompleted, { orchestratorId, success: result.success });
 
       if (!result.success) {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, result.error || 'Plan generation failed');
@@ -311,7 +316,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     } catch (err) {
       // Clean up on error too
       ctx.activePlanOrchestrators.delete(orchestratorId);
-      ctx.broadcast('plan:completed', {
+      ctx.broadcast(SseEvent.PlanCompleted, {
         orchestratorId,
         success: false,
         error: getErrorMessage(err),
@@ -323,7 +328,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }
   });
 
-  // Cancel active plan generation
+  // ========== Cancel Plan Generation ==========
+
   app.post('/api/cancel-plan-generation', async (req): Promise<ApiResponse> => {
     const cpResult = CancelPlanSchema.safeParse(req.body);
     if (!cpResult.success) {
@@ -340,7 +346,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       console.log(`[API] Cancelling plan generation ${orchestratorId}`);
       await orchestrator.cancel();
       ctx.activePlanOrchestrators.delete(orchestratorId);
-      ctx.broadcast('plan:cancelled', { orchestratorId });
+      ctx.broadcast(SseEvent.PlanCancelled, { orchestratorId });
       return { success: true, data: { cancelled: orchestratorId } };
     }
 
@@ -350,17 +356,19 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       console.log(`[API] Cancelling plan generation ${id}`);
       await orchestrator.cancel();
       cancelled.push(id);
-      ctx.broadcast('plan:cancelled', { orchestratorId: id });
+      ctx.broadcast(SseEvent.PlanCancelled, { orchestratorId: id });
     }
     ctx.activePlanOrchestrators.clear();
 
     return { success: true, data: { cancelled } };
   });
 
-  // ============ Plan Management Endpoints ============
-  // These endpoints support runtime plan adaptation with checkpoints, failure tracking, and versioning
+  // ═══════════════════════════════════════════════════════════════
+  // Plan Management (task CRUD, checkpoints, version history, rollback)
+  // ═══════════════════════════════════════════════════════════════
 
-  // Update a specific plan task (status, attempts, errors)
+  // ========== Update Plan Task ==========
+
   app.patch('/api/sessions/:id/plan/task/:taskId', async (req) => {
     const { id, taskId } = req.params as { id: string; taskId: string };
     const session = findSessionOrFail(ctx, id);
@@ -385,11 +393,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       return createErrorResponse(ApiErrorCode.NOT_FOUND, result.error || 'Task not found');
     }
 
-    ctx.broadcast('session:planTaskUpdate', { sessionId: id, taskId, update: result.task });
+    ctx.broadcast(SseEvent.SessionPlanTaskUpdate, { sessionId: id, taskId, update: result.task });
     return { success: true, data: result.task };
   });
 
-  // Trigger a checkpoint review (at iterations 5, 10, 20, etc.)
+  // ========== Create Checkpoint ==========
+
   app.post('/api/sessions/:id/plan/checkpoint', async (req) => {
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id);
@@ -400,11 +409,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     }
 
     const checkpoint = tracker.generateCheckpointReview();
-    ctx.broadcast('session:planCheckpoint', { sessionId: id, checkpoint });
+    ctx.broadcast(SseEvent.SessionPlanCheckpoint, { sessionId: id, checkpoint });
     return { success: true, data: checkpoint };
   });
 
-  // Get plan version history
+  // ========== Get Version History ==========
+
   app.get('/api/sessions/:id/plan/history', async (req) => {
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id);
@@ -417,7 +427,8 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     return { success: true, data: tracker.getPlanHistory() };
   });
 
-  // Rollback to a previous plan version
+  // ========== Rollback to Version ==========
+
   app.post('/api/sessions/:id/plan/rollback/:version', async (req) => {
     const { id, version } = req.params as { id: string; version: string };
     const session = findSessionOrFail(ctx, id);
@@ -432,11 +443,12 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
       return createErrorResponse(ApiErrorCode.NOT_FOUND, result.error || 'Version not found');
     }
 
-    ctx.broadcast('session:planRollback', { sessionId: id, version: parseInt(version, 10) });
+    ctx.broadcast(SseEvent.SessionPlanRollback, { sessionId: id, version: parseInt(version, 10) });
     return { success: true, data: result.plan };
   });
 
-  // Add a new task to the plan (for runtime adaptation)
+  // ========== Add Plan Task ==========
+
   app.post('/api/sessions/:id/plan/task', async (req) => {
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id);
@@ -453,7 +465,7 @@ NOW: Generate the implementation plan for the task above. Think step by step.`;
     const task = ptaResult.data;
 
     const result = tracker.addPlanTask(task);
-    ctx.broadcast('session:planTaskAdded', { sessionId: id, task: result.task });
+    ctx.broadcast(SseEvent.SessionPlanTaskAdded, { sessionId: id, task: result.task });
     return { success: true, data: result.task };
   });
 }

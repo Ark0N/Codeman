@@ -1,3 +1,18 @@
+/**
+ * @fileoverview Service worker for Web Push notifications.
+ *
+ * Receives push events from the Codeman server (via web-push library) and displays
+ * OS-level notifications. Handles notification clicks to focus an existing Codeman
+ * tab or open a new one. Supports action buttons, per-session deep linking, and
+ * critical notification persistence (requireInteraction).
+ *
+ * Lifecycle: skipWaiting on install, claim clients on activate — ensures the latest
+ * service worker takes control immediately without waiting for tab refresh.
+ *
+ * @dependency None (runs in ServiceWorkerGlobalScope, isolated from page scripts)
+ * @see src/push-store.ts — server-side VAPID key management and subscription CRUD
+ */
+
 // Codeman Service Worker — Web Push notifications
 // This service worker receives push events from the server and displays OS-level notifications.
 // It also handles notification clicks to focus or open the Codeman tab.

@@ -1,9 +1,33 @@
+/**
+ * @fileoverview Voice input with Deepgram Nova-3 (primary) and Web Speech API (fallback).
+ *
+ * Defines two singleton objects:
+ *
+ * - DeepgramProvider — Direct browser-to-Deepgram WebSocket connection for speech-to-text.
+ *   Captures audio via MediaRecorder, streams chunks every 250ms, handles KeepAlive pings,
+ *   auto-detects MIME type (opus/webm/mp4), and supports custom key terms for dev vocabulary.
+ *
+ * - VoiceInput — High-level voice input controller. Toggle mode: tap mic to start, tap
+ *   again to stop. Auto-stops after 3s silence. Shows floating preview overlay with recording
+ *   indicator, level meter (AnalyserNode), and elapsed timer. Two insert modes: "direct"
+ *   (inject into local echo overlay or PTY) and "compose" (editable textarea overlay).
+ *   Includes a temporary green Send button that replaces the settings gear icon after voice input.
+ *   Web Speech API has auto-retry (up to 2x) for premature onend and iOS Safari stability check.
+ *
+ * @globals {object} DeepgramProvider
+ * @globals {object} VoiceInput
+ *
+ * @dependency mobile-handlers.js (MobileDetection for device checks)
+ * @dependency app.js (uses global `app` for sendInput, showToast, terminal focus)
+ * @loadorder 3 of 9 — loaded after mobile-handlers.js, before notification-manager.js
+ */
+
 // Codeman — Voice input with Deepgram Nova-3 and Web Speech API fallback
 // Loaded after mobile-handlers.js, before app.js
 
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 // Voice Input (Deepgram Nova-3 + Web Speech API fallback)
-// ============================================================================
+// ═══════════════════════════════════════════════════════════════
 
 /**
  * DeepgramProvider - Speech-to-text via Deepgram Nova-3 WebSocket API.

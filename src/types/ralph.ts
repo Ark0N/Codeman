@@ -1,5 +1,26 @@
 /**
- * @fileoverview Ralph Loop / todo tracking type definitions
+ * @fileoverview Ralph Loop / todo tracking type definitions.
+ *
+ * Covers the autonomous task execution system: loop state, todo items,
+ * completion confidence scoring, RALPH_STATUS block parsing, and the
+ * circuit breaker for stuck-loop detection.
+ *
+ * Key exports:
+ * - RalphLoopState / RalphLoopStatus — global loop controller state (embedded in AppState)
+ * - RalphTrackerState — per-session loop tracking (cycle count, completion phrase, plan version)
+ * - RalphTodoItem / RalphTodoProgress — detected todo items with priority and progress estimation
+ * - RalphSessionState — composite per-session state (loop + todos), linked via sessionId
+ * - CompletionConfidence — multi-signal scoring for completion detection (0-100)
+ * - RalphStatusBlock — parsed RALPH_STATUS block from Claude output (status, tests, exit signal)
+ * - CircuitBreakerStatus / CircuitBreakerState — stuck-loop detection state machine (CLOSED → HALF_OPEN → OPEN)
+ * - Factory functions: createInitialCircuitBreakerStatus(), createInitialRalphTrackerState(), createInitialRalphSessionState()
+ *
+ * Cross-domain relationships:
+ * - RalphLoopState is embedded in AppState.ralphLoop (app-state domain)
+ * - RalphSessionState.sessionId links to SessionState.id (session domain)
+ * - CircuitBreakerStatus feeds into RalphLoopHealthScore.components.circuitBreaker (respawn domain)
+ *
+ * Served at `GET /api/sessions/:id/ralph-state` and `GET /api/sessions/:id/ralph-status`.
  */
 
 /** Status of the Ralph Loop controller */

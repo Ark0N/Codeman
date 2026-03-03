@@ -1,3 +1,74 @@
+/**
+ * @fileoverview Core UI controller for Codeman — tab-based terminal manager with xterm.js.
+ *
+ * This is the main application module (~11,500 lines). It defines the CodemanApp class which
+ * manages the entire frontend: terminal rendering, SSE event handling, session lifecycle,
+ * settings UI, and all panel systems. Additional methods are mixed in from api-client.js,
+ * ralph-wizard.js, and subagent-windows.js via Object.assign on CodemanApp.prototype.
+ *
+ * ═══ Major Sections ═══
+ *
+ *   _SSE_HANDLER_MAP (line ~14)       — SSE event-to-method routing table
+ *   CodemanApp class (line ~115)      — Constructor, state initialization
+ *   Pending Hooks (line ~291)         — Hook state machine for tab alerts
+ *   init / initTerminal (line ~329)   — App bootstrap, xterm.js setup, fit addon, link provider
+ *   Terminal Rendering (line ~979)    — batchTerminalWrite, flushPendingWrites, chunkedTerminalWrite
+ *   Event Listeners (line ~1299)      — Keyboard shortcuts, resize, beforeunload
+ *   SSE Connection (line ~1379)       — connectSSE with exponential backoff (1-30s)
+ *   SSE Event Handlers (line ~1473)   — ~60 handler methods (_onSessionCreated, _onRespawnStateChanged, etc.)
+ *   Connection Status (line ~2454)    — Online detection, handleInit (full state sync on reconnect)
+ *   Session Tabs (line ~2808)         — Tab rendering, selection, drag-and-drop reordering
+ *   Navigation (line ~3563)           — goHome, Ralph wizard stub
+ *   Quick Start (line ~3595)          — Case loading, session spawning (Claude, Shell, OpenCode)
+ *   Respawn Banner (line ~4087)       — Respawn state display, countdown timers, action log
+ *   Kill Sessions (line ~4518)        — Kill active/all sessions
+ *   Terminal Controls (line ~4554)    — Clear, resize, copy, font size, sendInput
+ *   Timer / Tokens (line ~4707)       — Session timer, token/cost display
+ *   Session Options Modal (line ~4809) — Per-session settings, respawn config, color picker
+ *   Respawn Presets (line ~5056)      — Preset CRUD, load/save/delete
+ *   Run Summary Modal (line ~5372)    — Timeline events, filtering, export (JSON/Markdown)
+ *   Session Options Tabs (line ~5626) — Ralph config tab within session options
+ *   Web Push (line ~5744)             — Service worker registration, push subscribe/unsubscribe
+ *   App Settings Modal (line ~5884)   — Global settings, tunnel management, QR auth, voice config
+ *   Session Lifecycle Log (line ~6394) — JSONL audit log viewer
+ *   Visibility Settings (line ~6716)  — Header/panel visibility, device-specific defaults
+ *   Persistent Parent Assoc (line ~7070) — Parent session tracking for subagent windows
+ *   Help Modal (line ~7176)           — Keyboard shortcuts help
+ *   Token Statistics (line ~7211)     — Aggregate token/cost stats across sessions
+ *   Monitor Panel (line ~7336)        — Mux sessions + background tasks, detachable panel
+ *   Subagents Panel (line ~7456)      — Detachable subagent list panel
+ *   Ralph Panel (line ~7639)          — Ralph Loop status, @fix_plan.md integration
+ *   Plan Versioning (line ~8474)      — Plan checkpoint/rollback/diff UI
+ *   Subagent Panel (line ~8614)       — Agent discovery, window open/close, connection lines
+ *   Subagent Parent Tracking (line ~8933) — Tab-based agent grouping
+ *   Agent Teams (line ~9425)          — Team tasks panel, teammate badges
+ *   Project Insights (line ~9823)     — Bash tool tracking with clickable file paths
+ *   File Browser (line ~10136)        — Directory tree panel with file preview
+ *   Log Viewer (line ~10443)          — Floating file streamer windows (tail -f)
+ *   Image Popups (line ~10590)        — Auto-popup windows for detected screenshots
+ *   Mux Sessions (line ~10729)        — tmux session list in monitor panel
+ *   Case Settings (line ~10804)       — Case CRUD and link management
+ *   Mobile Case Picker (line ~11035)  — Touch-friendly case selection modal
+ *   Plan Wizard Agents (line ~11294)  — Plan orchestrator subagent display in monitor
+ *   Toast (line ~11378)               — Toast notification popups
+ *   System Stats (line ~11428)        — CPU/memory polling display
+ *
+ * After the class: localStorage migration (claudeman-* → codeman-*), app instantiation,
+ * and window.app / window.MobileDetection exports.
+ *
+ * @class CodemanApp
+ * @globals {CodemanApp} app - Singleton instance (also on window.app)
+ *
+ * @dependency constants.js (SSE_EVENTS, timing constants, escapeHtml, extractSyncSegments, DEC sync markers)
+ * @dependency mobile-handlers.js (MobileDetection, KeyboardHandler, SwipeHandler)
+ * @dependency voice-input.js (VoiceInput, DeepgramProvider)
+ * @dependency notification-manager.js (NotificationManager class)
+ * @dependency keyboard-accessory.js (KeyboardAccessoryBar, FocusTrap)
+ * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js, vendor/xterm-addon-webgl.js
+ * @dependency vendor/xterm-zerolag-input.iife.js (LocalEchoOverlay)
+ * @loadorder 6 of 9 — loaded after keyboard-accessory.js, before ralph-wizard.js
+ */
+
 // Codeman App - Tab-based Terminal UI
 // Constants, utilities, and escapeHtml() are in constants.js (loaded before this file)
 // MobileDetection, KeyboardHandler, SwipeHandler are in mobile-handlers.js
@@ -288,7 +359,9 @@ class CodemanApp {
     return inputCost + outputCost;
   }
 
-  // ========== Pending Hooks State Machine ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Pending Hooks State Machine
+  // ═══════════════════════════════════════════════════════════════
   // Track pending hook events per session to determine tab alerts.
   // Action hooks (permission_prompt, elicitation_dialog) take priority over idle_prompt.
 
@@ -963,6 +1036,10 @@ class CodemanApp {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // Terminal Rendering
+  // ═══════════════════════════════════════════════════════════════
+
   /**
    * Check if terminal viewport is at or near the bottom.
    * Used to implement "sticky scroll" behavior - keep user at bottom if they were there.
@@ -1296,6 +1373,10 @@ class CodemanApp {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // Event Listeners (Keyboard Shortcuts, Resize, Beforeunload)
+  // ═══════════════════════════════════════════════════════════════
+
   setupEventListeners() {
     // Use capture to handle before terminal
     document.addEventListener('keydown', (e) => {
@@ -1376,7 +1457,9 @@ class CodemanApp {
     this.setupColorPicker();
   }
 
-  // ========== SSE Connection ==========
+  // ═══════════════════════════════════════════════════════════════
+  // SSE Connection
+  // ═══════════════════════════════════════════════════════════════
 
   connectSSE() {
     // Check if browser is offline
@@ -1470,7 +1553,9 @@ class CodemanApp {
     }
   }
 
-  // ========== SSE Event Handlers ==========
+  // ═══════════════════════════════════════════════════════════════
+  // SSE Event Handlers
+  // ═══════════════════════════════════════════════════════════════
   // Each _on* method receives pre-parsed SSE data (JSON.parse done in connectSSE loop).
   // Async handlers have their own internal try/catch for fetch errors.
 
@@ -2451,6 +2536,10 @@ class CodemanApp {
     this.renderMonitorPlanAgents();
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // Connection Status, Input Queuing & State Initialization
+  // ═══════════════════════════════════════════════════════════════
+
   setConnectionStatus(status) {
     this._connectionStatus = status;
     this._updateConnectionIndicator();
@@ -2805,7 +2894,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Session Tabs ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Session Tabs
+  // ═══════════════════════════════════════════════════════════════
 
   renderSessionTabs() {
     // Debounce renders at 100ms to prevent excessive DOM updates
@@ -3035,7 +3126,9 @@ class CodemanApp {
   }
 
 
-  // ========== Tab Order and Drag-and-Drop ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Tab Order and Drag-and-Drop
+  // ═══════════════════════════════════════════════════════════════
 
   // Sync sessionOrder with current sessions (preserve order for existing, add new at end)
   syncSessionOrder() {
@@ -3560,7 +3653,9 @@ class CodemanApp {
     this.selectSession(this.sessionOrder[prevIndex]);
   }
 
-  // ========== Navigation ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Navigation
+  // ═══════════════════════════════════════════════════════════════
 
   goHome() {
     // Deselect active session and show welcome screen
@@ -3572,7 +3667,9 @@ class CodemanApp {
     this.renderRalphStatePanel();
   }
 
-  // ========== Ralph Loop Wizard (methods in ralph-wizard.js) ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Ralph Loop Wizard (methods in ralph-wizard.js)
+  // ═══════════════════════════════════════════════════════════════
 
   // Wizard state (initialized here, methods loaded from ralph-wizard.js)
   ralphWizardStep = 1;
@@ -3592,7 +3689,9 @@ class CodemanApp {
   planLoadingTimer = null;
   planLoadingStartTime = null;
 
-  // ========== Quick Start ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Quick Start
+  // ═══════════════════════════════════════════════════════════════
 
   async loadQuickStartCases(selectCaseName = null, settingsPromise = null) {
     try {
@@ -4058,7 +4157,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Directory Input ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Directory Input
+  // ═══════════════════════════════════════════════════════════════
 
   toggleDirInput() {
     const btn = document.querySelector('#dirDisplay').parentElement;
@@ -4084,7 +4185,9 @@ class CodemanApp {
     }, 100);
   }
 
-  // ========== Respawn Banner ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Respawn Banner
+  // ═══════════════════════════════════════════════════════════════
 
   showRespawnBanner() {
     this.$('respawnBanner').style.display = 'flex';
@@ -4357,7 +4460,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Countdown Timer Display Methods ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Countdown Timer Display Methods
+  // ═══════════════════════════════════════════════════════════════
 
   addActionLogEntry(sessionId, action) {
     // Only keep truly interesting events - no spam
@@ -4515,7 +4620,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Kill Sessions ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Kill Sessions
+  // ═══════════════════════════════════════════════════════════════
 
   async killActiveSession() {
     if (!this.activeSessionId) {
@@ -4551,7 +4658,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Terminal Controls ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Terminal Controls
+  // ═══════════════════════════════════════════════════════════════
 
   clearTerminal() {
     this.terminal.clear();
@@ -4704,7 +4813,9 @@ class CodemanApp {
     });
   }
 
-  // ========== Timer ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Timer
+  // ═══════════════════════════════════════════════════════════════
 
   showTimer() {
     document.getElementById('timerBanner').style.display = 'flex';
@@ -4752,7 +4863,9 @@ class CodemanApp {
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
   }
 
-  // ========== Tokens ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Tokens
+  // ═══════════════════════════════════════════════════════════════
 
   updateCost() {
     // Now updates tokens instead of cost
@@ -4806,7 +4919,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Session Options Modal ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Session Options Modal
+  // ═══════════════════════════════════════════════════════════════
 
   openSessionOptions(sessionId) {
     const session = this.sessions.get(sessionId);
@@ -5053,7 +5168,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Respawn Presets ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Respawn Presets
+  // ═══════════════════════════════════════════════════════════════
 
   loadRespawnPresets() {
     const saved = localStorage.getItem('codeman-respawn-presets');
@@ -5369,7 +5486,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Run Summary Modal ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Run Summary Modal
+  // ═══════════════════════════════════════════════════════════════
 
   async openRunSummary(sessionId) {
     // Open session options modal and switch to summary tab
@@ -5623,7 +5742,9 @@ class CodemanApp {
     this.closeSessionOptions();
   }
 
-  // ========== Session Options Modal Tabs ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Session Options Modal Tabs
+  // ═══════════════════════════════════════════════════════════════
 
   switchOptionsTab(tabName) {
     // Toggle active class on tab buttons
@@ -5741,7 +5862,9 @@ class CodemanApp {
     });
   }
 
-  // ========== Web Push ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Web Push
+  // ═══════════════════════════════════════════════════════════════
 
   registerServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
@@ -5881,7 +6004,9 @@ class CodemanApp {
     }
   }
 
-  // ========== App Settings Modal ==========
+  // ═══════════════════════════════════════════════════════════════
+  // App Settings Modal
+  // ═══════════════════════════════════════════════════════════════
 
   openAppSettings() {
     // Load current settings
@@ -6391,7 +6516,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Session Lifecycle Log ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Session Lifecycle Log
+  // ═══════════════════════════════════════════════════════════════
 
   openLifecycleLog() {
     const win = document.getElementById('lifecycleWindow');
@@ -6711,6 +6838,10 @@ class CodemanApp {
       console.warn('Failed to save model config:', err);
     }
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Visibility Settings & Device-Specific Defaults
+  // ═══════════════════════════════════════════════════════════════
 
   // Get the global Ralph tracker enabled setting
   isRalphTrackerEnabledByDefault() {
@@ -7067,7 +7198,9 @@ class CodemanApp {
   }
 
 
-  // ========== Persistent Parent Associations ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Persistent Parent Associations
+  // ═══════════════════════════════════════════════════════════════
   // This is the ROCK-SOLID system for tracking which tab an agent belongs to.
   // Once an agent's parent is discovered, it's saved here PERMANENTLY.
 
@@ -7173,7 +7306,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Help Modal ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Help Modal
+  // ═══════════════════════════════════════════════════════════════
 
   showHelp() {
     const modal = document.getElementById('helpModal');
@@ -7208,7 +7343,9 @@ class CodemanApp {
     this.subagentPanelVisible = false;
   }
 
-  // ========== Token Statistics Modal ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Token Statistics Modal
+  // ═══════════════════════════════════════════════════════════════
 
   async openTokenStats() {
     try {
@@ -7333,7 +7470,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Monitor Panel (combined Mux Sessions + Background Tasks) ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Monitor Panel (combined Mux Sessions + Background Tasks)
+  // ═══════════════════════════════════════════════════════════════
 
   async toggleMonitorPanel() {
     const panel = document.getElementById('monitorPanel');
@@ -7358,7 +7497,9 @@ class CodemanApp {
     this.toggleMonitorPanel();
   }
 
-  // ========== Monitor Panel Detach & Drag ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Monitor Panel Detach & Drag
+  // ═══════════════════════════════════════════════════════════════
 
   toggleMonitorDetach() {
     const panel = document.getElementById('monitorPanel');
@@ -7453,7 +7594,9 @@ class CodemanApp {
     header.addEventListener('touchstart', onStart, { passive: false });
   }
 
-  // ========== Subagents Panel Detach & Drag ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Subagents Panel Detach & Drag
+  // ═══════════════════════════════════════════════════════════════
 
   toggleSubagentsDetach() {
     const panel = document.getElementById('subagentsPanel');
@@ -7636,7 +7779,9 @@ class CodemanApp {
     return result;
   }
 
-  // ========== Enhanced Ralph Wiggum Loop Panel ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Enhanced Ralph Wiggum Loop Panel
+  // ═══════════════════════════════════════════════════════════════
 
   updateRalphState(sessionId, updates) {
     const existing = this.ralphStates.get(sessionId) || { loop: null, todos: [] };
@@ -7684,7 +7829,9 @@ class CodemanApp {
     this.renderRalphStatePanel();
   }
 
-  // ========== @fix_plan.md Integration ==========
+  // ═══════════════════════════════════════════════════════════════
+  // @fix_plan.md Integration
+  // ═══════════════════════════════════════════════════════════════
 
   toggleRalphMenu() {
     const dropdown = document.getElementById('ralphDropdown');
@@ -8471,7 +8618,9 @@ class CodemanApp {
     return this.getRalphTaskIcon(status);
   }
 
-  // ========== Plan Versioning ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Plan Versioning
+  // ═══════════════════════════════════════════════════════════════
 
   // Update the plan version display in the Ralph panel
   updatePlanVersionDisplay(version, historyLength) {
@@ -8611,7 +8760,9 @@ class CodemanApp {
     return `${days}d ago`;
   }
 
-  // ========== Subagent Panel (Claude Code Background Agents) ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Subagent Panel (Claude Code Background Agents)
+  // ═══════════════════════════════════════════════════════════════
 
   // Legacy alias
   toggleSubagentPanel() {
@@ -8930,7 +9081,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Subagent Parent TAB Tracking ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Subagent Parent TAB Tracking
+  // ═══════════════════════════════════════════════════════════════
   //
   // CRITICAL: This system tracks which TAB an agent window connects to.
   // The association is stored in `subagentParentMap` (agentId -> sessionId).
@@ -9422,7 +9575,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Agent Teams ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Agent Teams
+  // ═══════════════════════════════════════════════════════════════
 
   /** Initialize an xterm.js terminal for a teammate's tmux pane */
   initTeammateTerminal(agentId, paneInfo, windowElement) {
@@ -9820,7 +9975,9 @@ class CodemanApp {
     return info?.color || 'blue';
   }
 
-  // ========== Project Insights Panel (Bash Tools with Clickable File Paths) ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Project Insights Panel (Bash Tools with Clickable File Paths)
+  // ═══════════════════════════════════════════════════════════════
 
   /**
    * Normalize a file path to its canonical form for comparison.
@@ -10133,7 +10290,9 @@ class CodemanApp {
     }
   }
 
-  // ========== File Browser Panel ==========
+  // ═══════════════════════════════════════════════════════════════
+  // File Browser Panel
+  // ═══════════════════════════════════════════════════════════════
 
   // File tree data and state
   fileBrowserData = null;
@@ -10440,7 +10599,9 @@ class CodemanApp {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   }
 
-  // ========== Log Viewer Windows (Floating File Streamers) ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Log Viewer Windows (Floating File Streamers)
+  // ═══════════════════════════════════════════════════════════════
 
   openLogViewerWindow(filePath, sessionId) {
     sessionId = sessionId || this.activeSessionId;
@@ -10587,7 +10748,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Image Popup Windows (Auto-popup for Screenshots) ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Image Popup Windows (Auto-popup for Screenshots)
+  // ═══════════════════════════════════════════════════════════════
 
   /**
    * Open a popup window to display a detected image.
@@ -10726,7 +10889,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Mux Sessions (in Monitor Panel) ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Mux Sessions (in Monitor Panel)
+  // ═══════════════════════════════════════════════════════════════
 
   async loadMuxSessions() {
     try {
@@ -10801,7 +10966,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Case Settings ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Case Settings
+  // ═══════════════════════════════════════════════════════════════
 
   toggleCaseSettings() {
     const popover = document.getElementById('caseSettingsPopover');
@@ -10878,7 +11045,9 @@ class CodemanApp {
     if (desktopCheckbox) desktopCheckbox.checked = settings.agentTeams;
   }
 
-  // ========== Create Case Modal ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Create Case Modal
+  // ═══════════════════════════════════════════════════════════════
 
   showCreateCaseModal() {
     document.getElementById('newCaseName').value = '';
@@ -11032,9 +11201,9 @@ class CodemanApp {
     }
   }
 
-  // ============================================================================
+  // ═══════════════════════════════════════════════════════════════
   // Mobile Case Picker
-  // ============================================================================
+  // ═══════════════════════════════════════════════════════════════
 
   showMobileCasePicker() {
     const modal = document.getElementById('mobileCasePickerModal');
@@ -11291,7 +11460,9 @@ class CodemanApp {
     }
   }
 
-  // ========== Plan Wizard Agents in Monitor ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Plan Wizard Agents in Monitor
+  // ═══════════════════════════════════════════════════════════════
 
   renderMonitorPlanAgents() {
     const section = document.getElementById('monitorPlanAgentsSection');
@@ -11375,7 +11546,9 @@ class CodemanApp {
     this.showToast('Plan generation cancelled', 'success');
   }
 
-  // ========== Toast ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Toast
+  // ═══════════════════════════════════════════════════════════════
 
   // Cached toast container for performance
   _toastContainer = null;
@@ -11425,7 +11598,9 @@ class CodemanApp {
     }, duration);
   }
 
-  // ========== System Stats ==========
+  // ═══════════════════════════════════════════════════════════════
+  // System Stats
+  // ═══════════════════════════════════════════════════════════════
 
   startSystemStatsPolling() {
     // Clear any existing interval to prevent duplicates

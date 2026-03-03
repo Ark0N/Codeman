@@ -64,6 +64,8 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 
 **Requirements**: Node.js 18+, Claude CLI, tmux
 
+**Git**: Main branch is `master`. SSH session chooser: `sc` (interactive), `sc 2` (quick attach), `sc -l` (list).
+
 ## Commands
 
 **Note**: `npm run dev` starts the web server (equivalent to `npx tsx src/index.ts web`).
@@ -119,64 +121,26 @@ journalctl --user -u codeman-web -f
 
 ## Architecture
 
-### Core Files
+### Core Files (by domain)
 
-| File | Purpose |
-|------|---------|
-| `src/index.ts` | CLI entry point: global error recovery, uncaught exception guard, `MAX_CONSECUTIVE_ERRORS` auto-restart |
-| `src/session.ts` | PTY wrapper: `runPrompt()`, `startInteractive()`, `startShell()` |
-| `src/mux-interface.ts` | `TerminalMultiplexer` interface + `MuxSession` type |
-| `src/mux-factory.ts` | Create tmux multiplexer instance |
-| `src/tmux-manager.ts` | tmux session management |
-| `src/session-manager.ts` | Session lifecycle, cleanup |
-| `src/session-auto-ops.ts` | Automatic session operations (auto-compact, etc.) |
-| `src/session-cli-builder.ts` | CLI argument construction for session spawning |
-| `src/session-task-cache.ts` | Task description caching for subagent correlation |
-| `src/state-store.ts` | State persistence to `~/.codeman/state.json` |
-| `src/respawn-controller.ts` | State machine for autonomous cycling |
-| `src/respawn-adaptive-timing.ts` | Adaptive idle timing calculation |
-| `src/respawn-health.ts` | Health scoring (0-100) for respawn loops |
-| `src/respawn-metrics.ts` | Per-cycle outcome metrics tracking |
-| `src/respawn-patterns.ts` | Pattern matching for stuck/error states |
-| `src/ralph-tracker.ts` | Detects `<promise>PHRASE</promise>`, todos |
-| `src/ralph-loop.ts` | Autonomous task execution loop (polls queue, assigns tasks) |
-| `src/ralph-config.ts` | Parses `.claude/ralph-loop.local.md` plugin config |
-| `src/ralph-fix-plan-watcher.ts` | Watches `@fix_plan.md` for changes |
-| `src/ralph-plan-tracker.ts` | Plan iteration tracking |
-| `src/ralph-stall-detector.ts` | Detects stuck Ralph loops |
-| `src/ralph-status-parser.ts` | Parses Ralph status messages |
-| `src/task.ts` | Task model for prompt execution |
-| `src/task-queue.ts` | Priority queue for tasks with dependencies |
-| `src/task-tracker.ts` | Background task tracker for subagent detection |
-| `src/subagent-watcher.ts` | Monitors Claude Code's Task tool (background agents) |
-| `src/team-watcher.ts` | Polls `~/.claude/teams/` for agent team activity; matches teams to sessions via `leadSessionId` |
-| `src/run-summary.ts` | Timeline events for "what happened while away" |
-| `src/ai-checker-base.ts` | Base class for AI-powered checkers (shared by idle + plan checkers) |
-| `src/ai-idle-checker.ts` | AI-powered idle detection |
-| `src/ai-plan-checker.ts` | AI-powered plan completion checker |
-| `src/bash-tool-parser.ts` | Parses Claude's bash tool invocations from output |
-| `src/transcript-watcher.ts` | Watches Claude's transcript files for changes |
-| `src/hooks-config.ts` | Manages `.claude/settings.local.json` hook configuration |
-| `src/push-store.ts` | VAPID key auto-gen + push subscription CRUD for Web Push |
-| `src/session-lifecycle-log.ts` | Append-only JSONL audit log at `~/.codeman/session-lifecycle.jsonl` |
-| `src/image-watcher.ts` | Watches for image file creation (screenshots, etc.) |
-| `src/file-stream-manager.ts` | Manages `tail -f` processes for live log viewing |
-| `src/plan-orchestrator.ts` | 2-agent plan generation: optional research agent → planner agent |
-| `src/prompts/index.ts` | Barrel export for all agent prompts |
-| `src/prompts/*.ts` | Agent prompts (research-agent, planner) |
-| `src/templates/claude-md.ts` | CLAUDE.md generation for new cases |
-| `src/tunnel-manager.ts` | Manages cloudflared child process for Cloudflare tunnel + QR auth token rotation |
-| `src/cli.ts` | Command-line interface handlers |
-| `src/web/server.ts` | Fastify server setup, SSE at `/api/events`, delegates to route modules |
-| `src/web/routes/*.ts` | 12 domain route modules (session, respawn, ralph, plan, etc.) — each exports `register*Routes()` |
-| `src/web/ports/*.ts` | Port interfaces (SessionPort, EventPort, etc.) — route modules declare dependencies via intersection types |
-| `src/web/middleware/auth.ts` | Auth middleware: Basic Auth, session cookies, rate limiting, security headers, CORS |
-| `src/web/route-helpers.ts` | Shared helper utilities for route modules |
-| `src/web/schemas.ts` | Zod v4 validation schemas with path/env security allowlists |
-| `src/web/public/app.js` | Frontend: xterm.js, tab management, subagent windows, mobile support (~11.5K lines) |
-| `src/types/index.ts` | Barrel re-export from `src/types/` — 13 domain files (session, task, respawn, ralph, api, etc.) |
+| Domain | Key files | Notes |
+|--------|-----------|-------|
+| **Entry** | `src/index.ts`, `src/cli.ts` | CLI entry point, global error recovery |
+| **Session** | `src/session.ts` ★, `src/session-manager.ts`, `src/session-auto-ops.ts`, `src/session-cli-builder.ts` | PTY wrapper, lifecycle, auto-compact |
+| **Mux** | `src/mux-interface.ts`, `src/mux-factory.ts`, `src/tmux-manager.ts` | tmux abstraction layer |
+| **Respawn** | `src/respawn-controller.ts` ★ + 4 helpers (`-adaptive-timing`, `-health`, `-metrics`, `-patterns`) | Autonomous cycling state machine |
+| **Ralph** | `src/ralph-tracker.ts` ★, `src/ralph-loop.ts` + 5 helpers (`-config`, `-fix-plan-watcher`, `-plan-tracker`, `-stall-detector`, `-status-parser`) | Completion tracking, autonomous task loop |
+| **Agents** | `src/subagent-watcher.ts` ★, `src/team-watcher.ts`, `src/bash-tool-parser.ts`, `src/transcript-watcher.ts` | Background agent monitoring |
+| **AI** | `src/ai-checker-base.ts`, `src/ai-idle-checker.ts`, `src/ai-plan-checker.ts` | AI-powered idle/plan detection |
+| **Tasks** | `src/task.ts`, `src/task-queue.ts`, `src/task-tracker.ts` | Task model, priority queue |
+| **State** | `src/state-store.ts`, `src/run-summary.ts`, `src/session-lifecycle-log.ts` | Persistence, timeline, audit log |
+| **Infra** | `src/hooks-config.ts`, `src/push-store.ts`, `src/tunnel-manager.ts`, `src/image-watcher.ts`, `src/file-stream-manager.ts` | Hooks, push, tunnel, file watching |
+| **Plan** | `src/plan-orchestrator.ts`, `src/prompts/*.ts`, `src/templates/claude-md.ts` | 2-agent plan generation |
+| **Web** | `src/web/server.ts`, `src/web/sse-events.ts`, `src/web/routes/*.ts` (13 modules), `src/web/ports/*.ts`, `src/web/middleware/auth.ts`, `src/web/schemas.ts` | Fastify server, SSE event registry, REST API |
+| **Frontend** | `src/web/public/app.js` ★ (~11.5K lines) + 8 JS modules | xterm.js UI, tabs, settings |
+| **Types** | `src/types/index.ts` → 13 domain files | Barrel re-export, see `@fileoverview` in index.ts |
 
-**Large files** (>50KB): `app.js`, `ralph-tracker.ts`, `respawn-controller.ts`, `session.ts`, `subagent-watcher.ts` — these contain complex state machines; read `docs/respawn-state-machine.md` before modifying.
+★ = Large file (>50KB), contains complex state machines. Read `docs/respawn-state-machine.md` before modifying respawn/ralph.
 
 ### Local Packages
 
@@ -184,38 +148,9 @@ journalctl --user -u codeman-web -f
 |---------|---------|
 | `packages/xterm-zerolag-input/` | Instant keystroke feedback overlay for xterm.js — eliminates perceived input latency over high-RTT connections. Source of truth for `LocalEchoOverlay`; a copy is embedded in `app.js`. Build: `npm run build` (tsup). |
 
-### Config Files (`src/config/`)
+**Config**: `src/config/` — 9 files for buffer limits, map limits, timeouts, SSE timing, auth, tunnel, terminal, AI, and teams. Import from specific files.
 
-| File | Purpose |
-|------|---------|
-| `buffer-limits.ts` | Terminal/text buffer size limits |
-| `map-limits.ts` | Global limits for Maps, sessions, watchers |
-| `exec-timeout.ts` | Execution timeout configuration |
-| `server-timing.ts` | Web server batching, SSE, scheduled run timing |
-| `auth-config.ts` | Auth session TTL, rate limits, hook timeout |
-| `tunnel-config.ts` | QR token rotation, tunnel process lifecycle |
-| `terminal-limits.ts` | Terminal dimension and input validation limits |
-| `ai-defaults.ts` | AI checker model and context limits |
-| `team-config.ts` | Agent Teams polling and cache sizes |
-
-### Utilities (`src/utils/`)
-
-Re-exported via `src/utils/index.ts`. Key exports:
-
-| File | Exports |
-|------|---------|
-| `cleanup-manager.ts` | `CleanupManager` — centralized disposal for timers, intervals, watchers, listeners, streams |
-| `lru-map.ts` | `LRUMap` — bounded cache with eviction |
-| `stale-expiration-map.ts` | `StaleExpirationMap` — TTL-based map with automatic cleanup |
-| `regex-patterns.ts` | `ANSI_ESCAPE_PATTERN_FULL/SIMPLE`, `createAnsiPatternFull/Simple()`, `stripAnsi`, `TOKEN_PATTERN`, `SPINNER_PATTERN` |
-| `buffer-accumulator.ts` | `BufferAccumulator` — batches rapid writes into single flushes |
-| `claude-cli-resolver.ts` | `findClaudeDir`, `getAugmentedPath` — resolves Claude CLI paths |
-| `opencode-cli-resolver.ts` | `resolveOpenCodeDir`, `isOpenCodeAvailable` — OpenCode CLI support |
-| `string-similarity.ts` | `stringSimilarity`, `fuzzyPhraseMatch`, `todoContentHash` |
-| `token-validation.ts` | `validateTokenCounts`, `validateTokensAndCost` |
-| `nice-wrapper.ts` | `wrapWithNice` — wraps commands with `nice`/`ionice` for lower priority |
-| `type-safety.ts` | `assertNever` — exhaustive switch/case guard |
-| `debouncer.ts` | `Debouncer` — reusable debounce utility |
+**Utilities**: `src/utils/` — re-exported via `src/utils/index.ts`. Key: `CleanupManager`, `LRUMap`, `StaleExpirationMap`, `BufferAccumulator`, `stripAnsi`, `createAnsiPatternFull/Simple()`, `assertNever`, `Debouncer`.
 
 ### Data Flow
 
@@ -248,28 +183,7 @@ Re-exported via `src/utils/index.ts`. Key exports:
 
 **Port interfaces**: Route modules declare their dependencies via port interfaces (`src/web/ports/`). `WebServer` implements all ports; routes use TypeScript intersection types (e.g., `SessionPort & EventPort`) to specify only what they need. This enables loose coupling between routes and the server.
 
-### Frontend Files
-
-| File | Purpose |
-|------|---------|
-| `src/web/public/index.html` | HTML entry point with inline critical CSS and async vendor loading |
-| `src/web/public/constants.js` | Shared constants, timing values, Z-index layers, Web Push utilities |
-| `src/web/public/api-client.js` | API fetch wrapper (`_api`, `_apiJson`, `_apiPost`, `_apiPut`) |
-| `src/web/public/mobile-handlers.js` | `MobileDetection`, `KeyboardHandler`, `SwipeHandler` objects |
-| `src/web/public/voice-input.js` | `DeepgramProvider`, `VoiceInput` objects for speech-to-text |
-| `src/web/public/notification-manager.js` | `NotificationManager` class (5-layer notification system) |
-| `src/web/public/keyboard-accessory.js` | `KeyboardAccessoryBar` and `FocusTrap` classes |
-| `src/web/public/subagent-windows.js` | Subagent window management (open, close, drag, connection lines) |
-| `src/web/public/app.js` | Core UI: xterm.js, tab management, settings |
-| `src/web/public/ralph-wizard.js` | Ralph Loop wizard UI |
-| `src/web/public/styles.css` | Main styling (dark theme, layout, components) |
-| `src/web/public/mobile.css` | Responsive overrides for screens <1024px (loaded conditionally via `media` attribute) |
-| `src/web/public/upload.html` | Screenshot upload page served at `/upload.html` |
-| `src/web/public/sw.js` | Service worker for Web Push notifications |
-| `src/web/public/manifest.json` | Minimal PWA manifest (required for push on Android) |
-| `src/web/public/vendor/` | Self-hosted xterm.js + addons (eliminates CDN latency) |
-
-**Script loading order** (index.html): `constants.js` → `mobile-handlers.js` → `voice-input.js` → `notification-manager.js` → `keyboard-accessory.js` → `app.js` → `ralph-wizard.js` → `api-client.js` → `subagent-windows.js`. All modules share global scope — order matters for dependencies.
+**Frontend files** are in `src/web/public/`. Each JS module has a `@fileoverview` JSDoc with `@dependency` and `@loadorder` tags. **Script loading order** (global scope, order matters): `constants.js`(1) → `mobile-handlers.js`(2) → `voice-input.js`(3) → `notification-manager.js`(4) → `keyboard-accessory.js`(5) → `app.js`(6) → `ralph-wizard.js`(7) → `api-client.js`(8) → `subagent-windows.js`(9).
 
 ### Frontend Architecture
 
@@ -308,22 +222,9 @@ The frontend is split across multiple vanilla JS modules (extracted from the ori
 - **Env var allowlist**: Only `CLAUDE_CODE_*` prefixes allowed; blocks `PATH`, `LD_PRELOAD`, `NODE_OPTIONS`, `CODEMAN_*` keys
 - **File streaming TOCTOU protection**: `FileStreamManager` calls `realpathSync()` twice (at validation and before spawn) to catch symlink swaps
 
-### SSE Event Categories
+### SSE Event Registry
 
-~100 event types broadcast via `broadcast()`. Key categories:
-
-| Category | Events | Purpose |
-|----------|--------|---------|
-| Session | `session:created/updated/deleted/working/idle/exit/error/completion` | Lifecycle |
-| Terminal | `session:terminal`, `session:clearTerminal`, `session:needsRefresh` | Output streaming |
-| Respawn | `respawn:stateChanged/cycleStarted/blocked/aiCheck*/planCheck*/timer*` | Respawn state machine |
-| Subagent | `subagent:discovered/updated/completed/tool_call/progress` | Background agents |
-| Ralph | `session:ralphLoopUpdate/ralphTodoUpdate/ralphCompletionDetected` | Ralph tracking |
-| Hooks | `hook:{eventName}` (dynamic) | Claude Code hook events |
-| Plan | `plan:started/progress/completed/cancelled/subagent` | Plan orchestration |
-| Mux | `mux:created/killed/died/statsUpdated` | tmux process monitor |
-| Tunnel | `tunnel:qrRotated/qrRegenerated/qrAuthUsed` | QR token lifecycle |
-| Image | `image:detected` | Screenshot detection |
+~100 event types defined in `src/web/sse-events.ts` (backend) and `SSE_EVENTS` in `constants.js` (frontend). Both must be kept in sync. Categories: Session lifecycle, Terminal output, Respawn state machine, Subagent monitoring, Ralph tracking, Hook events, Plan orchestration, Mux management, Tunnel/QR, Image detection.
 
 ### API Route Categories
 
@@ -347,7 +248,7 @@ The frontend is split across multiple vanilla JS modules (extracted from the ori
 ## Adding Features
 
 - **API endpoint**: Types in `src/types/` (domain file), route in the appropriate `src/web/routes/*-routes.ts` module, use `createErrorResponse()`. Validate request bodies with Zod schemas in `schemas.ts`.
-- **SSE event**: Emit via `broadcast()`, handle in `app.js` SSE listener section (search `addListener(`)
+- **SSE event**: Add constant to `src/web/sse-events.ts`, add to `SSE_EVENTS` in `constants.js`, emit via `broadcast()`, handle in `app.js` (search `addListener(`)
 - **Session setting**: Add to `SessionState` in `types.ts`, include in `session.toState()`, call `persistSessionState()`
 - **Hook event**: Add to `HookEventType` in `types.ts`, add hook command in `hooks-config.ts:generateHooksConfig()`, update `HookEventSchema` in `schemas.ts`
 - **Mobile feature**: Add to relevant mobile singleton (`KeyboardHandler`, `KeyboardAccessoryBar`, etc.), test with `MobileDetection.isMobile()` guard
@@ -445,19 +346,7 @@ The app must stay fast with 20 sessions and 50 agent windows:
 - Cached endpoints: `/api/sessions` and `/api/status` use 1s TTL caches to avoid expensive serialization
 - Frontend buffer loads: 128KB chunks via `requestAnimationFrame` to prevent UI jank
 
-## Terminal Anti-Flicker System
-
-Claude Code uses Ink (React for terminals), which redraws the screen on every state change. Codeman implements a 6-layer anti-flicker pipeline for smooth 60fps output:
-
-```
-PTY Output → Server Batching (16-50ms) → DEC 2026 Wrap → SSE → Client rAF → xterm.js
-```
-
-**Key functions:** `server.ts:batchTerminalData()`, `server.ts:flushTerminalBatches()`, `app.js:batchTerminalWrite()`, `app.js:extractSyncSegments()`
-
-**Typical latency:** 16-32ms. Optional per-session flicker filter adds ~50ms for problematic terminals.
-
-See `docs/terminal-anti-flicker.md` for full implementation details (adaptive batching, DEC 2026 markers, edge cases).
+**Anti-flicker pipeline**: `PTY → Server Batching (16-50ms) → DEC 2026 Wrap → SSE → Client rAF → xterm.js`. Key functions: `server.ts:batchTerminalData()`, `app.js:batchTerminalWrite()`, `app.js:extractSyncSegments()`. Optional per-session flicker filter adds ~50ms. See `docs/terminal-anti-flicker.md`.
 
 ## Resource Limits
 
@@ -488,30 +377,14 @@ Use `LRUMap` for bounded caches with eviction, `StaleExpirationMap` for TTL-base
 | **Ralph Loop guide** | `docs/ralph-wiggum-guide.md` |
 | **Claude Code hooks** | `docs/claude-code-hooks-reference.md` |
 | **Terminal anti-flicker** | `docs/terminal-anti-flicker.md` |
-| **Agent Teams (experimental)** | `agent-teams/README.md`, `agent-teams/design.md` |
-| **API routes** | `src/web/routes/` domain modules, or README.md |
-| **SSE events** | Search `broadcast(` in `server.ts` and route modules |
-| **Session statuses** | `SessionStatus` in `src/types/session.ts` |
-| **Error codes** | `createErrorResponse()` in `src/types/api.ts` |
-| **Refactoring phases** | `docs/phase1-implementation-plan.md` through `docs/phase7-test-infrastructure-plan.md` |
-| **Test utilities** | `test/respawn-test-utils.ts` |
-| **Mobile test suite** | `mobile-test/README.md` |
+| **Agent Teams** | `agent-teams/README.md`, `agent-teams/design.md` |
 | **OpenCode integration** | `docs/opencode-integration.md` |
-| **Local echo overlay** | `docs/local-echo-overlay-plan.md` |
-| **Performance investigation** | `docs/performance-investigation-report.md` |
-| **First-load optimization** | `docs/first-load-optimization-plan.md`, `docs/perf-audit-first-load.md` |
-| **Codebase quality / refactoring summary** | `docs/code-structure-findings.md` |
-| **Dead code audit** | `docs/cleanup-findings.md` |
-| **TypeScript improvements** | `docs/typescript-improvement-suggestions.md` |
-| **Browser testing** | `docs/browser-testing-guide.md` |
-| **Mobile testing report** | `docs/mobile-testing-report.md` |
-| **Voice input** | `docs/voice-input-plan.md` |
-| **Improvement roadmaps** | `docs/respawn-improvement-plan.md`, `docs/ralph-improvement-plan.md`, `docs/plan-improvement-roadmap.md` |
-| **Background keystroke forwarding** | `docs/background-keystroke-forwarding-merged-plan.md` |
 | **QR auth design** | `docs/qr-auth-plan.md` |
-| **Run summary** | `docs/run-summary-plan.md` |
+| **SSE events** | `src/web/sse-events.ts` (registry) + `src/web/public/constants.js` (frontend) |
+| **Types architecture** | `src/types/index.ts` `@fileoverview` (domain map + cross-references) |
+| **API routes** | `src/web/routes/` — each file has `@fileoverview` with route listing |
 
-Additional design docs and investigation reports are in the `docs/` directory.
+Additional docs in `docs/` directory: refactoring phases (1-7), performance reports, improvement roadmaps, mobile/browser testing guides.
 
 ## Scripts
 
@@ -577,28 +450,6 @@ Browser → Cloudflare Edge (HTTPS) → cloudflared → localhost:3000
 # Via web UI: Settings → Tunnel → Toggle On
 ```
 
-### systemd Service (Persistent)
+For persistent tunnel: `systemctl --user enable --now codeman-tunnel` (after copying `scripts/codeman-tunnel.service` to `~/.config/systemd/user/`).
 
-```bash
-# Install and enable
-cp scripts/codeman-tunnel.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now codeman-tunnel
-
-# Check logs
-journalctl --user -u codeman-tunnel -f
-```
-
-### Auth Flow
-
-1. First request → browser shows Basic Auth prompt (username: `admin` or `CODEMAN_USERNAME`), or scan QR code from tunnel settings panel
-2. On success → server issues `codeman_session` HttpOnly cookie (24h TTL, auto-extends on activity)
-3. Subsequent requests → cookie authenticates silently (no more prompts)
-4. SSE works automatically — `EventSource` sends same-origin cookies
-5. 10 failed attempts per IP → 429 rate limit (15-minute decay)
-
-### Security Requirements
-
-- **Always set `CODEMAN_PASSWORD`** before exposing via tunnel — without it, anyone with the URL has full access
-- Session cookies are `Secure` when using `--https` flag; through Cloudflare tunnel without `--https`, cookies are non-Secure but traffic is still encrypted end-to-end via Cloudflare
-- `/api/hook-event` bypasses auth (localhost-only Claude Code hooks need unauthenticated access)
+**Always set `CODEMAN_PASSWORD`** before exposing via tunnel — without it, anyone with the URL has full access. See the Security section above for full auth flow details (Basic Auth, QR Auth, session cookies, rate limiting).

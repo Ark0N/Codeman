@@ -1,3 +1,15 @@
+/**
+ * @fileoverview Centralized API fetch helpers mixed into CodemanApp.prototype.
+ *
+ * Provides _api(), _apiJson(), _apiPost(), _apiPut(), _apiDelete() methods that handle
+ * JSON serialization, Content-Type headers, and error swallowing. All API calls in the
+ * frontend route through these helpers.
+ *
+ * @mixin Extends CodemanApp.prototype via Object.assign
+ * @dependency app.js (CodemanApp class must be defined)
+ * @loadorder 8 of 9 — loaded after app.js
+ */
+
 // Codeman — Centralized API fetch helpers for CodemanApp
 // Loaded after app.js (needs CodemanApp class defined)
 

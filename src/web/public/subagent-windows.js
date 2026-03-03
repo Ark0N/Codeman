@@ -1,3 +1,23 @@
+/**
+ * @fileoverview Subagent floating window management mixed into CodemanApp.prototype.
+ *
+ * Extends CodemanApp with methods for managing floating terminal windows that display
+ * Claude Code background agent (subagent) output. Each subagent window has its own
+ * xterm.js terminal instance, drag/resize handles, minimize/close controls, and
+ * connection lines drawn to the parent session tab.
+ *
+ * Key functionality:
+ * - Tab badge dropdown showing minimized agents per session
+ * - Minimize/restore/permanently-close lifecycle for subagent windows
+ * - Cross-browser state persistence (localStorage + server-backed PUT /api/subagent-window-states)
+ * - Window state saved on every minimize/restore/close action
+ *
+ * @mixin Extends CodemanApp.prototype via Object.assign
+ * @dependency app.js (CodemanApp class, this.subagents, this.subagentWindows, this.minimizedSubagents)
+ * @dependency constants.js (escapeHtml)
+ * @loadorder 9 of 9 — loaded last, after api-client.js
+ */
+
 // Codeman — Subagent window management for CodemanApp
 // Loaded after app.js (needs CodemanApp class defined)
 
@@ -80,7 +100,9 @@ Object.assign(CodemanApp.prototype, {
     this.saveSubagentWindowStates();
   },
 
-  // ========== Subagent Window State Persistence ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Subagent Window State Persistence
+  // ═══════════════════════════════════════════════════════════════
 
   /**
    * Save subagent window states (minimized/open) to server for cross-browser persistence.
@@ -198,7 +220,9 @@ Object.assign(CodemanApp.prototype, {
     });
   },
 
-  // ========== Subagent Connection Lines ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Subagent Connection Lines
+  // ═══════════════════════════════════════════════════════════════
   //
   // Connection lines are drawn from agent windows to their parent TABs.
   // The parent TAB is determined by the PERSISTENT subagentParentMap.
@@ -434,7 +458,9 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  // ========== Subagent Floating Windows ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Subagent Floating Windows
+  // ═══════════════════════════════════════════════════════════════
 
   openSubagentWindow(agentId) {
     // If window already exists, focus it

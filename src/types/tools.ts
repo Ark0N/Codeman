@@ -1,5 +1,20 @@
 /**
- * @fileoverview Tool-related type definitions
+ * @fileoverview Tool-related type definitions.
+ *
+ * Types for tracking Claude's tool invocations in real-time.
+ *
+ * Key exports:
+ * - ActiveBashTool — a live bash command with extracted file paths and status
+ * - ActiveBashToolStatus — 'running' | 'completed'
+ * - ImageDetectedEvent — screenshot/image file detection trigger for UI popup
+ *
+ * Cross-domain relationships:
+ * - ActiveBashTool.sessionId links to SessionState.id (session domain)
+ * - ImageDetectedEvent.sessionId links to SessionState.id (session domain)
+ *
+ * Both types are in-memory only (not persisted). Broadcast via SSE events
+ * `subagent:tool_call` and `image:detected`. Parsed by BashToolParser
+ * (`src/bash-tool-parser.ts`).
  */
 
 /**

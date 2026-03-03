@@ -70,6 +70,7 @@ import {
 } from '../types.js';
 import { CleanupManager, KeyedDebouncer, StaleExpirationMap } from '../utils/index.js';
 import { MAX_CONCURRENT_SESSIONS, MAX_SSE_CLIENTS } from '../config/map-limits.js';
+import { SseEvent } from './sse-events.js';
 import type { ScheduledRun } from './ports/index.js';
 import { registerAuthMiddleware, registerSecurityHeaders } from './middleware/auth.js';
 import {
@@ -280,10 +281,10 @@ export class WebServer extends EventEmitter {
 
     // Set up mux event listeners
     this.mux.on('sessionCreated', (session) => {
-      this.broadcast('mux:created', session);
+      this.broadcast(SseEvent.MuxCreated, session);
     });
     this.mux.on('sessionKilled', (data) => {
-      this.broadcast('mux:killed', data);
+      this.broadcast(SseEvent.MuxKilled, data);
     });
     this.mux.on('sessionDied', (data) => {
       getLifecycleLog().log({
@@ -291,10 +292,10 @@ export class WebServer extends EventEmitter {
         sessionId: (data as { sessionId?: string }).sessionId || 'unknown',
         extra: data as Record<string, unknown>,
       });
-      this.broadcast('mux:died', data);
+      this.broadcast(SseEvent.MuxDied, data);
     });
     this.mux.on('statsUpdated', (sessions) => {
-      this.broadcast('mux:statsUpdated', sessions);
+      this.broadcast(SseEvent.MuxStatsUpdated, sessions);
     });
 
     // Set up subagent watcher listeners
@@ -308,16 +309,16 @@ export class WebServer extends EventEmitter {
 
     // Set up tunnel manager listeners
     this.tunnelManager.on('started', (data: { url: string }) => {
-      this.broadcast('tunnel:started', data);
+      this.broadcast(SseEvent.TunnelStarted, data);
     });
     this.tunnelManager.on('stopped', () => {
-      this.broadcast('tunnel:stopped', {});
+      this.broadcast(SseEvent.TunnelStopped, {});
     });
     this.tunnelManager.on('error', (message: string) => {
-      this.broadcast('tunnel:error', { message });
+      this.broadcast(SseEvent.TunnelError, { message });
     });
     this.tunnelManager.on('progress', (data: { message: string }) => {
-      this.broadcast('tunnel:progress', data);
+      this.broadcast(SseEvent.TunnelProgress, data);
     });
 
     // QR token rotation — broadcast inline SVG for instant desktop refresh
@@ -326,7 +327,7 @@ export class WebServer extends EventEmitter {
       if (url && process.env.CODEMAN_PASSWORD) {
         try {
           const svg = await this.tunnelManager.getQrSvg(url);
-          this.broadcast('tunnel:qrRotated', { svg });
+          this.broadcast(SseEvent.TunnelQrRotated, { svg });
         } catch {
           // QR generation failed — skip this rotation
         }
@@ -338,7 +339,7 @@ export class WebServer extends EventEmitter {
       if (url && process.env.CODEMAN_PASSWORD) {
         try {
           const svg = await this.tunnelManager.getQrSvg(url);
-          this.broadcast('tunnel:qrRegenerated', { svg });
+          this.broadcast(SseEvent.TunnelQrRegenerated, { svg });
         } catch {
           // QR generation failed — skip
         }
@@ -357,13 +358,13 @@ export class WebServer extends EventEmitter {
   private setupSubagentWatcherListeners(): void {
     // Store handlers for cleanup on shutdown
     this.subagentWatcherHandlers = {
-      discovered: (info: SubagentInfo) => this.broadcast('subagent:discovered', info),
-      updated: (info: SubagentInfo) => this.broadcast('subagent:updated', info),
-      toolCall: (data: SubagentToolCall) => this.broadcast('subagent:tool_call', data),
-      toolResult: (data: SubagentToolResult) => this.broadcast('subagent:tool_result', data),
-      progress: (data: SubagentProgress) => this.broadcast('subagent:progress', data),
-      message: (data: SubagentMessage) => this.broadcast('subagent:message', data),
-      completed: (info: SubagentInfo) => this.broadcast('subagent:completed', info),
+      discovered: (info: SubagentInfo) => this.broadcast(SseEvent.SubagentDiscovered, info),
+      updated: (info: SubagentInfo) => this.broadcast(SseEvent.SubagentUpdated, info),
+      toolCall: (data: SubagentToolCall) => this.broadcast(SseEvent.SubagentToolCall, data),
+      toolResult: (data: SubagentToolResult) => this.broadcast(SseEvent.SubagentToolResult, data),
+      progress: (data: SubagentProgress) => this.broadcast(SseEvent.SubagentProgress, data),
+      message: (data: SubagentMessage) => this.broadcast(SseEvent.SubagentMessage, data),
+      completed: (info: SubagentInfo) => this.broadcast(SseEvent.SubagentCompleted, info),
       error: (error: Error, agentId?: string) => {
         console.error(`[SubagentWatcher] Error${agentId ? ` for ${agentId}` : ''}:`, error.message);
       },
@@ -403,7 +404,7 @@ export class WebServer extends EventEmitter {
   private setupImageWatcherListeners(): void {
     // Store handlers for cleanup on shutdown
     this.imageWatcherHandlers = {
-      detected: (event: ImageDetectedEvent) => this.broadcast('image:detected', event),
+      detected: (event: ImageDetectedEvent) => this.broadcast(SseEvent.ImageDetected, event),
       error: (error: Error, sessionId?: string) => {
         console.error(`[ImageWatcher] Error${sessionId ? ` for ${sessionId}` : ''}:`, error.message);
       },
@@ -430,10 +431,10 @@ export class WebServer extends EventEmitter {
    */
   private setupTeamWatcherListeners(): void {
     this.teamWatcherHandlers = {
-      teamCreated: (config: unknown) => this.broadcast('team:created', config),
-      teamUpdated: (config: unknown) => this.broadcast('team:updated', config),
-      teamRemoved: (config: unknown) => this.broadcast('team:removed', config),
-      taskUpdated: (data: unknown) => this.broadcast('team:taskUpdated', data),
+      teamCreated: (config: unknown) => this.broadcast(SseEvent.TeamCreated, config),
+      teamUpdated: (config: unknown) => this.broadcast(SseEvent.TeamUpdated, config),
+      teamRemoved: (config: unknown) => this.broadcast(SseEvent.TeamRemoved, config),
+      taskUpdated: (data: unknown) => this.broadcast(SseEvent.TeamTaskUpdated, data),
     };
 
     this.teamWatcher.on('teamCreated', this.teamWatcherHandlers.teamCreated);
@@ -580,7 +581,7 @@ export class WebServer extends EventEmitter {
       // Send initial state
       // Use light state for SSE init to avoid sending 2MB+ terminal buffers
       // Buffers are fetched on-demand when switching tabs
-      this.sendSSE(reply, 'init', this.getLightState());
+      this.sendSSE(reply, SseEvent.Init, this.getLightState());
       // Flush Cloudflare tunnel buffer with padding — ensures the init event
       // (and any immediately following events) are delivered without proxy delay.
       if (this.tunnelManager.getUrl()) {
@@ -640,7 +641,7 @@ export class WebServer extends EventEmitter {
         if (controller) {
           controller.signalTranscriptComplete();
         }
-        this.broadcast('transcript:complete', { sessionId, timestamp: Date.now() });
+        this.broadcast(SseEvent.TranscriptComplete, { sessionId, timestamp: Date.now() });
       });
 
       watcher.on('transcript:plan_mode', () => {
@@ -648,15 +649,15 @@ export class WebServer extends EventEmitter {
         if (controller) {
           controller.signalTranscriptPlanMode();
         }
-        this.broadcast('transcript:plan_mode', { sessionId, timestamp: Date.now() });
+        this.broadcast(SseEvent.TranscriptPlanMode, { sessionId, timestamp: Date.now() });
       });
 
       watcher.on('transcript:tool_start', (toolName: string) => {
-        this.broadcast('transcript:tool_start', { sessionId, toolName, timestamp: Date.now() });
+        this.broadcast(SseEvent.TranscriptToolStart, { sessionId, toolName, timestamp: Date.now() });
       });
 
       watcher.on('transcript:tool_end', (toolName: string, isError: boolean) => {
-        this.broadcast('transcript:tool_end', {
+        this.broadcast(SseEvent.TranscriptToolEnd, {
           sessionId,
           toolName,
           isError,
@@ -806,7 +807,7 @@ export class WebServer extends EventEmitter {
       controller.removeAllListeners();
       this.respawnControllers.delete(sessionId);
       // Notify UI that respawn is stopped for this session
-      this.broadcast('respawn:stopped', { sessionId, reason: 'session_cleanup' });
+      this.broadcast(SseEvent.RespawnStopped, { sessionId, reason: 'session_cleanup' });
     }
 
     // Clear respawn timer
@@ -858,7 +859,7 @@ export class WebServer extends EventEmitter {
     this.store.removeRalphState(sessionId);
 
     // Broadcast Ralph cleared to update UI
-    this.broadcast('session:ralphLoopUpdate', {
+    this.broadcast(SseEvent.SessionRalphLoopUpdate, {
       sessionId,
       state: {
         enabled: false,
@@ -871,7 +872,7 @@ export class WebServer extends EventEmitter {
         elapsedHours: null,
       },
     });
-    this.broadcast('session:ralphTodoUpdate', {
+    this.broadcast(SseEvent.SessionRalphTodoUpdate, {
       sessionId,
       todos: [],
       stats: { total: 0, pending: 0, inProgress: 0, completed: 0 },
@@ -941,7 +942,7 @@ export class WebServer extends EventEmitter {
       }
     }
 
-    this.broadcast('session:deleted', { id: sessionId });
+    this.broadcast(SseEvent.SessionDeleted, { id: sessionId });
   }
 
   private async setupSessionListeners(session: Session): Promise<void> {
@@ -960,49 +961,58 @@ export class WebServer extends EventEmitter {
       imageWatcher.watchSession(session.id, session.workingDir);
     }
 
-    // Store all listener references for explicit cleanup on session delete
-    // This prevents memory leaks from closure references keeping objects alive
+    // Store all listener references for explicit cleanup on session delete.
+    // This prevents memory leaks from closure references keeping objects alive.
     const listeners: SessionListenerRefs = {
+      // ─── Terminal Output ─────────────────────────────────────
+      // These listeners handle raw PTY output streaming to SSE clients.
+
+      /** Batches PTY output → broadcasts `session:terminal` at 16-50ms intervals */
       terminal: (data) => {
-        // Use batching for better performance at high throughput
         this.batchTerminalData(session.id, data);
       },
 
+      /** Broadcasts `session:clearTerminal` — tells clients to wipe their xterm buffer (after mux attach) */
       clearTerminal: () => {
-        // Tell clients to clear their terminal (after mux attach)
-        this.broadcast('session:clearTerminal', { id: session.id });
+        this.broadcast(SseEvent.SessionClearTerminal, { id: session.id });
       },
 
+      /** Broadcasts `session:needsRefresh` — tells clients to reload buffer (e.g., after OpenCode TUI stabilizes) */
       needsRefresh: () => {
-        // Tell clients to reload the terminal buffer (e.g., after OpenCode TUI stabilizes)
-        this.broadcast('session:needsRefresh', { id: session.id });
+        this.broadcast(SseEvent.SessionNeedsRefresh, { id: session.id });
       },
 
+      // ─── Session Messages & Errors ──────────────────────────
+
+      /** Broadcasts `session:message` — structured Claude JSON messages (assistant, tool_use, etc.) */
       message: (msg: ClaudeMessage) => {
-        this.broadcast('session:message', { id: session.id, message: msg });
+        this.broadcast(SseEvent.SessionMessage, { id: session.id, message: msg });
       },
 
+      /** Broadcasts `session:error` + sends push notification */
       error: (error) => {
-        this.broadcast('session:error', { id: session.id, error });
-        this.sendPushNotifications('session:error', {
+        this.broadcast(SseEvent.SessionError, { id: session.id, error });
+        this.sendPushNotifications(SseEvent.SessionError, {
           sessionId: session.id,
           sessionName: session.name,
           error: String(error),
         });
-        // Track in run summary
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) tracker.recordError('Session error', String(error));
       },
 
+      /** Broadcasts `session:completion` + `session:updated` — prompt finished, persists state */
       completion: (result, cost) => {
-        this.broadcast('session:completion', { id: session.id, result, cost });
-        this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
+        this.broadcast(SseEvent.SessionCompletion, { id: session.id, result, cost });
+        this.broadcast(SseEvent.SessionUpdated, this.getSessionStateWithRespawn(session));
         this.persistSessionState(session);
-        // Track tokens in run summary (completion event has updated token values)
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) tracker.recordTokens(session.inputTokens, session.outputTokens);
       },
 
+      // ─── Session Lifecycle ──────────────────────────────────
+
+      /** Broadcasts `session:exit` + `session:updated` — PTY process exited; cleans up respawn, timers, listeners */
       exit: (code) => {
         getLifecycleLog().log({
           event: 'exit',
@@ -1012,8 +1022,8 @@ export class WebServer extends EventEmitter {
         });
         // Wrap in try/catch to ensure cleanup always happens
         try {
-          this.broadcast('session:exit', { id: session.id, code });
-          this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
+          this.broadcast(SseEvent.SessionExit, { id: session.id, code });
+          this.broadcast(SseEvent.SessionUpdated, this.getSessionStateWithRespawn(session));
           this.persistSessionState(session);
         } catch (err) {
           console.error(`[Server] Error broadcasting session exit for ${session.id}:`, err);
@@ -1107,9 +1117,11 @@ export class WebServer extends EventEmitter {
         }
       },
 
+      // ─── Activity State ─────────────────────────────────────
+
+      /** Broadcasts `session:working` — Claude started processing */
       working: () => {
-        this.broadcast('session:working', { id: session.id });
-        // Track in run summary
+        this.broadcast(SseEvent.SessionWorking, { id: session.id });
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) {
           tracker.recordWorking();
@@ -1117,11 +1129,10 @@ export class WebServer extends EventEmitter {
         }
       },
 
+      /** Broadcasts `session:idle` — Claude finished processing, waiting for input */
       idle: () => {
-        this.broadcast('session:idle', { id: session.id });
-        // Use debounced state update (idle can fire frequently)
+        this.broadcast(SseEvent.SessionIdle, { id: session.id });
         this.broadcastSessionStateDebounced(session.id);
-        // Track in run summary
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) {
           tracker.recordIdle();
@@ -1129,78 +1140,87 @@ export class WebServer extends EventEmitter {
         }
       },
 
-      // Background task events - use debounced state updates to reduce serialization overhead
+      // ─── Background Task Events ──────────────────────────────
+      // Debounced state updates to reduce serialization overhead.
+
+      /** Broadcasts `task:created` — new background task discovered */
       taskCreated: (task: BackgroundTask) => {
-        this.broadcast('task:created', { sessionId: session.id, task });
+        this.broadcast(SseEvent.TaskCreated, { sessionId: session.id, task });
         this.broadcastSessionStateDebounced(session.id);
       },
 
+      /** Batched broadcast of `task:updated` — high-frequency progress updates */
       taskUpdated: (task: BackgroundTask) => {
-        // Use batching for better performance at high update rates
         this.batchTaskUpdate(session.id, task);
       },
 
+      /** Broadcasts `task:completed` — background task finished successfully */
       taskCompleted: (task: BackgroundTask) => {
-        this.broadcast('task:completed', { sessionId: session.id, task });
+        this.broadcast(SseEvent.TaskCompleted, { sessionId: session.id, task });
         this.broadcastSessionStateDebounced(session.id);
       },
 
+      /** Broadcasts `task:failed` — background task errored */
       taskFailed: (task: BackgroundTask, error: string) => {
-        this.broadcast('task:failed', { sessionId: session.id, task, error });
+        this.broadcast(SseEvent.TaskFailed, { sessionId: session.id, task, error });
         this.broadcastSessionStateDebounced(session.id);
       },
 
+      // ─── Auto-Operations ────────────────────────────────────
+
+      /** Broadcasts `session:autoClear` — context window auto-cleared at token threshold */
       autoClear: (data: { tokens: number; threshold: number }) => {
-        this.broadcast('session:autoClear', { sessionId: session.id, ...data });
+        this.broadcast(SseEvent.SessionAutoClear, { sessionId: session.id, ...data });
         this.broadcastSessionStateDebounced(session.id);
-        // Track in run summary
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) tracker.recordAutoClear(data.tokens, data.threshold);
       },
 
+      /** Broadcasts `session:autoCompact` — context window auto-compacted at token threshold */
       autoCompact: (data: { tokens: number; threshold: number; prompt?: string }) => {
-        this.broadcast('session:autoCompact', { sessionId: session.id, ...data });
+        this.broadcast(SseEvent.SessionAutoCompact, { sessionId: session.id, ...data });
         this.broadcastSessionStateDebounced(session.id);
-        // Track in run summary
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) tracker.recordAutoCompact(data.tokens, data.threshold);
       },
 
-      // Claude Code CLI info parsed from terminal (version, model, account)
+      // ─── CLI Info ────────────────────────────────────────────
+
+      /** Broadcasts `session:cliInfo` — Claude Code version, model, account type parsed from terminal */
       cliInfoUpdated: (data: { version?: string; model?: string; accountType?: string; latestVersion?: string }) => {
-        this.broadcast('session:cliInfo', { sessionId: session.id, ...data });
+        this.broadcast(SseEvent.SessionCliInfo, { sessionId: session.id, ...data });
         this.broadcastSessionStateDebounced(session.id);
       },
 
-      // Ralph tracking events
+      // ─── Ralph Tracking Events ──────────────────────────────
+
+      /** Broadcasts `session:ralphLoopUpdate` — Ralph tracker loop state changed (iteration, phase) */
       ralphLoopUpdate: (state: RalphTrackerState) => {
-        this.broadcast('session:ralphLoopUpdate', { sessionId: session.id, state });
-        // Persist Ralph state
+        this.broadcast(SseEvent.SessionRalphLoopUpdate, { sessionId: session.id, state });
         this.store.updateRalphState(session.id, { loop: state });
       },
 
+      /** Broadcasts `session:ralphTodoUpdate` — todo items added, completed, or modified */
       ralphTodoUpdate: (todos: RalphTodoItem[]) => {
-        this.broadcast('session:ralphTodoUpdate', { sessionId: session.id, todos });
-        // Persist Ralph state
+        this.broadcast(SseEvent.SessionRalphTodoUpdate, { sessionId: session.id, todos });
         this.store.updateRalphState(session.id, { todos });
       },
 
+      /** Broadcasts `session:ralphCompletionDetected` + push notification — completion phrase matched */
       ralphCompletionDetected: (phrase: string) => {
-        this.broadcast('session:ralphCompletionDetected', { sessionId: session.id, phrase });
-        this.sendPushNotifications('session:ralphCompletionDetected', {
+        this.broadcast(SseEvent.SessionRalphCompletionDetected, { sessionId: session.id, phrase });
+        this.sendPushNotifications(SseEvent.SessionRalphCompletionDetected, {
           sessionId: session.id,
           sessionName: session.name,
           phrase,
         });
-        // Track in run summary
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) tracker.recordRalphCompletion(phrase);
       },
 
-      // RALPH_STATUS block events
+      /** Broadcasts `session:ralphStatusUpdate` — RALPH_STATUS block parsed from output */
       ralphStatusBlockDetected: (block: import('../types.js').RalphStatusBlock) => {
-        this.broadcast('session:ralphStatusUpdate', { sessionId: session.id, block });
-        // Track in run summary
+        this.broadcast(SseEvent.SessionRalphStatusUpdate, { sessionId: session.id, block });
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) {
           tracker.addEvent(
@@ -1212,18 +1232,18 @@ export class WebServer extends EventEmitter {
         }
       },
 
+      /** Broadcasts `session:circuitBreakerUpdate` — circuit breaker state changed (CLOSED/HALF_OPEN/OPEN) */
       ralphCircuitBreakerUpdate: (status: import('../types.js').CircuitBreakerStatus) => {
-        this.broadcast('session:circuitBreakerUpdate', { sessionId: session.id, status });
-        // Track state changes in run summary
+        this.broadcast(SseEvent.SessionCircuitBreakerUpdate, { sessionId: session.id, status });
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker && status.state === 'OPEN') {
           tracker.addEvent('warning', 'warning', 'Circuit Breaker Opened', status.reason);
         }
       },
 
+      /** Broadcasts `session:exitGateMet` — all completion indicators met, ready to exit */
       ralphExitGateMet: (data: { completionIndicators: number; exitSignal: boolean }) => {
-        this.broadcast('session:exitGateMet', { sessionId: session.id, ...data });
-        // Track in run summary
+        this.broadcast(SseEvent.SessionExitGateMet, { sessionId: session.id, ...data });
         const tracker = this.runSummaryTrackers.get(session.id);
         if (tracker) {
           tracker.addEvent(
@@ -1235,17 +1255,22 @@ export class WebServer extends EventEmitter {
         }
       },
 
-      // Bash tool tracking events (for clickable file paths)
+      // ─── Bash Tool Tracking ────────────────────────────────
+      // Used for clickable file paths in the UI.
+
+      /** Broadcasts `session:bashToolStart` — bash tool invocation started */
       bashToolStart: (tool: ActiveBashTool) => {
-        this.broadcast('session:bashToolStart', { sessionId: session.id, tool });
+        this.broadcast(SseEvent.SessionBashToolStart, { sessionId: session.id, tool });
       },
 
+      /** Broadcasts `session:bashToolEnd` — bash tool invocation completed */
       bashToolEnd: (tool: ActiveBashTool) => {
-        this.broadcast('session:bashToolEnd', { sessionId: session.id, tool });
+        this.broadcast(SseEvent.SessionBashToolEnd, { sessionId: session.id, tool });
       },
 
+      /** Broadcasts `session:bashToolsUpdate` — full active bash tools list refreshed */
       bashToolsUpdate: (tools: ActiveBashTool[]) => {
-        this.broadcast('session:bashToolsUpdate', { sessionId: session.id, tools });
+        this.broadcast(SseEvent.SessionBashToolsUpdate, { sessionId: session.id, tools });
       },
     };
 
@@ -1287,83 +1312,103 @@ export class WebServer extends EventEmitter {
     // Helper to get tracker lazily (may not exist at setup time for restored sessions)
     const getTracker = () => this.runSummaryTrackers.get(sessionId);
 
+    // ─── Respawn State Machine ──────────────────────────────
+
+    /** Broadcasts `respawn:stateChanged` — state machine transition (e.g., IDLE → DETECTING → RESPAWNING) */
     controller.on('stateChanged', (state: RespawnState, prevState: RespawnState) => {
-      this.broadcast('respawn:stateChanged', { sessionId, state, prevState });
-      // Track in run summary (lazy lookup since tracker may be created after controller)
+      this.broadcast(SseEvent.RespawnStateChanged, { sessionId, state, prevState });
       const tracker = getTracker();
       if (tracker) tracker.recordStateChange(state, `${prevState} → ${state}`);
     });
 
+    // ─── Respawn Cycle Lifecycle ────────────────────────────
+
+    /** Broadcasts `respawn:cycleStarted` — new respawn cycle begins */
     controller.on('respawnCycleStarted', (cycleNumber: number) => {
-      this.broadcast('respawn:cycleStarted', { sessionId, cycleNumber });
+      this.broadcast(SseEvent.RespawnCycleStarted, { sessionId, cycleNumber });
     });
 
+    /** Broadcasts `respawn:cycleCompleted` — respawn cycle finished */
     controller.on('respawnCycleCompleted', (cycleNumber: number) => {
-      this.broadcast('respawn:cycleCompleted', { sessionId, cycleNumber });
+      this.broadcast(SseEvent.RespawnCycleCompleted, { sessionId, cycleNumber });
     });
 
+    /** Broadcasts `respawn:blocked` + push notification — respawn blocked by error/circuit breaker */
     controller.on('respawnBlocked', (data: { reason: string; details: string }) => {
-      this.broadcast('respawn:blocked', { sessionId, reason: data.reason, details: data.details });
+      this.broadcast(SseEvent.RespawnBlocked, { sessionId, reason: data.reason, details: data.details });
       const sessionForPush = this.sessions.get(sessionId);
-      this.sendPushNotifications('respawn:blocked', {
+      this.sendPushNotifications(SseEvent.RespawnBlocked, {
         sessionId,
         sessionName: sessionForPush?.name ?? sessionId.slice(0, 8),
         reason: data.reason,
       });
-      // Track in run summary (lazy lookup)
       const tracker = getTracker();
       if (tracker) tracker.recordWarning(`Respawn blocked: ${data.reason}`, data.details);
     });
 
+    // ─── Respawn Step Progress ──────────────────────────────
+
+    /** Broadcasts `respawn:stepSent` — respawn step input sent (e.g., /clear, kickstart prompt) */
     controller.on('stepSent', (step: string, input: string) => {
-      this.broadcast('respawn:stepSent', { sessionId, step, input });
+      this.broadcast(SseEvent.RespawnStepSent, { sessionId, step, input });
     });
 
+    /** Broadcasts `respawn:stepCompleted` — respawn step finished */
     controller.on('stepCompleted', (step: string) => {
-      this.broadcast('respawn:stepCompleted', { sessionId, step });
+      this.broadcast(SseEvent.RespawnStepCompleted, { sessionId, step });
     });
 
+    /** Broadcasts `respawn:detectionUpdate` — idle/completion detection state changed */
     controller.on('detectionUpdate', (detection: unknown) => {
-      this.broadcast('respawn:detectionUpdate', { sessionId, detection });
+      this.broadcast(SseEvent.RespawnDetectionUpdate, { sessionId, detection });
     });
 
+    /** Broadcasts `respawn:autoAcceptSent` — auto-accepted a permission prompt */
     controller.on('autoAcceptSent', () => {
-      this.broadcast('respawn:autoAcceptSent', { sessionId });
+      this.broadcast(SseEvent.RespawnAutoAcceptSent, { sessionId });
     });
 
+    // ─── AI Checker Events ──────────────────────────────────
+
+    /** Broadcasts `respawn:aiCheckStarted` — AI idle checker invoked */
     controller.on('aiCheckStarted', () => {
-      this.broadcast('respawn:aiCheckStarted', { sessionId });
+      this.broadcast(SseEvent.RespawnAiCheckStarted, { sessionId });
     });
 
+    /** Broadcasts `respawn:aiCheckCompleted` — AI idle check returned verdict (idle/working/stuck) */
     controller.on('aiCheckCompleted', (result: { verdict: string; reasoning: string; durationMs: number }) => {
-      this.broadcast('respawn:aiCheckCompleted', {
+      this.broadcast(SseEvent.RespawnAiCheckCompleted, {
         sessionId,
         verdict: result.verdict,
         reasoning: result.reasoning,
         durationMs: result.durationMs,
       });
-      // Track in run summary (lazy lookup)
       const tracker = getTracker();
       if (tracker) tracker.recordAiCheckResult(result.verdict);
     });
 
+    /** Broadcasts `respawn:aiCheckFailed` — AI idle check errored */
     controller.on('aiCheckFailed', (error: string) => {
-      this.broadcast('respawn:aiCheckFailed', { sessionId, error });
-      // Track in run summary (lazy lookup)
+      this.broadcast(SseEvent.RespawnAiCheckFailed, { sessionId, error });
       const tracker = getTracker();
       if (tracker) tracker.recordError('AI check failed', error);
     });
 
+    /** Broadcasts `respawn:aiCheckCooldown` — AI check on cooldown after failure */
     controller.on('aiCheckCooldown', (active: boolean, endsAt: number | null) => {
-      this.broadcast('respawn:aiCheckCooldown', { sessionId, active, endsAt });
+      this.broadcast(SseEvent.RespawnAiCheckCooldown, { sessionId, active, endsAt });
     });
 
+    // ─── Plan Checker Events ────────────────────────────────
+
+    /** Broadcasts `respawn:planCheckStarted` — AI plan completion checker invoked */
     controller.on('planCheckStarted', () => {
-      this.broadcast('respawn:planCheckStarted', { sessionId });
+      this.broadcast(SseEvent.RespawnPlanCheckStarted, { sessionId });
     });
 
+    /** Broadcasts `respawn:planCheckCompleted` — plan check returned verdict */
     controller.on('planCheckCompleted', (result: { verdict: string; reasoning: string; durationMs: number }) => {
-      this.broadcast('respawn:planCheckCompleted', {
+      this.broadcast(SseEvent.RespawnPlanCheckCompleted, {
         sessionId,
         verdict: result.verdict,
         reasoning: result.reasoning,
@@ -1371,34 +1416,43 @@ export class WebServer extends EventEmitter {
       });
     });
 
+    /** Broadcasts `respawn:planCheckFailed` — plan check errored */
     controller.on('planCheckFailed', (error: string) => {
-      this.broadcast('respawn:planCheckFailed', { sessionId, error });
+      this.broadcast(SseEvent.RespawnPlanCheckFailed, { sessionId, error });
     });
 
-    // Timer tracking events for UI countdown display
+    // ─── Timer Events (UI countdown display) ────────────────
+
+    /** Broadcasts `respawn:timerStarted` — countdown timer started (idle, cooldown, etc.) */
     controller.on('timerStarted', (timer) => {
-      this.broadcast('respawn:timerStarted', { sessionId, timer });
+      this.broadcast(SseEvent.RespawnTimerStarted, { sessionId, timer });
     });
 
+    /** Broadcasts `respawn:timerCancelled` — timer cancelled before expiry */
     controller.on('timerCancelled', (timerName, reason) => {
-      this.broadcast('respawn:timerCancelled', { sessionId, timerName, reason });
+      this.broadcast(SseEvent.RespawnTimerCancelled, { sessionId, timerName, reason });
     });
 
+    /** Broadcasts `respawn:timerCompleted` — timer expired */
     controller.on('timerCompleted', (timerName) => {
-      this.broadcast('respawn:timerCompleted', { sessionId, timerName });
+      this.broadcast(SseEvent.RespawnTimerCompleted, { sessionId, timerName });
     });
 
+    // ─── Logging & Errors ───────────────────────────────────
+
+    /** Broadcasts `respawn:actionLog` — respawn action logged for audit/debugging */
     controller.on('actionLog', (action) => {
-      this.broadcast('respawn:actionLog', { sessionId, action });
+      this.broadcast(SseEvent.RespawnActionLog, { sessionId, action });
     });
 
+    /** Broadcasts `respawn:log` — general respawn log message */
     controller.on('log', (message: string) => {
-      this.broadcast('respawn:log', { sessionId, message });
+      this.broadcast(SseEvent.RespawnLog, { sessionId, message });
     });
 
+    /** Broadcasts `respawn:error` — respawn controller error */
     controller.on('error', (error: Error) => {
-      this.broadcast('respawn:error', { sessionId, error: error.message });
-      // Track in run summary (lazy lookup)
+      this.broadcast(SseEvent.RespawnError, { sessionId, error: error.message });
       const tracker = getTracker();
       if (tracker) tracker.recordError('Respawn error', error.message);
     });
@@ -1422,7 +1476,7 @@ export class WebServer extends EventEmitter {
           controller.stop();
           controller.removeAllListeners();
           this.respawnControllers.delete(sessionId);
-          this.broadcast('respawn:stopped', { sessionId, reason: 'duration_expired' });
+          this.broadcast(SseEvent.RespawnStopped, { sessionId, reason: 'duration_expired' });
         }
         this.respawnTimers.delete(sessionId);
         // Update persisted state (respawn no longer active)
@@ -1435,7 +1489,7 @@ export class WebServer extends EventEmitter {
     );
 
     this.respawnTimers.set(sessionId, { timer, endAt, startedAt: now });
-    this.broadcast('respawn:timerStarted', { sessionId, durationMinutes, endAt, startedAt: now });
+    this.broadcast(SseEvent.RespawnTimerStarted, { sessionId, durationMinutes, endAt, startedAt: now });
   }
 
   /**
@@ -1494,7 +1548,7 @@ export class WebServer extends EventEmitter {
         const ctrl = this.respawnControllers.get(session.id);
         if (ctrl && ctrl.state === 'stopped') {
           ctrl.start();
-          this.broadcast('respawn:started', { sessionId: session.id });
+          this.broadcast(SseEvent.RespawnStarted, { sessionId: session.id });
           console.log(`[Server] Restored respawn controller started for session ${session.id}`);
         }
       }, delayMs);
@@ -1607,7 +1661,7 @@ export class WebServer extends EventEmitter {
     };
 
     this.scheduledRuns.set(id, run);
-    this.broadcast('scheduled:created', run);
+    this.broadcast(SseEvent.ScheduledCreated, run);
 
     // Start the run loop (fire-and-forget with error handling)
     this.runScheduledLoop(id).catch((err) => {
@@ -1616,7 +1670,7 @@ export class WebServer extends EventEmitter {
       if (failedRun && failedRun.status === 'running') {
         failedRun.status = 'stopped';
         failedRun.logs.push(`[${new Date().toISOString()}] Error: ${err instanceof Error ? err.message : String(err)}`);
-        this.broadcast('scheduled:stopped', { id, reason: 'error' });
+        this.broadcast(SseEvent.ScheduledStopped, { id, reason: 'error' });
       }
     });
 
@@ -1629,7 +1683,7 @@ export class WebServer extends EventEmitter {
 
     const addLog = (msg: string) => {
       run.logs.push(`[${new Date().toISOString()}] ${msg}`);
-      this.broadcast('scheduled:log', { id: runId, log: run.logs[run.logs.length - 1] });
+      this.broadcast(SseEvent.ScheduledLog, { id: runId, log: run.logs[run.logs.length - 1] });
     };
 
     while (Date.now() < run.endAt && run.status === 'running') {
@@ -1651,7 +1705,7 @@ export class WebServer extends EventEmitter {
         run.sessionId = session.id;
 
         addLog(`Starting task iteration with session ${session.id.slice(0, 8)}`);
-        this.broadcast('scheduled:updated', run);
+        this.broadcast(SseEvent.ScheduledUpdated, run);
 
         // Run the prompt
         const timeRemaining = Math.round((run.endAt - Date.now()) / 60000);
@@ -1662,7 +1716,7 @@ export class WebServer extends EventEmitter {
         run.totalCost += result.cost;
 
         addLog(`Task completed. Cost: $${result.cost.toFixed(4)}. Total tasks: ${run.completedTasks}`);
-        this.broadcast('scheduled:updated', run);
+        this.broadcast(SseEvent.ScheduledUpdated, run);
 
         // Clean up the session after iteration to prevent memory leaks
         await this.cleanupSession(session.id, true, 'scheduled_run');
@@ -1672,7 +1726,7 @@ export class WebServer extends EventEmitter {
         await new Promise((r) => setTimeout(r, ITERATION_PAUSE_MS));
       } catch (err) {
         addLog(`Error: ${getErrorMessage(err)}`);
-        this.broadcast('scheduled:updated', run);
+        this.broadcast(SseEvent.ScheduledUpdated, run);
 
         // Clean up the session on error too
         if (session) {
@@ -1694,7 +1748,7 @@ export class WebServer extends EventEmitter {
       addLog(`Scheduled run completed. Total tasks: ${run.completedTasks}, Total cost: $${run.totalCost.toFixed(4)}`);
     }
 
-    this.broadcast('scheduled:completed', run);
+    this.broadcast(SseEvent.ScheduledCompleted, run);
   }
 
   private async stopScheduledRun(id: string): Promise<void> {
@@ -1710,7 +1764,7 @@ export class WebServer extends EventEmitter {
       run.sessionId = null;
     }
 
-    this.broadcast('scheduled:stopped', run);
+    this.broadcast(SseEvent.ScheduledStopped, run);
   }
 
   /**
@@ -1761,7 +1815,7 @@ export class WebServer extends EventEmitter {
 
     for (const id of toDelete) {
       this.scheduledRuns.delete(id);
-      this.broadcast('scheduled:deleted', { id });
+      this.broadcast(SseEvent.ScheduledDeleted, { id });
     }
 
     if (toDelete.length > 0) {
@@ -1867,7 +1921,7 @@ export class WebServer extends EventEmitter {
     //   1. The debounced session:updated follows within 500ms with the new state
     //   2. These caches serve /api/sessions and SSE init — neither is polled rapidly
     //   3. Invalidating on every working/idle transition makes the 1s TTL useless
-    if (event === 'session:created' || event === 'session:deleted' || event === 'session:updated') {
+    if (event === SseEvent.SessionCreated || event === SseEvent.SessionDeleted || event === SseEvent.SessionUpdated) {
       this.cachedLightState = null;
       this.cachedSessionsList = null;
     }
@@ -2004,7 +2058,7 @@ export class WebServer extends EventEmitter {
       return;
     }
     for (const [, { sessionId, task }] of this.taskUpdateBatches) {
-      this.broadcast('task:updated', { sessionId, task });
+      this.broadcast(SseEvent.TaskUpdated, { sessionId, task });
     }
     this.taskUpdateBatches.clear();
   }
@@ -2042,7 +2096,7 @@ export class WebServer extends EventEmitter {
       const session = this.sessions.get(sessionId);
       if (session) {
         // Single expensive serialization per batch interval
-        this.broadcast('session:updated', this.getSessionStateWithRespawn(session));
+        this.broadcast(SseEvent.SessionUpdated, this.getSessionStateWithRespawn(session));
       }
     }
     this.stateUpdatePending.clear();
@@ -2055,7 +2109,7 @@ export class WebServer extends EventEmitter {
     string,
     { title: string; urgency: string; actions?: Array<{ action: string; title: string }> }
   > = {
-    'hook:permission_prompt': {
+    [SseEvent.HookPermissionPrompt]: {
       title: 'Permission Required',
       urgency: 'critical',
       actions: [
@@ -2063,12 +2117,12 @@ export class WebServer extends EventEmitter {
         { action: 'deny', title: 'Deny' },
       ],
     },
-    'hook:elicitation_dialog': { title: 'Question Asked', urgency: 'critical' },
-    'hook:idle_prompt': { title: 'Waiting for Input', urgency: 'warning' },
-    'hook:stop': { title: 'Response Complete', urgency: 'info' },
-    'session:error': { title: 'Session Error', urgency: 'critical' },
-    'respawn:blocked': { title: 'Respawn Blocked', urgency: 'critical' },
-    'session:ralphCompletionDetected': { title: 'Task Complete', urgency: 'warning' },
+    [SseEvent.HookElicitationDialog]: { title: 'Question Asked', urgency: 'critical' },
+    [SseEvent.HookIdlePrompt]: { title: 'Waiting for Input', urgency: 'warning' },
+    [SseEvent.HookStop]: { title: 'Response Complete', urgency: 'info' },
+    [SseEvent.SessionError]: { title: 'Session Error', urgency: 'critical' },
+    [SseEvent.RespawnBlocked]: { title: 'Respawn Blocked', urgency: 'critical' },
+    [SseEvent.SessionRalphCompletionDetected]: { title: 'Task Complete', urgency: 'warning' },
   };
 
   /**
@@ -2091,16 +2145,16 @@ export class WebServer extends EventEmitter {
 
     // Build body text from event data
     let body = sessionName ? `[${sessionName}]` : '';
-    if (event === 'session:error' && data.error) {
+    if (event === SseEvent.SessionError && data.error) {
       body += body ? ' ' : '';
       body += String(data.error).slice(0, 200);
-    } else if (event === 'respawn:blocked' && data.reason) {
+    } else if (event === SseEvent.RespawnBlocked && data.reason) {
       body += body ? ' ' : '';
       body += String(data.reason);
-    } else if (event === 'session:ralphCompletionDetected' && data.phrase) {
+    } else if (event === SseEvent.SessionRalphCompletionDetected && data.phrase) {
       body += body ? ' ' : '';
       body += String(data.phrase);
-    } else if (event === 'hook:permission_prompt' && data.tool_name) {
+    } else if (event === SseEvent.HookPermissionPrompt && data.tool_name) {
       body += body ? ' ' : '';
       body += `Tool: ${String(data.tool_name)}`;
     }

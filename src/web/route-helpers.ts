@@ -10,6 +10,7 @@ import { homedir } from 'node:os';
 import { Session } from '../session.js';
 import { ApiErrorCode, createErrorResponse } from '../types.js';
 import { parseRalphLoopConfig, extractCompletionPhrase } from '../ralph-config.js';
+import { SseEvent } from './sse-events.js';
 import type { SessionPort } from './ports/session-port.js';
 import type { EventPort } from './ports/event-port.js';
 
@@ -131,7 +132,7 @@ export function autoConfigureRalph(session: Session, workingDir: string, ctx: Ev
     console.log(
       `[auto-detect] Configured Ralph loop for session ${session.id} from ralph-loop.local.md: ${ralphConfig.completionPromise}`
     );
-    ctx.broadcast('session:ralphLoopUpdate', {
+    ctx.broadcast(SseEvent.SessionRalphLoopUpdate, {
       sessionId: session.id,
       state: session.ralphTracker.loopState,
     });
@@ -146,7 +147,7 @@ export function autoConfigureRalph(session: Session, workingDir: string, ctx: Ev
     session.ralphTracker.enable();
     session.ralphTracker.startLoop(completionPhrase);
     console.log(`[auto-detect] Configured Ralph loop for session ${session.id} from CLAUDE.md: ${completionPhrase}`);
-    ctx.broadcast('session:ralphLoopUpdate', {
+    ctx.broadcast(SseEvent.SessionRalphLoopUpdate, {
       sessionId: session.id,
       state: session.ralphTracker.loopState,
     });

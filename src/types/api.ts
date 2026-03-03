@@ -1,5 +1,20 @@
 /**
- * @fileoverview API types and error handling
+ * @fileoverview API types and error handling.
+ *
+ * Defines the standardized API response envelope (ApiResponse), error codes,
+ * hook event types from Claude Code's hooks system, and utility functions
+ * for error message extraction. Used by all route modules in `src/web/routes/`.
+ *
+ * Key exports:
+ * - ApiResponse<T> — discriminated union envelope (success with data or error with code)
+ * - ApiErrorCode — enum of standard error codes with user-friendly messages
+ * - HookEventType — union of Claude Code hook event names (idle_prompt, stop, etc.)
+ * - createErrorResponse() — factory for consistent error responses
+ * - getErrorMessage() — safe extraction from unknown catch values
+ * - CaseInfo, QuickStartResponse — case folder metadata types
+ *
+ * No dependencies on other domain modules. Consumed by all route modules
+ * and validated via Zod schemas in `src/web/schemas.ts`.
  */
 
 /**

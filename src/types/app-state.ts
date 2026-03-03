@@ -1,5 +1,22 @@
 /**
- * @fileoverview Application state type definitions
+ * @fileoverview Application state type definitions.
+ *
+ * Defines the top-level persisted state structure (AppState) which composes
+ * types from multiple domains: SessionState (session), TaskState (task),
+ * RalphLoopState (ralph), and RespawnConfig (respawn).
+ *
+ * Key exports:
+ * - AppState — root state object (sessions, tasks, ralphLoop, config, globalStats, tokenStats)
+ * - AppConfig — app configuration including default RespawnConfig
+ * - GlobalStats — cumulative usage stats across all sessions (lifetime)
+ * - TokenStats / TokenUsageEntry — daily token usage history
+ * - DEFAULT_CONFIG — default AppConfig values
+ * - createInitialState() — factory for fresh AppState
+ *
+ * Persisted to `~/.codeman/state.json` via StateStore (debounced 500ms writes).
+ * Served at `GET /api/status` (full state) and `GET /api/config` (config subset).
+ *
+ * Cross-domain imports: SessionState, TaskState, RalphLoopState, RespawnConfig.
  */
 
 import type { SessionState } from './session.js';

@@ -1,10 +1,30 @@
 /**
- * Ralph Loop Wizard — extracted from app.js for maintainability.
- * Extends CodemanApp.prototype with wizard methods.
- * Loaded after app.js in index.html.
+ * @fileoverview Ralph Loop Wizard — multi-step modal for configuring autonomous task loops.
+ *
+ * Extends CodemanApp.prototype with wizard methods for the Ralph Loop setup flow:
+ *   Step 1: Task description, completion phrase, iteration limit, case selection
+ *   Step 2: AI-powered plan generation (optional) with research agent → planner agent pipeline
+ *   Step 3: Respawn configuration (idle timeout, kickstart prompt, auto-clear/init)
+ *   Step 4: Review and launch
+ *
+ * Features:
+ * - Plan generation via POST /api/sessions/:id/plan/generate with SSE progress streaming
+ * - Existing @fix_plan.md detection and reuse
+ * - Plan detail level selection (brief/detailed/comprehensive)
+ * - Case selector population from /api/cases
+ * - Focus trap for modal accessibility
+ * - Abort controller for cancelling in-flight plan generation
+ *
+ * @mixin Extends CodemanApp.prototype via Object.assign
+ * @dependency app.js (CodemanApp class must be defined)
+ * @dependency keyboard-accessory.js (FocusTrap class for modal focus management)
+ * @dependency constants.js (escapeHtml)
+ * @loadorder 7 of 9 — loaded after app.js, before api-client.js
  */
 
-// ========== Ralph Loop Wizard ==========
+// ═══════════════════════════════════════════════════════════════
+// Ralph Loop Wizard
+// ═══════════════════════════════════════════════════════════════
 
 Object.assign(CodemanApp.prototype, {
 
@@ -388,7 +408,9 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  // ========== Plan Generation ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Plan Generation
+  // ═══════════════════════════════════════════════════════════════
 
   resetPlanGenerationUI() {
     // Hide all plan generation states
@@ -780,7 +802,9 @@ Object.assign(CodemanApp.prototype, {
     this.closePlanSubagentWindows();
   },
 
-  // ========== Plan Subagent Windows ==========
+  // ═══════════════════════════════════════════════════════════════
+  // Plan Subagent Windows
+  // ═══════════════════════════════════════════════════════════════
 
   handlePlanSubagentEvent(event) {
     if (this.planGenerationStopped) return;
