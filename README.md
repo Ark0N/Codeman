@@ -68,11 +68,23 @@ Codeman requires tmux, so Windows users need [WSL](https://learn.microsoft.com/e
 
 ## Mobile-Optimized Web UI
 
-The most responsive AI coding agent experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work.
+The most responsive AI coding agent experience on any phone. Full xterm.js terminal with local echo, swipe navigation, and a touch-optimized interface designed for real remote work — not a desktop UI crammed onto a small screen.
 
 <table>
 <tr>
-<td rowspan="8" width="320"><img src="docs/screenshots/mobile-keyboard-open.png" alt="Mobile — keyboard open" width="300"></td>
+<td align="center" width="33%"><img src="docs/screenshots/mobile-landing-qr.png" alt="Mobile — landing page with QR auth" width="260"></td>
+<td align="center" width="33%"><img src="docs/screenshots/mobile-session-idle.png" alt="Mobile — idle session with keyboard accessory" width="260"></td>
+<td align="center" width="33%"><img src="docs/screenshots/mobile-session-active.png" alt="Mobile — active agent session" width="260"></td>
+</tr>
+<tr>
+<td align="center"><em>Landing page with QR auth</em></td>
+<td align="center"><em>Keyboard accessory bar</em></td>
+<td align="center"><em>Agent working in real-time</em></td>
+</tr>
+</table>
+
+<table>
+<tr>
 <th>Terminal Apps</th>
 <th>Codeman Mobile</th>
 </tr>
@@ -82,11 +94,22 @@ The most responsive AI coding agent experience on any phone. Full xterm.js termi
 <tr><td>No notifications</td><td>Push alerts for approvals and idle</td></tr>
 <tr><td>Manual reconnect</td><td>tmux persistence</td></tr>
 <tr><td>No agent visibility</td><td>Background agents in real-time</td></tr>
-<tr><td>Copy-paste slash commands</td><td>One-tap <code>/init</code></tr>
+<tr><td>Copy-paste slash commands</td><td>One-tap <code>/init</code>, <code>/clear</code>, <code>/compact</code></td></tr>
+<tr><td>Password typing on phone</td><td><b>QR code scan — instant auth</b></td></tr>
 </table>
 
-- **Swipe navigation** — left/right on the terminal to switch sessions (80px threshold, 300ms)
+### Secure QR Code Authentication
+
+Typing passwords on a phone keyboard is miserable. Codeman replaces it with **cryptographically secure single-use QR tokens** — scan the code displayed on your desktop and your phone is authenticated instantly.
+
+Each QR encodes a URL containing a 6-character short code that maps to a 256-bit secret (`crypto.randomBytes(32)`) on the server. Tokens auto-rotate every **60 seconds**, are **atomically consumed on first scan** (replays always fail), and use **hash-based `Map.get()` lookup** that leaks nothing through response timing. The short code is an opaque pointer — the real secret never appears in browser history, `Referer` headers, or Cloudflare edge logs.
+
+The security design addresses all 6 critical QR auth flaws identified in ["Demystifying the (In)Security of QR Code-based Login"](https://www.usenix.org/conference/usenixsecurity25/presentation/zhang-xin) (USENIX Security 2025, which found 47 of the top-100 websites vulnerable): single-use enforcement, short TTL, cryptographic randomness, server-side generation, real-time desktop notification on scan (QRLjacking detection), and IP + User-Agent session binding with manual revocation. Dual-layer rate limiting (per-IP + global) makes brute force infeasible across 62^6 = 56.8 billion possible codes. Full security analysis: [`docs/qr-auth-plan.md`](docs/qr-auth-plan.md)
+
+### Touch-Optimized Interface
+
 - **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard. Destructive commands (`/clear`, `/compact`) require a double-press to confirm — first tap arms the button, second tap executes — so you never fire one by accident on a bumpy commute
+- **Swipe navigation** — left/right on the terminal to switch sessions (80px threshold, 300ms)
 - **Smart keyboard handling** — toolbar and terminal shift up when keyboard opens (uses `visualViewport` API with 100px threshold for iOS address bar drift)
 - **Safe area support** — respects iPhone notch and home indicator via `env(safe-area-inset-*)`
 - **44px touch targets** — all buttons meet iOS Human Interface Guidelines minimum sizes
