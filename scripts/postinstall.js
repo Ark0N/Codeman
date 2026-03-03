@@ -276,11 +276,69 @@ if (isGlobalInstall) {
 
         // WebGL addon: copy unminified (matches build script behavior)
         copyFileSync(join(webglDir, 'lib', 'xterm-addon-webgl.js'), join(vendorDir, 'xterm-addon-webgl.min.js'));
+
+        // xterm-zerolag-input: bundle local package as IIFE for <script> tag loading
+        try {
+            const zerolagSrc = join(import.meta.dirname, '..', 'packages', 'xterm-zerolag-input', 'src', 'zerolag-input-addon.ts');
+            const zerolagOut = join(vendorDir, 'xterm-zerolag-input.js');
+            execSync(
+                `npx esbuild "${zerolagSrc}" --bundle --format=iife --global-name=XtermZerolagInput --outfile="${zerolagOut}"`,
+                { stdio: 'pipe' }
+            );
+            // Append global aliases so app.js can use `new LocalEchoOverlay(terminal)`
+            const { appendFileSync } = await import('fs');
+            appendFileSync(
+                zerolagOut,
+                '\n// Global aliases for browser usage\n' +
+                'if(typeof window!=="undefined"){' +
+                    'window.ZerolagInputAddon=XtermZerolagInput.ZerolagInputAddon;' +
+                    'window.LocalEchoOverlay=class extends XtermZerolagInput.ZerolagInputAddon{' +
+                        'constructor(terminal){' +
+                            'super({prompt:{type:"character",char:"\\u276f",offset:2}});' +
+                            'this.activate(terminal);' +
+                        '}' +
+                    '};' +
+                '}\n'
+            );
+            console.log(colors.green('✓ xterm-zerolag-input bundled to vendor/'));
+        } catch {
+            console.log(colors.yellow('⚠ Failed to bundle xterm-zerolag-input — overlay may not work in dev mode'));
+        }
     } catch (err) {
         hasWarnings = true;
         console.log(colors.yellow('⚠ Failed to copy xterm vendor files'));
         console.log(colors.dim(`  ${err.message}`));
         console.log(colors.dim('  Dev server may fail to load xterm.js — run: npm run build'));
+    }
+}
+
+// ----------------------------------------------------------------------------
+// 5. Install git pre-commit hook (format check)
+// ----------------------------------------------------------------------------
+
+if (!isGlobalInstall) {
+    try {
+        const { writeFileSync, mkdirSync } = await import('fs');
+        const gitHooksDir = join(import.meta.dirname, '..', '.git', 'hooks');
+        if (existsSync(join(import.meta.dirname, '..', '.git'))) {
+            mkdirSync(gitHooksDir, { recursive: true });
+            const hook = `#!/bin/bash
+# Auto-installed by postinstall — prevents CI format failures
+staged_ts=$(git diff --cached --name-only --diff-filter=ACM -- '*.ts')
+[ -z "$staged_ts" ] && exit 0
+echo "$staged_ts" | xargs npx prettier --check 2>&1
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "Pre-commit: Prettier check failed. Run 'npm run format' to fix."
+    exit 1
+fi
+`;
+            const hookPath = join(gitHooksDir, 'pre-commit');
+            writeFileSync(hookPath, hook, { mode: 0o755 });
+            console.log(colors.green('✓ Git pre-commit hook installed (prettier check)'));
+        }
+    } catch {
+        // Non-critical — git hook is a convenience
     }
 }
 
