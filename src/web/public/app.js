@@ -1097,18 +1097,47 @@ class CodemanApp {
     // Ink's status bar updates use cursor-up + erase-line + rewrite, which can split
     // across render frames causing old/new status text to overlap (garbled output).
     // Buffering for 50ms ensures the full redraw arrives atomically.
-    const hasCursorUpRedraw = /\x1b\[\d{1,2}A/.test(data);
+    //
+    // Shell mode is excluded: shell readline also uses cursor-up for prompt redraws
+    // (e.g. zsh syntax highlighting on every keystroke), and there's no Ink status bar
+    // to protect. Applying the filter in shell mode delays character feedback until the
+    // user stops typing for 50ms, making the terminal feel unresponsive.
+    const isShellMode = session?.mode === 'shell';
+    const hasCursorUpRedraw = !isShellMode && /\x1b\[\d{1,2}A/.test(data);
     if (hasCursorUpRedraw || (this.flickerFilterActive && !flickerFilterEnabled)) {
       this.flickerFilterActive = true;
       this.flickerFilterBuffer += data;
 
-      if (this.flickerFilterTimeout) {
-        clearTimeout(this.flickerFilterTimeout);
+      // Only reset the 50ms timer on cursor-up events (start of a new Ink redraw cycle).
+      // Non-cursor-up events while the filter is active are trailing data from the same
+      // redraw — don't extend the deadline further. Without this guard, a busy Claude
+      // session emitting terminal data faster than SYNC_WAIT_TIMEOUT_MS never flushes,
+      // accumulating MBs in flickerFilterBuffer that freeze Chrome all at once.
+      if (hasCursorUpRedraw) {
+        if (this.flickerFilterTimeout) {
+          clearTimeout(this.flickerFilterTimeout);
+        }
+        this.flickerFilterTimeout = setTimeout(() => {
+          this.flickerFilterTimeout = null;
+          this.flushFlickerBuffer();
+        }, SYNC_WAIT_TIMEOUT_MS); // 50ms buffer window
+      } else if (!this.flickerFilterTimeout) {
+        // Safety: if no timer is running for some reason, ensure we eventually flush.
+        this.flickerFilterTimeout = setTimeout(() => {
+          this.flickerFilterTimeout = null;
+          this.flushFlickerBuffer();
+        }, SYNC_WAIT_TIMEOUT_MS);
       }
-      this.flickerFilterTimeout = setTimeout(() => {
-        this.flickerFilterTimeout = null;
+
+      // Safety valve: if buffer grew very large (e.g. from a burst before the timer fired),
+      // flush immediately to avoid writing a huge block all at once.
+      if (this.flickerFilterBuffer.length > 256 * 1024) {
+        if (this.flickerFilterTimeout) {
+          clearTimeout(this.flickerFilterTimeout);
+          this.flickerFilterTimeout = null;
+        }
         this.flushFlickerBuffer();
-      }, SYNC_WAIT_TIMEOUT_MS); // 50ms buffer window
+      }
 
       return;
     }
@@ -1238,6 +1267,11 @@ class CodemanApp {
               } catch { return null; }
             }
           });
+        } else if (session.mode === 'shell') {
+          // Shell mode: the shell provides its own PTY echo so the overlay isn't needed.
+          // Disable it by clearing any pending text.
+          this._localEchoOverlay.clear();
+          this._localEchoEnabled = false;
         } else {
           // Claude Code: scan for ❯ prompt character
           this._localEchoOverlay.setPrompt({ type: 'character', char: '\u276f', offset: 2 });
