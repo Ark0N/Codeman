@@ -143,6 +143,10 @@ Watch background agents work in real-time. Codeman monitors agent activity and d
 
 ## Zero-Lag Input Overlay
 
+<p align="center">
+  <img src="docs/images/zerolag-demo.gif" alt="Zerolag Demo — local echo vs server echo side-by-side" width="900">
+</p>
+
 When accessing your coding agent remotely (VPN, Tailscale, SSH tunnel), every keystroke normally takes 200-300ms to round-trip. Codeman implements a **Mosh-inspired local echo system** that makes typing feel instant regardless of latency.
 
 A pixel-perfect DOM overlay inside xterm.js renders keystrokes at 0ms. Background forwarding silently sends every character to the PTY in 50ms debounced batches, so Tab completion, `Ctrl+R` history search, and all shell features work normally. When the server echo arrives 200-300ms later, the overlay seamlessly disappears and the real terminal text takes over — the transition is invisible.
