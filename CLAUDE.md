@@ -80,7 +80,7 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 
 **CI**: `.github/workflows/ci.yml` runs `typecheck`, `lint`, `format:check` on push to master (Node 22). Tests excluded (they spawn tmux).
 
-**Code style**: Prettier (`singleQuote: true`, `printWidth: 120`, `trailingComma: "es5"`). ESLint allows `no-console`, warns on `@typescript-eslint/no-explicit-any`. Does not lint `app.js` or `scripts/**/*.mjs`.
+**Code style**: Prettier (`singleQuote: true`, `printWidth: 120`, `trailingComma: "es5"`). ESLint flat config (`eslint.config.js`) allows `no-console`, warns on `@typescript-eslint/no-explicit-any`. Ignores: `app.js`, `scripts/**/*.mjs`, `src/web/public/vendor/**`, `tools/**`, `remotion/**`.
 
 ## Common Gotchas
 
@@ -108,9 +108,9 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 | **State** | `src/state-store.ts`, `src/run-summary.ts`, `src/session-lifecycle-log.ts` | |
 | **Infra** | `src/hooks-config.ts`, `src/push-store.ts`, `src/tunnel-manager.ts`, `src/image-watcher.ts`, `src/file-stream-manager.ts` | |
 | **Plan** | `src/plan-orchestrator.ts`, `src/prompts/*.ts`, `src/templates/claude-md.ts` | |
-| **Web** | `src/web/server.ts`, `src/web/sse-events.ts`, `src/web/routes/*.ts` (13 modules), `src/web/ports/*.ts`, `src/web/middleware/auth.ts`, `src/web/schemas.ts` | |
+| **Web** | `src/web/server.ts`, `src/web/sse-events.ts`, `src/web/routes/*.ts` (12 route modules + barrel), `src/web/ports/*.ts`, `src/web/middleware/auth.ts`, `src/web/schemas.ts` | |
 | **Frontend** | `src/web/public/app.js` ★ (~11.8K lines) + 10 JS modules (incl. `sw.js` service worker) | |
-| **Types** | `src/types/index.ts` → 14 domain files | See `@fileoverview` in index.ts |
+| **Types** | `src/types/index.ts` → 13 domain files | See `@fileoverview` in index.ts |
 
 ★ = Large file (>50KB). All files have `@fileoverview` JSDoc — read that before diving in.
 
@@ -170,7 +170,7 @@ Frontend JS modules have `@fileoverview` with `@dependency`/`@loadorder` tags. L
 
 ### API Routes
 
-~111 handlers across 13 route files in `src/web/routes/`: system (35), sessions (24), ralph (9), plan (8), respawn (7), cases (7), files (5), mux (5), scheduled (4), push (4), teams (2), hooks (1). Each file has `@fileoverview` with endpoint details.
+~111 handlers across 12 route files in `src/web/routes/`: system (35), sessions (24), ralph (9), plan (8), respawn (7), cases (7), files (5), mux (5), scheduled (4), push (4), teams (2), hooks (1). Each file has `@fileoverview` with endpoint details.
 
 ## Adding Features
 
@@ -179,7 +179,7 @@ Frontend JS modules have `@fileoverview` with `@dependency`/`@loadorder` tags. L
 - **Session setting**: Add to `SessionState`, include in `session.toState()`, call `persistSessionState()`
 - **Hook event**: Add to `HookEventType`, add hook in `hooks-config.ts:generateHooksConfig()`, update `HookEventSchema`
 - **Mobile feature**: Add to relevant singleton, guard with `MobileDetection.isMobile()`
-- **New test**: Pick unique port (search `const PORT =`). Integration: ports 3099-3211. Route tests: `app.inject()` — see `test/routes/_route-test-utils.ts`.
+- **New test**: Pick unique port (search `const PORT =`). Route tests use `app.inject()` (no port needed) — see `test/routes/_route-test-utils.ts`.
 
 **Validation**: Zod v4 (different API from v3). Define schemas in `schemas.ts`, use `.parse()`/`.safeParse()`.
 
@@ -238,7 +238,6 @@ Key: `scripts/tmux-manager.sh` (safe tmux mgmt), `scripts/tunnel.sh` (tunnel sta
 ## Common Workflows
 
 **Bug investigation**: Dev server → reproduce in browser → check terminal + `~/.codeman/state.json`.
-**API endpoint**: Types in `src/types/*.ts` → route in `src/web/routes/*-routes.ts` → SSE event if needed → handle in `app.js`.
 **Respawn changes**: Read `docs/respawn-state-machine.md` first. Use `MockSession` from `test/respawn-test-utils.ts`.
 
 ## Tunnel

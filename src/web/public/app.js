@@ -1817,14 +1817,24 @@ class CodemanApp {
     if (data.id === this.activeSessionId) {
       if (data.data.length > 32768) _crashDiag.log(`TERMINAL: ${(data.data.length/1024).toFixed(0)}KB`);
 
-      // Hard cap: track total bytes queued across ALL buffers (pendingWrites +
-      // flickerFilterBuffer + loadBufferQueue). When rAF is throttled (tab
+      // Hard cap: track total bytes queued in render buffers (pendingWrites +
+      // flickerFilterBuffer). When rAF is throttled (tab
       // backgrounded, GPU busy), data accumulates with no flush, reaching
-      // 889KB+ and freezing Chrome for minutes. Drop data beyond 96KB —
-      // the server sends session:needsRefresh to recover.
+      // 889KB+ and freezing Chrome for minutes. Drop data beyond 128KB and
+      // schedule a buffer reload to recover the display once the burst subsides.
       const queued = (this.pendingWrites?.reduce((s, w) => s + w.length, 0) || 0)
         + (this.flickerFilterBuffer?.length || 0);
-      if (queued > 131072) return; // 128KB — drop to prevent accumulation
+      if (queued > 131072) { // 128KB — drop to prevent accumulation
+        // Schedule a self-recovery: reload the full terminal buffer once the
+        // queue drains (debounced to avoid hammering the API during sustained bursts).
+        if (!this._clientDropRecoveryTimer) {
+          this._clientDropRecoveryTimer = setTimeout(() => {
+            this._clientDropRecoveryTimer = null;
+            this._onSessionNeedsRefresh();
+          }, 2000);
+        }
+        return;
+      }
 
       this.batchTerminalWrite(data.data);
     }
@@ -1835,8 +1845,7 @@ class CodemanApp {
     // so reload the buffer to recover from any display corruption.
     if (!this.activeSessionId || !this.terminal) return;
     try {
-      const tailSize = 256 * 1024;
-      const res = await fetch(`/api/sessions/${this.activeSessionId}/terminal?tail=${tailSize}`);
+      const res = await fetch(`/api/sessions/${this.activeSessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
       const data = await res.json();
       if (data.terminalBuffer) {
         this.terminal.clear();
@@ -3532,6 +3541,7 @@ class CodemanApp {
     this._tabCompletionRetries = 0;
     this._tabCompletionBaseText = null;
     if (this._tabCompletionFallback) { clearTimeout(this._tabCompletionFallback); this._tabCompletionFallback = null; }
+    if (this._clientDropRecoveryTimer) { clearTimeout(this._clientDropRecoveryTimer); this._clientDropRecoveryTimer = null; }
 
     // Clean up pending terminal writes to prevent old session data from appearing in new session
     if (this.syncWaitTimeout) {
@@ -3634,7 +3644,7 @@ class CodemanApp {
 
     // Load terminal buffer for this session
     // Show cached content instantly while fetching fresh data in background.
-    // Use tail mode for faster initial load (256KB is enough for recent visible content).
+    // Use tail mode for faster initial load (128KB is enough for recent visible content).
     //
     // Protect flushed state during buffer load: terminal.write() can trigger
     // xterm.js onData responses (DA, OSC, etc.) that would otherwise clear
@@ -3664,8 +3674,7 @@ class CodemanApp {
       }
 
       _crashDiag.log('FETCH_START');
-      const tailSize = 256 * 1024;
-      const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${tailSize}`);
+      const res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
       if (selectGen !== this._selectGeneration) { if (this._isLoadingBuffer) this._finishBufferLoad(); this._restoringFlushedState = false; return; }
       const data = await res.json();
       _crashDiag.log(`FETCH_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} truncated=${data.truncated}`);
