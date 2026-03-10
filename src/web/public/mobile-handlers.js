@@ -182,6 +182,14 @@ const KeyboardHandler = {
         if (heightDiff > 150 && !this.keyboardVisible) {
           this._showKeyboard();
         }
+        // HIDE detection: viewport growing back means keyboard is closing.
+        // iOS dismiss button hides keyboard without blurring focus, so
+        // focusout never fires. Detect hide when viewport returns close
+        // to initial height. 50px threshold avoids false triggers from
+        // iOS address bar or predictive text fluctuations.
+        if (this.keyboardVisible && heightDiff < 50) {
+          this._hideKeyboard();
+        }
         // Update app size when keyboard is visible (tracks animation)
         if (this.keyboardVisible) {
           this._resizeAppForKeyboard();
@@ -199,7 +207,9 @@ const KeyboardHandler = {
       window.visualViewport.addEventListener('scroll', this._viewportScrollHandler);
     }
 
-    // --- Keyboard HIDE detection (focus-based only — stable, no flicker) ---
+    // --- Keyboard HIDE detection (two signals, either triggers) ---
+
+    // Signal 1: focusout — catches blur from tapping outside, switching tabs, etc.
     this._focusoutHandler = () => {
       if (!this.keyboardVisible) return;
       // Wait 500ms for focus to settle — xterm may briefly blur/refocus
@@ -210,13 +220,13 @@ const KeyboardHandler = {
           (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' ||
            active.isContentEditable || active.closest('.xterm'));
         if (!stillTyping) {
-          this.keyboardVisible = false;
-          document.body.classList.remove('keyboard-visible');
-          this.onKeyboardHide();
+          this._hideKeyboard();
         }
       }, 500);
     };
     document.addEventListener('focusout', this._focusoutHandler);
+    // Signal 2: visualViewport resize growing back — handled in _viewportResizeHandler above.
+    // Catches iOS dismiss button which hides keyboard without blurring focus.
   },
 
   /** Show keyboard state (deduplicated) */
@@ -225,6 +235,14 @@ const KeyboardHandler = {
     this.keyboardVisible = true;
     document.body.classList.add('keyboard-visible');
     this.onKeyboardShow();
+  },
+
+  /** Hide keyboard state (deduplicated — safe to call from multiple signals) */
+  _hideKeyboard() {
+    if (!this.keyboardVisible) return;
+    this.keyboardVisible = false;
+    document.body.classList.remove('keyboard-visible');
+    this.onKeyboardHide();
   },
 
   /** Remove event listeners */
