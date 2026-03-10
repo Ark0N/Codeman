@@ -581,7 +581,7 @@ export class WebServer extends EventEmitter {
         .sendFile('sw.js', join(__dirname, 'public'));
     });
 
-    // Serve static files — versioned assets (?v=X) are immutable, cache aggressively
+    // Serve static files — versioned assets (?v=hash) are immutable, cache aggressively.
     // preCompressed: serve pre-built .br/.gz files (from build step) to avoid per-request CPU compression
     await this.app.register(fastifyStatic, {
       root: join(__dirname, 'public'),
@@ -589,6 +589,17 @@ export class WebServer extends EventEmitter {
       maxAge: '1y',
       immutable: true,
       preCompressed: true,
+    });
+
+    // HTML files must revalidate every time so browsers see updated ?v= hashes.
+    // Without this, a cached index.html points to stale asset URLs forever.
+    // Hook runs after fastifyStatic sets its headers, so we can override.
+    this.app.addHook('onSend', async (_req, reply, payload) => {
+      const ct = reply.getHeader('content-type');
+      if (typeof ct === 'string' && ct.includes('text/html')) {
+        reply.header('Cache-Control', 'no-cache');
+      }
+      return payload;
     });
 
     // SSE endpoint for real-time updates

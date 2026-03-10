@@ -8,11 +8,13 @@
  *   2. Copy static assets (web/public, templates)
  *   3. Build vendor xterm bundles
  *   4. Minify frontend assets (app.js, styles.css, mobile.css)
- *   5. Compress with gzip + brotli
+ *   5. Cache-bust: replace ?v= in index.html with content hashes
+ *   6. Compress with gzip + brotli
  */
 
 import { execSync } from 'child_process';
-import { appendFileSync } from 'fs';
+import { appendFileSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import { join } from 'path';
 
@@ -60,7 +62,23 @@ run('minify app.js', 'npx esbuild dist/web/public/app.js --minify --outfile=dist
 run('minify styles.css', 'npx esbuild dist/web/public/styles.css --minify --outfile=dist/web/public/styles.css --allow-overwrite');
 run('minify mobile.css', 'npx esbuild dist/web/public/mobile.css --minify --outfile=dist/web/public/mobile.css --allow-overwrite');
 
-// 5. Compress with gzip + brotli
+// 5. Cache-bust: replace ?v= query strings in index.html with content hashes
+console.log('\n[build] cache-bust index.html');
+{
+  const distPublic = join(ROOT, 'dist/web/public');
+  let html = readFileSync(join(distPublic, 'index.html'), 'utf8');
+  // Match href="file.css?v=..." and src="file.js?v=..."
+  html = html.replace(/((?:href|src)=")((?:vendor\/)?[^"?]+)\?v=[^"]*(")/g, (_match, pre, file, post) => {
+    const filePath = join(distPublic, file);
+    if (!existsSync(filePath)) return `${pre}${file}${post}`;
+    const hash = createHash('md5').update(readFileSync(filePath)).digest('hex').slice(0, 8);
+    return `${pre}${file}?v=${hash}${post}`;
+  });
+  writeFileSync(join(distPublic, 'index.html'), html);
+  console.log('  ✓ Replaced ?v= with content hashes');
+}
+
+// 6. Compress with gzip + brotli
 run(
   'compress',
   `for f in dist/web/public/*.js dist/web/public/*.css dist/web/public/*.html dist/web/public/vendor/*.js dist/web/public/vendor/*.css; do` +
