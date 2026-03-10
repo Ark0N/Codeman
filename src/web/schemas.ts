@@ -321,6 +321,30 @@ export const SettingsUpdateSchema = z
         insertMode: z.string().max(20).optional(),
       })
       .optional(),
+    // Run mode preference (cross-device sync)
+    runMode: z.string().max(20).optional(),
+    // Custom respawn presets (cross-device sync, replaces localStorage-only storage)
+    respawnPresets: z
+      .array(
+        z.object({
+          id: z.string().max(100),
+          name: z.string().max(100),
+          config: z.object({
+            idleTimeoutMs: z.number().optional(),
+            updatePrompt: z.string().max(5000).optional(),
+            interStepDelayMs: z.number().optional(),
+            sendClear: z.boolean().optional(),
+            sendInit: z.boolean().optional(),
+            kickstartPrompt: z.string().max(5000).optional(),
+            autoAcceptPrompts: z.boolean().optional(),
+          }),
+          durationMinutes: z.number().optional(),
+          builtIn: z.boolean().optional(),
+          createdAt: z.number().optional(),
+        })
+      )
+      .max(20)
+      .optional(),
   })
   .strict();
 

@@ -2080,7 +2080,7 @@ body {
   text-align: center;
 }
 
-/* History sessions panel */
+/* History sessions panel (welcome overlay) */
 .history-sessions {
   margin-top: 1.5rem;
   width: 100%;
@@ -2324,7 +2324,8 @@ body {
   border-radius: 6px;
   padding: 4px;
   z-index: 1000;
-  min-width: 150px;
+  min-width: 180px;
+  max-width: 300px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.4);
 }
 .run-mode-menu.active {
@@ -2360,6 +2361,40 @@ body {
 }
 .run-mode-dot.claude { background: #3b82f6; }
 .run-mode-dot.opencode { background: #10b981; }
+
+.run-mode-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+.run-mode-header {
+  padding: 4px 10px 2px;
+  font-size: 0.72em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+.run-mode-history {
+  max-height: 200px;
+  overflow-y: auto;
+}
+.run-mode-option .hist-dir {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-mode-option .hist-meta {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.run-mode-hist-empty {
+  padding: 6px 10px;
+  color: var(--text-muted);
+  font-style: italic;
+}
 
 /* Shell Button - Special styling */
 .btn-toolbar.btn-shell {

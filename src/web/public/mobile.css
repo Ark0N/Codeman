@@ -626,12 +626,20 @@ html.mobile-init .file-browser-panel {
     bottom: 100%;
     left: 0;
     margin-bottom: 6px;
-    min-width: 140px;
+    min-width: 160px;
+    max-width: 80vw;
   }
 
   .run-mode-option {
     padding: 10px 12px;
     font-size: 0.8rem;
+    cursor: pointer;
+    -webkit-tap-highlight-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .run-mode-history {
+    -webkit-overflow-scrolling: touch;
+    touch-action: manipulation;
   }
 
   /* Stop button - visible on mobile, icon-only */

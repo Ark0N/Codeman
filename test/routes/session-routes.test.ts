@@ -75,11 +75,7 @@ describe('session-routes', () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.success).toBe(true);
-      expect(harness.ctx.cleanupSession).toHaveBeenCalledWith(
-        harness.ctx._sessionId,
-        true,
-        'user_delete',
-      );
+      expect(harness.ctx.cleanupSession).toHaveBeenCalledWith(harness.ctx._sessionId, true, 'user_delete');
     });
 
     it('returns error for unknown session', async () => {
@@ -123,10 +119,7 @@ describe('session-routes', () => {
       expect(body.success).toBe(true);
       expect(body.name).toBe('new-name');
       expect(harness.ctx.persistSessionState).toHaveBeenCalled();
-      expect(harness.ctx.broadcast).toHaveBeenCalledWith(
-        'session:updated',
-        expect.anything(),
-      );
+      expect(harness.ctx.broadcast).toHaveBeenCalledWith('session:updated', expect.anything());
     });
 
     it('returns error for unknown session', async () => {
@@ -456,6 +449,111 @@ describe('session-routes', () => {
       const res = await harness.app.inject({
         method: 'POST',
         url: '/api/logout',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+    });
+  });
+
+  // ========== GET /api/history/sessions ==========
+
+  describe('GET /api/history/sessions', () => {
+    it('returns sessions array', async () => {
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions',
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body).toHaveProperty('sessions');
+      expect(Array.isArray(body.sessions)).toBe(true);
+    });
+
+    it('sessions have required fields', async () => {
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions',
+      });
+      const body = JSON.parse(res.body);
+      for (const session of body.sessions) {
+        expect(session).toHaveProperty('sessionId');
+        expect(session).toHaveProperty('workingDir');
+        expect(session).toHaveProperty('projectKey');
+        expect(session).toHaveProperty('sizeBytes');
+        expect(session).toHaveProperty('lastModified');
+        // sessionId must be a valid UUID
+        expect(session.sessionId).toMatch(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/);
+      }
+    });
+
+    it('sessions are sorted by lastModified descending', async () => {
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions',
+      });
+      const body = JSON.parse(res.body);
+      const dates = body.sessions.map((s: { lastModified: string }) => new Date(s.lastModified).getTime());
+      for (let i = 1; i < dates.length; i++) {
+        expect(dates[i - 1]).toBeGreaterThanOrEqual(dates[i]);
+      }
+    });
+
+    it('returns at most 50 sessions', async () => {
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: '/api/history/sessions',
+      });
+      const body = JSON.parse(res.body);
+      expect(body.sessions.length).toBeLessThanOrEqual(50);
+    });
+  });
+
+  // ========== POST /api/sessions (with resumeSessionId) ==========
+
+  describe('POST /api/sessions with resumeSessionId', () => {
+    it('creates session with valid resumeSessionId', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/sessions',
+        payload: {
+          name: 'resume-test',
+          mode: 'claude',
+          workingDir: process.env.HOME || '/tmp',
+          resumeSessionId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.session).toBeDefined();
+    });
+
+    it('rejects invalid resumeSessionId format', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/sessions',
+        payload: {
+          name: 'bad-resume',
+          mode: 'claude',
+          workingDir: process.env.HOME || '/tmp',
+          resumeSessionId: 'not-a-uuid',
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+    });
+
+    it('creates session without resumeSessionId (optional field)', async () => {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/sessions',
+        payload: {
+          name: 'no-resume',
+          mode: 'claude',
+          workingDir: process.env.HOME || '/tmp',
+        },
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);

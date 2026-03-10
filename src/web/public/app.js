@@ -1217,6 +1217,8 @@ class CodemanApp {
   }
 
   async resumeHistorySession(sessionId, workingDir) {
+    // Close the run mode menu if open
+    document.getElementById('runModeMenu')?.classList.remove('active');
     try {
       this.terminal.clear();
       this.terminal.writeln(`\x1b[1;32m Resuming conversation ${sessionId.slice(0, 8)}...\x1b[0m`);
@@ -4242,6 +4244,8 @@ class CodemanApp {
     this._runMode = mode;
     try { localStorage.setItem('codeman_runMode', mode); } catch {}
     this._applyRunMode();
+    // Sync to server for cross-device persistence
+    this._apiPut('/api/settings', { runMode: mode }).catch(() => {});
     // Close menu
     document.getElementById('runModeMenu')?.classList.remove('active');
   }
@@ -4255,8 +4259,9 @@ class CodemanApp {
     menu.querySelectorAll('.run-mode-option').forEach(btn => {
       btn.classList.toggle('selected', btn.dataset.mode === this.runMode);
     });
-    // Close on click outside
+    // Load history sessions when menu opens
     if (menu.classList.contains('active')) {
+      this._loadRunModeHistory();
       const close = (ev) => {
         if (!menu.contains(ev.target)) {
           menu.classList.remove('active');
@@ -4264,6 +4269,68 @@ class CodemanApp {
         }
       };
       setTimeout(() => document.addEventListener('click', close), 0);
+    }
+  }
+
+  async _loadRunModeHistory() {
+    const container = document.getElementById('runModeHistory');
+    if (!container) return;
+    container.innerHTML = '<div class="run-mode-hist-empty">Loading...</div>';
+
+    try {
+      const res = await fetch('/api/history/sessions');
+      const data = await res.json();
+      const sessions = data.sessions || [];
+
+      if (sessions.length === 0) {
+        container.innerHTML = '<div class="run-mode-hist-empty">No history</div>';
+        return;
+      }
+
+      // Deduplicate: up to 2 per dir, max 10 total
+      const byDir = new Map();
+      for (const s of sessions) {
+        if (!byDir.has(s.workingDir)) byDir.set(s.workingDir, []);
+        byDir.get(s.workingDir).push(s);
+      }
+      const items = [];
+      for (const [, group] of byDir) {
+        items.push(...group.slice(0, 2));
+      }
+      items.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
+      const display = items.slice(0, 10);
+
+      // Build items using DOM API for reliable mobile touch handling
+      container.replaceChildren();
+      for (const s of display) {
+        const date = new Date(s.lastModified);
+        const timeStr = date.toLocaleDateString('en', { month: 'short', day: 'numeric' })
+          + ' ' + date.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false });
+        const shortDir = s.workingDir.replace(/^\/home\/[^/]+\//, '~/');
+
+        const btn = document.createElement('button');
+        btn.className = 'run-mode-option';
+        btn.title = s.workingDir;
+        btn.dataset.sessionId = s.sessionId;
+        btn.dataset.workingDir = s.workingDir;
+
+        const dirSpan = document.createElement('span');
+        dirSpan.className = 'hist-dir';
+        dirSpan.textContent = shortDir;
+
+        const metaSpan = document.createElement('span');
+        metaSpan.className = 'hist-meta';
+        metaSpan.textContent = timeStr;
+
+        btn.append(dirSpan, metaSpan);
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.resumeHistorySession(s.sessionId, s.workingDir);
+        });
+        container.appendChild(btn);
+      }
+    } catch (err) {
+      container.innerHTML = '<div class="run-mode-hist-empty">Failed to load</div>';
     }
   }
 
@@ -5593,6 +5660,9 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   loadRespawnPresets() {
+    // Custom presets: prefer server-synced cache, fall back to legacy localStorage key
+    const serverCache = this._serverRespawnPresets;
+    if (serverCache) return [...BUILTIN_RESPAWN_PRESETS, ...serverCache];
     const saved = localStorage.getItem('codeman-respawn-presets');
     const custom = saved ? JSON.parse(saved) : [];
     return [...BUILTIN_RESPAWN_PRESETS, ...custom];
@@ -5601,7 +5671,11 @@ class CodemanApp {
   saveRespawnPresets(presets) {
     // Only save custom presets (not built-in)
     const custom = presets.filter(p => !p.builtIn);
+    // Update local cache + legacy localStorage
+    this._serverRespawnPresets = custom;
     localStorage.setItem('codeman-respawn-presets', JSON.stringify(custom));
+    // Persist to server (cross-device sync)
+    this._apiPut('/api/settings', { respawnPresets: custom }).catch(() => {});
   }
 
   renderPresetDropdown() {
@@ -7760,7 +7834,7 @@ class CodemanApp {
       const settings = settingsPromise ? await settingsPromise : await fetch('/api/settings').then(r => r.ok ? r.json() : null);
       if (settings) {
         // Extract notification prefs before merging app settings
-        const { notificationPreferences, voiceSettings, ...appSettings } = settings;
+        const { notificationPreferences, voiceSettings, respawnPresets, runMode, ...appSettings } = settings;
         // Filter out display settings — these are device-specific (mobile vs desktop)
         // and should not be synced from the server to avoid overriding mobile defaults.
         // NOTE: Feature toggles (subagentTrackingEnabled, imageWatcherEnabled, ralphTrackerEnabled)
@@ -7803,6 +7877,30 @@ class CodemanApp {
           if (!localVoice || !JSON.parse(localVoice).apiKey) {
             VoiceInput._saveDeepgramConfig(voiceSettings);
           }
+        }
+
+        // Sync respawn presets from server (server is source of truth)
+        if (respawnPresets && Array.isArray(respawnPresets)) {
+          this._serverRespawnPresets = respawnPresets;
+          // Also update localStorage for offline access
+          localStorage.setItem('codeman-respawn-presets', JSON.stringify(respawnPresets));
+        } else {
+          // Migration: push existing localStorage presets to server
+          const localPresets = localStorage.getItem('codeman-respawn-presets');
+          if (localPresets) {
+            const parsed = JSON.parse(localPresets);
+            if (parsed.length > 0) {
+              this._serverRespawnPresets = parsed;
+              this._apiPut('/api/settings', { respawnPresets: parsed }).catch(() => {});
+            }
+          }
+        }
+
+        // Sync run mode from server
+        if (runMode) {
+          this.runMode = runMode;
+          try { localStorage.setItem('codeman_runMode', runMode); } catch {}
+          this._applyRunMode();
         }
 
         return merged;

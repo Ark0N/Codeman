@@ -206,11 +206,18 @@ function buildSpawnCommand(options: {
     // Validate model to prevent command injection
     const safeModel = options.model && /^[a-zA-Z0-9._-]+$/.test(options.model) ? options.model : undefined;
     const modelFlag = safeModel ? ` --model ${safeModel}` : '';
-    // Use --resume to restore a previous conversation, otherwise --session-id for new sessions
+    // Use --resume to restore a previous conversation, otherwise --session-id for new sessions.
+    // Wrap --resume in a fallback: if it exits non-zero (session not found, corrupt, etc.),
+    // fall back to a new session with --session-id so the pane doesn't die.
     const safeResumeId =
       options.resumeSessionId && /^[a-f0-9-]+$/.test(options.resumeSessionId) ? options.resumeSessionId : undefined;
-    const sessionFlag = safeResumeId ? ` --resume "${safeResumeId}"` : ` --session-id "${options.sessionId}"`;
-    return `claude${buildClaudePermissionFlags(options.claudeMode, options.allowedTools)}${sessionFlag}${modelFlag}`;
+    const permFlags = buildClaudePermissionFlags(options.claudeMode, options.allowedTools);
+    if (safeResumeId) {
+      const resumeCmd = `claude${permFlags} --resume "${safeResumeId}"${modelFlag}`;
+      const fallbackCmd = `claude${permFlags} --session-id "${options.sessionId}"${modelFlag}`;
+      return `${resumeCmd} || ${fallbackCmd}`;
+    }
+    return `claude${permFlags} --session-id "${options.sessionId}"${modelFlag}`;
   }
   if (options.mode === 'opencode') {
     return buildOpenCodeCommand(options.openCodeConfig);
@@ -622,7 +629,17 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * preserving the session and its scrollback buffer.
    */
   async respawnPane(options: RespawnPaneOptions): Promise<number | null> {
-    const { sessionId, workingDir, mode, niceConfig, model, claudeMode, allowedTools, openCodeConfig } = options;
+    const {
+      sessionId,
+      workingDir,
+      mode,
+      niceConfig,
+      model,
+      claudeMode,
+      allowedTools,
+      openCodeConfig,
+      resumeSessionId,
+    } = options;
     const session = this.sessions.get(sessionId);
     if (!session) return null;
     const muxName = session.muxName;
@@ -658,6 +675,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       claudeMode,
       allowedTools,
       openCodeConfig,
+      resumeSessionId,
     });
     const config = niceConfig || DEFAULT_NICE_CONFIG;
     const cmd = wrapWithNice(baseCmd, config);

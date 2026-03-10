@@ -912,6 +912,7 @@ export class Session extends EventEmitter {
             claudeMode: this._claudeMode,
             allowedTools: this._allowedTools,
             openCodeConfig: this._openCodeConfig,
+            resumeSessionId: this._resumeSessionId,
           });
           if (!newPid) {
             console.error('[Session] Failed to respawn pane, will create new session');

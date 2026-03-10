@@ -965,8 +965,32 @@ export function registerSessionRoutes(
           const filePath = join(projPath, entry);
           const fileStat = await fs.stat(filePath).catch(() => null);
           if (!fileStat) continue;
-          // Skip tiny files (empty or just init)
-          if (fileStat.size < 500) continue;
+          // Skip files too small to contain real conversation (metadata-only sessions
+          // like file-history-snapshot entries are typically < 4KB)
+          if (fileStat.size < 4000) continue;
+
+          // Quick content check: verify actual conversation data exists.
+          // Sessions with only file-history-snapshot or hook_progress entries have
+          // no "user"/"assistant" messages and will fail claude --resume.
+          // Files > 50KB are almost certainly real conversations (skip the read).
+          if (fileStat.size < 50000) {
+            try {
+              const fd = await fs.open(filePath, 'r');
+              const buf = Buffer.alloc(16384);
+              const { bytesRead } = await fd.read(buf, 0, 16384, 0);
+              await fd.close();
+              const head = buf.toString('utf8', 0, bytesRead);
+              if (
+                !head.includes('"type":"user"') &&
+                !head.includes('"type":"assistant"') &&
+                !head.includes('"type":"summary"')
+              ) {
+                continue; // No conversation content — skip
+              }
+            } catch {
+              continue;
+            }
+          }
 
           results.push({
             sessionId,

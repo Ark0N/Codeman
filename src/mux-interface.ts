@@ -75,6 +75,8 @@ export interface RespawnPaneOptions {
   claudeMode?: ClaudeMode;
   allowedTools?: string;
   openCodeConfig?: OpenCodeConfig;
+  /** Resume a previous Claude conversation when respawning */
+  resumeSessionId?: string;
 }
 
 /**
