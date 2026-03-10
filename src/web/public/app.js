@@ -5066,6 +5066,8 @@ class CodemanApp {
       if (size >= 10 && size <= 24) {
         this.terminal.options.fontSize = size;
         document.getElementById('fontSizeDisplay').textContent = size;
+        // Sync overlay font to match (overlay was initialized with the default font size)
+        this._localEchoOverlay?.refreshFont();
       }
     }
   }
