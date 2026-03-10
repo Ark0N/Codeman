@@ -53,10 +53,15 @@ const KeyboardAccessoryBar = {
           <path d="M19 9l-7 7-7-7"/>
         </svg>
       </button>
+      <button class="accessory-btn accessory-btn-arrow" data-action="tab" title="Tab">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M4 12h12m-4-4l4 4-4 4M20 5v14"/>
+        </svg>
+      </button>
       <button class="accessory-btn" data-action="init" title="/init">/init</button>
       <button class="accessory-btn" data-action="clear" title="/clear">/clear</button>
       <button class="accessory-btn" data-action="compact" title="/compact">/compact</button>
-      <button class="accessory-btn" data-action="paste" title="Paste from clipboard">
+      <button class="accessory-btn" data-action="paste" title="Paste / multiline input">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
           <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
@@ -80,7 +85,7 @@ const KeyboardAccessoryBar = {
       this.handleAction(action, btn);
 
       // Refocus terminal so keyboard stays open (tap blurs terminal → keyboard dismisses → toolbar shifts)
-      if ((action === 'scroll-up' || action === 'scroll-down') ||
+      if ((action === 'scroll-up' || action === 'scroll-down' || action === 'tab') ||
           ((action === 'clear' || action === 'compact') && this._confirmAction)) {
         if (typeof app !== 'undefined' && app.terminal) {
           app.terminal.focus();
@@ -109,6 +114,9 @@ const KeyboardAccessoryBar = {
       case 'scroll-down':
         this.sendKey('\x1b[B');
         break;
+      case 'tab':
+        this.sendViaTerminal('\t');
+        break;
       case 'init':
         this.sendCommand('/init');
         break;
@@ -125,7 +133,7 @@ const KeyboardAccessoryBar = {
         break;
       }
       case 'paste':
-        this.pasteFromClipboard();
+        this.openInputOverlay();
         break;
       case 'dismiss':
         // Blur active element to dismiss keyboard
@@ -173,6 +181,16 @@ const KeyboardAccessoryBar = {
     setTimeout(() => app.sendInput('\r'), 120);
   },
 
+  /** Send Tab or Newline through xterm's data pipeline so the onData handler
+   *  in app.js manages zero-lag overlay state (flush pending text, tab completion
+   *  detection, etc.). Direct PTY writes bypass that logic and cause desync. */
+  sendViaTerminal(key) {
+    if (typeof app !== 'undefined' && app.terminal) {
+      // triggerDataEvent fires the onData callback as if the user typed the key
+      app.terminal._core.coreService.triggerDataEvent(key);
+    }
+  },
+
   /** Send a special key (arrow, escape, etc.) directly to the PTY.
    *  Bypasses tmux send-keys -l (literal mode) since escape sequences
    *  must be written raw to be interpreted as key presses by Ink. */
@@ -185,17 +203,21 @@ const KeyboardAccessoryBar = {
     }).catch(() => {});
   },
 
-  /** Read clipboard and send contents as input */
-  /** Show a paste overlay with a textarea for iOS compatibility */
-  pasteFromClipboard() {
+  /** Open input overlay for paste and multiline input.
+   *  Pre-fills with any pending typed text from the zero-lag overlay.
+   *  Sends via direct PTY write so newlines are preserved (tmux strips them). */
+  openInputOverlay() {
     if (typeof app === 'undefined' || !app.activeSessionId) return;
 
-    // Create overlay
+    // Grab any pending text from the zero-lag overlay
+    const pending = app._localEchoOverlay?.pendingText || '';
+    if (pending) app._localEchoOverlay.clear();
+
     const overlay = document.createElement('div');
     overlay.className = 'paste-overlay';
     overlay.innerHTML = `
       <div class="paste-dialog">
-        <textarea class="paste-textarea" placeholder="Long-press here and tap Paste"></textarea>
+        <textarea class="paste-textarea" placeholder="Type or paste here, then Send"></textarea>
         <div class="paste-actions">
           <button class="paste-cancel">Cancel</button>
           <button class="paste-send">Send</button>
@@ -204,17 +226,28 @@ const KeyboardAccessoryBar = {
     `;
 
     const textarea = overlay.querySelector('.paste-textarea');
+    textarea.value = pending;
     const send = () => {
       const text = textarea.value;
       overlay.remove();
-      if (text) app.sendInput(text);
+      if (!text) return;
+      // Send via direct PTY write (not tmux send-keys) so newlines are preserved.
+      fetch(`/api/sessions/${app.activeSessionId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: text })
+      }).catch(() => {});
     };
-    overlay.querySelector('.paste-cancel').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('.paste-cancel').addEventListener('click', () => {
+      overlay.remove();
+      if (pending && app._localEchoOverlay) app._localEchoOverlay.appendText(pending);
+    });
     overlay.querySelector('.paste-send').addEventListener('click', send);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 
     document.body.appendChild(overlay);
     textarea.focus();
+    textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
   },
 
   /** Show the accessory bar */

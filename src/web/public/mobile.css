@@ -766,12 +766,12 @@ html.mobile-init .file-browser-panel {
     height: 44px;
     background: #1a1a1a;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
-    padding: 6px 8px;
-    padding-left: calc(8px + var(--safe-area-left));
-    padding-right: calc(8px + var(--safe-area-right));
-    gap: 8px;
+    padding: 6px 4px;
+    padding-left: calc(4px + var(--safe-area-left));
+    padding-right: calc(4px + var(--safe-area-right));
+    gap: 5px;
     align-items: center;
-    justify-content: center;
+    justify-content: space-evenly;
     z-index: 51;
     transition: transform 0.15s ease-out;
     will-change: transform;
@@ -786,7 +786,7 @@ html.mobile-init .file-browser-panel {
     align-items: center;
     justify-content: center;
     gap: 4px;
-    padding: 6px 12px;
+    padding: 6px 8px;
     background: #2a2a2a;
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 6px;
@@ -814,7 +814,7 @@ html.mobile-init .file-browser-panel {
   }
 
   .accessory-btn-arrow {
-    padding: 6px 10px;
+    padding: 6px 7px;
     background: #1e3a5f;
     border-color: rgba(59, 130, 246, 0.3);
     color: #93c5fd;
@@ -825,7 +825,7 @@ html.mobile-init .file-browser-panel {
   }
 
   .accessory-btn-dismiss {
-    padding: 8px 14px;
+    padding: 6px 10px;
     background: #2a2a2a;
     border: 1.5px solid rgba(255, 255, 255, 0.25);
     border-radius: 6px;
@@ -833,8 +833,8 @@ html.mobile-init .file-browser-panel {
   }
 
   .accessory-btn-dismiss svg {
-    width: 22px;
-    height: 22px;
+    width: 18px;
+    height: 18px;
     stroke-width: 3;
   }
 

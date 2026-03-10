@@ -157,14 +157,19 @@ const KeyboardHandler = {
 
     // --- Keyboard SHOW detection (two signals, either triggers) ---
 
-    // Signal 1: focusin on typeable element
+    // Signal 1: focusin on form inputs (not xterm — see note below)
     this._focusinHandler = (e) => {
       const target = e.target;
       if (!this.keyboardVisible) {
-        const isTypeable = target &&
+        // Only detect keyboard for real form inputs. Do NOT include .xterm —
+        // xterm's hidden textarea gets focus on every tap (including scrolls),
+        // which would falsely trigger keyboard state and set .app to
+        // position:fixed, breaking normal terminal scrolling.
+        // Terminal keyboard is detected via viewport resize (Signal 2).
+        const isFormInput = target &&
           (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' ||
-           target.isContentEditable || target.closest('.xterm'));
-        if (isTypeable) {
+           target.isContentEditable) && !target.closest('.xterm');
+        if (isFormInput) {
           this._showKeyboard();
         }
       }
@@ -187,7 +192,10 @@ const KeyboardHandler = {
         // focusout never fires. Detect hide when viewport returns close
         // to initial height. 50px threshold avoids false triggers from
         // iOS address bar or predictive text fluctuations.
-        if (this.keyboardVisible && heightDiff < 50) {
+        // Grace period: suppress for 800ms after show to prevent false hide
+        // during keyboard open animation (viewport height changes gradually,
+        // so early resize events have small heightDiff that looks like "closing").
+        if (this.keyboardVisible && heightDiff < 50 && Date.now() - (this._showTime || 0) > 800) {
           this._hideKeyboard();
         }
         // Update app size when keyboard is visible (tracks animation)
@@ -233,6 +241,7 @@ const KeyboardHandler = {
   _showKeyboard() {
     if (this.keyboardVisible) return;
     this.keyboardVisible = true;
+    this._showTime = Date.now();
     document.body.classList.add('keyboard-visible');
     this.onKeyboardShow();
   },
