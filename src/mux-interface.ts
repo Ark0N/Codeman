@@ -189,4 +189,8 @@ export interface TerminalMultiplexer extends EventEmitter {
 
   /** Respawn a dead pane with a fresh command. Returns the new PID or null on failure. */
   respawnPane(options: RespawnPaneOptions): Promise<number | null>;
+
+  /** Capture the current scrollback buffer of the first pane in a session.
+   *  Returns content with ANSI escape codes preserved, or null on failure. */
+  captureScrollback(muxName: string): string | null;
 }

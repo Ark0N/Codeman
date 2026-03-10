@@ -964,8 +964,23 @@ export class Session extends EventEmitter {
           throw spawnErr;
         }
 
+        // For RESTORED mux sessions: seed the terminal buffer from tmux scrollback
+        // so the client sees pre-restart output immediately on tab switch.
+        if (isRestoredSession && this._mux) {
+          try {
+            const scrollback = this._mux.captureScrollback(this._muxSession!.muxName);
+            if (scrollback) {
+              this._terminalBuffer.set(scrollback);
+              console.log(
+                `[Session] Seeded terminal buffer from tmux scrollback: ${(scrollback.length / 1024).toFixed(0)}KB`
+              );
+            }
+          } catch (err) {
+            console.error('[Session] Failed to capture tmux scrollback:', err);
+          }
+        }
+
         // For NEW mux sessions: wait for readiness then clean buffer
-        // For RESTORED mux sessions: don't do anything - client will fetch buffer on tab switch
         if (!isRestoredSession) {
           if (this.mode === 'opencode') {
             // OpenCode uses Bubble Tea TUI — no ❯ prompt to detect.
@@ -1331,6 +1346,21 @@ export class Session extends EventEmitter {
           console.error('[Session] Failed to spawn PTY for shell mux attachment:', spawnErr);
           this.emit('error', `Failed to attach to mux session: ${spawnErr}`);
           throw spawnErr;
+        }
+
+        // For RESTORED mux sessions: seed the terminal buffer from tmux scrollback
+        if (isRestoredSession && this._mux) {
+          try {
+            const scrollback = this._mux.captureScrollback(this._muxSession!.muxName);
+            if (scrollback) {
+              this._terminalBuffer.set(scrollback);
+              console.log(
+                `[Session] Seeded terminal buffer from tmux scrollback: ${(scrollback.length / 1024).toFixed(0)}KB`
+              );
+            }
+          } catch (err) {
+            console.error('[Session] Failed to capture tmux scrollback:', err);
+          }
         }
 
         // For NEW sessions: clear by sending 'clear' command to the shell

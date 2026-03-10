@@ -1448,6 +1448,18 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * Capture the scrollback buffer of the first pane in a session.
+   * Convenience wrapper around capturePaneBuffer for the common single-pane case.
+   */
+  captureScrollback(muxName: string): string | null {
+    if (IS_TEST_MODE) return '';
+    if (!isValidMuxName(muxName)) return null;
+    const panes = this.listPanes(muxName);
+    if (panes.length === 0) return null;
+    return this.capturePaneBuffer(muxName, panes[0].paneId);
+  }
+
+  /**
    * Start piping pane output to a file using tmux pipe-pane.
    * Only pipes output direction (-O) to avoid echoing input.
    */

@@ -1,5 +1,11 @@
 /* Codeman - Terminal-First UI */
 
+/* Dark color scheme — tells browsers to use dark system chrome
+   (dark keyboard on iOS, dark scrollbars, dark form controls). */
+html {
+  color-scheme: dark;
+}
+
 :root {
   --bg-dark: #0a0a0a;
   --bg-card: #141414;

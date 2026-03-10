@@ -1085,6 +1085,8 @@ html.mobile-init .file-browser-panel {
 
   /* xterm-viewport is the scrollable element inside xterm.js.
      It must sit above xterm-screen to receive touch events.
+     will-change: scroll-position promotes to its own compositing layer
+     so iOS Safari applies native momentum scrolling independently of parent.
      See: https://github.com/xtermjs/xterm.js/issues/5377 */
   .terminal-container .xterm-viewport {
     position: absolute !important;
@@ -1096,6 +1098,8 @@ html.mobile-init .file-browser-panel {
     touch-action: pan-y;
     -webkit-overflow-scrolling: touch;
     overflow-y: scroll !important;
+    will-change: scroll-position;
+    overscroll-behavior: contain;
   }
 
   .terminal-container .xterm-screen {
