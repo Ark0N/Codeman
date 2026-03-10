@@ -41,7 +41,7 @@ html.mobile-init .file-browser-panel {
 /* ============================================================================
    Tablet Breakpoint (430px - 768px)
    ============================================================================ */
-@media (max-width: 768px) and (min-width: 430px) {
+@media (max-width: 768px) and (min-width: 431px) {
   /* Compact header for tablet - fixed at top, includes safe area padding */
   .header {
     position: fixed;
@@ -237,7 +237,7 @@ html.mobile-init .file-browser-panel {
 }
 
 /* ============================================================================
-   Phone Breakpoint (<430px)
+   Phone Breakpoint (<=430px)
    ============================================================================ */
 @media (max-width: 430px) {
   /* Hide header brand on phones */
@@ -859,9 +859,23 @@ html.mobile-init .file-browser-panel {
     display: none !important;
   }
 
-  /* When keyboard is visible, also move accessory bar up */
+  /* When keyboard is visible, switch toolbar and accessory bar from fixed to
+     flex layout. JS resizes .app to visualViewport.height, so flex children
+     at the bottom naturally appear above the keyboard. */
+  .keyboard-visible .toolbar {
+    position: static;
+    flex-shrink: 0;
+  }
+
   .keyboard-visible .keyboard-accessory-bar.visible {
-    /* Position is handled by JS transform along with toolbar */
+    position: static;
+    flex-shrink: 0;
+  }
+
+  /* Remove .main padding-bottom when keyboard is visible — toolbar is no
+     longer fixed, so it doesn't overlap content. */
+  .keyboard-visible .main {
+    padding-bottom: 0;
   }
 
   /* Paste overlay for iOS clipboard access */
@@ -1038,10 +1052,12 @@ html.mobile-init .file-browser-panel {
     padding-bottom: var(--safe-area-bottom);
   }
 
-  /* Main area must fill available space */
+  /* Main area must fill available space. padding-bottom keeps terminal
+     content above the fixed toolbar so nothing is obscured. */
   .main {
     flex: 1;
     min-height: 0; /* Allow flex item to shrink below content size */
+    padding-bottom: var(--toolbar-height);
   }
 
   /* Show CLI info bar on mobile (Claude version/model) */
@@ -1049,10 +1065,15 @@ html.mobile-init .file-browser-panel {
     display: block;
   }
 
-  /* Mobile terminal - native touch scrolling via xterm-viewport */
+  /* Mobile terminal - native touch scrolling via xterm-viewport.
+     min-width: 0 prevents flex expansion beyond parent — without it,
+     xterm.js content (rendered wider by FitAddon rounding) forces the
+     container past 100% width, causing right-side cutoff on 430px phones.
+     overflow: visible is required — overflow: hidden blocks touch scroll. */
   .terminal-container {
     height: 100%;
     min-height: 0;
+    min-width: 0;
     position: relative;
     overflow: visible; /* Must not be hidden — blocks touch scroll on viewport */
     touch-action: pan-y;

@@ -20,14 +20,14 @@ export interface DeviceEntry {
 // ---------------------------------------------------------------------------
 
 function breakpointFor(width: number): 'phone' | 'tablet' | 'desktop' {
-  if (width < 430) return 'phone';
+  if (width <= 430) return 'phone';
   if (width < 768) return 'tablet';
   return 'desktop';
 }
 
 function categoryFor(width: number): DeviceCategory {
   if (width < 375) return 'small-phone';
-  if (width < 430) return 'standard-phone';
+  if (width <= 430) return 'standard-phone';
   if (width < 600) return 'large-phone';
   if (width < 768) return 'small-tablet';
   if (width < 834) return 'standard-tablet';
