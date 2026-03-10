@@ -831,10 +831,10 @@ class CodemanApp {
         // Patterns: \x1b[?...c (DA1), \x1b[>...c (DA2), \x1b[...R (CPR), \x1b[...n (DSR)
         if (/^\x1b\[[\?>=]?[\d;]*[cnR]$/.test(data)) return;
 
-        // ── Local Echo Mode ──
-        // When enabled, keystrokes are buffered locally in the overlay for
-        // instant visual feedback.  Nothing is sent to the PTY until Enter
-        // (or a control char) is pressed — avoids out-of-order char delivery.
+        // ── Local Echo Mode (hybrid) ──
+        // Overlay provides instant visual feedback. Keystrokes are also sent
+        // to the PTY immediately so interactive features (slash-command
+        // autocomplete, Ink UI reactions) work in real time.
         if (this._localEchoEnabled) {
           if (data === '\x7f') {
             const source = this._localEchoOverlay?.removeChar();
@@ -853,13 +853,16 @@ class CodemanApp {
               this._pendingInput += data;
               flushInput();
             }
-            // 'pending' = removed unsent text (no PTY backspace needed)
+            if (source === 'pending') {
+              // Hybrid: char was already sent to PTY, send backspace too
+              this._pendingInput += data;
+              flushInput();
+            }
             // false = nothing to remove (swallow the backspace)
             return;
           }
           if (/^[\r\n]+$/.test(data)) {
-            // Enter: send full buffered text + \r to PTY in one shot
-            const text = this._localEchoOverlay?.pendingText || '';
+            // Enter: text was already sent to PTY char by char — just send \r
             this._localEchoOverlay?.clear();
             // Suppress detection so PTY-echoed text isn't re-detected as user input
             this._localEchoOverlay?.suppressBufferDetection();
@@ -870,20 +873,15 @@ class CodemanApp {
               clearTimeout(this._inputFlushTimeout);
               this._inputFlushTimeout = null;
             }
-            if (text) {
-              this._pendingInput += text;
-              flushInput();
-            }
-            // Send \r after a short delay so text arrives first
-            setTimeout(() => {
-              this._pendingInput += '\r';
-              flushInput();
-            }, 80);
+            this._pendingInput += '\r';
+            flushInput();
             return;
           }
           if (data.length > 1 && data.charCodeAt(0) >= 32) {
-            // Paste: append to overlay only (sent on Enter)
+            // Paste: append to overlay for display, send to PTY immediately
             this._localEchoOverlay?.appendText(data);
+            this._pendingInput += data;
+            flushInput();
             return;
           }
           if (data.charCodeAt(0) < 32) {
@@ -910,17 +908,13 @@ class CodemanApp {
               flushInput();
               return;
             }
-            // Tab key: send pending text + Tab to PTY for tab completion.
+            // Tab key: text was already sent to PTY char by char — just send Tab.
             // Set a flag so flushPendingWrites() re-detects buffer text when
             // the PTY response arrives (event-driven, no fixed timer).
             if (data === '\t') {
-              const text = this._localEchoOverlay?.pendingText || '';
               this._localEchoOverlay?.clear();
               this._flushedOffsets?.delete(this.activeSessionId);
               this._flushedTexts?.delete(this.activeSessionId);
-              if (text) {
-                this._pendingInput += text;
-              }
               this._pendingInput += data;
               if (this._inputFlushTimeout) {
                 clearTimeout(this._inputFlushTimeout);
@@ -966,8 +960,8 @@ class CodemanApp {
               }, 300);
               return;
             }
-            // Control chars (Ctrl+C, single ESC): send buffered text + control char immediately
-            const text = this._localEchoOverlay?.pendingText || '';
+            // Control chars (Ctrl+C, single ESC): text was already sent to PTY —
+            // just send the control char. Clear overlay since cursor position changes.
             this._localEchoOverlay?.clear();
             // Suppress detection so PTY-echoed text isn't re-detected as user input
             this._localEchoOverlay?.suppressBufferDetection();
@@ -975,9 +969,6 @@ class CodemanApp {
             // cursor position or abort readline, making flushed text tracking invalid.
             this._flushedOffsets?.delete(this.activeSessionId);
             this._flushedTexts?.delete(this.activeSessionId);
-            if (text) {
-              this._pendingInput += text;
-            }
             this._pendingInput += data;
             if (this._inputFlushTimeout) {
               clearTimeout(this._inputFlushTimeout);
@@ -987,8 +978,10 @@ class CodemanApp {
             return;
           }
           if (data.length === 1 && data.charCodeAt(0) >= 32) {
-            // Printable char: add to overlay only (sent on Enter)
+            // Printable char: add to overlay for display, send to PTY immediately
             this._localEchoOverlay?.addChar(data);
+            this._pendingInput += data;
+            flushInput();
             return;
           }
         }
