@@ -8,7 +8,7 @@
  */
 
 import { z } from 'zod';
-import { SAFE_PATH_PATTERN } from '../utils/regex-patterns.js';
+import { SAFE_PATH_PATTERN } from '../utils/index.js';
 
 // ========== Path Validation ==========
 

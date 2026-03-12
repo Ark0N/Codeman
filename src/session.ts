@@ -48,8 +48,8 @@ import type { TerminalMultiplexer, MuxSession } from './mux-interface.js';
 import { TaskTracker, type BackgroundTask } from './task-tracker.js';
 import { RalphTracker } from './ralph-tracker.js';
 import { BashToolParser } from './bash-tool-parser.js';
-import { BufferAccumulator } from './utils/buffer-accumulator.js';
 import {
+  BufferAccumulator,
   ANSI_ESCAPE_PATTERN_FULL,
   TOKEN_PATTERN,
   SPINNER_PATTERN,

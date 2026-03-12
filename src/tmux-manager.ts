@@ -40,8 +40,7 @@ import {
   type SessionMode,
   type OpenCodeConfig,
 } from './types.js';
-import { wrapWithNice } from './utils/nice-wrapper.js';
-import { SAFE_PATH_PATTERN } from './utils/regex-patterns.js';
+import { wrapWithNice, SAFE_PATH_PATTERN, findClaudeDir, resolveOpenCodeDir } from './utils/index.js';
 import type {
   TerminalMultiplexer,
   MuxSession,
@@ -49,11 +48,6 @@ import type {
   CreateSessionOptions,
   RespawnPaneOptions,
 } from './mux-interface.js';
-
-// Claude CLI PATH resolution — shared utility
-import { findClaudeDir } from './utils/claude-cli-resolver.js';
-// OpenCode CLI PATH resolution
-import { resolveOpenCodeDir } from './utils/opencode-cli-resolver.js';
 
 // ============================================================================
 // Timing Constants

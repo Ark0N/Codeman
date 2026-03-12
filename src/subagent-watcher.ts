@@ -17,7 +17,7 @@
  * Tracks per-agent: status, token counts, model, description, tool call count, liveness (PID).
  *
  * @dependencies config/map-limits (MAX_TRACKED_AGENTS, PENDING_TOOL_CALL_TTL_MS),
- *   utils (CleanupManager, KeyedDebouncer)
+ *   config/buffer-limits (FILE_PEEK_BYTES), utils (CleanupManager, KeyedDebouncer)
  * @consumedby web/server (SSE broadcast), session (subagent-session correlation)
  * @emits subagent:discovered, subagent:updated, subagent:tool_call, subagent:tool_result,
  *   subagent:progress, subagent:message, subagent:completed
@@ -35,6 +35,7 @@ import { execFile } from 'node:child_process';
 import { readFile, readdir, stat as statAsync } from 'node:fs/promises';
 import { PENDING_TOOL_CALL_TTL_MS, MAX_PENDING_TOOL_CALLS, MAX_TRACKED_AGENTS } from './config/map-limits.js';
 import { STALE_DATA_MAX_AGE_MS } from './config/server-timing.js';
+import { FILE_PEEK_BYTES } from './config/buffer-limits.js';
 import { CleanupManager, KeyedDebouncer } from './utils/index.js';
 
 // ========== Types ==========
@@ -1009,7 +1010,7 @@ export class SubagentWatcher extends EventEmitter {
   private async extractDescriptionFromFile(filePath: string): Promise<string | undefined> {
     try {
       // Only read the first 8KB — more than enough for 5 JSONL lines
-      const stream = createReadStream(filePath, { end: 8191 });
+      const stream = createReadStream(filePath, { end: FILE_PEEK_BYTES });
       const rl = createInterface({ input: stream });
 
       return await new Promise<string | undefined>((resolve) => {
@@ -1141,10 +1142,10 @@ export class SubagentWatcher extends EventEmitter {
 
           if (this.fileAgentContext.has(filePath)) {
             // Known file — handle content change
-            this.handleFileChange(filePath).catch(() => {});
+            this.handleFileChange(filePath).catch(() => {}); // Ignore - errors logged internally, don't crash watcher callback
           } else {
             // New file — register it
-            this.registerAgentFile(filePath, projectHash, sessionId).catch(() => {});
+            this.registerAgentFile(filePath, projectHash, sessionId).catch(() => {}); // Ignore - errors logged internally, don't crash watcher callback
           }
         });
       });

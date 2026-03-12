@@ -9,7 +9,7 @@
  */
 
 import type { ClaudeMode } from './types.js';
-import { getAugmentedPath } from './utils/claude-cli-resolver.js';
+import { getAugmentedPath } from './utils/index.js';
 
 /**
  * Build Claude CLI permission flags based on the configured mode.

@@ -49,8 +49,7 @@ import { Session } from './session.js';
 import { AiIdleChecker, type AiCheckResult, type AiCheckState } from './ai-idle-checker.js';
 import { AiPlanChecker, type AiPlanCheckResult } from './ai-plan-checker.js';
 import type { TeamWatcher } from './team-watcher.js';
-import { BufferAccumulator } from './utils/buffer-accumulator.js';
-import { ANSI_ESCAPE_PATTERN_SIMPLE, assertNever, CleanupManager } from './utils/index.js';
+import { BufferAccumulator, ANSI_ESCAPE_PATTERN_SIMPLE, assertNever, CleanupManager } from './utils/index.js';
 import { MAX_RESPAWN_BUFFER_SIZE, TRIM_RESPAWN_BUFFER_TO as RESPAWN_BUFFER_TRIM_SIZE } from './config/buffer-limits.js';
 import {
   isCompletionMessage,

@@ -61,7 +61,7 @@ export class TeamWatcher extends EventEmitter {
         persistent: false,
       });
 
-      const teamsHandler = () => this.pollAsync().catch(() => {});
+      const teamsHandler = () => this.pollAsync().catch(() => {}); // Ignore - poll errors are non-fatal, next poll will retry
       this.teamsWatcher.on('add', teamsHandler);
       this.teamsWatcher.on('change', teamsHandler);
       this.teamsWatcher.on('unlink', teamsHandler);
@@ -82,8 +82,8 @@ export class TeamWatcher extends EventEmitter {
         persistent: false,
       });
 
-      this.tasksWatcher.on('add', () => this.pollTasks().catch(() => {}));
-      this.tasksWatcher.on('change', () => this.pollTasks().catch(() => {}));
+      this.tasksWatcher.on('add', () => this.pollTasks().catch(() => {})); // Ignore - poll errors are non-fatal, next poll will retry
+      this.tasksWatcher.on('change', () => this.pollTasks().catch(() => {})); // Ignore - poll errors are non-fatal, next poll will retry
       this.tasksWatcher.on('error', (err) => {
         console.warn('[TeamWatcher] chokidar tasks watcher error:', err);
       });
@@ -95,11 +95,11 @@ export class TeamWatcher extends EventEmitter {
   stop(): void {
     // Close chokidar watchers
     if (this.teamsWatcher) {
-      this.teamsWatcher.close().catch(() => {});
+      this.teamsWatcher.close().catch(() => {}); // Ignore - watcher cleanup is best-effort during shutdown
       this.teamsWatcher = null;
     }
     if (this.tasksWatcher) {
-      this.tasksWatcher.close().catch(() => {});
+      this.tasksWatcher.close().catch(() => {}); // Ignore - watcher cleanup is best-effort during shutdown
       this.tasksWatcher = null;
     }
     if (this.pollTimer) {

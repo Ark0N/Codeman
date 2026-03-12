@@ -56,11 +56,6 @@ export const TRIM_TEXT_TO = 768 * 1024; // 768KB
  */
 export const MAX_MESSAGES = 1000;
 
-/**
- * Number of messages to keep when trimming (80% of max).
- */
-export const TRIM_MESSAGES_TO = 800;
-
 // ============================================================================
 // Line Buffer Limits
 // ============================================================================
@@ -85,3 +80,14 @@ export const MAX_RESPAWN_BUFFER_SIZE = 1 * 1024 * 1024; // 1MB
  * Size to trim respawn buffer to when max is exceeded.
  */
 export const TRIM_RESPAWN_BUFFER_TO = 512 * 1024; // 512KB
+
+// ============================================================================
+// File Peek Limits
+// ============================================================================
+
+/**
+ * Maximum bytes to read when peeking at the beginning of a file.
+ * Used with `createReadStream({ end })` (inclusive) to read the first 8KB,
+ * which is enough to extract metadata from the first few JSONL lines.
+ */
+export const FILE_PEEK_BYTES = 8 * 1024 - 1; // 8KB (inclusive end offset)

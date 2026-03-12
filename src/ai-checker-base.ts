@@ -28,8 +28,7 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
-import { getAugmentedPath } from './utils/claude-cli-resolver.js';
-import { ANSI_ESCAPE_PATTERN_SIMPLE } from './utils/index.js';
+import { getAugmentedPath, ANSI_ESCAPE_PATTERN_SIMPLE } from './utils/index.js';
 import { AI_CHECK_MAX_BACKOFF_MS } from './config/ai-defaults.js';
 
 // ========== Security Validation ==========

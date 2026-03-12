@@ -505,7 +505,7 @@ export function registerRalphRoutes(
       settings.lastUsedCase = caseName;
       const dir = dirname(SETTINGS_PATH);
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      fs.writeFile(SETTINGS_PATH, JSON.stringify(settings, null, 2)).catch(() => {});
+      fs.writeFile(SETTINGS_PATH, JSON.stringify(settings, null, 2)).catch(() => {}); // Ignore - persisting lastUsedCase is non-critical
     } catch {
       /* non-critical */
     }

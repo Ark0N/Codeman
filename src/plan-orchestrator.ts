@@ -521,7 +521,7 @@ export class PlanOrchestrator {
     } finally {
       // Always clean up session and progress interval — centralizing here
       // prevents the race where cancel() and catch both try to manage the set
-      await session.stop().catch(() => {});
+      await session.stop().catch(() => {}); // Ignore - session cleanup is best-effort in finally block
       this.runningSessions.delete(session);
       clearInterval(progressInterval);
     }
@@ -651,7 +651,7 @@ export class PlanOrchestrator {
     } finally {
       // Always clean up session and progress interval — centralizing here
       // prevents the race where cancel() and catch both try to manage the set
-      await session.stop().catch(() => {});
+      await session.stop().catch(() => {}); // Ignore - session cleanup is best-effort in finally block
       this.runningSessions.delete(session);
       clearInterval(progressInterval);
     }
