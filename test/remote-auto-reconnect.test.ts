@@ -106,7 +106,7 @@ describe('reconnect backoff schedule (pure)', () => {
 // ────────────────────────────────────────────────────────────────────────────
 
 describe('decideReconnect (pure eligibility)', () => {
-  const deadRemote: ReconnectSessionView = { sessionId: 's1', isRemote: true, paneDead: true };
+  const deadRemote: ReconnectSessionView = { sessionId: 's1', isRemote: true, paneDead: true, remoteAlive: true };
 
   it('emits for a dead remote pane that is not guarded and is due', () => {
     const action = decideReconnect({
@@ -132,7 +132,7 @@ describe('decideReconnect (pure eligibility)', () => {
 
   it('skips non-remote sessions', () => {
     const action = decideReconnect({
-      session: { sessionId: 's1', isRemote: false, paneDead: true },
+      session: { sessionId: 's1', isRemote: false, paneDead: true, remoteAlive: true },
       state: freshReconnectState(),
       guarded: false,
       enabled: true,
@@ -143,13 +143,35 @@ describe('decideReconnect (pure eligibility)', () => {
 
   it('skips when the pane is alive', () => {
     const action = decideReconnect({
-      session: { sessionId: 's1', isRemote: true, paneDead: false },
+      session: { sessionId: 's1', isRemote: true, paneDead: false, remoteAlive: true },
       state: freshReconnectState(),
       guarded: false,
       enabled: true,
       now: 0,
     });
     expect(action).toEqual({ kind: 'skip', reason: 'pane-alive' });
+  });
+
+  it('NEVER revives when the durable remote tmux is GONE (clean exit — the 2026-08-29 fix)', () => {
+    const action = decideReconnect({
+      session: { sessionId: 's1', isRemote: true, paneDead: true, remoteAlive: false },
+      state: freshReconnectState(),
+      guarded: false,
+      enabled: true,
+      now: 0,
+    });
+    expect(action).toEqual({ kind: 'skip', reason: 'remote-gone' });
+  });
+
+  it('NEVER revives when remote liveness is unknown (probe failed — fail closed)', () => {
+    const action = decideReconnect({
+      session: { sessionId: 's1', isRemote: true, paneDead: true, remoteAlive: undefined },
+      state: freshReconnectState(),
+      guarded: false,
+      enabled: true,
+      now: 0,
+    });
+    expect(action).toEqual({ kind: 'skip', reason: 'remote-gone' });
   });
 
   it('skips when the kill-switch is off', () => {
@@ -222,6 +244,11 @@ describe('TmuxManager remote reconnect watcher (integration)', () => {
     registerRemote('aaaa1111');
     // Force the watcher to see a dead pane regardless of test-mode isPaneDead.
     vi.spyOn(manager, 'isPaneDead').mockReturnValue(true);
+    // The durable remote tmux is still alive (transport drop) → reconnect allowed.
+    (manager as unknown as { remoteAliveCache: Map<string, boolean | undefined> }).remoteAliveCache.set(
+      'aaaa1111',
+      true
+    );
 
     const dropped: Array<{ sessionId: string; attempt: number }> = [];
     const exhausted: Array<{ sessionId: string }> = [];
@@ -263,6 +290,10 @@ describe('TmuxManager remote reconnect watcher (integration)', () => {
   it('resets backoff on a successful reattach (noteRemoteReconnect)', () => {
     registerRemote('cccc3333');
     vi.spyOn(manager, 'isPaneDead').mockReturnValue(true);
+    (manager as unknown as { remoteAliveCache: Map<string, boolean | undefined> }).remoteAliveCache.set(
+      'cccc3333',
+      true
+    );
 
     const dropped: Array<{ attempt: number }> = [];
     manager.on('remoteSessionDropped', (d) => dropped.push(d));
@@ -290,6 +321,10 @@ describe('TmuxManager remote reconnect watcher (integration)', () => {
     manager.clearRemoteReconnectState('eeee5555');
     // After clearing the guard, a fresh dead-pane observation should emit again.
     vi.spyOn(manager, 'isPaneDead').mockReturnValue(true);
+    (manager as unknown as { remoteAliveCache: Map<string, boolean | undefined> }).remoteAliveCache.set(
+      'eeee5555',
+      true
+    );
     const dropped: unknown[] = [];
     manager.on('remoteSessionDropped', (d) => dropped.push(d));
     manager.runRemoteReconnectTick(0, true);

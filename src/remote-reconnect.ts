@@ -108,6 +108,15 @@ export interface ReconnectSessionView {
   isRemote: boolean;
   /** Result of `isPaneDead(muxName)` for this session. */
   paneDead: boolean;
+  /**
+   * Whether the DURABLE remote tmux session is still alive on the remote host.
+   * Tri-state: `true` = transport drop with the agent still running (safe to
+   * reattach); `false` = the remote session is gone (the agent exited cleanly
+   * via ctrl-c/ctrl-d/exit and the remote tmux tore down); `undefined` =
+   * unknown/unresolvable. The watcher must NOT revive when the remote session
+   * is gone or unknown — a clean exit must never auto-relaunch the agent.
+   */
+  remoteAlive: boolean | undefined;
 }
 
 /**
@@ -130,7 +139,8 @@ export type ReconnectSkipReason =
   | 'in-flight'
   | 'not-due'
   | 'exhausted'
-  | 'disabled';
+  | 'disabled'
+  | 'remote-gone';
 
 export interface DecideReconnectInput {
   session: ReconnectSessionView;
@@ -166,6 +176,14 @@ export function decideReconnect(input: DecideReconnectInput): ReconnectAction {
   if (!session.paneDead) return { kind: 'skip', reason: 'pane-alive' };
   // Intentional kill / detach must NEVER be auto-revived.
   if (guarded) return { kind: 'skip', reason: 'guarded' };
+  // A clean exit tears down the durable remote tmux (the session's only pane
+  // exiting destroys it). Reviving is ONLY correct for a transport drop: the
+  // agent is still running on the remote, so the durable session must still
+  // exist. When it is gone (or status is unknown — probe failed/unreachable),
+  // the agent exited intentionally and must not be auto-relaunched (found
+  // live 2026-08-29: remote omp/opencode ctrl-c/ctrl-d auto-respawned fresh
+  // sessions; only claude's `|| --resume` accidentally masked it).
+  if (session.remoteAlive !== true) return { kind: 'skip', reason: 'remote-gone' };
 
   const s = state ?? freshReconnectState();
 

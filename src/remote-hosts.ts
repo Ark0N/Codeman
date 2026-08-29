@@ -329,6 +329,59 @@ export async function probeRemoteCliVersion(
 }
 
 /**
+ * COD-108 — build the SSH command that asks whether THIS Codeman's durable
+ * remote tmux session (`-L codeman-remote -s codeman-ssh-<id>`) is still alive
+ * on the remote host.
+ *
+ * `has-session` exits 0 when the session exists, non-zero otherwise (and
+ * stderr is swallowed). Connection options come from the shared
+ * `buildSshConnectionArgs` so this probe reaches exactly the hosts the launch
+ * can reach — same port/identity/proxy/jump-host as `buildRemoteLaunchCommand`.
+ */
+export function buildRemoteSessionAliveCommand(
+  host: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions,
+  remoteSessionName: string
+): string {
+  const [ssh, ...connectionArgs] = buildSshConnectionArgs(host);
+  const remoteCmd = `tmux -L codeman-remote has-session -t ${shellescape(remoteSessionName)} 2>/dev/null`;
+  return [ssh, ...connectionArgs, remoteSshTarget(host), shellescape(remoteCmd)].join(' ');
+}
+
+/**
+ * COD-108 — resolve whether THIS Codeman's durable remote tmux session is still
+ * alive on the remote host, for the auto-reconnect watcher.
+ *
+ * Returns:
+ *   - `true`      → the remote tmux session exists (the agent is still running
+ *                   on the remote; the LOCAL pane died from a transport drop →
+ *                   safe to auto-reconnect).
+ *   - `false`     → the remote session is gone (the agent exited cleanly and
+ *                   the remote tmux tore down; reviving would relaunch a fresh
+ *                   agent — must NOT auto-reconnect).
+ *   - `undefined` → probe failed (host unreachable, ssh error, tmux missing).
+ *                   Callers MUST treat this as "do not reconnect": an
+ *                   unreachable host is not a reason to relaunch the agent.
+ *
+ * VITEST guard — returns `true` under test so a real ssh never runs; the
+ * command construction is covered by `buildRemoteSessionAliveCommand`.
+ */
+export async function remoteTmuxSessionAlive(
+  remote: Pick<RemoteHost, 'username' | 'host' | 'port'> & RemoteSshOptions,
+  remoteSessionName: string
+): Promise<boolean | undefined> {
+  if (process.env.VITEST) return true;
+  const command = buildRemoteSessionAliveCommand(remote, remoteSessionName);
+  try {
+    const { stdout } = await execAsync(command, { timeout: 15_000 });
+    // has-session prints the session name on success (exit 0). Anything else is
+    // a non-zero exit → the session is gone.
+    return stdout.trim().length > 0;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * COD-105 — build the SSH command that lists `codeman-*` tmux sessions on a
  * remote host's canonical `-L codeman` socket.
  *
