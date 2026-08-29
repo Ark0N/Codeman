@@ -41,6 +41,15 @@ describe('mangleOmpWorkingDir', () => {
     const sibling = `${homedir()}-other/dev/foo`;
     expect(mangleOmpWorkingDir(sibling)).toBe(sibling.replace(/\//g, '-'));
   });
+
+  it('normalizes a trailing slash so a remote case path resolves to the same dir', () => {
+    // Regression (2026-08-29): remote case paths are stored verbatim with a
+    // trailing slash (e.g. `/home/user/dotfiles/`), but omp persists sessions
+    // under the slash-less mangle (`-dotfiles`). Before the fix this produced
+    // `-dotfiles-`, readdirSync returned null for an existing dir, and OMP
+    // respawn pinning silently degraded to the ambiguous `--continue`.
+    expect(mangleOmpWorkingDir(join(homedir(), 'dotfiles') + '/')).toBe('-dotfiles');
+  });
 });
 
 describe('findLatestOmpSessionId', () => {

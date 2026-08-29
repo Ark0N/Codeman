@@ -1121,11 +1121,27 @@ export function buildRemoteLaunchCommand(options: {
   // `defaultRemoteCommandForMode`: `claude` lives under a per-user PATH entry that
   // only an interactive login shell resolves (see that function's comment).
   const override = remote.commands?.[mode];
-  const modeCommand = override
-    ? override
-    : mode === 'claude'
-      ? remoteLoginShellCommand(`claude${buildClaudePermissionFlags(claudeMode, allowedTools)}`)
-      : defaultRemoteCommandForMode(mode);
+  let modeCommand: string;
+  if (override) {
+    modeCommand = override;
+  } else if (mode === 'claude') {
+    // Deterministic conversation pinning for SSH-remote claude (mirrors the
+    // docker-claude shape in claudeDockerPaneCommand): the FIRST run creates
+    // the conversation under --session-id <sessionId>; a respawn / reattach
+    // re-runs the same idempotent command, --session-id exits non-zero
+    // ("already in use"), and the `||` fallback RESUMES that same
+    // conversation. Without a pinned id, every reattach relaunched a bare
+    // `claude` and started a NEW conversation (found live 2026-08-29: remote
+    // claude ctrl-d / ctrl-c relaunched a fresh session). A per-host
+    // `commands.claude` override stays authoritative (admin's explicit
+    // choice) and skips this entirely.
+    const permFlags = buildClaudePermissionFlags(claudeMode, allowedTools);
+    modeCommand = remoteLoginShellCommand(
+      `claude${permFlags} --session-id ${sessionId} || claude${permFlags} --resume ${sessionId}`
+    );
+  } else {
+    modeCommand = defaultRemoteCommandForMode(mode);
+  }
   const remoteName = remoteTmuxSessionName(sessionId);
 
   // Innermost: the command tmux runs in the new pane. Run via `/bin/sh -c` by
