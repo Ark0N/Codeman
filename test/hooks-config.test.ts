@@ -18,11 +18,12 @@ import {
   statSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import {
   applyStatusLineConfig,
   ensureCodemanHooks,
+  findEffectiveUserStatusLineCommand,
   generateBackgroundWakeScript,
   generateHooksConfig,
   generateStatusLineCommand,
@@ -1324,5 +1325,77 @@ describe('resolveStatusLineCliCommand', () => {
 
     expect(cmd).toBeUndefined();
     expect(JSON.parse(readFileSync(settingsPath, 'utf-8')).statusLine).toBeUndefined();
+  });
+});
+
+describe('findEffectiveUserStatusLineCommand', () => {
+  const testDir = join(tmpdir(), 'codeman-statusline-precedence-test-' + Date.now());
+  const userSettingsPath = join(homedir(), '.claude', 'settings.json');
+
+  beforeEach(() => {
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+    rmSync(userSettingsPath, { force: true }); // don't leak into other tests sharing this HOME
+  });
+
+  it('returns undefined when nothing is configured anywhere', async () => {
+    expect(await findEffectiveUserStatusLineCommand(testDir)).toBeUndefined();
+  });
+
+  it('finds the user global ~/.claude/settings.json when nothing else is set', async () => {
+    const userClaudeDir = join(homedir(), '.claude');
+    mkdirSync(userClaudeDir, { recursive: true });
+    writeFileSync(
+      join(userClaudeDir, 'settings.json'),
+      JSON.stringify({ statusLine: { type: 'command', command: 'echo user-global' } })
+    );
+
+    expect(await findEffectiveUserStatusLineCommand(testDir)).toBe('echo user-global');
+  });
+
+  it('project-SHARED settings.json wins over user-global', async () => {
+    const userClaudeDir = join(homedir(), '.claude');
+    mkdirSync(userClaudeDir, { recursive: true });
+    writeFileSync(
+      join(userClaudeDir, 'settings.json'),
+      JSON.stringify({ statusLine: { type: 'command', command: 'echo user-global' } })
+    );
+    const projectClaudeDir = join(testDir, '.claude');
+    mkdirSync(projectClaudeDir, { recursive: true });
+    writeFileSync(
+      join(projectClaudeDir, 'settings.json'),
+      JSON.stringify({ statusLine: { type: 'command', command: 'echo project-shared' } })
+    );
+
+    expect(await findEffectiveUserStatusLineCommand(testDir)).toBe('echo project-shared');
+  });
+
+  it('project-LOCAL settings.local.json wins over everything', async () => {
+    const projectClaudeDir = join(testDir, '.claude');
+    mkdirSync(projectClaudeDir, { recursive: true });
+    writeFileSync(
+      join(projectClaudeDir, 'settings.json'),
+      JSON.stringify({ statusLine: { type: 'command', command: 'echo project-shared' } })
+    );
+    writeFileSync(
+      join(projectClaudeDir, 'settings.local.json'),
+      JSON.stringify({ statusLine: { type: 'command', command: 'echo project-local' } })
+    );
+
+    expect(await findEffectiveUserStatusLineCommand(testDir)).toBe('echo project-local');
+  });
+
+  it('skips a legacy Codeman-marked entry in project settings.local.json and falls through', async () => {
+    await applyStatusLineConfig(testDir, true); // simulates a pre-fix disk-written exporter
+    const projectClaudeDir = join(testDir, '.claude');
+    writeFileSync(
+      join(projectClaudeDir, 'settings.json'),
+      JSON.stringify({ statusLine: { type: 'command', command: 'echo project-shared' } })
+    );
+
+    expect(await findEffectiveUserStatusLineCommand(testDir)).toBe('echo project-shared');
   });
 });
