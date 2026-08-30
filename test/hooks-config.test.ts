@@ -6,7 +6,17 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
-import { closeSync, existsSync, openSync, readFileSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  rmSync,
+  symlinkSync,
+  statSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -15,8 +25,10 @@ import {
   ensureCodemanHooks,
   generateBackgroundWakeScript,
   generateHooksConfig,
+  generateStatusLineCommand,
   generateSubagentStopGuardScript,
   refreshStaleCodemanHooks,
+  resolveStatusLineCliCommand,
   settingsWriteBlocker,
   stripCaseEnvKeys,
   updateCaseEnvVars,
@@ -1242,5 +1254,75 @@ describe('Hook Config Generation - Extended', () => {
     expect(stopHooks).toHaveLength(1);
     expect(stopHooks[0].matcher).toBeUndefined();
     expect(stopHooks[0].hooks[0].command).toContain('stop');
+  });
+});
+
+describe('resolveStatusLineCliCommand', () => {
+  const testDir = join(tmpdir(), 'codeman-statusline-cli-test-' + Date.now());
+
+  beforeEach(() => {
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('returns undefined when telemetry was not requested', async () => {
+    expect(await resolveStatusLineCliCommand(testDir, false)).toBeUndefined();
+  });
+
+  it('returns a bare exporter SCRIPT PATH (never the inline command) when requested', async () => {
+    // A bare path has no `$`, quotes, or pipes for any intermediate shell
+    // layer to mangle — see ensureStatusLineExporterScript's doc comment for
+    // the real bug this guards against.
+    const cmd = await resolveStatusLineCliCommand(testDir, true);
+    expect(cmd).toBeDefined();
+    expect(cmd).not.toContain('$');
+    expect(cmd).not.toContain("'");
+    expect(cmd).toMatch(/^\/.*statusline-exporter\.sh$/);
+    expect(existsSync(cmd!)).toBe(true);
+    const stat = statSync(cmd!);
+    expect(stat.mode & 0o111).not.toBe(0); // executable
+    expect(readFileSync(cmd!, 'utf-8')).toContain('CODEMAN_STATUSLINE_EXPORTER_V');
+  });
+
+  it('never overrides a real, hand-authored statusLine', async () => {
+    const claudeDir = join(testDir, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(
+      join(claudeDir, 'settings.local.json'),
+      JSON.stringify({ statusLine: { type: 'command', command: 'echo my-own-prompt' } }, null, 2)
+    );
+
+    expect(await resolveStatusLineCliCommand(testDir, true)).toBeUndefined();
+
+    // The user's own config is untouched — this is a read-only decision, not a write.
+    const parsed = JSON.parse(readFileSync(join(claudeDir, 'settings.local.json'), 'utf-8'));
+    expect(parsed.statusLine.command).toBe('echo my-own-prompt');
+  });
+
+  it('self-heals: strips a legacy disk-written exporter from an older Codeman build', async () => {
+    // Simulate a workspace touched by the pre-fix applyStatusLineConfig(dir, true).
+    await applyStatusLineConfig(testDir, true);
+    const settingsPath = join(testDir, '.claude', 'settings.local.json');
+    expect(JSON.parse(readFileSync(settingsPath, 'utf-8')).statusLine).toBeDefined();
+
+    const cmd = await resolveStatusLineCliCommand(testDir, true);
+
+    // Cleaned off disk...
+    expect(JSON.parse(readFileSync(settingsPath, 'utf-8')).statusLine).toBeUndefined();
+    // ...and telemetry still flows, via the ephemeral CLI flag instead.
+    expect(cmd).toMatch(/statusline-exporter\.sh$/);
+  });
+
+  it('does not resurrect the legacy exporter when telemetry is off during cleanup', async () => {
+    await applyStatusLineConfig(testDir, true);
+    const settingsPath = join(testDir, '.claude', 'settings.local.json');
+
+    const cmd = await resolveStatusLineCliCommand(testDir, false);
+
+    expect(cmd).toBeUndefined();
+    expect(JSON.parse(readFileSync(settingsPath, 'utf-8')).statusLine).toBeUndefined();
   });
 });

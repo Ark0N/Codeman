@@ -90,6 +90,13 @@ export interface CreateSessionOptions {
   envOverrides?: Record<string, string>;
   /** Claude CLI effort level, injected as a `--settings` soft default (overridable via /effort in-session) */
   effort?: EffortLevel;
+  /**
+   * Claude-only: request the plan-usage statusLine exporter for this session,
+   * injected as an EPHEMERAL `--settings` CLI flag (never written to disk — see
+   * generateStatusLineCommand/resolveStatusLineCliCommand). Skipped when the
+   * workspace already has its own hand-configured statusLine.
+   */
+  statusLineTelemetry?: boolean;
   /** tmux history-limit (scrollback lines) allocated when this session is created. */
   historyLimit?: number;
   /** Remote execution metadata for local tmux sessions wrapping SSH */
@@ -125,6 +132,8 @@ export interface RespawnPaneOptions {
   envOverrides?: Record<string, string>;
   /** Claude CLI effort level (preserved across respawns, injected via `--settings`) */
   effort?: EffortLevel;
+  /** Preserved across respawns — see CreateSessionOptions.statusLineTelemetry. */
+  statusLineTelemetry?: boolean;
   /** Original tmux history-limit retained for config parity; respawn cannot resize the existing pane. */
   historyLimit?: number;
   /** Remote execution metadata for local tmux sessions wrapping SSH */
