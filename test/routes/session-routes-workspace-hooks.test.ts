@@ -19,7 +19,7 @@
  * including the sweep's deleted-workspace guard.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises';
