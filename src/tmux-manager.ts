@@ -65,6 +65,7 @@ import {
   defaultRemoteCommandForMode,
   remoteLoginShellCommand,
   remoteSshTarget,
+  remoteTmuxSessionAlive,
 } from './remote-hosts.js';
 import {
   buildDockerBaseArgs,
@@ -1112,8 +1113,11 @@ export function buildRemoteLaunchCommand(options: {
   sessionId: string;
   claudeMode?: ClaudeMode;
   allowedTools?: string;
+  /** OMP only — resume/continue overrides for the remote omp relaunch (dead-pane respawn). */
+  ompConfig?: OmpConfig;
+  resumeSessionId?: string;
 }): string {
-  const { mode, remote, sessionId, claudeMode, allowedTools } = options;
+  const { mode, remote, sessionId, claudeMode, allowedTools, ompConfig, resumeSessionId } = options;
   // §6.3: honor the session's EFFECTIVE claude permission mode on remote instead of
   // hardcoding --dangerously-skip-permissions, so a non-granted multi-user user's
   // downgraded 'auto' actually reaches the remote agent (the default command otherwise
@@ -1122,11 +1126,41 @@ export function buildRemoteLaunchCommand(options: {
   // `defaultRemoteCommandForMode`: `claude` lives under a per-user PATH entry that
   // only an interactive login shell resolves (see that function's comment).
   const override = remote.commands?.[mode];
-  const modeCommand = override
-    ? override
-    : mode === 'claude'
-      ? remoteLoginShellCommand(`claude${buildClaudePermissionFlags(claudeMode, allowedTools)}`)
-      : defaultRemoteCommandForMode(mode);
+  let modeCommand: string;
+  if (override) {
+    modeCommand = override;
+  } else if (mode === 'claude') {
+    // Deterministic conversation pinning for SSH-remote claude (mirrors the
+    // docker-claude shape in claudeDockerPaneCommand): the FIRST run creates
+    // the conversation under --session-id <sessionId>; a respawn / reattach
+    // re-runs the same idempotent command, --session-id exits non-zero
+    // ("already in use"), and the `||` fallback RESUMES that same
+    // conversation. Without a pinned id, every reattach relaunched a bare
+    // `claude` and started a NEW conversation (found live 2026-08-29: remote
+    // claude ctrl-d / ctrl-c relaunched a fresh session). A per-host
+    // `commands.claude` override stays authoritative (admin's explicit
+    // choice) and skips this entirely.
+    const permFlags = buildClaudePermissionFlags(claudeMode, allowedTools);
+    modeCommand = remoteLoginShellCommand(
+      `claude${permFlags} --session-id ${sessionId} || claude${permFlags} --resume ${sessionId}`
+    );
+  } else if (mode === 'omp') {
+    // Remote OMP respawn must RESUME the same conversation instead of
+    // relaunching fresh (found live 2026-08-29: remote ctrl-c/ctrl-d relaunched
+    // a brand-new omp session). The pinned id, when known, is passed as an
+    // explicit --resume; otherwise fall back to omp's own "most recent"
+    // --continue so a dead-pane respawn still lands back in the conversation.
+    // The docker path uses the same buildOmpCommand() shape via
+    // appendResumeFlag(); the remote builder just reuses the local builder
+    // directly so the flags can't drift.
+    const ompCmd = buildOmpCommand({
+      ...ompConfig,
+      resumeSessionId: resumeSessionId || ompConfig?.resumeSessionId,
+    });
+    modeCommand = remoteLoginShellCommand(ompCmd);
+  } else {
+    modeCommand = defaultRemoteCommandForMode(mode);
+  }
   const remoteName = remoteTmuxSessionName(sessionId);
 
   // Innermost: the command tmux runs in the new pane. Run via `/bin/sh -c` by
@@ -1560,6 +1594,9 @@ function buildRemoteSessionCommand(options: {
   sessionId: string;
   claudeMode?: ClaudeMode;
   allowedTools?: string;
+  /** OMP only — resume/continue overrides for a remote omp relaunch. */
+  ompConfig?: OmpConfig;
+  resumeSessionId?: string;
 }): string {
   const { remote, sessionId } = options;
   if (remote.owned === false) {
@@ -1732,6 +1769,18 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * torn down (killed/detached/stopping). A guarded session is NEVER revived.
    */
   private reconnectGuard: Set<string> = new Set();
+  /**
+   * Cached result of the remote tmux `has-session` probe (sessionId → alive).
+   * `true` = the durable remote tmux session exists (transport drop → reconnect
+   * is safe); `false` = remote session gone (agent exited cleanly → do NOT
+   * reconnect); `undefined` = not yet probed / probe failed. Only sessions
+   * whose pane is otherwise dead+eligible get probed, so a clean exit tears
+   * down the remote tmux and the probe reports false — killing the auto-revive
+   * (found live 2026-08-29: remote omp/opencode ctrl-c/ctrl-d auto-respawned
+   * fresh agents because the watcher couldn't tell a clean exit from a
+   * transport drop).
+   */
+  private remoteAliveCache: Map<string, boolean | undefined> = new Map();
 
   private trueColorConfigured = false;
   /** tmux 3.7+ can resize pane history after creation; older releases cannot. */
@@ -2198,7 +2247,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       const fullCmd = docker
         ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
         : remote
-          ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools })
+          ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools, ompConfig, resumeSessionId })
           : localFullCmd;
 
       // Create tmux session in three steps to handle cold-start (no server running)
@@ -2457,7 +2506,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     const fullCmd = docker
       ? buildDockerLaunchCommand(resolveDockerLaunchOptions(mode, docker, sessionId, resumeSessionId))
       : remote
-        ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools })
+        ? buildRemoteSessionCommand({ mode, remote, sessionId, claudeMode, allowedTools, ompConfig, resumeSessionId })
         : localFullCmd;
 
     try {
@@ -3182,16 +3231,44 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * applies the pure {@link decideReconnect} decision and translates the result
    * into events + backoff/state transitions. Public for tests + the watcher.
    */
+  /**
+   * Refresh the cached remote-tmux liveness for a session whose pane is dead.
+   * Fire-and-forget (async, not awaited by the sync tick): the probe is a slow
+   * ssh round-trip, so it must not block the 5s watcher interval. On success it
+   * writes the cached result; the NEXT tick then makes the revive decision with
+   * fresh data. A clean exit makes the remote tmux session vanish, so the probe
+   * resolves false and the watcher stops reviving it (2026-08-29).
+   */
+  private async refreshRemoteAlive(session: MuxSession): Promise<void> {
+    if (!session.remote) return;
+    const remoteName = session.remote.remoteSessionName || remoteTmuxSessionName(session.sessionId);
+    try {
+      const alive = await remoteTmuxSessionAlive(session.remote, remoteName);
+      this.remoteAliveCache.set(session.sessionId, alive);
+    } catch {
+      this.remoteAliveCache.set(session.sessionId, undefined);
+    }
+  }
+
   runRemoteReconnectTick(now: number, enabled: boolean): void {
     for (const session of this.sessions.values()) {
       if (!session.remote) continue;
       const sessionId = session.sessionId;
       const state = this.reconnectState.get(sessionId);
+      // Only probe when the pane is actually dead — otherwise the ssh round-trip
+      // would run every 5s for every healthy remote session. The cache is
+      // refreshed lazily so a clean exit (remote tmux gone) flips it to false
+      // on the next tick and stops the auto-revive.
+      const paneDead = this.isPaneDead(session.muxName);
+      if (paneDead && this.remoteAliveCache.get(sessionId) === undefined) {
+        void this.refreshRemoteAlive(session);
+      }
       const action = decideReconnect({
         session: {
           sessionId,
           isRemote: true,
-          paneDead: this.isPaneDead(session.muxName),
+          paneDead,
+          remoteAlive: this.remoteAliveCache.get(sessionId),
         },
         state,
         guarded: this.reconnectGuard.has(sessionId),
@@ -3239,12 +3316,14 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   guardRemoteReconnect(sessionId: string): void {
     this.reconnectGuard.add(sessionId);
     this.reconnectState.delete(sessionId);
+    this.remoteAliveCache.delete(sessionId);
   }
 
   /** Clear all per-session reconnect + guard state (e.g. when a session is removed). */
   clearRemoteReconnectState(sessionId: string): void {
     this.reconnectState.delete(sessionId);
     this.reconnectGuard.delete(sessionId);
+    this.remoteAliveCache.delete(sessionId);
   }
 
   destroy(): void {
@@ -3253,6 +3332,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     this.stopRemoteReconnectWatcher();
     this.reconnectState.clear();
     this.reconnectGuard.clear();
+    this.remoteAliveCache.clear();
   }
 
   registerSession(session: MuxSession): void {
