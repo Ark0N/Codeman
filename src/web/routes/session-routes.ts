@@ -88,7 +88,6 @@ import {
   writeHooksConfig,
   updateCaseModel,
   stripCaseEnvKeys,
-  applyStatusLineConfig,
   applyAgentSkill,
   refreshUserAgentSkill,
   seedAgentSessionPreamble,
@@ -930,27 +929,18 @@ export function registerSessionRoutes(
       await updateCaseModel(workingDir, body.modelOverride || null);
     }
 
-    // Plan-usage statusLine exporter (App Settings → Display → "Plan Usage
-    // Limits"). Claude-only; runs for ANY working dir (linked cases / real repos,
-    // where most sessions live), mirroring updateCaseModel above.
-    //
-    // ADD-ONLY: we never remove on create. Sessions in a repo share one
-    // settings.local.json, so a single create-with-false (e.g. a client whose
-    // synced setting hadn't loaded yet) must NOT yank the statusLine out from
-    // under other live sessions in that repo — that breaks their footer + the
-    // chip's data feed for everyone. The exporter is benign when the chip is off
-    // (the footer just shows session status). isOurs-guarded so a user's own
-    // statusLine is never touched.
-    //
-    // Same guard as the hooks call below (499d355): never for a remote attach
-    // (workingDir is a user@host:session pseudo-path — the mkdir inside
-    // applyStatusLineConfig would create it as a junk local dir), and only when
-    // the caller named a workingDir — the process-cwd fallback is $HOME under
-    // installer-created services, and a statusLine materializing in
-    // ~/.claude/settings.local.json was never asked for.
-    if (!remote && body.workingDir && (body.mode ?? 'claude') === 'claude' && body.statusLineTelemetry === true) {
-      await applyStatusLineConfig(workingDir, true);
-    }
+    // Plan-usage telemetry request (App Settings → header chip). NO LONGER a
+    // disk write here — a settings.local.json statusLine took precedence over
+    // the user's own global/project statusLine for ANY `claude` run in that
+    // directory, including entirely outside Codeman, with no disclosure and no
+    // way to undo it (real bug, found 2026-08-31). The request now flows
+    // through as an ordinary session field (statusLineTelemetryRequested below)
+    // and Session/TmuxManager resolve it into an EPHEMERAL `claude --settings`
+    // CLI flag at actual spawn time (resolveStatusLineCliCommand in
+    // hooks-config.ts) — never written to disk, so a plain `claude` run outside
+    // Codeman is untouched. That resolution also self-heals: it strips any
+    // legacy disk-written exporter an older Codeman build left behind.
+    const statusLineTelemetryRequested = body.statusLineTelemetry === true;
 
     // Hooks for the workspace this session runs in (install vs refresh-only is the
     // `workspaceHooksEnabled` setting; see applyWorkspaceHooks). Never for a remote
@@ -1120,6 +1110,7 @@ export function registerSessionRoutes(
       resumeSessionId: validatedResumeId,
       envOverrides: await clampEnvOverridesForOwner(owner, body.envOverrides),
       effort: body.effort,
+      statusLineTelemetry: statusLineTelemetryRequested,
       tmuxHistoryLimit: terminalHistoryConfig.tmuxHistoryLimit,
       remote,
       owner,

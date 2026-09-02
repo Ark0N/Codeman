@@ -549,6 +549,11 @@ export class Session extends EventEmitter {
   // the CLAUDE_CODE_EFFORT_LEVEL env var, which would hard-lock the session.
   private _effort: EffortLevel | undefined;
 
+  // Claude-only: request the plan-usage statusLine exporter for this session,
+  // injected as an ephemeral `--settings` CLI flag at spawn (never written to
+  // disk). Preserved across respawns like _effort above.
+  private _statusLineTelemetry: boolean | undefined;
+
   // tmux history-limit (scrollback lines) allocated when this session's pane is created.
   private readonly _tmuxHistoryLimit: number;
 
@@ -645,6 +650,8 @@ export class Session extends EventEmitter {
       envOverrides?: Record<string, string>;
       /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
       effort?: EffortLevel;
+      /** Claude-only: request the plan-usage statusLine exporter (ephemeral --settings flag, never disk-written) */
+      statusLineTelemetry?: boolean;
       /** tmux history-limit (scrollback lines) allocated when this session's pane is created. */
       tmuxHistoryLimit?: number;
       /** Restored per-session attachment history. May include server-private external paths. */
@@ -782,6 +789,7 @@ export class Session extends EventEmitter {
     if (config.effort && isEffortLevel(config.effort)) {
       this._effort = config.effort;
     }
+    this._statusLineTelemetry = config.statusLineTelemetry;
     this._tmuxHistoryLimit = config.tmuxHistoryLimit ?? DEFAULT_TMUX_HISTORY_LIMIT;
     this._remote = config.remote;
     this._docker = config.docker;
@@ -1660,6 +1668,7 @@ export class Session extends EventEmitter {
       resumeSessionId: this._resumeSessionId,
       envOverrides: this._envOverrides,
       effort: this._effort,
+      statusLineTelemetry: this._statusLineTelemetry,
       historyLimit: this._tmuxHistoryLimit,
       remote: this._remote,
       docker: this._docker,
@@ -1964,6 +1973,7 @@ export class Session extends EventEmitter {
             resumeSessionId: this._resumeSessionId,
             envOverrides: this._envOverrides,
             effort: this._effort,
+            statusLineTelemetry: this._statusLineTelemetry,
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,

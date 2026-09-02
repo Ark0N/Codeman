@@ -32,7 +32,6 @@ import {
 import { subagentWatcher } from '../../subagent-watcher.js';
 import { imageWatcher } from '../../image-watcher.js';
 import { workflowRunWatcher } from '../../workflow-run-watcher.js';
-import { applyStatusLineConfig } from '../../hooks-config.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import {
   buildAwayDigest,
@@ -990,7 +989,9 @@ export function registerSystemRoutes(
       }
       // statusLineTelemetry and acknowledgeUnauthTunnel are ACTION fields (not stored
       // settings) — strip them before persisting so settings.json stays clean.
-      const { statusLineTelemetry, acknowledgeUnauthTunnel, ...settingsToStore } = settings;
+      // statusLineTelemetry is an action field only (see below); it must never
+      // land in settingsToStore.
+      const { statusLineTelemetry: _statusLineTelemetry, acknowledgeUnauthTunnel, ...settingsToStore } = settings;
       const merged = { ...existing, ...settingsToStore };
       await fs.writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2));
 
@@ -1030,20 +1031,16 @@ export function registerSystemRoutes(
       });
 
       // Plan-usage chip: its DISPLAY is per-device (client-side, see settings-ui.js).
-      // Telemetry COLLECTION is server-side and enable-sticky — when a client turns
-      // the chip ON it sends statusLineTelemetry:true and we (re)inject our exporter
-      // into every ACTIVE Claude session's working dir so the live % starts flowing
-      // immediately (no new session needed). We deliberately never auto-REMOVE here:
-      // the exporter is benign/print-through and a per-repo settings.local.json is
-      // shared by sibling sessions, so one device's "off" must not yank the exporter
-      // another device's chip depends on. Each dir handled once.
-      if (statusLineTelemetry === true) {
-        const dirs = new Set<string>();
-        for (const session of ctx.sessions.values()) {
-          if (session.mode === 'claude' && session.workingDir) dirs.add(session.workingDir);
-        }
-        await Promise.all([...dirs].map((dir) => applyStatusLineConfig(dir, true).catch(() => {})));
-      }
+      // Telemetry COLLECTION was previously server-side and enable-sticky here —
+      // toggling the chip ON re-injected a statusLine.command into every ACTIVE
+      // Claude session's settings.local.json so live % started flowing without a
+      // new session. That disk write is exactly the bug fixed 2026-08-31 (it took
+      // precedence over the user's own statusline for ANY `claude` run in that
+      // directory, including outside Codeman, with no way to undo it). Telemetry
+      // is now requested per-session at CREATE time only (statusLineTelemetry on
+      // POST /api/sessions), resolved into an ephemeral `--settings` CLI flag —
+      // fixed at spawn, so there is nothing to (re)inject into an already-running
+      // session here. The action field above is received and discarded.
 
       // Handle tunnel toggle dynamically
       if ('tunnelEnabled' in settings) {
