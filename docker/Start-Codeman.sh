@@ -12,7 +12,21 @@ if [[ ! -f "$env_file" ]]; then
   exit 1
 fi
 
-compose_command=(docker compose --env-file "$env_file" -f "$compose_file")
+# Naming a Compose file explicitly disables Compose's automatic discovery of
+# the override file, so it has to be added back by hand. Without this, local
+# customisation in docker-compose.override.yml is silently ignored. The
+# candidates are checked in Compose's own precedence order.
+compose_files=(-f "$compose_file")
+for override_file in \
+  "$script_dir/docker-compose.override.yaml" \
+  "$script_dir/docker-compose.override.yml"; do
+  if [[ -f "$override_file" ]]; then
+    compose_files+=(-f "$override_file")
+    printf 'Using Compose override file: %s\n' "$override_file"
+    break
+  fi
+done
+compose_command=(docker compose --env-file "$env_file" "${compose_files[@]}")
 appdata_path=$(
   "${compose_command[@]}" config --environment |
     awk -F= '$1 == "CODEMAN_APPDATA_PATH" { sub(/^[^=]*=/, ""); print; exit }'
@@ -126,4 +140,4 @@ else
   printf 'Warning: no sha256 tool found; in-app updates will not detect environment changes.\n' >&2
 fi
 
-exec docker compose --env-file "$env_file" -f "$compose_file" up --build -d
+exec "${compose_command[@]}" up --build -d

@@ -38,6 +38,22 @@ Releases that change `server.Dockerfile`, `docker-compose.yaml`, or add a key to
 changed, and asks you to run `Start-Codeman.sh` here on the host instead. Details:
 [`../docs/docker-self-update.md`](../docs/docker-self-update.md).
 
+## Local customisation
+
+Compose merges `docker-compose.override.yml` on top of `docker-compose.yaml`. Keep host-specific changes there rather than editing `docker-compose.yaml`, so this repository can be updated without losing them. Both `docker-compose.override.yml` and `docker-compose.override.yaml` are ignored by Git.
+
+`Start-Codeman.sh` names the Compose file explicitly, which disables Compose's automatic discovery of the override file, so the script adds it back when one is present and prints the file it used. Running `docker compose` from this folder without any `-f` option finds it automatically. When passing `-f docker/docker-compose.yaml` from the repository root, add `-f docker/docker-compose.override.yml` as well, or the override is silently ignored.
+
+An override file adds to and replaces individual settings. It cannot delete a key from `docker-compose.yaml`, and Compose concatenates rather than replaces `ports`, so removing a published port still requires editing `docker-compose.yaml`. The example below replaces the restart policy and adds a mount, leaving every other setting in place:
+
+```yaml
+services:
+  codeman:
+    restart: always
+    volumes:
+      - /srv/projects:/srv/projects
+```
+
 ## Application data storage
 
 The default configuration uses a host-folder bind mount:
@@ -69,7 +85,7 @@ Do not replace this bind mount with a Docker-managed named volume when Docker ca
 
 ## Static macvlan networking
 
-The default configuration publishes a host port. It does not use `network_mode: host`. To attach Codeman directly to an existing external macvlan network with a static IP address and MAC address, remove the `ports:` section and add the following to the `codeman` service:
+The default configuration publishes a host port. It does not use `network_mode: host`. To attach Codeman directly to an existing external macvlan network with a static IP address and MAC address, remove the `ports:` section from `docker-compose.yaml` and add the following to the `codeman` service. The service and network additions can instead be placed in `docker-compose.override.yml`, but the `ports:` removal cannot, as described under [Local customisation](#local-customisation):
 
 ```yaml
 mac_address: ${CODEMAN_MAC_ADDRESS}
