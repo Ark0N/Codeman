@@ -420,6 +420,33 @@ Object.assign(CodemanApp.prototype, {
         }
       }
 
+      // Ctrl+Backspace (delete-word-backward): xterm's own default encoding for
+      // this key is a literal BS byte (0x08) — identical to what plain Ctrl+H
+      // sends — so a TUI reading raw bytes off the PTY (no kitty-protocol/CSI-u
+      // disambiguation available through this pipe) can't tell a real ctrl+backspace
+      // apart from someone just typing ^H, and neither omp nor opencode fires their
+      // own ctrl+backspace binding on it (confirmed empirically: opencode falls back
+      // to a single-char delete, omp does nothing at all). Every one of these tools
+      // already binds literal Ctrl+W to delete-word-backward (zsh, Claude Code, omp,
+      // opencode), so send Ctrl+W's byte (0x17) instead — a drop-in alias with no
+      // ambiguity, mirroring the same fix applied at the WezTerm layer for direct
+      // SSH sessions (wezterm.lua remaps ctrl-backspace -> SendString '\x17' there).
+      if (
+        ev.type === 'keydown' &&
+        ev.key === 'Backspace' &&
+        ev.ctrlKey &&
+        !ev.altKey &&
+        !ev.metaKey &&
+        !ev.shiftKey
+      ) {
+        ev.preventDefault();
+        if (this.activeSessionId) {
+          this._pendingInput += '\x17';
+          flushInput();
+        }
+        return false;
+      }
+
       // Shift+Enter / Ctrl+Enter: insert newline for multi-line input.
       // xterm.js sends plain \r for all Enter variants, so Claude Code (Ink) can't
       // distinguish them. We use tmux send-keys -H to send a line feed byte (0x0a)
