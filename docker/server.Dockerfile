@@ -135,8 +135,19 @@ ENV CODEMAN_IN_CONTAINER=1 \
     HOME=/home/${CODEMAN_RUNTIME_USER} \
     NODE_ENV=production
 
+# Runtime defaults for the entrypoint, matching the account created above.
+ENV PGID=${PGID} PUID=${PUID}
+
 EXPOSE 3000
 
-USER ${CODEMAN_RUNTIME_USER}
+# The container starts as root so the entrypoint can correct the ownership of
+# the host bind mounts, which the daemon creates as root whenever they do not
+# already exist. The entrypoint then drops to PUID:PGID with setpriv, so the
+# server itself never runs privileged. Setting `user:` in Compose bypasses both
+# steps, leaving the caller in full control.
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 0755 /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 CMD ["node", "dist/index.js", "web"]
