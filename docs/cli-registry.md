@@ -118,6 +118,52 @@ Treat those values as **transcribed, not authoritative** — nothing enforces th
 
 Everything else in the interface is live, including `overlays.remote` / `overlays.docker`, which back `defaultRemoteCommandForMode()` and `defaultDockerCommandForMode()` directly. Those two used to be hardcoded `Record<…CommandMode, string>` tables duplicating the registry with nothing keeping the two in step; `test/location-overlay-commands.test.ts` pins every resulting command as a literal string.
 
+## Consumers outside the server
+
+Two things need the catalogue but cannot import TypeScript, so `npm run generate:cli-catalog`
+(`scripts/generate-cli-catalog.mts`) emits two artifacts from `stock.ts`. Both are committed,
+and `test/cli-catalog-sync.test.ts` fails if either drifts from a fresh generation.
+
+| Artifact | Consumer | Why it exists |
+| ------------------------------------ | ---------------------------------- | ---------------------------------------------------------------------------------- |
+| `config/clis.stock.json` | `scripts/lib/cli-catalog.mjs` (Docker build args), tests | A `.mjs` cannot import the registry. |
+| a marked block inside `install.sh` | the installer itself | It runs via `curl \| bash` before any checkout exists, so it can read neither. |
+
+Only `id`, `label`, `shortBadge`, `enabled`, `order`, `kind` and `discovery` are exported.
+`launch`, `env`, `capabilities` and `overlays` are spawn-time concerns the server alone
+interprets, and a test asserts they never leak into the artifact — a second reading of the
+launch model in a consumer that cannot be tested against a real spawn is exactly what this
+registry exists to prevent.
+
+The install.sh copy is **embedded, not fetched**, and is the FULL catalogue. An earlier design
+fetched it and fell back to a hardcoded two-CLI list, which degraded silently on an empty
+response; there is no degraded mode to fall into now. An optional, opt-in refresh
+(`CODEMAN_CLI_CATALOGUE_URL`, or `CODEMAN_REFRESH_CLI_CATALOGUE=1`) exists for a stale local
+copy, and warns on all three failure shapes — empty body, unparseable content, failed fetch.
+
+### The install-command trust boundary
+
+Three rules, and the middle one is why the embed matters:
+
+1. **The server never executes an entry's `install.command`.** Unchanged, and still enforced by nothing executing it: the field is display text (`CliDiscovery.install.command`).
+2. **`install.sh` executes only commands embedded in itself.** Those arrive in the same file, over the same TLS fetch, in the same commit as the `curl \| bash` line that fetched the script — identical trust to the hardcoded vendor one-liners it replaces.
+3. **Nothing fetched at install time is ever executed.**
+
+That is mechanical rather than a promise. `CLI_INSTALL_CMD_TRUSTED` is written only from the
+generated block and is the only array the installer runs; `CLI_INSTALL_CMD_DISPLAY` is what the
+refresh may rewrite. `test/install-sh-invariants.test.ts` asserts the split holds, that the
+refresh never assigns into a `*_TRUSTED` array, and that it never `eval`s.
+
+### bash 3.2
+
+macOS ships bash 3.2 and the documented install is `curl -fsSL <url> | bash` under
+`set -euo pipefail`, so a bash-4 construct is not a warning there — it kills the install. The
+generated block therefore uses parallel indexed arrays with **offset/length windows** into one
+flat array instead of delimiters (a `$HOME` containing a space needs no `IFS` handling, and an
+entry with nothing to contribute gets length 0 and is never iterated). CI runs `bash -n` and
+executes the script inside a real `bash:3.2` container, because the empty-window case is a
+runtime `set -u` abort that `bash -n` cannot see.
+
 ## Resolve at call time, never at import
 
 Anything reading the registry must resolve it when it is asked, not when its module is first imported. `sessionModeSchema()`, `allowedEnvPrefixes()`, `dependencyRegistry()` and each resolver's `searchDirs` thunk all re-read the catalog per call.
@@ -127,8 +173,10 @@ A module-level const freezes at first import, and the failure is asymmetric: a C
 ## Adding a CLI
 
 1. Add a `CliEntry` to `stock.ts`.
-2. Add a golden spawn-command pin to `test/cli-registry-spawn-golden.test.ts`, a row to `test/cli-capability-predicates.test.ts`, and its remote/docker commands to `test/location-overlay-commands.test.ts`.
-3. That is usually all. If you find yourself wanting to add an `if` somewhere, the guard test will tell you — and the answer is a capability field, or a named profile if it genuinely needs to run code.
+2. Run `npm run generate:cli-catalog` and commit **both** artifacts (`config/clis.stock.json` and `install.sh`). The installer's detection, its install menu, its reminder text and the Docker agent image all follow from that one step — this is what makes upstream `b6d0f1fa` ("wire OMP into install.sh's CLI detection, it had none") impossible rather than merely fixed.
+3. Add a golden spawn-command pin to `test/cli-registry-spawn-golden.test.ts`, a row to `test/cli-capability-predicates.test.ts`, its remote/docker commands to `test/location-overlay-commands.test.ts`, and its search paths to `test/install-sh-detection-parity.test.ts`.
+4. Only if it cannot install with a plain `npm install -g <pkg>`: give it a layer in `docker/agent.Dockerfile` and a reason in `AGENT_IMAGE_SPECIAL_CASES` (`scripts/lib/cli-catalog.mjs`). The coverage test requires both, so an exclusion cannot quietly become an omission.
+5. That is usually all. If you find yourself wanting to add an `if` somewhere, the guard test will tell you — and the answer is a capability field, or a named profile if it genuinely needs to run code.
 
 ## See also
 
