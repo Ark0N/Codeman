@@ -24,7 +24,7 @@ RUN npm ci \
 # docker/docker-compose.yaml. It does not run a Docker daemon in this container.
 FROM node:22-bookworm-slim
 
-ARG CODEMAN_RUNTIME_USER=opencode
+ARG CODEMAN_RUNTIME_USER=codeman
 ARG PUID=1000
 ARG PGID=1000
 

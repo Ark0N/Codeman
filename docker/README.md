@@ -22,7 +22,7 @@ Every required value is defined and explained in `.env.example`. `GEMINI_API_KEY
 
 On Linux, `Start-Codeman.sh` stops with an error when required paths are missing. It creates the application-data directory when safe, detects its numeric owner as `PUID:PGID`, and detects `DOCKER_SOCKET_GID` from the configured Docker socket. It rejects a root-owned application-data directory because Codeman and its local CLI sessions must remain unprivileged.
 
-Codeman, Claude, OpenCode, and other local sessions run as the unprivileged account named by `CODEMAN_RUNTIME_USER`, which defaults to `opencode`. When Compose is run directly, `PUID` and `PGID` default to `1000:1000`; set them in `.env` when the application-data directory has a different owner. The Bash start script determines them automatically instead.
+Codeman, Claude, OpenCode, and other local sessions run as the unprivileged account named by `CODEMAN_RUNTIME_USER`, which defaults to `codeman`. When Compose is run directly, `PUID` and `PGID` default to `1000:1000`; set them in `.env` when the application-data directory has a different owner. The Bash start script determines them automatically instead.
 
 To retain Docker-case support without root when running Compose directly, set `DOCKER_SOCKET_GID` to the numeric group ID of the host socket. On a standard Linux Docker host, obtain it with `stat -c '%g' /var/run/docker.sock`. The Bash start script detects it automatically.
 
@@ -65,7 +65,7 @@ volumes:
     target: /home/${CODEMAN_RUNTIME_USER}
 ```
 
-Set `CODEMAN_APPDATA_PATH` in `.env` to a directory that the Docker daemon can access. The example value is `/mnt/user/appdata/Coding/codeman`.
+Set `CODEMAN_APPDATA_PATH` in `.env` to a directory that the Docker daemon can access. The example value is `/mnt/user/appdata/codeman`.
 
 `CODEMAN_CASES_PATH` is the separate host directory for managed case workspaces. It is mounted into Codeman at the same absolute path, allowing the host Docker daemon to bind it into an isolated case container. Set it to a child directory of `CODEMAN_APPDATA_PATH` unless you deliberately store workspaces elsewhere.
 
@@ -76,7 +76,7 @@ Set `CODEMAN_DOCKER_DISABLE_SWAP_LIMIT=1` when `docker info` reports `SwapLimit=
 For an existing installation created by a root-running image, change ownership of the application-data directory before upgrading so the configured `PUID` and `PGID` can read the saved credentials and state:
 
 ```sh
-chown -R 99:100 /mnt/user/appdata/Coding/codeman
+chown -R 99:100 /mnt/user/appdata/codeman
 ```
 
 Replace `99:100` and the path with the values from your `.env` file.
