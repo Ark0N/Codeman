@@ -26,13 +26,25 @@ RUN apt-get update \
       openssh-client \
  && rm -rf /var/lib/apt/lists/*
 
-# The npm-published agent CLIs. Pinning is left to the rebuild cadence (see
-# docs/docker-cases-plan.md, user-decision 2).
-RUN npm install -g \
-      @anthropic-ai/claude-code \
-      @openai/codex \
-      @google/gemini-cli \
-      opencode-ai \
+# The npm-published agent CLIs, supplied by scripts/build-agent-image.mjs from
+# config/clis.stock.json so a new stock CLI needs no edit here. The default is
+# today's literal list, so a bare `docker build` still produces the same image.
+#
+# ⚠️ Expanded UNQUOTED on purpose: word splitting is what turns the list into
+# several arguments. Every token is validated against
+# ^[@A-Za-z0-9][@A-Za-z0-9/._-]*$ on the producing side
+# (scripts/lib/cli-catalog.mjs) precisely because of that.
+#
+# ⚠️ Filtered on each entry's `enabled` flag, so a CLI that ships disabled is
+# never baked into every image.
+#
+# Pinning is left to the rebuild cadence (see docs/docker-cases-plan.md,
+# user-decision 2).
+# ⚠️ The default is in REGISTRY order, byte-identical to what the generator emits.
+# A different order is a different RUN string, which is a different layer hash and
+# so a needless cache miss between a bare `docker build` and a scripted one.
+ARG CLI_NPM_PACKAGES="@anthropic-ai/claude-code opencode-ai @openai/codex @google/gemini-cli"
+RUN npm install -g ${CLI_NPM_PACKAGES} \
  && npm cache clean --force
 
 # Antigravity (`agy`) is NOT on npm — Google ships a standalone binary through its

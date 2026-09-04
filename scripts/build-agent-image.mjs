@@ -12,6 +12,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { agentImageBuildArgPairs, readCatalog } from './lib/cli-catalog.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
@@ -58,6 +59,13 @@ if (args.help) {
 const engine = resolveEngine(args.engine);
 const buildArgs = ['build', '-f', DOCKERFILE, '-t', args.image];
 if (args.noCache) buildArgs.push('--no-cache');
+// The CLI list comes from the generated catalogue rather than the Dockerfile, so adding a
+// stock CLI needs no edit in either. `src/docker-hosts.ts` assembles the same argv for the
+// in-app auto-build; test/agent-image-build-args-parity.test.ts pins the two together, since
+// two independent producers of one command line is exactly how they drift.
+for (const [name, value] of agentImageBuildArgPairs(readCatalog())) {
+  buildArgs.push('--build-arg', `${name}=${value}`);
+}
 buildArgs.push(REPO_ROOT);
 
 console.log(`[build-agent-image] ${engine} ${buildArgs.join(' ')}`);
