@@ -25,6 +25,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { getCli } from './config/cli-registry/registry.js';
+import { STOCK_CLIS } from './config/cli-registry/stock.js';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -442,8 +443,52 @@ export function buildDockerCreateArgs(ctx: DockerCreateContext): string[] {
  * scripts/build-agent-image.mjs): `build -f <dockerfile> -t <image> [--no-cache]
  * <contextDir>`. Kept pure + unit-testable; the caller prepends the engine binary.
  */
-export function agentImageBuildArgs(dockerfile: string, image: string, contextDir: string, noCache = false): string[] {
-  return ['build', '-f', dockerfile, '-t', image, ...(noCache ? ['--no-cache'] : []), contextDir];
+export function agentImageBuildArgs(
+  dockerfile: string,
+  image: string,
+  contextDir: string,
+  noCache = false,
+  buildArgs: Array<[string, string]> = []
+): string[] {
+  return [
+    'build',
+    '-f',
+    dockerfile,
+    '-t',
+    image,
+    ...(noCache ? ['--no-cache'] : []),
+    ...buildArgs.flatMap(([name, value]) => ['--build-arg', `${name}=${value}`]),
+    contextDir,
+  ];
+}
+
+/**
+ * npm packages the agent image installs in its shared layer, from the STOCK catalogue.
+ *
+ * ⚠️ Stock, deliberately, NOT the merged registry. A user's `~/.codeman/clis.json` must not
+ * change what lands inside an image tagged `codeman/agent:base`, or two machines holding that
+ * same tag hold different images and every cache-hit decision downstream is a lie.
+ *
+ * ⚠️ This mirrors `agentImageNpmPackages()` in `scripts/lib/cli-catalog.mjs`, which the CLI
+ * build path uses because a `.mjs` cannot import TypeScript. Two producers of one command
+ * line drift; `test/agent-image-build-args-parity.test.ts` is what stops them.
+ */
+export function agentImageNpmPackages(): string[] {
+  return STOCK_CLIS.filter((entry) => entry.enabled && !AGENT_IMAGE_SPECIAL_CASE_IDS.has(entry.id as string))
+    .map((entry) => entry.discovery.install.npmPackage)
+    .filter((pkg): pkg is string => Boolean(pkg));
+}
+
+/**
+ * CLIs the agent image installs in their OWN Dockerfile layer rather than the shared npm one.
+ * The registry cannot express what makes each special, so the layers stay hand-written and
+ * `test/docker-agent-image-coverage.test.ts` requires each to carry a reason and still exist.
+ */
+const AGENT_IMAGE_SPECIAL_CASE_IDS = new Set(['pi', 'deepseek']);
+
+/** The `--build-arg` pairs the agent image takes. */
+export function agentImageBuildArgPairs(): Array<[string, string]> {
+  return [['CLI_NPM_PACKAGES', agentImageNpmPackages().join(' ')]];
 }
 
 // ========== Credential mount resolution (IO) ==========
@@ -961,7 +1006,7 @@ function buildAgentImage(
   const argv = dockerEngineArgv(docker);
   const args = [
     ...argv.slice(1),
-    ...agentImageBuildArgs(resolved.dockerfile, image, resolved.contextDir, opts.noCache),
+    ...agentImageBuildArgs(resolved.dockerfile, image, resolved.contextDir, opts.noCache, agentImageBuildArgPairs()),
   ];
   return new Promise<EnsureImageResult>((resolve) => {
     // async spawn (NEVER spawnSync) so a multi-minute build never wedges the event loop.
