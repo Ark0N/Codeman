@@ -54,6 +54,34 @@ services:
       - /srv/projects:/srv/projects
 ```
 
+### Reverse-proxy host allowlist
+
+Codeman rejects any request whose `Host` header is not on its own allowlist - a
+DNS-rebinding guard, not a Compose or Docker concern. Loopback, any IP literal,
+the configured `--host`, and a few tunnel-provider suffixes are allowed by
+default; a reverse-proxied domain is not, and is rejected with
+`403 Forbidden: host not allowed` before the request reaches any handler.
+
+Add the domain with `CODEMAN_ALLOWED_HOSTS` in `.env`:
+
+```sh
+CODEMAN_ALLOWED_HOSTS='codeman.example.com,.internal.example.com'
+```
+
+`docker-compose.yaml` does not forward this variable into the container - it
+only passes through the environment keys it explicitly lists, and this is not
+one of them. Forward it yourself in `docker-compose.override.yml`:
+
+```yaml
+services:
+  codeman:
+    environment:
+      CODEMAN_ALLOWED_HOSTS: ${CODEMAN_ALLOWED_HOSTS}
+```
+
+See the application's own `docs/wiki/Remote-Access.md` for the full allowlist
+format and the tunnel providers it accepts by default.
+
 ## Application data storage
 
 The default configuration uses a host-folder bind mount:
