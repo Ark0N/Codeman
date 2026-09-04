@@ -160,6 +160,35 @@ OMP_SEARCH_PATHS=(
     "$HOME/bin/omp"
 )
 
+# >>> BEGIN GENERATED CLI CATALOGUE
+# Generated from src/config/cli-registry/stock.ts by scripts/generate-cli-catalog.mts.
+# Do not edit by hand: run `npm run generate:cli-catalog` and commit the result.
+#
+# Parallel indexed arrays, bash 3.2 safe (no associative arrays, no nameref, no mapfile).
+# The variable-length lists use OFFSET/LENGTH windows into one flat array rather than a
+# delimiter, so a $HOME containing a space needs no IFS handling and an entry with nothing
+# to contribute (shell has no binaries) gets length 0 and is simply never iterated.
+#
+# ⚠️ TRUST BOUNDARY: CLI_CMD_LINUX/CLI_CMD_DARWIN are the ONLY source of a command this
+# script will ever execute, and they arrive embedded in this file — same TLS fetch, same
+# commit as the script itself. Nothing fetched at install time may write them; the
+# refresh may only touch the *_DISPLAY copy. See cli_catalog_select_platform below.
+CLI_IDS=('claude' 'shell' 'opencode' 'codex' 'gemini' 'antigravity' 'pi' 'grok' 'deepseek' 'omp')
+CLI_LABELS=('Claude' 'Shell' 'OpenCode' 'Codex' 'Gemini' 'Antigravity' 'Pi' 'Grok' 'DeepSeek' 'OMP')
+CLI_ENABLED=(1 1 1 1 1 1 1 1 1 1)
+CLI_KIND=('agent' 'shell' 'agent' 'agent' 'agent' 'agent' 'agent' 'agent' 'agent' 'agent')
+CLI_NPM=('@anthropic-ai/claude-code' '' 'opencode-ai' '@openai/codex' '@google/gemini-cli' '' '@earendil-works/pi-coding-agent' '' '@deepseek-ai/dsh' '')
+CLI_DOCS=('https://docs.claude.com/claude-code' '' 'https://opencode.ai/docs' 'https://developers.openai.com/codex/cli' 'https://github.com/google-gemini/gemini-cli' 'https://antigravity.google/cli' 'https://pi.dev' 'https://github.com/xai-org/grok-build' 'https://github.com/deepseek-ai/deepseek-harness' 'https://omp.sh')
+CLI_CMD_LINUX=('curl -fsSL https://claude.ai/install.sh | bash' '' 'curl -fsSL https://opencode.ai/install | bash' 'npm install -g @openai/codex' 'npm install -g @google/gemini-cli' 'curl -fsSL https://antigravity.google/cli/install.sh | bash' 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent' 'curl -fsSL https://x.ai/cli/install.sh | bash' 'npm install -g @deepseek-ai/dsh' 'curl -fsSL https://omp.sh/install | sh')
+CLI_CMD_DARWIN=('curl -fsSL https://claude.ai/install.sh | bash' '' 'curl -fsSL https://opencode.ai/install | bash' 'npm install -g @openai/codex' 'npm install -g @google/gemini-cli' 'curl -fsSL https://antigravity.google/cli/install.sh | bash' 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent' 'curl -fsSL https://x.ai/cli/install.sh | bash' 'npm install -g @deepseek-ai/dsh' 'brew install can1357/tap/omp')
+CLI_ALL_BINS=('claude' 'opencode' 'codex' 'gemini' 'agy' 'pi' 'grok' 'dsh' 'omp')
+CLI_BIN_OFF=(0 1 1 2 3 4 5 6 7 8)
+CLI_BIN_LEN=(1 0 1 1 1 1 1 1 1 1)
+CLI_ALL_PATHS=("$HOME/.local/bin/claude" "$HOME/.claude/local/claude" "/usr/local/bin/claude" "$HOME/.npm-global/bin/claude" "$HOME/bin/claude" "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode" "/usr/local/bin/opencode" "$HOME/go/bin/opencode" "$HOME/.bun/bin/opencode" "$HOME/.npm-global/bin/opencode" "$HOME/bin/opencode" "$HOME/.codex/bin/codex" "$HOME/.local/bin/codex" "/usr/local/bin/codex" "$HOME/.bun/bin/codex" "$HOME/.npm-global/bin/codex" "$HOME/bin/codex" "$HOME/.gemini/bin/gemini" "$HOME/.local/bin/gemini" "/usr/local/bin/gemini" "$HOME/.bun/bin/gemini" "$HOME/.npm-global/bin/gemini" "$HOME/bin/gemini" "$HOME/.local/bin/agy" "$HOME/.antigravity/bin/agy" "/usr/local/bin/agy" "$HOME/bin/agy" "$HOME/.local/bin/pi" "/usr/local/bin/pi" "$HOME/.bun/bin/pi" "$HOME/.npm-global/bin/pi" "$HOME/bin/pi" "$HOME/.grok/bin/grok" "$HOME/.local/bin/grok" "/usr/local/bin/grok" "$HOME/bin/grok" "$HOME/.local/bin/dsh" "/usr/local/bin/dsh" "$HOME/.npm-global/bin/dsh" "$HOME/bin/dsh" "$HOME/.local/bin/omp" "$HOME/.omp/bin/omp" "/usr/local/bin/omp" "$HOME/.bun/bin/omp" "$HOME/.npm-global/bin/omp" "$HOME/bin/omp")
+CLI_PATH_OFF=(0 5 5 12 18 24 28 33 37 41)
+CLI_PATH_LEN=(5 0 7 6 6 4 5 4 4 6)
+# <<< END GENERATED CLI CATALOGUE
+
 # ============================================================================
 # Color Output
 # ============================================================================
