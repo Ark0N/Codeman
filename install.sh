@@ -76,89 +76,6 @@ TS_NEED_ROOT="0"
 # explicit caller override so contributors can still fetch the browser if needed.
 export PUPPETEER_SKIP_DOWNLOAD="${PUPPETEER_SKIP_DOWNLOAD:-1}"
 
-# Claude CLI search paths (from src/utils/claude-cli-resolver.ts)
-CLAUDE_SEARCH_PATHS=(
-    "$HOME/.local/bin/claude"
-    "$HOME/.claude/local/claude"
-    "/usr/local/bin/claude"
-    "$HOME/.npm-global/bin/claude"
-    "$HOME/bin/claude"
-)
-
-# OpenCode CLI search paths (from src/utils/opencode-cli-resolver.ts)
-OPENCODE_SEARCH_PATHS=(
-    "$HOME/.opencode/bin/opencode"
-    "$HOME/.local/bin/opencode"
-    "/usr/local/bin/opencode"
-    "$HOME/go/bin/opencode"
-    "$HOME/.bun/bin/opencode"
-    "$HOME/.npm-global/bin/opencode"
-    "$HOME/bin/opencode"
-)
-
-# Codex CLI search paths (from src/utils/codex-cli-resolver.ts)
-CODEX_SEARCH_PATHS=(
-    "$HOME/.codex/bin/codex"
-    "$HOME/.local/bin/codex"
-    "/usr/local/bin/codex"
-    "$HOME/.bun/bin/codex"
-    "$HOME/.npm-global/bin/codex"
-    "$HOME/bin/codex"
-)
-
-# Gemini CLI search paths (from src/utils/gemini-cli-resolver.ts)
-GEMINI_SEARCH_PATHS=(
-    "$HOME/.gemini/bin/gemini"
-    "$HOME/.local/bin/gemini"
-    "/usr/local/bin/gemini"
-    "$HOME/.bun/bin/gemini"
-    "$HOME/.npm-global/bin/gemini"
-    "$HOME/bin/gemini"
-)
-
-# Pi CLI search paths (from src/utils/pi-cli-resolver.ts)
-PI_SEARCH_PATHS=(
-    "$HOME/.local/bin/pi"
-    "/usr/local/bin/pi"
-    "$HOME/.bun/bin/pi"
-    "$HOME/.npm-global/bin/pi"
-    "$HOME/bin/pi"
-)
-
-# DeepSeek Harness search paths (from src/utils/deepseek-cli-resolver.ts)
-DSH_SEARCH_PATHS=(
-    "$HOME/.local/bin/dsh"
-    "/usr/local/bin/dsh"
-    "$HOME/.npm-global/bin/dsh"
-    "$HOME/bin/dsh"
-)
-
-# Grok CLI search paths (from src/utils/grok-cli-resolver.ts)
-GROK_SEARCH_PATHS=(
-    "$HOME/.grok/bin/grok"
-    "$HOME/.local/bin/grok"
-    "/usr/local/bin/grok"
-    "$HOME/bin/grok"
-)
-
-# Antigravity CLI search paths (from src/utils/antigravity-cli-resolver.ts)
-ANTIGRAVITY_SEARCH_PATHS=(
-    "$HOME/.local/bin/agy"
-    "$HOME/.antigravity/bin/agy"
-    "/usr/local/bin/agy"
-    "$HOME/bin/agy"
-)
-
-# OMP CLI search paths (from src/utils/omp-cli-resolver.ts's OMP_SEARCH_DIRS —
-# ~/.local/bin leads, omp.sh's installer target; ~/.omp/bin is a fallback only)
-OMP_SEARCH_PATHS=(
-    "$HOME/.local/bin/omp"
-    "$HOME/.omp/bin/omp"
-    "/usr/local/bin/omp"
-    "$HOME/.bun/bin/omp"
-    "$HOME/.npm-global/bin/omp"
-    "$HOME/bin/omp"
-)
 
 # >>> BEGIN GENERATED CLI CATALOGUE
 # Generated from src/config/cli-registry/stock.ts by scripts/generate-cli-catalog.mts.
@@ -477,193 +394,35 @@ check_build_tools() {
     [[ -z "$(missing_build_tools)" ]]
 }
 
-check_claude() {
-    # Check PATH first
-    if command -v claude &>/dev/null; then
-        return 0
-    fi
+# ============================================================================
+# CLI Detection (generic, driven by the generated catalogue above)
+# ============================================================================
+#
+# One implementation for every CLI, replacing nine near-identical
+# check_<cli>/get_<cli>_path pairs plus their nine search-path arrays. Those had
+# to be extended by hand for each new CLI, and once were not: upstream b6d0f1fa
+# is "wire OMP into install.sh's CLI detection (it had none)", where a user with
+# only omp installed was told no AI CLI was found and offered Claude Code.
+# Adding an entry to stock.ts now wires detection, the install menu and the
+# closing reminder in one step.
+#
+# Probe order per CLI is UNCHANGED and pinned by
+# test/install-sh-detection-parity.test.ts: the process PATH first (each declared
+# binary name in turn), then each known install path, dir-major.
 
-    # Check known install locations
-    for path in "${CLAUDE_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
+# Index of "$1" in CLI_IDS -> CLI_IDX, returning 1 with CLI_IDX=-1 when unknown.
+# A global rather than an echo because this runs inside loops, and a subshell per
+# lookup is a fork per CLI per call site.
+CLI_IDX=-1
+_cli_index() {
+    local want="$1" i
+    CLI_IDX=-1
+    for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
+        if [[ "${CLI_IDS[$i]}" == "$want" ]]; then
+            CLI_IDX=$i
             return 0
         fi
     done
-
-    return 1
-}
-
-get_claude_path() {
-    if command -v claude &>/dev/null; then
-        command -v claude
-        return
-    fi
-
-    for path in "${CLAUDE_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            echo "$path"
-            return
-        fi
-    done
-}
-
-check_opencode() {
-    if command -v opencode &>/dev/null; then
-        return 0
-    fi
-
-    for path in "${OPENCODE_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-get_opencode_path() {
-    if command -v opencode &>/dev/null; then
-        command -v opencode
-        return
-    fi
-
-    for path in "${OPENCODE_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            echo "$path"
-            return
-        fi
-    done
-}
-
-check_codex() {
-    if command -v codex &>/dev/null; then
-        return 0
-    fi
-
-    for path in "${CODEX_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-get_codex_path() {
-    if command -v codex &>/dev/null; then
-        command -v codex
-        return
-    fi
-
-    for path in "${CODEX_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            echo "$path"
-            return
-        fi
-    done
-}
-
-check_gemini() {
-    if command -v gemini &>/dev/null; then
-        return 0
-    fi
-
-    for path in "${GEMINI_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-get_gemini_path() {
-    if command -v gemini &>/dev/null; then
-        command -v gemini
-        return
-    fi
-
-    for path in "${GEMINI_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            echo "$path"
-            return
-        fi
-    done
-}
-
-check_antigravity() {
-    if command -v agy &>/dev/null; then
-        return 0
-    fi
-
-    for path in "${ANTIGRAVITY_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-get_antigravity_path() {
-    if command -v agy &>/dev/null; then
-        command -v agy
-        return
-    fi
-
-    for path in "${ANTIGRAVITY_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            echo "$path"
-            return
-        fi
-    done
-}
-
-# `pi` is a short, generic name (Raspberry Pi tooling, personal scripts), so the
-# server-side resolver additionally probes `pi --version`. Detection here only feeds
-# the "you have no AI CLI" hint, so a plain executable test is enough.
-check_pi() {
-    if command -v pi &>/dev/null; then
-        return 0
-    fi
-
-    for path in "${PI_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-get_pi_path() {
-    if command -v pi &>/dev/null; then
-        command -v pi
-        return
-    fi
-
-    for path in "${PI_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            echo "$path"
-            return
-        fi
-    done
-}
-
-# `grok` has known squatters too (the unrelated @vibe-kit/grok-cli), so the
-# server-side resolver additionally probes `grok --version`. Detection here only
-# feeds the "you have no AI CLI" hint, so a plain executable test is enough.
-check_grok() {
-    if command -v grok &>/dev/null; then
-        return 0
-    fi
-
-    for path in "${GROK_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            return 0
-        fi
-    done
-
     return 1
 }
 
@@ -682,86 +441,254 @@ dsh_banner_probe() {
     "${runner[@]}" "$1" --help </dev/null 2>/dev/null | grep -qi "DeepSeek Harness"
 }
 
-# Resolved ONCE and memoized: the probe executes a possibly-foreign binary, and
-# the check/get/reminder call sites together used to re-run the whole scan many
-# times per install.
-DSH_RESOLVE_DONE=""
-DSH_RESOLVED_PATH=""
-resolve_dsh() {
-    [[ -n "$DSH_RESOLVE_DONE" ]] && return 0
-    DSH_RESOLVE_DONE=1
-    local candidate path
-    if command -v dsh &>/dev/null; then
-        candidate="$(command -v dsh)"
-        if dsh_banner_probe "$candidate"; then
-            DSH_RESOLVED_PATH="$candidate"
-            return 0
-        fi
-    fi
+# Is "$2" really the CLI "$1" claims to be?
+#
+# Every CLI but DeepSeek is accepted on being executable, exactly as before.
+# DeepSeek stays a hand-written special case ON PURPOSE: the registry expresses
+# its identity check as `discovery.identity.regex`, a JavaScript regex, and
+# translating that into a `grep` pattern at install time is a transformation
+# nobody should be performing on a security-adjacent check. The parity test pins
+# that the registry still demands "DeepSeek Harness", so an upstream banner
+# change fails a test instead of silently mis-detecting here.
+_cli_candidate_ok() {
+    case "$1" in
+        deepseek) dsh_banner_probe "$2" ;;
+        *) return 0 ;;
+    esac
+}
 
-    for path in "${DSH_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]] && dsh_banner_probe "$path"; then
-            DSH_RESOLVED_PATH="$path"
-            return 0
+# Resolve every CLI in ONE pass, memoized.
+#
+# CLI_FOUND_PATH is parallel to CLI_IDS ('' when not found). CLI_FOUND_COUNT
+# counts only ENABLED entries that have a binary to look for, which is what the
+# "no AI CLI found" gate asks about — `shell` has no binary and must never make
+# that gate think an agent is installed.
+#
+# Memoizing the whole scan generalises the old resolve_dsh memo: the three call
+# sites together used to re-run every probe, and for dsh that meant executing a
+# possibly-foreign binary repeatedly.
+CLI_DETECT_DONE=""
+CLI_FOUND_PATH=()
+CLI_FOUND_COUNT=0
+detect_all_clis() {
+    [[ -n "$CLI_DETECT_DONE" ]] && return 0
+    CLI_DETECT_DONE=1
+
+    local i j found bin path bin_end path_end
+    CLI_FOUND_COUNT=0
+    for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
+        found=""
+
+        # 1. The process PATH, each declared binary name in turn.
+        bin_end=$((${CLI_BIN_OFF[$i]} + ${CLI_BIN_LEN[$i]}))
+        for ((j = ${CLI_BIN_OFF[$i]}; j < bin_end; j++)); do
+            bin="${CLI_ALL_BINS[$j]}"
+            if command -v "$bin" &>/dev/null; then
+                path="$(command -v "$bin")"
+                if _cli_candidate_ok "${CLI_IDS[$i]}" "$path"; then
+                    found="$path"
+                    break
+                fi
+            fi
+        done
+
+        # 2. The known install locations, dir-major. Note this still runs when a
+        #    PATH hit was REJECTED above — that is how a Debian `dsh` on PATH
+        #    does not hide a real harness in ~/.local/bin.
+        if [[ -z "$found" ]]; then
+            path_end=$((${CLI_PATH_OFF[$i]} + ${CLI_PATH_LEN[$i]}))
+            for ((j = ${CLI_PATH_OFF[$i]}; j < path_end; j++)); do
+                path="${CLI_ALL_PATHS[$j]}"
+                if [[ -x "$path" ]] && _cli_candidate_ok "${CLI_IDS[$i]}" "$path"; then
+                    found="$path"
+                    break
+                fi
+            done
+        fi
+
+        CLI_FOUND_PATH[$i]="$found"
+        if [[ -n "$found" ]] && [[ "${CLI_ENABLED[$i]}" == "1" ]] && [[ "${CLI_BIN_LEN[$i]}" -gt 0 ]]; then
+            CLI_FOUND_COUNT=$((CLI_FOUND_COUNT + 1))
         fi
     done
     return 0
 }
 
-check_dsh() {
-    resolve_dsh
-    [[ -n "$DSH_RESOLVED_PATH" ]]
+# Is this CLI installed? Unknown id is "no", never an error.
+check_cli() {
+    detect_all_clis
+    _cli_index "$1" || return 1
+    [[ -n "${CLI_FOUND_PATH[$CLI_IDX]}" ]]
 }
 
-get_dsh_path() {
-    resolve_dsh
-    echo "$DSH_RESOLVED_PATH"
+# Where it was found, or nothing.
+get_cli_path() {
+    detect_all_clis
+    _cli_index "$1" || return 1
+    printf '%s\n' "${CLI_FOUND_PATH[$CLI_IDX]}"
 }
 
-get_grok_path() {
-    if command -v grok &>/dev/null; then
-        command -v grok
-        return
-    fi
+# ----------------------------------------------------------------------------
+# Catalogue helpers
+# ----------------------------------------------------------------------------
 
-    for path in "${GROK_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            echo "$path"
-            return
+# Pick this platform's install commands out of the generated per-platform arrays.
+#
+# ⚠️ THE TRUST BOUNDARY LIVES HERE, and it is mechanical rather than a promise:
+#
+#   CLI_INSTALL_CMD_TRUSTED  — written ONLY from CLI_CMD_LINUX/CLI_CMD_DARWIN,
+#                              i.e. only from the block generated into this file.
+#                              This is the sole array the installer ever executes.
+#   CLI_INSTALL_CMD_DISPLAY  — the copy shown on screen. The optional catalogue
+#                              refresh may rewrite it; it can never write TRUSTED.
+#
+# So a command that runs arrived in the same file, over the same TLS fetch, in
+# the same commit as the `curl | bash` line that fetched this script. That is
+# identical trust to the hardcoded vendor one-liners this replaces, and it is
+# why nothing fetched at install time is ever executed. The server keeps its own,
+# stricter rule unchanged: it never executes an entry's install command at all
+# (see CliDiscovery.install.command in src/config/cli-registry/types.ts).
+CLI_INSTALL_CMD_TRUSTED=()
+CLI_INSTALL_CMD_DISPLAY=()
+CLI_PLATFORM_DONE=""
+cli_catalog_select_platform() {
+    [[ -n "$CLI_PLATFORM_DONE" ]] && return 0
+    CLI_PLATFORM_DONE=1
+    # detect_os ONCE, not per entry: it forks a subshell, and on an unsupported
+    # platform it also prints. Inside the loop that was ten forks and ten copies of
+    # the same error, because a `die` inside $( ) can only exit the subshell.
+    local i platform
+    platform="$(detect_os)"
+    for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
+        if [[ "$platform" == "macos" ]]; then
+            CLI_INSTALL_CMD_TRUSTED[$i]="${CLI_CMD_DARWIN[$i]}"
+        else
+            CLI_INSTALL_CMD_TRUSTED[$i]="${CLI_CMD_LINUX[$i]}"
+        fi
+        CLI_INSTALL_CMD_DISPLAY[$i]="${CLI_INSTALL_CMD_TRUSTED[$i]}"
+    done
+}
+
+# "Claude, OpenCode, Codex, ..." — the enabled, detectable CLIs, for prose.
+cli_catalog_names() {
+    local i out=""
+    for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
+        [[ "${CLI_ENABLED[$i]}" == "1" ]] || continue
+        [[ "${CLI_BIN_LEN[$i]}" -gt 0 ]] || continue
+        out="${out:+$out, }${CLI_LABELS[$i]}"
+    done
+    printf '%s' "$out"
+}
+
+# The "install one yourself" hints: every enabled CLI that is not installed,
+# showing the DISPLAY command. An entry with no install command (DeepSeek ships
+# no vendor one-liner) gets its docs URL instead of being silently omitted,
+# which is what used to happen to Gemini — it had a command in the registry and
+# appeared in no list in this script.
+cli_catalog_print_install_hints() {
+    detect_all_clis
+    local i
+    for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
+        [[ "${CLI_ENABLED[$i]}" == "1" ]] || continue
+        [[ "${CLI_BIN_LEN[$i]}" -gt 0 ]] || continue
+        [[ -z "${CLI_FOUND_PATH[$i]}" ]] || continue
+        if [[ -n "${CLI_INSTALL_CMD_DISPLAY[$i]}" ]]; then
+            echo -e "    ${CYAN}${CLI_INSTALL_CMD_DISPLAY[$i]}${NC}   # ${CLI_LABELS[$i]}"
+        elif [[ -n "${CLI_DOCS[$i]}" ]]; then
+            echo -e "    ${CLI_LABELS[$i]}: see ${CYAN}${CLI_DOCS[$i]}${NC}"
         fi
     done
 }
 
-# `omp` is a short name too, so like grok/pi the server-side resolver
-# additionally probes `omp --version`. Detection here only feeds the
-# "you have no AI CLI" hint, so a plain executable test is enough.
-check_omp() {
-    if command -v omp &>/dev/null; then
+# Optional catalogue refresh — OPT-IN, and deliberately so.
+#
+# When you `curl | bash` from master the embedded catalogue is already exactly as
+# fresh as the script that carries it, so a default-on refresh would buy nothing
+# and add a network dependency plus a warning surface to every install. It exists
+# for the case the embedded copy really can be stale: re-running an old local
+# copy, or a fork.
+#
+# ⚠️ Only DISPLAY and detection-shaped fields are ever overwritten. TRUSTED is
+# untouchable from here — see cli_catalog_select_platform.
+# ⚠️ Called from main() only, AFTER check_curl_or_wget has set DOWNLOADER; that
+# variable is otherwise unset under `set -u`. The guard below keeps a future
+# caller that relocates this from dying instead of simply not refreshing.
+cli_catalog_refresh() {
+    local url="${CODEMAN_CLI_CATALOGUE_URL:-}"
+    if [[ -z "$url" ]] && [[ "${CODEMAN_REFRESH_CLI_CATALOGUE:-0}" == "1" ]]; then
+        url="$(cli_catalog_default_url)"
+    fi
+    [[ -n "$url" ]] || return 0
+    [[ -n "${DOWNLOADER:-}" ]] || return 0
+
+    local tmp
+    tmp="$(mktemp)" || return 0
+
+    if ! download "$url" "$tmp" 2>/dev/null; then
+        warn "CLI catalogue refresh could not fetch $url; using the catalogue built into this installer."
+        rm -f "$tmp"
+        return 0
+    fi
+    if [[ ! -s "$tmp" ]]; then
+        # The failure shape that used to be SILENT: a plain network failure
+        # returning an empty body, where the old design fell back to a hardcoded
+        # two-CLI list and said nothing. There is no degraded list to fall back
+        # to now, and the fallback is announced either way.
+        warn "CLI catalogue refresh returned nothing (network failure?); using the catalogue built into this installer."
+        rm -f "$tmp"
         return 0
     fi
 
-    for path in "${OMP_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            return 0
+    # Parsed with node into tab-separated records and read with `read`, never
+    # eval'd: this content came off the network.
+    local parsed count=0 id label
+    parsed="$(node -e '
+      const fs = require("fs");
+      let data;
+      try { data = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { process.exit(2); }
+      if (!Array.isArray(data)) process.exit(2);
+      for (const e of data) {
+        if (!e || typeof e.id !== "string" || typeof e.label !== "string") continue;
+        if (/[\t\n]/.test(e.id) || /[\t\n]/.test(e.label)) continue;
+        console.log([e.id, e.label].join("\t"));
+      }
+    ' "$tmp" </dev/null 2>/dev/null)" || {
+        warn "CLI catalogue refresh returned unparseable content; using the catalogue built into this installer."
+        rm -f "$tmp"
+        return 0
+    }
+    rm -f "$tmp"
+
+    while IFS=$'\t' read -r id label; do
+        [[ -n "$id" ]] || continue
+        if _cli_index "$id"; then
+            CLI_LABELS[$CLI_IDX]="$label"
+            count=$((count + 1))
         fi
-    done
+    done <<EOF
+$parsed
+EOF
 
-    return 1
-}
-
-get_omp_path() {
-    if command -v omp &>/dev/null; then
-        command -v omp
-        return
+    if [[ "$count" -eq 0 ]]; then
+        warn "CLI catalogue refresh matched no known CLI; using the catalogue built into this installer."
+    else
+        info "Refreshed CLI catalogue metadata for $count entries."
     fi
-
-    for path in "${OMP_SEARCH_PATHS[@]}"; do
-        if [[ -x "$path" ]]; then
-            echo "$path"
-            return
-        fi
-    done
 }
+
+# Where a refresh looks when only CODEMAN_REFRESH_CLI_CATALOGUE=1 is set:
+# the same repo and branch this installer came from.
+cli_catalog_default_url() {
+    local repo="${REPO_URL%.git}"
+    repo="${repo#https://github.com/}"
+    printf 'https://raw.githubusercontent.com/%s/%s/config/clis.stock.json' "$repo" "$BRANCH"
+}
+
+# Resolved at load, not lazily: every element of CLI_INSTALL_CMD_DISPLAY has to
+# exist before anything indexes it, or `set -u` aborts on an unset array element
+# the first time a hint is printed.
+cli_catalog_select_platform
+
 
 check_cloudflared() {
     # Check ~/.local/bin first (matches tunnel-manager.ts resolution order)
@@ -2301,6 +2228,11 @@ main() {
         die "curl or wget is required but neither is installed. Please install one first."
     fi
 
+    # Optional, opt-in catalogue refresh. Deliberately here and nowhere else:
+    # DOWNLOADER is assigned by check_curl_or_wget above and is unset under
+    # `set -u` on every path that skips main() (the tailscale subcommand is one).
+    cli_catalog_refresh
+
     # Detect system
     local os arch distro=""
     os=$(detect_os)
@@ -2397,117 +2329,119 @@ main() {
         fi
     fi
 
-    # AI CLI (Codeman drives one of: Claude Code, OpenCode, Codex, Gemini, Antigravity, Pi)
-    local has_claude=false
-    local has_opencode=false
-    local has_codex=false
-    local has_gemini=false
-    local has_antigravity=false
-    local has_pi=false
-    local has_grok=false
-    local has_dsh=false
-    local has_omp=false
-
+    # AI CLI. Codeman drives one of the CLIs in the generated catalogue above;
+    # this used to be a hand-written list here, in the gate below, and in the
+    # closing reminder — three places that had to agree and did not (the comment
+    # itself named six of the nine).
     info "Checking AI CLI tools..."
-    if check_claude; then
-        has_claude=true
-        success "Claude Code found at $(get_claude_path)"
-    fi
-    if check_opencode; then
-        has_opencode=true
-        success "OpenCode found at $(get_opencode_path)"
-    fi
-    if check_codex; then
-        has_codex=true
-        success "Codex found at $(get_codex_path)"
-    fi
-    if check_gemini; then
-        has_gemini=true
-        success "Gemini CLI found at $(get_gemini_path)"
-    fi
-    if check_antigravity; then
-        has_antigravity=true
-        success "Antigravity CLI found at $(get_antigravity_path)"
-    fi
-    if check_pi; then
-        has_pi=true
-        success "Pi CLI found at $(get_pi_path)"
-    fi
-    if check_grok; then
-        has_grok=true
-        success "Grok CLI found at $(get_grok_path)"
-    fi
-    if check_dsh; then
-        has_dsh=true
-        success "DeepSeek Harness found at $(get_dsh_path)"
-    fi
-    if check_omp; then
-        has_omp=true
-        success "OMP CLI found at $(get_omp_path)"
-    fi
+    detect_all_clis
+    local i
+    for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
+        [[ "${CLI_ENABLED[$i]}" == "1" ]] || continue
+        [[ "${CLI_BIN_LEN[$i]}" -gt 0 ]] || continue
+        if [[ -n "${CLI_FOUND_PATH[$i]}" ]]; then
+            success "${CLI_LABELS[$i]} found at ${CLI_FOUND_PATH[$i]}"
+        fi
+    done
 
-    if [[ "$has_claude" == "false" && "$has_opencode" == "false" && "$has_codex" == "false" && "$has_gemini" == "false" && "$has_antigravity" == "false" && "$has_pi" == "false" && "$has_grok" == "false" && "$has_dsh" == "false" && "$has_omp" == "false" ]]; then
+    if [[ "$CLI_FOUND_COUNT" -eq 0 ]]; then
         echo ""
-        warn "No AI CLI found. Codeman needs at least one: Claude Code, OpenCode, Codex, Antigravity, Gemini, Pi, Grok, DeepSeek Harness, or OMP."
+        warn "No AI CLI found. Codeman needs at least one: $(cli_catalog_names)."
         headless_guard "install an AI CLI (curl | bash from its vendor)"
         echo ""
-        echo -e "  ${BOLD}Which AI CLI would you like to install?${NC}"
-        echo -e "    ${CYAN}1)${NC} Claude Code  (Anthropic)"
-        echo -e "    ${CYAN}2)${NC} OpenCode     (open-source)"
-        echo -e "    ${CYAN}3)${NC} Both"
-        echo -e "    ${CYAN}4)${NC} Skip         (I'll install one myself, e.g. Codex, Antigravity, Gemini, Pi, Grok, DeepSeek Harness or OMP)"
-        echo ""
 
-        local cli_choice=""
-        if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
-            # Explicit automation opt-in: default to Claude Code
-            cli_choice="1"
-            info "CODEMAN_NONINTERACTIVE=1: defaulting to Claude Code"
+        # The menu is built from the catalogue: every enabled CLI that is not
+        # installed and ships an install command we can run. It used to be a
+        # fixed four-option prompt offering Claude Code and OpenCode only, so the
+        # other seven were unreachable even though the registry knows how to
+        # install five of them.
+        #
+        # ⚠️ TRUST BOUNDARY: the command executed comes from CLI_INSTALL_CMD_TRUSTED,
+        # which only the generated block above writes. The refresh may rewrite the
+        # _DISPLAY copy shown on screen but can never reach this array. See
+        # cli_catalog_select_platform.
+        local -a offer_idx=()
+        for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
+            [[ "${CLI_ENABLED[$i]}" == "1" ]] || continue
+            [[ "${CLI_BIN_LEN[$i]}" -gt 0 ]] || continue
+            [[ -z "${CLI_FOUND_PATH[$i]}" ]] || continue
+            [[ -n "${CLI_INSTALL_CMD_TRUSTED[$i]}" ]] || continue
+            offer_idx[${#offer_idx[@]}]=$i
+        done
+
+        # ⚠️ The registry's install commands are vendor one-liners that call
+        # `curl`, whereas the two literals this replaces went through
+        # download_to_stdout and so honoured `wget`. On a wget-only host we print
+        # the commands instead of offering to run them: rewriting curl to wget
+        # inside a string we are about to execute is exactly the wrong instinct.
+        if [[ "${DOWNLOADER:-}" != "curl" ]] && [[ ${#offer_idx[@]} -gt 0 ]]; then
+            warn "curl is not available, so the installer cannot run a vendor install script for you."
+            cli_catalog_print_install_hints
+            offer_idx=()
+        fi
+
+        if [[ ${#offer_idx[@]} -eq 0 ]]; then
+            warn "No AI CLI can be installed automatically here. Codeman will run, but sessions need a CLI to drive."
+            cli_catalog_print_install_hints
         else
-            while true; do
-                echo -en "${CYAN}Choose [1/2/3/4]:${NC} " >&2
-                read_reply cli_choice || { cli_choice="1"; break; }
-                case "$cli_choice" in
-                    1|2|3|4) break ;;
-                    *) echo "Please enter 1, 2, 3, or 4." >&2 ;;
-                esac
+            echo -e "  ${BOLD}Which AI CLI would you like to install?${NC}"
+            local n=0 idx
+            for idx in "${offer_idx[@]}"; do
+                n=$((n + 1))
+                echo -e "    ${CYAN}${n})${NC} ${CLI_LABELS[$idx]}"
             done
-        fi
+            echo -e "    ${CYAN}s)${NC} Skip (I'll install one myself)"
+            echo ""
 
-        if [[ "$cli_choice" == "1" ]] || [[ "$cli_choice" == "3" ]]; then
-            info "Installing Claude Code CLI..."
-            download_to_stdout https://claude.ai/install.sh | bash
-            hash -r 2>/dev/null || true
-            if check_claude; then
-                has_claude=true
-                success "Claude Code installed at $(get_claude_path)"
+            local cli_choice=""
+            if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
+                # Explicit automation opt-in: default to the first offered entry,
+                # which is registry order, which is Claude Code (order 0) — the
+                # same default this prompt has always taken non-interactively.
+                cli_choice="1"
+                info "CODEMAN_NONINTERACTIVE=1: defaulting to ${CLI_LABELS[${offer_idx[0]}]}"
             else
-                warn "Claude Code installation failed."
+                while true; do
+                    echo -en "${CYAN}Choose [1-${n}, or s to skip]:${NC} " >&2
+                    read_reply cli_choice || { cli_choice="1"; break; }
+                    case "$cli_choice" in
+                        s|S) break ;;
+                        ''|*[!0-9]*) echo "Please enter a number between 1 and ${n}, or s." >&2 ;;
+                        *)
+                            if [[ "$cli_choice" -ge 1 ]] && [[ "$cli_choice" -le "$n" ]]; then
+                                break
+                            fi
+                            echo "Please enter a number between 1 and ${n}, or s." >&2
+                            ;;
+                    esac
+                done
             fi
-        fi
 
-        if [[ "$cli_choice" == "2" ]] || [[ "$cli_choice" == "3" ]]; then
-            info "Installing OpenCode CLI..."
-            download_to_stdout https://opencode.ai/install | bash
-            hash -r 2>/dev/null || true
-            if check_opencode; then
-                has_opencode=true
-                success "OpenCode installed at $(get_opencode_path)"
+            if [[ "$cli_choice" == "s" ]] || [[ "$cli_choice" == "S" ]]; then
+                warn "Skipping AI CLI install. Codeman will run, but sessions need a CLI to drive."
+                cli_catalog_print_install_hints
             else
-                warn "OpenCode installation failed."
+                idx="${offer_idx[$((cli_choice - 1))]}"
+                info "Installing ${CLI_LABELS[$idx]}..."
+                # </dev/null: under `curl | bash` a child that reads stdin would
+                # consume the rest of this script.
+                bash -c "${CLI_INSTALL_CMD_TRUSTED[$idx]}" </dev/null || true
+                hash -r 2>/dev/null || true
+                CLI_DETECT_DONE=""
+                detect_all_clis
+                if [[ -n "${CLI_FOUND_PATH[$idx]}" ]]; then
+                    success "${CLI_LABELS[$idx]} installed at ${CLI_FOUND_PATH[$idx]}"
+                else
+                    warn "${CLI_LABELS[$idx]} installation failed."
+                fi
             fi
-        fi
 
-        if [[ "$cli_choice" == "4" ]]; then
-            warn "Skipping AI CLI install. Codeman will run, but sessions need a CLI to drive."
-            info "Install one later, e.g.: npm install -g @openai/codex                          (Codex)"
-            info "                    or: curl -fsSL https://antigravity.google/cli/install.sh | bash  (Antigravity)"
-            info "                    or: npm install -g --ignore-scripts @earendil-works/pi-coding-agent   (Pi)"
-            info "                    or: curl -fsSL https://x.ai/cli/install.sh | bash                     (Grok)"
-        elif [[ "$has_claude" == "false" ]] && [[ "$has_opencode" == "false" ]]; then
-            die "The selected AI CLI failed to install. Install one manually and re-run the installer."
+            if [[ "$CLI_FOUND_COUNT" -eq 0 ]]; then
+                die "The selected AI CLI failed to install. Install one manually and re-run the installer."
+            fi
         fi
     fi
+
 
     # cloudflared (optional — for remote/mobile access via Cloudflare Tunnel)
     info "Checking cloudflared (optional, for remote access)..."
@@ -2804,19 +2738,10 @@ main() {
     echo -e "    https://github.com/Ark0N/Codeman"
     echo ""
 
-    if ! check_claude && ! check_opencode && ! check_codex && ! check_gemini && ! check_antigravity && ! check_pi && ! check_grok && ! check_dsh && ! check_omp; then
+    detect_all_clis
+    if [[ "$CLI_FOUND_COUNT" -eq 0 ]]; then
         echo -e "  ${YELLOW}${BOLD}Reminder:${NC} Install at least one AI CLI to start using Codeman:"
-        echo -e "    ${CYAN}curl -fsSL https://claude.ai/install.sh | bash${NC}                # Claude Code"
-        echo -e "    ${CYAN}curl -fsSL https://opencode.ai/install | bash${NC}                 # OpenCode"
-        echo -e "    ${CYAN}npm install -g @openai/codex${NC}                                  # Codex"
-        echo -e "    ${CYAN}curl -fsSL https://antigravity.google/cli/install.sh | bash${NC}   # Antigravity"
-        echo -e "    ${CYAN}npm install -g --ignore-scripts @earendil-works/pi-coding-agent${NC}  # Pi"
-        echo -e "    ${CYAN}curl -fsSL https://x.ai/cli/install.sh | bash${NC}                 # Grok"
-        echo -e "    ${CYAN}curl -fsSL https://omp.sh/install | sh${NC}                        # OMP"
-        echo ""
-        echo -e "  DeepSeek Harness has no vendor one-liner — install it from within Codeman"
-        echo -e "  once the server is up (Run dropdown → Install DeepSeek Profile, or see"
-        echo -e "  docs/deepseek-integration.md)."
+        cli_catalog_print_install_hints
     fi
 
     # Security notice — last informational block so it stays visible (when not
@@ -3008,6 +2933,11 @@ uninstall() {
     echo -e "  ${DIM}You can remove them manually from $(detect_shell_profile)${NC}"
     echo ""
 }
+
+# Sourcing guard: let the test harness load this file for its pure helpers
+# without running an install. bash 3.2 cannot be exercised any other way from
+# CI — see .github/workflows/ci.yml and test/install-sh-invariants.test.ts.
+if [[ -n "${CODEMAN_INSTALL_SH_LIB:-}" ]]; then return 0 2>/dev/null || exit 0; fi
 
 # Wrap in main to prevent partial execution on curl | bash
 case "${1:-}" in

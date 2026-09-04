@@ -101,14 +101,32 @@ const ARRAY_PREFIX_TO_CLI_ID: Record<string, string> = {
   OMP: 'omp',
 };
 
-/** Every `NAME_SEARCH_PATHS=( "a" "b" )` block in install.sh, in declaration order. */
+/**
+ * The per-CLI search paths install.sh will actually probe, read back out of the GENERATED
+ * block: `CLI_ALL_PATHS` sliced by each id's `CLI_PATH_OFF`/`CLI_PATH_LEN` window.
+ *
+ * This parser replaced one that read the nine hand-written `*_SEARCH_PATHS` arrays, which
+ * this change deletes. The literals below did NOT move: they are still the same strings
+ * transcribed from those arrays, so the pin still measures the generated block against what
+ * shipped before it existed, which is the only comparison worth making.
+ */
 function parseInstallShSearchPaths(source: string): Record<string, string[]> {
+  const readArray = (name: string): string[] => {
+    const m = new RegExp(`^${name}=\\((.*)\\)$`, 'm').exec(source);
+    if (!m) throw new Error(`install.sh has no ${name}= array`);
+    // Tokens are double-quoted (paths, which carry $HOME), single-quoted (ids, labels) or
+    // bare (the numeric offset/length windows).
+    return [...m[1].matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((t) => t[1] ?? t[2] ?? t[3]);
+  };
+  const ids = readArray('CLI_IDS');
+  const paths = readArray('CLI_ALL_PATHS');
+  const offs = readArray('CLI_PATH_OFF').map(Number);
+  const lens = readArray('CLI_PATH_LEN').map(Number);
   const out: Record<string, string[]> = {};
-  const block = /^([A-Z0-9_]+)_SEARCH_PATHS=\(\s*\n([\s\S]*?)^\)/gm;
-  for (const match of source.matchAll(block)) {
-    const entries = [...match[2].matchAll(/^\s*"([^"]+)"\s*$/gm)].map((m) => m[1]);
-    out[match[1]] = entries;
-  }
+  ids.forEach((id, i) => {
+    const prefix = Object.entries(ARRAY_PREFIX_TO_CLI_ID).find(([, cliId]) => cliId === id)?.[0];
+    if (prefix) out[prefix] = paths.slice(offs[i], offs[i] + lens[i]);
+  });
   return out;
 }
 
@@ -131,20 +149,20 @@ function registrySearchPaths(cliId: string): string[] {
 describe('install.sh CLI detection parity', () => {
   const parsed = parseInstallShSearchPaths(INSTALL_SH);
 
-  it('finds every declared search-path array (anti-vacuity)', () => {
+  it('finds every generated search-path window (anti-vacuity)', () => {
     // If the parse returns nothing, every it.each below passes by comparing [] to [].
     expect(Object.keys(parsed).sort()).toEqual(Object.keys(LITERAL_SEARCH_PATHS).sort());
     for (const [name, paths] of Object.entries(parsed)) {
-      expect(paths.length, `${name}_SEARCH_PATHS parsed empty`).toBeGreaterThan(0);
+      expect(paths.length, `${name} window parsed empty`).toBeGreaterThan(0);
     }
   });
 
-  it.each(Object.keys(LITERAL_SEARCH_PATHS))('%s_SEARCH_PATHS matches the pinned literals', (prefix) => {
+  it.each(Object.keys(LITERAL_SEARCH_PATHS))('%s search paths match the pinned literals', (prefix) => {
     expect(parsed[prefix]).toEqual(LITERAL_SEARCH_PATHS[prefix]);
   });
 
   it.each(Object.entries(ARRAY_PREFIX_TO_CLI_ID))(
-    '%s_SEARCH_PATHS is reproduced by registry entry "%s"',
+    '%s search paths are reproduced by registry entry "%s"',
     (prefix, cliId) => {
       // The claim the generator rests on: the registry already knows every path the
       // installer probes, in the same order. A failure here means the generated block would
