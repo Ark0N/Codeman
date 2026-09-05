@@ -59,6 +59,7 @@ unchanged. The container path is a new `SupervisorKind`, not a new updater.
 | `CODEMAN_RESTART_BY_EXIT=1`                    | The Compose file's declaration of that policy, so the updater may exit even with no Docker socket. |
 | Toolchain + devDependencies in the image       | Lets `npm install` and `npm run build` run inside the container.     |
 | `docker-env-applied.json`                      | Fingerprint baseline, written by `Start-Codeman.sh` on every start.  |
+| `docker-build-source.json`                     | What HEAD/`package-lock.json` the build artefact volumes currently reflect. Written by both `Start-Codeman.sh` and this in-place update, so the two agree on whether those volumes are stale. |
 
 ### Why build artefacts are in named volumes
 
@@ -71,6 +72,20 @@ permanently noisy.
 Docker seeds an empty named volume from the image, so the first start inherits the
 image's already-built `node_modules` and `dist` and pays no bootstrap cost.
 `docker compose down -v` is the supported reset: the next start re-seeds them.
+
+That seeding-only-while-empty behaviour has a second, less obvious edge: it also
+means a plain `docker compose build` triggered from OUTSIDE the container (for
+example `Start-Codeman.sh`, after a `git pull` done by hand rather than through
+this in-app updater) produces a fresh image whose freshly-built `dist`/
+`node_modules` then sit unused behind the volumes' OLD content — the container
+comes back up looking unchanged. `Start-Codeman.sh` detects this by comparing the
+checkout's current HEAD and `package-lock.json` hash against `docker-build-source.json`,
+and clears just the affected volume(s) before its own `--build` if they moved.
+This in-place update writes that same file after a successful build precisely so
+that comparison does not fire on stale information: without it, the next plain
+`Start-Codeman.sh` run would see the HEAD this update just checked out, not
+recognise it as already accounted for, and wipe the volumes this update just
+correctly rebuilt right back to the OLDER image.
 
 ### Why the runtime image carries a build toolchain
 

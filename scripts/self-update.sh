@@ -193,6 +193,29 @@ run_step "installing" "Installing dependencies" npm install --no-fund --no-audit
 # 5) Build (gate the restart on success — never restart into a torn dist/).
 run_step "building" "Building" npm run build || rollback_and_fail "Build failed"
 
+# Docker Compose only: record what HEAD/package-lock.json the freshly-built
+# codeman-dist/codeman-node-modules volumes now reflect. `Start-Codeman.sh`
+# reads this same file (`$appdata_path/.codeman/…`, i.e. this container's own
+# $HOME/.codeman since that path IS the appdata bind mount) to detect source
+# changes an EXTERNAL `docker compose build` made and refresh those volumes —
+# without this, the next plain `Start-Codeman.sh` run would see the HEAD this
+# update just checked out, not recognise it as already accounted for, and wipe
+# the volumes this update just correctly rebuilt right back to the OLDER image.
+if [[ "$SUPERVISOR" == "docker-compose" ]]; then
+  build_source_file="$HOME/.codeman/docker-build-source.json"
+  mkdir -p -- "$HOME/.codeman"
+  build_head=$(git rev-parse HEAD 2>/dev/null || true)
+  build_lockfile_sha=''
+  if command -v sha256sum >/dev/null 2>&1; then
+    build_lockfile_sha=$(sha256sum -- package-lock.json 2>/dev/null | cut -d' ' -f1)
+  elif command -v shasum >/dev/null 2>&1; then
+    build_lockfile_sha=$(shasum -a 256 package-lock.json 2>/dev/null | cut -d' ' -f1)
+  fi
+  printf '{\n  "headCommit": "%s",\n  "lockfileSha256": "%s"\n}\n' \
+    "$build_head" "$build_lockfile_sha" >"$build_source_file.tmp" \
+    && mv -- "$build_source_file.tmp" "$build_source_file"
+fi
+
 # 6) Restart the service so the new code loads. Write the terminal pre-restart
 #    marker FIRST so the freshly-booted server can reconcile it deterministically.
 write_status "restarting" "Restarting Codeman…"
