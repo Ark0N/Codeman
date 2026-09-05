@@ -93,6 +93,15 @@ RUN npm install --global \
 # PGID match the host-owned application-data directory mounted by Compose. The
 # requested GID may not exist in the base image, and a host UID such as 1000 may
 # already belong to the baked `node` account, so handle both cases explicitly.
+#
+# The trailing chown hands the globally-installed CLIs to that same account.
+# They were `npm install --global`-ed above while still root, so
+# /usr/local/lib/node_modules (and the /usr/local/bin symlinks pointing into it)
+# start out root-owned; a session running as the unprivileged runtime user then
+# hits EACCES the moment it tries to self-update one in place (observed via
+# Codex's own `npm install -g @openai/codex`, which renames the old package dir
+# aside before installing the new one — a rename needs write access to the
+# PARENT directory, not just the target, so this must chown the whole tree).
 RUN set -eux; \
     case "${PUID}" in ''|*[!0-9]*) echo "PUID must be numeric" >&2; exit 1;; esac; \
     case "${PGID}" in ''|*[!0-9]*) echo "PGID must be numeric" >&2; exit 1;; esac; \
@@ -120,7 +129,8 @@ RUN set -eux; \
         --home-dir "/home/${CODEMAN_RUNTIME_USER}" \
         --shell /bin/bash \
         "${CODEMAN_RUNTIME_USER}"; \
-    fi
+    fi; \
+    chown -R "${PUID}:${PGID}" /usr/local/lib/node_modules /usr/local/bin
 
 WORKDIR /opt/codeman
 
