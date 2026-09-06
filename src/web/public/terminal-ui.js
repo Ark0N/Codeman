@@ -2193,7 +2193,7 @@ Object.assign(CodemanApp.prototype, {
           if (isLive && this.sessions.has(s.sessionId)) {
             this.selectSession(s.sessionId);
           } else {
-            this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '', s.name, s.mode);
+            this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '', s.name, s.mode, s.resumeId);
           }
         })
     );
@@ -2436,7 +2436,7 @@ Object.assign(CodemanApp.prototype, {
         } else {
           // Resume by the Claude conversation UUID when present (resumed sessions
           // carry theirs separately from their Codeman id).
-          this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '', s.name, s.mode);
+          this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '', s.name, s.mode, s.resumeId);
         }
         this.closeSessionManager?.();
         closeMenu();
@@ -2904,7 +2904,7 @@ Object.assign(CodemanApp.prototype, {
     return `w${startNumber}-${dirName}`;
   },
 
-  async resumeHistorySession(sessionId, workingDir, existingName, mode) {
+  async resumeHistorySession(sessionId, workingDir, existingName, mode, resumeId) {
     // Close the run mode menu if open
     document.getElementById('runModeMenu')?.classList.remove('active');
     // Close folder history modal if open
@@ -2942,19 +2942,27 @@ Object.assign(CodemanApp.prototype, {
         grok: 'grokConfig',
         omp: 'ompConfig',
       }[effectiveMode];
-      // codex/gemini/antigravity have no wired continuation here yet (their
-      // configs use an exact conversation id, not a "continue most recent"
-      // flag, and the row's own `sessionId` is not verified to carry that
-      // id for these three modes) — `continuesSomething` below is what keeps
-      // their row from being retired for a resume that didn't actually
-      // continue anything.
+      // codex names a thread by an id of its own, not by Codeman's session id,
+      // so it continues only when the row carried that id: `resumeId` is set by
+      // the rollout scanner (codex-transcript.ts) and by nothing else, which is
+      // what stops a LIVE codex row — whose sessionId is Codeman's uuid — from
+      // asking codex for a thread that does not exist.
+      //
+      // gemini/antigravity still have no wired continuation here (same reason
+      // codex used to have none: an exact conversation id nothing supplies) —
+      // `continuesSomething` below is what keeps their row from being retired
+      // for a resume that didn't actually continue anything.
+      const codexResumeId = effectiveMode === 'codex' ? resumeId : undefined;
       const modeConfig =
         modeConfigKey
           ? { [modeConfigKey]: { continueSession: true } }
           : effectiveMode === 'deepseek'
             ? { deepSeekConfig: { resumeSession: true } }
-            : {};
-      const continuesSomething = Boolean(modeConfigKey) || effectiveMode === 'deepseek';
+            : codexResumeId
+              ? { codexConfig: { resumeSessionId: codexResumeId } }
+              : {};
+      const continuesSomething =
+        Boolean(modeConfigKey) || effectiveMode === 'deepseek' || Boolean(codexResumeId);
       const createRes = await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2982,11 +2990,16 @@ Object.assign(CodemanApp.prototype, {
       // as a duplicate — click it 3 times, see the same name 3 times. Claude
       // rows are left alone: `sessionId` there is a claudeSessionId, which
       // usually has no live/persisted Codeman session of its own to delete.
-      // Gated on `continuesSomething`: for codex/gemini/antigravity (no
-      // continuation wired above), this is really a FRESH session with no
+      // Gated on `continuesSomething`: for gemini/antigravity, and for a codex
+      // row carrying no `resumeId`, this is really a FRESH session with no
       // relation to the old row's conversation, so retiring it would discard
       // the old conversation with no recovery — worse than the duplicate row
       // this guard exists to prevent for the modes that DO continue.
+      //
+      // A codex row that DOES continue passes this gate, but the DELETE is a
+      // no-op for it: `sessionId` there is codex's thread id and no Codeman
+      // session carries that id. Its duplicate is cleared from the other side
+      // instead, by the alias fold in gatherUnifiedInputs()/Session.
       if (effectiveMode !== 'claude' && continuesSomething && sessionId !== newSessionId) {
         fetch(`/api/sessions/${sessionId}?killMux=true`, { method: 'DELETE' }).catch(() => {});
       }

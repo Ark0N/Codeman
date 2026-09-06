@@ -14,6 +14,94 @@ import {
 } from '../../src/services/unified-session-service.js';
 
 describe('mergeUnifiedSessions', () => {
+  // A codex conversation showing twice is worse than cosmetic: the stale PAST row
+  // still resumes, so clicking it starts a SECOND `codex resume` on a thread
+  // already open in another pane. Both folds below are what prevent that.
+  it('folds a RESUMED codex session into its own rollout row', () => {
+    // Session sets claudeSessionId from codexConfig.resumeSessionId, so the live
+    // row already names the thread the rollout is keyed by.
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-uuid', status: 'idle', mode: 'codex', claudeSessionId: 'codex-thread-id' }],
+      history: [
+        {
+          sessionId: 'codex-thread-id',
+          workingDir: '/w',
+          sizeBytes: 4000,
+          lastModified: '2026-09-02T00:00:00.000Z',
+          mode: 'codex',
+          resumeId: 'codex-thread-id',
+        },
+      ],
+    });
+    expect(merged).toHaveLength(1);
+    expect(merged[0].sessionId).toBe('codeman-uuid');
+    expect([...merged[0].sources].sort()).toEqual(['history', 'live']);
+  });
+
+  it('folds a FRESH codex session once its rollout has been matched by originator', () => {
+    // A fresh pane knows no thread id, so gatherUnifiedInputs() stamps one onto
+    // the live row from session_meta.originator (see codexThreadBySessionId).
+    // This is that stamped row.
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-uuid', status: 'busy', mode: 'codex', claudeSessionId: 'fresh-thread-id' }],
+      persisted: [{ id: 'codeman-uuid', status: 'idle', mode: 'codex', claudeSessionId: 'fresh-thread-id' }],
+      history: [
+        {
+          sessionId: 'fresh-thread-id',
+          workingDir: '/w',
+          sizeBytes: 900,
+          lastModified: '2026-09-02T00:00:00.000Z',
+          mode: 'codex',
+          resumeId: 'fresh-thread-id',
+        },
+      ],
+    });
+    expect(merged).toHaveLength(1);
+    expect(merged[0].sessionId).toBe('codeman-uuid');
+    expect(merged[0].status).toBe('busy');
+  });
+
+  it('leaves an unrelated codex rollout as its own row', () => {
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-uuid', status: 'idle', mode: 'codex', claudeSessionId: 'thread-one' }],
+      history: [
+        {
+          sessionId: 'thread-two',
+          workingDir: '/w',
+          sizeBytes: 4000,
+          lastModified: '2026-09-02T00:00:00.000Z',
+          mode: 'codex',
+          resumeId: 'thread-two',
+        },
+      ],
+    });
+    expect(merged.map((m) => m.sessionId).sort()).toEqual(['codeman-uuid', 'thread-two']);
+  });
+
+  it("carries a transcript row's own resume token, and stamps none on a live row", () => {
+    // codex names a thread by an id in its rollout, not by Codeman's session id.
+    // The scanner sets `resumeId`; a live session never does, which is what stops
+    // a resume from asking codex for a thread whose id is really Codeman's uuid.
+    const merged = mergeUnifiedSessions({
+      live: [{ id: 'codeman-uuid', status: 'idle', mode: 'codex' }],
+      history: [
+        {
+          sessionId: 'codex-thread-id',
+          workingDir: '/w',
+          sizeBytes: 4000,
+          lastModified: '2026-09-02T00:00:00.000Z',
+          mode: 'codex',
+          resumeId: 'codex-thread-id',
+        },
+      ],
+    });
+    const fromTranscript = merged.find((m) => m.sessionId === 'codex-thread-id');
+    const fromLive = merged.find((m) => m.sessionId === 'codeman-uuid');
+    expect(fromTranscript?.resumeId).toBe('codex-thread-id');
+    expect(fromTranscript?.mode).toBe('codex');
+    expect(fromLive?.resumeId).toBeUndefined();
+  });
+
   it('dedupes the same sessionId across live + persisted into one item', () => {
     const merged = mergeUnifiedSessions({
       live: [{ id: 's1', status: 'working', isWorking: true }],

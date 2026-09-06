@@ -397,11 +397,13 @@ describe('Session Manager unified list', () => {
     expect(app.selectSession).toHaveBeenCalledWith('sess-alpha');
     expect(app.resumeHistorySession).not.toHaveBeenCalled();
 
-    // History row → resume by conversation UUID.
+    // History row → resume by conversation UUID. The trailing `resumeId` is the
+    // CLI's own thread token, which only a non-claude transcript scanner sets;
+    // a Claude row carries none, so it arrives undefined here.
     const [historyRecord, , historyOptions] = app._buildHistoryItem.mock.calls[1];
     expect(historyRecord).toMatchObject({ sessionId: 'conv-uuid-1', sizeBytes: 2048, firstPrompt: 'old prompt' });
     historyOptions.onActivate();
-    expect(app.resumeHistorySession).toHaveBeenCalledWith('conv-uuid-1', '/repo/old', undefined, undefined);
+    expect(app.resumeHistorySession).toHaveBeenCalledWith('conv-uuid-1', '/repo/old', undefined, undefined, undefined);
   });
 
   it('surfaces an error message instead of an empty list when the endpoint fails', async () => {

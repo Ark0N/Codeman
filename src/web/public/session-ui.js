@@ -804,7 +804,7 @@ Object.assign(CodemanApp.prototype, {
         btn.append(...parts);
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
-          this.resumeHistorySession(s.sessionId, s.workingDir, s.name, s.mode);
+          this.resumeHistorySession(s.sessionId, s.workingDir, s.name, s.mode, s.resumeId);
         });
         container.appendChild(btn);
       }

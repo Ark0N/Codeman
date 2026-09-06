@@ -2,12 +2,16 @@
  * @fileoverview Pure merge/filter logic for the unified session list (COD-121).
  *
  * Combines four read-only views of a session — live (in-memory `Session`),
- * persisted (`state.json`), transcript history (`~/.claude/projects`), and the
- * lifecycle audit log — plus mux process stats, into one de-duplicated list
- * keyed by sessionId. Transcript-history rows are keyed by the Claude
- * conversation UUID (the `.jsonl` filename stem), which diverges from the
- * Codeman id for resumed sessions — an alias map (claudeSessionId → Codeman id,
- * built from the live/persisted views) folds them into the owning session item.
+ * persisted (`state.json`), transcript history, and the lifecycle audit log —
+ * plus mux process stats, into one de-duplicated list keyed by sessionId.
+ *
+ * Transcript history is not one source but three, because the CLIs keep their
+ * conversations in their own stores: Claude's `~/.claude/projects`, omp's
+ * `~/.omp/agent/sessions` and codex's `~/.codex/sessions`. Each row is keyed by
+ * whatever id that CLI names the conversation with, which diverges from the
+ * Codeman id for a resumed session and for every non-Claude one — an alias map
+ * (claudeSessionId → Codeman id, built from the live/persisted views) folds them
+ * into the owning session item.
  * Higher-precedence sources overwrite scalar fields when present
  * (history < lifecycle < persisted < live), while the `sources` array
  * always accumulates every contributing view. A "meaningfulness floor" drops
@@ -39,6 +43,11 @@ export type UnifiedSessionItem = {
   /** Main repo root a worktree belongs to (#266). */
   worktreeRepo?: string;
   remote?: boolean;
+  /**
+   * Token this row's CLI resumes by, when that is not `sessionId`. Set only from
+   * a transcript scanner — see the field of the same name on `HistoryInput`.
+   */
+  resumeId?: string;
   /** Pinned to the top of the session manager list (COD-139). */
   pinned?: boolean;
   /** When the session was pinned (epoch ms) — orders the pinned group desc. */
@@ -100,12 +109,21 @@ export type HistoryInput = {
   worktreeName?: string;
   worktreeRepo?: string;
   /**
-   * Set only by a non-claude transcript source (currently omp); the Claude
-   * scanner never stamps this; the meaningfulness floor below still counts a
-   * row with a `mode` as real, since that also signals "not claude" — see
-   * where it's read below for the isReal check this touches.
+   * Set only by a non-claude transcript source (currently omp and codex); the
+   * Claude scanner never stamps this; the meaningfulness floor below still
+   * counts a row with a `mode` as real, since that also signals "not claude" —
+   * see where it's read below for the isReal check this touches.
    */
   mode?: string;
+  /**
+   * The token this CLI's own resume command expects, when it is NOT the row's
+   * `sessionId`. Codex names a thread by an id of its own that lives in the
+   * rollout, and a live codex session's `sessionId` is Codeman's uuid instead —
+   * so a resume that reused `sessionId` would ask codex for a thread that does
+   * not exist. Only a transcript scanner sets this, which is what keeps the two
+   * kinds of row apart.
+   */
+  resumeId?: string;
 };
 
 /** Mux process-stat view. */
@@ -186,6 +204,7 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     // transcript source (currently only omp) does, so a history-only row
     // still gets a mode badge instead of reading as claude by default.
     overwrite(item, 'mode', h.mode);
+    overwrite(item, 'resumeId', h.resumeId);
     const ms = Date.parse(h.lastModified);
     if (!Number.isNaN(ms) && item.lastActivityAt === undefined) item.lastActivityAt = ms;
   }

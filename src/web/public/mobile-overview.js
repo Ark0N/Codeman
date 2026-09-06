@@ -389,7 +389,13 @@ Object.assign(CodemanApp.prototype, {
   async resumeMobileOverviewSession(sessionId) {
     const row = (this._mobileOverviewPastRows || []).find((r) => r.id === sessionId);
     if (!row || !row.workingDir) return;
-    await this.resumeHistorySession(row.claudeSessionId || row.id, row.workingDir, row.name || undefined, row.mode);
+    await this.resumeHistorySession(
+      row.claudeSessionId || row.id,
+      row.workingDir,
+      row.name || undefined,
+      row.mode,
+      row.resumeId
+    );
   },
 
   // ═══════════════════════════════════════════════════════════════

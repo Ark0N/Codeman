@@ -90,7 +90,7 @@ describe('resumeHistorySession: row retirement is gated on actual continuation',
     fetchMock = stubFetch('new-session-id');
   });
 
-  it.each(['codex', 'gemini', 'antigravity'])(
+  it.each(['gemini', 'antigravity'])(
     'does NOT retire the old row for %s (no continuation is wired for it)',
     async (mode) => {
       const app = makeApp();
@@ -103,6 +103,44 @@ describe('resumeHistorySession: row retirement is gated on actual continuation',
       expect(deleteCalls(fetchMock)).toEqual([]);
     }
   );
+
+  // codex continues only when the row carried its thread id. A row without one
+  // is a live session's row, whose sessionId is Codeman's own uuid — sending
+  // THAT to `codex resume` asks for a thread that does not exist, so it must
+  // stay a fresh session and must not retire the row it came from.
+  it('does NOT continue or retire a codex row that carries no resumeId', async () => {
+    const app = makeApp();
+    await app.resumeHistorySession.call(app, 'codeman-uuid', '/repo', 'w1-repo', 'codex');
+
+    expect(createBody(fetchMock)).toMatchObject({ mode: 'codex' });
+    expect(createBody(fetchMock).codexConfig).toBeUndefined();
+    expect(deleteCalls(fetchMock)).toEqual([]);
+  });
+
+  it('resumes a codex row by the thread id the row carried', async () => {
+    const app = makeApp();
+    await app.resumeHistorySession.call(
+      app,
+      '01a060f0-0361-7f91-abde-b283020db0d7',
+      '/repo',
+      'w1-repo',
+      'codex',
+      '01a060f0-0361-7f91-abde-b283020db0d7'
+    );
+
+    expect(createBody(fetchMock)).toMatchObject({
+      mode: 'codex',
+      codexConfig: { resumeSessionId: '01a060f0-0361-7f91-abde-b283020db0d7' },
+    });
+  });
+
+  it('ignores a resumeId on a row that is not codex', async () => {
+    const app = makeApp();
+    await app.resumeHistorySession.call(app, 'old-id', '/repo', 'w1-repo', 'gemini', 'some-thread-id');
+
+    expect(createBody(fetchMock).codexConfig).toBeUndefined();
+    expect(deleteCalls(fetchMock)).toEqual([]);
+  });
 
   it.each([
     ['opencode', 'openCodeConfig'],
