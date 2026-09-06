@@ -66,6 +66,14 @@ reloading while a permission prompt is blocking does not lose the red tab.
 
 Tabs can also be dragged to reorder.
 
+### Automatic session names
+
+New sessions start with a short project/sequence name so they can be created immediately.
+After the first task prompt is submitted, Codeman replaces that placeholder with a short
+title derived locally from the prompt's first sentence. Slash commands such as `/clear` do
+not become titles. A name you set with the inline rename action is treated as manual and is
+never overwritten by automatic naming.
+
 On phones the strip scrolls horizontally instead of wrapping, and the active tab is always
 scrolled into view. It is not reordered to the front, so the `Alt+N` numbering stays stable.
 

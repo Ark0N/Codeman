@@ -1620,6 +1620,7 @@ export class WebServer extends EventEmitter {
       getStore: () => this.store,
       registerAttachment: (id: string, filePath: string, source: 'external' | 'codex-generated') =>
         this.registerAttachment(id, filePath, source),
+      updateSessionName: (id: string, name: string) => this.mux.updateSessionName(id, name),
     };
   }
 
@@ -2768,6 +2769,7 @@ export class WebServer extends EventEmitter {
               workingDir: muxSession.workingDir,
               mode: muxSession.mode,
               name: sessionName,
+              nameSource: savedState?.nameSource,
               // When the session FIRST started, not when this server booted.
               // Without it every recovered session was restamped `Date.now()` on
               // each restart, so a week-old pane read as "created 2m ago" on the
