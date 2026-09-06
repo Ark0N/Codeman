@@ -22,7 +22,7 @@ Every required value is defined and explained in `.env.example`. `GEMINI_API_KEY
 
 On Linux, `Start-Codeman.sh` stops with an error when required paths are missing. It creates the application-data directory when safe, detects its numeric owner as `PUID:PGID`, and detects `DOCKER_SOCKET_GID` from the configured Docker socket. It rejects a root-owned application-data directory because Codeman and its local CLI sessions must remain unprivileged.
 
-Codeman, Claude, OpenCode, and other local sessions run as the unprivileged account named by `CODEMAN_RUNTIME_USER`, which defaults to `opencode`. When Compose is run directly, `PUID` and `PGID` default to `1000:1000`; set them in `.env` when the application-data directory has a different owner. The Bash start script determines them automatically instead.
+Codeman, Claude, OpenCode, and other local sessions run as the unprivileged account named by `CODEMAN_RUNTIME_USER`, which defaults to `codeman`. When Compose is run directly, `PUID` and `PGID` default to `1000:1000`; set them in `.env` when the application-data directory has a different owner. The Bash start script determines them automatically instead.
 
 To retain Docker-case support without root when running Compose directly, set `DOCKER_SOCKET_GID` to the numeric group ID of the host socket. On a standard Linux Docker host, obtain it with `stat -c '%g' /var/run/docker.sock`. The Bash start script detects it automatically.
 
@@ -38,6 +38,50 @@ Releases that change `server.Dockerfile`, `docker-compose.yaml`, or add a key to
 changed, and asks you to run `Start-Codeman.sh` here on the host instead. Details:
 [`../docs/docker-self-update.md`](../docs/docker-self-update.md).
 
+## Local customisation
+
+Compose merges `docker-compose.override.yml` on top of `docker-compose.yaml`. Keep host-specific changes there rather than editing `docker-compose.yaml`, so this repository can be updated without losing them. Both `docker-compose.override.yml` and `docker-compose.override.yaml` are ignored by Git.
+
+`Start-Codeman.sh` names the Compose file explicitly, which disables Compose's automatic discovery of the override file, so the script adds it back when one is present and prints the file it used. Running `docker compose` from this folder without any `-f` option finds it automatically. When passing `-f docker/docker-compose.yaml` from the repository root, add `-f docker/docker-compose.override.yml` as well, or the override is silently ignored.
+
+An override file adds to and replaces individual settings. It cannot delete a key from `docker-compose.yaml`, and Compose concatenates rather than replaces `ports`, so removing a published port still requires editing `docker-compose.yaml`. The example below replaces the restart policy and adds a mount, leaving every other setting in place:
+
+```yaml
+services:
+  codeman:
+    restart: always
+    volumes:
+      - /srv/projects:/srv/projects
+```
+
+### Reverse-proxy host allowlist
+
+Codeman rejects any request whose `Host` header is not on its own allowlist - a
+DNS-rebinding guard, not a Compose or Docker concern. Loopback, any IP literal,
+the configured `--host`, and a few tunnel-provider suffixes are allowed by
+default; a reverse-proxied domain is not, and is rejected with
+`403 Forbidden: host not allowed` before the request reaches any handler.
+
+Add the domain with `CODEMAN_ALLOWED_HOSTS` in `.env`:
+
+```sh
+CODEMAN_ALLOWED_HOSTS='codeman.example.com,.internal.example.com'
+```
+
+`docker-compose.yaml` does not forward this variable into the container - it
+only passes through the environment keys it explicitly lists, and this is not
+one of them. Forward it yourself in `docker-compose.override.yml`:
+
+```yaml
+services:
+  codeman:
+    environment:
+      CODEMAN_ALLOWED_HOSTS: ${CODEMAN_ALLOWED_HOSTS}
+```
+
+See the application's own `docs/wiki/Remote-Access.md` for the full allowlist
+format and the tunnel providers it accepts by default.
+
 ## Application data storage
 
 The default configuration uses a host-folder bind mount:
@@ -49,7 +93,7 @@ volumes:
     target: /home/${CODEMAN_RUNTIME_USER}
 ```
 
-Set `CODEMAN_APPDATA_PATH` in `.env` to a directory that the Docker daemon can access. The example value is `/mnt/user/appdata/Coding/codeman`.
+Set `CODEMAN_APPDATA_PATH` in `.env` to a directory that the Docker daemon can access. The example value is `/mnt/user/appdata/codeman`.
 
 `CODEMAN_CASES_PATH` is the separate host directory for managed case workspaces. It is mounted into Codeman at the same absolute path, allowing the host Docker daemon to bind it into an isolated case container. Set it to a child directory of `CODEMAN_APPDATA_PATH` unless you deliberately store workspaces elsewhere.
 
@@ -60,7 +104,7 @@ Set `CODEMAN_DOCKER_DISABLE_SWAP_LIMIT=1` when `docker info` reports `SwapLimit=
 For an existing installation created by a root-running image, change ownership of the application-data directory before upgrading so the configured `PUID` and `PGID` can read the saved credentials and state:
 
 ```sh
-chown -R 99:100 /mnt/user/appdata/Coding/codeman
+chown -R 99:100 /mnt/user/appdata/codeman
 ```
 
 Replace `99:100` and the path with the values from your `.env` file.
@@ -69,7 +113,7 @@ Do not replace this bind mount with a Docker-managed named volume when Docker ca
 
 ## Static macvlan networking
 
-The default configuration publishes a host port. It does not use `network_mode: host`. To attach Codeman directly to an existing external macvlan network with a static IP address and MAC address, remove the `ports:` section and add the following to the `codeman` service:
+The default configuration publishes a host port. It does not use `network_mode: host`. To attach Codeman directly to an existing external macvlan network with a static IP address and MAC address, remove the `ports:` section from `docker-compose.yaml` and add the following to the `codeman` service. The service and network additions can instead be placed in `docker-compose.override.yml`, but the `ports:` removal cannot, as described under [Local customisation](#local-customisation):
 
 ```yaml
 mac_address: ${CODEMAN_MAC_ADDRESS}
