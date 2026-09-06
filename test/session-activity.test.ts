@@ -1,5 +1,5 @@
 /**
- * Working/idle detection for an interactive Claude pane.
+ * Working/idle detection for an interactive agent pane, Claude's and Codex's.
  *
  * The bug this pins: Claude redraws the composer (`❯`) about once a second all
  * the way through a turn, so the old "saw a ❯, wait 2s, call it idle" rule
@@ -7,11 +7,17 @@
  * worker: `GET /api/sessions` reported `idle` for a session that had been
  * running for 17 minutes and was mid-tool-call.
  *
+ * A second bug this pins: work detection read Claude's glyph and Claude's status line
+ * for every CLI, so a Codex session reported itself idle through an entire turn. Each CLI
+ * now names its own pair in `capabilities.workDetect`, and a CLI that names none reports
+ * work exactly as before.
+ *
  * The status-line fixtures below are verbatim captures from live panes
- * (`tmux -L codeman capture-pane -p`) on Claude Code 2.1.220.
+ * (`tmux -L codeman capture-pane -p`) on Claude Code 2.1.220 and Codex CLI 0.152.1.
  */
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { Session } from '../src/session.js';
+import { getCli } from '../src/config/cli-registry/index.js';
 import { CLAUDE_WORKING_LINE_PATTERN } from '../src/utils/regex-patterns.js';
 import {
   trackActivityStreak,
@@ -38,7 +44,7 @@ function feed(session: Session, data: string): void {
  * A session whose mux reports a fixed (or scripted) screen, so the pane probe has
  * something to read. Only `capturePaneText` is exercised by these paths.
  */
-function withFakePane(screen: string | (() => string)): Session {
+function withFakePane(screen: string | (() => string), mode: 'claude' | 'codex' = 'claude'): Session {
   const read = typeof screen === 'function' ? screen : () => screen;
   const mux = {
     isAvailable: () => true,
@@ -46,11 +52,25 @@ function withFakePane(screen: string | (() => string)): Session {
   } as unknown as NonNullable<Parameters<typeof Session.prototype.constructor>[0]>['mux'];
   return new Session({
     workingDir: '/tmp',
-    mode: 'claude',
+    mode,
     mux,
     muxSession: { muxName: 'codeman-test', sessionId: 'test', createdAt: Date.now() },
   } as ConstructorParameters<typeof Session>[0]);
 }
+
+/**
+ * Codex's pane, verbatim, while a turn runs and once it has finished. Codex draws `›` on
+ * its composer row through the whole turn, exactly as Claude draws `❯`, and prints
+ * `esc to interrupt` only while the turn is live.
+ */
+const CODEX_WORKING =
+  'Working (2m 49s • esc to interrupt)\n› Ask Codex to do anything\n' +
+  '  gpt-5.6-sol high · Context 59% left · ~/innovi/irisplus-ent-2 · main\n';
+const CODEX_FINISHED =
+  '─ Worked for 3m 47s ────────────────────\n› Ask Codex to do anything\n' +
+  '  gpt-5.6-sol high · Context 57% left · ~/innovi/irisplus-ent-2 · main\n';
+/** Codex's own composer repaint, the frame that arms the idle confirmation. */
+const CODEX_COMPOSER_REPAINT = '\x1b[31;1H\x1b[38;5;246m›\xa0\x1b[39m\x1b[0m';
 
 /** A composer repaint: the frame Claude ships roughly once a second while working. */
 const COMPOSER_REPAINT =
@@ -230,11 +250,13 @@ describe('Session interactive idle detection', () => {
     expect(session.status).toBe('idle');
   });
 
-  it('does not mark an external CLI pane working off raw activity', () => {
+  it('does not mark an uncharacterised CLI working off raw activity', () => {
     vi.useFakeTimers();
-    // Codex/Gemini/OpenCode render their own TUIs and have no ❯, so nothing would
-    // arm the idle confirmation, so a session marked working here would never recover.
-    const session = new Session({ workingDir: '/tmp', mode: 'codex' });
+    // Gemini and OpenCode render their own TUIs, and Codeman knows neither one's glyph,
+    // so nothing would arm the idle confirmation and a session marked working here would
+    // never recover. A CLI that names no glyph therefore reports no work at all.
+    expect(getCli('gemini')?.capabilities.workDetect).toBeUndefined();
+    const session = new Session({ workingDir: '/tmp', mode: 'gemini' });
     const events: string[] = [];
     session.on('working', () => events.push('working'));
 
@@ -244,6 +266,50 @@ describe('Session interactive idle detection', () => {
     }
 
     expect(events).toEqual([]);
+  });
+
+  it('marks a Codex pane working, and lets the turn end', () => {
+    vi.useFakeTimers();
+    let screen = CODEX_WORKING;
+    const session = withFakePane(() => screen, 'codex');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    for (let i = 0; i < 3; i++) {
+      feed(session, CODEX_COMPOSER_REPAINT);
+      vi.advanceTimersByTime(1000);
+    }
+    vi.advanceTimersByTime(20_000);
+
+    // The old code reported this session idle for the whole turn.
+    expect(events).toEqual(['working']);
+    expect(session.status).toBe('busy');
+
+    // Turn over: the working footer gives way to the finished line, which must NOT
+    // read as work — it sits on screen for the whole idle period afterwards.
+    screen = CODEX_FINISHED;
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['working', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+});
+
+describe("codex's work-detection descriptor", () => {
+  const codex = getCli('codex')?.capabilities.workDetect;
+
+  it('matches the footer Codex prints while a turn runs', () => {
+    expect(new RegExp(codex!.workingLine).test(CODEX_WORKING)).toBe(true);
+  });
+
+  it('does not match the finished line, nor the idle footer', () => {
+    expect(new RegExp(codex!.workingLine).test(CODEX_FINISHED)).toBe(false);
+  });
+
+  it('names the glyph Codex actually draws on its composer row', () => {
+    expect(CODEX_COMPOSER_REPAINT).toContain(codex!.promptGlyph);
+    expect(CODEX_WORKING).toContain(codex!.promptGlyph);
   });
 });
 

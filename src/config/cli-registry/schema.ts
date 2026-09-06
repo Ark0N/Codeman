@@ -274,6 +274,26 @@ const capabilitiesSchema = z
     effort: z.boolean(),
     agentSkillInjection: z.boolean(),
     statusLineTelemetry: z.boolean(),
+    workDetect: z
+      .object({
+        promptGlyph: z.string().min(1).max(8),
+        // Compiled per session, so a broken pattern must fail at LOAD time rather than
+        // throw inside the PTY data handler.
+        workingLine: z
+          .string()
+          .min(1)
+          .max(400)
+          .refine((src) => {
+            try {
+              new RegExp(src);
+              return true;
+            } catch {
+              return false;
+            }
+          }, 'workingLine must be a valid regular expression'),
+      })
+      .strict()
+      .optional(),
     model: z
       .object({ source: z.enum(['flag', 'claude-settings-file', 'none']), param: z.string().optional() })
       .strict(),

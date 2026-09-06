@@ -465,6 +465,8 @@ export class Session extends EventEmitter {
   private _activityStreak: ActivityStreak | null = null; // Unbroken run of PTY repaints (working detection)
   private _lastPaneProbeAt = 0; // Throttle for the tmux screen probe
   private _lastPaneProbeWorking: boolean | null = null; // Its last verdict (null = could not read)
+  /** Lazily compiled `capabilities.workDetect.workingLine`. See _workingLinePattern(). */
+  private _workingLineRe: RegExp | undefined = undefined;
   private _trustDialogAccepted: boolean = false; // Stops the trust-dialog scan (answered, or given up)
   private _trustDialogAttempts = 0; // Keystrokes sent at the trust dialog
   private _lastTrustDialogScanAt = 0; // Throttle for the trust-dialog screen read
@@ -2298,12 +2300,14 @@ export class Session extends EventEmitter {
    * @param data raw PTY chunk, ANSI included
    */
   private _detectInteractiveActivity(data: string): void {
-    // The prompt line contains "❯" when Claude is waiting for input. It only ARMS
-    // the check and is NOT evidence the turn ended: Claude redraws the composer
-    // about once a second all the way through a turn, which is exactly how a
-    // working session used to flip to idle two seconds in. _confirmIdle() waits
-    // for the pane to actually go quiet before believing it.
-    if (data.includes('❯')) {
+    const workDetect = getCli(this.mode)?.capabilities.workDetect;
+    // The composer row carries this glyph when the CLI is waiting for input. It only
+    // ARMS the check and is NOT evidence the turn ended: a CLI redraws its composer
+    // about once a second all the way through a turn, which is exactly how a working
+    // session used to flip to idle two seconds in. _confirmIdle() waits for the pane to
+    // actually go quiet before believing it. A CLI that declares no glyph keeps Claude's,
+    // which is the glyph every such session has been armed by until now.
+    if (data.includes(workDetect?.promptGlyph ?? '❯')) {
       // Only start a new timeout if we're not already awaiting idle confirmation.
       // This prevents status bar redraws (which include the prompt) from resetting it.
       if (!this._awaitingIdleConfirmation) {
@@ -2322,9 +2326,10 @@ export class Session extends EventEmitter {
     // new status line does not rescue it either (tmux repaints partially, so the
     // complete line reaches the PTY only every few tens of seconds). An unbroken run
     // of repaints is the signal that survives. See session-activity.ts for the
-    // measurement. Claude only: an external CLI's TUI has no ❯, so nothing would
-    // ever arm the idle confirmation and such a session would latch busy forever.
-    if (!isExternalCliMode(this.mode)) {
+    // measurement. This needs a pane Codeman can read: without a glyph to arm the idle
+    // confirmation, a session latches busy forever. A CLI that declares work detection
+    // supplies its own glyph, and the non-external modes keep the run they always had.
+    if (workDetect || !isExternalCliMode(this.mode)) {
       this._activityStreak = trackActivityStreak(this._activityStreak, Date.now());
       // A streak is the TRIGGER to look, not the verdict: typing into the composer
       // also produces a steady stream of repaints. The screen settles it, and only
@@ -2359,8 +2364,30 @@ export class Session extends EventEmitter {
     if (now - this._lastPaneProbeAt < PANE_PROBE_MIN_INTERVAL_MS) return this._lastPaneProbeWorking;
     this._lastPaneProbeAt = now;
     const text = this._mux.capturePaneText?.(this._muxSession.muxName) ?? null;
-    this._lastPaneProbeWorking = text === null ? null : CLAUDE_WORKING_LINE_PATTERN.test(text);
+    this._lastPaneProbeWorking = text === null ? null : this._workingLinePattern().test(text);
     return this._lastPaneProbeWorking;
+  }
+
+  /**
+   * The regex matching this CLI's "a turn is running" status line.
+   *
+   * Compiled once per session and cached: `_probePaneWorking` runs it against a whole
+   * pane capture on a timer, and the throttled text detector runs it against every
+   * accumulated chunk. A CLI that declares no pattern falls back to Claude's, which is
+   * the pattern every session used before the registry carried one.
+   */
+  private _workingLinePattern(): RegExp {
+    if (this._workingLineRe === undefined) {
+      const src = getCli(this.mode)?.capabilities.workDetect?.workingLine;
+      // The schema validates `workingLine` at load time, so a throw here would mean a
+      // registry that never loaded. Falling back beats taking the session down.
+      try {
+        this._workingLineRe = src ? new RegExp(src) : CLAUDE_WORKING_LINE_PATTERN;
+      } catch {
+        this._workingLineRe = CLAUDE_WORKING_LINE_PATTERN;
+      }
+    }
+    return this._workingLineRe;
   }
 
   /**
@@ -2451,10 +2478,6 @@ export class Session extends EventEmitter {
    * PTY data chunk. Receives accumulated raw data to process in one batch.
    */
   private _processExpensiveParsers(rawData: string): void {
-    // Skip Claude-specific parsers for external CLI sessions (Ralph tracker,
-    // BashToolParser, token + CLI-info parsing all depend on Claude's output format).
-    if (isExternalCliMode(this.mode)) return;
-
     // Lazy ANSI strip: only compute cleanData when a consumer actually needs it.
     let _cleanData: string | null = null;
     const getCleanData = (): string => {
@@ -2463,6 +2486,19 @@ export class Session extends EventEmitter {
       }
       return _cleanData;
     };
+
+    // Work detection by status line, ahead of the external-CLI gate below. The pattern
+    // comes from the CLI's own registry entry, so this is the one parser here that is not
+    // Claude-specific — and it sat under that gate, which is why an external CLI reported
+    // itself idle through an entire turn. Guarded on the descriptor so a CLI without one
+    // still skips the ANSI strip the gate used to save it.
+    if (!this._isWorking && getCli(this.mode)?.capabilities.workDetect) {
+      if (this._workingLinePattern().test(getCleanData())) this._markWorking();
+    }
+
+    // Skip Claude-specific parsers for external CLI sessions (Ralph tracker,
+    // BashToolParser, token + CLI-info parsing all depend on Claude's output format).
+    if (isExternalCliMode(this.mode)) return;
 
     // Forward to Ralph tracker to detect Ralph loops and todos
     // (opencode sessions already returned early at line 1209)
@@ -2495,16 +2531,13 @@ export class Session extends EventEmitter {
       this.parseTaskDescriptionsFromTerminalData(getCleanData());
     }
 
-    // Work detection (text-based, needs clean data: the status line is coloured,
-    // so raw data has escape sequences between the `…` and the elapsed timer).
-    // Only check if a faster path didn't already trigger working state.
+    // Legacy gerunds, Claude-only. The status-line pattern above already ran for every
+    // CLI that declares one, so this adds only the older wording. Current Claude
+    // randomizes the word ("Actualizing…", "Finagling…"), so these catch a fraction of
+    // turns; the pattern above and the activity streak carry the rest.
     if (!this._isWorking) {
       const cleanData = getCleanData();
       if (
-        CLAUDE_WORKING_LINE_PATTERN.test(cleanData) ||
-        // Legacy gerunds. Current Claude randomizes the word ("Actualizing…",
-        // "Finagling…"), so these catch only a fraction of turns; the pattern
-        // above and the activity streak carry the rest.
         cleanData.includes('Thinking') ||
         cleanData.includes('Writing') ||
         cleanData.includes('Reading') ||

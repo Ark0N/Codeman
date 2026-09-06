@@ -306,6 +306,29 @@ export interface CliCapabilities {
    * independent — see this interface's own doc comment.
    */
   external: boolean;
+  /**
+   * How to read this CLI's own TUI for whether it is mid-turn.
+   *
+   * Codeman infers a working agent from the pane, so the two strings it needs are the
+   * ones that differ per CLI: the glyph on the composer row, and the status line the CLI
+   * draws while a turn runs. Holding them here is what lets a non-Claude CLI report work
+   * at all — `external` used to gate the whole detector, so every external CLI reported
+   * itself permanently idle even mid-turn.
+   *
+   * `promptGlyph` only ARMS the idle confirmation and is never on its own evidence that a
+   * turn ended, because a CLI redraws its composer throughout a turn. `workingLine` is
+   * the evidence, and `_confirmIdle` consults it before believing the pane went quiet.
+   *
+   * An entry that omits this field keeps Codeman's historical behaviour: the Claude glyph
+   * arms the confirmation and the Claude working line answers it. Leave it out for a CLI
+   * whose TUI nobody has characterised, and its sessions report work exactly as before.
+   */
+  workDetect?: {
+    /** The glyph this CLI draws on its composer row, e.g. Claude's `❯`, Codex's `›`. */
+    promptGlyph: string;
+    /** Source of a regex matching the status line this CLI draws while a turn runs. */
+    workingLine: string;
+  };
   /** No direct-PTY fallback: the CLI must run inside tmux (secrets ride tmux setenv). */
   requiresMux: boolean;
   /**
