@@ -1,5 +1,6 @@
 #!/bin/sh
-# Corrects the ownership of the host bind mounts, then drops to PUID:PGID.
+# Corrects ownership - host bind mounts, and the image-baked CLI prefix -
+# then drops to PUID:PGID.
 #
 # Compose binds CODEMAN_APPDATA_PATH and CODEMAN_CASES_PATH from the host. When
 # either path does not exist yet - a first run, a cleared application-data
@@ -10,7 +11,10 @@
 #   Failed to start web server: EACCES: permission denied, mkdir '/home/<user>/.codeman'
 #
 # Running this as root and dropping afterwards removes that failure mode without
-# leaving the server privileged.
+# leaving the server privileged. The same root start also lets it re-assert
+# /opt/codeman-cli's ownership on every start, not just at image build time -
+# see the comment at that chown below for why that matters for anyone who
+# runs the compose file directly rather than through Start-Codeman.sh.
 
 set -eu
 
@@ -57,6 +61,26 @@ for target in "${HOME:-}" "${CODEMAN_CASES_PATH:-}"; do
     printf 'entrypoint: warning: continuing; set the ownership on the host if startup fails\n' >&2
   fi
 done
+
+# /opt/codeman-cli (the four agent CLIs) is chowned to PUID:PGID once, at
+# image BUILD time, from the PUID/PGID build args - server.Dockerfile's own
+# comment on that RUN step explains why it lives in its own prefix rather than
+# /usr/local. Unlike HOME/CODEMAN_CASES_PATH above, that bake happens only
+# when the image is actually rebuilt (`docker compose up --build`, which
+# Start-Codeman.sh always does) - a deployment that instead runs the compose
+# file directly (Unraid's Compose Manager, a native Debian systemd unit, any
+# `docker compose up`/`restart` with no --build) can change PUID/PGID in .env
+# and restart without ever rebuilding, at which point the container runs as
+# the NEW uid while the CLI directory is still owned by the OLD one baked into
+# the image layer - silently breaking the very "self-update a CLI in place"
+# fix this directory exists for. Re-assert it here, every start, unconditionally:
+# unlike the host bind mounts above, this is pure image content Codeman itself
+# populated, never host data that might legitimately belong to someone else,
+# so there is no ownership to be careful about - it is always correct for it
+# to be owned by whoever this container is about to run as.
+if [ -d /opt/codeman-cli ] && [ "$(stat -c '%u:%g' /opt/codeman-cli)" != "${PUID}:${PGID}" ]; then
+  chown -R "${PUID}:${PGID}" /opt/codeman-cli
+fi
 
 # Preserve the supplementary groups Compose granted through group_add - that is
 # how the Docker socket stays reachable - while discarding root's own group.
