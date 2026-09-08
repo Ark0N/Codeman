@@ -15,7 +15,7 @@ The application container mounts the Docker daemon socket so Codeman can create 
 
 ## Start
 
-Copy the environment template, set a strong password, and confirm `CODEMAN_APPDATA_PATH`. The example maps `/mnt/user/appdata/Coding/codeman` on the host to `/home/${CODEMAN_RUNTIME_USER}` in the container, preserving Codeman state and CLI credentials outside Docker-managed volumes.
+Copy the environment template, set a strong password, and confirm `CODEMAN_APPDATA_PATH`. The example maps `/mnt/user/appdata/codeman` on the host to `/home/${CODEMAN_RUNTIME_USER}` in the container, preserving Codeman state and CLI credentials outside Docker-managed volumes.
 
 ```sh
 cp docker/.env.example docker/.env

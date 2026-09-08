@@ -15,11 +15,16 @@ fi
 # Naming a Compose file explicitly disables Compose's automatic discovery of
 # the override file, so it has to be added back by hand. Without this, local
 # customisation in docker-compose.override.yml is silently ignored. The
-# candidates are checked in Compose's own precedence order.
+# candidates are checked in Compose's own precedence order - measured on
+# Compose v5.5.0 with both present: it uses `.yml` and ignores `.yaml`.
+override_yml="$script_dir/docker-compose.override.yml"
+override_yaml="$script_dir/docker-compose.override.yaml"
+if [[ -f "$override_yml" && -f "$override_yaml" ]]; then
+  printf 'Warning: both %s and %s exist; Compose uses .yml and ignores .yaml.\n' \
+    "$override_yml" "$override_yaml" >&2
+fi
 compose_files=(-f "$compose_file")
-for override_file in \
-  "$script_dir/docker-compose.override.yaml" \
-  "$script_dir/docker-compose.override.yml"; do
+for override_file in "$override_yml" "$override_yaml"; do
   if [[ -f "$override_file" ]]; then
     compose_files+=(-f "$override_file")
     printf 'Using Compose override file: %s\n' "$override_file"
@@ -30,6 +35,10 @@ compose_command=(docker compose --env-file "$env_file" "${compose_files[@]}")
 appdata_path=$(
   "${compose_command[@]}" config --environment |
     awk -F= '$1 == "CODEMAN_APPDATA_PATH" { sub(/^[^=]*=/, ""); print; exit }'
+)
+cases_path=$(
+  "${compose_command[@]}" config --environment |
+    awk -F= '$1 == "CODEMAN_CASES_PATH" { sub(/^[^=]*=/, ""); print; exit }'
 )
 docker_socket=$(
   "${compose_command[@]}" config --environment |
@@ -48,6 +57,26 @@ if [[ ! -d "$appdata_path" ]]; then
     exit 1
   fi
   mkdir -p -- "$appdata_path"
+fi
+
+if [[ -z "$cases_path" ]]; then
+  printf 'Error: CODEMAN_CASES_PATH is not set in %s\n' "$env_file" >&2
+  exit 1
+fi
+
+# Pre-creating this here, exactly like CODEMAN_APPDATA_PATH above, means Compose
+# never has to materialise a missing bind source itself - which it does as
+# root:root - so the in-container entrypoint's chown never has to run for this
+# path at all. Unlike appdata, an EXISTING cases directory is left exactly as
+# it is: the README explicitly allows pointing this at a normal projects
+# directory the host account already owns, so no ownership check happens here.
+if [[ ! -d "$cases_path" ]]; then
+  if [[ "$EUID" == '0' ]]; then
+    printf 'Error: Refusing to create CODEMAN_CASES_PATH as root: %s\n' "$cases_path" >&2
+    printf 'Create it as the unprivileged account that should run Codeman, then retry.\n' >&2
+    exit 1
+  fi
+  mkdir -p -- "$cases_path"
 fi
 
 if owner_ids=$(stat -c '%u:%g' -- "$appdata_path" 2>/dev/null); then
@@ -109,6 +138,11 @@ fi
 # Reads HEAD without requiring a `git` binary on the host — this script
 # otherwise checks the checkout only by testing for `.git` as a directory, and
 # resolving refs by hand keeps that the same "no host git needed" guarantee.
+# ⚠️ A worktree checkout has `.git` as a FILE (`gitdir: <path>`), not a
+# directory, so this returns nothing there and the volume-refresh check below
+# silently no-ops — consistent with the `-d .git` test used everywhere else in
+# this script, not a special case, but worth knowing if a worktree checkout
+# stops picking up a stale-volume refresh it should have caught.
 git_head_commit() {
   local git_dir="$1/.git" head_ref ref_path
   [[ -d "$git_dir" ]] || return 1
@@ -192,8 +226,23 @@ if [[ -n "$dockerfile_sha" ]]; then
     # no-op, so there is no fresh-install case this needs to avoid.
     printf 'Source changed since the last start; refreshing: %s\n' "${volumes_to_refresh[*]}"
     "${compose_command[@]}" down
+    # `com.docker.compose.volume` is the volume KEY, not a project-qualified
+    # name - a second stack on the same host (a beta instance started with a
+    # different COMPOSE_PROJECT_NAME, say) that also declares a volume keyed
+    # `codeman-dist` shares that label, and `head -n1` would pick whichever
+    # the daemon happens to list first. Scope the lookup to THIS stack's own
+    # resolved project name so it can only ever match this stack's volume.
+    project_name=$(
+      "${compose_command[@]}" config --format json 2>/dev/null |
+        sed -n 's/^  "name": "\(.*\)",\{0,1\}$/\1/p' | head -n1
+    )
     for key in "${volumes_to_refresh[@]}"; do
-      volume_name=$(docker volume ls -q --filter "label=com.docker.compose.volume=$key" | head -n1)
+      volume_name=$(
+        docker volume ls -q \
+          --filter "label=com.docker.compose.volume=$key" \
+          --filter "label=com.docker.compose.project=$project_name" |
+          head -n1
+      )
       [[ -n "$volume_name" ]] && docker volume rm -- "$volume_name"
     done
   fi

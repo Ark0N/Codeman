@@ -25,12 +25,30 @@ fi
 
 for target in "${HOME:-}" "${CODEMAN_CASES_PATH:-}"; do
   [ -n "$target" ] && [ -d "$target" ] || continue
-  [ "$(stat -c '%u:%g' "$target")" = "${PUID}:${PGID}" ] && continue
+  owner=$(stat -c '%u:%g' "$target")
+  [ "$owner" = "${PUID}:${PGID}" ] && continue
 
-  # Deliberately not fatal. A bind mount backed by NFS, CIFS or a rootless
-  # daemon can refuse chown while still being perfectly writable, and those
-  # deployments must keep working. A warning is more useful than a container
-  # that will not start.
+  # Only ever correct a directory the DAEMON created (root-owned, because
+  # neither PUID nor PGID existed yet when it materialised the missing bind
+  # source). Anything else - a host tree that legitimately belongs to some
+  # OTHER account, such as an existing CODEMAN_CASES_PATH the README already
+  # allows pointing at a normal project directory - is not this container's
+  # to reassign; recursively chowning it on every mismatch silently rewrote
+  # a credentials tree or a projects directory to PUID:PGID with one log
+  # line to explain it. Refuse instead, the same way Start-Codeman.sh already
+  # refuses to touch a root-owned appdata directory it did not expect.
+  if [ "${owner%%:*}" != '0' ]; then
+    printf 'entrypoint: %s is owned by %s, which is neither root nor PUID:PGID (%s:%s).\n' \
+      "$target" "$owner" "$PUID" "$PGID" >&2
+    printf 'entrypoint: refusing to change ownership of a directory this container did not create.\n' >&2
+    printf 'entrypoint: either chown it on the host, or set PUID/PGID to match its current owner.\n' >&2
+    exit 1
+  fi
+
+  # Deliberately not fatal for a root-owned directory. A bind mount backed by
+  # NFS, CIFS or a rootless daemon can refuse chown while still being
+  # perfectly writable, and those deployments must keep working. A warning is
+  # more useful than a container that will not start.
   if chown -R "${PUID}:${PGID}" "$target" 2>/dev/null; then
     printf 'entrypoint: corrected ownership of %s to %s:%s\n' "$target" "$PUID" "$PGID"
   else
@@ -45,4 +63,10 @@ done
 supplementary=$(id -G | tr ' ' '\n' | grep -vx 0 | paste -sd, -)
 [ -n "$supplementary" ] || supplementary="$PGID"
 
-exec setpriv --reuid "$PUID" --regid "$PGID" --groups "$supplementary" "$@"
+# --bounding-set -all: with the reuid/regid drop above, CapPrm/CapEff are
+# already empty, but the bounding set otherwise still lists everything
+# cap_add granted (visible as a nonzero CapBnd even post-drop). no-new-privileges
+# already makes that moot - nothing can regain a capability outside the
+# bounding set - but clearing it too is free and matches what "drops to
+# PUID:PGID" actually promises.
+exec setpriv --reuid "$PUID" --regid "$PGID" --groups "$supplementary" --bounding-set -all "$@"

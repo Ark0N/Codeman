@@ -71,6 +71,24 @@ COPY --from=docker:29-cli \
 # Keep credentials out of the image. Users authenticate these CLIs at runtime
 # through Codeman sessions, and the configured host bind mount retains state.
 #
+# Installed into a DEDICATED prefix, /opt/codeman-cli, not the base image's
+# default /usr/local. A session needs write access to wherever these CLIs live
+# so it can self-update one in place (observed via Codex's own
+# `npm install -g @openai/codex`, which renames the old package directory
+# aside before installing the new one — a rename needs write access to the
+# PARENT directory, not just the target, so the runtime account needs that
+# access at the directory level). Chowning /usr/local/bin and
+# /usr/local/lib/node_modules directly to get it would ALSO hand away
+# entrypoint.sh (COPY'd to /usr/local/bin below, root-owned, executed as root
+# on every container start with CHOWN/DAC_OVERRIDE/SETUID/SETGID) and the node
+# binary: owning the DIRECTORY is enough to rename it aside and drop a
+# replacement, even though the file itself stays root-owned, which would let a
+# compromised session arrange for its own script to run as root at the next
+# restart — undoing the "the server itself never runs privileged" guarantee
+# the entrypoint exists to provide. /opt/codeman-cli holds nothing else to
+# escalate through, so owning it is exactly the CLI-update access it needs and
+# no more.
+#
 # ⚠️ PINNED ON PURPOSE. Unpinned, the agent CLI versions a user ends up with are
 # a function of WHEN their image was built, not of any commit — so a Codeman
 # release that depends on newer CLI behaviour (the trust-dialog handling is
@@ -82,6 +100,8 @@ COPY --from=docker:29-cli \
 #
 # Bump these deliberately, in a release. `--no-cache` is still needed to rebuild
 # this layer when only the pins change upstream.
+ENV NPM_CONFIG_PREFIX=/opt/codeman-cli
+ENV PATH=/opt/codeman-cli/bin:$PATH
 RUN npm install --global \
       @anthropic-ai/claude-code@2.1.258 \
       @google/gemini-cli@0.58.0 \
@@ -94,14 +114,10 @@ RUN npm install --global \
 # requested GID may not exist in the base image, and a host UID such as 1000 may
 # already belong to the baked `node` account, so handle both cases explicitly.
 #
-# The trailing chown hands the globally-installed CLIs to that same account.
-# They were `npm install --global`-ed above while still root, so
-# /usr/local/lib/node_modules (and the /usr/local/bin symlinks pointing into it)
-# start out root-owned; a session running as the unprivileged runtime user then
-# hits EACCES the moment it tries to self-update one in place (observed via
-# Codex's own `npm install -g @openai/codex`, which renames the old package dir
-# aside before installing the new one — a rename needs write access to the
-# PARENT directory, not just the target, so this must chown the whole tree).
+# The trailing chown hands the CLI prefix (/opt/codeman-cli, populated above)
+# to that same account, so a session can self-update one of the CLIs in place.
+# /usr/local stays root-owned throughout — see the comment on the npm install
+# above for why that boundary matters.
 RUN set -eux; \
     case "${PUID}" in ''|*[!0-9]*) echo "PUID must be numeric" >&2; exit 1;; esac; \
     case "${PGID}" in ''|*[!0-9]*) echo "PGID must be numeric" >&2; exit 1;; esac; \
@@ -130,7 +146,7 @@ RUN set -eux; \
         --shell /bin/bash \
         "${CODEMAN_RUNTIME_USER}"; \
     fi; \
-    chown -R "${PUID}:${PGID}" /usr/local/lib/node_modules /usr/local/bin
+    chown -R "${PUID}:${PGID}" /opt/codeman-cli
 
 WORKDIR /opt/codeman
 
