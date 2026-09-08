@@ -88,16 +88,16 @@ export PUPPETEER_SKIP_DOWNLOAD="${PUPPETEER_SKIP_DOWNLOAD:-1}"
 #
 # ⚠️ TRUST BOUNDARY: CLI_CMD_LINUX/CLI_CMD_DARWIN are the ONLY source of a command this
 # script will ever execute, and they arrive embedded in this file — same TLS fetch, same
-# commit as the script itself. Nothing fetched at install time may write them; the
-# refresh may only touch the *_DISPLAY copy. See cli_catalog_select_platform below.
+# commit as the script itself. Nothing fetched at install time is ever executed; there is
+# no network refresh of these arrays. See cli_catalog_select_platform below.
 CLI_IDS=('claude' 'shell' 'opencode' 'codex' 'gemini' 'antigravity' 'pi' 'grok' 'deepseek' 'omp')
 CLI_LABELS=('Claude' 'Shell' 'OpenCode' 'Codex' 'Gemini' 'Antigravity' 'Pi' 'Grok' 'DeepSeek' 'OMP')
 CLI_ENABLED=(1 1 1 1 1 1 1 1 1 1)
 CLI_KIND=('agent' 'shell' 'agent' 'agent' 'agent' 'agent' 'agent' 'agent' 'agent' 'agent')
 CLI_NPM=('@anthropic-ai/claude-code' '' 'opencode-ai' '@openai/codex' '@google/gemini-cli' '' '@earendil-works/pi-coding-agent' '' '@deepseek-ai/dsh' '')
 CLI_DOCS=('https://docs.claude.com/claude-code' '' 'https://opencode.ai/docs' 'https://developers.openai.com/codex/cli' 'https://github.com/google-gemini/gemini-cli' 'https://antigravity.google/cli' 'https://pi.dev' 'https://github.com/xai-org/grok-build' 'https://github.com/deepseek-ai/deepseek-harness' 'https://omp.sh')
-CLI_CMD_LINUX=('curl -fsSL https://claude.ai/install.sh | bash' '' 'curl -fsSL https://opencode.ai/install | bash' 'npm install -g @openai/codex' 'npm install -g @google/gemini-cli' 'curl -fsSL https://antigravity.google/cli/install.sh | bash' 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent' 'curl -fsSL https://x.ai/cli/install.sh | bash' 'npm install -g @deepseek-ai/dsh' 'curl -fsSL https://omp.sh/install | sh')
-CLI_CMD_DARWIN=('curl -fsSL https://claude.ai/install.sh | bash' '' 'curl -fsSL https://opencode.ai/install | bash' 'npm install -g @openai/codex' 'npm install -g @google/gemini-cli' 'curl -fsSL https://antigravity.google/cli/install.sh | bash' 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent' 'curl -fsSL https://x.ai/cli/install.sh | bash' 'npm install -g @deepseek-ai/dsh' 'brew install can1357/tap/omp')
+CLI_CMD_LINUX=('curl -fsSL https://claude.ai/install.sh | bash' '' 'curl -fsSL https://opencode.ai/install | bash' 'npm install -g @openai/codex' 'npm install -g @google/gemini-cli' 'curl -fsSL https://antigravity.google/cli/install.sh | bash' 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent' 'curl -fsSL https://x.ai/cli/install.sh | bash' '' 'curl -fsSL https://omp.sh/install | sh')
+CLI_CMD_DARWIN=('curl -fsSL https://claude.ai/install.sh | bash' '' 'curl -fsSL https://opencode.ai/install | bash' 'npm install -g @openai/codex' 'npm install -g @google/gemini-cli' 'curl -fsSL https://antigravity.google/cli/install.sh | bash' 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent' 'curl -fsSL https://x.ai/cli/install.sh | bash' '' 'brew install can1357/tap/omp')
 CLI_ALL_BINS=('claude' 'opencode' 'codex' 'gemini' 'agy' 'pi' 'grok' 'dsh' 'omp')
 CLI_BIN_OFF=(0 1 1 2 3 4 5 6 7 8)
 CLI_BIN_LEN=(1 0 1 1 1 1 1 1 1 1)
@@ -438,7 +438,12 @@ _cli_index() {
 dsh_banner_probe() {
     local runner=()
     if command -v timeout &>/dev/null; then runner=(timeout 5); fi
-    "${runner[@]}" "$1" --help </dev/null 2>/dev/null | grep -qi "DeepSeek Harness"
+    # ⚠️ bash 3.2 (stock macOS): expanding an EMPTY array under `set -u` is an unbound-variable
+    # error, not a no-op — `${runner[@]}` alone abort­ed this whole probe with "runner[@]:
+    # unbound variable" whenever `timeout` was absent (i.e. exactly the host this comment is
+    # about). `${runner[@]+"${runner[@]}"}` expands to nothing when the array is empty and to
+    # the quoted elements otherwise, which is safe under `set -u` in both bash 3.2 and 4+.
+    ${runner[@]+"${runner[@]}"} "$1" --help </dev/null 2>/dev/null | grep -qi "DeepSeek Harness"
 }
 
 # Is "$2" really the CLI "$1" claims to be?
@@ -535,21 +540,17 @@ get_cli_path() {
 # Pick this platform's install commands out of the generated per-platform arrays.
 #
 # ⚠️ THE TRUST BOUNDARY LIVES HERE, and it is mechanical rather than a promise:
-#
-#   CLI_INSTALL_CMD_TRUSTED  — written ONLY from CLI_CMD_LINUX/CLI_CMD_DARWIN,
-#                              i.e. only from the block generated into this file.
-#                              This is the sole array the installer ever executes.
-#   CLI_INSTALL_CMD_DISPLAY  — the copy shown on screen. The optional catalogue
-#                              refresh may rewrite it; it can never write TRUSTED.
-#
-# So a command that runs arrived in the same file, over the same TLS fetch, in
-# the same commit as the `curl | bash` line that fetched this script. That is
-# identical trust to the hardcoded vendor one-liners this replaces, and it is
-# why nothing fetched at install time is ever executed. The server keeps its own,
-# stricter rule unchanged: it never executes an entry's install command at all
-# (see CliDiscovery.install.command in src/config/cli-registry/types.ts).
+# CLI_INSTALL_CMD_TRUSTED is written ONLY from CLI_CMD_LINUX/CLI_CMD_DARWIN, i.e.
+# only from the block generated into this file, and it is the sole array the
+# installer ever executes or displays — there is no second copy a network
+# refresh could rewrite. A command that runs therefore arrived in the same
+# file, over the same TLS fetch, in the same commit as the `curl | bash` line
+# that fetched this script. That is identical trust to the hardcoded vendor
+# one-liners this replaces, and it is why nothing fetched at install time is
+# ever executed. The server keeps its own, stricter rule unchanged: it never
+# executes an entry's install command at all (see CliDiscovery.install.command
+# in src/config/cli-registry/types.ts).
 CLI_INSTALL_CMD_TRUSTED=()
-CLI_INSTALL_CMD_DISPLAY=()
 CLI_PLATFORM_DONE=""
 cli_catalog_select_platform() {
     [[ -n "$CLI_PLATFORM_DONE" ]] && return 0
@@ -565,7 +566,6 @@ cli_catalog_select_platform() {
         else
             CLI_INSTALL_CMD_TRUSTED[$i]="${CLI_CMD_LINUX[$i]}"
         fi
-        CLI_INSTALL_CMD_DISPLAY[$i]="${CLI_INSTALL_CMD_TRUSTED[$i]}"
     done
 }
 
@@ -581,10 +581,14 @@ cli_catalog_names() {
 }
 
 # The "install one yourself" hints: every enabled CLI that is not installed,
-# showing the DISPLAY command. An entry with no install command (DeepSeek ships
-# no vendor one-liner) gets its docs URL instead of being silently omitted,
-# which is what used to happen to Gemini — it had a command in the registry and
-# appeared in no list in this script.
+# showing the trusted install command. An entry with no install command gets
+# its docs URL instead of being silently omitted, which is what used to
+# happen to Gemini — it had a command in the registry and appeared in no list
+# in this script. DeepSeek is the one entry that deliberately HAS a command in
+# the registry but an empty one here: installing the launcher alone leaves
+# nothing that can drive a pane, so the generator withholds the command for
+# any launcherProfile entry (see installCommandFor in generate-cli-catalog.mts)
+# and this hint falls through to the docs URL instead.
 cli_catalog_print_install_hints() {
     detect_all_clis
     local i
@@ -592,99 +596,15 @@ cli_catalog_print_install_hints() {
         [[ "${CLI_ENABLED[$i]}" == "1" ]] || continue
         [[ "${CLI_BIN_LEN[$i]}" -gt 0 ]] || continue
         [[ -z "${CLI_FOUND_PATH[$i]}" ]] || continue
-        if [[ -n "${CLI_INSTALL_CMD_DISPLAY[$i]}" ]]; then
-            echo -e "    ${CYAN}${CLI_INSTALL_CMD_DISPLAY[$i]}${NC}   # ${CLI_LABELS[$i]}"
+        if [[ -n "${CLI_INSTALL_CMD_TRUSTED[$i]}" ]]; then
+            echo -e "    ${CYAN}${CLI_INSTALL_CMD_TRUSTED[$i]}${NC}   # ${CLI_LABELS[$i]}"
         elif [[ -n "${CLI_DOCS[$i]}" ]]; then
             echo -e "    ${CLI_LABELS[$i]}: see ${CYAN}${CLI_DOCS[$i]}${NC}"
         fi
     done
 }
 
-# Optional catalogue refresh — OPT-IN, and deliberately so.
-#
-# When you `curl | bash` from master the embedded catalogue is already exactly as
-# fresh as the script that carries it, so a default-on refresh would buy nothing
-# and add a network dependency plus a warning surface to every install. It exists
-# for the case the embedded copy really can be stale: re-running an old local
-# copy, or a fork.
-#
-# ⚠️ Only DISPLAY and detection-shaped fields are ever overwritten. TRUSTED is
-# untouchable from here — see cli_catalog_select_platform.
-# ⚠️ Called from main() only, AFTER check_curl_or_wget has set DOWNLOADER; that
-# variable is otherwise unset under `set -u`. The guard below keeps a future
-# caller that relocates this from dying instead of simply not refreshing.
-cli_catalog_refresh() {
-    local url="${CODEMAN_CLI_CATALOGUE_URL:-}"
-    if [[ -z "$url" ]] && [[ "${CODEMAN_REFRESH_CLI_CATALOGUE:-0}" == "1" ]]; then
-        url="$(cli_catalog_default_url)"
-    fi
-    [[ -n "$url" ]] || return 0
-    [[ -n "${DOWNLOADER:-}" ]] || return 0
-
-    local tmp
-    tmp="$(mktemp)" || return 0
-
-    if ! download "$url" "$tmp" 2>/dev/null; then
-        warn "CLI catalogue refresh could not fetch $url; using the catalogue built into this installer."
-        rm -f "$tmp"
-        return 0
-    fi
-    if [[ ! -s "$tmp" ]]; then
-        # The failure shape that used to be SILENT: a plain network failure
-        # returning an empty body, where the old design fell back to a hardcoded
-        # two-CLI list and said nothing. There is no degraded list to fall back
-        # to now, and the fallback is announced either way.
-        warn "CLI catalogue refresh returned nothing (network failure?); using the catalogue built into this installer."
-        rm -f "$tmp"
-        return 0
-    fi
-
-    # Parsed with node into tab-separated records and read with `read`, never
-    # eval'd: this content came off the network.
-    local parsed count=0 id label
-    parsed="$(node -e '
-      const fs = require("fs");
-      let data;
-      try { data = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { process.exit(2); }
-      if (!Array.isArray(data)) process.exit(2);
-      for (const e of data) {
-        if (!e || typeof e.id !== "string" || typeof e.label !== "string") continue;
-        if (/[\t\n]/.test(e.id) || /[\t\n]/.test(e.label)) continue;
-        console.log([e.id, e.label].join("\t"));
-      }
-    ' "$tmp" </dev/null 2>/dev/null)" || {
-        warn "CLI catalogue refresh returned unparseable content; using the catalogue built into this installer."
-        rm -f "$tmp"
-        return 0
-    }
-    rm -f "$tmp"
-
-    while IFS=$'\t' read -r id label; do
-        [[ -n "$id" ]] || continue
-        if _cli_index "$id"; then
-            CLI_LABELS[$CLI_IDX]="$label"
-            count=$((count + 1))
-        fi
-    done <<EOF
-$parsed
-EOF
-
-    if [[ "$count" -eq 0 ]]; then
-        warn "CLI catalogue refresh matched no known CLI; using the catalogue built into this installer."
-    else
-        info "Refreshed CLI catalogue metadata for $count entries."
-    fi
-}
-
-# Where a refresh looks when only CODEMAN_REFRESH_CLI_CATALOGUE=1 is set:
-# the same repo and branch this installer came from.
-cli_catalog_default_url() {
-    local repo="${REPO_URL%.git}"
-    repo="${repo#https://github.com/}"
-    printf 'https://raw.githubusercontent.com/%s/%s/config/clis.stock.json' "$repo" "$BRANCH"
-}
-
-# Resolved at load, not lazily: every element of CLI_INSTALL_CMD_DISPLAY has to
+# Resolved at load, not lazily: every element of CLI_INSTALL_CMD_TRUSTED has to
 # exist before anything indexes it, or `set -u` aborts on an unset array element
 # the first time a hint is printed.
 cli_catalog_select_platform
@@ -2228,11 +2148,6 @@ main() {
         die "curl or wget is required but neither is installed. Please install one first."
     fi
 
-    # Optional, opt-in catalogue refresh. Deliberately here and nowhere else:
-    # DOWNLOADER is assigned by check_curl_or_wget above and is unset under
-    # `set -u` on every path that skips main() (the tailscale subcommand is one).
-    cli_catalog_refresh
-
     # Detect system
     local os arch distro=""
     os=$(detect_os)
@@ -2357,27 +2272,35 @@ main() {
         # install five of them.
         #
         # ⚠️ TRUST BOUNDARY: the command executed comes from CLI_INSTALL_CMD_TRUSTED,
-        # which only the generated block above writes. The refresh may rewrite the
-        # _DISPLAY copy shown on screen but can never reach this array. See
-        # cli_catalog_select_platform.
+        # the only array the generated block above writes and the only one the
+        # installer ever runs or displays — see cli_catalog_select_platform.
+        #
+        # ⚠️ The registry's install commands are a MIX: some call `curl` directly
+        # (vendor one-liners), others are `npm install -g …`, which never needed
+        # curl at all. A wget-only host used to lose the WHOLE menu over this,
+        # including every npm entry — the two literals this replaced went through
+        # download_to_stdout and so honoured `wget`, and CODEMAN_NONINTERACTIVE=1
+        # silently stopped defaulting to Claude Code as documented. Filter per
+        # entry instead: only a command that actually starts with `curl ` is
+        # curl-dependent, so only THOSE are held back on a wget-only host.
+        # Rewriting curl to wget inside a string about to be executed is the
+        # wrong instinct either way — the ones we can't run, we show as a hint.
         local -a offer_idx=()
+        local curl_only_skipped=0
         for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
             [[ "${CLI_ENABLED[$i]}" == "1" ]] || continue
             [[ "${CLI_BIN_LEN[$i]}" -gt 0 ]] || continue
             [[ -z "${CLI_FOUND_PATH[$i]}" ]] || continue
             [[ -n "${CLI_INSTALL_CMD_TRUSTED[$i]}" ]] || continue
+            if [[ "${DOWNLOADER:-}" != "curl" ]] && [[ "${CLI_INSTALL_CMD_TRUSTED[$i]}" == curl\ * ]]; then
+                curl_only_skipped=$((curl_only_skipped + 1))
+                continue
+            fi
             offer_idx[${#offer_idx[@]}]=$i
         done
 
-        # ⚠️ The registry's install commands are vendor one-liners that call
-        # `curl`, whereas the two literals this replaces went through
-        # download_to_stdout and so honoured `wget`. On a wget-only host we print
-        # the commands instead of offering to run them: rewriting curl to wget
-        # inside a string we are about to execute is exactly the wrong instinct.
-        if [[ "${DOWNLOADER:-}" != "curl" ]] && [[ ${#offer_idx[@]} -gt 0 ]]; then
-            warn "curl is not available, so the installer cannot run a vendor install script for you."
-            cli_catalog_print_install_hints
-            offer_idx=()
+        if [[ "$curl_only_skipped" -gt 0 ]]; then
+            warn "curl is not available, so $curl_only_skipped install command(s) that need it were left out of the menu below (still shown as hints if you skip)."
         fi
 
         if [[ ${#offer_idx[@]} -eq 0 ]]; then

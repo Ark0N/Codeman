@@ -58,7 +58,8 @@ RUN curl -fsSL https://antigravity.google/cli/install.sh | bash -s -- --dir /usr
 
 # Pi (pi.dev). Upstream documents --ignore-scripts (pi needs no lifecycle scripts);
 # kept out of the shared npm block above so the flag cannot silently change how the
-# other four CLIs install.
+# rest of that block's CLIs install — a fixed count would go stale here since
+# CLI_NPM_PACKAGES (above) is now a generated, dynamic list rather than a hand-kept one.
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent \
  && npm cache clean --force \
  && pi --version

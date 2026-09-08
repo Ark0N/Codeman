@@ -621,6 +621,10 @@ const PI: CliEntry = {
       },
       npmPackage: '@earendil-works/pi-coding-agent',
       docsUrl: 'https://pi.dev',
+      agentImageLayer: {
+        kind: 'dedicated',
+        reason: 'installed with --ignore-scripts in its own layer, so the flag cannot leak to the shared block',
+      },
     },
   },
   launch: {
@@ -835,6 +839,10 @@ const DEEPSEEK: CliEntry = {
       },
       npmPackage: '@deepseek-ai/dsh',
       docsUrl: 'https://github.com/deepseek-ai/deepseek-harness',
+      agentImageLayer: {
+        kind: 'dedicated',
+        reason: 'needs pnpm alongside it (dsh plugin, issue #352) and a dsh-tui profile install',
+      },
     },
   },
   launch: {

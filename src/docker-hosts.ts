@@ -508,6 +508,9 @@ export function agentImageBuildArgs(
   ];
 }
 
+/** Tokens allowed in an npm package name reaching a Dockerfile build arg unquoted. */
+const SAFE_PACKAGE = /^[@A-Za-z0-9][@A-Za-z0-9/._-]*$/;
+
 /**
  * npm packages the agent image installs in its shared layer, from the STOCK catalogue.
  *
@@ -515,22 +518,35 @@ export function agentImageBuildArgs(
  * change what lands inside an image tagged `codeman/agent:base`, or two machines holding that
  * same tag hold different images and every cache-hit decision downstream is a lie.
  *
+ * ⚠️ An entry carrying `discovery.install.agentImageLayer` is excluded here — see that field's
+ * doc comment in `types.ts` for why some CLIs need their own hand-written Dockerfile layer
+ * instead of the shared one, and `test/docker-agent-image-coverage.test.ts` for the guard that
+ * an exclusion here still lands in the Dockerfile somewhere.
+ *
  * ⚠️ This mirrors `agentImageNpmPackages()` in `scripts/lib/cli-catalog.mjs`, which the CLI
  * build path uses because a `.mjs` cannot import TypeScript. Two producers of one command
- * line drift; `test/agent-image-build-args-parity.test.ts` is what stops them.
+ * line drift; `test/agent-image-build-args-parity.test.ts` is what stops them — including the
+ * SAFE_PACKAGE regex below, which is duplicated (not imported) in that file for the same
+ * reason and must stay byte-identical to it.
  */
 export function agentImageNpmPackages(): string[] {
-  return STOCK_CLIS.filter((entry) => entry.enabled && !AGENT_IMAGE_SPECIAL_CASE_IDS.has(entry.id as string))
-    .map((entry) => entry.discovery.install.npmPackage)
-    .filter((pkg): pkg is string => Boolean(pkg));
+  const packages: string[] = [];
+  for (const entry of STOCK_CLIS) {
+    if (!entry.enabled || entry.discovery.install.agentImageLayer) continue;
+    const pkg = entry.discovery.install.npmPackage;
+    if (!pkg) continue;
+    // The value is interpolated into a Dockerfile ARG expanded UNQUOTED (word splitting is
+    // how the list becomes several arguments), so a token with whitespace or shell
+    // metacharacters would change what the RUN line means. The source is `stock.ts`, so the
+    // practical risk is nil, but this is the in-app auto-build path and the only one of the
+    // two producers where that had gone unchecked.
+    if (!SAFE_PACKAGE.test(pkg)) {
+      throw new Error(`Refusing unsafe npm package name for "${String(entry.id)}": ${JSON.stringify(pkg)}`);
+    }
+    packages.push(pkg);
+  }
+  return packages;
 }
-
-/**
- * CLIs the agent image installs in their OWN Dockerfile layer rather than the shared npm one.
- * The registry cannot express what makes each special, so the layers stay hand-written and
- * `test/docker-agent-image-coverage.test.ts` requires each to carry a reason and still exist.
- */
-const AGENT_IMAGE_SPECIAL_CASE_IDS = new Set(['pi', 'deepseek']);
 
 /** The `--build-arg` pairs the agent image takes. */
 export function agentImageBuildArgPairs(): Array<[string, string]> {

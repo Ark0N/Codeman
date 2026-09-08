@@ -52,7 +52,12 @@ interface CatalogEntry {
     binaries: string[];
     searchDirs: string[];
     identity?: { arg: string; regex: string };
-    install: { command: Record<string, string>; npmPackage?: string; docsUrl?: string };
+    install: {
+      command: Record<string, string>;
+      npmPackage?: string;
+      docsUrl?: string;
+      agentImageLayer?: { kind: 'dedicated'; reason: string };
+    };
   };
 }
 
@@ -75,6 +80,7 @@ function toCatalogEntry(entry: CliEntry): CatalogEntry {
         command: { ...install.command } as Record<string, string>,
         ...(install.npmPackage ? { npmPackage: install.npmPackage } : {}),
         ...(install.docsUrl ? { docsUrl: install.docsUrl } : {}),
+        ...(install.agentImageLayer ? { agentImageLayer: { ...install.agentImageLayer } } : {}),
       },
     },
   };
@@ -108,8 +114,19 @@ function shPath(dir: string, binary: string): string {
  * the exact platform, else linux, else whatever is declared. Resolved HERE, at generation
  * time, so that fallback logic stays in tested TypeScript instead of being reimplemented in
  * bash against an array the script would have to index by platform anyway.
+ *
+ * ⚠️ EMPTY for a `launcherProfile` entry (DeepSeek today), deliberately: `npm install -g
+ * @deepseek-ai/dsh` installs the LAUNCHER, not something that can drive a pane on its own — it
+ * ships only the `web`/`headless` profiles, neither of which is a terminal TUI. Emitting the
+ * command made the installer offer DeepSeek as a normal menu choice: picking it printed
+ * "DeepSeek installed at ...", counted as a found AI CLI, and left the user with a `dsh` that
+ * cannot actually run anything, with no mention of the Run dropdown's profile installer that
+ * fixes that. An empty command here means install.sh's menu-building loop (which requires a
+ * non-empty CLI_INSTALL_CMD_TRUSTED entry) skips it and the hint printer falls through to the
+ * docs URL instead — see cli_catalog_print_install_hints in install.sh.
  */
 function installCommandFor(entry: CliEntry, platform: InstallPlatform): string {
+  if (entry.discovery.launcherProfile) return '';
   const { command } = entry.discovery.install;
   return command[platform] ?? command.linux ?? Object.values(command)[0] ?? '';
 }
@@ -173,8 +190,8 @@ export function renderInstallShBlock(entries: CliEntry[] = STOCK_CLIS): string {
     '#',
     '# ⚠️ TRUST BOUNDARY: CLI_CMD_LINUX/CLI_CMD_DARWIN are the ONLY source of a command this',
     '# script will ever execute, and they arrive embedded in this file — same TLS fetch, same',
-    '# commit as the script itself. Nothing fetched at install time may write them; the',
-    '# refresh may only touch the *_DISPLAY copy. See cli_catalog_select_platform below.',
+    '# commit as the script itself. Nothing fetched at install time is ever executed; there is',
+    '# no network refresh of these arrays. See cli_catalog_select_platform below.',
     arr('CLI_IDS', ids),
     arr('CLI_LABELS', labels),
     arr('CLI_ENABLED', enabled),

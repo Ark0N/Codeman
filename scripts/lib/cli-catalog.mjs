@@ -20,17 +20,16 @@ const CATALOG_PATH = fileURLToPath(new URL('../../config/clis.stock.json', impor
  * ⚠️ Filters on `enabled`. That is the field the earlier attempt's export omitted, which is
  * how a CLI that ships disabled still had its package baked into every image.
  *
- * ⚠️ SPECIAL_CASES are excluded here and installed by their own hand-written Dockerfile
- * layers, because the registry cannot express what makes them special — a flag, a companion
- * package, or not being on npm at all. `test/docker-agent-image-coverage.test.ts` requires
- * every one of them to carry a reason and to still be present in the Dockerfile, so an
- * exclusion cannot quietly become an omission.
+ * ⚠️ An entry carrying `discovery.install.agentImageLayer` is excluded here and installed by
+ * its own hand-written Dockerfile layer instead, because the registry cannot express what
+ * makes it special — a flag, a companion package, or not being on npm at all. This used to be
+ * an id-keyed table duplicated between this file and `src/docker-hosts.ts` (exactly the shape
+ * `test/cli-registry-no-id-branching.test.ts` exists to forbid inside `src/`, which is why it
+ * was a blind spot rather than a pass — that test scans `src/` only). It is data now: both
+ * producers filter on the SAME field from the SAME catalogue entry, `reason` is required by
+ * `schema.ts`, and `test/docker-agent-image-coverage.test.ts` requires every one of them to
+ * still be present in the Dockerfile, so an exclusion cannot quietly become an omission.
  */
-export const AGENT_IMAGE_SPECIAL_CASES = {
-  pi: 'installed with --ignore-scripts in its own layer, so the flag cannot leak to the shared block',
-  deepseek: 'needs pnpm alongside it (dsh plugin, issue #352) and a dsh-tui profile install',
-};
-
 /** Tokens allowed in an npm package name reaching a Dockerfile build arg unquoted. */
 const SAFE_PACKAGE = /^[@A-Za-z0-9][@A-Za-z0-9/._-]*$/;
 
@@ -38,13 +37,17 @@ export function agentImageNpmPackages(catalog) {
   const packages = [];
   for (const entry of catalog) {
     if (!entry.enabled) continue;
-    if (entry.id in AGENT_IMAGE_SPECIAL_CASES) continue;
+    if (entry.discovery?.install?.agentImageLayer) continue;
     const pkg = entry.discovery?.install?.npmPackage;
     if (!pkg) continue; // antigravity/grok/omp ship standalone installers, not npm
     if (!SAFE_PACKAGE.test(pkg)) {
       // The value is interpolated into a Dockerfile ARG that is expanded UNQUOTED (word
       // splitting is how the list becomes several arguments), so a token with whitespace or
       // shell metacharacters would change what the RUN line means.
+      // ⚠️ This exact regex is duplicated in `agentImageNpmPackages()` in
+      // `src/docker-hosts.ts` (that file cannot import this one — it is the TypeScript side of
+      // the same two-producers split this whole module exists for). Keep both literal patterns
+      // identical; `test/agent-image-build-args-parity.test.ts` pins that they are.
       throw new Error(`Refusing unsafe npm package name for "${entry.id}": ${JSON.stringify(pkg)}`);
     }
     packages.push(pkg);

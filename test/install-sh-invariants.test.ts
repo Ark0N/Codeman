@@ -93,9 +93,13 @@ describe('install.sh generated-catalogue block', () => {
 });
 
 describe('install.sh trust boundary', () => {
-  // The whole point of splitting TRUSTED from DISPLAY: a command the installer EXECUTES must
-  // have arrived embedded in this file, over the same TLS fetch and in the same commit as the
-  // script itself. Anything pulled from the network at install time is display-only.
+  // A command the installer EXECUTES must have arrived embedded in this file, over the same
+  // TLS fetch and in the same commit as the script itself — there is no second, network-derived
+  // copy of these commands anywhere in the script (an earlier draft that added one, and split
+  // a TRUSTED/DISPLAY pair to keep the fetched copy display-only, was dropped before merge:
+  // see docs/cli-registry.md). These three assertions are what is left to guard now that the
+  // fetch path itself does not exist: everything the installer runs or shows still comes only
+  // from the generated block, and nothing in the file eval()s.
   it('writes CLI_INSTALL_CMD_TRUSTED only from the generated per-platform arrays', () => {
     const writes = CODE_LINES.filter((line) => /CLI_INSTALL_CMD_TRUSTED\s*\[[^\]]*\]\s*=/.test(line));
     expect(writes.length, 'expected exactly the two platform assignments').toBe(2);
@@ -106,23 +110,31 @@ describe('install.sh trust boundary', () => {
     }
   });
 
-  it('never lets the refresh touch a *_TRUSTED array', () => {
-    const refresh = CODE.slice(CODE.indexOf('cli_catalog_refresh() {'));
-    const body = refresh.slice(0, refresh.indexOf('\n}\n'));
-    expect(body.length, 'could not isolate cli_catalog_refresh').toBeGreaterThan(0);
-    expect(/_TRUSTED\s*\[[^\]]*\]\s*=/.test(body), 'the refresh assigns into a TRUSTED array').toBe(false);
+  it('fetches no CLI catalogue over the network at install time', () => {
+    // The exact shape of the earlier, dropped design: a URL built from the repo/branch this
+    // script came from, an opt-in env var to enable it, and a `download()` call feeding
+    // straight into the trusted arrays. None of that exists in this file any more; this pins
+    // the absence so it cannot quietly come back without a reviewer noticing.
+    for (const needle of [
+      'cli_catalog_refresh',
+      'cli_catalog_default_url',
+      'CODEMAN_CLI_CATALOGUE_URL',
+      'CODEMAN_REFRESH_CLI_CATALOGUE',
+      'CLI_INSTALL_CMD_DISPLAY',
+    ]) {
+      expect(SOURCE.includes(needle), `${needle} should not exist — the catalogue refresh was dropped`).toBe(false);
+    }
   });
 
-  it('never eval()s network-derived catalogue data', () => {
-    // Scoped to the refresh deliberately. install.sh has two long-standing, legitimate evals
-    // elsewhere (`eval "$(brew shellenv)"`, Homebrew's documented idiom, and one inside a
-    // node -e that reads `tailscale serve status`), and banning the word outright would flag
-    // those while saying nothing about the line that matters: `eval` on a fetched file would
-    // hand the shell to whatever answered the request.
-    const refresh = CODE.slice(CODE.indexOf('cli_catalog_refresh() {'));
-    const body = refresh.slice(0, refresh.indexOf('\n}\n'));
-    expect(body.length, 'could not isolate cli_catalog_refresh').toBeGreaterThan(0);
-    expect(/\beval\b/.test(body), 'the catalogue refresh eval()s something').toBe(false);
+  it('never eval()s anything', () => {
+    // install.sh has two long-standing, legitimate evals (`eval "$(brew shellenv)"`, Homebrew's
+    // documented idiom, and one inside a node -e that reads `tailscale serve status`), both of
+    // which operate on output this script itself produced, never on fetched content. With no
+    // network-derived catalogue left to eval, the word should not appear at all outside those.
+    const offenders = CODE_LINES.filter(
+      (line) => /\beval\b/.test(line) && !/eval "\$\(.*shellenv\)"/.test(line) && !line.includes('eval(process.argv')
+    );
+    expect(offenders, `unexpected eval:\n  ${offenders.join('\n  ')}`).toEqual([]);
   });
 
   it("redirects stdin for every command it executes on the user's behalf", () => {
@@ -137,15 +149,6 @@ describe('install.sh trust boundary', () => {
 });
 
 describe('install.sh runtime safety', () => {
-  it('guards the catalogue refresh on DOWNLOADER being set', () => {
-    // DOWNLOADER is assigned only by check_curl_or_wget, which only main() calls. Any path
-    // that reaches the refresh without it (the `tailscale` subcommand is one) would abort on
-    // an unbound variable under `set -u` rather than simply skipping the refresh.
-    const refresh = CODE.slice(CODE.indexOf('cli_catalog_refresh() {'));
-    const body = refresh.slice(0, refresh.indexOf('\n}\n'));
-    expect(body).toMatch(/\[\[\s*-n\s*"\$\{DOWNLOADER:-\}"\s*\]\]\s*\|\|\s*return 0/);
-  });
-
   it('can be sourced without installing anything', () => {
     // The bash 3.2 CI step sources this file to exercise detect_all_clis. Without the guard
     // the dispatch `case` at the tail would run a real install inside the container.

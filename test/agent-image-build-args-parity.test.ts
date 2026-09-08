@@ -77,4 +77,22 @@ describe('agent-image build args: the .mjs and the TS mirror agree', () => {
     expect(declared, 'the Dockerfile no longer declares CLI_NPM_PACKAGES').toBeDefined();
     expect(declared).toBe(tsPackages().join(' '));
   });
+
+  it('validates an unsafe package name with the SAME regex on both sides', () => {
+    // Equal OUTPUT on today's catalogue (asserted above) does not prove equal VALIDATION — a
+    // looser regex on one side would only show up the day someone ships a hostile package name.
+    // The regex is duplicated rather than shared (the .mjs side cannot import the .ts side, the
+    // whole reason this file exists), so pin the literal PATTERN text is identical between the
+    // two source files rather than trusting the comment that says so.
+    const tsSource = readFileSync(fileURLToPath(new URL('../src/docker-hosts.ts', import.meta.url)), 'utf-8');
+    const mjsSource = readFileSync(fileURLToPath(new URL('../scripts/lib/cli-catalog.mjs', import.meta.url)), 'utf-8');
+    const extract = (source: string, file: string): string => {
+      // Non-greedy to `/;` deliberately: the pattern itself contains a `/` (inside the
+      // character class), so a naive `[^/]+` stops at the wrong slash.
+      const m = /const SAFE_PACKAGE = (\/.+?\/);/.exec(source);
+      expect(m, `could not find the SAFE_PACKAGE regex literal in ${file}`).toBeDefined();
+      return m![1];
+    };
+    expect(extract(tsSource, 'docker-hosts.ts')).toBe(extract(mjsSource, 'cli-catalog.mjs'));
+  });
 });

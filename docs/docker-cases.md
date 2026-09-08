@@ -34,8 +34,9 @@ must not change what is inside an image tagged `codeman/agent:base`, or two mach
 that tag hold different images and every cache decision downstream is a lie. Each entry's
 `enabled` flag IS honoured, so a CLI that ships disabled is never baked in.
 
-Four CLIs keep hand-written layers, because the registry cannot express what makes them
-special:
+Five CLIs keep hand-written layers, because the registry cannot express what makes them
+special (as a REGISTRY field now — `discovery.install.agentImageLayer` in `stock.ts` — rather
+than an id-keyed table duplicated between the two producers of the image's build args):
 
 | CLI | Why it is not in the shared npm layer |
 | ------------- | ------------------------------------------------------------------------------------- |

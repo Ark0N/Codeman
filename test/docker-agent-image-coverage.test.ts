@@ -16,7 +16,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { AGENT_IMAGE_SPECIAL_CASES, agentImageNpmPackages } from '../scripts/lib/cli-catalog.mjs';
+import { agentImageNpmPackages } from '../scripts/lib/cli-catalog.mjs';
 import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
 
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(`../${rel}`, import.meta.url)), 'utf-8');
@@ -27,40 +27,53 @@ const INDEX_HTML = read('src/web/public/index.html');
 const CATALOG = JSON.parse(read('config/clis.stock.json')) as Array<{
   id: string;
   enabled: boolean;
-  discovery: { binaries: string[]; install: { npmPackage?: string } };
+  discovery: {
+    binaries: string[];
+    install: { npmPackage?: string; agentImageLayer?: { kind: 'dedicated'; reason: string } };
+  };
 }>;
 
 const enabledAgents = CATALOG.filter((e) => e.enabled && e.discovery.binaries.length > 0);
 
+/**
+ * A layer's PROOF it installed the right thing, not merely a substring anywhere in the file.
+ * Every dedicated layer in agent.Dockerfile ends by running `<binary> --version`, so anchoring
+ * on that (rather than `Dockerfile.includes(binary)`) survives a layer being deleted while its
+ * COMMENT — which also names the binary — is left behind. That gap is why this replaced the
+ * looser check.
+ */
+const hasVersionProof = (binary: string): boolean => AGENT_DOCKERFILE.includes(`${binary} --version`);
+
 describe('docker agent image covers the catalogue', () => {
-  it('installs every enabled npm CLI, via the build arg or a documented special case', () => {
+  it('installs every enabled npm CLI, via the build arg or a documented dedicated layer', () => {
     const inBuildArg = new Set(agentImageNpmPackages(CATALOG));
     const missing: string[] = [];
     for (const entry of enabledAgents) {
       const pkg = entry.discovery.install.npmPackage;
       if (!pkg) continue; // standalone installer, checked below
       if (inBuildArg.has(pkg)) continue;
-      if (entry.id in AGENT_IMAGE_SPECIAL_CASES) continue;
+      if (entry.discovery.install.agentImageLayer) continue;
       missing.push(`${entry.id} (${pkg})`);
     }
     expect(
       missing,
-      `npm CLI reaches neither the build arg nor a special case:\n  ${missing.join('\n  ')}\n` +
-        'Add it to the arg (it is automatic) or give it a Dockerfile layer AND a reason in AGENT_IMAGE_SPECIAL_CASES.'
+      `npm CLI reaches neither the build arg nor a dedicated layer:\n  ${missing.join('\n  ')}\n` +
+        'Add it to the arg (it is automatic) or give it a Dockerfile layer AND an agentImageLayer.reason in stock.ts.'
     ).toEqual([]);
   });
 
-  it('gives every special case a reason and a real layer', () => {
-    for (const [id, reason] of Object.entries(AGENT_IMAGE_SPECIAL_CASES)) {
-      expect(reason.length, `${id} has an empty reason`).toBeGreaterThan(20);
-      const entry = CATALOG.find((e) => e.id === id);
-      expect(entry, `${id} is a special case but not in the catalogue`).toBeDefined();
-      const pkg = entry?.discovery.install.npmPackage;
-      // Excluded from the shared arg, so it MUST appear in a hand-written layer, or it is
-      // simply not installed at all — an exclusion silently becoming an omission.
+  it('gives every dedicated-layer entry a reason and a real, provable layer', () => {
+    for (const entry of CATALOG) {
+      const layer = entry.discovery.install.agentImageLayer;
+      if (!layer) continue;
+      expect(layer.reason.length, `${entry.id} has an empty agentImageLayer.reason`).toBeGreaterThan(20);
+      const binary = entry.discovery.binaries[0];
+      // Excluded from the shared arg, so it MUST appear in a hand-written layer that actually
+      // ran the binary, or it is simply not installed at all — an exclusion silently becoming
+      // an omission.
       expect(
-        AGENT_DOCKERFILE.includes(pkg ?? id),
-        `${id} is excluded from the arg but absent from the Dockerfile`
+        hasVersionProof(binary),
+        `${entry.id} is excluded from the arg but has no "${binary} --version" proof line in the Dockerfile`
       ).toBe(true);
     }
   });
@@ -70,8 +83,8 @@ describe('docker agent image covers the catalogue', () => {
       if (entry.discovery.install.npmPackage) continue;
       const binary = entry.discovery.binaries[0];
       expect(
-        AGENT_DOCKERFILE.includes(binary),
-        `${entry.id} ships no npm package and no Dockerfile layer mentions "${binary}"`
+        hasVersionProof(binary),
+        `${entry.id} ships no npm package and no Dockerfile layer proves it ran "${binary} --version"`
       ).toBe(true);
     }
   });

@@ -137,9 +137,14 @@ registry exists to prevent.
 
 The install.sh copy is **embedded, not fetched**, and is the FULL catalogue. An earlier design
 fetched it and fell back to a hardcoded two-CLI list, which degraded silently on an empty
-response; there is no degraded mode to fall into now. An optional, opt-in refresh
-(`CODEMAN_CLI_CATALOGUE_URL`, or `CODEMAN_REFRESH_CLI_CATALOGUE=1`) exists for a stale local
-copy, and warns on all three failure shapes — empty body, unparseable content, failed fetch.
+response; there is no degraded mode to fall into now, and no network fetch either — a `curl |
+bash` from master already carries a catalogue exactly as fresh as the script itself, so there is
+nothing a refresh would buy that isn't already true. An earlier draft added an opt-in refresh
+with a `TRUSTED`/`DISPLAY` array split to keep it from ever writing the executed command; it was
+dropped before merge rather than shipped half-verified — the split's only actual write was the
+label, `DISPLAY` never diverged from `TRUSTED` in practice, and the added surface (a second
+array, a fetch path, three failure shapes to warn on) bought nothing the embedded copy didn't
+already have.
 
 ### The install-command trust boundary
 
@@ -147,12 +152,13 @@ Three rules, and the middle one is why the embed matters:
 
 1. **The server never executes an entry's `install.command`.** Unchanged, and still enforced by nothing executing it: the field is display text (`CliDiscovery.install.command`).
 2. **`install.sh` executes only commands embedded in itself.** Those arrive in the same file, over the same TLS fetch, in the same commit as the `curl \| bash` line that fetched the script — identical trust to the hardcoded vendor one-liners it replaces.
-3. **Nothing fetched at install time is ever executed.**
+3. **Nothing fetched at install time is ever executed.** There is no second code path that fetches anything after the script itself has been fetched.
 
 That is mechanical rather than a promise. `CLI_INSTALL_CMD_TRUSTED` is written only from the
-generated block and is the only array the installer runs; `CLI_INSTALL_CMD_DISPLAY` is what the
-refresh may rewrite. `test/install-sh-invariants.test.ts` asserts the split holds, that the
-refresh never assigns into a `*_TRUSTED` array, and that it never `eval`s.
+generated block and is the only array the installer ever runs or displays — there is no second
+array a refresh could rewrite, because there is no refresh. `test/install-sh-invariants.test.ts`
+asserts as much: the embedded commands are exactly the registry's, and nothing in `install.sh`
+`eval`s.
 
 ### bash 3.2
 
