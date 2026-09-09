@@ -5906,6 +5906,23 @@ class CodemanApp {
       }
     }
 
+    // Hold for the terminal font before measuring anything. A cell measured
+    // against a fallback font gives the wrong column and row count, and the
+    // correction would land after the replay, leaving the CLI drawing against a
+    // frame the terminal no longer shows. Resolves immediately once the font is
+    // in, so this costs a tab switch nothing after the first load, and it is
+    // bounded, so a font that never arrives cannot strand the session.
+    // ⚠️ BEFORE `_beginBufferLoad` on purpose: inside it, every live SSE event
+    // for this session queues instead of painting, so a slow font would hold
+    // output back rather than merely mis-measuring the grid.
+    if (this._terminalFontReady) {
+      await this._terminalFontReady;
+      if (this._isStaleSelect(selectGen)) {
+        this._clearTerminalLoadState(sessionId, selectGen);
+        return;
+      }
+    }
+
     // Load terminal buffer for this session
     // Show cached content instantly while fetching fresh data in background.
     // Use tail mode for faster initial load (128KB is enough for recent visible content).
@@ -5926,19 +5943,6 @@ class CodemanApp {
     let bufferWasEmpty = false;
     let cacheResetAndParseMs = 0;
     try {
-      // Hold for the terminal font before measuring anything. A cell measured
-      // against a fallback font gives the wrong column and row count, and the
-      // correction lands after the replay, leaving the CLI drawing against a
-      // frame the terminal no longer shows. Resolves immediately once the font
-      // is in, so this costs a tab switch nothing after the first load.
-      if (this._terminalFontReady) {
-        await this._terminalFontReady;
-        if (this._isStaleSelect(selectGen)) {
-          this._clearTerminalLoadState(sessionId, selectGen);
-          return;
-        }
-      }
-
       // Fit terminal to container BEFORE writing any buffer data.
       // If the browser was resized while viewing another session, the terminal
       // canvas may be at stale dimensions — content would render at wrong width.
