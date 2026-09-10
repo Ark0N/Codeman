@@ -1,5 +1,38 @@
 # aicodeman
 
+## 1.26.2
+
+### Patch Changes
+
+- Terminal rendering fixes, a Ctrl+V paste fix, an iOS Safari toolbar fix, a 2GB download cap, and a Blur entrance animation.
+
+  ### Terminal rendering
+
+  Three independent causes behind #398, where opening a session rendered a frame with characters spliced into each other and left the caret on the composer's border instead of its input line, until the CLI next wrote anything:
+  - **The full-history replay now keeps row alignment** (#395). The linear capture path never restored the cursor, so every cursor-relative update the CLI sent afterwards was measured from the status line instead of the pane's real position, and four transforms that each can delete a line (trailing-blank stripping, redraw-bloat stripping, the pre-banner trim, leading-whitespace removal) shifted the frame out from under it. The full-history path now appends the pane's own cursor position and keeps every row, so row N of the reply is row N of the pane. The visible-frame and tail paths are untouched.
+  - **The first fit waits for the terminal font** (#396). A cell measured against a fallback font gives the wrong column and row count, so the pane was sized twice and the CLI repainted for a shape that no longer matched the frame on screen. `selectSession` now holds for the font before measuring, bounded at 2s so a font that never arrives cannot strand a session, and it ends by re-measuring explicitly — `FitAddon.proposeDimensions()` divides by a cached cell size and nothing in it listens for font loading, so waiting alone would still divide by the fallback cell.
+  - **A detached session's own window owns its pane size** (#397). Popping a session out left both windows sizing one PTY, and the dashboard's terminal is narrower than the popup because the session rail takes width the popup does not have, so the CLI drew frames that fit neither. The dashboard now withholds the resize send (never the local reflow) for a session showing in its own window, and takes sizing back on redock.
+
+  ### Other fixes
+  - **Ctrl+V no longer pastes twice** (#394). One keypress delivered two paste events to the clipboard trap: Firefox dispatches a trusted event for `document.execCommand('paste')` and then returns `false`, and the key's own default action fires another, because xterm's custom key handler returns false without cancelling the keydown. Right-click → Paste has no keydown, which is why only the keyboard duplicated. The trap now consumes exactly one event per keypress.
+  - **iOS Safari: the phone toolbar sits on Safari's bottom bar** (#391, #392). The toolbar was lifted by `100vh - --app-height`, which on iPhone Safari measures the bar's collapsible height rather than an overlap — fixed elements there already stop above the bar — leaving an empty ~40px band and padding the terminal by the same amount. The lift is now `--chrome-overlap` (`innerHeight` minus the visual viewport height), which is 0 on iPhone Safari and equals the real overlap anywhere fixed elements do land behind the chrome.
+
+  ### Downloads
+
+  `file-raw`, the attachment `/raw` route and `GET /api/download` now cap at **2GB** instead of 50MB, configurable via `CODEMAN_MAX_DOWNLOAD_BYTES` (`0` = unlimited). The old cap was memory protection for a `readFile()` that no longer exists: those bodies stream and answer `Range` requests, so size costs a read stream rather than RSS (measured: a 600MB download moved peak RSS by ~37MB), and all the cap still did was refuse legitimate downloads of build artifacts, videos and archives. `/api/download` was the last route that really did buffer the whole file; it now streams, advertises `Accept-Ranges` and is resumable. Refusals move from `400` to `413`, the correct status for the case.
+
+  ### Blur entrance animation
+
+  A new opt-in `Blur` style on all four entrance surfaces (tabs, agent windows, the terminal pane, connection lines), plus a `Soft focus` theme that sets all four: an iOS-style focus pull where the thing arrives out of focus and the blur fades off it as the opacity comes up. App Settings → Appearance → Entrance Animations, or mix per surface at `?animlab=1`. Entrance animations stay off by default, so an untouched install is unchanged.
+
+  ### Maintainer tooling
+
+  The PR bot now fails fast when the review model's budget is spent, instead of hanging a review for the full 40-minute timeout and burning its retry cap.
+
+  ### Thanks
+  - @irisitymichaelgrundberg for #394, #395, #396 and #397, and for the #398 investigation that separated three causes behind one symptom
+  - @JDProfresh for reporting #391 and fixing it in #392
+
 ## 1.26.1
 
 ### Patch Changes
