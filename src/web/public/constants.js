@@ -659,6 +659,22 @@ function sortSessionsByActivity(rows) {
 // prompt icons (powerline segments, folder/git glyphs from p10k, starship,
 // oh-my-posh) render even though the text fonts carry no private-use-area
 // symbols — while all readable text keeps coming from the text fonts.
+/**
+ * How long a terminal fit will wait for the terminal font, in ms.
+ *
+ * `FontFaceSet.ready` has no deadline of its own and the wait sits in front of
+ * the buffer replay, so a font request that never settles would leave the
+ * session unpainted. Past this we measure whatever is painted.
+ */
+const TERMINAL_FONT_WAIT_MS = 2000;
+
+/**
+ * Families in the stack that cannot move the measured cell, so nothing waits on
+ * them: the generics match no `FontFace`, and the bundled symbols face carries
+ * private-use-area glyphs only (xterm measures `W`) while weighing ~1.2MB.
+ */
+const TERMINAL_FONT_UNMEASURED = new Set(['monospace', 'serif', 'sans-serif', 'system-ui', 'symbols nerd font mono']);
+
 const TERMINAL_FONT_DEFAULT_STACK =
   '"Fira Code", "Cascadia Code", "JetBrains Mono", "SF Mono", Monaco, "Symbols Nerd Font Mono", monospace';
 

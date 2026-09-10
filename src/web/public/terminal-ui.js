@@ -514,6 +514,11 @@ Object.assign(CodemanApp.prototype, {
     } else {
       this.fitAddon.fit();
     }
+    // Whenever that first fit runs — on this line, or a frame or two later on
+    // the mobile-Safari branch above — it measures whatever font the browser has
+    // painted with so far, which is not necessarily the terminal font. Start the
+    // wait now so the buffer load can hold for it.
+    this._terminalFontReady = this._awaitTerminalFont();
 
     // Register link provider for clickable file paths in Bash tool output
     this.registerFilePathLinkProvider();
@@ -4785,6 +4790,15 @@ Object.assign(CodemanApp.prototype, {
     const resolved = window.CodemanTerminalFont.resolve(custom);
     if (!this.terminal || this.terminal.options.fontFamily === resolved) return;
     this.terminal.options.fontFamily = resolved;
+    // Changing the family at runtime is the same race as the boot-time one: the
+    // option write makes xterm re-measure immediately, against a family the
+    // browser may not have loaded. Re-arm the wait for the new stack and fit
+    // again once it settles, so the setting takes effect at the right size
+    // without needing a tab switch. The fit below still runs, so the terminal
+    // is never left unfitted if the wait is slow.
+    this._terminalFontReady = this._awaitTerminalFont().then(() => {
+      if (this.terminal?.options?.fontFamily === resolved) this.fitAddon?.fit();
+    });
     this.fitAddon?.fit();
     this._localEchoOverlay?.refreshFont();
     this._predictiveEcho?.refreshFont();
@@ -4798,6 +4812,65 @@ Object.assign(CodemanApp.prototype, {
         this.terminal.options.fontSize = size;
         document.getElementById('fontSizeDisplay').textContent = size;
       }
+    }
+  },
+
+  /**
+   * Wait for the terminal's own font, then make xterm re-measure against it.
+   *
+   * A character cell measured against a fallback font has a different width and
+   * height from one measured against the terminal font, so a fit taken too early
+   * produces the wrong column and row count. The correction then arrives after
+   * the buffer has been replayed, and the CLI redraws a frame that no longer
+   * matches what the terminal is showing.
+   *
+   * ⚠️ Waiting is not sufficient on its own, which is what the re-measure at the
+   * end is for. `FitAddon.proposeDimensions()` divides the container by a CACHED
+   * cell size, and xterm refreshes that cache only from `open()`, from a resize
+   * that actually changed the grid, and on a device-pixel-ratio change — nothing
+   * in it listens for font loading. So a fit that runs after the font arrives can
+   * still divide by the fallback cell, propose the grid it already has, and
+   * short-circuit before anything re-measures.
+   *
+   * `document.fonts.load` for each family is what actually REQUESTS the faces:
+   * the WebGL renderer rasterises glyphs through a canvas texture atlas, and
+   * canvas text never triggers a CSS font fetch, so `document.fonts.ready` can
+   * resolve with a face never having been asked for at all.
+   *
+   * Every step is best-effort and the whole thing is bounded, because a font
+   * request that never settles must not hold up the terminal: `FontFaceSet.ready`
+   * has no deadline of its own, and the caller awaits this in front of the buffer
+   * replay. Past the deadline we fit against whatever is painted, which is the
+   * old behaviour rather than a new failure.
+   */
+  async _awaitTerminalFont() {
+    try {
+      if (typeof document === 'undefined' || !document.fonts?.load) return;
+      const size = this.terminal?.options?.fontSize || 14;
+      const families = String(this.terminal?.options?.fontFamily || '')
+        .split(',')
+        .map((family) => family.trim().replace(/^["']|["']$/g, ''))
+        .filter(Boolean)
+        // Only the faces that can supply the measured glyph are worth waiting on.
+        // The bundled symbols font is ~1.2MB and carries private-use-area glyphs
+        // only — xterm measures `W`, which it does not contain — so awaiting it
+        // puts a megabyte between the user and their first frame for nothing.
+        // Generic families match no FontFace at all.
+        .filter((family) => !TERMINAL_FONT_UNMEASURED.has(family.toLowerCase()));
+      const loaded = Promise.all(
+        families.map((family) => document.fonts.load(`${size}px "${family}"`).catch(() => {}))
+      ).then(() => document.fonts.ready);
+      await Promise.race([loaded, new Promise((resolve) => setTimeout(resolve, TERMINAL_FONT_WAIT_MS))]);
+    } catch {
+      /* font loading is unavailable or failed — fit against whatever is painted */
+    }
+    // Force the cache refresh xterm will not do for us. Without this the wait
+    // buys nothing on the common path (see the warning above). Private API, as
+    // FitAddon itself is; guarded because a terminal can be disposed mid-wait.
+    try {
+      this.terminal?._core?._charSizeService?.measure();
+    } catch {
+      /* renderer not ready or internals moved — the next real resize re-measures */
     }
   },
 
