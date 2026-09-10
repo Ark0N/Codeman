@@ -359,3 +359,30 @@ export function getLastTranscriptResponse(blocks: ResponseViewerTranscriptBlock[
   }
   return '';
 }
+
+/**
+ * The messages of the most recent turn that has an answer: every assistant
+ * message whose `turn` matches the highest turn any assistant message carries.
+ *
+ * This is what the viewer's brief ("Last Response") view renders for Claude.
+ * The brief `text` is one row — the last assistant row — and a Claude turn is
+ * a median of 3 rows (p90 11), so that row alone was usually the tail of the
+ * answer ("Done.") with the substance in the rows before it. Reading the whole
+ * turn gives the same cards the full view shows for it, and no more.
+ *
+ * Deliberately NOT "everything after the last user message": a prompt queued
+ * while the agent works opens a new, still-unanswered turn, and the honest
+ * brief view is then the previous, answered one — exactly the row `text`
+ * already points at. Messages without a numeric `turn` (Codex, the pane
+ * parser, an older reader) yield an empty list so callers fall back to `text`.
+ */
+export function selectLastAnsweredTurn<T extends { role: string; turn?: number }>(messages: T[]): T[] {
+  let latest = -1;
+  for (const message of messages) {
+    if (message.role === 'assistant' && typeof message.turn === 'number' && message.turn > latest) {
+      latest = message.turn;
+    }
+  }
+  if (latest < 0) return [];
+  return messages.filter((message) => message.role === 'assistant' && message.turn === latest);
+}
