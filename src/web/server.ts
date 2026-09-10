@@ -181,6 +181,7 @@ import {
   registerTabLayoutRoutes,
   tryWebviewRefererFallback,
 } from './routes/index.js';
+import { isLostWebviewFrameNavigation, lostWebviewFramePage, LOST_FRAME_PAGE_CSP } from './webview-proxy.js';
 import { CronService } from '../cron/cron-service.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -976,6 +977,15 @@ export class WebServer extends EventEmitter {
       // and the relay declines unless the Referer carries a live capability, so
       // genuinely unknown `/api` paths still get the envelope below.
       if (await tryWebviewRefererFallback(req, reply, this.basePath)) return reply;
+      // An authenticated web-tab frame (Basic auth, or trusted mode with a cookie)
+      // that navigated itself off its proxy prefix: the runtime shim masks the
+      // prefix so the page's router sees its own path, and a reload of that page
+      // lands here. The unauthenticated form is answered in the auth middleware.
+      if (!req.url.startsWith('/api') && isLostWebviewFrameNavigation(req)) {
+        reply.header('content-security-policy', LOST_FRAME_PAGE_CSP);
+        reply.header('cache-control', 'no-store');
+        return reply.type('text/html; charset=utf-8').send(lostWebviewFramePage());
+      }
       if (req.url.startsWith('/api')) {
         return reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, notFound));
       }

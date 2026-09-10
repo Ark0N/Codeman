@@ -27,6 +27,9 @@ import {
   runtimeUrlShim,
   stripFrameAncestors,
   upstreamWebSocketUrl,
+  isLostWebviewFrameNavigation,
+  lostWebviewFramePage,
+  LOST_FRAME_PAGE_CSP,
 } from '../src/web/webview-proxy.js';
 
 const CAP = 'A'.repeat(32);
@@ -718,5 +721,99 @@ describe('reverse-proxy base path', () => {
     expect(capabilityFromReferer(`https://box.ts.net/codeman-docs/webview/${CAP}/page`, BASE)).toBeNull();
     // Without the base arg the prefixed Referer no longer matches (documents why the arg exists).
     expect(capabilityFromReferer(`https://box.ts.net${BASED_PREFIX}page`)).toBeNull();
+  });
+});
+
+/**
+ * Route masking. A single-page app routes on `location.pathname` at boot; through
+ * the proxy that path starts with `/webview/<cap>/`, which no app has a route for,
+ * so it rendered its own "page not found" the moment its script ran (measured
+ * against a minimal history-routed page: HTML and CSS painted, then the router
+ * replaced them). The shim rewrites the history entry to the path the page would
+ * see on its own origin, before any page script runs.
+ */
+describe('runtimeUrlShim route masking', () => {
+  const body = runtimeUrlShim(PREFIX)
+    .replace(/^<script>/, '')
+    .replace(/<\/script>$/, '');
+
+  function boot(url: string) {
+    const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
+      url,
+      runScripts: 'outside-only',
+    });
+    dom.window.eval(body);
+    return dom.window;
+  }
+
+  it('masks the proxy prefix off the document URL so the router sees its own path', () => {
+    const win = boot(`https://codeman.local${PREFIX}pages/report?tab=2#top`);
+    expect(win.location.pathname).toBe('/pages/report');
+    expect(win.location.search).toBe('?tab=2');
+    expect(win.location.hash).toBe('#top');
+  });
+
+  it('maps the landing page to /', () => {
+    expect(boot(`https://codeman.local${PREFIX}`).location.pathname).toBe('/');
+  });
+
+  it('keeps rewriting root-absolute URLs into the prefix after masking', () => {
+    const win = boot(`https://codeman.local${PREFIX}`);
+    const calls: string[] = [];
+    // Patched fetch is a closure over the ORIGINAL window.fetch; jsdom has none,
+    // so exercise the same rewrite through an <a> href, which is a patched sink.
+    const a = win.document.createElement('a');
+    a.href = '/api/data';
+    calls.push(a.getAttribute('href') ?? '');
+    expect(calls).toEqual([`${PREFIX}api/data`]);
+  });
+
+  it('leaves a document that is not under the prefix alone', () => {
+    const win = boot('https://codeman.local/somewhere/else');
+    expect(win.location.pathname).toBe('/somewhere/else');
+  });
+
+  it('patches window.open so a popup stays inside the prefix', () => {
+    const win = boot(`https://codeman.local${PREFIX}`);
+    const opened: string[] = [];
+    // The shim wrapped the original; swap the original out from under it by
+    // re-running against a stub is not possible, so verify the wrapper shape.
+    const original = win.open;
+    expect(typeof original).toBe('function');
+    Object.defineProperty(win, 'open', { value: (u: string) => opened.push(u), configurable: true });
+    // A second shim run wraps the stub (the __cmrw guard applies to setters, not
+    // to window.open, which has no marker of its own to preserve).
+    win.eval(body);
+    win.open('/print');
+    expect(opened).toEqual([`${PREFIX}print`]);
+  });
+});
+
+describe('lost-frame recovery', () => {
+  const nav = (headers: Record<string, string>, method = 'GET') => isLostWebviewFrameNavigation({ method, headers });
+
+  it('recognises a top-level iframe navigation asking for HTML', () => {
+    expect(nav({ 'sec-fetch-dest': 'iframe', 'sec-fetch-mode': 'navigate', accept: 'text/html,*/*' })).toBe(true);
+    expect(nav({ 'sec-fetch-dest': 'frame', accept: 'text/html' })).toBe(true);
+  });
+
+  it('refuses subresource fetches, non-HTML accepts, and writes', () => {
+    expect(nav({ 'sec-fetch-dest': 'script', 'sec-fetch-mode': 'no-cors', accept: '*/*' })).toBe(false);
+    expect(nav({ 'sec-fetch-dest': 'iframe', 'sec-fetch-mode': 'cors', accept: 'text/html' })).toBe(false);
+    expect(nav({ 'sec-fetch-dest': 'iframe', accept: 'application/json' })).toBe(false);
+    expect(nav({ accept: 'text/html' })).toBe(false);
+    expect(nav({ 'sec-fetch-dest': 'iframe', accept: 'text/html' }, 'POST')).toBe(false);
+  });
+
+  it('serves a page whose only script posts the lost path to the parent, and hashes it in the CSP', async () => {
+    const page = lostWebviewFramePage();
+    const script = /<script>([\s\S]*?)<\/script>/.exec(page)?.[1] ?? '';
+    expect(script).toContain("postMessage({type:'codeman:webview-lost',path:path},'*')");
+    const { createHash } = await import('node:crypto');
+    const hash = createHash('sha256').update(script, 'utf8').digest('base64');
+    expect(LOST_FRAME_PAGE_CSP).toContain(`'sha256-${hash}'`);
+    expect(LOST_FRAME_PAGE_CSP).toContain("default-src 'none'");
+    // The page must never carry a Referer that would leak anything about the tab.
+    expect(page).toContain('name="referrer" content="no-referrer"');
   });
 });

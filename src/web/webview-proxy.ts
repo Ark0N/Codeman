@@ -38,6 +38,7 @@
  * that everything else here works to preserve.
  */
 
+import { createHash } from 'node:crypto';
 import { WEBVIEW_PROXY_PREFIX } from '../config/webview-limits.js';
 import { stripBasePath } from '../config/base-path.js';
 
@@ -425,6 +426,21 @@ export function runtimeUrlShim(prefix: string): string {
   // and a throw here would break the dashboard rather than fix it.
   return `<script>(function(){try{
 var P=${JSON.stringify(prefix)};
+// Route masking. A single-page app reads location.pathname on boot and routes
+// on it; through the proxy that path starts with /webview/<cap>/, which no app
+// has a route for, so it rendered its own "page not found" the moment its
+// script ran — after the HTML and CSS had already painted. Replace the entry
+// with the path the page would see on its own origin. The base element still resolves
+// relative URLs inside the prefix, and every root-absolute sink below is
+// rewritten back into it, so only what the page READS changes. The parent
+// tab remounts the frame if the page ever navigates itself off the prefix
+// (see lostWebviewFramePage), which is what makes a masked reload survivable.
+try{
+  var L=location.pathname;
+  if(L.indexOf(P)===0&&window.history&&typeof history.replaceState==='function'){
+    history.replaceState(history.state,'',L.slice(P.length-1)+location.search+location.hash);
+  }
+}catch(e){}
 function rw(u){
   try{
     if(u==null)return u;
@@ -457,13 +473,24 @@ if(window.XMLHttpRequest&&XMLHttpRequest.prototype.open){
     var a=[].slice.call(arguments);a[1]=rw(u);return oo.apply(this,a);
   };
 }
-['WebSocket','EventSource'].forEach(function(k){
+['WebSocket','EventSource','Worker','SharedWorker'].forEach(function(k){
   var C=window[k];if(!C)return;
   function W(u,p){return p===undefined?new C(rw(u)):new C(rw(u),p);}
   W.prototype=C.prototype;
   ['CONNECTING','OPEN','CLOSING','CLOSED'].forEach(function(s){if(s in C)W[s]=C[s];});
   window[k]=W;
 });
+// With the document URL masked, a request the shim misses can no longer be
+// rescued by its Referer (that carried the prefix), so the remaining
+// URL-taking entry points are covered here rather than left to the fallback.
+if(window.navigator&&typeof navigator.sendBeacon==='function'){
+  var ob=navigator.sendBeacon;
+  navigator.sendBeacon=function(u,d){return ob.call(navigator,rw(u),d);};
+}
+if(typeof window.open==='function'){
+  var ow=window.open;
+  window.open=function(u){var a=[].slice.call(arguments);a[0]=rw(u);return ow.apply(this,a);};
+}
 var A=['src','href','action','poster','data','formaction','srcset'];
 function rwSet(v){
   try{
@@ -679,4 +706,61 @@ export function upstreamWebSocketUrl(target: URL): string {
   const ws = new URL(target.href);
   ws.protocol = ws.protocol === 'https:' ? 'wss:' : 'ws:';
   return ws.href;
+}
+
+// ───────────────────────── Lost-frame recovery ─────────────────────────
+
+/**
+ * The script the recovery page runs. Kept as a constant so its CSP hash below
+ * is computed from the exact bytes that are served.
+ */
+const LOST_FRAME_SCRIPT = `(function(){try{
+var path=location.pathname+location.search+location.hash;
+if(window.parent&&window.parent!==window){window.parent.postMessage({type:'codeman:webview-lost',path:path},'*');}
+}catch(e){}})();`;
+
+const LOST_FRAME_SCRIPT_HASH = createHash('sha256').update(LOST_FRAME_SCRIPT, 'utf8').digest('base64');
+
+/** CSP for the recovery page: nothing but its own hashed inline script. */
+export const LOST_FRAME_PAGE_CSP = `default-src 'none'; script-src 'sha256-${LOST_FRAME_SCRIPT_HASH}'; style-src 'unsafe-inline'`;
+
+/**
+ * Whether this request is a web-tab frame that has navigated off its proxy prefix.
+ *
+ * The runtime shim masks `/webview/<cap>/` off the document URL so a single-page
+ * app routes on the path it expects. The price is that a navigation the page
+ * starts ITSELF — `location.reload()` (a dev server's full-reload HMR), a
+ * root-absolute `location.href = '/login'` — now targets Codeman's own root with
+ * no capability anywhere on it: no prefix in the path, no cookie in an
+ * opaque-origin frame, and a Referer that names the masked page. Such a request
+ * is recognisable by shape alone: a top-level navigation of an `<iframe>`
+ * (`Sec-Fetch-Dest`), asking for HTML, for a path Codeman does not serve.
+ *
+ * The answer is `lostWebviewFramePage()`, a static page whose only content is a
+ * `postMessage` to the parent naming the path; the Codeman tab that owns the
+ * frame remounts it inside the prefix at that path. Nothing is exempted from
+ * auth by this except that static page, which carries no data.
+ */
+export function isLostWebviewFrameNavigation(req: {
+  method: string;
+  headers: Record<string, string | string[] | undefined>;
+}): boolean {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  const dest = req.headers['sec-fetch-dest'];
+  if (dest !== 'iframe' && dest !== 'frame') return false;
+  const mode = req.headers['sec-fetch-mode'];
+  if (mode !== undefined && mode !== 'navigate') return false;
+  const accept = req.headers.accept;
+  return typeof accept === 'string' && accept.includes('text/html');
+}
+
+/** The static page that hands a lost frame back to its owning tab. */
+export function lostWebviewFramePage(): string {
+  return (
+    '<!doctype html><html><head><meta charset="utf-8"><title>Reconnecting</title>' +
+    '<meta name="referrer" content="no-referrer"></head>' +
+    '<body style="margin:0;font:14px system-ui,sans-serif;color:#888;padding:16px">' +
+    'Reconnecting this web tab…' +
+    `<script>${LOST_FRAME_SCRIPT}</script></body></html>`
+  );
 }
