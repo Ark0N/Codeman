@@ -2314,6 +2314,27 @@ Object.assign(CodemanApp.prototype, {
         return;
       }
 
+      // Ctrl+Z (SIGTSTP/job-control suspend): a teammate/subagent pane is always
+      // running an agent CLI (Task-tool dispatched, never a plain shell), so
+      // unlike the main terminal's mode-gated trap this one is unconditional.
+      // Mirrors the main terminal's guard in terminal-ui.js's
+      // attachCustomKeyEventHandler — case-insensitive so Caps Lock (which
+      // flips ev.key to 'Z' without setting shiftKey) can't slip a suspend past it.
+      terminal.attachCustomKeyEventHandler((ev) => {
+        if (
+          ev.type === 'keydown' &&
+          ev.key.toLowerCase() === 'z' &&
+          ev.ctrlKey &&
+          !ev.altKey &&
+          !ev.metaKey &&
+          !ev.shiftKey
+        ) {
+          ev.preventDefault();
+          return false;
+        }
+        return true;
+      });
+
       // Wait for terminal renderer to fully initialize before any writes.
       // xterm.js needs a few frames after open() before write() is safe.
       setTimeout(() => {

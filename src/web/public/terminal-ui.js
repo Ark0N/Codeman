@@ -363,6 +363,29 @@ Object.assign(CodemanApp.prototype, {
         return false;
       }
 
+      // Ctrl+Z (SIGTSTP/job-control suspend): in a plain shell session this is the
+      // user's own job-control tool (suspend a foreground command, `fg` it back) —
+      // leave it alone. In every other mode (claude/omp/pi/codex/... — Ink/TUI apps
+      // that normally run in raw mode with ISIG off, so ^Z is usually inert there
+      // already) suspending the CLI stops an unattended agent loop dead with no
+      // visible output — the same failure shape as an XOFF freeze. Swallow it
+      // before xterm can send \x1a into the PTY rather than relying on every CLI's
+      // raw-mode state holding at every instant (startup, raw-mode toggles, etc).
+      if (
+        ev.type === 'keydown' &&
+        ev.key.toLowerCase() === 'z' &&
+        ev.ctrlKey &&
+        !ev.altKey &&
+        !ev.metaKey &&
+        !ev.shiftKey
+      ) {
+        const activeCtrlZSession = this.activeSessionId ? this.sessions.get(this.activeSessionId) : null;
+        if (activeCtrlZSession && activeCtrlZSession.mode !== 'shell') {
+          ev.preventDefault();
+          return false;
+        }
+      }
+
       // Shift+Enter / Ctrl+Enter: insert newline for multi-line input.
       // xterm.js sends plain \r for all Enter variants, so Claude Code (Ink) can't
       // distinguish them. We use tmux send-keys -H to send a line feed byte (0x0a)
