@@ -2603,6 +2603,12 @@ export function registerSessionRoutes(
         ? 'mux-full-history'
         : 'mux-visible'
       : 'history';
+    // What the three row-preserving skips below must key on. `isFullReload` is
+    // only what the CLIENT ASKED FOR: when the capture comes back null — ENOBUFS,
+    // a timeout, a vanished pane, or a session with no mux at all — rawBuffer
+    // falls back to the byte history, which is a stream of successive frames with
+    // no row alignment to protect and every reason to be stripped.
+    const isFullCapture = isFullReload && hasLiveMuxBuffer;
     let rawBuffer: string;
     if (liveMuxBuffer !== null && liveMuxBuffer.length > 0) {
       // Full-history capture is the RENDERED form of everything already in the
@@ -2649,8 +2655,16 @@ export function registerSessionRoutes(
     // During long thinking phases, Ink rewrites the same rows thousands of times
     // (500KB+). Without stripping, tail mode returns only spinner frames and
     // the terminal appears empty when switching tabs.
+    // A full reload's buffer IS the rendered pane, one line per screen row, and
+    // it ends with an absolute cursor move back to the pane's own position.
+    // Every transform below that can DELETE A LINE would shift the rows out from
+    // under that position, leaving the caret a row off — on the composer's
+    // border rather than its input line. Redraw-bloat stripping exists for a
+    // byte stream of successive frames; a capture holds no successive frames.
     let strippedBuffer =
-      getCli(session.mode)?.capabilities.stripInkBloat === false ? rawBuffer : stripInkRedrawBloat(rawBuffer);
+      isFullCapture || getCli(session.mode)?.capabilities.stripInkBloat === false
+        ? rawBuffer
+        : stripInkRedrawBloat(rawBuffer);
 
     // Strip alt-screen toggles and scrollback-erase from Codex/Claude byte
     // streams. xterm.js obeys them by switching to its scrollback-less alt
@@ -2688,7 +2702,10 @@ export function registerSessionRoutes(
       cleanBuffer = strippedBuffer;
 
       // Find where Claude banner starts (has color codes before "Claude")
-      const claudeMatch = cleanBuffer.match(CLAUDE_BANNER_PATTERN);
+      // Skipped for a full reload: the banner sits at whatever row the pane has
+      // it, and cutting to it would drop the blank rows above and move every
+      // row up by that many.
+      const claudeMatch = isFullCapture ? null : cleanBuffer.match(CLAUDE_BANNER_PATTERN);
       if (claudeMatch && claudeMatch.index !== undefined && claudeMatch.index > 0) {
         let lineStart = claudeMatch.index;
         while (lineStart > 0 && cleanBuffer[lineStart - 1] !== '\n') {
@@ -2699,7 +2716,11 @@ export function registerSessionRoutes(
     }
 
     // Remove Ctrl+L and leading whitespace (cheap on tailed subset)
-    cleanBuffer = cleanBuffer.replace(CTRL_L_PATTERN, '').replace(LEADING_WHITESPACE_PATTERN, '');
+    // Leading whitespace goes too, except on a full reload where a leading
+    // blank line is the pane's own first row and dropping it shifts every row
+    // up by one.
+    cleanBuffer = cleanBuffer.replace(CTRL_L_PATTERN, '');
+    if (!isFullCapture) cleanBuffer = cleanBuffer.replace(LEADING_WHITESPACE_PATTERN, '');
 
     const finishedAt = performance.now();
     reply.header(

@@ -528,6 +528,73 @@ export function normalizeScrollbackEol(buffer: string): string {
   return buffer.replace(/\r?\n/g, '\r\n');
 }
 
+/** Pane geometry and caret position, as `display-message` reports them. */
+interface PaneCursorGeometry {
+  cols: number;
+  rows: number;
+  cursorX: number;
+  cursorY: number;
+}
+
+/**
+ * Read the pane's cursor and size, or null when tmux cannot say.
+ *
+ * Every field is validated together: a caller that gets a value back can place
+ * a caret with it, and one that gets null must not try.
+ */
+export function queryPaneCursor(run: () => string): PaneCursorGeometry | null {
+  let raw: string;
+  try {
+    raw = run().trim();
+  } catch (cursorErr) {
+    console.error('[TmuxManager] Failed to query pane cursor after capture:', cursorErr);
+    return null;
+  }
+  const [cursorX, cursorY, cols, rows] = raw.split(/\s+/).map((value) => parseInt(value, 10));
+  if (
+    !Number.isFinite(cursorX) ||
+    !Number.isFinite(cursorY) ||
+    !Number.isFinite(cols) ||
+    !Number.isFinite(rows) ||
+    cursorX < 0 ||
+    cursorY < 0 ||
+    cols <= 0 ||
+    rows <= 0
+  ) {
+    return null;
+  }
+  return { cols, rows, cursorX, cursorY };
+}
+
+/** SGR attributes, which is all `capture-pane -e` emits. */
+// eslint-disable-next-line no-control-regex
+const CAPTURE_STYLE_SEQUENCE = /\x1b\[[0-9;:]*m/g;
+
+/** Whether a capture holds anything a reader would see, styles discounted. */
+export function hasVisibleContent(capture: string): boolean {
+  return /\S/.test(capture.replace(CAPTURE_STYLE_SEQUENCE, ''));
+}
+
+/**
+ * Put the caret back where the pane has it, counting UP from the bottom of what
+ * was just replayed.
+ *
+ * Relative rather than absolute (`CUP`) on purpose. `\x1b[<row>;<col>H` numbers
+ * rows from the top of the browser's screen, so it only lands correctly while
+ * the browser's row count equals the pane's — and it need not, because
+ * `resizeWindow` fires its tmux resize without waiting, so a capture can be
+ * taken before a requested resize has been applied. Counting up from the last
+ * replayed row is anchored to the content instead, which is the thing both ends
+ * genuinely share.
+ */
+export function formatCursorRestore(geometry: PaneCursorGeometry): string {
+  const up = Math.max(0, geometry.rows - 1 - geometry.cursorY);
+  const right = Math.max(0, geometry.cursorX);
+  // `\r` first so the column is known: the replay leaves the caret wherever the
+  // last row's text ended.
+  return `${up > 0 ? `\x1b[${up}A` : ''}\r${right > 0 ? `\x1b[${right}C` : ''}`;
+}
+
 export function formatPaneSnapshot(
   lines: string[],
   geometry: { cols: number; rows: number; cursorX: number; cursorY: number }
@@ -3199,11 +3266,14 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    *   the browser xterm reproduces the live frame. Used for fast tab switches.
    * - Full history (`opts.fullHistory`): `capture-pane -p -e -J -S -<N>` grabs
    *   the tmux scrollback (COD-47, bounded to the configured history limit),
-   *   returned as linear scrollback text with SGR codes preserved (NOT
-   *   repositioned — a multi-screen history can't be painted into a single
-   *   visible frame, so the snapshot repaint is skipped). `-J` re-joins lines
-   *   hard-wrapped at the pane width so they reflow in the browser xterm.
-   *   Used for full page reloads so the user gets back their scroll history.
+   *   returned as linear scrollback text with SGR codes preserved. Rows are not
+   *   repainted at absolute positions — a multi-screen history can't be painted
+   *   into a single visible frame — but the capture DOES end with a cursor move
+   *   putting the caret back where the pane has it, counted up from the last
+   *   replayed row. `-J` re-joins lines hard-wrapped at the pane width so they
+   *   reflow in the browser xterm. Used for full page reloads so the user gets
+   *   back their scroll history. Returns '' for a pane holding nothing visible,
+   *   so the caller keeps whatever history it already had.
    *   Caveat: lines tmux has already evicted past its history-limit are gone.
    */
   /**
@@ -3262,42 +3332,41 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         execOpts.maxBuffer =
           (opts?.maxCaptureBytes ?? DEFAULT_TERMINAL_BUFFER_MAX_BYTES) + FULL_HISTORY_CAPTURE_SLACK_BYTES;
       }
-      const buffer = execSync(`${this.tmux()} ${captureFlags} -t ${shellescape(target)}`, execOpts).replace(
-        /\n+$/g,
-        ''
-      );
-      // Full-history spans many screens — return it as raw linear scrollback
-      // rather than repainting rows at single-screen absolute positions. tmux
-      // joins scrollback rows with a bare `\n`; normalize to `\r\n` so a fresh
-      // xterm (convertEol:false) starts each replayed line at column 0 instead
-      // of staircasing diagonally (COD-138).
-      if (fullHistory) {
-        return normalizeScrollbackEol(buffer);
-      }
-      try {
-        const cursor = execSync(
+      const rawCapture = execSync(`${this.tmux()} ${captureFlags} -t ${shellescape(target)}`, execOpts);
+      // Query the cursor BEFORE deciding anything else. On the full-history path
+      // it settles both how the capture is trimmed and whether a cursor move is
+      // appended, and those two have to agree: trailing blank rows are only safe
+      // to keep when a move follows to put the caret back above them.
+      const geometry = queryPaneCursor(() =>
+        execSync(
           `${this.tmux()} display-message -p -t ${shellescape(target)} '#{cursor_x} #{cursor_y} #{pane_width} #{pane_height}'`,
-          {
-            encoding: 'utf-8',
-            timeout: EXEC_TIMEOUT_MS,
-          }
-        ).trim();
-        const [cursorX, cursorY, cols, rows] = cursor.split(/\s+/).map((value) => parseInt(value, 10));
-        if (
-          Number.isFinite(cursorX) &&
-          Number.isFinite(cursorY) &&
-          Number.isFinite(cols) &&
-          Number.isFinite(rows) &&
-          cursorX >= 0 &&
-          cursorY >= 0 &&
-          cols > 0 &&
-          rows > 0
-        ) {
-          return formatPaneSnapshot(buffer.split('\n'), { cols, rows, cursorX, cursorY });
-        }
-      } catch (cursorErr) {
-        console.error('[TmuxManager] Failed to query pane cursor after capture:', cursorErr);
+          { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+        )
+      );
+
+      if (fullHistory) {
+        // Without geometry there is no cursor move, so fall back to the old trim.
+        // Keeping the blank rows here would park the caret at the bottom of the
+        // pane with nothing to correct it — worse than not trying at all.
+        if (!geometry) return normalizeScrollbackEol(rawCapture.replace(/\n+$/g, ''));
+        // Take the line terminator off and nothing else. The trailing blank rows
+        // that remain are the real bottom of the screen, and the cursor move
+        // below counts up from it. tmux joins rows with a bare `\n`; normalize to
+        // `\r\n` so a fresh xterm (convertEol:false) starts each replayed line at
+        // column 0 instead of staircasing diagonally (COD-138).
+        const trimmed = rawCapture.replace(/\n$/, '');
+        // An all-blank pane has to keep reading as "nothing to replay". The caller
+        // treats an empty string as "capture unavailable" and keeps the byte
+        // history; blank rows plus a cursor move are not empty, so without this a
+        // blank pane REPLACES that history with a blank screen — the downgrade
+        // `_replayWouldShrinkBuffer` exists to refuse, arriving from the server
+        // side where that guard cannot see it.
+        if (!hasVisibleContent(trimmed)) return '';
+        return `${normalizeScrollbackEol(trimmed)}${formatCursorRestore(geometry)}`;
       }
+
+      const buffer = rawCapture.replace(/\n+$/g, '');
+      if (geometry) return formatPaneSnapshot(buffer.split('\n'), geometry);
       // Cursor query failed or geometry was invalid, so we skip the absolute-
       // positioned snapshot repaint and fall back to the raw capture. Normalize
       // its bare `\n` line endings to `\r\n` so the replay doesn't staircase

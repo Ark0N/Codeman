@@ -137,7 +137,12 @@ export interface RespawnPaneOptions {
 
 /** Options for pane buffer capture (COD-47 full-history mode). */
 export interface PaneCaptureOptions {
-  /** Capture the entire tmux scrollback instead of just the visible frame. */
+  /**
+   * Capture the entire scrollback instead of just the visible frame, as linear
+   * text ending with a cursor move back to the pane's caret position. An
+   * implementation returns '' when the pane holds nothing visible, which the
+   * caller reads as "nothing to replay" and keeps its existing history.
+   */
   fullHistory?: boolean;
   /** Bound the full-history capture to this many scrollback lines (`-S -<N>`). */
   historyLimitLines?: number;
