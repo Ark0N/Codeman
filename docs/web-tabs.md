@@ -52,6 +52,25 @@ sandbox, cookies, CORS, CSP, or any reverse proxy sitting in front of Codeman, s
 passing Test does not guarantee the embedded page will render (see the
 cookie-authenticated reverse proxy caveat below).
 
+## Links to `localhost` from another device
+
+An agent prints `http://localhost:5173/` (a dev server, a preview, a report it just
+served) and you tap it on your phone. That address only exists on the Codeman box, so
+the phone's browser can never load it — but the web-tab proxy fetches from the server,
+where it works.
+
+So a **loopback** link (`localhost`, `*.localhost`, `127.0.0.0/8`, `0.0.0.0`, `::1`) clicked
+in the terminal or in the Response Viewer opens as a **proxied web tab** whenever the
+Codeman page itself is not on that box. A saved proxied dashboard on the same origin is
+reused (one tab per dev server, with the link's own path opened inside it); otherwise
+one is saved under its `host:port` so it is in the Run dropdown next time. Sandboxed by
+default, like any other web tab.
+
+Only loopback is routed this way. A LAN or tailnet address (`192.168.…`, `100.…`,
+`box.ts.net`) may well be reachable from the device — a VPN, the same Wi-Fi — and a
+direct open is the cheaper, richer path, so those links still open in a new browser tab.
+On the box itself (a browser on `localhost`) every link opens directly.
+
 ## The sandbox, and when to turn it off
 
 Because a proxied dashboard is served from Codeman's own address, it is

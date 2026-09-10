@@ -2149,6 +2149,16 @@ class CodemanApp {
         return;
       }
 
+      // A `localhost` URL in the agent's answer: from another device that can
+      // only load through the server, so hand it to a proxied web tab
+      // (webview-tabs.js). Every other link keeps its new-tab default.
+      const urlLink = ev.target.closest('a[href]');
+      if (urlLink && this.openLinkThroughWebTabIfLoopback?.(urlLink.href)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        return;
+      }
+
       // One-click copy: lift the raw source from the sibling <pre><code>.
       const copyBtn = ev.target.closest('.rv-copy-btn');
       if (copyBtn) {

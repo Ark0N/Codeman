@@ -1448,6 +1448,10 @@ Object.assign(CodemanApp.prototype, {
             range: { start, end },
             decorations: { pointerCursor: true, underline: true },
             activate(_event, text) {
+              // A `localhost` link tapped from another device can only work
+              // through the server: route it into a proxied web tab
+              // (webview-tabs.js). Anything else opens as before.
+              if (self.openLinkThroughWebTabIfLoopback?.(text)) return;
               window.open(text, '_blank', 'noopener,noreferrer');
             },
             hover() {
