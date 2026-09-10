@@ -191,7 +191,9 @@ describe('file-raw range requests', () => {
   });
 
   it('still refuses files past the raw size cap before looking at Range', async () => {
-    mockedStat.mockResolvedValue({ size: 100 * 1024 * 1024, isFile: () => true } as never);
+    // 3GB, past the 2GB CODEMAN_MAX_DOWNLOAD_BYTES default. The cap is checked
+    // before the range, so a small slice of an oversized file is refused too.
+    mockedStat.mockResolvedValue({ size: 3 * 1024 * 1024 * 1024, isFile: () => true } as never);
 
     const res = await harness.app.inject({
       method: 'GET',
@@ -199,6 +201,18 @@ describe('file-raw range requests', () => {
       headers: { range: 'bytes=0-99' },
     });
 
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(413);
+  });
+
+  it('serves a 100MB file that the historical 50MB cap would have refused', async () => {
+    mockedStat.mockResolvedValue({ size: 100 * 1024 * 1024, isFile: () => true } as never);
+
+    const res = await harness.app.inject({
+      method: 'GET',
+      url: rawUrl('big.mp4'),
+      headers: { range: 'bytes=0-99' },
+    });
+
+    expect(res.statusCode).toBe(206);
   });
 });

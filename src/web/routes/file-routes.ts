@@ -50,6 +50,7 @@ import {
 } from '../route-helpers.js';
 import type { FastifyRequest } from 'fastify';
 import type { SessionAttachmentHistoryItem, SessionState } from '../../types/session.js';
+import { downloadTooLargeMessage, exceedsDownloadLimit } from '../../config/buffer-limits.js';
 import { parseByteRange } from '../http-range.js';
 import { isSensitivePath } from '../sensitive-path.js';
 import { SseEvent } from '../sse-events.js';
@@ -183,16 +184,8 @@ async function serveRawFile(
   rangeHeader?: string | string[]
 ): Promise<void> {
   const stat = await fs.stat(resolvedPath);
-  const MAX_RAW_ATTACHMENT_SIZE = 50 * 1024 * 1024; // 50MB, matching file-raw / download
-  if (stat.size > MAX_RAW_ATTACHMENT_SIZE) {
-    reply
-      .code(413)
-      .send(
-        createErrorResponse(
-          ApiErrorCode.INVALID_INPUT,
-          `File too large (${Math.round(stat.size / 1024 / 1024)}MB > ${MAX_RAW_ATTACHMENT_SIZE / 1024 / 1024}MB limit)`
-        )
-      );
+  if (exceedsDownloadLimit(stat.size)) {
+    reply.code(413).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, downloadTooLargeMessage(stat.size)));
     return;
   }
   // Markup is download-only: served with a renderable type on our own origin it
@@ -1562,18 +1555,11 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     const { resolvedPath } = validated;
 
     try {
-      // Validate file size before reading (DoS protection - prevent memory exhaustion)
-      const MAX_RAW_FILE_SIZE = 50 * 1024 * 1024; // 50MB for raw files
+      // Sanity bound only: the body below is streamed and Range-aware, so size
+      // does not translate into resident memory. Configurable, 0 = unlimited.
       const stat = await fs.stat(resolvedPath);
-      if (stat.size > MAX_RAW_FILE_SIZE) {
-        reply
-          .code(400)
-          .send(
-            createErrorResponse(
-              ApiErrorCode.INVALID_INPUT,
-              `File too large (${Math.round(stat.size / 1024 / 1024)}MB > ${MAX_RAW_FILE_SIZE / 1024 / 1024}MB limit)`
-            )
-          );
+      if (exceedsDownloadLimit(stat.size)) {
+        reply.code(413).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, downloadTooLargeMessage(stat.size)));
         return;
       }
 
@@ -1954,17 +1940,8 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         return;
       }
 
-      // 50MB size limit
-      const MAX_DOWNLOAD_SIZE = 50 * 1024 * 1024;
-      if (stat.size > MAX_DOWNLOAD_SIZE) {
-        reply
-          .code(400)
-          .send(
-            createErrorResponse(
-              ApiErrorCode.INVALID_INPUT,
-              `File too large (${Math.round(stat.size / 1024 / 1024)}MB > 50MB limit)`
-            )
-          );
+      if (exceedsDownloadLimit(stat.size)) {
+        reply.code(413).send(createErrorResponse(ApiErrorCode.INVALID_INPUT, downloadTooLargeMessage(stat.size)));
         return;
       }
 
@@ -1988,15 +1965,13 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       };
 
       const filename = pathBasename(resolvedPath);
-      const content = await fs.readFile(resolvedPath);
-      // Bypass Fastify compression — write directly to raw response
-      reply.raw.writeHead(200, {
-        ...inheritedHeaders(reply),
-        'Content-Type': mimeTypes[ext] || 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Content-Length': content.length,
-      });
-      reply.raw.end(content);
+      // Streamed rather than read into memory, and Range-aware, so a multi-GB
+      // artifact costs one read stream and can be resumed. sendFileBody()
+      // hijacks the reply, which also keeps Fastify's compression out of it.
+      reply.header('Content-Type', mimeTypes[ext] || 'application/octet-stream');
+      reply.header('Content-Disposition', buildContentDisposition('attachment', filename));
+      reply.header('X-Content-Type-Options', 'nosniff');
+      sendFileBody(reply, resolvedPath, stat.size, req.headers.range);
       return;
     } catch (err) {
       reply

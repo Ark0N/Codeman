@@ -112,3 +112,50 @@ export const FILE_PEEK_BYTES = 8 * 1024 - 1; // 8KB (inclusive end offset)
  * Override: CODEMAN_MAX_PASTE_IMAGE_BYTES (bytes)
  */
 export const MAX_PASTE_IMAGE_BYTES = parseInt(process.env.CODEMAN_MAX_PASTE_IMAGE_BYTES || '') || 50 * 1024 * 1024; // 50MB
+
+// ============================================================================
+// File Download Limits
+// ============================================================================
+
+/**
+ * Parse a byte-limit env var, where `0` explicitly means "no limit".
+ *
+ * The `parseInt(...) || default` idiom used elsewhere in this file cannot
+ * express that: it treats 0 as falsy and silently restores the default.
+ */
+function parseByteLimitEnv(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return parsed;
+}
+
+/**
+ * Maximum size (bytes) of a file served by the raw/download file routes:
+ * `GET /api/sessions/:id/file-raw` (the Files panel's download link and the
+ * file-preview overlay), the attachment `/raw` route, and `GET /api/download`.
+ *
+ * ⚠️ This is a sanity bound, NOT memory protection. All three bodies are
+ * STREAMED and `Range`-aware (`sendFileBody` in file-routes.ts), so a large
+ * file costs one read stream rather than its size in RSS. The historical 50MB
+ * cap predates that streaming rewrite and its "prevent memory exhaustion"
+ * comment described a `readFile()` that no longer exists — all it did was
+ * refuse legitimate downloads of build artifacts, videos and archives.
+ *
+ * Set `CODEMAN_MAX_DOWNLOAD_BYTES=0` to remove the cap entirely.
+ * Override: CODEMAN_MAX_DOWNLOAD_BYTES (bytes)
+ */
+export const MAX_FILE_DOWNLOAD_BYTES = parseByteLimitEnv(
+  process.env.CODEMAN_MAX_DOWNLOAD_BYTES,
+  2 * 1024 * 1024 * 1024 // 2GB
+);
+
+/** True when `size` exceeds the download cap (a cap of 0 means unlimited). */
+export function exceedsDownloadLimit(size: number): boolean {
+  return MAX_FILE_DOWNLOAD_BYTES > 0 && size > MAX_FILE_DOWNLOAD_BYTES;
+}
+
+/** Human-readable "File too large (…)" message for a refused download. */
+export function downloadTooLargeMessage(size: number): string {
+  return `File too large (${Math.round(size / 1024 / 1024)}MB > ${Math.round(MAX_FILE_DOWNLOAD_BYTES / 1024 / 1024)}MB limit). Raise or remove it with CODEMAN_MAX_DOWNLOAD_BYTES (0 = unlimited).`;
+}

@@ -802,14 +802,27 @@ describe('file-routes', () => {
       expect(res.statusCode).toBe(404);
     });
 
-    it('rejects overly large raw files', async () => {
-      mockedStat.mockResolvedValue({ size: 100 * 1024 * 1024 } as never); // 100MB
+    it('serves a file past the historical 50MB cap', async () => {
+      // The body is streamed and Range-aware, so size costs a read stream, not
+      // RSS. The old 50MB refusal only blocked legitimate artifact downloads.
+      mockedStat.mockResolvedValue({ size: 100 * 1024 * 1024, isFile: () => true } as never); // 100MB
 
       const res = await harness.app.inject({
         method: 'GET',
         url: `/api/sessions/${harness.ctx._sessionId}/file-raw?path=huge.bin`,
       });
-      expect(res.statusCode).toBe(400);
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('still refuses a file past the configured download cap', async () => {
+      mockedStat.mockResolvedValue({ size: 3 * 1024 * 1024 * 1024, isFile: () => true } as never); // 3GB > 2GB default
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/file-raw?path=enormous.bin`,
+      });
+      expect(res.statusCode).toBe(413);
+      expect(JSON.parse(res.body).error).toContain('CODEMAN_MAX_DOWNLOAD_BYTES');
     });
   });
 
@@ -863,8 +876,9 @@ describe('file-routes', () => {
     });
 
     it('downloads files scoped to the session working directory', async () => {
-      const content = Buffer.from('download content');
-      mockedReadFile.mockResolvedValue(content as never);
+      // The body is streamed (shared sendFileBody path), so the bytes come from
+      // the createReadStream mock rather than from readFile.
+      const content = Buffer.from('fake file bytes');
       mockedStat.mockResolvedValue({ size: content.length, isFile: () => true } as never);
 
       const res = await harness.app.inject({
@@ -874,7 +888,19 @@ describe('file-routes', () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.headers['content-disposition']).toContain('filename="report.txt"');
-      expect(res.body).toBe('download content');
+      expect(res.headers['accept-ranges']).toBe('bytes');
+      expect(res.body).toBe('fake file bytes');
+    });
+
+    it('refuses a download past the configured cap', async () => {
+      mockedStat.mockResolvedValue({ size: 3 * 1024 * 1024 * 1024, isFile: () => true } as never); // 3GB > 2GB default
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/download?sessionId=${harness.ctx._sessionId}&path=enormous.bin`,
+      });
+
+      expect(res.statusCode).toBe(413);
     });
 
     it('rejects absolute paths outside the session working directory', async () => {

@@ -312,8 +312,8 @@ TOCTOU window.
 | Route | Cap | Notes |
 |-------|-----|-------|
 | `file-content` | 10 MB | text preview |
-| `file-raw` | 50 MB | inline MIME map; **`X-Content-Type-Options: nosniff` on all responses**; streamed, `Range`-aware (206 slices come from the same validated path, and the cap is checked before the range) |
-| `POST /api/download` | 50 MB | forced `attachment`; sensitive‑path blocklist |
+| `file-raw` | 2 GB (`CODEMAN_MAX_DOWNLOAD_BYTES`, `0` = unlimited) | inline MIME map; **`X-Content-Type-Options: nosniff` on all responses**; streamed, `Range`-aware (206 slices come from the same validated path, and the cap is checked before the range) |
+| `GET /api/download` | same cap | forced `attachment`; sensitive‑path blocklist; streamed, `Range`-aware |
 
 ### SVG / content‑type XSS
 
@@ -340,7 +340,7 @@ the attachment guard below.
 
 Live external attachments (`src/attachment-registry.ts`) mint an `att_<uuid>` id
 for a host file so browser requests carry the id, never an absolute path. Serving
-is by id (`GET /api/sessions/:id/attachments/:attachmentId/raw`, 50 MB cap,
+is by id (`GET /api/sessions/:id/attachments/:attachmentId/raw`, same download cap,
 `nosniff`) and re‑resolves the symlink + re‑checks the **attachment guard**
 (`src/config/attachment-guard.ts`: the shared sensitive‑path blocklist **plus**
 the `/root` and `/etc` trees, extendable via `attachmentBlockedPaths` /

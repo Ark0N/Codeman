@@ -19,7 +19,9 @@ It renders what it can:
 | PDF and Office documents | Converted for preview when a converter is available.                       |
 | Anything else            | Download.                                                                  |
 
-Caps: 10 MB for text preview, 50 MB for raw and download. Sensitive paths (`.env`, anything
+Caps: 10 MB for text preview, 2 GB for raw and download (set `CODEMAN_MAX_DOWNLOAD_BYTES`
+to change it, `0` for no limit — these bodies are streamed, so a large file costs a read
+stream rather than server memory). Sensitive paths (`.env`, anything
 matching credentials, `~/.ssh`, AWS credentials) are blocked from download, and SVG and HTML
 are served as downloads rather than rendered, so they cannot execute in the page.
 
