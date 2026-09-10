@@ -36,6 +36,7 @@
   ].join(',');
   const USER_TEXT_SELECTOR = [
     '.history-item-title',
+    '.history-item-summary',
     '.history-item-subtitle',
     '.history-detail-prompt',
     '.history-detail-path',

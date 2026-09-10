@@ -4621,6 +4621,17 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   word-break: break-word;
 }
 
+.history-item-summary {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
 .history-item-subtitle {
   font-size: 0.65rem;
   color: var(--text-muted);

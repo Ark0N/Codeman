@@ -2369,7 +2369,22 @@ Object.assign(CodemanApp.prototype, {
       pin.title = 'Pinned';
       titleSpan.appendChild(pin);
     }
-    titleSpan.appendChild(document.createTextNode(this._historyRowLabel(s, shortDir)));
+    const rowLabel = this._historyRowLabel(s, shortDir);
+    titleSpan.appendChild(document.createTextNode(rowLabel));
+
+    // Prompt preview ("summary"): most rows carry a session `name`, which wins
+    // the title above and buries the actual conversation content — a filter or
+    // an A-Z sort still finds those rows by name, but a glance down the list
+    // can't tell one "w1-Codeman" from another. Show firstPrompt as its own line
+    // whenever it exists and isn't already what the title is displaying (an
+    // unnamed row falls through to firstPrompt as its title above, and this
+    // would just repeat it).
+    let summarySpan = null;
+    if (s.firstPrompt && s.firstPrompt !== rowLabel) {
+      summarySpan = document.createElement('span');
+      summarySpan.className = 'history-item-summary';
+      summarySpan.textContent = s.firstPrompt;
+    }
 
     // Badge row: mode (claude/codex/opencode/gemini/antigravity/pi/grok/deepseek/shell) + a LIVE pill.
     const badgeRow = document.createElement('div');
@@ -2405,6 +2420,7 @@ Object.assign(CodemanApp.prototype, {
     subtitleSpan.textContent = caseLabel;
 
     textCol.append(titleSpan);
+    if (summarySpan) textCol.append(summarySpan);
     if (badgeRow.childElementCount > 0) textCol.append(badgeRow);
     textCol.append(subtitleSpan);
 
