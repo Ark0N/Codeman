@@ -471,11 +471,11 @@ html.mobile-init .file-browser-panel {
     padding-bottom: calc(40px + var(--safe-area-bottom));
   }
 
-  /* iOS Safari: toolbar is pushed up by (100vh - --app-height) to clear the
-     browser's bottom bar. Match that offset in main's padding so the terminal
-     doesn't extend behind the toolbar. */
+  /* iOS Safari: the toolbar is lifted by --chrome-overlap where the browser's
+     bottom bar would otherwise cover it. Match that offset in main's padding so
+     the terminal doesn't extend behind the toolbar. */
   .ios-device.safari-browser .main {
-    padding-bottom: calc(40px + var(--safe-area-bottom) + (100vh - var(--app-height, 100vh)));
+    padding-bottom: calc(40px + var(--safe-area-bottom) + var(--chrome-overlap, 0px));
   }
 
   .header-right {
@@ -780,11 +780,14 @@ html.mobile-init .file-browser-panel {
     will-change: transform;
   }
 
-  /* iOS Safari with tab bar: position: fixed uses the layout viewport which
-     extends behind the browser chrome. Offset the toolbar upward by the delta
-     between 100vh (layout) and --app-height (visual). */
+  /* iOS Safari: where position: fixed anchors to a layout viewport that
+     extends behind the browser's bottom bar, lift the toolbar by that overlap.
+     --chrome-overlap is innerHeight minus the visual viewport height, set in
+     mobile-handlers.js. On iPhone Safari it is 0 because fixed elements already
+     stop above the bar; the previous (100vh - --app-height) lift measured the
+     collapsible chrome instead and left an empty band above the bar. */
   .ios-device.safari-browser .toolbar {
-    bottom: calc(var(--safe-area-bottom) + (100vh - var(--app-height, 100vh)));
+    bottom: calc(var(--safe-area-bottom) + var(--chrome-overlap, 0px));
   }
 
   /* When keyboard is visible the JS translateY already accounts for the full
