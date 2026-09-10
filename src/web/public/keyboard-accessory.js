@@ -47,11 +47,24 @@
 // the picker browses Home and every configured root, so wanting dotfiles in a
 // project does not imply wanting them in ~.
 const PATH_PICKER_SHOW_HIDDEN_KEY = 'codeman:pathPickerShowHidden';
+// Per-device like the hidden toggle: how you scan a folder is a habit of the
+// hand, not of the workspace.
+const PATH_PICKER_SORT_KEY = 'codeman:pathPickerSort';
+const PATH_PICKER_SORT_MODES = [
+  { value: 'name-asc', label: 'Name A→Z' },
+  { value: 'name-desc', label: 'Name Z→A' },
+  { value: 'mtime-desc', label: 'Newest first' },
+  { value: 'mtime-asc', label: 'Oldest first' },
+];
+const PATH_PICKER_DEFAULT_SORT = 'name-asc';
 
 const PathPicker = {
   overlay: null,
   _options: null,
   _selectedPath: '',
+  _currentPath: '',
+  _entries: [],
+  _truncated: false,
   _previousFocus: null,
   _keydownHandler: null,
   _loadSequence: 0,
@@ -59,6 +72,7 @@ const PathPicker = {
   _previewRequestSequence: 0,
   _previewPreviousFocus: null,
   _showHidden: false,
+  _sortMode: PATH_PICKER_DEFAULT_SORT,
 
   /**
    * Open the lazy filesystem browser.
@@ -69,7 +83,10 @@ const PathPicker = {
     this.close(false);
     this._options = options;
     this._selectedPath = '';
+    this._currentPath = '';
+    this._entries = [];
     this._showHidden = this._loadShowHidden();
+    this._sortMode = this._loadSortMode();
     this._previousFocus = document.activeElement;
     this._previousFocus?.blur?.();
 
@@ -90,11 +107,19 @@ const PathPicker = {
         </div>
         <div class="path-picker-nav">
           <button type="button" class="path-picker-up" title="Parent folder" aria-label="Parent folder">&#x2191;</button>
-          <div class="path-picker-current" title="Current folder"></div>
+          <form class="path-picker-jump" title="Current folder — edit and press Enter to jump">
+            <input type="text" class="path-picker-current" aria-label="Current folder path" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go">
+            <button type="submit" class="path-picker-go" title="Go to this path" aria-label="Go to this path">Go</button>
+          </form>
           <button type="button" class="path-picker-hidden" title="Show hidden files and folders" aria-label="Show hidden files and folders" aria-pressed="false">.*</button>
           <button type="button" class="path-picker-refresh" title="Refresh" aria-label="Refresh">&#x21BB;</button>
         </div>
-        <div class="path-picker-status" aria-live="polite">Loading...</div>
+        <div class="path-picker-toolbar">
+          <div class="path-picker-status" aria-live="polite">Loading...</div>
+          <label class="path-picker-sort-label">Sort
+            <select class="path-picker-sort" aria-label="Sort entries"></select>
+          </label>
+        </div>
         <div class="path-picker-list" role="listbox"></div>
         <div class="path-picker-selection">
           <span class="path-picker-selection-label">Selected</span>
@@ -114,12 +139,27 @@ const PathPicker = {
     overlay.querySelector('.path-picker-cancel').addEventListener('click', () => this.close(true));
     overlay.querySelector('.path-picker-confirm').addEventListener('click', () => this.confirm());
     overlay.querySelector('.path-picker-current-select').addEventListener('click', () => {
-      const current = overlay.querySelector('.path-picker-current').textContent;
-      if (current) this.select(current);
+      if (this._currentPath) this.select(this._currentPath);
     });
-    overlay.querySelector('.path-picker-refresh').addEventListener('click', () => this.load());
+    overlay.querySelector('.path-picker-refresh').addEventListener('click', () => this.load(this._currentPath));
     overlay.querySelector('.path-picker-hidden').addEventListener('click', () => this.toggleHidden());
     this._syncHiddenButton();
+    // Typing a path is the fast way there. The listing is loaded ONLY on Enter/Go,
+    // never on each keystroke: a half-typed path is a 404 the server has to
+    // answer for nothing, and jumping mid-edit would yank the field around.
+    overlay.querySelector('.path-picker-jump').addEventListener('submit', (event) => {
+      event.preventDefault();
+      this.jumpTo(overlay.querySelector('.path-picker-current').value);
+    });
+    const sortSelect = overlay.querySelector('.path-picker-sort');
+    for (const mode of PATH_PICKER_SORT_MODES) {
+      const option = document.createElement('option');
+      option.value = mode.value;
+      option.textContent = mode.label;
+      sortSelect.appendChild(option);
+    }
+    sortSelect.value = this._sortMode;
+    sortSelect.addEventListener('change', (event) => this.setSortMode(event.target.value));
     overlay.querySelector('.path-picker-up').addEventListener('click', () => {
       const parent = overlay.querySelector('.path-picker-up').dataset.parent;
       if (parent) this.load(parent);
@@ -169,15 +209,89 @@ const PathPicker = {
     // OFF inside a hidden folder makes the current path unbrowsable again; the
     // server answers 403 and load()'s catch falls back to the default root,
     // which is the only place left to stand.
-    this.load(this.overlay.querySelector('.path-picker-current').textContent || '');
+    this.load(this._currentPath || '');
   },
 
-  async load(path) {
+  _loadSortMode() {
+    try {
+      const stored = localStorage.getItem(PATH_PICKER_SORT_KEY);
+      return PATH_PICKER_SORT_MODES.some((mode) => mode.value === stored) ? stored : PATH_PICKER_DEFAULT_SORT;
+    } catch {
+      return PATH_PICKER_DEFAULT_SORT;
+    }
+  },
+
+  setSortMode(mode) {
+    if (!PATH_PICKER_SORT_MODES.some((candidate) => candidate.value === mode)) return;
+    this._sortMode = mode;
+    try {
+      localStorage.setItem(PATH_PICKER_SORT_KEY, mode);
+    } catch {}
+    const select = this.overlay?.querySelector('.path-picker-sort');
+    if (select && select.value !== mode) select.value = mode;
+    // Re-order what is already on screen; no round trip, no lost selection.
+    if (this.overlay) this.renderEntries();
+  },
+
+  /**
+   * Order entries for display. Folders always come first, whatever the mode:
+   * a date sort is for finding the file you just made, and the folders are the
+   * way past it, not the thing being looked for. An entry without an mtime (an
+   * older server, the in-container source) sorts after every dated one and then
+   * by name, so a listing never degrades into an unstable order.
+   */
+  _sortEntries(entries) {
+    const [key, direction] = this._sortMode.split('-');
+    const sign = direction === 'desc' ? -1 : 1;
+    const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+    return entries.slice().sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+      if (key === 'mtime') {
+        const aTime = typeof a.mtimeMs === 'number' ? a.mtimeMs : null;
+        const bTime = typeof b.mtimeMs === 'number' ? b.mtimeMs : null;
+        if (aTime !== null && bTime !== null && aTime !== bTime) return sign * (aTime - bTime);
+        if (aTime === null && bTime !== null) return 1;
+        if (aTime !== null && bTime === null) return -1;
+        return byName(a, b);
+      }
+      return sign * byName(a, b);
+    });
+  },
+
+  /** Compact modified-time label: time of day today, month-day this year, else the date. */
+  _formatModified(mtimeMs) {
+    if (typeof mtimeMs !== 'number' || !Number.isFinite(mtimeMs)) return '';
+    const date = new Date(mtimeMs);
+    if (Number.isNaN(date.getTime())) return '';
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    if (date.toDateString() === now.toDateString()) return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    if (date.getFullYear() === now.getFullYear()) return `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  },
+
+  /**
+   * Go to a path the user typed. A file path lands in its folder with the
+   * file selected, so pasting a full path from a log or a message is one Enter
+   * away from Select. A path that does not resolve lands in its parent folder
+   * when that exists (the closest place to stand) and otherwise keeps the
+   * current listing, and says so either way — unlike a stale initialPath, a
+   * typo is not a reason to throw the user back to the root.
+   */
+  jumpTo(rawPath) {
+    const path = String(rawPath || '').trim();
+    if (!path) return;
+    this.load(path, { typed: true });
+  },
+
+  async load(path, options = {}) {
     if (!this.overlay || !this._options) return;
     const loadSequence = ++this._loadSequence;
     const list = this.overlay.querySelector('.path-picker-list');
     const status = this.overlay.querySelector('.path-picker-status');
-    list.replaceChildren();
+    const typed = !!options.typed;
+    if (!typed) list.replaceChildren();
+    status.classList.remove('error');
     status.textContent = 'Loading...';
 
     const params = new URLSearchParams();
@@ -194,13 +308,40 @@ const PathPicker = {
       if (!result?.success) throw new Error(result?.error || 'Failed to browse this folder');
       if (!this.overlay || loadSequence !== this._loadSequence) return;
       this.render(result.data);
+      if (options.selectIfListed) {
+        // Landed in the typed path's folder: select the entry if it is there
+        // (a file path), otherwise say what the server said about the full
+        // path — the listing is still the closest place to stand.
+        if (this._entries.some((entry) => entry.path === options.selectIfListed)) {
+          this.select(options.selectIfListed);
+        } else {
+          status.textContent = options.failMessage || 'Path not found';
+          status.classList.add('error');
+        }
+      }
     } catch (error) {
       if (!this.overlay || loadSequence !== this._loadSequence) return;
+      const message = error.message || 'Failed to browse this folder';
+      if (typed) {
+        // The browse endpoint answers a FILE path with "not found" (it resolves
+        // folders only), so one retry lands in the parent folder and selects
+        // the entry from the listing. Only one level: a typo two segments up
+        // is an error, not a reason to climb to the root.
+        const slash = path.lastIndexOf('/');
+        if (slash > 0 && !options.selectIfListed) {
+          this.load(path.slice(0, slash), { typed: true, selectIfListed: path, failMessage: message });
+          return;
+        }
+        this.renderEntries();
+        status.textContent = options.failMessage || message;
+        status.classList.add('error');
+        return;
+      }
       if (path) {
         this.load('');
         return;
       }
-      status.textContent = error.message || 'Failed to browse this folder';
+      status.textContent = message;
       status.classList.add('error');
     }
   },
@@ -216,19 +357,29 @@ const PathPicker = {
       rootSelect.appendChild(option);
     }
 
-    this.overlay.querySelector('.path-picker-current').textContent = data.path;
+    this._currentPath = data.path;
+    this.overlay.querySelector('.path-picker-current').value = data.path;
     const up = this.overlay.querySelector('.path-picker-up');
     up.dataset.parent = data.parent || '';
     up.disabled = !data.parent;
+    this._entries = Array.isArray(data.entries) ? data.entries : [];
+    this._truncated = !!data.truncated;
+    this.renderEntries();
+  },
+
+  /** (Re)build the list from the last listing in the current sort order. */
+  renderEntries() {
+    if (!this.overlay) return;
+    const entries = this._sortEntries(this._entries);
     const status = this.overlay.querySelector('.path-picker-status');
     status.classList.remove('error');
-    status.textContent = data.entries.length === 0
+    status.textContent = entries.length === 0
       ? 'This folder is empty'
-      : `${data.entries.length} item${data.entries.length === 1 ? '' : 's'}${data.truncated ? ' (first 500)' : ''}`;
+      : `${entries.length} item${entries.length === 1 ? '' : 's'}${this._truncated ? ' (first 500)' : ''}`;
 
     const list = this.overlay.querySelector('.path-picker-list');
     list.replaceChildren();
-    for (const entry of data.entries) {
+    for (const entry of entries) {
       const row = document.createElement('div');
       row.className = 'path-picker-item';
       if (entry.type === 'file' && this._options.directoriesOnly && !entry.previewKind) {
@@ -248,6 +399,14 @@ const PathPicker = {
       name.className = 'path-picker-item-name';
       name.textContent = entry.name;
       open.append(icon, name);
+      const modified = this._formatModified(entry.mtimeMs);
+      if (modified) {
+        const meta = document.createElement('span');
+        meta.className = 'path-picker-item-meta';
+        meta.textContent = modified;
+        meta.title = new Date(entry.mtimeMs).toLocaleString();
+        open.appendChild(meta);
+      }
       if (entry.symlink) {
         const link = document.createElement('span');
         link.className = 'path-picker-item-link';
@@ -417,6 +576,8 @@ const PathPicker = {
     this._previousFocus = null;
     this._options = null;
     this._selectedPath = '';
+    this._currentPath = '';
+    this._entries = [];
     if (restoreFocus) previousFocus?.focus?.();
   },
 };

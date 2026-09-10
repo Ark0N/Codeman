@@ -117,10 +117,14 @@ For choosing a path rather than typing one. It appears in two places:
 - **Browse** in **Add Case → Link Existing**.
 - The **📁 Path** key on the mobile keyboard bar.
 
-It browses one directory at a time and can show hidden entries on request. The picker
-inserts the path into your prompt **without** pressing Enter, so nothing is submitted by
-accident. Its sibling **⌫ All** key clears the unsent prompt, and never sends the agent's
-`/clear` command.
+It browses one directory at a time and can show hidden entries on request. The current
+folder is an editable field: type or paste a path and press Enter (or **Go**) to jump
+straight there, and a full file path lands in its folder with that file selected. The
+**Sort** control orders each listing by name or by modified time (newest first is the
+quick way to the file an agent just wrote), with folders always ahead of files; the
+choice is remembered per device. The picker inserts the path into your prompt
+**without** pressing Enter, so nothing is submitted by accident. Its sibling **⌫ All**
+key clears the unsent prompt, and never sends the agent's `/clear` command.
 
 This is a separate file-serving surface from the viewer, with its own rules: it allowlists
 your home directory, the cases directory, and anything in `CODEMAN_FILE_PICKER_ROOTS`, and

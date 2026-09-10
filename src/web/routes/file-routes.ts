@@ -876,6 +876,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
 
       let type: FilesystemBrowseEntry['type'];
       let size: number | undefined;
+      let mtimeMs: number | undefined;
       const symlink = entry.isSymbolicLink();
       if (entry.isDirectory()) {
         type = 'directory';
@@ -886,6 +887,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
           const targetStat = await fs.stat(targetPath);
           type = targetStat.isDirectory() ? 'directory' : 'file';
           if (type === 'file') size = targetStat.size;
+          mtimeMs = targetStat.mtimeMs;
         } catch {
           continue;
         }
@@ -894,11 +896,15 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       }
 
       if (isBlockedPickerPath(targetPath, blockedTrees, type === 'directory')) continue;
-      if (type === 'file' && size === undefined) {
+      if (mtimeMs === undefined) {
+        // One stat per entry: the modified time lets the picker sort by date, and
+        // a file's size rides along on the same call.
         try {
-          size = (await fs.stat(targetPath)).size;
+          const targetStat = await fs.stat(targetPath);
+          mtimeMs = targetStat.mtimeMs;
+          if (type === 'file') size = targetStat.size;
         } catch {
-          // The path is still selectable even when a size lookup races a change.
+          // The path is still selectable even when a stat races a change.
         }
       }
       entries.push({
@@ -906,6 +912,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         path: visiblePath,
         type,
         size,
+        mtimeMs,
         symlink: symlink || undefined,
         previewKind: type === 'file' ? getFilesystemPreviewKind(entry.name) : undefined,
       });
