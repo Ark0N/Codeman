@@ -691,6 +691,7 @@ The web UI remains the primary surface; see **[docs/tui.md](docs/tui.md)** for t
 | `Ctrl+Shift+{` / `Ctrl+Shift+}` | Move active tab left / right                                  |
 | `Ctrl/Cmd+C`                    | Copy selection, or interrupt when nothing is selected         |
 | `Ctrl+Shift+C`                  | Copy selection (never interrupts)                             |
+| `Ctrl/Cmd+V`                    | Paste, or upload a clipboard image and paste its path          |
 | `Ctrl/Cmd+L`                    | Clear terminal                                                |
 | `Ctrl+Shift+R`                  | Restore terminal size                                         |
 | `Ctrl+Shift+V`                  | Toggle voice input                                            |

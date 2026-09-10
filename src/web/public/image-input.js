@@ -60,9 +60,22 @@ Object.assign(CodemanApp.prototype, {
     document.body.appendChild(trap);
     trap.focus();
 
+    // One Ctrl+V can deliver TWO paste events to this trap. The
+    // execCommand('paste') below fires one wherever the browser honours that
+    // command, and the key's own default action fires another, because xterm's
+    // custom key handler returns false without cancelling the keydown. Handling
+    // both sends the clipboard text to the PTY twice, which is the "Ctrl+V
+    // pastes twice, right-click Paste does not" report: the context-menu paste
+    // has no keydown, so it only ever produces one event. The trap therefore
+    // accepts the first paste and drops every later one.
+    var pasteConsumed = false;
+
     // Listen for the paste event on our trap
     trap.addEventListener('paste', function(e) {
       e.stopPropagation();
+      e.preventDefault();
+      if (pasteConsumed) return;
+      pasteConsumed = true;
 
       // Check for images in clipboard items
       var imageFiles = [];
@@ -84,7 +97,6 @@ Object.assign(CodemanApp.prototype, {
       }, 0);
 
       if (imageFiles.length > 0) {
-        e.preventDefault();
         self._uploadAndInsertImages(imageFiles);
       } else {
         // No image -- route text through xterm's paste() so bracketed-paste
@@ -94,7 +106,6 @@ Object.assign(CodemanApp.prototype, {
         // indistinguishable from typed input, weakening the CLI's
         // prompt-injection defenses.
         var text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
-        e.preventDefault();
         if (text && self.terminal) self.terminal.paste(text);
       }
     });

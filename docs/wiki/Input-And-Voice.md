@@ -14,6 +14,7 @@ works, slash commands included.
 | `Shift+Enter` / `Ctrl+Enter` | Newline without sending.                       |
 | `Ctrl+C`                     | Copy if text is selected, otherwise interrupt. |
 | `Ctrl+Shift+C`               | Copy, never interrupts.                        |
+| `Ctrl+V`                     | Paste. A clipboard image uploads instead.      |
 | `Ctrl+L`                     | Clear the terminal.                            |
 
 ### Exactly-once delivery

@@ -302,6 +302,19 @@ Copy goes through `_copyText()` (Clipboard API, then hidden-textarea + `execComm
 
 Feedback is silent on success except ONCE per page load (a feature that works by doing nothing visible cannot otherwise be told from a dead toggle); failures and refusals toast, throttled to 10s so a permanently blocked clipboard cannot paint a toast on every drag. The setting is per-device on both counts required by the settings rule: it is in `displayKeys` AND absent from the `.strict()` `SettingsUpdateSchema` (clipboard access differs by device and by origin, and the plain-HTTP LAN install has no `navigator.clipboard` at all). Tests: `test/terminal-auto-copy.test.ts`.
 
+### Terminal paste (Ctrl+V)
+
+**The Ctrl+V paste trap consumes exactly ONE paste event.** `_handleImagePaste()` (image-input.js) appends a hidden `contenteditable` div, focuses it, and reads the clipboard out of the paste event that lands there. An image becomes an upload whose saved path is typed into the session; text goes through `terminal.paste()`, so the bracketed-paste markers survive. Two independent routes deliver that event for one keypress, and a browser may fire both:
+
+1. **`document.execCommand('paste')`**, which the function calls itself. ⚠️ Its return value proves nothing about whether it fired. Firefox dispatches a trusted `paste` event carrying the real clipboard and still returns `false`, because the trap cancels the event and the command therefore never completes. Chromium refuses the command outright and dispatches nothing.
+2. **The keydown's own default action.** The `Ctrl+V` branch in `attachCustomKeyEventHandler` returns `false`, which stops xterm from evaluating the key into `^V` but does not cancel the DOM event, for the same reason rule 1 of smart copy above spells out. `trap.focus()` has already run by then, so the browser sends its own paste to the trap as well.
+
+Measured against a live install, one `Ctrl+V` each: Firefox delivers two paste events, Chromium and WebKit one. Handling both wrote the clipboard text to the PTY twice, which is why `Ctrl+V` pasted twice while right-click → Paste pasted once. That menu path involves no keydown, so route 2 cannot exist for it.
+
+⚠️ **Route 2 alone is enough in all three engines, so route 1 is redundant where it can be measured.** Strip the `execCommand('paste')` call out and each of the three still delivers exactly one paste event to the trap, Firefox included. The call is kept anyway, because the trap technique was written for the mobile engines that a desktop measurement cannot reach, and a browser that resolves the key's default action against the element focused when the keydown began would send its paste to xterm's textarea instead. Text paste survives that on xterm's own `handlePasteEvent`; image paste does not, since the trap's listener is the only place clipboard image blobs are read. Removing the call is therefore a decision about mobile coverage, not a cleanup.
+
+The guard is a one-shot flag on each trap rather than a browser test or a reading of `execCommand`'s return value, so any count of events produces one insert. Tests: `test/image-paste-trap.test.ts`.
+
 ### Settings surface: App Settings, Session Options, Add Case
 
 **One visual language, three modals.** `#appSettingsModal`, `#sessionOptionsModal` and `#createCaseModal` share the `set-*` surface (left rail, sections of grouped row cards, label + description on the left, control pinned right) through a single `:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal)` scope in `styles.css`. An `:is()` list takes the specificity of its **most specific argument**, and all three arguments are ids, so every rule kept exactly the weight it had when the block was `#appSettingsModal`-only: nothing downstream shifted in the cascade. That property is what let the surface absorb Session Options and then Add Case in two separate commits without a cascade audit each time.

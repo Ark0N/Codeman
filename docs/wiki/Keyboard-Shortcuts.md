@@ -25,6 +25,7 @@ Press `Ctrl+?` in the app for the same list in a floating overlay.
 | `Ctrl+Enter`            | Same.                                                            |
 | `Ctrl+C`                | Copy the selection, or interrupt when nothing is selected.       |
 | `Ctrl+Shift+C`          | Copy the selection. Never interrupts.                            |
+| `Ctrl+V`                | Paste. An image on the clipboard uploads and pastes its file path instead. |
 | `Ctrl+L`                | Clear the terminal.                                              |
 | `Ctrl+Shift+R`          | Restore terminal size.                                           |
 | `Ctrl` `+` / `Ctrl` `-` | Font size.                                                       |
