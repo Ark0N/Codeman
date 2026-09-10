@@ -25,7 +25,10 @@
  * 3. The terminal pane is ONE shared element, so its entrance is marked at
  *    session creation but played at selection: a session created in the
  *    background must not animate the pane the user is currently looking at. Its
- *    styles are also restricted to transform/opacity/clip-path (see below).
+ *    styles are also restricted to transform/opacity/clip-path (see below), with
+ *    `blur` the one documented exception - a filter is the only thing that
+ *    actually blurs a live xterm; styles.css carries the measurement and the
+ *    three alternatives that do not work.
  * 4. Nothing may animate on page load or reconnect replay. Only ids that pass
  *    through `markSessionTabEntering()` animate, and `_tabEnterSeen` makes that
  *    once-per-id even though the POST response and the SSE event both call
@@ -50,6 +53,7 @@ const TAB_ANIM_STYLES = [
   { key: 'unroll', label: 'Unroll', blurb: 'The strip makes room and the tab widens in.', duration: 480 },
   { key: 'boot', label: 'Boot', blurb: 'Flickers on under a green scan sweep.', duration: 720 },
   { key: 'flip', label: 'Flip', blurb: 'Drops in as a card hinged on its top edge.', duration: 520 },
+  { key: 'blur', label: 'Blur', blurb: 'Focus-pulls in as the blur fades off it.', duration: 440 },
   { key: 'off', label: 'Off', blurb: 'Tabs just appear.', duration: 0 },
 ];
 
@@ -65,6 +69,7 @@ const WIN_ANIM_STYLES = [
   { key: 'unfold', label: 'Unfold', blurb: 'Hinges down from its top edge in 3D.', duration: 560 },
   { key: 'beam', label: 'Beam down', blurb: 'Waits for its line to reach it, then materializes.', duration: 620 },
   { key: 'pop', label: 'Pop', blurb: 'Springs open from its centre.', duration: 460 },
+  { key: 'blur', label: 'Blur', blurb: 'Focus-pulls in as the blur fades off it.', duration: 560 },
   { key: 'off', label: 'Off', blurb: 'Windows just appear.', duration: 0 },
 ];
 
@@ -73,6 +78,7 @@ const LINE_ANIM_STYLES = [
   { key: 'draw', label: 'Draw', blurb: 'Draws itself from the tab down to the window.', duration: 420 },
   { key: 'packet', label: 'Packet', blurb: 'Line fades in, then a bright packet runs down it.', duration: 700 },
   { key: 'fade', label: 'Fade', blurb: 'Simply fades in.', duration: 300 },
+  { key: 'blur', label: 'Blur', blurb: 'Focus-pulls in as the blur fades off it.', duration: 380 },
   { key: 'off', label: 'Off', blurb: 'Lines just appear.', duration: 0 },
 ];
 
@@ -92,6 +98,7 @@ const TERM_ANIM_STYLES = [
   { key: 'wipe', label: 'Wipe', blurb: 'Reveals top-to-bottom behind a bright edge.', duration: 520 },
   { key: 'slide', label: 'Slide up', blurb: 'Rises into place from below.', duration: 420 },
   { key: 'fade', label: 'Fade', blurb: 'Quiet fade with a touch of scale.', duration: 340 },
+  { key: 'blur', label: 'Blur', blurb: 'Focus-pulls in as the blur lifts off the pane.', duration: 520 },
   { key: 'off', label: 'Off', blurb: 'Current behaviour: the pane just appears.', duration: 0 },
 ];
 
@@ -102,6 +109,7 @@ const BEAM_HOLD_MS = 360;
 const ANIM_THEMES = [
   { key: 'terminal', label: 'Terminal', tab: 'crt', win: 'crt', line: 'draw', term: 'crt' },
   { key: 'beamdown', label: 'Beam down', tab: 'crt', win: 'beam', line: 'draw', term: 'wipe' },
+  { key: 'softfocus', label: 'Soft focus', tab: 'blur', win: 'blur', line: 'blur', term: 'blur' },
   { key: 'quiet', label: 'Quiet', tab: 'slide', win: 'materialize', line: 'fade', term: 'fade' },
   { key: 'playful', label: 'Playful', tab: 'pop', win: 'pop', line: 'packet', term: 'slide' },
   { key: 'legacy', label: 'Legacy', tab: 'off', win: 'fly', line: 'off', term: 'off' },

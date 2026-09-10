@@ -905,6 +905,28 @@ html[data-tab-anim="flip"] .session-tab.tab-enter {
   100% { opacity: 1; transform: perspective(700px) rotateX(0deg); }
 }
 
+/* Blur, iOS-style focus pull: the tab arrives out of focus and the blur fades
+   OFF it as the opacity comes up, so it reads as resolving rather than moving.
+   Opacity leads the blur (full opacity around 45%, blur still lifting) - that
+   offset is what separates it from a plain cross-fade.
+
+   `filter` here, not on ::before: the tab's own box-shadow and border have to
+   blur with it or the shape stays sharp inside a blurred fill, and unlike
+   background/box-shadow (which .session-tab.active sets !important) nothing
+   overrides filter. */
+html[data-tab-anim="blur"] .session-tab.tab-enter {
+  animation-name: tab-enter-blur;
+  animation-duration: calc(440ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform, opacity, filter;
+}
+
+@keyframes tab-enter-blur {
+  0%   { opacity: 0; filter: blur(10px); transform: scale(0.94); }
+  45%  { opacity: 1; }
+  100% { opacity: 1; filter: blur(0px); transform: none; }
+}
+
 /* ── Entrance lab (?animlab=1) ───────────────────────────────────────────── */
 
 .anim-lab {
@@ -1186,6 +1208,25 @@ html[data-win-anim="pop"] .ultracode-window.win-enter {
   100% { opacity: 1; transform: scale(1); }
 }
 
+/* Blur, iOS-style focus pull. `materialize` is the noisy cousin: it glitches the
+   opacity and rides a brightness boost. This one only defocuses, so it stays
+   readable next to a terminal. The scale is deliberately small (0.96): the
+   connection line is aimed at getBoundingClientRect(), which reports the
+   TRANSFORMED box, so a big scale would swing the line's target while it draws.
+   applyWindowEntrance() redraws the lines once the animation ends. */
+html[data-win-anim="blur"] .subagent-window.win-enter,
+html[data-win-anim="blur"] .ultracode-window.win-enter {
+  animation-name: win-enter-blur;
+  animation-duration: calc(560ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@keyframes win-enter-blur {
+  0%   { opacity: 0; filter: blur(18px); transform: scale(0.96); }
+  50%  { opacity: 1; }
+  100% { opacity: 1; filter: blur(0px); transform: none; }
+}
+
 /* ── Main terminal pane entrance animations ────────────────────────────────
    ⚠ transform / opacity / clip-path ONLY. xterm's FitAddon derives rows+cols
    from getComputedStyle(parent).width/height, the untransformed layout box -
@@ -1327,6 +1368,47 @@ html[data-term-anim="fade"] .terminal-container.term-enter {
   100% { opacity: 1; transform: none; }
 }
 
+/* Blur, iOS-style focus pull.
+
+   ⚠ THE ONE PLACE A `filter` GOES ON THE TERMINAL CONTAINER, and it is a
+   deliberate exception to the rule above, not an oversight. Every other way of
+   blurring this pane was tried against a real xterm and does not work:
+
+     - `backdrop-filter` on ::before blurs perfectly while it is STATIC, and
+       Chrome silently drops the backdrop the moment ANY animation runs on that
+       pseudo-element (measured: the veil computes `blur(15.3px)` and the text
+       behind it stays razor sharp). Animating the container instead keeps the
+       backdrop, so the veil would have to hold one fixed radius, which is a
+       frosted pane that snaps off rather than a focus pull.
+     - Driving the radius from rAF avoids the compositor promotion, at the cost
+       of the same full-screen blur per frame plus main-thread work.
+
+   So the cost the rule exists to avoid is inherent to blurring a terminal at
+   all, and this style buys it knowingly: it is opt-in, OFF by default, bounded
+   to one ~520ms run when a session is opened (or switched to, with `Also on
+   every tab switch`), and the class comes straight back off. `will-change` is
+   still deliberately unset, per the base rule. Measured price on a headless
+   SwiftShader rasterizer with no GPU at all, i.e. the worst case: frame deltas
+   go 16.7ms -> 33.3ms for the length of the run, against 16.7ms flat for `fade`.
+
+   The blur must not change layout, or FitAddon would feed wrong dimensions into
+   resize() and through to the PTY. `filter` is paint-only (measured live: 178x38
+   before, during and after a run), and the property allowlist for every one of
+   these keyframes is pinned by test/entrance-animations.test.ts. */
+html[data-term-anim="blur"] .terminal-container.term-enter {
+  animation-name: term-enter-blur;
+  animation-duration: calc(520ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Opacity leads the blur - full opacity around 45%, blur still lifting - which
+   is what separates the effect from a plain cross-fade. */
+@keyframes term-enter-blur {
+  0%   { opacity: 0; filter: blur(14px); transform: scale(1.008); }
+  45%  { opacity: 1; }
+  100% { opacity: 1; filter: blur(0px); transform: none; }
+}
+
 /* ── Connection-line entrance animations ───────────────────────────────────
    `--line-len` is the measured path length, stamped inline by
    _applyLineEntrances(); `--line-enter-delay` is negative when an entrance is
@@ -1391,6 +1473,26 @@ html[data-line-anim="packet"] .connection-line.line-enter {
   12%  { opacity: 1; }
   85%  { opacity: 1; }
   100% { stroke-dashoffset: calc(-1 * var(--line-len)); opacity: 0; }
+}
+
+/* Blur, the line focuses in alongside a blurred tab and window. `filter` on an
+   SVG path takes CSS filter functions, so the blur simply rides in front of the
+   line's own glow (see --line-glow on .connection-line).
+
+   ⚠ The 100% frame deliberately omits `opacity`, which makes the browser take
+   the endpoint from the element's own computed value: a subagent line rests at
+   0.9, a lineage line at 0.72, and a WORKING lineage line at 0.95. Pinning 0.9
+   here - as `line-enter-fade` above still does - lands every lineage line on the
+   wrong opacity and snaps it when the class comes off. */
+html[data-line-anim="blur"] .connection-line.line-enter {
+  animation-name: line-enter-blur;
+  animation-duration: calc(380ms * var(--anim-enter-scale, 1));
+  animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@keyframes line-enter-blur {
+  0%   { opacity: 0; filter: blur(5px) var(--line-glow); }
+  100% { filter: blur(0px) var(--line-glow); }
 }
 
 .anim-lab-check {
@@ -9833,10 +9935,17 @@ kbd {
   stroke-dasharray: 5 3;
   fill: none;
   opacity: 0.9;
-  /* Dark outline for contrast, vibrant blue glow */
-  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8))
-          drop-shadow(0 0 4px rgba(59, 130, 246, 0.8))
-          drop-shadow(0 0 8px rgba(59, 130, 246, 0.5));
+  /* Dark outline for contrast, vibrant blue glow. Held in a variable because the
+     `blur` line entrance animates `filter`: a keyframe listing only the blur would
+     drop the glow for the length of the run and pop it back at the end, and the
+     lineage lines below - whose glow is a different colour entirely, set per
+     element - make that obvious. Both of its keyframes say
+     `blur(N) var(--line-glow)`, so the function lists match and interpolate while
+     each kind of line keeps its own glow. */
+  --line-glow: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8))
+    drop-shadow(0 0 4px rgba(59, 130, 246, 0.8))
+    drop-shadow(0 0 8px rgba(59, 130, 246, 0.5));
+  filter: var(--line-glow);
   transition: opacity 0.2s, stroke-width 0.2s, filter 0.2s;
 }
 
@@ -9930,8 +10039,10 @@ kbd {
   stroke-dasharray: 5 5;
   stroke-linecap: round;
   opacity: 0.72;
-  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.7)) drop-shadow(0 0 5px var(--lineage-color, var(--session-blue, #2b8fd9)))
+  --line-glow: drop-shadow(0 0 2px rgba(0, 0, 0, 0.7))
+    drop-shadow(0 0 5px var(--lineage-color, var(--session-blue, #2b8fd9)))
     drop-shadow(0 0 11px var(--lineage-color, var(--session-blue, #2b8fd9)));
+  filter: var(--line-glow);
 }
 
 /* ⚠ OUTSIDE the reduced-motion block below on purpose. A working child is the case
