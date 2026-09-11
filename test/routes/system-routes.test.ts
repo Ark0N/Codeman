@@ -411,21 +411,43 @@ describe('system-routes', () => {
   // ========== GET /api/settings ==========
 
   describe('GET /api/settings', () => {
-    it('returns empty object when settings file does not exist', async () => {
+    it('reconciles showPlanUsageLimits to true when the settings file does not exist', async () => {
+      // The chip/checkbox default to ON client-side (planUsageChipEnabled()) whenever
+      // this key is absent, but readPlanUsageTelemetryEnabled() deliberately treats
+      // absence as "no telemetry" — nothing reconciled those two defaults, so a fresh
+      // install showed a checked box that silently collected nothing. GET now persists
+      // the resolved default the first time anything reads settings.
       mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
 
       const res = await harness.app.inject({ method: 'GET', url: '/api/settings' });
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(res.body)).toEqual({});
+      expect(JSON.parse(res.body)).toEqual({ showPlanUsageLimits: true });
+      // Reconciliation actually reached disk, not just the response.
+      expect(mockedWriteFile).toHaveBeenCalledWith(
+        expect.anything(),
+        JSON.stringify({ showPlanUsageLimits: true }, null, 2)
+      );
     });
 
-    it('returns parsed settings when file exists', async () => {
+    it('reconciles showPlanUsageLimits to true when the file exists but omits it', async () => {
       const settings = { subagentTrackingEnabled: true, showSystemStats: false };
       mockedReadFile.mockResolvedValue(JSON.stringify(settings) as never);
 
       const res = await harness.app.inject({ method: 'GET', url: '/api/settings' });
       expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body)).toEqual({ ...settings, showPlanUsageLimits: true });
+    });
+
+    it('never overwrites an explicit false', async () => {
+      const settings = { subagentTrackingEnabled: true, showPlanUsageLimits: false };
+      mockedReadFile.mockResolvedValue(JSON.stringify(settings) as never);
+      mockedWriteFile.mockClear();
+
+      const res = await harness.app.inject({ method: 'GET', url: '/api/settings' });
+      expect(res.statusCode).toBe(200);
       expect(JSON.parse(res.body)).toEqual(settings);
+      // No reconciliation write when the key is already explicit.
+      expect(mockedWriteFile).not.toHaveBeenCalled();
     });
   });
 

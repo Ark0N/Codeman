@@ -936,7 +936,47 @@ export function registerSystemRoutes(
   // ========== Settings ==========
 
   app.get('/api/settings', async () => {
-    return readJsonConfig(SETTINGS_PATH, 'settings', {});
+    const settings = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings', {});
+
+    // Plan-usage chip default reconciliation (PR #361 follow-up): the client's
+    // own default resolution (planUsageChipEnabled() in settings-ui.js) shows
+    // the header chip and the App Settings checkbox as already ON whenever this
+    // key has never been set — a discoverability default from 1.9.3, unrelated
+    // to consent. Meanwhile readPlanUsageTelemetryEnabled() (hooks-config.ts)
+    // deliberately treats an absent key as "no telemetry" (privacy: never POST
+    // usage data without an explicit persisted yes, pinned by its own unit
+    // tests). Nothing ever reconciled those two independent guesses, so a
+    // fresh install showed a checked box that silently did nothing until the
+    // user opened Settings and hit Save at least once — verified live: an
+    // install that had never touched this setting had NO showPlanUsageLimits
+    // key in settings.json, and its running Claude process's argv carried no
+    // --settings flag at all, i.e. zero telemetry ever collected.
+    //
+    // Resolve it ONCE, here, the first time anything reads settings: if the
+    // key is truly ABSENT (never explicit true or false), persist the same
+    // desktop-default-ON resolution the client already shows, so "chip visible"
+    // and "telemetry collected" become the same fact instead of two defaults
+    // that happen to disagree. readPlanUsageTelemetryEnabled()'s own
+    // absent-means-false contract is untouched — after this runs once the key
+    // is never absent again, so that branch stays correct in isolation (its
+    // unit tests keep passing unmodified) while being unreachable in practice
+    // for any install that has ever called this route. An explicit false the
+    // user sets afterward is respected forever; this only fires on true absence.
+    if (!('showPlanUsageLimits' in settings)) {
+      settings.showPlanUsageLimits = true;
+      try {
+        const dir = dirname(SETTINGS_PATH);
+        if (!existsSync(dir)) {
+          mkdirSync(dir, { recursive: true });
+        }
+        await fs.writeFile(SETTINGS_PATH, JSON.stringify(settings, null, 2));
+      } catch {
+        // Best-effort: the resolved default still reaches this response even
+        // if the write fails, so the caller sees consistent data either way.
+      }
+    }
+
+    return settings;
   });
 
   app.put('/api/settings', async (req) => {
