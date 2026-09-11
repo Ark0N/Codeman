@@ -23,6 +23,7 @@ import {
   updateCaseModel,
   writeHooksConfig,
 } from '../src/hooks-config.js';
+import { LEGACY_STATUSLINE_MARKER, STATUSLINE_SHIM_TOKEN } from '../src/statusline-shim.js';
 
 describe('generateHooksConfig', () => {
   it('should return an object with hooks key', () => {
@@ -1303,5 +1304,83 @@ describe('Hook Config Generation - Extended', () => {
     expect(stopHooks).toHaveLength(1);
     expect(stopHooks[0].matcher).toBeUndefined();
     expect(stopHooks[0].hooks[0].command).toContain('stop');
+  });
+});
+
+describe('applyStatusLineConfig', () => {
+  const testDir = join(tmpdir(), 'codeman-statusline-config-' + Date.now());
+  const settingsFile = join(testDir, '.claude', 'settings.local.json');
+
+  const read = () => JSON.parse(readFileSync(settingsFile, 'utf-8'));
+  const write = (value: object) => {
+    mkdirSync(join(testDir, '.claude'), { recursive: true });
+    writeFileSync(settingsFile, JSON.stringify(value, null, 2));
+  };
+
+  beforeEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('injects the delegating shim rather than an inline exporter', async () => {
+    await applyStatusLineConfig(testDir, true);
+    const { statusLine } = read();
+    expect(statusLine.type).toBe('command');
+    expect(statusLine.command).toContain(STATUSLINE_SHIM_TOKEN);
+    // The inline form SHADOWS the user's statusline, which is the whole reason
+    // the shim exists. It may never be the command we inject by choice.
+    expect(statusLine.command).not.toContain(LEGACY_STATUSLINE_MARKER);
+  });
+
+  it('upgrades a pre-shim inline exporter in place', async () => {
+    // Every repo a previous Codeman managed still holds this command. If the
+    // ownership check missed it, the upgrade would read it as hand-authored,
+    // refuse to touch it, and leave the user shadowed forever.
+    write({
+      statusLine: { type: 'command', command: `curl -X POST "$CODEMAN_API_URL${LEGACY_STATUSLINE_MARKER}"` },
+      permissions: { allow: ['Read'] },
+    });
+
+    await applyStatusLineConfig(testDir, true);
+
+    const settings = read();
+    expect(settings.statusLine.command).toContain(STATUSLINE_SHIM_TOKEN);
+    expect(settings.permissions).toEqual({ allow: ['Read'] });
+  });
+
+  it('removes a pre-shim inline exporter on the disable path', async () => {
+    write({ statusLine: { type: 'command', command: `curl "$CODEMAN_API_URL${LEGACY_STATUSLINE_MARKER}"` } });
+    await applyStatusLineConfig(testDir, false);
+    expect(read().statusLine).toBeUndefined();
+  });
+
+  it('removes its own shim entry on the disable path', async () => {
+    await applyStatusLineConfig(testDir, true);
+    await applyStatusLineConfig(testDir, false);
+    expect(read().statusLine).toBeUndefined();
+  });
+
+  it('never touches a statusLine the user wrote themselves', async () => {
+    // Unchanged contract: a hand-authored entry in the repo's own file stops
+    // Codeman cold, so it never owns an entry it would have to restore later.
+    const mine = { type: 'command', command: 'bash ~/.claude/my-statusline.sh' };
+    write({ statusLine: mine });
+
+    await applyStatusLineConfig(testDir, true);
+    expect(read().statusLine).toEqual(mine);
+
+    await applyStatusLineConfig(testDir, false);
+    expect(read().statusLine).toEqual(mine);
+  });
+
+  it('rewrites nothing when the shim command is already current', async () => {
+    await applyStatusLineConfig(testDir, true);
+    const before = readFileSync(settingsFile, 'utf-8');
+    await applyStatusLineConfig(testDir, true);
+    expect(readFileSync(settingsFile, 'utf-8')).toBe(before);
   });
 });

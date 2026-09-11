@@ -39,6 +39,7 @@ import { fileURLToPath } from 'node:url';
 import type { HookEventType } from './types.js';
 import { HOOK_TIMEOUT_SECONDS } from './config/auth-config.js';
 import { dataPath } from './config/instance.js';
+import { generateShimStatusLineCommand, LEGACY_STATUSLINE_MARKER, STATUSLINE_SHIM_TOKEN } from './statusline-shim.js';
 
 /**
  * Serializes read-modify-write access to a `settings.local.json` path. Every
@@ -844,17 +845,30 @@ async function readWorkspaceHooksEnabled(): Promise<boolean> {
   }
 }
 
-/** Unique marker identifying Codeman's own statusLine command (vs a user's). */
-const STATUSLINE_MARKER = '/api/status-telemetry';
+/**
+ * Is this statusLine command one Codeman wrote?
+ *
+ * Two forms count. The current one runs the delegating shim, recognised by the
+ * version-free token in its filename. The other is the pre-shim inline `curl`,
+ * recognised by the endpoint path it posts to. Both must be read as ours, or
+ * the upgrade mistakes an old injected command for a hand-authored line,
+ * refuses to touch it, and leaves the user with the shadowing exporter.
+ */
+function isCodemanStatusLine(command: unknown): boolean {
+  return (
+    typeof command === 'string' &&
+    (command.includes(STATUSLINE_SHIM_TOKEN) || command.includes(LEGACY_STATUSLINE_MARKER))
+  );
+}
 
 /**
- * The plan-usage statusLine exporter command. Mirrors the hook `curlCmd` pattern:
- * reads Claude Code's statusline stdin JSON, POSTs `{sessionId,data}` to Codeman,
- * and prints the response body (a compact "⟳ 5h 15% · 7d 34%" footer) back to
- * stdout so the in-terminal statusline stays useful. Env vars resolve at runtime
- * (present in every managed session via tmux setenv), so the config is static.
+ * The pre-shim inline exporter, kept as the fallback when the shim cannot be
+ * installed. It POSTs the statusline JSON and prints Codeman's response, which
+ * means it SHADOWS whatever statusline the user configured globally. That is
+ * the cost the shim exists to remove, so this runs only when a data dir that
+ * cannot be written leaves no better option.
  */
-export function generateStatusLineCommand(): string {
+function generateInlineStatusLineCommand(): string {
   // `curl -sk`: CODEMAN_API_URL is loopback HTTPS with a self-signed cert in the
   // production setup; without -k curl returns 000 and the statusline shows
   // nothing. -k is safe here (loopback only). Falls back to a brand string so the
@@ -862,7 +876,7 @@ export function generateStatusLineCommand(): string {
   return (
     `INPUT=$(cat 2>/dev/null || echo '{}'); ` +
     `printf '{"sessionId":"%s","data":%s}' "$CODEMAN_SESSION_ID" "$INPUT" | ` +
-    `curl -sk -X POST "$CODEMAN_API_URL${STATUSLINE_MARKER}" ` +
+    `curl -sk -X POST "$CODEMAN_API_URL${LEGACY_STATUSLINE_MARKER}" ` +
     `-H 'Content-Type: application/json' ` +
     `-H "X-Codeman-Hook-Secret: $(cat "$CODEMAN_HOOK_SECRET_FILE" 2>/dev/null)" ` +
     `--data @- 2>/dev/null || echo codeman`
@@ -870,12 +884,25 @@ export function generateStatusLineCommand(): string {
 }
 
 /**
+ * The plan-usage statusLine exporter command.
+ *
+ * Normally this runs the delegating shim, which forwards the same JSON to
+ * Codeman and then prints the statusline its own entry shadows. The inline
+ * exporter above is the fallback for an uninstallable shim.
+ */
+export function generateStatusLineCommand(): string {
+  return generateShimStatusLineCommand() ?? generateInlineStatusLineCommand();
+}
+
+/**
  * Add or remove Codeman's plan-usage statusLine exporter in
  * `.claude/settings.local.json`. Only ever touches a statusLine that is OURS
- * (command targets `/api/status-telemetry`), so a user's hand-authored
- * statusLine is never removed OR overwritten — on both the enable and disable
- * paths we bail out when an existing statusLine isn't ours. Callers gate on
- * Claude mode. Merges, preserving all other keys (hooks, env, model).
+ * (see `isCodemanStatusLine`, which accepts the shim and the pre-shim inline
+ * form), so a user's hand-authored statusLine is never removed OR overwritten
+ * — on both the enable and disable paths we bail out when an existing
+ * statusLine isn't ours. An enable on a repo still carrying the old inline
+ * command upgrades it to the shim in place. Callers gate on Claude mode.
+ * Merges, preserving all other keys (hooks, env, model).
  */
 export async function applyStatusLineConfig(casePath: string, enabled: boolean): Promise<void> {
   await withSafeSettingsWrite(casePath, 'statusLine', async (claudeDir, settingsPath) => {
@@ -889,7 +916,7 @@ export async function applyStatusLineConfig(casePath: string, enabled: boolean):
     }
 
     const current = existing.statusLine as { command?: unknown } | undefined;
-    const isOurs = !!current && typeof current.command === 'string' && current.command.includes(STATUSLINE_MARKER);
+    const isOurs = !!current && isCodemanStatusLine(current.command);
 
     if (enabled) {
       const desired = generateStatusLineCommand();
