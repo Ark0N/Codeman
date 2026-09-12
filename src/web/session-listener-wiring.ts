@@ -3,7 +3,7 @@
  *
  * Extracted from server.ts for modularity. Provides:
  * - `SessionListenerRefs` interface (named listener references for leak-free cleanup)
- * - `createSessionListeners()` — builds all 25 listener handlers via dependency injection
+ * - `createSessionListeners()` — builds all session listener handlers via dependency injection
  * - `attachSessionListeners()` / `detachSessionListeners()` — symmetric attach/detach
  *
  * The detach function deduplicates a pattern that was previously copy-pasted 3 times
@@ -29,6 +29,7 @@ import { getLifecycleLog } from '../session-lifecycle-log.js';
 import { fileStreamManager } from '../file-stream-manager.js';
 import { sessionWaits } from './session-wait-registry.js';
 import { approvalInbox } from './approval-inbox.js';
+import { deriveAutoSessionName } from '../session-auto-name.js';
 
 /** Stored listener references for session cleanup (prevents memory leaks) */
 export interface SessionListenerRefs {
@@ -63,6 +64,7 @@ export interface SessionListenerRefs {
   bashToolEnd: (tool: ActiveBashTool) => void;
   bashToolsUpdate: (tools: ActiveBashTool[]) => void;
   attachmentRequested: (event: { path: string; source: 'external' | 'codex-generated' }) => void;
+  promptSubmitted: (prompt: string) => void;
 }
 
 /** Dependencies injected by WebServer — keeps listener creation decoupled from server internals. */
@@ -83,10 +85,11 @@ interface SessionListenerDeps {
   cleanupRespawnOnExit(sessionId: string): void;
   getStore(): import('../state-store.js').StateStore;
   registerAttachment(sessionId: string, filePath: string, source: 'external' | 'codex-generated'): Promise<void>;
+  updateSessionName(sessionId: string, name: string): boolean;
 }
 
 /**
- * Creates all 26 session listener handlers, capturing dependencies via closure.
+ * Creates all session listener handlers, capturing dependencies via closure.
  * Call `attachSessionListeners()` after to wire them to the session.
  */
 export function createSessionListeners(session: Session, deps: SessionListenerDeps): SessionListenerRefs {
@@ -451,6 +454,15 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
         console.error(`[Attachment] Failed to register ${event.path} for ${session.id}:`, err);
       });
     },
+
+    /** Assigns a bounded local title from the first real task prompt. */
+    promptSubmitted: (prompt: string) => {
+      const name = deriveAutoSessionName(prompt);
+      if (!name || !session.applyAutoName(name)) return;
+      deps.updateSessionName(session.id, session.name);
+      deps.persistSessionState(session);
+      deps.broadcast(SseEvent.SessionUpdated, deps.getSessionStateWithRespawn(session));
+    },
   };
 }
 
@@ -487,6 +499,7 @@ export function attachSessionListeners(session: Session, refs: SessionListenerRe
   session.on('bashToolEnd', refs.bashToolEnd);
   session.on('bashToolsUpdate', refs.bashToolsUpdate);
   session.on('attachmentRequested', refs.attachmentRequested);
+  session.on('promptSubmitted', refs.promptSubmitted);
 }
 
 /** Detach all listeners from a session (prevents memory leaks from closure references). */
@@ -522,4 +535,5 @@ export function detachSessionListeners(session: Session, refs: SessionListenerRe
   session.off('bashToolEnd', refs.bashToolEnd);
   session.off('bashToolsUpdate', refs.bashToolsUpdate);
   session.off('attachmentRequested', refs.attachmentRequested);
+  session.off('promptSubmitted', refs.promptSubmitted);
 }
