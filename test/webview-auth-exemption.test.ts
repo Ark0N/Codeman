@@ -236,3 +236,41 @@ describe('authenticated access is unaffected', () => {
     expect((await app.inject({ method: 'GET', url: '/', headers: { authorization: wrong } })).statusCode).toBe(401);
   });
 });
+
+/**
+ * A web-tab frame that navigated itself off its proxy prefix. The runtime shim
+ * masks `/webview/<cap>/` off the document URL so a single-page app routes on its
+ * own path; a reload of that page (a dev server's full-reload HMR) then targets
+ * Codeman's root with no capability, no cookie (opaque origin) and a Referer that
+ * names the masked page. It gets the static recovery page, not a login challenge,
+ * and it must not count as an auth failure.
+ */
+describe('a lost web-tab frame', () => {
+  const lostFrame = { 'sec-fetch-dest': 'iframe', 'sec-fetch-mode': 'navigate', accept: 'text/html,*/*;q=0.8' };
+
+  it('gets the recovery page instead of a 401', async () => {
+    const res = await app.inject({ method: 'GET', url: '/about?tab=2', headers: lostFrame });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/html');
+    expect(res.headers['content-security-policy']).toContain("default-src 'none'");
+    expect(res.body).toContain('codeman:webview-lost');
+  });
+
+  it('never for a path Codeman actually serves, and never for a plain navigation', async () => {
+    expect((await app.inject({ method: 'GET', url: '/', headers: lostFrame })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'GET', url: '/api/sessions/abc', headers: lostFrame })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'GET', url: '/about' })).statusCode).toBe(401);
+    expect(
+      (await app.inject({ method: 'GET', url: '/about', headers: { ...lostFrame, 'sec-fetch-dest': 'document' } }))
+        .statusCode
+    ).toBe(401);
+  });
+
+  it('does not count against the auth failure limit', async () => {
+    for (let i = 0; i < 20; i += 1) {
+      expect((await app.inject({ method: 'GET', url: `/reload-${i}`, headers: lostFrame })).statusCode).toBe(200);
+    }
+    // A genuinely unauthenticated request afterwards is still a plain 401, not a 429.
+    expect((await app.inject({ method: 'GET', url: '/static/app.js' })).statusCode).toBe(401);
+  });
+});

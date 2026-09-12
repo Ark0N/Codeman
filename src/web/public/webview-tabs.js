@@ -188,6 +188,7 @@ Object.assign(CodemanApp.prototype, {
     this._webviewFrameLru = this._webviewFrameLru || [];
 
     await this.refreshWebviews();
+    this._installWebviewLostListener();
 
     // Restore the previously open web tabs (per device: which dashboards you keep
     // open is a workspace-layout choice, not something to sync across machines).
@@ -223,6 +224,48 @@ Object.assign(CodemanApp.prototype, {
     // A dashboard deleted elsewhere must not linger as a dead tab here.
     if (data && data.action === 'deleted' && data.id) this._removeWebviewTab(data.id);
     this.renderSessionTabs();
+  },
+
+  /**
+   * Take back a frame that navigated itself off its proxy prefix.
+   *
+   * The proxy's runtime shim masks `/webview/<cap>/` off the document URL so a
+   * single-page app routes on the path it expects. A navigation the page then
+   * starts itself — `location.reload()` (a dev server's full-reload HMR), a
+   * root-absolute `location.href = '/login'` — lands on Codeman's root with no
+   * capability, where the server answers a static page that does nothing but
+   * post `{type:'codeman:webview-lost', path}` here. The frame is identified by
+   * `event.source` against the iframes this tab mounted (never by the payload),
+   * and remounted inside the prefix at that path. Bounded per frame so a page
+   * that reloads itself on every boot cannot spin.
+   */
+  _installWebviewLostListener() {
+    if (this._webviewLostListener) return;
+    this._webviewLostListener = (event) => {
+      const data = event.data;
+      if (!data || typeof data !== 'object' || data.type !== 'codeman:webview-lost') return;
+      if (typeof data.path !== 'string' || !event.source) return;
+      const layer = document.getElementById('webviewLayer');
+      if (!layer) return;
+      for (const wrap of layer.querySelectorAll('.webview-frame')) {
+        const frame = wrap.querySelector('iframe');
+        if (!frame || frame.contentWindow !== event.source) continue;
+        const id = wrap.dataset.webviewId;
+        if (!id || !this.webviews?.has(id)) return;
+        const now = Date.now();
+        this._webviewRecoveries = this._webviewRecoveries || new Map();
+        const recent = (this._webviewRecoveries.get(id) || []).filter((at) => now - at < 60000);
+        if (recent.length >= 5) return;
+        recent.push(now);
+        this._webviewRecoveries.set(id, recent);
+        // Path only, never an origin: a `//host/x` here would jump the frame off
+        // the proxy (resolveUpstreamUrl refuses it server-side as well).
+        const path = data.path.replace(/^\/+/, '/');
+        void this.openWebview(id, { path: path.startsWith('/') && !path.startsWith('//') ? path : '/' });
+        return;
+      }
+    };
+    window.addEventListener('message', this._webviewLostListener);
   },
 
   _persistWebviewOrder() {
@@ -322,13 +365,15 @@ Object.assign(CodemanApp.prototype, {
     if (data.webview) this.webviews.set(id, data.webview);
 
     let src = data.embedUrl || data.webview?.url || webview.url;
-    const path = typeof options.path === 'string' ? options.path : '';
+    // A string `path` (even '') means "go there": the proxy prefix is
+    // `/webview/<cap>/` and the wildcard rides after it; in direct mode the deep
+    // link resolves against the dashboard's own origin. No `path` means "show
+    // the tab", leaving a mounted frame on whatever page it reached.
+    const path = typeof options.path === 'string' ? options.path : null;
     if (path) {
-      // The proxy prefix is `/webview/<cap>/`; a wildcard rides after it. In
-      // direct mode the deep link resolves against the dashboard's own origin.
       src = data.embedUrl ? `${data.embedUrl.replace(/\/?$/, '/')}${path.replace(/^\//, '')}` : new URL(path, src).href;
     }
-    this._mountWebviewFrame(id, src, data.webview || webview, { navigate: !!path });
+    this._mountWebviewFrame(id, src, data.webview || webview, { navigate: path !== null });
     this.activeWebviewId = id;
     this.hideWelcome?.();
     document.querySelector('.main')?.classList.add('webview-active');
