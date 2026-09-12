@@ -5183,6 +5183,18 @@ class CodemanApp {
 
       // Rows hidden by the sidebar filter must not be steppable.
       const tabs = [...container.querySelectorAll('.session-tab:not(.tab-filtered-out)')];
+      // ⚠️ A sorted rail paints its rows with the flex `order` property while the
+      // DOM stays in `sessionOrder` (that is what keeps the Alt+N badge and the
+      // drag model honest), so a DOM-order walk steps around the screen instead of
+      // down it: ArrowDown from the top card lands wherever that session happens to
+      // sit in the tab order. Walk what the eye sees. Read the COMPUTED order, not
+      // the inline one, or web tabs (pinned past the cards by a CSS `order: 9999`
+      // rather than an inline style) read as 0 and the walk starts on them. Array
+      // sort is stable, so equal orders keep DOM order, which is the unsorted case.
+      if (this.isTabRailSorted()) {
+        const orderOf = (el) => Number(getComputedStyle(el).order) || 0;
+        tabs.sort((a, b) => orderOf(a) - orderOf(b));
+      }
       const currentIndex = tabs.indexOf(document.activeElement);
 
       // Enter or Space activates the tab

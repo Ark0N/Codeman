@@ -250,6 +250,29 @@ describe('openLinkThroughWebTabIfLoopback', () => {
     });
   });
 
+  it("does not reuse a TRUSTED dashboard, whose frame runs on Codeman's own origin", async () => {
+    // A trusted webview is mounted with `allow-same-origin`. The link being
+    // followed came from agent output, so auto-reusing that frame would let an
+    // agent-chosen path be opened inside a privileged origin on one tap. A fresh
+    // sandboxed record is saved instead.
+    const { win, app, calls } = boot();
+    app.webviews.set('trusted-dev', {
+      id: 'trusted-dev',
+      name: 'trusted',
+      url: 'http://localhost:5173/',
+      embedMode: 'proxy',
+      trusted: true,
+    } as never);
+    app.webviews.delete('dev');
+
+    await app.openUrlInWebTab('http://localhost:5173/admin');
+
+    const post = calls.find((c) => c.method === 'POST' && c.path === '/api/webviews');
+    expect(post, 'a trusted dashboard must not be reused for a tapped link').toBeTruthy();
+    expect(post?.body).toMatchObject({ url: 'http://localhost:5173/', trusted: false });
+    expect(frameSrc(win, 'trusted-dev')).toBeFalsy();
+  });
+
   it('does not reuse a direct-mode dashboard, which cannot show a loopback page from elsewhere', async () => {
     const { win, app, calls } = boot();
     expect(app.openLinkThroughWebTabIfLoopback('https://localhost:9443/admin')).toBe(true);

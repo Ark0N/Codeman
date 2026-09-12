@@ -59,12 +59,24 @@ served) and you tap it on your phone. That address only exists on the Codeman bo
 the phone's browser can never load it — but the web-tab proxy fetches from the server,
 where it works.
 
-So a **loopback** link (`localhost`, `*.localhost`, `127.0.0.0/8`, `0.0.0.0`, `::1`) clicked
+So a **loopback** link (`localhost`, `127.0.0.0/8`, `0.0.0.0`, `::1`) clicked
 in the terminal or in the Response Viewer opens as a **proxied web tab** whenever the
 Codeman page itself is not on that box. A saved proxied dashboard on the same origin is
-reused (one tab per dev server, with the link's own path opened inside it); otherwise
-one is saved under its `host:port` so it is in the Run dropdown next time. Sandboxed by
-default, like any other web tab.
+reused (one tab per dev server, with the link's own path opened inside it, and one tab
+per dev server rather than per host spelling, so `localhost:5173` and `127.0.0.1:5173`
+share it); otherwise one is saved under its `host:port` so it is in the Run dropdown
+next time, and a toast tells you it was saved. Sandboxed by default, like any other web
+tab.
+
+⚠️ **`*.localhost` is deliberately not auto-routed**, even though a browser treats it as
+loopback. Every other name in that list is an address literal that can only mean this
+box; a `*.localhost` DNS name is not one, and on a resolver with a search domain
+configured `evil.localhost` can be retried as `evil.localhost.<search domain>`, which
+someone else can control. Since the links come from agent output, one tap would then
+make Codeman fetch an agent-chosen origin server-side and save it. If you really run
+`api.localhost` dev hosts, add that dashboard by hand: doing so is an explicit action,
+which is the difference that matters here. A **trusted** (non-sandboxed) dashboard is
+likewise never auto-reused by a tapped link, for the same reason.
 
 Only loopback is routed this way. A LAN or tailnet address (`192.168.…`, `100.…`,
 `box.ts.net`) may well be reachable from the device — a VPN, the same Wi-Fi — and a

@@ -298,6 +298,28 @@ describe('orphaned terminal input recovery', () => {
   });
 });
 
+describe('the first input event of a page load, with no keydown before it', () => {
+  it('stands down when xterm already delivered it, instead of duplicating the text', () => {
+    // Dictation (Android voice typing, desktop dictation, any `insertText` with
+    // no key held) reaches xterm with `_keyDownSeen` false, so xterm's OWN capture
+    // listener forwards it and bumps the canonical counter before this controller's
+    // listener runs. The snapshot baseline has to predate that bump, or the
+    // candidate reads "xterm stayed silent" and emits the text a second time.
+    const h = harness();
+    h.controller.notifyCanonicalData(); // xterm delivered it first
+    h.input('hello');
+    h.flushTimers();
+    expect(h.emitted, 'xterm already delivered this text').toEqual([]);
+  });
+
+  it('still recovers one that xterm genuinely dropped', () => {
+    const h = harness();
+    h.input('hello'); // nothing from xterm for it
+    h.flushTimers();
+    expect(h.emitted).toEqual(['hello']);
+  });
+});
+
 describe('terminal-ui wiring: what counts as "xterm spoke for this keystroke"', () => {
   const terminalSource = readFileSync(new URL('../src/web/public/terminal-ui.js', import.meta.url), 'utf8');
 

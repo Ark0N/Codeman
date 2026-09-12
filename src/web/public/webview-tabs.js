@@ -141,7 +141,13 @@ Object.assign(CodemanApp.prototype, {
     const wantedKey = webTabOriginKey(url);
     let existing = null;
     for (const webview of this.webviews.values()) {
-      if (webview.managed || (webview.embedMode ?? 'proxy') !== 'proxy') continue;
+      // ⚠️ `trusted` is excluded alongside `managed` and direct-mode records: a
+      // trusted frame runs with `allow-same-origin`, i.e. on Codeman's origin with
+      // the user's cookie, and the link being followed came from agent output. An
+      // agent that can write into the dev server's tree (it IS the workspace) could
+      // otherwise print a path that one tap navigates that privileged frame to.
+      // Opening such a dashboard from the Run dropdown is still an explicit action.
+      if (webview.managed || webview.trusted || (webview.embedMode ?? 'proxy') !== 'proxy') continue;
       try {
         if (webTabOriginKey(new URL(webview.url)) === wantedKey) {
           existing = webview;

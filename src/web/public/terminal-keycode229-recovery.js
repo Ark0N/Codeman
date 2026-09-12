@@ -54,7 +54,15 @@
     // Number of canonical data events xterm has emitted, bumped by the caller's
     // onData hook. Only its ORDER relative to a keydown matters.
     let canonicalCount = 0;
-    let keydownSnapshot = null;
+    // ⚠️ 0, never null. With `null` the `?? canonicalCount` fallback at the input
+    // event reads a count xterm has ALREADY bumped: on a fresh page load with no
+    // keydown yet (dictation, Android voice typing, any `insertText` with no key
+    // held) xterm's own capture listener runs first, forwards the text itself and
+    // bumps the counter, then this snapshot equals it, `count > snapshot` is false,
+    // and the text is emitted a SECOND time. A baseline of 0 makes that comparison
+    // true and stands the recovery down, which restores this file's invariant: a
+    // missed recovery is acceptable, a duplicated keystroke is not.
+    let keydownSnapshot = 0;
     let composing = false;
     const pending = [];
 
