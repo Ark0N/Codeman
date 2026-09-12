@@ -24,14 +24,14 @@ custom port, identity file, `-J` jump host, `-o ProxyCommand`).
 
 Types live in `src/types/session.ts`; persistence in `src/remote-hosts.ts`.
 
-| Type                                         | Role                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `RemoteSshOptions`                           | The **HOW-to-reach** fields, shared by host + session: `identityFile`, `socksProxy` (`host:port`), `jumpHost` (`[user@]host[:port]`), `extraSshOptions` (`KEY=VALUE[]`). Every field optional — all-absent reproduces port-22, default-identity, directly-SSH-able behavior.                                                                                                                                                                                                               |
-| `RemoteHost` (extends `RemoteSshOptions`)    | A saved host: `id`, `label`, `host`, `username`, `port?`, `commands?` (per-mode launch command override).                                                                                                                                                                                                                                                                                                                                                                                  |
-| `RemoteCase`                                 | A working directory on a host: `name`, `type: 'remote'`, `hostId`, `remotePath`.                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Type | Role |
+|------|------|
+| `RemoteSshOptions` | The **HOW-to-reach** fields, shared by host + session: `identityFile`, `socksProxy` (`host:port`), `jumpHost` (`[user@]host[:port]`), `extraSshOptions` (`KEY=VALUE[]`). Every field optional — all-absent reproduces port-22, default-identity, directly-SSH-able behavior. |
+| `RemoteHost` (extends `RemoteSshOptions`) | A saved host: `id`, `label`, `host`, `username`, `port?`, `commands?` (per-mode launch command override). |
+| `RemoteCase` | A working directory on a host: `name`, `type: 'remote'`, `hostId`, `remotePath`. |
 | `SessionRemote` (extends `RemoteSshOptions`) | The resolved bundle stamped onto a live session: host coordinates + `remotePath` + `commands`, plus **`owned?`** and **`remoteSessionName?`** (COD-105 — see [Ownership](#ownership-launched-vs-discovered-and-attached-cod-105)). Built by `toSessionRemote(host, case)` (sets `owned: true`) for the launch path, or `toAttachedSessionRemote(host, name, path)` (sets `owned: false`) for the attach path. Both copy the advanced SSH options through so every connection is identical. |
-| `RemoteCommandMode`                          | `Extract<SessionMode, 'shell' \| 'claude' \| 'opencode' \| 'codex' \| 'gemini' \| 'antigravity' \| 'pi' \| 'grok'>` — the modes that can run remotely.                                                                                                                                                                                                                                                                                                                                     |
-| `RemoteSessionInfo` (COD-105)                | One discovered remote tmux session: `name` (always `codeman-*`), `attached` (a client is connected), `created` (epoch s), `windows`. Returned by `listRemoteCodemanSessions()`.                                                                                                                                                                                                                                                                                                            |
+| `RemoteCommandMode` | `Extract<SessionMode, 'shell' \| 'claude' \| 'opencode' \| 'codex' \| 'gemini' \| 'antigravity' \| 'pi' \| 'grok' \| 'deepseek' \| 'omp'>` — the modes that can run remotely. |
+| `RemoteSessionInfo` (COD-105) | One discovered remote tmux session: `name` (always `codeman-*`), `attached` (a client is connected), `created` (epoch s), `windows`. Returned by `listRemoteCodemanSessions()`. |
 
 Persistence is two flat JSON arrays in the instance data dir:
 
@@ -73,7 +73,7 @@ Rules that keep this safe — **do not bypass them by hand-building an ssh line 
   single-quote `shellescape`d (`'…'` with embedded `'\''`). The helper mirrors
   the one in `tmux-manager.ts`.
 - **`~`/`$HOME` in `identityFile` is expanded at build time** (`expandIdentityPath`),
-  _before_ escaping — ssh does not expand `~` inside `-i`, and the escaped value
+  *before* escaping — ssh does not expand `~` inside `-i`, and the escaped value
   never reaches a shell that would.
 - **The ProxyCommand is one shellescaped `-o KEY=VALUE` token**, so its spaces and
   the `%h`/`%p` placeholders reach ssh as a single argument. `%h %p` survive
@@ -112,10 +112,15 @@ Key points:
   asymmetry: **discovery/attach (COD-105) target the canonical `-L codeman`
   socket** — they join sessions the remote's own Codeman manages, while owned
   durable launches live on `-L codeman-remote`.
-- **`exec <cli>`** replaces the pane shell with the agent, so the pane PID _is_
+- **`exec <cli>`** replaces the pane shell with the agent, so the pane PID *is*
   the agent. The per-mode command comes from `remote.commands?.[mode]` or
   `defaultRemoteCommandForMode(mode)` (`exec claude` / `exec opencode` /
   `exec codex` / `exec gemini` / `exec agy` / `exec bash -l`).
+  ⚠️ **claude and omp no longer take that path**: both have their own arm in
+  `buildRemoteLaunchCommand` so a respawn can continue the same conversation
+  (see [Respawn / reattach continuation](#respawn--reattach-continuation)), and
+  because the claude arm is an `a || b` pair under `-c`, its pane PID is the
+  **login shell**, not the agent.
 - The **whole tmux invocation is a single shell-quoted ssh argument**, and the
   pane command is independently quoted, so a `remotePath` with spaces is safe.
 - Connection options come from the **same `buildSshConnectionArgs(remote)`** as
@@ -128,9 +133,9 @@ Because durable remote sessions require tmux on the remote host,
 `checkRemoteTmuxAvailable(host)` runs `command -v tmux` over SSH **before**
 creating a remote case/session and returns a structured, never-throwing result:
 
-- empty stdout / non-zero exit → _"remote host `<host>` needs tmux installed for
-  durable remote sessions"_
-- stderr present → _"could not verify tmux on remote host `<host>`: `<stderr>`"_
+- empty stdout / non-zero exit → *"remote host `<host>` needs tmux installed for
+  durable remote sessions"*
+- stderr present → *"could not verify tmux on remote host `<host>`: `<stderr>`"*
   (a real connection failure, surfaced to the operator)
 - success → `{ ok: true, tmuxPath }`
 
@@ -147,7 +152,7 @@ skipped; command construction is still asserted by unit tests.
 
 ## Ownership: launched vs. discovered-and-attached (COD-105)
 
-COD-104 (above) was Phase 1 — Codeman _launches_ a remote session and owns it.
+COD-104 (above) was Phase 1 — Codeman *launches* a remote session and owns it.
 COD-105 is Phase 2 — Codeman can also **discover** `codeman-*` tmux sessions
 already running on a remote host (created by the remote's own Codeman or another
 instance) and **attach** to one it didn't launch. Ownership decides what happens
@@ -188,7 +193,7 @@ remote command line by ownership:
 
 - **`owned === false`** → `buildRemoteAttachCommand(remote, name)` — emits
   `ssh … -t … 'tmux -L codeman attach -t <remoteSessionName>'`. It uses **`attach`,
-  NOT `new-session -A`**, so it only _joins_ an existing session and never creates
+  NOT `new-session -A`**, so it only *joins* an existing session and never creates
   one.
 - **owned (default)** → `buildRemoteLaunchCommand` (the COD-104 path above).
 
@@ -196,7 +201,7 @@ remote command line by ownership:
 
 `TmuxManager.killSession()` has an **early return for non-owned remote sessions**:
 it tears down **only the LOCAL pane** holding the ssh client (`tmux -L codeman
-kill-session` on _this_ host's socket). Killing the local ssh sends SIGHUP to the
+kill-session` on *this* host's socket). Killing the local ssh sends SIGHUP to the
 remote `tmux attach`, which **detaches** — the durable remote session survives.
 The early return is a structural guarantee that **no code path can ever issue a
 remote `kill-session` for a session we don't own** — the only `kill-session` run is
@@ -250,14 +255,14 @@ stale `true` from one transport drop can never revive the NEXT clean exit.
 
 Routes are registered in `src/web/routes/case-routes.ts`:
 
-| Method   | Path                                 | Purpose                                                                                        |
-| -------- | ------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `GET`    | `/api/remote-hosts`                  | List saved hosts                                                                               |
-| `POST`   | `/api/remote-hosts`                  | Create a host                                                                                  |
-| `PUT`    | `/api/remote-hosts/:id`              | Update a host                                                                                  |
-| `DELETE` | `/api/remote-hosts/:id`              | Delete a host                                                                                  |
-| `GET`    | `/api/remote-hosts/:hostId/sessions` | Discover `codeman-*` sessions on the host (COD-105; `listRemoteCodemanSessions`, never errors) |
-| `POST`   | `/api/cases/remote-link`             | Link a case to a remote host (creates the `RemoteCase`)                                        |
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/remote-hosts` | List saved hosts |
+| `POST` | `/api/remote-hosts` | Create a host |
+| `PUT` | `/api/remote-hosts/:id` | Update a host |
+| `DELETE` | `/api/remote-hosts/:id` | Delete a host |
+| `GET` | `/api/remote-hosts/:hostId/sessions` | Discover `codeman-*` sessions on the host (COD-105; `listRemoteCodemanSessions`, never errors) |
+| `POST` | `/api/cases/remote-link` | Link a case to a remote host (creates the `RemoteCase`) |
 
 Attaching to a discovered session is a **session-create** path, not a host route:
 `POST /api/sessions` accepts `attachRemoteSession: { hostId, remoteSessionName }`

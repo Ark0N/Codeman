@@ -30,16 +30,51 @@
 
 const LOOPBACK_HOSTNAMES = new Set(['localhost', '0.0.0.0', '::1', '[::1]', '::', '[::]']);
 
-/** `localhost`, `*.localhost`, 127.0.0.0/8, 0.0.0.0 and the IPv6 loopback forms. */
-function isLoopbackHostname(hostname) {
-  const host = String(hostname || '')
+function normalizeHostname(hostname) {
+  return String(hostname || '')
     .trim()
     .toLowerCase()
     .replace(/\.$/, '');
+}
+
+/**
+ * `localhost`, 127.0.0.0/8, 0.0.0.0 and the IPv6 loopback forms: names that can
+ * only ever mean this box.
+ *
+ * ⚠️ `*.localhost` is deliberately NOT here. The link source is agent-written
+ * terminal output and response-viewer markdown, i.e. prompt-injectable, and
+ * this set is the whole confinement on a tap that makes Codeman fetch a URL
+ * server-side and persist it. Every other member is an address literal; a
+ * `*.localhost` DNS name is not one: on a resolver that does not synthesise it
+ * locally and has a search domain configured, `evil.localhost` NXDOMAINs as
+ * absolute and is retried as `evil.localhost.<search domain>`, which an
+ * attacker can control. A user who really runs `api.localhost` dev hosts can
+ * still save that dashboard by hand, which is an explicit action.
+ */
+function isLoopbackHostname(hostname) {
+  const host = normalizeHostname(hostname);
   if (!host) return false;
-  if (LOOPBACK_HOSTNAMES.has(host) || host.endsWith('.localhost')) return true;
+  if (LOOPBACK_HOSTNAMES.has(host)) return true;
   const ipv4 = /^(\d{1,3})\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.exec(host);
   return !!ipv4 && Number(ipv4[1]) === 127;
+}
+
+/**
+ * Whether the PAGE is being viewed on the box itself. Broader than the
+ * auto-route set on purpose, and safe in the opposite direction: a false
+ * positive here only ever DECLINES to proxy, leaving the caller's direct open.
+ */
+function isOnBoxHostname(hostname) {
+  const host = normalizeHostname(hostname);
+  return isLoopbackHostname(host) || host.endsWith('.localhost');
+}
+
+/**
+ * One key per dev server, so `localhost:5173` and `127.0.0.1:5173` reuse a
+ * single saved dashboard and a single tab instead of one per host spelling.
+ */
+function webTabOriginKey(url) {
+  return isLoopbackHostname(url.hostname) ? `${url.protocol}//loopback:${url.port}` : url.origin;
 }
 
 /**
@@ -57,11 +92,11 @@ function linkNeedsWebTabProxy(rawUrl, pageHostname) {
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
   if (!isLoopbackHostname(url.hostname)) return false;
-  return !isLoopbackHostname(pageHostname);
+  return !isOnBoxHostname(pageHostname);
 }
 
 if (typeof window !== 'undefined') {
-  window.CodemanWebviewLinks = { isLoopbackHostname, linkNeedsWebTabProxy };
+  window.CodemanWebviewLinks = { isLoopbackHostname, isOnBoxHostname, webTabOriginKey, linkNeedsWebTabProxy };
 }
 
 Object.assign(CodemanApp.prototype, {
@@ -91,17 +126,24 @@ Object.assign(CodemanApp.prototype, {
     } catch {
       return;
     }
-    if (!this.webviews) await this.refreshWebviews();
+    // ⚠️ "is `this.webviews` set" does NOT answer "is it loaded": initWebviews()
+    // assigns a truthy EMPTY map synchronously and only then awaits the list, so
+    // a tap during page load used to find nothing to reuse and POST a duplicate
+    // record for an origin that already exists server-side. Join an in-flight
+    // load; start one only when none has ever run.
+    if (this._webviewsRefresh) await this._webviewsRefresh;
+    else if (!this._webviewsLoaded) await this.refreshWebviews();
     if (!this.webviews) {
       this.showToast?.('Could not open URL', 'error');
       return;
     }
 
+    const wantedKey = webTabOriginKey(url);
     let existing = null;
     for (const webview of this.webviews.values()) {
       if (webview.managed || (webview.embedMode ?? 'proxy') !== 'proxy') continue;
       try {
-        if (new URL(webview.url).origin === url.origin) {
+        if (webTabOriginKey(new URL(webview.url)) === wantedKey) {
           existing = webview;
           break;
         }
@@ -122,9 +164,17 @@ Object.assign(CodemanApp.prototype, {
       }
       await this.refreshWebviews();
       id = created.id;
+      // The create is a persisted record: it writes webviews.json, broadcasts
+      // over SSE, adds a Run-dropdown row on every device this owner is signed
+      // in on and counts toward MAX_WEBVIEWS. Adding one by hand goes through a
+      // modal; a tap should not do all that with a new tab as its only signal.
+      this.showToast?.(`Saved ${url.host} as a web tab`, 'success');
     }
+    // `/` is passed through rather than flattened to '': openWebview reads an
+    // empty path as "no deep link" and leaves an already-open frame on whatever
+    // page it was showing, so a link to the origin root did nothing visible.
     const path = `${url.pathname}${url.search}${url.hash}`;
-    await this.openWebview(id, { path: path === '/' ? '' : path });
+    await this.openWebview(id, { path: path || '/' });
   },
 
   // ── State ─────────────────────────────────────────────────────────────────
@@ -152,11 +202,19 @@ Object.assign(CodemanApp.prototype, {
   },
 
   async refreshWebviews() {
-    const data = await this._apiJson('/api/webviews');
-    if (!data) return;
-    this.webviews = new Map((data.webviews || []).map((w) => [w.id, w]));
-    if (typeof data.maxLiveFrames === 'number') this._webviewMaxFrames = data.maxLiveFrames;
-    this.renderWebviewMenuItems();
+    const inFlight = this._apiJson('/api/webviews').then((data) => {
+      if (!data) return;
+      this.webviews = new Map((data.webviews || []).map((w) => [w.id, w]));
+      if (typeof data.maxLiveFrames === 'number') this._webviewMaxFrames = data.maxLiveFrames;
+      this._webviewsLoaded = true;
+      this.renderWebviewMenuItems();
+    });
+    this._webviewsRefresh = inFlight;
+    try {
+      await inFlight;
+    } finally {
+      if (this._webviewsRefresh === inFlight) this._webviewsRefresh = null;
+    }
   },
 
   /** SSE: the saved list changed (possibly on another device). */

@@ -145,6 +145,47 @@ describe('response viewer brief view (last answered turn)', () => {
     expect(viewer.classList.contains('visible')).toBe(true);
   });
 
+  it('opens a multi-row turn at its NEWEST text, and a single card at the top', async () => {
+    // `body.scrollTop = 0` was right when the brief view was one card holding
+    // the last row. With the whole turn rendered, the top of the scroller is
+    // the turn's FIRST narration line and the answer the eye button exists to
+    // show can be several screens below it; loadFullContext already scrolls to
+    // the bottom for the same turn, so the two views disagreed.
+    // jsdom does no layout, so scrollHeight is stubbed and the write recorded.
+    const spyScroll = (body: HTMLElement) => {
+      const writes: number[] = [];
+      Object.defineProperty(body, 'scrollHeight', { configurable: true, get: () => 4200 });
+      Object.defineProperty(body, 'scrollTop', {
+        configurable: true,
+        get: () => writes[writes.length - 1] ?? 0,
+        set: (v: number) => void writes.push(v),
+      });
+      return writes;
+    };
+
+    const many = mountViewer();
+    const manyWrites = spyScroll(many.body);
+    await makeApp({
+      text: 'Done.',
+      timestamp: 't',
+      messages: [
+        { role: 'assistant', text: 'Looking at the file.', turn: 2 },
+        { role: 'assistant', text: 'Done.', turn: 2 },
+      ],
+    }).app.toggleResponseViewer();
+    expect(manyWrites.at(-1)).toBe(4200);
+
+    document.body.innerHTML = '';
+    const one = mountViewer();
+    const oneWrites = spyScroll(one.body);
+    await makeApp({
+      text: 'Done.',
+      timestamp: 't',
+      messages: [{ role: 'assistant', text: 'Done.', turn: 2 }],
+    }).app.toggleResponseViewer();
+    expect(oneWrites.at(-1)).toBe(0);
+  });
+
   it('falls back to text when the server sends no messages, keeping one badged card', async () => {
     const { body } = mountViewer();
     const { app } = makeApp({ text: 'Only the last row.', timestamp: 't' });

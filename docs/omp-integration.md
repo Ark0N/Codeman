@@ -153,6 +153,14 @@ shared nor seeded.
 include `~/.local/bin`. Per-session config and `envOverrides` do not cross ssh and are
 rejected rather than silently ignored; use the per-host command override instead.
 
+⚠️ A **respawn or reattach** of a remote omp session runs `omp --continue`, not a
+bare `omp`, so it lands back in the same conversation. It is deliberately
+`--continue` rather than the exact `--resume <id>` the local and docker paths
+pin: `omp-session-resolver.ts` only ever reads THIS host's `~/.omp/agent/sessions/`,
+and a remote conversation's session file lives on the remote host under the
+remote user's home, so resolving locally would pin a stranger's id. See
+[Respawn / reattach continuation](remote-sessions.md#respawn--reattach-continuation).
+
 ## Known gaps
 
 - **No idle/completion hook.** Idle detection falls back to output-stabilization

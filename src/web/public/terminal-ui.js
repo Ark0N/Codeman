@@ -1400,8 +1400,21 @@ Object.assign(CodemanApp.prototype, {
     this.terminal.onData((data) => {
       // Canonical xterm data. Telling the controller is what lets it know a
       // keystroke was already delivered and needs no recovery.
+      //
+      // ⚠️ onData ALSO fires for output xterm produces on its own initiative:
+      // the DA/DSR/CPR/OSC replies it answers during Ink redraws, and the SGR
+      // mouse and focus reports (see the two predicates above, used for exactly
+      // this question at the send sites). Any one of those landing between the
+      // keydown and the candidate's zero-delay resolution would be read as
+      // "xterm spoke for this keystroke", standing the recovery down and
+      // leaving the character dropped, worst on a busy agent pane, which is
+      // the case this exists for. Narrowing the counter cannot cause a
+      // duplicate: it only ever makes the controller less sure it can stand down.
       try {
-        this._keyCode229Recovery?.notifyCanonicalData?.();
+        const input = window.CodemanTerminalInput;
+        if (!input?.shouldSuppressTerminalQueryResponse(data) && !input?.isTerminalFocusOrMouseReport(data)) {
+          this._keyCode229Recovery?.notifyCanonicalData?.();
+        }
       } catch {
         // Bookkeeping must never block real input.
       }

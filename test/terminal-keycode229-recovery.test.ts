@@ -89,6 +89,27 @@ function harness({ screenReader = false } = {}) {
   };
 }
 
+/** terminal-ui.js's exported predicates, loaded the same way as in test/mobile-shell-keyboard.test.ts. */
+function loadTerminalInput() {
+  const source = readFileSync(new URL('../src/web/public/terminal-ui.js', import.meta.url), 'utf8');
+  const win: Record<string, any> = {
+    addEventListener() {},
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
+  };
+  const sandbox: Record<string, any> = {
+    window: win,
+    globalThis: win,
+    document: { addEventListener() {} },
+    CodemanApp: class {},
+  };
+  win.CodemanApp = sandbox.CodemanApp;
+  vm.runInNewContext(source, sandbox, { filename: 'terminal-ui.js' });
+  return win.CodemanTerminalInput as {
+    shouldSuppressTerminalQueryResponse(data: string): boolean;
+    isTerminalFocusOrMouseReport(data: string): boolean;
+  };
+}
+
 describe('orphaned terminal input recovery', () => {
   it('forwards the committed text when xterm stayed silent', () => {
     const h = harness();
@@ -274,5 +295,62 @@ describe('orphaned terminal input recovery', () => {
     h.textarea.fire('input', inputEvent('y'));
     h.flushTimers();
     expect(h.emitted).toEqual([]);
+  });
+});
+
+describe('terminal-ui wiring: what counts as "xterm spoke for this keystroke"', () => {
+  const terminalSource = readFileSync(new URL('../src/web/public/terminal-ui.js', import.meta.url), 'utf8');
+
+  it('gates notifyCanonicalData on the two predicates this file already owns', () => {
+    // onData does NOT only carry keystrokes: xterm answers DA/DSR/CPR/OSC
+    // queries through it during Ink redraws, and emits SGR mouse and focus
+    // reports on its own initiative. Counting one of those as canonical data
+    // for the pending keystroke stands the recovery down and leaves the
+    // character dropped, worst on a busy agent pane, which is the case this
+    // exists for. Same gate, same two predicates, as the one-shot Ctrl
+    // modifier uses for the same question (test/mobile-shell-keyboard.test.ts).
+    const notify = terminalSource.indexOf('_keyCode229Recovery?.notifyCanonicalData?.()');
+    expect(notify).toBeGreaterThan(0);
+
+    const gate = terminalSource.lastIndexOf(
+      '!input?.shouldSuppressTerminalQueryResponse(data) && !input?.isTerminalFocusOrMouseReport(data)',
+      notify
+    );
+    expect(gate).toBeGreaterThan(0);
+    expect(gate).toBeLessThan(notify);
+
+    // ⚠️ The predicates live inside the module IIFE that ends long before this
+    // call site, so they are reachable ONLY through the global. Bare references
+    // would throw a ReferenceError straight into the surrounding try/catch,
+    // which swallows it, and notifyCanonicalData would then NEVER run: the
+    // recovery would re-emit a character xterm already delivered.
+    expect(terminalSource.slice(gate - 120, notify)).toContain('window.CodemanTerminalInput');
+  });
+
+  it('stands down for a real keystroke, but not for a mouse report or a query reply', () => {
+    // The gate as terminal-ui.js writes it. The wiring test above pins the real
+    // source; this proves the behaviour it buys.
+    const input = loadTerminalInput();
+    const onData = (h: ReturnType<typeof harness>, data: string) => {
+      if (!input.shouldSuppressTerminalQueryResponse(data) && !input.isTerminalFocusOrMouseReport(data)) {
+        h.controller.notifyCanonicalData();
+      }
+    };
+
+    for (const noise of ['\x1b[<0;10;5M', '\x1b[I', '\x1b[?1;2c']) {
+      const h = harness();
+      h.keydown();
+      h.input('x');
+      onData(h, noise);
+      h.flushTimers();
+      expect(h.emitted, `${JSON.stringify(noise)} must not stand the recovery down`).toEqual(['x']);
+    }
+
+    const typed = harness();
+    typed.keydown();
+    typed.input('x');
+    onData(typed, 'x');
+    typed.flushTimers();
+    expect(typed.emitted, 'xterm really did deliver this one').toEqual([]);
   });
 });

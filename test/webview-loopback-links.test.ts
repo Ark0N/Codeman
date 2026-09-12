@@ -95,6 +95,8 @@ function boot(pageUrl = 'http://192.168.1.135:8095/') {
 
 interface WebviewLinks {
   isLoopbackHostname(host: string): boolean;
+  isOnBoxHostname(host: string): boolean;
+  webTabOriginKey(url: URL): string;
   linkNeedsWebTabProxy(url: string, pageHostname: string): boolean;
 }
 
@@ -108,16 +110,7 @@ describe('loopback link decision', () => {
   const links = win.CodemanWebviewLinks;
 
   it('recognises every loopback spelling and nothing else', () => {
-    for (const host of [
-      'localhost',
-      'LOCALHOST',
-      'app.localhost',
-      '127.0.0.1',
-      '127.1.2.3',
-      '0.0.0.0',
-      '[::1]',
-      '::1',
-    ]) {
+    for (const host of ['localhost', 'LOCALHOST', '127.0.0.1', '127.1.2.3', '0.0.0.0', '[::1]', '::1']) {
       expect(links.isLoopbackHostname(host), host).toBe(true);
     }
     for (const host of [
@@ -131,6 +124,31 @@ describe('loopback link decision', () => {
     ]) {
       expect(links.isLoopbackHostname(host), host).toBe(false);
     }
+  });
+
+  it('keeps *.localhost OUT of the auto-route set, because it is a DNS name an attacker can steer', () => {
+    // Every other member of the set is an address literal that can only mean
+    // this box. `evil.localhost` is not: on a resolver that does not synthesise
+    // *.localhost locally and has a search domain configured, it NXDOMAINs as
+    // absolute and is retried as `evil.localhost.<search domain>`. The link
+    // source is agent-written terminal output, so this set is the whole
+    // confinement on a tap that makes Codeman fetch a URL and persist it.
+    expect(links.isLoopbackHostname('app.localhost')).toBe(false);
+    expect(links.isLoopbackHostname('evil.localhost')).toBe(false);
+    expect(links.linkNeedsWebTabProxy('http://evil.localhost/', '192.168.1.135')).toBe(false);
+
+    // The PAGE-side test stays broader: a false positive there only ever
+    // DECLINES to proxy, leaving the caller's own direct open untouched.
+    expect(links.isOnBoxHostname('app.localhost')).toBe(true);
+    expect(links.linkNeedsWebTabProxy('http://localhost:5173/', 'app.localhost')).toBe(false);
+  });
+
+  it('keys a dashboard per dev server, not per host spelling', () => {
+    const key = (u: string) => links.webTabOriginKey(new URL(u));
+    expect(key('http://localhost:5173/')).toBe(key('http://127.0.0.1:5173/'));
+    expect(key('http://localhost:5173/')).not.toBe(key('http://localhost:5174/'));
+    expect(key('http://localhost:5173/')).not.toBe(key('https://localhost:5173/'));
+    expect(key('http://box.ts.net:3000/')).toBe('http://box.ts.net:3000');
   });
 
   it('proxies a loopback http(s) link only when the page is not on that box', () => {
@@ -169,6 +187,54 @@ describe('openLinkThroughWebTabIfLoopback', () => {
     expect(win.document.querySelector('.webview-frame[data-webview-id="dev"] iframe')).toBe(first);
     expect(frameSrc(win, 'dev')).toBe('/webview/cap-dev/other');
     expect(win.document.querySelectorAll('.webview-frame').length).toBe(1);
+  });
+
+  it('navigates an already-mounted frame back to the origin ROOT, which used to do nothing', async () => {
+    // openUrlInWebTab used to flatten '/' to '', and openWebview reads an empty
+    // path as "no deep link", so it mounted with navigate:false and an open
+    // frame stayed on whatever page it was showing. Deep links navigated; a tap
+    // on the bare origin silently did not.
+    const { win, app } = boot();
+    await app.openUrlInWebTab('http://localhost:5173/deep/page?a=1');
+    expect(frameSrc(win, 'dev')).toBe('/webview/cap-dev/deep/page?a=1');
+
+    await app.openUrlInWebTab('http://localhost:5173/');
+    expect(frameSrc(win, 'dev')).toBe('/webview/cap-dev/');
+    expect(win.document.querySelectorAll('.webview-frame').length).toBe(1);
+  });
+
+  it('reuses one dashboard across host spellings of the same dev server', async () => {
+    const { win, app, calls } = boot();
+    // The saved dashboard is http://localhost:5173/; a 127.0.0.1 link to the
+    // same port is the same server and must not mint a second tab.
+    await app.openUrlInWebTab('http://127.0.0.1:5173/status');
+    expect(frameSrc(win, 'dev')).toBe('/webview/cap-dev/status');
+    expect(calls.find((c) => c.method === 'POST' && c.path === '/api/webviews')).toBeUndefined();
+    expect(win.document.querySelectorAll('.webview-frame').length).toBe(1);
+  });
+
+  it('waits for an in-flight webview load instead of POSTing a duplicate record', async () => {
+    // initWebviews() assigns a truthy EMPTY map synchronously and only then
+    // awaits GET /api/webviews, so "is this.webviews set" answered "is it
+    // loaded" wrongly: a tap inside that round trip found nothing to reuse and
+    // saved a second dashboard for an origin that already existed server-side.
+    const { win, app, calls } = boot();
+    const loaded = app.webviews;
+    app.webviews = new Map();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    (app as unknown as { _webviewsRefresh: Promise<void> })._webviewsRefresh = gate.then(() => {
+      app.webviews = loaded;
+    });
+
+    const tap = app.openUrlInWebTab('http://localhost:5173/late');
+    release();
+    await tap;
+
+    expect(calls.find((c) => c.method === 'POST' && c.path === '/api/webviews')).toBeUndefined();
+    expect(frameSrc(win, 'dev')).toBe('/webview/cap-dev/late');
   });
 
   it('saves an unknown origin under its host:port, then opens it', async () => {

@@ -2398,7 +2398,12 @@ class CodemanApp {
 
       viewer.classList.add('visible');
       backdrop.classList.add('visible');
-      body.scrollTop = 0;
+      // A multi-row turn opens at its NEWEST text, matching loadFullContext's
+      // "scroll to bottom (latest message)". `scrollTop = 0` was right when the
+      // brief view was a single card holding the last row; with the whole turn
+      // rendered, the top is the turn's first narration line and the answer the
+      // eye button exists to show can be several screens down.
+      body.scrollTop = turnMessages.length > 1 ? body.scrollHeight : 0;
     } catch (err) {
       console.error('Failed to load response:', err);
     }
