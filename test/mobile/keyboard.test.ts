@@ -471,7 +471,18 @@ describe('Virtual Keyboard', () => {
       });
       // Tab replaced /clear in the simple bar; /clear and /compact live in the
       // extended bar only.
-      expect(actions).toEqual(['scroll-up', 'scroll-down', 'init', 'tab', 'paste', 'esc', 'dismiss']);
+      expect(actions).toEqual([
+        'scroll-up',
+        'scroll-down',
+        'init',
+        'tab',
+        'shift-left',
+        'shift-right',
+        'paste',
+        'readmymind',
+        'esc',
+        'dismiss',
+      ]);
     });
 
     it('double-tap confirm on /clear button', async () => {
