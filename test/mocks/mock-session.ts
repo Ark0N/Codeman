@@ -318,6 +318,22 @@ export class MockSession extends EventEmitter {
     this.color = c;
   });
 
+  /** Custom Model Endpoint Profiles (deployment_plan.md) */
+  customModel: { endpointId: string; modelId: string; label?: string } | undefined = undefined;
+  private _mockCustomModelConfigDir: string | undefined;
+  setCustomModel = vi.fn(
+    (
+      next: { endpointId: string; modelId: string; label?: string; envKeys: string[]; configDir?: string } | undefined,
+      _envOverrides?: Record<string, string>
+    ): string | undefined => {
+      const previous = this._mockCustomModelConfigDir;
+      this._mockCustomModelConfigDir = next?.configDir;
+      this.customModel = next ? { endpointId: next.endpointId, modelId: next.modelId, label: next.label } : undefined;
+      return previous;
+    }
+  );
+  restartCli = vi.fn(async () => true);
+
   /** Stub for sendInput */
   sendInput = vi.fn();
 

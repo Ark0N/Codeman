@@ -372,7 +372,10 @@ describe('DeepSeek multi-user clamp: the env-var half', () => {
   });
 
   it('leaves unrelated overrides alone, and returns the same object when there is nothing to strip', async () => {
-    const input = { DEEPSEEK_API_KEY: 'sk-test', CODEX_HOME: '/tmp/cx' };
+    // CODEX_HOME is a poor "unrelated" example here — it is itself a privileged key
+    // (codex's own registry entry), so a genuinely non-privileged one is needed to
+    // prove the identity-return fast path, not just that DEEPSEEK_API_KEY is exempt.
+    const input = { DEEPSEEK_API_KEY: 'sk-test', OPENCODE_LOG_LEVEL: 'debug' };
     const out = await _clampEnvOverridesForOwner('nobody', input);
     expect(out).toBe(input);
     expect(await _clampEnvOverridesForOwner('nobody', undefined)).toBeUndefined();

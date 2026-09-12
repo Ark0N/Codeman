@@ -677,6 +677,13 @@ export interface SessionState {
   resumeSessionId?: string;
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort?: EffortLevel;
+  /**
+   * Custom Model Endpoint Profiles (deployment_plan.md): the custom OpenAI-compatible
+   * endpoint (local or cloud) this session's CLI is currently pointed at, if any.
+   * Undefined = the harness's native cloud default. No secrets here — the endpoint's
+   * base URL/api key live only in Session._envOverrides, never in this public state.
+   */
+  customModel?: { endpointId: string; modelId: string; label?: string };
   /** Sanitized per-session attachment history. */
   attachmentHistory?: SessionAttachmentHistoryItem[];
   /**

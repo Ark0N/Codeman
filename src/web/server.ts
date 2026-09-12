@@ -179,6 +179,7 @@ import {
   registerVoiceRoutes,
   registerWebviewRoutes,
   registerTabLayoutRoutes,
+  registerCustomModelRoutes,
   tryWebviewRefererFallback,
 } from './routes/index.js';
 import { CronService } from '../cron/cron-service.js';
@@ -1051,6 +1052,7 @@ export class WebServer extends EventEmitter {
     registerOrchestratorRoutes(this.app, ctx);
     registerWebviewRoutes(this.app, ctx, this.basePath);
     registerTabLayoutRoutes(this.app, ctx);
+    registerCustomModelRoutes(this.app);
 
     // Cron: build the service from the same context, recompute
     // due times for any persisted jobs, then expose it to its routes.

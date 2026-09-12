@@ -310,6 +310,34 @@ const capabilitiesSchema = z
     privilegedEnvKeys: z.array(envName).max(8),
     gates: z.record(z.string(), z.object({ minVersion: z.string().max(20), failClosed: z.boolean() }).strict()),
     maxFrameBytes: z.number().int().positive().optional(),
+    customModelInjection: z.discriminatedUnion('kind', [
+      z
+        .object({
+          kind: z.literal('env'),
+          baseUrlVar: envName,
+          apiKeyVar: envName,
+          // Empty is valid: deepseek's model routing is a profile-composition concern, not
+          // an env var, so it declares baseUrl/apiKey injection with no model var at all.
+          modelVars: z.array(envName).max(8),
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal('configContentEnv'),
+          envVar: envName,
+          template: z.literal('opencode-json'),
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal('configDir'),
+          dirEnvVar: envName,
+          fileName: z.string().min(1).max(80),
+          template: z.enum(['codex-toml', 'pi-models-json', 'omp-models-yml', 'grok-toml']),
+        })
+        .strict(),
+      z.object({ kind: z.literal('unsupported') }).strict(),
+    ]),
   })
   .strict();
 

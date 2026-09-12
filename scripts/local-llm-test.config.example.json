@@ -1,0 +1,9 @@
+{
+  "_comment": "Copy this file to local-llm-test.config.json (gitignored) and fill in your own values. CLI flags on scripts/test-local-llm-harnesses.mjs always override these. Any field can be omitted. apiKey is OPTIONAL — omit it entirely (or delete this line) for an endpoint like llama.cpp that doesn't check one; it defaults to a harmless placeholder either way.",
+  "baseUrl": "http://192.168.1.50:8080",
+  "model": "qwen3",
+  "apiKey": "",
+  "prompt": "Reply with exactly: hello world",
+  "timeout": 30000,
+  "only": []
+}

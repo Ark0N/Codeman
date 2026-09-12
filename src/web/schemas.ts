@@ -741,6 +741,29 @@ export const RemoteHostSchema = z.object({
   commands: RemoteCommandOverridesSchema,
 });
 
+// Custom Model Endpoint Profiles (deployment_plan.md) — a user-configured custom
+// OpenAI-compatible endpoint, local (llama.cpp) or cloud (Azure AI Foundry, etc.).
+export const CustomModelHostSchema = z.object({
+  id: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid endpoint id'),
+  label: z.string().min(1).max(100),
+  baseUrl: z.string().url().max(2048),
+  apiKey: z.string().max(4096).optional(),
+  // No 'both': live-tested against a real server, sending both auth header
+  // conventions on one request reliably HANGS it — see custom-model-hosts.ts.
+  authStyle: z.enum(['bearer', 'api-key']).optional(),
+  models: z.array(z.string().max(200)).max(200).optional(),
+  lastDiscoveredAt: z.string().max(64).optional(),
+});
+
+/** POST /api/sessions/:id/custom-model — apply or clear a session's custom-model selection. */
+export const CustomModelSelectionSchema = z.union([
+  z.object({
+    endpointId: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid endpoint id'),
+    modelId: z.string().min(1).max(200),
+  }),
+  z.object({ clear: z.literal(true) }),
+]);
+
 export const RemoteCaseLinkSchema = z.object({
   name: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format'),
   hostId: z.string().regex(/^[a-zA-Z0-9_-]+$/, 'Invalid remote host id'),
@@ -1239,6 +1262,13 @@ export const SettingsUpdateSchema = z
      * stored profiles stay until DELETE /api/sessions/:id/intent.
      */
     readMyMindEnabled: z.boolean().optional(),
+    /**
+     * Custom Model Endpoint Profiles (deployment_plan.md): the toolbar picker that lets a
+     * session point at a user-configured custom OpenAI-compatible endpoint (local or
+     * cloud) instead of its native cloud backend. SYNCED, default OFF — endpoint entry,
+     * discovery, and the extra toolbar surface are all opt-in.
+     */
+    customModelEndpointsEnabled: z.boolean().optional(),
     /**
      * Read My Mind predictor model override. Empty/absent = the AI-checker
      * default (opus: prediction quality is the product and it runs only on an

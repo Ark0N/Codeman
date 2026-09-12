@@ -105,3 +105,7 @@ readme-preview.mjs
 
 # Uploaded images land here under each session working dir (runtime artifact)
 .claude-images/
+
+# Local-LLM harness smoke-test config (real IPs/keys) — see the .example.json
+# alongside it in scripts/, which IS tracked as the template.
+scripts/local-llm-test.config.json
