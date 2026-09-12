@@ -2,6 +2,8 @@
 
 > **Status: SHIPPED — deployed to prod + pushed to master, not yet released (2026-06-14).** App Settings → Display → **Plan Usage Limits** (`showPlanUsageLimits`). **Default changed in 1.9.3: desktop now defaults ON, handhelds stay OFF, resolved via `planUsageChipEnabled()`.** The per-device notes further down describing it as opt-in/synced record the original 2026-06-14 shape, not current behavior. Commits `c82f6c8` (feature) → `4d9d93d` (end-to-end fixes) → `eae225b` (per-user reconcile) → `95fb5fc` (init-snapshot replay). Full suite green (2869), CI green. No changeset/version bump yet.
 >
+> **2026-09-07 rework — the "Injection lifecycle" section below (disk-write reconcile via `applyStatusLineConfig`) is SUPERSEDED and describes the OLD mechanism, kept for history.** That disk write let a Codeman-marked `statusLine.command` in `.claude/settings.local.json` take precedence over the user's own global/project statusline for ANY `claude` run in that directory — including entirely outside Codeman — with no disclosure and no way to undo it (real bug, found 2026-08-31). The exporter is now injected as an EPHEMERAL `claude --settings` CLI flag at spawn (`resolveStatusLineCliCommand`/`ensureStatusLineExporterScript`, hooks-config.ts) — never written to disk — and it WRAPS the user's own real statusline (`findEffectiveUserStatusLineCommand`) rather than replacing it. `showPlanUsageLimits` now doubles as the telemetry COLLECTION switch too: `readPlanUsageTelemetryEnabled()` reads it fresh from `settings.json` at every claude session create/respawn (`TmuxManager.createSession`/`respawnPane`), so it applies uniformly across every claude-creation path — interactive Run, cron, the Ralph Loop API, quick-start — with no per-session state (a Codeman restart cannot silently kill it) and no per-request field on the wire at all.
+>
 > Two surfaces from one `statusLine` callback:
 > - **Header chip** (top-right) — account-wide **plan limits**: `5h 35% · 7d 38%`, per-window green/yellow/red.
 > - **In-terminal statusline footer** — the **current session's** status: `Opus 4.8 (1M context)  in:562,411 out:1,188  ctx:56%`.
@@ -110,33 +112,33 @@ Fixed path (sessionId in the **body**, not the URL) so the auth exemption is an 
 2. **Fresh load / reconnect:** server stores the latest in `plan-usage-latest.ts`; `getLightState()` includes it as `planUsage`; the per-connection **init snapshot** replays it; `handleInit` paints the chip immediately (authoritative over localStorage). Null until the first telemetry of the process.
 3. **Offline / cross-restart:** `restorePlanUsageChip()` reads `localStorage` on load (12h freshness guard).
 
-### 5. Injection lifecycle — works for *any* user, never self-destructs
+### 5. Injection lifecycle (SUPERSEDED 2026-09-07 — see header note; kept for history)
 
 The setting `showPlanUsageLimits` is **synced** (in `settings.json`, not a per-device `displayKey`).
 
-- **On toggle** (`PUT /api/settings`, `system-routes.ts`): reconcile the exporter across **all active Claude sessions' working dirs** — inject on enable, remove on disable. Server-side and authoritative, so existing sessions get the footer + feed the chip *immediately*, no new session needed, no dependency on a client's synced localStorage.
-- **On session create** (`session-routes.ts`): **ADD-ONLY** — inject when `statusLineTelemetry` is true; **never remove**. Sessions in a repo share one `settings.local.json`, so a single create-with-false (e.g. a client whose synced setting hadn't loaded) must not yank the statusLine out from under other live sessions. Removal happens only via the explicit toggle.
-- `applyStatusLineConfig()` is **`isOurs`-guarded** (matches `/api/status-telemetry`), so a user's own hand-authored statusLine is never touched, and it **updates an out-of-date ours-command** so fixes (e.g. `-k`) propagate. **No `CASES_DIR` gate** — runs for linked cases / real repos (where sessions actually run), mirroring `updateCaseModel`.
+- ~~**On toggle** (`PUT /api/settings`, `system-routes.ts`): reconcile the exporter across **all active Claude sessions' working dirs** — inject on enable, remove on disable.~~ There is nothing to (re)inject into an already-running session under the new CLI-flag mechanism — the NEXT respawn (a Ralph cycle, `/clear`, a PTY-exit restart) already reads the setting fresh.
+- ~~**On session create** (`session-routes.ts`): **ADD-ONLY** — inject when `statusLineTelemetry` is true; **never remove**.~~ There is no `statusLineTelemetry` request field anymore. `TmuxManager.createSession`/`respawnPane` read `readPlanUsageTelemetryEnabled()` fresh at spawn instead, uniformly across every claude-creation path.
+- ~~`applyStatusLineConfig()` is **`isOurs`-guarded**~~ — `applyStatusLineConfig` still exists but only for the SELF-HEAL path now (`resolveStatusLineCliCommand` strips a legacy disk-written exporter the first time a session starts in a workspace an older Codeman build touched).
 
 ## Codeman-specific considerations
 
 1. **Account-global limits.** The 5h/7d pools are shared across all sessions on the account → one shared header chip (freshest sample wins), not a per-tab bar.
 2. **The footer is owned, by necessity.** A statusLine command always replaces Claude's default footer. Since `rate_limits` *only* arrives via statusLine, we reconstruct a useful **session-status** footer (model · tokens · ctx %) from the same payload rather than showing the limits there.
-3. **`isOurs`-guarded.** Never removes/overwrites a user's own statusLine on disable; only manages the Codeman exporter.
+3. **Never overwrites, now WRAPS.** The exporter composes with a user's own real statusline (`findEffectiveUserStatusLineCommand`) rather than replacing it; `applyStatusLineConfig`'s `isOurs`-guard now only backs the legacy self-heal removal path.
 4. **Security envelope unchanged.** The exporter runs arbitrary shell every render — same trust model as the hook curls (localhost + `$CODEMAN_HOOK_SECRET_FILE`); reuses the hook-secret gate.
-5. **Claude-only.** OpenCode/Codex emit no `rate_limits` JSON; injection is gated to `mode === 'claude'`.
+5. **Claude-only, registry-gated.** Injection is gated on `getCli(mode)?.capabilities.statusLineTelemetry` (currently `true` only for claude) rather than a hardcoded `mode === 'claude'` string.
 6. **Future — auto-resume synergy.** Live percentages would let `SessionAutoOps` pre-arm *before* the wall instead of reacting to the stall footer. Not built.
 
 ## Files shipped
 
 - `src/usage-telemetry.ts` — pure parse/format (`parseStatusTelemetry`, `parseSessionStatus`, `formatSessionStatusText`, `telemetrySignature`) + `test/usage-telemetry.test.ts`.
-- `src/hooks-config.ts` — `generateStatusLineCommand()` (`curl -sk`), `applyStatusLineConfig()` (add/update/remove, `isOurs`-guarded).
+- `src/hooks-config.ts` — `resolveStatusLineCliCommand()`/`ensureStatusLineExporterScript()` (ephemeral CLI-flag injection, never disk), `findEffectiveUserStatusLineCommand()` (wrap the user's real statusline), `readPlanUsageTelemetryEnabled()` (fresh global-setting read), `applyStatusLineConfig()` (legacy self-heal removal only now).
+- `src/session-cli-registry-bridge.ts` — merges the exporter path into the SAME `--settings` JSON object as effort/ultracode (Claude Code accepts only one `--settings` flag per invocation).
 - `src/web/routes/status-telemetry-routes.ts` — `POST /api/status-telemetry`.
 - `src/web/plan-usage-latest.ts` — process-wide last-known store for init replay.
-- `src/web/schemas.ts` — `StatusTelemetrySchema` + `showPlanUsageLimits` + create-payload `statusLineTelemetry`.
+- `src/web/schemas.ts` — `StatusTelemetrySchema` + `showPlanUsageLimits` (no separate create-payload or action field anymore).
 - `src/web/middleware/auth.ts` — exemption extended to `/api/status-telemetry`.
-- `src/web/routes/session-routes.ts` — add-only create-time injection.
-- `src/web/routes/system-routes.ts` — settings-toggle reconcile.
+- `src/tmux-manager.ts` — `createSession`/`respawnPane` read `readPlanUsageTelemetryEnabled()` fresh at spawn.
 - `src/web/server.ts` — `getLightState().planUsage` (init snapshot).
 - `src/web/sse-events.ts` + `constants.js` — `session:statusTelemetry`.
 - Frontend: `app.js` (`_onSessionStatusTelemetry`, `updatePlanUsageChip`, `restorePlanUsageChip`, `handleInit`), `settings-ui.js` (toggle + `applyHeaderVisibilitySettings`), `index.html` (chip + toggle row), `styles.css` (chip + colors), `session-ui.js` (create payload).

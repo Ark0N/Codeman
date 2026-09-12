@@ -1450,7 +1450,10 @@ export class WebServer extends EventEmitter {
     // PER-DEVICE by the client (settings-ui.js applyHeaderVisibilitySettings). It
     // used to be server-revealed from a synced setting, but that leaked the desktop
     // choice onto mobile — display is now per-device only (like the response viewer).
-    // Telemetry collection stays server-side via the statusLineTelemetry action.
+    // Telemetry collection stays server-side, reading `showPlanUsageLimits` fresh
+    // from settings.json at every claude session create/respawn (see
+    // readPlanUsageTelemetryEnabled in hooks-config.ts) — the same setting this
+    // display-visibility check reads, doing double duty.
     // Detached single-session ("solo") window: inject the target session id so
     // the client can enter solo mode even if a (network-first) service worker
     // later serves a cached shell. The client primarily detects solo mode from

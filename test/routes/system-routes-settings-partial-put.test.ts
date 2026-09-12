@@ -4,7 +4,7 @@
  * The three service toggles (subagent watcher, workflow-run watcher, image
  * watcher) used to read the RAW REQUEST BODY with `??` defaults, so any key the
  * caller omitted was treated as "apply the default". A body of just
- * `{statusLineTelemetry:true}` therefore STARTED the subagent watcher (`?? true`)
+ * `{showPlanUsageLimits:true}` therefore STARTED the subagent watcher (`?? true`)
  * and STOPPED the workflow + image watchers (`?? false`), silently undoing the
  * persisted config. Nothing triggered it in practice only because every shipped
  * client sends a full settings payload rebuilt from the DOM.
@@ -91,8 +91,8 @@ describe('PUT /api/settings — partial body must not reset service toggles', ()
     const res = await harness.app.inject({
       method: 'PUT',
       url: '/api/settings',
-      // Action-only body: the exact shape that used to flip all three watchers.
-      payload: { statusLineTelemetry: true },
+      // Minimal single-key body: the exact shape that used to flip all three watchers.
+      payload: { showPlanUsageLimits: true },
     });
 
     expect(res.statusCode).toBe(200);

@@ -94,7 +94,6 @@ import {
   writeHooksConfig,
   updateCaseModel,
   stripCaseEnvKeys,
-  applyStatusLineConfig,
   applyAgentSkill,
   refreshUserAgentSkill,
   seedAgentSessionPreamble,
@@ -949,27 +948,19 @@ export function registerSessionRoutes(
       await updateCaseModel(workingDir, body.modelOverride || null);
     }
 
-    // Plan-usage statusLine exporter (App Settings → Display → "Plan Usage
-    // Limits"). Claude-only; runs for ANY working dir (linked cases / real repos,
-    // where most sessions live), mirroring updateCaseModel above.
-    //
-    // ADD-ONLY: we never remove on create. Sessions in a repo share one
-    // settings.local.json, so a single create-with-false (e.g. a client whose
-    // synced setting hadn't loaded yet) must NOT yank the statusLine out from
-    // under other live sessions in that repo — that breaks their footer + the
-    // chip's data feed for everyone. The exporter is benign when the chip is off
-    // (the footer just shows session status). isOurs-guarded so a user's own
-    // statusLine is never touched.
-    //
-    // Same guard as the hooks call below (499d355): never for a remote attach
-    // (workingDir is a user@host:session pseudo-path — the mkdir inside
-    // applyStatusLineConfig would create it as a junk local dir), and only when
-    // the caller named a workingDir — the process-cwd fallback is $HOME under
-    // installer-created services, and a statusLine materializing in
-    // ~/.claude/settings.local.json was never asked for.
-    if (!remote && body.workingDir && (body.mode ?? 'claude') === 'claude' && body.statusLineTelemetry === true) {
-      await applyStatusLineConfig(workingDir, true);
-    }
+    // Plan-usage telemetry (App Settings → header chip): no request-time field
+    // here anymore, and NO disk write — a settings.local.json statusLine used
+    // to take precedence over the user's own global/project statusLine for ANY
+    // `claude` run in that directory, including entirely outside Codeman, with
+    // no disclosure and no way to undo it (real bug, found 2026-08-31).
+    // TmuxManager.createSession reads the persisted `showPlanUsageLimits`
+    // setting FRESH at spawn (readPlanUsageTelemetryEnabled in hooks-config.ts)
+    // and resolves it into an EPHEMERAL `claude --settings` CLI flag — never
+    // written to disk, so a plain `claude` run outside Codeman is untouched —
+    // and applies uniformly to every claude creation path (this route, cron,
+    // the Ralph Loop API, quick-start), not just this one. That resolution
+    // also self-heals: it strips any legacy disk-written exporter an older
+    // Codeman build left behind.
 
     // Hooks for the workspace this session runs in (install vs refresh-only is the
     // `workspaceHooksEnabled` setting; see applyWorkspaceHooks). Never for a remote

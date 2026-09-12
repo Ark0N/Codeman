@@ -156,7 +156,7 @@ describe('POST /api/sessions workspace hooks', () => {
     const cwdSettings = join(process.cwd(), '.claude', 'settings.local.json');
     const before = existsSync(cwdSettings) ? await readFile(cwdSettings, 'utf-8') : null;
 
-    const res = await createSession({ name: 'hooks-no-dir', mode: 'claude', statusLineTelemetry: true });
+    const res = await createSession({ name: 'hooks-no-dir', mode: 'claude' });
     expect(res.statusCode).toBe(200);
 
     const after = existsSync(cwdSettings) ? await readFile(cwdSettings, 'utf-8') : null;
@@ -166,8 +166,9 @@ describe('POST /api/sessions workspace hooks', () => {
   it('never writes hooks for a remote attach (workingDir is a user@host pseudo-path)', async () => {
     // A claude-mode attachRemoteSession create overwrites workingDir with
     // `user@host:session` — locally a RELATIVE path, so a mkdir would create it
-    // as a junk directory under the server cwd. statusLineTelemetry rides along:
-    // applyStatusLineConfig mkdirs the same way and used to run for remote attaches.
+    // as a junk directory under the server cwd. The statusLine exporter rides
+    // along: applyStatusLineConfig mkdirs the same way and used to run for
+    // remote attaches.
     // SAFETY (2026-08-29): write straight to `getDataDir()` — `test/setup.ts`
     // already sandboxes the data dir for the whole file (temp HOME, inherited
     // CODEMAN_DATA_DIR stripped; same convention as the docker-hosts fixtures
@@ -188,7 +189,6 @@ describe('POST /api/sessions workspace hooks', () => {
     const res = await createSession({
       name: 'hooks-remote',
       mode: 'claude',
-      statusLineTelemetry: true,
       attachRemoteSession: { hostId: 'h1', remoteSessionName: 'codeman-ssh-abc123' },
     });
     expect(res.statusCode).toBe(200);

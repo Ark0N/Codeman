@@ -56,6 +56,14 @@ export interface SpawnBridgeOptions {
   effort?: EffortLevel;
   sessionName?: string;
   claudeCliVersion?: string | null;
+  /**
+   * Resolved by resolveStatusLineCliCommand (hooks-config.ts) — undefined skips the
+   * exporter. Claude only. Rides the SAME `--settings` JSON object as `effortSettingsJson`
+   * (see buildSpawnCommandFromRegistry): Claude Code accepts only one `--settings` flag
+   * per invocation, so the two must be merged before reaching the argv engine rather than
+   * rendered as two independent params.
+   */
+  statusLineCommand?: string;
 }
 
 /**
@@ -186,8 +194,23 @@ export function buildSpawnCommandFromRegistry(entry: CliEntry, options: SpawnBri
   // than re-deriving the ultracode special case) keeps the EFFORT_LEVELS allowlist and the
   // settings-JSON shape single-sourced in session-cli-builder.ts.
   const [effortFlag, effortValue] = buildEffortCliArgs(options.effort);
-  if (effortFlag === '--settings') engineValues.effortSettingsJson = effortValue;
-  else if (effortFlag === '--effort') engineValues.effortLevel = effortValue;
+  if (effortFlag === '--effort') {
+    engineValues.effortLevel = effortValue;
+  }
+
+  // Fold the ephemeral plan-usage statusLine exporter (see resolveStatusLineCliCommand in
+  // hooks-config.ts) into the SAME `--settings` JSON object as ultracode/ effort, since Claude
+  // Code accepts only one `--settings` flag per invocation — rendering them as two independent
+  // params would let the second one silently win. Claude-only in practice (statusLineCommand
+  // is resolved claude-mode-only upstream), but this merge is mode-agnostic.
+  if ((effortFlag === '--settings' && effortValue) || options.statusLineCommand) {
+    const settingsObj: Record<string, unknown> =
+      effortFlag === '--settings' && effortValue ? JSON.parse(effortValue) : {};
+    if (options.statusLineCommand) {
+      settingsObj.statusLine = { type: 'command', command: options.statusLineCommand };
+    }
+    engineValues.effortSettingsJson = JSON.stringify(settingsObj);
+  }
 
   // Preserves buildSpawnCommand's original fallback exactly: an EXPLICIT `undefined` probes
   // the local claude CLI (getClaudeCliVersion, null under vitest); an explicit `null` means

@@ -6,17 +6,33 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
-import { closeSync, existsSync, openSync, readFileSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  rmSync,
+  symlinkSync,
+  statSync,
+} from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { SETTINGS_PATH } from '../src/web/route-helpers.js';
+import { tmpdir, homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import {
   applyStatusLineConfig,
   ensureCodemanHooks,
+  findEffectiveUserStatusLineCommand,
   generateBackgroundWakeScript,
   generateHooksConfig,
+  generateStatusLineCommand,
   generateSubagentStopGuardScript,
+  readPlanUsageTelemetryEnabled,
   refreshStaleCodemanHooks,
+  resolveStatusLineCliCommand,
   settingsWriteBlocker,
   stripCaseEnvKeys,
   updateCaseEnvVars,
@@ -1303,5 +1319,266 @@ describe('Hook Config Generation - Extended', () => {
     expect(stopHooks).toHaveLength(1);
     expect(stopHooks[0].matcher).toBeUndefined();
     expect(stopHooks[0].hooks[0].command).toContain('stop');
+  });
+});
+
+describe('readPlanUsageTelemetryEnabled', () => {
+  const backup = existsSync(SETTINGS_PATH) ? readFileSync(SETTINGS_PATH, 'utf-8') : null;
+
+  afterEach(() => {
+    if (backup !== null) {
+      writeFileSync(SETTINGS_PATH, backup);
+    } else {
+      rmSync(SETTINGS_PATH, { force: true });
+    }
+  });
+
+  it('reads true fresh from the persisted showPlanUsageLimits setting', async () => {
+    mkdirSync(join(SETTINGS_PATH, '..'), { recursive: true });
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ showPlanUsageLimits: true }));
+    expect(await readPlanUsageTelemetryEnabled()).toBe(true);
+  });
+
+  it('reads false when the setting is explicitly false', async () => {
+    mkdirSync(join(SETTINGS_PATH, '..'), { recursive: true });
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ showPlanUsageLimits: false }));
+    expect(await readPlanUsageTelemetryEnabled()).toBe(false);
+  });
+
+  it('defaults to false when the setting is absent or the file is missing', async () => {
+    rmSync(SETTINGS_PATH, { force: true });
+    expect(await readPlanUsageTelemetryEnabled()).toBe(false);
+
+    mkdirSync(join(SETTINGS_PATH, '..'), { recursive: true });
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ someOtherSetting: true }));
+    expect(await readPlanUsageTelemetryEnabled()).toBe(false);
+  });
+
+  it('never caches — a change on disk is visible on the very next call', async () => {
+    mkdirSync(join(SETTINGS_PATH, '..'), { recursive: true });
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ showPlanUsageLimits: false }));
+    expect(await readPlanUsageTelemetryEnabled()).toBe(false);
+
+    writeFileSync(SETTINGS_PATH, JSON.stringify({ showPlanUsageLimits: true }));
+    expect(await readPlanUsageTelemetryEnabled()).toBe(true);
+  });
+});
+
+describe('resolveStatusLineCliCommand', () => {
+  const testDir = join(tmpdir(), 'codeman-statusline-cli-test-' + Date.now());
+
+  beforeEach(() => {
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('returns undefined when telemetry was not requested', async () => {
+    expect(await resolveStatusLineCliCommand(testDir, false)).toBeUndefined();
+  });
+
+  it('returns a bare exporter SCRIPT PATH (never the inline command) when requested', async () => {
+    // A bare path has no `$`, quotes, or pipes for any intermediate shell
+    // layer to mangle — see ensureStatusLineExporterScript's doc comment for
+    // the real bug this guards against.
+    const cmd = await resolveStatusLineCliCommand(testDir, true);
+    expect(cmd).toBeDefined();
+    expect(cmd).not.toContain('$');
+    expect(cmd).not.toContain("'");
+    expect(cmd).toMatch(/^\/.*statusline-exporter\.sh$/);
+    expect(existsSync(cmd!)).toBe(true);
+    const stat = statSync(cmd!);
+    expect(stat.mode & 0o111).not.toBe(0); // executable
+    expect(readFileSync(cmd!, 'utf-8')).toContain('CODEMAN_STATUSLINE_EXPORTER_V');
+  });
+
+  it('never overrides a real, hand-authored statusLine', async () => {
+    const claudeDir = join(testDir, '.claude');
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(
+      join(claudeDir, 'settings.local.json'),
+      JSON.stringify({ statusLine: { type: 'command', command: 'echo my-own-prompt' } }, null, 2)
+    );
+
+    expect(await resolveStatusLineCliCommand(testDir, true)).toBeUndefined();
+
+    // The user's own config is untouched — this is a read-only decision, not a write.
+    const parsed = JSON.parse(readFileSync(join(claudeDir, 'settings.local.json'), 'utf-8'));
+    expect(parsed.statusLine.command).toBe('echo my-own-prompt');
+  });
+
+  it('self-heals: strips a legacy disk-written exporter from an older Codeman build', async () => {
+    // Simulate a workspace touched by the pre-fix applyStatusLineConfig(dir, true).
+    await applyStatusLineConfig(testDir, true);
+    const settingsPath = join(testDir, '.claude', 'settings.local.json');
+    expect(JSON.parse(readFileSync(settingsPath, 'utf-8')).statusLine).toBeDefined();
+
+    const cmd = await resolveStatusLineCliCommand(testDir, true);
+
+    // Cleaned off disk...
+    expect(JSON.parse(readFileSync(settingsPath, 'utf-8')).statusLine).toBeUndefined();
+    // ...and telemetry still flows, via the ephemeral CLI flag instead.
+    expect(cmd).toMatch(/statusline-exporter\.sh$/);
+  });
+
+  it('does not resurrect the legacy exporter when telemetry is off during cleanup', async () => {
+    await applyStatusLineConfig(testDir, true);
+    const settingsPath = join(testDir, '.claude', 'settings.local.json');
+
+    const cmd = await resolveStatusLineCliCommand(testDir, false);
+
+    expect(cmd).toBeUndefined();
+    expect(JSON.parse(readFileSync(settingsPath, 'utf-8')).statusLine).toBeUndefined();
+  });
+});
+
+describe('statusline exporter script (real shell execution)', () => {
+  const testDir = join(tmpdir(), 'codeman-statusline-script-exec-test-' + Date.now());
+  const binDir = join(tmpdir(), 'codeman-statusline-script-exec-bin-' + Date.now());
+
+  beforeEach(() => {
+    mkdirSync(testDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+  });
+
+  // A stand-in for the real `curl` binary, placed FIRST on PATH — same technique
+  // the exporter's own review used ("an arg-echoing stand-in"). It ignores every
+  // arg curl would have received; only its own scripted behavior matters here.
+  function writeFakeCurl(script: string): void {
+    const curlPath = join(binDir, 'curl');
+    writeFileSync(curlPath, `#!/bin/sh\n${script}\n`);
+    chmodSync(curlPath, 0o755);
+  }
+
+  function runExporter(
+    env: Record<string, string>
+  ): Promise<{ code: number | null; stdout: string; durationMs: number }> {
+    return resolveStatusLineCliCommand(testDir, true).then(
+      (scriptPath) =>
+        new Promise((resolve, reject) => {
+          const start = Date.now();
+          const child = spawn('sh', [scriptPath!], {
+            env: { ...env, PATH: `${binDir}:${process.env.PATH}` },
+            stdio: ['pipe', 'pipe', 'ignore'],
+          });
+          let stdout = '';
+          child.stdout.setEncoding('utf8');
+          child.stdout.on('data', (chunk) => {
+            stdout += chunk;
+          });
+          child.on('error', reject);
+          child.on('close', (code) => resolve({ code, stdout, durationMs: Date.now() - start }));
+          child.stdin.end('{}');
+        })
+    );
+  }
+
+  const baseEnv = {
+    CODEMAN_SESSION_ID: 'x',
+    CODEMAN_API_URL: 'http://127.0.0.1:1',
+    CODEMAN_HOOK_SECRET_FILE: '/dev/null',
+  };
+
+  it('no-user-statusline branch: the POST runs in the foreground and its OWN stdout becomes the footer', async () => {
+    writeFakeCurl(`echo 'model: opus | 42% used'`);
+    const result = await runExporter(baseEnv);
+    expect(result.stdout.trim()).toBe('model: opus | 42% used');
+  });
+
+  it('no-user-statusline branch: falls back to the plain "codeman" marker when curl fails', async () => {
+    writeFakeCurl(`exit 1`);
+    const result = await runExporter(baseEnv);
+    expect(result.stdout.trim()).toBe('codeman');
+  });
+
+  it('wrap branch: never blocks a reader-to-EOF on a slow/hung curl (background subshell closes stdin too)', async () => {
+    writeFakeCurl(`sleep 3`);
+    const result = await runExporter({ ...baseEnv, CODEMAN_USER_STATUSLINE_CMD: 'echo my-own-statusline' });
+    expect(result.stdout.trim()).toBe('my-own-statusline');
+    expect(result.durationMs).toBeLessThan(1000);
+  }, 10000);
+
+  it('curl is bounded with --max-time so a HUNG (not just refused) Codeman cannot wedge the render', async () => {
+    const scriptPath = await resolveStatusLineCliCommand(testDir, true);
+    expect(readFileSync(scriptPath!, 'utf-8')).toContain('--max-time');
+  });
+});
+
+describe('findEffectiveUserStatusLineCommand', () => {
+  const testDir = join(tmpdir(), 'codeman-statusline-precedence-test-' + Date.now());
+  const userSettingsPath = join(homedir(), '.claude', 'settings.json');
+
+  beforeEach(() => {
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+    rmSync(userSettingsPath, { force: true }); // don't leak into other tests sharing this HOME
+  });
+
+  it('returns undefined when nothing is configured anywhere', async () => {
+    expect(await findEffectiveUserStatusLineCommand(testDir)).toBeUndefined();
+  });
+
+  it('finds the user global ~/.claude/settings.json when nothing else is set', async () => {
+    const userClaudeDir = join(homedir(), '.claude');
+    mkdirSync(userClaudeDir, { recursive: true });
+    writeFileSync(
+      join(userClaudeDir, 'settings.json'),
+      JSON.stringify({ statusLine: { type: 'command', command: 'echo user-global' } })
+    );
+
+    expect(await findEffectiveUserStatusLineCommand(testDir)).toBe('echo user-global');
+  });
+
+  it('project-SHARED settings.json wins over user-global', async () => {
+    const userClaudeDir = join(homedir(), '.claude');
+    mkdirSync(userClaudeDir, { recursive: true });
+    writeFileSync(
+      join(userClaudeDir, 'settings.json'),
+      JSON.stringify({ statusLine: { type: 'command', command: 'echo user-global' } })
+    );
+    const projectClaudeDir = join(testDir, '.claude');
+    mkdirSync(projectClaudeDir, { recursive: true });
+    writeFileSync(
+      join(projectClaudeDir, 'settings.json'),
+      JSON.stringify({ statusLine: { type: 'command', command: 'echo project-shared' } })
+    );
+
+    expect(await findEffectiveUserStatusLineCommand(testDir)).toBe('echo project-shared');
+  });
+
+  it('project-LOCAL settings.local.json wins over everything', async () => {
+    const projectClaudeDir = join(testDir, '.claude');
+    mkdirSync(projectClaudeDir, { recursive: true });
+    writeFileSync(
+      join(projectClaudeDir, 'settings.json'),
+      JSON.stringify({ statusLine: { type: 'command', command: 'echo project-shared' } })
+    );
+    writeFileSync(
+      join(projectClaudeDir, 'settings.local.json'),
+      JSON.stringify({ statusLine: { type: 'command', command: 'echo project-local' } })
+    );
+
+    expect(await findEffectiveUserStatusLineCommand(testDir)).toBe('echo project-local');
+  });
+
+  it('skips a legacy Codeman-marked entry in project settings.local.json and falls through', async () => {
+    await applyStatusLineConfig(testDir, true); // simulates a pre-fix disk-written exporter
+    const projectClaudeDir = join(testDir, '.claude');
+    writeFileSync(
+      join(projectClaudeDir, 'settings.json'),
+      JSON.stringify({ statusLine: { type: 'command', command: 'echo project-shared' } })
+    );
+
+    expect(await findEffectiveUserStatusLineCommand(testDir)).toBe('echo project-shared');
   });
 });

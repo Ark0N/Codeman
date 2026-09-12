@@ -5,7 +5,6 @@
  */
 
 import { FastifyInstance } from 'fastify';
-import { getCli } from '../../config/cli-registry/registry.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
@@ -33,7 +32,6 @@ import {
 import { subagentWatcher } from '../../subagent-watcher.js';
 import { imageWatcher } from '../../image-watcher.js';
 import { workflowRunWatcher } from '../../workflow-run-watcher.js';
-import { applyStatusLineConfig } from '../../hooks-config.js';
 import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import {
   buildAwayDigest,
@@ -938,7 +936,47 @@ export function registerSystemRoutes(
   // ========== Settings ==========
 
   app.get('/api/settings', async () => {
-    return readJsonConfig(SETTINGS_PATH, 'settings', {});
+    const settings = await readJsonConfig<Record<string, unknown>>(SETTINGS_PATH, 'settings', {});
+
+    // Plan-usage chip default reconciliation (PR #361 follow-up): the client's
+    // own default resolution (planUsageChipEnabled() in settings-ui.js) shows
+    // the header chip and the App Settings checkbox as already ON whenever this
+    // key has never been set — a discoverability default from 1.9.3, unrelated
+    // to consent. Meanwhile readPlanUsageTelemetryEnabled() (hooks-config.ts)
+    // deliberately treats an absent key as "no telemetry" (privacy: never POST
+    // usage data without an explicit persisted yes, pinned by its own unit
+    // tests). Nothing ever reconciled those two independent guesses, so a
+    // fresh install showed a checked box that silently did nothing until the
+    // user opened Settings and hit Save at least once — verified live: an
+    // install that had never touched this setting had NO showPlanUsageLimits
+    // key in settings.json, and its running Claude process's argv carried no
+    // --settings flag at all, i.e. zero telemetry ever collected.
+    //
+    // Resolve it ONCE, here, the first time anything reads settings: if the
+    // key is truly ABSENT (never explicit true or false), persist the same
+    // desktop-default-ON resolution the client already shows, so "chip visible"
+    // and "telemetry collected" become the same fact instead of two defaults
+    // that happen to disagree. readPlanUsageTelemetryEnabled()'s own
+    // absent-means-false contract is untouched — after this runs once the key
+    // is never absent again, so that branch stays correct in isolation (its
+    // unit tests keep passing unmodified) while being unreachable in practice
+    // for any install that has ever called this route. An explicit false the
+    // user sets afterward is respected forever; this only fires on true absence.
+    if (!('showPlanUsageLimits' in settings)) {
+      settings.showPlanUsageLimits = true;
+      try {
+        const dir = dirname(SETTINGS_PATH);
+        if (!existsSync(dir)) {
+          mkdirSync(dir, { recursive: true });
+        }
+        await fs.writeFile(SETTINGS_PATH, JSON.stringify(settings, null, 2));
+      } catch {
+        // Best-effort: the resolved default still reaches this response even
+        // if the write fails, so the caller sees consistent data either way.
+      }
+    }
+
+    return settings;
   });
 
   app.put('/api/settings', async (req) => {
@@ -992,9 +1030,9 @@ export function registerSystemRoutes(
       } catch {
         /* ignore */
       }
-      // statusLineTelemetry and acknowledgeUnauthTunnel are ACTION fields (not stored
-      // settings) — strip them before persisting so settings.json stays clean.
-      const { statusLineTelemetry, acknowledgeUnauthTunnel, ...settingsToStore } = settings;
+      // acknowledgeUnauthTunnel is an ACTION field (not a stored setting) — strip
+      // it before persisting so settings.json stays clean.
+      const { acknowledgeUnauthTunnel, ...settingsToStore } = settings;
       const merged = { ...existing, ...settingsToStore };
       await fs.writeFile(SETTINGS_PATH, JSON.stringify(merged, null, 2));
 
@@ -1007,7 +1045,7 @@ export function registerSystemRoutes(
       // Service toggles resolve from `merged` (existing + incoming), NEVER from the
       // raw request body. A PARTIAL PUT omits keys it does not intend to change, and
       // reading the body directly turned every omission into "apply the default":
-      // a body of just `{statusLineTelemetry:true}` would START the subagent watcher
+      // a body of just `{showPlanUsageLimits:true}` would START the subagent watcher
       // (`?? true`) and STOP the workflow + image watchers (`?? false`), silently
       // undoing the user's persisted config. Reading `merged` makes any PUT reconcile
       // services to the effective stored settings instead, which also self-heals
@@ -1033,22 +1071,23 @@ export function registerSystemRoutes(
         }
       });
 
-      // Plan-usage chip: its DISPLAY is per-device (client-side, see settings-ui.js).
-      // Telemetry COLLECTION is server-side and enable-sticky — when a client turns
-      // the chip ON it sends statusLineTelemetry:true and we (re)inject our exporter
-      // into every ACTIVE Claude session's working dir so the live % starts flowing
-      // immediately (no new session needed). We deliberately never auto-REMOVE here:
-      // the exporter is benign/print-through and a per-repo settings.local.json is
-      // shared by sibling sessions, so one device's "off" must not yank the exporter
-      // another device's chip depends on. Each dir handled once.
-      if (statusLineTelemetry === true) {
-        const dirs = new Set<string>();
-        for (const session of ctx.sessions.values()) {
-          if (getCli(session.mode)?.capabilities.statusLineTelemetry && session.workingDir)
-            dirs.add(session.workingDir);
-        }
-        await Promise.all([...dirs].map((dir) => applyStatusLineConfig(dir, true).catch(() => {})));
-      }
+      // Plan-usage chip: its DISPLAY is per-device (client-side, see settings-ui.js),
+      // but `showPlanUsageLimits` ALSO doubles as the telemetry COLLECTION switch,
+      // persisted here in settingsToStore like any other setting (no special-casing
+      // needed — see readPlanUsageTelemetryEnabled's doc comment in hooks-config.ts).
+      // Telemetry COLLECTION used to be a SEPARATE, action-only, sticky mechanism
+      // here: toggling the chip ON re-injected a statusLine.command into every
+      // ACTIVE Claude session's settings.local.json so live % started flowing
+      // without a new session. That disk write was the bug fixed 2026-08-31 (it
+      // took precedence over the user's own statusline for ANY `claude` run in
+      // that directory, including outside Codeman, with no way to undo it).
+      // Collection is now decided by TmuxManager.createSession/respawnPane reading
+      // `showPlanUsageLimits` FRESH from settings.json at spawn time — no
+      // per-session field, no per-request threading through cron/Ralph-loop/
+      // quick-start/interactive-create (they all reach the same read), and no
+      // (re)injection into an already-running session needed here: the NEXT
+      // respawn (a Ralph cycle, `/clear`, a PTY-exit restart) already picks up
+      // whatever this PUT just persisted.
 
       // Handle tunnel toggle dynamically
       if ('tunnelEnabled' in settings) {

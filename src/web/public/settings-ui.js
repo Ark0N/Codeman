@@ -2271,22 +2271,26 @@ Object.assign(CodemanApp.prototype, {
 
     // Save to server (includes notification prefs for cross-browser persistence).
     // Strip device-specific DISPLAY keys so they never sync across devices —
-    // localEcho/cjk/extendedKeyboard/skin are per-platform, and showPlanUsageLimits
-    // is per-device too (desktop can show the usage chip while mobile stays hidden).
+    // localEcho/cjk/extendedKeyboard/skin are per-platform.
     // webglRendererEnabled is per-device as well (renderer choice is GPU-specific,
     // and syncing would leak mobile's hidden-checkbox false onto desktop); it's
     // also absent from SettingsUpdateSchema, which is .strict() — sending it
     // would 400 the whole settings PUT.
-    // Telemetry COLLECTION is requested out-of-band via statusLineTelemetry (sent on
-    // ENABLE only, so a device with the chip OFF never strips the exporter that
-    // another device's chip depends on — see system-routes settings handler).
+    // showPlanUsageLimits is the ONE exception to "per-device keys never sync":
+    // its DISPLAY stays per-device (loadAppSettingsFromServer only seeds it into
+    // localStorage when a device has no value yet — same as every other display
+    // key), but it ALSO doubles as the server-side plan-usage telemetry
+    // COLLECTION switch (readPlanUsageTelemetryEnabled in hooks-config.ts, read
+    // fresh at every claude session create/respawn), so unlike the others it
+    // MUST flow through in `serverSettings` below on every save — including
+    // OFF, which used to be un-sendable under the old one-way "ENABLE only"
+    // action field this replaces.
     const {
       localEchoEnabled: _leo,
       cjkInputEnabled: _cjk,
       extendedKeyboardBar: _ekb,
       skin: _skin,
       language: _language,
-      showPlanUsageLimits: _pul,
       showAttachmentsButton: _ahb,
       showFileViewerButton: _fvb,
       webglRendererEnabled: _wgl,
@@ -2316,7 +2320,6 @@ Object.assign(CodemanApp.prototype, {
     try {
       const res = await this._apiPut('/api/settings', {
         ...serverSettings,
-        ...(settings.showPlanUsageLimits ? { statusLineTelemetry: true } : {}),
         notificationPreferences: notifPrefsToSave,
         voiceSettings,
       });
@@ -2579,10 +2582,11 @@ Object.assign(CodemanApp.prototype, {
   // Resolved per-device state of the plan-usage chip. Desktop defaults ON,
   // handhelds default OFF (the mobile block in getDefaultSettings() sets false,
   // and the mobile-header-buttons-policy guard depends on that staying false).
-  // Single source of truth for THREE call sites that must never disagree: the
-  // App Settings checkbox, the chip's visibility, and the statusLineTelemetry
-  // flag sent on session create. A chip shown without telemetry renders "—"
-  // forever, which is exactly the drift this helper prevents.
+  // Single source of truth for the two call sites that must never disagree:
+  // the App Settings checkbox and the chip's visibility. Telemetry COLLECTION
+  // no longer has a THIRD client-side call site here at all — the server reads
+  // this same persisted setting directly (readPlanUsageTelemetryEnabled in
+  // hooks-config.ts), fresh, at every claude session create/respawn.
   planUsageChipEnabled(settings = null) {
     const s = settings ?? this.loadAppSettingsFromStorage();
     return s.showPlanUsageLimits ?? this.getDefaultSettings().showPlanUsageLimits ?? true;
@@ -3074,11 +3078,13 @@ Object.assign(CodemanApp.prototype, {
           'sessionLineageLines',
         ]);
         // The plan-usage chip is a PER-DEVICE display setting (desktop default ON,
-        // handheld default OFF): desktop can show it while mobile stays hidden. It
-        // used to sync, so an older server.json may still carry a value — drop it
-        // so the server value is NEVER
-        // seeded into a device that didn't explicitly enable it (collection is handled
-        // separately via the statusLineTelemetry action, not this display flag).
+        // handheld default OFF): desktop can show it while mobile stays hidden. Drop
+        // the server's stored value here so it is NEVER seeded into a device that
+        // didn't explicitly enable it — even though this SAME setting also drives
+        // server-side telemetry collection now (readPlanUsageTelemetryEnabled in
+        // hooks-config.ts), that's a read the server does directly from settings.json
+        // at spawn time; it has nothing to do with what gets merged into THIS
+        // device's local display preference.
         delete appSettings.showPlanUsageLimits;
         // Merge settings: non-display keys always sync from server,
         // display keys only seed from server when localStorage has no value
