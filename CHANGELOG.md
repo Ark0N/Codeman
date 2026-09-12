@@ -1,5 +1,26 @@
 # aicodeman
 
+## 1.27.0
+
+### Minor Changes
+
+- Session lists that answer "which of these wants me next?", loopback links that work from a phone, and a batch of input and remote-session fixes.
+
+  **The vertical tab rail sorts by activity and wears the home screen's cards.** A new per-device setting (App Settings → Appearance → Tabs → **Vertical Rail Order**, default _By activity_) orders rail rows with the same comparator both home screens use: whatever is blocked on you first, then whatever has been running longest, then the most recently quiet. Detailed rail rows become cards, with the state dot keeping its working ring and gaining the home rail's green halo. ⚠️ Existing vertical-rail users get sorting on upgrade, and a self-sorting list cannot also be drag-reorderable: choose _Manual_ to get your own order and drag-reordering back. The lineage bracket also moves 4px further from the rail's left edge, where its glow was being clipped by the window frame.
+
+  **The Claude Response Viewer's brief view shows the whole last turn.** It used to render one row, so the eye button often showed the "Done." tail of an answer whose substance was in the rows above it. A multi-row turn now also opens at its newest text instead of its first narration line.
+
+  **A `localhost` link in agent output opens as a proxied web tab.** An agent prints `http://localhost:5173/` and you tap it on a phone: that address only exists on the Codeman box, so the link was a guaranteed connection error from any other device. It now opens through the proxy, reusing a saved dashboard for the same dev server (one tab per server, not per host spelling) or saving one under its `host:port`. LAN and tailnet addresses still open directly, and on the box itself every link opens directly. `*.localhost` is deliberately not auto-routed: it is the only spelling that is a DNS name rather than an address literal, and these links come from agent output; add such a dashboard by hand instead. Trusted (non-sandboxed) dashboards are likewise never auto-reused by a tapped link.
+
+  **Remote omp and remote claude sessions continue their conversation across a respawn or reattach.** Remote claude now launches an idempotent `--session-id || --resume` pair and remote omp respawns with `--continue`, instead of starting a fresh conversation each time. An omp session id is never resolved from the local `~/.omp` for a remote session, which would have pinned an unrelated local conversation.
+
+  **Android and IME keyboards no longer drop committed characters.** Chrome on Android delivers a `composed: true` input event preceded by a keydown, which is exactly the shape xterm refuses to forward, so the character vanished. A recovery controller forwards it when, and only when, xterm produced nothing for that keystroke, so dictation and soft-keyboard input cannot be delivered twice either.
+
+  ### Thanks
+  - **@shenlvkang-collab** for the Response Viewer last-turn fix (#400) and for loopback links as web tabs (#401), both carefully measured, #400 against 285 real transcripts.
+  - **@timkjr** for remote-omp resume/continue through respawn and reattach (#362), including dropping a half that had already landed and verifying the merge kept none of it.
+  - **@aakhter** for the Android/IME input recovery (#388), and in particular for finding that an earlier version of their own browser test was passing vacuously, and saying so.
+
 ## 1.26.2
 
 ### Patch Changes
