@@ -1,5 +1,34 @@
 # aicodeman
 
+## 1.27.0
+
+### Minor Changes
+
+- d9eeb03: feat(webview): open `localhost` links from the terminal and the Response Viewer through a proxied web tab
+
+  An agent prints `http://localhost:5173/` and the user taps it on a phone: that address
+  only exists on the Codeman box, so the link was a guaranteed connection error from any
+  other device. A loopback link (`localhost`, 127/8, 0.0.0.0, ::1) clicked in
+  the terminal or in the Response Viewer now opens as a proxied web tab whenever the
+  Codeman page itself is not on that box — reusing a saved proxied dashboard on the same
+  origin (with the link's own path opened inside it) or saving one under its host:port.
+  LAN and tailnet addresses, which the device may reach directly, keep opening in a new
+  browser tab, and on the box itself every link opens directly.
+
+### Patch Changes
+
+- bd61735: fix(web): show the whole last turn in the Claude response viewer's brief view
+
+  The eye button rendered `text`, which is one row — the last assistant row — while a
+  Claude answer is a median of 3 model messages (p90 11) split around tool calls, so the
+  brief view usually showed the tail of an answer ("Done.") and the substance only after
+  More. The brief view now asks `GET /api/sessions/:id/last-response?context=turn`, which
+  returns the assistant messages of the last answered turn, and renders them the way the
+  full view renders that turn: one badge, then continuation segments. `text` stays the last
+  assistant row in every mode (agent pollers hash it), a prompt queued after the answer does
+  not blank the view, and readers without turns (Codex, the pane parser, an older server)
+  keep their single card.
+
 ## 1.26.2
 
 ### Patch Changes
