@@ -402,6 +402,46 @@ describe('Settings Modal', () => {
       }
     });
 
+    it('keeps handheld settings and finds no keyboard when an iPhone Duo closes', async () => {
+      // The Duo pair does not cross the desktop breakpoint the way Find N5 does
+      // (466 and 626 are both in the tablet band), so what this covers is the
+      // other half of "a continuous experience as the device opens and closes":
+      // the fold takes 212px of height, which handleViewportResize() used to
+      // read as the virtual keyboard appearing. Unit-covered in
+      // test/viewport-shape-change.test.ts; this drives the real resize.
+      const inner = DEVICE_REGISTRY.find((entry) => entry.name === 'iPhone Duo (inner)')!;
+      const outer = DEVICE_REGISTRY.find((entry) => entry.name === 'iPhone Duo (outer)')!;
+      const { page, context } = await createDevicePage(inner, BASE_URL, 'chromium');
+
+      try {
+        await page.evaluate((key) => {
+          localStorage.setItem(key, JSON.stringify({ showResponseViewer: true }));
+        }, STORAGE_KEYS.SETTINGS_MOBILE);
+        await page.reload({ waitUntil: WAIT.DOM_CONTENT_LOADED });
+        await page.waitForTimeout(WAIT.SSE_CONNECT);
+
+        await page.setViewportSize(outer.viewport);
+        await page.waitForTimeout(WAIT.SSE_CONNECT);
+
+        const state = await page.evaluate(() => ({
+          handheld: (window as any).MobileDetection.isHandheldDevice(),
+          storageKey: (window as any).app.getSettingsStorageKey(),
+          // The two user-visible symptoms of the latch. KeyboardHandler itself
+          // is a script-scope const with no window export, and the flag is
+          // asserted directly in the unit test.
+          keyboardClass: document.body.classList.contains('keyboard-visible'),
+          mainPadding: (document.querySelector('.main') as HTMLElement | null)?.style.paddingBottom ?? '',
+        }));
+
+        expect(state.handheld).toBe(true);
+        expect(state.storageKey).toBe(STORAGE_KEYS.SETTINGS_MOBILE);
+        expect(state.keyboardClass).toBe(false);
+        expect(state.mainPadding).toBe('');
+      } finally {
+        await context.close();
+      }
+    });
+
     it('keeps handheld settings when a foldable unfolds past the desktop breakpoint', async () => {
       const device = DEVICE_REGISTRY.find((entry) => entry.name === 'OPPO Find N5 (unfolded)')!;
       const { page, context } = await createDevicePage(device, BASE_URL, 'chromium');

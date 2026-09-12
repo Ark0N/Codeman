@@ -279,6 +279,28 @@ const customEntries: DeviceEntry[] = [
   // resolution CSS viewport crosses Codeman's desktop breakpoint while the
   // browser remains a mobile/touch device.
   custom('OPPO Find N5 (unfolded)', 1124, 1240, 2, ANDROID_MOBILE_UA('15', 'CPH2671'), false),
+
+  // iPhone Duo, both postures. Apple publishes pixels, not points: the outer
+  // display is 1398x2034 and the inner one 1878x2670, both @3x (460 and 430
+  // ppi over 5.36" and 7.58" diagonals), so the CSS viewports below are those
+  // divided by 3.
+  //
+  // No browser-chrome allowance is subtracted, unlike the other iOS entries:
+  // per Apple's "Designing for iPhone Duo", the system moves toolbars and tab
+  // bars to the SIDE on the outer display and on the inner one in landscape,
+  // so the ~193pt vertical allowance copied from other iPhones would be wrong
+  // in both axes. The registry's other foldable (Find N5) uses the full
+  // viewport for the same reason.
+  //
+  // The PAIR is what earns its place here. Both postures land in the tablet
+  // band (466 and 626 are each above the 430px phone cut and below 768), so a
+  // 5.4" phone in someone's hand gets the roomier layout. Deliberate, per the
+  // note on shouldUseMobileOverview(), and worth a profile precisely because it
+  // is easy to regress into a phone-width assumption. What must NOT move with
+  // the fold is the per-device settings identity, which is UA-based and
+  // therefore identical across the two; test/mobile/settings.test.ts pins it.
+  custom('iPhone Duo (outer)', 466, 678, 3, IOS_MOBILE_UA('26_0'), true),
+  custom('iPhone Duo (inner)', 626, 890, 3, IOS_MOBILE_UA('26_0'), true),
 ];
 
 // ---------------------------------------------------------------------------
