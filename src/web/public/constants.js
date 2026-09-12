@@ -342,7 +342,13 @@ const LINEAGE_DIP_MAX_PX = 64;
 // apart bled into one thick band instead of reading as three separate lines.
 const LINEAGE_SIBLING_STEP_PX = 8;
 const LINEAGE_STRIP_TOLERANCE_PX = 4;
-const LINEAGE_VERTICAL_TRACK_INSET_PX = 6;
+// How far the vertical bracket sits in from the rail's left edge. It has to
+// clear the VIEWPORT edge, not just the tabs: the line carries an 11px outer
+// glow, so a track at 6px had half of that glow clipped away and the arc read
+// as a thin thread pinned to the window frame. The rail reserves the channel
+// itself (`--lineage-vertical-gutter` on the rail's .session-tabs), and
+// computeLineagePath still clamps the track to stay left of both tabs.
+const LINEAGE_VERTICAL_TRACK_INSET_PX = 10;
 const LINEAGE_VERTICAL_SIBLING_STEP_PX = 3;
 const LINEAGE_VERTICAL_ANCHOR_CLEARANCE_PX = 4;
 // Lineage palette, assigned per SPAWNING TAB in first-seen order and cycled

@@ -17754,6 +17754,172 @@ html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail
   margin-top: 0.15rem;
 }
 
+/* --- Detailed rail rows wear the HOME SCREEN's card language -------------- */
+/* The desktop home rail (.home-sessions, home-sessions.js) and this rail list
+   the same sessions with the same three lines — name, project, "created 3d ago
+   · working 12m" + pill — so they now LOOK the same too: a bordered card per
+   session instead of a flat strip row, a 9px state dot (pulsing and ringed
+   while the session works), the name at full weight, and the stamps line
+   wrapped onto its own full-width row with the pill parked at its right end.
+
+   ⚠ RAIL ONLY, never the shared comma-grouped selectors above. The detailed
+   SIDEBAR draws the same meta line and is deliberately left flat: it is a
+   permanently-docked navigation column that sits next to the terminal all day,
+   and 20 stacked cards there read as a wall. Widening one of those grouped
+   rules instead of adding this block is what would silently restyle it.
+
+   ⚠ The paint rules here are (0,5,1)-(0,6,1), so they outrank the plain
+   `.session-tab .tab-status.idle` class rules (0,2,0) — which is the point —
+   but they must NOT outrank the alert rules that turn a dot red or yellow when
+   a session is blocked on a human. Those are (0,3,0), so every dot rule below
+   excludes the two alert classes by hand rather than relying on the cascade.
+   State and alert normally agree (_mobileOverviewState reads the same pending
+   hooks the alert does), so this is a guard against them drifting, not a fix
+   for a known disagreement. */
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tabs {
+  gap: 0.35rem;
+  padding-top: 0.5rem;
+}
+
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab {
+  /* The stamps line rides a wrapped full-width row, exactly as on the home rail:
+     that hands the whole width of the card to the session name, which is what
+     stops a `w34-claudeman: mindreading` ellipsizing into `w34-claudeman: …`. */
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+}
+
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab:hover {
+  background: var(--bg-hover);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: var(--text);
+}
+
+/* The name is what tells one card from another, so it carries the weight the
+   home rail gives it rather than the strip's dim 0.75rem label. */
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab .tab-name {
+  color: var(--text);
+  font-weight: 600;
+  /* One step up from the shared vertical-list size, which is 12px because that
+     is what the SIDEBAR has always been; a card row has the height for the
+     ~13px the home rail renders at. Still driven by the same setting (App
+     Settings → Session Name Font Size), so it moves with it. */
+  font-size: calc(var(--session-sidebar-name-font-size, 12px) + 1px);
+  /* Three lines rather than two: the card is wrapped, so a long name costs
+     height instead of pushing the pill or the stamps off the row. */
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab .tab-folder {
+  font-size: 0.66rem;
+  margin-top: 0.1rem;
+}
+
+/* The state line gets the full width of the card (`flex: 0 0 100%` wraps it),
+   so the stamps stop competing with the gear/close column for the sliver of
+   room left beside the name. */
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-meta {
+  flex: 0 0 100%;
+  margin-top: 0;
+  font-size: 0.64rem;
+  opacity: 0.75;
+}
+
+/* Bigger than the strip's 6px pip, because a card row has the room and the dot
+   is the one thing on it readable at a glance. */
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab .tab-status {
+  width: 9px;
+  height: 9px;
+  margin-top: 0.3rem;
+}
+
+/* Idle is green, but a MUTED green — same mix the home rail uses, for the same
+   reason: a glance down the rail must separate "running right now" from
+   "sitting there" without reading a word. */
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact)
+  .tab-rail
+  .session-tab.tab-state-idle:not(.tab-alert-action):not(.tab-alert-idle)
+  .tab-status {
+  background: color-mix(in srgb, var(--green) 42%, var(--text-muted));
+}
+
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact)
+  .tab-rail
+  .session-tab.tab-state-done:not(.tab-alert-action):not(.tab-alert-idle)
+  .tab-status {
+  background: var(--text-muted);
+  opacity: 0.5;
+}
+
+/* The working halo. The orbiting ring is the shared `.tab-status.busy::after`
+   already declared above — only its inset moves, to clear the wider dot. */
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact)
+  .tab-rail
+  .session-tab.tab-state-working:not(.tab-alert-action):not(.tab-alert-idle)
+  .tab-status {
+  background: var(--green);
+  box-shadow: 0 0 8px 2px color-mix(in srgb, var(--green) 55%, transparent);
+}
+
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact)
+  .tab-rail
+  .session-tab
+  .tab-status.busy::after {
+  inset: -4px;
+  border-width: 2px;
+}
+
+/* Card accents: the same three colours as every other session surface, and the
+   same two blinks the home rail runs. `tab-alert-*` draws its own ::before ring
+   on top of this for the sessions that are genuinely blocked on a human; these
+   border accents are the calmer, always-on half. */
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab.tab-state-needs,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab.tab-state-error {
+  border-color: color-mix(in srgb, var(--red) 50%, transparent);
+  animation: home-sessions-blink-red 2.5s ease-in-out infinite;
+}
+
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab.tab-state-waiting {
+  border-color: color-mix(in srgb, var(--yellow) 50%, transparent);
+  animation: home-sessions-blink-yellow 3.5s ease-in-out infinite;
+}
+
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab.tab-state-working {
+  border-color: color-mix(in srgb, var(--green) 35%, transparent);
+}
+
+/* No `.active` rule here on purpose: `.session-tab.active` (and its per-skin
+   twin) already paints background, border and box-shadow with !important, so a
+   card rule would be dead weight that reads as if it were doing something. The
+   selected card keeps the accent its skin gives every selected tab, which is
+   what makes it legible against the card background the state accents above
+   paint on. */
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab {
+    animation: none !important;
+  }
+}
+
+/* --- Activity-sorted rail (tabRailSort) ---------------------------------- */
+/* Visual order only: the DOM stays in the user's tab order, so drag-reorder,
+   Alt+N badges, the arrow-key walk and the sidebar filter all keep reading the
+   list they always read. `order` is set inline per tab by the render paths
+   (app.js `_tabRailSortOrder`).
+
+   Web tabs carry no session state to sort by and keep their place at the end of
+   the list, so they are pinned past every session card rather than being given
+   an inline order of their own — `renderWebviewTabs()` emits the same markup for
+   every layout and must stay that way. */
+html[data-tab-orientation='vertical'][data-tab-rail-sort='activity'] .tab-rail .session-tab[data-webview-id] {
+  order: 9999;
+}
+
 /* --- Collapsed rail ---------------------------------------------------- */
 /* Collapsed is a 44px icon rail, not "hidden": the ambient signal (status dot,
    task/subagent/ultracode badges) is the whole point of mission control and

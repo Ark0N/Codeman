@@ -1256,6 +1256,15 @@ export const SettingsUpdateSchema = z
     tabRailWidth: z.number().int().min(208).max(360).optional(),
     tabRailDetail: z.enum(['simple', 'rich']).optional(),
     /**
+     * Vertical rail row order. Display key (per-device).
+     * 'activity' = the home screens' order (CodemanSessionOrder): blocked on a
+     *              human first, then running longest-first, then quiet
+     *              most-recently-quiet first.
+     * 'manual'   = the user's tab order, and the only value that leaves the
+     *              rail drag-reorderable.
+     */
+    tabRailSort: z.enum(['activity', 'manual']).optional(),
+    /**
      * Session list layout. Display key (per-device).
      * 'header'       = horizontal tab strip
      * 'sidebar'      = collapsible left sidebar, one compact row per session

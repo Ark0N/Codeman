@@ -4028,6 +4028,71 @@ class CodemanApp {
   }
 
   /**
+   * True when the VERTICAL TAB RAIL orders its cards the way both home screens
+   * do — blocked on you first, then running longest-first, then quiet
+   * most-recently-quiet first (`CodemanSessionOrder`, constants.js) — instead of
+   * leaving them in the user's tab order.
+   *
+   * Read off <html> like the other two rail gates, because the render loop asks
+   * it once per pass and getSessionListLayout() re-parses localStorage.
+   * `tabRailSort: 'manual'` is the opt-out, and it is what a user who reorders
+   * by hand wants: a self-sorting list cannot also be drag-reorderable, so
+   * setupTabDragHandlers() drops the drag affordance while this is on rather
+   * than letting a card snap back to where the sort puts it.
+   *
+   * Deliberately NOT gated on `isTabRailRich()`: a simple rail lists the same
+   * sessions and answers the same question, it just says less about each one.
+   */
+  isTabRailSorted() {
+    const root = document.documentElement;
+    return root.getAttribute('data-tab-orientation') === 'vertical' && root.dataset.tabRailSort === 'activity';
+  }
+
+  /**
+   * Visual position per session id for the sorted rail, or null when the rail is
+   * not sorting.
+   *
+   * The sort is applied as the flex `order` property, NOT by reordering the DOM.
+   * That is the whole design: `#sessionTabs` stays in `sessionOrder`, so
+   * drag-and-drop, the Alt+N badges, the arrow-key walk, the sidebar filter and
+   * `_scrollActiveTabIntoView()` all keep reading the list they have always
+   * read, and a session changing state moves one inline style instead of
+   * forcing the full rebuild that would restart every card's animation.
+   *
+   * Rows are classified by `_mobileOverviewState()` and compared by
+   * `CodemanSessionOrder` — the same two helpers both home screens use, so the
+   * rail cannot disagree with them about what "working" means or what sorts
+   * first. `orderIndex` is the tab-strip position, which the comparator uses as
+   * its deterministic final tiebreak.
+   *
+   * Guarded like every other cross-file consumer: a stale cached constants.js or
+   * mobile-overview.js degrades to tab order rather than taking the strip down.
+   *
+   * @param {Array<string>} ids live session ids, in tab order
+   * @returns {Map<string, number>|null}
+   */
+  _tabRailSortOrder(ids) {
+    if (!this.isTabRailSorted()) return null;
+    if (!window.CodemanSessionOrder || typeof this._mobileOverviewState !== 'function') return null;
+    const rows = [];
+    for (let i = 0; i < ids.length; i++) {
+      const session = this.sessions.get(ids[i]);
+      if (!session) continue;
+      rows.push({
+        id: ids[i],
+        state: this._mobileOverviewState(session, this.pendingHooks?.get(ids[i])),
+        lastActivityAt: Number(session.lastActivityAt) || 0,
+        lastSubmitAt: Number(session.lastSubmitAt) || 0,
+        orderIndex: i,
+      });
+    }
+    const sorted = window.CodemanSessionOrder.sort(rows);
+    const out = new Map();
+    for (let i = 0; i < sorted.length; i++) out.set(sorted[i].id, i);
+    return out;
+  }
+
+  /**
    * True where the sidebar is a MODAL off-canvas drawer over the terminal
    * instead of a docked column.
    *
@@ -4648,10 +4713,20 @@ class CodemanApp {
       // Read once for the whole pass, like the full-rebuild path: this touches
       // the DOM and the loop below runs for every session on every SSE tick.
       const richRows = this.isRichTabRows();
+      // Sorted vertical rail: a state change moves a card, and this is the path
+      // that sees one — a session going working→idle never adds or removes a
+      // tab, so the full rebuild below is not reached. Recomputed per pass for
+      // the same reason the rich meta line is: the order IS the state.
+      const railSortOrder = this._tabRailSortOrder(this.sessionOrder.filter((sid) => this.sessions.has(sid)));
       // Incremental update - only modify changed properties
       for (const [id, session] of this.sessions) {
         const tab = container.querySelector(`.session-tab[data-id="${id}"]`);
         if (!tab) continue;
+
+        // An empty string clears the property, which is also what un-sorts the
+        // rail when the setting (or the layout) flips without a full rebuild.
+        const railOrder = railSortOrder?.has(id) ? String(railSortOrder.get(id)) : '';
+        if (tab.style.order !== railOrder) tab.style.order = railOrder;
 
         // A web tab owns the active state while one is open. activeSessionId stays
         // set (the terminal keeps streaming underneath, and switching back is
@@ -4959,10 +5034,17 @@ class CodemanApp {
     // Read once, not per session: isRichTabRows() touches the DOM and
     // this loop runs for every tab on every full rebuild.
     const richRows = this.isRichTabRows();
+    // The sorted vertical rail (tabRailSort) moves cards with the flex `order`
+    // property and leaves this loop iterating tab order, so the Alt+N badge
+    // below still counts the strip, not the sorted list. Null in every other
+    // layout, and the tabs then carry no inline order at all — the header
+    // strip's markup is byte-identical to before.
+    const railSortOrder = this._tabRailSortOrder(tabOrder.filter((id) => this.sessions.has(id)));
     let _tabIdx = 0;
     for (const id of tabOrder) {
       const session = this.sessions.get(id);
       if (!session) continue; // Skip if session was removed
+      const railOrderStyle = railSortOrder?.has(id) ? ` style="order:${railSortOrder.get(id)}"` : '';
 
       // See the note in the incremental path: a web tab owns the active highlight
       // while one is open, even though activeSessionId stays set.
@@ -5016,7 +5098,7 @@ class CodemanApp {
       const inlineSessionActions = this.shouldInlineSessionActions();
       const tabActionsHtml = `<span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span><button type="button" class="tab-more" onclick="event.stopPropagation(); app.openTabRailActionMenu(event, ${escapeHtml(JSON.stringify(id))})" title="Session actions" aria-label="Session actions">&#x22EF;</button></span>`;
 
-      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}"${richData} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(name)} session" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
+      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}"${richData}${railOrderStyle} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(name)} session" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
           ${_tabIdx < 9 ? '<span class="tab-number">' + (_tabIdx + 1) + '</span>' : ''}
           ${loadState ? '<span class="tab-load-spinner" aria-hidden="true"></span>' : ''}
           <span class="tab-status ${status}" aria-hidden="true"></span>
@@ -5226,6 +5308,17 @@ class CodemanApp {
   setupTabDragHandlers() {
     const container = this.$('sessionTabs');
     const tabs = container.querySelectorAll('.session-tab[data-id]');
+
+    // A self-sorting list cannot also be hand-ordered: the drop below rewrites
+    // sessionOrder correctly, the sort then puts the card straight back where it
+    // was, and the user is left dragging a row that refuses to move. Drop the
+    // affordance instead of lying about it — `tabRailSort: 'manual'` is the way
+    // back to drag-reordering, and Alt+N / Ctrl+Shift+{ } still walk the strip
+    // order this list is no longer showing.
+    if (this.isTabRailSorted()) {
+      tabs.forEach((tab) => tab.setAttribute('draggable', 'false'));
+      return;
+    }
 
     tabs.forEach(tab => {
       tab.setAttribute('draggable', 'true');
