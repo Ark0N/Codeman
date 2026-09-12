@@ -115,6 +115,50 @@ describe('file-routes', () => {
       ]);
     });
 
+    it('stamps every entry with its modified time so the picker can sort by date', async () => {
+      mockedReaddir.mockResolvedValueOnce([
+        { name: 'notes.txt', isDirectory: () => false, isFile: () => true, isSymbolicLink: () => false },
+        { name: 'src', isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false },
+        { name: 'link', isDirectory: () => false, isFile: () => false, isSymbolicLink: () => true },
+      ] as never);
+      mockedStat.mockImplementation(async (candidate) => {
+        const target = String(candidate);
+        if (target.endsWith('/notes.txt')) {
+          return { size: 42, mtimeMs: 1_700_000_000_000, isFile: () => true, isDirectory: () => false } as never;
+        }
+        if (target.endsWith('/src')) {
+          return { size: 4096, mtimeMs: 1_700_000_001_000, isFile: () => false, isDirectory: () => true } as never;
+        }
+        if (target.endsWith('/link')) {
+          return { size: 7, mtimeMs: 1_700_000_002_000, isFile: () => true, isDirectory: () => false } as never;
+        }
+        return { size: 0, mtimeMs: 0, isFile: () => false, isDirectory: () => true } as never;
+      });
+
+      const path = harness.ctx._session.workingDir;
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/filesystem/browse?sessionId=${harness.ctx._sessionId}&path=${encodeURIComponent(path)}`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const entries = JSON.parse(res.body).data.entries as Array<{
+        name: string;
+        type: string;
+        size?: number;
+        mtimeMs?: number;
+      }>;
+      expect(entries.map((entry) => [entry.name, entry.type, entry.size, entry.mtimeMs])).toEqual([
+        ['src', 'directory', undefined, 1_700_000_001_000],
+        ['link', 'file', 7, 1_700_000_002_000],
+        ['notes.txt', 'file', 42, 1_700_000_000_000],
+      ]);
+      // One stat per entry: the date and the size ride on the same call.
+      const statsFor = (name: string) =>
+        mockedStat.mock.calls.filter(([candidate]) => String(candidate).endsWith(`/${name}`)).length;
+      expect([statsFor('notes.txt'), statsFor('src'), statsFor('link')]).toEqual([1, 1, 1]);
+    });
+
     it('defaults to the Codeman Cases root, not Home, when linking a case with no path chosen yet', async () => {
       // The "Link Existing" case picker opens with an empty path and no
       // sessionId. `Home` and `Codeman Cases` are unrelated bind mounts under

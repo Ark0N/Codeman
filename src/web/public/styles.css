@@ -13617,24 +13617,95 @@ body.touch-device.cjk-input-visible .main {
   cursor: default;
 }
 
-.path-picker-current {
+/* The current path is an editable field: type or paste a path and press Enter
+ * (or Go) to jump there. The Go button is part of the same rounded control so
+ * the field keeps the width the read-only breadcrumb had. */
+.path-picker-jump {
+  display: flex;
   flex: 1;
   min-width: 0;
-  padding: 9px 11px;
-  overflow-x: auto;
-  color: var(--accent);
-  font-family: var(--font-mono, monospace);
-  font-size: 0.75rem;
-  white-space: nowrap;
+  margin: 0;
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 8px;
 }
 
-.path-picker-status {
-  padding: 0 14px 8px;
+.path-picker-jump:focus-within {
+  border-color: var(--accent);
+}
+
+.path-picker-current {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  color: var(--accent);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+
+.path-picker-go {
+  flex: 0 0 auto;
+  padding: 0 10px;
   color: var(--text-dim);
   font-size: 0.7rem;
+  font-weight: 600;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.path-picker-go:hover {
+  color: var(--accent);
+}
+
+.path-picker-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px 8px;
+}
+
+.path-picker-status {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-picker-sort-label {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  align-items: center;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+}
+
+.path-picker-sort {
+  padding: 3px 6px;
+  color: var(--text);
+  font-size: 0.7rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.path-picker-item-meta {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  color: var(--text-dim);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.65rem;
+  white-space: nowrap;
 }
 
 .path-picker-status.error {

@@ -77,6 +77,8 @@ export interface FilesystemBrowseEntry {
   path: string;
   type: 'file' | 'directory';
   size?: number;
+  /** Last-modified time (ms since epoch) of the entry's target; lets the picker sort by date. */
+  mtimeMs?: number;
   symlink?: boolean;
   previewKind?: FilesystemPreviewKind;
 }
