@@ -93,6 +93,11 @@ const ALLOWED_BRANCHES: Record<string, string> = {
   "tmux-manager.ts::mode === 'claude'":
     "claude's remote pane command carries per-session permission flags, and its docker form is " +
     '`--session-id … || resume`; neither fits a static overlays.command string',
+  "tmux-manager.ts::mode === 'omp'":
+    'remote omp respawn needs the pinned/continue --resume override threaded through ' +
+    '(resumeSessionId/ompConfig), which the static overlays.remote.command string has no ' +
+    'room for; the command itself is still rendered through buildSpawnCommandFromRegistry, ' +
+    'the same mode-agnostic engine local/docker spawns use — only the BRANCH is per-mode',
 
   // --- Per-CLI prose and launch handling not yet generalised ---
   "web/session-wait-registry.ts::mode === 'deepseek'":

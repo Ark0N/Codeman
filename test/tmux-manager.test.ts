@@ -172,6 +172,43 @@ describe('TmuxManager (unit)', () => {
       expect(command).toContain('exec "${SHELL:-/bin/sh}" -i -l -c');
       expect(command).toContain('claude --dangerously-skip-permissions');
     });
+
+    it('pins SSH-remote claude to the Codeman session id so a respawn resumes the same conversation', () => {
+      // Regression (2026-08-29): remote claude was launched as a bare `claude …`,
+      // so every reattach/respawn after a pane death (user ctrl-d or ctrl-c exit)
+      // started a NEW conversation. The launch now mirrors the docker-claude shape:
+      // `--session-id <id>` to create, with a `|| --resume <id>` fallback so the
+      // idempotent re-run resumes instead of erroring ("already in use").
+      const command = buildRemoteLaunchCommand({
+        mode: 'claude',
+        remote: { hostId: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu', remotePath: '/w' },
+        sessionId: 'abc123def456',
+      });
+      expect(command).toContain('claude --dangerously-skip-permissions --session-id abc123def456');
+      expect(command).toContain('claude --dangerously-skip-permissions --resume abc123def456');
+    });
+
+    it('resumes an explicit resumeSessionId distinct from sessionId (mirrors claudeDockerPaneCommand)', () => {
+      // The docker-claude builder (claudeDockerPaneCommand) has always handled a
+      // resumeId that differs from sessionId — e.g. a resume-from-history launch —
+      // by leading with `--resume <rid> || --session-id <sessionId>`. The remote
+      // claude branch used to only mirror the SAME-id fallback shape and silently
+      // dropped a distinct resumeSessionId, so a remote resume-from-history claude
+      // launch created a brand-new conversation instead of resuming the named one.
+      const command = buildRemoteLaunchCommand({
+        mode: 'claude',
+        remote: { hostId: 'gpu-box', label: 'GPU Box', host: '10.0.0.42', username: 'ubuntu', remotePath: '/w' },
+        sessionId: 'abc123def456',
+        resumeSessionId: 'old-conversation-uuid',
+      });
+      expect(command).toContain('claude --dangerously-skip-permissions --resume old-conversation-uuid');
+      expect(command).toContain('claude --dangerously-skip-permissions --session-id abc123def456');
+      // The resume attempt must lead — session-id is the fallback here, reversed
+      // from the same-id case.
+      const resumeIdx = command.indexOf('--resume old-conversation-uuid');
+      const sessionIdIdx = command.indexOf('--session-id abc123def456');
+      expect(resumeIdx).toBeLessThan(sessionIdIdx);
+    });
   });
 
   describe('remote kill command builder', () => {

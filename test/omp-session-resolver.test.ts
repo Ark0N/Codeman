@@ -20,7 +20,11 @@ import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { findLatestOmpSessionId, mangleOmpWorkingDir } from '../src/utils/omp-session-resolver.js';
+import {
+  findLatestOmpSessionId,
+  mangleOmpWorkingDir,
+  resolveAndClaimOmpSessionId,
+} from '../src/utils/omp-session-resolver.js';
 import { resolveOmpConfigForCreate } from '../src/web/routes/session-routes.js';
 
 describe('mangleOmpWorkingDir', () => {
@@ -40,6 +44,15 @@ describe('mangleOmpWorkingDir', () => {
   it('does not false-positive on a sibling directory sharing a prefix with $HOME', () => {
     const sibling = `${homedir()}-other/dev/foo`;
     expect(mangleOmpWorkingDir(sibling)).toBe(sibling.replace(/\//g, '-'));
+  });
+
+  it('normalizes a trailing slash so a remote case path resolves to the same dir', () => {
+    // Regression (2026-08-29): remote case paths are stored verbatim with a
+    // trailing slash (e.g. `/home/user/dotfiles/`), but omp persists sessions
+    // under the slash-less mangle (`-dotfiles`). Before the fix this produced
+    // `-dotfiles-`, readdirSync returned null for an existing dir, and OMP
+    // respawn pinning silently degraded to the ambiguous `--continue`.
+    expect(mangleOmpWorkingDir(join(homedir(), 'dotfiles') + '/')).toBe('-dotfiles');
   });
 });
 
@@ -66,6 +79,33 @@ describe('findLatestOmpSessionId', () => {
 
   it('returns null when the mangled directory does not exist', () => {
     expect(findLatestOmpSessionId(join(homedir(), 'never-launched'))).toBeNull();
+  });
+});
+
+describe('resolveAndClaimOmpSessionId: header-cwd trailing-slash normalization', () => {
+  // Sibling of the directory-mangle trailing-slash regression above, but for
+  // the OTHER half of the same fix: resolveAndClaimOmpSessionId additionally
+  // verifies each candidate file's own header `cwd` against workingDir (the
+  // mangle is lossy, so the filename-derived id alone isn't enough — see the
+  // function's doc comment). A remote case's workingDir carries a trailing
+  // slash (e.g. `/home/user/dotfiles/`) but omp's header `cwd` never does;
+  // without stripTrailingSlash() on BOTH sides of that comparison, a real
+  // on-disk session would be found by directory but rejected by the cwd
+  // check, silently degrading pinning to the ambiguous `--continue`.
+  const workingDirNoSlash = join(homedir(), 'dotfiles');
+  const workingDirWithSlash = `${workingDirNoSlash}/`;
+  const sessionDir = join(homedir(), '.omp', 'agent', 'sessions', '-dotfiles');
+
+  afterEach(() => {
+    rmSync(join(homedir(), '.omp'), { recursive: true, force: true });
+  });
+
+  it('matches a header cwd with no trailing slash against a workingDir that has one', () => {
+    mkdirSync(sessionDir, { recursive: true });
+    const header = `${JSON.stringify({ type: 'session', id: 'remote-dotfiles-uuid', cwd: workingDirNoSlash })}\n`;
+    writeFileSync(join(sessionDir, '2026-08-29T00-00-00-000Z_remote-dotfiles-uuid.jsonl'), header);
+
+    expect(resolveAndClaimOmpSessionId(workingDirWithSlash)).toBe('remote-dotfiles-uuid');
   });
 });
 

@@ -24,6 +24,31 @@ describe('COD-106 shared remote sessions', () => {
     expect(cmd).toContain('new-session -A -s codeman-ssh-cod106aa');
   });
 
+  it('remote omp relaunch resumes the pinned conversation instead of starting fresh (2026-08-29)', () => {
+    const cmd = buildRemoteLaunchCommand({
+      mode: 'omp',
+      remote,
+      sessionId: 'cod106aaa',
+      ompConfig: { model: 'llm-proxy/crof/glm-5.3-flash' },
+      resumeSessionId: '01a04eb1-d883-75f0-bdfa-74cc315b09ce',
+    });
+    // The remote pane command must carry the pinned omp session id so a
+    // dead-pane respawn lands back in the same conversation.
+    expect(cmd).toContain('omp --model llm-proxy/crof/glm-5.3-flash --resume 01a04eb1-d883-75f0-bdfa-74cc315b09ce');
+    // still a durable, idempotent remote tmux session
+    expect(cmd).toContain('new-session -A -s codeman-ssh-cod106aa');
+  });
+
+  it('remote omp relaunch falls back to --continue when no id is pinned', () => {
+    const cmd = buildRemoteLaunchCommand({
+      mode: 'omp',
+      remote,
+      sessionId: 'cod106aaa',
+      ompConfig: { continueSession: true },
+    });
+    expect(cmd).toContain('omp --continue');
+  });
+
   it('parses session_attached as a CLIENT COUNT (>1 = shared)', () => {
     const rows = parseRemoteSessionList(
       ['codeman-solo\\t1\\t100\\t1', 'codeman-shared\\t2\\t200\\t3', 'codeman-idle\\t0\\t300\\t1'].join('\n')

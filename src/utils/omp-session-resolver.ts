@@ -23,6 +23,23 @@ import { join, sep } from 'node:path';
 const OMP_SESSION_FILE_PATTERN = /^.+_([a-zA-Z0-9-]+)\.jsonl$/;
 
 /**
+ * Strip a trailing `/` from a workingDir unless it is the root itself.
+ *
+ * Case paths routinely end in `/` — a remote case's `remotePath` is stored
+ * verbatim (e.g. `/home/user/dotfiles/`) — but omp persists sessions under
+ * the slash-less mangle (`-dotfiles`) with a header `cwd` of
+ * `/home/user/dotfiles`. Without normalization, the trailing slash survives
+ * the mangle (`-dotfiles-`), `readdirSync` returns null for a directory that
+ * exists, and OMP respawn pinning silently degrades to the ambiguous
+ * `--continue` (found live 2026-08-29: a remote OMP ctrl-c relaunched a fresh
+ * conversation instead of resuming). Exported so the same normalization is
+ * used for the header-`cwd` comparison in {@link resolveAndClaimOmpSessionId}.
+ */
+export function stripTrailingSlash(workingDir: string): string {
+  return workingDir.length > 1 && workingDir.endsWith('/') ? workingDir.slice(0, -1) : workingDir;
+}
+
+/**
  * Mirrors `omp`'s own directory mangling. Confirmed empirically against real
  * `~/.omp/agent/sessions/` directory names (2026-08-27): unlike Claude Code's
  * `~/.claude/projects/*`, which keeps the home prefix (`-home-user-dev-foo`),
@@ -45,8 +62,9 @@ export function mangleOmpWorkingDir(workingDir: string): string {
   // omp's actual behavior on a symlinked-home setup; guessing wrong here would
   // trade one silent mismatch for a different one.
   const home = homedir();
+  const normalized = stripTrailingSlash(workingDir);
   const relative =
-    workingDir === home || workingDir.startsWith(home + sep) ? workingDir.slice(home.length) : workingDir;
+    normalized === home || normalized.startsWith(home + sep) ? normalized.slice(home.length) : normalized;
   return relative.replace(/\//g, '-');
 }
 
@@ -183,7 +201,9 @@ export function resolveAndClaimOmpSessionId(workingDir: string): string | null {
     }
     if (mtimeMs <= newestMtime) continue;
     const header = readOmpSessionHeader(filePath);
-    if (!header || header.cwd !== workingDir || claimedOmpSessionIds.has(header.id)) continue;
+    // Compare against the slash-normalized workingDir: the session's own
+    // workingDir may carry a trailing slash while omp's header cwd never does.
+    if (!header || header.cwd !== stripTrailingSlash(workingDir) || claimedOmpSessionIds.has(header.id)) continue;
     newestMtime = mtimeMs;
     newestId = header.id;
   }

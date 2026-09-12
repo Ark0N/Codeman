@@ -1775,6 +1775,19 @@ export class Session extends EventEmitter {
     // (reported live 2026-08-27, fixed in 13a19f79); this guard keeps that
     // fix intact now that resolution has moved out of the eager options build.
     if (!this._muxSession) return;
+    // `resolveAndClaimOmpSessionId` scans THIS HOST's `~/.omp/agent/sessions/`, which is
+    // meaningless for a remote session — the conversation and its session file live on the
+    // remote host, under the REMOTE user's home. Worse than a no-op: `this.workingDir` for a
+    // remote session is the remote path (e.g. `/home/user/dotfiles`), so if the local machine
+    // happens to have its own omp history under a directory that mangles to the same name,
+    // this would silently claim and pin a COMPLETELY UNRELATED local session's id onto a
+    // remote respawn. Skip straight to the CLI's own `--continue` fallback, which the remote
+    // pane command already renders (see buildRemoteLaunchCommand's omp branch) — safe there
+    // because each remote respawn talks to exactly one remote pane's own omp history.
+    if (this._remote) {
+      this._ompConfig = { ...this._ompConfig, continueSession: true };
+      return;
+    }
     const resolvedId = resolveAndClaimOmpSessionId(this.workingDir);
     if (resolvedId) {
       this._ompConfig = { ...this._ompConfig, resumeSessionId: resolvedId };
@@ -2568,6 +2581,11 @@ export class Session extends EventEmitter {
    */
   private _maybeCaptureOmpSessionId(): void {
     if (getCli(this.mode)?.capabilities.transcript !== 'omp-jsonl' || this._claudeSessionId !== this.id) return;
+    // Same host-local-filesystem trap as `_pinOmpRespawnId`: the omp session file for a
+    // remote session lives on the remote host, not here, so scanning locally risks aliasing
+    // this session onto an unrelated local omp conversation that happens to mangle to the
+    // same directory name. Never resolvable from here — skip.
+    if (this._remote) return;
     try {
       const resolvedId = resolveAndClaimOmpSessionId(this.workingDir);
       if (resolvedId) {
