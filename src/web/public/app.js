@@ -2325,10 +2325,19 @@ class CodemanApp {
 
     if (!this.activeSessionId) return;
     try {
-      // Source 1: Transcript JSONL (best quality — clean structured text from Claude)
-      const res = await fetch(`/api/sessions/${this.activeSessionId}/last-response`);
+      // Source 1: Transcript JSONL (best quality — clean structured text from Claude).
+      // `context=turn` asks for the last ANSWERED turn as messages: a Claude
+      // answer is a median of 3 model messages (p90 11), and `text` alone is
+      // only the final one — usually a "Done." tail with the substance in the
+      // rows before it. Readers that know no `turn` context (Codex, the pane
+      // parser, an older server) answer with `text` only, and that path is
+      // unchanged below.
+      const res = await fetch(`/api/sessions/${this.activeSessionId}/last-response?context=turn`);
       const data = (await res.json())?.data ?? {};
       let lastResponse = data.text || '';
+      const turnMessages = (Array.isArray(data.messages) ? data.messages : []).filter(
+        (msg) => msg && msg.role === 'assistant' && typeof msg.text === 'string' && msg.text.trim()
+      );
 
       // Source 2: Terminal buffer fallback — strip ANSI, drop Claude CLI chrome.
       // Claude + shell only: _cleanTerminalBuffer knows Claude CLI's output, and
@@ -2345,7 +2354,20 @@ class CodemanApp {
       }
 
       const body = document.getElementById('responseViewerBody');
-      if (lastResponse) {
+      if (turnMessages.length > 0) {
+        // The whole last turn, rendered exactly as the full view renders that
+        // turn: one badge, then badge-less continuation segments. The same
+        // numeric-`turn` gate as loadFullContext, never same-role adjacency.
+        const agentLabel = this._getResponseViewerAgentLabel();
+        body.innerHTML = '';
+        let previous = null;
+        for (const msg of turnMessages) {
+          const continuation = !!previous && typeof msg.turn === 'number' && previous.turn === msg.turn;
+          body.appendChild(this._buildResponseViewerMessage(msg.text, 'assistant', agentLabel, { ...msg, continuation }));
+          previous = msg;
+        }
+        this._bindResponseViewerInteractions(body);
+      } else if (lastResponse) {
         // Keep the brief view inside the same message wrapper as the full
         // conversation view. The wrapper supplies the card, role badge and
         // descendant markdown styles that direct body children do not get.

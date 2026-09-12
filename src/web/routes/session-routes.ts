@@ -153,6 +153,7 @@ import {
   getLastTranscriptResponse,
   isExternalCliTranscriptMode,
   parseExternalCliTranscript,
+  selectLastAnsweredTurn,
 } from '../response-viewer-transcript.js';
 import { readDeepSeekLastResponse } from '../../deepseek-transcript.js';
 
@@ -2214,10 +2215,14 @@ export function registerSessionRoutes(
     }
 
     const query = req.query as { context?: string };
+    // `turn` is the brief view's context: the last ANSWERED turn's assistant
+    // messages, so a multi-row answer is not reduced to its final row. `text`
+    // stays the last assistant row in every mode (agent pollers hash it).
+    const wantsMessages = query.context === 'full' || query.context === 'turn';
     const claudeSessionId = session.claudeSessionId || session.id;
     const transcript = await findClaudeTranscript(projectsDir, claudeSessionId, session.id);
     if (!transcript) {
-      return query.context === 'full' ? { text: '', timestamp: '', messages: [] } : { text: '', timestamp: '' };
+      return wantsMessages ? { text: '', timestamp: '', messages: [] } : { text: '', timestamp: '' };
     }
 
     if (transcript.sessionId !== session.claudeSessionId && transcript.sessionId !== session.id) {
@@ -2233,9 +2238,17 @@ export function registerSessionRoutes(
 
     try {
       const content = await fs.readFile(transcript.path, 'utf8');
-      return parseClaudeResponseTranscript(content, query.context === 'full');
+      const parsed = parseClaudeResponseTranscript(content, wantsMessages);
+      if (query.context === 'turn') {
+        return {
+          text: parsed.text,
+          timestamp: parsed.timestamp,
+          messages: selectLastAnsweredTurn(parsed.messages ?? []),
+        };
+      }
+      return parsed;
     } catch {
-      return query.context === 'full' ? { text: '', timestamp: '', messages: [] } : { text: '', timestamp: '' };
+      return wantsMessages ? { text: '', timestamp: '', messages: [] } : { text: '', timestamp: '' };
     }
   });
 

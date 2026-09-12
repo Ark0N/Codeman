@@ -336,6 +336,69 @@ describe('GET /api/sessions/:id/last-response (claude)', () => {
     expect(body.data.text).toBe('Let me look.');
   });
 
+  it('answers context=turn with the last answered turn only, text still on the last row', async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [
+      userEntry('first'),
+      assistantEntry('Old answer.', '2026-07-21T00:00:01Z'),
+      userEntry('second'),
+      assistantEntry('Looking at the file.', '2026-07-21T00:00:02Z'),
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'x' }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'x' }] } },
+      assistantEntry('The bug is on line 3.', '2026-07-21T00:00:03Z'),
+      assistantEntry('Done.', '2026-07-21T00:00:04Z'),
+      // A prompt queued after the answer opens a new, unanswered turn.
+      queuedEntry('third', '2026-07-21T00:00:05Z'),
+    ]);
+
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/last-response?context=turn`,
+    });
+    expect(response.statusCode).toBe(200);
+    const data = JSON.parse(response.body).data as {
+      text: string;
+      timestamp: string;
+      messages: Array<{ role: string; text: string; turn: number }>;
+    };
+    // The frozen brief contract holds: still the last assistant row.
+    expect(data.text).toBe('Done.');
+    expect(data.timestamp).toBe('2026-07-21T00:00:04Z');
+    // The turn view is that row's whole turn, assistant rows only, and not the
+    // queued prompt that has no answer yet.
+    expect(data.messages.map((m) => [m.role, m.text, m.turn])).toEqual([
+      ['assistant', 'Looking at the file.', 2],
+      ['assistant', 'The bug is on line 3.', 2],
+      ['assistant', 'Done.', 2],
+    ]);
+
+    const brief = await getLastResponse(sessionId);
+    expect(brief.body.data).toEqual({ text: 'Done.', timestamp: '2026-07-21T00:00:04Z' });
+  });
+
+  it('answers context=turn with an empty list when nothing has been answered yet', async () => {
+    const sessionId = harness.ctx._session.id;
+    const session = harness.ctx._session as typeof harness.ctx._session & {
+      claudeSessionId: string;
+      adoptClaudeSessionId: ReturnType<typeof vi.fn>;
+    };
+    session.claudeSessionId = sessionId;
+    session.adoptClaudeSessionId = vi.fn();
+    writeTranscript(sessionId, [userEntry('go')]);
+
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: `/api/sessions/${sessionId}/last-response?context=turn`,
+    });
+    expect(JSON.parse(response.body).data).toEqual({ text: '', timestamp: '', messages: [] });
+  });
+
   /**
    * A multi-line paste absorbed mid-turn arrives as N queued rows within a few
    * hundred milliseconds (observed: 5 rows inside ~360ms). They are one turn, so
