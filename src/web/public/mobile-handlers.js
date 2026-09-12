@@ -223,6 +223,10 @@ const MobileDetection = {
 const KeyboardHandler = {
   VIEWPORT_SETTLE_MS: 80,
   lastViewportHeight: 0,
+  // Width of the visual viewport at the previous resize event. A virtual
+  // keyboard never changes it, so a change here means the device itself
+  // changed shape. See handleViewportResize().
+  lastViewportWidth: 0,
   keyboardVisible: false,
   initialViewportHeight: 0,
   _viewportSettleTimer: null,
@@ -241,6 +245,9 @@ const KeyboardHandler = {
 
     this.initialViewportHeight = window.visualViewport?.height || window.innerHeight;
     this.lastViewportHeight = this.initialViewportHeight;
+    // Seed the width too, or the first resize event reads as a shape change and
+    // swallows a real keyboard.
+    this.lastViewportWidth = window.visualViewport?.width || window.innerWidth;
 
     // Simple focus handler - scroll input into view after keyboard appears
     this._focusinHandler = (e) => {
@@ -307,13 +314,35 @@ const KeyboardHandler = {
     this._settleAnchorY = null;
   },
 
-  /** Handle viewport resize (keyboard show/hide) */
+  /**
+   * Handle viewport resize (keyboard show/hide).
+   *
+   * ⚠️ A resize that changes the viewport WIDTH is the device changing shape
+   * (a rotation, or a foldable opening or closing), and is never a virtual
+   * keyboard, which only ever takes height. Without that distinction, closing
+   * an iPhone Duo (626→466pt wide, 890→678pt tall) drops the height by more
+   * than the 150px threshold, so the app latched `keyboardVisible` with no
+   * keyboard on screen: the accessory bar appeared, `main` grew 84px of dead
+   * padding, and `updateAppHeight()` (which bails while the keyboard is up)
+   * stopped refreshing --app-height. The latch is sticky, because clearing it
+   * needs the height back within 100px of a baseline that is now a display the
+   * user is no longer looking at, so it survived until the device was opened
+   * again. Rotating any phone hit the same latch; the fold just makes it a
+   * routine gesture rather than a rare one.
+   *
+   * The shape-change branch re-baselines instead, which is also what lets a
+   * keyboard opened AFTER the fold be detected against the new display.
+   */
   handleViewportResize() {
     const currentHeight = window.visualViewport?.height || window.innerHeight;
+    const currentWidth = window.visualViewport?.width || window.innerWidth;
+    const shapeChanged = currentWidth !== this.lastViewportWidth;
+    this.lastViewportWidth = currentWidth;
     const heightDiff = this.initialViewportHeight - currentHeight;
 
-    // Keyboard appeared (viewport shrunk by more than 150px)
-    if (heightDiff > 150 && !this.keyboardVisible) {
+    // Keyboard appeared (viewport shrunk by more than 150px). Both detection
+    // branches are skipped on a shape change, whichever way the height moved.
+    if (!shapeChanged && heightDiff > 150 && !this.keyboardVisible) {
       this.keyboardVisible = true;
       document.body.classList.add('keyboard-visible');
       // While the keyboard is open, size the app to the visual viewport so
@@ -324,7 +353,7 @@ const KeyboardHandler = {
     // Keyboard hidden (viewport grew back close to initial)
     // Use 100px threshold (not 50) to handle iOS address bar drift,
     // iOS 26's persistent 24px discrepancy, and Safari bottom bar changes
-    else if (heightDiff < 100 && this.keyboardVisible) {
+    else if (!shapeChanged && heightDiff < 100 && this.keyboardVisible) {
       this.keyboardVisible = false;
       document.body.classList.remove('keyboard-visible');
       this.onKeyboardHide();
@@ -334,10 +363,15 @@ const KeyboardHandler = {
     }
 
     // Update baseline when keyboard is not visible — adapts to address bar
-    // state changes, orientation changes, and other viewport shifts
-    if (!this.keyboardVisible) {
+    // state changes, orientation changes, and other viewport shifts. A shape
+    // change re-baselines even with the keyboard up (it may genuinely still be
+    // open, but its old baseline belongs to a display that is gone), and still
+    // writes --app-height below so the keyboard-open sizing follows the new
+    // display.
+    if (shapeChanged || !this.keyboardVisible) {
       this.initialViewportHeight = currentHeight;
-    } else {
+    }
+    if (this.keyboardVisible) {
       document.documentElement.style.setProperty('--app-height', `${currentHeight}px`);
     }
 
