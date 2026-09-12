@@ -597,6 +597,34 @@ describe('composer nav keys from the bar', () => {
   const sentKeys = (fetchMock: { mock: { calls: unknown[][] } }) =>
     fetchMock.mock.calls.map((call) => JSON.parse((call[1] as { body: string }).body).input);
 
+  it.each(['simple', 'extended'])('exposes Shift arrows in the %s agent layout', (mode) => {
+    const { bar, barElement } = loadBar('codex');
+    bar.setMode(mode);
+    expect(barElement.actions).toContain('shift-left');
+    expect(barElement.actions).toContain('shift-right');
+  });
+
+  it.each([
+    ['shift-left', '\x1b[1;2D'],
+    ['shift-right', '\x1b[1;2C'],
+  ])('%s flushes the draft before navigation and hands editing to the PTY', (action, sequence) => {
+    const { bar, app, overlay, fetchMock } = barWithDraft('unfinished follow-up');
+    const events: string[] = [];
+    app.sendInput = vi.fn(() => events.push('draft'));
+    fetchMock.mockImplementation(() => {
+      events.push('key');
+      return Promise.resolve({ ok: true, catch: () => {} });
+    });
+
+    bar.handleAction(action);
+
+    expect(app.sendInput).toHaveBeenCalledWith('unfinished follow-up');
+    expect(events).toEqual(['draft', 'key']);
+    expect(sentKeys(fetchMock)).toEqual([sequence]);
+    expect(overlay.pendingText).toBe('');
+    expect([...(app._echoPassthroughSessions as Set<string>)]).toEqual(['session-1']);
+  });
+
   it('flushes the unsent draft before sending the arrow', () => {
     // On a phone the typed text lives in the overlay and has NEVER reached the
     // PTY, so an arrow sent on its own arrives at a composer the CLI still

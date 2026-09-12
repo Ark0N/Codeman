@@ -4,7 +4,7 @@
  * Defines three exports:
  *
  * - KeyboardAccessoryBar (singleton object) — Quick action buttons shown above the virtual
- *   keyboard on mobile: arrow up/down, /init, Tab, paste, Esc, and dismiss (the extended
+ *   keyboard on mobile: arrow up/down, /init, Tab, Shift+Left/Right, paste, Esc, and dismiss (the extended
  *   bar adds /clear, /compact, Shift+Tab and more). Tab flushes any locally-buffered
  *   prompt text to the PTY before sending \t, so completion applies to what was typed.
  *   The paste button opens a dialog that handles both text paste and image attach
@@ -492,6 +492,8 @@ const KeyboardAccessoryBar = {
       </button>
       <button class="accessory-btn" data-action="init" title="/init">/init</button>
       <button class="accessory-btn" data-action="tab" title="Tab">Tab</button>
+      <button class="accessory-btn" data-action="shift-left" title="Shift+Left (Codex: edit queued message)" aria-label="Shift+Left (Codex: edit queued message)">⇧←</button>
+      <button class="accessory-btn" data-action="shift-right" title="Shift+Right (Codex: prompt stack back)" aria-label="Shift+Right (Codex: prompt stack back)">⇧→</button>
       <button class="accessory-btn" data-action="paste" title="Paste from clipboard">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
@@ -577,6 +579,8 @@ const KeyboardAccessoryBar = {
       <button class="accessory-btn" data-action="clear-input" title="Clear the current unsent input">&#x232B; All</button>
       <button class="accessory-btn accessory-btn-rmm" data-action="readmymind" title="Read My Mind: predict your next prompt">🧠</button>
       <button class="accessory-btn" data-action="tab" title="Tab">Tab</button>
+      <button class="accessory-btn" data-action="shift-left" title="Shift+Left (Codex: edit queued message)" aria-label="Shift+Left (Codex: edit queued message)">⇧←</button>
+      <button class="accessory-btn" data-action="shift-right" title="Shift+Right (Codex: prompt stack back)" aria-label="Shift+Right (Codex: prompt stack back)">⇧→</button>
       <button class="accessory-btn" data-action="shift-tab" title="Shift+Tab">⇧Tab</button>
       <button class="accessory-btn" data-action="effort-max" title="/effort max">Max</button>
       <button class="accessory-btn" data-action="ctrl-o" title="Ctrl+O">⌃O</button>
@@ -615,7 +619,7 @@ const KeyboardAccessoryBar = {
       this.handleAction(action, btn);
 
       // Refocus terminal so keyboard stays open (tap blurs terminal → keyboard dismisses → toolbar shifts)
-      const refocusActions = new Set(['scroll-up', 'scroll-down', 'arrow-left', 'arrow-right', 'tab', 'shift-tab', 'ctrl', 'ctrl-o', 'opt-enter', 'esc', 'effort-max', 'clear-input']);
+      const refocusActions = new Set(['scroll-up', 'scroll-down', 'arrow-left', 'arrow-right', 'tab', 'shift-tab', 'shift-left', 'shift-right', 'ctrl', 'ctrl-o', 'opt-enter', 'esc', 'effort-max', 'clear-input']);
       if (refocusActions.has(action) ||
           ((action === 'clear' || action === 'compact') && this._confirmAction)) {
         if (typeof app !== 'undefined' && app.terminal) {
@@ -743,6 +747,12 @@ const KeyboardAccessoryBar = {
         break;
       case 'arrow-right':
         this.sendNavKey('\x1b[C');
+        break;
+      case 'shift-left':
+        this.sendNavKey('\x1b[1;2D');
+        break;
+      case 'shift-right':
+        this.sendNavKey('\x1b[1;2C');
         break;
       case 'esc':
         this.sendKey('\x1b');
@@ -875,7 +885,7 @@ const KeyboardAccessoryBar = {
   },
 
   /**
-   * A composer nav key (the four arrows) from the bar, under the SAME contract
+   * A composer nav key (arrows, including Shift+Left/Right) from the bar, under the SAME contract
    * as pressing one on a hardware keyboard (the `isComposerNavKey` branch of
    * terminal-ui.js's onData): flush the unsent draft so the key edits the real
    * composer, then hand the session to plain PTY echo until Enter or Ctrl+C,

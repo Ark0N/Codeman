@@ -209,7 +209,7 @@ The most responsive AI coding agent experience on any phone. Full xterm.js termi
 <tr><td>Password typing on phone</td><td><b>QR code scan — instant auth</b></td></tr>
 </table>
 
-- **Keyboard accessory bar** — `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard; destructive commands require a double-press to confirm, so you never fire one by accident
+- **Keyboard accessory bar** — `⇧←` / `⇧→` send Shift+Left / Shift+Right in both default and extended agent layouts (Codex defaults: edit the last queued message / return through the prompt stack); `/init`, `/clear`, `/compact` quick-action buttons above the virtual keyboard; destructive commands require a double-press to confirm, so you never fire one by accident
 - **Dedicated Enter button** — replays the keypress through the terminal, so text buffered by local echo is flushed first rather than stranded
 - **Swipe navigation & smart keyboard handling** — swipe left/right to switch sessions; toolbar and terminal shift up when the keyboard opens (`visualViewport` API)
 - **Built for phones** — safe-area insets for notch and home indicator, 44px touch targets, bottom-sheet case picker, native momentum scrolling
