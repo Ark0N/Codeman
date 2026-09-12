@@ -10,7 +10,7 @@
 //
 // Policy: every header button that is VISIBLE BY DEFAULT on desktop must have an
 // explicit decision for phones — either it's hidden via an @media (max-width:
-// 430px) display:none rule in mobile.css, or it's added to MOBILE_VISIBLE_ALLOWLIST
+// 600px) display:none rule in mobile.css, or it's added to MOBILE_VISIBLE_ALLOWLIST
 // below with a reason. A new default-visible header button with neither fails this
 // test, forcing the author to decide its mobile behavior.
 //
@@ -123,7 +123,7 @@ describe('Mobile header button policy (static guard)', () => {
         hidden || allowed,
         `Header button .${btn.distinguishing.join('.')} (id=${btn.id || '?'}) is VISIBLE BY DEFAULT but has ` +
           `no mobile-visibility decision.\n` +
-          `  → To hide it on phones: add it to the @media (max-width: 430px) "display: none" block in ` +
+          `  → To hide it on phones: add it to the @media (max-width: 599px) "display: none" block in ` +
           `src/web/public/mobile.css (next to .btn-settings / .btn-lifecycle-log).\n` +
           `  → To keep it visible on phones: add '${btn.distinguishing[0]}' to MOBILE_VISIBLE_ALLOWLIST in ` +
           `this test, with a reason.\n` +
@@ -137,7 +137,7 @@ describe('Mobile header button policy (static guard)', () => {
     for (const cls of KNOWN_PHONE_HIDDEN) {
       expect(
         phoneHidden.has(cls),
-        `${cls} must stay hidden on phones — restore its rule in the @media (max-width: 430px) ` +
+        `${cls} must stay hidden on phones — restore its rule in the @media (max-width: 599px) ` +
           `display:none block in src/web/public/mobile.css.`
       ).toBe(true);
     }

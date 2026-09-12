@@ -26,7 +26,7 @@ export interface DeviceEntry {
 // ---------------------------------------------------------------------------
 
 function breakpointFor(width: number): 'phone' | 'tablet' | 'desktop' {
-  if (width < 430) return 'phone';
+  if (width < 600) return 'phone';
   if (width < 768) return 'tablet';
   return 'desktop';
 }

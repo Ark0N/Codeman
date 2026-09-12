@@ -54,7 +54,7 @@ function loadHomeSessionsApp(overrides: Record<string, any> = {}, innerWidth = 1
       createElement: () => fakeElement(),
       createElementNS: () => fakeElement(),
     },
-    MobileDetection: { getDeviceType: () => (innerWidth < 430 ? 'mobile' : 'desktop') },
+    MobileDetection: { getDeviceType: () => (innerWidth < 600 ? 'mobile' : 'desktop') },
   });
   for (const file of ['constants.js', 'mobile-overview.js', 'home-sessions.js']) {
     vm.runInContext(readFileSync(resolve(PUBLIC, file), 'utf8'), context, { filename: file });

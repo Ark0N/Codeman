@@ -187,7 +187,7 @@ describe('Mobile Layout', () => {
       }
     });
 
-    it('does not render the desktop voice button at the 430px phone/tablet boundary', async () => {
+    it('does not render the desktop voice button on a 430px large phone', async () => {
       const device = REPRESENTATIVE_DEVICES['large-phone'];
       const { context, page } = await createDevicePage(device, BASE_URL, 'chromium');
       try {
@@ -331,7 +331,7 @@ describe('Mobile Layout', () => {
       }
     });
 
-    it('width < 430 adds device-mobile', async () => {
+    it('width < 600 adds device-mobile', async () => {
       const { context, page } = await createDevicePage(iPhone14Pro, BASE_URL);
       try {
         await assertDeviceClasses(page, iPhone14Pro.viewport.width);
@@ -340,7 +340,7 @@ describe('Mobile Layout', () => {
       }
     });
 
-    it('width 430-768 adds device-tablet', async () => {
+    it('width 600-768 adds device-tablet', async () => {
       const tablet = REPRESENTATIVE_DEVICES['small-tablet'];
       const { context, page } = await createDevicePage(tablet, BASE_URL);
       try {

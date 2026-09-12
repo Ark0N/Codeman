@@ -43,7 +43,7 @@ import { describe, expect, it } from 'vitest';
 const CSS = readFileSync(resolve(import.meta.dirname, '../src/web/public/mobile.css'), 'utf8');
 const ROOT = postcss.parse(CSS);
 /** The phone block. Tablets keep the roomier layout and are deliberately out of scope. */
-const PHONE_QUERY = '(max-width: 430px)';
+const PHONE_QUERY = '(max-width: 599px)';
 /** `.session-tab` border, from styles.css: `border: 1px solid transparent`. */
 const TAB_BORDER = 1;
 /**

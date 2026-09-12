@@ -35,8 +35,8 @@ describe('read my mind phone key + alternates (static guards)', () => {
   const html = read('index.html');
   const ui = read('readmymind-ui.js');
   const settingsUi = read('settings-ui.js');
-  // Everything phone-specific lives in the max-width 430px block of mobile.css.
-  const phoneBlock = mobile.slice(mobile.indexOf('@media (max-width: 430px)'));
+  // Everything phone-specific lives in the max-width 599px block of mobile.css.
+  const phoneBlock = mobile.slice(mobile.indexOf('@media (max-width: 599px)'));
 
   it('ships the 🧠 key in BOTH accessory bar templates and routes it to the modal', () => {
     const simple = accessory.match(/_simpleButtons\s*:\s*`([\s\S]*?)`/)?.[1] ?? '';

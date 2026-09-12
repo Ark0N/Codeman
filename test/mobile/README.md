@@ -89,11 +89,11 @@ Matching `app.js MobileDetection` and `mobile.css` media queries:
 
 | Breakpoint | Width | CSS Class | Header | Toolbar |
 |------------|-------|-----------|--------|---------|
-| **Phone** | ≤ 430px | `device-mobile` | Fixed at top | Fixed at bottom |
-| **Tablet** | 431–768px | `device-tablet` | Fixed at top | Relative (in flow) |
+| **Phone** | ≤ 599px | `device-mobile` | Fixed at top | Fixed at bottom |
+| **Tablet** | 600–768px | `device-tablet` | Fixed at top | Relative (in flow) |
 | **Desktop** | > 768px | `device-desktop` | Relative (in flow) | Relative (in flow) |
 
-Breakpoint boundaries (430px, 768px) use `max-width` which is **inclusive** — a 430px device is phone, a 768px device is tablet.
+The phone block is `max-width: 599px` and the tablet block starts at `min-width: 600px`, so a 599px device is phone and a 600px device (Nexus 7) is a small tablet in both CSS and the JS `getDeviceType()` cutoff (`< 600`). The tablet/desktop boundary (768px) is `max-width` inclusive: a 768px device is tablet.
 
 ## Architecture
 

@@ -1,7 +1,7 @@
 // Port: none (pure model + static markup assertions — no browser, no server).
 //
 // The phone home screen (src/web/public/mobile-overview.js) replaces the welcome
-// overlay under 430px. Its grouping logic is the part that can silently go wrong:
+// overlay under 600px. Its grouping logic is the part that can silently go wrong:
 // a session blocked on a permission prompt landing in "idle" is exactly the bug
 // this surface exists to prevent. buildMobileOverviewModel() is pure for that
 // reason, so it can be exercised here against plain objects.

@@ -27,7 +27,7 @@ const BASE_URL = `http://localhost:${PORT}`;
 
 let server: WebServer;
 
-// Hidden on phones (< 430px width)
+// Hidden on phones (< 600px width)
 const PHONE_HIDDEN_SELECTORS = [
   SELECTORS.HEADER_BRAND,
   SELECTORS.CASE_SELECT_GROUP,
@@ -94,7 +94,7 @@ describe('Device Matrix', () => {
       const { width } = device.viewport;
       const position = await getCSSProperty(page, SELECTORS.TOOLBAR, 'position');
       if (width <= BREAKPOINTS.PHONE_MAX) {
-        // Phone (max-width: 430px includes 430): fixed toolbar
+        // Phone (max-width: 599px): fixed toolbar
         expect(position).toBe('fixed');
       } else {
         // Tablet/desktop: relative toolbar

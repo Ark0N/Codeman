@@ -5004,7 +5004,7 @@ Object.assign(CodemanApp.prototype, {
     const viewportType =
       typeof MobileDetection !== 'undefined' && MobileDetection.getDeviceType
         ? MobileDetection.getDeviceType()
-        : window.innerWidth < 430
+        : window.innerWidth < 600
           ? 'mobile'
           : window.innerWidth < 768
             ? 'tablet'

@@ -46,9 +46,9 @@ html.mobile-init .file-browser-panel {
 }
 
 /* ============================================================================
-   Tablet Breakpoint (430px - 768px)
+   Tablet Breakpoint (600px - 768px)
    ============================================================================ */
-@media (max-width: 768px) and (min-width: 430px) {
+@media (max-width: 768px) and (min-width: 600px) {
   /* Compact header for tablet - fixed at top, includes safe area padding */
   .header {
     position: fixed;
@@ -303,12 +303,12 @@ html.mobile-init .file-browser-panel {
   }
 
   /* Show desktop voice button on tablet (hidden by max-width:1023px in styles.css,
-     mobile .btn-voice-mobile only shows at <430px) */
+     mobile .btn-voice-mobile only shows at <600px) */
   .toolbar-center .btn-toolbar.btn-voice {
     display: flex !important;
   }
 
-  /* Toolbar — use desktop-style sizing on tablet (plenty of room at 430-768px) */
+  /* Toolbar — use desktop-style sizing on tablet (plenty of room at 600-768px) */
   .toolbar {
     padding: 0 0.5rem;
     gap: 0.5rem;
@@ -333,9 +333,9 @@ html.mobile-init .file-browser-panel {
 }
 
 /* ============================================================================
-   Phone Breakpoint (<430px)
+   Phone Breakpoint (<600px)
    ============================================================================ */
-@media (max-width: 430px) {
+@media (max-width: 599px) {
   /* Phones get a 44px header, up from 36px. Every header control is a touch
      target and 44px is the floor for one; the brand "C" that gets you home is
      the one that matters most. Redefined as the TOKEN rather than a literal so
@@ -499,7 +499,7 @@ html.mobile-init .file-browser-panel {
 
   /* Exception to the 26px shrink above: in sidebar layout this button is the
      ONLY way to open the session list — the strip it replaced is gone. A 26px
-     target is below --touch-target-min (44px), which the 430-768px block
+     target is below --touch-target-min (44px), which the 600-768px block
      already enforces for every other header button. */
   html[data-session-list='sidebar'] #sidebarToggleBtn {
     width: 44px;
@@ -1170,7 +1170,7 @@ html.mobile-init .file-browser-panel {
     }
   }
 
-  @media (max-width: 430px) {
+  @media (max-width: 599px) {
     .btn-case-settings-mobile {
       display: none !important;
     }
@@ -3147,7 +3147,7 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 
 /* Keyboard accessory bar + paste overlay base styles moved to styles.css
    (always loaded — covers iPad landscape where mobile.css doesn't load).
-   Phone-specific overrides remain in @media (max-width: 430px) above. */
+   Phone-specific overrides remain in @media (max-width: 599px) above. */
 
 /* ============================================================================
    iOS Safari Specific Fixes
@@ -3190,7 +3190,7 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   }
 }
 
-@media (max-width: 430px) {
+@media (max-width: 599px) {
   /* Attachment history (COD-18): full-screen sheet on phones */
   .attachment-history-drawer {
     top: 0;
@@ -3240,7 +3240,7 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
    already reserves that space), so it needs the same safe-area padding as the
    other banners. The overlay is fixed and handles its own insets.
    ============================================================================ */
-@media (max-width: 430px) {
+@media (max-width: 599px) {
   .offline-banner {
     padding: 0.4rem 0.5rem;
     padding-left: calc(0.5rem + var(--safe-area-left));
@@ -3730,7 +3730,7 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
    This whole file is served with media="(max-width: 1023px)", so these
    top-level rules cover the entire handheld range — deliberately NOT wrapped in
    a nested @media, because the two compact `.session-tabs` blocks above live in
-   `max-width: 768px` and `max-width: 430px` and would leave 769-1023px
+   `max-width: 768px` and `max-width: 599px` and would leave 769-1023px
    unhandled.
 
    Placement at the END of the file is load-bearing: the compact strip blocks at

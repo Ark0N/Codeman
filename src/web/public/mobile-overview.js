@@ -12,7 +12,7 @@
  * the SAME comparator the desktop rail uses: blocked longest-first, then
  * running longest-first, then quiet most-recently-quiet first.
  *
- * PHONE ONLY. The gate is `shouldUseMobileOverview()` (viewport < 430px, not a
+ * PHONE ONLY. The gate is `shouldUseMobileOverview()` (viewport < 600px, not a
  * popped-out solo window, per-device setting on). Tablet and desktop keep the
  * welcome overlay untouched. The container ships with the `hidden` attribute and
  * only this module removes it, so desktop (which never loads mobile.css) cannot
@@ -38,7 +38,7 @@
  */
 
 /** Viewport width that counts as a phone. Matches the mobile.css phone block. */
-const MOBILE_OVERVIEW_PHONE_QUERY = '(max-width: 430px)';
+const MOBILE_OVERVIEW_PHONE_QUERY = '(max-width: 599px)';
 
 /** How many past conversations show before the "Show all" toggle. */
 const MOBILE_OVERVIEW_PAST_LIMIT = 8;

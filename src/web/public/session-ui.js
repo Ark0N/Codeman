@@ -2526,7 +2526,7 @@ Object.assign(CodemanApp.prototype, {
       if (!input._mobileScrollWired) {
         input._mobileScrollWired = true;
         input.addEventListener('focus', () => {
-          if (window.innerWidth <= 430) {
+          if (window.innerWidth < 600) {
             setTimeout(() => input.scrollIntoView({ behavior: 'smooth', block: 'center' }), 300);
           }
         });

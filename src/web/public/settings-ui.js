@@ -376,7 +376,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowMultiMonitorButton').checked = settings.showMultiMonitorButton ?? defaults.showMultiMonitorButton ?? false;
     document.getElementById('appSettingsShowPlanUsageLimits').checked = this.planUsageChipEnabled(settings);
     document.getElementById('appSettingsShowRedrawButton').checked = settings.showRedrawButton ?? defaults.showRedrawButton ?? false;
-    // Phone overview home screen: only meaningful under 430px, so the row is
+    // Phone overview home screen: only meaningful under 600px, so the row is
     // hidden elsewhere rather than offering a toggle that changes nothing.
     // Spawn lineage lines: desktop-only (the overlay sits UNDER the fixed mobile
     // header), so the row is hidden elsewhere rather than offering a toggle that

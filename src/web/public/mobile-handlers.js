@@ -85,20 +85,20 @@ const MobileDetection = {
     return /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
   },
 
-  /** Check if screen is small (phone-sized, <430px) */
+  /** Check if screen is small (phone-sized, <600px) */
   isSmallScreen() {
-    return window.innerWidth < 430;
+    return window.innerWidth < 600;
   },
 
-  /** Check if screen is medium (tablet-sized, 430-768px) */
+  /** Check if screen is medium (tablet-sized, 600-768px) */
   isMediumScreen() {
-    return window.innerWidth >= 430 && window.innerWidth < 768;
+    return window.innerWidth >= 600 && window.innerWidth < 768;
   },
 
   /** Get device type based on screen width */
   getDeviceType() {
     const width = window.innerWidth;
-    if (width < 430) return 'mobile';
+    if (width < 600) return 'mobile';
     if (width < 768) return 'tablet';
     return 'desktop';
   },
