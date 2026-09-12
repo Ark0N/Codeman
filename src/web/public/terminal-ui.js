@@ -232,12 +232,22 @@ Object.assign(CodemanApp.prototype, {
   // Terminal Setup — xterm.js config and input handling
   // ═══════════════════════════════════════════════════════════════
 
+  _destroyKeyCode229Recovery() {
+    try {
+      this._keyCode229Recovery?.destroy?.();
+    } catch {
+      // Recovery is optional; terminal replacement must continue.
+    }
+    this._keyCode229Recovery = null;
+  },
+
   initTerminal() {
     // Load scrollback setting from localStorage, treating DEFAULT_SCROLLBACK as a floor
     // so users who picked up the previous (smaller) default get the new minimum on upgrade.
     const stored = parseInt(localStorage.getItem('codeman-scrollback'));
     const scrollback = Number.isFinite(stored) && stored > 0 ? Math.max(stored, DEFAULT_SCROLLBACK) : DEFAULT_SCROLLBACK;
 
+    this._destroyKeyCode229Recovery();
     this.terminal = new Terminal({
       theme: { ...window.codemanCurrentXtermTheme() },
       fontFamily: window.CodemanTerminalFont.resolve(this.loadAppSettingsFromStorage?.().terminalFontFamily),
@@ -292,6 +302,16 @@ Object.assign(CodemanApp.prototype, {
     // punctuation; returning false here would stop xterm before it can diff
     // the helper textarea and emit the committed Unicode text.
     this.terminal.attachCustomKeyEventHandler((ev) => {
+      try {
+        // Deliberately runs for EVERY keydown, not just keyCode 229: the
+        // controller snapshots a counter and reads nothing off the event, and
+        // the devices this exists for report `key: 'Unidentified'` with no
+        // reliable identity to gate on. Gating it would make recovery inert
+        // exactly where it is needed. Cost is one assignment.
+        this._keyCode229Recovery?.handleKeyEvent?.(ev);
+      } catch {
+        // The fallback must never interfere with xterm's canonical handler.
+      }
       if (ev.isComposing || ev.key === 'Process' || ev.keyCode === 229) return true;
 
       // Let the app's Alt/Option session-nav and Command Palette shortcuts reach the document keydown handler
@@ -1034,7 +1054,7 @@ Object.assign(CodemanApp.prototype, {
     // mobile connections.  The overlay + localStorage persistence ensure input
     // survives tab switches and reconnects.
 
-    this.terminal.onData((data) => {
+    const handleTerminalData = (data) => {
       // Mouse SGR reports (tap-to-position) are NOT IME input — they must reach
       // the PTY even while the CJK input field owns focus. Without this exception
       // tapping to move the cursor silently does nothing whenever Chinese input
@@ -1356,6 +1376,36 @@ Object.assign(CodemanApp.prototype, {
           }
         }
       }
+    };
+
+    // Chrome on Android delivers a `composed: true` input event preceded by a
+    // keydown, which is exactly the shape xterm's _inputEvent refuses to
+    // forward, so the committed character is silently dropped. The controller
+    // forwards the input event's own `data` when xterm produced nothing for
+    // that keystroke. Created AFTER terminal.open() on purpose: for an event
+    // targeting the textarea, at-target listeners run in registration order,
+    // so xterm's listener (added in open()) still runs first. The controller
+    // registers its own listener with `capture: true`; on bubble xterm's
+    // `cancel()` (stopPropagation) would swallow exactly the handled events —
+    // see the measured table in terminal-keycode229-recovery.js.
+    try {
+      this._keyCode229Recovery = window.CodemanKeyCode229Recovery?.create?.({
+        textarea: this.terminal.textarea,
+        emitRecovered: (data) => handleTerminalData(data),
+        isScreenReaderMode: () => this.terminal?.options?.screenReaderMode === true,
+      });
+    } catch {
+      this._keyCode229Recovery = null;
+    }
+    this.terminal.onData((data) => {
+      // Canonical xterm data. Telling the controller is what lets it know a
+      // keystroke was already delivered and needs no recovery.
+      try {
+        this._keyCode229Recovery?.notifyCanonicalData?.();
+      } catch {
+        // Bookkeeping must never block real input.
+      }
+      handleTerminalData(data);
     });
   },
 

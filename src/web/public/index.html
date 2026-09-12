@@ -3459,6 +3459,8 @@
   <script defer src="notification-manager.js"></script>
   <script defer src="keyboard-accessory.js"></script>
   <script defer src="input-cjk.js"></script>
+  <!-- Forwards committed input events that xterm drops on Android/GBoard soft keyboards. Must precede terminal-ui.js. -->
+  <script defer src="terminal-keycode229-recovery.js"></script>
   <!-- Hardened markdown HTML sanitizer (wires DOMPurify). Must precede app.js. -->
   <script defer src="sanitize-html.js"></script>
   <script defer src="app.js"></script>
