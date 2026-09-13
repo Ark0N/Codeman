@@ -12,10 +12,33 @@ if [[ ! -f "$env_file" ]]; then
   exit 1
 fi
 
-compose_command=(docker compose --env-file "$env_file" -f "$compose_file")
+# Naming a Compose file explicitly disables Compose's automatic discovery of
+# the override file, so it has to be added back by hand. Without this, local
+# customisation in docker-compose.override.yml is silently ignored. The
+# candidates are checked in Compose's own precedence order - measured on
+# Compose v5.5.0 with both present: it uses `.yml` and ignores `.yaml`.
+override_yml="$script_dir/docker-compose.override.yml"
+override_yaml="$script_dir/docker-compose.override.yaml"
+if [[ -f "$override_yml" && -f "$override_yaml" ]]; then
+  printf 'Warning: both %s and %s exist; Compose uses .yml and ignores .yaml.\n' \
+    "$override_yml" "$override_yaml" >&2
+fi
+compose_files=(-f "$compose_file")
+for override_file in "$override_yml" "$override_yaml"; do
+  if [[ -f "$override_file" ]]; then
+    compose_files+=(-f "$override_file")
+    printf 'Using Compose override file: %s\n' "$override_file"
+    break
+  fi
+done
+compose_command=(docker compose --env-file "$env_file" "${compose_files[@]}")
 appdata_path=$(
   "${compose_command[@]}" config --environment |
     awk -F= '$1 == "CODEMAN_APPDATA_PATH" { sub(/^[^=]*=/, ""); print; exit }'
+)
+cases_path=$(
+  "${compose_command[@]}" config --environment |
+    awk -F= '$1 == "CODEMAN_CASES_PATH" { sub(/^[^=]*=/, ""); print; exit }'
 )
 docker_socket=$(
   "${compose_command[@]}" config --environment |
@@ -34,6 +57,26 @@ if [[ ! -d "$appdata_path" ]]; then
     exit 1
   fi
   mkdir -p -- "$appdata_path"
+fi
+
+if [[ -z "$cases_path" ]]; then
+  printf 'Error: CODEMAN_CASES_PATH is not set in %s\n' "$env_file" >&2
+  exit 1
+fi
+
+# Pre-creating this here, exactly like CODEMAN_APPDATA_PATH above, means Compose
+# never has to materialise a missing bind source itself - which it does as
+# root:root - so the in-container entrypoint's chown never has to run for this
+# path at all. Unlike appdata, an EXISTING cases directory is left exactly as
+# it is: the README explicitly allows pointing this at a normal projects
+# directory the host account already owns, so no ownership check happens here.
+if [[ ! -d "$cases_path" ]]; then
+  if [[ "$EUID" == '0' ]]; then
+    printf 'Error: Refusing to create CODEMAN_CASES_PATH as root: %s\n' "$cases_path" >&2
+    printf 'Create it as the unprivileged account that should run Codeman, then retry.\n' >&2
+    exit 1
+  fi
+  mkdir -p -- "$cases_path"
 fi
 
 if owner_ids=$(stat -c '%u:%g' -- "$appdata_path" 2>/dev/null); then
@@ -92,6 +135,31 @@ if [[ ! -d "$repo_path/.git" ]]; then
   printf 'Note: %s is not a git checkout, so in-app updates are unavailable.\n' "$repo_path" >&2
 fi
 
+# Reads HEAD without requiring a `git` binary on the host — this script
+# otherwise checks the checkout only by testing for `.git` as a directory, and
+# resolving refs by hand keeps that the same "no host git needed" guarantee.
+# ⚠️ A worktree checkout has `.git` as a FILE (`gitdir: <path>`), not a
+# directory, so this returns nothing there and the volume-refresh check below
+# silently no-ops — consistent with the `-d .git` test used everywhere else in
+# this script, not a special case, but worth knowing if a worktree checkout
+# stops picking up a stale-volume refresh it should have caught.
+git_head_commit() {
+  local git_dir="$1/.git" head_ref ref_path
+  [[ -d "$git_dir" ]] || return 1
+  head_ref=$(cat -- "$git_dir/HEAD" 2>/dev/null) || return 1
+  if [[ "$head_ref" == ref:* ]]; then
+    ref_path="${head_ref#ref: }"
+    if [[ -f "$git_dir/$ref_path" ]]; then
+      cat -- "$git_dir/$ref_path"
+    else
+      # Packed after a `git gc`; the loose ref file above is gone.
+      awk -v ref="$ref_path" '$2 == ref { print $1; exit }' "$git_dir/packed-refs" 2>/dev/null
+    fi
+  else
+    printf '%s' "$head_ref"
+  fi
+}
+
 # Record what the container is about to be built and created FROM. The in-app
 # updater compares these against the release it wants to apply: a release that
 # changes either file cannot be applied by the container restarting itself (a
@@ -126,4 +194,65 @@ else
   printf 'Warning: no sha256 tool found; in-app updates will not detect environment changes.\n' >&2
 fi
 
-exec docker compose --env-file "$env_file" -f "$compose_file" up --build -d
+# codeman-node-modules and codeman-dist (docker-compose.yaml) are seeded from
+# the image only while EMPTY, so a rebuilt image's fresh output sits unused
+# behind old volume content until something clears it. The in-app self-updater
+# never hits this — it rebuilds INSIDE the running container, into the very
+# volume already in use — but a `docker compose build` triggered from outside
+# it (this script, after a `git pull`) does: the container comes back up
+# looking unchanged. Detect that here and clear just the affected volume(s) so
+# `--build` below actually takes effect. Best-effort: with no sha256 tool this
+# quietly does nothing, same as the environment-gate block above.
+if [[ -n "$dockerfile_sha" ]]; then
+  repo_head=$(git_head_commit "$repo_path" || true)
+  lockfile_sha=$(sha256_of "$repo_path/package-lock.json" 2>/dev/null || true)
+  source_state_file="$state_dir/docker-build-source.json"
+  prev_head=''
+  prev_lockfile_sha=''
+  if [[ -f "$source_state_file" ]]; then
+    prev_head=$(sed -n 's/.*"headCommit": *"\([^"]*\)".*/\1/p' "$source_state_file")
+    prev_lockfile_sha=$(sed -n 's/.*"lockfileSha256": *"\([^"]*\)".*/\1/p' "$source_state_file")
+  fi
+
+  volumes_to_refresh=()
+  [[ -n "$repo_head" && "$repo_head" != "$prev_head" ]] && volumes_to_refresh+=('codeman-dist')
+  [[ -n "$lockfile_sha" && "$lockfile_sha" != "$prev_lockfile_sha" ]] && volumes_to_refresh+=('codeman-node-modules')
+
+  if [[ ${#volumes_to_refresh[@]} -gt 0 ]]; then
+    # Runs even on this script's very first invocation against an EXISTING
+    # deployment, deliberately: that deployment's volumes may already be
+    # stale (there was no earlier version of this check to have caught it),
+    # and clearing an already-empty or nonexistent volume is a harmless
+    # no-op, so there is no fresh-install case this needs to avoid.
+    printf 'Source changed since the last start; refreshing: %s\n' "${volumes_to_refresh[*]}"
+    "${compose_command[@]}" down
+    # `com.docker.compose.volume` is the volume KEY, not a project-qualified
+    # name - a second stack on the same host (a beta instance started with a
+    # different COMPOSE_PROJECT_NAME, say) that also declares a volume keyed
+    # `codeman-dist` shares that label, and `head -n1` would pick whichever
+    # the daemon happens to list first. Scope the lookup to THIS stack's own
+    # resolved project name so it can only ever match this stack's volume.
+    project_name=$(
+      "${compose_command[@]}" config --format json 2>/dev/null |
+        sed -n 's/^  "name": "\(.*\)",\{0,1\}$/\1/p' | head -n1
+    )
+    for key in "${volumes_to_refresh[@]}"; do
+      volume_name=$(
+        docker volume ls -q \
+          --filter "label=com.docker.compose.volume=$key" \
+          --filter "label=com.docker.compose.project=$project_name" |
+          head -n1
+      )
+      [[ -n "$volume_name" ]] && docker volume rm -- "$volume_name"
+    done
+  fi
+
+  printf '{\n  "headCommit": "%s",\n  "lockfileSha256": "%s"\n}\n' \
+    "$repo_head" "$lockfile_sha" >"$source_state_file.tmp"
+  mv -- "$source_state_file.tmp" "$source_state_file"
+  if [[ "$EUID" == '0' ]]; then
+    chown -- "$PUID:$PGID" "$source_state_file"
+  fi
+fi
+
+exec "${compose_command[@]}" up --build -d

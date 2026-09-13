@@ -91,6 +91,13 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add:
+      # The entrypoint corrects bind-mount ownership as root before dropping to
+      # PUID:PGID. Everything not listed here remains dropped by cap_drop above.
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
     healthcheck:
       test:
         - CMD-SHELL
