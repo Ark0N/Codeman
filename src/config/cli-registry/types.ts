@@ -230,6 +230,22 @@ export interface CliDiscovery {
     /** Package name for an npm-installable CLI. Display/tooling metadata only. */
     npmPackage?: string;
     docsUrl?: string;
+    /**
+     * Present when the agent Docker image (`docker/agent.Dockerfile`) cannot install this
+     * CLI in the shared `npm install -g` layer with the rest and needs its own hand-written
+     * layer instead — a flag that would leak into the shared install (pi's `--ignore-scripts`),
+     * a companion package (deepseek's `pnpm`), or not being on npm at all (antigravity, grok,
+     * omp ship standalone installers). `reason` is REQUIRED, not decorative: it is what
+     * `test/docker-agent-image-coverage.test.ts` prints when a layer for this id goes missing
+     * from the Dockerfile, and it is what keeps this a data field rather than the id-keyed
+     * table it replaced (`AGENT_IMAGE_SPECIAL_CASE_IDS` in `docker-hosts.ts`,
+     * `AGENT_IMAGE_SPECIAL_CASES` in `scripts/lib/cli-catalog.mjs` — two copies kept in step by
+     * hand, outside stock.ts, which is exactly what this registry exists to prevent).
+     * `agentImageNpmPackages()` (docker-hosts.ts) and its `.mjs` mirror both filter on its
+     * presence rather than an id, so the shared npm layer and the special-case layers can never
+     * silently disagree about which CLI belongs in which.
+     */
+    agentImageLayer?: { kind: 'dedicated'; reason: string };
   };
 }
 

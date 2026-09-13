@@ -1,0 +1,281 @@
+[
+  {
+    "id": "claude",
+    "label": "Claude",
+    "shortBadge": "CC",
+    "enabled": true,
+    "order": 0,
+    "kind": "agent",
+    "discovery": {
+      "binaries": [
+        "claude"
+      ],
+      "searchDirs": [
+        "~/.local/bin",
+        "~/.claude/local",
+        "/usr/local/bin",
+        "~/.npm-global/bin",
+        "~/bin"
+      ],
+      "install": {
+        "command": {
+          "linux": "curl -fsSL https://claude.ai/install.sh | bash",
+          "darwin": "curl -fsSL https://claude.ai/install.sh | bash",
+          "wsl": "curl -fsSL https://claude.ai/install.sh | bash"
+        },
+        "npmPackage": "@anthropic-ai/claude-code",
+        "docsUrl": "https://docs.claude.com/claude-code"
+      }
+    }
+  },
+  {
+    "id": "shell",
+    "label": "Shell",
+    "shortBadge": "SH",
+    "enabled": true,
+    "order": 1,
+    "kind": "shell",
+    "discovery": {
+      "binaries": [],
+      "searchDirs": [],
+      "install": {
+        "command": {}
+      }
+    }
+  },
+  {
+    "id": "opencode",
+    "label": "OpenCode",
+    "shortBadge": "OC",
+    "enabled": true,
+    "order": 10,
+    "kind": "agent",
+    "discovery": {
+      "binaries": [
+        "opencode"
+      ],
+      "searchDirs": [
+        "~/.opencode/bin",
+        "~/.local/bin",
+        "/usr/local/bin",
+        "~/go/bin",
+        "~/.bun/bin",
+        "~/.npm-global/bin",
+        "~/bin"
+      ],
+      "install": {
+        "command": {
+          "linux": "curl -fsSL https://opencode.ai/install | bash",
+          "darwin": "curl -fsSL https://opencode.ai/install | bash"
+        },
+        "npmPackage": "opencode-ai",
+        "docsUrl": "https://opencode.ai/docs"
+      }
+    }
+  },
+  {
+    "id": "codex",
+    "label": "Codex",
+    "shortBadge": "CX",
+    "enabled": true,
+    "order": 20,
+    "kind": "agent",
+    "discovery": {
+      "binaries": [
+        "codex"
+      ],
+      "searchDirs": [
+        "~/.codex/bin",
+        "~/.local/bin",
+        "/usr/local/bin",
+        "~/.bun/bin",
+        "~/.npm-global/bin",
+        "~/bin"
+      ],
+      "install": {
+        "command": {
+          "linux": "npm install -g @openai/codex",
+          "darwin": "npm install -g @openai/codex"
+        },
+        "npmPackage": "@openai/codex",
+        "docsUrl": "https://developers.openai.com/codex/cli"
+      }
+    }
+  },
+  {
+    "id": "gemini",
+    "label": "Gemini",
+    "shortBadge": "GM",
+    "enabled": true,
+    "order": 30,
+    "kind": "agent",
+    "discovery": {
+      "binaries": [
+        "gemini"
+      ],
+      "searchDirs": [
+        "~/.gemini/bin",
+        "~/.local/bin",
+        "/usr/local/bin",
+        "~/.bun/bin",
+        "~/.npm-global/bin",
+        "~/bin"
+      ],
+      "install": {
+        "command": {
+          "linux": "npm install -g @google/gemini-cli",
+          "darwin": "npm install -g @google/gemini-cli"
+        },
+        "npmPackage": "@google/gemini-cli",
+        "docsUrl": "https://github.com/google-gemini/gemini-cli"
+      }
+    }
+  },
+  {
+    "id": "antigravity",
+    "label": "Antigravity",
+    "shortBadge": "AG",
+    "enabled": true,
+    "order": 40,
+    "kind": "agent",
+    "discovery": {
+      "binaries": [
+        "agy"
+      ],
+      "searchDirs": [
+        "~/.local/bin",
+        "~/.antigravity/bin",
+        "/usr/local/bin",
+        "~/bin"
+      ],
+      "install": {
+        "command": {
+          "linux": "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+          "darwin": "curl -fsSL https://antigravity.google/cli/install.sh | bash"
+        },
+        "docsUrl": "https://antigravity.google/cli"
+      }
+    }
+  },
+  {
+    "id": "pi",
+    "label": "Pi",
+    "shortBadge": "PI",
+    "enabled": true,
+    "order": 50,
+    "kind": "agent",
+    "discovery": {
+      "binaries": [
+        "pi"
+      ],
+      "searchDirs": [
+        "~/.local/bin",
+        "/usr/local/bin",
+        "~/.bun/bin",
+        "~/.npm-global/bin",
+        "~/bin"
+      ],
+      "install": {
+        "command": {
+          "linux": "npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
+          "darwin": "npm install -g --ignore-scripts @earendil-works/pi-coding-agent"
+        },
+        "npmPackage": "@earendil-works/pi-coding-agent",
+        "docsUrl": "https://pi.dev",
+        "agentImageLayer": {
+          "kind": "dedicated",
+          "reason": "installed with --ignore-scripts in its own layer, so the flag cannot leak to the shared block"
+        }
+      }
+    }
+  },
+  {
+    "id": "grok",
+    "label": "Grok",
+    "shortBadge": "GK",
+    "enabled": true,
+    "order": 70,
+    "kind": "agent",
+    "discovery": {
+      "binaries": [
+        "grok"
+      ],
+      "searchDirs": [
+        "~/.grok/bin",
+        "~/.local/bin",
+        "/usr/local/bin",
+        "~/bin"
+      ],
+      "install": {
+        "command": {
+          "linux": "curl -fsSL https://x.ai/cli/install.sh | bash",
+          "darwin": "curl -fsSL https://x.ai/cli/install.sh | bash"
+        },
+        "docsUrl": "https://github.com/xai-org/grok-build"
+      }
+    }
+  },
+  {
+    "id": "deepseek",
+    "label": "DeepSeek",
+    "shortBadge": "DS",
+    "enabled": true,
+    "order": 80,
+    "kind": "agent",
+    "discovery": {
+      "binaries": [
+        "dsh"
+      ],
+      "searchDirs": [
+        "~/.local/bin",
+        "/usr/local/bin",
+        "~/.npm-global/bin",
+        "~/bin"
+      ],
+      "identity": {
+        "arg": "--help",
+        "regex": "DeepSeek\\s+Harness"
+      },
+      "install": {
+        "command": {
+          "linux": "npm install -g @deepseek-ai/dsh",
+          "darwin": "npm install -g @deepseek-ai/dsh"
+        },
+        "npmPackage": "@deepseek-ai/dsh",
+        "docsUrl": "https://github.com/deepseek-ai/deepseek-harness",
+        "agentImageLayer": {
+          "kind": "dedicated",
+          "reason": "needs pnpm alongside it (dsh plugin, issue #352) and a dsh-tui profile install"
+        }
+      }
+    }
+  },
+  {
+    "id": "omp",
+    "label": "OMP",
+    "shortBadge": "OM",
+    "enabled": true,
+    "order": 90,
+    "kind": "agent",
+    "discovery": {
+      "binaries": [
+        "omp"
+      ],
+      "searchDirs": [
+        "~/.local/bin",
+        "~/.omp/bin",
+        "/usr/local/bin",
+        "~/.bun/bin",
+        "~/.npm-global/bin",
+        "~/bin"
+      ],
+      "install": {
+        "command": {
+          "linux": "curl -fsSL https://omp.sh/install | sh",
+          "darwin": "brew install can1357/tap/omp"
+        },
+        "docsUrl": "https://omp.sh"
+      }
+    }
+  }
+]

@@ -187,6 +187,13 @@ const discoverySchema = z
           .strict(),
         npmPackage: z.string().max(200).optional(),
         docsUrl: z.url().optional(),
+        // Requires a `reason` on purpose — see the field's own doc comment in types.ts. A
+        // dedicated agent-image layer with no stated reason is a silent id-keyed special case
+        // rebuilding itself inside the data this change moved it out of.
+        agentImageLayer: z
+          .object({ kind: z.literal('dedicated'), reason: z.string().min(1).max(300) })
+          .strict()
+          .optional(),
       })
       .strict(),
   })

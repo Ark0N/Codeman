@@ -13,6 +13,7 @@
     "postinstall": "node scripts/postinstall.js",
     "build": "node scripts/build.mjs",
     "build:gesture": "node scripts/build-gesture-bundle.mjs",
+    "generate:cli-catalog": "tsx scripts/generate-cli-catalog.mts",
     "start": "NODE_COMPILE_CACHE=${HOME}/.codeman/compile-cache node dist/index.js",
     "dev": "tsx src/index.ts web",
     "web": "node dist/index.js web",

@@ -25,6 +25,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { enabledCliIds, getCli } from './config/cli-registry/registry.js';
+import { STOCK_CLIS } from './config/cli-registry/stock.js';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -488,8 +489,68 @@ export function buildDockerCreateArgs(ctx: DockerCreateContext): string[] {
  * scripts/build-agent-image.mjs): `build -f <dockerfile> -t <image> [--no-cache]
  * <contextDir>`. Kept pure + unit-testable; the caller prepends the engine binary.
  */
-export function agentImageBuildArgs(dockerfile: string, image: string, contextDir: string, noCache = false): string[] {
-  return ['build', '-f', dockerfile, '-t', image, ...(noCache ? ['--no-cache'] : []), contextDir];
+export function agentImageBuildArgs(
+  dockerfile: string,
+  image: string,
+  contextDir: string,
+  noCache = false,
+  buildArgs: Array<[string, string]> = []
+): string[] {
+  return [
+    'build',
+    '-f',
+    dockerfile,
+    '-t',
+    image,
+    ...(noCache ? ['--no-cache'] : []),
+    ...buildArgs.flatMap(([name, value]) => ['--build-arg', `${name}=${value}`]),
+    contextDir,
+  ];
+}
+
+/** Tokens allowed in an npm package name reaching a Dockerfile build arg unquoted. */
+const SAFE_PACKAGE = /^[@A-Za-z0-9][@A-Za-z0-9/._-]*$/;
+
+/**
+ * npm packages the agent image installs in its shared layer, from the STOCK catalogue.
+ *
+ * ⚠️ Stock, deliberately, NOT the merged registry. A user's `~/.codeman/clis.json` must not
+ * change what lands inside an image tagged `codeman/agent:base`, or two machines holding that
+ * same tag hold different images and every cache-hit decision downstream is a lie.
+ *
+ * ⚠️ An entry carrying `discovery.install.agentImageLayer` is excluded here — see that field's
+ * doc comment in `types.ts` for why some CLIs need their own hand-written Dockerfile layer
+ * instead of the shared one, and `test/docker-agent-image-coverage.test.ts` for the guard that
+ * an exclusion here still lands in the Dockerfile somewhere.
+ *
+ * ⚠️ This mirrors `agentImageNpmPackages()` in `scripts/lib/cli-catalog.mjs`, which the CLI
+ * build path uses because a `.mjs` cannot import TypeScript. Two producers of one command
+ * line drift; `test/agent-image-build-args-parity.test.ts` is what stops them — including the
+ * SAFE_PACKAGE regex below, which is duplicated (not imported) in that file for the same
+ * reason and must stay byte-identical to it.
+ */
+export function agentImageNpmPackages(): string[] {
+  const packages: string[] = [];
+  for (const entry of STOCK_CLIS) {
+    if (!entry.enabled || entry.discovery.install.agentImageLayer) continue;
+    const pkg = entry.discovery.install.npmPackage;
+    if (!pkg) continue;
+    // The value is interpolated into a Dockerfile ARG expanded UNQUOTED (word splitting is
+    // how the list becomes several arguments), so a token with whitespace or shell
+    // metacharacters would change what the RUN line means. The source is `stock.ts`, so the
+    // practical risk is nil, but this is the in-app auto-build path and the only one of the
+    // two producers where that had gone unchecked.
+    if (!SAFE_PACKAGE.test(pkg)) {
+      throw new Error(`Refusing unsafe npm package name for "${String(entry.id)}": ${JSON.stringify(pkg)}`);
+    }
+    packages.push(pkg);
+  }
+  return packages;
+}
+
+/** The `--build-arg` pairs the agent image takes. */
+export function agentImageBuildArgPairs(): Array<[string, string]> {
+  return [['CLI_NPM_PACKAGES', agentImageNpmPackages().join(' ')]];
 }
 
 // ========== Credential mount resolution (IO) ==========
@@ -1020,7 +1081,7 @@ function buildAgentImage(
   const argv = dockerEngineArgv(docker);
   const args = [
     ...argv.slice(1),
-    ...agentImageBuildArgs(resolved.dockerfile, image, resolved.contextDir, opts.noCache),
+    ...agentImageBuildArgs(resolved.dockerfile, image, resolved.contextDir, opts.noCache, agentImageBuildArgPairs()),
   ];
   return new Promise<EnsureImageResult>((resolve) => {
     // async spawn (NEVER spawnSync) so a multi-minute build never wedges the event loop.

@@ -37,6 +37,35 @@ jobs:
       - name: Format check
         run: npm run format:check
 
+      # install.sh reaches users through `curl | bash` with nothing between it and
+      # them, and until now nothing in this repo checked it at all: no shellcheck,
+      # no bats, and the vitest gate is Node-only.
+      - name: install.sh syntax
+        run: bash -n install.sh
+
+      # macOS ships bash 3.2 and this runner has bash 5, so the constructs that
+      # actually break a Mac install are invisible here without a container. This
+      # step is what catches them — in particular expanding an EMPTY array under
+      # `set -u`, which bash 3.2 treats as an unbound variable and `bash -n`
+      # cannot see because it is a runtime error, not a syntax one.
+      - name: install.sh runs on bash 3.2 (macOS's version)
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD":/w -w /w bash:3.2 bash -n /w/install.sh
+          docker run --rm -v "$PWD":/w -w /w -e CODEMAN_INSTALL_SH_LIB=1 bash:3.2 bash -c '
+            set -euo pipefail
+            . /w/install.sh
+            detect_all_clis
+            # `shell` declares no binaries, so its offset/length window is length 0.
+            # Iterating it is the empty-array case; reaching here means it did not abort.
+            echo "bash $BASH_VERSION: ${#CLI_IDS[@]} CLIs, $CLI_FOUND_COUNT found"
+            cli_catalog_names >/dev/null
+            cli_catalog_print_install_hints >/dev/null
+          '
+
+      - name: CLI catalogue artifacts are in sync with stock.ts
+        run: npm run generate:cli-catalog -- --check
+
       - name: Server boot smoke test
         run: |
           set -u

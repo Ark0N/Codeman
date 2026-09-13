@@ -21,6 +21,40 @@ The image is **secret-free**: credentials are delivered at runtime (bind mounts 
 node scripts/build-agent-image.mjs --no-cache
 ```
 
+### Which CLIs the image contains
+
+The npm-published CLIs come from `ARG CLI_NPM_PACKAGES`, which `scripts/build-agent-image.mjs`
+fills from `config/clis.stock.json` (generated from `src/config/cli-registry/stock.ts`). Adding
+a stock CLI that installs with a plain `npm install -g` needs no Dockerfile edit. The ARG
+defaults to the same list in the same order, so a bare `docker build` produces a byte-identical
+layer — a different order would be a different `RUN` string and so a needless cache miss.
+
+⚠️ It reads the **stock** catalogue, never the merged registry. A user's `~/.codeman/clis.json`
+must not change what is inside an image tagged `codeman/agent:base`, or two machines holding
+that tag hold different images and every cache decision downstream is a lie. Each entry's
+`enabled` flag IS honoured, so a CLI that ships disabled is never baked in.
+
+Five CLIs keep hand-written layers, because the registry cannot express what makes them
+special (as a REGISTRY field now — `discovery.install.agentImageLayer` in `stock.ts` — rather
+than an id-keyed table duplicated between the two producers of the image's build args):
+
+| CLI | Why it is not in the shared npm layer |
+| ------------- | ------------------------------------------------------------------------------------- |
+| `pi` | Installs with `--ignore-scripts`, kept in its own layer so the flag cannot leak to the others. |
+| `deepseek` | Needs `pnpm` alongside it (`dsh plugin`, issue #352) plus a `dsh-tui` profile install. |
+| `antigravity` | Not on npm — Google ships a standalone binary (~190MB, the largest layer). |
+| `grok`, `omp` | Not on npm — standalone vendor installers. |
+
+`test/docker-agent-image-coverage.test.ts` requires every special case to carry a written
+reason AND still be present in the Dockerfile, so an exclusion cannot silently become an
+omission — which is the same failure upstream `b6d0f1fa` hit in `install.sh`.
+
+Two things build this image: `scripts/build-agent-image.mjs` (a human) and
+`ensureAgentBaseImage()` in `src/docker-hosts.ts` (the app, on the first Docker case). They
+assemble the argv independently, because a `.mjs` cannot import TypeScript, so
+`test/agent-image-build-args-parity.test.ts` pins them together. Without it, an image built by
+hand and one built by the app could hold different CLIs under the same tag.
+
 A zero exit code only proves the layers ran, not that the toolchain works. Verify by actually executing each CLI in the image, and check the build log for `Using cache` lines:
 
 ```bash
