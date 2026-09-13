@@ -295,6 +295,13 @@ describe('TmuxManager (unit)', () => {
       expect(callBuildEnvExports('opencode')).toContain('unset COLORTERM');
     });
 
+    // Claude renders its themed backgrounds as RGB. Without this the pane inherits
+    // tmux's TERM=screen, supports-color reads 16 colors, and every dark background
+    // quantizes to ESC[40m — the terminal's own black — so the block goes invisible.
+    it('exports truecolor for Claude sessions', () => {
+      expect(callBuildEnvExports('claude')).toContain('export COLORTERM=truecolor');
+    });
+
     it('exports the server-stamped CODEMAN_API_URL verbatim', () => {
       const original = process.env.CODEMAN_API_URL;
       process.env.CODEMAN_API_URL = 'https://127.0.0.1:3199';

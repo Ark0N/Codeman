@@ -13,6 +13,7 @@ import { isEffortLevel } from './types.js';
 import { getAugmentedPath } from './utils/index.js';
 import { compareVersions } from './utils/dependency-checker.js';
 import { dataPath } from './config/instance.js';
+import { getCli } from './config/cli-registry/registry.js';
 
 /**
  * Build Claude CLI permission flags based on the configured mode.
@@ -181,10 +182,26 @@ export function buildClaudeEnv(sessionId: string): Record<string, string | undef
     // Path only (not the secret value) — hook curls cat it at execution time (COD-54)
     CODEMAN_HOOK_SECRET_FILE: dataPath('hook-secret'),
   };
+  // The colour and identity vars come from the registry entry, the same source
+  // buildEnvExports() and buildMuxAttachEnv() read, so this fallback cannot drift from
+  // the tmux pane the way a hand-maintained list here did.
   // COD-115: `delete`, not `= undefined` — node-pty serializes a present-with-undefined
   // key as the literal string "KEY=undefined" (see buildMuxAttachEnv below).
-  delete env.COLORTERM;
-  delete env.CLAUDECODE;
+  const cliEnv = getCli('claude')?.env;
+  for (const name of cliEnv?.unset ?? []) delete env[name];
+  for (const item of cliEnv?.exports ?? []) {
+    // A direct PTY has no mux, so `muxName` has no value to resolve against. Claude
+    // declares literals only; an unresolvable engine value is skipped, never guessed.
+    const value =
+      typeof item.value === 'string'
+        ? item.value
+        : item.value.engine === 'sessionId'
+          ? sessionId
+          : item.value.engine === 'codemanPrefixedSessionId'
+            ? `codeman_${sessionId}`
+            : undefined;
+    if (value !== undefined) env[item.name] = value;
+  }
   return env;
 }
 
