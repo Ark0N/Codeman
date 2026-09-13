@@ -174,8 +174,17 @@ const CLAUDE: CliEntry = {
     legacyConfigAliases: { resumeId: 'resumeSessionId' },
   },
   env: {
-    exports: [],
-    unset: ['CLAUDECODE', 'COLORTERM'],
+    // Claude joins the truecolor list with COLORTERM=truecolor and NO_COLOR unset.
+    // tmux hands the pane TERM=screen, which supports-color reads as 16 colors, and
+    // Claude then quantizes every RGB color its theme asks for down to that palette.
+    // Each dark background lands on ESC[40m, the terminal's own black, so the block
+    // Claude draws behind the user's own messages renders invisible. PR #3 unset
+    // COLORTERM here against xterm.js#484, which xterm.js had already closed in 2019,
+    // and Codeman now ships @xterm/xterm 6 and sets `terminal-overrides *:Tc` itself.
+    // CLAUDECODE stays unset, because Claude reads it as a signal that it is running
+    // nested inside itself.
+    exports: [{ name: 'COLORTERM', value: 'truecolor' }],
+    unset: ['CLAUDECODE', 'NO_COLOR'],
     tmuxSetenvKeys: [],
     dockerExecEnvNames: [],
     allowedPrefixes: ['CLAUDE_CODE_'],
