@@ -6834,6 +6834,99 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   color: #fff;
 }
 
+/* Search row. Tokens only (no literal dark glass) so the light skins need no
+   override of their own; the sheet itself is already re-pointed at
+   var(--floating-bg) up in the skin block. */
+.mobile-case-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 20px 4px;
+  padding: 0 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+}
+
+.mobile-case-picker-search:focus-within {
+  border-color: var(--accent);
+}
+
+.mobile-case-search-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.mobile-case-search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  /* 16px: anything smaller makes iOS Safari zoom the page on focus, which
+     leaves the sheet scrolled off-centre when the field is blurred again. */
+  font-size: 16px;
+  font-family: inherit;
+  padding: 11px 0;
+  outline: none;
+}
+
+.mobile-case-search-input::placeholder {
+  color: var(--text-dim);
+}
+
+/* The global input:focus-visible rule paints a 1px accent ring, which inside
+   an already-bordered row draws a second border a few pixels in. The row's
+   :focus-within border is the focus cue here, so the input drops its own. */
+.mobile-case-search-input:focus-visible {
+  box-shadow: none;
+}
+
+/* The native affordance sits in a different spot per engine and is absent on
+   Android, so the sheet ships its own clear button and hides this one. */
+.mobile-case-search-input::-webkit-search-cancel-button,
+.mobile-case-search-input::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.mobile-case-search-clear {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.mobile-case-search-clear:active {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* The UA's [hidden] rule is display:none at specificity (0,0,0) and loses to the
+   display:flex above, so the button has to hide itself explicitly. */
+.mobile-case-search-clear[hidden] {
+  display: none;
+}
+
+.mobile-case-empty {
+  padding: 22px 20px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
 .mobile-case-picker-body {
   flex: 1;
   overflow-y: auto;
