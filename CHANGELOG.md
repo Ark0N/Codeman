@@ -1,5 +1,77 @@
 # aicodeman
 
+## 1.28.0
+
+### Minor Changes
+
+- 58b4cb0: feat(files): let the path picker jump to a typed path and sort by name or date
+
+  The picker's current-folder line was read-only, so reaching a deep folder meant tapping
+  through every level, and its listing was fixed to name order, so the file an agent had
+  just written was somewhere in a 500-entry list. The current folder is now an editable
+  field (Enter or Go jumps there, a full file path lands in its folder with the file
+  selected, and a typo keeps the listing you had instead of resetting to the root), the
+  listing can be sorted by name or modified time in either direction with folders always
+  first (the choice is remembered per device), and each entry shows a compact modified
+  time. `GET /api/filesystem/browse` entries carry `mtimeMs` to make that possible, with
+  one stat per entry.
+
+### Patch Changes
+
+- c211461: fix(terminal): swallow Ctrl+Z in agent sessions so it cannot suspend a running CLI
+
+  Ctrl+Z raises SIGTSTP on the pane's tty. In a `shell` session that is ordinary job control and
+  is left alone, but in an agent session suspending the CLI stops an unattended loop dead with no
+  visible output, the same failure shape as an XOFF freeze. The key is now swallowed in
+  `attachCustomKeyEventHandler` for every non-shell mode, and unconditionally in the
+  subagent/teammate terminals, which always run an agent CLI. The match is case-insensitive,
+  because Caps Lock flips `ev.key` to `'Z'` without setting `shiftKey` and a plain `=== 'z'`
+  check would let exactly the keystroke this exists to catch through.
+
+  This is defence in depth rather than a fix for the steady state: an agent CLI holds its tty in
+  raw mode with ISIG off, where ^Z is already inert. It covers the moments that are not the
+  steady state: the window before the CLI takes the tty at startup, and any point where it hands
+  the tty back. Two input paths are deliberately not covered and still reach the PTY: the mobile
+  keyboard accessory bar's one-shot Ctrl, and the CJK composition textarea when `cjkInputEnabled`
+  is on. Both are separate choke points to the PTY, and both are worth covering if this ever
+  turns out to matter in practice.
+
+- 7767b16: fix(terminal): let Claude use truecolor so its themed backgrounds render
+
+  Claude draws the user's own messages as a block of background color, and it renders as an
+  approximation of the theme color at best. Claude's registry entry deleted `COLORTERM`, which
+  left it the only agent CLI here besides `opencode` not asking for 24-bit color, so every RGB
+  color its theme asks for was quantized down to whatever palette `TERM` alone implies. Claude
+  now exports `COLORTERM=truecolor` like codex, gemini, antigravity, pi, grok, deepseek and omp
+  already do, and the block renders in the color the theme actually names.
+
+  How bad the quantization was depends on `TERM`, which is why this looks different on different
+  machines. On tmux 3.2 and newer, whose `default-terminal` defaults to `tmux-256color`,
+  supports-color reports 256 colors and `rgb(55, 55, 55)` lands on `ESC[48;5;237m`: visible, but
+  not the color the theme asked for. Where `TERM` resolves to a 16-color entry instead (tmux
+  older than 3.2, or a `~/.tmux.conf` setting `default-terminal screen`, which Codeman's tmux
+  server does read), every dark background collapses to `ESC[40m`, the terminal's own black, and
+  the block disappears entirely. That is the case this was reported from, and a custom Claude
+  theme could change the color there with nothing on screen moving.
+
+  Those seven CLIs also unset `NO_COLOR`; Claude does not, so a user who exports `NO_COLOR`
+  globally keeps the monochrome panes they asked for. `CLAUDECODE` stays unset, because Claude
+  reads it as a signal that it is running nested inside itself.
+
+  `buildClaudeEnv()`, the direct-PTY fallback used when tmux is unavailable, now reads the same
+  registry entry as the tmux pane and its attach client instead of deleting `COLORTERM` from a
+  hand-maintained list of its own. It applies that entry before assigning Codeman's own
+  variables, mirroring `buildEnvExports()`, so a `clis.json` override naming one of them cannot
+  strip it on this path while the tmux pane keeps it. A remote pane still exports nothing,
+  because `buildRemoteLaunchCommand()` never carried these declarations, so an SSH-remote Claude
+  session keeps the old rendering.
+
+  PR #3 introduced the `unset COLORTERM` in February, citing xterm.js#484 for the claim that
+  xterm.js mishandles truecolor, and aiming to fall back to 256-color mode. xterm.js closed that
+  issue in April 2019, Codeman now depends on `@xterm/xterm` 6, and `TmuxManager` sets
+  `terminal-overrides ",*:Tc"` on its own tmux server, so 24-bit color already reaches the
+  browser for the CLIs that ask for it.
+
 ## 1.27.0
 
 ### Minor Changes
