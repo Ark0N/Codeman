@@ -1,5 +1,30 @@
 # aicodeman
 
+## 1.28.1
+
+### Patch Changes
+
+- 708cb2c: fix(tabs): let a wrapped desktop tab strip grow the header instead of clipping itself
+
+  The wrapped tab strip carried fixed height caps (120px for the manual two-row layout,
+  96px for measured auto-wrap) that were row counts in disguise. A third row of tabs was
+  clipped into a roughly 4px scroller, so the tab being looked for sat off-screen inside a
+  container nothing invites you to scroll, while the header had the whole page below it to
+  grow into. The header is `min-height` plus `flex-shrink: 0`, and terminal-ui's
+  ResizeObserver refits the terminal on its own, so growing it costs nothing.
+
+  Both wrapped layouts now share one rule capped at `var(--tab-strip-max-height, 40vh)`.
+  That cap is a safety net for an absurd session count rather than a row limit: past it the
+  scroller comes back, which still beats a header that swallows the terminal. Nothing sets
+  `--tab-strip-max-height` yet, so today it is the 40vh fallback plus a hook for a future
+  control.
+
+  Desktop only in effect. `tabs-auto-wrap` is applied by `updateTabOverflowMode()`, which
+  returns early for anything that is not a desktop viewport, and below 1024px `mobile.css`
+  pins the header to `max-height: 48px` so it cannot grow at all. The two rules are
+  comma-grouped rather than wrapped in `:is()`, so each arm keeps its own (0,2,0)
+  specificity and `mobile.css`'s matching overrides still win on source order.
+
 ## 1.28.0
 
 ### Minor Changes
