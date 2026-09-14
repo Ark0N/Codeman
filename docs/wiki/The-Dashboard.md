@@ -15,7 +15,7 @@ page says so and names the setting.
 | **Header, left**   | The "C" logo (goes home) and the session list, unless you moved it to the sidebar.       |
 | **Header, right**  | Status chips and panel buttons, most of them off by default.                            |
 | **Center**         | The terminal for the active session, or the home screen when nothing is selected.        |
-| **Bottom toolbar** | Run, Stop, Run Shell, the case picker, and the instance counters.                        |
+| **Bottom toolbar** | Run, Stop, Run Shell, the case picker, and the instance counter.                         |
 | **Overlays**       | Panels and modals: Respawn, Cron, Subagents, File Viewer, Settings.                      |
 
 ## Session list layout
