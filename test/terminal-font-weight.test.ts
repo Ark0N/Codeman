@@ -218,6 +218,20 @@ describe('terminal font weight settings plumbing', () => {
     }
   });
 
+  it('drops a custom entry a previous open added', () => {
+    // The modal is opened again and again, and a custom entry is only ever right for
+    // the value it was added for. Without the cleanup a picker that visited 350, then
+    // 200, then 400 ends up offering all three, none of them stored.
+    const populate = settingsUi.slice(settingsUi.indexOf('populateTerminalFontWeight(select, value) {'));
+    const body = populate.slice(0, populate.indexOf('\n  },'));
+    expect(body).toContain('option[data-custom="1"]');
+    expect(body).toContain('.remove()');
+    // The marker has to be SET too, or the cleanup above matches nothing.
+    expect(body).toContain("dataset.custom = '1'");
+    // …and the removal must run before the add, or it takes out the entry it just made.
+    expect(body.indexOf('.remove()')).toBeLessThan(body.indexOf('createElement'));
+  });
+
   it('applies the save to the live terminal', () => {
     const save = settingsUi.slice(settingsUi.indexOf('async saveAppSettings()'));
     expect(save.slice(0, save.indexOf('\n  },'))).toContain('this.applyTerminalFontWeights?.(settings)');

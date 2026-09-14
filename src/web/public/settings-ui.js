@@ -347,10 +347,16 @@ Object.assign(CodemanApp.prototype, {
   populateTerminalFontWeight(select, value) {
     if (!select) return;
     const stored = value === undefined || value === null ? '' : String(value).trim();
+    // Any custom entry a PREVIOUS open added is dropped first. The modal is opened
+    // repeatedly and the entry is only ever right for the value it was added for, so
+    // without this a picker visits 350, then 200, then 400 and ends up offering every
+    // weight the device has ever held, none of which is the stored one.
+    for (const stale of Array.from(select.querySelectorAll('option[data-custom="1"]'))) stale.remove();
     if (stored && !Array.from(select.options).some((opt) => opt.value === stored)) {
       const extra = document.createElement('option');
       extra.value = stored;
       extra.textContent = `${stored} (custom)`;
+      extra.dataset.custom = '1';
       select.appendChild(extra);
     }
     select.value = stored;
