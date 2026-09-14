@@ -39,7 +39,7 @@ import { fileURLToPath } from 'node:url';
 import type { HookEventType } from './types.js';
 import { HOOK_TIMEOUT_SECONDS } from './config/auth-config.js';
 import { dataPath } from './config/instance.js';
-import { generateShimStatusLineCommand, LEGACY_STATUSLINE_MARKER, STATUSLINE_SHIM_TOKEN } from './statusline-shim.js';
+import { LEGACY_STATUSLINE_MARKER, statusLineShimGuard, STATUSLINE_SHIM_TOKEN } from './statusline-shim.js';
 
 /**
  * Serializes read-modify-write access to a `settings.local.json` path. Every
@@ -848,13 +848,15 @@ async function readWorkspaceHooksEnabled(): Promise<boolean> {
 /**
  * Is this statusLine command one Codeman wrote?
  *
- * Two forms count. The current one runs the delegating shim, recognised by the
- * version-free token in its filename. The other is the pre-shim inline `curl`,
- * recognised by the endpoint path it posts to. Both must be read as ours, or
- * the upgrade mistakes an old injected command for a hand-authored line,
- * refuses to touch it, and leaves the user with the shadowing exporter.
+ * Two markers count, and every command Codeman has ever injected carries at
+ * least one. The version-free `codeman-statusline-shim` token names the shim
+ * file the current guarded command runs; the `/api/status-telemetry` path is
+ * what the inline exporter posts to, in the pre-shim command AND in the
+ * fallback half of the current one. Both must be read as ours, or the upgrade
+ * mistakes an old injected command for a hand-authored line, refuses to touch
+ * it, and leaves the user with the shadowing exporter.
  */
-function isCodemanStatusLine(command: unknown): boolean {
+export function isCodemanStatusLine(command: unknown): boolean {
   return (
     typeof command === 'string' &&
     (command.includes(STATUSLINE_SHIM_TOKEN) || command.includes(LEGACY_STATUSLINE_MARKER))
@@ -862,36 +864,45 @@ function isCodemanStatusLine(command: unknown): boolean {
 }
 
 /**
- * The pre-shim inline exporter, kept as the fallback when the shim cannot be
- * installed. It POSTs the statusline JSON and prints Codeman's response, which
- * means it SHADOWS whatever statusline the user configured globally. That is
- * the cost the shim exists to remove, so this runs only when a data dir that
- * cannot be written leaves no better option.
+ * The inline exporter: env vars plus curl, portable by construction. It POSTs
+ * the statusline JSON and prints Codeman's answer, which means it SHADOWS
+ * whatever statusline the user configured globally. That is the cost the shim
+ * exists to remove, so this half only renders where the shim cannot run: inside
+ * a Docker case's container (the workspace is bind-mounted, `~/.codeman` and
+ * the host's node are not), or on a host whose data dir could not be written.
+ *
+ * `curl -sfk`: CODEMAN_API_URL is loopback HTTPS with a self-signed cert in the
+ * production setup, so without -k curl returns 000 (-k is safe here, loopback
+ * only); -f keeps an HTTP error body off the statusline. On any failure it
+ * prints NOTHING: the old `|| echo codeman` is the bare word that a hand-run
+ * `claude` in a managed repo rendered, and that reads as a broken config.
  */
 function generateInlineStatusLineCommand(): string {
-  // `curl -sk`: CODEMAN_API_URL is loopback HTTPS with a self-signed cert in the
-  // production setup; without -k curl returns 000 and the statusline shows
-  // nothing. -k is safe here (loopback only). Falls back to a brand string so the
-  // footer is never blank if Codeman is unreachable.
   return (
     `INPUT=$(cat 2>/dev/null || echo '{}'); ` +
     `printf '{"sessionId":"%s","data":%s}' "$CODEMAN_SESSION_ID" "$INPUT" | ` +
-    `curl -sk -X POST "$CODEMAN_API_URL${LEGACY_STATUSLINE_MARKER}" ` +
+    `curl -sfk -X POST "$CODEMAN_API_URL${LEGACY_STATUSLINE_MARKER}" ` +
     `-H 'Content-Type: application/json' ` +
     `-H "X-Codeman-Hook-Secret: $(cat "$CODEMAN_HOOK_SECRET_FILE" 2>/dev/null)" ` +
-    `--data @- 2>/dev/null || echo codeman`
+    `--data @- 2>/dev/null || true`
   );
 }
 
 /**
  * The plan-usage statusLine exporter command.
  *
- * Normally this runs the delegating shim, which forwards the same JSON to
- * Codeman and then prints the statusline its own entry shadows. The inline
- * exporter above is the fallback for an uninstallable shim.
+ * A self-selecting guard followed by the inline exporter: where the shim and
+ * the node binary both exist the guard `exec`s the delegating shim, which
+ * forwards the same JSON to Codeman and then prints the statusline its own
+ * entry shadows; anywhere else the shell falls through to the inline curl.
+ * The SAME injected string therefore renders correctly from the host and from
+ * inside a Docker case's container, which is what lets a bind-mounted
+ * `settings.local.json` carry it. See `statusLineShimGuard()`.
  */
 export function generateStatusLineCommand(): string {
-  return generateShimStatusLineCommand() ?? generateInlineStatusLineCommand();
+  const guard = statusLineShimGuard();
+  const inline = generateInlineStatusLineCommand();
+  return guard ? `${guard} ${inline}` : inline;
 }
 
 /**

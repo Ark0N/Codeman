@@ -2050,6 +2050,9 @@ Object.assign(CodemanApp.prototype, {
     // WebGL toggle: default ON (desktop), so only an explicit stored false counts
     // as "previously off" — used below to detect a real OFF→ON flip.
     const _prevWebglEnabled = (_prev.webglRendererEnabled ?? true) === true;
+    // Plan-usage chip: the exporter it depends on is removed from live workspaces
+    // ONLY on the save that turns the chip off (see statusLineTelemetryAction).
+    const _prevPlanUsageChip = this.planUsageChipEnabled(_prev);
     const settings = {
       displayName: window.CodemanI18n?.normalizeDisplayName(
         document.getElementById('appSettingsDisplayName').value
@@ -2280,9 +2283,11 @@ Object.assign(CodemanApp.prototype, {
     // and syncing would leak mobile's hidden-checkbox false onto desktop); it's
     // also absent from SettingsUpdateSchema, which is .strict() — sending it
     // would 400 the whole settings PUT.
-    // Telemetry COLLECTION is requested out-of-band via statusLineTelemetry (sent on
-    // ENABLE only, so a device with the chip OFF never strips the exporter that
-    // another device's chip depends on — see system-routes settings handler).
+    // Telemetry COLLECTION is requested out-of-band via the statusLineTelemetry
+    // action field: `true` on every save while the chip is on, `false` only on the
+    // save that turned it off here, nothing otherwise (statusLineTelemetryAction),
+    // so a device whose chip was never on cannot strip the exporter another
+    // device's chip depends on. See the system-routes settings handler.
     const {
       localEchoEnabled: _leo,
       cjkInputEnabled: _cjk,
@@ -2316,10 +2321,11 @@ Object.assign(CodemanApp.prototype, {
       sessionLineageLines: _sll,
       ...serverSettings
     } = settings;
+    const statusLineTelemetry = this.statusLineTelemetryAction(_prevPlanUsageChip, settings.showPlanUsageLimits);
     try {
       const res = await this._apiPut('/api/settings', {
         ...serverSettings,
-        ...(settings.showPlanUsageLimits ? { statusLineTelemetry: true } : {}),
+        ...(statusLineTelemetry === undefined ? {} : { statusLineTelemetry }),
         notificationPreferences: notifPrefsToSave,
         voiceSettings,
       });
@@ -2590,6 +2596,20 @@ Object.assign(CodemanApp.prototype, {
   planUsageChipEnabled(settings = null) {
     const s = settings ?? this.loadAppSettingsFromStorage();
     return s.showPlanUsageLimits ?? this.getDefaultSettings().showPlanUsageLimits ?? true;
+  },
+
+  // What a settings save tells the server about the plan-usage exporter, given
+  // the chip's state before and after the save. `true` re-injects the exporter
+  // into every live Claude workspace and may ride every save while the chip is
+  // on. `false` REMOVES it from those workspaces, and the chip is per-device
+  // while the exporter lives in each repo's shared settings.local.json, so it
+  // may ride only the save that turned the chip off on this device: a phone
+  // whose chip was never on must never strip what a desktop's chip depends on.
+  // Pure, so test/plan-usage-telemetry-action.test.ts can pin all three cases.
+  statusLineTelemetryAction(prevEnabled, nowEnabled) {
+    if (nowEnabled) return true;
+    if (prevEnabled) return false;
+    return undefined;
   },
 
   applyHeaderVisibilitySettings() {

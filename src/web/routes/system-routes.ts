@@ -1034,20 +1034,34 @@ export function registerSystemRoutes(
       });
 
       // Plan-usage chip: its DISPLAY is per-device (client-side, see settings-ui.js).
-      // Telemetry COLLECTION is server-side and enable-sticky — when a client turns
-      // the chip ON it sends statusLineTelemetry:true and we (re)inject our exporter
-      // into every ACTIVE Claude session's working dir so the live % starts flowing
-      // immediately (no new session needed). We deliberately never auto-REMOVE here:
-      // the exporter is benign/print-through and a per-repo settings.local.json is
-      // shared by sibling sessions, so one device's "off" must not yank the exporter
-      // another device's chip depends on. Each dir handled once.
-      if (statusLineTelemetry === true) {
+      // Telemetry COLLECTION is a per-save ACTION field in both directions. `true`
+      // rides every save while the chip is on: we (re)inject our exporter into every
+      // ACTIVE Claude session's working dir so the live % starts flowing immediately
+      // (no new session needed), and that is also how a second device catches up.
+      // `false` rides ONLY the save that turned the chip OFF on that device
+      // (statusLineTelemetryAction in settings-ui.js) and takes our exporter back
+      // out of those same dirs. Nothing called the disable path before, so turning
+      // the chip off left the line in every repo it had ever reached (#405). A
+      // per-repo settings.local.json is shared by sibling sessions and by every
+      // device, so the flip-only rule is what keeps a phone whose chip was never on
+      // from stripping the exporter a desktop's chip depends on; a device with the
+      // chip still on re-injects on its next save or session create and shows the
+      // last snapshot meanwhile. Both paths are isOurs-guarded (a hand-authored
+      // statusLine is never touched), remote attaches are skipped (their workingDir
+      // is a user@host:session pseudo-path the enable path would mkdir as a junk
+      // local dir), and each dir is handled once.
+      if (statusLineTelemetry === true || statusLineTelemetry === false) {
+        const user = getAuthUser(req);
         const dirs = new Set<string>();
         for (const session of ctx.sessions.values()) {
-          if (getCli(session.mode)?.capabilities.statusLineTelemetry && session.workingDir)
-            dirs.add(session.workingDir);
+          if (!getCli(session.mode)?.capabilities.statusLineTelemetry || !session.workingDir) continue;
+          if (session.remote) continue;
+          // Removal is the destructive direction: only the caller's own workspaces
+          // (canAccessOwned is allow-all for admins and in single-user mode).
+          if (!statusLineTelemetry && !canAccessOwned(user, session.owner)) continue;
+          dirs.add(session.workingDir);
         }
-        await Promise.all([...dirs].map((dir) => applyStatusLineConfig(dir, true).catch(() => {})));
+        await Promise.all([...dirs].map((dir) => applyStatusLineConfig(dir, statusLineTelemetry).catch(() => {})));
       }
 
       // Handle tunnel toggle dynamically

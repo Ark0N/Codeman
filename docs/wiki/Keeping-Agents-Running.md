@@ -101,10 +101,14 @@ subscription plan.
 **Claude only.** A header chip showing live subscription usage, on by default on desktop and
 off on phones.
 
-It works by installing a status line exporter into Claude Code, which posts Claude's own
-rate limit data back to Codeman. The exporter is marker-identified, so it only ever touches
-a status line Codeman installed, never one you wrote yourself, and it prints your footer
-through so the in-terminal status line still works.
+It works by installing a status line exporter into each managed repo's
+`.claude/settings.local.json`, which posts Claude's own rate limit data back to Codeman. The
+exporter is marker-identified, so it only ever touches a status line Codeman installed, never
+one you wrote yourself. A repo's status line outranks the one in `~/.claude/settings.json`,
+so the exporter also runs the status line it shadows and prints that instead of its own
+footer: your global status line keeps rendering in managed repos, and in a repo with no
+status line of your own you get Codeman's compact session footer. Turning the chip off takes
+the exporter back out of the repos of your live sessions.
 
 The chip and the exporter are the same setting. Turning the chip on without the exporter
 would leave it showing a dash forever, so resolve it in one place: **App Settings**.

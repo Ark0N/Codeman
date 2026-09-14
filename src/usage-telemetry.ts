@@ -173,10 +173,14 @@ export function parseSessionStatus(data: RawStatuslinePayload | undefined): Sess
  * Format the in-terminal statusline footer: the CURRENT SESSION's status —
  * `Opus 4.8 (1M context)  in:562,411 out:1,188  ctx:56%` — NOT the plan limits,
  * which live in the Codeman header chip. Claude requires a statusLine command to
- * emit the rate_limits JSON at all, so this is what that command prints back.
+ * emit the rate_limits JSON at all, so this is what that command prints back
+ * when it has no statusline of the user's own to delegate to. With nothing to
+ * show it returns '' rather than a brand word: the exporter's shim reads an
+ * empty footer as "no telemetry", and a bare `codeman` on the statusline is the
+ * symptom discussion #405 opened with.
  */
 export function formatSessionStatusText(s: SessionStatus | null): string {
-  if (!s) return 'codeman';
+  if (!s) return '';
   const groups: string[] = [];
   if (s.modelDisplayName) groups.push(s.modelDisplayName);
   const tok: string[] = [];
@@ -184,7 +188,7 @@ export function formatSessionStatusText(s: SessionStatus | null): string {
   if (s.outputTokens != null) tok.push(`out:${withCommas(s.outputTokens)}`);
   if (tok.length) groups.push(tok.join(' '));
   if (s.contextUsedPercentage != null) groups.push(`ctx:${Math.round(clampPct(s.contextUsedPercentage))}%`);
-  return groups.length ? groups.join('  ') : 'codeman';
+  return groups.length ? groups.join('  ') : '';
 }
 
 /**

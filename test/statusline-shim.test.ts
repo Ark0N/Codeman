@@ -1,10 +1,13 @@
 /**
- * The generated plan-usage statusLine shim.
+ * The generated plan-usage statusLine shim and the command that launches it.
  *
- * Like the DeepSeek status shim, this file is emitted as a STRING and executed
- * by someone else — Claude Code, before every render — so tsc never sees it.
- * The assertions therefore run the real file in a real `node` process, with a
- * real temp HOME and a real listener, rather than inspecting the source text.
+ * Like the DeepSeek status shim, the shim is emitted as a STRING and executed
+ * by someone else, Claude Code, before every render, so tsc never sees it. The
+ * assertions therefore run the real file in a real `node` process, with a real
+ * temp HOME and a real listener, rather than inspecting the source text. The
+ * injected command is exercised the same way, through `sh -c`, because its
+ * fallback half is the only thing that renders inside a Docker case's
+ * container and a typo there is invisible to every other check.
  *
  * The load-bearing property is the pair: the shim must keep forwarding plan
  * usage to Codeman AND give the user back the statusline it shadows. Losing
@@ -21,7 +24,6 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -29,17 +31,24 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   ensureStatusLineShim,
-  generateShimStatusLineCommand,
   LEGACY_STATUSLINE_MARKER,
   resetStatusLineShimForTest,
+  statusLineShimGuard,
   statusLineShimPath,
   STATUSLINE_SHIM_TOKEN,
 } from '../src/statusline-shim.js';
+import { generateStatusLineCommand, isCodemanStatusLine } from '../src/hooks-config.js';
 
 const PORT = 3252;
 /** A port nothing listens on, for the unreachable-Codeman case. Claimed here so
  *  the repo-wide `const PORT =` search a contributor runs finds it too. */
 const PORT_DEAD = 3253;
+
+/** Point a settings file's statusLine at a shell command. */
+function writeStatusLine(file: string, command: string): void {
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ statusLine: { type: 'command', command } }, null, 2));
+}
 
 describe('statusLine shim: provisioning', () => {
   beforeEach(() => {
@@ -78,20 +87,21 @@ describe('statusLine shim: provisioning', () => {
     expect(statSync(path).mode & 0o777).toBe(0o700);
   });
 
-  it('names the shim so the injected command carries the ownership token', () => {
-    // applyStatusLineConfig decides ownership on this substring. If the file is
+  it('names the shim so the guard carries the ownership token', () => {
+    // isCodemanStatusLine decides ownership on this substring. If the file is
     // ever renamed out from under it, Codeman stops recognising its own entries
     // and starts treating them as hand-authored.
-    const command = generateShimStatusLineCommand();
-    expect(command).toBeTruthy();
-    expect(command).toContain(STATUSLINE_SHIM_TOKEN);
+    const guard = statusLineShimGuard();
+    expect(guard).toBeTruthy();
+    expect(guard).toContain(STATUSLINE_SHIM_TOKEN);
     // Absolute node, not a bare `node`: a managed session's PATH need not have one.
-    expect(command).toContain(process.execPath);
+    expect(guard).toContain(process.execPath);
   });
 
-  it('quotes both paths, so a data dir with a space still runs', () => {
-    const command = generateShimStatusLineCommand()!;
-    expect(command).toBe(`'${process.execPath}' '${statusLineShimPath()}'`);
+  it('tests both paths before exec-ing, and quotes them, so a data dir with a space still runs', () => {
+    const node = `'${process.execPath}'`;
+    const shim = `'${statusLineShimPath()}'`;
+    expect(statusLineShimGuard()).toBe(`if [ -x ${node} ] && [ -f ${shim} ]; then exec ${node} ${shim}; fi;`);
   });
 });
 
@@ -99,6 +109,7 @@ describe('statusLine shim: rendering', () => {
   let shim: string;
   let server: Server;
   let received: Array<{ url: string; body: string }> = [];
+  let footer = 'CODEMAN-FOOTER';
   let workspace: string;
   let fakeHome: string;
 
@@ -121,11 +132,7 @@ describe('statusLine shim: rendering', () => {
     });
   }
 
-  /** Point a settings file's statusLine at a shell command. */
-  function writeStatusLine(file: string, command: string): void {
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, JSON.stringify({ statusLine: { type: 'command', command } }, null, 2));
-  }
+  const managed = () => ({ CODEMAN_SESSION_ID: 'sess-1', CODEMAN_API_URL: `http://127.0.0.1:${PORT}` });
 
   beforeAll(async () => {
     resetStatusLineShimForTest();
@@ -137,7 +144,7 @@ describe('statusLine shim: rendering', () => {
       req.on('end', () => {
         received.push({ url: req.url ?? '', body });
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('CODEMAN-FOOTER');
+        res.end(footer);
       });
     });
     await new Promise<void>((r) => server.listen(PORT, '127.0.0.1', r));
@@ -149,6 +156,7 @@ describe('statusLine shim: rendering', () => {
 
   beforeEach(() => {
     received = [];
+    footer = 'CODEMAN-FOOTER';
     const root = mkdtempSync(join(tmpdir(), 'codeman-statusline-'));
     fakeHome = join(root, 'home');
     workspace = join(root, 'repo');
@@ -173,12 +181,14 @@ describe('statusLine shim: rendering', () => {
     expect(stdout).toContain('"display_name":"Opus 5"');
   });
 
-  it('never delegates to its own entry', async () => {
+  it('never delegates to its own entry, and prints nothing rather than a brand word', async () => {
     // No other statusLine exists, so the only candidate is the shim's own. If
-    // the loop guard failed this would fork until something ran out.
+    // the loop guard failed this would fork until something ran out. And with
+    // nothing to shadow and no Codeman to ask, the line stays blank: the bare
+    // word `codeman` is the symptom discussion #405 opened with.
     const { stdout, code } = await render({ cwd: workspace });
     expect(code).toBe(0);
-    expect(stdout).toBe('codeman');
+    expect(stdout).toBe('');
   });
 
   it('never delegates to the pre-shim inline exporter', async () => {
@@ -189,7 +199,7 @@ describe('statusLine shim: rendering', () => {
       `curl -sk -X POST "$CODEMAN_API_URL${LEGACY_STATUSLINE_MARKER}" || echo codeman`
     );
     const { stdout } = await render({ cwd: workspace });
-    expect(stdout).toBe('codeman');
+    expect(stdout).toBe('');
   });
 
   it('prefers a project statusline to the global one', async () => {
@@ -199,14 +209,38 @@ describe('statusLine shim: rendering', () => {
     expect(stdout).toBe('PROJECT');
   });
 
-  it('finds the workspace statusline from a subdirectory', async () => {
-    // Claude Code applies a project's settings from the workspace root, which is
-    // routinely an ancestor of the directory the session sits in.
+  it('reads project settings from the launch directory, not the current one', async () => {
+    // Claude Code applies a project's settings from the directory it was
+    // launched in (workspace.project_dir), which the blob keeps reporting after
+    // the working directory changes mid-session.
     writeStatusLine(join(workspace, '.claude', 'settings.json'), 'echo PROJECT');
-    const deep = join(workspace, 'src', 'nested');
-    mkdirSync(deep, { recursive: true });
-    const { stdout } = await render({ cwd: deep }, {}, deep);
+    const elsewhere = join(dirname(workspace), 'elsewhere');
+    mkdirSync(elsewhere, { recursive: true });
+    const { stdout } = await render(
+      { cwd: elsewhere, workspace: { current_dir: elsewhere, project_dir: workspace } },
+      {},
+      elsewhere
+    );
     expect(stdout).toBe('PROJECT');
+  });
+
+  it('does not walk up from the launch directory', async () => {
+    // Claude Code reads project settings from the launch directory alone, so a
+    // .claude in an ancestor is one it would have ignored. Delegating to it
+    // would run a statusline the user never sees otherwise.
+    writeStatusLine(join(workspace, '.claude', 'settings.json'), 'echo ANCESTOR');
+    const sub = join(workspace, 'packages', 'inner');
+    mkdirSync(sub, { recursive: true });
+    writeStatusLine(join(fakeHome, '.claude', 'settings.json'), 'echo GLOBAL');
+    const { stdout } = await render({ cwd: sub, workspace: { current_dir: sub, project_dir: sub } }, {}, sub);
+    expect(stdout).toBe('GLOBAL');
+  });
+
+  it('ignores a user-level settings.local.json, which Claude Code does not read', async () => {
+    writeStatusLine(join(fakeHome, '.claude', 'settings.local.json'), 'echo NOT-A-REAL-FILE');
+    writeStatusLine(join(fakeHome, '.claude', 'settings.json'), 'echo GLOBAL');
+    const { stdout } = await render({ cwd: workspace });
+    expect(stdout).toBe('GLOBAL');
   });
 
   it('forwards telemetry to Codeman WHILE delegating', async () => {
@@ -214,7 +248,7 @@ describe('statusLine shim: rendering', () => {
     writeStatusLine(join(fakeHome, '.claude', 'settings.json'), 'echo THE-USERS-LINE');
     const { stdout } = await render(
       { cwd: workspace, rate_limits: { five_hour: { used_percentage: 12, resets_at: 99 } } },
-      { CODEMAN_SESSION_ID: 'sess-1', CODEMAN_API_URL: `http://127.0.0.1:${PORT}` }
+      managed()
     );
 
     expect(stdout).toBe('THE-USERS-LINE');
@@ -226,32 +260,34 @@ describe('statusLine shim: rendering', () => {
   });
 
   it("prints Codeman's own footer when there is no line to shadow", async () => {
-    const { stdout } = await render(
-      { cwd: workspace },
-      { CODEMAN_SESSION_ID: 'sess-1', CODEMAN_API_URL: `http://127.0.0.1:${PORT}` }
-    );
+    const { stdout } = await render({ cwd: workspace }, managed());
     expect(stdout).toBe('CODEMAN-FOOTER');
     expect(received).toHaveLength(1);
   });
 
+  it('treats the bare brand word from an older server as no telemetry', async () => {
+    // A pre-1.28 route answers `codeman` for a session it does not know. That
+    // word on the statusline is what cost discussion #405 seven repositories
+    // of debugging, so it must never be printed, whichever server answers.
+    footer = 'codeman';
+    const { stdout } = await render({ cwd: workspace }, managed());
+    expect(stdout).toBe('');
+    expect(received).toHaveLength(1);
+  });
+
   it('skips the POST entirely outside a managed session', async () => {
-    // Running `claude` by hand in a managed repo must cost nothing extra, and
-    // must not render the old bare-word `codeman` the server returns for an
-    // unknown session id.
+    // Running `claude` by hand in a managed repo must cost nothing extra.
     writeStatusLine(join(fakeHome, '.claude', 'settings.json'), 'echo THE-USERS-LINE');
     const { stdout } = await render({ cwd: workspace });
     expect(stdout).toBe('THE-USERS-LINE');
     expect(received).toEqual([]);
   });
 
-  it('falls back rather than blanking when the delegate fails silently', async () => {
-    // A blank statusline reads as a broken terminal, so a delegate that exits
-    // non-zero with no output must not win.
+  it('falls back to the footer when the delegate fails silently', async () => {
+    // A delegate that exits non-zero with no output must not win over a footer
+    // Codeman can supply.
     writeStatusLine(join(fakeHome, '.claude', 'settings.json'), 'exit 3');
-    const { stdout } = await render(
-      { cwd: workspace },
-      { CODEMAN_SESSION_ID: 'sess-1', CODEMAN_API_URL: `http://127.0.0.1:${PORT}` }
-    );
+    const { stdout } = await render({ cwd: workspace }, managed());
     expect(stdout).toBe('CODEMAN-FOOTER');
   });
 
@@ -297,7 +333,90 @@ describe('statusLine shim: rendering', () => {
       join(fakeHome, '.claude', 'settings.json'),
       JSON.stringify({ statusLine: { type: 'something-else', command: 'echo NOPE' } })
     );
-    const { stdout } = await render({ cwd: workspace });
-    expect(stdout).toBe('codeman');
+    const { stdout } = await render({ cwd: workspace }, managed());
+    expect(stdout).toBe('CODEMAN-FOOTER');
+  });
+});
+
+describe('the injected statusLine command', () => {
+  let server: Server;
+  let received: string[] = [];
+  let fakeHome: string;
+
+  /** Run the command the way Claude Code does: through a shell, JSON on stdin. */
+  function run(command: string, env: Record<string, string>, stdin = '{"model":{"display_name":"Opus"}}') {
+    return new Promise<{ stdout: string; code: number | null }>((resolve) => {
+      const child = spawn('/bin/sh', ['-c', command], {
+        cwd: fakeHome,
+        env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, ...env },
+        stdio: ['pipe', 'pipe', 'ignore'],
+      });
+      let stdout = '';
+      child.stdout.on('data', (c) => (stdout += c));
+      child.on('close', (code) => resolve({ stdout, code }));
+      child.stdin.end(stdin);
+    });
+  }
+
+  const managed = () => ({ CODEMAN_SESSION_ID: 'sess-2', CODEMAN_API_URL: `http://127.0.0.1:${PORT}` });
+
+  beforeAll(async () => {
+    resetStatusLineShimForTest();
+    server = createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => (body += c));
+      req.on('end', () => {
+        received.push(body);
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('CODEMAN-FOOTER');
+      });
+    });
+    await new Promise<void>((r) => server.listen(PORT, '127.0.0.1', r));
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+  });
+
+  beforeEach(() => {
+    received = [];
+    fakeHome = mkdtempSync(join(tmpdir(), 'codeman-statusline-cmd-'));
+  });
+
+  it('is recognised as ours by both of its halves', () => {
+    const command = generateStatusLineCommand();
+    expect(command.startsWith('if [ -x ')).toBe(true);
+    expect(command).toContain(STATUSLINE_SHIM_TOKEN);
+    expect(command).toContain(LEGACY_STATUSLINE_MARKER);
+    expect(isCodemanStatusLine(command)).toBe(true);
+    // The word the whole change exists to remove.
+    expect(command).not.toContain('echo codeman');
+  });
+
+  it('runs the shim where the shim exists', async () => {
+    writeStatusLine(join(fakeHome, '.claude', 'settings.json'), 'echo THE-USERS-LINE');
+    const { stdout } = await run(generateStatusLineCommand(), managed());
+    expect(stdout).toBe('THE-USERS-LINE');
+    expect(JSON.parse(received[0]).sessionId).toBe('sess-2');
+  });
+
+  it('falls through to the inline curl exporter where the shim does not exist', async () => {
+    // Inside a Docker case's container the workspace's settings.local.json is
+    // bind-mounted at the same absolute path, but neither the host's node nor
+    // its data dir is. The same command must still report telemetry there.
+    const command = generateStatusLineCommand().split(statusLineShimPath()).join(join(fakeHome, 'no-such-shim.mjs'));
+    writeStatusLine(join(fakeHome, '.claude', 'settings.json'), 'echo THE-USERS-LINE');
+    const { stdout } = await run(command, managed());
+    expect(received).toHaveLength(1);
+    expect(JSON.parse(received[0])).toMatchObject({ sessionId: 'sess-2', data: { model: { display_name: 'Opus' } } });
+    // The inline half cannot delegate, so it prints the footer through.
+    expect(stdout).toBe('CODEMAN-FOOTER');
+  });
+
+  it('prints nothing, not a brand word, when the inline half has no Codeman to reach', async () => {
+    const command = generateStatusLineCommand().split(statusLineShimPath()).join(join(fakeHome, 'no-such-shim.mjs'));
+    const { stdout, code } = await run(command, { CODEMAN_API_URL: '', CODEMAN_SESSION_ID: '' });
+    expect(code).toBe(0);
+    expect(stdout).toBe('');
   });
 });

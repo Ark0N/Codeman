@@ -8,8 +8,10 @@
  * (localhost-only; hook-secret-gated while a tunnel runs — see middleware/auth).
  *
  * Returns a compact plain-text status string for the exporter to print as the
- * in-terminal footer (print-through), so injecting our statusLine doesn't leave
- * the terminal footer blank.
+ * in-terminal footer when it has no statusline of the user's own to delegate to
+ * (see `statusline-shim.ts`). An unknown session gets an EMPTY body: the old
+ * brand-word answer rendered as the statusline of every hand-run `claude` in a
+ * managed repo, and cost discussion #405 seven repositories of debugging.
  */
 
 import { FastifyInstance } from 'fastify';
@@ -36,10 +38,12 @@ export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: Session
 
     reply.type('text/plain; charset=utf-8');
 
-    // Unknown session — minimal footer, no broadcast.
+    // Unknown session: nothing to broadcast and nothing to print. Never a brand
+    // word here, it would render as the statusline (the shim treats an empty
+    // answer as "no telemetry" and falls through to the delegate or to blank).
     if (!ctx.sessions.has(sessionId)) {
       lastSig.delete(sessionId);
-      return 'codeman';
+      return '';
     }
 
     const payload = data as RawStatuslinePayload | undefined;

@@ -13,8 +13,8 @@
  * `~/.claude/settings.json`, so writing a statusLine into a managed repo
  * SHADOWS whatever statusline the user configured globally. The inline exporter
  * then printed Codeman's own footer in its place, and a user who ran `claude`
- * by hand in a managed repo saw the bare word `codeman` — the response this
- * instance returns for a session id it does not know.
+ * by hand in a managed repo saw the bare word `codeman` (discussion #405: seven
+ * repositories before the cause was found).
  *
  * This shim keeps the data tap and gives the line back. It forwards the blob
  * exactly as before, resolves the statusline it is shadowing, runs that command
@@ -25,11 +25,32 @@
  *
  * ## How the delegate is resolved
  *
- * At RENDER time, not at injection time. The shim walks the settings files
- * Claude Code would consult, nearest first, and takes the first `statusLine`
- * that is not one of ours. Resolving late means a user who edits their global
- * statusline sees the change immediately, with no reinjection and no stale
- * command baked into a config file.
+ * At RENDER time, not at injection time, from exactly the three files Claude
+ * Code documents for a project: `.claude/settings.local.json` and
+ * `.claude/settings.json` under the directory Claude Code was launched in
+ * (`workspace.project_dir` in the blob), then `~/.claude/settings.json`. The
+ * first `statusLine` that is not one of ours wins. Resolving late means a user
+ * who edits their global statusline sees the change immediately, with no
+ * reinjection and no stale command baked into a config file.
+ *
+ * Two candidates are deliberately NOT consulted, because delegating to a
+ * command Claude Code itself would have ignored is exactly the failure this
+ * shim exists to end: a user-level `~/.claude/settings.local.json` (not in the
+ * documented set), and the project files of any ANCESTOR of the launch
+ * directory (Claude Code reads project settings from the launch directory
+ * alone, and a walk upward can land on a `.claude` that is not a project root).
+ *
+ * ## Why the injected command is shell that MAY run the shim
+ *
+ * The shim is a file at an absolute path under this instance's data dir, run
+ * by the node binary Codeman itself runs on. Neither exists on the other side of
+ * a Docker case's bind mount: the workspace (and its `settings.local.json`) is
+ * mounted at the same absolute path inside the container, but `~/.codeman` and
+ * the host's node are not. So the injected command is a self-selecting guard:
+ * run the shim when both paths resolve, else fall through to the inline curl
+ * exporter, which is env vars plus curl and works wherever the hooks do. The
+ * SAME file therefore renders correctly from the host and from inside the
+ * container, and the inline form is also what a wiped data dir degrades to.
  *
  * ## Why it is generated rather than committed
  *
@@ -59,21 +80,21 @@ const SHIM_MARKER = `codeman-statusline-shim v${SHIM_VERSION}`;
  *
  * It appears in the generated file's NAME, so it is a substring of the injected
  * command for every shim version. Two separate decisions key on that:
- * `applyStatusLineConfig` uses it to recognise a statusLine as Codeman's, and
- * the shim itself uses it to skip its own entry while hunting for a delegate.
- * Deciding ownership on the version-free token means bumping SHIM_VERSION can
- * never disown every previously injected command.
+ * `isCodemanStatusLine()` in hooks-config uses it to recognise a statusLine as
+ * Codeman's, and the shim itself uses it to skip its own entry while hunting
+ * for a delegate. Deciding ownership on the version-free token means bumping
+ * SHIM_VERSION can never disown every previously injected command.
  */
 export const STATUSLINE_SHIM_TOKEN = 'codeman-statusline-shim';
 
 /**
- * The pre-shim inline exporter's ownership marker, kept only for recognition.
+ * The inline exporter's ownership marker: the route it posts to.
  *
- * Codeman injected a bare `curl` carrying this path before the shim existed.
- * Those commands are still sitting in every repo a previous version managed, so
- * `applyStatusLineConfig` must still read them as OURS — otherwise the upgrade
- * mistakes them for a hand-authored line, refuses to touch them, and the user
- * keeps the shadowing exporter forever.
+ * Every command Codeman has ever injected carries this path, the pre-shim
+ * inline `curl` and the fallback half of the current guarded command alike, so
+ * `isCodemanStatusLine()` must keep reading it as OURS. Drop it and every repo
+ * an older Codeman managed reads as hand-authored: the upgrade refuses to touch
+ * it and the user keeps the shadowing exporter forever.
  */
 export const LEGACY_STATUSLINE_MARKER = '/api/status-telemetry';
 
@@ -84,6 +105,15 @@ export const LEGACY_STATUSLINE_MARKER = '/api/status-telemetry';
  * not silently change what counts as an old config.
  */
 const STATUS_TELEMETRY_PATH = '/api/status-telemetry';
+
+/**
+ * What a pre-1.28 server answers for a session it does not know. The current
+ * route answers an empty body, but a shim written by a newer Codeman can be
+ * talking to an older one (two instances sharing a repo), and this exact word
+ * rendered as a statusline is the symptom the whole change exists to remove,
+ * so the shim treats it as "no telemetry" rather than printing it.
+ */
+const NO_TELEMETRY_WORD = 'codeman';
 
 /** Wrap a path for safe use inside a single-quoted shell word. */
 function shQuote(value: string): string {
@@ -99,16 +129,18 @@ function shQuote(value: string): string {
  * - **The delegate runs concurrently with the POST.** This command executes on
  *   every assistant message, so its latency lands in the user's prompt. Running
  *   both at once costs the slower of the two rather than their sum.
- * - **A failing delegate never blanks the line.** Empty output, a non-zero
- *   exit, or a timeout all fall through to Codeman's footer, then to a brand
- *   string. A statusline that renders nothing looks like a broken terminal.
+ * - **A failing delegate falls through, never blanks by accident.** Empty
+ *   output, a non-zero exit, or a timeout all fall through to Codeman's footer.
+ *   With no footer either the shim prints nothing at all, which is what a user
+ *   with no statusline of their own gets from Claude Code anyway: the one thing
+ *   it never prints is a brand word that reads as a broken config.
  * - **Both timeouts are short and independent.** An unreachable Codeman must
  *   not delay a prompt by more than its own budget, and a hung delegate must
  *   not hold the render open indefinitely.
  */
 const SHIM_SOURCE = `#!/usr/bin/env node
 // ${SHIM_MARKER}
-// GENERATED BY CODEMAN — do not edit. Rewritten from src/statusline-shim.ts
+// GENERATED BY CODEMAN. Do not edit: rewritten from src/statusline-shim.ts
 // whenever its version marker changes.
 //
 // Forwards Claude Code's statusline JSON to this Codeman instance (the only
@@ -116,13 +148,17 @@ const SHIM_SOURCE = `#!/usr/bin/env node
 // shadows, so taking the slot costs the user nothing.
 import { existsSync, readFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { homedir } from 'node:os'
-import http from 'node:http'
-import https from 'node:https'
+// The HTTP transport is imported lazily, inside postTelemetry(): node:http
+// costs ~38 ms to load on a fast Linux box (measured, versus ~4 ms for
+// node:https alone), and this file runs on every assistant message. Loading
+// only the transport the URL needs, and none outside a managed session, is
+// most of the difference between an 80 ms render and a 110 ms one.
 
 const SHIM_TOKEN = ${JSON.stringify(STATUSLINE_SHIM_TOKEN)}
 const LEGACY_MARKER = ${JSON.stringify(LEGACY_STATUSLINE_MARKER)}
+const NO_TELEMETRY_WORD = ${JSON.stringify(NO_TELEMETRY_WORD)}
 const POST_TIMEOUT_MS = 1500
 const DELEGATE_TIMEOUT_MS = 4000
 
@@ -130,7 +166,7 @@ let input = ''
 try {
   input = readFileSync(0, 'utf-8')
 } catch {
-  // No stdin (a TTY, or a closed pipe) — the delegate still deserves a run.
+  // No stdin (a TTY, or a closed pipe): the delegate still deserves a run.
 }
 if (!input.trim()) input = '{}'
 
@@ -141,36 +177,30 @@ try {
   // Malformed payload: still forward it verbatim and still run the delegate.
   // Codeman's parser is defensive and the delegate may not need the JSON.
 }
+if (!parsed || typeof parsed !== 'object') parsed = {}
 
-// Claude Code reports the render's directory here. Fall back to the process cwd,
-// which is the same directory in every shape we have seen.
-const cwd =
-  (typeof parsed.cwd === 'string' && parsed.cwd) ||
-  (parsed.workspace && typeof parsed.workspace.current_dir === 'string' && parsed.workspace.current_dir) ||
-  process.cwd()
+const str = (value) => (typeof value === 'string' && value ? value : '')
+const workspace = parsed.workspace && typeof parsed.workspace === 'object' ? parsed.workspace : {}
+
+// Claude Code reads a project's settings from the directory it was LAUNCHED in,
+// which the blob reports as workspace.project_dir; current_dir/cwd can drift
+// from it when the working directory changes mid-session. The process cwd is
+// the last resort for a blob that carries neither.
+const projectDir = str(workspace.project_dir) || str(workspace.current_dir) || str(parsed.cwd) || process.cwd()
 
 /**
- * Settings files Claude Code consults, nearest first.
- *
- * Walking UP from the render directory matters: Claude Code applies a project's
- * settings from the workspace root, which is often an ancestor of the directory
- * a session actually sits in. The home files come last, matching the precedence
- * that makes a project entry win over a global one.
+ * The settings files Claude Code consults for this render, highest precedence
+ * first: the documented set is exactly these three. No ancestor of the launch
+ * directory and no user-level settings.local.json: Claude Code reads neither,
+ * and delegating to a command it would have ignored is the failure this shim
+ * exists to end.
  */
 function settingsCandidates() {
-  const out = []
-  let dir = cwd
-  for (;;) {
-    out.push(join(dir, '.claude', 'settings.local.json'))
-    out.push(join(dir, '.claude', 'settings.json'))
-    const parent = dirname(dir)
-    if (!parent || parent === dir) break
-    dir = parent
-  }
-  const home = homedir()
-  out.push(join(home, '.claude', 'settings.local.json'))
-  out.push(join(home, '.claude', 'settings.json'))
-  return [...new Set(out)]
+  return [
+    join(projectDir, '.claude', 'settings.local.json'),
+    join(projectDir, '.claude', 'settings.json'),
+    join(homedir(), '.claude', 'settings.json'),
+  ]
 }
 
 /** The first statusLine command that is not one of ours, or null. */
@@ -188,7 +218,7 @@ function resolveDelegate() {
     if (line.type && line.type !== 'command') continue
     const command = line.command
     if (typeof command !== 'string' || !command.trim()) continue
-    // Our own entry, in either the shim form or the pre-shim inline form.
+    // Our own entry, in the guarded shim form or the pre-shim inline form.
     // Delegating to either one would recurse or double-report.
     if (command.includes(SHIM_TOKEN) || command.includes(LEGACY_MARKER)) continue
     return command
@@ -239,31 +269,32 @@ function runDelegate(command) {
   })
 }
 
-/** POST the blob to Codeman. Resolves to the response body, or null. */
-function postTelemetry() {
+/** POST the blob to Codeman. Resolves to the footer it answered, or null. */
+async function postTelemetry() {
+  const sessionId = process.env.CODEMAN_SESSION_ID
+  const apiUrl = process.env.CODEMAN_API_URL
+  // Outside a managed session there is no session to report against, so the
+  // shim costs nothing beyond running the delegate.
+  if (!sessionId || !apiUrl) return null
+
+  let url
+  try {
+    url = new URL(${JSON.stringify(STATUS_TELEMETRY_PATH)}, apiUrl)
+  } catch {
+    return null
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null
+
+  let secret = ''
+  try {
+    secret = readFileSync(process.env.CODEMAN_HOOK_SECRET_FILE || '', 'utf-8').trim()
+  } catch {
+    // Missing file: the loopback bypass still applies when no tunnel runs.
+  }
+
+  const { default: transport } = await import(url.protocol === 'https:' ? 'node:https' : 'node:http')
+  const body = JSON.stringify({ sessionId, data: parsed })
   return new Promise((resolve) => {
-    const sessionId = process.env.CODEMAN_SESSION_ID
-    const apiUrl = process.env.CODEMAN_API_URL
-    // Outside a managed session there is no session to report against, so the
-    // shim costs nothing beyond running the delegate.
-    if (!sessionId || !apiUrl) return resolve(null)
-
-    let secret = ''
-    try {
-      secret = readFileSync(process.env.CODEMAN_HOOK_SECRET_FILE || '', 'utf-8').trim()
-    } catch {
-      // Missing file: the loopback bypass still applies when no tunnel runs.
-    }
-
-    let url
-    try {
-      url = new URL(${JSON.stringify(STATUS_TELEMETRY_PATH)}, apiUrl)
-    } catch {
-      return resolve(null)
-    }
-
-    const body = JSON.stringify({ sessionId, data: parsed })
-    const transport = url.protocol === 'https:' ? https : http
     const req = transport.request(
       {
         protocol: url.protocol,
@@ -305,10 +336,13 @@ const [delegateOut, telemetryOut] = await Promise.all([
 ])
 
 // The shadowed line wins. Codeman's footer fills in only when there is no line
-// to shadow or the delegate produced nothing, and the brand string is the last
-// resort — a blank statusline reads as a broken terminal.
-const rendered = (delegateOut && delegateOut.trim() && delegateOut) || telemetryOut || 'codeman'
-process.stdout.write(rendered.replace(/\\n$/, ''))
+// to shadow or the delegate produced nothing. With neither, print NOTHING: a
+// blank statusline is what Claude Code shows a user with no statusline of
+// their own, while the bare brand word is the symptom this shim exists to end.
+const own = delegateOut && delegateOut.trim() ? delegateOut : ''
+const footer = telemetryOut && telemetryOut.trim() && telemetryOut.trim() !== NO_TELEMETRY_WORD ? telemetryOut : ''
+const rendered = own || footer
+if (rendered) process.stdout.write(rendered.replace(/\\n$/, ''))
 `;
 
 /** Absolute path of the generated shim for this instance. */
@@ -324,8 +358,8 @@ let ensuredThisProcess = false;
  * Idempotent and cheap: after the first call in a process it does nothing, and
  * even the first call rewrites only when the on-disk marker differs. Never
  * throws. A data dir that cannot be written is a degraded exporter, not a
- * failed session start, so the caller receives null and falls back to the
- * inline command.
+ * failed session start, so the caller receives null and injects the inline
+ * command alone.
  */
 export function ensureStatusLineShim(): string | null {
   const path = statusLineShimPath();
@@ -335,7 +369,7 @@ export function ensureStatusLineShim(): string | null {
     try {
       current = readFileSync(path, 'utf-8');
     } catch {
-      // Missing — fall through to the write.
+      // Missing: fall through to the write.
     }
     if (!current.includes(SHIM_MARKER)) {
       mkdirSync(dirname(path), { recursive: true });
@@ -370,21 +404,27 @@ export function ensureStatusLineShim(): string | null {
 }
 
 /**
- * The statusLine command Codeman injects.
+ * The shell guard that runs the shim where it exists, for `generateStatusLineCommand()`
+ * in hooks-config to prepend to the inline exporter.
  *
- * `process.execPath` rather than a bare `node`: Codeman is itself running on
- * that binary, so it is known to exist, and a managed session's PATH need not
- * carry node at all. The absolute path is also self-healing, because a node
- * that moves changes this string, and the next session create rewrites the
- * config to match.
+ * `if [ -x <node> ] && [ -f <shim> ]; then exec <node> <shim>; fi;`: both
+ * tests fail inside a Docker case's container (see the fileoverview), on a
+ * host whose data dir was wiped, and after the node Codeman ran on moves, so
+ * the inline exporter after it is what renders there. `process.execPath`
+ * rather than a bare `node`: Codeman is itself running on that binary, so it
+ * is known to exist, and a managed session's PATH need not carry node at all.
+ * The absolute path is also self-healing, because a node that moves changes
+ * this string, and the next session create rewrites the config to match.
  *
- * Returns null when the shim could not be installed, leaving the caller to
- * decide the fallback.
+ * Returns null when the shim could not be installed, in which case the caller
+ * injects the inline exporter alone.
  */
-export function generateShimStatusLineCommand(): string | null {
+export function statusLineShimGuard(): string | null {
   const shim = ensureStatusLineShim();
   if (!shim) return null;
-  return `${shQuote(process.execPath)} ${shQuote(shim)}`;
+  const node = shQuote(process.execPath);
+  const file = shQuote(shim);
+  return `if [ -x ${node} ] && [ -f ${file} ]; then exec ${node} ${file}; fi;`;
 }
 
 /** Test seam: forget the per-process memo so a fresh temp data dir is provisioned. */

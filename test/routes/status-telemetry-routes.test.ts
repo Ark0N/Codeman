@@ -49,10 +49,13 @@ describe('POST /api/status-telemetry', () => {
     });
   });
 
-  it('does not broadcast for an unknown session; returns the brand footer', async () => {
+  it('does not broadcast for an unknown session, and answers an empty body', async () => {
+    // Never the bare brand word: the exporter prints this answer as the
+    // statusline, and `codeman` on the statusline of every hand-run `claude` in
+    // a managed repo is the symptom discussion #405 opened with.
     const res = await post({ sessionId: 'does-not-exist', data: REAL });
     expect(res.statusCode).toBe(200);
-    expect(res.body).toBe('codeman');
+    expect(res.body).toBe('');
     expect(h.ctx.broadcast).not.toHaveBeenCalled();
   });
 

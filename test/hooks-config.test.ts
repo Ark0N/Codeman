@@ -1326,14 +1326,18 @@ describe('applyStatusLineConfig', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('injects the delegating shim rather than an inline exporter', async () => {
+  it('injects the guarded shim command with the inline exporter as its fallback', async () => {
     await applyStatusLineConfig(testDir, true);
     const { statusLine } = read();
     expect(statusLine.type).toBe('command');
+    // The shim runs first wherever it exists: it is what gives the user their
+    // own statusline back. The inline half after it is what renders where the
+    // shim cannot (inside a Docker case's container), and it must not carry the
+    // brand-word fallback the old exporter printed.
+    expect(statusLine.command.startsWith('if [ -x ')).toBe(true);
     expect(statusLine.command).toContain(STATUSLINE_SHIM_TOKEN);
-    // The inline form SHADOWS the user's statusline, which is the whole reason
-    // the shim exists. It may never be the command we inject by choice.
-    expect(statusLine.command).not.toContain(LEGACY_STATUSLINE_MARKER);
+    expect(statusLine.command).toContain(LEGACY_STATUSLINE_MARKER);
+    expect(statusLine.command).not.toContain('echo codeman');
   });
 
   it('upgrades a pre-shim inline exporter in place', async () => {
