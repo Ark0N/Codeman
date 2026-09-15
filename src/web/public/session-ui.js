@@ -869,17 +869,17 @@ Object.assign(CodemanApp.prototype, {
     input.value = Math.max(1, current - 1);
   },
 
-  // Shell count stepper functions
-  incrementShellCount() {
-    const input = document.getElementById('shellCount');
-    const current = parseInt(input.value) || 1;
-    input.value = Math.min(20, current + 1);
-  },
-
-  decrementShellCount() {
-    const input = document.getElementById('shellCount');
-    const current = parseInt(input.value) || 1;
-    input.value = Math.max(1, current - 1);
+  /**
+   * How many sessions the next launch creates, from the toolbar's single
+   * instance stepper. Run Shell used to carry a second, identical `− 1 +` group
+   * of its own (`#shellCount`); that one is gone, so both launch paths read
+   * this control. An absent stepper reads as 1 rather than throwing: the group
+   * is display:none on phones and tablets, and the vm-based unit tests stub
+   * only the elements they exercise.
+   */
+  _toolbarInstanceCount() {
+    const raw = document.getElementById('tabCount')?.value;
+    return Math.min(20, Math.max(1, parseInt(raw, 10) || 1));
   },
 
   // Next free <prefix><n> index for a case's session tabs (e.g. w1-<case>,
@@ -930,7 +930,7 @@ Object.assign(CodemanApp.prototype, {
 
   async runClaude() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    const tabCount = Math.min(20, Math.max(1, parseInt(document.getElementById('tabCount').value) || 1));
+    const tabCount = this._toolbarInstanceCount();
 
     const ownsLaunchTerminal = this._beginSessionLaunchStatus(
       `Starting ${tabCount} Claude session(s) in ${caseName}...`
@@ -1142,7 +1142,7 @@ Object.assign(CodemanApp.prototype, {
 
   async runShell() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    const shellCount = Math.min(20, Math.max(1, parseInt(document.getElementById('shellCount').value) || 1));
+    const shellCount = this._toolbarInstanceCount();
 
     const ownsLaunchTerminal = this._beginSessionLaunchStatus(
       `Starting ${shellCount} Shell session(s) in ${caseName}...`,
@@ -3916,13 +3916,42 @@ Object.assign(CodemanApp.prototype, {
 
   showMobileCasePicker() {
     const modal = document.getElementById('mobileCasePickerModal');
+    const search = document.getElementById('mobileCaseSearch');
+
+    // Every open starts unfiltered: the sheet is a one-shot picker, and a query
+    // left over from last time would present a truncated case list as the whole
+    // one. Deliberately no autofocus: focusing raises the keyboard over a sheet
+    // that is anchored to the bottom of the screen, so the user asks for it.
+    this._mobileCaseFilter = '';
+    if (search) search.value = '';
+
+    this.renderMobileCaseList();
+    modal.classList.add('active');
+  },
+
+  /** Re-render the sheet's list for the current search text. */
+  renderMobileCaseList() {
     const listContainer = document.getElementById('mobileCaseList');
     const select = document.getElementById('quickStartCase');
+    if (!listContainer || !select) return;
     const currentCase = select.value;
+
+    const clearBtn = document.getElementById('mobileCaseSearchClear');
+    const filter = this._mobileCaseFilter || '';
+    if (clearBtn) clearBtn.hidden = filter.length === 0;
+
+    // Same matcher the desktop combobox uses (every term must appear in the
+    // option's searchText, which carries the name, label, path and the
+    // remote/docker fields), so both pickers answer a query identically.
+    const allCases = this.filterCasePickerOptions(this.getCasePickerOptions(), filter);
+
+    if (allCases.length === 0) {
+      listContainer.innerHTML = '<div class="mobile-case-empty">No cases match</div>';
+      return;
+    }
 
     // Build case list HTML
     let html = '';
-    const allCases = this.getCasePickerOptions();
 
     for (const c of allCases) {
       const isSelected = c.name === currentCase;
@@ -3950,7 +3979,43 @@ Object.assign(CodemanApp.prototype, {
     }
 
     listContainer.innerHTML = html;
-    modal.classList.add('active');
+  },
+
+  /** oninput on the sheet's search field. */
+  filterMobileCaseList() {
+    const search = document.getElementById('mobileCaseSearch');
+    this._mobileCaseFilter = search?.value || '';
+    this.renderMobileCaseList();
+  },
+
+  clearMobileCaseSearch() {
+    const search = document.getElementById('mobileCaseSearch');
+    if (search) search.value = '';
+    this._mobileCaseFilter = '';
+    this.renderMobileCaseList();
+    search?.focus();
+  },
+
+  handleMobileCaseSearchKeydown(event) {
+    if (event.key === 'Enter') {
+      // A search that narrowed to one case is an unambiguous choice, so Enter
+      // takes it instead of leaving the user to reach past the keyboard for a
+      // single row. Several matches just dismiss the keyboard.
+      event.preventDefault();
+      const matches = this.filterCasePickerOptions(this.getCasePickerOptions(), this._mobileCaseFilter || '');
+      if (matches.length === 1) {
+        this.selectMobileCase(matches[0].name);
+      } else {
+        event.target?.blur?.();
+      }
+    } else if (event.key === 'Escape') {
+      // Swallowed: the document-level Escape handler closes the whole sheet, and
+      // the first Escape here means "drop the filter", not "give up on picking".
+      event.preventDefault();
+      event.stopPropagation();
+      if (this._mobileCaseFilter) this.clearMobileCaseSearch();
+      else this.closeMobileCasePicker();
+    }
   },
 
   closeMobileCasePicker() {

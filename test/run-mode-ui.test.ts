@@ -691,7 +691,9 @@ describe('case selector refresh', () => {
   it('creates remote shell sessions by caseName instead of remote display path', async () => {
     const elements: Record<string, any> = {
       quickStartCase: { value: 'gpu-work' },
-      shellCount: { value: '1' },
+      // The toolbar's one instance stepper, shared by Run and Run Shell since
+      // the second (#shellCount) group was removed.
+      tabCount: { value: '1' },
     };
     const requests: Array<{ url: string; body?: any }> = [];
     const CodemanApp = function CodemanApp(this: any) {};
@@ -825,6 +827,180 @@ describe('case selector refresh', () => {
       method: 'PUT',
       body: { lastUsedCase: 'kept-case' },
     });
+  });
+});
+
+describe('mobile case picker search', () => {
+  // The phone bottom sheet listed every case with no way to narrow it, while the
+  // desktop toolbar combobox has filtered for a while. Both now run the same
+  // matcher (filterCasePickerOptions), so these assert the sheet's own wiring:
+  // the reset-on-open, the rendered rows, the empty state and the Enter shortcut.
+  function loadMobilePicker(cases: any[], selected = 'testcase') {
+    const elements: Record<string, any> = {};
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: (id: string) => elements[id] ?? null },
+      console,
+      escapeHtml: (value: string) => value,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+
+    const classes = new Set<string>();
+    elements.mobileCasePickerModal = {
+      classList: { add: (c: string) => classes.add(c), remove: (c: string) => classes.delete(c) },
+    };
+    elements.mobileCaseList = { innerHTML: '' };
+    elements.mobileCaseSearch = { value: '', focus: () => {} };
+    elements.mobileCaseSearchClear = { hidden: true };
+    elements.quickStartCase = { value: selected };
+
+    const app = new (CodemanApp as any)();
+    app.cases = cases;
+    app.updateDirDisplayForCase = () => {};
+    app.updateMobileCaseLabel = () => {};
+    app.saveLastUsedCase = () => {};
+    app.showToast = () => {};
+    return { app, elements, classes };
+  }
+
+  const renderedNames = (elements: Record<string, any>) =>
+    [...String(elements.mobileCaseList.innerHTML).matchAll(/mobile-case-item-name">([^<]*)</g)].map((m) => m[1]);
+
+  const cases = [
+    { name: 'alpha-api' },
+    { name: 'claudeman' },
+    { name: 'claudeman-docs' },
+    { name: 'moneytrove', location: 'remote', remote: { hostId: 'mac-mini', path: '/Users/x/moneytrove' } },
+  ];
+
+  it('lists every case on open and leaves the search field empty', () => {
+    const { app, elements, classes } = loadMobilePicker(cases);
+    elements.mobileCaseSearch.value = 'stale query';
+    app._mobileCaseFilter = 'stale query';
+
+    app.showMobileCasePicker();
+
+    expect(classes.has('active')).toBe(true);
+    expect(elements.mobileCaseSearch.value).toBe('');
+    expect(elements.mobileCaseSearchClear.hidden).toBe(true);
+    // testcase is synthesized by buildCasePickerOptions when absent.
+    expect(renderedNames(elements)).toEqual([
+      'alpha-api',
+      'claudeman',
+      'claudeman-docs',
+      'moneytrove @ mac-mini',
+      'testcase',
+    ]);
+  });
+
+  it('narrows the rendered rows to the query and reveals the clear button', () => {
+    const { app, elements } = loadMobilePicker(cases);
+    app.showMobileCasePicker();
+
+    elements.mobileCaseSearch.value = 'claud';
+    app.filterMobileCaseList();
+
+    expect(renderedNames(elements)).toEqual(['claudeman', 'claudeman-docs']);
+    expect(elements.mobileCaseSearchClear.hidden).toBe(false);
+
+    // Same searchText the desktop combobox indexes, so a remote host matches too.
+    elements.mobileCaseSearch.value = 'mac-mini';
+    app.filterMobileCaseList();
+    expect(renderedNames(elements)).toEqual(['moneytrove @ mac-mini']);
+  });
+
+  it('renders an empty state rather than a blank sheet when nothing matches', () => {
+    const { app, elements } = loadMobilePicker(cases);
+    app.showMobileCasePicker();
+
+    elements.mobileCaseSearch.value = 'nothing-here';
+    app.filterMobileCaseList();
+
+    expect(renderedNames(elements)).toEqual([]);
+    expect(elements.mobileCaseList.innerHTML).toContain('No cases match');
+  });
+
+  it('clears the filter back to the full list', () => {
+    const { app, elements } = loadMobilePicker(cases);
+    app.showMobileCasePicker();
+    elements.mobileCaseSearch.value = 'claud';
+    app.filterMobileCaseList();
+
+    app.clearMobileCaseSearch();
+
+    expect(elements.mobileCaseSearch.value).toBe('');
+    expect(elements.mobileCaseSearchClear.hidden).toBe(true);
+    expect(renderedNames(elements)).toHaveLength(5);
+  });
+
+  it('takes a single remaining match on Enter and leaves an ambiguous one alone', () => {
+    const { app, elements, classes } = loadMobilePicker(cases);
+    app.showMobileCasePicker();
+
+    // Two matches: Enter only dismisses the keyboard.
+    elements.mobileCaseSearch.value = 'claud';
+    app.filterMobileCaseList();
+    let blurred = false;
+    app.handleMobileCaseSearchKeydown({
+      key: 'Enter',
+      preventDefault: () => {},
+      stopPropagation: () => {},
+      target: {
+        blur: () => {
+          blurred = true;
+        },
+      },
+    });
+    expect(blurred).toBe(true);
+    expect(classes.has('active')).toBe(true);
+    expect(elements.quickStartCase.value).toBe('testcase');
+
+    // One match: Enter picks it and closes the sheet.
+    elements.mobileCaseSearch.value = 'claudeman-d';
+    app.filterMobileCaseList();
+    app.handleMobileCaseSearchKeydown({
+      key: 'Enter',
+      preventDefault: () => {},
+      stopPropagation: () => {},
+      target: { blur: () => {} },
+    });
+    expect(elements.quickStartCase.value).toBe('claudeman-docs');
+    expect(classes.has('active')).toBe(false);
+  });
+});
+
+describe('toolbar instance count', () => {
+  // Run Shell used to carry its own `#shellCount` stepper next to the Run one.
+  // It was removed, so both launch paths read #tabCount, and an absent stepper
+  // (phones and tablets hide the group) has to read as 1, not throw.
+  function loadCounter(elements: Record<string, any>) {
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: (id: string) => elements[id] ?? null },
+      console,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+    return new (CodemanApp as any)();
+  }
+
+  it('reads the shared stepper and falls back to 1 when it is absent', () => {
+    expect(loadCounter({ tabCount: { value: '3' } })._toolbarInstanceCount()).toBe(3);
+    expect(loadCounter({})._toolbarInstanceCount()).toBe(1);
+    expect(loadCounter({ tabCount: { value: '' } })._toolbarInstanceCount()).toBe(1);
+    expect(loadCounter({ tabCount: { value: '0' } })._toolbarInstanceCount()).toBe(1);
+    expect(loadCounter({ tabCount: { value: '99' } })._toolbarInstanceCount()).toBe(20);
+  });
+
+  it('no longer exposes the removed shell stepper handlers', () => {
+    const app = loadCounter({ tabCount: { value: '1' } });
+    expect(app.incrementShellCount).toBeUndefined();
+    expect(app.decrementShellCount).toBeUndefined();
   });
 });
 

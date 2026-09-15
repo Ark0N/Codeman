@@ -2164,6 +2164,18 @@ html.mobile-init .file-browser-panel {
     font-size: 1.5rem;
   }
 
+  /* With the keyboard up the sheet is lifted above it (mobile-handlers.js), so
+     what is left to fit is much shorter than 60vh of the layout viewport. Cap
+     the list rather than the sheet, so the search row and the Create button
+     stay on screen and only the rows scroll. */
+  .keyboard-visible .mobile-case-picker-sheet {
+    max-height: 45vh;
+  }
+
+  .keyboard-visible .mobile-case-picker-body {
+    max-height: 28vh;
+  }
+
   .mobile-case-picker-footer {
     padding-bottom: calc(12px + var(--safe-area-bottom));
   }
