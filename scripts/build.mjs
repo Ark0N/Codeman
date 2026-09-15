@@ -146,10 +146,44 @@ console.log('\n[build] content-hash cache busting');
     html = html.replaceAll(`"${original}"`, `"${hashed}"`);
   }
   writeFileSync(join(distPublic, 'index.html'), html);
+
+  // Rewrite sw.js from the SAME manifest that just renamed the files.
+  //
+  // The service worker's precache list used to be maintained by hand with the
+  // pre-hash names, so after this step every entry in it pointed at a file that
+  // no longer existed and `cache.add(...).catch(() => {})` hid it. Deriving it
+  // here is the only way the two cannot drift.
+  //
+  // The cache key gets the build hash for the same reason: `activate` deletes
+  // every cache that is not the current one, so a constant key meant that
+  // cleanup never ran and hashed assets from every past release piled up.
+  const swPath = join(distPublic, 'sw.js');
+  let sw = readFileSync(swPath, 'utf8');
+  const hashedAssets = Object.values(manifest);
+  const buildId = createHash('md5').update(hashedAssets.join('|')).digest('hex').slice(0, 12);
+  // Rewrite the two declarations. Anchored on the full `const … = …;` text so
+  // each pattern occurs exactly once and cannot collide with prose in sw.js's
+  // own comments — an earlier cut used bare `__BUILD_ID__` sentinels and the
+  // first match landed in the comment that documented them, leaving the real
+  // constant untouched and still producing a plausible-looking cache key.
+  const swEdits = [
+    ["const BUILD_ID = 'dev';", `const BUILD_ID = '${buildId}';`],
+    ['const HASHED_ASSETS = [];', `const HASHED_ASSETS = [${hashedAssets.map((p) => JSON.stringify(p)).join(', ')}];`],
+  ];
+  for (const [from, to] of swEdits) {
+    const hits = sw.split(from).length - 1;
+    if (hits !== 1) {
+      throw new Error(`sw.js: expected exactly one \`${from}\`, found ${hits} — precache would ship stale`);
+    }
+    sw = sw.replace(from, to);
+  }
+  writeFileSync(swPath, sw);
+
   console.log('  Hashed files:');
   for (const [orig, hashed] of Object.entries(manifest)) {
     console.log(`    ${orig} -> ${hashed}`);
   }
+  console.log(`  sw.js: cache bucket codeman-${buildId}, ${hashedAssets.length} precached assets`);
 }
 
 // 6. Compress with gzip + brotli

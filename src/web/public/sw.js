@@ -18,7 +18,16 @@
  * @see src/push-store.ts -- server-side VAPID key management and subscription CRUD
  */
 
-const CACHE_NAME = 'codeman-v1';
+// Build identity. scripts/build.mjs rewrites this declaration after it content-
+// hashes the assets; the literal below is what dev serves, and dev wants a
+// stable key.
+//
+// Why the cache key MUST carry it: `activate` deletes every cache whose key is
+// not the current one, so the old constant key meant that cleanup never deleted
+// anything — hashed assets from every release ever deployed accumulated in one
+// bucket until the origin hit its storage quota.
+const BUILD_ID = 'dev';
+const CACHE_NAME = `codeman-${BUILD_ID}`;
 
 // Reverse-proxy base path: the worker is served at `<base>/sw.js`, so its own
 // location tells us the mount prefix ('' at root, or '/codeman'). Every URL below
@@ -27,27 +36,27 @@ const CACHE_NAME = 'codeman-v1';
 const SW_BASE = self.location.pathname.replace(/\/sw\.js$/, '');
 const B = (p) => (p && p[0] === '/' ? SW_BASE + p : p);
 
+// Content-hashed assets. scripts/build.mjs rewrites this declaration with the
+// filenames it actually emitted; dev has no hashing, so the empty literal below
+// is correct there and the unhashed modules are simply cached on first use by
+// the runtime handler further down.
+//
+// This list used to be maintained by hand with the PRE-hash names, which the
+// build then renamed — so in production every entry 404'd and the silent
+// `.catch()` in install swallowed all of it. Measured against a running
+// instance: 15 of 23 entries failed. Offline still worked, because the fetch
+// handler caches every successful GET at runtime, but the precache warmed
+// nothing while looking like it did. Deriving it from the same manifest that
+// renames the files is the only thing that keeps the two from drifting again.
+const HASHED_ASSETS = [];
+
 // Core app shell -- cached on install for instant startup
 const APP_SHELL = [
   '/',
-  '/styles.css',
-  '/mobile.css',
-  '/constants.js',
-  '/app.js',
-  '/api-client.js',
-  '/terminal-ui.js',
-  '/session-ui.js',
-  '/settings-ui.js',
-  '/panels-ui.js',
-  '/notification-manager.js',
-  '/mobile-handlers.js',
-  '/keyboard-accessory.js',
-  '/voice-input.js',
+  ...HASHED_ASSETS.map((p) => '/' + p),
   '/vendor/xterm.min.js',
   '/vendor/xterm-addon-fit.min.js',
   '/vendor/xterm-addon-unicode11.min.js',
-  '/vendor/xterm-zerolag-input.js',
-  '/vendor/xterm-predictive-echo.js',
   '/vendor/xterm.css',
   '/icon-192.png',
   '/icon-512.png',
