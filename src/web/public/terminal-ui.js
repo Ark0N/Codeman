@@ -3544,6 +3544,29 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
+   * Re-assert a history anchor captured before a terminal write (#358).
+   *
+   * Called from xterm's write callback, never synchronously after write():
+   * xterm parses on its own schedule, so the buffer only carries the redraw's
+   * effect once that callback fires. A null anchor means the user was following
+   * live output and nothing needs restoring.
+   */
+  _restoreTerminalViewport(preserveViewportY, sessionId) {
+    if (preserveViewportY === null || preserveViewportY === undefined) return;
+    // The anchor is a row index into the buffer it was captured from. Now that
+    // this runs a parse later instead of synchronously, a session switch can land
+    // in between: selectSession() resets the terminal and chunk-loads the new
+    // session's scrollback, and scrolling THAT buffer to a row that meant
+    // something in the previous one is not a restore, it is a jump to an
+    // arbitrary place. Both checks cover one half of that window.
+    if (sessionId !== undefined && sessionId !== this.activeSessionId) return;
+    if (this._isLoadingBuffer) return;
+    if (typeof this.terminal?.scrollToLine !== 'function') return;
+    if (this.terminal.buffer?.active?.viewportY === preserveViewportY) return;
+    this.terminal.scrollToLine(preserveViewportY);
+  },
+
+  /**
    * Flush pending writes to terminal, processing DEC 2026 sync markers.
    * Strips markers and writes content atomically within a single frame.
    */
@@ -3578,6 +3601,8 @@ Object.assign(CodemanApp.prototype, {
     // scroll-to-bottom below, where it protects against a mid-flush race.
     const preserveViewportY =
       this.terminal.buffer?.active && !this.isTerminalAtBottom() ? this.terminal.buffer.active.viewportY : null;
+    // Which buffer the anchor belongs to, checked again when the write parses.
+    const flushSessionId = this.activeSessionId;
 
     const writeChunk = joined.slice(0, MAX_FRAME_BYTES);
     if (_joinedLen > MAX_FRAME_BYTES) {
@@ -3592,19 +3617,22 @@ Object.assign(CodemanApp.prototype, {
       this.terminal.write(writeChunk, () => {
         this._terminalWriteInFlight = false;
         this._terminalWriteInFlightBytes = 0;
+        // Restore INSIDE the callback (#358). xterm parses asynchronously, so
+        // the moment write() returns the buffer has not moved yet: the old
+        // restore ran here, found viewportY still equal to the anchor, and did
+        // nothing at all — then the parse landed and a cursor-addressed Codex
+        // redraw dragged the viewport to the live bottom with nothing left to
+        // pull it back. The callback is xterm's own "this chunk is parsed"
+        // signal, which is the earliest point the anchor can actually be
+        // reasserted. (The synchronous version passed its regression test only
+        // because the test's write mock moved the viewport synchronously.)
+        this._restoreTerminalViewport(preserveViewportY, flushSessionId);
         this._scheduleTerminalWriteFlush();
       });
     } catch (err) {
       this._terminalWriteInFlight = false;
       this._terminalWriteInFlightBytes = 0;
       throw err;
-    }
-    if (
-      preserveViewportY !== null &&
-      this.terminal.buffer?.active?.viewportY !== preserveViewportY &&
-      typeof this.terminal.scrollToLine === 'function'
-    ) {
-      this.terminal.scrollToLine(preserveViewportY);
     }
     const bytesThisFrame = deferred ? MAX_FRAME_BYTES : _joinedLen;
     const _dt = performance.now() - _t0;
@@ -3617,7 +3645,13 @@ Object.assign(CodemanApp.prototype, {
     // Give manual scroll-up gestures a short grace window so high-frequency
     // Codex status ticks do not snap the viewport back while the user is
     // trying to inspect earlier output.
-    if (this._wasAtBottomBeforeWrite && !this._hasRecentUserScrollUp()) {
+    //
+    // A live anchor wins outright. The two flags are captured at different
+    // moments (_wasAtBottomBeforeWrite at the frame's first batchTerminalWrite,
+    // the anchor at flush time), so a scroll-up in between leaves both set; now
+    // that the anchor is reasserted after the parse, running both would jump to
+    // the bottom and then back one frame later instead of simply staying put.
+    if (preserveViewportY === null && this._wasAtBottomBeforeWrite && !this._hasRecentUserScrollUp()) {
       this.terminal.scrollToBottom();
     }
 

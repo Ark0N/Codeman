@@ -49,6 +49,39 @@ function loadTerminalUiHarness(mode: string) {
   return { app, writes };
 }
 
+/**
+ * Swap in a terminal whose write() parses ASYNCHRONOUSLY, the way xterm.js does.
+ *
+ * The real renderer queues the chunk and applies it later, firing the write
+ * callback once it has been parsed; a redraw that addresses a row past the
+ * viewport (Codex's status line) drags the viewport to the live bottom at that
+ * point, not when write() returns. `parse()` runs that pending work.
+ */
+function attachAsyncParsingTerminal(app: any, opts: { viewportY: number; baseY: number }) {
+  const buffer = { viewportY: opts.viewportY, baseY: opts.baseY };
+  const pending: Array<() => void> = [];
+  app.terminal.buffer = { active: buffer };
+  app.terminal.write = vi.fn((_data: string, callback?: () => void) => {
+    pending.push(() => {
+      buffer.viewportY = buffer.baseY; // the redraw lands
+      callback?.();
+    });
+  });
+  app.terminal.scrollToLine = vi.fn((line: number) => {
+    buffer.viewportY = line;
+  });
+  app.terminal.scrollToBottom = vi.fn(() => {
+    buffer.viewportY = buffer.baseY;
+  });
+  return {
+    buffer,
+    parse: () => {
+      const queued = pending.splice(0, pending.length);
+      for (const run of queued) run();
+    },
+  };
+}
+
 function loadAppHarness() {
   const dir = resolve(import.meta.dirname, '../src/web/public');
   const fetchMock = vi.fn();
@@ -337,20 +370,111 @@ describe('terminal flush budget', () => {
 
   it('restores the user scroll position when Codex Working redraws move the viewport', () => {
     const { app } = loadTerminalUiHarness('codex');
-    const buffer = { viewportY: 40, baseY: 100 };
-    app.terminal.buffer = { active: buffer };
-    app.terminal.write = vi.fn(() => {
-      buffer.viewportY = buffer.baseY;
-    });
-    app.terminal.scrollToLine = vi.fn((line: number) => {
-      buffer.viewportY = line;
-    });
+    const { buffer, parse } = attachAsyncParsingTerminal(app, { viewportY: 40, baseY: 100 });
     app._wasAtBottomBeforeWrite = true;
     app._lastUserScrollUpAt = 0;
     app.pendingWrites.push('\x1b[55;1H\x1b[2m• Working (6s)');
 
     app.flushPendingWrites();
+    parse();
 
+    expect(buffer.viewportY).toBe(40);
+  });
+
+  // Issue #358. xterm.js parses on its own schedule, so the buffer still holds
+  // the pre-write viewport the instant write() returns: restoring there compared
+  // the anchor against itself, did nothing, and left the redraw free to drag the
+  // viewport to the live bottom a tick later. The previous regression passed
+  // because its write mock moved the viewport synchronously, which real xterm
+  // never does. These drive the callback explicitly instead.
+  it('restores the history anchor only AFTER xterm has parsed the write (#358)', () => {
+    const { app } = loadTerminalUiHarness('codex');
+    const { buffer, parse } = attachAsyncParsingTerminal(app, { viewportY: 40, baseY: 100 });
+    app.pendingWrites.push('\x1b[55;1H\x1b[2m• Working (6s)');
+
+    app.flushPendingWrites();
+    // Nothing has parsed yet, so nothing may have been restored yet either.
+    expect(app.terminal.scrollToLine).not.toHaveBeenCalled();
+    expect(buffer.viewportY).toBe(40);
+
+    parse();
+
+    expect(app.terminal.scrollToLine).toHaveBeenCalledWith(40);
+    expect(buffer.viewportY).toBe(40);
+  });
+
+  it('holds the anchor across consecutive Codex redraws', () => {
+    const { app } = loadTerminalUiHarness('codex');
+    const { buffer, parse } = attachAsyncParsingTerminal(app, { viewportY: 40, baseY: 100 });
+
+    for (const frame of ['\x1b[55;1H\x1b[2m• Working (6s)', '\x1b[55;1H\x1b[2m• Working (7s)']) {
+      app.pendingWrites.push(frame);
+      app.flushPendingWrites();
+      parse();
+      expect(buffer.viewportY).toBe(40);
+    }
+  });
+
+  it('holds the anchor across a chunked write whose remainder is deferred', () => {
+    const { app } = loadTerminalUiHarness('codex');
+    const { buffer, parse } = attachAsyncParsingTerminal(app, { viewportY: 40, baseY: 100 });
+    // Over the 32KB codex frame budget, so the flush defers a remainder and the
+    // second chunk goes out from the write callback's reschedule.
+    app.pendingWrites.push('x'.repeat(40000));
+
+    app.flushPendingWrites();
+    parse();
+    expect(buffer.viewportY).toBe(40);
+
+    app.flushPendingWrites();
+    parse();
+    expect(buffer.viewportY).toBe(40);
+    expect(app.pendingWrites).toHaveLength(0);
+  });
+
+  it('drops the anchor when the user switched sessions before the write parsed', () => {
+    // The anchor indexes the buffer it came from. selectSession() resets the
+    // terminal and chunk-loads a different scrollback, so replaying row 40 into
+    // that one is a jump to an arbitrary place, not a restore. Only reachable now
+    // that the restore runs a parse later than the write.
+    const { app } = loadTerminalUiHarness('codex');
+    const { buffer, parse } = attachAsyncParsingTerminal(app, { viewportY: 40, baseY: 100 });
+    app.pendingWrites.push('\x1b[55;1H\x1b[2m• Working (6s)');
+
+    app.flushPendingWrites();
+    app.activeSessionId = 'session-2'; // the user clicked another tab
+    parse();
+
+    expect(app.terminal.scrollToLine).not.toHaveBeenCalled();
+    expect(buffer.viewportY).toBe(buffer.baseY);
+  });
+
+  it('drops the anchor while a buffer load is replaying history', () => {
+    const { app } = loadTerminalUiHarness('codex');
+    const { parse } = attachAsyncParsingTerminal(app, { viewportY: 40, baseY: 100 });
+    app.pendingWrites.push('\x1b[55;1H\x1b[2m• Working (6s)');
+
+    app.flushPendingWrites();
+    app._isLoadingBuffer = true; // chunkedTerminalWrite owns the viewport now
+    parse();
+
+    expect(app.terminal.scrollToLine).not.toHaveBeenCalled();
+  });
+
+  it('does not bounce off the bottom when the sticky flag and an anchor disagree', () => {
+    // _wasAtBottomBeforeWrite is captured at the frame's first batchTerminalWrite
+    // and the anchor at flush time, so a scroll-up in between leaves both live.
+    // The anchor wins: scrolling to the bottom and back would be a visible jump.
+    const { app } = loadTerminalUiHarness('codex');
+    const { buffer, parse } = attachAsyncParsingTerminal(app, { viewportY: 40, baseY: 100 });
+    app._wasAtBottomBeforeWrite = true;
+    app._lastUserScrollUpAt = 0;
+    app.pendingWrites.push('\x1b[55;1H\x1b[2m• Working (6s)');
+
+    app.flushPendingWrites();
+    parse();
+
+    expect(app.terminal.scrollToBottom).not.toHaveBeenCalled();
     expect(buffer.viewportY).toBe(40);
   });
 });
