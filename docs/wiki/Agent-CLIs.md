@@ -273,9 +273,16 @@ into the case's `.claude/settings.local.json` so that `/model` keeps working.
 - **Shell** for the times you want a terminal on your phone with no agent at all. It is a
   genuinely useful mode, not a fallback.
 
+## Pointing one at your own server
+
+Most of these harnesses can also run against a custom OpenAI-compatible endpoint instead of
+their native cloud backend, for one session at a time, an opt-in feature covered in full on
+[Custom Model Endpoints](Custom-Model-Endpoints).
+
 ## Read next
 
 - [Core Concepts](Core-Concepts) - run modes versus location overlays.
+- [Custom Model Endpoints](Custom-Model-Endpoints) - run a harness against your own server.
 - [Settings Reference](Settings-Reference) - model, effort, and permission-mode settings.
 - [Keeping Agents Running](Keeping-Agents-Running) - what idle detection does per mode.
 - [Security](Security) - what skipping permission prompts actually means.

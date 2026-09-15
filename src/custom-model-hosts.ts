@@ -40,6 +40,16 @@ export interface CustomModelHost {
   authStyle?: CustomModelAuthStyle;
   models?: string[];
   lastDiscoveredAt?: string;
+  /**
+   * The model the Run-menu picker (docs/custom-model-endpoints-plan.md) applies when
+   * this endpoint is picked with no further choice — one generated menu entry per
+   * (CLI, endpoint) pair, not per (CLI, endpoint, model), so it needs a single answer.
+   * Must be a member of `models` when set; the picker falls back to `models[0]` when
+   * this is unset, and disables the entry entirely when `models` is empty (nothing to
+   * default to). Never auto-set on discovery — the previous default staying valid
+   * after a re-discover is a property worth keeping even if the model list changes.
+   */
+  defaultModelId?: string;
 }
 
 export function customModelHostsPath(configDir: string): string {

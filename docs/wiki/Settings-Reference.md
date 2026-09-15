@@ -92,6 +92,10 @@ Model and effort are both **soft defaults**: the model is written into the case'
 `.claude/settings.local.json` and effort is passed at start, so `/model` and `/effort`
 inside a session override them at any time.
 
+**Custom model endpoints** (off by default) adds a saved-endpoint list plus a matching
+section to the Run dropdown, for pointing a harness at your own OpenAI-compatible server
+instead of its native cloud backend. See [Custom Model Endpoints](Custom-Model-Endpoints).
+
 ### Agents & CLIs
 
 | Setting                          | Notes                                                                                        |

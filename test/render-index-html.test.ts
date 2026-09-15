@@ -11,7 +11,7 @@
  * Port: N/A (no server start).
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { WebServer } from '../src/web/server.js';
+import { WebServer, escapeScriptJson } from '../src/web/server.js';
 import { isClaudeAvailable } from '../src/utils/claude-cli-resolver.js';
 import { isOpenCodeAvailable } from '../src/utils/opencode-cli-resolver.js';
 import { isCodexAvailable } from '../src/utils/codex-cli-resolver.js';
@@ -187,6 +187,41 @@ describe('WebServer.renderIndexHtml', () => {
     });
   });
 
+  it('reports which run modes the custom-model Run-menu picker may generate an entry for', async () => {
+    // Read generically off the CLI registry's own capabilities, not a hardcoded id
+    // list — antigravity (`unsupported`) and shell (`kind !== 'agent'`) must be
+    // absent, and any enabled agent CLI with a real injection recipe must be
+    // present, with no mock needed since this reads the real stock registry.
+    const { server } = makeServer({});
+    const html = await render(server);
+    expect(html).toContain('window.__codemanCustomModelClis=');
+    const clis = JSON.parse(html.match(/window\.__codemanCustomModelClis=(\[.*?\]);/)![1]) as Array<{
+      id: string;
+      label: string;
+    }>;
+    const ids = clis.map((c) => c.id);
+    expect(ids).toContain('claude');
+    expect(ids).not.toContain('antigravity');
+    expect(ids).not.toContain('shell');
+    for (const cli of clis) {
+      expect(typeof cli.id).toBe('string');
+      expect(typeof cli.label).toBe('string');
+    }
+  });
+
+  it('escapeScriptJson neutralizes a literal </script>, and still round-trips as a JS literal', () => {
+    // CliEntry.label is a plain string a user's own clis.json can set (up to 60
+    // chars), unlike __codemanCliAvailable's booleans-only payload, so this is
+    // the one injection that needs it. Exported so this tests the pure
+    // function directly rather than needing a real WebServer (which needs tmux).
+    const dangerous = JSON.stringify([{ id: 'x', label: '</script><script>alert(1)</script>' }]);
+    const escaped = escapeScriptJson(dangerous);
+    expect(escaped).not.toContain('</script');
+    // Proves it decodes back to the real value the way a browser's own JS
+    // parser would, not just "the output contains no </script>".
+    expect(eval(escaped)[0].label).toBe('</script><script>alert(1)</script>');
+  });
+
   it('still emits the object when nothing at all is installed', async () => {
     // The all-false case is the one that matters most and the easiest to get
     // wrong by only injecting when something resolves.
@@ -218,6 +253,7 @@ describe('WebServer.renderIndexHtml', () => {
     const { server } = makeServer({});
     const html = await render(server, 'sess-123');
     expect(html).not.toContain('__codemanCliAvailable');
+    expect(html).not.toContain('__codemanCustomModelClis');
   });
 
   it('does not expose gesture at all when CODEMAN_GESTURE is unset', async () => {

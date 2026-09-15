@@ -650,6 +650,14 @@
               <button class="run-mode-option" data-mode="omp" onclick="app.setRunMode('omp')">
                 <span class="run-mode-dot omp"></span>OMP
               </button>
+              <!-- Custom Model Endpoint Profiles (docs/custom-model-endpoints-plan.md): one
+                   generated entry per (harness, saved endpoint) pair, e.g. "Claude Code
+                   (llama.cpp)". Built entirely by _refreshCustomModelRunOptions() — hidden
+                   when the feature is off or no endpoint has a usable default model, never
+                   a fixed per-harness duplicate in this markup. -->
+              <div class="run-mode-sep" id="runModeCustomModelSep" style="display: none;"></div>
+              <div class="run-mode-header" id="runModeCustomModelHeader" style="display: none;">Custom Endpoints</div>
+              <div class="run-mode-custom-models" id="runModeCustomModels"></div>
               <div class="run-mode-sep"></div>
               <button class="run-mode-option" data-mode="shell" onclick="app.setRunMode('shell')">
                 <span class="run-mode-dot shell"></span>Terminal / Shell
@@ -2195,6 +2203,60 @@
                       <span class="set-row-desc">Advisory only. Never overrides your choice.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsShowModelRecommendations" checked><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group" id="customModelEndpointsGroup">
+                <div class="set-group-head"><h4>Custom model endpoints</h4><span class="set-scope">synced</span></div>
+                <p class="set-group-hint">Point a harness at your own OpenAI-compatible server (llama.cpp, vLLM, DGX Spark, Azure AI Foundry, OpenRouter) instead of its native cloud backend. When on, the Run menu offers an extra entry per harness that supports it, per saved endpoint.</p>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="custom model endpoint llama.cpp local llm run menu picker">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Enable custom model endpoints</span>
+                      <span class="set-row-desc">Adds a per-endpoint entry to the Run menu for every harness that can redirect to one.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsCustomModelEndpoints" onchange="app.applyCustomModelEndpointsVisibility()"><span class="slider"></span></label>
+                  </div>
+                  <!-- Gated on the toggle above (applyCustomModelEndpointsVisibility): with the
+                       feature off, a list of endpoints that do nothing is worse than nothing. -->
+                  <div id="customModelEndpointsBody" style="display:none">
+                    <div id="customModelHostsList" class="set-group-body" data-search="endpoints"></div>
+                    <button type="button" class="btn-toolbar btn-sm" id="customModelHostAddBtn" onclick="app.openCustomModelHostEditor()">+ Add endpoint</button>
+                    <div id="customModelHostEditor" class="set-inline-form" style="display:none">
+                      <h5 id="customModelHostEditorTitle">Add endpoint</h5>
+                      <div class="set-row has-field">
+                        <div class="set-row-text"><span class="set-row-label">Id</span><span class="set-row-desc">Short, stable — used in URLs, never shown to the CLI.</span></div>
+                        <input type="text" id="customModelHostId" class="set-input" placeholder="llama-cpp-local">
+                      </div>
+                      <div class="set-row has-field">
+                        <div class="set-row-text"><span class="set-row-label">Label</span></div>
+                        <input type="text" id="customModelHostLabel" class="set-input" placeholder="llama.cpp (local)">
+                      </div>
+                      <div class="set-row has-field">
+                        <div class="set-row-text"><span class="set-row-label">Base URL</span></div>
+                        <input type="text" id="customModelHostBaseUrl" class="set-input" placeholder="http://192.168.1.50:8080">
+                      </div>
+                      <div class="set-row has-field">
+                        <div class="set-row-text"><span class="set-row-label">API key</span><span class="set-row-desc">Optional. Left blank on edit keeps the existing key.</span></div>
+                        <input type="password" id="customModelHostApiKey" class="set-input" autocomplete="new-password">
+                      </div>
+                      <div class="set-row has-field">
+                        <div class="set-row-text"><span class="set-row-label">Auth header</span><span class="set-row-desc">Never send both — some servers hang indefinitely.</span></div>
+                        <select id="customModelHostAuthStyle" class="set-select">
+                          <option value="bearer">Authorization: Bearer (default)</option>
+                          <option value="api-key">api-key header (Azure)</option>
+                        </select>
+                      </div>
+                      <div class="set-row has-field">
+                        <div class="set-row-text"><span class="set-row-label">Default model</span><span class="set-row-desc">What the Run-menu picker applies for this endpoint. Discover models first.</span></div>
+                        <select id="customModelHostDefaultModel" class="set-select" disabled></select>
+                      </div>
+                      <div class="set-row-actions">
+                        <button type="button" class="btn-toolbar btn-sm" onclick="app.saveCustomModelHostFromEditor()">Save</button>
+                        <button type="button" class="btn-toolbar btn-sm" onclick="app.closeCustomModelHostEditor()">Cancel</button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

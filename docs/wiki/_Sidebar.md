@@ -12,6 +12,7 @@
 
 - [The Dashboard](The-Dashboard)
 - [Agent CLIs](Agent-CLIs)
+- [Custom Model Endpoints](Custom-Model-Endpoints)
 - [Working With Files](Working-With-Files)
 - [Input And Voice](Input-And-Voice)
 - [Mobile Guide](Mobile-Guide)

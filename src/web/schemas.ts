@@ -1918,6 +1918,12 @@ export const CustomModelHostSchema = z.object({
   authStyle: z.enum(['bearer', 'api-key']).optional(),
   models: z.array(z.string().max(200)).max(200).optional(),
   lastDiscoveredAt: z.string().max(64).optional(),
+  // The Run-menu picker's per-endpoint default; validated against `models` at the
+  // route layer (schema-level cross-field checks can't see the array narrowed the
+  // same way a `.refine()` closure could, and the route already re-reads the stored
+  // host to apply it, so the check belongs there once, not duplicated into a refine
+  // that would run on every unrelated field edit too).
+  defaultModelId: z.string().max(200).optional(),
 });
 
 /** POST /api/sessions/:id/custom-model — apply or clear a session's custom-model selection. */

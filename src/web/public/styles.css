@@ -15134,6 +15134,12 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 
 .run-mode-dot.web { background: #38bdf8; }
 .run-mode-webviews { max-height: 180px; overflow-y: auto; }
+/* Custom Model Endpoint Profiles' generated entries: `.run-mode-menu.active`'s
+   own `gap: 2px` only spaces its DIRECT children, and this container (like
+   `.run-mode-webviews` above) is one such child holding several buttons of
+   its own, so it needs the same gap repeated one level down or its rows sit
+   flush against each other. */
+.run-mode-custom-models { display: flex; flex-direction: column; gap: 2px; }
 
 /* A saved URL is a ROW: open on the left, edit + delete on the right, so a URL can
    be changed or removed without first opening it as a tab. The side buttons stay
@@ -16205,6 +16211,29 @@ html[data-tab-orientation='vertical'] .home-sessions {
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+
+/* Custom Model Endpoint Profiles' inline add/edit form: a nested panel rather
+   than a modal, so it needs its own border to read as a distinct sub-section
+   inside .set-group-body's flat row stack. `--control-bg` rather than a
+   hardcoded black alpha — CLAUDE.md records that literal fill turning the
+   settings live preview into a grey slab on the light skins, and this panel
+   sits in the very same modal. */
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-inline-form {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--control-bg);
+}
+
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-inline-form h5 {
+  margin: 0 0 4px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
 }
 
 /* ── rows ─────────────────────────────────────────────────────────────── */

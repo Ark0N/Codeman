@@ -208,6 +208,14 @@ extra per-model configuration on Codeman's side at all.
 
 ### 4. Toolbar UI
 
+> **Superseded.** This section describes the toolbar-button design as originally
+> planned. What actually shipped is a Run-menu picker instead: one generated entry
+> per (capable harness, saved endpoint) pair directly in the existing `#runModeMenu`
+> dropdown, rather than a separate `#customModelBtn`/`#customModelMenu` surface. See
+> [`docs/custom-model-endpoints.md`](custom-model-endpoints.md#the-run-menu-picker)
+> for the current design; the sections below (session-restart mechanics, security)
+> remain accurate regardless of which UI calls the underlying route.
+
 - New header/toolbar button (e.g. `#customModelBtn`, `btn-toolbar
 btn-custom-model`), marker-hidden by default (`btn-custom-model--hidden`)
   and revealed by `applyHeaderVisibilitySettings()` only when

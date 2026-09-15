@@ -194,3 +194,198 @@ describe('custom model endpoint CRUD', () => {
     }
   });
 });
+
+describe('defaultModelId — the Run-menu picker’s per-endpoint default', () => {
+  afterEach(() => {
+    fetchMock.mockReset();
+  });
+
+  it('rejects a defaultModelId that is not one of the endpoint’s discovered models, on both create and update', async () => {
+    const { app } = await setup();
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: {
+        id: 'ep-default-reject',
+        label: 'A',
+        baseUrl: 'http://localhost:8080',
+        models: ['qwen3'],
+        defaultModelId: 'ghost',
+      },
+    });
+    expect(create.json().success).toBe(false);
+    expect(create.json().errorCode).toBe('INVALID_INPUT');
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'ep-default-reject', label: 'A', baseUrl: 'http://localhost:8080', models: ['qwen3'] },
+    });
+    const update = await app.inject({
+      method: 'PUT',
+      url: '/api/model-endpoints/ep-default-reject',
+      payload: { label: 'A', baseUrl: 'http://localhost:8080', models: ['qwen3'], defaultModelId: 'ghost' },
+    });
+    expect(update.json().success).toBe(false);
+    expect(update.json().errorCode).toBe('INVALID_INPUT');
+  });
+
+  it('accepts a defaultModelId that IS one of the discovered models', async () => {
+    const { app } = await setup();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: {
+        id: 'ep-default-accept',
+        label: 'A',
+        baseUrl: 'http://localhost:8080',
+        models: ['qwen3', 'llama3'],
+        defaultModelId: 'llama3',
+      },
+    });
+    expect(res.json().success).toBe(true);
+    expect(res.json().data.host.defaultModelId).toBe('llama3');
+  });
+
+  it('drops a stale default that no longer appears in a fresh discovery, rather than carrying it forward invalid', async () => {
+    const { app } = await setup();
+    await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: {
+        id: 'ep-default-drop',
+        label: 'A',
+        baseUrl: 'http://localhost:8080',
+        models: ['qwen3'],
+        defaultModelId: 'qwen3',
+      },
+    });
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ data: [{ id: 'llama3' }] }), { status: 200 }));
+    await app.inject({ method: 'POST', url: '/api/model-endpoints/ep-default-drop/discover-models' });
+
+    const list = await app.inject({ method: 'GET', url: '/api/model-endpoints' });
+    const stored = (list.json() as Array<{ id: string; defaultModelId?: string }>).find(
+      (h) => h.id === 'ep-default-drop'
+    );
+    expect(stored?.defaultModelId).toBeUndefined();
+  });
+
+  it('keeps a default that IS still present after a fresh discovery', async () => {
+    const { app } = await setup();
+    await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: {
+        id: 'ep-default-keep',
+        label: 'A',
+        baseUrl: 'http://localhost:8080',
+        models: ['qwen3'],
+        defaultModelId: 'qwen3',
+      },
+    });
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ data: [{ id: 'qwen3' }, { id: 'llama3' }] }), { status: 200 })
+    );
+    await app.inject({ method: 'POST', url: '/api/model-endpoints/ep-default-keep/discover-models' });
+
+    const list = await app.inject({ method: 'GET', url: '/api/model-endpoints' });
+    const stored = (list.json() as Array<{ id: string; defaultModelId?: string }>).find(
+      (h) => h.id === 'ep-default-keep'
+    );
+    expect(stored?.defaultModelId).toBe('qwen3');
+  });
+});
+
+describe('apiKey is never handed back to the browser', () => {
+  afterEach(() => {
+    fetchMock.mockReset();
+  });
+
+  it('POST, GET and PUT responses all carry apiKeySet instead of the real key', async () => {
+    const { app } = await setup();
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'ep-secret', label: 'A', baseUrl: 'http://localhost:8080', apiKey: 'super-secret' },
+    });
+    expect(create.json().data.host.apiKey).toBeUndefined();
+    expect(create.json().data.host.apiKeySet).toBe(true);
+
+    const list = await app.inject({ method: 'GET', url: '/api/model-endpoints' });
+    const listed = (list.json() as Array<{ id: string; apiKey?: string; apiKeySet?: boolean }>).find(
+      (h) => h.id === 'ep-secret'
+    );
+    expect(listed?.apiKey).toBeUndefined();
+    expect(listed?.apiKeySet).toBe(true);
+    expect(JSON.stringify(list.json())).not.toContain('super-secret');
+
+    const update = await app.inject({
+      method: 'PUT',
+      url: '/api/model-endpoints/ep-secret',
+      payload: { label: 'Renamed', baseUrl: 'http://localhost:8080' },
+    });
+    expect(update.json().data.host.apiKey).toBeUndefined();
+    expect(update.json().data.host.apiKeySet).toBe(true);
+    expect(JSON.stringify(update.json())).not.toContain('super-secret');
+  });
+
+  it('a host with no key set at all reports apiKeySet: false', async () => {
+    const { app } = await setup();
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'ep-nokey', label: 'A', baseUrl: 'http://localhost:8080' },
+    });
+    expect(create.json().data.host.apiKeySet).toBe(false);
+  });
+
+  it('PUT with no apiKey keeps the stored one, rather than clearing it', async () => {
+    const { app } = await setup();
+    await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'ep-keep-key', label: 'A', baseUrl: 'http://localhost:8080', apiKey: 'original-key' },
+    });
+    // Edit without touching the API key field — the real bug this guards: a
+    // browser round-trip that only ever sees apiKeySet, never the real value,
+    // must not accidentally send an empty string and wipe a working credential.
+    const update = await app.inject({
+      method: 'PUT',
+      url: '/api/model-endpoints/ep-keep-key',
+      payload: { label: 'Renamed', baseUrl: 'http://localhost:8080' },
+    });
+    expect(update.json().data.host.apiKeySet).toBe(true);
+
+    // Prove it by observing the auth header discovery actually sends.
+    fetchMock.mockImplementation(async (_url: URL, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string>;
+      expect(headers.Authorization).toBe('Bearer original-key');
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    });
+    const discover = await app.inject({ method: 'POST', url: '/api/model-endpoints/ep-keep-key/discover-models' });
+    expect(discover.json().success).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('PUT with a new apiKey replaces the stored one', async () => {
+    const { app } = await setup();
+    await app.inject({
+      method: 'POST',
+      url: '/api/model-endpoints',
+      payload: { id: 'ep-replace-key', label: 'A', baseUrl: 'http://localhost:8080', apiKey: 'old-key' },
+    });
+    await app.inject({
+      method: 'PUT',
+      url: '/api/model-endpoints/ep-replace-key',
+      payload: { label: 'A', baseUrl: 'http://localhost:8080', apiKey: 'new-key' },
+    });
+
+    fetchMock.mockImplementation(async (_url: URL, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string>;
+      expect(headers.Authorization).toBe('Bearer new-key');
+      return new Response(JSON.stringify({ data: [] }), { status: 200 });
+    });
+    await app.inject({ method: 'POST', url: '/api/model-endpoints/ep-replace-key/discover-models' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

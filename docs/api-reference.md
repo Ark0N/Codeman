@@ -516,6 +516,53 @@ All four enforce session ownership in multi-user mode; a foreign session id
 answers `404 NOT_FOUND` (no existence leak), and profiles of two owners of the
 same directory are distinct by construction.
 
+## Custom Model Endpoints
+
+Points a session's harness at a user-configured OpenAI-compatible endpoint —
+local (llama.cpp, vLLM, DGX Spark) or cloud (Azure AI Foundry, OpenRouter) —
+instead of its native cloud backend, gated by the opt-in
+`customModelEndpointsEnabled` setting (default OFF). Endpoints are
+machine-level infra, like remote/docker hosts: writes are admin-only in
+multi-user mode. Design: [`custom-model-endpoints-plan.md`](custom-model-endpoints-plan.md);
+user guide: [`custom-model-endpoints.md`](custom-model-endpoints.md).
+
+- `GET /api/v1/model-endpoints` -> `CustomModelHost[]`, an unwrapped bare
+  array like every other list route (still riding the standard `{success,
+  data}` envelope on the wire — unwrap it the same way). Answers `[]` for a
+  non-admin in multi-user mode. `apiKey` is never returned; `apiKeySet:
+  boolean` reports whether one is stored, so a client can render "unchanged
+  if left blank" without ever holding the real value.
+- `POST /api/v1/model-endpoints` with `{ id, label, baseUrl, apiKey?,
+  authStyle?, defaultModelId? }` creates one. `id` must match
+  `^[a-zA-Z0-9_-]+$`; `authStyle` is `bearer` (default) or `api-key`, never
+  both (a real server hung indefinitely when sent both headers on one
+  request); `baseUrl` must be `http(s)`, carry no embedded credentials, and
+  is refused if it points at (or resolves to) a link-local or
+  cloud-metadata address. `409 ALREADY_EXISTS` on a duplicate id.
+- `PUT /api/v1/model-endpoints/:id` updates one. An **absent** `apiKey`
+  keeps the stored one rather than clearing it — the client never receives
+  the real value to resend deliberately unchanged, so omission is the only
+  way to say "leave it alone"; there is no way to clear a key back to unset
+  this way. `defaultModelId`, when set, must be one of that endpoint's own
+  `models` (`400 INVALID_INPUT` otherwise).
+- `DELETE /api/v1/model-endpoints/:id` removes one.
+- `POST /api/v1/model-endpoints/:id/discover-models` fetches the endpoint's
+  own `GET /v1/models` and stores the result as `models`, updating
+  `lastDiscoveredAt`. A `defaultModelId` that no longer appears in the fresh
+  list is dropped rather than carried forward invalid. Failures answer
+  `502 OPERATION_FAILED` with the underlying connection error, or a named
+  egress refusal if the resolved address turned out to be blocked.
+- `POST /api/v1/sessions/:id/custom-model` with `{ endpointId, modelId } |
+  { clear: true }` applies (or clears) the session's selection and
+  **restarts the session's CLI process in place** — every supported harness
+  reads its endpoint config at process start, never per turn, so there is
+  no live hot-swap. A Claude session resumes its existing conversation
+  across the restart; pi/omp/grok additionally get a forced `--model`/`-m`
+  value, since for those three the config file alone does not select it.
+  `400 INVALID_INPUT` for a remote (SSH) or Docker session — both restart
+  their agent differently under the hood, and applying to one would report
+  success while changing nothing.
+
 ## Voice dictation
 
 Browser dictation transcribed through this server's Claude Code login, i.e. the

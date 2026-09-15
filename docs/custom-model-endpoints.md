@@ -11,20 +11,21 @@ company gateway) — anything answering `GET /v1/models` and
 recipe confidence table, and security reasoning:
 [`custom-model-endpoints-plan.md`](custom-model-endpoints-plan.md).
 
-> **Status**: backend is implemented and tested (registry capability, the
-> injection engine, the endpoint store + discovery route, the session
-> restart route). The toolbar picker / settings UI described below as the
-> intended surface is **not yet built** — until it lands, use the HTTP API
-> directly (examples below). Antigravity has no known custom-endpoint
-> mechanism and is not supported.
+> **Status**: fully wired end to end — registry capability, the injection
+> engine, the endpoint store + discovery route, the session restart route,
+> a settings-panel CRUD surface, and the Run-menu picker described below.
+> Antigravity has no known custom-endpoint mechanism and is not supported.
+> The HTTP API (examples below) still works directly and is what the picker
+> itself calls under the hood.
 
 ## Turning it on
 
-App Settings → Agents & CLIs → **Custom Model Endpoints** (synced setting
-`customModelEndpointsEnabled`, default **OFF**). Until the toolbar picker
-lands, nothing reads this setting: the HTTP routes below work whether it is
-on or off, and it exists now only so the picker has a switch to hang off
-when it ships. The API equivalent:
+App Settings → Models → **Custom model endpoints** (synced setting
+`customModelEndpointsEnabled`, default **OFF**). Turning it on does two
+things: it reveals the endpoint list/add/edit/discover panel in that same
+settings section, and it makes the Run menu offer a generated entry per
+(harness, endpoint) pair — see "The Run-menu picker" below. The API
+equivalent:
 
 ```bash
 curl -sk -X PUT https://localhost:3000/api/settings \
@@ -33,6 +34,9 @@ curl -sk -X PUT https://localhost:3000/api/settings \
 ```
 
 ## Adding an endpoint
+
+Via App Settings → Models → Custom model endpoints → **+ Add endpoint**, or
+directly:
 
 ```bash
 curl -sk -X POST https://localhost:3000/api/model-endpoints \
@@ -61,6 +65,34 @@ on the endpoint record; `GET /api/model-endpoints` lists everything
 configured, `PUT`/`DELETE /api/model-endpoints/:id` update or remove one.
 Endpoint management is admin-only in multi-user mode, same as remote/docker
 hosts — these are machine-level infra, not per-user settings.
+
+`defaultModelId` names which discovered model the Run-menu picker applies
+for that endpoint with no further choice — the settings panel's Edit form
+exposes it as a select populated from the endpoint's own discovered
+`models`, and the route refuses a value that isn't one of them. Leaving it
+unset falls back to the first discovered model; re-discovering drops a
+default that no longer appears in the fresh list rather than carrying an
+invalid one forward.
+
+## The Run-menu picker
+
+With the setting on and at least one endpoint carrying a usable default
+model (either an explicit `defaultModelId` or just one discovered model),
+the toolbar's Run dropdown grows a **Custom Endpoints** section: one entry
+per (harness that can redirect to a custom endpoint, saved endpoint) pair,
+e.g. "Claude Code (llama.cpp)". The harness list is read off the CLI
+registry's own `capabilities.customModelInjection` at page render
+(`window.__codemanCustomModelClis`, `server.ts`) — never a hardcoded id list
+in the frontend — so a CLI whose injection recipe lands later shows up with
+no frontend change, and Antigravity (`unsupported`) never does.
+
+Picking an entry runs a single session on that harness exactly the way its
+own Run-menu entry would (same case creation, env overrides, everything),
+then immediately applies the endpoint's default model to it via the route
+below. It is a one-off "try this endpoint" action, not a sticky mode: the
+plain Run button still means "this harness, native cloud" afterward.
+Entries are hidden entirely for a remote or Docker active case, since the
+apply route refuses both (see the next section).
 
 ## Applying a model to a session
 

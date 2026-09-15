@@ -33,6 +33,45 @@ function adminOnly(req: FastifyRequest, reply: { code: (n: number) => unknown })
   return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Admin only in multi-user mode');
 }
 
+/**
+ * `defaultModelId` names the model the Run-menu picker applies for this endpoint with
+ * no further choice, so it must actually be one of the discovered `models` — a schema
+ * `.refine()` can't see across the two fields the way this can, and would also run on
+ * every unrelated field edit rather than only when either of these two changes.
+ */
+function invalidDefaultModel(host: Pick<CustomModelHost, 'defaultModelId' | 'models'>): ApiResponse<never> | null {
+  if (host.defaultModelId === undefined) return null;
+  if ((host.models ?? []).includes(host.defaultModelId)) return null;
+  return createErrorResponse(
+    ApiErrorCode.INVALID_INPUT,
+    'defaultModelId must be one of the endpoint’s discovered models'
+  );
+}
+
+/**
+ * Never hand the stored credential back to the browser, on GET, POST or PUT
+ * alike — the file is written 0600 precisely because it holds one. `apiKeySet`
+ * is what lets the editor say "unchanged if left blank" without the client
+ * ever holding the real value: `applyStoredApiKey()` below is the other half,
+ * treating an absent key on PUT as "keep the stored one" rather than clearing
+ * it, which is what makes never returning it survivable for the edit flow.
+ */
+function redactApiKey(host: CustomModelHost): Omit<CustomModelHost, 'apiKey'> & { apiKeySet: boolean } {
+  const { apiKey, ...rest } = host;
+  return { ...rest, apiKeySet: !!apiKey };
+}
+
+/**
+ * A PUT body with no `apiKey` (or a blank one) means "leave it alone", never
+ * "clear it": the editor never receives the real value to resend deliberately
+ * unchanged (see redactApiKey), so the only way it can tell the two apart is
+ * by omission. There is deliberately no way to CLEAR a key back to unset this
+ * way — a pre-existing limitation, not something this changes.
+ */
+function applyStoredApiKey(incoming: CustomModelHost, existing: CustomModelHost): CustomModelHost {
+  return incoming.apiKey ? incoming : { ...incoming, apiKey: existing.apiKey };
+}
+
 async function discoverModels(host: Pick<CustomModelHost, 'baseUrl' | 'apiKey' | 'authStyle'>): Promise<string[]> {
   const headers: Record<string, string> = {};
   const apiKey = host.apiKey?.trim();
@@ -66,41 +105,50 @@ function describeFetchError(err: unknown): string {
   return message;
 }
 
-export function registerCustomModelRoutes(app: FastifyInstance): void {
-  app.get('/api/model-endpoints', async (req) =>
-    isMultiUserMode() && !isAdmin(req) ? [] : readCustomModelHosts(CODEMAN_CONFIG_DIR)
-  );
+type RedactedHost = ReturnType<typeof redactApiKey>;
 
-  app.post('/api/model-endpoints', async (req, reply): Promise<ApiResponse<{ host: CustomModelHost }>> => {
+export function registerCustomModelRoutes(app: FastifyInstance): void {
+  app.get('/api/model-endpoints', async (req): Promise<RedactedHost[]> => {
+    if (isMultiUserMode() && !isAdmin(req)) return [];
+    const hosts = await readCustomModelHosts(CODEMAN_CONFIG_DIR);
+    return hosts.map(redactApiKey);
+  });
+
+  app.post('/api/model-endpoints', async (req, reply): Promise<ApiResponse<{ host: RedactedHost }>> => {
     const denied = adminOnly(req, reply);
     if (denied) return denied;
     const host = parseBody(CustomModelHostSchema, req.body);
     if (isBlockedWebviewUrl(host.baseUrl)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Endpoint base URL is not allowed');
     }
+    const badDefault = invalidDefaultModel(host);
+    if (badDefault) return badDefault;
     const hosts = await readCustomModelHosts(CODEMAN_CONFIG_DIR);
     if (hosts.some((item) => item.id === host.id)) {
       return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'Model endpoint already exists');
     }
     await writeCustomModelHosts(CODEMAN_CONFIG_DIR, [...hosts, host]);
-    return { success: true, data: { host } };
+    return { success: true, data: { host: redactApiKey(host) } };
   });
 
-  app.put('/api/model-endpoints/:id', async (req, reply): Promise<ApiResponse<{ host: CustomModelHost }>> => {
+  app.put('/api/model-endpoints/:id', async (req, reply): Promise<ApiResponse<{ host: RedactedHost }>> => {
     const denied = adminOnly(req, reply);
     if (denied) return denied;
     const { id } = req.params as { id: string };
-    const host = parseBody(CustomModelHostSchema, { ...(req.body as object), id });
-    if (isBlockedWebviewUrl(host.baseUrl)) {
+    const incoming = parseBody(CustomModelHostSchema, { ...(req.body as object), id });
+    if (isBlockedWebviewUrl(incoming.baseUrl)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Endpoint base URL is not allowed');
     }
+    const badDefault = invalidDefaultModel(incoming);
+    if (badDefault) return badDefault;
     const hosts = await readCustomModelHosts(CODEMAN_CONFIG_DIR);
     const index = hosts.findIndex((item) => item.id === id);
     if (index === -1) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Model endpoint not found');
+    const host = applyStoredApiKey(incoming, hosts[index]);
     const next = [...hosts];
     next[index] = host;
     await writeCustomModelHosts(CODEMAN_CONFIG_DIR, next);
-    return { success: true, data: { host } };
+    return { success: true, data: { host: redactApiKey(host) } };
   });
 
   app.delete('/api/model-endpoints/:id', async (req, reply): Promise<ApiResponse<{ id: string }>> => {
@@ -131,7 +179,12 @@ export function registerCustomModelRoutes(app: FastifyInstance): void {
       try {
         const models = await discoverModels(host);
         const next = [...hosts];
-        next[index] = { ...host, models, lastDiscoveredAt: new Date().toISOString() };
+        // A default that no longer appears in the fresh list would leave the Run-menu
+        // picker applying a model id the endpoint just told us it doesn't serve; drop
+        // it rather than carry it forward silently invalid.
+        const defaultModelId =
+          host.defaultModelId && models.includes(host.defaultModelId) ? host.defaultModelId : undefined;
+        next[index] = { ...host, models, defaultModelId, lastDiscoveredAt: new Date().toISOString() };
         await writeCustomModelHosts(CODEMAN_CONFIG_DIR, next);
         return { success: true, data: { models } };
       } catch (err) {

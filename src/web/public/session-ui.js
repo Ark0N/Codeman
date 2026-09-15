@@ -461,6 +461,7 @@ Object.assign(CodemanApp.prototype, {
     if (menu.classList.contains('active')) {
       this._loadRunModeHistory();
       this._refreshRunModeAvailability(menu);
+      this._refreshCustomModelRunOptions(menu);
       const close = (ev) => {
         if (!menu.contains(ev.target)) {
           menu.classList.remove('active');
@@ -532,6 +533,132 @@ Object.assign(CodemanApp.prototype, {
     // all (and is the honest thing to offer there).
     const dsWeb = menu.querySelector('#runModeDeepSeekWeb');
     if (dsWeb) dsWeb.style.display = avail.deepseekBinary ? 'flex' : 'none';
+  },
+
+  /**
+   * Generates the Run menu's Custom Model Endpoint entries
+   * (docs/custom-model-endpoints-plan.md): one button per (capable harness, saved
+   * endpoint) pair, e.g. "Claude Code (llama.cpp)". Hidden entirely when the
+   * feature is off, no endpoint has a usable default model, or the active case is
+   * remote/docker (the apply route refuses both — see session-routes.ts).
+   *
+   * `window.__codemanCustomModelClis` is server-injected at render time from the
+   * CLI registry's own `capabilities.customModelInjection` (never a hardcoded id
+   * list here), so a CLI gaining or losing the capability shows up with no
+   * frontend change.
+   */
+  async _refreshCustomModelRunOptions(menu) {
+    const sep = menu.querySelector('#runModeCustomModelSep');
+    const header = menu.querySelector('#runModeCustomModelHeader');
+    const container = menu.querySelector('#runModeCustomModels');
+    if (!container) return;
+    const hide = () => {
+      if (sep) sep.style.display = 'none';
+      if (header) header.style.display = 'none';
+      container.innerHTML = '';
+    };
+
+    const settings = this.loadAppSettingsFromStorage();
+    // Matches _refreshRunModeAvailability's own gate: a stock entry for an
+    // uninstalled CLI is hidden, so a generated one must be too, or a box with
+    // no codex still offers "Codex (llama.cpp)" and fails at launch.
+    const capableClis = (window.__codemanCustomModelClis || []).filter((cli) => this.isCliAvailable(cli.id));
+    if (!settings.customModelEndpointsEnabled || capableClis.length === 0) return hide();
+
+    const caseName = document.getElementById('quickStartCase')?.value;
+    const activeCase = caseName ? (this.cases || []).find((c) => c.name === caseName) : null;
+    if (activeCase?.location === 'remote' || activeCase?.location === 'docker') return hide();
+
+    // GET /api/model-endpoints wraps its body in the { success, data } envelope
+    // like every other /api route (server.ts's preSerialization hook applies to
+    // arrays too) — _apiJson() unwraps it. A raw fetch().json() here would
+    // silently see the envelope object instead of the array and hide this
+    // section unconditionally.
+    const hosts = await this._apiJson('/api/model-endpoints');
+    if (!Array.isArray(hosts) || hosts.length === 0) return hide();
+
+    const rows = [];
+    for (const host of hosts) {
+      const modelId = host.defaultModelId || (host.models || [])[0];
+      if (!modelId) continue; // nothing discovered yet — the settings panel explains why
+      for (const cli of capableClis) {
+        // escapeHtml(JSON.stringify(...)) on EVERY arg, not just the untrusted
+        // one: JSON.stringify's own double quotes would otherwise terminate this
+        // double-quoted attribute at the first one, and everything after parses
+        // as raw tag content rather than a quoted string — which is what turns
+        // modelId (server-controlled, from the endpoint's own /v1/models reply,
+        // not this box's) into markup instead of inert data. Same idiom as
+        // deleteCase's onclick a few hundred lines down.
+        const args = [cli.id, host.id, modelId].map((v) => escapeHtml(JSON.stringify(v))).join(', ');
+        rows.push(`
+          <button class="run-mode-option" data-mode="${escapeHtml(cli.id)}" data-endpoint="${escapeHtml(host.id)}"
+                  onclick="app.runCustomModelEntry(${args})"
+                  title="${escapeHtml(cli.label)} → ${escapeHtml(host.baseUrl)} (${escapeHtml(modelId)})">
+            <span class="run-mode-dot ${escapeHtml(cli.id)}"></span>${escapeHtml(cli.label)} (${escapeHtml(host.label)})
+          </button>`);
+      }
+    }
+    if (rows.length === 0) return hide();
+    if (sep) sep.style.display = '';
+    if (header) header.style.display = '';
+    container.innerHTML = rows.join('');
+  },
+
+  /**
+   * Runs a session on `mode` and immediately applies `endpointId`/`modelId` to it
+   * via POST /api/sessions/:id/custom-model (see session-routes.ts) — the same
+   * restart-in-place apply path the (not-yet-built) endpoint-management surface
+   * would use for an already-running session. A custom-model run is a one-off
+   * "try this endpoint" action, not a sticky mode.
+   *
+   * Routes through run() itself, via a temporary `_runMode` swap, rather than a
+   * parallel dispatch table: that is what gives this the same in-flight lock
+   * every other Run click gets (CLAUDE.md, Run launch synchronization — the lock
+   * exists so a double click cannot create duplicate sessions with the same
+   * `w<n>-<case>` name, and it guards the OTHER direction too: without it, the
+   * main Run button could start a second concurrent launch while this one was
+   * still resolving), and it means a CLI whose customModelInjection recipe
+   * lands later needs no update here, only in run()'s own dispatch. The swap
+   * never persists — setRunMode() would sync it to the server as the user's new
+   * default, which a one-off endpoint run must not do — and is restored in
+   * `finally` even if run() throws.
+   */
+  async runCustomModelEntry(mode, endpointId, modelId) {
+    document.getElementById('runModeMenu')?.classList.remove('active');
+
+    const previousRunMode = this._runMode;
+    const before = this.activeSessionId;
+    const tabCountEl = document.getElementById('tabCount');
+    const prevTabCount = tabCountEl?.value;
+    this._runMode = mode;
+    if (tabCountEl) tabCountEl.value = '1';
+    try {
+      await this.run();
+    } finally {
+      this._runMode = previousRunMode;
+      if (tabCountEl && prevTabCount !== undefined) tabCountEl.value = prevTabCount;
+    }
+
+    // run() reports its own errors via toast. Every run*() function handles its
+    // own failure internally and returns normally rather than throwing or
+    // leaving activeSessionId null, so a declined/failed launch (missing CLI, a
+    // caught exception, isBusy on the session the launch would have targeted)
+    // falls through to here with the PREVIOUSLY active session still active.
+    // Requiring the id to have actually changed — not just to be non-null — is
+    // what stops that case from silently re-pointing and restarting whatever
+    // session the user was already looking at.
+    const sessionId = this.activeSessionId;
+    if (!sessionId || sessionId === before) return;
+
+    const data = await this._apiJson(`/api/sessions/${sessionId}/custom-model`, {
+      method: 'POST',
+      body: { endpointId, modelId },
+    });
+    if (!data) {
+      this.showToast(`Session started on the native backend — could not apply the custom endpoint`, 'warning');
+      return;
+    }
+    this.showToast(`Pointed at ${endpointId} — restarting the session...`, 'info');
   },
 
   /**

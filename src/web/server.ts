@@ -67,7 +67,7 @@ import {
 import { imageWatcher } from '../image-watcher.js';
 import { workflowRunWatcher, summarizeRun } from '../workflow-run-watcher.js';
 import { attachmentRegistry, buildFileThumbnailRoute, registerExternalAttachment } from '../attachment-registry.js';
-import { getCli } from '../config/cli-registry/registry.js';
+import { getCli, enabledClis } from '../config/cli-registry/registry.js';
 import { readCustomModelHosts } from '../custom-model-hosts.js';
 import { applyCustomModelInjection, customModelConfigDir, removeConfigDir } from '../custom-model-injection-apply.js';
 import type { CustomModelBookkeeping } from '../types/session.js';
@@ -205,6 +205,20 @@ const CODEX_USAGE_POLL_INTERVAL_MS = 5 * 60_000;
 
 function escapeHtmlText(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+}
+
+/**
+ * Escapes a JSON string for safe embedding as the body of an inline `<script>`
+ * tag: `<` becomes the six-character sequence `<`, which both a JSON
+ * parser and a plain JS string literal decode back to `<` (both treat
+ * `\uXXXX` identically), but which can never itself form the two literal
+ * characters `<` `/` a browser's HTML tokenizer looks for to end the tag. A
+ * value containing a literal `</script>` would otherwise close the tag early
+ * and turn the rest of the document into inert script-body text. Exported so
+ * it unit-tests without constructing a WebServer (which needs a real tmux).
+ */
+export function escapeScriptJson(json: string): string {
+  return json.replace(/</g, '\\u003c');
 }
 
 import {
@@ -1595,6 +1609,23 @@ export class WebServer extends EventEmitter {
       html = html.replace(
         '</head>',
         `<script>window.__codemanCliAvailable=${JSON.stringify(available)};</script>\n</head>`
+      );
+      // Which run modes the Run-menu picker (docs/custom-model-endpoints-plan.md) may
+      // generate an entry for: read generically off the registry's `capabilities`
+      // (never an id list here) so a CLI whose customModelInjection lands later shows
+      // up in the picker with no frontend change, and one that ships `unsupported`
+      // (antigravity, and `shell`'s `kind !== 'agent'`) never does.
+      const customModelClis = enabledClis()
+        .filter((entry) => entry.kind === 'agent' && entry.capabilities.customModelInjection.kind !== 'unsupported')
+        .map((entry) => ({ id: entry.id, label: entry.label }));
+      // Unlike the boolean-only __codemanCliAvailable above, this payload carries
+      // `label`, a string a user's own clis.json can set (CliEntry.label, up to 60
+      // chars) — see escapeScriptJson's own doc comment for why that needs escaping
+      // and __codemanCliAvailable's booleans never did.
+      const customModelClisJson = escapeScriptJson(JSON.stringify(customModelClis));
+      html = html.replace(
+        '</head>',
+        `<script>window.__codemanCustomModelClis=${customModelClisJson};</script>\n</head>`
       );
     }
     if (!soloSessionId && process.env.CODEMAN_GESTURE === '1') {
