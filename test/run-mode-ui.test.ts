@@ -592,13 +592,7 @@ describe('case selector refresh', () => {
 
     const options = app.buildCasePickerOptions(cases);
 
-    expect(options.map((option: any) => option.name)).toEqual([
-      'Alpha',
-      'moneytrove',
-      'plex-previews',
-      'testcase',
-      'zeta',
-    ]);
+    expect(options.map((option: any) => option.name)).toEqual(['Alpha', 'moneytrove', 'plex-previews', 'zeta']);
     expect(options.find((option: any) => option.name === 'moneytrove')?.label).toBe('moneytrove @ mac-mini');
     expect(app.filterCasePickerOptions(options, 'MAC').map((option: any) => option.name)).toEqual(['moneytrove']);
     expect(app.filterCasePickerOptions(options, 'plex').map((option: any) => option.name)).toEqual(['plex-previews']);
