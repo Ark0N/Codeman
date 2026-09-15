@@ -15,6 +15,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
+import { createServer, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 
 function loadConstants() {
@@ -150,5 +152,95 @@ describe('sanitizeDiagEntry', () => {
     expect(sanitizeDiagEntry(undefined)).toBe('');
     expect(sanitizeDiagEntry(42)).toBe('42');
     expect(sanitizeDiagEntry({ toString: () => 'obj' })).toBe('obj');
+  });
+});
+
+// ── The deadline must cover the BODY, not just the handshake ────────────────
+//
+// `await fetch()` settles on response HEADERS. Clearing the abort timer there
+// leaves the body — the multi-megabyte `?full=1` capture the deadline exists
+// for — completely unbounded; it only ever covered a server that accepts a
+// connection and never replies at all.
+//
+// Measured on the pre-fix shape against a server that sends headers immediately
+// and stalls the body 4s under a 1s deadline: fetch resolved at 30ms, the timer
+// was cleared there, and the body completed at 4026ms unaborted.
+//
+// This exercises the real property with a real socket rather than asserting on
+// source text, because the bug was a lifetime mistake that reads correctly.
+describe('terminal capture deadline covers the response body', () => {
+  // Mirrors _fetchTerminalCapture's lifetime: one timer spanning headers AND
+  // body, cleared only once the body has been read.
+  async function captureUnderDeadline(url: string, deadlineMs: number) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), deadlineMs);
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      const headersAt = performance.now();
+      const json = await res.json();
+      return { json, headers: res.headers, headersAt };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function serve(handler: (res: ServerResponse) => void) {
+    const srv = createServer((_req, res) => handler(res));
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    const { port } = srv.address() as AddressInfo;
+    return { url: `http://127.0.0.1:${port}/`, close: () => srv.close() };
+  }
+
+  it('aborts a stalled body instead of waiting on it forever', async () => {
+    let finish: NodeJS.Timeout | undefined;
+    const { url, close } = await serve((res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.write(' '); // headers out immediately, body never completes in time
+      finish = setTimeout(() => res.end('{"data":{}}'), 5000);
+    });
+    try {
+      await expect(captureUnderDeadline(url, 300)).rejects.toThrow(/abort/i);
+    } finally {
+      if (finish) clearTimeout(finish);
+      close();
+    }
+  });
+
+  // The two tests above exercise the PATTERN against a real socket, using a
+  // local mirror — so on their own they would still pass if the real helper
+  // regressed to clearing its timer at headers. This pins the real one.
+  it('_fetchTerminalCapture reads the body before releasing its deadline', () => {
+    const app = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
+    const start = app.indexOf('async _fetchTerminalCapture(');
+    expect(start, 'helper not found — renamed?').toBeGreaterThan(-1);
+    const body = app.slice(start, app.indexOf('\n  }', start));
+    const jsonAt = body.indexOf('await res.json()');
+    const finallyAt = body.indexOf('} finally {');
+    expect(jsonAt, 'the body must be read inside the helper, not by callers').toBeGreaterThan(-1);
+    expect(finallyAt).toBeGreaterThan(-1);
+    expect(
+      jsonAt,
+      'await res.json() must run BEFORE the finally that clears the abort timer — ' +
+        'fetch() settles on headers, so a timer cleared there leaves the body unbounded'
+    ).toBeLessThan(finallyAt);
+    // And the returned shape the five call sites destructure.
+    expect(body).toContain('return { json, headers: res.headers, headersAt };');
+  });
+
+  it('returns the parsed envelope and headers on a healthy response', async () => {
+    const { url, close } = await serve((res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'server-timing': 'db;dur=12' });
+      res.end('{"data":{"terminalBuffer":"hello"}}');
+    });
+    try {
+      const out = await captureUnderDeadline(url, 5000);
+      // Callers read `capture.json?.data`, `capture.headers.get(...)` and
+      // `capture.headersAt` — all three must survive.
+      expect((out.json as { data: { terminalBuffer: string } }).data.terminalBuffer).toBe('hello');
+      expect(out.headers.get('server-timing')).toBe('db;dur=12');
+      expect(typeof out.headersAt).toBe('number');
+    } finally {
+      close();
+    }
   });
 });

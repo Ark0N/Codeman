@@ -53,29 +53,24 @@ describe('service worker precache contract', () => {
     expect(sw).toContain("...HASHED_ASSETS.map((p) => '/' + p)");
   });
 
-  // The regression itself. These are the pre-hash names the build renames, so
-  // any of them appearing in the shell list means someone hand-added an entry
-  // that will 404 in production.
+  // The regression itself: any pre-hash filename hand-listed in APP_SHELL will
+  // 404 in production, because the build renames it.
+  //
+  // The HASHABLE list is PARSED out of scripts/build.mjs rather than copied
+  // here. A hand-kept duplicate would be the same drift this whole PR exists to
+  // fix — it would go stale the first time someone adds an asset to the build,
+  // and then silently stop covering it.
   it('never hand-lists a filename the build content-hashes', () => {
+    const block = build.slice(
+      build.indexOf('const HASHABLE = ['),
+      build.indexOf('];', build.indexOf('const HASHABLE = ['))
+    );
+    const hashedByBuild = [...block.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    // Guard the parse itself: an empty list would make this test vacuously pass.
+    expect(hashedByBuild.length, 'failed to parse HASHABLE out of scripts/build.mjs').toBeGreaterThan(10);
+    expect(hashedByBuild).toContain('app.js');
+
     const shell = sw.slice(sw.indexOf('const APP_SHELL'), sw.indexOf('].map(B);'));
-    const hashedByBuild = [
-      'app.js',
-      'constants.js',
-      'terminal-ui.js',
-      'session-ui.js',
-      'settings-ui.js',
-      'panels-ui.js',
-      'styles.css',
-      'mobile.css',
-      'i18n.js',
-      'mobile-handlers.js',
-      'keyboard-accessory.js',
-      'notification-manager.js',
-      'voice-input.js',
-      'api-client.js',
-      'vendor/xterm-zerolag-input.js',
-      'vendor/xterm-predictive-echo.js',
-    ];
     for (const name of hashedByBuild) {
       expect(shell, `APP_SHELL must not hand-list ${name} — the build renames it`).not.toContain(`'/${name}'`);
     }
@@ -85,5 +80,21 @@ describe('service worker precache contract', () => {
   // an empty precache plus the unhashed modules cached on first use.
   it('is valid unrewritten, for dev', () => {
     expect(() => new Function(sw.replace(/self\./g, 'globalThis.'))).not.toThrow();
+  });
+
+  // Without ignoreSearch the whole precache is unreachable, which is subtle
+  // enough to be re-broken by anyone tidying this handler.
+  //
+  // `renderIndexHtml` runs `cacheBustAssets`, which appends `?v=<mtime>` to
+  // EVERY same-origin `.js`/`.css` reference — content-hashed names included.
+  // Observed on a running instance: `src="app.556be563.js?v=1789423735875"`.
+  // `caches.match` is query-sensitive by default, so a precache keyed on
+  // `/app.556be563.js` can never serve that request, and the install would be
+  // downloading ~1.3MB per deploy that nothing can ever read back.
+  it('falls back to the cache ignoring the cache-busting query string', () => {
+    expect(sw).toContain('caches.match(request, { ignoreSearch: true })');
+    expect(sw, 'a bare caches.match(request) cannot match the ?v=<mtime> URLs cacheBustAssets emits').not.toMatch(
+      /caches\.match\(request\)\s*\)/
+    );
   });
 });

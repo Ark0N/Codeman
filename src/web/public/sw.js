@@ -111,7 +111,17 @@ self.addEventListener('fetch', (event) => {
         }
         return response;
       })
-      .catch(() => caches.match(request))
+      // ignoreSearch, or the precache can never be hit. `renderIndexHtml` runs
+      // `cacheBustAssets`, which appends `?v=<mtime>` to EVERY same-origin
+      // `.js`/`.css` reference — content-hashed names included, so the page asks
+      // for `/app.556be563.js?v=1789423735875` while the precache stored
+      // `/app.556be563.js`. `caches.match` is query-sensitive by default, so
+      // every precached entry was unreachable and only `/`, the icons and the
+      // manifest could ever be served offline.
+      //
+      // It also makes runtime-cached entries survive an mtime change: the same
+      // file re-requested under a new `?v=` still matches the copy already held.
+      .catch(() => caches.match(request, { ignoreSearch: true }))
   );
 });
 

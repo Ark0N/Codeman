@@ -28,23 +28,29 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const root = resolve(import.meta.dirname, '..');
-const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as {
-  dependencies: Record<string, string>;
+const lock = JSON.parse(readFileSync(resolve(root, 'package-lock.json'), 'utf8')) as {
+  packages: Record<string, { version?: string }>;
 };
 const terminalUi = readFileSync(resolve(root, 'src/web/public/terminal-ui.js'), 'utf8');
 
-// The major line `_kickRenderer`'s field path was verified against.
-const VERIFIED_XTERM_RANGE = '^6.0.0';
+// The exact version `_kickRenderer`'s field path was verified against.
+//
+// Read from the LOCKFILE, not package.json. The declared range is `^6.0.0`, so
+// asserting on that string is the wrong test in both directions: a real upgrade
+// to 6.4.0 — which can absolutely rename a private field — resolves inside the
+// range and slips through, while an innocuous range edit that changes nothing
+// about the installed code fails. The lockfile is what actually ships.
+const VERIFIED_XTERM_VERSION = '6.0.0';
 
 describe('xterm private-API dependency guard', () => {
-  it('pins the xterm range _kickRenderer was verified against', () => {
+  it('pins the resolved xterm version _kickRenderer was verified against', () => {
     expect(
-      pkg.dependencies['@xterm/xterm'],
-      'xterm moved off the verified range — re-verify _kickRenderer in a real browser ' +
+      lock.packages['node_modules/@xterm/xterm']?.version,
+      'xterm moved off the verified version — re-verify _kickRenderer in a real browser ' +
         '(terminal-ui.js: _core._renderService._renderDebouncer._animationFrame), then update ' +
-        'VERIFIED_XTERM_RANGE here. The accessor is optional-chained, so a renamed field ' +
+        'VERIFIED_XTERM_VERSION here. The accessor is optional-chained, so a renamed field ' +
         'degrades to a silent no-op and the freeze it heals comes back unnoticed.'
-    ).toBe(VERIFIED_XTERM_RANGE);
+    ).toBe(VERIFIED_XTERM_VERSION);
   });
 
   // If someone deletes the watchdog, this guard is pointless noise — keep the
