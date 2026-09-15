@@ -1,6 +1,6 @@
 {
   "name": "aicodeman",
-  "version": "1.29.0",
+  "version": "1.29.1",
   "description": "Mission control for AI coding agents - run 20 autonomous agents with real-time monitoring and session persistence",
   "type": "module",
   "main": "dist/index.js",
