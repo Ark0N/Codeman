@@ -1442,8 +1442,129 @@ function terminalLogicalLine(buffer, row, cols, maxRows) {
   return { startRow, endRow, text, offsetToCell, cellToOffset };
 }
 
+// ── Renderer liveness ──────────────────────────────────────────────────────
+//
+// iOS DISCARDS scheduled requestAnimationFrame callbacks when a PWA goes to
+// the background — not deferred, never delivered. xterm's RenderDebouncer only
+// clears its `_animationFrame` handle from INSIDE that callback:
+//
+//   refresh() {
+//     if (this._animationFrame !== undefined) return;   // <- stale forever
+//     this._animationFrame = requestAnimationFrame(() => this._innerRefresh());
+//   }
+//   _innerRefresh() { this._animationFrame = undefined; ... }   // never runs
+//
+// So after one backgrounding the handle is permanently non-undefined and EVERY
+// later render request returns on line one. Parsing is decoupled from
+// rendering, so bytes keep filling the buffer correctly and nothing throws —
+// the terminal is simply frozen. Closing and reopening fixes it because that
+// constructs a new Terminal, and therefore a new debouncer.
+//
+// Codeman is MORE exposed than a per-session-terminal app: there is exactly one
+// xterm instance for the whole page load, so a single backgrounding can wedge
+// it until a full reload.
+//
+// This is the pure decision half. The signature that distinguishes this from
+// every other way a terminal can look stuck is that bytes were WRITTEN and the
+// element is VISIBLE, yet onRender has not fired since:
+//
+//   frozen   = wroteAt > renderedAt && now - wroteAt >= threshold && visible
+//
+// Deliberately NOT a "no output at all" check: a quiet terminal is the normal
+// state and must never be kicked. And `visible` is required because a hidden
+// terminal legitimately stops rendering (xterm pauses it), so kicking there
+// would fire constantly on every backgrounded tab.
+const RENDER_STALL_MS = 4000;
+
+// How often the watchdog checks. Deliberately coarse: the failure it catches is
+// permanent until healed, so detecting it a second late costs nothing, while a
+// tight interval would burn a wakeup per second on every idle phone.
+const RENDER_LIVENESS_POLL_MS = 2000;
+
+/**
+ * Should the renderer be kicked? Pure so the CI gate can cover it — the DOM
+ * half (cancelling the stale handle) lives in terminal-ui.js.
+ *
+ * @param {{wroteAt:number, renderedAt:number, now:number, visible:boolean,
+ *          thresholdMs?:number}} s
+ * @returns {boolean}
+ */
+function shouldKickRenderer(s) {
+  if (!s || !s.visible) return false;
+  const wroteAt = Number(s.wroteAt) || 0;
+  const renderedAt = Number(s.renderedAt) || 0;
+  const now = Number(s.now) || 0;
+  // Nothing written yet — a fresh terminal has no render to be missing.
+  if (wroteAt <= 0) return false;
+  // A render landed at or after the last write: the pipeline is alive.
+  if (renderedAt >= wroteAt) return false;
+  const threshold = Number.isFinite(s.thresholdMs) && s.thresholdMs > 0 ? s.thresholdMs : RENDER_STALL_MS;
+  return now - wroteAt >= threshold;
+}
+
+// ── Fetch deadlines ────────────────────────────────────────────────────────
+//
+// No terminal fetch carried any deadline, including `?full=1`, which the code
+// itself describes as "unbounded-ish work: at the default history limit it can
+// be megabytes". On a stalled mobile link that request hangs on the browser
+// default with no retry and no path back to a usable terminal short of a
+// reload.
+//
+// A single fixed timeout is wrong in both directions — too short for a full
+// scrollback capture on a slow uplink, too long for a small tail on a dead
+// connection. So the deadline is scaled by what is actually being asked for,
+// and by how many captures are already in flight: on a slow link those bytes
+// must drain before this request's own bytes start moving, and its timer is
+// already running the whole time.
+const FETCH_DEADLINE_TAIL_MS = 15000;
+const FETCH_DEADLINE_FULL_MS = 45000;
+const FETCH_DEADLINE_MAX_MS = 120000;
+
+/**
+ * Deadline in ms for a terminal capture.
+ *
+ * @param {{full?:boolean, inflight?:number}} s - `full` = the ?full=1 capture;
+ *   `inflight` = captures already running (this one included or not, it only
+ *   scales the budget).
+ * @returns {number}
+ */
+function terminalFetchDeadlineMs(s) {
+  const full = !!(s && s.full);
+  const base = full ? FETCH_DEADLINE_FULL_MS : FETCH_DEADLINE_TAIL_MS;
+  const inflight = Math.max(0, Number(s && s.inflight) || 0);
+  // Each already-queued capture gets the newcomer one more base budget to wait
+  // through. Linear rather than clever: the point is only that eight tabs
+  // resuming do not all time out together because each assumed it was alone.
+  return Math.min(FETCH_DEADLINE_MAX_MS, base * (1 + inflight));
+}
+
+// ── Diagnostics hygiene ────────────────────────────────────────────────────
+//
+// The crash trail is joined with '\n' into ONE localStorage value and beaconed
+// to the server, and at least one call site interpolates server-controlled text
+// (a WebSocket close `reason`). An embedded newline there forges extra entries
+// in the trail; an unbounded string can fill the storage quota. Both are cheap
+// to close, and the trail is something a user may be asked to paste into an
+// issue.
+const DIAG_ENTRY_MAX_CHARS = 300;
+
+/** Flatten a diagnostic message to one bounded, newline-free line. */
+function sanitizeDiagEntry(msg) {
+  return String(msg == null ? '' : msg)
+    .replace(/[\r\n\u2028\u2029]+/g, ' ')
+    .slice(0, DIAG_ENTRY_MAX_CHARS);
+}
+
 if (typeof window !== 'undefined') {
   window.CodemanHistoryFormat = { formatHistoryBytes, computeHistoryTruncationNotice, computeRewriteScrollLine };
   window.CodemanFilePaths = { absoluteFilePathPattern, previewsInFileViewer, FILE_PREVIEW_EXTENSIONS };
   window.CodemanTerminalLines = { terminalLogicalLine };
+  window.CodemanRenderLiveness = { shouldKickRenderer, RENDER_STALL_MS, RENDER_LIVENESS_POLL_MS };
+  window.CodemanFetchDeadline = {
+    terminalFetchDeadlineMs,
+    FETCH_DEADLINE_TAIL_MS,
+    FETCH_DEADLINE_FULL_MS,
+    FETCH_DEADLINE_MAX_MS,
+  };
+  window.CodemanDiag = { sanitizeDiagEntry, DIAG_ENTRY_MAX_CHARS };
 }

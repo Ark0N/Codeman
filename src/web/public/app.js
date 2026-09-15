@@ -66,7 +66,18 @@ const _crashDiag = {
   // concurrent clients (desktop + phone) don't clobber each other.
   _pageId: Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
   log(msg) {
-    const entry = `${new Date().toISOString().slice(11,23)} ${msg}`;
+    // Entries are joined with '\n' into ONE localStorage value and beaconed to
+    // the server, and some call sites interpolate text this client does not
+    // control (a WebSocket close `reason` arrives from the server). A newline
+    // in there forges extra entries in the trail; an unbounded string can fill
+    // the storage quota and silently kill every later breadcrumb. Flatten and
+    // cap. CodemanDiag is loaded before app.js, but guard anyway — a
+    // diagnostic that can throw is worse than no diagnostic.
+    const flat =
+      typeof CodemanDiag !== 'undefined' && CodemanDiag.sanitizeDiagEntry
+        ? CodemanDiag.sanitizeDiagEntry(msg)
+        : String(msg == null ? '' : msg).replace(/[\r\n\u2028\u2029]+/g, ' ').slice(0, 300);
+    const entry = `${new Date().toISOString().slice(11,23)} ${flat}`;
     this._entries.push(entry);
     if (this._entries.length > this._maxEntries) this._entries.shift();
     try { localStorage.setItem('codeman-crash-diag', this._entries.join('\n')); } catch {}
@@ -675,6 +686,10 @@ class CodemanApp {
     this._wsReady = false;      // True when WS is open and ready for I/O
     this._wsState = 'disconnected'; // connecting | connected | reconnecting | fallback | disconnected
     this._wsLastRecvAt = 0;     // ms timestamp of the last frame received on the active WS
+    // Session whose socket dropped unintentionally, so output produced during
+    // the outage is missing from its buffer. Output frames carry no sequence
+    // number, so the only recovery is to refetch on the next successful open.
+    this._wsOutputGapSession = null;
 
     // Terminal write batching with DEC 2026 sync support
     this.pendingWrites = [];
@@ -2475,6 +2490,81 @@ class CodemanApp {
     }
   }
 
+  /**
+   * Fetch a terminal capture under a deadline.
+   *
+   * Every terminal fetch used to run with no timeout at all, including
+   * `?full=1`, which _maybeRefetchFullHistory itself calls "unbounded-ish work:
+   * at the default history limit it can be megabytes". On a stalled mobile link
+   * that request hangs on the browser default with no retry, and the load-state
+   * machinery stays armed behind it.
+   *
+   * The budget scales with what is being asked for and with how many captures
+   * are already running (see CodemanFetchDeadline): a full scrollback on a slow
+   * uplink legitimately needs longer than a tail, and eight tabs resuming must
+   * not all expire together because each assumed it had the link to itself.
+   *
+   * An abort surfaces as a rejected promise, which every caller already handles —
+   * they wrap these in try/catch and log. That is the point: a timeout becomes a
+   * recoverable error instead of an indefinite hang.
+   *
+   * ⚠️ **The body is read HERE, and that is the whole point.** `await fetch()`
+   * settles on response HEADERS, not the body, so clearing the deadline when it
+   * resolves leaves the body — the multi-megabyte `?full=1` capture this exists
+   * for — completely unbounded. Measured against a server that sends headers
+   * immediately and stalls the body: `fetch()` resolved at 30ms, the timer was
+   * cleared there, and the body completed at 4026ms unaborted under a 1000ms
+   * deadline. Reading the body inside the helper is what makes the deadline
+   * cover the transfer rather than just the handshake. `_terminalCaptureInflight`
+   * is scoped the same way, so a body still streaming counts toward the budget
+   * of a capture starting beside it.
+   *
+   * Returns the PARSED envelope plus the response headers, because two callers
+   * read `server-timing`, and `headersAt` because those same callers measure
+   * header-vs-body time and can no longer observe that moment themselves.
+   *
+   * @param {string} url
+   * @param {{full?: boolean}} [opts]
+   * @returns {Promise<{json: unknown, headers: Headers|undefined, headersAt: number}>}
+   */
+  async _fetchTerminalCapture(url, opts = {}) {
+    const deadlineMs =
+      typeof CodemanFetchDeadline !== 'undefined'
+        ? CodemanFetchDeadline.terminalFetchDeadlineMs({
+            full: !!opts.full,
+            inflight: this._terminalCaptureInflight || 0,
+          })
+        : 45000;
+    // AbortSignal.timeout() is not on every browser Codeman supports, so drive
+    // it from a controller and always clear the timer — an uncancelled one
+    // would abort a LATER request that reused this controller's signal.
+    //
+    // Degrade to a plain fetch where AbortController is missing rather than
+    // throwing: a capture with no deadline is the behaviour every caller had
+    // before this helper existed, while a ReferenceError here would take out
+    // terminal replay entirely. The deadline is a safety net, not a dependency.
+    const canAbort = typeof AbortController === 'function';
+    const controller = canAbort ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), deadlineMs) : null;
+    this._terminalCaptureInflight = (this._terminalCaptureInflight || 0) + 1;
+    try {
+      const res = await (controller ? fetch(url, { signal: controller.signal }) : fetch(url));
+      const headersAt = performance.now();
+      // Still inside the deadline: an abort here rejects the body stream, which
+      // is exactly the case a header-only timeout could not reach.
+      const json = await res.json();
+      return { json, headers: res.headers, headersAt };
+    } catch (err) {
+      if (err?.name === 'AbortError') {
+        _crashDiag.log(`TERMINAL FETCH TIMEOUT after ${deadlineMs}ms`);
+      }
+      throw err;
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+      this._terminalCaptureInflight = Math.max(0, (this._terminalCaptureInflight || 1) - 1);
+    }
+  }
+
   async _onSessionNeedsRefresh(event = {}) {
     // Server sends this after SSE backpressure clears — terminal data was dropped,
     // so reload the buffer to recover from any display corruption.
@@ -2493,15 +2583,16 @@ class CodemanApp {
       // TUI modes still recover the whole picture, with the downgrade guard for
       // repaint-mode panes whose tmux capture can be smaller than xterm's buffer.
       const useFullHistory = this.sessions.get(sessionId)?.mode !== 'shell';
-      let res = await fetch(
+      let capture = await this._fetchTerminalCapture(
         useFullHistory
           ? `/api/sessions/${sessionId}/terminal?full=1`
-          : `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`
+          : `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`,
+        { full: useFullHistory }
       );
-      let data = (await res.json())?.data ?? {};
+      let data = capture.json?.data ?? {};
       if (useFullHistory && data.terminalBuffer && this._replayWouldShrinkBuffer(data.terminalBuffer)) {
-        res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
-        data = (await res.json())?.data ?? {};
+        capture = await this._fetchTerminalCapture(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
+        data = capture.json?.data ?? {};
       }
       // Bail on a tab switch mid-fetch: writing here would paint this session's
       // history into the terminal the user is now looking at. The window is two
@@ -2514,8 +2605,11 @@ class CodemanApp {
         // meaningless across it — distance from the bottom is what survives.
         const before = this.terminal.buffer?.active;
         const linesFromBottom = before ? Math.max(0, (before.baseY || 0) - (before.viewportY || 0)) : 0;
-        this.terminal.clear();
-        this.terminal.reset();
+        // One queued clear, not clear()+reset(): both of those are synchronous
+        // and skip xterm's write queue, so live bytes still parsing would land
+        // after them and fuse into the buffer written below. See
+        // _resetTerminalForReplay.
+        this._resetTerminalForReplay();
         await this.chunkedTerminalWrite(data.terminalBuffer);
         // A tail fetch can be partial, and the banner would otherwise keep
         // describing the pre-refresh buffer (#258).
@@ -2538,7 +2632,23 @@ class CodemanApp {
       console.error('needsRefresh reload failed:', err);
     } finally {
       if (this._terminalRefreshOwner === refreshOwner) this._terminalRefreshOwner = null;
+      // Any completed reload for this session IS the reconcile, whoever asked
+      // for it — handleInit's SSE-reconnect branch and selectSession both land
+      // here or do the same work. Leaving the marker set would make the next
+      // ws.onopen replay the whole buffer a second time.
+      this._markTerminalBufferReconciled(sessionId);
     }
+  }
+
+  /**
+   * Drop the "this session lost output" marker.
+   *
+   * Called from every path that repaints a session's buffer from the server, so
+   * the ws.onopen reconcile fires once and only when nothing else already did
+   * the work. See the ws.onclose note for what the marker means.
+   */
+  _markTerminalBufferReconciled(sessionId) {
+    if (sessionId && this._wsOutputGapSession === sessionId) this._wsOutputGapSession = null;
   }
 
   async _onSessionClearTerminal(data) {
@@ -2551,11 +2661,12 @@ class CodemanApp {
 
       // Fetch buffer, clear terminal, write buffer, resize (no Ctrl+L needed)
       try {
-        const res = await fetch(`/api/sessions/${data.id}/terminal`);
-        const termData = (await res.json())?.data ?? {};
+        const capture = await this._fetchTerminalCapture(`/api/sessions/${data.id}/terminal`);
+        const termData = capture.json?.data ?? {};
 
-        this.terminal.clear();
-        this.terminal.reset();
+        // Queued clear — see _resetTerminalForReplay for why clear()+reset()
+        // cannot do this job.
+        this._resetTerminalForReplay();
         if (termData.terminalBuffer) {
           // Strip any DEC 2026 markers and write raw content
           // (markers don't help here - this is a static buffer reload, not live Ink redraws)
@@ -2875,6 +2986,18 @@ class CodemanApp {
         // Flush any durably-queued input over the fresh socket (covers frames a
         // prior half-open socket silently dropped, and input typed while offline).
         this._onWsReady(sessionId);
+        // Reconcile the output hole this drop left (see the ws.onclose note).
+        // Only after an unintentional close — a first connect has no gap, and
+        // refetching there would duplicate the buffer selectSession just wrote.
+        if (this._wsOutputGapSession === sessionId) {
+          this._wsOutputGapSession = null;
+          _crashDiag.log(`WS REOPEN: reconciling output gap for ${sessionId}`);
+          // Fire-and-forget: this is recovery, and a failure here must not stop
+          // the socket coming up. _onSessionNeedsRefresh already guards against
+          // running while a buffer load is in flight and against a tab switch
+          // landing this session's history in another session's terminal.
+          void this._onSessionNeedsRefresh({ id: sessionId });
+        }
       }
     };
 
@@ -2921,6 +3044,30 @@ class CodemanApp {
       _crashDiag.log(
         `WS CLOSE code=${event.code} reason=${event.reason || ''} action=${plan.action} attempts=${this._wsReconnectAttempts || 0}`
       );
+
+      // Output frames carry no sequence number, so a dropped socket leaves a
+      // hole with nothing to replay it. ws.onopen re-sends dims and flushes
+      // queued INPUT; `needsRefresh` fires only on external-CLI startup and on
+      // SSE backpressure drain, never here.
+      //
+      // ⚠️ The gap this closes is NARROWER than "the device went offline". If
+      // the network drops, SSE drops with it and `handleInit`'s keepTerminal
+      // branch already reconciles on reconnect. The uncovered case is the WS
+      // dying while SSE stays up — a half-open socket, a proxy idle-timeout,
+      // a ping timeout — because `_onSSETerminal` discards every SSE terminal
+      // frame while `_wsReady` is true, and `_wsReady` only flips here, in
+      // onclose. Detecting a half-open socket takes up to the ping+pong window,
+      // and that whole span produces output nothing writes to the terminal.
+      //
+      // Reaching onclose at all means the drop was NOT intentional
+      // (_disconnectWs nulls this handler first), so mark the gap and let the
+      // next successful open reconcile from the server's buffer.
+      //
+      // Scoped to the session that actually lost bytes: a user who switches
+      // sessions during an outage gets a clean intentional disconnect for the
+      // new one, and its freshly-loaded buffer must not be refetched because a
+      // DIFFERENT session's socket dropped.
+      this._wsOutputGapSession = sessionId;
 
       const stillActive = this.activeSessionId === sessionId;
       if (plan.action === 'give-up') {
@@ -5745,9 +5892,29 @@ class CodemanApp {
     }
   }
 
+  /**
+   * Clear the terminal for a replay, IN STREAM.
+   *
+   * xterm's `write()` is asynchronously queued (the WriteBuffer parses in ~12ms
+   * slices) while `Terminal.reset()` is synchronous and, by upstream's own
+   * documentation, "does not clear input buffers and does not reset the parser,
+   * thus the terminal will continue to apply pending input data". So bytes
+   * queued just before a `reset()` are parsed AFTER it and fuse into whatever
+   * snapshot is written next — measured upstream as `p8rmissions` rendered
+   * where `bypass permissions` belonged.
+   *
+   * A queued clear cannot race that way: it lands after the leftovers and
+   * before the snapshot, whatever the queue held. This function used to follow
+   * the sync `reset()` with a queued `\x1b[3J\x1b[H\x1b[2J`, which already got
+   * that right for CONTENT. RIS (`\x1bc`) additionally resets modes, charsets,
+   * scroll regions and SGR state, so leftover bytes cannot park the terminal in
+   * alt-screen or an odd scroll region and survive the clear.
+   *
+   * Callers may write the replacement content in as many chunks as they like —
+   * ordering within the queue is what matters, not writing it all at once.
+   */
   _resetTerminalForReplay() {
-    this.terminal.reset();
-    this.terminal.write('\x1b[3J\x1b[H\x1b[2J');
+    this.terminal.write('\x1bc');
   }
 
   _recordTerminalLoadTiming(timing) {
@@ -5811,9 +5978,9 @@ class CodemanApp {
     this._fullHistoryRepullInFlight = true;
     try {
       const requestStartedAt = performance.now();
-      const res = await fetch(`/api/sessions/${sessionId}/terminal?full=1`);
-      const headersReceivedAt = performance.now();
-      const payload = (await res.json())?.data ?? {};
+      const capture = await this._fetchTerminalCapture(`/api/sessions/${sessionId}/terminal?full=1`, { full: true });
+      const headersReceivedAt = capture.headersAt;
+      const payload = capture.json?.data ?? {};
       const bodyParsedAt = performance.now();
       const buffer = payload.terminalBuffer;
       const timing = {
@@ -5826,7 +5993,7 @@ class CodemanApp {
         bodyAndJsonMs: bodyParsedAt - headersReceivedAt,
         resetAndParseMs: 0,
         totalMs: 0,
-        serverTiming: res.headers?.get?.('server-timing') || '',
+        serverTiming: capture.headers?.get?.('server-timing') || '',
         refused: false,
       };
       // Bail on a tab switch mid-fetch: writing here would paint another session's
@@ -6299,17 +6466,18 @@ class CodemanApp {
       const useFullHistory = session?.mode !== 'shell' && !this._fullHistoryLoaded.has(sessionId);
       if (useFullHistory) this._fullHistoryLoaded.add(sessionId);
       const fetchStartedAt = performance.now();
-      const res = await fetch(
+      const capture = await this._fetchTerminalCapture(
         useFullHistory
           ? `/api/sessions/${sessionId}/terminal?full=1`
-          : `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`
+          : `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`,
+        { full: useFullHistory }
       );
-      const headersReceivedAt = performance.now();
+      const headersReceivedAt = capture.headersAt;
       if (this._isStaleSelect(selectGen)) {
         this._clearTerminalLoadState(sessionId, selectGen);
         return;
       }
-      const data = (await res.json())?.data ?? {};
+      const data = capture.json?.data ?? {};
       const bodyParsedAt = performance.now();
       _crashDiag.log(`FETCH_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} truncated=${data.truncated}`);
 
@@ -6379,7 +6547,7 @@ class CodemanApp {
         cacheResetAndParseMs,
         freshResetAndParseMs,
         selectToReplayCompleteMs: performance.now() - _selStart,
-        serverTiming: res.headers?.get?.('server-timing') || '',
+        serverTiming: capture.headers?.get?.('server-timing') || '',
       };
       // Buffer load complete — unblock live SSE writes. chunkedTerminalWrite calls
       // _finishBufferLoad after ordering the fetched snapshot in xterm; if we skipped
@@ -6389,6 +6557,11 @@ class CodemanApp {
       if (this._isLoadingBuffer) {
         this._finishBufferLoad(bufferLoadOwner, { flushQueued: bufferWasEmpty });
       }
+      // This load repainted the session from the server, so any pending
+      // output-gap marker is already satisfied. Selecting a session runs BEFORE
+      // _connectWs, so without this the socket opening afterwards would replay
+      // the whole buffer again on top of the one just written.
+      this._markTerminalBufferReconciled(sessionId);
       // Drop the guard so user input clears state normally
       this._restoringFlushedState = false;
 
@@ -6529,6 +6702,9 @@ class CodemanApp {
   // Shared cleanup for all session data — called from both closeSession() and session:deleted handler
   _cleanupSessionData(sessionId) {
     this.closeTabRailActionMenu?.();
+    // A dead session has no buffer to reconcile; leaving the marker set would
+    // make a later socket for a REUSED id reconcile against nothing.
+    this._markTerminalBufferReconciled(sessionId);
     // If the deleted session is currently being renamed, abort the rename
     // so the inline <input> doesn't ghost as a stale tab on screen.
     if (this._activeRename?.sessionId === sessionId) {
