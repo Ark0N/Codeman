@@ -41,6 +41,7 @@ import fs from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { hostname as getHostname } from 'node:os';
 import { dataPath, getDataDir, CODEMAN_INSTANCE } from '../config/instance.js';
+import { readRemoteHosts, rehydrateRemoteHostFields } from '../remote-hosts.js';
 import { normalizeBasePath, stripBasePath, joinBasePath } from '../config/base-path.js';
 import { GLYPH, palette } from '../cli-style.js';
 import { getHookSecret } from '../config/hook-secret.js';
@@ -2871,6 +2872,9 @@ export class WebServer extends EventEmitter {
 
         // For each alive mux session, create a Session object if it doesn't exist
         const muxSessions = this.mux.getSessions();
+        // Host-level config lives in remote-hosts.json, not in the persisted session
+        // snapshot, so refresh the fields that only exist there (see the helper).
+        const remoteHostsById = new Map((await readRemoteHosts(getDataDir())).map((host) => [host.id, host]));
         for (const muxSession of muxSessions) {
           if (!this.sessions.has(muxSession.sessionId)) {
             // Restore session settings from state.json (single source of truth)
@@ -2948,7 +2952,9 @@ export class WebServer extends EventEmitter {
               // respawn rebuilds a LOCAL command, breaking the pane and silently
               // erasing `remote` from state.json on the next persist. mux-sessions.json
               // round-trips MuxSession.remote; state.json carries SessionState.remote.
-              remote: muxSession.remote ?? savedState?.remote,
+              // Host-level fields are refreshed from remote-hosts.json on top, or a
+              // field added to the host config after launch would never arrive.
+              remote: rehydrateRemoteHostFields(muxSession.remote ?? savedState?.remote, remoteHostsById),
               // Docker metadata round-trips the same way (mux-sessions.json carries
               // MuxSession.docker; state.json carries SessionState.docker), so recovery
               // rebuilds the `docker exec` launch instead of a broken local command.

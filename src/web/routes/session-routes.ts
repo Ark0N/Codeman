@@ -67,6 +67,7 @@ import {
   type WaitSignal,
   type SignalWaitResult,
 } from '../session-wait-registry.js';
+import { RemoteWakeRegistry, createDefaultRemoteWakeDeps } from '../../remote-wake.js';
 import { clampWaitMs, MAX_BUFFER_SCAN_BYTES } from '../../config/agent-wait.js';
 import {
   autoConfigureRalph,
@@ -133,6 +134,7 @@ import {
   checkRemoteTmuxAvailable,
   readRemoteCases,
   readRemoteHosts,
+  rehydrateRemoteHostFields,
   toAttachedSessionRemote,
   toSessionRemote,
 } from '../../remote-hosts.js';
@@ -816,8 +818,42 @@ export function resolveOmpConfigForCreate(
 
 export function registerSessionRoutes(
   app: FastifyInstance,
-  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort
+  ctx: SessionPort & EventPort & ConfigPort & InfraPort & AuthPort & TabLayoutPort,
+  /** Test seam: inject a registry with fake IO instead of the real TCP/WoL probes. */
+  options: { remoteWake?: RemoteWakeRegistry } = {}
 ): void {
+  // Wake-on-LAN for sleeping remote hosts (see remote-wake.ts). One registry per
+  // route registration (= one web server) — the same shape as the process-wide
+  // `sessionWaits` singleton, but without the global.
+  //
+  // ⚠️ The ONLY caller that may wake a host is the input route below. The
+  // auto-reconnect watcher and boot recovery deliberately have no access to this
+  // registry: waking there would re-wake the host seconds after every suspend, so
+  // it could never stay asleep.
+  const remoteWake =
+    options.remoteWake ??
+    new RemoteWakeRegistry(
+      createDefaultRemoteWakeDeps({
+        noteReconnected: (sessionId, success) => {
+          // Duck-typed exactly like server.ts: TmuxManager owns the COD-108 backoff
+          // state, and the port interface does not expose it.
+          const mux = ctx.mux as unknown as { noteRemoteReconnect?: (id: string, ok: boolean) => void };
+          mux.noteRemoteReconnect?.(sessionId, success);
+        },
+        broadcast: (event, payload) => ctx.broadcast(event, payload),
+        log: (message) => console.log(message),
+        // The session's `remote` block is a launch-time snapshot, so a wake target
+        // configured later (banner's config dialog, or a hand-edited remote-hosts.json)
+        // is resolved here — throttled by the registry, and only for sessions that
+        // have no usable target of their own.
+        resolveRemote: async (session) => {
+          const remote = session.remote;
+          if (!remote) return undefined;
+          const hosts = await readRemoteHosts(CODEMAN_CONFIG_DIR);
+          return rehydrateRemoteHostFields(remote, new Map(hosts.map((host) => [host.id, host])));
+        },
+      })
+    );
   // ═══════════════════════════════════════════════════════════════
   // Auth
   // ═══════════════════════════════════════════════════════════════
@@ -1279,6 +1315,7 @@ export function registerSessionRoutes(
     }
 
     const session = findSessionOrFail(ctx, id, req);
+    remoteWake.drop(session.id);
     await ctx.cleanupSession(session.id, killMux, 'user_delete');
     return {};
   });
@@ -1296,6 +1333,7 @@ export function registerSessionRoutes(
 
     for (const id of sessionIds) {
       if (ctx.sessions.has(id)) {
+        remoteWake.drop(id);
         await ctx.cleanupSession(id, true, 'user_bulk_delete');
         killed++;
       }
@@ -1514,6 +1552,56 @@ export function registerSessionRoutes(
   // Terminal I/O (input, resize, buffer)
   // ═══════════════════════════════════════════════════════════════
 
+  // ========== Wake-on-LAN: state + manual trigger ==========
+  //
+  // Both routes are session-scoped (not host-scoped) because the wake flow needs the
+  // SESSION: a woken host whose pane is not reattached is still a dead terminal, and an
+  // exhausted COD-108 backoff never retries on its own. The probe in `/reachability` is
+  // the same cheap TCP connect the input path uses and it NEVER wakes a host — the UI
+  // decides that, with the button.
+
+  app.get('/api/sessions/:id/reachability', async (req) => {
+    const { id } = req.params as { id: string };
+    const session = findSessionOrFail(ctx, id, req);
+    const remote = session.remote;
+    if (!remote) return { success: true, data: { reachable: true, wakeConfigured: 'none' as const } };
+    const force = (req.query as { force?: string })?.force === '1';
+    const reachable = await remoteWake.checkReachable(session, { force });
+    return {
+      success: true,
+      data: {
+        reachable,
+        wakeConfigured: await remoteWake.wakeConfigured(session),
+        host: remote.host,
+        label: remote.label,
+      },
+    };
+  });
+
+  app.post('/api/sessions/:id/wake', async (req) => {
+    const { id } = req.params as { id: string };
+    const session = findSessionOrFail(ctx, id, req);
+    if (!session.remote) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Not a remote session');
+    }
+    // The UI uses this to route to the host config dialog instead of a dead button.
+    if (!(await remoteWake.hasWakeTarget(session))) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'No wake-on-LAN target configured for this host (set a MAC address or a wake command)'
+      );
+    }
+    const woke = await remoteWake.ensureAwake(session, { force: true });
+    return {
+      success: true,
+      data: {
+        woke,
+        reachable: await remoteWake.checkReachable(session),
+        wakeConfigured: await remoteWake.wakeConfigured(session),
+      },
+    };
+  });
+
   // ========== Send Input ==========
 
   app.post('/api/sessions/:id/input', async (req, reply) => {
@@ -1553,6 +1641,28 @@ export function registerSessionRoutes(
     const duplicate = tagged && !session.shouldApplyInput(clientId as string, seq as number);
     if (duplicate && !wantsWait) {
       return {};
+    }
+
+    // Wake-on-LAN (remote-wake.ts): a wake-enabled remote host that suspended leaves
+    // the local ssh pane STALLED, and `send-keys` succeeds against it — the bytes
+    // would vanish with no error anywhere. Give the registry the chance to probe the
+    // host, wake it, reattach, and own delivery before we write into nothing.
+    //
+    // Costs nothing for non-wake hosts (the `wakeCommand` guard) or while the host is
+    // known reachable inside the probe throttle window; the probe itself is a bare
+    // TCP connect on wake-enabled hosts only, at most once per
+    // REMOTE_WAKE_PROBE_MIN_INTERVAL_MS.
+    if (!duplicate && (await remoteWake.hasWakeTarget(session))) {
+      if (wantsWait) {
+        // Send-and-wait keeps the response open anyway, so blocking on the wake is
+        // simpler and more correct than buffering (buffering would break the wait).
+        await remoteWake.ensureAwake(session);
+      } else if ((await remoteWake.handleInput(session, inputStr)) === 'buffered') {
+        // The registry holds the bytes and flushes them in order once the pane is
+        // reattached. The client's ACK is this 200 — a tagged retry is deduped
+        // (`shouldApplyInput` above already consumed the seq), so nothing is lost.
+        return {};
+      }
     }
 
     // Only a waiting request pays for the tmux probe: the browser's plain input path

@@ -213,6 +213,18 @@
       <button class="offline-banner-retry" id="offlineBannerRetry" onclick="app.retryConnection()">Retry now</button>
     </div>
 
+    <!-- Remote-host unreachable: the machine SLEEPS, the local ssh pane stalls
+         silently (send-keys succeeds against it, so typed input would vanish) and
+         Codeman can wake it. Amber, not red: the session is fine, the host is
+         asleep. Without a configured wake target the action becomes "Configure
+         WoL" and opens the small config dialog. -->
+    <div class="offline-banner host-wake-banner" id="hostWakeBanner" role="status" hidden>
+      <span class="offline-banner-dot" aria-hidden="true"></span>
+      <span class="offline-banner-text" id="hostWakeBannerText">Remote host is unreachable</span>
+      <span class="offline-banner-detail" id="hostWakeBannerDetail"></span>
+      <button class="offline-banner-retry" id="hostWakeBannerAction" onclick="app.hostWakeAction()">Wake</button>
+    </div>
+
     <!-- Timer Banner (shown when timed run is active) -->
     <div class="timer-banner" id="timerBanner" style="display: none;">
       <div class="timer-content">
@@ -2861,6 +2873,11 @@
               <span class="form-hint">Optional. Leave blank for the default port 22.</span>
             </div>
             <div class="form-row">
+              <label>Wake-on-LAN MAC</label>
+              <input type="text" id="remoteHostWakeMac" placeholder="04:d9:f5:80:c6:58" autocomplete="off" autocapitalize="off" spellcheck="false">
+              <span class="form-hint">Optional. Comma-separated for several NICs. Codeman sends the magic packet itself so a sleeping host can be woken from the session banner.</span>
+            </div>
+            <div class="form-row">
               <label>Codex Command Override</label>
               <input type="text" id="remoteHostCodexCommand" placeholder="exec codx personal" autocomplete="off" autocapitalize="off" spellcheck="false">
               <span class="form-hint">Optional. Leave blank to use exec codex on the remote host.</span>
@@ -2868,6 +2885,11 @@
             <details class="advanced-options">
               <summary><svg class="set-adv-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg><span>Advanced SSH</span></summary>
               <div class="advanced-options-content">
+                <div class="form-row">
+                  <label>Wake Command</label>
+                  <input type="text" id="remoteHostWakeCommand" placeholder="/home/user/bin/wake-this-host" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                  <span class="form-hint">Optional override for the MAC above (takes precedence). A single executable path, run without a shell — use it when the host needs a router/other machine to send the packet.</span>
+                </div>
                 <div class="form-row">
                   <label>Identity File</label>
                   <input type="text" id="remoteHostIdentityFile" placeholder="~/.ssh/remote_ed25519" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
@@ -3463,6 +3485,36 @@
        text is set via value/textContent only: predictor output derives from
        observable (injectable) content, and the explicit click here is the
        security boundary (nothing is ever auto-sent). -->
+  <!-- Wake-on-LAN setup for a remote host whose session cannot be woken yet. Kept
+       deliberately small (host is fixed, only the wake fields are editable) so it can
+       be opened from the banner with one click. Persists via PUT /api/remote-hosts/:id. -->
+  <div class="modal" id="wakeConfigModal">
+    <div class="modal-backdrop" onclick="app.closeWakeConfigDialog()"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Wake-on-LAN &middot; <span id="wakeConfigHostLabel"></span></h3>
+        <button class="modal-close" onclick="app.closeWakeConfigDialog()" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <label>MAC address(es)</label>
+          <input type="text" id="wakeConfigMac" placeholder="04:d9:f5:80:c6:58" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <span class="form-hint">Comma-separated for several NICs. Codeman sends the magic packet itself (UDP port 9, broadcast).</span>
+        </div>
+        <div class="form-row">
+          <label>Wake command (optional)</label>
+          <input type="text" id="wakeConfigCommand" placeholder="/home/user/bin/wake-this-host" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+          <span class="form-hint">Takes precedence over the MAC. A single executable path, run without a shell.</span>
+        </div>
+        <div class="form-hint" id="wakeConfigStatus"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-toolbar" onclick="app.closeWakeConfigDialog()">Cancel</button>
+        <button class="btn-toolbar btn-primary" id="wakeConfigSave" onclick="app.saveWakeConfig()">Save</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal" id="readMyMindModal">
     <div class="modal-backdrop" onclick="app.closeReadMyMind()"></div>
     <div class="modal-content readmymind-modal">
@@ -3537,6 +3589,7 @@
   <script defer src="approvals-ui.js"></script>
   <script defer src="admin-ui.js"></script>
   <script defer src="session-ui.js"></script>
+  <script defer src="host-wake-ui.js"></script>
   <script defer src="webview-tabs.js"></script>
   <script defer src="mobile-overview.js"></script>
   <script defer src="home-sessions.js"></script>

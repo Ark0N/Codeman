@@ -1057,6 +1057,9 @@ const SSE_EVENTS = {
   REMOTE_SESSION_DROPPED: 'remote:sessionDropped',
   REMOTE_SESSION_RECONNECTED: 'remote:sessionReconnected',
   REMOTE_RECONNECT_EXHAUSTED: 'remote:reconnectExhausted',
+  // Wake-on-LAN from user input on a sleeping remote host
+  REMOTE_HOST_WAKING: 'remote:hostWaking',
+  REMOTE_HOST_WAKE_FAILED: 'remote:hostWakeFailed',
 
   // Ralph
   SESSION_RALPH_LOOP_UPDATE: 'session:ralphLoopUpdate',

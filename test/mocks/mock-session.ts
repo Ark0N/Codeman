@@ -99,6 +99,14 @@ export class MockSession extends EventEmitter {
     return true;
   }
 
+  /**
+   * Mirrors `Session.reattachRemote()` — the COD-108 transport re-establish that
+   * the wake-on-LAN flow calls once a sleeping host is back. Defaults to success;
+   * set `reattachRemote.mockResolvedValue(false)` to model a pane that could not
+   * be respawned.
+   */
+  reattachRemote = vi.fn(async (): Promise<boolean> => true);
+
   /** Exactly-once input dedup — mirrors Session.shouldApplyInput so route tests
    *  exercising the reliable-delivery path behave like production. */
   private _appliedInputSeq = new Map<string, number>();

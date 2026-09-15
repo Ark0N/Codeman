@@ -15306,6 +15306,18 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
   background: rgba(255, 255, 255, 0.24);
 }
 
+/* Remote-host unreachable (host asleep, can be woken). Reuses the offline-banner
+   layout and children; amber instead of red because the Codeman session itself is
+   perfectly healthy — only the machine is asleep. */
+.host-wake-banner {
+  background: linear-gradient(90deg, #b45309, #92400e);
+}
+
+.host-wake-banner .offline-banner-retry:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* Above the mobile fixed header (1200) and modals (1300): this is a blocking
    "nothing works right now" state, and it only appears before any session
    state has loaded, so there is no modal underneath to bury. Stays below the

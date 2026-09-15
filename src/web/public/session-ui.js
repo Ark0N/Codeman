@@ -3071,6 +3071,9 @@ Object.assign(CodemanApp.prototype, {
     const identityFile = document.getElementById('remoteHostIdentityFile').value.trim();
     const socksProxy = document.getElementById('remoteHostSocksProxy').value.trim();
     const jumpHost = document.getElementById('remoteHostJumpHost').value.trim();
+    // Wake-on-LAN: keep in sync with `_readRemoteHostFromForm` (the Discover path).
+    const wakeMac = document.getElementById('remoteHostWakeMac').value.trim();
+    const wakeCommand = document.getElementById('remoteHostWakeCommand').value.trim();
     const extraSshOptions = document.getElementById('remoteHostExtraSshOptions').value
       .split('\n')
       .map(line => line.trim())
@@ -3108,6 +3111,8 @@ Object.assign(CodemanApp.prototype, {
         ...(socksProxy ? { socksProxy } : {}),
         ...(jumpHost ? { jumpHost } : {}),
         ...(extraSshOptions.length ? { extraSshOptions } : {}),
+        ...(wakeMac ? { wakeMac } : {}),
+        ...(wakeCommand ? { wakeCommand } : {}),
         ...(codexCommand ? { commands: { codex: codexCommand } } : {}),
       };
       const hostRes = await fetch('/api/remote-hosts', {
@@ -3568,6 +3573,9 @@ Object.assign(CodemanApp.prototype, {
     const socksProxy = document.getElementById('remoteHostSocksProxy').value.trim();
     const jumpHost = document.getElementById('remoteHostJumpHost').value.trim();
     const codexCommand = document.getElementById('remoteHostCodexCommand').value.trim();
+    // Wake-on-LAN: keep in sync with `linkRemoteCase`'s inline payload.
+    const wakeMac = document.getElementById('remoteHostWakeMac').value.trim();
+    const wakeCommand = document.getElementById('remoteHostWakeCommand').value.trim();
     const extraSshOptions = document.getElementById('remoteHostExtraSshOptions').value
       .split('\n')
       .map(line => line.trim())
@@ -3587,6 +3595,8 @@ Object.assign(CodemanApp.prototype, {
       ...(socksProxy ? { socksProxy } : {}),
       ...(jumpHost ? { jumpHost } : {}),
       ...(extraSshOptions.length ? { extraSshOptions } : {}),
+      ...(wakeMac ? { wakeMac } : {}),
+      ...(wakeCommand ? { wakeCommand } : {}),
       ...(codexCommand ? { commands: { codex: codexCommand } } : {}),
     };
   },

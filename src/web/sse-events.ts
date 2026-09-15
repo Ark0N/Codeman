@@ -184,6 +184,13 @@ export const RemoteSessionDropped = 'remote:sessionDropped' as const;
 export const RemoteSessionReconnected = 'remote:sessionReconnected' as const;
 /** Auto-reconnect gave up after the bounded backoff cap — manual reconnect needed. */
 export const RemoteReconnectExhausted = 'remote:reconnectExhausted' as const;
+/**
+ * User input arrived for a session whose host is unreachable, so a Wake-on-LAN
+ * command was started (see `remote-wake.ts`). Input sent meanwhile is buffered.
+ */
+export const RemoteHostWaking = 'remote:hostWaking' as const;
+/** The host did not come back within the wake timeout — buffered input is still held. */
+export const RemoteHostWakeFailed = 'remote:hostWakeFailed' as const;
 
 // ─── Respawn ─────────────────────────────────────────────────────────────────
 
@@ -535,6 +542,8 @@ export const SseEvent = {
   RemoteSessionDropped,
   RemoteSessionReconnected,
   RemoteReconnectExhausted,
+  RemoteHostWaking,
+  RemoteHostWakeFailed,
 
   // Respawn
   RespawnStarted,

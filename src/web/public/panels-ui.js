@@ -92,6 +92,9 @@ Object.assign(CodemanApp.prototype, {
   _onRemoteSessionReconnected(data) {
     const id = this.getShortId(data.sessionId);
     this.showToast(`Remote session ${id} reconnected`, 'success');
+    // A successful reattach (the wake flow's own, or the watcher's) means the host is
+    // back: drop the "unreachable" banner without waiting out the poll interval.
+    if (this.activeSessionId === data.sessionId) this._pollHostReachability?.(true);
   },
 
   _onRemoteReconnectExhausted(data) {
@@ -114,6 +117,16 @@ Object.assign(CodemanApp.prototype, {
       },
     });
   },
+
+
+  // Wake-on-LAN from user input on a sleeping remote host (see remote-wake.ts).
+  // ⚠️ The `remote:hostWaking` / `remote:hostWakeFailed` HANDLERS live in
+  // `host-wake-ui.js`, which owns the banner state. They are NOT redefined here:
+  // both files mix into `CodemanApp.prototype` and `host-wake-ui.js` is loaded
+  // later, so a second definition would silently shadow the banner update (and the
+  // toast would never fire — the exact silent no-op `sse-dispatch-table.test.ts`
+  // exists to prevent, which cannot see shadowing). The toasts are shown from the
+  // host-wake-ui handlers instead.
 
 
   // Bash tools
