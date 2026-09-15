@@ -4203,6 +4203,12 @@ Object.assign(CodemanApp.prototype, {
    */
   detachFilePreview() {
     if (!this.filePreviewDetachUrl) return;
+    const hosted = this.openInHostWindow?.(this.filePreviewDetachUrl) ?? null;
+    if (hosted !== null) {
+      if (hosted) this.closeFilePreview();
+      else this.showToast('Could not open a new window for this preview', 'error');
+      return;
+    }
     const win = window.open(this.filePreviewDetachUrl, '_blank');
     if (!win) {
       this.showToast('Pop-up blocked: allow pop-ups for this site to detach previews', 'error');
