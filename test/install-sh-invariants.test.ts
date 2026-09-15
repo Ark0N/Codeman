@@ -48,13 +48,12 @@ describe('install.sh generated-catalogue block', () => {
     );
   });
 
-  it('declares every array the detection code indexes', () => {
+  it('declares every array install.sh actually reads', () => {
     for (const name of [
       'CLI_IDS',
       'CLI_LABELS',
       'CLI_ENABLED',
-      'CLI_KIND',
-      'CLI_NPM',
+      'CLI_LAUNCHER_ONLY',
       'CLI_DOCS',
       'CLI_CMD_LINUX',
       'CLI_CMD_DARWIN',
@@ -66,6 +65,17 @@ describe('install.sh generated-catalogue block', () => {
       'CLI_PATH_LEN',
     ]) {
       expect(new RegExp(`^${name}=\\(`, 'm').test(SOURCE), `${name} is not declared`).toBe(true);
+    }
+  });
+
+  it('declares no array install.sh never reads', () => {
+    // CLI_KIND and CLI_NPM were generated and read by nothing (the .mjs/docker-hosts.ts
+    // producers read the JSON's `kind`/`npmPackage` fields directly; only these two bash
+    // arrays were dead). A generated-but-unread array is a maintenance trap the generator
+    // itself cannot warn about — it has no reader to check against — so this pins the
+    // opposite of the test above: naming what must NOT come back rather than what must.
+    for (const name of ['CLI_KIND', 'CLI_NPM']) {
+      expect(new RegExp(`^${name}=\\(`, 'm').test(SOURCE), `${name} is declared but nothing reads it`).toBe(false);
     }
   });
 
@@ -92,6 +102,16 @@ describe('install.sh generated-catalogue block', () => {
     expect(perCliFunctions, `hand-written per-CLI detection still present:\n  ${perCliFunctions.join('\n  ')}`).toEqual(
       []
     );
+  });
+
+  it('keeps no dead generic-lookup helpers behind', () => {
+    // _cli_index/check_cli/get_cli_path were the ungenericized precursor to the per-CLI
+    // helpers above: same shape, one level of indirection, called from nowhere once the
+    // catalogue-driven menu and hints stopped needing a lookup-by-id. Unlike the per-CLI
+    // pairs these are exact names, not derived from the catalogue.
+    for (const fn of ['_cli_index()', 'check_cli()', 'get_cli_path()']) {
+      expect(CODE.includes(fn), `${fn} should have been removed as dead code`).toBe(false);
+    }
   });
 });
 
@@ -243,5 +263,44 @@ describe('install.sh AI CLI install menu', () => {
     expect(run.stderr).toContain('The selected AI CLI failed to install');
     expect(run.stdout).not.toContain('REACHED THE STEP AFTER THE MENU');
     expect(run.status).toBe(1);
+  });
+});
+
+describe('install.sh detect_all_clis and a disabled entry', () => {
+  // No stock entry ships disabled today, so this is characterization rather than a regression
+  // pin on real data: it drives the real function in a real bash with entry 0 fabricated
+  // disabled, and points its binary at `bash` — guaranteed resolvable via `command -v` — to
+  // prove the entry is genuinely never PROBED (CLI_FOUND_PATH stays empty) rather than merely
+  // filtered out downstream by every consumer's own `CLI_ENABLED` check.
+  function driveDetect(disableEntry0: boolean) {
+    const driver = `
+      set -euo pipefail
+      export CODEMAN_INSTALL_SH_LIB=1
+      . "$1"
+      k=0; while [[ $k -lt \${#CLI_ALL_BINS[@]} ]]; do CLI_ALL_BINS[$k]="codeman-test-no-such-bin-$k"; k=$((k + 1)); done
+      k=0; while [[ $k -lt \${#CLI_ALL_PATHS[@]} ]]; do CLI_ALL_PATHS[$k]="/nonexistent/codeman-test/$k"; k=$((k + 1)); done
+      # Point entry 0's first declared binary at something that WILL resolve, so a probe that
+      # runs at all finds it.
+      CLI_ALL_BINS[\${CLI_BIN_OFF[0]}]="bash"
+      ${disableEntry0 ? 'CLI_ENABLED[0]="0"' : ''}
+      CLI_DETECT_DONE=""
+      detect_all_clis
+      echo "path0=[\${CLI_FOUND_PATH[0]}]"
+      echo "found=$CLI_FOUND_COUNT"
+    `;
+    const result = spawnSync('bash', ['-c', driver, 'bash', INSTALL_SH], { encoding: 'utf-8', timeout: 30_000 });
+    return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+  }
+
+  it('probes an enabled entry (control case)', () => {
+    const run = driveDetect(false);
+    expect(run.stdout, run.stderr).not.toContain('path0=[]');
+    expect(run.stdout).toContain('found=1');
+  });
+
+  it('never probes a disabled entry', () => {
+    const run = driveDetect(true);
+    expect(run.stdout, run.stderr).toContain('path0=[]');
+    expect(run.stdout).toContain('found=0');
   });
 });

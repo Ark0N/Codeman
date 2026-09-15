@@ -135,8 +135,7 @@ export function renderInstallShBlock(entries: CliEntry[] = STOCK_CLIS): string {
   const ids: string[] = [];
   const labels: string[] = [];
   const enabled: string[] = [];
-  const kinds: string[] = [];
-  const npm: string[] = [];
+  const launcherOnly: string[] = [];
   const docs: string[] = [];
   const cmdLinux: string[] = [];
   const cmdDarwin: string[] = [];
@@ -151,8 +150,11 @@ export function renderInstallShBlock(entries: CliEntry[] = STOCK_CLIS): string {
     ids.push(shQuote(entry.id as string));
     labels.push(shQuote(entry.label));
     enabled.push(entry.enabled ? '1' : '0');
-    kinds.push(shQuote(entry.kind));
-    npm.push(shQuote(entry.discovery.install.npmPackage ?? ''));
+    // Parallel to CLI_IDS: 1 when this entry's install command installs a launcher rather
+    // than something that can drive a pane on its own (see installCommandFor below). Purely
+    // derived from discovery.launcherProfile — install.sh's hint printer reads this to add a
+    // caveat instead of hardcoding which id it means.
+    launcherOnly.push(entry.discovery.launcherProfile ? '1' : '0');
     docs.push(shQuote(entry.discovery.install.docsUrl ?? ''));
     cmdLinux.push(shQuote(installCommandFor(entry, 'linux')));
     cmdDarwin.push(shQuote(installCommandFor(entry, 'darwin')));
@@ -195,8 +197,7 @@ export function renderInstallShBlock(entries: CliEntry[] = STOCK_CLIS): string {
     arr('CLI_IDS', ids),
     arr('CLI_LABELS', labels),
     arr('CLI_ENABLED', enabled),
-    arr('CLI_KIND', kinds),
-    arr('CLI_NPM', npm),
+    arr('CLI_LAUNCHER_ONLY', launcherOnly),
     arr('CLI_DOCS', docs),
     arr('CLI_CMD_LINUX', cmdLinux),
     arr('CLI_CMD_DARWIN', cmdDarwin),

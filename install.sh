@@ -93,8 +93,7 @@ export PUPPETEER_SKIP_DOWNLOAD="${PUPPETEER_SKIP_DOWNLOAD:-1}"
 CLI_IDS=('claude' 'shell' 'opencode' 'codex' 'gemini' 'antigravity' 'pi' 'grok' 'deepseek' 'omp')
 CLI_LABELS=('Claude' 'Shell' 'OpenCode' 'Codex' 'Gemini' 'Antigravity' 'Pi' 'Grok' 'DeepSeek' 'OMP')
 CLI_ENABLED=(1 1 1 1 1 1 1 1 1 1)
-CLI_KIND=('agent' 'shell' 'agent' 'agent' 'agent' 'agent' 'agent' 'agent' 'agent' 'agent')
-CLI_NPM=('@anthropic-ai/claude-code' '' 'opencode-ai' '@openai/codex' '@google/gemini-cli' '' '@earendil-works/pi-coding-agent' '' '@deepseek-ai/dsh' '')
+CLI_LAUNCHER_ONLY=(0 0 0 0 0 0 0 0 1 0)
 CLI_DOCS=('https://docs.claude.com/claude-code' '' 'https://opencode.ai/docs' 'https://developers.openai.com/codex/cli' 'https://github.com/google-gemini/gemini-cli' 'https://antigravity.google/cli' 'https://pi.dev' 'https://github.com/xai-org/grok-build' 'https://github.com/deepseek-ai/deepseek-harness' 'https://omp.sh')
 CLI_CMD_LINUX=('curl -fsSL https://claude.ai/install.sh | bash' '' 'curl -fsSL https://opencode.ai/install | bash' 'npm install -g @openai/codex' 'npm install -g @google/gemini-cli' 'curl -fsSL https://antigravity.google/cli/install.sh | bash' 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent' 'curl -fsSL https://x.ai/cli/install.sh | bash' '' 'curl -fsSL https://omp.sh/install | sh')
 CLI_CMD_DARWIN=('curl -fsSL https://claude.ai/install.sh | bash' '' 'curl -fsSL https://opencode.ai/install | bash' 'npm install -g @openai/codex' 'npm install -g @google/gemini-cli' 'curl -fsSL https://antigravity.google/cli/install.sh | bash' 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent' 'curl -fsSL https://x.ai/cli/install.sh | bash' '' 'brew install can1357/tap/omp')
@@ -410,22 +409,6 @@ check_build_tools() {
 # test/install-sh-detection-parity.test.ts: the process PATH first (each declared
 # binary name in turn), then each known install path, dir-major.
 
-# Index of "$1" in CLI_IDS -> CLI_IDX, returning 1 with CLI_IDX=-1 when unknown.
-# A global rather than an echo because this runs inside loops, and a subshell per
-# lookup is a fork per CLI per call site.
-CLI_IDX=-1
-_cli_index() {
-    local want="$1" i
-    CLI_IDX=-1
-    for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
-        if [[ "${CLI_IDS[$i]}" == "$want" ]]; then
-            CLI_IDX=$i
-            return 0
-        fi
-    done
-    return 1
-}
-
 # `dsh` is the hardest name of the lot: Debian ships an unrelated `dsh`
 # (dancer's shell). The server-side resolver settles it by demanding the
 # harness's own help banner; detection here only feeds the "you have no AI CLI"
@@ -465,7 +448,8 @@ _cli_candidate_ok() {
 
 # Resolve every CLI in ONE pass, memoized.
 #
-# CLI_FOUND_PATH is parallel to CLI_IDS ('' when not found). CLI_FOUND_COUNT
+# CLI_FOUND_PATH is parallel to CLI_IDS ('' when not found, and also '' for a
+# DISABLED entry — it is never probed at all, see below). CLI_FOUND_COUNT
 # counts only ENABLED entries that have a binary to look for, which is what the
 # "no AI CLI found" gate asks about — `shell` has no binary and must never make
 # that gate think an agent is installed.
@@ -484,6 +468,16 @@ detect_all_clis() {
     CLI_FOUND_COUNT=0
     for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
         found=""
+
+        # A disabled entry is never even probed: every consumer already filters
+        # on CLI_ENABLED before showing anything, so the command-v/stat calls
+        # below would be pure waste — and, unlike filtering downstream, skipping
+        # the probe here is what makes CLI_ENABLED mean "look for it" rather
+        # than just "offer it once found".
+        if [[ "${CLI_ENABLED[$i]}" != "1" ]]; then
+            CLI_FOUND_PATH[$i]=""
+            continue
+        fi
 
         # 1. The process PATH, each declared binary name in turn.
         bin_end=$((${CLI_BIN_OFF[$i]} + ${CLI_BIN_LEN[$i]}))
@@ -518,20 +512,6 @@ detect_all_clis() {
         fi
     done
     return 0
-}
-
-# Is this CLI installed? Unknown id is "no", never an error.
-check_cli() {
-    detect_all_clis
-    _cli_index "$1" || return 1
-    [[ -n "${CLI_FOUND_PATH[$CLI_IDX]}" ]]
-}
-
-# Where it was found, or nothing.
-get_cli_path() {
-    detect_all_clis
-    _cli_index "$1" || return 1
-    printf '%s\n' "${CLI_FOUND_PATH[$CLI_IDX]}"
 }
 
 # ----------------------------------------------------------------------------
@@ -589,7 +569,12 @@ cli_catalog_names() {
 # the registry but an empty one here: installing the launcher alone leaves
 # nothing that can drive a pane, so the generator withholds the command for
 # any launcherProfile entry (see installCommandFor in generate-cli-catalog.mts)
-# and this hint falls through to the docs URL instead.
+# and this hint falls through to the docs URL instead — CLI_LAUNCHER_ONLY adds
+# one line explaining WHY it is a docs link and not a command, so a user who
+# follows that link straight to `npm install -g @deepseek-ai/dsh` (which the
+# docs page itself documents) does not land back in the same "installed but
+# cannot drive a pane" trap the menu exists to avoid. Data-driven, not an id
+# check: any future launcherProfile entry gets the same caveat for free.
 cli_catalog_print_install_hints() {
     detect_all_clis
     local i
@@ -601,6 +586,9 @@ cli_catalog_print_install_hints() {
             echo -e "    ${CYAN}${CLI_INSTALL_CMD_TRUSTED[$i]}${NC}   # ${CLI_LABELS[$i]}"
         elif [[ -n "${CLI_DOCS[$i]}" ]]; then
             echo -e "    ${CLI_LABELS[$i]}: see ${CYAN}${CLI_DOCS[$i]}${NC}"
+            if [[ "${CLI_LAUNCHER_ONLY[$i]}" == "1" ]]; then
+                echo -e "      (its package installs a launcher only — it needs a profile that can drive a pane, see the docs above)"
+            fi
         fi
     done
 }
@@ -679,9 +667,12 @@ offer_ai_cli_install() {
 
         local cli_choice=""
         if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
-            # Explicit automation opt-in: default to the first offered entry,
-            # which is registry order, which is Claude Code (order 0) — the
-            # same default this prompt has always taken non-interactively.
+            # Explicit automation opt-in: default to the first OFFERED entry.
+            # That is registry order, which is Claude Code (order 0), UNLESS
+            # this is a wget-only host and Claude's curl one-liner was just
+            # filtered out of offer_idx above — there, the first survivor is
+            # whichever npm-based entry sorts earliest (Codex today), not
+            # Claude. Printed either way so the choice is never silent.
             cli_choice="1"
             info "CODEMAN_NONINTERACTIVE=1: defaulting to ${CLI_LABELS[${offer_idx[0]}]}"
         else
