@@ -910,6 +910,8 @@ class CodemanApp {
     // strip never flashes before handleInit selects the target session.
     this._initWindowChannel();
     if (this.isSoloWindow) document.body.classList.add('solo-mode');
+    // mobile.css keeps the pop-out icon off phones unless a host can open windows.
+    document.documentElement.classList.toggle('host-windows', this.hasHostWindows());
     // Initialize mobile handlers
     KeyboardHandler.init();
     SwipeHandler.init();
@@ -1295,6 +1297,21 @@ class CodemanApp {
     // false only when we owned a now-closed window (re-dock + fall through to
     // genuinely re-open below).
     if (this.detachedSessions.has(id) && this._raiseDetached(id)) return;
+    // A native wrapper (an Android WebView app) has no browser pop-ups, but can
+    // open the solo URL in a window of its own, beside this one on a foldable or
+    // a split screen. There is no WindowProxy to poll, so the tab is tracked the
+    // way a dashboard reload tracks it: the solo window's channel announcements
+    // plus the roll-call liveness check.
+    const hosted = this.openInHostWindow(CodemanBase.url('/session/' + encodeURIComponent(id)));
+    if (hosted !== null) {
+      if (!hosted) {
+        this.showToast?.('Could not open a new window for this session', 'error');
+        return;
+      }
+      this._markDetached(id, true);
+      this._postWindowMessage({ type: 'detached', id });
+      return;
+    }
     const features = 'width=960,height=680,menubar=no,toolbar=no,location=no,status=no';
     let win = null;
     try { win = window.open(CodemanBase.url('/session/' + encodeURIComponent(id)), 'codeman-session-' + id, features); } catch {}
@@ -1307,6 +1324,32 @@ class CodemanApp {
     this._watchDetachedWindow(id, win);
     this._postWindowMessage({ type: 'detached', id });
     try { win.focus(); } catch {}
+  }
+
+  /**
+   * The embedding app's window opener, when there is one. A native wrapper
+   * exposes `window.CodemanHost.openWindow(absoluteUrl)` (returning whether a
+   * window opened) to say it can put a page in a window of its own; browsers
+   * never define it.
+   * @returns {boolean} whether a host window opener is present
+   */
+  hasHostWindows() {
+    try {
+      return typeof window !== 'undefined' && typeof window.CodemanHost?.openWindow === 'function';
+    } catch { return false; }
+  }
+
+  /**
+   * Open a same-origin page in a host window.
+   * @param {string} url absolute or base-relative URL
+   * @returns {boolean|null} null when there is no host (use window.open),
+   *   otherwise whether the host opened a window
+   */
+  openInHostWindow(url) {
+    if (!this.hasHostWindows()) return null;
+    try {
+      return window.CodemanHost.openWindow(new URL(url, location.href).href) !== false;
+    } catch { return false; }
   }
 
   /** Raise the popup for an already-detached session. Returns true if the raise
@@ -1435,8 +1478,12 @@ class CodemanApp {
       // Roll-call has no id (broadcast to all) — answer before the id filter.
       if (msg.type === 'roll-call') { this._postWindowMessage({ type: 'detached', id: this.soloSessionId }); return; }
       if (msg.id !== this.soloSessionId) return;
-      if (msg.type === 'close-request') { try { window.close(); } catch {} }
-      else if (msg.type === 'focus-request') { try { window.focus(); } catch {} }
+      // A host window ignores window.close()/focus() from script it did not
+      // open by window.open, so ask the host when it offers the call.
+      if (msg.type === 'close-request') { this._closeSoloWindow(); }
+      else if (msg.type === 'focus-request') {
+        try { if (typeof window.CodemanHost?.focusWindow === 'function') window.CodemanHost.focusWindow(); else window.focus(); } catch {}
+      }
       return;
     }
     // Dashboard side.
@@ -1486,6 +1533,14 @@ class CodemanApp {
       }
       this._detachPingPending = null;
     }, 1200);
+  }
+
+  /** Solo window: close itself (the re-dock button and a dashboard close-request). */
+  _closeSoloWindow() {
+    try {
+      if (typeof window.CodemanHost?.closeWindow === 'function') window.CodemanHost.closeWindow();
+      else window.close();
+    } catch {}
   }
 
   /** Solo window: select the target session and apply minimal single-session

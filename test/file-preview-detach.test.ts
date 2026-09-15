@@ -128,6 +128,30 @@ describe('file viewer detach button', () => {
     expect(app.showToast).toHaveBeenCalledWith(expect.stringContaining('Pop-up blocked'), 'error');
   });
 
+  it('hands the URL to a host window opener instead of window.open', () => {
+    const { app, overlay, windowStub } = loadApp();
+    app.openInHostWindow = vi.fn().mockReturnValue(true);
+    app.filePreviewDetachUrl = '/api/sessions/s1/file-raw?path=doc.pdf';
+
+    app.detachFilePreview();
+
+    expect(app.openInHostWindow).toHaveBeenCalledWith('/api/sessions/s1/file-raw?path=doc.pdf');
+    expect(windowStub.open).not.toHaveBeenCalled();
+    expect(overlay.classList.contains('visible')).toBe(false);
+  });
+
+  it('keeps the overlay and toasts when the host could not open a window', () => {
+    const { app, overlay, windowStub } = loadApp();
+    app.openInHostWindow = vi.fn().mockReturnValue(false);
+    app.filePreviewDetachUrl = '/api/sessions/s1/file-raw?path=doc.pdf';
+
+    app.detachFilePreview();
+
+    expect(windowStub.open).not.toHaveBeenCalled();
+    expect(overlay.classList.contains('visible')).toBe(true);
+    expect(app.showToast).toHaveBeenCalledWith(expect.stringContaining('Could not open'), 'error');
+  });
+
   it('does nothing when no preview is armed', () => {
     const { app, windowStub } = loadApp();
     app.filePreviewDetachUrl = '';
