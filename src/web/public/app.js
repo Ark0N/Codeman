@@ -6117,6 +6117,10 @@ class CodemanApp {
       // sendResize is a no-op on the server when dims haven't changed, so
       // calling it every tab switch is cheap.
       const dimsChanged = await this.sendResize(sessionId, { forceHttp: true }).catch(() => false);
+      // The size the capture below will be taken against. The debounced resize
+      // handler can move the terminal again while the load runs, so this is a
+      // recorded value rather than a later read of `_lastResizeDims`.
+      const dimsAtCapture = this.getTerminalDimensions?.();
       if (this._isStaleSelect(selectGen)) {
         this._clearTerminalLoadState(sessionId, selectGen);
         return;
@@ -6348,6 +6352,29 @@ class CodemanApp {
       // annoyance that disappear on the user's next keypress; data loss is not
       // acceptable. Do NOT re-introduce Ctrl+L here.
       this.sendResize(sessionId);
+      // sendResize fits synchronously before its first await, so this reads the
+      // size that survived the load rather than the one the capture was taken
+      // at. The two differ whenever the terminal was still settling.
+      const dimsAfterLoad = this.getTerminalDimensions?.();
+      const sizeMovedUnderLoad =
+        !!dimsAtCapture &&
+        !!dimsAfterLoad &&
+        (dimsAfterLoad.cols !== dimsAtCapture.cols || dimsAfterLoad.rows !== dimsAtCapture.rows);
+      // A capture positions every row absolutely, so a pane taller than this
+      // terminal writes its overflow rows onto the last line and loses the rows
+      // it overwrote. That happens when the capture wins a race against the
+      // resize meant to precede it, which is what the retry below repairs.
+      //
+      // It also happens when `Session.resize` DECLINED the resize, which it does
+      // for a small viewport while a desktop viewport's size claim is live. The
+      // retry cannot repair that one: it re-sends the same declined resize and
+      // captures the same too-tall pane. `resizeRetry` stops it after the one
+      // extra attempt, and the frame is shown as-is. Repairing that case means
+      // changing who owns the pane size, which is a policy question this does
+      // not touch. What the flag does buy there is that the client can SEE the
+      // mismatch at all, which it previously could not.
+      const capturedTallerThanTerminal =
+        Number.isFinite(data.captureRows) && data.captureRows > (this.terminal?.rows || 0);
 
       // Defer secondary panel updates so they don't block the main thread
       // after terminal content is already visible.
@@ -6448,6 +6475,30 @@ class CodemanApp {
       this._clearTerminalLoadState(sessionId, selectGen);
       _crashDiag.log(`SELECT_DONE: ${selectDoneMs.toFixed(0)}ms`);
       console.log(`[CRASH-DIAG] selectSession DONE: ${sessionId.slice(0,8)} in ${selectDoneMs.toFixed(0)}ms`);
+      // What is on screen was drawn for a geometry this terminal does not have.
+      // Replaying once against the size that stuck is the only thing that
+      // repairs it: SIGWINCH reaches the CLI only on a real size change, and
+      // the pane is already at its final size, so no redraw is coming.
+      // `resizeRetry` caps this at one attempt, so two competing fits cannot
+      // trade replays forever.
+      if (
+        (sizeMovedUnderLoad || capturedTallerThanTerminal) &&
+        !options?.resizeRetry &&
+        !this._isStaleSelect(selectGen)
+      ) {
+        _crashDiag.log(
+          `RESIZE_RETRY: capture ${data.captureCols}x${data.captureRows} vs terminal ` +
+            `${this.terminal?.cols}x${this.terminal?.rows}` +
+            (sizeMovedUnderLoad ? ' (size moved under load)' : '')
+        );
+        // Re-arm the full-history pull ONLY if this pass actually used one, so
+        // the retry replays the same content at the geometry that stuck. A pass
+        // that took the bounded tail must retry on the tail too: clearing the
+        // flag unconditionally would UPGRADE a tab switch into a fresh
+        // multi-megabyte scrollback capture it never asked for.
+        if (useFullHistory) this._fullHistoryLoaded.delete(sessionId);
+        await this.selectSession(sessionId, { auto: true, forceReload: true, resizeRetry: true });
+      }
     } catch (err) {
       if (this._isLoadingBuffer) this._finishBufferLoad(bufferLoadOwner);
       this._restoringFlushedState = false;

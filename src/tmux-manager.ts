@@ -3467,6 +3467,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
           { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
         )
       );
+      // Report the size the pane was really drawing at. Both replay paths below
+      // address rows absolutely, so a consumer whose terminal is shorter than
+      // this piles every overflow row onto its last line and loses the rows it
+      // overwrote. Only the caller can see both sizes, so hand it this one.
+      if (opts && geometry) opts.capturedGeometry = { cols: geometry.cols, rows: geometry.rows };
 
       if (fullHistory) {
         // Without geometry there is no cursor move, so fall back to the old trim.
