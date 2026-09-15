@@ -56,10 +56,10 @@ type BufferLoadApp = {
   _bufferLoadSeq: number;
   _bufferLoadOwner: string | null;
   _isLoadingBuffer: boolean;
-  _loadBufferQueue: string[] | null;
+  _loadBufferQueue: { at: number; data: string }[] | null;
   batchTerminalWrite: (data: string) => void;
   _beginBufferLoad: (owner?: string) => string;
-  _finishBufferLoad: (owner?: string, opts?: { flushQueued?: boolean }) => boolean;
+  _finishBufferLoad: (owner?: string, opts?: { flushQueued?: boolean; since?: number }) => boolean;
 };
 
 /**
@@ -84,10 +84,13 @@ function makeApp() {
   return { app, writes };
 }
 
-/** Simulate live SSE events arriving while a buffer load is in progress (the queue path). */
-function pushWhileLoading(app: BufferLoadApp, data: string) {
-  // Mirrors batchTerminalWrite's queue branch: if loading, push to the queue.
-  if (app._isLoadingBuffer && app._loadBufferQueue) app._loadBufferQueue.push(data);
+/**
+ * Simulate a live SSE event arriving while a buffer load is in progress.
+ * Mirrors batchTerminalWrite's queue branch, which stamps each entry with its
+ * arrival time so a flush can replay only the tail (see the `since` tests).
+ */
+function pushWhileLoading(app: BufferLoadApp, data: string, at = performance.now()) {
+  if (app._isLoadingBuffer && app._loadBufferQueue) app._loadBufferQueue.push({ at, data });
 }
 
 describe('buffer-load flush (COD-144)', () => {
@@ -153,9 +156,89 @@ describe('buffer-load flush (COD-144)', () => {
     // State untouched — still loading, queue intact, nothing replayed.
     expect(app._isLoadingBuffer).toBe(true);
     expect(app._bufferLoadOwner).toBe('real-owner');
-    expect(app._loadBufferQueue).toEqual(['queued']);
+    expect(app._loadBufferQueue).toEqual([{ at: expect.any(Number), data: 'queued' }]);
     expect(app.batchTerminalWrite).not.toHaveBeenCalled();
     expect(writes).toEqual([]);
+  });
+
+  // ── The tmux-capture tail: `since` ──
+  //
+  // A pane capture is a point-in-time frame taken part-way through the fetch, so
+  // it holds what arrived BEFORE the capture and nothing after. selectSession
+  // passes the response's arrival time as `since`, which splits the queue at
+  // exactly that line: pre-capture events are already painted and must stay
+  // dropped, post-capture events exist nowhere else and must be replayed.
+
+  it('flushes only the entries at or after `since`', () => {
+    const { app, writes } = makeApp();
+    const owner = app._beginBufferLoad('load-since');
+    pushWhileLoading(app, 'already-in-the-capture', 100);
+    pushWhileLoading(app, 'arrived-at-the-headers', 200);
+    pushWhileLoading(app, 'arrived-after-the-headers', 300);
+
+    app._finishBufferLoad(owner, { flushQueued: true, since: 200 });
+
+    // The pre-capture event stays dropped; the boundary entry counts as after.
+    expect(writes).toEqual(['arrived-at-the-headers', 'arrived-after-the-headers']);
+  });
+
+  it('flushQueued without `since` still replays the whole queue', () => {
+    // The COD-144 path: a brand-new session's first prompt predates the
+    // response, so cutting the queue would drop the only content it has.
+    const { app, writes } = makeApp();
+    const owner = app._beginBufferLoad('load-no-since');
+    pushWhileLoading(app, 'prompt', 10);
+    pushWhileLoading(app, 'more', 20);
+
+    app._finishBufferLoad(owner, { flushQueued: true });
+
+    expect(writes).toEqual(['prompt', 'more']);
+  });
+
+  it('a `since` past every entry flushes nothing', () => {
+    const { app, writes } = makeApp();
+    const owner = app._beginBufferLoad('load-since-late');
+    pushWhileLoading(app, 'old', 10);
+
+    app._finishBufferLoad(owner, { flushQueued: true, since: 999 });
+
+    expect(writes).toEqual([]);
+    expect(app.batchTerminalWrite).not.toHaveBeenCalled();
+  });
+
+  // ── Re-entering one load ──
+  //
+  // `selectSession` opens the load before its fetch, and `chunkedTerminalWrite`
+  // opens it again under the SAME owner when it starts writing. A reset on that
+  // second call would silently throw away everything queued during the fetch,
+  // which on the capture path is output no buffer holds.
+
+  it('re-entering the same load keeps what the queue already holds', () => {
+    const { app, writes } = makeApp();
+    const owner = app._beginBufferLoad('load-reenter');
+    pushWhileLoading(app, 'arrived-during-the-fetch', 100);
+
+    // chunkedTerminalWrite re-opens the load it was handed.
+    app._beginBufferLoad(owner);
+    pushWhileLoading(app, 'arrived-during-the-write', 200);
+
+    app._finishBufferLoad(owner, { flushQueued: true, since: 50 });
+
+    expect(writes).toEqual(['arrived-during-the-fetch', 'arrived-during-the-write']);
+  });
+
+  it('a genuinely different load still starts with an empty queue', () => {
+    const { app, writes } = makeApp();
+    app._beginBufferLoad('load-first');
+    pushWhileLoading(app, 'belongs-to-the-abandoned-load', 100);
+
+    // A tab switch starts a new load under a new owner. Its events are not ours.
+    const second = app._beginBufferLoad('load-second');
+    pushWhileLoading(app, 'belongs-to-this-load', 200);
+
+    app._finishBufferLoad(second, { flushQueued: true, since: 0 });
+
+    expect(writes).toEqual(['belongs-to-this-load']);
   });
 
   it('empty queue + flushQueued is a no-op (no throw, no writes)', () => {

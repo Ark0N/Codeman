@@ -1906,6 +1906,30 @@ class CodemanApp {
     this._onSessionClearTerminal(data);
   }
 
+  /**
+   * How a buffer load that just fetched `payload` must end.
+   *
+   * A tmux pane capture is a point-in-time frame, so nothing that reached the
+   * browser after the response headers can already be in it. Such a load
+   * replays exactly that tail; discarding it drops the CLI's output for the
+   * rest of the load window, and its next partial redraw then lands on a frame
+   * the terminal never received. A payload built from the server's accumulated
+   * byte history needs the opposite: that history is current up to the
+   * response, so replaying the queue on top of it would duplicate output.
+   *
+   * `headersReceivedAt` is the caller's own `performance.now()` reading from
+   * the moment the response arrived, compared only against other client-side
+   * readings, so there is no clock skew to worry about.
+   *
+   * @param {{source?: string}} payload - The parsed `data` of a terminal response.
+   * @param {number} headersReceivedAt - When that response reached this client.
+   * @returns {{flushQueued: boolean, since: number}} Options for `_finishBufferLoad`.
+   */
+  _bufferLoadFinishOpts(payload, headersReceivedAt) {
+    const capturedFromMux = payload?.source === 'mux-visible' || payload?.source === 'mux-full-history';
+    return { flushQueued: capturedFromMux, since: headersReceivedAt };
+  }
+
   _onSessionTerminal(data) {
     if (data.id === this.activeSessionId) {
       if (data.data.length > 32768) _crashDiag.log(`TERMINAL: ${(data.data.length/1024).toFixed(0)}KB`);
@@ -1915,7 +1939,7 @@ class CodemanApp {
       // jump over the cap. Dropped data is recovered from the canonical buffer.
       const queued = (this.pendingWrites?.reduce((s, w) => s + w.length, 0) || 0)
         + (this.flickerFilterBuffer?.length || 0)
-        + (this._loadBufferQueue?.reduce((s, w) => s + w.length, 0) || 0)
+        + (this._loadBufferQueue?.reduce((s, w) => s + w.data.length, 0) || 0)
         + (this._terminalWriteInFlightBytes || 0);
       if (queued + data.data.length > 131072) { // 128KB — drop to prevent accumulation
         // Schedule a self-recovery once the
@@ -2498,9 +2522,11 @@ class CodemanApp {
           ? `/api/sessions/${sessionId}/terminal?full=1`
           : `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`
       );
+      let headersReceivedAt = performance.now();
       let data = (await res.json())?.data ?? {};
       if (useFullHistory && data.terminalBuffer && this._replayWouldShrinkBuffer(data.terminalBuffer)) {
         res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
+        headersReceivedAt = performance.now();
         data = (await res.json())?.data ?? {};
       }
       // Bail on a tab switch mid-fetch: writing here would paint this session's
@@ -2516,7 +2542,12 @@ class CodemanApp {
         const linesFromBottom = before ? Math.max(0, (before.baseY || 0) - (before.viewportY || 0)) : 0;
         this.terminal.clear();
         this.terminal.reset();
-        await this.chunkedTerminalWrite(data.terminalBuffer);
+        await this.chunkedTerminalWrite(
+          data.terminalBuffer,
+          TERMINAL_CHUNK_SIZE,
+          undefined,
+          this._bufferLoadFinishOpts(data, headersReceivedAt)
+        );
         // A tail fetch can be partial, and the banner would otherwise keep
         // describing the pre-refresh buffer (#258).
         this._setHistoryTruncation(sessionId, data);
@@ -2552,6 +2583,7 @@ class CodemanApp {
       // Fetch buffer, clear terminal, write buffer, resize (no Ctrl+L needed)
       try {
         const res = await fetch(`/api/sessions/${data.id}/terminal`);
+        const headersReceivedAt = performance.now();
         const termData = (await res.json())?.data ?? {};
 
         this.terminal.clear();
@@ -2561,7 +2593,12 @@ class CodemanApp {
           // (markers don't help here - this is a static buffer reload, not live Ink redraws)
           const cleanBuffer = termData.terminalBuffer.replace(DEC_SYNC_STRIP_RE, '');
           // Use chunked write to avoid UI freeze with large buffers (can be 1-2MB)
-          await this.chunkedTerminalWrite(cleanBuffer);
+          await this.chunkedTerminalWrite(
+            cleanBuffer,
+            TERMINAL_CHUNK_SIZE,
+            undefined,
+            this._bufferLoadFinishOpts(termData, headersReceivedAt)
+          );
         }
 
         // Fire-and-forget resize — don't block on it
@@ -5852,7 +5889,12 @@ class CodemanApp {
         parsedAt,
         bufferLength: parsedBufferLength,
         completed,
-      } = await this.chunkedTerminalWrite(buffer, TERMINAL_CHUNK_SIZE, sessionId);
+      } = await this.chunkedTerminalWrite(
+        buffer,
+        TERMINAL_CHUNK_SIZE,
+        sessionId,
+        this._bufferLoadFinishOpts(payload, headersReceivedAt)
+      );
       timing.resetAndParseMs = parsedAt - replayStartedAt;
       if (!completed || this.activeSessionId !== sessionId) return;
       // Keep shell tab restores bounded too. A user-triggered full-history pull
@@ -6311,6 +6353,15 @@ class CodemanApp {
       }
       const data = (await res.json())?.data ?? {};
       const bodyParsedAt = performance.now();
+      // How this load must end, decided here because `chunkedTerminalWrite` is
+      // what actually ends it for a non-empty buffer. A tmux pane capture is a
+      // point-in-time frame, so nothing that reached the browser after the
+      // response headers can already be in it. Replay exactly that tail;
+      // discarding it drops the CLI's output for the rest of the load window,
+      // and its next partial redraw then lands on a frame the terminal never
+      // received. `since` keeps the pre-capture events dropped, because the
+      // capture does hold those and replaying them would duplicate output.
+      const finishOpts = this._bufferLoadFinishOpts(data, headersReceivedAt);
       _crashDiag.log(`FETCH_DONE: ${data.terminalBuffer ? (data.terminalBuffer.length/1024).toFixed(0) + 'KB' : 'empty'} truncated=${data.truncated}`);
 
       let freshResetAndParseMs = 0;
@@ -6337,7 +6388,8 @@ class CodemanApp {
           const { parsedAt: freshParsedAt } = await this.chunkedTerminalWrite(
             data.terminalBuffer,
             TERMINAL_CHUNK_SIZE,
-            bufferLoadOwner
+            bufferLoadOwner,
+            finishOpts
           );
           freshResetAndParseMs = freshParsedAt - replayStartedAt;
           if (this._isStaleSelect(selectGen)) {
@@ -6387,7 +6439,14 @@ class CodemanApp {
       // COD-144: when the load painted nothing, FLUSH the queued events instead of
       // discarding — a new session's prompt arrives only as a queued SSE event.
       if (this._isLoadingBuffer) {
-        this._finishBufferLoad(bufferLoadOwner, { flushQueued: bufferWasEmpty });
+        // Only reached when the write was skipped. COD-144 lives here: a new
+        // session's first prompt exists only as a queued event that predates the
+        // response, so an empty paint replays its queue WHOLE rather than from
+        // the header timestamp.
+        this._finishBufferLoad(
+          bufferLoadOwner,
+          bufferWasEmpty ? { flushQueued: true, since: 0 } : finishOpts
+        );
       }
       // Drop the guard so user input clears state normally
       this._restoringFlushedState = false;
