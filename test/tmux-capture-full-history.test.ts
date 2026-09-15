@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { formatCursorRestore, hasVisibleContent } from '../src/tmux-manager.js';
+import { formatCursorRestore, formatPaneSnapshot, hasVisibleContent } from '../src/tmux-manager.js';
 
 describe('tmux full-history pane capture (COD-47)', () => {
   const source = readFileSync(resolve(import.meta.dirname, '../src/tmux-manager.ts'), 'utf8');
@@ -119,5 +119,55 @@ describe('hasVisibleContent', () => {
 
   it('is true as soon as one row carries a character', () => {
     expect(hasVisibleContent('\x1b[m   \x1b[0m\n\x1b[m x \x1b[0m')).toBe(true);
+  });
+});
+
+describe('the geometry a capture reports back', () => {
+  const source = readFileSync(resolve(import.meta.dirname, '../src/tmux-manager.ts'), 'utf8');
+  const methodStart = source.indexOf('capturePaneBuffer(muxName: string');
+  const methodEnd = source.indexOf('captureActivePaneBuffer(muxName: string', methodStart);
+  const methodBody = source.slice(methodStart, methodEnd);
+
+  it('writes the pane size onto the caller options before either replay path returns', () => {
+    // IS_TEST_MODE no-ops execSync, so assert from source (same approach as the
+    // capture-flag tests above). The write must precede the fullHistory branch:
+    // both paths return from inside it, and a caller that got no geometry
+    // cannot tell a mismatched frame from a matching one.
+    const write = methodBody.indexOf('opts.capturedGeometry = { cols: geometry.cols, rows: geometry.rows }');
+    // Anchor on the REPLAY branch, not the earlier `if (fullHistory)` that only
+    // sizes the exec buffer.
+    const replayBranch = methodBody.indexOf('if (!geometry) return normalizeScrollbackEol(');
+    const visibleReturn = methodBody.indexOf('if (geometry) return formatPaneSnapshot(');
+    expect(write).toBeGreaterThan(-1);
+    expect(replayBranch).toBeGreaterThan(-1);
+    expect(visibleReturn).toBeGreaterThan(-1);
+    expect(write).toBeLessThan(replayBranch);
+    expect(write).toBeLessThan(visibleReturn);
+  });
+
+  it('reports nothing when the cursor query gave no geometry', () => {
+    // `queryPaneCursor` returns null on a failed or nonsensical query, and the
+    // snapshot repaint is skipped in that case. Reporting a size anyway would
+    // describe a frame that was never positioned.
+    expect(methodBody).toContain('if (opts && geometry)');
+  });
+});
+
+describe('why a capture has to report its height', () => {
+  it('a snapshot addresses rows the receiving terminal may not have', () => {
+    // formatPaneSnapshot positions every row absolutely. A terminal shorter
+    // than the pane clamps each address past its own height onto its last
+    // line, so the overflow rows overwrite one another and the rows underneath
+    // are lost. Nothing in the escape sequence tells the client this happened —
+    // hence captureRows on the response.
+    const lines = Array.from({ length: 50 }, (_, i) => `row-${i + 1}`);
+    // cursorX 5 keeps the trailing cursor-restore move (`\x1b[50;6H`) out of the
+    // `;1H` row-paint match below, so the count is row paints alone.
+    const snapshot = formatPaneSnapshot(lines, { cols: 100, rows: 50, cursorX: 5, cursorY: 49 });
+    const addressed = [...snapshot.matchAll(/\x1b\[(\d+);1H/g)].map((m) => Number(m[1]));
+
+    expect(Math.max(...addressed)).toBe(50);
+    // A 30-row terminal cannot honour 20 of those addresses.
+    expect(addressed.filter((row) => row > 30)).toHaveLength(20);
   });
 });

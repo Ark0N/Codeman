@@ -159,6 +159,15 @@ export interface PaneCaptureOptions {
    * the 1MB execSync default (ENOBUFS).
    */
   maxCaptureBytes?: number;
+  /**
+   * Filled in by the implementation with the pane geometry the capture was
+   * really taken at, which is not always the geometry the caller last asked
+   * for: a resize and a capture can race, and a pane whose size a desktop
+   * viewport has claimed ignores a smaller client's resize outright. A
+   * visible-frame capture addresses every row absolutely, so a consumer
+   * rendering it needs the real height to know the frame fits.
+   */
+  capturedGeometry?: { cols: number; rows: number };
 }
 
 /**

@@ -373,8 +373,19 @@ export class MockSession extends EventEmitter {
   /** Stub for sendInput */
   sendInput = vi.fn();
 
+  /**
+   * The geometry the pane is drawing at, which the terminal route reports on
+   * every response so a client can tell whether the frame fits its own
+   * terminal. The stubbed `resize` records it the way the real one does.
+   */
+  ptyCols = 120;
+  ptyRows = 40;
+
   /** Stub for resize */
-  resize = vi.fn();
+  resize = vi.fn((cols: number, rows: number) => {
+    this.ptyCols = cols;
+    this.ptyRows = rows;
+  });
 
   /** Stubs for the desktop sizing claims used by resize arbitration */
   claimDesktopSizing = vi.fn();

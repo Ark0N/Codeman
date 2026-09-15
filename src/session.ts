@@ -3725,6 +3725,20 @@ export class Session extends EventEmitter {
   private _ptyRows = 40;
 
   /**
+   * The geometry the pane is currently drawing at. A caller that captures the
+   * pane needs this to report the size the frame was built for, and `resize`
+   * can decline a small viewport's request while a desktop claim is live, so
+   * the last size asked for is not always the size in force.
+   */
+  get ptyCols(): number {
+    return this._ptyCols;
+  }
+
+  get ptyRows(): number {
+    return this._ptyRows;
+  }
+
+  /**
    * Live WebSocket connections that have announced a desktop viewport for this
    * session. While at least one is registered, small-viewport (mobile/tablet)
    * resizes are ignored so a phone glancing at the session can't reflow the

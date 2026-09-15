@@ -30,6 +30,7 @@ import {
   type OmpConfig,
 } from '../../types.js';
 import { Session, isAltScreenStripMode, isExternalCliMode, isMuxAltScreenOnlyStripMode } from '../../session.js';
+import type { PaneCaptureOptions } from '../../mux-interface.js';
 import { SseEvent } from '../sse-events.js';
 import { webviewCapabilities } from '../../webview-capabilities.js';
 import {
@@ -2697,14 +2698,16 @@ export function registerSessionRoutes(
     // returns null when unavailable, in which case we fall back to history.
     const muxName = session.muxName;
     const captureStartedAt = performance.now();
+    // The visible path used to pass no options at all. It passes one now for a
+    // single reason: `capturedGeometry` comes BACK on it, and the response has
+    // to tell the client what size the frame it is about to render was built
+    // for. See PaneCaptureOptions.capturedGeometry.
+    const captureOpts: PaneCaptureOptions = isFullReload
+      ? { fullHistory: true, historyLimitLines: tmuxHistoryLimit, maxCaptureBytes: terminalBufferMaxBytes }
+      : {};
     const liveMuxBuffer =
       muxName && typeof ctx.mux.captureActivePaneBuffer === 'function'
-        ? ctx.mux.captureActivePaneBuffer(
-            muxName,
-            isFullReload
-              ? { fullHistory: true, historyLimitLines: tmuxHistoryLimit, maxCaptureBytes: terminalBufferMaxBytes }
-              : undefined
-          )
+        ? ctx.mux.captureActivePaneBuffer(muxName, captureOpts)
         : null;
     const captureFinishedAt = performance.now();
     const hasLiveMuxBuffer = liveMuxBuffer !== null && liveMuxBuffer.length > 0;
@@ -2850,6 +2853,14 @@ export function registerSessionRoutes(
       // what existed before the cut. The gap is what the indicator reports.
       retainedBytes: cleanBuffer.length,
       source,
+      // The pane geometry this frame was drawn for. A visible-frame capture
+      // positions every row absolutely, so a client whose terminal has fewer
+      // rows than this overwrites its last line with the overflow and loses
+      // the rows underneath. The client compares these against its own size.
+      // Falls back to the session's own geometry when the capture reported
+      // none (cursor query failed, or the buffer came from byte history).
+      captureCols: captureOpts.capturedGeometry?.cols ?? session.ptyCols,
+      captureRows: captureOpts.capturedGeometry?.rows ?? session.ptyRows,
     };
   });
 
