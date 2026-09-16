@@ -18327,3 +18327,66 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
     max-height: min(88vh, env(viewport-segment-height 0 1, 88vh));
   }
 }
+
+/* Split-Pane Sessions: container inserted only while a split is active.
+   .terminal-wrap (Pane A) is reparented into this as the first child; it
+   keeps every existing rule unchanged since nothing here restyles it. */
+.terminal-split-container {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.terminal-split-container > .terminal-wrap {
+  flex: 0 0 auto;
+  min-width: 240px;
+  overflow: hidden;
+}
+
+.split-divider {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--border-color, #333);
+  position: relative;
+}
+
+.split-divider:hover,
+.split-divider.dragging {
+  background: var(--accent-color, #4a9eff);
+}
+
+.terminal-pane-b {
+  flex: 0 0 auto;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.terminal-pane-b-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--bg-secondary, #1a1a1a);
+  border-bottom: 1px solid var(--border-color, #333);
+  flex: 0 0 auto;
+}
+
+.terminal-pane-b-close {
+  cursor: pointer;
+  padding: 0 6px;
+  opacity: 0.7;
+}
+
+.terminal-pane-b-close:hover {
+  opacity: 1;
+}
+
+.terminal-pane-b-container {
+  flex: 1 1 auto;
+  min-height: 0;
+}
