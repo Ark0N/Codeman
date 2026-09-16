@@ -182,24 +182,64 @@ git commit -m "feat(split-pane): add pure divider-clamp and picker-list helpers"
 
 - [ ] **Step 1: Write the failing test**
 
+This mirrors the existing `test/routes/system-routes-settings-partial-put.test.ts` pattern exactly — there is no `buildTestApp()` helper in this codebase; route tests go through `createRouteTestHarness(registerFn)` from `test/routes/_route-test-utils.ts`, and `GET`/`PUT /api/settings` are NOT wrapped in the `{success,data}` envelope (see `src/web/routes/system-routes.ts:938`, `app.get('/api/settings', ...)` returns the raw settings object directly — read its own comment there for why). `registerSystemRoutes` also drives three watcher singletons on every PUT, so they must be mocked or the route throws.
+
 ```typescript
 // test/routes/system-routes-split-button-setting.test.ts
-import { describe, it, expect } from 'vitest';
-import { buildTestApp } from './_route-test-utils';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
+import { registerSystemRoutes } from '../../src/web/routes/system-routes.js';
+
+const { subagentWatcher, imageWatcher, workflowRunWatcher } = vi.hoisted(() => {
+  const makeWatcher = () => ({
+    isRunning: vi.fn(() => false),
+    start: vi.fn(),
+    stop: vi.fn(),
+    getStats: vi.fn(() => ({})),
+    watchSession: vi.fn(),
+    getRecentRunSummaries: vi.fn(() => []),
+  });
+  return { subagentWatcher: makeWatcher(), imageWatcher: makeWatcher(), workflowRunWatcher: makeWatcher() };
+});
+
+vi.mock('node:fs/promises', () => ({
+  default: {
+    readFile: vi.fn(async () => JSON.stringify({})),
+    writeFile: vi.fn(async () => undefined),
+  },
+}));
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, existsSync: vi.fn(() => true), mkdirSync: vi.fn(), readdirSync: vi.fn(() => []) };
+});
+
+vi.mock('../../src/subagent-watcher.js', () => ({ subagentWatcher }));
+vi.mock('../../src/image-watcher.js', () => ({ imageWatcher }));
+vi.mock('../../src/workflow-run-watcher.js', () => ({ workflowRunWatcher }));
 
 describe('showSplitButton setting', () => {
+  let harness: RouteTestHarness;
+
+  beforeEach(async () => {
+    harness = await createRouteTestHarness(registerSystemRoutes);
+  });
+
+  afterEach(async () => {
+    await harness.app.close();
+  });
+
   it('round-trips through PUT and GET /api/settings', async () => {
-    const app = await buildTestApp();
-    const putRes = await app.inject({
+    const putRes = await harness.app.inject({
       method: 'PUT',
       url: '/api/settings',
       payload: { showSplitButton: true },
     });
     expect(putRes.statusCode).toBe(200);
 
-    const getRes = await app.inject({ method: 'GET', url: '/api/settings' });
+    const getRes = await harness.app.inject({ method: 'GET', url: '/api/settings' });
     const body = JSON.parse(getRes.body);
-    expect(body.data.showSplitButton).toBe(true);
+    expect(body.showSplitButton).toBe(true);
   });
 });
 ```
@@ -366,69 +406,112 @@ git commit -m "feat(split-pane): add split container/divider/pane-b CSS"
 - Create: `src/web/public/terminal-split.js`
 - Modify: `src/web/public/index.html` (add the `<script>` tag)
 - Modify: `CLAUDE.md` (append `terminal-split.js` to the Frontend load-order list)
-- Test: `test/browser/split-pane-terminal.test.ts` (new, Playwright — this is browser-only behavior: a real xterm instance and a real WebSocket, which is exactly what `test/browser` exists for per the Testing section of CLAUDE.md)
+- Test: `test/split-pane-terminal.browser.test.ts` (new)
+- Modify: `config/test-suites.ts` (register the new test file path in `BROWSER_TEST_GLOBS`, or `npm run test:browser` silently never runs it — vitest treats "no files matched" as success, and a glob-less array here means literally nothing runs this file unless it's listed)
 
 **Interfaces:**
 - Consumes: global `window.CodemanTerminalFont.resolve()` / `.resolveWeights()`, `window.codemanCurrentXtermTheme()`, `window.codemanCurrentSkinIsLight()` (all already attached to `window` by `terminal-ui.js`), global `Terminal`/`FitAddon` (vendor libs, already loaded before this script per load order)
 - Produces: `class SplitTerminalPane { constructor(sessionId, mountEl); connect(): void; fit(): void; destroy(): void; }`, exposed as `window.SplitTerminalPane`
 
+⚠️ **This codebase's browser tests do NOT use `@playwright/test`'s own runner, and there is no `test/browser/` directory.** They are ordinary vitest `describe`/`it` files that import `chromium` from the raw `playwright` package and spin up a REAL in-process server via `new WebServer(PORT, false, true)` (port, https=false, testMode=true — testMode makes `TmuxManager`/`Session` spawn a real echo PTY instead of real tmux, per `test/terminal-copy-shortcut.test.ts`, `test/tab-rail-resize.browser.test.ts`). Test files live at the top of `test/`, individually named, and `npm run test:browser`/CI only run files explicitly listed in `config/test-suites.ts`'s `BROWSER_TEST_GLOBS` array — there is no directory glob. Port 3175 (checked against every existing `const PORT =` in `test/*.ts` and the mobile suite's port constants file at plan-writing time — free).
+
 - [ ] **Step 1: Write the failing test**
 
 ```typescript
-// test/browser/split-pane-terminal.test.ts
-import { test, expect } from '@playwright/test';
+// test/split-pane-terminal.browser.test.ts
+/** @fileoverview Real Chromium + real WebSocket coverage for SplitTerminalPane (Task 4 of the split-pane-sessions plan). */
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { chromium, type Browser, type Page } from 'playwright';
+import { WebServer } from '../src/web/server.js';
 
-// Assumes a live dev server is reachable at BASE_URL (see docs/browser-testing-guide.md
-// for the standard live-server fixture other test/browser specs use).
-const BASE_URL = process.env.CODEMAN_TEST_URL || 'http://localhost:3151';
+const PORT = 3175;
+const BASE_URL = `http://localhost:${PORT}`;
 
-test('SplitTerminalPane connects, renders output, and cleans up on destroy', async ({ page }) => {
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+describe('SplitTerminalPane in a real browser', () => {
+  let server: WebServer;
+  let browser: Browser;
+  let page: Page;
 
-  // Create a throwaway shell session to point Pane B at.
-  const sessionId = await page.evaluate(async () => {
-    const res = await fetch('/api/sessions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workingDir: '/tmp', mode: 'shell' }),
+  beforeAll(async () => {
+    server = new WebServer(PORT, false, true);
+    await server.start();
+    browser = await chromium.launch({ headless: true });
+    page = await browser.newPage();
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
+  }, 90000);
+
+  afterAll(async () => {
+    if (browser) await browser.close();
+    if (server) await server.stop();
+  }, 60000);
+
+  it('connects, echoes real PTY output, and cleans up on destroy', async () => {
+    const sessionId = await page.evaluate(async () => {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workingDir: '/tmp', mode: 'shell' }),
+      });
+      return (await res.json()).data.id;
     });
-    const body = await res.json();
-    return body.data.id;
+
+    const result = await page.evaluate(async (id) => {
+      const mount = document.createElement('div');
+      mount.style.width = '400px';
+      mount.style.height = '300px';
+      document.body.appendChild(mount);
+
+      const pane = new (window as any).SplitTerminalPane(id, mount);
+      pane.connect();
+
+      // Wait for the WS to open, then send a real input frame — testMode's
+      // echo PTY (TEST_PTY_SCRIPT) echoes each byte back exactly once, which
+      // is what proves the WS round-trip actually reaches a real PTY and back,
+      // not just that xterm can render locally-written text.
+      await new Promise((resolve) => {
+        const check = () => (pane._wsReady ? resolve(undefined) : setTimeout(check, 100));
+        check();
+      });
+      pane.ws.send(JSON.stringify({ t: 'i', d: 'SPLITPANE_MARKER\r' }));
+
+      const hasEcho = await new Promise((resolve) => {
+        const deadline = Date.now() + 5000;
+        const poll = () => {
+          const buf = pane.terminal.buffer.active;
+          for (let i = 0; i < buf.length; i++) {
+            if (buf.getLine(i)?.translateToString(true).includes('SPLITPANE_MARKER')) {
+              resolve(true);
+              return;
+            }
+          }
+          if (Date.now() > deadline) resolve(false);
+          else setTimeout(poll, 100);
+        };
+        poll();
+      });
+
+      pane.destroy();
+      const cleanedUp = mount.querySelector('.xterm') === null;
+      document.body.removeChild(mount);
+
+      return { hasEcho, cleanedUp };
+    }, sessionId);
+
+    expect(result.hasEcho).toBe(true);
+    expect(result.cleanedUp).toBe(true);
+
+    await page.evaluate(async (id) => {
+      await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+    }, sessionId);
   });
-
-  const result = await page.evaluate(async (id) => {
-    const mount = document.createElement('div');
-    mount.style.width = '400px';
-    mount.style.height = '300px';
-    document.body.appendChild(mount);
-
-    const pane = new window.SplitTerminalPane(id, mount);
-    pane.connect();
-
-    // Wait for the WS to open and at least one output frame to render.
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    const hasContent = mount.querySelector('.xterm-rows') !== null;
-
-    pane.destroy();
-    const cleanedUp = mount.querySelector('.xterm') === null;
-    document.body.removeChild(mount);
-
-    return { hasContent, cleanedUp };
-  }, sessionId);
-
-  expect(result.hasContent).toBe(true);
-  expect(result.cleanedUp).toBe(true);
-
-  await page.evaluate(async (id) => {
-    await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
-  }, sessionId);
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npm run test:browser -- test/browser/split-pane-terminal.test.ts`
-Expected: FAIL — `window.SplitTerminalPane` is undefined.
+Run: `npm run test:browser -- test/split-pane-terminal.browser.test.ts`
+Expected: This file is not yet listed in `config/test-suites.ts`'s `BROWSER_TEST_GLOBS`, so vitest reports 0 files matched and exits 0 (a vacuous "pass" — read the file count, not the color, per CLAUDE.md's Testing section). Register the file in `BROWSER_TEST_GLOBS` FIRST (add `'test/split-pane-terminal.browser.test.ts',` to the array in `config/test-suites.ts`), then re-run: now it actually executes and FAILs — `window.SplitTerminalPane` is undefined.
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -549,20 +632,22 @@ In `src/web/public/index.html`, find the `<script src="terminal-ui.js">` tag and
 
 In `CLAUDE.md`, find the Frontend load-order line (`... → terminal-ui.js(7) → respawn-ui.js(8) → ...`) and insert `terminal-split.js(7.5)` between them, matching the existing `X.Y of 16` `@loadorder` numbering convention already used for other `.5`-numbered modules (e.g. `tab-rail-resize.js(6.5)`).
 
+In `config/test-suites.ts`, add `'test/split-pane-terminal.browser.test.ts',` to the `BROWSER_TEST_GLOBS` array (any position — it's a flat list, not order-sensitive).
+
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npm run test:browser -- test/browser/split-pane-terminal.test.ts`
-Expected: PASS
+Run: `npm run test:browser -- test/split-pane-terminal.browser.test.ts`
+Expected: PASS (1 test)
 
 - [ ] **Step 5: Run the full gate to check for regressions**
 
 Run: `npm test`
-Expected: PASS (this task adds no vitest-visible surface, so this just confirms nothing broke)
+Expected: PASS (this task adds no vitest-visible surface to the CI gate itself, so this just confirms nothing broke — `test/split-pane-terminal.browser.test.ts` is excluded from `npm test` by the same `BROWSER_TEST_GLOBS` exclusion list, which is why Step 4 uses `test:browser` instead)
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/web/public/terminal-split.js src/web/public/index.html CLAUDE.md test/browser/split-pane-terminal.test.ts
+git add src/web/public/terminal-split.js src/web/public/index.html CLAUDE.md config/test-suites.ts test/split-pane-terminal.browser.test.ts
 git commit -m "feat(split-pane): add SplitTerminalPane class for Pane B"
 ```
 
@@ -572,105 +657,119 @@ git commit -m "feat(split-pane): add SplitTerminalPane class for Pane B"
 
 **Files:**
 - Modify: `src/web/public/terminal-split.js` (add orchestration methods, mixed into `CodemanApp.prototype`)
-- Test: `test/browser/split-pane-orchestration.test.ts` (new, Playwright)
+- Test: `test/split-pane-orchestration.browser.test.ts` (new)
+- Modify: `config/test-suites.ts` (register the new test file in `BROWSER_TEST_GLOBS`, same reason as Task 4)
 
 **Interfaces:**
 - Consumes: `window.SplitTerminalPane` (Task 4), `window.CodemanSplitPane.buildSplitPickerSessions` (Task 1), `app.sessions` (`Map<string, {name, ...}>`), `app.sessionOrder` (`string[]`), `app.activeSessionId` (`string | null`)
 - Produces: `app.openSplitPicker()`, `app.openSplitPane(sessionId)`, `app.closeSplitPane()`, `app._splitPane` (the live `SplitTerminalPane` instance or `null`), `app._splitSessionId` (the Pane B session id or `null`)
 
+⚠️ Same test-infrastructure note as Task 4: vitest + raw `playwright` + a real `WebServer(PORT, false, true)`, file at the top of `test/`, registered by exact path in `config/test-suites.ts`. Port 3176 (checked free at plan-writing time, alongside 3175 used by Task 4 — the two suites never run concurrently since `fileParallelism: false` in `config/vitest.browser.config.ts`, but distinct ports avoid any doubt).
+
 - [ ] **Step 1: Write the failing test**
 
 ```typescript
-// test/browser/split-pane-orchestration.test.ts
-import { test, expect } from '@playwright/test';
+// test/split-pane-orchestration.browser.test.ts
+/** @fileoverview Real Chromium coverage for split open/close orchestration and the session picker (Task 5). */
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { chromium, type Browser, type Page } from 'playwright';
+import { WebServer } from '../src/web/server.js';
 
-const BASE_URL = process.env.CODEMAN_TEST_URL || 'http://localhost:3151';
+const PORT = 3176;
+const BASE_URL = `http://localhost:${PORT}`;
 
-test('opening and closing a split reparents and restores .terminal-wrap', async ({ page }) => {
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(2000); // let SSE/handleInit settle
+describe('split-pane orchestration in a real browser', () => {
+  let server: WebServer;
+  let browser: Browser;
+  let page: Page;
 
-  const sessionIds = await page.evaluate(async () => {
-    const create = async () => {
+  beforeAll(async () => {
+    server = new WebServer(PORT, false, true);
+    await server.start();
+    browser = await chromium.launch({ headless: true });
+    page = await browser.newPage();
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
+  }, 90000);
+
+  afterAll(async () => {
+    if (browser) await browser.close();
+    if (server) await server.stop();
+  }, 60000);
+
+  async function createShellSession(): Promise<string> {
+    return page.evaluate(async () => {
       const res = await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workingDir: '/tmp', mode: 'shell' }),
       });
       return (await res.json()).data.id;
-    };
-    return { a: await create(), b: await create() };
-  });
-
-  await page.evaluate((id) => window.app.selectSession(id), sessionIds.a);
-  await page.waitForTimeout(500);
-
-  const beforeSplit = await page.evaluate(
-    () => document.querySelector('.terminal-split-container') === null
-  );
-  expect(beforeSplit).toBe(true);
-
-  await page.evaluate((id) => window.app.openSplitPane(id), sessionIds.b);
-  await page.waitForTimeout(1000);
-
-  const duringSplit = await page.evaluate(() => ({
-    hasContainer: document.querySelector('.terminal-split-container') !== null,
-    wrapIsChildOfContainer:
-      document.querySelector('.terminal-split-container > .terminal-wrap') !== null,
-    hasPaneB: document.querySelector('.terminal-pane-b') !== null,
-  }));
-  expect(duringSplit.hasContainer).toBe(true);
-  expect(duringSplit.wrapIsChildOfContainer).toBe(true);
-  expect(duringSplit.hasPaneB).toBe(true);
-
-  await page.evaluate(() => window.app.closeSplitPane());
-  await page.waitForTimeout(500);
-
-  const afterClose = await page.evaluate(() => ({
-    hasContainer: document.querySelector('.terminal-split-container') === null,
-    wrapRestored: document.querySelector('.main .terminal-wrap') !== null,
-  }));
-  expect(afterClose.hasContainer).toBe(true);
-  expect(afterClose.wrapRestored).toBe(true);
-
-  await page.evaluate(async (ids) => {
-    await fetch(`/api/sessions/${ids.a}`, { method: 'DELETE' });
-    await fetch(`/api/sessions/${ids.b}`, { method: 'DELETE' });
-  }, sessionIds);
-});
-
-test('the split picker excludes the active session', async ({ page }) => {
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(2000);
-
-  const sessionId = await page.evaluate(async () => {
-    const res = await fetch('/api/sessions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workingDir: '/tmp', mode: 'shell' }),
     });
-    return (await res.json()).data.id;
+  }
+
+  it('opening and closing a split reparents and restores .terminal-wrap', async () => {
+    const idA = await createShellSession();
+    const idB = await createShellSession();
+
+    await page.evaluate((id) => (window as any).app.selectSession(id), idA);
+    await page.waitForFunction((id) => (window as any).app.activeSessionId === id, idA, { timeout: 10000 });
+
+    expect(await page.evaluate(() => document.querySelector('.terminal-split-container') === null)).toBe(true);
+
+    await page.evaluate((id) => (window as any).app.openSplitPane(id), idB);
+    await page.waitForSelector('.terminal-pane-b', { timeout: 10000 });
+
+    const duringSplit = await page.evaluate(() => ({
+      hasContainer: document.querySelector('.terminal-split-container') !== null,
+      wrapIsChildOfContainer: document.querySelector('.terminal-split-container > .terminal-wrap') !== null,
+      hasPaneB: document.querySelector('.terminal-pane-b') !== null,
+    }));
+    expect(duringSplit.hasContainer).toBe(true);
+    expect(duringSplit.wrapIsChildOfContainer).toBe(true);
+    expect(duringSplit.hasPaneB).toBe(true);
+
+    await page.evaluate(() => (window as any).app.closeSplitPane());
+    await page.waitForFunction(() => document.querySelector('.terminal-split-container') === null, null, {
+      timeout: 10000,
+    });
+
+    const afterClose = await page.evaluate(() => ({
+      hasContainer: document.querySelector('.terminal-split-container') === null,
+      wrapRestored: document.querySelector('.main .terminal-wrap') !== null,
+    }));
+    expect(afterClose.hasContainer).toBe(true);
+    expect(afterClose.wrapRestored).toBe(true);
+
+    await page.evaluate(async (ids) => {
+      await fetch(`/api/sessions/${ids.a}`, { method: 'DELETE' });
+      await fetch(`/api/sessions/${ids.b}`, { method: 'DELETE' });
+    }, { a: idA, b: idB });
   });
 
-  await page.evaluate((id) => window.app.selectSession(id), sessionId);
-  await page.waitForTimeout(500);
+  it('the split picker excludes the active session', async () => {
+    const id = await createShellSession();
 
-  const pickerExcludesActive = await page.evaluate((id) => {
-    window.app.openSplitPicker();
-    const items = Array.from(document.querySelectorAll('.split-picker-item'));
-    return !items.some((el) => el.getAttribute('data-session-id') === id);
-  }, sessionId);
-  expect(pickerExcludesActive).toBe(true);
+    await page.evaluate((sid) => (window as any).app.selectSession(sid), id);
+    await page.waitForFunction((sid) => (window as any).app.activeSessionId === sid, id, { timeout: 10000 });
 
-  await page.evaluate(async (id) => {
-    await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
-  }, sessionId);
+    const pickerExcludesActive = await page.evaluate((sid) => {
+      (window as any).app.openSplitPicker();
+      const items = Array.from(document.querySelectorAll('.split-picker-item'));
+      return !items.some((el) => el.getAttribute('data-session-id') === sid);
+    }, id);
+    expect(pickerExcludesActive).toBe(true);
+
+    await page.evaluate(async (sid) => {
+      await fetch(`/api/sessions/${sid}`, { method: 'DELETE' });
+    }, id);
+  });
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npm run test:browser -- test/browser/split-pane-orchestration.test.ts`
+Run: register `'test/split-pane-orchestration.browser.test.ts',` in `config/test-suites.ts`'s `BROWSER_TEST_GLOBS` first, then `npm run test:browser -- test/split-pane-orchestration.browser.test.ts`
 Expected: FAIL — `app.openSplitPane`/`closeSplitPane`/`openSplitPicker` are undefined.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -804,8 +903,8 @@ Object.assign(CodemanApp.prototype, {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npm run test:browser -- test/browser/split-pane-orchestration.test.ts`
-Expected: PASS
+Run: `npm run test:browser -- test/split-pane-orchestration.browser.test.ts`
+Expected: PASS (2 tests)
 
 - [ ] **Step 5: Run the full gate to check for regressions**
 
@@ -815,7 +914,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/web/public/terminal-split.js test/browser/split-pane-orchestration.test.ts
+git add src/web/public/terminal-split.js config/test-suites.ts test/split-pane-orchestration.browser.test.ts
 git commit -m "feat(split-pane): add open/close orchestration, picker, and divider drag"
 ```
 
@@ -825,64 +924,92 @@ git commit -m "feat(split-pane): add open/close orchestration, picker, and divid
 
 **Files:**
 - Modify: `src/web/public/terminal-split.js` (hook into existing SSE session-lifecycle handlers)
-- Test: `test/browser/split-pane-auto-collapse.test.ts` (new, Playwright)
+- Test: `test/split-pane-auto-collapse.browser.test.ts` (new)
+- Modify: `config/test-suites.ts` (register the new test file in `BROWSER_TEST_GLOBS`, same reason as Tasks 4-5)
 
 **Interfaces:**
 - Consumes: the existing `_onSessionDeleted(data)` handler in `app.js` (find it via `[SSE_EVENTS.SESSION_DELETED, '_onSessionDeleted']` in the `app.js` handler map) — this task wraps it rather than replacing it.
 - Produces: no new public interface; behavior only.
 
+⚠️ Same test-infrastructure note as Tasks 4-5: vitest + raw `playwright` + a real `WebServer(PORT, false, true)`. Port 3177 (checked free at plan-writing time, alongside 3175/3176 from Tasks 4-5).
+
 - [ ] **Step 1: Write the failing test**
 
 ```typescript
-// test/browser/split-pane-auto-collapse.test.ts
-import { test, expect } from '@playwright/test';
+// test/split-pane-auto-collapse.browser.test.ts
+/** @fileoverview Real Chromium coverage for split auto-collapse when either session ends (Task 6). */
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { chromium, type Browser, type Page } from 'playwright';
+import { WebServer } from '../src/web/server.js';
 
-const BASE_URL = process.env.CODEMAN_TEST_URL || 'http://localhost:3151';
+const PORT = 3177;
+const BASE_URL = `http://localhost:${PORT}`;
 
-test('deleting the Pane B session auto-collapses the split', async ({ page }) => {
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(2000);
+describe('split-pane auto-collapse in a real browser', () => {
+  let server: WebServer;
+  let browser: Browser;
+  let page: Page;
 
-  const sessionIds = await page.evaluate(async () => {
-    const create = async () => {
+  beforeAll(async () => {
+    server = new WebServer(PORT, false, true);
+    await server.start();
+    browser = await chromium.launch({ headless: true });
+    page = await browser.newPage();
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
+  }, 90000);
+
+  afterAll(async () => {
+    if (browser) await browser.close();
+    if (server) await server.stop();
+  }, 60000);
+
+  async function createShellSession(): Promise<string> {
+    return page.evaluate(async () => {
       const res = await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workingDir: '/tmp', mode: 'shell' }),
       });
       return (await res.json()).data.id;
-    };
-    return { a: await create(), b: await create() };
+    });
+  }
+
+  it('deleting the Pane B session auto-collapses the split', async () => {
+    const idA = await createShellSession();
+    const idB = await createShellSession();
+
+    await page.evaluate((id) => (window as any).app.selectSession(id), idA);
+    await page.waitForFunction((id) => (window as any).app.activeSessionId === id, idA, { timeout: 10000 });
+    await page.evaluate((id) => (window as any).app.openSplitPane(id), idB);
+    await page.waitForSelector('.terminal-pane-b', { timeout: 10000 });
+
+    // Delete Pane B's session from "outside" (simulating the SSE event another
+    // client's delete would produce, by hitting the DELETE route directly).
+    await page.evaluate(async (id) => {
+      await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+    }, idB);
+    await page.waitForFunction(() => document.querySelector('.terminal-split-container') === null, null, {
+      timeout: 10000,
+    });
+
+    const collapsed = await page.evaluate(() => ({
+      hasContainer: document.querySelector('.terminal-split-container') === null,
+      splitPaneNulled: (window as any).app._splitPane === null,
+    }));
+    expect(collapsed.hasContainer).toBe(true);
+    expect(collapsed.splitPaneNulled).toBe(true);
+
+    await page.evaluate(async (id) => {
+      await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+    }, idA);
   });
-
-  await page.evaluate((id) => window.app.selectSession(id), sessionIds.a);
-  await page.waitForTimeout(500);
-  await page.evaluate((id) => window.app.openSplitPane(id), sessionIds.b);
-  await page.waitForTimeout(1000);
-
-  // Delete Pane B's session from "outside" (simulating the SSE event another
-  // client's delete would produce, by hitting the DELETE route directly).
-  await page.evaluate(async (id) => {
-    await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
-  }, sessionIds.b);
-  await page.waitForTimeout(1000);
-
-  const collapsed = await page.evaluate(() => ({
-    hasContainer: document.querySelector('.terminal-split-container') === null,
-    splitPaneNulled: window.app._splitPane === null,
-  }));
-  expect(collapsed.hasContainer).toBe(true);
-  expect(collapsed.splitPaneNulled).toBe(true);
-
-  await page.evaluate(async (id) => {
-    await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
-  }, sessionIds.a);
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npm run test:browser -- test/browser/split-pane-auto-collapse.test.ts`
+Run: register `'test/split-pane-auto-collapse.browser.test.ts',` in `config/test-suites.ts`'s `BROWSER_TEST_GLOBS` first, then `npm run test:browser -- test/split-pane-auto-collapse.browser.test.ts`
 Expected: FAIL — deleting Pane B's session leaves the split container in place with a dead `SplitTerminalPane`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -921,7 +1048,7 @@ Note: `window.app` is assigned during `app.js` init, which per load order runs b
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npm run test:browser -- test/browser/split-pane-auto-collapse.test.ts`
+Run: `npm run test:browser -- test/split-pane-auto-collapse.browser.test.ts`
 Expected: PASS. If it fails specifically because `window.app._onSessionDeleted` was undefined at wire time, switch the wiring approach per the note in Step 3 (call `_wireSplitAutoCollapse()` at module scope, not inside `DOMContentLoaded`) and re-run.
 
 - [ ] **Step 5: Run the full gate to check for regressions**
@@ -932,7 +1059,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/web/public/terminal-split.js test/browser/split-pane-auto-collapse.test.ts
+git add src/web/public/terminal-split.js config/test-suites.ts test/split-pane-auto-collapse.browser.test.ts
 git commit -m "feat(split-pane): auto-collapse split when either session ends"
 ```
 
@@ -967,3 +1094,4 @@ git commit -m "docs: add split-pane sessions architecture-invariants entry"
 - **Spec coverage**: side-by-side split (Task 5), draggable divider (Task 5), 50/50 default clamped 20–80% (Task 1 + Task 5), button+picker trigger excluding active session (Task 2 + Task 5), Pane A untouched (Global Constraints + every task explicitly avoids editing `terminal-ui.js`), Pane B feature-reduced (Task 4's fileoverview comment + Global Constraints), no persistence (no task writes a localStorage key), auto-collapse both directions (Task 6), subagent windows unchanged (no task touches `subagent-windows.js` or `ultracode-windows.js` — confirmed nothing in this plan needs to, since they already float independent of `.terminal-wrap`'s layout).
 - **Placeholder scan**: none found — every step has real code or a real doc paragraph.
 - **Type/name consistency checked**: `SplitTerminalPane` (class name) used identically in Tasks 4, 5, 6; `_splitPane`/`_splitSessionId` (instance state) used identically in Tasks 5, 6; `openSplitPicker`/`openSplitPane`/`closeSplitPane` (method names) used identically in Tasks 2 (button onclick), 5 (definition), 6 (auto-collapse caller).
+- **Post-approval fixes (SDD pre-flight, before Task 1 dispatch):** Task 2's test originally invented a `buildTestApp()` helper and a `{data:...}` envelope that don't exist for `/api/settings` — corrected against the real `createRouteTestHarness`/`registerSystemRoutes` pattern in `test/routes/system-routes-settings-partial-put.test.ts`. Tasks 4-6 originally used `@playwright/test`'s own runner against a `test/browser/` directory that does not exist in this codebase — corrected to the real pattern (vitest `describe`/`it` + raw `playwright` package + `new WebServer(PORT, false, true)`, files at the top of `test/`, individually registered in `config/test-suites.ts`'s `BROWSER_TEST_GLOBS`) found in `test/terminal-copy-shortcut.test.ts` and `test/tab-rail-resize.browser.test.ts`. Ports assigned: 3175 (Task 4), 3176 (Task 5), 3177 (Task 6), checked against every existing `const PORT =` in `test/*.ts` plus the mobile suite's port constants at fix-time.
