@@ -6,9 +6,9 @@
 
 ## Problem
 
-Codeman's terminal area shows exactly one active session at a time — switching
-tabs re-binds the single xterm instance and the single WebSocket to a
-different session. Multi-monitor spanning (`scripts/span-codeman.sh` /
+Codeman's terminal area shows exactly one active session (pane) at a time —
+switching panes re-binds the single xterm instance and the single WebSocket
+to a different session. Multi-monitor spanning (`scripts/span-codeman.sh` /
 `span-codeman.ps1`) turned out to solve a different problem: it makes one
 browser window bigger, but that window still shows one session; floating
 subagent windows are draggable overlays on top of it, not tiled panes. There
@@ -39,7 +39,7 @@ Explicitly out of scope for v1 (v2 candidates, not designed here):
 
 `terminal-ui.js` is built entirely around **singleton** state: `this.terminal`
 (one xterm instance), `this._ws`/`this._wsSessionId` (one WebSocket, rebound
-on every tab switch via `_disconnectWs()` + `_connectWs(newId)`), a
+on every pane switch via `_disconnectWs()` + `_connectWs(newId)`), a
 `this._xtermSnapshots` map used only to restore scrollback into that one
 terminal when switching back to a session. Roughly 280 references to this
 singleton state exist across the file (input handling, resize/fit, sizing-
