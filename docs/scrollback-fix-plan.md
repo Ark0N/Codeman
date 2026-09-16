@@ -279,7 +279,7 @@ Touch is always-local by design, and Claude sessions keep content in the normal 
 - The viewport-at-bottom gate stays: once the user scrolled up locally, wheel stays local until they return to bottom.
 - 40ms SGR coalescing: never send per-event writes to the server.
 - Strip parity triangle: `session.ts` live strip ↔ `session-routes.ts` replay strip ↔ `_sessionUsesServerMouseStrip()` in the frontend. If you touch mode lists, update all three.
-- Don't add `opencode`/`antigravity` to any strip/forward list; their TUI wheel behavior is unverified (documented at `_shouldForwardWheelToApp`).
+- Don't add `opencode`/`antigravity` to any strip/forward list; their TUI wheel behavior is unverified (documented at `_shouldForwardWheelToApp`). ⚠️ 2026-09-16: opencode's half is now MEASURED — 1.18.31 ignores SGR wheel reports but pages its transcript on PageUp/PageDown — so it belongs in the **paging** list (`_localScrollbackIsHollow`), which is not a strip/forward list. antigravity/grok/deepseek/omp remain unverified.
 - The chunk-boundary sequence carry in `_handleTerminalOutput` must not be weakened.
 
 ## Testing (per repo rules)

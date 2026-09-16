@@ -5485,15 +5485,29 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * True when this session's LOCAL scrollback is structurally empty: a Claude
-   * pane in repaint mode, where tmux reports `history_size≈0` and every frame
-   * overwrites the last, so xterm's normal buffer never grows past one screen
+   * True when this session's LOCAL scrollback is structurally empty: a pane whose
+   * TUI repaints one full screen in place, so tmux keeps no history for it
+   * (`history_size≈0`) and xterm's normal buffer never grows past one screen
    * (`baseY === 0`). Scrolling that buffer is a no-op no matter how the gesture
    * is routed — the "wheel does nothing at all" half of the #205 retest.
+   *
+   * Two shapes, measured separately:
+   *  - `claude` in repaint mode (the original, #205 round 2), and
+   *  - `opencode`, whose TUI runs on the ALTERNATE SCREEN (opencode 1.18.31: tmux
+   *    `alternate_on=1`, `history_size=0`) and so pushes nothing into the
+   *    terminal's scrollback at all. It pages its own transcript with the same
+   *    PageUp/PageDown keys (`messages_page_up/down`) but IGNORES SGR wheel
+   *    reports — six `\x1b[<64;…M` reports against an idle pane left the capture
+   *    byte-identical — so paging is the only gesture that reaches it. Without
+   *    this the wheel was silently dead in every opencode tab.
+   *
+   * Every other mode is deliberately absent: shell/pi own real terminal
+   * scrollback, and codex/gemini/antigravity/grok/deepseek/omp page-key behaviour
+   * is unverified (docs/scrollback-fix-plan.md).
    */
   _localScrollbackIsHollow() {
     const mode = this.sessions?.get(this.activeSessionId)?.mode || 'claude';
-    if (mode !== 'claude') return false;
+    if (mode !== 'claude' && mode !== 'opencode') return false;
     const buf = this.terminal?.buffer?.active;
     if (!buf || buf.type === 'alternate') return false;
     return (buf.baseY || 0) === 0;
@@ -5504,18 +5518,19 @@ Object.assign(CodemanApp.prototype, {
    * coalesced PageUp/PageDown key sends so the CLI pages its OWN transcript.
    *
    * The rescue path for every way `_shouldForwardWheelToApp` can come back false
-   * on a Claude session that has no local history to fall back on: the CLI
-   * version probe failed or is genuinely older than 2.1.187, the CLI's mouse
-   * tracking flag is unset (the inline renderer, or fullscreen right after a
-   * server restart), or the user turned on "Wheel scrolls local history" (which
-   * pins the wheel to a buffer that, for a repaint-mode CLI, is empty: the
-   * setting's footgun). Before this, all of those produced a completely dead
-   * gesture; the #205 reporter proved the keyboard route works by paging back
-   * through intact text with Fn+Up.
+   * on a session that has no local history to fall back on: the CLI version probe
+   * failed or is genuinely older than 2.1.187, the CLI's mouse tracking flag is
+   * unset (the inline renderer, or fullscreen right after a server restart), the
+   * user turned on "Wheel scrolls local history" (which pins the wheel to a buffer
+   * that, for a repaint-mode CLI, is empty: the setting's footgun), or the CLI is
+   * opencode, which never fills the buffer and never accepts the wheel. Before
+   * this, all of those produced a completely dead gesture; the #205 reporter
+   * proved the keyboard route works by paging back through intact text with Fn+Up.
    *
-   * Triple-guarded (claude mode + gate false + `baseY === 0`), so a session with
-   * real local scrollback is never touched. Shift is excluded on purpose: it is
-   * the explicit "give me local scrollback" gesture and must keep that meaning.
+   * Guarded by `_localScrollbackIsHollow()` plus a false forwarding gate, so a
+   * session with real local scrollback is never touched. Shift is excluded on
+   * purpose: it is the explicit "give me local scrollback" gesture and must keep
+   * that meaning.
    *
    * @returns true when the gesture was consumed here (the caller must not also
    *          scroll locally).
