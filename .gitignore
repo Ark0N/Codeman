@@ -2,6 +2,9 @@
 .agents/
 skills-lock.json
 
+# Local git worktrees (isolated checkouts for concurrent-session work)
+.worktrees/
+
 
 # In-session decision scratchpad (context-survival mechanism, not a deliverable)
 DECISIONS.md
