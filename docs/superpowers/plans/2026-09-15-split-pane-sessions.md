@@ -453,7 +453,14 @@ describe('SplitTerminalPane in a real browser', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workingDir: '/tmp', mode: 'shell' }),
       });
-      return (await res.json()).data.id;
+      // POST /api/sessions nests the session under data.session, and mode:'shell'
+      // does not spawn a PTY on creation alone (pid: null, no pane) — an explicit
+      // POST .../shell is what actually starts it (both were bugs in this plan's
+      // original text, found and fixed by Task 4's implementer against the real
+      // server; corrected here to match what was actually committed).
+      const id = (await res.json()).data.session.id;
+      await fetch(`/api/sessions/${id}/shell`, { method: 'POST' });
+      return id;
     });
 
     const result = await page.evaluate(async (id) => {
@@ -624,10 +631,10 @@ Expected: This file is not yet listed in `config/test-suites.ts`'s `BROWSER_TEST
 })(window);
 ```
 
-In `src/web/public/index.html`, find the `<script src="terminal-ui.js">` tag and add immediately after it:
+In `src/web/public/index.html`, find the `<script src="terminal-ui.js">` tag — check whether it (and its neighbors) actually carry a `defer` attribute in the real file before copying this verbatim; match whatever the surrounding block's real convention is — and add immediately after it:
 
 ```html
-<script src="terminal-split.js"></script>
+<script defer src="terminal-split.js"></script>
 ```
 
 In `CLAUDE.md`, find the Frontend load-order line (`... → terminal-ui.js(7) → respawn-ui.js(8) → ...`) and insert `terminal-split.js(7.5)` between them, matching the existing `X.Y of 16` `@loadorder` numbering convention already used for other `.5`-numbered modules (e.g. `tab-rail-resize.js(6.5)`).
@@ -704,7 +711,14 @@ describe('split-pane orchestration in a real browser', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workingDir: '/tmp', mode: 'shell' }),
       });
-      return (await res.json()).data.id;
+      // POST /api/sessions nests the session under data.session, and mode:'shell'
+      // does not spawn a PTY on creation alone (pid: null, no pane) — an explicit
+      // POST .../shell is what actually starts it (both found and fixed by Task 4's
+      // implementer against this exact pattern; carried forward here so this task
+      // does not rediscover the same two bugs).
+      const id = (await res.json()).data.session.id;
+      await fetch(`/api/sessions/${id}/shell`, { method: 'POST' });
+      return id;
     });
   }
 
@@ -971,7 +985,14 @@ describe('split-pane auto-collapse in a real browser', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workingDir: '/tmp', mode: 'shell' }),
       });
-      return (await res.json()).data.id;
+      // POST /api/sessions nests the session under data.session, and mode:'shell'
+      // does not spawn a PTY on creation alone (pid: null, no pane) — an explicit
+      // POST .../shell is what actually starts it (both found and fixed by Task 4's
+      // implementer against this exact pattern; carried forward here so this task
+      // does not rediscover the same two bugs).
+      const id = (await res.json()).data.session.id;
+      await fetch(`/api/sessions/${id}/shell`, { method: 'POST' });
+      return id;
     });
   }
 
