@@ -1442,8 +1442,33 @@ function terminalLogicalLine(buffer, row, cols, maxRows) {
   return { startRow, endRow, text, offsetToCell, cellToOffset };
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Split-Pane Sessions — pure helpers (divider math, picker list)
+// ═══════════════════════════════════════════════════════════════
+
+function clampDividerPercent(rawPercent, min = 20, max = 80) {
+  if (rawPercent < min) return min;
+  if (rawPercent > max) return max;
+  return rawPercent;
+}
+
+function buildSplitPickerSessions(sessions, sessionOrder, excludeId) {
+  const result = [];
+  for (const id of sessionOrder) {
+    if (id === excludeId) continue;
+    const session = sessions.get(id);
+    if (!session) continue;
+    result.push({ id, label: session.name || 'Session' });
+  }
+  return result;
+}
+
 if (typeof window !== 'undefined') {
   window.CodemanHistoryFormat = { formatHistoryBytes, computeHistoryTruncationNotice, computeRewriteScrollLine };
   window.CodemanFilePaths = { absoluteFilePathPattern, previewsInFileViewer, FILE_PREVIEW_EXTENSIONS };
   window.CodemanTerminalLines = { terminalLogicalLine };
+  window.CodemanSplitPane = {
+    clampDividerPercent,
+    buildSplitPickerSessions,
+  };
 }
