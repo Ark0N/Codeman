@@ -118,3 +118,126 @@
 
   global.SplitTerminalPane = SplitTerminalPane;
 })(window);
+
+Object.assign(CodemanApp.prototype, {
+  openSplitPicker() {
+    if (this._splitPane) {
+      this.closeSplitPane();
+      return;
+    }
+    const candidates = window.CodemanSplitPane.buildSplitPickerSessions(
+      this.sessions,
+      this.sessionOrder,
+      this.activeSessionId
+    );
+    const existing = document.getElementById('splitPickerMenu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement('div');
+    menu.id = 'splitPickerMenu';
+    menu.className = 'split-picker-menu';
+    if (candidates.length === 0) {
+      menu.innerHTML = '<div class="split-picker-empty">No other sessions to split with</div>';
+    } else {
+      menu.innerHTML = candidates
+        .map(
+          (c) =>
+            `<div class="split-picker-item" data-session-id="${escapeHtml(c.id)}" onclick="app.openSplitPane(${escapeHtml(JSON.stringify(c.id))}); document.getElementById('splitPickerMenu')?.remove();">${escapeHtml(c.label)}</div>`
+        )
+        .join('');
+    }
+    document.body.appendChild(menu);
+    const splitBtn = document.querySelector('.btn-split');
+    if (splitBtn) {
+      const rect = splitBtn.getBoundingClientRect();
+      menu.style.position = 'fixed';
+      menu.style.top = `${rect.bottom + 4}px`;
+      menu.style.right = `${window.innerWidth - rect.right}px`;
+    }
+  },
+
+  openSplitPane(sessionId) {
+    if (this._splitPane) this.closeSplitPane();
+
+    const wrap = document.querySelector('.terminal-wrap');
+    const parent = wrap.parentElement;
+
+    const container = document.createElement('div');
+    container.className = 'terminal-split-container';
+
+    const divider = document.createElement('div');
+    divider.className = 'split-divider';
+
+    const paneB = document.createElement('div');
+    paneB.className = 'terminal-pane-b';
+    const session = this.sessions.get(sessionId);
+    paneB.innerHTML = `
+      <div class="terminal-pane-b-header">
+        <span>${escapeHtml(session?.name || 'Session')}</span>
+        <span class="terminal-pane-b-close" onclick="app.closeSplitPane()">&times;</span>
+      </div>
+      <div class="terminal-pane-b-container"></div>
+    `;
+
+    parent.insertBefore(container, wrap);
+    container.appendChild(wrap);
+    wrap.style.flexBasis = '50%';
+    container.appendChild(divider);
+    container.appendChild(paneB);
+    paneB.style.flexBasis = '50%';
+
+    this._splitPane = new window.SplitTerminalPane(sessionId, paneB.querySelector('.terminal-pane-b-container'));
+    this._splitPane.connect();
+    this._splitSessionId = sessionId;
+
+    this._installSplitDividerDrag(divider, wrap, paneB);
+  },
+
+  closeSplitPane() {
+    if (!this._splitPane) return;
+    this._splitPane.destroy();
+    this._splitPane = null;
+    this._splitSessionId = null;
+
+    const container = document.querySelector('.terminal-split-container');
+    if (!container) return;
+    const wrap = container.querySelector('.terminal-wrap');
+    const parent = container.parentElement;
+    wrap.style.flexBasis = '';
+    parent.insertBefore(wrap, container);
+    container.remove();
+
+    if (this.fitAddon) this.fitAddon.fit();
+    this.sendResize?.(this.activeSessionId, { force: true })?.catch?.(() => {});
+  },
+
+  _installSplitDividerDrag(divider, wrap, paneB) {
+    let dragging = false;
+
+    const onMove = (e) => {
+      if (!dragging) return;
+      const container = divider.parentElement;
+      const rect = container.getBoundingClientRect();
+      const rawPercent = ((e.clientX - rect.left) / rect.width) * 100;
+      const percent = window.CodemanSplitPane.clampDividerPercent(rawPercent);
+      wrap.style.flexBasis = `${percent}%`;
+      paneB.style.flexBasis = `${100 - percent}%`;
+      if (this.fitAddon) this.fitAddon.fit();
+      this._splitPane?.fit();
+    };
+
+    const onUp = () => {
+      dragging = false;
+      divider.classList.remove('dragging');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+
+    divider.addEventListener('mousedown', () => {
+      dragging = true;
+      divider.classList.add('dragging');
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  },
+});
