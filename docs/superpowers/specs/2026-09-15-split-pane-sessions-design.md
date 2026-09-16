@@ -50,6 +50,15 @@ Showing two sessions at once therefore requires a second, independently
 alive xterm + WebSocket pair running concurrently — not a layout change to
 one shared instance.
 
+**Related prior art**: `detachSession(id)` (app.js) already opens one session
+in a genuinely separate browser window (`isSoloWindow` mode) with its own
+independent WebSocket, and two of those can already be snapped side-by-side
+today with zero new code. That covers "two sessions visible at once" but not
+what this spec is for: one Codeman window with two panes and a divider you
+can drag without leaving your seat, each still a full participant in that
+window's floating subagent windows, header, and settings. This spec builds
+past detach, not a duplicate of it.
+
 **Server-side check (done, not just assumed)**: `MAX_WS_PER_SESSION = 5`
 (`src/web/routes/ws-routes.ts`), scoped by `clientId:tabNonce`
 (`ws-connection-registry.ts`). Splitting always opens a *different* session
