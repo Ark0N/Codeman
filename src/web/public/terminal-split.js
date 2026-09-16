@@ -70,6 +70,20 @@
           /* Malformed frame — ignore, matches primary pane's tolerance. */
         }
       };
+
+      // Mirror app.js's onclose/onerror pattern (app.js:2905-2964): _wsReady
+      // must go false on a drop or fit()/_sendResize() silently no-ops on a
+      // closed socket per the WebSocket spec (no exception, no log). No
+      // reconnect logic here — Pane B is deliberately plainer than the
+      // primary pane (see the fileoverview above); a drop just stops
+      // resizing until the parent recreates the pane.
+      this.ws.onclose = () => {
+        this._wsReady = false;
+      };
+
+      this.ws.onerror = () => {
+        // onclose fires after onerror — cleanup happens there.
+      };
     }
 
     fit() {
