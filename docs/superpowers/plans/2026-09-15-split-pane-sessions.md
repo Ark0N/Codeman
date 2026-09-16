@@ -10,10 +10,22 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-15-split-pane-sessions-design.md`
 
+## Execution Environment
+
+This plan is implemented entirely inside the existing worktree at
+`.worktrees/split-pane-sessions` (branch `feat/split-pane-sessions`), created
+before brainstorming started — **not** in the main checkout. Every task's
+commit step assumes `cwd` is that worktree. Before each commit, run
+`git branch --show-current` and confirm it prints `feat/split-pane-sessions`
+(CLAUDE.md's worktree/branch-safety rule) — this repo runs multiple Codeman
+sessions concurrently, so verifying is cheap insurance, not ceremony.
+All commit steps in this plan already stage explicit paths (never `git add -A`),
+in line with the same rule.
+
 ## Global Constraints
 
 - Pane A's existing code path (`this.terminal`, `this._ws`, `_connectWs`, `sendResize`, etc.) is never modified — zero regression risk on the primary pane.
-- Pane B does not get the local-echo overlay, CJK IME, touch/mobile handlers, or keyboard accessory bar (desktop-only feature; see spec's "Pane B is deliberately plainer").
+- Local-echo overlay, CJK IME, and the keyboard accessory bar are **mobile/touch-only** subsystems in this codebase (`localEchoEnabled` defaults to `MobileDetection.isTouchDevice()`; the accessory bar is phone-toolbar-specific). Pane B gets none of them — not because they're being cut down for desktop, but because split-pane itself is a **desktop-only feature** (it needs a wide viewport), so a mobile-only subsystem has nothing to do there regardless. See the spec's "Key design decision: Pane B is deliberately plainer than Pane A" section for the full reasoning.
 - No persistence: a page reload always returns to single-pane view. No localStorage key stores split state.
 - Side-by-side only, exactly 2 panes, draggable divider, default 50/50, clamped 20%–80%.
 - The "Split" header button follows the existing opt-in header-button pattern: ships with a `btn-split--hidden` marker class, gated by a `showSplitButton` setting (default `false`), so it needs no addition to `test/mobile-header-buttons-policy.test.ts`'s default-visible enumeration (mirrors `showMultiMonitorButton`).
