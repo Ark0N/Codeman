@@ -241,3 +241,17 @@ Object.assign(CodemanApp.prototype, {
     });
   },
 });
+
+const _originalOnSessionDeleted = CodemanApp.prototype._onSessionDeleted;
+CodemanApp.prototype._onSessionDeleted = function (data) {
+  if (this._splitSessionId === data.id) {
+    this.closeSplitPane();
+  } else if (this._splitPane && this.activeSessionId === data.id) {
+    // Pane A's session ended: promote Pane B by closing the split and
+    // selecting its session as the new (single) active pane.
+    const promoted = this._splitSessionId;
+    this.closeSplitPane();
+    if (promoted) this.selectSession(promoted);
+  }
+  return _originalOnSessionDeleted.call(this, data);
+};
