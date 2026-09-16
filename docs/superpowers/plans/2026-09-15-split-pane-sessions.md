@@ -1014,42 +1014,30 @@ Expected: FAIL — deleting Pane B's session leaves the split container in place
 
 - [ ] **Step 3: Write minimal implementation**
 
-Append to `src/web/public/terminal-split.js`, inside the same `Object.assign(CodemanApp.prototype, {...})` block from Task 5, add one more method and wrap the existing handler registration. Since `_onSessionDeleted` is defined in `app.js` and this file loads after it (load order 7.5 vs app.js's 6), monkey-patch it here rather than editing `app.js` — this keeps all split-pane logic in one file per the "files that change together live together" principle:
+⚠️ **This must wrap the PROTOTYPE method at module-evaluation time, not the instance inside a `DOMContentLoaded` listener.** `connectSSE()` in app.js builds `this._sseHandlerWrappers` once, on first connect, and each wrapper closure captures the handler function by value — `const fn = this[method]` (see the `_SSE_HANDLER_MAP` loop in app.js) — then always invokes that CAPTURED `fn`, never re-reading `this._onSessionDeleted` later. So patching the live instance's `_onSessionDeleted` after `connectSSE()` has already run (which a `DOMContentLoaded` listener cannot guarantee happens before) would silently never fire — the wrapper keeps calling the pre-patch original forever. Patching `CodemanApp.prototype._onSessionDeleted` directly at the top level of `terminal-split.js` sidesteps this entirely: script tags evaluate synchronously in document order, so this patch runs and completes before `app.js`'s own `DOMContentLoaded`-triggered bootstrap ever constructs an instance or calls `connectSSE()` — by the time `this[method]` is looked up, the prototype it falls through to is already the wrapped version.
+
+Append to `src/web/public/terminal-split.js`, after the `Object.assign(CodemanApp.prototype, {...})` block from Task 5, as top-level module code (not inside any function, not inside a `DOMContentLoaded` listener):
 
 ```javascript
-  _wireSplitAutoCollapse() {
-    const original = this._onSessionDeleted.bind(this);
-    this._onSessionDeleted = (data) => {
-      if (this._splitSessionId === data.id) {
-        this.closeSplitPane();
-      } else if (this._splitPane && this.activeSessionId === data.id) {
-        // Pane A's session ended: promote Pane B by closing the split and
-        // selecting its session as the new (single) active pane.
-        const promoted = this._splitSessionId;
-        this.closeSplitPane();
-        if (promoted) this.selectSession(promoted);
-      }
-      original(data);
-    };
-  },
-```
-
-Then, at the bottom of `terminal-split.js` (module scope, after the `Object.assign` call), wire it once at load time:
-
-```javascript
-document.addEventListener('DOMContentLoaded', () => {
-  if (window.app && typeof window.app._wireSplitAutoCollapse === 'function') {
-    window.app._wireSplitAutoCollapse();
+const _originalOnSessionDeleted = CodemanApp.prototype._onSessionDeleted;
+CodemanApp.prototype._onSessionDeleted = function (data) {
+  if (this._splitSessionId === data.id) {
+    this.closeSplitPane();
+  } else if (this._splitPane && this.activeSessionId === data.id) {
+    // Pane A's session ended: promote Pane B by closing the split and
+    // selecting its session as the new (single) active pane.
+    const promoted = this._splitSessionId;
+    this.closeSplitPane();
+    if (promoted) this.selectSession(promoted);
   }
-});
+  return _originalOnSessionDeleted.call(this, data);
+};
 ```
-
-Note: `window.app` is assigned during `app.js` init, which per load order runs before `terminal-split.js`'s `DOMContentLoaded` listener fires (both are deferred to the same event, and script *evaluation* order — app.js at position 6, terminal-split.js at 7.5 — determines listener *registration* order, so app.js's own init logic that creates `window.app` runs first). If this ordering assumption proves wrong when this step is actually run, the fallback is to call `_wireSplitAutoCollapse()` directly from the end of `terminal-split.js` at module-evaluation time instead of inside `DOMContentLoaded`, since `window.app` is what needs to exist, not the DOM.
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npm run test:browser -- test/split-pane-auto-collapse.browser.test.ts`
-Expected: PASS. If it fails specifically because `window.app._onSessionDeleted` was undefined at wire time, switch the wiring approach per the note in Step 3 (call `_wireSplitAutoCollapse()` at module scope, not inside `DOMContentLoaded`) and re-run.
+Expected: PASS
 
 - [ ] **Step 5: Run the full gate to check for regressions**
 
