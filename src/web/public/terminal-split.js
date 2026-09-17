@@ -186,6 +186,12 @@ Object.assign(CodemanApp.prototype, {
   },
 
   openSplitPane(sessionId) {
+    // A stale picker click (opened before switching tabs) or clicking Pane
+    // B's own session tab while split can otherwise land here with
+    // sessionId === activeSessionId: two live WebSockets to the same
+    // session, each independently claiming PTY dimensions via its own `{t:'z',...}`
+    // resize frame. Refuse before creating any DOM or SplitTerminalPane.
+    if (sessionId === this.activeSessionId) return;
     if (this._splitPane) this.closeSplitPane();
 
     const wrap = document.querySelector('.terminal-wrap');
@@ -283,4 +289,18 @@ CodemanApp.prototype._onSessionDeleted = function (data) {
     if (promoted) this.selectSession(promoted);
   }
   return _originalOnSessionDeleted.call(this, data);
+};
+
+// I2: closes an active split BEFORE the primary pane rebinds to the same
+// session Pane B is showing (clicking Pane B's own session tab while split,
+// or any other selectSession() call that targets _splitSessionId). Without
+// this, Pane A rebinds to a session that Pane B's independent WebSocket is
+// still attached to — two live WebSockets to one session, each claiming PTY
+// dimensions via its own `{t:'z',...}` resize frame.
+const _originalSelectSession = CodemanApp.prototype.selectSession;
+CodemanApp.prototype.selectSession = function (sessionId, ...args) {
+  if (this._splitPane && this._splitSessionId === sessionId) {
+    this.closeSplitPane();
+  }
+  return _originalSelectSession.call(this, sessionId, ...args);
 };
