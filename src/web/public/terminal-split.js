@@ -124,7 +124,14 @@
 })(window);
 
 Object.assign(CodemanApp.prototype, {
-  openSplitPicker() {
+  openSplitPicker(event) {
+    // Mirrors toggleRunModeMenu (session-ui.js): stopPropagation on the
+    // OPENING click so it never reaches the outside-click listener this
+    // same call is about to register — without it, a click landing on the
+    // button's own inner <svg> (matched by neither `menu.contains()` nor
+    // the old exact-node check below) bubbled straight through to
+    // `document` and self-closed the menu it just opened.
+    event?.stopPropagation();
     if (this._splitPane) {
       this.closeSplitPane();
       return;
@@ -134,8 +141,13 @@ Object.assign(CodemanApp.prototype, {
       this.sessionOrder,
       this.activeSessionId
     );
-    const existing = document.getElementById('splitPickerMenu');
-    if (existing) existing.remove();
+    // Route a pre-existing menu through the SAME dismiss path used
+    // everywhere else, instead of a raw `.remove()`: a genuinely still-open
+    // menu has live document listeners (see below), and a raw removal left
+    // them attached forever — only the single-slot field below got
+    // overwritten, so every prior pair but the last was orphaned on
+    // `document` with no way to ever find and remove it again.
+    this._dismissSplitPicker();
 
     const menu = document.createElement('div');
     menu.id = 'splitPickerMenu';
@@ -162,14 +174,32 @@ Object.assign(CodemanApp.prototype, {
     // Dismiss on outside click or Escape — same one-shot listener pattern as
     // session-ui.js's other transient popovers (toggleCaseSettings(),
     // toggleRunModeMenu()). Deferred by a tick so the click that OPENED the
-    // menu (still bubbling) doesn't immediately close it. Picking an item
+    // menu (still bubbling) doesn't immediately close it — reinforced by
+    // the button's own stopPropagation() above, which is what actually
+    // stops that same click reaching `document` at all. Picking an item
     // (above) calls the SAME dismiss method, so these listeners never
     // outlive the menu either way.
+    //
+    // Self-removing by identity: each handler removes ITSELF (and its
+    // sibling) the moment it fires, rather than leaning solely on the
+    // `this._splitPickerDismissHandlers` field. That field is still kept in
+    // sync (so `_dismissSplitPicker()` called from elsewhere — the picker
+    // item's onclick above, or a still-open menu at the top of this method
+    // — can find and remove the CURRENT pair), but no path here can ever
+    // again leave a pair attached to `document` with nothing referencing it.
     const closeOnOutsideClick = (e) => {
-      if (!menu.contains(e.target) && e.target !== splitBtn) this._dismissSplitPicker();
+      if (menu.contains(e.target) || e.target.closest('.btn-split')) return;
+      document.removeEventListener('click', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+      this._splitPickerDismissHandlers = null;
+      menu.remove();
     };
     const closeOnEscape = (e) => {
-      if (e.key === 'Escape') this._dismissSplitPicker();
+      if (e.key !== 'Escape') return;
+      document.removeEventListener('click', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+      this._splitPickerDismissHandlers = null;
+      menu.remove();
     };
     this._splitPickerDismissHandlers = { closeOnOutsideClick, closeOnEscape };
     setTimeout(() => document.addEventListener('click', closeOnOutsideClick), 0);
