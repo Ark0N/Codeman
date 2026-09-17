@@ -6549,6 +6549,7 @@ class CodemanApp {
 
     this._flushedOffsets?.delete(sessionId);
     this._flushedTexts?.delete(sessionId);
+    if (typeof KeyboardAccessoryBar !== 'undefined') KeyboardAccessoryBar.discardComposerDraft?.(sessionId);
     // Drop any durably-queued input for a session that's actually gone (deleted/
     // exited). Not a lost prompt — the target no longer exists. Only reached on
     // real session removal, never on a tab switch.

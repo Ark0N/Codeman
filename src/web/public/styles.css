@@ -13521,6 +13521,61 @@ body.touch-device.cjk-input-visible .main {
   font-weight: 600;
 }
 
+.prompt-composer-overlay {
+  overflow-y: auto;
+  padding: min(15dvh, 72px) 0 calc(12px + env(safe-area-inset-bottom));
+}
+
+.prompt-composer-dialog {
+  max-width: 560px;
+  max-height: calc(100dvh - min(15dvh, 72px) - 12px - env(safe-area-inset-bottom));
+  overflow-y: auto;
+}
+
+.prompt-composer-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 2px 2px 10px;
+  color: var(--text);
+}
+
+.prompt-composer-header span {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.prompt-composer-textarea {
+  min-height: min(34dvh, 240px);
+  max-height: 50dvh;
+  resize: vertical;
+}
+
+.prompt-composer-actions {
+  flex-wrap: wrap;
+}
+
+.prompt-composer-actions button {
+  min-height: var(--touch-target-min);
+}
+
+.prompt-composer-terminal {
+  flex: 1 0 100%;
+  padding: 8px 12px;
+  color: var(--text-dim);
+  font-size: 14px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.prompt-composer-terminal:active {
+  color: var(--text);
+  background: var(--bg-input);
+}
+
 /* Shared lazy filesystem path picker (case linking + mobile input). */
 .path-input-group {
   display: flex;

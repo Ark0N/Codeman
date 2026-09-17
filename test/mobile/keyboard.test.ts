@@ -478,7 +478,7 @@ describe('Virtual Keyboard', () => {
         'tab',
         'shift-left',
         'shift-right',
-        'paste',
+        'compose',
         'readmymind',
         'esc',
         'dismiss',

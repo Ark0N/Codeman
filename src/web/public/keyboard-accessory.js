@@ -4,13 +4,14 @@
  * Defines three exports:
  *
  * - KeyboardAccessoryBar (singleton object) — Quick action buttons shown above the virtual
- *   keyboard on mobile: arrow up/down, /init, Tab, paste, Esc, and dismiss (the extended
+ *   keyboard on mobile: arrow up/down, /init, Tab, Compose, Esc, and dismiss (the extended
  *   bar adds /clear, /compact, Shift+Tab and more). Shift+Left/Right ship in both agent
  *   layouts but are revealed only on Codex sessions (`codex-enabled` marker class on the
  *   bar, synced on every session switch), since they are Codex bindings. Tab flushes any locally-buffered
  *   prompt text to the PTY before sending \t, so completion applies to what was typed.
- *   The paste button opens a dialog that handles both text paste and image attach
- *   (native picker + best-effort image paste, routed through app._uploadAndInsertImages).
+ *   Agent bars expose a Compose dialog with an autocorrect-aware multiline textarea,
+ *   per-session in-memory drafts and image attach. Shell bars keep the direct Paste
+ *   dialog because shell input is not an agent prompt.
  *   Destructive actions (/clear, /compact, extended bar only) require double-tap confirmation (2s amber state).
  *   Commands are sent as text + Enter separately for Ink compatibility.
  *   Only initializes on touch devices (MobileDetection.isTouchDevice guard).
@@ -648,8 +649,13 @@ const KeyboardAccessoryBar = {
   _baseMode: 'simple',
   // One-shot Ctrl modifier (shell bar only). See handleAction('ctrl').
   _ctrlArmed: false,
+  // Prompt drafts intentionally stay in memory: prompts routinely contain secrets,
+  // so persistence would need the same treatment as the 0600 intent store.
+  _composerDrafts: new Map(),
+  _composerUploads: new Map(),
+  _composerOverlay: null,
 
-  /** HTML for simple mode: arrows, commands, paste, Esc, dismiss */
+  /** HTML for simple mode: arrows, commands, Compose, Esc, dismiss */
   _simpleButtons: `
       <button class="accessory-btn accessory-btn-arrow" data-action="scroll-up" title="Arrow up">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -665,12 +671,7 @@ const KeyboardAccessoryBar = {
       <button class="accessory-btn" data-action="tab" title="Tab">Tab</button>
       <button class="accessory-btn accessory-btn-codex" data-action="shift-left" title="Shift+Left (Codex: edit queued message)" aria-label="Shift+Left (Codex: edit queued message)">⇧←</button>
       <button class="accessory-btn accessory-btn-codex" data-action="shift-right" title="Shift+Right (Codex: prompt stack back)" aria-label="Shift+Right (Codex: prompt stack back)">⇧→</button>
-      <button class="accessory-btn" data-action="paste" title="Paste from clipboard">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-          <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
-        </svg>
-      </button>
+      <button class="accessory-btn accessory-btn-compose" data-action="compose" title="Compose prompt">Compose</button>
       <button class="accessory-btn accessory-btn-rmm" data-action="readmymind" title="Read My Mind: predict your next prompt">🧠</button>
       <button class="accessory-btn" data-action="esc" title="Escape">Esc</button>
       <button class="accessory-btn accessory-btn-dismiss" data-action="dismiss" title="Dismiss keyboard">
@@ -740,12 +741,7 @@ const KeyboardAccessoryBar = {
           <path d="M9 5l7 7-7 7"/>
         </svg>
       </button>
-      <button class="accessory-btn" data-action="paste" title="Paste from clipboard">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-          <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
-        </svg>
-      </button>
+      <button class="accessory-btn accessory-btn-compose" data-action="compose" title="Compose prompt">Compose</button>
       <button class="accessory-btn" data-action="pick-path" title="Insert a file or folder path">&#x1F4C1; Path</button>
       <button class="accessory-btn" data-action="clear-input" title="Clear the current unsent input">&#x232B; All</button>
       <button class="accessory-btn accessory-btn-rmm" data-action="readmymind" title="Read My Mind: predict your next prompt">🧠</button>
@@ -823,6 +819,9 @@ const KeyboardAccessoryBar = {
    *  the next one. */
   refreshForActiveSession() {
     this.clearCtrl();
+    if (this._composerOverlay && this._composerOverlay.dataset.sessionId !== app.activeSessionId) {
+      this._composerOverlay._closeComposer?.({ restoreFocus: false });
+    }
     this._applyLayout(this._resolveMode());
     this.syncCodexKeys();
   },
@@ -977,6 +976,9 @@ const KeyboardAccessoryBar = {
       case 'paste':
         this.pasteFromClipboard();
         break;
+      case 'compose':
+        this.composePrompt();
+        break;
       case 'pick-path':
         this.pickPath();
         break;
@@ -1130,6 +1132,212 @@ const KeyboardAccessoryBar = {
     });
   },
 
+  /** Move the whole editable terminal prompt into the composer. Pending text
+   *  exists only in the overlay; flushed text already reached the PTY, so erase
+   *  that prefix before making the textarea authoritative. */
+  _takePendingLocalEcho(sessionId) {
+    if (!app._localEchoEnabled || !app._localEchoOverlay) return '';
+    const pending = app._localEchoOverlay.pendingText || '';
+    const overlayFlushed = app._localEchoOverlay.getFlushed?.() || {};
+    const flushedText = overlayFlushed.text || app._flushedTexts?.get(sessionId) || '';
+    const flushedCount = overlayFlushed.count || app._flushedOffsets?.get(sessionId) || 0;
+    app._localEchoOverlay.clear();
+    app._localEchoOverlay.suppressBufferDetection?.();
+    app._flushedOffsets?.delete(sessionId);
+    app._flushedTexts?.delete(sessionId);
+    if (flushedCount > 0) {
+      app._sendInputAsync(sessionId, '\x7f'.repeat(flushedCount), { useMux: true });
+    }
+    return flushedText + pending;
+  },
+
+  /** Insert text at the textarea selection, adding one separating space when
+   *  an attachment path would otherwise run into neighboring prompt text. */
+  _insertComposerText(textarea, text) {
+    if (!textarea || !text) return;
+    const start = Number.isInteger(textarea.selectionStart) ? textarea.selectionStart : textarea.value.length;
+    const end = Number.isInteger(textarea.selectionEnd) ? textarea.selectionEnd : start;
+    const before = textarea.value.slice(0, start);
+    const after = textarea.value.slice(end);
+    const prefix = before && !/\s$/.test(before) ? ' ' : '';
+    const suffix = after && !/^\s/.test(after) ? ' ' : '';
+    const inserted = `${prefix}${text}${suffix}`;
+    textarea.setRangeText(inserted, start, end, 'end');
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  },
+
+  /** Deliver one complete prompt through xterm's paste path. terminal.paste()
+   *  preserves bracketed-paste markers and multiline content; Enter is a
+   *  separate delayed durable write because Codex drops keys sharing a PTY read
+   *  with a bracketed paste. Capture the session so a fast tab switch cannot
+   *  submit the prompt in a different pane. */
+  _sendComposedPrompt(sessionId, text) {
+    if (!sessionId || !text || !app.terminal?.paste) return false;
+    if (app.terminal.modes?.bracketedPasteMode !== true) {
+      app.showToast?.('Prompt composer is waiting for the agent input to become ready', 'info');
+      return false;
+    }
+    app._predictiveEcho?.clearPredictions();
+    app.terminal.paste(text);
+    setTimeout(() => app._sendInputAsync(sessionId, '\r', { useMux: true }), 120);
+    return true;
+  },
+
+  /** Forget a draft when its target session no longer exists. */
+  discardComposerDraft(sessionId) {
+    this._composerDrafts.delete(sessionId);
+    this._composerUploads.delete(sessionId);
+    if (this._composerOverlay?.dataset.sessionId === sessionId) {
+      this._composerOverlay._closeComposer?.({ preserveDraft: false });
+    }
+  },
+
+  /** Open the manual agent prompt composer. Enter remains a newline; only the
+   *  Send button submits. Cancel/backdrop/Escape preserve the per-session draft. */
+  composePrompt() {
+    if (typeof app === 'undefined' || !app.activeSessionId) return;
+    if (this._isShellSession()) {
+      this.pasteFromClipboard();
+      return;
+    }
+
+    const sessionId = app.activeSessionId;
+    const pending = this._takePendingLocalEcho(sessionId);
+    const saved = this._composerDrafts.get(sessionId) || '';
+    const initial = saved + pending;
+
+    this._composerOverlay?._closeComposer?.({ restoreFocus: false });
+    const overlay = document.createElement('div');
+    overlay.className = 'paste-overlay prompt-composer-overlay';
+    overlay.dataset.sessionId = sessionId;
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-label', 'Compose prompt');
+    overlay.innerHTML = `
+      <div class="paste-dialog prompt-composer-dialog">
+        <div class="prompt-composer-header">
+          <strong>Compose prompt</strong>
+          <span>Enter adds a new line</span>
+        </div>
+        <textarea class="paste-textarea prompt-composer-textarea" aria-label="Prompt" placeholder="Write your prompt…" autocorrect="on" autocapitalize="sentences" spellcheck="true"></textarea>
+        <div class="paste-actions prompt-composer-actions">
+          <button type="button" class="prompt-composer-terminal">Use terminal keyboard</button>
+          <button type="button" class="paste-image">🖼 Image</button>
+          <button type="button" class="paste-cancel">Cancel</button>
+          <button type="button" class="paste-send">Send</button>
+        </div>
+        <input type="file" class="paste-file-input" accept="image/*" multiple hidden>
+      </div>
+    `;
+
+    this._composerOverlay = overlay;
+    const textarea = overlay.querySelector('.prompt-composer-textarea');
+    const fileInput = overlay.querySelector('.paste-file-input');
+    const imageButton = overlay.querySelector('.paste-image');
+    const sendButton = overlay.querySelector('.paste-send');
+    const focusTrap = new FocusTrap(overlay);
+    textarea.value = initial;
+    if (initial) this._composerDrafts.set(sessionId, initial);
+    const initialUploads = this._composerUploads.get(sessionId) || 0;
+    imageButton.disabled = initialUploads > 0;
+    sendButton.disabled = initialUploads > 0;
+    if (initialUploads > 0) imageButton.textContent = 'Uploading…';
+
+    const saveDraft = () => {
+      if (textarea.value) this._composerDrafts.set(sessionId, textarea.value);
+      else this._composerDrafts.delete(sessionId);
+    };
+    const close = ({ focusTerminal = false, preserveDraft = true, restoreFocus = true } = {}) => {
+      if (preserveDraft) saveDraft();
+      focusTrap.deactivate({ restoreFocus });
+      overlay.remove();
+      if (this._composerOverlay === overlay) this._composerOverlay = null;
+      if (focusTerminal) app.terminal?.focus();
+    };
+    overlay._closeComposer = close;
+    const send = () => {
+      const text = textarea.value;
+      if (!text || !this._sendComposedPrompt(sessionId, text)) return;
+      this._composerDrafts.delete(sessionId);
+      close({ preserveDraft: false });
+    };
+    const handleImages = async (files) => {
+      const images = Array.from(files || []).filter((file) => file.type.startsWith('image/'));
+      if (images.length === 0 || typeof app._uploadAndInsertImages !== 'function') return;
+      saveDraft();
+      this._composerUploads.set(sessionId, (this._composerUploads.get(sessionId) || 0) + 1);
+      const syncUploadUi = () => {
+        const currentOverlay =
+          this._composerOverlay?.isConnected && this._composerOverlay.dataset.sessionId === sessionId
+            ? this._composerOverlay
+            : null;
+        const count = this._composerUploads.get(sessionId) || 0;
+        const currentImageButton = currentOverlay?.querySelector('.paste-image');
+        const currentSendButton = currentOverlay?.querySelector('.paste-send');
+        if (currentImageButton) {
+          currentImageButton.disabled = count > 0;
+          currentImageButton.textContent = count > 0 ? 'Uploading…' : '🖼 Image';
+        }
+        if (currentSendButton) currentSendButton.disabled = count > 0;
+      };
+      syncUploadUi();
+      try {
+        const paths = await app._uploadAndInsertImages(images, { insert: false });
+        if (paths?.length) {
+          const currentOverlay =
+            this._composerOverlay?.isConnected && this._composerOverlay.dataset.sessionId === sessionId
+              ? this._composerOverlay
+              : null;
+          const currentTextarea = currentOverlay?.querySelector('.prompt-composer-textarea');
+          if (currentTextarea) this._insertComposerText(currentTextarea, paths.join(' '));
+          else if (app.sessions?.has(sessionId)) {
+            const draft = this._composerDrafts.get(sessionId) || '';
+            this._composerDrafts.set(sessionId, `${draft}${draft && !/\s$/.test(draft) ? ' ' : ''}${paths.join(' ')}`);
+          }
+        }
+      } finally {
+        const remaining = Math.max(0, (this._composerUploads.get(sessionId) || 1) - 1);
+        if (remaining > 0) this._composerUploads.set(sessionId, remaining);
+        else this._composerUploads.delete(sessionId);
+        syncUploadUi();
+        if (overlay.isConnected) fileInput.value = '';
+      }
+    };
+
+    textarea.addEventListener('input', saveDraft);
+    textarea.addEventListener('paste', (event) => {
+      const items = event.clipboardData?.items;
+      if (!items) return;
+      const images = Array.from(items)
+        .filter((item) => item.type.startsWith('image/'))
+        .map((item) => item.getAsFile())
+        .filter(Boolean);
+      if (images.length > 0) {
+        event.preventDefault();
+        void handleImages(images);
+      }
+    });
+    overlay.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      }
+    });
+    imageButton.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => void handleImages(fileInput.files));
+    overlay.querySelector('.prompt-composer-terminal').addEventListener('click', () => close({ focusTerminal: true }));
+    overlay.querySelector('.paste-cancel').addEventListener('click', () => close());
+    sendButton.addEventListener('click', send);
+    overlay.addEventListener('click', (event) => {
+      if (event.target === overlay) close();
+    });
+
+    document.body.appendChild(overlay);
+    focusTrap.activate();
+    textarea.focus();
+    textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
+  },
+
   /** Show a paste overlay for iOS compatibility.
    *  Handles three input paths from one dialog:
    *   - Text: long-press the textarea → Paste → Send (unchanged).
@@ -1259,9 +1467,9 @@ class FocusTrap {
     });
   }
 
-  deactivate() {
+  deactivate({ restoreFocus = true } = {}) {
     this.element.removeEventListener('keydown', this.boundHandleKeydown);
-    if (this.previouslyFocused && typeof this.previouslyFocused.focus === 'function') {
+    if (restoreFocus && this.previouslyFocused && typeof this.previouslyFocused.focus === 'function') {
       this.previouslyFocused.focus();
     }
   }
