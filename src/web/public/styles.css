@@ -2282,6 +2282,13 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-prefix {
   display: none !important;
 }
 
+/* Split-pane header button: hidden by default (opt-in via App Settings →
+   Header & Panels → Header buttons → Split, `showSplitButton`). Pure
+   client-side toggle applied by applyHeaderVisibilitySettings(). */
+.btn-split--hidden {
+  display: none !important;
+}
+
 .btn-icon-header.btn-settings {
   width: 30px;
   height: 30px;
