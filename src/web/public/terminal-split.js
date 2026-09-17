@@ -96,9 +96,13 @@
       if (!this._wsReady || !this.fitAddon) return;
       const dims = this.fitAddon.proposeDimensions();
       if (!dims) return;
-      const cols = Math.max(dims.cols, 40);
-      const rows = Math.max(dims.rows, 10);
-      this.ws.send(JSON.stringify({ t: 'z', c: cols, r: rows, v: 'desktop' }));
+      // Send the real proposed dimensions unclamped, matching the primary
+      // pane's convention (terminal-ui.js's getTerminalDimensions()) — the
+      // server enforces its own valid range ([1,500]/[1,200] in ws-routes.ts).
+      // A 40/10 floor here misreported Pane B's real width to the PTY at the
+      // divider's own reachable 20% floor position, causing real
+      // output-wrapping bugs.
+      this.ws.send(JSON.stringify({ t: 'z', c: dims.cols, r: dims.rows, v: 'desktop' }));
     }
 
     destroy() {
