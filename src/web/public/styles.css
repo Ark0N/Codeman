@@ -18397,3 +18397,43 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   flex: 1 1 auto;
   min-height: 0;
 }
+
+/* Split-picker menu: a small popover listing sessions to split with, appended
+   to document.body and positioned `fixed` by openSplitPicker() (JS sets
+   top/right against the Split header button's own rect). z-index above the
+   header (100) with headroom to spare, matching the sibling .run-mode-menu
+   dropdown's 1000. Dismissed by openSplitPane()'s own inline onclick, or by
+   the click-outside/Escape listeners installed alongside it. */
+.split-picker-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 4px;
+  background: var(--floating-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--control-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.split-picker-item {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.split-picker-item:hover {
+  background: var(--control-bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+.split-picker-empty {
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}

@@ -146,7 +146,7 @@ Object.assign(CodemanApp.prototype, {
       menu.innerHTML = candidates
         .map(
           (c) =>
-            `<div class="split-picker-item" data-session-id="${escapeHtml(c.id)}" onclick="app.openSplitPane(${escapeHtml(JSON.stringify(c.id))}); document.getElementById('splitPickerMenu')?.remove();">${escapeHtml(c.label)}</div>`
+            `<div class="split-picker-item" data-session-id="${escapeHtml(c.id)}" onclick="app.openSplitPane(${escapeHtml(JSON.stringify(c.id))}); app._dismissSplitPicker();">${escapeHtml(c.label)}</div>`
         )
         .join('');
     }
@@ -157,6 +157,31 @@ Object.assign(CodemanApp.prototype, {
       menu.style.position = 'fixed';
       menu.style.top = `${rect.bottom + 4}px`;
       menu.style.right = `${window.innerWidth - rect.right}px`;
+    }
+
+    // Dismiss on outside click or Escape — same one-shot listener pattern as
+    // session-ui.js's other transient popovers (toggleCaseSettings(),
+    // toggleRunModeMenu()). Deferred by a tick so the click that OPENED the
+    // menu (still bubbling) doesn't immediately close it. Picking an item
+    // (above) calls the SAME dismiss method, so these listeners never
+    // outlive the menu either way.
+    const closeOnOutsideClick = (e) => {
+      if (!menu.contains(e.target) && e.target !== splitBtn) this._dismissSplitPicker();
+    };
+    const closeOnEscape = (e) => {
+      if (e.key === 'Escape') this._dismissSplitPicker();
+    };
+    this._splitPickerDismissHandlers = { closeOnOutsideClick, closeOnEscape };
+    setTimeout(() => document.addEventListener('click', closeOnOutsideClick), 0);
+    document.addEventListener('keydown', closeOnEscape);
+  },
+
+  _dismissSplitPicker() {
+    document.getElementById('splitPickerMenu')?.remove();
+    if (this._splitPickerDismissHandlers) {
+      document.removeEventListener('click', this._splitPickerDismissHandlers.closeOnOutsideClick);
+      document.removeEventListener('keydown', this._splitPickerDismissHandlers.closeOnEscape);
+      this._splitPickerDismissHandlers = null;
     }
   },
 
