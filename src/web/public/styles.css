@@ -15109,6 +15109,13 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 }
 .main.webview-active .webview-layer { display: flex; }
 .main.webview-active .terminal-wrap { display: none; }
+/* A split (Pane A + divider + Pane B) hides as one unit when a web tab is
+   active, mirroring the .terminal-wrap rule above — .terminal-wrap is
+   reparented INSIDE .terminal-split-container while a split is open, so
+   hiding only .terminal-wrap would leave Pane B and the divider stranded on
+   screen over the dashboard iframe. No state is destroyed, so returning to
+   the session tab shows the split intact. */
+.main.webview-active .terminal-split-container { display: none; }
 
 .webview-frame {
   display: none;
