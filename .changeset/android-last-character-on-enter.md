@@ -1,5 +1,0 @@
----
-"aicodeman": patch
----
-
-Stop a phone keyboard losing the last character of every message it sends. Android soft keyboards commit the last typed character and send the Enter key in one InputConnection transaction, so the `input` event and the Enter keydown are both processed before any zero-delay timer runs. The orphaned-input recovery from #388 only resolved its candidate on such a timer, and lost it both ways: xterm emits `\r` synchronously from the Enter keydown, so the local-echo composer submitted the prompt before the recovered character existed, and that `\r` bumped the "did xterm speak for this keystroke" counter, so the candidate then stood itself down and dropped the character outright. Pending candidates are now drained synchronously at the next keydown, from xterm's custom key handler, which runs before xterm processes that key, so the counter still holds the value it had while the candidate's own keystroke was current, and the recovered byte reaches the composer ahead of the Enter. Typing on a physical keyboard is unaffected: there, the timer has already resolved the candidate before the next key arrives.
