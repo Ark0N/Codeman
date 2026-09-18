@@ -528,6 +528,14 @@ Object.assign(CodemanApp.prototype, {
       this.terminal.onRender(() => this._syncMobileHelperTextareaToCursor());
     }
 
+    // Renderer liveness — see _startRenderLivenessWatchdog. Registered for every
+    // device, not just touch: the rAF-discard behaviour is worst on an iOS PWA
+    // but a stale handle wedges the debouncer identically anywhere it happens.
+    this.terminal.onRender(() => {
+      this._lastRenderAt = Date.now();
+    });
+    this._startRenderLivenessWatchdog();
+
     // CJK IME input — textarea in index.html, just wire up send
     this._cjkInput = null;
     if (typeof CjkInput !== 'undefined') {
@@ -3290,7 +3298,105 @@ Object.assign(CodemanApp.prototype, {
     return performance.now() - this._lastUserScrollUpAt < window.CodemanTerminalInput.USER_SCROLL_STICKY_SUPPRESS_MS;
   },
 
+  /**
+   * Watchdog for a frozen renderer.
+   *
+   * iOS DISCARDS scheduled requestAnimationFrame callbacks when a PWA goes to
+   * the background — not deferred, never delivered. xterm's RenderDebouncer
+   * only clears its `_animationFrame` handle from INSIDE that callback, so once
+   * one is dropped the handle stays permanently non-undefined and every later
+   * `refresh()` returns on its first line. Parsing is decoupled from rendering,
+   * so bytes keep filling the buffer correctly and nothing throws: the terminal
+   * is simply frozen until the page is reloaded.
+   *
+   * Codeman is more exposed than an app that mounts a terminal per session —
+   * there is exactly ONE xterm instance for the whole page load, so a single
+   * backgrounding can wedge it for the rest of the session.
+   *
+   * The heal is what `_innerRefresh` would have done: cancel the stale handle,
+   * clear the field, and request a full repaint (which schedules a fresh rAF).
+   * Cancelling a genuinely pending handle is harmless — the full repaint that
+   * follows covers whatever it was going to draw.
+   *
+   * Discipline for reaching into xterm privates, and it is not optional: every
+   * access is optional-chained and the whole body is wrapped, so a shape change
+   * upstream degrades to a no-op. A self-heal that can break the terminal it is
+   * healing is worse than no self-heal.
+   *
+   * ⚠️ The field path (`_core._renderService._renderDebouncer._animationFrame`)
+   * is validated against xterm 6.x and CANNOT be covered by the CI gate:
+   * `_renderService` is only constructed by `Terminal.open()`, which needs a
+   * real DOM, and the gate runs in node. `test/xterm-private-api.test.ts` pins
+   * the dependency RANGE instead, so a major bump fails there and sends someone
+   * to re-check this by hand; `test/terminal-resilience.test.ts` covers the
+   * decision half. If the path ever goes stale the watchdog silently stops
+   * healing — that is the failure mode to watch for, and why the range guard
+   * exists at all.
+   */
+  _startRenderLivenessWatchdog() {
+    this._stopRenderLivenessWatchdog();
+    this._lastRenderAt = Date.now();
+    this._lastTerminalWriteAt = 0;
+    this._renderLivenessTimer = setInterval(() => {
+      try {
+        if (typeof CodemanRenderLiveness === 'undefined') return;
+        const kick = CodemanRenderLiveness.shouldKickRenderer({
+          wroteAt: this._lastTerminalWriteAt || 0,
+          renderedAt: this._lastRenderAt || 0,
+          now: Date.now(),
+          // A hidden terminal legitimately stops rendering (xterm pauses it),
+          // so only a VISIBLE one that owes us a frame counts as frozen.
+          visible: document.visibilityState === 'visible' && !!this.terminal?.element?.isConnected,
+        });
+        if (!kick) return;
+        const kicked = this._kickRenderer();
+        _crashDiag.log(`RENDER STALL: kick=${kicked}`);
+        // Treat the kick as the render for accounting purposes either way, so a
+        // terminal we cannot heal logs once per stall rather than every tick.
+        this._lastRenderAt = Date.now();
+      } catch {
+        /* a watchdog must never throw into the interval */
+      }
+    }, RENDER_LIVENESS_POLL_MS);
+  },
+
+  _stopRenderLivenessWatchdog() {
+    if (this._renderLivenessTimer) {
+      clearInterval(this._renderLivenessTimer);
+      this._renderLivenessTimer = null;
+    }
+  },
+
+  /**
+   * Do what xterm's dropped `_innerRefresh` would have done. Never throws.
+   * @returns {boolean} true if a stale handle was found and cleared.
+   */
+  _kickRenderer() {
+    try {
+      const renderService = this.terminal?._core?._renderService;
+      const debouncer = renderService?._renderDebouncer;
+      if (!debouncer || typeof renderService.refreshRows !== 'function') return false;
+      const handle = debouncer._animationFrame;
+      if (handle === undefined) return false; // not wedged — nothing to clear
+      try {
+        cancelAnimationFrame(handle);
+      } catch {
+        /* a stale handle may no longer be cancellable; clearing it is the point */
+      }
+      debouncer._animationFrame = undefined;
+      renderService.refreshRows(0, Math.max(0, (this.terminal.rows || 1) - 1));
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
   batchTerminalWrite(data) {
+    // Feed the renderer watchdog. Recorded before the buffer-load early return
+    // below: a write that is queued rather than written still means the pipeline
+    // owes us a frame once it drains.
+    this._lastTerminalWriteAt = Date.now();
+
     // If a buffer load (chunkedTerminalWrite) is in progress, queue live events
     // to prevent interleaving historical buffer data with live SSE data.
     // This is critical: interleaving causes cursor position chaos with Ink redraws.
