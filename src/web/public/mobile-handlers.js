@@ -410,6 +410,12 @@ const KeyboardHandler = {
       const keyboardHeight = this.initialViewportHeight - (window.visualViewport.height || window.innerHeight);
       const accessoryBar = document.querySelector('.keyboard-accessory-bar');
 
+      // The mobile case picker is a third position:fixed bottom-anchored
+      // surface, and since it gained a search field the keyboard can open over
+      // it. iOS does not shrink the layout viewport, so an unlifted sheet sits
+      // BEHIND the keyboard with its own search box out of sight.
+      const caseSheet = document.querySelector('.mobile-case-picker.active .mobile-case-picker-sheet');
+
       if (isSmallMedium) {
         // Phones/small tablets: toolbar and accessory bar are position:fixed
         // via CSS. Use translateY to lift them above the keyboard.
@@ -426,6 +432,9 @@ const KeyboardHandler = {
         if (accessoryBar) {
           accessoryBar.style.transform = keyboardOffset > 0 ? `translateY(${-keyboardOffset}px)` : '';
         }
+        if (caseSheet) {
+          caseSheet.style.transform = keyboardOffset > 0 ? `translateY(${-keyboardOffset}px)` : '';
+        }
         if (main && keyboardHeight > 0) {
           const cjkInputHeight = cjkInput?.classList.contains('cjk-input-visible') ? 44 : 0;
           main.style.paddingBottom = `${84 + cjkInputHeight}px`;
@@ -435,6 +444,9 @@ const KeyboardHandler = {
         // iOS auto-scrolls the visual viewport, making keyboardOffset ≈ 0).
         if (accessoryBar) {
           accessoryBar.style.bottom = `${keyboardHeight}px`;
+        }
+        if (caseSheet) {
+          caseSheet.style.bottom = `${keyboardHeight}px`;
         }
       }
 
@@ -464,6 +476,10 @@ const KeyboardHandler = {
     const accessoryBar = document.querySelector('.keyboard-accessory-bar');
     const cjkInput = document.getElementById('cjkInput');
     const main = document.querySelector('.main');
+    // Not scoped to `.active`, unlike the lift above: a sheet closed while the
+    // keyboard was still up must still have its inline offset cleared, or the
+    // next open slides in already displaced.
+    const caseSheet = document.querySelector('.mobile-case-picker-sheet');
 
     if (toolbar) {
       toolbar.style.transform = '';
@@ -475,6 +491,10 @@ const KeyboardHandler = {
     if (cjkInput) {
       cjkInput.style.transform = '';
       cjkInput.style.bottom = '';
+    }
+    if (caseSheet) {
+      caseSheet.style.transform = '';
+      caseSheet.style.bottom = '';
     }
     if (main) {
       main.style.paddingBottom = '';

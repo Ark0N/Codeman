@@ -102,6 +102,8 @@
     'Manage AI Coding tools in persistent tmux sessions.': '在持久化 tmux 会话中管理 AI 编程工具。',
     'Select case': '选择案例',
     'Select Case': '选择案例',
+    'Search cases': '搜索案例',
+    'No cases match': '没有匹配的案例',
     'All cases': '全部案例',
     'No directory': '未选择目录',
     Run: '运行',

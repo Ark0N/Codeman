@@ -710,11 +710,9 @@
           <button class="btn-toolbar btn-enter" onclick="app.sendEnterKey()" title="Send Enter">
             Enter
           </button>
-          <div class="tab-count-group" title="Instance count">
-            <button class="tab-count-btn" onclick="app.decrementShellCount()">−</button>
-            <input type="number" id="shellCount" class="tab-count-input" value="1" min="1" max="20" readonly>
-            <button class="tab-count-btn" onclick="app.incrementShellCount()">+</button>
-          </div>
+          <!-- Run Shell had a second, identical instance-count stepper here. The
+               toolbar carried two of them side by side, so it is gone and Run
+               Shell reads the one above (#tabCount) like the Run button does. -->
           <div class="case-select-group">
             <div class="case-combobox" id="quickStartCasePicker">
               <input
@@ -3041,6 +3039,33 @@
         <div class="mobile-case-picker-header">
           <h3>Select Case</h3>
           <button class="modal-close" onclick="app.closeMobileCasePicker()" aria-label="Close case picker">&times;</button>
+        </div>
+        <!-- Search: the desktop toolbar has had a filtering combobox for a while
+             (#quickStartCaseSearch); this is the same matcher on the phone sheet,
+             where a long case list is otherwise a long scroll. -->
+        <div class="mobile-case-picker-search">
+          <span class="mobile-case-search-icon" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+          </span>
+          <input
+            type="search"
+            id="mobileCaseSearch"
+            class="mobile-case-search-input"
+            placeholder="Search cases"
+            aria-label="Search cases"
+            aria-controls="mobileCaseList"
+            autocomplete="off"
+            autocapitalize="none"
+            autocorrect="off"
+            spellcheck="false"
+            enterkeyhint="search"
+            oninput="app.filterMobileCaseList()"
+            onkeydown="app.handleMobileCaseSearchKeydown(event)"
+          >
+          <button type="button" class="mobile-case-search-clear" id="mobileCaseSearchClear"
+                  onclick="app.clearMobileCaseSearch()" aria-label="Clear search" hidden>&times;</button>
         </div>
         <div class="mobile-case-picker-body">
           <div class="mobile-case-list" id="mobileCaseList">
