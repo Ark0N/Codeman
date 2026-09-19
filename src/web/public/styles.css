@@ -2282,6 +2282,13 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-prefix {
   display: none !important;
 }
 
+/* Split-pane header button: hidden by default (opt-in via App Settings →
+   Header & Panels → Header buttons → Split, `showSplitButton`). Pure
+   client-side toggle applied by applyHeaderVisibilitySettings(). */
+.btn-split--hidden {
+  display: none !important;
+}
+
 .btn-icon-header.btn-settings {
   width: 30px;
   height: 30px;
@@ -4614,6 +4621,17 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   font-size: 0.8rem;
   color: var(--text);
   line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.history-item-summary {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  line-height: 1.3;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -15091,6 +15109,13 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 }
 .main.webview-active .webview-layer { display: flex; }
 .main.webview-active .terminal-wrap { display: none; }
+/* A split (Pane A + divider + Pane B) hides as one unit when a web tab is
+   active, mirroring the .terminal-wrap rule above — .terminal-wrap is
+   reparented INSIDE .terminal-split-container while a split is open, so
+   hiding only .terminal-wrap would leave Pane B and the divider stranded on
+   screen over the dashboard iframe. No state is destroyed, so returning to
+   the session tab shows the split intact. */
+.main.webview-active .terminal-split-container { display: none; }
 
 .webview-frame {
   display: none;
@@ -18315,4 +18340,107 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   .response-viewer {
     max-height: min(88vh, env(viewport-segment-height 0 1, 88vh));
   }
+}
+
+/* Split-Pane Sessions: container inserted only while a split is active.
+   .terminal-wrap (Pane A) is reparented into this as the first child; it
+   keeps every existing rule unchanged since nothing here restyles it. */
+.terminal-split-container {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.terminal-split-container > .terminal-wrap {
+  flex: 0 0 auto;
+  min-width: 240px;
+  overflow: hidden;
+}
+
+.split-divider {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--border-color, #333);
+  position: relative;
+}
+
+.split-divider:hover,
+.split-divider.dragging {
+  background: var(--accent-color, #4a9eff);
+}
+
+.terminal-pane-b {
+  flex: 0 0 auto;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.terminal-pane-b-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--bg-secondary, #1a1a1a);
+  border-bottom: 1px solid var(--border-color, #333);
+  flex: 0 0 auto;
+}
+
+.terminal-pane-b-close {
+  cursor: pointer;
+  padding: 0 6px;
+  opacity: 0.7;
+}
+
+.terminal-pane-b-close:hover {
+  opacity: 1;
+}
+
+.terminal-pane-b-container {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Split-picker menu: a small popover listing sessions to split with, appended
+   to document.body and positioned `fixed` by openSplitPicker() (JS sets
+   top/right against the Split header button's own rect). z-index above the
+   header (100) with headroom to spare, matching the sibling .run-mode-menu
+   dropdown's 1000. Dismissed by openSplitPane()'s own inline onclick, or by
+   the click-outside/Escape listeners installed alongside it. */
+.split-picker-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 4px;
+  background: var(--floating-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--control-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.split-picker-item {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.split-picker-item:hover {
+  background: var(--control-bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+.split-picker-empty {
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text-muted);
 }

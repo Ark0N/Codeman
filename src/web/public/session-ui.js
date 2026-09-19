@@ -67,9 +67,6 @@ Object.assign(CodemanApp.prototype, {
       seen.add(c.name);
       normalized.push(c);
     }
-    if (!seen.has('testcase')) {
-      normalized.push({ name: 'testcase' });
-    }
 
     return normalized
       .map(c => {

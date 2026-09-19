@@ -1324,6 +1324,7 @@ export const SettingsUpdateSchema = z
     showFileBrowser: z.boolean().optional(),
     showSubagents: z.boolean().optional(),
     showMultiMonitorButton: z.boolean().optional(),
+    showSplitButton: z.boolean().optional(),
     // Doubles as the plan-usage telemetry COLLECTION switch, read fresh from
     // disk by readPlanUsageTelemetryEnabled() (hooks-config.ts) at every claude
     // session create/respawn — not just the chip's DISPLAY preference. See that

@@ -28,6 +28,15 @@
   // suppressed, so high-frequency Codex status redraws don't snap the viewport
   // back to the bottom while the user is inspecting earlier output.
   const USER_SCROLL_STICKY_SUPPRESS_MS = 1500;
+  // Minimum gap between sticky-scroll's own scrollToBottom() calls. Some CLIs
+  // (omp's known upstream row-duplication bug, can1357/oh-my-pi#9780) redraw
+  // their status widget many times per second with no real new content, and
+  // sticky-scroll snapping on every single flush reads as continuous jank —
+  // most visible on a phone's short viewport, where each snap is a much
+  // bigger fraction of what's on screen. Coalescing rapid snaps into one
+  // trailing catch-up keeps the pinned-to-bottom guarantee (see
+  // _stickyScrollToBottom) without the per-flush visual yank.
+  const STICKY_SCROLL_MIN_GAP_MS = 180;
   // Mobile browsers synthesize trusted mouse events after touchend. During this
   // short window, only the app's synthetic tap-to-position mouse event should
   // reach xterm.
@@ -219,6 +228,7 @@
     CODEX_COMPOSER_ROW_RE,
     BRACKETED_PASTE_START,
     USER_SCROLL_STICKY_SUPPRESS_MS,
+    STICKY_SCROLL_MIN_GAP_MS,
     TOUCH_COMPAT_MOUSE_SUPPRESS_MS,
     REPLAY_ESCAPE_RE,
     KEY_PAGE_UP,
@@ -418,6 +428,33 @@ Object.assign(CodemanApp.prototype, {
           ev.preventDefault();
           return false;
         }
+      }
+
+      // Ctrl+Backspace (delete-word-backward): xterm's own default encoding for
+      // this key is a literal BS byte (0x08) — identical to what plain Ctrl+H
+      // sends — so a TUI reading raw bytes off the PTY (no kitty-protocol/CSI-u
+      // disambiguation available through this pipe) can't tell a real ctrl+backspace
+      // apart from someone just typing ^H, and neither omp nor opencode fires their
+      // own ctrl+backspace binding on it (confirmed empirically: opencode falls back
+      // to a single-char delete, omp does nothing at all). Every one of these tools
+      // already binds literal Ctrl+W to delete-word-backward (zsh, Claude Code, omp,
+      // opencode), so send Ctrl+W's byte (0x17) instead — a drop-in alias with no
+      // ambiguity, mirroring the same fix applied at the WezTerm layer for direct
+      // SSH sessions (wezterm.lua remaps ctrl-backspace -> SendString '\x17' there).
+      if (
+        ev.type === 'keydown' &&
+        ev.key === 'Backspace' &&
+        ev.ctrlKey &&
+        !ev.altKey &&
+        !ev.metaKey &&
+        !ev.shiftKey
+      ) {
+        ev.preventDefault();
+        if (this.activeSessionId) {
+          this._pendingInput += '\x17';
+          flushInput();
+        }
+        return false;
       }
 
       // Shift+Enter / Ctrl+Enter: insert newline for multi-line input.
@@ -2342,7 +2379,22 @@ Object.assign(CodemanApp.prototype, {
       pin.title = 'Pinned';
       titleSpan.appendChild(pin);
     }
-    titleSpan.appendChild(document.createTextNode(this._historyRowLabel(s, shortDir)));
+    const rowLabel = this._historyRowLabel(s, shortDir);
+    titleSpan.appendChild(document.createTextNode(rowLabel));
+
+    // Prompt preview ("summary"): most rows carry a session `name`, which wins
+    // the title above and buries the actual conversation content — a filter or
+    // an A-Z sort still finds those rows by name, but a glance down the list
+    // can't tell one "w1-Codeman" from another. Show firstPrompt as its own line
+    // whenever it exists and isn't already what the title is displaying (an
+    // unnamed row falls through to firstPrompt as its title above, and this
+    // would just repeat it).
+    let summarySpan = null;
+    if (s.firstPrompt && s.firstPrompt !== rowLabel) {
+      summarySpan = document.createElement('span');
+      summarySpan.className = 'history-item-summary';
+      summarySpan.textContent = s.firstPrompt;
+    }
 
     // Badge row: mode (claude/codex/opencode/gemini/antigravity/pi/grok/deepseek/shell) + a LIVE pill.
     const badgeRow = document.createElement('div');
@@ -2378,6 +2430,7 @@ Object.assign(CodemanApp.prototype, {
     subtitleSpan.textContent = caseLabel;
 
     textCol.append(titleSpan);
+    if (summarySpan) textCol.append(summarySpan);
     if (badgeRow.childElementCount > 0) textCol.append(badgeRow);
     textCol.append(subtitleSpan);
 
@@ -3322,6 +3375,34 @@ Object.assign(CodemanApp.prototype, {
     return performance.now() - this._lastUserScrollUpAt < window.CodemanTerminalInput.USER_SCROLL_STICKY_SUPPRESS_MS;
   },
 
+  /**
+   * Throttled sticky-scroll: coalesces rapid-fire scrollToBottom() calls into
+   * one visual jump per STICKY_SCROLL_MIN_GAP_MS instead of one per flush.
+   * A CLI redrawing its status widget many times a second (no real new
+   * content, e.g. omp's upstream row-duplication bug) would otherwise snap
+   * the viewport on every single flush — harmless on a tall desktop terminal,
+   * but a much bigger fraction of a phone's short viewport, so it reads as
+   * continuous scrolling. The trailing call re-checks eligibility instead of
+   * assuming it still holds, since a burst can outlast a manual scroll-up.
+   */
+  _stickyScrollToBottom() {
+    const gapMs = window.CodemanTerminalInput.STICKY_SCROLL_MIN_GAP_MS;
+    const now = performance.now();
+    const elapsed = now - (this._lastStickyScrollAt || 0);
+    if (elapsed >= gapMs) {
+      this._lastStickyScrollAt = now;
+      this.terminal.scrollToBottom();
+      return;
+    }
+    if (this._stickyScrollTrailingTimer) return;
+    this._stickyScrollTrailingTimer = setTimeout(() => {
+      this._stickyScrollTrailingTimer = null;
+      if (!this.terminal || this._hasRecentUserScrollUp()) return;
+      this._lastStickyScrollAt = performance.now();
+      this.terminal.scrollToBottom();
+    }, gapMs - elapsed);
+  },
+
   batchTerminalWrite(data) {
     // If a buffer load (chunkedTerminalWrite) is in progress, queue live events
     // to prevent interleaving historical buffer data with live SSE data.
@@ -3680,7 +3761,8 @@ Object.assign(CodemanApp.prototype, {
     // Sticky scroll: if user was at bottom, keep them there after new output.
     // Give manual scroll-up gestures a short grace window so high-frequency
     // Codex status ticks do not snap the viewport back while the user is
-    // trying to inspect earlier output.
+    // trying to inspect earlier output. Throttled (see _stickyScrollToBottom)
+    // so a rapid-fire burst of flushes coalesces into fewer visual jumps.
     //
     // A live anchor wins outright. The two flags are captured at different
     // moments (_wasAtBottomBeforeWrite at the frame's first batchTerminalWrite,
@@ -3688,7 +3770,7 @@ Object.assign(CodemanApp.prototype, {
     // that the anchor is reasserted after the parse, running both would jump to
     // the bottom and then back one frame later instead of simply staying put.
     if (preserveViewportY === null && this._wasAtBottomBeforeWrite && !this._hasRecentUserScrollUp()) {
-      this.terminal.scrollToBottom();
+      this._stickyScrollToBottom();
     }
 
     // Re-position local echo overlay after terminal writes — Ink redraws can

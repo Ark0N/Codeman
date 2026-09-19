@@ -400,6 +400,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsUltracodeFloatingWindows').checked =
       settings.ultracodeFloatingWindows ?? defaults.ultracodeFloatingWindows ?? false;
     document.getElementById('appSettingsShowMultiMonitorButton').checked = settings.showMultiMonitorButton ?? defaults.showMultiMonitorButton ?? false;
+    document.getElementById('appSettingsShowSplitButton').checked = settings.showSplitButton ?? defaults.showSplitButton ?? false;
     document.getElementById('appSettingsShowPlanUsageLimits').checked = this.planUsageChipEnabled(settings);
     document.getElementById('appSettingsShowRedrawButton').checked = settings.showRedrawButton ?? defaults.showRedrawButton ?? false;
     // Phone overview home screen: only meaningful under 600px, so the row is
@@ -2109,6 +2110,7 @@ Object.assign(CodemanApp.prototype, {
       readMyMindEnabled: document.getElementById('appSettingsReadMyMind').checked,
       ultracodeFloatingWindows: document.getElementById('appSettingsUltracodeFloatingWindows').checked,
       showMultiMonitorButton: document.getElementById('appSettingsShowMultiMonitorButton').checked,
+      showSplitButton: document.getElementById('appSettingsShowSplitButton').checked,
       showPlanUsageLimits: document.getElementById('appSettingsShowPlanUsageLimits').checked,
       showRedrawButton: document.getElementById('appSettingsShowRedrawButton').checked,
       mobileOverviewEnabled: document.getElementById('appSettingsMobileOverview').checked,
@@ -2528,6 +2530,7 @@ Object.assign(CodemanApp.prototype, {
         showUltracodeAgents: false,
         ultracodeFloatingWindows: false,
         showMultiMonitorButton: false,
+        showSplitButton: false,
         // Desktop defaults this ON (see planUsageChipEnabled); handhelds keep it
         // OFF so the phone header stays minimal and the mobile-header-buttons
         // policy guard keeps passing.
@@ -2731,6 +2734,13 @@ Object.assign(CodemanApp.prototype, {
     const multiMonitorBtn = document.querySelector('.btn-multimonitor');
     if (multiMonitorBtn) {
       multiMonitorBtn.classList.toggle('btn-multimonitor--hidden', !showMultiMonitorButton);
+    }
+
+    // Split button — hidden by default
+    const showSplitButton = settings.showSplitButton ?? defaults.showSplitButton ?? false;
+    const splitBtn = document.querySelector('.btn-split');
+    if (splitBtn) {
+      splitBtn.classList.toggle('btn-split--hidden', !showSplitButton);
     }
 
     // Ultracode/Workflow agents launcher — hidden by default; reveal when enabled.
