@@ -17,7 +17,9 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+const imageInputSource = readFileSync(resolve(import.meta.dirname, '../src/web/public/image-input.js'), 'utf8');
 
 interface TrapListener {
   (e: Record<string, unknown>): void;
@@ -91,8 +93,7 @@ function loadPasteHarness(): Harness {
   });
 
   vm.runInContext('class CodemanApp {}', context);
-  const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/image-input.js'), 'utf8');
-  vm.runInContext(src, context, { filename: 'image-input.js' });
+  vm.runInContext(imageInputSource, context, { filename: 'image-input.js' });
   const CodemanApp = vm.runInContext('CodemanApp', context) as new () => Record<string, unknown>;
 
   const pastedText: string[] = [];
@@ -131,6 +132,20 @@ function loadPasteHarness(): Harness {
       for (const fn of pending) fn();
     },
   };
+}
+
+function loadImageInputApp() {
+  const context = vm.createContext({ console, window: {}, document: {} });
+  vm.runInContext('class CodemanApp {}', context);
+  vm.runInContext(imageInputSource, context, { filename: 'image-input.js' });
+  const CodemanApp = vm.runInContext('CodemanApp', context) as new () => Record<string, unknown>;
+  const app = new CodemanApp();
+  app.activeSessionId = 'session-1';
+  app.showToast = vi.fn();
+  app.sendInput = vi.fn(async () => {});
+  app._normalizeImageForUpload = vi.fn(async (file) => file);
+  app._uploadPasteImage = vi.fn(async (_sessionId, file: { path: string }) => file.path);
+  return app as Record<string, any>;
 }
 
 describe('Ctrl+V paste trap', () => {
@@ -172,5 +187,26 @@ describe('Ctrl+V paste trap', () => {
 
     h.runTimers();
     expect(h.attachedTraps()).toBe(0);
+  });
+});
+
+describe('image upload insertion policy', () => {
+  it('returns ordered paths without terminal insertion when requested by the composer', async () => {
+    const app = loadImageInputApp();
+    const files = [{ path: '/tmp/first.png' }, { path: '/tmp/second.png' }];
+
+    const paths = await app._uploadAndInsertImages(files, { insert: false });
+
+    expect(Array.from(paths)).toEqual(['/tmp/first.png', '/tmp/second.png']);
+    expect(app.sendInput).not.toHaveBeenCalled();
+  });
+
+  it('preserves terminal insertion by default', async () => {
+    const app = loadImageInputApp();
+
+    const paths = await app._uploadAndInsertImages([{ path: '/tmp/legacy.png' }]);
+
+    expect(Array.from(paths)).toEqual(['/tmp/legacy.png']);
+    expect(app.sendInput).toHaveBeenCalledWith('/tmp/legacy.png');
   });
 });

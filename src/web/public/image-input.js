@@ -124,12 +124,15 @@ Object.assign(CodemanApp.prototype, {
   // 20 photos don't crawl through serially.
   _uploadConcurrency: 3,
 
-  async _uploadAndInsertImages(fileList) {
+  /** Upload a batch and normally insert its paths into the active terminal.
+   *  The prompt composer passes `{ insert: false }` so it can put those paths
+   *  into its textarea instead. Returns successful paths in selection order. */
+  async _uploadAndInsertImages(fileList, options = {}) {
     const sessionId = this.activeSessionId;
-    if (!sessionId) return;
+    if (!sessionId) return [];
 
     let files = Array.from(fileList || []);
-    if (files.length === 0) return;
+    if (files.length === 0) return [];
 
     // Cap the batch and tell the user what got dropped (no silent truncation).
     let capped = false;
@@ -175,7 +178,7 @@ Object.assign(CodemanApp.prototype, {
     await Promise.all(Array.from({ length: Math.min(this._uploadConcurrency, total) }, () => worker()));
 
     const paths = results.filter(Boolean);
-    if (paths.length > 0) {
+    if (paths.length > 0 && options.insert !== false) {
       // Insert all paths in one shot, space-separated, in selection order.
       await this.sendInput(paths.join(' '));
     }
@@ -187,6 +190,7 @@ Object.assign(CodemanApp.prototype, {
     if (capped) parts.push(`max ${this._maxBatchImages} per batch`);
     const tone = paths.length > 0 ? (failed > 0 || capped ? 'info' : 'success') : 'error';
     this.showToast(parts.join(' · ') || 'No images uploaded', tone);
+    return paths;
   },
 
   async _uploadPasteImage(sessionId, file) {
