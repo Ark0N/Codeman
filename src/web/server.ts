@@ -1674,6 +1674,24 @@ export class WebServer extends EventEmitter {
         '</head>',
         `<script>window.__codemanCustomModelClis=${customModelClisJson};</script>\n</head>`
       );
+      // The general-purpose run-menu catalogue (PR B2, docs/cli-registry.md): every
+      // ENABLED CliEntry's menu-facing fields, unfiltered by capability — unlike
+      // __codemanCustomModelClis above, which is narrowed to one picker's needs.
+      // Field list mirrors what scripts/generate-cli-catalog.mts exports to
+      // config/clis.stock.json (id/label/shortBadge/order/kind); launch/env/
+      // capabilities/overlays are spawn-time concerns the server alone interprets
+      // and must never leak here, same rule as that generated artifact.
+      const cliCatalog = enabledClis().map((entry) => ({
+        id: entry.id,
+        label: entry.label,
+        shortBadge: entry.shortBadge,
+        order: entry.order,
+        kind: entry.kind,
+      }));
+      // `label`/`shortBadge` are user-clis.json-settable strings, so this needs the
+      // same </script>-breakout guard as __codemanCustomModelClis above.
+      const cliCatalogJson = escapeScriptJson(JSON.stringify(cliCatalog));
+      html = html.replace('</head>', `<script>window.__codemanCliCatalog=${cliCatalogJson};</script>\n</head>`);
     }
     if (!soloSessionId && process.env.CODEMAN_GESTURE === '1') {
       html = html.replace('</head>', `<script>window.__codemanGestureAvailable=true;</script>\n</head>`);

@@ -209,6 +209,38 @@ describe('WebServer.renderIndexHtml', () => {
     }
   });
 
+  it('exposes the general run-menu CLI catalogue with the menu-facing fields only', async () => {
+    // Unlike __codemanCustomModelClis above (narrowed to one picker's needs), this
+    // one carries every ENABLED CliEntry, agent and shell alike, with no capability
+    // filter — but still excludes launch/env/capabilities/overlays, the same rule
+    // scripts/generate-cli-catalog.mts follows for config/clis.stock.json.
+    const { server } = makeServer({});
+    const html = await render(server);
+    expect(html).toContain('window.__codemanCliCatalog=');
+    const catalog = JSON.parse(html.match(/window\.__codemanCliCatalog=(\[.*?\]);/)![1]) as Array<{
+      id: string;
+      label: string;
+      shortBadge: string;
+      order: number;
+      kind: string;
+    }>;
+    const ids = catalog.map((c) => c.id);
+    expect(ids).toContain('claude');
+    expect(ids).toContain('shell');
+    for (const cli of catalog) {
+      expect(typeof cli.id).toBe('string');
+      expect(typeof cli.label).toBe('string');
+      expect(typeof cli.shortBadge).toBe('string');
+      expect(typeof cli.order).toBe('number');
+      expect(['agent', 'shell']).toContain(cli.kind);
+      expect(cli).not.toHaveProperty('launch');
+      expect(cli).not.toHaveProperty('env');
+      expect(cli).not.toHaveProperty('capabilities');
+      expect(cli).not.toHaveProperty('overlays');
+      expect(cli).not.toHaveProperty('discovery');
+    }
+  });
+
   it('escapeScriptJson neutralizes a literal </script>, and still round-trips as a JS literal', () => {
     // CliEntry.label is a plain string a user's own clis.json can set (up to 60
     // chars), unlike __codemanCliAvailable's booleans-only payload, so this is
@@ -254,6 +286,7 @@ describe('WebServer.renderIndexHtml', () => {
     const html = await render(server, 'sess-123');
     expect(html).not.toContain('__codemanCliAvailable');
     expect(html).not.toContain('__codemanCustomModelClis');
+    expect(html).not.toContain('__codemanCliCatalog');
   });
 
   it('does not expose gesture at all when CODEMAN_GESTURE is unset', async () => {

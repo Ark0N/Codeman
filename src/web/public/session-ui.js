@@ -11,6 +11,115 @@
  * @loadorder 12 of 15 — loaded after panels-ui.js, before ralph-wizard.js
  */
 
+/**
+ * PR B2: the single source for every non-Claude, non-Shell run mode's launch
+ * shape, consumed by `_runCliMode()` below. Before this table existed, each of
+ * `runOpenCode`/`runCodex`/`runGemini`/`runAntigravity`/`runPi`/`runOmp`/
+ * `runGrok`/`runDeepSeek` was a ~45-line copy of the same probe/launch/select
+ * skeleton with only the CLI-specific pieces below actually differing — eight
+ * near-identical bodies guaranteed to drift, exactly what the CLI registry's
+ * own no-id-branching rule exists to prevent server-side.
+ *
+ * Deliberately a LOCAL table rather than reading `window.__codemanCliCatalog`
+ * (server.ts, PR B2): that catalogue carries only menu-facing metadata
+ * (id/label/shortBadge/order/kind), and several unit tests exercise these
+ * run*() methods inside a bare `vm.createContext()` sandbox with no `window`
+ * global at all (see test/run-mode-ui.test.ts) — referencing `window` there
+ * unguarded would throw, not degrade. `buildConfig` returns the CLI's
+ * top-level legacy config field for a LOCAL launch, or `null` for a CLI that
+ * sends none (pi: no bypass flag exists, so there is nothing to send — see
+ * runPi's own history below for why that must stay true).
+ */
+const RUN_MODE_LAUNCH = {
+  opencode: {
+    label: 'OpenCode',
+    installHint: 'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash',
+    supportsCustomModel: true,
+    buildConfig: () => ({ openCodeConfig: { autoAllowTools: true } }),
+  },
+  codex: {
+    label: 'Codex',
+    installHint: 'Codex CLI not found. Install with: npm install -g @openai/codex',
+    supportsCustomModel: true,
+    buildConfig: (globalSettings) => ({
+      codexConfig: {
+        dangerouslyBypassApprovals: globalSettings.codexDangerouslyBypassApprovals ?? false,
+        animations: globalSettings.codexAnimationsEnabled ?? false,
+        renderMode: 'hybrid',
+      },
+    }),
+  },
+  gemini: {
+    label: 'Gemini',
+    installHint: 'Gemini CLI not found. Install with: npm install -g @google/gemini-cli',
+    supportsCustomModel: true,
+    buildConfig: () => ({ geminiConfig: { approvalMode: 'yolo' } }),
+  },
+  antigravity: {
+    label: 'Antigravity',
+    installHint: 'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash',
+    // antigravity has no customModelInjection recipe (docs/custom-model-endpoints-plan.md
+    // calls it `unsupported`) — never fold a pending pick into its launch body.
+    supportsCustomModel: false,
+    buildConfig: () => ({ antigravityConfig: { dangerouslySkipPermissions: true } }),
+  },
+  pi: {
+    label: 'Pi',
+    installHint: 'Pi CLI not found. Install with: npm install -g --ignore-scripts @earendil-works/pi-coding-agent',
+    supportsCustomModel: true,
+    // Deliberately NO piConfig: pi has no permission prompts, so there is no
+    // bypass to opt into, and project trust is pi's own `defaultProjectTrust`
+    // decision (an interactive prompt the user answers in the terminal).
+    // Sending `approveProjectTrust: true` here would silently opt every
+    // browser-launched pi session into executing repo-supplied TypeScript.
+    buildConfig: () => null,
+  },
+  omp: {
+    label: 'OMP',
+    installHint: 'OMP CLI not found. Install with: curl -fsSL https://omp.sh/install | sh',
+    supportsCustomModel: true,
+    buildConfig: () => null,
+  },
+  grok: {
+    label: 'Grok',
+    installHint: 'Grok CLI not found. Install with: curl -fsSL https://x.ai/cli/install.sh | bash',
+    supportsCustomModel: true,
+    // Sends `grokConfig: { alwaysApprove: true }` the way antigravity sends
+    // `dangerouslySkipPermissions: true`: Codeman sessions exist for autonomous
+    // work, so the Run button opts into grok's bypassPermissions mode
+    // (`--always-approve`; config-level deny rules still apply on top). The
+    // multi-user clamp forces it back off for non-granted owners server-side.
+    buildConfig: () => ({ grokConfig: { alwaysApprove: true } }),
+  },
+  deepseek: {
+    label: 'DeepSeek',
+    installHint: 'DeepSeek Harness CLI (dsh) not found. Install with: npm install -g @deepseek-ai/dsh',
+    // The two-part availability check is deliberate. `dsh` being installed is
+    // not enough — DeepSeek ships no terminal front door, so a box can have a
+    // perfect binary and nothing a pane can run.
+    unrunnableHint:
+      'No interactive DeepSeek Harness profile is installed. DeepSeek ships only web and headless ' +
+      'profiles, so the terminal agent comes from a plugin. Install one from the Run menu, or run: ' +
+      'dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui',
+    supportsCustomModel: true,
+    // Sends `permissionMode: 'danger-full-access'` for the same reason every
+    // sibling Run button sends its bypass switch. The harness has no bypass
+    // FLAG, so this rides the `DSH_PERMISSION_MODE` export instead, and the
+    // multi-user clamp forces it back down to `workspace-write` server-side.
+    buildConfig: () => ({ deepSeekConfig: { permissionMode: 'danger-full-access' } }),
+  },
+};
+
+/**
+ * External (non-Claude, non-Shell) CLI run modes — the keys of RUN_MODE_LAUNCH
+ * above, kept as its own Set so `_isAltCliMode()` doesn't recompute an array
+ * every call. Single source for what used to be two hand-copied 8-way
+ * `session.mode === '<id>' || ...` chains inside one function
+ * (`openSessionOptions`), guaranteed to drift from each other the moment a
+ * ninth CLI landed in one and not the other.
+ */
+const EXTERNAL_CLI_MODES = new Set(Object.keys(RUN_MODE_LAUNCH));
+
 Object.assign(CodemanApp.prototype, {
   /**
    * Build envOverrides payload from case + global settings.
@@ -395,34 +504,13 @@ Object.assign(CodemanApp.prototype, {
 
     try {
       const mode = this._runMode || 'claude';
-      if (mode === 'opencode') {
-        return await this.runOpenCode();
-      }
-      if (mode === 'codex') {
-        return await this.runCodex();
-      }
-      if (mode === 'gemini') {
-        return await this.runGemini();
-      }
-      if (mode === 'antigravity') {
-        return await this.runAntigravity();
-      }
-      if (mode === 'omp') {
-        return await this.runOmp();
-      }
-      if (mode === 'pi') {
-        return await this.runPi();
-      }
-      if (mode === 'grok') {
-        return await this.runGrok();
-      }
-      if (mode === 'deepseek') {
-        return await this.runDeepSeek();
-      }
       if (mode === 'shell') {
         return await this.runShell();
       }
-      return await this.runClaude();
+      if (mode === 'claude' || !EXTERNAL_CLI_MODES.has(mode)) {
+        return await this.runClaude();
+      }
+      return await this._runCliMode(mode);
     } finally {
       const remaining = minLockMs - (Date.now() - startedAt);
       if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
@@ -1917,88 +2005,41 @@ Object.assign(CodemanApp.prototype, {
     return firstSessionId;
   },
 
-  async runOpenCode() {
+  /**
+   * Shared launcher for every RUN_MODE_LAUNCH entry (every run mode except
+   * claude/shell, which have their own flows — claude for its remote/docker
+   * branching and parallel-create path, shell for needing no CLI probe at
+   * all). The eight run<Mode>() methods below are thin named wrappers: their
+   * names stay because index.html's welcome-screen buttons and the run-mode
+   * menu call them directly by name (`app.runOpenCode()` etc.), and several
+   * tests assert on that name directly too.
+   */
+  async _runCliMode(mode) {
+    const entry = RUN_MODE_LAUNCH[mode];
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    // Remote cases run the CLI on the REMOTE host — the local /api/opencode/status
-    // probe and the local-only config/env below don't apply (quick-start rejects them).
+    // Remote/docker cases run the CLI on the OTHER side — the local status
+    // probe and the local-only config/env below don't apply (quick-start
+    // rejects them for remote cases).
     const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
     const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
 
     const tabCount = this._readTabCount();
     const ownsLaunchTerminal = this._beginSessionLaunchStatus(
-      `Starting ${tabCount} OpenCode session(s) in ${caseName}...`
+      `Starting ${tabCount} ${entry.label} session(s) in ${caseName}...`
     );
     // Focus in sync gesture context (see runClaude comment)
     this.terminal.focus();
 
     try {
-      // Check if OpenCode is available (local sessions only)
       if (!isRemote) {
-        const statusRes = await fetch('/api/opencode/status');
+        const statusRes = await fetch(`/api/${mode}/status`);
         const status = (await statusRes.json()).data;
         if (!status.available) {
-          this._reportSessionLaunchError(
-            ownsLaunchTerminal,
-            'OpenCode CLI not found. Install with: curl -fsSL https://opencode.ai/install | bash'
-          );
+          this._reportSessionLaunchError(ownsLaunchTerminal, entry.installHint);
           return;
         }
-      }
-
-      // Quick-start with opencode mode (auto-allow tools by default).
-      // No `effort` field — it's Claude-specific (OpenCode has no /effort).
-      const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
-      const firstSessionId = await this._launchQuickStartInstances(
-        caseName,
-        tabCount,
-        'OpenCode',
-        (sessionName) => ({
-          caseName,
-          mode: 'opencode',
-          sessionName,
-          ...(isRemote ? {} : {
-            openCodeConfig: { autoAllowTools: true },
-            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
-            ...(this._pendingCustomModelForLaunch ? { customModel: this._pendingCustomModelForLaunch } : {}),
-          }),
-        }),
-        ownsLaunchTerminal
-      );
-
-      // Switch to the new session (don't pre-set activeSessionId — selectSession
-      // early-returns when IDs match, skipping buffer load and sendResize)
-      if (firstSessionId) {
-        await this.selectSession(firstSessionId);
-      }
-
-      this.terminal.focus();
-    } catch (err) {
-      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
-    }
-  },
-
-  async runCodex() {
-    const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    // Remote cases run Codex on the REMOTE host — skip the local status probe and the
-    // local-only config/env below (quick-start rejects them for remote cases).
-    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
-    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
-
-    const tabCount = this._readTabCount();
-    const ownsLaunchTerminal = this._beginSessionLaunchStatus(
-      `Starting ${tabCount} Codex session(s) in ${caseName}...`
-    );
-    this.terminal.focus();
-
-    try {
-      if (!isRemote) {
-        const statusRes = await fetch('/api/codex/status');
-        const status = (await statusRes.json()).data;
-        if (!status.available) {
-          this._reportSessionLaunchError(
-            ownsLaunchTerminal,
-            'Codex CLI not found. Install with: npm install -g @openai/codex'
-          );
+        if (entry.unrunnableHint && !status.runnable) {
+          this._reportSessionLaunchError(ownsLaunchTerminal, entry.unrunnableHint);
           return;
         }
       }
@@ -2008,19 +2049,17 @@ Object.assign(CodemanApp.prototype, {
       const firstSessionId = await this._launchQuickStartInstances(
         caseName,
         tabCount,
-        'Codex',
+        entry.label,
         (sessionName) => ({
           caseName,
-          mode: 'codex',
+          mode,
           sessionName,
           ...(isRemote ? {} : {
-            codexConfig: {
-              dangerouslyBypassApprovals: globalSettings.codexDangerouslyBypassApprovals ?? false,
-              animations: globalSettings.codexAnimationsEnabled ?? false,
-              renderMode: 'hybrid',
-            },
+            ...(entry.buildConfig(globalSettings) || {}),
             ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
-            ...(this._pendingCustomModelForLaunch ? { customModel: this._pendingCustomModelForLaunch } : {}),
+            ...(entry.supportsCustomModel && this._pendingCustomModelForLaunch
+              ? { customModel: this._pendingCustomModelForLaunch }
+              : {}),
           }),
         }),
         ownsLaunchTerminal
@@ -2038,368 +2077,36 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  async runOpenCode() {
+    return this._runCliMode('opencode');
+  },
+
+  async runCodex() {
+    return this._runCliMode('codex');
+  },
+
   async runGemini() {
-    const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    // Remote cases run Gemini on the REMOTE host — skip the local status probe and the
-    // local-only config/env below (quick-start rejects them for remote cases).
-    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
-    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
-
-    const tabCount = this._readTabCount();
-    const ownsLaunchTerminal = this._beginSessionLaunchStatus(
-      `Starting ${tabCount} Gemini session(s) in ${caseName}...`
-    );
-    this.terminal.focus();
-
-    try {
-      if (!isRemote) {
-        const statusRes = await fetch('/api/gemini/status');
-        const status = (await statusRes.json()).data;
-        if (!status.available) {
-          this._reportSessionLaunchError(
-            ownsLaunchTerminal,
-            'Gemini CLI not found. Install with: npm install -g @google/gemini-cli'
-          );
-          return;
-        }
-      }
-
-      const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
-      const firstSessionId = await this._launchQuickStartInstances(
-        caseName,
-        tabCount,
-        'Gemini',
-        (sessionName) => ({
-          caseName,
-          mode: 'gemini',
-          sessionName,
-          ...(isRemote ? {} : {
-            geminiConfig: { approvalMode: 'yolo' },
-            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
-            ...(this._pendingCustomModelForLaunch ? { customModel: this._pendingCustomModelForLaunch } : {}),
-          }),
-        }),
-        ownsLaunchTerminal
-      );
-
-      if (firstSessionId) {
-        await this.selectSession(firstSessionId);
-      }
-
-      this.terminal.focus();
-    } catch (err) {
-      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
-    }
+    return this._runCliMode('gemini');
   },
 
   async runAntigravity() {
-    const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    // Remote/docker cases run agy on the OTHER side — skip the local status probe and the
-    // local-only config/env below (quick-start rejects them for remote cases).
-    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
-    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
-
-    const tabCount = this._readTabCount();
-    const ownsLaunchTerminal = this._beginSessionLaunchStatus(
-      `Starting ${tabCount} Antigravity session(s) in ${caseName}...`
-    );
-    this.terminal.focus();
-
-    try {
-      if (!isRemote) {
-        const statusRes = await fetch('/api/antigravity/status');
-        const status = (await statusRes.json()).data;
-        if (!status.available) {
-          this._reportSessionLaunchError(
-            ownsLaunchTerminal,
-            'Antigravity CLI not found. Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash'
-          );
-          return;
-        }
-      }
-
-      const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
-      const firstSessionId = await this._launchQuickStartInstances(
-        caseName,
-        tabCount,
-        'Antigravity',
-        (sessionName) => ({
-          caseName,
-          mode: 'antigravity',
-          sessionName,
-          ...(isRemote ? {} : {
-            antigravityConfig: { dangerouslySkipPermissions: true },
-            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
-          }),
-        }),
-        ownsLaunchTerminal
-      );
-
-      if (firstSessionId) {
-        await this.selectSession(firstSessionId);
-      }
-
-      this.terminal.focus();
-    } catch (err) {
-      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
-    }
+    return this._runCliMode('antigravity');
   },
 
-  /**
-   * Launch a Pi (pi.dev) session.
-   *
-   * Deliberately sends NO piConfig: pi has no permission prompts, so there is no
-   * bypass to opt into, and project trust is pi's own `defaultProjectTrust`
-   * decision (an interactive prompt the user answers in the terminal). Sending
-   * `approveProjectTrust: true` here would silently opt every browser-launched pi
-   * session into executing repo-supplied TypeScript.
-   */
   async runPi() {
-    const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    // Remote/docker cases run pi on the OTHER side — skip the local status probe and the
-    // local-only config/env below (quick-start rejects them for remote cases).
-    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
-    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
-
-    const tabCount = this._readTabCount();
-    const ownsLaunchTerminal = this._beginSessionLaunchStatus(
-      `Starting ${tabCount} Pi session(s) in ${caseName}...`
-    );
-    this.terminal.focus();
-
-    try {
-      if (!isRemote) {
-        const statusRes = await fetch('/api/pi/status');
-        const status = (await statusRes.json()).data;
-        if (!status.available) {
-          this._reportSessionLaunchError(
-            ownsLaunchTerminal,
-            'Pi CLI not found. Install with: npm install -g --ignore-scripts @earendil-works/pi-coding-agent'
-          );
-          return;
-        }
-      }
-
-      const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
-      const firstSessionId = await this._launchQuickStartInstances(
-        caseName,
-        tabCount,
-        'Pi',
-        (sessionName) => ({
-          caseName,
-          mode: 'pi',
-          sessionName,
-          ...(isRemote || Object.keys(envOverrides).length === 0 ? {} : { envOverrides }),
-          ...(!isRemote && this._pendingCustomModelForLaunch ? { customModel: this._pendingCustomModelForLaunch } : {}),
-        }),
-        ownsLaunchTerminal
-      );
-
-      if (firstSessionId) {
-        await this.selectSession(firstSessionId);
-      }
-
-      this.terminal.focus();
-    } catch (err) {
-      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
-    }
+    return this._runCliMode('pi');
   },
 
   async runOmp() {
-    const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    // Remote/docker cases run omp on the OTHER side — skip the local status probe
-    // and the local-only config below (quick-start rejects them for remote cases).
-    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
-    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
-
-    const tabCount = this._readTabCount();
-    const ownsLaunchTerminal = this._beginSessionLaunchStatus(
-      `Starting ${tabCount} OMP session(s) in ${caseName}...`
-    );
-    this.terminal.focus();
-
-    try {
-      if (!isRemote) {
-        const statusRes = await fetch('/api/omp/status');
-        const status = (await statusRes.json()).data;
-        if (!status.available) {
-          this._reportSessionLaunchError(
-            ownsLaunchTerminal,
-            'OMP CLI not found. Install with: curl -fsSL https://omp.sh/install | sh'
-          );
-          return;
-        }
-      }
-
-      const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
-      const firstSessionId = await this._launchQuickStartInstances(
-        caseName,
-        tabCount,
-        'OMP',
-        (sessionName) => ({
-          caseName,
-          mode: 'omp',
-          sessionName,
-          ...(isRemote ? {} : {
-            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
-            ...(this._pendingCustomModelForLaunch ? { customModel: this._pendingCustomModelForLaunch } : {}),
-          }),
-        }),
-        ownsLaunchTerminal
-      );
-
-      if (firstSessionId) {
-        await this.selectSession(firstSessionId);
-      }
-
-      this.terminal.focus();
-    } catch (err) {
-      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
-    }
+    return this._runCliMode('omp');
   },
 
-  /**
-   * Launch a Grok Build (xAI `grok`) session.
-   *
-   * Sends `grokConfig: { alwaysApprove: true }` the way runAntigravity() sends
-   * `dangerouslySkipPermissions: true`: Codeman sessions exist for autonomous
-   * work, so the Run button opts into grok's bypassPermissions mode
-   * (`--always-approve`; config-level deny rules still apply on top). The
-   * multi-user clamp forces it back off for non-granted owners server-side.
-   */
   async runGrok() {
-    const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    // Remote/docker cases run grok on the OTHER side: skip the local status probe and the
-    // local-only config/env below (quick-start rejects them for remote cases).
-    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
-    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
-
-    const tabCount = this._readTabCount();
-    const ownsLaunchTerminal = this._beginSessionLaunchStatus(
-      `Starting ${tabCount} Grok session(s) in ${caseName}...`
-    );
-    this.terminal.focus();
-
-    try {
-      if (!isRemote) {
-        const statusRes = await fetch('/api/grok/status');
-        const status = (await statusRes.json()).data;
-        if (!status.available) {
-          this._reportSessionLaunchError(
-            ownsLaunchTerminal,
-            'Grok CLI not found. Install with: curl -fsSL https://x.ai/cli/install.sh | bash'
-          );
-          return;
-        }
-      }
-
-      const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
-      const firstSessionId = await this._launchQuickStartInstances(
-        caseName,
-        tabCount,
-        'Grok',
-        (sessionName) => ({
-          caseName,
-          mode: 'grok',
-          sessionName,
-          ...(isRemote ? {} : {
-            grokConfig: { alwaysApprove: true },
-            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
-            ...(this._pendingCustomModelForLaunch ? { customModel: this._pendingCustomModelForLaunch } : {}),
-          }),
-        }),
-        ownsLaunchTerminal
-      );
-
-      if (firstSessionId) {
-        await this.selectSession(firstSessionId);
-      }
-
-      this.terminal.focus();
-    } catch (err) {
-      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
-    }
+    return this._runCliMode('grok');
   },
 
-  /**
-   * Launch a DeepSeek Harness (`dsh`) session.
-   *
-   * Sends `permissionMode: 'danger-full-access'` for the same reason every
-   * sibling Run button sends its bypass switch: Codeman sessions exist for
-   * autonomous work. The harness has no bypass FLAG, so this rides the
-   * `DSH_PERMISSION_MODE` export instead, and the multi-user clamp forces it
-   * back down to `workspace-write` for non-granted owners server-side.
-   *
-   * `statusReporting` is left unset, i.e. ON: it is what upgrades this mode from
-   * output-stabilization guessing to definitive idle/blocked hook events.
-   *
-   * The two-part availability check is deliberate. `dsh` being installed is not
-   * enough — DeepSeek ships no terminal front door, so a box can have a perfect
-   * binary and nothing a pane can run. Reporting that precisely, with the exact
-   * command that fixes it, is the difference between "the Run button is broken"
-   * and a 30-second fix.
-   */
   async runDeepSeek() {
-    const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    // Remote/docker cases run dsh on the OTHER side: skip the local status probe and the
-    // local-only config/env below (quick-start rejects them for remote cases).
-    const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
-    const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
-
-    const tabCount = this._readTabCount();
-    const ownsLaunchTerminal = this._beginSessionLaunchStatus(
-      `Starting ${tabCount} DeepSeek session(s) in ${caseName}...`
-    );
-    this.terminal.focus();
-
-    try {
-      if (!isRemote) {
-        const statusRes = await fetch('/api/deepseek/status');
-        const status = (await statusRes.json()).data;
-        if (!status.available) {
-          this._reportSessionLaunchError(
-            ownsLaunchTerminal,
-            'DeepSeek Harness CLI (dsh) not found. Install with: npm install -g @deepseek-ai/dsh'
-          );
-          return;
-        }
-        if (!status.runnable) {
-          this._reportSessionLaunchError(
-            ownsLaunchTerminal,
-            'No interactive DeepSeek Harness profile is installed. DeepSeek ships only web and headless ' +
-            'profiles, so the terminal agent comes from a plugin. Install one from the Run menu, or run: ' +
-            'dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui'
-          );
-          return;
-        }
-      }
-
-      const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), this.loadAppSettingsFromStorage());
-      const firstSessionId = await this._launchQuickStartInstances(
-        caseName,
-        tabCount,
-        'DeepSeek',
-        (sessionName) => ({
-          caseName,
-          mode: 'deepseek',
-          sessionName,
-          ...(isRemote ? {} : {
-            deepSeekConfig: { permissionMode: 'danger-full-access' },
-            ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
-            ...(this._pendingCustomModelForLaunch ? { customModel: this._pendingCustomModelForLaunch } : {}),
-          }),
-        }),
-        ownsLaunchTerminal
-      );
-
-      if (firstSessionId) {
-        await this.selectSession(firstSessionId);
-      }
-
-      this.terminal.focus();
-    } catch (err) {
-      this._reportSessionLaunchError(ownsLaunchTerminal, err.message);
-    }
+    return this._runCliMode('deepseek');
   },
 
 
@@ -2467,7 +2174,7 @@ Object.assign(CodemanApp.prototype, {
     if (detachToggle) detachToggle.checked = this.hasTabDetachOverride(sessionId);
 
     // Reset to an appropriate tab — Summary for external CLIs (Respawn/Ralph are Claude-only)
-    const isAltMode = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini' || session.mode === 'antigravity' || session.mode === 'pi' || session.mode === 'grok' || session.mode === 'deepseek' || session.mode === 'omp';
+    const isAltMode = EXTERNAL_CLI_MODES.has(session.mode);
     this.switchOptionsTab(isAltMode ? 'summary' : 'respawn');
 
     // Update respawn status display and buttons
@@ -2497,7 +2204,7 @@ Object.assign(CodemanApp.prototype, {
     }
 
     // Hide Claude-specific options for external CLI sessions
-    const isExternalCli = session.mode === 'opencode' || session.mode === 'codex' || session.mode === 'gemini' || session.mode === 'antigravity' || session.mode === 'pi' || session.mode === 'grok' || session.mode === 'deepseek' || session.mode === 'omp';
+    const isExternalCli = isAltMode;
     const claudeOnlyEls = document.querySelectorAll('[data-claude-only]');
     claudeOnlyEls.forEach(el => { el.style.display = isExternalCli ? 'none' : ''; });
 
