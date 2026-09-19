@@ -102,4 +102,118 @@ describe('split-pane orchestration in a real browser', () => {
       await fetch(`/api/sessions/${sid}`, { method: 'DELETE' });
     }, id);
   });
+
+  it('force-resizes Pane A immediately when a split opens', async () => {
+    // Regression guard: opening a split moved Pane A from full width to 50%
+    // in the DOM, but nothing told its session's PTY/tmux window about the
+    // new size — only the passive, 300ms-debounced ResizeObserver in
+    // terminal-ui.js eventually caught up, leaving stale-width content on
+    // screen until the user manually hit "Redraw Terminal". openSplitPane()
+    // now force-resizes Pane A synchronously as part of the same call.
+    const idA = await createShellSession();
+    const idB = await createShellSession();
+
+    await page.evaluate((id) => (window as any).app.selectSession(id), idA);
+    await page.waitForFunction((id) => (window as any).app.activeSessionId === id, idA, { timeout: 10000 });
+
+    await page.evaluate(() => {
+      const app = window as any as { app: any };
+      (window as any).__resizeCalls = [];
+      (window as any).__origSendResize = (window as any).app.sendResize;
+      (window as any).app.sendResize = function (...args: any[]) {
+        (window as any).__resizeCalls.push(args);
+        return (window as any).__origSendResize.apply(app.app, args);
+      };
+    });
+
+    await page.evaluate((id) => (window as any).app.openSplitPane(id), idB);
+    await page.waitForSelector('.terminal-pane-b', { timeout: 10000 });
+
+    const forcedResize = await page.evaluate(
+      (id) =>
+        ((window as any).__resizeCalls as Array<[string, { force?: boolean }]>).some(
+          ([sessionId, opts]) => sessionId === id && opts?.force === true
+        ),
+      idA
+    );
+    expect(forcedResize).toBe(true);
+
+    await page.evaluate(() => {
+      (window as any).app.sendResize = (window as any).__origSendResize;
+    });
+    await page.evaluate(() => (window as any).app.closeSplitPane());
+    await page.waitForFunction(() => document.querySelector('.terminal-split-container') === null, null, {
+      timeout: 10000,
+    });
+
+    await page.evaluate(
+      async (ids) => {
+        await fetch(`/api/sessions/${ids.a}`, { method: 'DELETE' });
+        await fetch(`/api/sessions/${ids.b}`, { method: 'DELETE' });
+      },
+      { a: idA, b: idB }
+    );
+  });
+
+  it('force-resizes Pane A once at the end of a divider drag', async () => {
+    // Regression guard: the divider's onMove handler only called
+    // fitAddon.fit() for Pane A — a LOCAL xterm reflow that never told Pane
+    // A's own PTY/tmux window the new size, so existing content stayed laid
+    // out for the pre-drag width. onUp now force-resizes Pane A once, at
+    // drag end (not per-move, to avoid flooding the PTY with SIGWINCHes
+    // during a fast drag).
+    const idA = await createShellSession();
+    const idB = await createShellSession();
+
+    await page.evaluate((id) => (window as any).app.selectSession(id), idA);
+    await page.waitForFunction((id) => (window as any).app.activeSessionId === id, idA, { timeout: 10000 });
+    await page.evaluate((id) => (window as any).app.openSplitPane(id), idB);
+    await page.waitForSelector('.split-divider', { timeout: 10000 });
+
+    await page.evaluate(() => {
+      const app = window as any as { app: any };
+      (window as any).__resizeCalls = [];
+      (window as any).__origSendResize = (window as any).app.sendResize;
+      (window as any).app.sendResize = function (...args: any[]) {
+        (window as any).__resizeCalls.push(args);
+        return (window as any).__origSendResize.apply(app.app, args);
+      };
+    });
+
+    const divider = await page.$('.split-divider');
+    const box = await divider!.boundingBox();
+    if (!box) throw new Error('divider has no bounding box');
+    const startX = box.x + box.width / 2;
+    const startY = box.y + box.height / 2;
+
+    await page.mouse.move(startX, startY);
+    await page.mouse.down();
+    await page.mouse.move(startX + 80, startY, { steps: 5 });
+    await page.mouse.up();
+
+    const forcedResize = await page.evaluate(
+      (id) =>
+        ((window as any).__resizeCalls as Array<[string, { force?: boolean }]>).some(
+          ([sessionId, opts]) => sessionId === id && opts?.force === true
+        ),
+      idA
+    );
+    expect(forcedResize).toBe(true);
+
+    await page.evaluate(() => {
+      (window as any).app.sendResize = (window as any).__origSendResize;
+    });
+    await page.evaluate(() => (window as any).app.closeSplitPane());
+    await page.waitForFunction(() => document.querySelector('.terminal-split-container') === null, null, {
+      timeout: 10000,
+    });
+
+    await page.evaluate(
+      async (ids) => {
+        await fetch(`/api/sessions/${ids.a}`, { method: 'DELETE' });
+        await fetch(`/api/sessions/${ids.b}`, { method: 'DELETE' });
+      },
+      { a: idA, b: idB }
+    );
+  });
 });
