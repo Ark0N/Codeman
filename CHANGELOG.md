@@ -1,5 +1,113 @@
 # aicodeman
 
+## 1.31.0
+
+### Minor Changes
+
+- 035bfbc: feat(remote): wake a sleeping remote host from Codeman
+
+  A remote SSH case pointing at a machine that suspends used to fail the same way every
+  time: the session was there, the host was not, and typing into it went nowhere. A host
+  can now carry a wake target, either a MAC address for Wake-on-LAN (Codeman builds the
+  magic packet itself, so nothing reaches a shell) or a wake command of your own, and
+  Codeman uses it when you ask for the host: when you type into a sleeping session, when
+  you press the wake button on the banner, or when you start or attach a session on that
+  host. Input you type while it wakes is buffered and flushed once it is back, up to 4 KB,
+  and a chunk over that is refused outright rather than delivered as a fragment.
+
+  Waking only ever happens because you asked. No watcher, dropped-session handler or
+  boot-recovery path can reach it, since a machine woken by a reconnect watcher would come
+  back seconds after every suspend.
+
+- fbee1b2: feat(custom-model): pick a custom endpoint straight from the Run menu
+
+  #393 landed the backend for custom model endpoints and left it reachable only over the
+  HTTP API. This is the rest of it. Turn on Custom model endpoints in App Settings, save
+  an endpoint, and the Run dropdown grows a Custom Endpoints section built live off the
+  CLI registry, one entry per harness that can actually redirect plus each endpoint you
+  saved. Pick one and it launches that harness pointed at your server, asking which model
+  first when the endpoint has more than one. Endpoints re-discover themselves every five
+  minutes, and one unreachable endpoint never blocks the others. App Settings gains full
+  add, edit and delete for endpoints.
+
+  Seven of the harnesses (opencode, Codex, Gemini, Pi, Grok, DeepSeek and OMP) now launch
+  directly onto the endpoint with no restart at all, where before you watched a native
+  boot followed immediately by a second one. Claude still launches and then restarts in
+  place, which its own resume makes far less jarring.
+
+  Most of this release's work went into things that only show up against a real server,
+  and each was found that way rather than in tests: a freshly launched CLI reporting
+  itself busy for its own startup and getting refused; Claude Code assuming a large
+  context window for a model it does not recognise and silently overflowing a small one;
+  a model whose real context is below what Claude Code's own system prompt costs, which
+  no setting can fix and which now warns before launching into a certain failure; and the
+  big one, llama.cpp running exactly one model at a time, so applying a selection can
+  unload the model another session is using. That last case now asks first, tells you
+  which session it affects, and keeps a "loading model" notice on screen for the whole
+  swap window, so a prompt sent mid-swap reads as loading rather than as an answer from
+  whatever was loaded a moment ago. A background sweep also catches the reverse: your
+  session's model being evicted later by somebody else's ordinary use.
+
+  Two things worth knowing if you drive this over the HTTP API or run multi-user. The two
+  questions an apply can ask (the model's context window is too small, and loading it will
+  unload the model another session is using) are now answered by separate
+  `confirmedContext` and `confirmedSwap` fields rather than one `confirmed`. They shared a
+  flag until now, and since the context check runs first, confirming that one silently
+  agreed to evict another session's model as well. The old `confirmed` still means both.
+  And `CLAUDE_CONFIG_DIR` is now admin-only in multi-user mode: it joined claude's
+  privileged env keys, so a non-granted owner can no longer set it through `envOverrides`,
+  and an already-persisted one is dropped on reboot-restore, which returns that session to
+  the default Claude account rather than the per-client one it was pointed at. Single-user
+  installs are unaffected.
+
+  Remote SSH and Docker sessions are refused for now, since their restart reattaches a
+  durable tmux rather than relaunching the agent.
+
+### Patch Changes
+
+- c9515b1: fix(terminal): keep the output a pane capture could not contain. Opening a session, a backpressure refresh, a clear-terminal reload and a full-history re-pull all load the screen from a tmux pane capture, and anything the CLI printed between that capture and the end of the load used to be dropped, so its next partial redraw landed on a frame the terminal had never seen: missing or garbled output right after a tab switch or a refresh, plainest in a shell session. Each load now replays exactly the output that arrived after the capture, through one shared rule for all four paths, and a refresh that restores your scroll position no longer snaps back to the bottom afterwards.
+- 3edf9aa: fix(terminal): replay a pane capture at the geometry it was taken at
+
+  Opening a session could draw a frame built for a pane bigger than your terminal. A
+  taller pane wrote its overflow rows onto the last line and lost the rows underneath
+  (against a 50-row pane, a 30-row terminal rendered 28 of a 45-line command and drew
+  the survivors twice), and a wider one wrapped every row and scrolled the whole frame
+  up by one. The terminal response now reports the geometry the capture was really
+  taken at, so the browser can see the mismatch and replay once at the size that stuck.
+  A pane that cannot be sized to fit is diagnosed once per session instead of on every
+  tab switch.
+
+- 035bfbc: ### Thanks
+  - @irisitymichaelgrundberg for three terminal fixes in one release: keeping the output a pane capture could not contain (#436), replaying a capture at the geometry it was taken at (#435, five rounds and a Playwright suite that fails against the merge base), and trimming the padding out of a copied selection (#451), where the scan-instead-of-regex call avoided a 2.9s freeze nobody would have traced back to a copy.
+  - @timkjr for a first contribution that found a real silent failure: the Instance count stepper next to the Run button had only ever applied to Claude, so on the other eight run modes it launched one session and said nothing (#454).
+  - @Randalix for Wake-on-LAN on remote hosts (#439), built and live-tested against a real sleeping machine, and for reading the whole diff again between rounds rather than only the parts that were asked about.
+  - @opticon454 for turning #393's backend-only custom model endpoints into the whole feature (#430), and for validating it against a real llama-swap box rather than against the tests: the `/props` versus `/running` context discrepancy and the DeepSeek `/v1` root cause were both tracked down to the SDK source instead of guessed at.
+
+- c376534: fix(run): make the Instance count stepper work for every non-Claude mode
+
+  The Instance count stepper next to the Run button only ever applied to Claude.
+  Setting it to 3 and launching OpenCode, Codex, Gemini, Antigravity, Pi, OMP, Grok or
+  DeepSeek started exactly one session, with no error and no hint that the control had
+  done nothing. All eight now launch the count you asked for, and the opening banner
+  says how many are starting. The one exception is a launch started from the Custom
+  Endpoints section of the Run menu, which always starts a single session.
+
+- 19ffe9b: fix(input): make sure a prompt sent through the API actually leaves the composer. Claude Code 2.1.277 started ignoring Enter for the first 30 to 50 seconds after the composer paints while still accepting the typed text, so a prompt sent right after a session came up sat unsent in the pane and every waiter (send-and-wait, the agent skill, cron, the maintainer bot) burned its whole timeout on a turn that never started. The server now reads the pane after every programmatic write that carried Enter and presses Enter again, on a 2 to 60 second schedule, only while the composer verifiably still holds the text it sent; an empty composer, other text, or a pane with no composer at all ends it. The agent skill's `sendwait` gets the same loop for servers that predate this, and its preamble version moves to 1.30.1 so an already-seeded agent picks up the fresh copy.
+- f9edb33: fix(terminal): trim the padding out of a copied selection
+
+  Copying out of a pane put a wall of spaces on the clipboard. xterm hands back
+  whole screen rows and trims only the cells that were never written to, so the
+  real spaces a full-screen program paints across the unused part of a row count
+  as content: measured against Claude Code in a 282-column pane, single lines
+  arrived carrying 138 trailing spaces. Pasting that into a chat client or an
+  editor meant deleting the whitespace by hand, while Windows Terminal, iTerm2 and
+  GNOME Terminal all trim it for you. A copy now drops the trailing run from every
+  line, on all four paths (the Ctrl+C chord, right-click, the phone selection
+  button and Auto Copy), while leading indentation is left exactly as it is. An
+  Alt+drag rectangular selection is copied verbatim, because its columns lining up
+  is the point of that gesture. A selection holding nothing but padding is refused
+  rather than copied as bare line breaks.
+
 ## 1.30.0
 
 ### Minor Changes
