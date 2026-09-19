@@ -105,7 +105,12 @@ CLI is 2.1.224+ (`buildNameCliArgs`, `session-cli-builder.ts:97-101`, wired in a
 and its messages arrive tagged `from-name="w9-msgtest"`; a derived-name worker's
 messages carry no `from-name`). Name your workers: a quick-start WITHOUT
 `sessionName` leaves the Codeman name empty, so there is nothing to pass and the
-peer name stays derived. The flag is fail-closed (older/unknown CLI omits it, because an
+peer name stays derived. ⚠️ Give them a DESCRIPTIVE name: only a name the user chose
+is pinned (`Session.cliPinnedName`), because `--name` is also the conversation's
+`/resume` title and terminal title and suppresses Claude's own generated title. A
+placeholder-shaped name (`w9-msgtest`, anything matching `isGeneratedSessionName`)
+and an auto name are NOT passed, so such a worker's peer name is derived; use
+`msgtest-worker` rather than `w9-msgtest`. The flag is fail-closed (older/unknown CLI omits it, because an
 unknown flag aborts startup and would kill every spawn) and allowlist-sanitized (a name of
 only unsafe characters is dropped), and the docker/remote builders never see it at all
 (`tmux-manager.ts:782-789`), which is why the `tmux` column stays the canonical join key
@@ -196,8 +201,8 @@ idle:
 The contract an orchestrator follows for any fleet of two or more messaging workers.
 Every topology in the next section is this protocol plus a wiring diagram.
 
-1. **Spawn with a name, and confirm hooks.** Use `quick-start` with `sessionName` (the
-   `--name` gate above). Session create installs the hooks block into the workspace
+1. **Spawn with a name, and confirm hooks.** Use `quick-start` with a descriptive,
+   non-`w<N>-` `sessionName` (the `--name` gate above). Session create installs the hooks block into the workspace
    whatever kind it is, so a linked case and a raw `POST /api/sessions` path both get
    `stop`/`blocked` by default. ⚠️ Not unconditionally: the operator can turn
    `workspaceHooksEnabled` off, remote SSH sessions never get hooks, and a session from

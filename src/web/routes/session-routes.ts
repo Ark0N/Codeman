@@ -176,6 +176,7 @@ import {
   selectLastAnsweredTurn,
 } from '../response-viewer-transcript.js';
 import { readDeepSeekLastResponse } from '../../deepseek-transcript.js';
+import { appendClaudeCustomTitle } from '../../claude-session-title.js';
 
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
@@ -1166,6 +1167,7 @@ export function registerSessionRoutes(
     // Also update the mux session name if applicable
     ctx.mux.updateSessionName(id, session.name);
     persistAndBroadcastSession(ctx, session);
+    await syncClaudeTitle(session);
     return { name: session.name };
   });
 
@@ -2375,6 +2377,25 @@ export function registerSessionRoutes(
     }
 
     return full ? { text: lastText, timestamp: lastTimestamp, messages } : { text: lastText, timestamp: lastTimestamp };
+  }
+
+  /**
+   * Mirror a rename into the conversation's `/resume` title (claude-session-title.ts).
+   * Local Claude-format transcripts only: a remote pane's transcript lives on the remote host. Best
+   * effort: the tab rename has already happened and must not fail on this.
+   */
+  async function syncClaudeTitle(session: Session): Promise<void> {
+    if (getCli(session.mode)?.capabilities.transcript !== 'claude-jsonl' || session.remote) return;
+    try {
+      const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
+      const hookPath = ctx.getTranscriptPath(session.id);
+      const transcript = hookPath
+        ? { sessionId: basename(hookPath, '.jsonl'), path: hookPath }
+        : await findClaudeTranscript(projectsDir, session.claudeSessionId || session.id, session.id);
+      if (transcript) await appendClaudeCustomTitle(transcript.path, transcript.sessionId, session.name);
+    } catch (err) {
+      console.warn(`[Session] Could not carry rename into the Claude transcript for ${session.id}:`, err);
+    }
   }
 
   /** Locate a top-level Claude transcript, including recovered tmux sessions. */

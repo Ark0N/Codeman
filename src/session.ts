@@ -1421,6 +1421,19 @@ export class Session extends EventEmitter {
     return this._nameSource;
   }
 
+  /**
+   * The name to pin on the Claude CLI as `--name`, or undefined to let Claude
+   * title the conversation itself. `--name` is the prompt-box label, the
+   * `/resume` picker entry and the terminal title all at once, and a pinned
+   * title stops Claude generating its own, so only a name the user chose is
+   * worth pinning. Pinning the `w1-myapp` placeholder gave every conversation
+   * in a case the same `/resume` entry; an auto name is a cut of the first
+   * prompt, which Claude's own generated title already beats.
+   */
+  get cliPinnedName(): string | undefined {
+    return this._nameSource === 'manual' ? this._name : undefined;
+  }
+
   setAutoClear(enabled: boolean, threshold?: number): void {
     this._autoOps.setAutoClear(enabled, threshold);
   }
@@ -1914,6 +1927,7 @@ export class Session extends EventEmitter {
       workingDir: this.workingDir,
       mode: this.mode,
       name: this._name,
+      cliName: this.cliPinnedName,
       niceConfig: this._niceConfig,
       model: this._model,
       claudeMode: this._claudeMode,
@@ -2276,6 +2290,7 @@ export class Session extends EventEmitter {
             workingDir: this.workingDir,
             mode: this.mode,
             name: this._name,
+            cliName: this.cliPinnedName,
             niceConfig: this._niceConfig,
             model: this._model,
             claudeMode: this._claudeMode,
@@ -2403,7 +2418,7 @@ export class Session extends EventEmitter {
           this._model,
           this._allowedTools,
           this._effort,
-          this._name,
+          this.cliPinnedName,
           getClaudeCliVersion()
         );
         this.ptyProcess = spawnPtyWithHelperRepair(() =>

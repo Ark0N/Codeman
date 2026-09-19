@@ -5,10 +5,16 @@
  * auto-naming can never overwrite a name a person chose, on this server or
  * on the one that restores the session after a restart.
  *
+ * The rename also reaches Claude's own `/resume` title: a `custom-title` row is
+ * appended to the conversation's transcript, the row `/rename` writes.
+ *
  * Uses app.inject() — no real HTTP ports needed.
  */
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 import { Session } from '../../src/session.js';
@@ -18,17 +24,28 @@ describe('PUT /api/sessions/:id/name', () => {
   let harness: RouteTestHarness;
   let session: Session;
   const updateSessionName = vi.fn(() => true);
+  const transcriptDir = mkdtempSync(join(tmpdir(), 'codeman-rename-title-'));
+  const transcriptPath = join(transcriptDir, '6f1c1a2e-0000-4000-8000-000000000001.jsonl');
+  const transcriptRows = () =>
+    readFileSync(transcriptPath, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
 
   beforeAll(async () => {
+    writeFileSync(transcriptPath, `${JSON.stringify({ type: 'user', message: { role: 'user', content: 'hi' } })}\n`);
     harness = await createRouteTestHarness(registerSessionRoutes);
     // A REAL session, since the ownership flag lives on the class, not the mock.
     session = new Session({ id: 'name-route-test', workingDir: '/tmp', name: 'w1-demo' });
     harness.ctx.sessions.set(session.id, session as never);
     (harness.ctx.mux as Record<string, unknown>).updateSessionName = updateSessionName;
+    (harness.ctx as Record<string, unknown>).getTranscriptPath = (id: string) =>
+      id === session.id ? transcriptPath : null;
   });
 
   afterAll(async () => {
     await harness.app.close();
+    rmSync(transcriptDir, { recursive: true, force: true });
   });
 
   it('flips a placeholder to manual, then persists and broadcasts the ownership', async () => {
@@ -56,5 +73,32 @@ describe('PUT /api/sessions/:id/name', () => {
     );
     // What the restore path will read back: the persisted state carries the flag.
     expect(session.toState().nameSource).toBe('manual');
+  });
+
+  it("appends the name as the conversation's custom-title, the row /resume reads", async () => {
+    const res = await harness.app.inject({
+      method: 'PUT',
+      url: `/api/sessions/${session.id}/name`,
+      payload: { name: '修复登录跳转' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(transcriptRows().at(-1)).toEqual({
+      type: 'custom-title',
+      customTitle: '修复登录跳转',
+      sessionId: '6f1c1a2e-0000-4000-8000-000000000001',
+    });
+  });
+
+  it('writes no title row for an empty name, which would blank the /resume entry', async () => {
+    const before = transcriptRows().length;
+    const res = await harness.app.inject({
+      method: 'PUT',
+      url: `/api/sessions/${session.id}/name`,
+      payload: { name: '   ' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(transcriptRows()).toHaveLength(before);
   });
 });

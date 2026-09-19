@@ -735,7 +735,7 @@ export function buildSpawnCommand(options: {
   effort?: EffortLevel;
   /** Resolved by resolveStatusLineCliCommand (hooks-config.ts) — undefined skips the exporter. Claude only. */
   statusLineCommand?: string;
-  /** Codeman session name, passed to claude as `--name` (version-gated, sanitized; local spawns only). */
+  /** Name pinned on claude as `--name` (version-gated, sanitized; local spawns only). Only a user-chosen name: see `Session.cliPinnedName`. */
   sessionName?: string;
   /**
    * Claude CLI version for the `--name` gate. Omitted = probe the local CLI
@@ -1894,6 +1894,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       workingDir,
       mode,
       name,
+      cliName,
       niceConfig,
       model,
       claudeMode,
@@ -1997,7 +1998,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       resumeSessionId,
       effort,
       statusLineCommand,
-      sessionName: name,
+      sessionName: cliName,
     });
 
     const config = niceConfig || DEFAULT_NICE_CONFIG;
@@ -2225,7 +2226,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       effort,
       remote,
       docker,
-      name,
+      cliName,
     } = options;
     const session = this.sessions.get(sessionId);
     if (!session) return null;
@@ -2262,7 +2263,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       resumeSessionId,
       effort,
       statusLineCommand,
-      sessionName: name,
+      sessionName: cliName,
     });
     const config = niceConfig || DEFAULT_NICE_CONFIG;
     const cmd = wrapWithNice(baseCmd, config);
