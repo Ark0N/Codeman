@@ -21,9 +21,10 @@
       this.fitAddon = null;
       this.ws = null;
       this._wsReady = false;
+      this._destroyed = false;
     }
 
-    connect() {
+    async connect() {
       this.terminal = new Terminal({
         theme: { ...global.codemanCurrentXtermTheme() },
         fontFamily: global.CodemanTerminalFont.resolve(),
@@ -48,6 +49,28 @@
           this.ws.send(JSON.stringify({ t: 'i', d: data }));
         }
       });
+
+      // Load existing scrollback before going live. The WS below is
+      // subscribe-only (ws-routes.ts sends nothing on connect, only future
+      // 'terminal' events), so without this Pane B stays blank until the
+      // target session happens to produce new output. It LOOKED
+      // intermittent rather than always-broken because _sendResize() below
+      // often nudges the shared session's real tmux window to a new size,
+      // and tmux repaints its current screen on resize — that repaint was
+      // getting captured and streamed here, incidentally populating the
+      // pane. When Pane B's computed dimensions happened to already match
+      // the session's last-known size, Session.resize() (session.ts) skips
+      // the resize as a no-op, no repaint fires, and the pane stayed blank.
+      try {
+        const res = await fetch(`${window.CodemanBase.base}/api/sessions/${this.sessionId}/terminal?full=1`);
+        const payload = (await res.json())?.data ?? {};
+        if (payload.terminalBuffer && this.terminal) {
+          this.terminal.write(payload.terminalBuffer);
+        }
+      } catch {
+        /* Best-effort — live output still arrives once the socket below connects. */
+      }
+      if (this._destroyed) return;
 
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const url = `${proto}//${location.host}${window.CodemanBase.base}/ws/sessions/${this.sessionId}/terminal`;
@@ -106,6 +129,7 @@
     }
 
     destroy() {
+      this._destroyed = true;
       if (this.ws) {
         this.ws.onopen = null;
         this.ws.onmessage = null;
@@ -255,6 +279,14 @@ Object.assign(CodemanApp.prototype, {
     this._splitPane.connect();
     this._splitSessionId = sessionId;
 
+    // Pane A just went from full width to 50%, but nothing has told its
+    // session's PTY/tmux window about it yet — the passive ResizeObserver in
+    // terminal-ui.js debounces 300ms and would eventually catch up, but
+    // relying on that left the pane showing stale-width content (existing
+    // box-drawing lines, banners) until the user hit "Redraw Terminal".
+    // Force it immediately, mirroring closeSplitPane()'s symmetric call.
+    this.sendResize?.(this.activeSessionId, { force: true })?.catch?.(() => {});
+
     this._installSplitDividerDrag(divider, wrap, paneB);
   },
 
@@ -296,6 +328,17 @@ Object.assign(CodemanApp.prototype, {
       divider.classList.remove('dragging');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+      // Pane B force-resizes on every move via _splitPane.fit() (SplitTerminalPane
+      // has no client-side "dims unchanged" skip, so it always reaches the
+      // server). Pane A's onMove above only calls fitAddon.fit() — a LOCAL
+      // xterm reflow that changes how many columns xterm displays but never
+      // tells Pane A's own PTY/tmux window the new size, so existing content
+      // (box-drawing lines, banners) stays laid out for the old width. Fire
+      // once here, at drag end, rather than per-move (matching the codebase's
+      // established trailing-edge debounce convention — see throttledResize
+      // in terminal-ui.js — so a fast drag doesn't flood dozens of
+      // intermediate SIGWINCH/reflow states into scrollback).
+      this.sendResize?.(this.activeSessionId, { force: true })?.catch?.(() => {});
     };
 
     divider.addEventListener('mousedown', () => {
