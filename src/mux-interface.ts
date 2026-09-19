@@ -72,6 +72,13 @@ export interface CreateSessionOptions {
   workingDir: string;
   mode: SessionMode;
   name?: string;
+  /**
+   * Name pinned on a claude spawn as `--name` (version-gated, sanitized, local only).
+   * Deliberately NOT `name`: `--name` owns the prompt-box label, the `/resume` picker
+   * entry and the terminal title, and a pinned title stops Claude generating its own,
+   * so only a user-chosen name belongs here (see `Session.cliPinnedName`).
+   */
+  cliName?: string;
   niceConfig?: NiceConfig;
   model?: string;
   claudeMode?: ClaudeMode;
@@ -105,8 +112,15 @@ export interface RespawnPaneOptions {
   sessionId: string;
   workingDir: string;
   mode: SessionMode;
-  /** Session display name; a respawned claude keeps its `--name` peer name (version-gated, local only). */
+  /** Session display name (tab name). */
   name?: string;
+  /**
+   * Name pinned on a respawned claude as `--name` (version-gated, sanitized, local only).
+   * Deliberately NOT `name`: `--name` owns the prompt-box label, the `/resume` picker
+   * entry and the terminal title, and a pinned title stops Claude generating its own,
+   * so only a user-chosen name belongs here (see `Session.cliPinnedName`).
+   */
+  cliName?: string;
   niceConfig?: NiceConfig;
   model?: string;
   claudeMode?: ClaudeMode;

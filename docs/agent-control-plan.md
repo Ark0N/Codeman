@@ -757,3 +757,13 @@ works, and its replies arrive tagged `from-name="w9-msgtest"` (a derived-name
 worker's replies carry no `from-name`). A quick-start without `sessionName` has an
 empty Codeman name, so the peer name stays derived: agents should name their
 workers. Tests: `test/name-flag-injection.test.ts`.
+
+Later narrowing: `--name` is not only the peer name but also the `/resume` picker
+entry and the terminal title, and a pinned title stops Claude generating its own, so
+pinning the `w1-myapp` placeholder listed every conversation of a case under the same
+name in `/resume`. Only a manual name is pinned now (`Session.cliPinnedName`,
+`nameSource === 'manual'`, carried to the builders as `cliName`); placeholder and auto
+names leave Claude to title the conversation. A rename in Codeman appends a
+`custom-title` row to the conversation's transcript (`claude-session-title.ts`), the
+row `/rename` writes. Tests: `test/claude-resume-title.test.ts`,
+`test/routes/session-name-routes.test.ts`.
