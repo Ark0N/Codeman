@@ -1,5 +1,34 @@
 # aicodeman
 
+## 1.32.0
+
+### Minor Changes
+
+- d47f93a: feat(custom-model): the model picker puts the ready model first
+
+  When a custom endpoint has more than one model, the Run menu's picker now promotes one row to the top instead of showing raw discovery order: the model llama-swap reports loaded and ready right now (tagged "Currently loaded", the one a launch attaches to with zero wait), else the model you last launched on that harness and endpoint (tagged "Last used", remembered per device). The endpoint's default keeps its own pill, nothing is ever auto-chosen, and a plain OpenAI-compatible server or an endpoint that does not answer within a second simply keeps the old order. The probe is bounded on the client too, so a GPU box that is off no longer holds the picker closed for five seconds.
+
+- d47f93a: feat(split-pane): view two live sessions side by side
+
+  A new Split button in the header (opt-in in App Settings, off by default, desktop only at 1180px and wider) opens a picker and shows a second live session beside the active one: its own terminal, its own WebSocket, and a divider you can drag. When either session ends the view collapses back to one pane, with Pane B promoted to the primary when it is Pane A that ended. Nothing is persisted on purpose in this first cut, so a page reload always returns to a single pane. Pane B is deliberately plainer than the primary pane (no local-echo overlay, CJK input, touch handling or keyboard accessory bar); the design and the v2 boundaries are in discussion #452.
+
+- 72d437a: Installer v2. `curl -fsSL https://getcodeman.com/install | bash` now looks at the machine first, asks at most three questions up front (how the dashboard is reached, optionally what to call the machine on your tailnet, whether to run Codeman as a background service), does the install unattended behind progress spinners with the output in `~/.codeman/install.log`, and ends on the URL with a QR code to scan. One consent covers every missing package and sudo asks for your password once. Flags pipe through `bash -s --` (`--tailscale | --lan | --local`, `--name <n> | --no-rename`, `--service | --run | --no-start`, `--yes`, `--password`, `--port`), `install.sh status` prints the URL and the QR code again, and the cloudflared question moved out of the main flow into `install.sh cloudflared`. On the Tailscale route, a `:443` that already belongs to another app gets Codeman under `https://<node>/codeman` (or on a second port) instead of a dead end, the node can be renamed opt-in (`--name`, `install.sh name`, undone by uninstall), and the HTTPS-certificates toggle is polled with the admin page opened for you. Also fixed on the way: the installer's own `npm install` no longer lets the postinstall start a stray server on port 3000 (the service crash-looped on EADDRINUSE while the done screen said "running"), the LAN address comes from the default route rather than the first interface, a hand-written LaunchDaemon on a headless Mac is left alone, a flag re-run keeps an existing dashboard password, and the done screen's start command carries the sub-path and port it was installed with.
+- d47f93a: feat(mobile): a Compose key for writing prompts on a phone
+
+  The agent keyboard bars on phones replace their Paste key with Compose: a real multiline editor with autocorrect and spellcheck, per-session drafts kept in memory only, image attach that never writes into the terminal early, and a Send that delivers the text as one paste followed by Enter, so a long prompt no longer has to be typed blind into the terminal composer. Anything you had already typed into the terminal is picked up into the editor. Shell sessions keep the direct Paste key. This is the manual first slice from #359; the auto-open setting and terminal tap routing are a separate follow-up.
+
+### Patch Changes
+
+- d47f93a: refactor(run-menu): one table-driven launcher for every external CLI
+
+  The eight near-identical per-CLI launch functions in the Run menu collapsed into one launcher driven by a table that a CI test keeps in step with the CLI registry, and a second no-id-branching guard now covers the frontend the way the backend guard covers the server. No behaviour change: the refactor was verified byte-identical across 288 launch permutations against the previous code.
+
+- e899af4: Maintainer fixes applied while landing the above. The model picker's promoted row keeps its Default pill (the promotion tag and the default marker are two pills now, and they render as pills in the picker rather than as plain text). The phone composer keeps its bottom gutter on folding devices (the generic fold rule used to erase it), a whitespace-only draft is no longer sent, and its dialog is translated on a zh-CN UI. A split that collapses mid-drag no longer leaves the page stuck in resize-cursor mode, Pane B refuses a session that has no live process, and a burst of refresh frames replays once instead of twice. The `</head>` script injections on the page render use replacer functions, so a CLI label containing `$'` can no longer splice the document into the inline script, and the frontend no-id-branching guard now catches comparisons on any variable name.
+- 6ef71ec: ### Thanks
+  - @timkjr for split-pane sessions (#453): five review rounds turned around in two days, and the pointer-capture edge case measured in a real browser rather than reasoned about.
+  - @DodgyBadger for the mobile prompt composer (#444), a first contribution that took the scope back down to one slice when asked, and that verified the delivery path against a live tmux pane and a live Claude Code composer instead of trusting the diff.
+  - @opticon454 for putting the ready model first in the picker (#459) and for collapsing the eight Run-menu launch functions into one (#458), proven byte-identical across 288 launch permutations instead of argued.
+
 ## 1.31.0
 
 ### Minor Changes
