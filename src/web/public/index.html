@@ -2363,6 +2363,20 @@
               </div>
               <p class="set-section-blurb">Launch flags for the CLIs Codeman spawns.</p>
 
+              <div class="set-group" id="cliManagementGroup">
+                <div class="set-group-head"><h4>CLI management</h4><span class="set-scope">synced</span></div>
+                <p class="set-group-hint">Enable/disable a CLI, install one that's missing, or add your own — without hand-editing ~/.codeman/clis.json.</p>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="cli management enable disable install custom">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Enable CLI management</span>
+                      <span class="set-row-desc">Adds the list below and its write endpoints. Off by default: this changes machine configuration, not just what you see.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsCliManagement"><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+
               <div class="set-group">
                 <div class="set-group-head"><h4>Claude</h4><span class="set-scope">synced</span></div>
                 <div class="set-group-body">

@@ -1318,6 +1318,15 @@ export const SettingsUpdateSchema = z
      */
     customModelEndpointsEnabled: z.boolean().optional(),
     /**
+     * CLI management (docs/cli-enable-disable-plan.md): the Settings UI section that
+     * lets an admin enable/disable a stock CLI, trigger its install, and add/edit/
+     * remove custom CLI entries — all previously hand-edit-only via ~/.codeman/clis.json.
+     * SYNCED, default OFF: this is a machine-configuration surface (like Custom Model
+     * Endpoints), not a display preference, and enabling it is what makes the write
+     * endpoints (PUT/POST/DELETE /api/clis...) answer instead of refusing outright.
+     */
+    cliManagementEnabled: z.boolean().optional(),
+    /**
      * Read My Mind predictor model override. Empty/absent = the AI-checker
      * default (opus: prediction quality is the product and it runs only on an
      * explicit press). Shell-safety is validated again at spawn time.

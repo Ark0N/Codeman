@@ -38,3 +38,4 @@ export {
   type CustomModelSessionLike,
   type CustomModelSwapDisplacement,
 } from './custom-model-routes.js';
+export { registerCliRegistryRoutes, readCliManagementEnabled, type CliListItem } from './cli-registry-routes.js';

@@ -402,6 +402,8 @@ Object.assign(CodemanApp.prototype, {
     // Assigning .checked above does not fire onchange, so the body's visibility
     // (and its lazy load) needs an explicit sync on every open, not just a save.
     this.applyCustomModelEndpointsVisibility();
+    // CLI management (docs/cli-enable-disable-plan.md): synced, default OFF.
+    document.getElementById('appSettingsCliManagement').checked = settings.cliManagementEnabled === true;
     // Read My Mind: synced, default OFF (opt-in; capture + prediction cost real tokens).
     document.getElementById('appSettingsReadMyMind').checked = settings.readMyMindEnabled === true;
     document.getElementById('appSettingsUltracodeFloatingWindows').checked =
@@ -2118,6 +2120,7 @@ Object.assign(CodemanApp.prototype, {
       showUltracodeAgents: document.getElementById('appSettingsShowUltracodeAgents').checked,
       approvalsInboxEnabled: document.getElementById('appSettingsApprovalsInbox').checked,
       customModelEndpointsEnabled: document.getElementById('appSettingsCustomModelEndpoints').checked,
+      cliManagementEnabled: document.getElementById('appSettingsCliManagement').checked,
       readMyMindEnabled: document.getElementById('appSettingsReadMyMind').checked,
       ultracodeFloatingWindows: document.getElementById('appSettingsUltracodeFloatingWindows').checked,
       showMultiMonitorButton: document.getElementById('appSettingsShowMultiMonitorButton').checked,
