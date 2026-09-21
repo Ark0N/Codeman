@@ -2006,6 +2006,39 @@ export const CustomModelHostSchema = z.object({
   modelSizesGB: z.record(z.string().max(200), z.number().positive().max(100_000)).optional(),
 });
 
+/**
+ * A shell-safe bare word, mirroring `config/cli-registry/schema.ts`'s own `shellToken` —
+ * duplicated rather than imported, since the REAL safety boundary for anything built from
+ * this is `CliEntrySchema` itself, re-applied server-side once the full entry is assembled
+ * (`cli-registry-routes.ts`). This is a request-shape sanity check, not the security gate.
+ */
+const cliShellToken = z
+  .string()
+  .min(1)
+  .max(256)
+  .regex(/^[A-Za-z0-9._:@=+/,-]+$/, 'must be a plain word with no shell metacharacters');
+
+/** PUT /api/clis/:id (Phase 3) — stock enable/disable, the ONLY thing this endpoint can flip. */
+export const CliEnableSchema = z.object({ enabled: z.boolean() });
+
+/**
+ * POST /api/clis + PUT /api/clis/custom/:id (Phase 5) — a deliberately MINIMAL custom-CLI
+ * shape (docs/cli-enable-disable-plan.md, Phase 6 checklist: "scope the FIRST version to the
+ * fields most stock entries actually use"), not the full `CliEntry`. `cli-registry-routes.ts`
+ * assembles the rest with safe, conservative capability defaults and re-validates the whole
+ * thing through `CliEntrySchema` before ever writing it — this schema exists to bound the
+ * REQUEST shape, not to BE the safety layer (Decision 3: typed-argv only, no raw shell text).
+ */
+export const CliCustomEntrySchema = z.object({
+  id: z.string().regex(/^[a-z][a-z0-9-]{0,23}$/, 'id must be lowercase, start with a letter, at most 24 chars'),
+  label: z.string().min(1).max(60),
+  shortBadge: z.string().min(1).max(6),
+  enabled: z.boolean().optional(),
+  binaries: z.array(cliShellToken).min(1).max(4),
+  /** Bare argv tokens for the single launch variant — no flags-with-values, no params. */
+  argv: z.array(cliShellToken).min(1).max(16),
+});
+
 /** POST /api/sessions/:id/custom-model — apply or clear a session's custom-model selection. */
 export const CustomModelSelectionSchema = z.union([
   z.object({

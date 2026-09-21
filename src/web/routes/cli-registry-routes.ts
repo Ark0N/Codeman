@@ -3,22 +3,38 @@
  * original #343 review, done in phases with the trust-model scope decided up front
  * (see that doc's "Decisions" section) rather than folded into a large diff.
  *
- * This file currently holds Phase 2 only: `GET /api/clis`, a read-only list of
- * every registry entry (stock + custom, enabled or not) for the Settings UI.
- * Phase 3 (write: enable/disable), Phase 4 (auto-install) and Phase 5 (custom
- * entry CRUD) land as their own additions here, each behind `cliManagementEnabled`.
+ * Phase 2: `GET /api/clis` — read-only list, ungated (reading is cheap, not the risky part).
+ * Phase 3: `PUT /api/clis/:id` — stock enable/disable ONLY; 404 for a non-stock id, so this
+ *   endpoint can never become a backdoor for creating an entry (that's Phase 5's job).
+ * Phase 4: `POST /api/clis/:id/install` — runs a STOCK entry's already-vetted install command
+ *   (never a custom entry's — Decision 3). Never auto-enables; Phase 3's endpoint is still
+ *   the only thing that flips `enabled`.
+ * Phase 5: `POST /api/clis` (create) / `PUT /api/clis/custom/:id` (update) / `DELETE
+ *   /api/clis/:id` (custom only) — a deliberately separate write surface from Phase 3's, so
+ *   "stock entries can only have `enabled` toggled here, custom entries can be fully edited"
+ *   stays structurally true rather than depending on every caller remembering the rule.
  *
- * Mirrors `custom-model-routes.ts`'s shape for the closest existing precedent:
- * same admin-gating pattern, same `readXEnabled()` helper shape reading
- * `settings.json` directly rather than threading the setting through every
- * caller.
+ * Every write endpoint answers the SAME way when `cliManagementEnabled` is off: 403
+ * FORBIDDEN with a message naming the setting, via `requireCliManagementGate()`.
+ *
+ * Mirrors `custom-model-routes.ts`'s shape for the closest existing precedent: same
+ * admin-gating pattern, same `readXEnabled()` helper shape reading `settings.json`
+ * directly rather than threading the setting through every caller, same tmp+rename+0600
+ * write path (`registry-writer.ts` mirrors `custom-model-hosts.ts`).
  */
 
+import { spawn } from 'node:child_process';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { isAdmin, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
+import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
+import { getAuthUser, isAdmin, parseBody, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
-import { listClis } from '../../config/cli-registry/registry.js';
+import { listClis, reloadCliRegistry, resolveInstallCommandForPlatform } from '../../config/cli-registry/registry.js';
+import { readRegistryFileForWrite, writeRegistryFile } from '../../config/cli-registry/registry-writer.js';
+import { CliEntrySchema } from '../../config/cli-registry/schema.js';
+import { STOCK_CLIS } from '../../config/cli-registry/stock.js';
 import type { CliEntry } from '../../config/cli-registry/types.js';
+import { CliCustomEntrySchema, CliEnableSchema } from '../schemas.js';
+import { appendAdminAudit } from '../admin-audit.js';
 
 /**
  * `cliManagementEnabled` defaults OFF, same reasoning as
@@ -50,11 +66,9 @@ export interface CliListItem {
  * resolvers when the CLI-management section is never opened; Node caches the
  * module after the first call, so repeat requests cost nothing extra.
  *
- * ⚠️ STOCK-ONLY. There is no per-id resolver for a CUSTOM entry — Phase 5
- * (custom CLI creation) needs a GENERIC installed check built from the
- * entry's own `discovery.binaries`/`searchDirs` directly, not this map. Until
- * then a custom entry (none can exist before Phase 5 ships) reports `installed:
- * false` rather than guessing.
+ * ⚠️ STOCK-ONLY. There is no per-id resolver for a CUSTOM entry — Phase 5's
+ * custom entries report `installed: false` from a GENERIC probe instead (a
+ * plain `which`-style search over the entry's own `discovery.binaries`).
  */
 const STOCK_INSTALLED_PROBES: Record<string, () => Promise<boolean>> = {
   claude: async () => (await import('../../utils/claude-cli-resolver.js')).isClaudeAvailable(),
@@ -71,22 +85,224 @@ const STOCK_INSTALLED_PROBES: Record<string, () => Promise<boolean>> = {
   omp: async () => (await import('../../utils/omp-cli-resolver.js')).isOmpAvailable(),
 };
 
+/**
+ * A CUSTOM entry's own installed probe: a plain PATH search (`which`/`where`) over its
+ * declared binaries, since there is no per-id resolver for a user-defined CLI. Deliberately
+ * simple — this is an informational badge in a settings list, not a launch-time gate (the
+ * actual resolver chain a session spawn uses is unrelated to this probe) — so it skips the
+ * full retry/negative-cache machinery `cli-executable-resolver.ts` builds for the heavier,
+ * request-hot stock resolvers.
+ *
+ * No real IO under vitest, same discipline as every other resolver in this codebase
+ * (`IS_TEST_MODE` in tmux-manager, the VITEST gate in cli-executable-resolver.ts): a test
+ * run must never scan the real machine's PATH.
+ */
+async function probeCustomInstalled(entry: CliEntry): Promise<boolean> {
+  if (process.env.VITEST) return false;
+  const { execFileSync } = await import('node:child_process');
+  const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+  for (const binary of entry.discovery.binaries) {
+    try {
+      execFileSync(whichCmd, [binary], { stdio: 'ignore', timeout: 3000 });
+      return true;
+    } catch {
+      /* not on PATH, try the next declared binary */
+    }
+  }
+  return false;
+}
+
 async function probeInstalled(entry: CliEntry): Promise<boolean> {
-  const probe = STOCK_INSTALLED_PROBES[entry.id as string];
-  return probe ? probe() : false;
+  if (entry.stock) {
+    const probe = STOCK_INSTALLED_PROBES[entry.id as string];
+    return probe ? probe() : false;
+  }
+  return probeCustomInstalled(entry);
+}
+
+const STOCK_IDS = new Set(STOCK_CLIS.map((e) => e.id as string));
+
+/** `shell`/`claude` can never be disabled (Decision 4) — enforced here, not just in the UI. */
+const UNDISABLEABLE_IDS = new Set(['shell', 'claude']);
+
+/**
+ * Every write endpoint (Phases 3-5) answers the SAME way when the feature is off or the
+ * caller is a non-admin in multi-user mode: 403 FORBIDDEN. Decided once here rather than
+ * per-route, per docs/cli-enable-disable-plan.md Phase 1's own checklist item ("decide
+ * exact behavior... before Phase 3 starts, so all three write endpoints answer the same way").
+ */
+async function requireCliManagementGate(req: FastifyRequest): Promise<ApiResponse<never> | null> {
+  if (isMultiUserMode() && !isAdmin(req)) {
+    return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Admin only in multi-user mode');
+  }
+  if (!(await readCliManagementEnabled())) {
+    return createErrorResponse(ApiErrorCode.FORBIDDEN, 'CLI management is disabled. Enable it in Settings first.');
+  }
+  return null;
+}
+
+/**
+ * Assembles a full, schema-valid `CliEntry` from Phase 5's deliberately minimal request
+ * shape (id/label/shortBadge/binaries/a simple launch variant — nothing else exposed in
+ * v1), filling every other required field with conservative, safe defaults: no hooks, no
+ * mux-optional fallback, no privileged params, no install command (Decision 3: a custom
+ * entry's install text stays display-only, and there IS none here to display), no custom
+ * model injection. `CliEntrySchema` re-validates the WHOLE thing below — this function
+ * only shapes the object, it is not itself the safety layer.
+ */
+function buildCustomCliEntry(
+  input: { id: string; label: string; shortBadge: string; binaries: string[]; argv: string[]; enabled?: boolean },
+  order: number
+): unknown {
+  return {
+    id: input.id,
+    label: input.label,
+    shortBadge: input.shortBadge,
+    accent: '#6b7280',
+    enabled: input.enabled ?? true,
+    stock: false,
+    order,
+    kind: 'agent',
+    discovery: {
+      binaries: input.binaries,
+      searchDirs: [],
+      install: { command: {} },
+    },
+    launch: {
+      params: {},
+      variants: [{ id: 'default', args: input.argv.map((tok) => ({ lit: tok })) }],
+    },
+    env: {
+      exports: [],
+      unset: [],
+      tmuxSetenvKeys: [],
+      dockerExecEnvNames: [],
+      allowedPrefixes: [],
+      allowedKeys: [],
+    },
+    capabilities: {
+      external: true,
+      requiresMux: true,
+      hooks: 'none',
+      transcript: 'none',
+      altScreen: 'strip-mux-only',
+      echo: { policy: 'buffer', anchor: { kind: 'none' } },
+      wheelForward: { mode: 'never' },
+      keyboardAccessory: 'agent',
+      privilegedCommandGate: false,
+      startMode: 'interactive',
+      stripInkBloat: false,
+      ralph: false,
+      respawn: false,
+      effort: false,
+      agentSkillInjection: false,
+      statusLineTelemetry: false,
+      model: { source: 'none' },
+      privilegedParams: [],
+      privilegedEnvKeys: [],
+      gates: {},
+      customModelInjection: { kind: 'unsupported' },
+    },
+    overlays: {},
+  };
+}
+
+function nextOrder(): number {
+  const orders = listClis().map((e) => e.order);
+  return (orders.length ? Math.max(...orders) : 0) + 10;
+}
+
+/** Bounded execution: `PATH_INSTALL_TIMEOUT_MS`, output capped, process GROUP killed on timeout. */
+const CLI_INSTALL_TIMEOUT_MS = 300_000;
+
+interface InstallResult {
+  code: number | null;
+  output: string;
+  timedOut: boolean;
+}
+
+/**
+ * Runs a STOCK entry's already-vetted install command. `shell: true` is unavoidable here —
+ * the shipped commands are genuinely `curl | bash` / `npm install -g` one-liners — but this
+ * is NOT a reopening of the config-shell-text concern the registry's `shellToken` pattern
+ * exists to prevent: the string executed here is NEVER user input, only ever what is
+ * already hardcoded and reviewed in `stock.ts` (`resolveInstallCommandForPlatform`), and a
+ * CUSTOM entry can never reach this function at all — see the route's own guard below.
+ */
+async function runInstallCommand(command: string): Promise<InstallResult> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, {
+        shell: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        // Own process group; the timeout below kills the whole tree by hand, mirroring
+        // the DeepSeek profile-install endpoint's own reasoning: an install command fans
+        // out into package-manager children, and spawn's own `timeout` option signals
+        // only the direct child, leaving survivors holding the pipes open forever.
+        detached: true,
+        env: process.env,
+      });
+    } catch (err) {
+      resolve({ code: null, output: `spawn failed: ${getErrorMessage(err)}`, timedOut: false });
+      return;
+    }
+
+    let output = '';
+    let timedOut = false;
+    let settled = false;
+    let killTimer: NodeJS.Timeout | undefined;
+    let reapTimer: NodeJS.Timeout | undefined;
+
+    const capture = (chunk: Buffer) => {
+      if (output.length < 16_384) output += chunk.toString('utf-8');
+    };
+    child.stdout?.on('data', capture);
+    child.stderr?.on('data', capture);
+
+    const killTree = (signal: NodeJS.Signals) => {
+      try {
+        if (child.pid) process.kill(-child.pid, signal);
+      } catch {
+        /* already gone */
+      }
+    };
+
+    const finish = (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      if (reapTimer) clearTimeout(reapTimer);
+      resolve({ code, output, timedOut });
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree('SIGTERM');
+      killTimer = setTimeout(() => killTree('SIGKILL'), 3_000);
+      reapTimer = setTimeout(() => finish(null), 8_000);
+    }, CLI_INSTALL_TIMEOUT_MS);
+
+    child.on('error', (err) => {
+      output = `${output}\n${err.message}`;
+      finish(null);
+    });
+    child.on('close', (code) => finish(code));
+  });
 }
 
 export function registerCliRegistryRoutes(app: FastifyInstance): void {
+  // ---- Phase 2: read ----------------------------------------------------
   // GET /api/clis — every registry entry, disabled ones included (this is an
   // admin/settings surface; every SPAWN-time caller elsewhere uses
   // enabledClis() instead). Deliberately excludes launch/env/capabilities/
   // overlays/discovery — the same rule every other catalogue-export surface in
-  // this codebase follows (scripts/generate-cli-catalog.mts, the reverted PR
-  // B2 window.__codemanCliCatalog before it).
+  // this codebase follows.
   //
   // NOT gated on cliManagementEnabled: reading the list is cheap and is not
-  // the risky part (docs/cli-enable-disable-plan.md, Phase 1). The Settings UI
-  // section simply never fetches this while the flag is off (Phase 6).
+  // the risky part. The Settings UI section simply never fetches this while
+  // the flag is off (Phase 6).
   app.get('/api/clis', async (req: FastifyRequest): Promise<{ success: true; data: CliListItem[] }> => {
     if (isMultiUserMode() && !isAdmin(req)) {
       return { success: true, data: [] };
@@ -105,5 +321,182 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
       }))
     );
     return { success: true, data };
+  });
+
+  // ---- Phase 3: enable/disable (stock OR custom) -------------------------
+  // PUT /api/clis/:id — body { enabled }. Toggles an EXISTING entry's
+  // `enabled` flag, stock or custom alike; a not-yet-existing id is 404,
+  // never a backdoor into CREATING one (Phase 5 owns creation via its own
+  // endpoint, POST /api/clis). This is deliberately the one simple toggle
+  // both kinds of entry share — full custom-entry editing is a SEPARATE path
+  // (PUT /api/clis/custom/:id) precisely so a caller can flip `enabled`
+  // without first knowing the rest of a custom entry's shape (its binaries,
+  // its argv), which the Settings UI list row never carries.
+  app.put('/api/clis/:id', async (req, reply): Promise<ApiResponse<{ id: string; enabled: boolean }>> => {
+    const denied = await requireCliManagementGate(req);
+    if (denied) {
+      reply.code(403);
+      return denied;
+    }
+    const { id } = req.params as { id: string };
+    const body = parseBody(CliEnableSchema, req.body);
+
+    if (UNDISABLEABLE_IDS.has(id) && !body.enabled) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, `"${id}" cannot be disabled`);
+    }
+    if (!listClis().some((e) => (e.id as string) === id)) {
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, `"${id}" does not exist`);
+    }
+
+    const file = await readRegistryFileForWrite();
+    const existingOverride = (file.clis[id] as Record<string, unknown> | undefined) ?? {};
+    file.clis = { ...file.clis, [id]: { ...existingOverride, enabled: body.enabled } };
+    await writeRegistryFile(file);
+    reloadCliRegistry();
+    return { success: true, data: { id, enabled: body.enabled } };
+  });
+
+  // ---- Phase 4: auto-install (stock only) --------------------------------
+  // POST /api/clis/:id/install — runs the entry's already-vetted install
+  // command. Separate endpoint from Phase 3's toggle: installing is a bigger
+  // action than a boolean flip and gets its own audit entry. Never auto-
+  // enables — Phase 3's endpoint is still the only thing that flips `enabled`.
+  app.post(
+    '/api/clis/:id/install',
+    async (req, reply): Promise<ApiResponse<{ id: string; code: number | null; output: string }>> => {
+      const denied = await requireCliManagementGate(req);
+      if (denied) {
+        reply.code(403);
+        return denied;
+      }
+      const { id } = req.params as { id: string };
+      if (!STOCK_IDS.has(id)) {
+        // Decision 3: a custom entry's install command is NEVER executed, full
+        // stop — this guard is what makes that true independent of anything
+        // Phase 5 does, even if a caller invents an id that happens to match
+        // a custom entry's.
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Auto-install is only available for stock CLIs');
+      }
+      const entry = listClis().find((e) => (e.id as string) === id);
+      if (!entry) return createErrorResponse(ApiErrorCode.NOT_FOUND, `"${id}" is not a stock CLI`);
+      const command = resolveInstallCommandForPlatform(entry);
+      if (!command) {
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `"${id}" has no install command for this platform`);
+      }
+
+      const result = await runInstallCommand(command);
+      const admin = getAuthUser(req).username;
+      void appendAdminAudit({
+        admin,
+        action: 'cli_install',
+        target: id,
+        ip: req.ip,
+        detail: { command, exitCode: result.code, timedOut: result.timedOut },
+      });
+
+      if (result.code !== 0) {
+        const detail = result.timedOut
+          ? `timed out after ${Math.round(CLI_INSTALL_TIMEOUT_MS / 1000)}s`
+          : result.output.slice(-1000).trim() || 'no output';
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Installing "${id}" failed: ${detail}`);
+      }
+      return { success: true, data: { id, code: result.code, output: result.output.slice(-4000) } };
+    }
+  );
+
+  // ---- Phase 5: custom CLI entries ----------------------------------------
+  // POST /api/clis — create a custom entry. Deliberately separate from Phase
+  // 3's PUT: that endpoint can only ever toggle an EXISTING stock entry, this
+  // one can only ever create a NEW custom one, so the two write surfaces
+  // cannot be confused for each other by a caller.
+  app.post('/api/clis', async (req, reply): Promise<ApiResponse<{ id: string }>> => {
+    const denied = await requireCliManagementGate(req);
+    if (denied) {
+      reply.code(403);
+      return denied;
+    }
+    const body = parseBody(CliCustomEntrySchema, req.body);
+    if (STOCK_IDS.has(body.id)) {
+      return createErrorResponse(
+        ApiErrorCode.ALREADY_EXISTS,
+        `"${body.id}" is a stock CLI id and cannot be used for a custom entry`
+      );
+    }
+    const file = await readRegistryFileForWrite();
+    if (Object.prototype.hasOwnProperty.call(file.clis, body.id)) {
+      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `A custom CLI "${body.id}" already exists`);
+    }
+
+    const candidate = buildCustomCliEntry(body, nextOrder());
+    const parsed = CliEntrySchema.safeParse(candidate);
+    if (!parsed.success) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, parsed.error.message);
+    }
+
+    // Stored WITHOUT id/stock — those are forced back in by resolveRegistry() on every
+    // read, so the override file never duplicates what the key and provenance already say.
+    const { id: _id, stock: _stock, ...toStore } = parsed.data;
+    file.clis = { ...file.clis, [body.id]: toStore };
+    await writeRegistryFile(file);
+    reloadCliRegistry();
+    return { success: true, data: { id: body.id } };
+  });
+
+  // PUT /api/clis/custom/:id — full update of an EXISTING custom entry. A
+  // separate path from Phase 3's PUT /api/clis/:id on purpose: that one is
+  // structurally stock-only (404s any id it doesn't recognise as stock), so
+  // there is no shared route where "which fields this id may change" depends
+  // on a runtime check a caller could get wrong.
+  app.put('/api/clis/custom/:id', async (req, reply): Promise<ApiResponse<{ id: string }>> => {
+    const denied = await requireCliManagementGate(req);
+    if (denied) {
+      reply.code(403);
+      return denied;
+    }
+    const { id } = req.params as { id: string };
+    if (STOCK_IDS.has(id)) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, `"${id}" is a stock CLI; use PUT /api/clis/${id} instead`);
+    }
+    const body = parseBody(CliCustomEntrySchema, { ...(req.body as object), id });
+    const file = await readRegistryFileForWrite();
+    if (!Object.prototype.hasOwnProperty.call(file.clis, id)) {
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, `No custom CLI "${id}"`);
+    }
+
+    const existingOrder = listClis().find((e) => (e.id as string) === id)?.order ?? nextOrder();
+    const candidate = buildCustomCliEntry(body, existingOrder);
+    const parsed = CliEntrySchema.safeParse(candidate);
+    if (!parsed.success) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, parsed.error.message);
+    }
+
+    const { id: _id, stock: _stock, ...toStore } = parsed.data;
+    file.clis = { ...file.clis, [id]: toStore };
+    await writeRegistryFile(file);
+    reloadCliRegistry();
+    return { success: true, data: { id } };
+  });
+
+  // DELETE /api/clis/:id — refuses any STOCK id outright; deleting only ever
+  // removes a CUSTOM entry's override.
+  app.delete('/api/clis/:id', async (req, reply): Promise<ApiResponse<{ id: string }>> => {
+    const denied = await requireCliManagementGate(req);
+    if (denied) {
+      reply.code(403);
+      return denied;
+    }
+    const { id } = req.params as { id: string };
+    if (STOCK_IDS.has(id)) {
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, `"${id}" is a stock CLI and cannot be deleted`);
+    }
+    const file = await readRegistryFileForWrite();
+    if (!Object.prototype.hasOwnProperty.call(file.clis, id)) {
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, `No custom CLI "${id}"`);
+    }
+    const { [id]: _removed, ...rest } = file.clis;
+    file.clis = rest;
+    await writeRegistryFile(file);
+    reloadCliRegistry();
+    return { success: true, data: { id } };
   });
 }

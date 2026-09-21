@@ -2372,8 +2372,52 @@
                       <span class="set-row-label">Enable CLI management</span>
                       <span class="set-row-desc">Adds the list below and its write endpoints. Off by default: this changes machine configuration, not just what you see.</span>
                     </div>
-                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsCliManagement"><span class="slider"></span></label>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsCliManagement" onchange="app.applyCliManagementVisibility()"><span class="slider"></span></label>
                   </div>
+                </div>
+              </div>
+
+              <div class="set-group" id="cliListGroup" style="display: none;">
+                <div class="set-group-head"><h4>Installed CLIs</h4></div>
+                <div class="set-group-body">
+                  <div id="cliListRows"></div>
+                  <div class="set-row" data-search="add custom cli">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Add a custom CLI</span>
+                      <span class="set-row-desc">A launch command Codeman doesn't ship — id, label, badge, binary and its bare argv.</span>
+                    </div>
+                    <button type="button" class="btn btn-xs" id="cliCustomAddToggle" onclick="app.openCliCustomForm()">Add</button>
+                  </div>
+                  <form id="cliCustomForm" style="display: none;" onsubmit="app.submitCliCustomForm(event)">
+                    <div class="set-row has-field">
+                      <div class="set-row-text"><span class="set-row-label">Id</span></div>
+                      <input type="text" id="cliCustomId" class="set-input" placeholder="my-cli" maxlength="24">
+                    </div>
+                    <div class="set-row has-field">
+                      <div class="set-row-text"><span class="set-row-label">Label</span></div>
+                      <input type="text" id="cliCustomLabel" class="set-input" placeholder="My CLI" maxlength="60">
+                    </div>
+                    <div class="set-row has-field">
+                      <div class="set-row-text"><span class="set-row-label">Badge</span></div>
+                      <input type="text" id="cliCustomBadge" class="set-input" placeholder="MC" maxlength="6">
+                    </div>
+                    <div class="set-row has-field">
+                      <div class="set-row-text"><span class="set-row-label">Binary</span></div>
+                      <input type="text" id="cliCustomBinary" class="set-input" placeholder="my-cli">
+                    </div>
+                    <div class="set-row has-field">
+                      <div class="set-row-text">
+                        <span class="set-row-label">Launch argv</span>
+                        <span class="set-row-desc">Space-separated bare words, e.g. "my-cli --flag". No quoting or shell syntax.</span>
+                      </div>
+                      <input type="text" id="cliCustomArgv" class="set-input" placeholder="my-cli --flag">
+                    </div>
+                    <div class="set-row">
+                      <button type="submit" class="btn btn-xs" id="cliCustomSubmit">Create</button>
+                      <button type="button" class="btn btn-xs" id="cliCustomCancel" onclick="app.closeCliCustomForm()">Cancel</button>
+                    </div>
+                    <div id="cliCustomFormError" class="set-row-desc" style="color: var(--error, #e5484d); display: none;"></div>
+                  </form>
                 </div>
               </div>
 

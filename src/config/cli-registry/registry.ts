@@ -49,6 +49,16 @@ function filePath(): string {
 }
 
 /**
+ * The resolved path of `~/.codeman/clis.json`, exported for the write API
+ * (`cli-registry-writer.ts`, docs/cli-enable-disable-plan.md Phases 3/5) so both the read and
+ * write sides resolve the SAME path through the SAME instance-scoped helper — never a second
+ * `dataPath('clis.json')` call that could drift from this one under a future `dataPath()` change.
+ */
+export function registryFilePath(): string {
+  return filePath();
+}
+
+/**
  * Keys that must never be merged out of a hand-editable JSON file.
  *
  * `JSON.parse` produces `__proto__` as an ORDINARY own property, but `result[key] = …` on a

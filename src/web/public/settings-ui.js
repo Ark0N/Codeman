@@ -404,6 +404,10 @@ Object.assign(CodemanApp.prototype, {
     this.applyCustomModelEndpointsVisibility();
     // CLI management (docs/cli-enable-disable-plan.md): synced, default OFF.
     document.getElementById('appSettingsCliManagement').checked = settings.cliManagementEnabled === true;
+    // Same reasoning as applyCustomModelEndpointsVisibility above: assigning
+    // .checked fires no onchange, so the list's visibility (and lazy load)
+    // needs an explicit sync on every open, not just a save.
+    this.applyCliManagementVisibility();
     // Read My Mind: synced, default OFF (opt-in; capture + prediction cost real tokens).
     document.getElementById('appSettingsReadMyMind').checked = settings.readMyMindEnabled === true;
     document.getElementById('appSettingsUltracodeFloatingWindows').checked =
@@ -2712,6 +2716,227 @@ Object.assign(CodemanApp.prototype, {
   },
 
   // ═══════════════════════════════════════════════════════════════
+  // CLI management (docs/cli-enable-disable-plan.md)
+  //
+  // CRUD against /api/clis, rendered into the Agents & CLIs settings section.
+  // Same load/save-pair-outside-openAppSettings reasoning as the Custom Model
+  // Endpoints block above: these are server-side registry records, not a
+  // settings-payload field — only the `cliManagementEnabled` toggle itself
+  // goes through openAppSettings/saveAppSettings.
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Same two-caller shape as applyCustomModelEndpointsVisibility (assigning
+   * .checked fires no change event, so this needs both an explicit call on
+   * open AND the checkbox's own onchange) and the same reasoning for hiding
+   * the whole list rather than showing it disabled: with the flag off the
+   * rows would be controls that only 403.
+   */
+  applyCliManagementVisibility() {
+    const enabled = document.getElementById('appSettingsCliManagement').checked;
+    const group = document.getElementById('cliListGroup');
+    if (group) group.style.display = enabled ? '' : 'none';
+    if (enabled) this.loadCliListForSettings();
+    else this.closeCliCustomForm();
+    this._applyCliManagementAdminGate();
+  },
+
+  /**
+   * Decision 5 (docs/cli-enable-disable-plan.md): hidden entirely for a
+   * non-admin in multi-user mode, not shown-empty. GET /api/clis already
+   * answers a non-admin with [], which empties the row list on its own; the
+   * "Add a custom CLI" row has no list row to hide behind, so it needs its
+   * own gate the same way the Custom Model Endpoints "+ Add" button does.
+   */
+  _applyCliManagementAdminGate() {
+    const group = document.getElementById('cliListGroup');
+    if (!group) return;
+    const me = window.__codemanUser || {};
+    const blocked = me.multiUser && me.role !== 'admin';
+    const featureOn = document.getElementById('appSettingsCliManagement')?.checked ?? false;
+    group.style.display = blocked || !featureOn ? 'none' : '';
+    const addRow = document.getElementById('cliCustomAddToggle');
+    if (addRow) addRow.style.display = blocked ? 'none' : '';
+  },
+
+  async loadCliListForSettings() {
+    // GET /api/clis wraps its body in the { success, data } envelope like every
+    // other /api route — _apiJson() unwraps it, same reasoning as the Custom
+    // Model Endpoints list load above.
+    const clis = await this._apiJson('/api/clis');
+    this._cliList = Array.isArray(clis) ? clis : [];
+    this.renderCliList();
+  },
+
+  renderCliList() {
+    const list = document.getElementById('cliListRows');
+    if (!list) return;
+    const clis = this._cliList || [];
+    if (clis.length === 0) {
+      list.innerHTML = '<p class="set-group-hint">No CLIs found.</p>';
+      return;
+    }
+    const UNDISABLEABLE = new Set(['shell', 'claude']);
+    list.innerHTML = clis
+      .map((c) => {
+        const idArg = escapeHtml(JSON.stringify(c.id));
+        const undisableable = UNDISABLEABLE.has(c.id);
+        const toggleTitle = undisableable ? `title="${escapeHtml(c.id)} cannot be disabled"` : '';
+        const installBtn =
+          c.stock && !c.installed
+            ? `<button type="button" class="btn-toolbar btn-sm" onclick="app.installCliEntry(${idArg})" id="cliInstallBtn-${escapeHtml(c.id)}">Install</button>`
+            : '';
+        const customActions = c.stock
+          ? ''
+          : `<button type="button" class="btn-toolbar btn-sm" onclick="app.openCliCustomForm(${idArg})">Edit</button>
+             <button type="button" class="btn-toolbar btn-danger btn-sm" onclick="app.deleteCliCustom(${idArg})">Delete</button>`;
+        return `
+          <div class="set-row" data-cli-id="${escapeHtml(c.id)}">
+            <div class="set-row-text">
+              <span class="set-row-label">${escapeHtml(c.label)} <span class="set-scope">${escapeHtml(c.shortBadge)}</span></span>
+              <span class="set-row-desc">${c.installed ? 'Installed' : 'Not installed'}${c.stock ? '' : ' · custom'}</span>
+            </div>
+            <div class="set-row-actions">
+              ${installBtn}
+              ${customActions}
+              <label class="switch switch-sm" ${toggleTitle}>
+                <input type="checkbox" ${c.enabled ? 'checked' : ''} ${undisableable ? 'disabled' : ''}
+                  onchange="app.toggleCliEnabled(${idArg}, this)">
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>`;
+      })
+      .join('');
+  },
+
+  async toggleCliEnabled(id, checkbox) {
+    const next = checkbox.checked;
+    const res = await this._api(`/api/clis/${encodeURIComponent(id)}`, { method: 'PUT', body: { enabled: next } });
+    if (!res || !res.ok) {
+      checkbox.checked = !next; // revert on failure — the row must not lie about server state
+      let detail = '';
+      try {
+        detail = (await res?.json())?.error || '';
+      } catch {
+        /* no body to read */
+      }
+      this.showToast(`Failed to ${next ? 'enable' : 'disable'} "${id}"${detail ? `: ${detail}` : ''}`, 'error');
+      return;
+    }
+    await this.loadCliListForSettings();
+  },
+
+  async installCliEntry(id) {
+    const btn = document.getElementById(`cliInstallBtn-${id}`);
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Installing…';
+    }
+    try {
+      const res = await this._api(`/api/clis/${encodeURIComponent(id)}/install`, { method: 'POST' });
+      if (!res || !res.ok) {
+        let detail = '';
+        try {
+          detail = (await res?.json())?.error || '';
+        } catch {
+          /* no body to read */
+        }
+        this.showToast(`Installing "${id}" failed${detail ? `: ${detail}` : ''}`, 'error');
+        return;
+      }
+      this.showToast(`Installed "${id}"`, 'success');
+    } finally {
+      await this.loadCliListForSettings();
+    }
+  },
+
+  /**
+   * Pass no id to create a new entry; pass an existing CUSTOM id to edit one.
+   * ⚠️ GET /api/clis deliberately excludes discovery/launch (Phase 2's own
+   * scope), so an edit cannot be pre-filled with the entry's existing binary
+   * or argv — those two fields start blank and must be re-entered, since the
+   * update endpoint (PUT /api/clis/custom/:id) replaces the whole launch
+   * spec rather than patching it. id/label/badge DO come from the list row.
+   */
+  openCliCustomForm(editId) {
+    const form = document.getElementById('cliCustomForm');
+    const errorEl = document.getElementById('cliCustomFormError');
+    if (!form) return;
+    const existing = editId ? (this._cliList || []).find((c) => c.id === editId) : null;
+    this._editingCliCustomId = existing ? existing.id : null;
+    document.getElementById('cliCustomId').value = existing ? existing.id : '';
+    document.getElementById('cliCustomId').disabled = !!existing; // id is immutable once created
+    document.getElementById('cliCustomLabel').value = existing ? existing.label : '';
+    document.getElementById('cliCustomBadge').value = existing ? existing.shortBadge : '';
+    document.getElementById('cliCustomBinary').value = '';
+    document.getElementById('cliCustomArgv').value = '';
+    document.getElementById('cliCustomSubmit').textContent = existing ? 'Save' : 'Create';
+    if (errorEl) errorEl.style.display = 'none';
+    form.style.display = '';
+  },
+
+  closeCliCustomForm() {
+    const form = document.getElementById('cliCustomForm');
+    if (form) form.style.display = 'none';
+    this._editingCliCustomId = null;
+  },
+
+  /** Wired to #cliCustomForm's onsubmit; `event` is the submit event. */
+  async submitCliCustomForm(event) {
+    event.preventDefault();
+    const errorEl = document.getElementById('cliCustomFormError');
+    const showError = (msg) => {
+      if (errorEl) {
+        errorEl.textContent = msg;
+        errorEl.style.display = '';
+      }
+    };
+    const id = document.getElementById('cliCustomId').value.trim();
+    const label = document.getElementById('cliCustomLabel').value.trim();
+    const shortBadge = document.getElementById('cliCustomBadge').value.trim();
+    const binaries = document.getElementById('cliCustomBinary').value.trim().split(/\s+/).filter(Boolean);
+    const argv = document.getElementById('cliCustomArgv').value.trim().split(/\s+/).filter(Boolean);
+    if (!id || !label || !shortBadge || binaries.length === 0 || argv.length === 0) {
+      showError('All fields are required.');
+      return;
+    }
+    const editing = this._editingCliCustomId;
+    const path = editing ? `/api/clis/custom/${encodeURIComponent(editing)}` : '/api/clis';
+    const method = editing ? 'PUT' : 'POST';
+    const res = await this._api(path, { method, body: { id, label, shortBadge, binaries, argv } });
+    if (!res || !res.ok) {
+      let detail = 'Request failed';
+      try {
+        detail = (await res?.json())?.error || detail;
+      } catch {
+        /* no body to read */
+      }
+      showError(detail);
+      return;
+    }
+    this.closeCliCustomForm();
+    await this.loadCliListForSettings();
+  },
+
+  async deleteCliCustom(id) {
+    const entry = (this._cliList || []).find((c) => c.id === id);
+    if (!confirm(`Delete custom CLI "${entry?.label || id}"? This cannot be undone.`)) return;
+    const res = await this._api(`/api/clis/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!res || !res.ok) {
+      let detail = '';
+      try {
+        detail = (await res?.json())?.error || '';
+      } catch {
+        /* no body to read */
+      }
+      this.showToast(`Failed to delete "${id}"${detail ? `: ${detail}` : ''}`, 'error');
+      return;
+    }
+    await this.loadCliListForSettings();
+  },
+
+  // ═══════════════════════════════════════════════════════════════
   // Visibility Settings & Device-Specific Defaults
   // ═══════════════════════════════════════════════════════════════
 
@@ -3786,4 +4011,5 @@ Object.assign(CodemanApp.prototype, {
 // evaluation, not just this feature.
 document.addEventListener?.('codeman:me', () => {
   window.app?._applyCustomModelAdminGate?.();
+  window.app?._applyCliManagementAdminGate?.();
 });
