@@ -1663,6 +1663,29 @@ export class WebServer extends EventEmitter {
         // keep without git (issue #236), same reasoning as cloudflared above.
         git: isGitAvailable(),
       };
+      // A CLI disabled via the registry (docs/cli-enable-disable-plan.md's Settings UI,
+      // or a hand-edited clis.json) must read as unavailable here too — `isCliAvailable()`
+      // on the frontend is what the welcome screen, the Run-menu dropdown and the mobile
+      // overview all gate on, and none of them otherwise know the registry's `enabled`
+      // flag exists; without this, disabling a CLI in Settings toggled the row there but
+      // left every launch surface still offering it. `git`/`cloudflared` are utility
+      // binaries, not CLI registry entries, and `deepseekBinary` is a secondary
+      // installed-only flag for the "add a profile" affordance — none of the three are
+      // registry ids, so only the nine real SessionMode entries are gated.
+      const registryEnabledIds = new Set<string>(enabledClis().map((entry) => entry.id));
+      for (const id of [
+        'claude',
+        'opencode',
+        'codex',
+        'gemini',
+        'antigravity',
+        'pi',
+        'grok',
+        'deepseek',
+        'omp',
+      ] as const) {
+        if (!registryEnabledIds.has(id)) available[id] = false;
+      }
       html = html.replace(
         '</head>',
         () => `<script>window.__codemanCliAvailable=${JSON.stringify(available)};</script>\n</head>`

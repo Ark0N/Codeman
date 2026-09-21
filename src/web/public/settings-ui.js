@@ -2810,6 +2810,13 @@ Object.assign(CodemanApp.prototype, {
       .join('');
   },
 
+  /**
+   * ⚠️ A successful toggle must patch `window.__codemanCliAvailable` and refresh
+   * every surface that reads it, or the change is invisible everywhere except
+   * this settings row until the next full page reload — `window.__codemanCliAvailable`
+   * is injected ONCE at initial page render (server.ts) and nothing else refetches
+   * it. Same pattern `installDeepSeekProfile()` already uses for the same reason.
+   */
   async toggleCliEnabled(id, checkbox) {
     const next = checkbox.checked;
     const res = await this._api(`/api/clis/${encodeURIComponent(id)}`, { method: 'PUT', body: { enabled: next } });
@@ -2824,6 +2831,11 @@ Object.assign(CodemanApp.prototype, {
       this.showToast(`Failed to ${next ? 'enable' : 'disable'} "${id}"${detail ? `: ${detail}` : ''}`, 'error');
       return;
     }
+    window.__codemanCliAvailable = { ...(window.__codemanCliAvailable || {}), [id]: next };
+    this.applyWelcomeCliVisibility?.();
+    this.renderMobileOverview?.();
+    const menu = document.getElementById('runModeMenu');
+    if (menu) this._refreshRunModeAvailability?.(menu);
     await this.loadCliListForSettings();
   },
 
