@@ -39,7 +39,7 @@ interface Harness {
   externalIds: string[];
 }
 
-function loadHarness(): Harness {
+function loadHarness(catalog: Array<{ id: string; kind: string; enabled: boolean }> = []): Harness {
   const dom = new JSDOM('<!doctype html><body><button id="runBtn"></button></body>', {
     url: 'http://localhost/',
     runScripts: 'dangerously',
@@ -49,7 +49,9 @@ function loadHarness(): Harness {
     document: Document;
     CodemanApp: new () => HarnessApp;
     __TEST_RUN_MODE_LAUNCH: Record<string, unknown>;
+    __codemanCliCatalog: Array<{ id: string; kind: string; enabled: boolean }>;
   };
+  win.__codemanCliCatalog = catalog;
   win.eval('window.CodemanApp = function CodemanApp() {};');
   // The assignment rides in the SAME evaluated string as the module:
   // RUN_MODE_LAUNCH is a bare top-level `const`, visible only to this eval call
@@ -106,9 +108,18 @@ describe('run() dispatch (session-ui.js)', () => {
     });
   }
 
+  it('an enabled registry agent reaches the shared launcher', async () => {
+    const { app } = loadHarness([{ id: 'custom-agent', kind: 'agent', enabled: true }]);
+    app._runMode = 'custom-agent';
+    await expect(app.run()).resolves.toBe('cli:custom-agent');
+    expect(app._runCliMode).toHaveBeenCalledTimes(1);
+    expect(app._runCliMode).toHaveBeenCalledWith('custom-agent');
+    expect(app.runClaude).not.toHaveBeenCalled();
+  });
+
   it('an unknown mode lands on runClaude(), never on the shared launcher', async () => {
-    // `_runCliMode(mode)` reads `RUN_MODE_LAUNCH[mode].label` unguarded, so an
-    // unknown id reaching it would throw rather than launch anything.
+    // A stale localStorage mode must not reach `_runCliMode()`: it has neither
+    // a stock launch shape nor an enabled registry entry to launch.
     for (const mode of ['nope', 'CLAUDE', 'code x']) {
       const { app } = loadHarness();
       app._runMode = mode;

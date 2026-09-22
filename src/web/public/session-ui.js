@@ -524,7 +524,7 @@ Object.assign(CodemanApp.prototype, {
       if (mode === 'shell') {
         return await this.runShell();
       }
-      if (mode === 'claude') {
+      if (mode === 'claude' || !isExternalCliRunMode(mode)) {
         return await this.runClaude();
       }
       return await this._runCliMode(mode);
@@ -1706,7 +1706,11 @@ Object.assign(CodemanApp.prototype, {
 
   _initRunMode() {
     this.renderRegistryRunOptions();
-    try { this._runMode = localStorage.getItem('codeman_runMode') || 'claude'; } catch { this._runMode = 'claude'; }
+    let savedMode = 'claude';
+    try { savedMode = localStorage.getItem('codeman_runMode') || 'claude'; } catch { /* localStorage unavailable */ }
+    // Go through the setter so a CLI disabled after the previous visit, or a
+    // removed custom CLI, cannot survive in localStorage as a runnable mode.
+    this.runMode = savedMode;
     this._applyRunMode();
   },
 
