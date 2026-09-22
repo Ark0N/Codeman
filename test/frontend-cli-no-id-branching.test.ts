@@ -45,9 +45,9 @@ const SCANNED_FILES = ['session-ui.js', 'mobile-overview.js'];
  */
 const ALLOWED_BRANCHES: Record<string, { count: number; reason: string }> = {
   "session-ui.js::mode === 'shell'": {
-    count: 2,
+    count: 3,
     reason:
-      'run() dispatch (shell needs no CLI probe at all) and the button-label ternary (pinned exact ' +
+      'run() dispatch, availability gating (shell needs no CLI probe at all), and the button-label ternary (pinned exact ' +
       "text — test/run-mode-ui.test.ts asserts e.g. 'Run OMP', which diverges from CliEntry.shortBadge " +
       "for at least omp ('OM' vs the displayed 'OMP'), so a catalogue-driven rewrite would silently " +
       'change user-visible text and break that pinned test; the maintainer confirmed leaving this ' +
@@ -55,9 +55,9 @@ const ALLOWED_BRANCHES: Record<string, { count: number; reason: string }> = {
   },
 
   "session-ui.js::mode === 'claude'": {
-    count: 4,
+    count: 3,
     reason:
-      'four claude-specific call sites, not one branch: run() dispatch (claude has its own ' +
+      'three claude-specific call sites, not one branch: run() dispatch (claude has its own ' +
       'remote/docker branching and parallel-create path, unlike every RUN_MODE_LAUNCH entry), ' +
       'runCustomModelEntry() (restart-vs-one-shot launch mechanism, not a preference — see ' +
       "CLAUDE.md's Custom Model Endpoint Profiles section), the Respawn/Ralph section (claude-only " +
@@ -65,22 +65,19 @@ const ALLOWED_BRANCHES: Record<string, { count: number; reason: string }> = {
       'validity check',
   },
 
-  // The 8 external CLIs share the same two call sites and the same reason at
-  // each: the button-label ternary (see the shell entry above for why it
-  // stays hardcoded) and the runMode property setter's validity allowlist
-  // (not a behaviour branch; left hardcoded in Phase 2 since its chain has
-  // no shell arm at all and no evidence of what callers rely on it).
-  "session-ui.js::mode === 'opencode'": { count: 2, reason: 'button-label ternary + runMode setter validity check' },
-  "session-ui.js::mode === 'codex'": { count: 2, reason: 'button-label ternary + runMode setter validity check' },
-  "session-ui.js::mode === 'gemini'": { count: 2, reason: 'button-label ternary + runMode setter validity check' },
+  // The 8 external CLIs remain in the button-label ternary only. The runMode
+  // setter now validates custom entries through the injected registry catalog.
+  "session-ui.js::mode === 'opencode'": { count: 1, reason: 'button-label ternary' },
+  "session-ui.js::mode === 'codex'": { count: 1, reason: 'button-label ternary' },
+  "session-ui.js::mode === 'gemini'": { count: 1, reason: 'button-label ternary' },
   "session-ui.js::mode === 'antigravity'": {
-    count: 2,
-    reason: 'button-label ternary + runMode setter validity check',
+    count: 1,
+    reason: 'button-label ternary',
   },
-  "session-ui.js::mode === 'pi'": { count: 2, reason: 'button-label ternary + runMode setter validity check' },
-  "session-ui.js::mode === 'grok'": { count: 2, reason: 'button-label ternary + runMode setter validity check' },
-  "session-ui.js::mode === 'deepseek'": { count: 2, reason: 'button-label ternary + runMode setter validity check' },
-  "session-ui.js::mode === 'omp'": { count: 2, reason: 'button-label ternary + runMode setter validity check' },
+  "session-ui.js::mode === 'pi'": { count: 1, reason: 'button-label ternary' },
+  "session-ui.js::mode === 'grok'": { count: 1, reason: 'button-label ternary' },
+  "session-ui.js::mode === 'deepseek'": { count: 1, reason: 'button-label ternary' },
+  "session-ui.js::mode === 'omp'": { count: 1, reason: 'button-label ternary' },
 
   // The docker adopt-preflight status line and the docker link/adopt toast
   // both list the agent CLIs probed INSIDE the container and leave `shell`

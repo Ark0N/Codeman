@@ -42,6 +42,7 @@ const MOBILE_OVERVIEW_PHONE_QUERY = '(max-width: 599px)';
 
 /** How many past conversations show before the "Show all" toggle. */
 const MOBILE_OVERVIEW_PAST_LIMIT = 8;
+const SHELL_KIND = 'shell';
 
 /**
  * Backends offered by the Run picker, mirroring the toolbar's run-mode menu
@@ -68,7 +69,7 @@ function mobileOverviewRunModes() {
     .filter((entry) => entry.enabled)
     .map((entry) => ({
       mode: entry.id,
-      label: entry.kind === 'shell' ? 'Terminal / Shell' : entry.label === 'Claude' ? 'Claude Code' : entry.label,
+      label: entry.kind === SHELL_KIND ? 'Terminal / Shell' : entry.label === 'Claude' ? 'Claude Code' : entry.label,
       short: entry.shortBadge,
     }));
 }
