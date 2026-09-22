@@ -451,41 +451,10 @@
           <h1 class="welcome-title">Codeman</h1>
           <p class="welcome-desc">Manage AI Coding tools in persistent tmux sessions.</p>
           <div class="welcome-actions">
-            <button class="welcome-btn welcome-btn-claude" id="welcomeClaudeBtn" style="display: none;" onclick="app.setRunMode('claude'); app.runClaude()">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run Claude Code
-            </button>
+            <div class="welcome-cli-actions" id="welcomeCliActions"></div>
             <button class="welcome-btn welcome-btn-tunnel" id="welcomeTunnelBtn" style="display: none;" onclick="app.toggleTunnelFromWelcome()">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
               Cloudflare Tunnel
-            </button>
-            <button class="welcome-btn welcome-btn-opencode" id="welcomeOpencodeBtn" style="display: none;" onclick="app.setRunMode('opencode'); app.runOpenCode()">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run OpenCode
-            </button>
-            <button class="welcome-btn welcome-btn-antigravity" id="welcomeAntigravityBtn" style="display: none;" onclick="app.setRunMode('antigravity'); app.runAntigravity()">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run Antigravity
-            </button>
-            <button class="welcome-btn welcome-btn-gemini" id="welcomeGeminiBtn" style="display: none;" onclick="app.setRunMode('gemini'); app.runGemini()">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run Gemini
-            </button>
-            <button class="welcome-btn welcome-btn-pi" id="welcomePiBtn" style="display: none;" onclick="app.setRunMode('pi'); app.runPi()">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run Pi
-            </button>
-            <button class="welcome-btn welcome-btn-grok" id="welcomeGrokBtn" style="display: none;" onclick="app.setRunMode('grok'); app.runGrok()">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run Grok
-            </button>
-            <button class="welcome-btn welcome-btn-deepseek" id="welcomeDeepSeekBtn" style="display: none;" onclick="app.setRunMode('deepseek'); app.runDeepSeek()">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run DeepSeek
-            </button>
-            <button class="welcome-btn welcome-btn-omp" id="welcomeOmpBtn" style="display: none;" onclick="app.setRunMode('omp'); app.runOmp()">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Run OMP
             </button>
           </div>
           <div class="welcome-qr" id="welcomeQr" onclick="app.toggleWelcomeQrSize()">
@@ -648,38 +617,12 @@
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
             </button>
             <div class="run-mode-menu" id="runModeMenu">
-              <button class="run-mode-option" data-mode="claude" onclick="app.setRunMode('claude')">
-                <span class="run-mode-dot claude"></span>Claude Code
-              </button>
-              <button class="run-mode-option" data-mode="opencode" onclick="app.setRunMode('opencode')">
-                <span class="run-mode-dot opencode"></span>OpenCode
-              </button>
-              <button class="run-mode-option" data-mode="codex" onclick="app.setRunMode('codex')">
-                <span class="run-mode-dot codex"></span>Codex
-              </button>
-              <button class="run-mode-option" data-mode="gemini" onclick="app.setRunMode('gemini')">
-                <span class="run-mode-dot gemini"></span>Gemini
-              </button>
-              <button class="run-mode-option" data-mode="antigravity" onclick="app.setRunMode('antigravity')">
-                <span class="run-mode-dot antigravity"></span>Antigravity
-              </button>
-              <button class="run-mode-option" data-mode="pi" onclick="app.setRunMode('pi')">
-                <span class="run-mode-dot pi"></span>Pi
-              </button>
-              <button class="run-mode-option" data-mode="grok" onclick="app.setRunMode('grok')">
-                <span class="run-mode-dot grok"></span>Grok
-              </button>
-              <button class="run-mode-option" data-mode="deepseek" onclick="app.setRunMode('deepseek')">
-                <span class="run-mode-dot deepseek"></span>DeepSeek
-              </button>
+              <div class="run-mode-cli-options" id="runModeCliOptions"></div>
               <!-- Shown only when `dsh` is installed but no pane-capable profile is:
                    DeepSeek ships no terminal front door, so the fix is an install,
                    not a greyed-out entry the user cannot act on. -->
               <button class="run-mode-option run-mode-option-install" data-action="deepseek-install" id="runModeDeepSeekInstall" style="display: none;" onclick="app.installDeepSeekProfile()">
                 <span class="run-mode-dot deepseek"></span>DeepSeek — add a terminal profile…
-              </button>
-              <button class="run-mode-option" data-mode="omp" onclick="app.setRunMode('omp')">
-                <span class="run-mode-dot omp"></span>OMP
               </button>
               <!-- Custom Model Endpoint Profiles (docs/custom-model-endpoints-plan.md): one
                    generated entry per (harness, saved endpoint) pair, e.g. "Claude Code

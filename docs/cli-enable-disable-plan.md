@@ -57,27 +57,17 @@ New test in `test/render-index-html.test.ts`: an installed-but-disabled CLI (cod
 `render-index-html.test.ts`), the CLI-registry suites pass (86/86), and the **full CI gate is
 green — 415 test files, 7855 tests, 0 failures**.
 
-### Outstanding — real gap, not yet fixed
+### Launch-surface registry integration — completed
 
-**A custom CLI created via Phase 5's API has no way to actually be launched.** The Run menu
-(`index.html`) is static markup: one hardcoded `<button data-mode="…">` per stock `SessionMode`
-(claude/opencode/codex/gemini/antigravity/pi/grok/deepseek/omp/shell). Nothing reads
-`window.__codemanCliCatalog` (injected, per `server.ts`'s own comment, as "declared forward-looking
-infrastructure" with "no consumer yet" — see PR B2) or otherwise generates a Run-menu entry from
-the registry. So a custom entry created, enabled and even shown as `installed: true` in the
-Settings list still cannot be launched from anywhere in the UI — Phase 6's own "Verify" step
-("create a custom entry, confirm it appears and can be enabled/launched") was never actually
-exercised against this gap. Two ways to close it, neither started:
-1. Wire the Run menu to render one additional button per enabled custom entry (probably the
-   cleanest use for the already-injected, already-unused `__codemanCliCatalog`).
-2. Explicitly punt in the UI/docs for this release ("custom CLIs can be managed here; launching
-   one is coming next") so the feature doesn't silently under-deliver on its own stated Phase 5
-   verify criteria.
+The welcome screen, desktop Run menu and mobile Run picker now use the same injected CLI catalog.
+Every enabled registry entry is rendered; unavailable binaries remain hidden as before. Settings
+updates the catalog and availability flags in place after enable/disable, create, edit or delete,
+so the launch surfaces update without a page reload. A custom entry uses the generic quick-start
+path, while stock entries retain their existing per-CLI launch settings.
 
 Not otherwise re-verified line-by-line against every Phase 1–6 checklist item below (e.g. the
 exact wording of toasts, the "same PR" sequencing notes) — the checklists are left as originally
-written; treat the **Status** section above as authoritative for what exists, and this Outstanding
-section for what doesn't yet.
+written; treat the **Status** section above as authoritative for what exists.
 
 ---
 

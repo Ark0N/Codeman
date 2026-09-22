@@ -1303,29 +1303,51 @@ Object.assign(CodemanApp.prototype, {
     return flags[tool] !== false;
   },
 
+  /** Render the registry's enabled, available CLIs as welcome-screen actions. */
+  renderWelcomeCliActions() {
+    const container = document.getElementById('welcomeCliActions');
+    if (!container) return;
+    const catalog = Array.isArray(window.__codemanCliCatalog) ? window.__codemanCliCatalog : [];
+    container.replaceChildren();
+    for (const cli of catalog) {
+      if (!cli.enabled || !this.isCliAvailable(cli.id)) continue;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `welcome-btn welcome-btn-cli welcome-btn-${cli.id}`;
+      btn.dataset.mode = cli.id;
+      btn.setAttribute('data-i18n-skip', '');
+      const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      icon.setAttribute('width', '20');
+      icon.setAttribute('height', '20');
+      icon.setAttribute('viewBox', '0 0 24 24');
+      icon.setAttribute('fill', 'none');
+      icon.setAttribute('stroke', 'currentColor');
+      icon.setAttribute('stroke-width', '2');
+      icon.setAttribute('aria-hidden', 'true');
+      const play = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+      play.setAttribute('points', '5 3 19 12 5 21 5 3');
+      icon.appendChild(play);
+      btn.appendChild(icon);
+      btn.append(`Run ${cli.kind === 'shell' ? 'Terminal / Shell' : cli.label}`);
+      btn.onclick = () => {
+        this.setRunMode(cli.id);
+        void this.run();
+      };
+      container.appendChild(btn);
+    }
+  },
+
   /**
-   * #200: show a welcome-screen button only where the thing it launches exists.
-   * The markup ships them hidden, so an old cached page can never flash a button
-   * for a tool this server does not have.
+   * #200: show a welcome-screen action only where the thing it launches exists.
+   * The registry catalog is injected with the initial document and is updated in
+   * place after a Settings toggle, so the page never offers a disabled CLI.
    */
   applyWelcomeCliVisibility() {
-    const buttons = [
-      ['welcomeClaudeBtn', 'claude'],
-      ['welcomeOpencodeBtn', 'opencode'],
-      ['welcomeAntigravityBtn', 'antigravity'],
-      ['welcomeOmpBtn', 'omp'],
-      ['welcomeGeminiBtn', 'gemini'],
-      ['welcomePiBtn', 'pi'],
-      ['welcomeGrokBtn', 'grok'],
-      ['welcomeDeepSeekBtn', 'deepseek'],
-      // Not a run mode, same reasoning: offering a Cloudflare Tunnel on a box
-      // without cloudflared can only ever produce "cloudflared not found".
-      ['welcomeTunnelBtn', 'cloudflared'],
-    ];
-    for (const [id, tool] of buttons) {
-      const btn = document.getElementById(id);
-      if (btn) btn.style.display = this.isCliAvailable(tool) ? 'flex' : 'none';
-    }
+    this.renderWelcomeCliActions();
+    // Not a run mode, same reasoning: offering a Cloudflare Tunnel on a box
+    // without cloudflared can only ever produce "cloudflared not found".
+    const tunnel = document.getElementById('welcomeTunnelBtn');
+    if (tunnel) tunnel.style.display = this.isCliAvailable('cloudflared') ? 'flex' : 'none';
   },
 
   async loadTunnelStatus() {
@@ -2765,7 +2787,34 @@ Object.assign(CodemanApp.prototype, {
     // Model Endpoints list load above.
     const clis = await this._apiJson('/api/clis');
     this._cliList = Array.isArray(clis) ? clis : [];
+    this._syncCliLaunchCatalog();
     this.renderCliList();
+  },
+
+  /** Keep the launch surfaces in sync with Settings mutations without a reload. */
+  _syncCliLaunchCatalog() {
+    if (!Array.isArray(this._cliList) || this._cliList.length === 0) return;
+    window.__codemanCliCatalog = this._cliList.map((cli) => ({
+      id: cli.id,
+      label: cli.label,
+      shortBadge: cli.shortBadge,
+      order: cli.order,
+      kind: cli.kind,
+      enabled: cli.enabled,
+      available: cli.kind === 'shell' || (cli.enabled && cli.installed),
+    }));
+    window.__codemanCliAvailable = {
+      ...(window.__codemanCliAvailable || {}),
+      ...Object.fromEntries(this._cliList.map((cli) => [cli.id, cli.kind === 'shell' || (cli.enabled && cli.installed)])),
+    };
+    if (!window.__codemanCliCatalog.some((cli) => cli.id === this.runMode && cli.enabled)) {
+      this.setRunMode?.('claude');
+    }
+    this.applyWelcomeCliVisibility?.();
+    this.renderRegistryRunOptions?.();
+    this.renderMobileOverview?.();
+    const menu = document.getElementById('runModeMenu');
+    if (menu) this._refreshRunModeAvailability?.(menu);
   },
 
   renderCliList() {
@@ -2831,11 +2880,6 @@ Object.assign(CodemanApp.prototype, {
       this.showToast(`Failed to ${next ? 'enable' : 'disable'} "${id}"${detail ? `: ${detail}` : ''}`, 'error');
       return;
     }
-    window.__codemanCliAvailable = { ...(window.__codemanCliAvailable || {}), [id]: next };
-    this.applyWelcomeCliVisibility?.();
-    this.renderMobileOverview?.();
-    const menu = document.getElementById('runModeMenu');
-    if (menu) this._refreshRunModeAvailability?.(menu);
     await this.loadCliListForSettings();
   },
 

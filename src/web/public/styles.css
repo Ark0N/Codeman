@@ -3969,6 +3969,27 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   margin-bottom: 1.5rem;
 }
 
+.welcome-cli-actions {
+  display: contents;
+}
+
+.welcome-btn-cli {
+  background: linear-gradient(135deg, #1f2937 0%, #374151 100%);
+  border-color: rgba(148, 163, 184, 0.35);
+  color: #e2e8f0;
+}
+
+.welcome-btn-cli:hover {
+  background: linear-gradient(135deg, #374151 0%, #4b5563 100%);
+  border-color: rgba(203, 213, 225, 0.5);
+  color: #f8fafc;
+  transform: translateY(-1px);
+}
+
+.run-mode-cli-options {
+  display: contents;
+}
+
 .welcome-btn {
   display: flex;
   align-items: center;
@@ -4010,6 +4031,21 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   box-shadow: 0 4px 20px rgba(16, 185, 129, 0.3), 0 0 40px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.08);
   border-color: rgba(52, 211, 153, 0.5);
   color: #a7f3d0;
+  transform: translateY(-1px);
+}
+
+.welcome-btn-codex {
+  background: linear-gradient(135deg, #2a0a3e 0%, #350b4d 50%, #400d5e 100%);
+  border-color: rgba(168, 85, 247, 0.4);
+  color: #d8b4fe;
+  box-shadow: 0 2px 8px rgba(168, 85, 247, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.welcome-btn-codex:hover {
+  background: linear-gradient(135deg, #400d5e 0%, #581c87 50%, #6b21a8 100%);
+  box-shadow: 0 4px 20px rgba(168, 85, 247, 0.3), 0 0 40px rgba(88, 28, 135, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-color: rgba(192, 132, 252, 0.5);
+  color: #e9d5ff;
   transform: translateY(-1px);
 }
 

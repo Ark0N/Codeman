@@ -123,6 +123,19 @@ const RUN_MODE_LAUNCH = {
  * ninth CLI landed in one and not the other.
  */
 const EXTERNAL_CLI_MODES = new Set(Object.keys(RUN_MODE_LAUNCH));
+const BUILT_IN_RUN_MODES = new Set(['claude', 'shell', ...Object.keys(RUN_MODE_LAUNCH)]);
+
+function registryCliCatalog() {
+  return typeof window !== 'undefined' && Array.isArray(window.__codemanCliCatalog) ? window.__codemanCliCatalog : [];
+}
+
+function registryCliById(id) {
+  return registryCliCatalog().find((entry) => entry.id === id);
+}
+
+function isExternalCliRunMode(mode) {
+  return EXTERNAL_CLI_MODES.has(mode) || registryCliById(mode)?.kind === 'agent';
+}
 
 Object.assign(CodemanApp.prototype, {
   /**
@@ -511,7 +524,7 @@ Object.assign(CodemanApp.prototype, {
       if (mode === 'shell') {
         return await this.runShell();
       }
-      if (mode === 'claude' || !EXTERNAL_CLI_MODES.has(mode)) {
+      if (mode === 'claude') {
         return await this.runClaude();
       }
       return await this._runCliMode(mode);
@@ -544,6 +557,7 @@ Object.assign(CodemanApp.prototype, {
     e?.stopPropagation();
     const menu = document.getElementById('runModeMenu');
     if (!menu) return;
+    this.renderRegistryRunOptions();
     menu.classList.toggle('active');
     // Update selected state
     menu.querySelectorAll('.run-mode-option').forEach(btn => {
@@ -602,13 +616,13 @@ Object.assign(CodemanApp.prototype, {
     // reporting it as a fault hid every agent mode on a freshly linked Docker case
     // behind "start it yourself first", for a container Codeman was about to create.
     const probeError = isDocker ? this._dockerCaseProbeError?.[caseName] : null;
-    for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'deepseek', 'omp']) {
-      const btn = menu.querySelector(`.run-mode-option[data-mode="${mode}"]`);
-      if (!btn) continue;
+    for (const option of menu.querySelectorAll('.run-mode-option[data-mode]')) {
+      const mode = option.dataset.mode;
+      if (!mode || mode === 'shell') continue;
       let available;
       if (isDocker) available = probeError ? false : containerModes ? containerModes.includes(mode) : true;
       else available = this.isCliAvailable(mode);
-      btn.style.display = available ? 'flex' : 'none';
+      option.style.display = available ? 'flex' : 'none';
     }
     this._renderRunModeNotice(menu, probeError);
     // DeepSeek is the one mode whose availability has two halves: `dsh` can be
@@ -625,6 +639,29 @@ Object.assign(CodemanApp.prototype, {
     // all (and is the honest thing to offer there).
     const dsWeb = menu.querySelector('#runModeDeepSeekWeb');
     if (dsWeb) dsWeb.style.display = avail.deepseekBinary ? 'flex' : 'none';
+  },
+
+  /** Render every enabled agent entry from the server's registry projection. */
+  renderRegistryRunOptions() {
+    const container = document.getElementById('runModeCliOptions');
+    if (!container) return;
+    const catalog = registryCliCatalog();
+    if (catalog.length === 0) return; // cached pages from before the catalog keep their static fallback.
+    container.replaceChildren();
+    for (const cli of catalog) {
+      if (cli.kind !== 'agent' || !cli.enabled) continue;
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'run-mode-option';
+      option.dataset.mode = cli.id;
+      option.onclick = () => this.setRunMode(cli.id);
+      const dot = document.createElement('span');
+      dot.className = `run-mode-dot ${cli.id}`;
+      dot.setAttribute('aria-hidden', 'true');
+      option.appendChild(dot);
+      option.append(cli.label === 'Claude' ? 'Claude Code' : cli.label);
+      container.appendChild(option);
+    }
   },
 
   /**
@@ -1640,7 +1677,8 @@ Object.assign(CodemanApp.prototype, {
       gearBtn.className = `btn-toolbar btn-run-gear mode-${mode}`;
     }
     if (label) {
-      label.textContent = mode === 'opencode' ? 'Run OC' : mode === 'codex' ? 'Run CX' : mode === 'gemini' ? 'Run GM' : mode === 'antigravity' ? 'Run AG' : mode === 'pi' ? 'Run PI' : mode === 'grok' ? 'Run GK' : mode === 'deepseek' ? 'Run DS' : mode === 'omp' ? 'Run OMP' : mode === 'shell' ? 'Run SH' : 'Run';
+      const registryEntry = registryCliById(mode);
+      label.textContent = mode === 'opencode' ? 'Run OC' : mode === 'codex' ? 'Run CX' : mode === 'gemini' ? 'Run GM' : mode === 'antigravity' ? 'Run AG' : mode === 'pi' ? 'Run PI' : mode === 'grok' ? 'Run GK' : mode === 'deepseek' ? 'Run DS' : mode === 'omp' ? 'Run OMP' : mode === 'shell' ? 'Run SH' : registryEntry ? `Run ${registryEntry.shortBadge}` : 'Run';
     }
   },
 
@@ -1667,6 +1705,7 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _initRunMode() {
+    this.renderRegistryRunOptions();
     try { this._runMode = localStorage.getItem('codeman_runMode') || 'claude'; } catch { this._runMode = 'claude'; }
     this._applyRunMode();
   },
@@ -2131,7 +2170,15 @@ Object.assign(CodemanApp.prototype, {
    * tests assert on that name directly too.
    */
   async _runCliMode(mode) {
-    const entry = RUN_MODE_LAUNCH[mode];
+    const catalogEntry = registryCliById(mode);
+    const entry = RUN_MODE_LAUNCH[mode] ||
+      (catalogEntry && {
+        label: catalogEntry.label,
+        installHint: `${catalogEntry.label} is not available on this host.`,
+        supportsCustomModel: false,
+        buildConfig: () => null,
+      });
+    if (!entry) throw new Error(`Unknown run mode: ${mode}`);
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
     // Remote/docker cases run the CLI on the OTHER side — the local status
     // probe and the local-only config/env below don't apply (quick-start
@@ -2147,7 +2194,7 @@ Object.assign(CodemanApp.prototype, {
     this.terminal.focus();
 
     try {
-      if (!isRemote) {
+      if (!isRemote && RUN_MODE_LAUNCH[mode]) {
         const statusRes = await fetch(`/api/${mode}/status`);
         const status = (await statusRes.json()).data;
         if (!status.available) {
@@ -2158,6 +2205,9 @@ Object.assign(CodemanApp.prototype, {
           this._reportSessionLaunchError(ownsLaunchTerminal, entry.unrunnableHint);
           return;
         }
+      } else if (!isRemote && !this.isCliAvailable(mode)) {
+        this._reportSessionLaunchError(ownsLaunchTerminal, entry.installHint);
+        return;
       }
 
       const globalSettings = this.loadAppSettingsFromStorage();
@@ -2294,7 +2344,7 @@ Object.assign(CodemanApp.prototype, {
     if (detachToggle) detachToggle.checked = this.hasTabDetachOverride(sessionId);
 
     // Reset to an appropriate tab — Summary for external CLIs (Respawn/Ralph are Claude-only)
-    const isAltMode = EXTERNAL_CLI_MODES.has(session.mode);
+    const isAltMode = isExternalCliRunMode(session.mode);
     this.switchOptionsTab(isAltMode ? 'summary' : 'respawn');
 
     // Update respawn status display and buttons
@@ -4547,9 +4597,7 @@ Object.defineProperty(CodemanApp.prototype, 'runMode', {
     return this._runMode || 'claude';
   },
   set(mode) {
-    this._runMode =
-      mode === 'opencode' || mode === 'codex' || mode === 'gemini' || mode === 'antigravity' || mode === 'pi' || mode === 'grok' || mode === 'deepseek' || mode === 'omp' || mode === 'claude'
-        ? mode
-        : 'claude';
+    const entry = registryCliById(mode);
+    this._runMode = (entry && entry.enabled) || (!entry && BUILT_IN_RUN_MODES.has(mode)) ? mode : 'claude';
   },
 });
