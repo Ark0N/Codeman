@@ -344,7 +344,48 @@ export interface CliCapabilities {
     promptGlyph: string;
     /** Source of a regex matching the status line this CLI draws while a turn runs. */
     workingLine: string;
+    /**
+     * Source of a regex matching the row this CLI draws while work it started in the
+     * background is still running, e.g. Claude's `· 1 monitor ·` footer chip or Codex's
+     * `1 background terminal running · /ps to view`. Capture group 1 is the label Codeman
+     * shows, and the whole match stands in when the pattern declares no group. A CLI that
+     * omits this reports no background work, which is what every CLI did before the field
+     * existed.
+     */
+    watchingLine?: string;
+    /**
+     * How many rows at the FOOT of the screen that row can appear in, counting non-blank
+     * rows only. Claude writes its chip on the last row and keeps the default; Codex pins
+     * its own above the composer, which puts it third from the bottom, so it declares
+     * more. Keep each number as small as that CLI's layout allows: every extra row is
+     * another row an agent might be able to write, and the label is what silences an
+     * alert. See `watchingLabel()` in `session-activity.ts`.
+     */
+    watchingLines?: number;
   };
+  /**
+   * How many columns this CLI indents its transcript body by, so a copy taken from its
+   * pane can drop that much and paste flush. Claude Code indents two and puts its own
+   * markers in those columns.
+   *
+   * ⚠ DECLARED rather than measured off the pane, and two measured attempts are why.
+   * Asking whether the pane painted real spaces across the unused part of each row
+   * separates a TUI from a shell perfectly where it fires and never over-stripped; it
+   * is also a function of pane WIDTH, because that padding exists only while a
+   * rendered line stops short of the CLI's own layout width and Claude Code's prose
+   * wraps to fill it. On one live transcript the share of padded rows ran 44%, 6%, 6%,
+   * 7% and 87% at 123, 160, 198, 235 and 298 columns, so at any ordinary window size
+   * the strip silently did nothing. Taking the narrowest indent on the surrounding
+   * rows instead fires at every width and over-strips on roughly 1% of selections,
+   * because a file listing inside the transcript can be the narrowest thing on screen.
+   *
+   * A declared width can do neither. The strip is the lesser of this and what every
+   * selected line shares, so a block can only ever shift as a unit, and it can never
+   * shift further than the CLI itself says its gutter is.
+   *
+   * Absent means no strip at all, the same fail-safe direction `workDetect` takes.
+   */
+  transcriptGutter?: number;
   /** No direct-PTY fallback: the CLI must run inside tmux (secrets ride tmux setenv). */
   requiresMux: boolean;
   /**
@@ -653,7 +694,13 @@ export interface CliEntry {
   label: string;
   /** Two-ish character tab badge, e.g. 'OC'. */
   shortBadge: string;
-  /** Single hex colour. CSS derives every per-CLI gradient from it via --cli-accent. */
+  /**
+   * Single hex colour, measured from the CLI's actual `.btn-toolbar.btn-run.mode-<id>`
+   * gradient in styles.css (see stock.ts's comment above `CLAUDE` for the exact
+   * methodology). DECLARED-FOR-LATER (above) — no code reads this yet; styles.css's
+   * gradients are still hand-authored per id, not derived from this field via any
+   * CSS custom property. There is no `--cli-accent` variable in the codebase.
+   */
   accent: string;
   enabled: boolean;
   /** Set by the loader from the shipped catalog; a user entry can never claim it. */

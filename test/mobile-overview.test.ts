@@ -19,8 +19,11 @@ function fakeElement(): any {
     type: '',
     dataset: {},
     style: {},
+    attrs: {} as Record<string, string>,
     children: [] as any[],
-    setAttribute() {},
+    setAttribute(name: string, value: string) {
+      el.attrs[name] = value;
+    },
     appendChild(child: any) {
       el.children.push(child);
       return child;
@@ -483,5 +486,55 @@ describe('mobile overview run picker (CLI availability gating)', () => {
     const fn = src.slice(src.indexOf('_buildMobileOverviewRunMenu() {'));
     const gate = fn.slice(0, fn.indexOf('const header'));
     expect(gate).toContain('isCliAvailable');
+  });
+});
+
+describe('mobile overview watching badge', () => {
+  it('carries what the pane says is running in the background', () => {
+    const app = loadOverviewApp();
+    const model = app.buildMobileOverviewModel({
+      sessions: [session({ id: 'a', status: 'idle', watching: '1 monitor' }), session({ id: 'b', status: 'idle' })],
+      cases: CASES,
+    });
+
+    const rows = Object.fromEntries(model.current.map((r: any) => [r.id, r.watching]));
+    expect(rows).toEqual({ a: '1 monitor', b: '' });
+  });
+
+  it('leaves a session that is ALSO blocked on a dialog in NEEDS YOU', () => {
+    // An agent can arm a monitor and ask the user a question in the same breath, so the
+    // badge adds a fact to the row and never moves it out of the group that says a human
+    // is needed. Only the row's own pill decides that.
+    const app = loadOverviewApp();
+    const model = app.buildMobileOverviewModel({
+      sessions: [session({ id: 'a', status: 'idle', watching: '2 shells' })],
+      cases: CASES,
+      pendingHooks: new Map([['a', new Set(['permission_prompt'])]]),
+    });
+
+    expect(model.needsYou.map((r: any) => r.id)).toEqual(['a']);
+    expect(model.needsYou[0].pill).toBe('needs you');
+    expect(model.needsYou[0].watching).toBe('2 shells');
+  });
+
+  it('says one word and puts the detail where every surface can reach it', () => {
+    const app = loadOverviewApp();
+    const badge = app._buildWatchingBadge('1 monitor', 'mobile-overview-pill');
+
+    expect(badge.className).toBe('mobile-overview-pill mobile-overview-pill--watching');
+    expect(badge.textContent).toBe('watching');
+    expect(badge.title).toBe('Still running in the background: 1 monitor');
+    // A phone has no hover target and a screen reader reads neither the class nor the
+    // tooltip, so the label has to be here too or this surface says only "watching".
+    expect(badge.attrs['aria-label']).toBe('Still running in the background: 1 monitor');
+  });
+
+  it('takes the pill class of whichever surface asks for it', () => {
+    // The phone's pill styles live inside a media query the desktop rail never enters,
+    // so the rail passes its own base class and gets the same badge in its own clothes.
+    const app = loadOverviewApp();
+    expect(app._buildWatchingBadge('1 shell', 'home-sessions-pill').className).toBe(
+      'home-sessions-pill home-sessions-pill--watching'
+    );
   });
 });

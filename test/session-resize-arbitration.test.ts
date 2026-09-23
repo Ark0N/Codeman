@@ -19,6 +19,37 @@ function attachFakePty(session: Session, cols = 160, rows = 48) {
   return resize;
 }
 
+describe('Session.ptyGeometry', () => {
+  // ⚠️ `resize()` writes `_ptyCols`/`_ptyRows` only when `ptyProcess` is set,
+  // and nothing seeds them from the spawn geometry — so the fields hold the
+  // constructor defaults of 120x40 for any session whose pane is not running.
+  // Reporting those to a client made it adopt a width no process had ever been
+  // told, and on anything narrower than 120 columns claim another device owned
+  // the pane when none existed (issue #464).
+  it('reports nothing for a session that has no pane', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'shell' });
+    expect(session.ptyGeometry).toBeNull();
+  });
+
+  it('still reports nothing after a resize it could not apply', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'shell' });
+    session.resize(45, 20, { viewportType: 'mobile' });
+    // The resize was swallowed (no pty to resize), so there is no geometry to
+    // report — NOT the 120x40 the fields still hold.
+    expect(session.ptyGeometry).toBeNull();
+  });
+
+  it('reports the pane geometry once a pane exists, and follows a resize', () => {
+    // The contrast, so "always null" would fail this.
+    const session = new Session({ workingDir: '/tmp', mode: 'shell' });
+    attachFakePty(session, 160, 48);
+    expect(session.ptyGeometry).toEqual({ cols: 160, rows: 48 });
+
+    session.resize(62, 40, { viewportType: 'mobile' });
+    expect(session.ptyGeometry).toEqual({ cols: 62, rows: 40 });
+  });
+});
+
 describe('Session resize arbitration', () => {
   it('lets a mobile-only session shrink below the spawn default (no desktop connected)', () => {
     const session = new Session({ workingDir: '/tmp', mode: 'shell' });

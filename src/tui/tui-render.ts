@@ -462,7 +462,8 @@ export function computeListWindow(
  * The pending dialog, drawn above the tail: the question, the parsed options
  * with their digits, and the keys that answer them. Red for a permission or
  * question prompt, yellow for an idle one, the same severity vocabulary the web
- * inbox uses.
+ * inbox uses. An idle prompt that opened acknowledged carries neither: it reads
+ * grey with the idle glyph, because nothing about it wants the reader.
  */
 export function renderApprovalCard(
   item: ApprovalItem,
@@ -472,8 +473,8 @@ export function renderApprovalCard(
 ): string[] {
   const paint = painterFor(opts.color);
   const card = approvalCard(item);
-  const color = card.tone === 'err' ? SGR.red : SGR.yellow;
-  const glyph = card.tone === 'err' ? glyphs.blockedPermission : glyphs.waiting;
+  const color = card.tone === 'err' ? SGR.red : card.tone === 'warn' ? SGR.yellow : SGR.gray;
+  const glyph = card.tone === 'err' ? glyphs.blockedPermission : card.tone === 'warn' ? glyphs.waiting : glyphs.idle;
   const lines: string[] = [];
   const push = (text: string, style: string): void => {
     lines.push(padDisplay(paint(clipStyledLine(text, width), style), width));
@@ -571,10 +572,19 @@ function previewBody(
 // Chrome
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Sessions with a prompt waiting on a human, which is what the badge counts. */
+/**
+ * Sessions with a prompt waiting on a human, which is what the badge counts.
+ *
+ * An ACKNOWLEDGED item is not one of them. Its alert has been spent, either by somebody
+ * opening the session elsewhere or because the inbox opened it that way for a session
+ * watching its own background work, and the row has already left NEEDS YOU by the same
+ * flag (`classifySession`). Counting it here would put a number in the header for a
+ * group the reader can see is empty.
+ */
 export function pendingApprovalCount(model: TuiRenderModel): number {
   let count = 0;
-  for (const group of model.groups()) for (const row of group.rows) if (row.approval) count++;
+  for (const group of model.groups())
+    for (const row of group.rows) if (row.approval && !row.approval.acknowledgedAt) count++;
   return count;
 }
 

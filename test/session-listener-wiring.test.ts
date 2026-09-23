@@ -22,6 +22,21 @@ describe('session listener wiring', () => {
     expect(registerAttachment).toHaveBeenNthCalledWith(2, 'wiring-attach-source-test', '/tmp/report.pdf', 'external');
   });
 
+  it('pushes the session state when the watching label changes on its own', () => {
+    // The badge appears on the idle transition, which broadcasts anyway. It goes AWAY
+    // when the background work ends, and a CLI can do that without taking a turn — codex
+    // repaints its background-terminal row away and stays idle — so nothing else fires
+    // and every open page would keep drawing a badge the server had already dropped.
+    const session = new Session({ id: 'wiring-watching-test', workingDir: '/tmp', mode: 'codex' });
+    const broadcastSessionStateDebounced = vi.fn();
+    const deps = { broadcastSessionStateDebounced } as unknown as Parameters<typeof createSessionListeners>[1];
+
+    const refs = createSessionListeners(session, deps);
+    refs.watchingChanged();
+
+    expect(broadcastSessionStateDebounced).toHaveBeenCalledWith('wiring-watching-test');
+  });
+
   /** The listener reads the setting asynchronously; let its promise chain settle. */
   const flush = () => new Promise((resolve) => setTimeout(resolve, 5));
 

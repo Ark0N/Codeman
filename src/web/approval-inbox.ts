@@ -36,12 +36,7 @@ import { stripAnsi, CLAUDE_WORKING_LINE_PATTERN } from '../utils/index.js';
 export type ApprovalKind = 'permission' | 'question' | 'idle';
 
 export type ApprovalResolution =
-  | 'answered'
-  | 'resolved_in_terminal'
-  | 'superseded'
-  | 'session_ended'
-  | 'dismissed'
-  | 'expired';
+  'answered' | 'resolved_in_terminal' | 'superseded' | 'session_ended' | 'dismissed' | 'expired';
 
 /** A numbered choice parsed from the captured dialog frame. */
 export interface ApprovalOption {
@@ -72,6 +67,15 @@ export interface ApprovalItem {
    */
   acknowledgedAt?: number;
   /**
+   * Why the item arrived already acknowledged, for display only: the inbox
+   * writes `watching 1 monitor` for a session that went quiet because work it
+   * started itself is still running. A human acknowledgement leaves this unset,
+   * so a card can say "quiet, watching 1 monitor" rather than implying somebody
+   * looked. ⚠️ Pane-derived text, so it is bounded at the source and must not
+   * reach the DOM as markup — see `watchingLabel()` in `session-activity.ts`.
+   */
+  acknowledgedReason?: string;
+  /**
    * Present only when the frame parsed confidently. Gates which digits the
    * answer endpoint accepts; absent → only approve('1')/deny(Esc) are allowed.
    */
@@ -93,6 +97,12 @@ interface NotePromptArgs {
   toolSummary?: string;
   message?: string;
   cwd?: string;
+  /**
+   * What the session's pane says is still running in the background
+   * (`Session.watching`, e.g. `1 monitor`). An idle prompt from such a session
+   * opens ALREADY acknowledged: see `notePrompt()`.
+   */
+  watching?: string | null;
   /** Returns the raw (ANSI-bearing) pane frame, or null when unavailable. */
   capture?: () => string | null;
 }
@@ -217,6 +227,22 @@ export class ApprovalInbox {
    * Record a prompt for a session, superseding any previous item, and return
    * the new item. Captures context immediately and once more after a short
    * delay (see RECAPTURE_DELAY_MS).
+   *
+   * ⚠️ An idle prompt from a session that is WATCHING its own background work
+   * opens already acknowledged (`args.watching`). Claude Code ends the turn
+   * after arming a monitor or backgrounding a shell and then reports the pane
+   * idle a minute later, so the alert that follows asks a human to look at a
+   * session that wants nothing from them. Acknowledging is deliberately what
+   * happens here rather than skipping the item: the prompt is real and stays
+   * pending, answerable and available as Read My Mind context, and only the
+   * alert it would have armed is spent. A wrong label therefore costs a card
+   * that does not blink, never an alert that was never created.
+   *
+   * It re-arms by itself. The next idle prompt supersedes this item and builds
+   * a fresh one, so once the background work ends and the session goes quiet
+   * for an ordinary reason, that item carries no acknowledgement and alerts
+   * normally. Only `idle` is eligible: a permission or question dialog blocks
+   * the agent whatever else it started, so its alert must survive.
    */
   notePrompt(args: NotePromptArgs): ApprovalItem {
     this.resolveForSession(args.sessionId, 'superseded');
@@ -231,6 +257,10 @@ export class ApprovalInbox {
       message: args.message,
       cwd: args.cwd,
     };
+    if (args.kind === 'idle' && args.watching) {
+      item.acknowledgedAt = item.createdAt;
+      item.acknowledgedReason = `watching ${args.watching}`;
+    }
     this.applyCapture(item, args.capture);
     this.items.set(args.sessionId, item);
     if (args.capture) this.captures.set(args.sessionId, args.capture);

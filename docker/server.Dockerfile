@@ -68,6 +68,111 @@ COPY --from=docker:29-cli \
      /usr/local/libexec/docker/cli-plugins/docker-buildx \
      /usr/local/libexec/docker/cli-plugins/docker-buildx
 
+# GitHub CLI and Azure CLI (with the azure-devops extension), so a user can sign
+# this container in to GitHub and Azure DevOps from a Codeman shell session and
+# then clone PRIVATE repositories, both from that session and through Add Case
+# -> Clone Repo. Codeman still collects no Git credentials itself: the clone
+# path (src/git-clone.ts) only inherits HOME and git's config, so whatever the
+# user signs in to here is what authenticates, and nothing when they have not
+# (the clone then fails fast with AUTH_REQUIRED, exactly as before).
+#
+# Each is OPT-IN and OFF by default: the image is functionally unchanged
+# unless the build gets CODEMAN_INSTALL_GH=1 and/or CODEMAN_INSTALL_AZ=1, which
+# a deployment sets under `build: args:` in docker-compose.override.yml
+# (docker/README.md, "Private repositories"). Off installs no apt repository,
+# package, extension or credential-helper entry; all that remains is the
+# AZURE_EXTENSION_DIR variable, its empty directory and one layer that copies
+# and then removes the helper script. The Azure CLI is the heavy one (~600 MB,
+# mostly its bundled Python). The base docker-compose.yaml
+# and .env deliberately do not carry them: turning a CLI on is a per-host
+# choice, which is what the override file is for, and a new .env.example key
+# would make the self-updater refuse existing installs until their .env gained
+# it (docs/docker-self-update.md).
+#
+# Both come from their vendors' own apt repositories, the same ones the
+# documented one-liners configure (https://github.com/cli/cli/blob/trunk/docs/install_linux.md
+# and https://learn.microsoft.com/cli/azure/install-azure-cli-linux?pivots=apt).
+# Microsoft's `deb_install.sh` is deliberately not piped into the build: it does
+# exactly this plus a `gnupg` install, and a remote script run at build time is
+# the one step a reviewer cannot read in this file. apt reads an ASCII-armoured
+# `.asc` key directly, which is what keeps `gnupg` out of the image.
+#
+# Not pinned, unlike the agent CLIs below: nothing in Codeman depends on a
+# particular gh or az behaviour, so the pinning argument there does not apply.
+# The layer cache still keeps whatever version the first build fetched until a
+# --no-cache rebuild.
+ARG CODEMAN_INSTALL_GH=0
+ARG CODEMAN_INSTALL_AZ=0
+RUN set -eux; \
+    for flag in "CODEMAN_INSTALL_GH=${CODEMAN_INSTALL_GH}" "CODEMAN_INSTALL_AZ=${CODEMAN_INSTALL_AZ}"; do \
+      case "${flag#*=}" in 0|1) ;; *) echo "${flag%%=*} must be 0 or 1, got '${flag#*=}'" >&2; exit 1;; esac; \
+    done; \
+    codename="$(. /etc/os-release && echo "${VERSION_CODENAME}")"; \
+    arch="$(dpkg --print-architecture)"; \
+    pkgs=""; \
+    install -d -m 0755 /etc/apt/keyrings; \
+    if [ "${CODEMAN_INSTALL_GH}" = 1 ]; then \
+      curl -fsSL -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+        https://cli.github.com/packages/githubcli-archive-keyring.gpg; \
+      chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
+      echo "deb [arch=${arch} signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        > /etc/apt/sources.list.d/github-cli.list; \
+      pkgs="${pkgs} gh"; \
+    fi; \
+    if [ "${CODEMAN_INSTALL_AZ}" = 1 ]; then \
+      curl -fsSL -o /etc/apt/keyrings/microsoft.asc \
+        https://packages.microsoft.com/keys/microsoft.asc; \
+      chmod go+r /etc/apt/keyrings/microsoft.asc; \
+      echo "deb [arch=${arch} signed-by=/etc/apt/keyrings/microsoft.asc] https://packages.microsoft.com/repos/azure-cli/ ${codename} main" \
+        > /etc/apt/sources.list.d/azure-cli.list; \
+      pkgs="${pkgs} azure-cli"; \
+    fi; \
+    if [ -n "${pkgs}" ]; then \
+      apt-get update; \
+      apt-get install -y --no-install-recommends ${pkgs}; \
+      rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# The azure-devops extension goes into a SYSTEM directory rather than the
+# default ~/.azure/cliextensions: HOME is the application-data bind mount, which
+# hides anything installed there at build time. The directory is handed to the
+# runtime account below (next to /opt/codeman-cli) so `az extension update`
+# works from a session. Nothing that runs as root executes from it. It is
+# created even without az, so the chown below does not have to know.
+ENV AZURE_EXTENSION_DIR=/opt/codeman-az-extensions
+RUN set -eux; \
+    install -d -m 0755 "${AZURE_EXTENSION_DIR}"; \
+    if [ "${CODEMAN_INSTALL_AZ}" = 1 ]; then \
+      az extension add --name azure-devops --only-show-errors; \
+      rm -rf /root/.azure; \
+    fi
+
+# Git credential helpers, in the SYSTEM gitconfig so they apply to every
+# account and survive a fresh application-data directory. Each one answers only
+# for its own host and prints nothing when its CLI is not signed in, so git
+# falls through to its normal non-interactive failure. Only an installed CLI
+# gets an entry: a helper naming a missing binary would print an error on every
+# clone from that host.
+#   github.com     `gh auth git-credential`, what `gh auth setup-git` configures.
+#   Azure DevOps   an Entra ID token from `az login` (git-credential-azure-cli),
+#                  for both dev.azure.com and the legacy *.visualstudio.com hosts.
+COPY docker/git-credential-azure-cli /usr/local/bin/git-credential-azure-cli
+RUN set -eux; \
+    if [ "${CODEMAN_INSTALL_GH}" = 1 ]; then \
+      for host in https://github.com https://gist.github.com; do \
+        git config --system "credential.${host}.helper" '!/usr/bin/gh auth git-credential'; \
+      done; \
+    fi; \
+    if [ "${CODEMAN_INSTALL_AZ}" = 1 ]; then \
+      chmod 0755 /usr/local/bin/git-credential-azure-cli; \
+      for host in https://dev.azure.com 'https://*.visualstudio.com'; do \
+        git config --system "credential.${host}.helper" /usr/local/bin/git-credential-azure-cli; \
+        git config --system "credential.${host}.useHttpPath" true; \
+      done; \
+    else \
+      rm -f /usr/local/bin/git-credential-azure-cli; \
+    fi
+
 # Keep credentials out of the image. Users authenticate these CLIs at runtime
 # through Codeman sessions, and the configured host bind mount retains state.
 #
@@ -153,7 +258,7 @@ RUN set -eux; \
         --shell /bin/bash \
         "${CODEMAN_RUNTIME_USER}"; \
     fi; \
-    chown -R "${PUID}:${PGID}" /opt/codeman-cli
+    chown -R "${PUID}:${PGID}" /opt/codeman-cli /opt/codeman-az-extensions
 
 WORKDIR /opt/codeman
 

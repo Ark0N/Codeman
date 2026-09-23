@@ -356,3 +356,50 @@ describe('home screens: one order, one numbering', () => {
     expect(branch).not.toContain('this.sessionOrder[idx]');
   });
 });
+
+describe('home sessions column: watching badge', () => {
+  it('carries the label off the session payload', () => {
+    const app = loadHomeSessionsApp({
+      sessions: sessionMap([{ id: 'watcher', watching: '1 monitor' }, { id: 'plain' }]),
+      sessionOrder: ['watcher', 'plain'],
+      cases: CASES,
+    });
+
+    const rows = Object.fromEntries(app.buildHomeSessionRows().map((r: any) => [r.id, r.watching]));
+    expect(rows).toEqual({ watcher: '1 monitor', plain: '' });
+  });
+
+  it("builds the badge with the phone overview, in the rail's own pill class", () => {
+    // Both home screens must word this badge identically, so the rail borrows the
+    // builder rather than writing a second one — the same arrangement it already has
+    // for state classification and for the stamp wording.
+    const app = loadHomeSessionsApp({
+      sessions: sessionMap([{ id: 'watcher', watching: '2 shells' }]),
+      sessionOrder: ['watcher'],
+      cases: CASES,
+    });
+
+    const row = app._buildHomeSessionRow(app.buildHomeSessionRows()[0]);
+    const badges = collect(row).filter((el: any) => String(el.className).includes('--watching'));
+    expect(badges).toHaveLength(1);
+    expect(badges[0].className).toBe('home-sessions-pill home-sessions-pill--watching');
+    expect(badges[0].textContent).toBe('watching');
+    expect(badges[0].title).toBe('Still running in the background: 2 shells');
+  });
+
+  it('draws no badge for a session running nothing in the background', () => {
+    const app = loadHomeSessionsApp({
+      sessions: sessionMap([{ id: 'plain' }]),
+      sessionOrder: ['plain'],
+      cases: CASES,
+    });
+
+    const row = app._buildHomeSessionRow(app.buildHomeSessionRows()[0]);
+    expect(collect(row).filter((el: any) => String(el.className).includes('--watching'))).toHaveLength(0);
+  });
+});
+
+/** Every node under one the builders made, the row itself included. */
+function collect(node: any): any[] {
+  return [node, ...(node.children || []).flatMap((child: any) => collect(child))];
+}

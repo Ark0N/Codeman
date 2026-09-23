@@ -194,8 +194,21 @@ Object.assign(CodemanApp.prototype, {
     document.querySelector('.btn-approvals')?.setAttribute('aria-expanded', 'false');
   },
 
+  /**
+   * Items still waiting on a human. An acknowledged item (a human already looked, or the
+   * session opened it acknowledged because it is watching its own background work) keeps
+   * its card but arms no alert, so it must not light the bell either; this is the same
+   * count `pendingApprovalCount()` gives `codeman tui`.
+   */
+  pendingApprovalsCount() {
+    if (!this.approvals) return 0;
+    let count = 0;
+    for (const item of this.approvals.values()) if (!item.acknowledgedAt) count++;
+    return count;
+  },
+
   renderApprovals() {
-    const count = this.approvals ? this.approvals.size : 0;
+    const count = this.pendingApprovalsCount();
     const btn = document.querySelector('.btn-approvals');
     if (btn) {
       // Marker-class visibility (base header rules are display !important):
@@ -222,6 +235,15 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
     list.innerHTML = items.map((item) => this._approvalCardHtml(item)).join('');
+    // The quiet reason is the only pane-derived string on a card, and it is the one
+    // an agent could write itself (it prints its own footer row), so it reaches the
+    // DOM as text and never as markup. The card leaves an empty span for it.
+    for (const item of items) {
+      if (!item.acknowledgedReason) continue;
+      const card = list.querySelector(`[data-approval-id="${CSS.escape(item.id)}"]`);
+      const slot = card && card.querySelector('.approval-quiet');
+      if (slot) slot.textContent = 'quiet, ' + item.acknowledgedReason;
+    }
   },
 
   _approvalCardHtml(item) {
@@ -260,6 +282,9 @@ Object.assign(CodemanApp.prototype, {
       `<span class="approval-session" data-i18n-skip>${escapeHtml(item.sessionName || item.sessionId.slice(0, 8))}</span>` +
       `<span class="approval-age" data-i18n-skip>${age}</span>` +
       `</div>` +
+      // Filled by renderApprovalsDrawer through textContent, never here: see the note
+      // there. An item a human acknowledged carries no reason and gets no line.
+      (item.acknowledgedReason ? `<div class="approval-quiet" data-i18n-skip></div>` : '') +
       (summary ? `<div class="approval-summary" data-i18n-skip>${escapeHtml(summary)}</div>` : '') +
       (item.context ? `<pre class="approval-context">${escapeHtml(item.context)}</pre>` : '') +
       `<div class="approval-actions">${actions}</div>` +

@@ -188,7 +188,18 @@
         if (ev.type === 'keydown' && global.app?.shouldCopyTerminalSelectionFromShortcut?.(ev)) {
           const raw = this.terminal?.getSelection?.() || '';
           const isColumnSelection = this.terminal?._core?._selectionService?._activeSelectionMode === 3;
-          const selection = isColumnSelection ? raw : (global.CodemanCopySelection?.clean?.(raw) ?? raw);
+          // Both clean options are read for THIS pane, never the primary one:
+          // the gutter width comes from this.sessionId's own run mode, and the
+          // partial-first-line flag from this terminal's own selection range.
+          // Passing neither left Pane B keeping a margin Pane A dropped, on the
+          // same split and the same keystroke.
+          const range = global.app?._normalisedSelectionRange?.(this.terminal);
+          const selection = isColumnSelection
+            ? raw
+            : (global.CodemanCopySelection?.clean?.(raw, {
+                margin: global.app?._cliGutterColumns?.(this.sessionId) ?? 0,
+                firstLinePartial: !!range && range.start.x > 0,
+              }) ?? raw);
           if (selection.trim()) {
             ev.preventDefault();
             void global.app._copyText?.(selection).then((ok) => {

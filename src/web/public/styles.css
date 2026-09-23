@@ -2433,6 +2433,51 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-prefix {
   display: inline-flex;
 }
 
+/* The agent inside the pane has exited (Ark0N/Codeman#446). Unlike the badge
+   above this one carries text the server computed, so it is added and removed
+   by the renderer rather than toggled by a class. */
+.session-tab .tab-exited-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 4px;
+  margin-left: 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+  background: rgba(248, 113, 113, 0.16);
+  color: var(--danger);
+}
+
+/* An exited agent quiets the status dot, which otherwise reports `status` and
+   so stays green (or pulses, for a session the exit caught mid-turn) beside a
+   badge saying the agent is gone. `status` itself is deliberately untouched —
+   `error` is the PTY-exit breaker's value and makes the browser offer a restart
+   — so this is a rendering rule only, and it matches `.tab-status.ended`.
+
+   ⚠ Three states are excluded BY HAND rather than by cascade, the same way the
+   rich-rail dot rules below do it: a dot turning red or yellow because a
+   session is blocked on a human outranks "the agent exited", and this selector
+   is specific enough (0,5,0) to have beaten those (0,3,0) rules otherwise. The
+   third is `.tab-status.error` (0,2,0), which is the PTY-exit breaker's state
+   and the one the browser answers with a "restart it?" confirm — the same
+   argument that protects the two alert classes, and it reaches the dot rather
+   than the tab, which is why the `:not()` sits on `.tab-status` here and on
+   `.session-tab` there. The spinner ring is a pseudo-element the skin blocks
+   cannot reach, so it needs hiding explicitly rather than by unsetting the
+   animation. */
+.session-tab.tab-agent-exited:not(.tab-alert-action):not(.tab-alert-idle) .tab-status:not(.error) {
+  background: var(--text-muted);
+  opacity: 0.5;
+  animation: none;
+}
+.session-tab.tab-agent-exited:not(.tab-alert-action):not(.tab-alert-idle) .tab-status:not(.error)::after {
+  display: none;
+}
+
 /* ===== Tab action icons: active tab only =================================
    All three per-tab icons live in a .tab-actions wrapper (in flow; it adds
    no width of its own while the children keep the width:0 collapse above).
@@ -3816,6 +3861,37 @@ body.solo-mode .btn-lifecycle-log {
 .terminal-container .xterm-viewport {
   background: transparent !important;
 }
+
+/* The terminal is wider than the box that shows it (issue #464). Two causes,
+   one affordance: another device holds the sizing claim so this terminal has
+   adopted a width it did not ask for, or the 40-column floor has widened it
+   past a narrow container. Either way the text is rendered CORRECTLY and simply
+   does not fit, and without horizontal reach the right-hand columns sit behind
+   .terminal-container's clip with no gesture that can get to them — measured at
+   360px, font 24: 218px of the pane, 38% of it, unreachable.
+   Present only while that is true; _syncTerminalOverflowAffordance() owns it. */
+.terminal-container.term-overflows-x {
+  /* ⚠️ BOTH axes, explicitly. mobile.css loads after this file and sets
+     `.terminal-container { overflow: visible }` — a bare `overflow-x` would
+     then leave overflow-y computing to `auto` (CSS promotes a `visible` paired
+     with a non-visible axis), handing the browser a vertical scroll container
+     the terminal's own touch handler does not know about. */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+/* xterm's own element is width:100% above, so the container would see no
+   overflow to scroll even though .xterm-screen is wider than both. */
+.terminal-container.term-overflows-x .xterm {
+  width: max-content;
+  min-width: 100%;
+}
+/* ⚠️ NO `touch-action: pan-x` here, deliberately. The terminal's own touchmove
+   handler pans this container (see `canPanHorizontally` in terminal-ui.js),
+   because `touchstart` preventDefault()s every 'content' tap and that cancels
+   a native pan before it can start. Granting the browser pan-x as well would
+   double-handle the gestures where that preventDefault does NOT run — a tap on
+   a scrolled-up viewport — moving the pane twice for one finger. The
+   `touch-action: none` the other rules set is what keeps JS the sole owner. */
 
 /* Touch devices: prevent browser from claiming the touch gesture before
    our JS touchmove handler fires. Without this, the browser starts native
@@ -12418,6 +12494,17 @@ kbd {
   color: var(--text-dim);
   font-size: 0.68rem;
 }
+/* Why this card is not blinking at anyone: the session is watching work it
+   started itself. Accent, like the watching badge on a session row, and never
+   the red or yellow that mean a human is needed. */
+.approval-quiet {
+  margin-bottom: 6px;
+  color: var(--accent);
+  font-size: 0.68rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .approval-summary {
   color: var(--text);
   font-size: 0.76rem;
@@ -15178,11 +15265,31 @@ html:not([data-skin="og"]) {
   color: #061c20;
 }
 .btn-toolbar.btn-run.mode-codex:hover { box-shadow: 0 0 14px -2px rgba(43, 203, 187, 0.45); }
-/* Pi keeps its rose identity on the non-og skins. This rule has to live INSIDE
-   this nested block: the generic `.btn-toolbar.btn-run` above resolves to (0,3,1)
-   here and would otherwise beat the base sheet's (0,3,0) `.mode-pi` pair, which
-   is exactly why gemini's and antigravity's gradients render as generic claude
-   blue on the default skin. */
+/* Gemini, Antigravity, Pi, OMP, Grok and DeepSeek all keep their own identity
+   on the non-og skins. Each rule has to live INSIDE this nested block: the
+   generic `.btn-toolbar.btn-run` above resolves to (0,3,1) here and would
+   otherwise beat the base sheet's (0,3,0) `.mode-<id>` pair — which is exactly
+   what gemini/antigravity/omp did until this fix, rendering as generic claude
+   blue on `daylight-blue`, the actual DEFAULT skin for a fresh install
+   (`index.html`'s pre-paint script), not just a corner case on `og`. */
+.btn-toolbar.btn-run.mode-gemini {
+  background: linear-gradient(135deg, #174ea6, #4f46e5);
+  border-color: #123a7a;
+  color: #dbeafe;
+}
+.btn-toolbar.btn-run.mode-gemini:hover { box-shadow: 0 0 14px -2px rgba(96, 165, 250, 0.45); }
+.btn-toolbar.btn-run.mode-antigravity {
+  background: linear-gradient(135deg, #0e7490, #0891b2);
+  border-color: #0b5566;
+  color: #cffafe;
+}
+.btn-toolbar.btn-run.mode-antigravity:hover { box-shadow: 0 0 14px -2px rgba(34, 211, 238, 0.45); }
+.btn-toolbar.btn-run.mode-omp {
+  background: linear-gradient(135deg, #4f46e5, #6366f1);
+  border-color: #3730a3;
+  color: #e0e7ff;
+}
+.btn-toolbar.btn-run.mode-omp:hover { box-shadow: 0 0 14px -2px rgba(129, 140, 248, 0.45); }
 .btn-toolbar.btn-run.mode-pi {
   background: linear-gradient(135deg, #be185d, #f472b6);
   border-color: #be185d;
@@ -16283,6 +16390,17 @@ html[data-tab-orientation='vertical'] .home-sessions {
   background: color-mix(in srgb, var(--green) 7%, transparent);
   border-color: color-mix(in srgb, var(--green) 18%, var(--border));
   color: color-mix(in srgb, var(--green) 45%, var(--text-muted));
+}
+
+/* Accent, deliberately none of the three above: a session that is watching something
+   it started (a monitor, a backgrounded shell, a cloud session) is not asking for
+   anything, so it must not borrow the red or the yellow that mean it is. This badge
+   sits BESIDE the state pill rather than replacing it, since an agent can arm a
+   monitor and ask a question in the same breath. */
+.home-sessions-pill--watching {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
 }
 
 /* Row accents: same language as the session tabs and the phone overview — red
@@ -18347,6 +18465,25 @@ html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail
   color: color-mix(in srgb, var(--green) 45%, var(--text-muted));
 }
 
+/* An exited agent (Ark0N/Codeman#446): neutral, like the muted dot beside it.
+   No green at all, since nothing is running behind this row. */
+html[data-sidebar-detail="rich"] .session-sidebar .tab-pill--exited,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-pill--exited {
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  border-color: color-mix(in srgb, var(--text-muted) 30%, var(--border));
+  color: var(--text-muted);
+}
+
+/* Accent, deliberately none of the three above: a watching session is waiting for
+   work it started itself, not for the user, and the red and yellow here are spoken
+   for by sessions that ARE waiting for the user. */
+html[data-sidebar-detail="rich"] .session-sidebar .tab-pill--watching,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-pill--watching {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
+}
+
 /* Three lines of content per row instead of two, so give them room to breathe
    and stop the row actions crowding the pill.
 
@@ -18491,6 +18628,26 @@ html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail
   .tab-status.busy::after {
   inset: -4px;
   border-width: 2px;
+}
+
+/* The exited-agent mute, again, for the rich rail (Ark0N/Codeman#446).
+   The strip's rule is (0,5,0) and the three state rules above are (0,9,1), so
+   on this rail an exited session kept a full green dot and the working halo
+   beside a badge reading "exited" — measured, the contradiction the mute
+   exists to remove. This twin matches their (0,9,1) exactly and therefore MUST
+   stay below them in source order; moving it above silently restores the green
+   dot. It also clears the halo, which is a box-shadow the strip's rule never
+   had to think about.
+   ⚠ The alert exclusions are repeated by hand for the same reason they are on
+   the rules above: a dot turning red or yellow because a session is blocked on
+   a human outranks "the agent exited". */
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact)
+  .tab-rail
+  .session-tab.tab-agent-exited:not(.tab-alert-action):not(.tab-alert-idle)
+  .tab-status:not(.error) {
+  background: var(--text-muted);
+  opacity: 0.5;
+  box-shadow: none;
 }
 
 /* Card accents: the same three colours as every other session surface, and the

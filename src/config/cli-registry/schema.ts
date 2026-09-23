@@ -294,6 +294,23 @@ const capabilitiesSchema = z
     effort: z.boolean(),
     agentSkillInjection: z.boolean(),
     statusLineTelemetry: z.boolean(),
+    // How many columns this CLI indents its transcript body by, so a copy can take
+    // that much off the clipboard. Bounded, because it is the whole strip: a copy
+    // never removes more than this, nor more than every selected line shares.
+    //
+    // ⚠ DECLARED, not measured off the pane, and two measured attempts are why.
+    // Asking whether the pane painted spaces across the unused part of each row
+    // separates a TUI from a shell perfectly where it fires and never
+    // over-stripped, but it is a function of pane WIDTH: that padding exists
+    // only while a rendered line stops short of the CLI's own layout width, and
+    // Claude Code's prose wraps to fill it — the share of padded rows on one
+    // live transcript ran 44%, 6%, 6%, 7% and 87% at 123, 160, 198, 235 and 298
+    // columns, so the strip did nothing at any ordinary size. Taking the
+    // narrowest indent on screen instead fires everywhere and over-strips, since
+    // a file listing inside the transcript can be the narrowest thing on it.
+    // A declared width cannot do either. Absent means no strip, so a CLI whose
+    // transcript layout nobody has measured is never touched.
+    transcriptGutter: z.number().int().min(1).max(8).optional(),
     workDetect: z
       .object({
         promptGlyph: z.string().min(1).max(8),
@@ -308,8 +325,29 @@ const capabilitiesSchema = z
             (src) => compileVersionRegex(src) !== null,
             'workingLine must be a regex compileVersionRegex() accepts: at most 200 characters, no nested quantifiers'
           ),
+        // Same guard, same reasons: this one runs over the foot of a pane capture every
+        // time a session settles, and ~/.codeman/clis.json can set it.
+        watchingLine: z
+          .string()
+          .min(1)
+          .refine(
+            (src) => compileVersionRegex(src) !== null,
+            'watchingLine must be a regex compileVersionRegex() accepts: at most 200 characters, no nested quantifiers'
+          )
+          .optional(),
+        // Bounded hard: this is how far up the screen a config file may push the search,
+        // and every row it adds is one more row the agent itself may be able to write.
+        watchingLines: z.number().int().min(1).max(8).optional(),
       })
       .strict()
+      // A window with nothing to search is a typo, not a configuration. Refused at LOAD
+      // time for the same reason `privilegedParams[].param` is checked against the params
+      // the entry declares: the failure is otherwise silent and looks like a feature that
+      // simply never fires.
+      .refine(
+        (v) => v.watchingLines === undefined || v.watchingLine !== undefined,
+        'watchingLines has nothing to bound without a watchingLine'
+      )
       .optional(),
     model: z
       .object({ source: z.enum(['flag', 'claude-settings-file', 'none']), param: z.string().optional() })

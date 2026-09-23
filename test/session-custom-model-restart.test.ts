@@ -12,7 +12,8 @@
  * 2. Applying to a local claude session killed the pane: the relaunch was
  *    `claude --session-id <id>` and Claude refuses an id that already has a
  *    transcript, so it needs the `--resume <id> || --session-id <id>` shape the
- *    docker and remote pane commands use, i.e. a pinned resume id.
+ *    docker and remote pane commands use, i.e. a pinned resume id. The pin is
+ *    gated on that transcript existing, so these tests write one.
  * 3. pi/omp/grok wrote their config file and then launched without the `--model`
  *    that selects it, so the file was ignored.
  *
@@ -20,7 +21,7 @@
  * spying on `respawnPane` to read the options the relaunch would get.
  * Port: N/A.
  */
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -30,12 +31,28 @@ import { TmuxManager } from '../src/tmux-manager.js';
 import type { MuxSession, SessionMode } from '../src/types.js';
 
 const workingDir = join(homedir(), 'codeman-cases', 'custom-model-restart');
+const projectsDir = join(homedir(), '.claude', 'projects', '-custom-model-restart');
 const sessions: Session[] = [];
 
 afterEach(() => {
   for (const s of sessions.splice(0)) s.stop();
   rmSync(workingDir, { recursive: true, force: true });
+  // Only the directory these tests create. `setup.ts` gives each test file a
+  // temp HOME, but a wider sweep here would delete a real `~/.claude` the day
+  // that stops being true.
+  rmSync(projectsDir, { recursive: true, force: true });
 });
+
+/**
+ * Write the transcript Claude would have written for a conversation. A pane
+ * `restartCli()` relaunches is a WORKING one, so its conversation has a
+ * transcript on disk; that is both what makes the bare `--session-id` collide
+ * and what the pin is now gated on.
+ */
+function giveTranscript(conversationId: string): void {
+  mkdirSync(projectsDir, { recursive: true });
+  writeFileSync(join(projectsDir, `${conversationId}.jsonl`), '{"type":"user"}\n');
+}
 
 function liveSession(mode: SessionMode, extra: Record<string, unknown> = {}) {
   mkdirSync(workingDir, { recursive: true });
@@ -118,6 +135,7 @@ describe('clearing a selection unsets what it injected', () => {
 describe('restartCli() must not kill a working pane', () => {
   it('claude: pins the live conversation id so the relaunch renders --resume <id> || --session-id <id>', async () => {
     const { session, respawn } = liveSession('claude');
+    giveTranscript(session.id);
     await session.restartCli();
     const options = respawn.mock.calls[0][0];
     expect(options.resumeSessionId).toBe(session.claudeSessionId);
@@ -126,7 +144,33 @@ describe('restartCli() must not kill a working pane', () => {
     expect(session.toState().resumeSessionId).toBeUndefined();
   });
 
+  it('claude: pins nothing when the pane has no transcript, because nothing can collide', async () => {
+    // A pane that was launched and never prompted. `--session-id <this.id>` is
+    // accepted on an id no transcript holds, so pinning would buy nothing and
+    // cost two things: claude prints "No conversation found" into a pane with
+    // no history, and `wrapWithNice()` prefixes only the first branch of the
+    // rendered `a || b`, so the branch that actually runs loses its priority
+    // for the life of the session.
+    const { session, respawn } = liveSession('claude');
+    await session.restartCli();
+    expect(respawn.mock.calls[0][0].resumeSessionId).toBeUndefined();
+  });
+
   it('claude: an explicit resume id from a resume-from-history launch wins over the pin', async () => {
+    const RESUMED = '01a060f0-0361-7f91-abde-b283020db0d7';
+    const { session, respawn } = liveSession('claude', { resumeSessionId: RESUMED });
+    giveTranscript(RESUMED);
+    await session.restartCli();
+    expect(respawn.mock.calls[0][0].resumeSessionId).toBe(RESUMED);
+  });
+
+  it('claude: a launch seed survives the pin walk even with its transcript gone', async () => {
+    // The walk only ever ADDS a pin. The seed is what the session was created
+    // with and every respawn has always carried it, so a transcript deleted
+    // under a running session leaves the relaunch on
+    // `--resume <seed> || --session-id <this.id>` — the resume fails and the
+    // fallback runs, which is safe precisely because nothing is on disk to
+    // collide with.
     const RESUMED = '01a060f0-0361-7f91-abde-b283020db0d7';
     const { session, respawn } = liveSession('claude', { resumeSessionId: RESUMED });
     await session.restartCli();

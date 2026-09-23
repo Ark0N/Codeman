@@ -292,6 +292,10 @@ function loadRealSelectSessionHarness(options: { terminalFailure?: boolean } = {
   app._beginBufferLoad = vi.fn(() => 1);
   app._isLoadingBuffer = false;
   app.fitAddon = { fit: vi.fn() };
+  // selectSession fits through the one owner now, which also applies the floor
+  // it reports to the PTY (#464). Without it on the fake, the unconditional
+  // call throws into selectSession's catch and nothing after it runs.
+  app.syncTerminalGeometry = vi.fn(() => ({ cols: 120, rows: 40 }));
   app.sendResize = vi.fn(() => {
     resizeCalls++;
     return resizeCalls === 1 ? terminalBoundary.promise : Promise.resolve(false);

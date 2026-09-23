@@ -51,6 +51,12 @@ delete process.env.CODEMAN_GESTURE;
 // operator who exports it (exactly who the feature is for) would otherwise see the
 // root-install byte-identity assertions fail.
 delete process.env.CODEMAN_BASE_URL;
+// CLAUDE_CONFIG_DIR (#255) relocates Claude's whole tree, transcripts included, and
+// `claudeProjectsDir()` reads it before it ever looks at `homedir()`. A developer who runs
+// Codeman against a separate Claude account exports exactly this, and every test that writes
+// a transcript fixture under the temp HOME's `~/.claude/projects` then reads "no transcript"
+// (found at merge of #467: test/session-custom-model-restart.test.ts went red).
+delete process.env.CLAUDE_CONFIG_DIR;
 
 // Instance selection is PROCESS-WIDE and is what `src/config/instance.ts` derives
 // both the data dir and the tmux socket from, so a shell that exports any of these

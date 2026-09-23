@@ -201,6 +201,25 @@ describe('buildCloneArgs / buildLsRemoteArgs', () => {
       'd',
     ]);
   });
+
+  it('clears every credential helper, BEFORE the subcommand, only when asked', () => {
+    // Multi-user non-admin clones must not borrow the server account's git sign-in.
+    // `-c` is a global option: after `clone` git would read it as an unknown flag.
+    expect(
+      buildCloneArgs({ repository: 'https://example.com/r.git', destination: 'd', withoutCredentialHelpers: true })
+    ).toEqual(['-c', 'credential.helper=', 'clone', '--', 'https://example.com/r.git', 'd']);
+    expect(buildLsRemoteArgs('https://example.com/r.git', { withoutCredentialHelpers: true })).toEqual([
+      '-c',
+      'credential.helper=',
+      'ls-remote',
+      '--symref',
+      '--',
+      'https://example.com/r.git',
+    ]);
+    // Absent or false leaves the argv exactly as it was before the option existed.
+    expect(buildCloneArgs({ repository: 'r', destination: 'd', withoutCredentialHelpers: false })[0]).toBe('clone');
+    expect(buildLsRemoteArgs('r', {})[0]).toBe('ls-remote');
+  });
 });
 
 describe('gitNonInteractiveEnv', () => {

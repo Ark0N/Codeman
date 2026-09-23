@@ -127,7 +127,11 @@ describe('the in-terminal truncation line is gone (static guard)', () => {
     expect(app).toContain("session?.mode !== 'shell' && !this._fullHistoryLoaded.has(sessionId)");
     expect(app).toContain("!restoredSnapshot && session?.mode !== 'shell'");
     expect(app).toContain('`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`');
-    expect(app).toContain('fetch(`/api/sessions/${sessionId}/terminal?full=1`)');
+    // Every terminal capture now goes through _fetchTerminalCapture, which adds
+    // an abort deadline (a `?full=1` body can be megabytes and used to hang
+    // indefinitely on a stalled mobile link). The URL and the full-vs-tail
+    // decision this guard exists to pin are unchanged.
+    expect(app).toContain('this._fetchTerminalCapture(`/api/sessions/${sessionId}/terminal?full=1`, { full: true })');
     expect(app).toContain("if (this.sessions.get(sessionId)?.mode !== 'shell')");
     expect(app).toContain("if (session?.mode === 'shell')");
     expect(app).toContain("if (!force && session?.mode === 'shell') return;");

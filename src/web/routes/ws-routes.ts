@@ -22,6 +22,9 @@
  *     {"t":"c"}           — clear terminal
  *     {"t":"r"}           — needs refresh (reload buffer)
  *     {"t":"ia","seq":N}  — input ACK (echoes the seq of an applied/deduped input frame)
+ *     {"t":"zc","c":N,"r":N} — resize confirm: the geometry the PTY now holds, which
+ *                          is NOT always the one requested (see Session.resize
+ *                          arbitration). Clients adopt it — issue #464.
  *   Client -> Server:
  *     {"t":"i","d":"...","seq":N,"cid":"..."} — input (keystroke or paste). seq+cid are
  *                          optional reliable-delivery tags: the server applies each
@@ -240,6 +243,19 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
             }
             const force = msg.f === true;
             session.resize(msg.c, msg.r, { viewportType, force });
+            // Report the geometry that actually took. Resize used to be
+            // write-only, so a client whose request was declined by the
+            // arbitration above — or floored, or overridden by another device
+            // — had no way to find out, and went on rendering a CLI's repaints
+            // against a screen shape that did not exist (issue #464). Sent
+            // unconditionally: it is ~30 bytes on a debounced, rare message,
+            // and always-send means the client needs no "did it take?" state.
+            // A session with no pane sends nothing at all: its `_ptyCols`/
+            // `_ptyRows` are constructor defaults no process was ever told.
+            const applied = session.ptyGeometry;
+            if (applied && socket.readyState === 1) {
+              socket.send(`{"t":"zc","c":${applied.cols},"r":${applied.rows}}`);
+            }
           }
         } catch {
           // Ignore malformed messages

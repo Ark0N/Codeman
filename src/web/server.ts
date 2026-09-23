@@ -465,6 +465,11 @@ export class WebServer extends EventEmitter {
     this.mux.on('statsUpdated', (sessions) => {
       this.broadcast(SseEvent.MuxStatsUpdated, sessions);
     });
+    // Ark0N/Codeman#446 — a pane read finished. Internal only: the field reaches
+    // the browser on `session:updated`, and no SSE event was added for it.
+    this.mux.on('paneExitsUpdated', () => {
+      this.applyPaneExits();
+    });
 
     // COD-108 — remote-session auto-reconnect. The TmuxManager watcher detects a
     // dead remote pane and emits `remoteSessionDropped`; the session owner (here)
@@ -1720,6 +1725,27 @@ export class WebServer extends EventEmitter {
         () => `<script>window.__codemanCustomModelClis=${customModelClisJson};</script>\n</head>`
       );
     }
+    // How many columns each run mode indents its transcript by, so a copy can drop
+    // that much. Read off `capabilities` like the payload above and never as an id
+    // list here, so a CLI that declares a gutter later needs no frontend change.
+    // Ids and small integers only, no user-settable strings, so JSON.stringify
+    // alone is enough (same reasoning as __codemanCliAvailable's booleans).
+    //
+    // ⚠️ Outside the `if (!soloSessionId)` block above, unlike every other payload
+    // here: a detached session window (`/session/:id`) runs a terminal, so Ctrl+C
+    // copies there, and an absent map reads as "no session gets a strip". The
+    // toggle used to work in the main window and do nothing in the popup on the
+    // same device. This needs no availability probe, so it costs a solo window
+    // nothing that the run menu's own payloads would have cost it.
+    const gutterClis: Record<string, number> = {};
+    for (const entry of enabledClis()) {
+      const columns = entry.capabilities.transcriptGutter;
+      if (typeof columns === 'number') gutterClis[entry.id] = columns;
+    }
+    html = html.replace(
+      '</head>',
+      () => `<script>window.__codemanTranscriptGutter=${JSON.stringify(gutterClis)};</script>\n</head>`
+    );
     if (!soloSessionId && process.env.CODEMAN_GESTURE === '1') {
       html = html.replace('</head>', () => `<script>window.__codemanGestureAvailable=true;</script>\n</head>`);
       if (settings.gestureControlEnabled === true) {
@@ -2490,6 +2516,36 @@ export class WebServer extends EventEmitter {
 
   private broadcastSessionStateDebounced(sessionId: string): void {
     this.sse.broadcastSessionStateDebounced(sessionId);
+  }
+
+  /**
+   * Fold the latest pane readings into the sessions they belong to
+   * (Ark0N/Codeman#446). A reading that changes a session's answer persists the
+   * record and pushes a `session:updated`, which is how the tab learns; a read
+   * that repeats what the last one said costs nothing.
+   *
+   * The answer is pulled per session from the mux rather than taken off a
+   * broadcast payload. The mux reports the RAW pane reading, which for a remote
+   * or docker session is the death of an ssh client or a `docker exec` rather
+   * than of the agent, so it must not travel to a browser at all;
+   * `Session.setPaneExit()` is where that scoping is applied.
+   *
+   * Nothing here touches `status` or `pid`. `status: 'error'` belongs to the
+   * PTY-exit breaker and makes the browser offer a restart, and a null `pid` is
+   * what makes the browser re-attach and launch a fresh CLI.
+   */
+  private applyPaneExits(): void {
+    const getPaneExit = this.mux.getPaneExit?.bind(this.mux);
+    if (!getPaneExit) return;
+    for (const session of this.sessions.values()) {
+      const muxName = session.muxName;
+      // No pane, so nothing to report — and `setPaneExit()` would force UNKNOWN
+      // for such a session anyway.
+      if (!muxName) continue;
+      if (!session.setPaneExit(getPaneExit(muxName))) continue;
+      this.persistSessionState(session);
+      this.broadcastSessionStateDebounced(session.id);
+    }
   }
 
   // ========== Web Push ==========
@@ -3373,6 +3429,15 @@ export class WebServer extends EventEmitter {
               // the conversation the CLI was on when the server stopped, which is
               // what a re-attach must point the viewer at instead of the launch id.
               claudeSessionChain: savedState?.claudeSessionChain,
+              // What the previous run last observed of this pane's agent. Carried
+              // over so the first persist after boot does not blank a record that
+              // says the agent exited; the attach below drops it, and the
+              // pane-exit watcher's own tick replaces it with a first-hand
+              // reading (not the stats collector — see `startPaneExitWatcher`).
+              paneExit: savedState?.paneExit,
+              // A record rebuilt from the socket has no provenance, so its
+              // apparent locality is a guess (see `MuxSession.discovered`).
+              discoveredMuxSession: muxSession.discovered,
               // The pane's last output, previous run's value. Without it every
               // restart restamped all sessions "now" (constructor + the attach
               // repaint within the same second), flattening the home screens'
@@ -3580,6 +3645,15 @@ export class WebServer extends EventEmitter {
       // Always start, even with no sessions — new sessions may be created later.
       if ('startMouseModeSync' in this.mux) {
         (this.mux as { startMouseModeSync: (ms?: number) => void }).startMouseModeSync();
+      }
+
+      // Ark0N/Codeman#446 — poll every pane for an exited agent. Always start,
+      // even with no sessions, for the same reason as the two watchers around
+      // it: sessions arrive later. Deliberately NOT folded into the stats
+      // collector above, which the browser arms and disarms with the Monitor
+      // panel and which boot skips entirely when nothing was recovered.
+      if ('startPaneExitWatcher' in this.mux) {
+        (this.mux as { startPaneExitWatcher: (ms?: number) => void }).startPaneExitWatcher();
       }
 
       // COD-108 — start the remote-session auto-reconnect watcher (tmux only).

@@ -223,7 +223,12 @@ describe('mobile prompt composer', () => {
 
   it('wires session cleanup to composer draft cleanup', () => {
     const cleanupStart = appSource.indexOf('  _cleanupSessionData(sessionId) {');
-    const cleanup = appSource.slice(cleanupStart, cleanupStart + 1200);
+    expect(cleanupStart, '_cleanupSessionData not found — renamed?').toBeGreaterThan(-1);
+    // The whole method, not a fixed byte window. A 1200-character slice made
+    // this assertion depend on how much OTHER code sat above the line it cares
+    // about, so an unrelated addition near the top of the method failed it.
+    const cleanup = appSource.slice(cleanupStart, appSource.indexOf('\n  }\n', cleanupStart));
+    expect(cleanup.length, 'method body did not terminate').toBeGreaterThan(0);
 
     expect(cleanup).toContain('KeyboardAccessoryBar.discardComposerDraft?.(sessionId)');
   });

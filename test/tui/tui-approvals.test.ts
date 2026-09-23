@@ -59,6 +59,24 @@ describe('approvalCard', () => {
     expect(card.hint).toBe('p to reply');
   });
 
+  it('says why an acknowledged idle prompt is quiet, in the drawer own words', () => {
+    // The session is watching work it started itself. Asking for a reply would be the
+    // same false alarm the acknowledgement exists to remove, so the card states the
+    // reason and drops out of the warning vocabulary — while staying answerable.
+    const card = approvalCard(
+      item({
+        kind: 'idle',
+        message: 'Claude is waiting for your input',
+        options: undefined,
+        acknowledgedAt: 1_700_000_000_000,
+        acknowledgedReason: 'watching 1 monitor',
+      })
+    );
+    expect(card.tone).toBe('info');
+    expect(card.title).toBe('quiet, watching 1 monitor');
+    expect(card.hint).toBe('p to reply');
+  });
+
   it('drops the approve/deny-only hint when the frame did not parse', () => {
     const card = approvalCard(item({ options: undefined }));
     expect(card.options).toEqual([]);
@@ -80,6 +98,12 @@ describe('approvalTone', () => {
     expect(approvalTone(item())).toBe('err');
     expect(approvalTone(item({ kind: 'question' }))).toBe('err');
     expect(approvalTone(item({ kind: 'idle' }))).toBe('warn');
+  });
+
+  it('is neither for a prompt that opened acknowledged', () => {
+    expect(approvalTone(item({ kind: 'idle', acknowledgedReason: 'watching 2 shells' }))).toBe('info');
+    // A dialog stays red whatever else the session started.
+    expect(approvalTone(item({ kind: 'permission', acknowledgedReason: 'watching 2 shells' }))).toBe('err');
   });
 });
 

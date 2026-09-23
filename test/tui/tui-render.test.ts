@@ -11,6 +11,7 @@ import { charWidth, stripStyles, toDisplayLines, visibleWidth } from '../../src/
 import { composerMove, createComposer } from '../../src/tui/tui-composer.js';
 import { computeLayout, needsBanner } from '../../src/tui/tui-layout.js';
 import { createTuiModel, type TuiModelStore } from '../../src/tui/tui-model.js';
+import type { ApprovalItem } from '../../src/web/approval-inbox.js';
 import {
   composerCursorCell,
   detectGlyphTier,
@@ -19,6 +20,7 @@ import {
   formatPlanUsage,
   formatTokens,
   glyphsFor,
+  pendingApprovalCount,
   renderFrame,
   rowLabel,
   type TuiRenderOptions,
@@ -680,5 +682,35 @@ describe('the unicode glyph set is safe to render', () => {
   it('has no emoji where a text glyph belongs', () => {
     // U+270B is Wide AND emoji-presentation: it drew at emoji size mid-row.
     expect(every.join('')).not.toContain('\u270B');
+  });
+});
+
+describe('pendingApprovalCount', () => {
+  const prompt = (over: Partial<ApprovalItem>): ApprovalItem => ({
+    id: 'bbb2:1',
+    sessionId: 'bbb2',
+    sessionName: 'w6-docs',
+    kind: 'idle',
+    createdAt: NOW - 30_000,
+    ...over,
+  });
+
+  it('counts a prompt nobody has seen', () => {
+    const model = fixture();
+    model.setApprovals([prompt({})]);
+    expect(pendingApprovalCount(model)).toBe(1);
+  });
+
+  it('does not count one whose alert is already spent', () => {
+    // Both ways an item gets acknowledged: a human opening the session elsewhere, and the
+    // inbox opening it that way for a session watching its own background work. The row
+    // has left NEEDS YOU by the same flag, so a number in the header would point at a
+    // group the reader can see is empty.
+    const model = fixture();
+    model.setApprovals([prompt({ acknowledgedAt: NOW - 20_000 })]);
+    expect(pendingApprovalCount(model)).toBe(0);
+
+    model.setApprovals([prompt({ acknowledgedAt: NOW - 20_000, acknowledgedReason: 'watching 1 monitor' })]);
+    expect(pendingApprovalCount(model)).toBe(0);
   });
 });

@@ -195,6 +195,8 @@ export interface CloneOptions {
   /** `--depth 1`: history-less but much faster on large repos. */
   shallow?: boolean;
   timeoutMs?: number;
+  /** Clear every git credential helper for this run (see `GIT_NO_CREDENTIAL_HELPERS`). */
+  withoutCredentialHelpers?: boolean;
 }
 
 export type CloneResult = { ok: true; stderr: string } | { ok: false; failure: GitFailure };
@@ -437,11 +439,26 @@ export function isSafeGitRef(ref: string): boolean {
 // ─── Pure: argv + env ────────────────────────────────────────────────────────
 
 /**
+ * Global git options that empty the credential-helper list for one run.
+ *
+ * Every Codeman user in multi-user mode runs git as the SAME OS account, so a
+ * helper that account has (the Docker image's opt-in `gh`/`az` helpers, or a
+ * user's own `gh auth setup-git`) would read private repositories on the
+ * signed-in admin's behalf for anyone who can reach Clone Repo. An empty
+ * `credential.helper` resets the helper list, and a command-line `-c` is read
+ * last, so it also drops the URL-scoped `credential.<url>.helper` entries the
+ * image configures (verified against a real private repo: refs with the helper,
+ * `could not read Username` with it cleared). Public repositories are
+ * unaffected. It must precede the subcommand.
+ */
+export const GIT_NO_CREDENTIAL_HELPERS: readonly string[] = ['-c', 'credential.helper='];
+
+/**
  * argv for the clone. `--` separates flags from operands so neither the
  * repository nor the destination can ever be read as an option.
  */
 export function buildCloneArgs(opts: CloneOptions): string[] {
-  const args = ['clone'];
+  const args = [...(opts.withoutCredentialHelpers ? GIT_NO_CREDENTIAL_HELPERS : []), 'clone'];
   // `--single-branch` is what makes "just this tag/branch" cheap on a big repo.
   if (opts.ref) args.push('--single-branch', '--branch', opts.ref);
   if (opts.shallow) args.push('--depth', '1');
@@ -450,8 +467,14 @@ export function buildCloneArgs(opts: CloneOptions): string[] {
 }
 
 /** argv for the preflight. `--symref` is what reveals the remote's default branch. */
-export function buildLsRemoteArgs(repository: string): string[] {
-  return ['ls-remote', '--symref', '--', repository];
+export function buildLsRemoteArgs(repository: string, opts: { withoutCredentialHelpers?: boolean } = {}): string[] {
+  return [
+    ...(opts.withoutCredentialHelpers ? GIT_NO_CREDENTIAL_HELPERS : []),
+    'ls-remote',
+    '--symref',
+    '--',
+    repository,
+  ];
 }
 
 /**
@@ -579,7 +602,7 @@ export function classifyGitFailure(stderr: string, timedOut: boolean, spawnError
     return {
       code: 'AUTH_REQUIRED',
       message:
-        'That repository needs authentication. Codeman clones without credentials, so private repositories have to be cloned outside Codeman and added with Link Existing.',
+        "That repository needs authentication. Codeman never asks for credentials, so sign this server's git in first (for example `gh auth login` or `az login` from a shell session; the Docker image can include both, see docker/README.md), or clone it outside Codeman and add it with Link Existing.",
       stderr: clean,
     };
   }
@@ -790,7 +813,8 @@ export function isGitAvailable(): boolean {
  */
 export async function probeGitRemote(
   repository: string,
-  timeoutMs = GIT_LS_REMOTE_TIMEOUT_MS
+  timeoutMs = GIT_LS_REMOTE_TIMEOUT_MS,
+  opts: { withoutCredentialHelpers?: boolean } = {}
 ): Promise<GitRemoteProbe> {
   if (!isGitAvailable()) {
     return {
@@ -800,7 +824,7 @@ export async function probeGitRemote(
       failure: classifyGitFailure('', false, 'ENOENT: git not found'),
     };
   }
-  const run = await runGit(buildLsRemoteArgs(repository), timeoutMs, MAX_LS_REMOTE_BYTES);
+  const run = await runGit(buildLsRemoteArgs(repository, opts), timeoutMs, MAX_LS_REMOTE_BYTES);
   if (run.code !== 0 || run.spawnError) {
     return {
       reachable: false,

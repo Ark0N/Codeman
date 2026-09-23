@@ -5276,8 +5276,10 @@ Object.assign(CodemanApp.prototype, {
           try { localStorage.removeItem('codeman-active-session'); } catch {}
           this.renderSessionTabs();
           this.renderMuxSessions();
-          this.terminal.clear();
-          this.terminal.reset();
+          // Not a replay path, so the ordering hazard does not apply here — but
+          // there is one way to clear this terminal and this is it, so a future
+          // caller cannot copy a clear()+reset() pair out of here into one.
+          this._resetTerminalForReplay();
           this.toast('All sessions and tmux killed', 'success');
         }
       } else {
@@ -5286,8 +5288,7 @@ Object.assign(CodemanApp.prototype, {
         this.activeSessionId = null;
         try { localStorage.removeItem('codeman-active-session'); } catch {}
         this.renderSessionTabs();
-        this.terminal.clear();
-        this.terminal.reset();
+        this._resetTerminalForReplay();
         this.toast('All tabs removed, tmux still running', 'info');
       }
     } catch (err) {

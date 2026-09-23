@@ -512,8 +512,10 @@ class NotificationManager {
     }
     // Re-fit terminal and send resize to PTY so this client's dimensions win.
     // Fixes broken layout when switching between desktop and mobile on the same session.
-    if (this.app?.fitAddon && this.app?.activeSessionId) {
-      this.app.fitAddon.fit();
+    // sendResize fits (floored) as its first synchronous step, so the bare
+    // fit that used to precede it was both redundant and a chance to leave
+    // xterm at the unfloored proposal (#464).
+    if (this.app?.activeSessionId) {
       this.app.sendResize(this.app.activeSessionId);
     }
   }

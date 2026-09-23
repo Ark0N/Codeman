@@ -47,16 +47,7 @@ export type ClaudeMode = 'dangerously-skip-permissions' | 'auto' | 'normal' | 'a
 
 /** Session mode: which CLI backend a session runs */
 export type SessionMode =
-  | 'claude'
-  | 'shell'
-  | 'opencode'
-  | 'codex'
-  | 'gemini'
-  | 'antigravity'
-  | 'pi'
-  | 'grok'
-  | 'deepseek'
-  | 'omp';
+  'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp';
 
 /**
  * Who owns a session's name. `placeholder`: Codeman's own `w<n>-<case>` (or no
@@ -625,6 +616,54 @@ export interface CustomModelBookkeeping extends CustomModelSelection {
   launchModel?: string;
 }
 
+/**
+ * The agent inside a LOCAL tmux pane has exited, and the pane survived it.
+ *
+ * Codeman creates every pane with `remain-on-exit on`, so `/exit` ends the CLI
+ * while tmux keeps the pane, the tmux session and the `tmux attach-session`
+ * process Codeman records as the session's pid. No PTY exit handler runs, so
+ * without this record the session reads as a live idle one (Ark0N/Codeman#446).
+ *
+ * The field is TRI-STATE, and the third state is the absence of the field:
+ * `undefined` means Codeman does not know, and it must never be rendered as
+ * "alive". It is absent for a direct-PTY session (no pane exists), for a remote
+ * SSH session (the local pane holds the ssh client, whose death means transport
+ * drop OR exit) and for a docker case (the local pane holds a `docker exec`
+ * into the container's own tmux).
+ *
+ * `status` and `signal` are independently optional because tmux may know that
+ * the pane died without reporting how. Measured on tmux 3.2a: a SIGKILLed pane
+ * reports `pane_dead=1` with BOTH `#{pane_dead_status}` and `#{pane_dead_signal}`
+ * empty, and `#{pane_dead_signal}` does not exist at all before tmux 3.4. So an
+ * absent `status` means "the exit code is unknown", never "the exit code is 0".
+ *
+ * ⚠ AN ABSENT `status` STAYS ABSENT. Never write `status ?? 0`, and never read
+ * "no signal was reported" as "the exit must have been clean". On tmux 3.2a
+ * the absent status IS how a signal death presents, so absent-stays-absent is
+ * the only thing keeping a future clean-exit sweep away from crashed agents:
+ * an agent SIGKILLed by the OOM killer would otherwise read as a user typing
+ * `/exit` and be swept. Nothing here fails when somebody adds that `??` — the
+ * types allow it, the label still renders, and the damage shows up only once
+ * the sweep lands. The rule is enforced in `derivePaneExits()`
+ * (`tmux-manager.ts`), which omits the key rather than defaulting it.
+ */
+export interface PaneExit {
+  /**
+   * tmux `#{pane_dead_status}` — the command's exit code. Absent when tmux
+   * reported none, which means UNKNOWN and never 0. See the ⚠ above before
+   * giving this a default anywhere.
+   */
+  status?: number;
+  /** tmux `#{pane_dead_signal}` — the signal that killed the command. Absent when unsignalled or unsupported. */
+  signal?: number;
+  /**
+   * Wall-clock ms when THIS server process first observed the pane dead. It is
+   * not when the agent exited, which nothing records, and a restart that finds
+   * the pane still dead respawns it rather than re-timing the old exit.
+   */
+  at: number;
+}
+
 export interface SessionState {
   /** Unique session identifier */
   id: string;
@@ -780,6 +819,21 @@ export interface SessionState {
    * (COD-118). Runtime-only: never restored on boot (fresh server = fresh breaker).
    */
   respawnBlocked?: boolean;
+  /**
+   * The agent in this session's LOCAL tmux pane has exited (Ark0N/Codeman#446).
+   * See {@link PaneExit} for the tri-state rule and for which session shapes
+   * leave it absent. `status` and `pid` are deliberately untouched by it: the
+   * PTY-exit breaker owns `status: 'error'`, and a null `pid` is what makes the
+   * browser re-attach and launch a fresh CLI.
+   *
+   * Persisted so a reboot restore can tell a session whose agent exited from one
+   * that was merely idle when the power went. `reboot-restore.ts` reads the
+   * persisted record and never builds a `Session`, so the record is the only
+   * place that survives the reboot to carry it. Nothing reads it there YET:
+   * making the restore refuse such a session is a behavior change, and it
+   * belongs with the part of Ark0N/Codeman#446 that closes exited sessions.
+   */
+  paneExit?: PaneExit;
 }
 
 /**

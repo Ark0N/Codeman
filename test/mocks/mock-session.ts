@@ -35,6 +35,12 @@ export class MockSession extends EventEmitter {
   /** `null` once the PTY is gone (or before it has ever started) — see `pid` in Session. */
   pid: number | null = 12345;
   isWorking: boolean = false;
+  /**
+   * Mirrors Session.watching — what the pane's footer says is still running in the
+   * background. An idle prompt from such a session opens acknowledged, so the routes
+   * need to be able to set it.
+   */
+  watching: string | null = null;
   private _activeChildProcesses: { pid: number; command: string }[] = [];
   ralphTracker: null = null;
   writeBuffer: string[] = [];

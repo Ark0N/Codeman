@@ -819,36 +819,32 @@ function decideAutoCopy({ enabled, text, lastCopied, pending } = {}) {
 // _selectTouchSelectionLine already treats those cells as padding. This is that
 // same rule for the mouse and keyboard paths, which never had it.
 //
-// ⚠ Trailing padding ONLY. A shared LEADING indent is deliberately left alone,
-// and this note is here so the idea is not re-derived: it was built, measured
-// and dropped before merge. Removing the longest leading run every selected row
-// shares looks like the mirror image of the trailing trim and is not, because
-// no native terminal does it and the transform cannot tell a TUI's margin from
-// content that is genuinely indented. Measured over 401 445 three-row windows
-// across 1 010 tracked files in this repo, it fired on 73% of them: 92% inside
-// a YAML workflow, 76% over `git log` output, 48% in a TypeScript source file.
-// No width threshold separates the two, because they are the same widths: a
-// live Claude Code pane's own margins measure 2 and 5 columns while the most
-// common non-TUI shared run is 4, sitting between them.
+// A LEADING margin is stripped too, but only the one the CLI in the pane
+// DECLARES as its transcript gutter, passed in as `options.margin`. Called with
+// no options this trims trailing padding and nothing else, which is what keeps
+// every caller that has no declared gutter on the old behaviour.
 //
-// The asymmetry that settles it is in the failure modes. A wrong trailing trim
+// ⚠ The failure modes are not symmetrical, and that asymmetry sets how much
+// evidence a leading strip has to show before it fires. A wrong trailing trim
 // costs nothing. A wrong dedent silently deletes information that was on the
 // screen, with no signal to the user and nothing in the clipboard to hint at
 // it, and it is wrong on `git log` bodies, on indented code read out of `cat`
 // (semantic in Python), on `git diff` context rows where the leading space is
 // the marker, and on stack traces.
 //
-// ⚠ It also cannot be made consistent cheaply. Whether the first row joins the
-// measurement depended on the mousedown COLUMN, which the user never sees, so
-// one block of three rows produced three different clipboard results; and the
-// flag read `getSelectionPosition().start`, which is the mousedown anchor that
-// xterm never normalises, so dragging UP through a block read it off the bottom
-// row. If it is ever revisited, the one qualification that measured clean is
-// painted trailing padding (a full-screen TUI writes real spaces across every
-// row; a shell pane leaves those cells never-written, so xterm trims them):
-// zero false positives over all 401 445 windows. It still mangles a `git log`
-// body sitting inside an agent's own gutter, which is why it was not taken now.
-function cleanCopiedSelection(text) {
+// ⚠ The declared gutter is a CEILING, not the answer. The strip is the lesser
+// of it and the run every selected line shares, so a block can only ever shift
+// as a unit: the relative structure inside a selection survives by
+// construction, and a selection reaching column 0 loses nothing at all.
+//
+// ⚠ Deriving the width from the text instead is what fails, twice over. The
+// selection's own shared indent cannot tell a margin from content, because a
+// three-row window of nested YAML shares an indent for the same reason a margin
+// does — it fired on 73% of ordinary indented text. Taking the narrowest indent
+// on the surrounding rows fails more quietly: a file listing inside the
+// transcript can be the narrowest thing on screen, which over-stripped about 1%
+// of selections across six pane widths.
+function cleanCopiedSelection(text, options) {
   if (typeof text !== 'string' || !text) return '';
   // Split on \n and leave any \r in place: xterm joins rows with \r\n on
   // Windows, and the clipboard should keep the endings xterm chose.
@@ -868,7 +864,36 @@ function cleanCopiedSelection(text) {
     while (cut > 0 && (line[cut - 1] === ' ' || line[cut - 1] === '\t')) cut--;
     return cut === end ? line : line.slice(0, cut) + line.slice(end);
   };
-  return text.split('\n').map(trimEnd).join('\n');
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) lines[i] = trimEnd(lines[i]);
+
+  const margin = Math.max(0, Math.trunc(Number(options?.margin) || 0));
+  if (!margin) return lines.join('\n');
+
+  // The first line of a selection that began mid-row carries no margin — the
+  // mousedown cut it off — so it neither votes on the shared indent nor gets
+  // stripped. This is the ONE thing the mousedown column still decides, and it
+  // decides it for that line alone. Whether the rest of the block is dedented
+  // no longer depends on where the click landed, which is what made the same
+  // three rows produce three different clipboard results before.
+  const from = options?.firstLinePartial === true ? 1 : 0;
+
+  // The pane's margin is a ceiling, not the answer. Strip the narrower of it
+  // and what every selected line shares, so the block shifts as a unit and no
+  // line can lose indentation another line keeps.
+  let shared = margin;
+  for (let i = from; i < lines.length && shared > 0; i++) {
+    const line = lines[i];
+    if (!line || line === '\r') continue; // a padding-only row, already trimmed away
+    let run = 0;
+    while (run < line.length && line[run] === ' ') run++;
+    if (run < shared) shared = run;
+  }
+  if (!shared) return lines.join('\n');
+  for (let i = from; i < lines.length; i++) {
+    if (lines[i] && lines[i] !== '\r') lines[i] = lines[i].slice(shared);
+  }
+  return lines.join('\n');
 }
 
 if (typeof window !== 'undefined') {
@@ -1560,6 +1585,226 @@ function buildSplitPickerSessions(sessions, sessionOrder, excludeId, detachedIds
   return result;
 }
 
+// ── Renderer liveness ──────────────────────────────────────────────────────
+//
+// iOS DISCARDS scheduled requestAnimationFrame callbacks when a PWA goes to
+// the background — not deferred, never delivered. xterm's RenderDebouncer only
+// clears its `_animationFrame` handle from INSIDE that callback:
+//
+//   refresh() {
+//     if (this._animationFrame !== undefined) return;   // <- stale forever
+//     this._animationFrame = requestAnimationFrame(() => this._innerRefresh());
+//   }
+//   _innerRefresh() { this._animationFrame = undefined; ... }   // never runs
+//
+// So after one backgrounding the handle is permanently non-undefined and EVERY
+// later render request returns on line one. Parsing is decoupled from
+// rendering, so bytes keep filling the buffer correctly and nothing throws —
+// the terminal is simply frozen. Closing and reopening fixes it because that
+// constructs a new Terminal, and therefore a new debouncer.
+//
+// Codeman is MORE exposed than a per-session-terminal app: there is exactly one
+// xterm instance for the whole page load, so a single backgrounding can wedge
+// it until a full reload.
+//
+// This is the pure decision half. The signature that distinguishes this from
+// every other way a terminal can look stuck is that bytes were WRITTEN and the
+// element is VISIBLE, yet onRender has not fired since:
+//
+//   frozen   = wroteAt > renderedAt && now - wroteAt >= threshold && visible
+//
+// Deliberately NOT a "no output at all" check: a quiet terminal is the normal
+// state and must never be kicked. And `visible` is required because a hidden
+// terminal legitimately stops rendering (xterm pauses it), so kicking there
+// would fire constantly on every backgrounded tab.
+const RENDER_STALL_MS = 4000;
+
+// How often the watchdog checks. Deliberately coarse: the failure it catches is
+// permanent until healed, so detecting it a second late costs nothing, while a
+// tight interval would burn a wakeup per second on every idle phone.
+const RENDER_LIVENESS_POLL_MS = 2000;
+
+/**
+ * Should the renderer be kicked? Pure so the CI gate can cover it — the DOM
+ * half (cancelling the stale handle) lives in terminal-ui.js.
+ *
+ * @param {{wroteAt:number, renderedAt:number, now:number, visible:boolean,
+ *          thresholdMs?:number}} s
+ * @returns {boolean}
+ */
+function shouldKickRenderer(s) {
+  if (!s || !s.visible) return false;
+  const wroteAt = Number(s.wroteAt) || 0;
+  const renderedAt = Number(s.renderedAt) || 0;
+  const now = Number(s.now) || 0;
+  // Nothing written yet — a fresh terminal has no render to be missing.
+  if (wroteAt <= 0) return false;
+  // A render landed at or after the last write: the pipeline is alive.
+  if (renderedAt >= wroteAt) return false;
+  const threshold = Number.isFinite(s.thresholdMs) && s.thresholdMs > 0 ? s.thresholdMs : RENDER_STALL_MS;
+  return now - wroteAt >= threshold;
+}
+
+// ── Fetch deadlines ────────────────────────────────────────────────────────
+//
+// No terminal fetch carried any deadline, including `?full=1`, which the code
+// itself describes as "unbounded-ish work: at the default history limit it can
+// be megabytes". On a stalled mobile link that request hangs on the browser
+// default with no retry and no path back to a usable terminal short of a
+// reload.
+//
+// A single fixed timeout is wrong in both directions — too short for a full
+// scrollback capture on a slow uplink, too long for a small tail on a dead
+// connection. So the deadline is scaled by what is actually being asked for,
+// and by how many captures are already in flight: on a slow link those bytes
+// must drain before this request's own bytes start moving, and its timer is
+// already running the whole time.
+const FETCH_DEADLINE_TAIL_MS = 15000;
+const FETCH_DEADLINE_FULL_MS = 45000;
+const FETCH_DEADLINE_MAX_MS = 120000;
+
+/**
+ * Deadline in ms for a terminal capture.
+ *
+ * @param {{full?:boolean, inflight?:number}} s - `full` = the ?full=1 capture;
+ *   `inflight` = captures already running (this one included or not, it only
+ *   scales the budget).
+ * @returns {number}
+ */
+function terminalFetchDeadlineMs(s) {
+  const full = !!(s && s.full);
+  const base = full ? FETCH_DEADLINE_FULL_MS : FETCH_DEADLINE_TAIL_MS;
+  const inflight = Math.max(0, Number(s && s.inflight) || 0);
+  // Each already-queued capture gets the newcomer one more base budget to wait
+  // through. Linear rather than clever: the point is only that eight tabs
+  // resuming do not all time out together because each assumed it was alone.
+  return Math.min(FETCH_DEADLINE_MAX_MS, base * (1 + inflight));
+}
+
+// ── Diagnostics hygiene ────────────────────────────────────────────────────
+//
+// The crash trail is joined with '\n' into ONE localStorage value and beaconed
+// to the server, and at least one call site interpolates server-controlled text
+// (a WebSocket close `reason`). An embedded newline there forges extra entries
+// in the trail; an unbounded string can fill the storage quota. Both are cheap
+// to close, and the trail is something a user may be asked to paste into an
+// issue.
+const DIAG_ENTRY_MAX_CHARS = 300;
+
+/** Flatten a diagnostic message to one bounded, newline-free line. */
+function sanitizeDiagEntry(msg) {
+  return String(msg == null ? '' : msg)
+    .replace(/[\r\n\u2028\u2029]+/g, ' ')
+    .slice(0, DIAG_ENTRY_MAX_CHARS);
+}
+
+// ── Recovering a dropped output frame ──────────────────────────────────────
+//
+// `_onSessionTerminal` drops an incoming frame when the app-owned render queues
+// already hold 128KB, which is the right call — the alternative is an unbounded
+// backlog — but a hole in a TUI byte stream is a desynced cursor, and a desynced
+// cursor is muffled text (issue #464). So the drop is only half of it: the
+// recovery has to actually happen.
+//
+// ⚠️ It used to be a fire-and-forget timer. `_onSessionNeedsRefresh` opens with
+// four early returns, and two of them — a buffer load in flight, a refresh
+// already owning this session — are MOST likely to be true during exactly the
+// output burst that caused the drop. The timer nulled itself before the call,
+// so a skipped refresh lost the recovery silently and the dropped bytes were
+// never replayed.
+//
+// Bounded, because the early returns it retries past are transient contention
+// that clears in seconds, and a permanently failing refresh must not become a
+// forever-loop against the API. A refresh that hit the capture fetch DEADLINE
+// is not contention but a stalled link, and is not retried at all: each retry
+// would be another `?full=1` capture waiting out a deadline of up to two
+// minutes, where the old code cost exactly one. Giving up after the cap leaves
+// exactly the garbled frames the old code left, so the floor is no worse.
+const DROP_RECOVERY_DELAY_MS = 2000;
+const DROP_RECOVERY_MAX_ATTEMPTS = 5;
+
+/**
+ * Should a dropped-output recovery run again?
+ *
+ * @param {{repainted: boolean, timedOut?: boolean, attempt: number, stillActive: boolean}} state
+ *   `repainted` — whether `_onSessionNeedsRefresh` actually rewrote the buffer.
+ *   `timedOut`  - whether it failed at the capture fetch deadline.
+ *   `attempt`   — how many have already run, zero-based.
+ *   `stillActive` — whether the dropped session is still the one on screen.
+ * @returns {boolean}
+ */
+function shouldRetryDroppedOutputRecovery({ repainted, timedOut = false, attempt, stillActive }) {
+  // Switched away: `selectSession` repaints from the server on its own, so a
+  // retry here would be a second replay of a buffer that is about to be written.
+  if (!stillActive) return false;
+  if (repainted) return false;
+  if (timedOut) return false;
+  return attempt + 1 < DROP_RECOVERY_MAX_ATTEMPTS;
+}
+
+// ── Terminal geometry: xterm and the PTY must never disagree ───────────────
+//
+// Issue #464 ("text gets muffled"). Claude Code's TUI repaints by wrapping its
+// frame at the width the PTY reported and walking the cursor up that many
+// ROWS. So a browser terminal whose width differs from the PTY's makes every
+// repaint arithmetic wrong: a logical line occupies more physical rows than
+// Ink counted, `eraseLines(n)` clears too few of them, and the new frame paints
+// over rows that were never erased. Measured against a real xterm — a PTY
+// believing 120 columns against a 62-column terminal renders each wrapped line
+// twice, and a shorter replacement line leaves the tail of the old one behind.
+// That is exactly the doubled rows and half-overwritten prose in the report.
+//
+// The floor exists because a PTY a handful of columns wide makes any CLI wrap
+// every word; it is NOT a display preference, so the browser terminal has to
+// honour it too. Three separate call sites used to fit xterm to the RAW
+// proposal and report the CLAMPED one, which is how the two drifted apart with
+// nothing to notice: resize is write-only, so nobody could see the disagreement.
+const TERMINAL_MIN_COLS = 40;
+const TERMINAL_MIN_ROWS = 10;
+
+/**
+ * The geometry to apply AND report — there is only ever one answer to both.
+ * @param {{cols: number, rows: number}|null|undefined} proposed
+ * @returns {{cols: number, rows: number}|null}
+ */
+function clampTerminalDimensions(proposed) {
+  if (!proposed || !Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) return null;
+  return {
+    cols: Math.max(Math.trunc(proposed.cols), TERMINAL_MIN_COLS),
+    rows: Math.max(Math.trunc(proposed.rows), TERMINAL_MIN_ROWS),
+  };
+}
+
+/**
+ * What to do when the server reports the PTY's real geometry.
+ *
+ * The server is the authority: it owns the PTY the CLI is drawing for, and it
+ * can refuse a resize outright (`Session.resize` ignores small-viewport
+ * requests while a desktop connection holds an active sizing claim) without
+ * the asking client ever being told. A terminal that keeps its own WIDTH after
+ * such a refusal renders garbage, because Ink wraps its frame and counts its
+ * erase rows at the width it was told.
+ *
+ * ⚠️ COLUMNS ONLY. Rows are deliberately left alone, and adopting them was a
+ * real regression: a phone that took a desktop's 43 rows into a viewport with
+ * room for 18 painted an `.xterm-screen` far taller than its container, and
+ * because xterm's own viewport then had nothing to scroll, the bottom of the
+ * frame — the CLI's input line — sat below the container with no gesture that
+ * could reach it. Output visible, typing invisible, for as long as the claim
+ * stayed hot. Width is the axis the wrap arithmetic depends on; rows only
+ * decide how much is on screen at once, and keeping the local row count keeps
+ * the composer at the bottom of a viewport that scrolls.
+ *
+ * @param {{cols: number, rows: number}|null} local - what xterm currently holds
+ * @param {{cols: number, rows: number}|null} pty - what the server just reported
+ * @returns {{adopt: boolean, cols: number|null}}
+ */
+function reconcilePtyGeometry(local, pty) {
+  if (!pty || !Number.isFinite(pty.cols)) return { adopt: false, cols: null };
+  if (!local || !Number.isFinite(local.cols) || local.cols === pty.cols) return { adopt: false, cols: null };
+  return { adopt: true, cols: pty.cols };
+}
+
 if (typeof window !== 'undefined') {
   window.CodemanHistoryFormat = { formatHistoryBytes, computeHistoryTruncationNotice, computeRewriteScrollLine };
   window.CodemanFilePaths = { absoluteFilePathPattern, previewsInFileViewer, FILE_PREVIEW_EXTENSIONS };
@@ -1568,5 +1813,24 @@ if (typeof window !== 'undefined') {
     clampDividerPercent,
     buildSplitPickerSessions,
     SPLIT_PANE_MIN_WIDTH,
+  };
+  window.CodemanRenderLiveness = { shouldKickRenderer, RENDER_STALL_MS, RENDER_LIVENESS_POLL_MS };
+  window.CodemanFetchDeadline = {
+    terminalFetchDeadlineMs,
+    FETCH_DEADLINE_TAIL_MS,
+    FETCH_DEADLINE_FULL_MS,
+    FETCH_DEADLINE_MAX_MS,
+  };
+  window.CodemanDiag = { sanitizeDiagEntry, DIAG_ENTRY_MAX_CHARS };
+  window.CodemanDroppedOutput = {
+    shouldRetryDroppedOutputRecovery,
+    DROP_RECOVERY_DELAY_MS,
+    DROP_RECOVERY_MAX_ATTEMPTS,
+  };
+  window.CodemanTerminalGeometry = {
+    clampTerminalDimensions,
+    reconcilePtyGeometry,
+    TERMINAL_MIN_COLS,
+    TERMINAL_MIN_ROWS,
   };
 }

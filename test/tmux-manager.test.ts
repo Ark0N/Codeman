@@ -14,10 +14,14 @@ import {
   buildRemoteKillCommand,
   buildRemoteLaunchCommand,
   formatPaneSnapshot,
-  parsePaneList,
+  parsePaneRows,
+  derivePaneExits,
+  hasObservablePaneSession,
+  type PaneRow,
   resolveActivePaneTarget,
 } from '../src/tmux-manager.js';
 import { execSync, exec } from 'node:child_process';
+import type { MuxSession } from '../src/mux-interface.js';
 
 // ============================================================================
 // Unit Tests (mocked)
@@ -910,41 +914,44 @@ describe('TmuxManager (unit)', () => {
 // exec without TTY). See PR #71.
 // ============================================================================
 
-describe('parsePaneList', () => {
+describe('parsePaneRows', () => {
+  /** Pull the name → pid map reconciliation builds, so these cases read as they used to. */
+  const pids = (output: string) => new Map(parsePaneRows(output).map((row) => [row.sessionName, row.pid]));
+
   it('parses well-formed output into name → pid', () => {
     const out = 'codeman-aaaa|1234\ncodeman-bbbb|5678\nclaudeman-cccc|9999';
-    const result = parsePaneList(out);
+    const result = pids(out);
     expect(result.size).toBe(3);
     expect(result.get('codeman-aaaa')).toBe(1234);
     expect(result.get('codeman-bbbb')).toBe(5678);
     expect(result.get('claudeman-cccc')).toBe(9999);
   });
 
-  it('returns an empty map for empty output', () => {
-    expect(parsePaneList('').size).toBe(0);
+  it('returns no rows for empty output', () => {
+    expect(parsePaneRows('')).toEqual([]);
   });
 
   it('skips blank lines', () => {
-    const result = parsePaneList('\ncodeman-aaaa|100\n\n\ncodeman-bbbb|200\n');
+    const result = pids('\ncodeman-aaaa|100\n\n\ncodeman-bbbb|200\n');
     expect(result.size).toBe(2);
     expect(result.get('codeman-aaaa')).toBe(100);
     expect(result.get('codeman-bbbb')).toBe(200);
   });
 
   it('skips lines without the separator', () => {
-    const result = parsePaneList('codeman-aaaa 1234\ncodeman-bbbb|5678');
+    const result = pids('codeman-aaaa 1234\ncodeman-bbbb|5678');
     expect(result.size).toBe(1);
     expect(result.get('codeman-bbbb')).toBe(5678);
   });
 
   it('skips lines with a non-numeric pid', () => {
-    const result = parsePaneList('codeman-aaaa|notapid\ncodeman-bbbb|5678');
+    const result = pids('codeman-aaaa|notapid\ncodeman-bbbb|5678');
     expect(result.size).toBe(1);
     expect(result.get('codeman-bbbb')).toBe(5678);
   });
 
   it('skips lines with an empty session name', () => {
-    const result = parsePaneList('|1234\ncodeman-bbbb|5678');
+    const result = pids('|1234\ncodeman-bbbb|5678');
     expect(result.size).toBe(1);
     expect(result.get('codeman-bbbb')).toBe(5678);
   });
@@ -955,15 +962,341 @@ describe('parsePaneList', () => {
     // tab byte. With the '|' separator, such literals must not be silently
     // treated as a delimiter — the line is discarded because there is no '|'.
     const literalBackslashT = 'codeman-aaaa\\t1234';
-    const result = parsePaneList(literalBackslashT);
-    expect(result.size).toBe(0);
+    expect(parsePaneRows(literalBackslashT)).toEqual([]);
   });
 
-  it('splits on the first separator only', () => {
-    // Numeric trailing junk after the pid is tolerated by parseInt — proves
-    // that splitting on the first '|' leaves the pid extractable even if a
-    // future tmux ever appended extra fields.
-    const result = parsePaneList('codeman-aaaa|1234|extra-field');
-    expect(result.get('codeman-aaaa')).toBe(1234);
+  it('keeps a row whose pane_dead fields are missing, and calls its deadness unknown', () => {
+    // A tmux old enough to have shipped the previous two-field format, or one
+    // that dropped the trailing fields, must still yield its pid.
+    const [row] = parsePaneRows('codeman-aaaa|1234');
+    expect(row.pid).toBe(1234);
+    expect(row.dead).toBeUndefined();
+    expect(row.exitStatus).toBeUndefined();
+    expect(row.exitSignal).toBeUndefined();
   });
+
+  it('reads a live pane as not dead, with no status or signal', () => {
+    // Measured against tmux 3.2a: a live pane leaves both numeric fields blank.
+    const [row] = parsePaneRows('codeman-aaaa|1234|0|||1');
+    expect(row.dead).toBe(false);
+    expect(row.exitStatus).toBeUndefined();
+    expect(row.exitSignal).toBeUndefined();
+  });
+
+  it('reads a dead pane with its exit status', () => {
+    const [row] = parsePaneRows('codeman-aaaa|1234|1|7|');
+    expect(row.dead).toBe(true);
+    expect(row.exitStatus).toBe(7);
+    expect(row.exitSignal).toBeUndefined();
+  });
+
+  it('reads a dead pane with its killing signal', () => {
+    const [row] = parsePaneRows('codeman-aaaa|1234|1||9');
+    expect(row.dead).toBe(true);
+    expect(row.exitStatus).toBeUndefined();
+    expect(row.exitSignal).toBe(9);
+  });
+
+  it('leaves a status of 0 as 0 rather than dropping it', () => {
+    // The whole point of the field: a clean exit is the case part 2 acts on.
+    const [row] = parsePaneRows('codeman-aaaa|1234|1|0|');
+    expect(row.exitStatus).toBe(0);
+  });
+
+  it('still reads the pid when a trailing field is junk', () => {
+    // Carried over from the retired parsePaneList case 'splits on the first separator only'.
+    expect(pids('codeman-aaaa|1234|extra-field').get('codeman-aaaa')).toBe(1234);
+  });
+
+  it('calls a non-numeric dead flag unknown rather than false', () => {
+    const [row] = parsePaneRows('codeman-aaaa|1234|?||');
+    expect(row.dead).toBeUndefined();
+  });
+
+  it('returns one row per pane of a split session, in tmux order', () => {
+    const rows = parsePaneRows('codeman-aaaa|100|0|||\ncodeman-aaaa|200|1|0|');
+    expect(rows.map((row) => row.pid)).toEqual([100, 200]);
+    expect(rows.map((row) => row.sessionName)).toEqual(['codeman-aaaa', 'codeman-aaaa']);
+  });
+});
+
+describe('derivePaneExits', () => {
+  const NOW = 1_700_000_000_000;
+
+  it('reports a single dead pane with its exit status', () => {
+    const exits = derivePaneExits(parsePaneRows('codeman-aaaa|1234|1|0|'), NOW);
+    expect(exits.get('codeman-aaaa')).toEqual({ panePid: 1234, exit: { status: 0, at: NOW } });
+  });
+
+  it('reports a signalled death without inventing a status', () => {
+    // Folding an absent status into 0 would turn an unexplained death into the
+    // clean exit part 2 closes on sight.
+    const exits = derivePaneExits(parsePaneRows('codeman-aaaa|1234|1||9'), NOW);
+    expect(exits.get('codeman-aaaa')).toEqual({ panePid: 1234, exit: { signal: 9, at: NOW } });
+  });
+
+  it('reports a death tmux could not explain at all', () => {
+    // Measured on tmux 3.2a: a SIGKILLed pane reports pane_dead=1 and nothing else.
+    const exits = derivePaneExits(parsePaneRows('codeman-aaaa|1234|1||'), NOW);
+    expect(exits.get('codeman-aaaa')).toEqual({ panePid: 1234, exit: { at: NOW } });
+  });
+
+  it('says nothing about a live pane', () => {
+    const exits = derivePaneExits(parsePaneRows('codeman-aaaa|1234|0|||'), NOW);
+    expect(exits.has('codeman-aaaa')).toBe(false);
+  });
+
+  it('says nothing about a pane whose deadness tmux did not report', () => {
+    expect(derivePaneExits(parsePaneRows('codeman-aaaa|1234'), NOW).size).toBe(0);
+  });
+
+  it('says nothing about a session with more than one pane, even when all are dead', () => {
+    // A session the user split by hand has no single "the agent" to report on,
+    // and guessing which pane speaks for it could call a live session exited.
+    const exits = derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|\ncodeman-aaaa|200|1|0|'), NOW);
+    expect(exits.size).toBe(0);
+  });
+
+  it("answers per session, so one session's split does not silence another", () => {
+    const exits = derivePaneExits(
+      parsePaneRows('codeman-aaaa|100|1|0|\ncodeman-bbbb|200|1|0|\ncodeman-bbbb|201|0|||'),
+      NOW
+    );
+    expect([...exits.keys()]).toEqual(['codeman-aaaa']);
+  });
+});
+
+describe('TmuxManager pane-exit bookkeeping', () => {
+  const NOW = 1_700_000_000_000;
+
+  it('reports nothing before any tick has run', () => {
+    const manager = new TmuxManager();
+    expect(manager.getPaneExit('codeman-aaaa')).toBeUndefined();
+  });
+
+  it('keeps the timestamp of the FIRST tick that saw an unchanged exit', () => {
+    // The stamp says when the agent was found gone, so a pane that stays dead
+    // must not have its age reset every two seconds.
+    const manager = new TmuxManager();
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|'), NOW));
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|'), NOW + 2000));
+    expect(manager.getPaneExit('codeman-aaaa')).toEqual({ status: 0, at: NOW });
+  });
+
+  it('starts a new observation when the exit status changes', () => {
+    const manager = new TmuxManager();
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|'), NOW));
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|137|'), NOW + 2000));
+    expect(manager.getPaneExit('codeman-aaaa')).toEqual({ status: 137, at: NOW + 2000 });
+  });
+
+  it('forgets the exit once the same session reports a live pane', () => {
+    const manager = new TmuxManager();
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|'), NOW));
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|101|0|||'), NOW + 2000));
+    expect(manager.getPaneExit('codeman-aaaa')).toBeUndefined();
+  });
+
+  it('prunes an exit for a session an authoritative read did not mention', () => {
+    // `list-panes -a` lists every pane on the socket, so a session missing from
+    // a successful read has no pane at all and no exit to report. Keeping the
+    // entry would grow the map forever as tmux sessions come and go outside
+    // killSession(). A FAILED or empty read never reaches here — refreshPaneExits
+    // returns before calling this, which is the case the next test covers.
+    const manager = new TmuxManager();
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|'), NOW));
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-bbbb|200|1|0|'), NOW));
+    expect(manager.getPaneExit('codeman-aaaa')).toBeUndefined();
+    expect(manager.getPaneExit('codeman-bbbb')).toEqual({ status: 0, at: NOW });
+  });
+
+  it('starts a new observation when the same status comes from a different pane pid', () => {
+    // A second command in the same pane that also exited 0 is a NEW death, and
+    // its `at` must say so. Only reachable when the respawn bypassed
+    // respawnPane() — a hand-run `tmux respawn-pane` — since every Codeman path
+    // clears the entry outright.
+    const manager = new TmuxManager();
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|'), NOW));
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|101|1|0|'), NOW + 60_000));
+    expect(manager.getPaneExit('codeman-aaaa')).toEqual({ status: 0, at: NOW + 60_000 });
+  });
+
+  it('forgets an exit on request, which is what a respawned pane needs', () => {
+    const manager = new TmuxManager();
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|'), NOW));
+    manager.clearPaneExit('codeman-aaaa');
+    expect(manager.getPaneExit('codeman-aaaa')).toBeUndefined();
+  });
+});
+
+describe('the pane-exit watcher tick', () => {
+  // Every guard in `refreshPaneExits()` used to be unreachable: the method
+  // began with `if (IS_TEST_MODE) return;`, so deleting the generation check,
+  // the in-flight suppression, the empty-read rule or the read gate left the
+  // whole suite green. The tmux read now sits alone in `readPaneRows()`, which
+  // a subclass can answer for.
+  const NOW = 1_700_000_000_000;
+
+  class TestManager extends TmuxManager {
+    rows: PaneRow[] = [];
+    reads = 0;
+    /** While true, a read parks until releaseAll(), so a test can hold one in flight. */
+    hold = false;
+    private pending: (() => void)[] = [];
+
+    protected override async readPaneRows(): Promise<PaneRow[]> {
+      this.reads++;
+      // Every parked read is tracked, not just the latest: with the in-flight
+      // guard removed a second one starts, and a harness that could release
+      // only the last would deadlock instead of failing.
+      if (this.hold) await new Promise<void>((resolve) => this.pending.push(resolve));
+      return this.rows;
+    }
+
+    releaseAll(): void {
+      this.hold = false;
+      for (const resolve of this.pending.splice(0)) resolve();
+    }
+  }
+
+  const localSession = (sessionId = 's1'): MuxSession =>
+    ({
+      sessionId,
+      muxName: `codeman-${sessionId}`,
+      pid: 100,
+      createdAt: 0,
+      workingDir: '/tmp',
+      mode: 'claude',
+      attached: true,
+    }) as MuxSession;
+
+  const withLocalSession = () => {
+    const manager = new TestManager();
+    manager.registerSession(localSession());
+    return manager;
+  };
+
+  it('does not read tmux when no session could answer', async () => {
+    const manager = new TestManager();
+    await manager.refreshPaneExits(NOW);
+    expect(manager.reads).toBe(0);
+  });
+
+  it('reads tmux once a local session exists', async () => {
+    const manager = withLocalSession();
+    manager.rows = parsePaneRows('codeman-s1|100|1|0|');
+    await manager.refreshPaneExits(NOW);
+    expect(manager.reads).toBe(1);
+    expect(manager.getPaneExit('codeman-s1')).toEqual({ status: 0, at: NOW });
+  });
+
+  it('suppresses a second read while one is still in flight', async () => {
+    // EXEC_TIMEOUT_MS is 5000 against a 2000 ms tick, so a slow read outlives
+    // two ticks; without this the older one can resolve last and win.
+    const manager = withLocalSession();
+    manager.hold = true;
+    const first = manager.refreshPaneExits(NOW);
+    const second = manager.refreshPaneExits(NOW);
+    const reads = manager.reads;
+    manager.releaseAll();
+    await Promise.all([first, second]);
+    expect(reads).toBe(1);
+  });
+
+  it('retracts nothing when the read comes back empty', async () => {
+    // An empty read is "tmux did not answer". Retracting there would turn a
+    // transient failure into a silent denial of a death already observed.
+    const manager = withLocalSession();
+    manager.rows = parsePaneRows('codeman-s1|100|1|137|');
+    await manager.refreshPaneExits(NOW);
+    manager.rows = [];
+    await manager.refreshPaneExits(NOW + 2000);
+    expect(manager.getPaneExit('codeman-s1')).toEqual({ status: 137, at: NOW });
+  });
+
+  it('discards a read that started before the pane was cleared', async () => {
+    // The guard that stops an in-flight read from republishing a death over
+    // the pane that has just replaced it.
+    const manager = withLocalSession();
+    manager.rows = parsePaneRows('codeman-s1|100|1|0|');
+    manager.hold = true;
+    const pending = manager.refreshPaneExits(NOW);
+    manager.clearPaneExit('codeman-s1');
+    manager.releaseAll();
+    await pending;
+    expect(manager.getPaneExit('codeman-s1')).toBeUndefined();
+  });
+
+  it('announces each tick so the server can publish it', async () => {
+    // Losing this emit, or the server's own startPaneExitWatcher() call,
+    // disables the whole feature with nothing failing.
+    vi.useFakeTimers();
+    try {
+      const manager = withLocalSession();
+      manager.rows = parsePaneRows('codeman-s1|100|1||9');
+      const updates: number[] = [];
+      manager.on('paneExitsUpdated', () => updates.push(1));
+      manager.startPaneExitWatcher(10);
+      await vi.advanceTimersByTimeAsync(25);
+      manager.stopPaneExitWatcher();
+      expect(updates.length).toBeGreaterThan(0);
+      expect(manager.getPaneExit('codeman-s1')).toMatchObject({ signal: 9 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('hasObservablePaneSession', () => {
+  // The pane-exit watcher is always-on, so a tick with nothing to observe is
+  // the normal case on an instance running only remote or Docker work. This
+  // predicate is what keeps that tick from exec'ing tmux to find out.
+  const base = {
+    sessionId: 's1',
+    muxName: 'codeman-aaaa',
+    pid: 100,
+    createdAt: 0,
+    workingDir: '/tmp',
+    mode: 'claude' as const,
+    attached: true,
+  };
+
+  it('says no for an empty manager', () => {
+    expect(hasObservablePaneSession([])).toBe(false);
+  });
+
+  it('says yes for a local session, which is the whole reason the watcher runs', () => {
+    expect(hasObservablePaneSession([base])).toBe(true);
+  });
+
+  it('says no for a remote session, whose local pane holds the ssh client', () => {
+    expect(hasObservablePaneSession([{ ...base, remote: { host: 'box', user: 'me' } }])).toBe(false);
+  });
+
+  it('says no for a Docker case, whose local pane holds a `docker exec`', () => {
+    expect(hasObservablePaneSession([{ ...base, docker: { containerName: 'c1' } }])).toBe(false);
+  });
+
+  it('says no for a record rebuilt from the socket, which carries no provenance', () => {
+    // `reconcileSessions()` gives it a synthetic id that matches no state.json
+    // entry, so a remote session rediscovered that way looks local. Session
+    // forces UNKNOWN for it, so reading tmux for it buys nothing.
+    expect(hasObservablePaneSession([{ ...base, discovered: true }])).toBe(false);
+  });
+
+  it('says yes when one local session sits among sessions that cannot answer', () => {
+    // The read is one batched call for the whole socket, so a single local
+    // session is enough to make the tick worth paying for.
+    expect(
+      hasObservablePaneSession([
+        { ...base, sessionId: 's1', remote: { host: 'box', user: 'me' } },
+        { ...base, sessionId: 's2', discovered: true },
+        { ...base, sessionId: 's3' },
+      ])
+    ).toBe(true);
+  });
+
+  // The predicate has to agree with `Session.paneExitApplies`, which is where
+  // the rule is enforced; that pairing is pinned in session-pane-exit.test.ts,
+  // where a real Session can answer for itself.
 });

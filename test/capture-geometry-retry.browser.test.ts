@@ -136,9 +136,10 @@ async function stubTerminalDynamic(
 /**
  * Answer every fetch with the geometry the client itself is asking for, read
  * live from the page. That is the clamp signature: `getTerminalDimensions()`
- * floors at 40x10 while `fitAddon.fit()` does not, so a small enough viewport
- * makes the pane permanently bigger than the terminal at a size the client
- * requested itself.
+ * floors at 40x10, and since #464 `syncTerminalGeometry()` applies that floor
+ * to xterm too — so at a small enough viewport the pane, the report and the
+ * terminal all agree on the floored size, which is the case the equality guard
+ * is left covering.
  */
 async function stubTerminalAtRequestedSize(page: Page, counter: { n: number; urls: string[] }) {
   await page.route('**/api/sessions/*/terminal*', async (route) => {
@@ -498,13 +499,22 @@ describe('a capture bigger than the terminal', () => {
   }, 60_000);
 
   it('does not replay a pane already at the size the client asked for', async () => {
-    // `getTerminalDimensions()` floors at 40x10 while `fitAddon.fit()` does
-    // not, so a viewport this small leaves the terminal shorter than the size
-    // the client itself requests, and the pane obligingly draws at the floored
-    // size. The captured height then exceeds the terminal's forever. A replay
-    // cannot converge, because it re-requests the same floored size and
-    // captures the same frame, so without the equality guard this retries on
-    // every tab switch for the life of the page.
+    // ⚠️ The premise of this case CHANGED with issue #464, and the old one can
+    // never hold again. It used to be the clamp: `getTerminalDimensions()`
+    // floors at 40x10 while `fitAddon.fit()` did not, so a viewport this small
+    // left the terminal shorter than the size the client itself requested, the
+    // pane drew at the floored size, and the captured height exceeded the
+    // terminal's forever — a replay that re-requested the same floored size and
+    // captured the same frame, on every tab switch, for the life of the page.
+    //
+    // `syncTerminalGeometry()` now applies the floor to xterm as well, so the
+    // browser terminal IS the size it reports and that divergence is gone at
+    // the source. The case survives on its own terms — a pane already drawing
+    // at the requested size must not be replayed, because the retry would
+    // capture the identical frame — and its premise is now the #464 invariant
+    // itself, asserted below: the floored report and the terminal agree. That
+    // is a stronger guard than the old one, since the clamp coming back would
+    // fail it here rather than silently restoring the replay loop.
     context = await browser.newContext({ viewport: { width: 320, height: 200 } });
     page = await context.newPage();
     const sessionId = await openSession(page);
@@ -514,8 +524,9 @@ describe('a capture bigger than the terminal', () => {
     await consumeFullHistory(page, sessionId, fetches);
     await select(page, sessionId, { forceReload: true });
 
-    // The premise: the floor really does bind here. Without this the case
-    // would pass on any viewport, proving nothing.
+    // The premise: the floor really does bind at this viewport — otherwise the
+    // case would pass on any viewport, proving nothing — AND the terminal holds
+    // exactly what it reports, which is what stops the old replay loop.
     const requested = await page.evaluate(
       () =>
         (
@@ -523,7 +534,20 @@ describe('a capture bigger than the terminal', () => {
         ).app.getTerminalDimensions?.() ?? null
     );
     expect(requested).not.toBeNull();
-    expect(requested!.rows).toBeGreaterThan(await terminalRows(page));
+    const proposed = await page.evaluate(
+      () =>
+        (
+          window as unknown as { app: { fitAddon?: { proposeDimensions?: () => { cols: number; rows: number } } } }
+        ).app.fitAddon?.proposeDimensions?.() ?? null
+    );
+    expect(proposed, 'the terminal could not be measured').not.toBeNull();
+    expect(
+      proposed!.rows < requested!.rows || proposed!.cols < requested!.cols,
+      `the floor must bind at this viewport, or the case proves nothing (proposed ${proposed!.cols}x${proposed!.rows}, reported ${requested!.cols}x${requested!.rows})`
+    ).toBe(true);
+    // The #464 invariant: what the client reports is what the terminal holds.
+    expect(requested!.rows).toBe(await terminalRows(page));
+    expect(requested!.cols).toBe(await terminalCols(page));
 
     expect(fetches.n).toBe(1);
 

@@ -28,8 +28,11 @@
 import type { ApprovalItem, ApprovalOption } from '../web/approval-inbox.js';
 import type { TuiApprovalAnswer } from './tui-client.js';
 
-/** Card severity, in the same red/yellow vocabulary the web inbox uses. */
-export type TuiApprovalTone = 'err' | 'warn';
+/**
+ * Card severity, in the same red/yellow vocabulary the web inbox uses, plus the quiet
+ * third case: an item that opened acknowledged asks for nothing and reads grey.
+ */
+export type TuiApprovalTone = 'err' | 'warn' | 'info';
 
 export interface TuiApprovalCard {
   tone: TuiApprovalTone;
@@ -50,8 +53,14 @@ function clean(text: string | undefined): string {
   return (text ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_CARD_TEXT);
 }
 
+/**
+ * How loud the card is. An idle prompt the inbox opened ALREADY acknowledged is not
+ * asking for anything — the session is watching work it started itself — so it drops to
+ * `info` and out of the warning vocabulary the other two share with the web inbox.
+ */
 export function approvalTone(item: ApprovalItem): TuiApprovalTone {
-  return item.kind === 'idle' ? 'warn' : 'err';
+  if (item.kind !== 'idle') return 'err';
+  return item.acknowledgedReason ? 'info' : 'warn';
 }
 
 /**
@@ -65,9 +74,13 @@ export function approvalCard(item: ApprovalItem): TuiApprovalCard {
   const summary = clean(item.toolSummary) || clean(item.toolName);
 
   if (item.kind === 'idle') {
+    // Say what it is waiting for rather than asking for a reply, in the same words the
+    // web drawer uses for the same item. The prompt is still answerable, so the hint
+    // stays either way.
+    const quiet = clean(item.acknowledgedReason);
     return {
-      tone: 'warn',
-      title: message || 'waiting for your reply',
+      tone: approvalTone(item),
+      title: quiet ? `quiet, ${quiet}` : message || 'waiting for your reply',
       detail: [],
       options: [],
       hint: 'p to reply',
