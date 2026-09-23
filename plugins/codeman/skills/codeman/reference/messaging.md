@@ -101,8 +101,8 @@ the case name, read it from the listing.
 From Codeman 1.16 a LOCAL claude spawn passes `--name <session name>` when the local
 CLI is 2.1.224+ (`buildNameCliArgs`, `session-cli-builder.ts:97-101`, wired in at
 `tmux-manager.ts:797`), so a worker's peer name usually IS its Codeman session name
-(verified live: quick-start with `sessionName: "w9-msgtest"` listed as `w9-msgtest`,
-and its messages arrive tagged `from-name="w9-msgtest"`; a derived-name worker's
+(verified live: a quick-start `sessionName` is listed as that exact peer name, and
+the worker's messages arrive tagged `from-name="<that name>"`; a derived-name worker's
 messages carry no `from-name`). Name your workers: a quick-start WITHOUT
 `sessionName` leaves the Codeman name empty, so there is nothing to pass and the
 peer name stays derived. ⚠️ Give them a DESCRIPTIVE name: only a name the user chose

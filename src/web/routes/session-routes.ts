@@ -1163,6 +1163,9 @@ export function registerSessionRoutes(
     const session = findSessionOrFail(ctx, id, req);
 
     const name = String(body.name || '').slice(0, MAX_SESSION_NAME_LENGTH);
+    // A no-op rename (the Session Options name field saves on blur and recomposes the same
+    // string) must not flip nameSource to 'manual' or append a custom-title row to the transcript.
+    if (name === session.name) return { name: session.name };
     session.name = name;
     // Also update the mux session name if applicable
     ctx.mux.updateSessionName(id, session.name);
@@ -2381,11 +2384,12 @@ export function registerSessionRoutes(
 
   /**
    * Mirror a rename into the conversation's `/resume` title (claude-session-title.ts).
-   * Local Claude-format transcripts only: a remote pane's transcript lives on the remote host. Best
+   * Local Claude-format transcripts only: a remote pane's transcript lives on the remote host and a
+   * docker pane's inside the container (HOME=/home/agent), never under the host's projects dir. Best
    * effort: the tab rename has already happened and must not fail on this.
    */
   async function syncClaudeTitle(session: Session): Promise<void> {
-    if (getCli(session.mode)?.capabilities.transcript !== 'claude-jsonl' || session.remote) return;
+    if (getCli(session.mode)?.capabilities.transcript !== 'claude-jsonl' || session.remote || session.docker) return;
     try {
       const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
       const hookPath = ctx.getTranscriptPath(session.id);

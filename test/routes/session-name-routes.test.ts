@@ -48,6 +48,23 @@ describe('PUT /api/sessions/:id/name', () => {
     rmSync(transcriptDir, { recursive: true, force: true });
   });
 
+  it('treats a same-name PUT as a no-op: stays placeholder, writes no title row', async () => {
+    // The Session Options field saves on blur and recomposes the unchanged placeholder.
+    const before = transcriptRows().length;
+    const res = await harness.app.inject({
+      method: 'PUT',
+      url: `/api/sessions/${session.id}/name`,
+      payload: { name: 'w1-demo' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ name: 'w1-demo' });
+    expect(session.nameSource).toBe('placeholder');
+    expect(transcriptRows()).toHaveLength(before);
+    expect(updateSessionName).not.toHaveBeenCalled();
+    expect(harness.ctx.persistSessionState).not.toHaveBeenCalled();
+  });
+
   it('flips a placeholder to manual, then persists and broadcasts the ownership', async () => {
     expect(session.nameSource).toBe('placeholder');
 
@@ -100,5 +117,34 @@ describe('PUT /api/sessions/:id/name', () => {
 
     expect(res.statusCode).toBe(200);
     expect(transcriptRows()).toHaveLength(before);
+  });
+
+  it('appends a title row only once when the same name is PUT twice', async () => {
+    const before = transcriptRows().length;
+    for (let i = 0; i < 2; i++) {
+      await harness.app.inject({
+        method: 'PUT',
+        url: `/api/sessions/${session.id}/name`,
+        payload: { name: 'twice' },
+      });
+    }
+    expect(transcriptRows()).toHaveLength(before + 1);
+  });
+
+  it('writes no title row for a docker session, whose transcript lives in the container', async () => {
+    const before = transcriptRows().length;
+    Object.defineProperty(session, 'docker', { configurable: true, get: () => ({ caseName: 'c' }) });
+    try {
+      const res = await harness.app.inject({
+        method: 'PUT',
+        url: `/api/sessions/${session.id}/name`,
+        payload: { name: 'in a container' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(session.name).toBe('in a container');
+      expect(transcriptRows()).toHaveLength(before);
+    } finally {
+      delete (session as unknown as Record<string, unknown>).docker;
+    }
   });
 });

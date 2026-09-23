@@ -692,8 +692,9 @@ The shape, each step verified live (probes, failure modes and safety detail in
    [§5.2](#52-readiness)).
 2. `ListAgents`: find the worker's row by its `tmux codeman-<first 8 of session id>`
    column; the row's `name [ref]` is the address. On Codeman 1.16+ with claude
-   2.1.224+ a worker's peer name is its Codeman session name, so pass `sessionName`
-   in quick-start to pick it; older setups list a name derived from the case folder.
+   2.1.224+ a worker's peer name is its Codeman session name, so pass a DESCRIPTIVE
+   `sessionName` in quick-start to pick it (a `w<N>-` placeholder-shaped name is not
+   pinned, so it lists derived); older setups list a name derived from the case folder.
    No row = messaging is off for that worker (it is feature-flagged even on matching
    CLI versions, observed live): fall back to the HTTP recipes without complaint.
 3. `SendMessage` the task; first contact must use the `name [ref]` form copied from

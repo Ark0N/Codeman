@@ -340,7 +340,7 @@ ESC=$(printf '\033')
 ### Starting a worker
 
 `POST /api/v1/quick-start` body (all optional):
-`{"caseName":"worker-1","mode":"claude","sessionName":"w9-worker","effort":"high"}`
+`{"caseName":"worker-1","mode":"claude","sessionName":"auth-worker","effort":"high"}`
 ,  `mode` ∈ `claude|shell|opencode|codex|gemini|antigravity|pi|grok|deepseek|omp`; response is
 `.data.{sessionId, caseName, casePath}`. Creates the case directory (a real directory
 on the user's disk) if missing, do not retry it in a loop, and remember the name.
