@@ -35,6 +35,8 @@ import { STOCK_CLIS } from '../../config/cli-registry/stock.js';
 import type { CliEntry } from '../../config/cli-registry/types.js';
 import { CliCustomEntrySchema, CliEnableSchema } from '../schemas.js';
 import { appendAdminAudit } from '../admin-audit.js';
+import { invalidateCliExecutableResolvers } from '../../utils/cli-executable-resolver.js';
+import { invalidateCliResolverCache, isCliAvailable as isRegistryCliAvailable } from '../../utils/cli-resolver.js';
 
 /**
  * `cliManagementEnabled` defaults OFF, same reasoning as
@@ -56,6 +58,13 @@ export interface CliListItem {
   enabled: boolean;
   stock: boolean;
   installed: boolean;
+  /**
+   * The command `POST /api/clis/:id/install` would run, for a STOCK entry only, so the
+   * Settings UI can name it in the confirm dialog before anything executes. The same
+   * display text `missingCliMessage()` already prints in "CLI not found. Install with: …";
+   * absent for a custom entry, whose install command is never executed (Decision 3).
+   */
+  installCommand?: string;
 }
 
 /**
@@ -66,9 +75,8 @@ export interface CliListItem {
  * resolvers when the CLI-management section is never opened; Node caches the
  * module after the first call, so repeat requests cost nothing extra.
  *
- * ⚠️ STOCK-ONLY. There is no per-id resolver for a CUSTOM entry — Phase 5's
- * custom entries report `installed: false` from a GENERIC probe instead (a
- * plain `which`-style search over the entry's own `discovery.binaries`).
+ * STOCK-ONLY by construction; a custom entry goes through the registry's generic
+ * resolver instead (`probeInstalled` below).
  */
 const STOCK_INSTALLED_PROBES: Record<string, () => Promise<boolean>> = {
   claude: async () => (await import('../../utils/claude-cli-resolver.js')).isClaudeAvailable(),
@@ -86,38 +94,29 @@ const STOCK_INSTALLED_PROBES: Record<string, () => Promise<boolean>> = {
 };
 
 /**
- * A CUSTOM entry's own installed probe: a plain PATH search (`which`/`where`) over its
- * declared binaries, since there is no per-id resolver for a user-defined CLI. Deliberately
- * simple — this is an informational badge in a settings list, not a launch-time gate (the
- * actual resolver chain a session spawn uses is unrelated to this probe) — so it skips the
- * full retry/negative-cache machinery `cli-executable-resolver.ts` builds for the heavier,
- * request-hot stock resolvers.
- *
- * No real IO under vitest, same discipline as every other resolver in this codebase
- * (`IS_TEST_MODE` in tmux-manager, the VITEST gate in cli-executable-resolver.ts): a test
- * run must never scan the real machine's PATH.
+ * A custom entry is probed through the registry's GENERIC resolver (cli-resolver.ts) —
+ * the same one a session spawn uses (`missingCliMessage`/`resolveCliBinDir`) and the same
+ * one `renderIndexHtml` uses for the Run menu. A private `which` here used to disagree with
+ * both, since it ignored the entry's `searchDirs` and the login-shell lookup: the badge
+ * could say "Not installed" for a CLI the Run menu happily launched.
  */
-async function probeCustomInstalled(entry: CliEntry): Promise<boolean> {
-  if (process.env.VITEST) return false;
-  const { execFileSync } = await import('node:child_process');
-  const whichCmd = process.platform === 'win32' ? 'where' : 'which';
-  for (const binary of entry.discovery.binaries) {
-    try {
-      execFileSync(whichCmd, [binary], { stdio: 'ignore', timeout: 3000 });
-      return true;
-    } catch {
-      /* not on PATH, try the next declared binary */
-    }
-  }
-  return false;
-}
-
 async function probeInstalled(entry: CliEntry): Promise<boolean> {
   if (entry.stock) {
     const probe = STOCK_INSTALLED_PROBES[entry.id as string];
     return probe ? probe() : false;
   }
-  return probeCustomInstalled(entry);
+  return isRegistryCliAvailable(entry.id as string);
+}
+
+/**
+ * Forget every cached binary lookup for this CLI — the generic per-id resolver (which
+ * captures the entry's binaries when first built) and every underlying per-binary cache,
+ * success and negative-cache backoff alike. Called after anything that changes what is on
+ * disk or what the CLI's binary IS; see `invalidateCliExecutableResolvers`.
+ */
+function forgetResolvedCli(id: string, binaries: readonly string[]): void {
+  invalidateCliExecutableResolvers(binaries);
+  invalidateCliResolverCache(id);
 }
 
 const STOCK_IDS = new Set(STOCK_CLIS.map((e) => e.id as string));
@@ -328,6 +327,7 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
         enabled: entry.enabled,
         stock: entry.stock,
         installed: await probeInstalled(entry),
+        ...(entry.stock ? { installCommand: resolveInstallCommandForPlatform(entry) } : {}),
       }))
     );
     return { success: true, data };
@@ -395,6 +395,10 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
       }
 
       const result = await runInstallCommand(command);
+      // Even a failed or timed-out install may have left a binary behind, so forget the
+      // cached lookups either way: the next Run click or badge read probes afresh
+      // instead of replaying a pre-install miss for up to the 5-minute backoff.
+      forgetResolvedCli(id, entry.discovery.binaries);
       const admin = getAuthUser(req).username;
       void appendAdminAudit({
         admin,
@@ -449,6 +453,9 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
     file.clis = { ...file.clis, [body.id]: toStore };
     await writeRegistryFile(file);
     reloadCliRegistry();
+    // A resolver may already exist for this id (a same-named entry deleted earlier in
+    // this process) and would keep probing that entry's binaries.
+    forgetResolvedCli(body.id, body.binaries);
     return { success: true, data: { id: body.id } };
   });
 
@@ -473,7 +480,9 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, `No custom CLI "${id}"`);
     }
 
-    const existingOrder = listClis().find((e) => (e.id as string) === id)?.order ?? nextOrder();
+    const existing = listClis().find((e) => (e.id as string) === id);
+    const existingOrder = existing?.order ?? nextOrder();
+    const previousBinaries = existing?.discovery.binaries ?? [];
     const candidate = buildCustomCliEntry(body, existingOrder);
     const parsed = CliEntrySchema.safeParse(candidate);
     if (!parsed.success) {
@@ -484,6 +493,9 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
     file.clis = { ...file.clis, [id]: toStore };
     await writeRegistryFile(file);
     reloadCliRegistry();
+    // The generic resolver captured the OLD binaries when first built; without this a
+    // session spawn kept launching the previous binary until a restart.
+    forgetResolvedCli(id, [...previousBinaries, ...body.binaries]);
     return { success: true, data: { id } };
   });
 
@@ -503,10 +515,12 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
     if (!Object.prototype.hasOwnProperty.call(file.clis, id)) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, `No custom CLI "${id}"`);
     }
+    const previousBinaries = listClis().find((e) => (e.id as string) === id)?.discovery.binaries ?? [];
     const { [id]: _removed, ...rest } = file.clis;
     file.clis = rest;
     await writeRegistryFile(file);
     reloadCliRegistry();
+    forgetResolvedCli(id, previousBinaries);
     return { success: true, data: { id } };
   });
 }

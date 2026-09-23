@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
+import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
 
 const PUBLIC = resolve(import.meta.dirname, '../src/web/public');
 
@@ -536,5 +537,57 @@ describe('mobile overview watching badge', () => {
     expect(app._buildWatchingBadge('1 shell', 'home-sessions-pill').className).toBe(
       'home-sessions-pill home-sessions-pill--watching'
     );
+  });
+});
+
+describe('mobile overview Run picker, driven by the registry catalogue', () => {
+  function loadRunModes(catalog: unknown[] | undefined) {
+    const context = vm.createContext({
+      CodemanApp: function CodemanApp() {},
+      console,
+      window: catalog ? { __codemanCliCatalog: catalog } : {},
+      document: {
+        getElementById: () => null,
+        createElement: () => fakeElement(),
+        createElementNS: () => fakeElement(),
+      },
+      MobileDetection: { getDeviceType: () => 'mobile' },
+    });
+    for (const file of ['constants.js', 'mobile-overview.js']) {
+      vm.runInContext(readFileSync(resolve(PUBLIC, file), 'utf8'), context, { filename: file });
+    }
+    return {
+      modes: JSON.parse(JSON.stringify(vm.runInContext('mobileOverviewRunModes()', context))),
+      staticTable: JSON.parse(JSON.stringify(vm.runInContext('MOBILE_OVERVIEW_RUN_MODES', context))),
+    };
+  }
+
+  it('keeps the Run button on its word label, never the two-letter tab badge', () => {
+    const { modes } = loadRunModes([
+      { id: 'claude', label: 'Claude', shortBadge: 'CC', kind: 'agent', enabled: true },
+      { id: 'codex', label: 'Codex', shortBadge: 'CX', kind: 'agent', enabled: true },
+      { id: 'grok', label: 'Grok', shortBadge: 'GK', kind: 'agent', enabled: false },
+      { id: 'shell', label: 'Shell', shortBadge: 'SH', kind: 'shell', enabled: true },
+    ]);
+    expect(modes).toEqual([
+      { mode: 'claude', label: 'Claude Code', short: 'Claude' },
+      { mode: 'codex', label: 'Codex', short: 'Codex' },
+      { mode: 'shell', label: 'Terminal / Shell', short: 'Shell' },
+    ]);
+  });
+
+  it('renders every stock CLI exactly as the static fallback table did', () => {
+    // The catalogue-driven path must be byte-identical to the pre-registry table for the
+    // shipped CLIs; only a CLI the table never knew (a custom entry) may differ.
+    const catalog = STOCK_CLIS.map((e) => ({
+      id: e.id,
+      label: e.label,
+      shortBadge: e.shortBadge,
+      kind: e.kind,
+      enabled: true,
+    }));
+    const { modes, staticTable } = loadRunModes(catalog);
+    const byMode = (list: Array<{ mode: string }>) => [...list].sort((a, b) => a.mode.localeCompare(b.mode));
+    expect(byMode(modes)).toEqual(byMode(staticTable));
   });
 });

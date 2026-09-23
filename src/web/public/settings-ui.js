@@ -2910,6 +2910,16 @@ Object.assign(CodemanApp.prototype, {
   },
 
   async installCliEntry(id) {
+    // Installing runs a command on the server, so it never happens on a single click:
+    // the confirm names the exact command POST /api/clis/:id/install would run (the
+    // #343 review's "auto-install may end up behind an explicit confirm").
+    const entry = (this._cliList || []).find((c) => c.id === id);
+    const label = entry?.label || id;
+    const command = entry?.installCommand;
+    const prompt = command
+      ? `Install ${label}? This runs the following on the Codeman server:\n\n${command}`
+      : `Install ${label}? This runs its official install command on the Codeman server.`;
+    if (!confirm(prompt)) return;
     const btn = document.getElementById(`cliInstallBtn-${id}`);
     if (btn) {
       btn.disabled = true;

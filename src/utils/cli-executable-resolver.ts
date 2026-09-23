@@ -204,6 +204,28 @@ export function createProductionCliResolverHost(options: ProductionCliResolverHo
   };
 }
 
+/**
+ * Per-binary invalidation generation, bumped by `invalidateCliExecutableResolvers()`.
+ *
+ * Every resolver instance (each per-CLI module's private one AND the generic registry
+ * resolver in cli-resolver.ts) is built by the factory below and caches in its own
+ * closure, so there is no instance to reach from outside. Keying on the BINARY name is
+ * what lets one call reach all of them: the CLI-management install/update routes know
+ * which binaries just changed, and every resolver knows its own.
+ */
+const binaryGenerations = new Map<string, number>();
+
+/**
+ * Forget every cached result — success and negative-cache backoff alike — for these
+ * binaries, so the next `resolve()` re-runs the chain immediately. For an action that
+ * just changed what is on disk (an install) or what a CLI's binary IS (editing a custom
+ * entry): without it a CLI installed from Settings kept reading as missing for up to the
+ * 5-minute backoff, and an edited entry kept launching its old binary until a restart.
+ */
+export function invalidateCliExecutableResolvers(binaries: readonly string[]): void {
+  for (const binary of binaries) binaryGenerations.set(binary, (binaryGenerations.get(binary) ?? 0) + 1);
+}
+
 export function createCliExecutableResolver<T = undefined>(
   options: {
     binary: string;
@@ -235,6 +257,8 @@ export function createCliExecutableResolver<T = undefined>(
   let failures = 0;
   /** Timestamp of the most recent miss. */
   let lastFailureAt = 0;
+  /** The invalidation generation the cached state above belongs to. */
+  let generation = binaryGenerations.get(options.binary) ?? 0;
   const accept = (path: string | null, source: CliResolutionSource): CliResolution<T> | null => {
     if (!path || !isAbsolute(path) || !host.exists(path)) return null;
     const validation = options.validateCandidate?.(path) ?? ({ accepted: true } as CandidateValidation<T>);
@@ -249,6 +273,13 @@ export function createCliExecutableResolver<T = undefined>(
 
   return {
     resolve() {
+      const current = binaryGenerations.get(options.binary) ?? 0;
+      if (current !== generation) {
+        generation = current;
+        cached = null;
+        failures = 0;
+        lastFailureAt = 0;
+      }
       if (cached) return cached;
       // Negative cache: a miss is remembered and the chain — whose login-shell
       // tail is a synchronous 5s-bounded spawn — is not re-run until the

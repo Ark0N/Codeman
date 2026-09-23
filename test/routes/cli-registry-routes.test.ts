@@ -10,13 +10,62 @@
  *
  * Port: N/A (app.inject(), no live server).
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 import { mkdirSync, writeFileSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerCliRegistryRoutes, type CliListItem } from '../../src/web/routes/cli-registry-routes.js';
 import { SETTINGS_PATH } from '../../src/web/route-helpers.js';
-import { getCli, registryFilePath } from '../../src/config/cli-registry/registry.js';
+import { getCli, registryFilePath, resolveInstallCommandForPlatform } from '../../src/config/cli-registry/registry.js';
+
+// The install route spawns a real shell command, so `spawn` is replaced with a fake
+// child (every other child_process export stays real). The two cache invalidators are
+// wrapped pass-through spies: the real invalidation still runs, and the tests can see
+// WHICH binaries and id each route forgot.
+const { spawnMock, invalidateBinariesSpy, invalidateIdSpy } = vi.hoisted(() => ({
+  spawnMock: vi.fn(),
+  invalidateBinariesSpy: vi.fn(),
+  invalidateIdSpy: vi.fn(),
+}));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, spawn: spawnMock };
+});
+vi.mock('../../src/utils/cli-executable-resolver.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/utils/cli-executable-resolver.js')>();
+  return {
+    ...actual,
+    invalidateCliExecutableResolvers: (binaries: readonly string[]) => {
+      invalidateBinariesSpy([...binaries]);
+      actual.invalidateCliExecutableResolvers(binaries);
+    },
+  };
+});
+vi.mock('../../src/utils/cli-resolver.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/utils/cli-resolver.js')>();
+  return {
+    ...actual,
+    invalidateCliResolverCache: (id?: string) => {
+      invalidateIdSpy(id);
+      actual.invalidateCliResolverCache(id);
+    },
+  };
+});
+
+/** A spawned install that prints one line and exits with `code` on the next tick. */
+function fakeInstallChild(code: number): EventEmitter {
+  const child = new EventEmitter() as EventEmitter & Record<string, unknown>;
+  const stdout = new EventEmitter();
+  child.stdout = stdout;
+  child.stderr = new EventEmitter();
+  child.kill = vi.fn();
+  setImmediate(() => {
+    stdout.emit('data', Buffer.from(code === 0 ? 'installed\n' : 'boom\n'));
+    child.emit('close', code);
+  });
+  return child;
+}
 
 /** Every write endpoint requires this on; toggled per-test by writing settings.json directly. */
 function enableCliManagement(): void {
@@ -431,5 +480,102 @@ describe('Custom CLI entries (Phase 5)', () => {
     });
     expect(relabel.statusCode).toBe(200);
     await app.inject({ method: 'DELETE', url: '/api/clis/test-toggle' });
+  });
+});
+
+describe('resolver caches are forgotten when what a CLI resolves to changes', () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+    invalidateBinariesSpy.mockClear();
+    invalidateIdSpy.mockClear();
+  });
+
+  it('GET /api/clis names the install command for a stock entry only (for the confirm dialog)', async () => {
+    enableCliManagement();
+    const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+    await app.inject({
+      method: 'POST',
+      url: '/api/clis',
+      payload: { id: 'test-cmd', label: 'X', shortBadge: 'X', binaries: ['x'], argv: ['x'] },
+    });
+    const list = (await app.inject({ method: 'GET', url: '/api/clis' })).json() as { data: CliListItem[] };
+    const grok = list.data.find((c) => c.id === 'grok');
+    expect(grok?.installCommand).toBe(resolveInstallCommandForPlatform(getCli('grok')!));
+    expect(list.data.find((c) => c.id === 'test-cmd')).not.toHaveProperty('installCommand');
+    await app.inject({ method: 'DELETE', url: '/api/clis/test-cmd' });
+  });
+
+  it('a successful install runs the stock command and forgets that CLI’s cached lookups', async () => {
+    enableCliManagement();
+    spawnMock.mockImplementation(() => fakeInstallChild(0));
+    const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+    const res = await app.inject({ method: 'POST', url: '/api/clis/grok/install' });
+    expect(res.statusCode).toBe(200);
+    const grok = getCli('grok')!;
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock.mock.calls[0][0]).toBe(resolveInstallCommandForPlatform(grok));
+    expect(spawnMock.mock.calls[0][1]).toMatchObject({ shell: true, detached: true });
+    // Without this, the Run menu and a session spawn replayed the pre-install miss
+    // for up to the 5-minute negative-cache backoff.
+    expect(invalidateBinariesSpy).toHaveBeenCalledWith(grok.discovery.binaries);
+    expect(invalidateIdSpy).toHaveBeenCalledWith('grok');
+  });
+
+  it('a failed install still forgets the cached lookups (it may have left a binary behind)', async () => {
+    enableCliManagement();
+    spawnMock.mockImplementation(() => fakeInstallChild(1));
+    const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+    const res = await app.inject({ method: 'POST', url: '/api/clis/grok/install' });
+    expect(res.json().errorCode).toBe('OPERATION_FAILED');
+    expect(invalidateIdSpy).toHaveBeenCalledWith('grok');
+  });
+
+  it('never spawns anything for a custom entry, even though the route exists', async () => {
+    enableCliManagement();
+    const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+    await app.inject({
+      method: 'POST',
+      url: '/api/clis',
+      payload: { id: 'test-nospawn', label: 'X', shortBadge: 'X', binaries: ['x'], argv: ['x'] },
+    });
+    await app.inject({ method: 'POST', url: '/api/clis/test-nospawn/install' });
+    expect(spawnMock).not.toHaveBeenCalled();
+    await app.inject({ method: 'DELETE', url: '/api/clis/test-nospawn' });
+  });
+
+  it('editing a custom entry forgets BOTH its old and new binaries, and its id', async () => {
+    enableCliManagement();
+    const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+    await app.inject({
+      method: 'POST',
+      url: '/api/clis',
+      payload: { id: 'test-rebin', label: 'X', shortBadge: 'X', binaries: ['old-bin'], argv: ['old-bin'] },
+    });
+    invalidateBinariesSpy.mockClear();
+    invalidateIdSpy.mockClear();
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/clis/custom/test-rebin',
+      payload: { label: 'X', shortBadge: 'X', binaries: ['new-bin'], argv: ['new-bin'] },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(invalidateBinariesSpy).toHaveBeenCalledWith(['old-bin', 'new-bin']);
+    expect(invalidateIdSpy).toHaveBeenCalledWith('test-rebin');
+    await app.inject({ method: 'DELETE', url: '/api/clis/test-rebin' });
+  });
+
+  it('deleting a custom entry forgets its binaries and id, so a same-named re-create starts clean', async () => {
+    enableCliManagement();
+    const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+    await app.inject({
+      method: 'POST',
+      url: '/api/clis',
+      payload: { id: 'test-forget', label: 'X', shortBadge: 'X', binaries: ['gone-bin'], argv: ['gone-bin'] },
+    });
+    invalidateBinariesSpy.mockClear();
+    invalidateIdSpy.mockClear();
+    await app.inject({ method: 'DELETE', url: '/api/clis/test-forget' });
+    expect(invalidateBinariesSpy).toHaveBeenCalledWith(['gone-bin']);
+    expect(invalidateIdSpy).toHaveBeenCalledWith('test-forget');
   });
 });

@@ -8,6 +8,7 @@ import {
   createCliExecutableResolver,
   createProductionCliResolverHost,
   formatCliNotFoundMessage,
+  invalidateCliExecutableResolvers,
   type CliResolverHost,
 } from '../src/utils/cli-executable-resolver.js';
 
@@ -127,6 +128,49 @@ describe('createCliExecutableResolver', () => {
     expect(resolver.resolve()?.binaryPath).toBe('/new/bin/codex');
     expect(resolver.resolve()?.binaryPath).toBe('/new/bin/codex');
     expect(findInLoginShell).toHaveBeenCalledTimes(2);
+  });
+
+  it('invalidation drops a negative-cache backoff immediately (a CLI installed from Settings)', () => {
+    let now = 0;
+    const findInLoginShell = vi.fn<() => string | null>().mockReturnValueOnce(null).mockReturnValue('/new/bin/grokx');
+    const h = host({ findInLoginShell, exists: vi.fn((path) => path === '/new/bin/grokx') });
+    const resolver = createCliExecutableResolver({ binary: 'grokx', searchDirs: [], now: () => now }, h);
+
+    expect(resolver.resolve()).toBeNull();
+    // Still inside the backoff window: without invalidation this answers from the
+    // negative cache for up to five minutes after a successful install.
+    now = 1;
+    invalidateCliExecutableResolvers(['grokx']);
+    expect(resolver.resolve()?.binaryPath).toBe('/new/bin/grokx');
+    expect(findInLoginShell).toHaveBeenCalledTimes(2);
+  });
+
+  it('invalidation drops a cached success too, so an edited binary is re-resolved', () => {
+    const findOnProcessPath = vi
+      .fn<() => string | null>()
+      .mockReturnValueOnce('/old/bin/editedx')
+      .mockReturnValue('/new/bin/editedx');
+    const h = host({ findOnProcessPath, exists: vi.fn(() => true) });
+    const resolver = createCliExecutableResolver({ binary: 'editedx', searchDirs: [] }, h);
+
+    expect(resolver.resolve()?.binaryPath).toBe('/old/bin/editedx');
+    expect(resolver.resolve()?.binaryPath).toBe('/old/bin/editedx');
+    invalidateCliExecutableResolvers(['editedx']);
+    expect(resolver.resolve()?.binaryPath).toBe('/new/bin/editedx');
+    // And the fresh result is cached again rather than re-probed every call.
+    expect(resolver.resolve()?.binaryPath).toBe('/new/bin/editedx');
+    expect(findOnProcessPath).toHaveBeenCalledTimes(2);
+  });
+
+  it('invalidation is scoped to the named binaries and leaves every other cache alone', () => {
+    const findOnProcessPath = vi.fn(() => '/bin/untouchedx');
+    const h = host({ findOnProcessPath, exists: vi.fn(() => true) });
+    const resolver = createCliExecutableResolver({ binary: 'untouchedx', searchDirs: [] }, h);
+
+    resolver.resolve();
+    invalidateCliExecutableResolvers(['some-other-binary']);
+    resolver.resolve();
+    expect(findOnProcessPath).toHaveBeenCalledTimes(1);
   });
 
   it('doubles the retry delay per consecutive miss and caps it at five minutes', () => {

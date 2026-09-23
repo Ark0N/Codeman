@@ -78,7 +78,11 @@ function mobileOverviewRunModes() {
     .map((entry) => ({
       mode: entry.id,
       label: entry.kind === SHELL_KIND ? 'Terminal / Shell' : entry.label === 'Claude' ? 'Claude Code' : entry.label,
-      short: entry.shortBadge,
+      // The registry `label`, not `shortBadge`: the Run button has always shown a word
+      // ("Claude", "Codex", "Shell"), and every stock label IS that word, so this stays
+      // identical to MOBILE_OVERVIEW_RUN_MODES above. `shortBadge` is the two-letter tab
+      // code ("CC", "CX"), which read as a regression on the button.
+      short: entry.label,
     }));
 }
 
