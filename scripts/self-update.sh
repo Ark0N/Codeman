@@ -74,6 +74,15 @@ echo "[self-update] $(date) start tag=$TAG supervisor=$SUPERVISOR repo=$REPO"
 export PATH="$(dirname "$NODE"):$HOME/.local/bin:$HOME/.npm-global/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
 export GIT_TERMINAL_PROMPT=0
 
+# --node is the server's process.execPath, a VERSIONED path (Homebrew resolves it
+# into Cellar/node/<ver>/). A `brew upgrade node` under a long-running server
+# deletes it, and every status write then failed, so the status stayed "queued"
+# forever. Fall back to whatever node is on PATH.
+if [ ! -x "$NODE" ]; then
+  echo "[self-update] WARN: $NODE is not executable, falling back to node on PATH"
+  NODE="$(command -v node || echo node)"
+fi
+
 TO_VERSION="${TAG##*@}"   # codeman@0.9.4 → 0.9.4 (tag is validated upstream)
 STASH_REF=""
 MANUAL_CMD=""

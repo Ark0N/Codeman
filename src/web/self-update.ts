@@ -226,6 +226,29 @@ export function reconcileStatusDecision(
   return null;
 }
 
+/**
+ * PURE runtime staleness check, applied whenever the status is READ (not only on
+ * boot). The live updater heartbeats `updatedAt` every few seconds, so an
+ * in-flight status whose last write is older than the window has no updater
+ * behind it. Without this, a status that never advanced (e.g. the updater could
+ * not run its `--node` binary because Homebrew upgraded node under a long-running
+ * server, so every status write failed) blocked every later update with "An
+ * update is already in progress." until the server happened to restart.
+ * Returns the failed status to persist, or null to leave the status untouched.
+ */
+export function expireStalledStatus(status: UpdateStatus | null, now: number): UpdateStatus | null {
+  if (!status || !IN_FLIGHT_PHASES.has(status.phase)) return null;
+  const lastWrite = status.updatedAt || status.startedAt;
+  if (now - lastWrite <= RECONCILE_STALE_MS) return null;
+  return {
+    ...status,
+    phase: 'failed',
+    message: 'Update stopped reporting progress',
+    error: `no status update for ${Math.round((now - lastWrite) / 60_000)} min during "${status.phase}"`,
+    updatedAt: now,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // PURE helpers — the container environment gate
 // ─────────────────────────────────────────────────────────────────────────────
@@ -378,6 +401,19 @@ export function writeUpdateStatusAtomic(status: UpdateStatus): void {
   const tmp = `${STATUS_FILE}.tmp-${process.pid}`;
   writeFileSync(tmp, JSON.stringify(status, null, 2));
   renameSync(tmp, STATUS_FILE);
+}
+
+/** Read the status, first failing (and persisting) an in-flight one that stopped heartbeating. */
+function readCurrentUpdateStatus(now = Date.now()): UpdateStatus | null {
+  const status = readUpdateStatus();
+  const expired = expireStalledStatus(status, now);
+  if (!expired) return status;
+  try {
+    writeUpdateStatusAtomic(expired);
+  } catch {
+    // Still report the expired view; the next read retries the write.
+  }
+  return expired;
 }
 
 /** Reconcile the status file on server boot (call once, early in start()). */
@@ -796,7 +832,7 @@ export async function startUpdate(): Promise<StartUpdateResult> {
         : 'This is not a git install. Update with: npm i -g aicodeman@latest',
     };
   }
-  const existing = readUpdateStatus();
+  const existing = readCurrentUpdateStatus();
   if (isInFlight(existing)) {
     return { ok: false, code: 'in-flight', message: 'An update is already in progress.' };
   }
@@ -885,7 +921,7 @@ export async function startUpdate(): Promise<StartUpdateResult> {
 
 /** Current status for the polling endpoint; null collapses to an explicit idle. */
 export function getUpdateStatusForApi(): UpdateStatus {
-  const status = readUpdateStatus();
+  const status = readCurrentUpdateStatus();
   if (status) return status;
   return {
     updateId: '',
