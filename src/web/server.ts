@@ -1322,16 +1322,32 @@ export class WebServer extends EventEmitter {
   // Clean up all resources associated with a session
   // Track sessions currently being cleaned up to prevent concurrent cleanup races
   private cleaningUp: Set<string> = new Set();
+  /**
+   * The subset of {@link cleaningUp} whose tmux session is being KILLED rather
+   * than detached. The paste-image guard needs the difference: a detaching
+   * session keeps running in tmux and still uses its working directory.
+   */
+  private killingSessions: Set<string> = new Set();
 
   private async cleanupSession(sessionId: string, killMux: boolean = true, reason?: string): Promise<void> {
     // Guard against concurrent cleanup of the same session
     if (this.cleaningUp.has(sessionId)) return;
     this.cleaningUp.add(sessionId);
+    if (killMux) this.killingSessions.add(sessionId);
+    // Refuse a start or attach from here on (Ark0N/Codeman#446): a start that
+    // raced this cleanup would launch a CLI in a tmux session whose record is
+    // about to be deleted, leaving an orphan the next boot rediscovers.
+    const session = this.sessions.get(sessionId);
+    session?.markClosing(true);
 
     try {
       await this._doCleanupSession(sessionId, killMux, reason);
     } finally {
       this.cleaningUp.delete(sessionId);
+      this.killingSessions.delete(sessionId);
+      // A cleanup that failed leaves the session on the board, so it must be
+      // startable again.
+      if (this.sessions.get(sessionId) === session) session?.markClosing(false);
     }
   }
 
@@ -1489,7 +1505,17 @@ export class WebServer extends EventEmitter {
       if (
         killMux &&
         session.workingDir &&
-        !pasteImageDirInUseByOtherSession(this.sessions.values(), sessionId, session.workingDir, this.cleaningUp)
+        !pasteImageDirInUseByOtherSession({
+          live: this.sessions.values(),
+          persisted: Object.entries(this.store.getSessions()).map(([id, record]) => ({
+            id,
+            workingDir: record.workingDir,
+            status: record.status,
+          })),
+          closingId: sessionId,
+          workingDir: session.workingDir,
+          killing: this.killingSessions,
+        })
       ) {
         const pasteImageDir = join(session.workingDir, '.claude-images');
         try {
@@ -2546,10 +2572,23 @@ export class WebServer extends EventEmitter {
    * The close runs in the background. `cleanupSession()` ignores a second call
    * for a session it is already closing, and the `closing` check below keeps
    * the next tick from queueing one.
+   *
+   * Each exit is attempted ONCE, keyed by session id and the exit's `at`
+   * stamp. A close that fails leaves the session on the board with its exit
+   * badge, which is where a crashed agent's row would be too, rather than
+   * retrying and logging every two seconds. A new exit in the same pane has a
+   * new `at` and gets its own attempt.
    */
+  /** Exits the clean-exit sweep has already tried to close, as `<sessionId>:<exit.at>`. */
+  private cleanExitCloseAttempts: Set<string> = new Set();
+
   private closeCleanlyExitedSessions(): void {
     const readCount = this.mux.getPaneExitReadCount?.bind(this.mux);
     if (!readCount) return;
+    // Forget attempts for sessions that are gone, so the set stays bounded.
+    for (const key of this.cleanExitCloseAttempts) {
+      if (!this.sessions.has(key.slice(0, key.lastIndexOf(':')))) this.cleanExitCloseAttempts.delete(key);
+    }
     for (const session of [...this.sessions.values()]) {
       const muxName = session.muxName;
       if (!muxName) continue;
@@ -2560,6 +2599,9 @@ export class WebServer extends EventEmitter {
         closing: this.cleaningUp.has(session.id),
       });
       if (!close) continue;
+      const attempt = `${session.id}:${session.paneExit?.at ?? 0}`;
+      if (this.cleanExitCloseAttempts.has(attempt)) continue;
+      this.cleanExitCloseAttempts.add(attempt);
       console.log(`[Server] Closing session ${session.id} (${session.name}): ${CLEAN_EXIT_CLOSE_REASON}`);
       void this.cleanupSession(session.id, true, CLEAN_EXIT_CLOSE_REASON).catch((err) => {
         console.error(`[Server] Failed to close cleanly exited session ${session.id}:`, err);
@@ -4013,6 +4055,7 @@ export class WebServer extends EventEmitter {
     }
     this.activePlanOrchestrators.clear();
     this.cleaningUp.clear();
+    this.killingSessions.clear();
 
     // Dispose push store (flush pending saves)
     this.pushStore.dispose();

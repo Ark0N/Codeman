@@ -158,6 +158,29 @@ describe('the sweep on a real server', () => {
     expect(cleanup).toHaveBeenCalledWith(session.id, true, CLEAN_EXIT_CLOSE_REASON);
   });
 
+  it('tries each exit once, so a failed close is not retried every tick', () => {
+    const { web, tick, cleanup } = build({ status: 0, at: AT }, 2);
+    const { session } = addSession(web);
+
+    tick();
+    tick();
+    tick();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    // The spy resolved without removing the session, which is what a failed
+    // close looks like from here: the row stays, with its exit badge.
+    expect(session.paneExit).toEqual({ status: 0, at: AT });
+  });
+
+  it('gives a new exit in the same pane its own attempt', () => {
+    const { web, state, tick, cleanup } = build({ status: 0, at: AT }, 2);
+    addSession(web);
+
+    tick();
+    state.exit = { status: 0, at: AT + 60_000 };
+    tick();
+    expect(cleanup).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps a crashed agent on the board', () => {
     const { web, tick, cleanup } = build({ status: 137, at: AT }, 5);
     addSession(web);
@@ -208,6 +231,49 @@ describe('the sweep on a real server', () => {
 
     (mux as unknown as { emit: (e: string) => void }).emit('paneExitsUpdated');
     await vi.waitFor(() => expect(sessions.has(session.id)).toBe(false));
+  });
+});
+
+describe('a session the server is closing', () => {
+  const session = () =>
+    new Session({
+      workingDir: '/tmp',
+      mode: 'shell',
+      useMux: true,
+      mux: { isAvailable: () => true } as unknown as TerminalMultiplexer,
+      muxSession: { muxName: 'codeman-aaaa', sessionId: 'aaaa' } as unknown as MuxSession,
+    });
+
+  it('refuses to start, so a racing start cannot orphan a tmux session', async () => {
+    const s = session();
+    s.markClosing(true);
+    await expect(s.startInteractive()).rejects.toThrow('Session is being closed');
+    await expect(s.startShell()).rejects.toThrow('Session is being closed');
+  });
+
+  it('is cleared again when the server gives the close up', async () => {
+    const web = new WebServer(PORT, false, true);
+    try {
+      const s = session();
+      const sessions = (web as unknown as { sessions: Map<string, Session> }).sessions;
+      sessions.set(s.id, s);
+      const internals = web as unknown as {
+        _doCleanupSession: (...a: unknown[]) => Promise<void>;
+        cleanupSession: (id: string, kill: boolean, reason: string) => Promise<void>;
+      };
+      let closingDuring = false;
+      vi.spyOn(internals, '_doCleanupSession').mockImplementation(async () => {
+        closingDuring = (s as unknown as { _closing: boolean })._closing;
+        throw new Error('layout prune unavailable');
+      });
+
+      await expect(internals.cleanupSession(s.id, true, 'test')).rejects.toThrow('layout prune unavailable');
+      expect(closingDuring).toBe(true);
+      expect((s as unknown as { _closing: boolean })._closing).toBe(false);
+    } finally {
+      vi.restoreAllMocks();
+      await web.stop();
+    }
   });
 });
 

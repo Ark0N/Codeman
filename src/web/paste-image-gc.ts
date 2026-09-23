@@ -12,6 +12,7 @@
  * image dir.
  */
 import fs from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { SessionPort } from './ports/index.js';
 
@@ -54,33 +55,68 @@ export async function sweepPasteImagesOnce(
 }
 
 /**
+ * The path two sessions must share to share a paste-image dir: the canonical
+ * path when it can be resolved, so a sibling that reaches the same directory
+ * through a symlink matches, and the normalised path otherwise (a directory
+ * that no longer exists has nothing left to protect).
+ */
+function canonicalDir(dir: string): string {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return resolve(dir);
+  }
+}
+
+/** One session the paste-image guard weighs: its id, directory and, for a persisted record, its status. */
+export interface PasteImageDirUser {
+  id: string;
+  workingDir: string;
+  status?: string;
+}
+
+/**
  * Does another live session still use this working directory's paste-image
  * dir? Deleting a session removes `{workingDir}/.claude-images` recursively,
  * and several sessions routinely share one case directory, so without this
  * check closing one session deletes the pasted images a sibling in the same
  * case still refers to.
  *
- * A session that is itself being cleaned up does not count as live. Without
- * that exemption, closing two sessions of one case concurrently (a bulk
- * delete, or the exited-agent sweep closing two panes on one tick) would have
- * each defer to the other, and neither would remove the dir.
+ * Two kinds of sibling count as live:
  *
- * Paths are compared after `resolve()`, which normalises a trailing slash and
- * `..` segments. Symlinks are not resolved: a sibling that reaches the same
- * directory through a symlink only costs a missed deletion here, and the
- * periodic sweep above still ages those files out.
+ * - a session in the server's map, unless it is itself being killed;
+ * - a persisted record whose status is not `stopped`. That covers a session
+ *   detached with `killMux=false`, which leaves the server's map while its
+ *   tmux pane keeps running, and a session whose detach is still in progress.
+ *
+ * A session being KILLED does not count. Without that exemption, killing two
+ * sessions of one case concurrently (a bulk delete, or the exited-agent sweep
+ * closing two panes on one tick) would have each defer to the other, and
+ * neither would remove the dir.
+ *
+ * Erring toward "in use" only costs a missed deletion, which the periodic
+ * sweep above ages out. A pinned record whose tmux session is gone keeps its
+ * status through boot pruning, so it holds the dir this way until unpinned.
  */
-export function pasteImageDirInUseByOtherSession(
-  sessions: Iterable<{ id: string; workingDir: string }>,
-  closingId: string,
-  workingDir: string,
-  closing: ReadonlySet<string>
-): boolean {
-  const target = resolve(workingDir);
-  for (const session of sessions) {
-    if (session.id === closingId || closing.has(session.id)) continue;
-    if (!session.workingDir) continue;
-    if (resolve(session.workingDir) === target) return true;
+export function pasteImageDirInUseByOtherSession(input: {
+  live: Iterable<PasteImageDirUser>;
+  persisted: Iterable<PasteImageDirUser>;
+  closingId: string;
+  workingDir: string;
+  killing: ReadonlySet<string>;
+}): boolean {
+  const target = canonicalDir(input.workingDir);
+  const matches = (user: PasteImageDirUser): boolean =>
+    user.id !== input.closingId &&
+    !input.killing.has(user.id) &&
+    !!user.workingDir &&
+    canonicalDir(user.workingDir) === target;
+  for (const user of input.live) {
+    if (matches(user)) return true;
+  }
+  for (const user of input.persisted) {
+    if (user.status === 'stopped') continue;
+    if (matches(user)) return true;
   }
   return false;
 }

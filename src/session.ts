@@ -591,6 +591,11 @@ export class Session extends EventEmitter {
    */
   private _paneLifecycleOps = 0;
   /**
+   * The server has started closing this session, so no start or attach may
+   * begin (see {@link markClosing}).
+   */
+  private _closing = false;
+  /**
    * This session was rebuilt from the tmux socket rather than from Codeman's
    * own records, so its `remote`/`docker` metadata is missing rather than known
    * to be absent. See {@link MuxSession.discovered}.
@@ -1199,6 +1204,16 @@ export class Session extends EventEmitter {
    */
   get paneLifecycleInFlight(): boolean {
     return this._paneLifecycleOps > 0;
+  }
+
+  /**
+   * Mark this session as being closed, or clear the mark after a close that
+   * failed. While it is set, {@link startInteractive} and {@link startShell}
+   * refuse to run. A start that raced a close would otherwise launch a CLI in a
+   * tmux session whose record is about to be deleted (Ark0N/Codeman#446).
+   */
+  markClosing(closing: boolean): void {
+    this._closing = closing;
   }
 
   /** Run one pane start, attach or relaunch with {@link paneLifecycleInFlight} raised. */
@@ -2499,6 +2514,9 @@ export class Session extends EventEmitter {
     if (this.ptyProcess) {
       throw new Error('Session already has a running process');
     }
+    if (this._closing) {
+      throw new Error('Session is being closed');
+    }
 
     // Bounds the workspace-trust scan (see _maybeAcceptTrustDialog). Stamped here
     // rather than at PTY spawn so a slow mux attach still counts as startup.
@@ -3319,6 +3337,9 @@ export class Session extends EventEmitter {
   async startShell(): Promise<void> {
     if (this.ptyProcess) {
       throw new Error('Session already has a running process');
+    }
+    if (this._closing) {
+      throw new Error('Session is being closed');
     }
 
     this._resetBuffers();
