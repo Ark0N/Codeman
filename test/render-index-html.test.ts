@@ -197,6 +197,7 @@ describe('WebServer.renderIndexHtml', () => {
       omp: true,
       cloudflared: true,
       git: true,
+      shell: true,
     });
   });
 
@@ -223,6 +224,28 @@ describe('WebServer.renderIndexHtml', () => {
       writeFileSync(path, JSON.stringify({ clis: {} }, null, 2), { mode: 0o600 });
       reloadCliRegistry();
     }
+  });
+
+  it('injects the full registry catalog for every launch surface, including disabled entries', async () => {
+    const { server } = makeServer({});
+    const html = await render(server);
+    const catalog = JSON.parse(html.match(/window\.__codemanCliCatalog=(\[.*?\]);/)![1]) as Array<{
+      id: string;
+      label: string;
+      shortBadge: string;
+      order: number;
+      kind: string;
+      enabled: boolean;
+      available: boolean;
+    }>;
+    expect(catalog.map((entry) => entry.id)).toEqual(STOCK_CLIS.map((entry) => entry.id));
+    expect(catalog.find((entry) => entry.id === 'codex')).toMatchObject({ label: 'Codex', kind: 'agent' });
+    expect(catalog.find((entry) => entry.id === 'shell')).toMatchObject({ enabled: true, available: true });
+    expect(
+      catalog.every((entry) =>
+        Object.keys(entry).every((key) => ['id', 'label', 'shortBadge', 'order', 'kind', 'enabled', 'available'].includes(key))
+      )
+    ).toBe(true);
   });
 
   it('reports which run modes the custom-model Run-menu picker may generate an entry for', async () => {
@@ -312,7 +335,7 @@ describe('WebServer.renderIndexHtml', () => {
     const html = await render(server);
     expect(html).toContain('window.__codemanCliAvailable=');
     const flags = JSON.parse(html.match(/window\.__codemanCliAvailable=(\{.*?\});/)![1]);
-    expect(Object.values(flags).every((v) => v === false)).toBe(true);
+    expect(Object.entries(flags).every(([key, value]) => key === 'shell' || value === false)).toBe(true);
   });
 
   it('skips the probe for a solo window, which has no welcome screen or run menu', async () => {
@@ -320,6 +343,7 @@ describe('WebServer.renderIndexHtml', () => {
     const { server } = makeServer({});
     const html = await render(server, 'sess-123');
     expect(html).not.toContain('__codemanCliAvailable');
+    expect(html).not.toContain('__codemanCliCatalog');
     expect(html).not.toContain('__codemanCustomModelClis');
   });
 

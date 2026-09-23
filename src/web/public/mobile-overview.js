@@ -42,6 +42,7 @@ const MOBILE_OVERVIEW_PHONE_QUERY = '(max-width: 599px)';
 
 /** How many past conversations show before the "Show all" toggle. */
 const MOBILE_OVERVIEW_PAST_LIMIT = 8;
+const SHELL_KIND = 'shell';
 
 /**
  * Backends offered by the Run picker, mirroring the toolbar's run-mode menu
@@ -59,6 +60,19 @@ const MOBILE_OVERVIEW_RUN_MODES = [
   { mode: 'omp', label: 'OMP', short: 'OMP' },
   { mode: 'shell', label: 'Terminal / Shell', short: 'Shell' },
 ];
+
+function mobileOverviewRunModes() {
+  const catalog =
+    typeof window !== 'undefined' && Array.isArray(window.__codemanCliCatalog) ? window.__codemanCliCatalog : [];
+  if (catalog.length === 0) return MOBILE_OVERVIEW_RUN_MODES;
+  return catalog
+    .filter((entry) => entry.enabled)
+    .map((entry) => ({
+      mode: entry.id,
+      label: entry.kind === SHELL_KIND ? 'Terminal / Shell' : entry.label === 'Claude' ? 'Claude Code' : entry.label,
+      short: entry.shortBadge,
+    }));
+}
 
 /** Pill copy per state. Kept short: a phone row has ~90px for it. */
 const MOBILE_OVERVIEW_PILL_LABEL = {
@@ -515,7 +529,7 @@ Object.assign(CodemanApp.prototype, {
     const runMode = document.createElement('span');
     runMode.className = 'mobile-overview-run-mode';
     runMode.setAttribute('data-i18n-skip', '');
-    runMode.textContent = MOBILE_OVERVIEW_RUN_MODES.find((m) => m.mode === mode)?.short || mode;
+    runMode.textContent = mobileOverviewRunModes().find((m) => m.mode === mode)?.short || mode;
     run.appendChild(runMode);
     group.appendChild(run);
 
@@ -570,7 +584,7 @@ Object.assign(CodemanApp.prototype, {
     menu.className = 'mobile-overview-run-menu';
     const current = this.runMode || 'claude';
 
-    for (const entry of MOBILE_OVERVIEW_RUN_MODES) {
+    for (const entry of mobileOverviewRunModes()) {
       if (entry.mode !== 'shell' && !this.isCliAvailable(entry.mode)) continue;
       const option = document.createElement('button');
       option.type = 'button';

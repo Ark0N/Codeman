@@ -376,47 +376,76 @@ describe('Codex quick start settings', () => {
   });
 
   describe('CLI availability gating (#200/#201)', () => {
-    // Drives the REAL settings-ui.js + session-ui.js against stub elements, so an
-    // added run mode that nobody wires up here is what these are meant to catch.
-    function loadUi(flags: Record<string, boolean> | undefined) {
+    const CATALOG = [
+      { id: 'claude', label: 'Claude', shortBadge: 'CC', kind: 'agent', enabled: true },
+      { id: 'opencode', label: 'OpenCode', shortBadge: 'OC', kind: 'agent', enabled: true },
+      { id: 'codex', label: 'Codex', shortBadge: 'CX', kind: 'agent', enabled: true },
+      { id: 'gemini', label: 'Gemini', shortBadge: 'GM', kind: 'agent', enabled: true },
+      { id: 'antigravity', label: 'Antigravity', shortBadge: 'AG', kind: 'agent', enabled: true },
+      { id: 'pi', label: 'Pi', shortBadge: 'PI', kind: 'agent', enabled: true },
+      { id: 'grok', label: 'Grok', shortBadge: 'GK', kind: 'agent', enabled: true },
+      { id: 'deepseek', label: 'DeepSeek', shortBadge: 'DS', kind: 'agent', enabled: true },
+      { id: 'omp', label: 'OMP', shortBadge: 'OM', kind: 'agent', enabled: true },
+      { id: 'custom-agent', label: 'Custom Agent', shortBadge: 'CA', kind: 'agent', enabled: true },
+      { id: 'shell', label: 'Shell', shortBadge: 'SH', kind: 'shell', enabled: true },
+    ];
+
+    function element() {
+      const el: any = {
+        style: { display: 'PRISTINE' },
+        dataset: {},
+        children: [] as any[],
+        setAttribute: () => {},
+        appendChild(child: any) { this.children.push(child); return child; },
+        append(child: any) { this.children.push(child); },
+        replaceChildren(...children: any[]) { this.children = children; },
+      };
+      return el;
+    }
+
+    // Drives the REAL settings-ui.js + session-ui.js against stub elements, including
+    // a custom registry entry so a static stock-only list cannot pass this test.
+    function loadUi(flags: Record<string, boolean> | undefined, catalog = CATALOG) {
       const CodemanApp = function CodemanApp(this: any) {};
-      const welcomeBtns: Record<string, { style: { display: string } }> = {};
-      for (const id of [
-        'welcomeClaudeBtn',
-        'welcomeOpencodeBtn',
-        'welcomeAntigravityBtn',
-        'welcomeGeminiBtn',
-        'welcomePiBtn',
-        'welcomeGrokBtn',
-        'welcomeOmpBtn',
-        'welcomeTunnelBtn',
-      ]) {
-        welcomeBtns[id] = { style: { display: 'PRISTINE' } };
-      }
-      const modeBtns: Record<string, { style: { display: string } }> = {};
-      for (const mode of ['claude', 'opencode', 'codex', 'gemini', 'antigravity', 'pi', 'grok', 'omp', 'shell']) {
-        modeBtns[mode] = { style: { display: 'PRISTINE' } };
+      const welcomeCliActions = element();
+      const tunnelBtn = element();
+      const runModeCliOptions = element();
+      const modeBtns: Record<string, any> = {};
+      for (const cli of catalog) {
+        modeBtns[cli.id] = element();
+        modeBtns[cli.id].dataset.mode = cli.id;
       }
       const menu = {
-        querySelector: (sel: string) => {
-          const m = sel.match(/data-mode="([^"]+)"/);
-          return m ? (modeBtns[m[1]] ?? null) : null;
-        },
+        querySelector: (sel: string) => (sel === '#runModeDeepSeekInstall' || sel === '#runModeDeepSeekWeb' ? null : null),
+        querySelectorAll: () => Object.values(modeBtns),
       };
       const context: any = vm.createContext({
         CodemanApp,
         MobileDetection: { getDeviceType: () => 'desktop', isTouchDevice: () => false, isHandheldDevice: () => false },
         localStorage: { getItem: () => null, setItem: () => {} },
-        document: { getElementById: (id: string) => welcomeBtns[id] ?? null, querySelector: () => null },
+        document: {
+          getElementById: (id: string) =>
+            id === 'welcomeCliActions'
+              ? welcomeCliActions
+              : id === 'welcomeTunnelBtn'
+                ? tunnelBtn
+                : id === 'runModeCliOptions'
+                  ? runModeCliOptions
+                  : null,
+          createElement: element,
+          createElementNS: element,
+          querySelector: () => null,
+        },
         console,
       });
       context.window = context;
+      context.__codemanCliCatalog = catalog;
       if (flags !== undefined) context.__codemanCliAvailable = flags;
       for (const file of ['settings-ui.js', 'session-ui.js']) {
         const src = readFileSync(resolve(import.meta.dirname, `../src/web/public/${file}`), 'utf8');
         vm.runInContext(src, context, { filename: file });
       }
-      return { app: new (CodemanApp as any)(), welcomeBtns, modeBtns, menu };
+      return { app: new (CodemanApp as any)(), welcomeCliActions, tunnelBtn, runModeCliOptions, modeBtns, menu };
     }
 
     const ALL_OFF = {
@@ -427,50 +456,28 @@ describe('Codex quick start settings', () => {
       antigravity: false,
       pi: false,
       grok: false,
+      deepseek: false,
       omp: false,
+      'custom-agent': false,
       cloudflared: false,
     };
 
-    it('hides each welcome button whose tool is missing, including the tunnel', () => {
-      const { app, welcomeBtns } = loadUi({ ...ALL_OFF, claude: true });
+    it('renders only enabled and available registry entries on the welcome screen', () => {
+      const { app, welcomeCliActions, tunnelBtn } = loadUi({ ...ALL_OFF, claude: true, 'custom-agent': true });
       app.applyWelcomeCliVisibility();
-      expect(welcomeBtns.welcomeClaudeBtn.style.display).toBe('flex');
-      expect(welcomeBtns.welcomeOpencodeBtn.style.display).toBe('none');
-      expect(welcomeBtns.welcomeAntigravityBtn.style.display).toBe('none');
-      expect(welcomeBtns.welcomeGeminiBtn.style.display).toBe('none');
+      const offered = welcomeCliActions.children.map((btn: any) => btn.dataset.mode);
+      expect(offered).toEqual(['claude', 'custom-agent', 'shell']);
       // #200 originally DELETED the tunnel button and its QR outright; it is gated
       // on cloudflared instead, so a box that has cloudflared keeps the feature.
-      expect(welcomeBtns.welcomeTunnelBtn.style.display).toBe('none');
+      expect(tunnelBtn.style.display).toBe('none');
 
       const withTunnel = loadUi({ ...ALL_OFF, cloudflared: true });
       withTunnel.app.applyWelcomeCliVisibility();
-      expect(withTunnel.welcomeBtns.welcomeTunnelBtn.style.display).toBe('flex');
+      expect(withTunnel.tunnelBtn.style.display).toBe('flex');
 
-      // Pi is gated on `pi` like the rest; the resolver additionally version-probes
-      // the binary, so a stray `pi` on PATH reports unavailable rather than broken.
       const withPi = loadUi({ ...ALL_OFF, pi: true });
       withPi.app.applyWelcomeCliVisibility();
-      expect(withPi.welcomeBtns.welcomePiBtn.style.display).toBe('flex');
-
-      // Grok is gated on `grok` like the rest; the resolver additionally
-      // version-probes the binary, so a stray `grok` on PATH reports unavailable.
-      const withGrok = loadUi({ ...ALL_OFF, grok: true });
-      withGrok.app.applyWelcomeCliVisibility();
-      expect(withGrok.welcomeBtns.welcomeGrokBtn.style.display).toBe('flex');
-      expect(withGrok.welcomeBtns.welcomeClaudeBtn.style.display).toBe('none');
-      expect(withPi.welcomeBtns.welcomeClaudeBtn.style.display).toBe('none');
-
-      // Antigravity is a first-class welcome action, gated on `agy` like the rest.
-      const withAgy = loadUi({ ...ALL_OFF, antigravity: true });
-      withAgy.app.applyWelcomeCliVisibility();
-      expect(withAgy.welcomeBtns.welcomeAntigravityBtn.style.display).toBe('flex');
-      expect(withAgy.welcomeBtns.welcomeClaudeBtn.style.display).toBe('none');
-
-      // OMP is a first-class welcome action, gated on `omp` like the rest.
-      const withOmp = loadUi({ ...ALL_OFF, omp: true });
-      withOmp.app.applyWelcomeCliVisibility();
-      expect(withOmp.welcomeBtns.welcomeOmpBtn.style.display).toBe('flex');
-      expect(withOmp.welcomeBtns.welcomeClaudeBtn.style.display).toBe('none');
+      expect(withPi.welcomeCliActions.children.map((btn: any) => btn.dataset.mode)).toEqual(['pi', 'shell']);
     });
 
     it('gates every run mode in the dropdown, antigravity included, and never shell', () => {
@@ -487,34 +494,28 @@ describe('Codex quick start settings', () => {
       expect(modeBtns.shell.style.display).toBe('PRISTINE');
     });
 
-    it('gates every mode the run-mode menu actually offers', () => {
-      // Catches a sixth run mode being added to index.html without being gated,
-      // which is exactly how antigravity slipped past #201.
+    it('renders each enabled agent registry entry in the Run menu, including custom entries', () => {
+      const { app, runModeCliOptions } = loadUi({ ...ALL_OFF, claude: true, 'custom-agent': true });
+      app.renderRegistryRunOptions();
+      expect(runModeCliOptions.children.map((btn: any) => btn.dataset.mode)).toContain('custom-agent');
+      expect(runModeCliOptions.children.map((btn: any) => btn.dataset.mode)).not.toContain('shell');
+    });
+
+    it('builds the run-mode menu from the registry rather than static markup', () => {
       const html = readFileSync(resolve(import.meta.dirname, '../src/web/public/index.html'), 'utf8');
-      const menuHtml = html.slice(html.indexOf('id="runModeMenu"'));
-      const offered = [...menuHtml.slice(0, menuHtml.indexOf('</div>')).matchAll(/data-mode="([^"]+)"/g)].map(
-        (m) => m[1]
-      );
-      expect(offered).toContain('antigravity');
-      expect(offered).toContain('pi');
-      expect(offered).toContain('grok');
-      expect(offered).toContain('omp');
+      expect(html).toContain('id="runModeCliOptions"');
       const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
-      // Anchor on the DEFINITION, not the earlier call site in toggleRunModeMenu.
-      const fn = src.slice(src.indexOf('_refreshRunModeAvailability(menu) {'));
-      const gated = fn.slice(0, fn.indexOf('\n  },'));
-      for (const mode of offered.filter((m) => m !== 'shell')) {
-        expect(gated).toContain(`'${mode}'`);
-      }
+      expect(src).toContain('renderRegistryRunOptions()');
+      expect(src).not.toContain('data-mode="codex"');
     });
 
     it('shows everything when the flags were never injected', () => {
       // A cached page from a build without the injection, or a solo popup. Hiding
       // every run button on a doubt would leave a working install nothing to click.
-      const { app, welcomeBtns, modeBtns, menu } = loadUi(undefined);
+      const { app, welcomeCliActions, modeBtns, menu } = loadUi(undefined);
       app.applyWelcomeCliVisibility();
       app._refreshRunModeAvailability(menu);
-      expect(welcomeBtns.welcomeClaudeBtn.style.display).toBe('flex');
+      expect(welcomeCliActions.children.map((btn: any) => btn.dataset.mode)).toContain('claude');
       expect(modeBtns.gemini.style.display).toBe('flex');
     });
   });

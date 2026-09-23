@@ -183,7 +183,7 @@ Integration tests that spawn web servers use unique ports to avoid conflicts.
 
 | Port  | Test File                    | Notes                           |
 |-------|------------------------------|----------------------------------|
-| 3099  | quick-start.test.ts          | Basic startup tests             |
+| 3299  | quick-start.test.ts          | Basic startup tests             |
 | 3102  | session.test.ts              | Session lifecycle tests         |
 | 3105  | scheduled-runs.test.ts       | Scheduled task tests            |
 | 3107  | sse-events.test.ts           | Server-Sent Events tests        |

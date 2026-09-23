@@ -71,7 +71,8 @@ import {
 import { imageWatcher } from '../image-watcher.js';
 import { workflowRunWatcher, summarizeRun } from '../workflow-run-watcher.js';
 import { attachmentRegistry, buildFileThumbnailRoute, registerExternalAttachment } from '../attachment-registry.js';
-import { getCli, enabledClis } from '../config/cli-registry/registry.js';
+import { getCli, enabledClis, listClis } from '../config/cli-registry/registry.js';
+import { isCliAvailable as isRegistryCliAvailable } from '../utils/cli-resolver.js';
 import { readCustomModelHosts } from '../custom-model-hosts.js';
 import { applyCustomModelInjection, customModelConfigDir, removeConfigDir } from '../custom-model-injection-apply.js';
 import type { CustomModelBookkeeping } from '../types/session.js';
@@ -1642,7 +1643,7 @@ export class WebServer extends EventEmitter {
         import('../utils/cloudflared-resolver.js'),
         import('../git-clone.js'),
       ]);
-      const available = {
+      const available: Record<string, boolean> = {
         claude: isClaudeAvailable(),
         opencode: isOpenCodeAvailable(),
         codex: isCodexAvailable(),
@@ -1672,24 +1673,35 @@ export class WebServer extends EventEmitter {
       // binaries, not CLI registry entries, and `deepseekBinary` is a secondary
       // installed-only flag for the "add a profile" affordance — none of the three are
       // registry ids, so only the nine real SessionMode entries are gated.
-      const registryEnabledIds = new Set<string>(enabledClis().map((entry) => entry.id));
-      for (const id of [
-        'claude',
-        'opencode',
-        'codex',
-        'gemini',
-        'antigravity',
-        'pi',
-        'grok',
-        'deepseek',
-        'omp',
-      ] as const) {
-        if (!registryEnabledIds.has(id)) available[id] = false;
-      }
+      const cliCatalog = listClis().map((entry) => {
+        const id = entry.id as string;
+        // Stock tools above retain their dedicated resolver semantics (in particular,
+        // DeepSeek is available only when it has a runnable terminal profile). A custom
+        // entry uses the registry's generic resolver, which understands its declared
+        // binary and search directories.
+        const installed = entry.kind === 'shell' || (id in available ? available[id] : isRegistryCliAvailable(id));
+        const enabled = entry.enabled;
+        available[id] = enabled && installed;
+        return {
+          id,
+          label: entry.label,
+          shortBadge: entry.shortBadge,
+          order: entry.order,
+          kind: entry.kind,
+          enabled,
+          available: enabled && installed,
+        };
+      });
       html = html.replace(
         '</head>',
         () => `<script>window.__codemanCliAvailable=${JSON.stringify(available)};</script>\n</head>`
       );
+      // The launch surfaces consume this deliberately small projection rather than
+      // carrying a second hand-maintained list of CLI ids. It includes disabled
+      // entries so Settings can redraw immediately after a toggle, while each
+      // renderer filters on `enabled`/`available` before offering a launch action.
+      const cliCatalogJson = escapeScriptJson(JSON.stringify(cliCatalog));
+      html = html.replace('</head>', () => `<script>window.__codemanCliCatalog=${cliCatalogJson};</script>\n</head>`);
       // Which run modes the Run-menu picker (docs/custom-model-endpoints-plan.md) may
       // generate an entry for: read generically off the registry's `capabilities`
       // (never an id list here) so a CLI whose customModelInjection lands later shows
