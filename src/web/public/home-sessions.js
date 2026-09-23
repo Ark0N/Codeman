@@ -201,6 +201,8 @@ Object.assign(CodemanApp.prototype, {
       const session = this.sessions.get(id);
       const matched = this._mobileOverviewCaseFor(session.workingDir, cases);
       const state = this._mobileOverviewState(session, this.pendingHooks?.get(id));
+      // Guarded: a stale cached mobile-overview.js may predate the helper.
+      const exit = this._mobileOverviewExit ? this._mobileOverviewExit(state, session) : null;
       const mode = session.mode || 'claude';
       return {
         id,
@@ -211,7 +213,10 @@ Object.assign(CodemanApp.prototype, {
         caseName: matched ? matched.name : '',
         dir: this._shortenHomePath ? this._shortenHomePath(session.workingDir) : session.workingDir || '',
         state,
-        pill: HOME_SESSIONS_PILL_LABEL[state] || state,
+        // What the row's dot, accent and pill show. It differs from `state` only
+        // for an exited agent (Ark0N/Codeman#446), whose state still sorts it.
+        display: exit ? 'exited' : state,
+        pill: exit ? 'exited' : HOME_SESSIONS_PILL_LABEL[state] || state,
         // What the pane's footer says is still running in the background, straight off
         // the session payload. Same field, same meaning as on the phone overview.
         watching: typeof session.watching === 'string' ? session.watching : '',
@@ -224,7 +229,7 @@ Object.assign(CodemanApp.prototype, {
         lastSubmitAt: Number(session.lastSubmitAt) || 0,
         // "how long has it been like this", resolved by the phone overview's
         // helper so both home screens label the same stamp with the same word.
-        since: this._mobileOverviewSince(state, session),
+        since: exit ? exit.since : this._mobileOverviewSince(state, session),
       };
     });
 
@@ -392,7 +397,8 @@ Object.assign(CodemanApp.prototype, {
   _buildHomeSessionRow(row) {
     const item = document.createElement('button');
     item.type = 'button';
-    item.className = 'home-sessions-row home-sessions-row--' + row.state;
+    const display = row.display || row.state;
+    item.className = 'home-sessions-row home-sessions-row--' + display;
     item.dataset.hsAction = 'session';
     item.dataset.hsSession = row.id;
     item.title = row.dir ? `${row.name} (${row.dir})` : row.name;
@@ -409,7 +415,7 @@ Object.assign(CodemanApp.prototype, {
     }
 
     const dot = document.createElement('span');
-    dot.className = 'home-sessions-dot home-sessions-dot--' + row.state;
+    dot.className = 'home-sessions-dot home-sessions-dot--' + display;
     dot.setAttribute('aria-hidden', 'true');
     item.appendChild(dot);
 
@@ -441,7 +447,7 @@ Object.assign(CodemanApp.prototype, {
     item.appendChild(body);
 
     const pill = document.createElement('span');
-    pill.className = 'home-sessions-pill home-sessions-pill--' + row.state;
+    pill.className = 'home-sessions-pill home-sessions-pill--' + display;
     // Skipped by i18n on purpose: generic single words ("idle", "done", "error")
     // that collide with state strings on other surfaces.
     pill.setAttribute('data-i18n-skip', '');

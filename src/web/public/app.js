@@ -4878,9 +4878,10 @@ class CodemanApp {
     // `state` keys SESSION_ACTIVITY_RANK and the sort, while `status` stays idle
     // or busy for an exited pane by design, so without this the muted dot sits
     // beside a pill saying "idle". A pending alert still wins, exactly as it
-    // does for the dot.
-    const exited = !!paneExitLabel(session.paneExit) && (state === 'idle' || state === 'working');
-    const exitAt = exited ? Number(session.paneExit.at) || 0 : 0;
+    // does for the dot. The rule is `_mobileOverviewExit()`, shared with both
+    // home screens so the three surfaces agree on which sessions have exited.
+    const exit = this._mobileOverviewExit ? this._mobileOverviewExit(state, session) : null;
+    const exited = !!exit;
     return {
       state,
       exited,
@@ -4891,13 +4892,7 @@ class CodemanApp {
       // state pill and never replaces it.
       watching: typeof session.watching === 'string' ? session.watching : '',
       createdAt: Number(session.createdAt) || 0,
-      since: exitAt
-        ? { key: 'exited', at: exitAt }
-        : exited
-          ? null
-          : this._mobileOverviewSince
-            ? this._mobileOverviewSince(state, session)
-            : null,
+      since: exit ? exit.since : this._mobileOverviewSince ? this._mobileOverviewSince(state, session) : null,
     };
   }
 

@@ -2978,6 +2978,13 @@ html.mobile-init .file-browser-panel {
     color: var(--green);
   }
 
+  /* An exited agent (Ark0N/Codeman#446): neutral, since nothing is running behind
+     the row. The dot and the row take `--exited` too and keep their base rules. */
+  .mobile-overview-pill--exited {
+    border-color: var(--text-muted);
+    color: var(--text-muted);
+  }
+
   /* Accent, and none of the three above: a session watching work it started itself
      is not asking the user for anything, and red and yellow are what say it is. */
   .mobile-overview-pill--watching {

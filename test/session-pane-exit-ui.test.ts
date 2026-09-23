@@ -163,9 +163,12 @@ describe('the rich row pill of an exited session', () => {
   // which reads `status` and knows nothing about the exit, so without an override
   // the muted dot sat beside a pill saying "idle".
   const appJs = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
-  const fn = (re: RegExp, name: string) => {
-    const m = appJs.match(re)?.[0];
-    if (!m) throw new Error(`${name} not found in app.js`);
+  // The exit rule itself is shared with both home screens and lives in
+  // mobile-overview.js, so it is lifted from there rather than stubbed.
+  const overviewJs = readFileSync(resolve(import.meta.dirname, '../src/web/public/mobile-overview.js'), 'utf8');
+  const fn = (re: RegExp, name: string, source = appJs) => {
+    const m = source.match(re)?.[0];
+    if (!m) throw new Error(`${name} not found`);
     return m;
   };
   type Row = { state: string; exited: boolean; pill: string; since: { key: string; at: number } | null };
@@ -174,6 +177,7 @@ describe('the rich row pill of an exited session', () => {
     return {
       ${fn(/ {2}_sidebarRichPillLabel\(state\) \{[\s\S]*?\n {2}\}/, '_sidebarRichPillLabel')},
       ${fn(/ {2}_sidebarRichRow\(id, session\) \{[\s\S]*?\n {2}\}/, '_sidebarRichRow')},
+      ${fn(/ {2}_mobileOverviewExit\(state, session\) \{[\s\S]*?\n {2}\}/, '_mobileOverviewExit', overviewJs)},
       _mobileOverviewState(session, hooks) {
         if (hooks && hooks.has('permission_prompt')) return 'needs';
         if (hooks && hooks.has('idle_prompt')) return 'waiting';
