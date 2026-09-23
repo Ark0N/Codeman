@@ -406,6 +406,61 @@ describe('Session Manager unified list', () => {
     expect(app.resumeHistorySession).toHaveBeenCalledWith('conv-uuid-1', '/repo/old', undefined, undefined, undefined);
   });
 
+  it('keeps mode, claudeSessionId and resumeId on the row record the ⋯ menu reads', async () => {
+    const { app, elements } = loadPaletteHarness({
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          success: true,
+          data: {
+            sessions: [
+              {
+                sessionId: 'codex-thread-1',
+                mode: 'codex',
+                resumeId: 'codex-thread-1',
+                workingDir: '/repo/cx',
+                firstPrompt: 'codex prompt',
+                lastActivityAt: 1750000000000,
+                sources: ['history'],
+              },
+              {
+                sessionId: 'sess-resumed',
+                mode: 'claude',
+                claudeSessionId: 'conv-uuid-2',
+                workingDir: '/repo/cl',
+                lastActivityAt: 1749000000000,
+                sources: ['persisted'],
+              },
+            ],
+            total: 2,
+          },
+        }),
+      }),
+    });
+    elements.sessionManagerList = { replaceChildren: vi.fn(), appendChild: vi.fn() };
+    app._buildHistoryItem = vi.fn(() => ({}));
+    app.resumeHistorySession = vi.fn();
+
+    await app._loadSessionManagerList('');
+
+    // The re-projected record is also what the row's ⋯ menu reads (mode badge,
+    // Resume), so these fields must survive it, not only reach onActivate.
+    const [codexRecord, , codexOptions] = app._buildHistoryItem.mock.calls[0];
+    expect(codexRecord).toMatchObject({ mode: 'codex', resumeId: 'codex-thread-1' });
+    codexOptions.onActivate();
+    expect(app.resumeHistorySession).toHaveBeenCalledWith(
+      'codex-thread-1',
+      '/repo/cx',
+      undefined,
+      'codex',
+      'codex-thread-1'
+    );
+
+    const [claudeRecord] = app._buildHistoryItem.mock.calls[1];
+    expect(claudeRecord).toMatchObject({ mode: 'claude', claudeSessionId: 'conv-uuid-2' });
+  });
+
   it('surfaces an error message instead of an empty list when the endpoint fails', async () => {
     const appended: any[] = [];
     const { app, elements } = loadPaletteHarness({
