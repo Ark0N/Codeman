@@ -1126,6 +1126,37 @@ describe('TmuxManager pane-exit bookkeeping', () => {
     manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|'), NOW));
     manager.clearPaneExit('codeman-aaaa');
     expect(manager.getPaneExit('codeman-aaaa')).toBeUndefined();
+    expect(manager.getPaneExitReadCount('codeman-aaaa')).toBe(0);
+  });
+
+  // The clean-exit sweep closes a session only once two reads agreed on its
+  // exit (Ark0N/Codeman#446), so the count must rise only on an exact repeat.
+  it('counts the reads that agreed on one exit', () => {
+    const manager = new TmuxManager();
+    expect(manager.getPaneExitReadCount('codeman-aaaa')).toBe(0);
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|'), NOW));
+    expect(manager.getPaneExitReadCount('codeman-aaaa')).toBe(1);
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|'), NOW + 2000));
+    expect(manager.getPaneExitReadCount('codeman-aaaa')).toBe(2);
+  });
+
+  it('starts the count again when the status or the pane pid changes', () => {
+    const manager = new TmuxManager();
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|'), NOW));
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|'), NOW + 2000));
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|1|'), NOW + 4000));
+    expect(manager.getPaneExitReadCount('codeman-aaaa')).toBe(1);
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|101|1|1|'), NOW + 6000));
+    expect(manager.getPaneExitReadCount('codeman-aaaa')).toBe(1);
+  });
+
+  it('drops the count once a read sees the pane alive again', () => {
+    const manager = new TmuxManager();
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|100|1|0|'), NOW));
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|101|0|||'), NOW + 2000));
+    expect(manager.getPaneExitReadCount('codeman-aaaa')).toBe(0);
+    manager.applyPaneExits(derivePaneExits(parsePaneRows('codeman-aaaa|101|1|0|'), NOW + 4000));
+    expect(manager.getPaneExitReadCount('codeman-aaaa')).toBe(1);
   });
 });
 
@@ -1212,6 +1243,20 @@ describe('the pane-exit watcher tick', () => {
     manager.rows = [];
     await manager.refreshPaneExits(NOW + 2000);
     expect(manager.getPaneExit('codeman-s1')).toEqual({ status: 137, at: NOW });
+  });
+
+  it('does not count an empty read as confirming an exit', async () => {
+    // The clean-exit sweep closes on the second agreeing read. A read tmux did
+    // not answer agrees with nothing, so it must not supply that second read.
+    const manager = withLocalSession();
+    manager.rows = parsePaneRows('codeman-s1|100|1|0|');
+    await manager.refreshPaneExits(NOW);
+    manager.rows = [];
+    await manager.refreshPaneExits(NOW + 2000);
+    expect(manager.getPaneExitReadCount('codeman-s1')).toBe(1);
+    manager.rows = parsePaneRows('codeman-s1|100|1|0|');
+    await manager.refreshPaneExits(NOW + 4000);
+    expect(manager.getPaneExitReadCount('codeman-s1')).toBe(2);
   });
 
   it('discards a read that started before the pane was cleared', async () => {

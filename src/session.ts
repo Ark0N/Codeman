@@ -583,6 +583,14 @@ export class Session extends EventEmitter {
    */
   private _paneExit: PaneExit | null = null;
   /**
+   * How many starts, attaches or relaunches are running for this session's
+   * pane. While one is, a dead-pane reading may describe a pane that is being
+   * revived on purpose, so the exited-agent sweep leaves the session alone
+   * (Ark0N/Codeman#446). A counter rather than a flag, so two overlapping
+   * operations cannot clear each other's mark.
+   */
+  private _paneLifecycleOps = 0;
+  /**
    * This session was rebuilt from the tmux socket rather than from Codeman's
    * own records, so its `remote`/`docker` metadata is missing rather than known
    * to be absent. See {@link MuxSession.discovered}.
@@ -1181,6 +1189,26 @@ export class Session extends EventEmitter {
   /** What Codeman last observed of this pane's agent, or undefined for UNKNOWN. */
   get paneExit(): PaneExit | undefined {
     return this._paneExit ?? undefined;
+  }
+
+  /**
+   * True while a start, attach or relaunch is running for this session's pane.
+   * The exited-agent sweep reads it (see `pane-exit-sweep.ts`): the dead-pane
+   * branch of {@link _setupOrAttachMuxSession} respawns an exited pane, and
+   * until it finishes and clears the exit, the pane still reads as dead.
+   */
+  get paneLifecycleInFlight(): boolean {
+    return this._paneLifecycleOps > 0;
+  }
+
+  /** Run one pane start, attach or relaunch with {@link paneLifecycleInFlight} raised. */
+  private async _withPaneLifecycle<T>(op: () => Promise<T>): Promise<T> {
+    this._paneLifecycleOps++;
+    try {
+      return await op();
+    } finally {
+      this._paneLifecycleOps--;
+    }
   }
 
   /**
@@ -1889,6 +1917,14 @@ export class Session extends EventEmitter {
     createSessionOptions: import('./mux-interface.js').CreateSessionOptions;
     spawnErrLabel: string;
   }): Promise<{ isRestored: boolean; respawnedResumeId?: string; respawnedDeadPane: boolean }> {
+    return this._withPaneLifecycle(() => this._doSetupOrAttachMuxSession(options));
+  }
+
+  private async _doSetupOrAttachMuxSession(options: {
+    respawnPaneOptions: import('./mux-interface.js').RespawnPaneOptions;
+    createSessionOptions: import('./mux-interface.js').CreateSessionOptions;
+    spawnErrLabel: string;
+  }): Promise<{ isRestored: boolean; respawnedResumeId?: string; respawnedDeadPane: boolean }> {
     const mux = this._mux!;
 
     // Verify stale mux session — tmux may have been destroyed (e.g., killed externally).
@@ -2071,6 +2107,10 @@ export class Session extends EventEmitter {
    *   the mux session is gone — see {@link reattachRemote} for that reasoning).
    */
   async restartCli(): Promise<boolean> {
+    return this._withPaneLifecycle(() => this._doRestartCli());
+  }
+
+  private async _doRestartCli(): Promise<boolean> {
     if (!this._useMux || !this._mux || !this._muxSession) return false;
     const mux = this._mux;
 

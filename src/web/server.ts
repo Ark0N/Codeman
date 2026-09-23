@@ -34,6 +34,7 @@ import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
 import { pasteImageDirInUseByOtherSession, startPasteImageGc } from './paste-image-gc.js';
+import { CLEAN_EXIT_CLOSE_REASON, shouldCloseCleanlyExitedSession } from '../pane-exit-sweep.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, chmodSync, rmSync, statSync } from 'node:fs';
@@ -2508,6 +2509,9 @@ export class WebServer extends EventEmitter {
    * Nothing here touches `status` or `pid`. `status: 'error'` belongs to the
    * PTY-exit breaker and makes the browser offer a restart, and a null `pid` is
    * what makes the browser re-attach and launch a fresh CLI.
+   *
+   * Once the records are current, {@link closeCleanlyExitedSessions} closes the
+   * sessions whose agent the user ended.
    */
   private applyPaneExits(): void {
     const getPaneExit = this.mux.getPaneExit?.bind(this.mux);
@@ -2520,6 +2524,46 @@ export class WebServer extends EventEmitter {
       if (!session.setPaneExit(getPaneExit(muxName))) continue;
       this.persistSessionState(session);
       this.broadcastSessionStateDebounced(session.id);
+    }
+    this.closeCleanlyExitedSessions();
+  }
+
+  /**
+   * Close every session whose agent exited cleanly, through the same
+   * `cleanupSession()` the X button uses (Ark0N/Codeman#446). A pinned session
+   * is demoted to `status: 'stopped'` there rather than removed, and either way
+   * the reboot restore stops offering it back. The conversation stays
+   * resumable, since the Resume list reads the lifecycle log and the transcript
+   * files, and the pane owns neither.
+   *
+   * `shouldCloseCleanlyExitedSession()` (`pane-exit-sweep.ts`) holds the rule:
+   * an explicit status of 0, confirmed by more than one pane read, with no
+   * start or attach in flight. A crashed agent keeps its row with the exit
+   * code on it. `session.paneExit` is already scoped to local mux-backed
+   * sessions by `setPaneExit()`, so a remote, docker or direct-PTY session is
+   * never closed here.
+   *
+   * The close runs in the background. `cleanupSession()` ignores a second call
+   * for a session it is already closing, and the `closing` check below keeps
+   * the next tick from queueing one.
+   */
+  private closeCleanlyExitedSessions(): void {
+    const readCount = this.mux.getPaneExitReadCount?.bind(this.mux);
+    if (!readCount) return;
+    for (const session of [...this.sessions.values()]) {
+      const muxName = session.muxName;
+      if (!muxName) continue;
+      const close = shouldCloseCleanlyExitedSession({
+        paneExit: session.paneExit,
+        confirmingReads: readCount(muxName),
+        paneLifecycleInFlight: session.paneLifecycleInFlight,
+        closing: this.cleaningUp.has(session.id),
+      });
+      if (!close) continue;
+      console.log(`[Server] Closing session ${session.id} (${session.name}): ${CLEAN_EXIT_CLOSE_REASON}`);
+      void this.cleanupSession(session.id, true, CLEAN_EXIT_CLOSE_REASON).catch((err) => {
+        console.error(`[Server] Failed to close cleanly exited session ${session.id}:`, err);
+      });
     }
   }
 
