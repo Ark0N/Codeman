@@ -2820,7 +2820,11 @@ Object.assign(CodemanApp.prototype, {
   renderCliList() {
     const list = document.getElementById('cliListRows');
     if (!list) return;
-    const clis = this._cliList || [];
+    const clis = [...(this._cliList || [])].sort((a, b) => {
+      // Installed CLIs first, alphabetically; then not-installed, alphabetically.
+      if (a.installed !== b.installed) return a.installed ? -1 : 1;
+      return a.label.localeCompare(b.label);
+    });
     if (clis.length === 0) {
       list.innerHTML = '<p class="set-group-hint">No CLIs found.</p>';
       return;
