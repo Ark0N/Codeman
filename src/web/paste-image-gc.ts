@@ -12,7 +12,7 @@
  * image dir.
  */
 import fs from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { SessionPort } from './ports/index.js';
 
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -51,6 +51,38 @@ export async function sweepPasteImagesOnce(
     }
   }
   return { scanned, deleted };
+}
+
+/**
+ * Does another live session still use this working directory's paste-image
+ * dir? Deleting a session removes `{workingDir}/.claude-images` recursively,
+ * and several sessions routinely share one case directory, so without this
+ * check closing one session deletes the pasted images a sibling in the same
+ * case still refers to.
+ *
+ * A session that is itself being cleaned up does not count as live. Without
+ * that exemption, closing two sessions of one case concurrently (a bulk
+ * delete, or the exited-agent sweep closing two panes on one tick) would have
+ * each defer to the other, and neither would remove the dir.
+ *
+ * Paths are compared after `resolve()`, which normalises a trailing slash and
+ * `..` segments. Symlinks are not resolved: a sibling that reaches the same
+ * directory through a symlink only costs a missed deletion here, and the
+ * periodic sweep above still ages those files out.
+ */
+export function pasteImageDirInUseByOtherSession(
+  sessions: Iterable<{ id: string; workingDir: string }>,
+  closingId: string,
+  workingDir: string,
+  closing: ReadonlySet<string>
+): boolean {
+  const target = resolve(workingDir);
+  for (const session of sessions) {
+    if (session.id === closingId || closing.has(session.id)) continue;
+    if (!session.workingDir) continue;
+    if (resolve(session.workingDir) === target) return true;
+  }
+  return false;
 }
 
 export function startPasteImageGc(ctx: Pick<SessionPort, 'sessions'>): () => void {

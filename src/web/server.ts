@@ -33,7 +33,7 @@ import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
-import { startPasteImageGc } from './paste-image-gc.js';
+import { pasteImageDirInUseByOtherSession, startPasteImageGc } from './paste-image-gc.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, chmodSync, rmSync, statSync } from 'node:fs';
@@ -1482,8 +1482,14 @@ export class WebServer extends EventEmitter {
       attachmentRegistry.clearSession(sessionId);
       // Stop watching for images in this session's directory
       imageWatcher.unwatchSession(sessionId);
-      // Clean up pasted images directory for this session
-      if (killMux && session.workingDir) {
+      // Clean up pasted images directory for this session. The dir belongs to the
+      // working directory rather than the session, so it stays while another live
+      // session in the same case still uses it (Ark0N/Codeman#446).
+      if (
+        killMux &&
+        session.workingDir &&
+        !pasteImageDirInUseByOtherSession(this.sessions.values(), sessionId, session.workingDir, this.cleaningUp)
+      ) {
         const pasteImageDir = join(session.workingDir, '.claude-images');
         try {
           rmSync(pasteImageDir, { recursive: true, force: true });
