@@ -122,8 +122,18 @@ async function probeInstalled(entry: CliEntry): Promise<boolean> {
 
 const STOCK_IDS = new Set(STOCK_CLIS.map((e) => e.id as string));
 
-/** `shell`/`claude` can never be disabled (Decision 4) — enforced here, not just in the UI. */
-const UNDISABLEABLE_IDS = new Set(['shell', 'claude']);
+/**
+ * `shell` can never be disabled — enforced here, not just in the UI (a frontend-only guard
+ * is bypassable with curl). Revised from Decision 4's original "shell/claude" scope
+ * (2026-09-23): `claude` is now a normal toggleable entry like any other CLI. Internal
+ * session creation (tmux-manager.ts, session.ts, Ralph, plan-orchestrator) resolves a CLI
+ * via `getCli()`, which does NOT check `enabled` at all, so disabling `claude` only affects
+ * the Run menu and the HTTP-facing `sessionModeSchema()` (new session requests via the
+ * normal API) — identical in kind to disabling any other CLI, never a break to an internal
+ * fallback path. `shell` keeps the harder guarantee because it is the one non-agent mode
+ * several code paths assume always exists as a raw-terminal fallback.
+ */
+const UNDISABLEABLE_IDS = new Set(['shell']);
 
 /**
  * Every write endpoint (Phases 3-5) answers the SAME way when the feature is off or the

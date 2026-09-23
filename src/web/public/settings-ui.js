@@ -2776,7 +2776,9 @@ Object.assign(CodemanApp.prototype, {
       list.innerHTML = '<p class="set-group-hint">No CLIs found.</p>';
       return;
     }
-    const UNDISABLEABLE = new Set(['shell', 'claude']);
+    // Mirrors cli-registry-routes.ts's own UNDISABLEABLE_IDS (2026-09-23 revision:
+    // claude is now a normal toggleable entry, only shell keeps the hard guarantee).
+    const UNDISABLEABLE = new Set(['shell']);
     list.innerHTML = clis
       .map((c) => {
         const idArg = escapeHtml(JSON.stringify(c.id));

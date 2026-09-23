@@ -131,20 +131,30 @@ describe('PUT /api/clis/:id (Phase 3: enable/disable)', () => {
     expect(grokOn?.enabled).toBe(true);
   });
 
-  it('rejects disabling shell or claude, changes nothing', async () => {
+  it('rejects disabling shell, changes nothing', async () => {
     enableCliManagement();
     const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
-    for (const id of ['shell', 'claude']) {
-      const res = await app.inject({ method: 'PUT', url: `/api/clis/${id}`, payload: { enabled: false } });
-      // errorCode, not statusCode: this branch returns bare createErrorResponse()
-      // and relies on server.ts's global preSerialization hook to map it to 400,
-      // which the lightweight test harness does not register — same convention
-      // as test/routes/custom-model-routes.test.ts's equivalent checks.
-      expect(res.json().errorCode).toBe('INVALID_INPUT');
-      const list = await app.inject({ method: 'GET', url: '/api/clis' });
-      const entry = (list.json() as { data: CliListItem[] }).data.find((c) => c.id === id);
-      expect(entry?.enabled).toBe(true);
-    }
+    const res = await app.inject({ method: 'PUT', url: '/api/clis/shell', payload: { enabled: false } });
+    // errorCode, not statusCode: this branch returns bare createErrorResponse()
+    // and relies on server.ts's global preSerialization hook to map it to 400,
+    // which the lightweight test harness does not register — same convention
+    // as test/routes/custom-model-routes.test.ts's equivalent checks.
+    expect(res.json().errorCode).toBe('INVALID_INPUT');
+    const list = await app.inject({ method: 'GET', url: '/api/clis' });
+    const entry = (list.json() as { data: CliListItem[] }).data.find((c) => c.id === 'shell');
+    expect(entry?.enabled).toBe(true);
+  });
+
+  it('allows disabling claude — only shell keeps the hard guarantee (revised 2026-09-23)', async () => {
+    enableCliManagement();
+    const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+    const off = await app.inject({ method: 'PUT', url: '/api/clis/claude', payload: { enabled: false } });
+    expect(off.statusCode).toBe(200);
+    const list = await app.inject({ method: 'GET', url: '/api/clis' });
+    const entry = (list.json() as { data: CliListItem[] }).data.find((c) => c.id === 'claude');
+    expect(entry?.enabled).toBe(false);
+    // Restore for any later test in this file that assumes claude's stock default.
+    await app.inject({ method: 'PUT', url: '/api/clis/claude', payload: { enabled: true } });
   });
 
   it('404s an id that does not exist, never creating one', async () => {
