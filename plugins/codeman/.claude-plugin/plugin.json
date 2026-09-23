@@ -1,7 +1,7 @@
 {
   "name": "codeman",
   "description": "Drive Codeman, the self-hosted session manager for AI coding agents, from inside a Claude Code session: spawn worker sessions, prompt them, wait for them, read their answers, clean up. Acts only inside a Codeman-managed session.",
-  "version": "1.32.0",
+  "version": "1.32.1",
   "author": {
     "name": "Ark0N",
     "url": "https://github.com/Ark0N"
