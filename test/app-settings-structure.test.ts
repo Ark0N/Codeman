@@ -123,7 +123,13 @@ describe('App Settings modal structure', () => {
     const select = modal.match(/id="appSettingsClaudeModel"([\s\S]*?)<\/select>/)?.[1] ?? '';
     // The cards render the base models; the [1m] rows exist so that base + the
     // context switch can compose back into a real claudeModel value.
-    for (const value of ['opus[1m]', 'claude-fable-5[1m]', 'claude-fable-5-1[1m]', 'claude-opus-4-6[1m]']) {
+    for (const value of [
+      'opus[1m]',
+      'claude-fable-5[1m]',
+      'claude-fable-5-1[1m]',
+      'claude-opus-5-5[1m]',
+      'claude-opus-4-6[1m]',
+    ]) {
       expect(select).toContain(`value="${value}"`);
     }
     expect(select).toContain('data-ctx="1"');
@@ -145,6 +151,22 @@ describe('App Settings modal structure', () => {
     ]) {
       const routing = modal.match(new RegExp(`id="${id}"([\\s\\S]*?)</select>`))?.[1] ?? '';
       expect(routing, `${id} does not offer Fable 5.1`).toContain('value="claude-fable-5-1"');
+    }
+  });
+
+  it('models: offers Opus 5.5 as a card and to task routing', () => {
+    const modal = settingsModal();
+    const select = modal.match(/id="appSettingsClaudeModel"([\s\S]*?)<\/select>/)?.[1] ?? '';
+    expect(select).toMatch(/value="claude-opus-5-5"[^>]*data-ctx="1"/);
+    for (const id of [
+      'appSettingsDefaultModel',
+      'appSettingsModelExplore',
+      'appSettingsModelImplement',
+      'appSettingsModelTest',
+      'appSettingsModelReview',
+    ]) {
+      const routing = modal.match(new RegExp(`id="${id}"([\\s\\S]*?)</select>`))?.[1] ?? '';
+      expect(routing, `${id} does not offer Opus 5.5`).toContain('value="claude-opus-5-5"');
     }
   });
 
