@@ -100,6 +100,50 @@ jobs:
             fi
             echo "bash $BASH_VERSION: dsh identity probe survives a missing timeout"
           '
+          # Installer v2: the question phase runs before the build, and every decision it
+          # takes is bash logic over stubbed tailscale state. Drive the flags, the launch
+          # default, the occupied-:443 menu and the rename question with canned answers,
+          # so a bash-4 construct or a flipped default in any of them fails here, not on a
+          # Mac. The JSON parsers need node (absent in this image) and are stubbed; their
+          # own coverage is test/install-sh-invariants.test.ts plus the vitest gate.
+          docker run --rm -v "$PWD":/w -w /w -e CODEMAN_INSTALL_SH_LIB=1 -e HOME=/tmp/h bash:3.2 bash -c '
+            set -euo pipefail
+            mkdir -p /tmp/h
+            . /w/install.sh
+            parse_flags --tailscale --service --name Build-Box --port 4000
+            [[ "$CODEMAN_TAILSCALE" == "1" && "$LAUNCH_PRESET" == "2" && "$TS_NAME" == "Build-Box" && "$CODEMAN_PORT" == "4000" ]]
+            [[ "$(ts_sanitize_name "$TS_NAME")" == "build-box" ]]
+            has_tty() { return 0; }
+            ANSWER=""; read_reply() { eval "$1=\"\$ANSWER\""; }
+            systemctl() { return 0; }
+            LAUNCH_PRESET=""; NONINTERACTIVE=0
+            choose_launch_mode linux >/dev/null 2>&1
+            [[ "$LAUNCH_CHOICE" == "2" ]]
+            check_tailscale() { return 0; }
+            ts_status_field() { case "$1" in "s.BackendState") printf Running ;; "s.Self && s.Self.DNSName") printf "box.tail.ts.net." ;; esac; }
+            ts_backend_state() { printf Running; }
+            ts_dns_name() { printf box.tail.ts.net; }
+            ts_serve_443_target_port() { printf 8080; }
+            ts_serve_find_port_mapping() { :; }
+            ts_serve_port_used() { return 1; }
+            detect_tailscale_serve_url() { :; }
+            tailscale_choose_mapping >/dev/null 2>&1
+            [[ "$TS_SERVE_MODE" == "path" && "$BIND_BASE_URL" == "/codeman" ]]
+            RENAMED=""; tailscale_rename_node() { RENAMED="$1"; }
+            TS_NAME=""; tailscale_choose_name >/dev/null 2>&1
+            [[ -z "$RENAMED" ]]
+            # A flag re-run keeps the password the unit already carries (and so
+            # never writes the unauthenticated ack), and the hand-start line the
+            # done screen prints carries every non-default value.
+            read_existing_binding() { EXISTING_FOUND=1; EXISTING_HOST=0.0.0.0; EXISTING_PASSWORD=s3cret; EXISTING_ACK=0; EXISTING_BASE_URL=""; }
+            CODEMAN_HOST=0.0.0.0; CODEMAN_TAILSCALE=0; unset CODEMAN_PASSWORD; BIND_ACK=0
+            choose_network_binding >/dev/null 2>&1
+            [[ "$BIND_PASSWORD" == "s3cret" && "$BIND_ACK" == "0" ]]
+            BIND_HOST=0.0.0.0; BIND_PASSWORD=x; BIND_ACK=0; BIND_BASE_URL=/codeman; CODEMAN_PORT=4000
+            [[ "$(start_command_hint)" == "CODEMAN_HOST=0.0.0.0 CODEMAN_PASSWORD="*" CODEMAN_BASE_URL=/codeman CODEMAN_PORT=4000 codeman web" ]]
+            RECONFIGURE=0; parse_flags --port 4001; [[ "$RECONFIGURE" == "1" ]]
+            echo "bash $BASH_VERSION: question phase (flags, launch default, occupied :443, rename opt-in, kept password, start line) ok"
+          '
 
       - name: CLI catalogue artifacts are in sync with stock.ts
         run: npm run generate:cli-catalog -- --check

@@ -675,6 +675,12 @@ body.tab-rail-resizing * {
   user-select: none !important;
 }
 
+body.split-pane-resizing,
+body.split-pane-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .tab-rail,
   .tab-rail-resize-handle {
@@ -2282,6 +2288,39 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-prefix {
   display: none !important;
 }
 
+/* Split-pane header button: hidden by default (opt-in via App Settings →
+   Header & Panels → Header buttons → Split, `showSplitButton`). Pure
+   client-side toggle applied by applyHeaderVisibilitySettings(). */
+.btn-split--hidden {
+  display: none !important;
+}
+
+/* While a split is open, the button's own click closes it instead of opening
+   the picker — the accent fill is what tells the user which of its two
+   behaviours the next click will get (aria-pressed carries the same state
+   for assistive tech). */
+.btn-icon-header.btn-split.split-open {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.btn-icon-header.btn-split.split-open:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* Split-pane hard desktop gate, independent of the showSplitButton setting:
+   two 240px min-width panes plus the divider need ~486px, the divider has no
+   touch handlers, and mobile.css only loads up to 1023px so it cannot cover
+   the 1024-1179px tablet range on its own. Same threshold and reasoning as
+   HOME_SESSIONS_MIN_WIDTH (home-sessions.js) / SPLIT_PANE_MIN_WIDTH
+   (constants.js) — keep the three in sync. */
+@media (max-width: 1179px) {
+  .btn-icon-header.btn-split {
+    display: none !important;
+  }
+}
+
 .btn-icon-header.btn-settings {
   width: 30px;
   height: 30px;
@@ -2392,6 +2431,51 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-prefix {
 }
 .session-tab.detached .tab-detached-badge {
   display: inline-flex;
+}
+
+/* The agent inside the pane has exited (Ark0N/Codeman#446). Unlike the badge
+   above this one carries text the server computed, so it is added and removed
+   by the renderer rather than toggled by a class. */
+.session-tab .tab-exited-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 4px;
+  margin-left: 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+  background: rgba(248, 113, 113, 0.16);
+  color: var(--danger);
+}
+
+/* An exited agent quiets the status dot, which otherwise reports `status` and
+   so stays green (or pulses, for a session the exit caught mid-turn) beside a
+   badge saying the agent is gone. `status` itself is deliberately untouched —
+   `error` is the PTY-exit breaker's value and makes the browser offer a restart
+   — so this is a rendering rule only, and it matches `.tab-status.ended`.
+
+   ⚠ Three states are excluded BY HAND rather than by cascade, the same way the
+   rich-rail dot rules below do it: a dot turning red or yellow because a
+   session is blocked on a human outranks "the agent exited", and this selector
+   is specific enough (0,5,0) to have beaten those (0,3,0) rules otherwise. The
+   third is `.tab-status.error` (0,2,0), which is the PTY-exit breaker's state
+   and the one the browser answers with a "restart it?" confirm — the same
+   argument that protects the two alert classes, and it reaches the dot rather
+   than the tab, which is why the `:not()` sits on `.tab-status` here and on
+   `.session-tab` there. The spinner ring is a pseudo-element the skin blocks
+   cannot reach, so it needs hiding explicitly rather than by unsetting the
+   animation. */
+.session-tab.tab-agent-exited:not(.tab-alert-action):not(.tab-alert-idle) .tab-status:not(.error) {
+  background: var(--text-muted);
+  opacity: 0.5;
+  animation: none;
+}
+.session-tab.tab-agent-exited:not(.tab-alert-action):not(.tab-alert-idle) .tab-status:not(.error)::after {
+  display: none;
 }
 
 /* ===== Tab action icons: active tab only =================================
@@ -2547,6 +2631,7 @@ body.solo-mode .header-system-stats,
 body.solo-mode .header-tokens,
 body.solo-mode .btn-notifications,
 body.solo-mode .btn-multimonitor,
+body.solo-mode .btn-split,
 body.solo-mode .header-plan-usage,
 /* A solo window shows ONE session and has no tab strip to put restored ones in,
    so offering to rebuild a list of them there is an offer it cannot show the
@@ -3776,6 +3861,37 @@ body.solo-mode .btn-lifecycle-log {
 .terminal-container .xterm-viewport {
   background: transparent !important;
 }
+
+/* The terminal is wider than the box that shows it (issue #464). Two causes,
+   one affordance: another device holds the sizing claim so this terminal has
+   adopted a width it did not ask for, or the 40-column floor has widened it
+   past a narrow container. Either way the text is rendered CORRECTLY and simply
+   does not fit, and without horizontal reach the right-hand columns sit behind
+   .terminal-container's clip with no gesture that can get to them — measured at
+   360px, font 24: 218px of the pane, 38% of it, unreachable.
+   Present only while that is true; _syncTerminalOverflowAffordance() owns it. */
+.terminal-container.term-overflows-x {
+  /* ⚠️ BOTH axes, explicitly. mobile.css loads after this file and sets
+     `.terminal-container { overflow: visible }` — a bare `overflow-x` would
+     then leave overflow-y computing to `auto` (CSS promotes a `visible` paired
+     with a non-visible axis), handing the browser a vertical scroll container
+     the terminal's own touch handler does not know about. */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+/* xterm's own element is width:100% above, so the container would see no
+   overflow to scroll even though .xterm-screen is wider than both. */
+.terminal-container.term-overflows-x .xterm {
+  width: max-content;
+  min-width: 100%;
+}
+/* ⚠️ NO `touch-action: pan-x` here, deliberately. The terminal's own touchmove
+   handler pans this container (see `canPanHorizontally` in terminal-ui.js),
+   because `touchstart` preventDefault()s every 'content' tap and that cancels
+   a native pan before it can start. Granting the browser pan-x as well would
+   double-handle the gestures where that preventDefault does NOT run — a tap on
+   a scrolled-up viewport — moving the pane twice for one finger. The
+   `touch-action: none` the other rules set is what keeps JS the sole owner. */
 
 /* Touch devices: prevent browser from claiming the touch gesture before
    our JS touchmove handler fires. Without this, the browser starts native
@@ -6827,6 +6943,27 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   overflow-y: auto;
   flex: 1;
   min-height: 0;
+}
+
+/* The picker's row tags ("Currently loaded", "Last used", "Default") reuse the
+   settings surface's .set-scope pill, but that pill is styled only inside
+   :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) (see the
+   settings-surface block), so in here it rendered as plain body text and
+   "qwen3 Currently loaded" read as one model name. Same pill, same skin
+   tokens (never a hardcoded colour: --text-muted / --border are what each
+   html[data-skin] block redefines), and nothing about the modal's layout or
+   z-index. The row is a flex container, so the pills sit after the name
+   with the row's own gap and the trailing whitespace collapses. */
+#customModelPickModal .set-scope {
+  font-size: 0.52rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-radius: 4px;
+  padding: 1px 4px;
+  white-space: nowrap;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  opacity: 0.8;
 }
 
 /* Custom Model Endpoint Profiles: llama-swap model-swap confirmation — replaces a native
@@ -12321,6 +12458,17 @@ kbd {
   color: var(--text-dim);
   font-size: 0.68rem;
 }
+/* Why this card is not blinking at anyone: the session is watching work it
+   started itself. Accent, like the watching badge on a session row, and never
+   the red or yellow that mean a human is needed. */
+.approval-quiet {
+  margin-bottom: 6px;
+  color: var(--accent);
+  font-size: 0.68rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .approval-summary {
   color: var(--text);
   font-size: 0.76rem;
@@ -13613,6 +13761,14 @@ body.touch-device.cjk-input-visible .main {
   background: var(--control-bg-hover);
 }
 
+.accessory-btn-compose.has-draft::after {
+  width: 6px;
+  height: 6px;
+  background: var(--yellow);
+  border-radius: 50%;
+  content: '';
+}
+
 .accessory-btn svg {
   width: 14px;
   height: 14px;
@@ -13731,6 +13887,64 @@ body.touch-device.cjk-input-visible .main {
   background: var(--accent);
   color: #fff;
   font-weight: 600;
+}
+
+.prompt-composer-overlay {
+  overflow-y: auto;
+  padding: min(15dvh, 72px) 0 calc(12px + env(safe-area-inset-bottom));
+}
+
+.prompt-composer-dialog {
+  max-width: 560px;
+  /* The overlay's top inset and bottom gutter, plus the strip a folding device
+     reserves below the dialog (0px everywhere else; see the fold rules at the
+     end of this file). */
+  max-height: calc(100dvh - min(15dvh, 72px) - 12px - env(safe-area-inset-bottom) - var(--fold-block-end));
+  overflow-y: auto;
+}
+
+.prompt-composer-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 2px 2px 10px;
+  color: var(--text);
+}
+
+.prompt-composer-header span {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.prompt-composer-textarea {
+  min-height: min(34dvh, 240px);
+  max-height: 50dvh;
+  resize: vertical;
+}
+
+.prompt-composer-actions {
+  flex-wrap: wrap;
+}
+
+.prompt-composer-actions button {
+  min-height: var(--touch-target-min);
+}
+
+.prompt-composer-terminal {
+  flex: 1 0 100%;
+  padding: 8px 12px;
+  color: var(--text-dim);
+  font-size: 14px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.prompt-composer-terminal:active {
+  color: var(--text);
+  background: var(--bg-input);
 }
 
 /* Shared lazy filesystem path picker (case linking + mobile input). */
@@ -15015,11 +15229,31 @@ html:not([data-skin="og"]) {
   color: #061c20;
 }
 .btn-toolbar.btn-run.mode-codex:hover { box-shadow: 0 0 14px -2px rgba(43, 203, 187, 0.45); }
-/* Pi keeps its rose identity on the non-og skins. This rule has to live INSIDE
-   this nested block: the generic `.btn-toolbar.btn-run` above resolves to (0,3,1)
-   here and would otherwise beat the base sheet's (0,3,0) `.mode-pi` pair, which
-   is exactly why gemini's and antigravity's gradients render as generic claude
-   blue on the default skin. */
+/* Gemini, Antigravity, Pi, OMP, Grok and DeepSeek all keep their own identity
+   on the non-og skins. Each rule has to live INSIDE this nested block: the
+   generic `.btn-toolbar.btn-run` above resolves to (0,3,1) here and would
+   otherwise beat the base sheet's (0,3,0) `.mode-<id>` pair — which is exactly
+   what gemini/antigravity/omp did until this fix, rendering as generic claude
+   blue on `daylight-blue`, the actual DEFAULT skin for a fresh install
+   (`index.html`'s pre-paint script), not just a corner case on `og`. */
+.btn-toolbar.btn-run.mode-gemini {
+  background: linear-gradient(135deg, #174ea6, #4f46e5);
+  border-color: #123a7a;
+  color: #dbeafe;
+}
+.btn-toolbar.btn-run.mode-gemini:hover { box-shadow: 0 0 14px -2px rgba(96, 165, 250, 0.45); }
+.btn-toolbar.btn-run.mode-antigravity {
+  background: linear-gradient(135deg, #0e7490, #0891b2);
+  border-color: #0b5566;
+  color: #cffafe;
+}
+.btn-toolbar.btn-run.mode-antigravity:hover { box-shadow: 0 0 14px -2px rgba(34, 211, 238, 0.45); }
+.btn-toolbar.btn-run.mode-omp {
+  background: linear-gradient(135deg, #4f46e5, #6366f1);
+  border-color: #3730a3;
+  color: #e0e7ff;
+}
+.btn-toolbar.btn-run.mode-omp:hover { box-shadow: 0 0 14px -2px rgba(129, 140, 248, 0.45); }
 .btn-toolbar.btn-run.mode-pi {
   background: linear-gradient(135deg, #be185d, #f472b6);
   border-color: #be185d;
@@ -15299,6 +15533,13 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 }
 .main.webview-active .webview-layer { display: flex; }
 .main.webview-active .terminal-wrap { display: none; }
+/* A split (Pane A + divider + Pane B) hides as one unit when a web tab is
+   active, mirroring the .terminal-wrap rule above — .terminal-wrap is
+   reparented INSIDE .terminal-split-container while a split is open, so
+   hiding only .terminal-wrap would leave Pane B and the divider stranded on
+   screen over the dashboard iframe. No state is destroyed, so returning to
+   the session tab shows the split intact. */
+.main.webview-active .terminal-split-container { display: none; }
 
 .webview-frame {
   display: none;
@@ -16113,6 +16354,17 @@ html[data-tab-orientation='vertical'] .home-sessions {
   background: color-mix(in srgb, var(--green) 7%, transparent);
   border-color: color-mix(in srgb, var(--green) 18%, var(--border));
   color: color-mix(in srgb, var(--green) 45%, var(--text-muted));
+}
+
+/* Accent, deliberately none of the three above: a session that is watching something
+   it started (a monitor, a backgrounded shell, a cloud session) is not asking for
+   anything, so it must not borrow the red or the yellow that mean it is. This badge
+   sits BESIDE the state pill rather than replacing it, since an agent can arm a
+   monitor and ask a question in the same breath. */
+.home-sessions-pill--watching {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
 }
 
 /* Row accents: same language as the session tabs and the phone overview — red
@@ -18177,6 +18429,25 @@ html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail
   color: color-mix(in srgb, var(--green) 45%, var(--text-muted));
 }
 
+/* An exited agent (Ark0N/Codeman#446): neutral, like the muted dot beside it.
+   No green at all, since nothing is running behind this row. */
+html[data-sidebar-detail="rich"] .session-sidebar .tab-pill--exited,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-pill--exited {
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  border-color: color-mix(in srgb, var(--text-muted) 30%, var(--border));
+  color: var(--text-muted);
+}
+
+/* Accent, deliberately none of the three above: a watching session is waiting for
+   work it started itself, not for the user, and the red and yellow here are spoken
+   for by sessions that ARE waiting for the user. */
+html[data-sidebar-detail="rich"] .session-sidebar .tab-pill--watching,
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .tab-pill--watching {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
+}
+
 /* Three lines of content per row instead of two, so give them room to breathe
    and stop the row actions crowding the pill.
 
@@ -18321,6 +18592,26 @@ html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail
   .tab-status.busy::after {
   inset: -4px;
   border-width: 2px;
+}
+
+/* The exited-agent mute, again, for the rich rail (Ark0N/Codeman#446).
+   The strip's rule is (0,5,0) and the three state rules above are (0,9,1), so
+   on this rail an exited session kept a full green dot and the working halo
+   beside a badge reading "exited" — measured, the contradiction the mute
+   exists to remove. This twin matches their (0,9,1) exactly and therefore MUST
+   stay below them in source order; moving it above silently restores the green
+   dot. It also clears the halo, which is a box-shadow the strip's rule never
+   had to think about.
+   ⚠ The alert exclusions are repeated by hand for the same reason they are on
+   the rules above: a dot turning red or yellow because a session is blocked on
+   a human outranks "the agent exited". */
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact)
+  .tab-rail
+  .session-tab.tab-agent-exited:not(.tab-alert-action):not(.tab-alert-idle)
+  .tab-status:not(.error) {
+  background: var(--text-muted);
+  opacity: 0.5;
+  box-shadow: none;
 }
 
 /* Card accents: the same three colours as every other session surface, and the
@@ -18552,6 +18843,19 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   padding-bottom: var(--fold-block-end);
 }
 
+/* The mobile prompt composer is a .paste-overlay with a gutter of its own: a
+   three-value `padding` shorthand whose bottom is 12px plus the safe area. The
+   generic rule above is a later longhand at the same specificity, so it ERASED
+   that gutter (measured at 393x852: padding-bottom 0 instead of 12px, and with
+   the fold variables set the hinge strip stood in for the gutter instead of
+   adding to it). Restate the composer's bottom gutter on top of the strip; the
+   side has no gutter of its own. The dialog's height cap subtracts the same
+   strip where it is declared (.prompt-composer-dialog). */
+.prompt-composer-overlay {
+  padding-right: var(--fold-inline-end);
+  padding-bottom: calc(12px + env(safe-area-inset-bottom) + var(--fold-block-end));
+}
+
 /* The response viewer is a bottom sheet, so a vertical hinge running through it
    is fine, since it is a wide surface like the terminal and inset dialogs are what
    the fold guidance is about. A horizontal hinge is not: in tabletop pose the
@@ -18564,4 +18868,129 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   .response-viewer {
     max-height: min(88vh, env(viewport-segment-height 0 1, 88vh));
   }
+}
+
+/* Split-Pane Sessions: container inserted only while a split is active.
+   .terminal-wrap (Pane A) is reparented into this as the first child; it
+   keeps every existing rule unchanged since nothing here restyles it. */
+.terminal-split-container {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.terminal-split-container > .terminal-wrap {
+  /* flex-shrink 1 (not 0): the divider's own 6px is fixed-width, and Pane A
+     +Pane B's inline flex-basis (openSplitPane/onMove) always sums to 100%,
+     so with flex-shrink 0 on both panes the row is 100% + 6px wide and
+     .main's overflow clips Pane B's right edge by exactly the divider's
+     width. Shrinking lets the two panes give up that 6px between them. */
+  flex: 0 1 auto;
+  min-width: 240px;
+  overflow: hidden;
+}
+
+.split-divider {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--border-color, #333);
+  position: relative;
+}
+
+.split-divider:hover,
+.split-divider.dragging {
+  background: var(--accent-color, #4a9eff);
+}
+
+.terminal-pane-b {
+  /* flex-shrink 1, matching .terminal-wrap above — see its comment. */
+  flex: 0 1 auto;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.terminal-pane-b-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  font-size: 12px;
+  background: var(--bg-secondary, #1a1a1a);
+  border-bottom: 1px solid var(--border-color, #333);
+  flex: 0 0 auto;
+}
+
+.terminal-pane-b-close {
+  /* A native <button> now backs this (keyboard-reachable close), so reset its
+     default chrome back to the plain glyph this rule always drew. */
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 6px;
+  opacity: 0.7;
+}
+
+.terminal-pane-b-close:hover {
+  opacity: 1;
+}
+
+.terminal-pane-b-container {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Split-picker menu: a small popover listing sessions to split with, appended
+   to document.body and positioned `fixed` by openSplitPicker() (JS sets
+   top/right against the Split header button's own rect). z-index above the
+   header (100) with headroom to spare, matching the sibling .run-mode-menu
+   dropdown's 1000. Dismissed by openSplitPane()'s own inline onclick, or by
+   the click-outside/Escape listeners installed alongside it. */
+.split-picker-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 4px;
+  background: var(--floating-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--control-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.split-picker-item {
+  /* A native <button> now backs each row (keyboard-reachable picker), so
+     reset its default chrome back to the plain list-row look this always
+     drew — full-width, left-aligned, no border/background of its own. */
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.split-picker-item:hover {
+  background: var(--control-bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+.split-picker-empty {
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text-muted);
 }

@@ -66,7 +66,23 @@ const _crashDiag = {
   // concurrent clients (desktop + phone) don't clobber each other.
   _pageId: Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8),
   log(msg) {
-    const entry = `${new Date().toISOString().slice(11,23)} ${msg}`;
+    // Entries are joined with '\n' into ONE localStorage value and beaconed to
+    // the server, and some call sites interpolate text this client does not
+    // control (a WebSocket close `reason` arrives from the server). A newline
+    // in there forges extra entries in the trail; an unbounded string can fill
+    // the storage quota and silently kill every later breadcrumb. Flatten and
+    // cap. CodemanDiag is loaded before app.js, but guard anyway — a
+    // diagnostic that can throw is worse than no diagnostic.
+    // Bound to a local FIRST: `CodemanDiag?.x` still throws a ReferenceError
+    // when the identifier was never declared, and this is the one function in
+    // the app that must never throw.
+    const diag = typeof CodemanDiag !== 'undefined' ? CodemanDiag : null;
+    const flat = diag?.sanitizeDiagEntry
+      ? diag.sanitizeDiagEntry(msg)
+      : String(msg == null ? '' : msg)
+          .replace(/[\r\n\u2028\u2029]+/g, ' ')
+          .slice(0, diag?.DIAG_ENTRY_MAX_CHARS ?? 300);
+    const entry = `${new Date().toISOString().slice(11,23)} ${flat}`;
     this._entries.push(entry);
     if (this._entries.length > this._maxEntries) this._entries.shift();
     try { localStorage.setItem('codeman-crash-diag', this._entries.join('\n')); } catch {}
@@ -323,6 +339,66 @@ function parseSessionPrefix(name) {
   if (rest === "") return { prefix, suffix: "" };
   if (rest.startsWith(": ")) return { prefix, suffix: rest.slice(2) };
   return null;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Exited-agent tab label (Ark0N/Codeman#446)
+// ═══════════════════════════════════════════════════════════════
+// The server publishes session.paneExit when the agent inside a local tmux
+// pane has exited while remain-on-exit kept the pane. The field is tri-state
+// and its third state is absence, which means Codeman does not know — that
+// renders as nothing here and must never read as alive.
+//
+// status and signal are each optional, because tmux can know the pane died
+// without reporting how (a SIGKILLed pane on tmux 3.2a reports neither). So an
+// absent status shows a bare "exited" rather than "exited (0)": a clean exit
+// and an unexplained one must not look the same.
+function paneExitLabel(paneExit) {
+  if (!paneExit || typeof paneExit !== 'object') return '';
+  if (typeof paneExit.signal === 'number' && paneExit.signal > 0) return `exited (signal ${paneExit.signal})`;
+  if (typeof paneExit.status === 'number') return `exited (${paneExit.status})`;
+  return 'exited';
+}
+
+// The tab's accessible name, with the exit appended when there is one. Shared
+// by the full render and applyPaneExitBadge() so the two cannot disagree.
+function paneExitAriaLabel(name, label) {
+  return label ? `${name} session, agent ${label}` : `${name} session`;
+}
+
+// Add, update or remove one tab's exited-agent badge in place. Separate from
+// the render loop so it can be exercised directly: this is the only path a
+// session going live-to-exited ever takes, since that transition adds and
+// removes no tab and so never reaches the full rebuild.
+function applyPaneExitBadge(tab, paneExit) {
+  const label = paneExitLabel(paneExit);
+  const existing = tab.querySelector('.tab-exited-badge');
+  // Quiets the status dot too. That dot reports `status`, which stays `idle` or
+  // `busy` for an exited pane by design, so without this a green or pulsing dot
+  // sits next to a badge saying the agent is gone.
+  tab.classList.toggle('tab-agent-exited', !!label);
+  // The tab's aria-label overrides its contents for the accessible name, and the
+  // badge is aria-hidden like its siblings, so the exit has to ride the label.
+  const name = tab.querySelector('.tab-name')?.dataset?.fullName;
+  if (name) tab.setAttribute('aria-label', paneExitAriaLabel(name, label));
+  if (!label) {
+    existing?.remove();
+    return;
+  }
+  if (!existing) {
+    const badge = document.createElement('span');
+    badge.className = 'tab-exited-badge';
+    badge.setAttribute('aria-hidden', 'true');
+    // Generated status text, like the status pills: it carries data-i18n-skip
+    // rather than a dictionary entry. Without it the translator would rewrite
+    // the badge and the next render pass would rewrite it back, because the
+    // comparison below is against the English string.
+    badge.setAttribute('data-i18n-skip', '');
+    badge.textContent = label;
+    tab.querySelector('.tab-name')?.insertAdjacentElement('afterend', badge);
+    return;
+  }
+  if (existing.textContent !== label) existing.textContent = label;
 }
 
 const DEFAULT_SHORTCUTS = [
@@ -682,6 +758,10 @@ class CodemanApp {
     this._wsReady = false;      // True when WS is open and ready for I/O
     this._wsState = 'disconnected'; // connecting | connected | reconnecting | fallback | disconnected
     this._wsLastRecvAt = 0;     // ms timestamp of the last frame received on the active WS
+    // Session whose socket dropped unintentionally, so output produced during
+    // the outage is missing from its buffer. Output frames carry no sequence
+    // number, so the only recovery is to refetch on the next successful open.
+    this._wsOutputGapSession = null;
 
     // Terminal write batching with DEC 2026 sync support
     this.pendingWrites = [];
@@ -1998,19 +2078,72 @@ class CodemanApp {
         + (this._loadBufferQueue?.reduce((s, w) => s + w.data.length, 0) || 0)
         + (this._terminalWriteInFlightBytes || 0);
       if (queued + data.data.length > 131072) { // 128KB — drop to prevent accumulation
-        // Schedule a self-recovery once the
-        // queue drains (debounced to avoid hammering the API during sustained bursts).
-        if (!this._clientDropRecoveryTimer) {
-          this._clientDropRecoveryTimer = setTimeout(() => {
-            this._clientDropRecoveryTimer = null;
-            this._onSessionNeedsRefresh();
-          }, 2000);
-        }
+        // The bytes are gone from the stream now, so the recovery is the only
+        // thing that puts this terminal back in step with the PTY. It also
+        // writes the crash-trail line, once per debounce window: logged here,
+        // one line per dropped frame evicted the whole 50-entry trail in
+        // under a second.
+        this._scheduleDroppedOutputRecovery(data.id, 0, queued);
         return;
       }
 
       this.batchTerminalWrite(data.data);
     }
+  }
+
+  /**
+   * Put the terminal back in step after a dropped frame, and keep trying until
+   * something actually repaints.
+   *
+   * ⚠️ A fire-and-forget timer is not a recovery, which is what this used to be:
+   * it nulled its own handle and then called `_onSessionNeedsRefresh()`, whose
+   * early returns are most likely to fire during the very burst that caused the
+   * drop. A skipped refresh lost the recovery with nothing left to retry it, so
+   * the hole stayed in the stream — and a hole in a TUI byte stream is a
+   * desynced cursor, which is muffled text (issue #464).
+   *
+   * Debounced by the same 2s as before, so a sustained burst still collapses
+   * into one attempt rather than hammering the API; bounded by
+   * `DROP_RECOVERY_MAX_ATTEMPTS`, because the early returns it retries past
+   * are transient contention. A refresh that died at the fetch DEADLINE is
+   * not retried: that is a stalled link, not contention, and each retry would
+   * be another `?full=1` capture waiting out a deadline of up to two minutes.
+   * Giving up leaves exactly what the old code left, so the floor is no worse.
+   *
+   * @param {string} sessionId - the session whose output was dropped
+   * @param {number} [attempt] - zero-based, for the bound
+   * @param {number} [queuedBytes] - render-queue bytes at the drop, for the crash trail
+   */
+  _scheduleDroppedOutputRecovery(sessionId, attempt = 0, queuedBytes) {
+    if (!sessionId || this._clientDropRecoveryTimer) return;
+    // Behind the debounce guard: one line per window, not per dropped frame.
+    if (Number.isFinite(queuedBytes)) _crashDiag.log(`TERMINAL DROP: ${(queuedBytes / 1024).toFixed(0)}KB queued`);
+    this._clientDropRecoveryTimer = setTimeout(async () => {
+      this._clientDropRecoveryTimer = null;
+      let repainted = false;
+      let timedOut = false;
+      try {
+        const result = await this._onSessionNeedsRefresh({ id: sessionId });
+        repainted = result === true;
+        timedOut = result === 'deadline';
+      } catch {
+        // Treated as "did not repaint" — retrying is the entire point of this.
+      }
+      const retry = window.CodemanDroppedOutput.shouldRetryDroppedOutputRecovery({
+        repainted,
+        timedOut,
+        attempt,
+        stillActive: this.activeSessionId === sessionId,
+      });
+      if (retry) {
+        _crashDiag.log(`DROP RECOVERY: attempt ${attempt + 1} did not repaint, retrying`);
+        this._scheduleDroppedOutputRecovery(sessionId, attempt + 1);
+      }
+      // Read through `window.` like terminal-ui.js does with its own constants:
+      // a bare global resolves in a browser but not in the vm harnesses the gate
+      // runs app.js under, and this body executes inside a timer where a
+      // ReferenceError would be swallowed — taking the recovery with it.
+    }, window.CodemanDroppedOutput.DROP_RECOVERY_DELAY_MS);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -2436,8 +2569,14 @@ class CodemanApp {
       // placeholder beats a messy screen dump there.
       const sessionMode = this.sessions.get(this.activeSessionId)?.mode || 'claude';
       if (!lastResponse && (sessionMode === 'claude' || sessionMode === 'shell')) {
-        const termRes = await fetch(`/api/sessions/${this.activeSessionId}/terminal`);
-        const termData = (await termRes.json())?.data ?? {};
+        // The no-param form is capped only by `terminalBufferMaxBytes` (32MB by
+        // default), so it is the largest body the frontend asks for anywhere —
+        // it gets the full-history budget, not the tail one.
+        const termCapture = await this._fetchTerminalCapture(
+          `/api/sessions/${this.activeSessionId}/terminal`,
+          { full: true }
+        );
+        const termData = termCapture.json?.data ?? {};
         if (termData.terminalBuffer) {
           lastResponse = this._cleanTerminalBuffer(termData.terminalBuffer);
         }
@@ -2555,15 +2694,104 @@ class CodemanApp {
     }
   }
 
+  /**
+   * Fetch a terminal capture under a deadline.
+   *
+   * Every terminal fetch used to run with no timeout at all, including
+   * `?full=1`, which _maybeRefetchFullHistory itself calls "unbounded-ish work:
+   * at the default history limit it can be megabytes". On a stalled mobile link
+   * that request hangs on the browser default with no retry, and the load-state
+   * machinery stays armed behind it.
+   *
+   * The budget scales with what is being asked for and with how many captures
+   * are already running (see CodemanFetchDeadline): a full scrollback on a slow
+   * uplink legitimately needs longer than a tail, and eight tabs resuming must
+   * not all expire together because each assumed it had the link to itself.
+   *
+   * An abort surfaces as a rejected promise, which every caller already handles —
+   * they wrap these in try/catch and log. That is the point: a timeout becomes a
+   * recoverable error instead of an indefinite hang.
+   *
+   * ⚠️ **The body is read HERE, and that is the whole point.** `await fetch()`
+   * settles on response HEADERS, not the body, so clearing the deadline when it
+   * resolves leaves the body — the multi-megabyte `?full=1` capture this exists
+   * for — completely unbounded. Measured against a server that sends headers
+   * immediately and stalls the body: `fetch()` resolved at 30ms, the timer was
+   * cleared there, and the body completed at 4026ms unaborted under a 1000ms
+   * deadline. Reading the body inside the helper is what makes the deadline
+   * cover the transfer rather than just the handshake. `_terminalCaptureInflight`
+   * is scoped the same way, so a body still streaming counts toward the budget
+   * of a capture starting beside it.
+   *
+   * Returns the PARSED envelope plus the response headers, because two callers
+   * read `server-timing`, and `headersAt` because those same callers measure
+   * header-vs-body time and can no longer observe that moment themselves.
+   *
+   * @param {string} url
+   * @param {{full?: boolean}} [opts]
+   * @returns {Promise<{json: unknown, headers: Headers|undefined, headersAt: number}>}
+   */
+  async _fetchTerminalCapture(url, opts = {}) {
+    const deadlineMs =
+      typeof CodemanFetchDeadline !== 'undefined'
+        ? CodemanFetchDeadline.terminalFetchDeadlineMs({
+            full: !!opts.full,
+            inflight: this._terminalCaptureInflight || 0,
+          })
+        : 45000;
+    // AbortSignal.timeout() is not on every browser Codeman supports, so drive
+    // it from a controller and always clear the timer — an uncancelled one
+    // would abort a LATER request that reused this controller's signal.
+    //
+    // Degrade to a plain fetch where AbortController is missing rather than
+    // throwing: a capture with no deadline is the behaviour every caller had
+    // before this helper existed, while a ReferenceError here would take out
+    // terminal replay entirely. The deadline is a safety net, not a dependency.
+    const canAbort = typeof AbortController === 'function';
+    const controller = canAbort ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), deadlineMs) : null;
+    this._terminalCaptureInflight = (this._terminalCaptureInflight || 0) + 1;
+    try {
+      const res = await (controller ? fetch(url, { signal: controller.signal }) : fetch(url));
+      const headersAt = performance.now();
+      // Still inside the deadline: an abort here rejects the body stream, which
+      // is exactly the case a header-only timeout could not reach.
+      const json = await res.json();
+      return { json, headers: res.headers, headersAt };
+    } catch (err) {
+      if (err?.name === 'AbortError') {
+        _crashDiag.log(`TERMINAL FETCH TIMEOUT after ${deadlineMs}ms`);
+      }
+      throw err;
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+      this._terminalCaptureInflight = Math.max(0, (this._terminalCaptureInflight || 1) - 1);
+    }
+  }
+
+  /**
+   * Reload this session's buffer from the server.
+   *
+   * ⚠️ Returns whether it ACTUALLY reloaded. Four of the paths out of here are
+   * early returns, and two of them — a buffer load in flight, a refresh already
+   * owning this session — are most likely to be true during exactly the output
+   * burst that makes a caller need this. A caller that treats "called" as
+   * "recovered" silently loses the recovery; `_scheduleDroppedOutputRecovery`
+   * is the one that cannot afford to.
+   *
+   * @returns {Promise<boolean|'deadline'>} true only once a response has been
+   *   applied; 'deadline' when the capture fetch hit its deadline (a stalled
+   *   link, which the dropped-output scheduler does not retry); false otherwise.
+   */
   async _onSessionNeedsRefresh(event = {}) {
     // Server sends this after SSE backpressure clears — terminal data was dropped,
     // so reload the buffer to recover from any display corruption.
     const sessionId = this.activeSessionId;
-    if (event?.id && event.id !== sessionId) return;
-    if (!sessionId || !this.terminal) return;
+    if (event?.id && event.id !== sessionId) return false;
+    if (!sessionId || !this.terminal) return false;
     // Skip if buffer load already in progress — avoids competing clear+rewrite cycles
-    if (this._isLoadingBuffer) return;
-    if (this._terminalRefreshOwner?.sessionId === sessionId) return;
+    if (this._isLoadingBuffer) return false;
+    if (this._terminalRefreshOwner?.sessionId === sessionId) return false;
     const refreshOwner = { sessionId };
     this._terminalRefreshOwner = refreshOwner;
     try {
@@ -2573,22 +2801,23 @@ class CodemanApp {
       // TUI modes still recover the whole picture, with the downgrade guard for
       // repaint-mode panes whose tmux capture can be smaller than xterm's buffer.
       const useFullHistory = this.sessions.get(sessionId)?.mode !== 'shell';
-      let res = await fetch(
+      let capture = await this._fetchTerminalCapture(
         useFullHistory
           ? `/api/sessions/${sessionId}/terminal?full=1`
-          : `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`
+          : `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`,
+        { full: useFullHistory }
       );
-      let headersReceivedAt = performance.now();
-      let data = (await res.json())?.data ?? {};
+      let headersReceivedAt = capture.headersAt;
+      let data = capture.json?.data ?? {};
       if (useFullHistory && data.terminalBuffer && this._replayWouldShrinkBuffer(data.terminalBuffer)) {
-        res = await fetch(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
-        headersReceivedAt = performance.now();
-        data = (await res.json())?.data ?? {};
+        capture = await this._fetchTerminalCapture(`/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`);
+        headersReceivedAt = capture.headersAt;
+        data = capture.json?.data ?? {};
       }
       // Bail on a tab switch mid-fetch: writing here would paint this session's
       // history into the terminal the user is now looking at. The window is two
       // fetches wide in the fallback case, so this guard is not optional.
-      if (this.activeSessionId !== sessionId || this._terminalRefreshOwner !== refreshOwner) return;
+      if (this.activeSessionId !== sessionId || this._terminalRefreshOwner !== refreshOwner) return false;
       if (data.terminalBuffer) {
         // This refresh is SERVER-triggered, so a user quietly reading scrollback
         // did not ask for it and must not be dragged to the bottom by it (#259).
@@ -2596,8 +2825,11 @@ class CodemanApp {
         // meaningless across it — distance from the bottom is what survives.
         const before = this.terminal.buffer?.active;
         const linesFromBottom = before ? Math.max(0, (before.baseY || 0) - (before.viewportY || 0)) : 0;
-        this.terminal.clear();
-        this.terminal.reset();
+        // One queued clear, not clear()+reset(): both of those are synchronous
+        // and skip xterm's write queue, so live bytes still parsing would land
+        // after them and fuse into the buffer written below. See
+        // _resetTerminalForReplay.
+        this._resetTerminalForReplay();
         await this.chunkedTerminalWrite(
           data.terminalBuffer,
           TERMINAL_CHUNK_SIZE,
@@ -2625,11 +2857,34 @@ class CodemanApp {
           this.sendResize(this.activeSessionId);
         }
       }
+      // ⚠️ HERE: after a response arrived, and NOT in the `finally`. The marker
+      // means "this session lost output", and only a reconcile that actually
+      // completed settles it. Clearing on every exit meant one that threw — or
+      // hit the fetch deadline, which is the flaky-link case the marker exists
+      // for — dropped the gap silently with nothing to retry it.
+      // ⚠️ Outside the `if (data.terminalBuffer)` too: a server that answers
+      // with an empty capture HAS reconciled us, there was simply nothing to
+      // replay. Leaving the marker set there refetched on every reconnect for
+      // the life of the page.
+      this._markTerminalBufferReconciled(sessionId);
+      return true;
     } catch (err) {
       console.error('needsRefresh reload failed:', err);
+      return err?.name === 'AbortError' ? 'deadline' : false;
     } finally {
       if (this._terminalRefreshOwner === refreshOwner) this._terminalRefreshOwner = null;
     }
+  }
+
+  /**
+   * Drop the "this session lost output" marker.
+   *
+   * Called from every path that repaints a session's buffer from the server, so
+   * the ws.onopen reconcile fires once and only when nothing else already did
+   * the work. See the ws.onclose note for what the marker means.
+   */
+  _markTerminalBufferReconciled(sessionId) {
+    if (sessionId && this._wsOutputGapSession === sessionId) this._wsOutputGapSession = null;
   }
 
   async _onSessionClearTerminal(data) {
@@ -2642,12 +2897,16 @@ class CodemanApp {
 
       // Fetch buffer, clear terminal, write buffer, resize (no Ctrl+L needed)
       try {
-        const res = await fetch(`/api/sessions/${data.id}/terminal`);
-        const headersReceivedAt = performance.now();
-        const termData = (await res.json())?.data ?? {};
+        // No-param capture: `terminalBufferMaxBytes` (32MB) is its only ceiling,
+        // so it needs the full-history budget. Defaulting to the tail budget
+        // gave the largest payload the smallest deadline.
+        const capture = await this._fetchTerminalCapture(`/api/sessions/${data.id}/terminal`, { full: true });
+        const headersReceivedAt = capture.headersAt;
+        const termData = capture.json?.data ?? {};
 
-        this.terminal.clear();
-        this.terminal.reset();
+        // Queued clear — see _resetTerminalForReplay for why clear()+reset()
+        // cannot do this job.
+        this._resetTerminalForReplay();
         if (termData.terminalBuffer) {
           // Strip any DEC 2026 markers and write raw content
           // (markers don't help here - this is a static buffer reload, not live Ink redraws)
@@ -2972,6 +3231,22 @@ class CodemanApp {
         // Flush any durably-queued input over the fresh socket (covers frames a
         // prior half-open socket silently dropped, and input typed while offline).
         this._onWsReady(sessionId);
+        // Reconcile the output hole this drop left (see the ws.onclose note).
+        // Only after an unintentional close — a first connect has no gap, and
+        // refetching there would duplicate the buffer selectSession just wrote.
+        if (this._wsOutputGapSession === sessionId) {
+          // NOT cleared here. `_onSessionNeedsRefresh` clears it once it has
+          // actually repainted; a reconcile that fails or is skipped (a buffer
+          // load already in flight, a tab switch) leaves the marker set so the
+          // next open retries. Re-entry is safe: `_terminalRefreshOwner` makes
+          // a second reconcile for the same session a no-op.
+          _crashDiag.log(`WS REOPEN: reconciling output gap for ${sessionId}`);
+          // Fire-and-forget: this is recovery, and a failure here must not stop
+          // the socket coming up. _onSessionNeedsRefresh already guards against
+          // running while a buffer load is in flight and against a tab switch
+          // landing this session's history in another session's terminal.
+          void this._onSessionNeedsRefresh({ id: sessionId });
+        }
       }
     };
 
@@ -2993,6 +3268,10 @@ class CodemanApp {
           // Input ACK — the server applied (or deduped) this seq; drop it from
           // the durable queue so it can never be re-delivered/lost.
           this._onWsInputAck(msg.seq, msg);
+        } else if (msg.t === 'zc') {
+          // Resize confirm — the geometry the PTY actually holds, which is not
+          // always the one this client asked for (issue #464).
+          this._onPtyGeometryReport(sessionId, msg.c, msg.r);
         }
       } catch {
         // Ignore malformed messages
@@ -3018,6 +3297,30 @@ class CodemanApp {
       _crashDiag.log(
         `WS CLOSE code=${event.code} reason=${event.reason || ''} action=${plan.action} attempts=${this._wsReconnectAttempts || 0}`
       );
+
+      // Output frames carry no sequence number, so a dropped socket leaves a
+      // hole with nothing to replay it. ws.onopen re-sends dims and flushes
+      // queued INPUT; `needsRefresh` fires only on external-CLI startup and on
+      // SSE backpressure drain, never here.
+      //
+      // ⚠️ The gap this closes is NARROWER than "the device went offline". If
+      // the network drops, SSE drops with it and `handleInit`'s keepTerminal
+      // branch already reconciles on reconnect. The uncovered case is the WS
+      // dying while SSE stays up — a half-open socket, a proxy idle-timeout,
+      // a ping timeout — because `_onSSETerminal` discards every SSE terminal
+      // frame while `_wsReady` is true, and `_wsReady` only flips here, in
+      // onclose. Detecting a half-open socket takes up to the ping+pong window,
+      // and that whole span produces output nothing writes to the terminal.
+      //
+      // Reaching onclose at all means the drop was NOT intentional
+      // (_disconnectWs nulls this handler first), so mark the gap and let the
+      // next successful open reconcile from the server's buffer.
+      //
+      // Scoped to the session that actually lost bytes: a user who switches
+      // sessions during an outage gets a clean intentional disconnect for the
+      // new one, and its freshly-loaded buffer must not be refetched because a
+      // DIFFERENT session's socket dropped.
+      this._wsOutputGapSession = sessionId;
 
       const stillActive = this.activeSessionId === sessionId;
       if (plan.action === 'give-up') {
@@ -4571,11 +4874,30 @@ class CodemanApp {
   _sidebarRichRow(id, session) {
     if (typeof this._mobileOverviewState !== 'function') return null;
     const state = this._mobileOverviewState(session, this.pendingHooks?.get(id));
+    // An exited agent (Ark0N/Codeman#446) overrides the LABEL, never the state:
+    // `state` keys SESSION_ACTIVITY_RANK and the sort, while `status` stays idle
+    // or busy for an exited pane by design, so without this the muted dot sits
+    // beside a pill saying "idle". A pending alert still wins, exactly as it
+    // does for the dot.
+    const exited = !!paneExitLabel(session.paneExit) && (state === 'idle' || state === 'working');
+    const exitAt = exited ? Number(session.paneExit.at) || 0 : 0;
     return {
       state,
-      pill: this._sidebarRichPillLabel(state),
+      exited,
+      pill: exited ? 'exited' : this._sidebarRichPillLabel(state),
+      // What the pane's own footer says is still running in the background ("1 monitor",
+      // "2 shells"). A row that has one went quiet because the agent is waiting for that,
+      // which is a different thing from waiting for the user — so it rides BESIDE the
+      // state pill and never replaces it.
+      watching: typeof session.watching === 'string' ? session.watching : '',
       createdAt: Number(session.createdAt) || 0,
-      since: this._mobileOverviewSince ? this._mobileOverviewSince(state, session) : null,
+      since: exitAt
+        ? { key: 'exited', at: exitAt }
+        : exited
+          ? null
+          : this._mobileOverviewSince
+            ? this._mobileOverviewSince(state, session)
+            : null,
     };
   }
 
@@ -4608,7 +4930,19 @@ class CodemanApp {
       parts.push('<span class="tab-meta-sep" aria-hidden="true">\u00B7</span>');
       parts.push(stamp(row.since.key, row.since.at, 'for', 'tab-meta-since'));
     }
-    parts.push(`<span class="tab-pill tab-pill--${escapeHtml(row.state)}">${escapeHtml(row.pill)}</span>`);
+    const pillMod = row.exited ? 'exited' : row.state;
+    parts.push(`<span class="tab-pill tab-pill--${escapeHtml(pillMod)}">${escapeHtml(row.pill)}</span>`);
+    // The word is duplicated from mobile-overview.js for the same reason the pill labels
+    // above are: it is one word, and this file must render a complete row even when a
+    // stale cached mobile-overview.js has arrived without it.
+    // The visible text is that constant. The pane-derived label appears only in the
+    // tooltip, where escapeHtml() (which escapes both quote characters) is what this file
+    // already relies on for every untrusted string it puts in an attribute, and where the
+    // source caps it at MAX_WATCHING_LABEL_CHARS before it ever gets here.
+    if (row.watching) {
+      const title = escapeHtml(`Still running in the background: ${row.watching}`);
+      parts.push(`<span class="tab-pill tab-pill--watching" title="${title}">watching</span>`);
+    }
     // Both absolute stamps ALSO on the line itself, not only on the two items.
     // Below 288px the rail hides `.tab-meta-created` (the `tab-rail-tight`
     // rule), and a tooltip on a `display: none` element has no hover target —
@@ -4646,7 +4980,11 @@ class CodemanApp {
     const prev = tab.dataset.tabState;
     // The since ANCHOR moves without the state changing (each new turn re-stamps
     // lastSubmitAt), so key the compare on both.
-    const sig = `${row.state}:${row.since ? row.since.at : 0}:${row.createdAt}`;
+    // Unescaped on purpose, and it still matches the attribute the initial render wrote:
+    // that one goes through escapeHtml() because it is interpolated into markup, and the
+    // browser hands the decoded string back through `dataset`. `watching` is the only
+    // pane-derived value in this signature, which is why it is the only one escaped there.
+    const sig = `${row.state}${row.exited ? '+exited' : ''}:${row.since ? row.since.at : 0}:${row.createdAt}:${row.watching}`;
     if (tab.dataset.tabMetaSig === sig) return;
     tab.dataset.tabMetaSig = sig;
     tab.dataset.tabState = row.state;
@@ -4968,6 +5306,11 @@ class CodemanApp {
           statusEl.className = `tab-status ${status}`;
         }
 
+        // The exited-agent badge (Ark0N/Codeman#446). A session going from live
+        // to exited changes no tab count, so the full rebuild below never runs
+        // for it and this is the only path that ever draws the badge.
+        applyPaneExitBadge(tab, session.paneExit);
+
         // Rich sidebar meta ("created 3d ago · working 12m" + pill). The stamps
         // themselves move on _tickSidebarRichTimes(); this is here for the parts
         // a tick cannot see — the state flipping, and with it the pill, the row
@@ -5265,13 +5608,18 @@ class CodemanApp {
       const richMeta = this._sidebarRichMetaHTML(richRow);
       const richClass = richRow ? ` tab-state-${richRow.state}` : '';
       const richData = richRow
-        ? ` data-tab-state="${richRow.state}" data-tab-meta-sig="${richRow.state}:${richRow.since ? richRow.since.at : 0}:${richRow.createdAt}"`
+        ? ` data-tab-state="${richRow.state}" data-tab-meta-sig="${richRow.state}${richRow.exited ? '+exited' : ''}:${richRow.since ? richRow.since.at : 0}:${richRow.createdAt}:${escapeHtml(richRow.watching)}"`
         : '';
+
+      // '' whenever the server said nothing about this pane's agent, which covers
+      // a running pane and every session shape the field never applies to
+      // (direct-PTY, remote SSH, docker). See paneExitLabel().
+      const paneExitBadge = paneExitLabel(session.paneExit);
 
       const inlineSessionActions = this.shouldInlineSessionActions();
       const tabActionsHtml = `<span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span><button type="button" class="tab-more" onclick="event.stopPropagation(); app.openTabRailActionMenu(event, ${escapeHtml(JSON.stringify(id))})" title="Session actions" aria-label="Session actions">&#x22EF;</button></span>`;
 
-      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}"${richData}${railOrderStyle} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(name)} session" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
+      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${paneExitBadge ? ' tab-agent-exited' : ''}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}"${richData}${railOrderStyle} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
           ${_tabIdx < 9 ? '<span class="tab-number">' + (_tabIdx + 1) + '</span>' : ''}
           ${loadState ? '<span class="tab-load-spinner" aria-hidden="true"></span>' : ''}
           <span class="tab-status ${status}" aria-hidden="true"></span>
@@ -5279,6 +5627,7 @@ class CodemanApp {
             <span class="tab-name-row">
               ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : mode === 'codex' ? '<span class="tab-mode codex" aria-hidden="true">cx</span>' : mode === 'gemini' ? '<span class="tab-mode gemini" aria-hidden="true">gm</span>' : mode === 'antigravity' ? '<span class="tab-mode antigravity" aria-hidden="true">ag</span>' : mode === 'pi' ? '<span class="tab-mode pi" aria-hidden="true">pi</span>' : mode === 'grok' ? '<span class="tab-mode grok" aria-hidden="true">gk</span>' : mode === 'deepseek' ? '<span class="tab-mode deepseek" aria-hidden="true">ds</span>' : mode === 'omp' ? '<span class="tab-mode omp" aria-hidden="true">om</span>' : ''}
               <span class="tab-name" data-session-id="${id}" data-full-name="${escapeHtml(name)}">${tabLabel}</span>
+              ${paneExitBadge ? `<span class="tab-exited-badge" data-i18n-skip aria-hidden="true">${escapeHtml(paneExitBadge)}</span>` : ''}
               ${inlineSessionActions ? tabActionsHtml : ''}
               <span class="tab-detached-badge" aria-hidden="true">detached</span>
             </span>
@@ -5866,9 +6215,29 @@ class CodemanApp {
     }
   }
 
+  /**
+   * Clear the terminal for a replay, IN STREAM.
+   *
+   * xterm's `write()` is asynchronously queued (the WriteBuffer parses in ~12ms
+   * slices) while `Terminal.reset()` is synchronous and, by upstream's own
+   * documentation, "does not clear input buffers and does not reset the parser,
+   * thus the terminal will continue to apply pending input data". So bytes
+   * queued just before a `reset()` are parsed AFTER it and fuse into whatever
+   * snapshot is written next — measured upstream as `p8rmissions` rendered
+   * where `bypass permissions` belonged.
+   *
+   * A queued clear cannot race that way: it lands after the leftovers and
+   * before the snapshot, whatever the queue held. This function used to follow
+   * the sync `reset()` with a queued `\x1b[3J\x1b[H\x1b[2J`, which already got
+   * that right for CONTENT. RIS (`\x1bc`) additionally resets modes, charsets,
+   * scroll regions and SGR state, so leftover bytes cannot park the terminal in
+   * alt-screen or an odd scroll region and survive the clear.
+   *
+   * Callers may write the replacement content in as many chunks as they like —
+   * ordering within the queue is what matters, not writing it all at once.
+   */
   _resetTerminalForReplay() {
-    this.terminal.reset();
-    this.terminal.write('\x1b[3J\x1b[H\x1b[2J');
+    this.terminal.write('\x1bc');
   }
 
   _recordTerminalLoadTiming(timing) {
@@ -5932,9 +6301,9 @@ class CodemanApp {
     this._fullHistoryRepullInFlight = true;
     try {
       const requestStartedAt = performance.now();
-      const res = await fetch(`/api/sessions/${sessionId}/terminal?full=1`);
-      const headersReceivedAt = performance.now();
-      const payload = (await res.json())?.data ?? {};
+      const capture = await this._fetchTerminalCapture(`/api/sessions/${sessionId}/terminal?full=1`, { full: true });
+      const headersReceivedAt = capture.headersAt;
+      const payload = capture.json?.data ?? {};
       const bodyParsedAt = performance.now();
       const buffer = payload.terminalBuffer;
       const timing = {
@@ -5947,7 +6316,7 @@ class CodemanApp {
         bodyAndJsonMs: bodyParsedAt - headersReceivedAt,
         resetAndParseMs: 0,
         totalMs: 0,
-        serverTiming: res.headers?.get?.('server-timing') || '',
+        serverTiming: capture.headers?.get?.('server-timing') || '',
         refused: false,
       };
       // Bail on a tab switch mid-fetch: writing here would paint another session's
@@ -6315,11 +6684,18 @@ class CodemanApp {
     // For that just-created-session case we flush (not discard) queued SSE events.
     let bufferWasEmpty = false;
     let cacheResetAndParseMs = 0;
+    // Hoisted out of the try: the catch needs to know whether the pane was
+    // blanked before the fetch, because only then is there nothing on screen.
+    let clearedBeforeFresh = false;
     try {
       // Fit terminal to container BEFORE writing any buffer data.
       // If the browser was resized while viewing another session, the terminal
       // canvas may be at stale dimensions — content would render at wrong width.
-      if (this.fitAddon) this.fitAddon.fit();
+      // A width refusal belonged to the PREVIOUS session's pane, and while it
+      // stands sendResize keeps the columns it last adopted; this pane's own
+      // report re-establishes it if another device holds this one too.
+      this._paneWidthRefused = false;
+      this.syncTerminalGeometry();
 
       // Also push the new dimensions to the PTY. Without this, codex/codeman
       // sees the size that was set the last time the throttled resize handler
@@ -6396,7 +6772,8 @@ class CodemanApp {
       // blank and rewrites with fresh data. Skip the cache and write the fresh
       // buffer once for a single clean transition.
       const cachedBuffer = this.terminalBufferCache.get(sessionId);
-      let clearedBeforeFresh = false;
+      // `clearedBeforeFresh` is declared above the try, because the catch reads
+      // it — re-declaring it here would shadow that and silently break it.
       if (cachedBuffer && !sessionIsBusy && !restoredSnapshot && session?.mode !== 'shell') {
         _crashDiag.log(`CACHE_WRITE: ${(cachedBuffer.length/1024).toFixed(0)}KB`);
         this._setTerminalLoadState(sessionId, selectGen, 'replaying');
@@ -6445,17 +6822,32 @@ class CodemanApp {
       const useFullHistory = session?.mode !== 'shell' && !this._fullHistoryLoaded.has(sessionId);
       if (useFullHistory) this._fullHistoryLoaded.add(sessionId);
       const fetchStartedAt = performance.now();
-      const res = await fetch(
-        useFullHistory
-          ? `/api/sessions/${sessionId}/terminal?full=1`
-          : `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`
-      );
-      const headersReceivedAt = performance.now();
+      const tailUrl = `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`;
+      let capture;
+      try {
+        capture = await this._fetchTerminalCapture(
+          useFullHistory ? `/api/sessions/${sessionId}/terminal?full=1` : tailUrl,
+          { full: useFullHistory }
+        );
+      } catch (err) {
+        // The deadline made a slow link reachable for the first time, and the
+        // pane was already blanked above — so an abort here used to leave a
+        // black rectangle, discard the queued live output, and never reach
+        // `_connectWs`. Degrade to the bounded tail instead: less history, but
+        // a working tab. Only for the full-history pull; the tail has nothing
+        // smaller to fall back to, and a second failure is the honest floor.
+        if (err?.name !== 'AbortError' || !useFullHistory) throw err;
+        _crashDiag.log('FULL CAPTURE ABORTED → tail');
+        // It never loaded, so the next select must be allowed to try again.
+        this._fullHistoryLoaded.delete(sessionId);
+        capture = await this._fetchTerminalCapture(tailUrl);
+      }
+      const headersReceivedAt = capture.headersAt;
       if (this._isStaleSelect(selectGen)) {
         this._clearTerminalLoadState(sessionId, selectGen);
         return;
       }
-      const data = (await res.json())?.data ?? {};
+      const data = capture.json?.data ?? {};
       const bodyParsedAt = performance.now();
       // How this load must end, decided here because `chunkedTerminalWrite` is
       // what actually ends it for a non-empty buffer. A tmux pane capture is a
@@ -6535,7 +6927,7 @@ class CodemanApp {
         cacheResetAndParseMs,
         freshResetAndParseMs,
         selectToReplayCompleteMs: performance.now() - _selStart,
-        serverTiming: res.headers?.get?.('server-timing') || '',
+        serverTiming: capture.headers?.get?.('server-timing') || '',
       };
       // Buffer load complete — unblock live SSE writes. chunkedTerminalWrite calls
       // _finishBufferLoad after ordering the fetched snapshot in xterm; if we skipped
@@ -6552,6 +6944,11 @@ class CodemanApp {
           bufferWasEmpty ? { flushQueued: true, since: 0 } : finishOpts
         );
       }
+      // This load repainted the session from the server, so any pending
+      // output-gap marker is already satisfied. Selecting a session runs BEFORE
+      // _connectWs, so without this the socket opening afterwards would replay
+      // the whole buffer again on top of the one just written.
+      this._markTerminalBufferReconciled(sessionId);
       // Drop the guard so user input clears state normally
       this._restoringFlushedState = false;
 
@@ -6646,17 +7043,28 @@ class CodemanApp {
       // and, because it goes through `forceReload`, a dropped and reopened
       // WebSocket plus a deleted xterm snapshot.
       //
-      // That equality is the signature of a CLAMP rather than a race.
-      // `getTerminalDimensions()` floors at 40x10 while `fitAddon.fit()` does
-      // not, so a terminal narrower than 40 columns or shorter than 10 rows
-      // reports a pane permanently bigger than itself, and every select would
-      // retry without ever converging. A race never produces this equality: its
-      // whole premise is that the pane was still at the size we asked it to
-      // leave. The other non-converging case, `Session.resize` declining a
-      // small viewport while a desktop claim is live, does not produce it
-      // either — that pane sits at the DESKTOP's size — so it still costs the
-      // one capped attempt, and stopping it needs the pane-ownership policy
-      // this does not touch.
+      // A race never produces this equality: its whole premise is that the pane
+      // was still at the size we asked it to leave. So the equality means the
+      // pane already IS what we asked for and a retry would capture the same
+      // frame twice.
+      //
+      // ⚠️ This used to also be the signature of a CLAMP, and that is now fixed
+      // at the source rather than worked around here (issue #464).
+      // `getTerminalDimensions()` floors at 40x10 while `fitAddon.fit()` did
+      // not, so a terminal under 40 columns or 10 rows reported a pane
+      // permanently bigger than itself and every select retried without ever
+      // converging. `syncTerminalGeometry()` now applies that floor to xterm as
+      // well, so the browser terminal IS the size it reports and the clamp can
+      // no longer manufacture a mismatch — which also means the repair below is
+      // reached only by cases it can actually repair.
+      //
+      // The other non-converging case, `Session.resize` declining a small
+      // viewport while a desktop claim is live, does not produce this equality
+      // either — that pane sits at the DESKTOP's size. It no longer needs
+      // repairing from here: the server reports the geometry the PTY actually
+      // holds ({"t":"zc"} / the resize response) and `_onPtyGeometryReport`
+      // adopts it, so the terminal matches the pane that is being drawn instead
+      // of replaying against one that never existed.
       const captureMatchesRequestedSize =
         !!dimsAfterLoad && data.captureCols === dimsAfterLoad.cols && data.captureRows === dimsAfterLoad.rows;
 
@@ -6823,14 +7231,46 @@ class CodemanApp {
     } catch (err) {
       if (this._isLoadingBuffer) this._finishBufferLoad(bufferLoadOwner);
       this._restoringFlushedState = false;
-      this._setTerminalLoadState(sessionId, selectGen, 'failed');
       console.error('Failed to load session terminal:', err);
+      if (this._isStaleSelect(selectGen)) {
+        this._clearTerminalLoadState(sessionId, selectGen);
+        return;
+      }
+      // The history did not load. That is not a reason to leave the tab dead:
+      // ⚠️ the socket is what carries LIVE output, and it is opened at the end
+      // of the happy path, so bailing here left the session mute until the user
+      // switched away and back.
+      this._connectWs(sessionId);
+      // Only when the pane was blanked for a replay that never came. A pane
+      // still holding its previous content is stale, not empty, and stacking a
+      // notice on top of readable output is worse than the staleness.
+      if (clearedBeforeFresh && this.terminal) {
+        // Three short lines, none over 25 columns, because the narrowest
+        // terminal this app will render is the 40-column floor and a notice
+        // that wraps there leaves a lone '.' on a line of its own — measured at
+        // 320px, where a single 52-character sentence did exactly that.
+        // Each line is one fact: what failed, that the session is still alive,
+        // and what to do. The last says RELOAD rather than "reopen the tab",
+        // because `selectSession` early-returns when the session is already
+        // active, so clicking the tab you are already on retries nothing.
+        this.terminal.write(
+          '\r\n\x1b[2m  History did not load.\r\n  Live output continues.\r\n  Reload to try again.\x1b[0m\r\n'
+        );
+      }
+      // ⚠️ CLEAR, not 'failed'. `_setTerminalLoadState` only marks the TAB, and
+      // nothing ever cleared it on this path — so the tab kept its spinner and
+      // `aria-busy="true"` forever, telling every reader and every screen reader
+      // that a load was still running when it had already given up.
+      this._clearTerminalLoadState(sessionId, selectGen);
     }
   }
 
   // Shared cleanup for all session data — called from both closeSession() and session:deleted handler
   _cleanupSessionData(sessionId) {
     this.closeTabRailActionMenu?.();
+    // A dead session has no buffer to reconcile; leaving the marker set would
+    // make a later socket for a REUSED id reconcile against nothing.
+    this._markTerminalBufferReconciled(sessionId);
     // If the deleted session is currently being renamed, abort the rename
     // so the inline <input> doesn't ghost as a stale tab on screen.
     if (this._activeRename?.sessionId === sessionId) {
@@ -6851,6 +7291,7 @@ class CodemanApp {
 
     this._flushedOffsets?.delete(sessionId);
     this._flushedTexts?.delete(sessionId);
+    if (typeof KeyboardAccessoryBar !== 'undefined') KeyboardAccessoryBar.discardComposerDraft?.(sessionId);
     // Drop any durably-queued input for a session that's actually gone (deleted/
     // exited). Not a lost prompt — the target no longer exists. Only reached on
     // real session removal, never on a tab switch.

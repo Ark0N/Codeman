@@ -67,6 +67,14 @@ On Linux, if you want the service running while you are not logged in:
 loginctl enable-linger $USER
 ```
 
+On macOS, a LaunchAgent starts when you log in, not at boot. A headless Mac (no GUI login)
+needs a system LaunchDaemon instead, written by hand as root. The installer recognises an
+existing `/Library/LaunchDaemons/com.codeman.web.plist` and leaves it alone rather than
+installing a LaunchAgent next to it, since the two would fight over the port; remove the
+daemon first if you want to switch. The same login caveat applies to the App Store and
+standalone Tailscale apps, so on a headless Mac the Tailscale URL only comes back after a
+reboot if the open-source `tailscaled` is used.
+
 ### Writing the unit by hand
 
 **Linux (systemd user unit):**

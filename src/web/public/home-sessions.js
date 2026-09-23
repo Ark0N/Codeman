@@ -212,6 +212,9 @@ Object.assign(CodemanApp.prototype, {
         dir: this._shortenHomePath ? this._shortenHomePath(session.workingDir) : session.workingDir || '',
         state,
         pill: HOME_SESSIONS_PILL_LABEL[state] || state,
+        // What the pane's footer says is still running in the background, straight off
+        // the session payload. Same field, same meaning as on the phone overview.
+        watching: typeof session.watching === 'string' ? session.watching : '',
         // Epoch ms, straight off the session payload; formatting happens at
         // render time so the clock below can redo it without a re-render.
         createdAt: Number(session.createdAt) || 0,
@@ -450,6 +453,12 @@ Object.assign(CodemanApp.prototype, {
     // what stops it ellipsizing.
     const meta = this._buildHomeSessionsMeta(row);
     meta.appendChild(pill);
+    // Built by the phone overview so both home screens word the badge identically.
+    // Guarded like every other cross-file call here: a stale cached mobile-overview.js
+    // must cost the badge, not the rail.
+    if (row.watching && typeof this._buildWatchingBadge === 'function') {
+      meta.appendChild(this._buildWatchingBadge(row.watching, 'home-sessions-pill'));
+    }
     item.appendChild(meta);
 
     return item;

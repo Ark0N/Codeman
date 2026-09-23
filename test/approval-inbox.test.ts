@@ -330,6 +330,58 @@ describe('ApprovalInbox', () => {
     expect(inbox.getById(second.id)).toBeDefined();
   });
 
+  describe('a session watching its own background work', () => {
+    it('opens its idle prompt already acknowledged, and says why', () => {
+      const item = inbox.notePrompt({ sessionId: 's1', sessionName: 'w1', kind: 'idle', watching: '1 monitor' });
+      expect(item.acknowledgedAt).toBe(item.createdAt);
+      expect(item.acknowledgedReason).toBe('watching 1 monitor');
+    });
+
+    it('keeps the prompt pending and answerable: only its alert is spent', () => {
+      // Acknowledging rather than skipping creation is what makes a wrong label cheap.
+      // The prompt is real either way, and this way it is still in the drawer, still
+      // answerable and still Read My Mind context.
+      const item = inbox.notePrompt({ sessionId: 's1', sessionName: 'w1', kind: 'idle', watching: '2 shells' });
+      expect(inbox.listPending().map((i) => i.id)).toEqual([item.id]);
+      expect(inbox.getForSession('s1')?.id).toBe(item.id);
+      expect(inbox.verifyStillAnswerable(item.id)).toBe(true);
+    });
+
+    it('never pre-acknowledges a dialog that blocks the agent', () => {
+      // A permission or question dialog blocks the turn whatever else the agent started,
+      // so watching says nothing about whether a human is needed.
+      for (const kind of ['permission', 'question'] as const) {
+        const item = inbox.notePrompt({ sessionId: `s-${kind}`, sessionName: 'w1', kind, watching: '1 monitor' });
+        expect(item.acknowledgedAt).toBeUndefined();
+        expect(item.acknowledgedReason).toBeUndefined();
+      }
+    });
+
+    it('leaves an ordinary idle prompt alone', () => {
+      for (const watching of [undefined, null, '']) {
+        const item = inbox.notePrompt({ sessionId: 's1', sessionName: 'w1', kind: 'idle', watching });
+        expect(item.acknowledgedAt).toBeUndefined();
+      }
+    });
+
+    it('re-arms by itself once the background work is over', () => {
+      // The next prompt supersedes this one and is built fresh, so nothing has to
+      // remember to clear the flag when the monitor ends.
+      const watched = inbox.notePrompt({ sessionId: 's1', sessionName: 'w1', kind: 'idle', watching: '1 monitor' });
+      expect(watched.acknowledgedAt).toBeDefined();
+      const after = inbox.notePrompt({ sessionId: 's1', sessionName: 'w1', kind: 'idle' });
+      expect(after.id).not.toBe(watched.id);
+      expect(after.acknowledgedAt).toBeUndefined();
+      expect(after.acknowledgedReason).toBeUndefined();
+    });
+
+    it('cannot be acknowledged a second time by a human opening the session', () => {
+      const item = inbox.notePrompt({ sessionId: 's1', sessionName: 'w1', kind: 'idle', watching: '1 monitor' });
+      expect(inbox.acknowledge('s1')).toBeUndefined();
+      expect(inbox.getById(item.id)?.acknowledgedReason).toBe('watching 1 monitor');
+    });
+  });
+
   describe('verifyStillAnswerable', () => {
     it('resolves the item and refuses when a parsed dialog left the screen', () => {
       const { resolved } = collect(inbox);

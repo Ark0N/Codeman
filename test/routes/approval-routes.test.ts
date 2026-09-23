@@ -325,6 +325,65 @@ describe('approval routes', () => {
     });
   });
 
+  describe('an idle prompt from a session watching its own background work', () => {
+    beforeEach(() => {
+      session.terminalBuffer = 'claude> waiting at the composer';
+      session.watching = '1 monitor';
+    });
+
+    it('opens acknowledged, so no surface has an alert to raise', async () => {
+      await postHook(harness, 'idle_prompt', { message: 'Claude is waiting for your input' });
+      const [item] = await listApprovals(harness);
+      expect(item).toMatchObject({ kind: 'idle', acknowledgedReason: 'watching 1 monitor' });
+      expect(item.acknowledgedAt).toEqual(expect.any(Number));
+    });
+
+    it('tells a live page why, so it declines to arm the alert', async () => {
+      await postHook(harness, 'idle_prompt', {});
+      const broadcast = harness.ctx.broadcast.mock.calls.find((c) => c[0] === 'hook:idle_prompt');
+      expect(broadcast?.[1]).toMatchObject({ acknowledgedReason: 'watching 1 monitor' });
+    });
+
+    it('sends no push', async () => {
+      // The loudest surface, and the one a false alarm is hardest to ignore on.
+      await postHook(harness, 'idle_prompt', {});
+      expect(harness.ctx.sendPushNotifications.mock.calls.find((c) => c[0] === 'hook:idle_prompt')).toBeUndefined();
+    });
+
+    it('stays answerable from the drawer', async () => {
+      await postHook(harness, 'idle_prompt', {});
+      const [item] = await listApprovals(harness);
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: `/api/approvals/${item.id}/answer`,
+        payload: { action: 'text', text: 'carry on' },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(session.writeBuffer.join('')).toContain('carry on');
+    });
+
+    it('still raises a permission dialog from the same session', async () => {
+      // Watching says nothing about a dialog: that one blocks the agent outright.
+      session.terminalBuffer = PERMISSION_DIALOG;
+      await postHook(harness, 'permission_prompt', { tool_name: 'Bash' });
+      const [item] = await listApprovals(harness);
+      expect(item.acknowledgedAt).toBeUndefined();
+      expect(item.acknowledgedReason).toBeUndefined();
+      const broadcast = harness.ctx.broadcast.mock.calls.find((c) => c[0] === 'hook:permission_prompt');
+      expect(broadcast?.[1]).not.toMatchObject({ acknowledgedReason: expect.any(String) });
+      expect(harness.ctx.sendPushNotifications.mock.calls.find((c) => c[0] === 'hook:permission_prompt')).toBeDefined();
+    });
+
+    it('alerts normally again once the background work is over', async () => {
+      await postHook(harness, 'idle_prompt', {});
+      session.watching = null;
+      await postHook(harness, 'idle_prompt', {});
+      const [item] = await listApprovals(harness);
+      expect(item.acknowledgedAt).toBeUndefined();
+      expect(harness.ctx.sendPushNotifications.mock.calls.filter((c) => c[0] === 'hook:idle_prompt')).toHaveLength(1);
+    });
+  });
+
   it('viewing a session acknowledges its idle prompt (item stays pending) and broadcasts it', async () => {
     session.terminalBuffer = 'claude> waiting at the composer';
     await postHook(harness, 'idle_prompt', {});

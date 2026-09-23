@@ -166,8 +166,18 @@ describe('Run launch synchronization', () => {
 
     // Methods live in one Object.assign(prototype, {...}) block at a fixed
     // 2-space indent, so `\n  },` reliably closes the one we are inside.
+    //
+    // `(\w*)` in the param list, not `()`, and the leading `_?`: PR B2
+    // consolidated the eight run<Mode>() bodies into one shared
+    // `_runCliMode(mode)`, and the ORIGINAL `\(\)`-only pattern matched every
+    // one-line wrapper (`async runOpenCode() { return this._runCliMode(...) }`)
+    // but not `_runCliMode` itself, where the real terminal-ownership logic
+    // now lives — so this guard could see 8 clean one-liners and stay green
+    // while the actual bug shipped unseen for all eight external CLIs at
+    // once. Confirmed live: adding `this.terminal.clear()` to `_runCliMode`
+    // left this test 32/32 green under the old pattern.
     const bodies = new Map<string, string>();
-    const header = /^ {2}async (run[A-Za-z]*)\(\) \{$/gm;
+    const header = /^ {2}async (_?run[A-Za-z]*)\(\w*\) \{$/gm;
     for (let m = header.exec(src); m; m = header.exec(src)) {
       const start = m.index + m[0].length;
       const end = src.indexOf('\n  },', start);
@@ -181,6 +191,7 @@ describe('Run launch synchronization', () => {
       expect.arrayContaining([
         'runClaude',
         'runShell',
+        '_runCliMode',
         'runOpenCode',
         'runCodex',
         'runGemini',

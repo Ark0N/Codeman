@@ -176,4 +176,33 @@ describe('Codeman light skins', () => {
     expect(mobileStylesSource).toContain(':is(.header, .toolbar, .keyboard-accessory-bar)');
     expect(mobileStylesSource).toContain(':is(.case-settings-popover-mobile, .mobile-case-picker-sheet)');
   });
+
+  it('re-declares every run-mode colour inside the non-og skin block', () => {
+    // The skin block nests under `html:not([data-skin="og"])`, so its generic
+    // `.btn-toolbar.btn-run` outranks a base-sheet `.mode-<id>` pair. A mode with no
+    // resting rule of its own in there (a `:hover` alone does not count) renders as generic claude blue on the DEFAULT skin
+    // (gemini, antigravity and omp all shipped that way). Ids come from the sheet.
+    const css = stylesSource.replace(/\/\*[\s\S]*?\*\//g, '');
+    const opener = 'html:not([data-skin="og"]) {';
+    const start = css.indexOf(opener);
+    expect(start).toBeGreaterThan(-1);
+    let depth = 0;
+    let end = -1;
+    for (let i = start + opener.length - 1; i < css.length; i++) {
+      if (css[i] === '{') depth++;
+      else if (css[i] === '}' && --depth === 0) {
+        end = i;
+        break;
+      }
+    }
+    expect(end).toBeGreaterThan(start);
+    const nested = css.slice(start, end);
+    const base = css.slice(0, start) + css.slice(end);
+    const ids = (text: string) =>
+      new Set([...text.matchAll(/\.btn-toolbar\.btn-run\.mode-([\w-]+)(?![\w-]|:)/g)].map((m) => m[1]));
+    const baseIds = [...ids(base)];
+    expect(baseIds.length).toBeGreaterThanOrEqual(5);
+    const nestedIds = ids(nested);
+    expect(baseIds.filter((id) => !nestedIds.has(id))).toEqual([]);
+  });
 });

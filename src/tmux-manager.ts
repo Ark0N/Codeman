@@ -58,6 +58,7 @@ import {
   type SessionRemote,
   type SessionDocker,
   type DockerCommandMode,
+  type PaneExit,
 } from './types.js';
 import { getCli } from './config/cli-registry/registry.js';
 import { missingCliMessage, resolveCliBinDir } from './utils/cli-resolver.js';
@@ -152,6 +153,16 @@ const GRACEFUL_SHUTDOWN_WAIT_MS = 100;
 /** Default stats collection interval (2 seconds) */
 const DEFAULT_STATS_INTERVAL_MS = 2000;
 
+/**
+ * How often the pane-exit watcher re-reads every pane on the socket. The
+ * watcher owns this cadence: it does NOT ride `startStatsCollection()`, whose
+ * lifetime a browser panel controls (see {@link TmuxManager.startPaneExitWatcher}).
+ * Matched to the stats cadence above because both cost one batched tmux read.
+ * ⚠ It does NOT bound a read: EXEC_TIMEOUT_MS is 5000 ms, so a slow read can
+ * outlive two ticks, which is exactly why `paneExitReadInFlight` exists.
+ */
+const DEFAULT_PANE_EXIT_INTERVAL_MS = 2000;
+
 /** Default remote-reconnect watcher poll interval (5 seconds) — COD-108 */
 const DEFAULT_REMOTE_RECONNECT_INTERVAL_MS = 5000;
 
@@ -219,8 +230,18 @@ const DEFAULT_CODEMAN_TMUX_SOCKET = DEFAULT_TMUX_SOCKET;
  */
 const PANE_LIST_SEP = '|';
 
-/** Format string for `tmux list-panes -F`. Keep in sync with {@link parsePaneList}. */
-const PANE_LIST_FORMAT = `#{session_name}${PANE_LIST_SEP}#{pane_pid}`;
+/**
+ * Format string for `tmux list-panes -F`. Keep in sync with {@link parsePaneRows}.
+ *
+ * The three `pane_dead*` fields carry the agent-exit signal of Ark0N/Codeman#446.
+ * Appending them is backward compatible in both directions. A tmux that does not
+ * know a variable substitutes the empty string rather than failing, which is how
+ * tmux 3.2a answers `#{pane_dead_signal}` (added in 3.4), and the parser reads a
+ * short row as "pid known, deadness unknown" rather than discarding it.
+ */
+const PANE_LIST_FORMAT =
+  `#{session_name}${PANE_LIST_SEP}#{pane_pid}` +
+  `${PANE_LIST_SEP}#{pane_dead}${PANE_LIST_SEP}#{pane_dead_status}${PANE_LIST_SEP}#{pane_dead_signal}`;
 
 /**
  * 构建 pane 启动前的 nofile 修复命令。
@@ -235,26 +256,141 @@ export function buildNofileLimitCommand(targetLimit = CLAUDE_CODE_NOFILE_LIMIT):
   return `ulimit -Sn ${safeLimit} 2>/dev/null || ulimit -n ${safeLimit} 2>/dev/null || true`;
 }
 
+/** One pane of one tmux session, as {@link parsePaneRows} reads it off the wire. */
+export interface PaneRow {
+  /** tmux session this pane belongs to. Repeats once per pane of a split session. */
+  sessionName: string;
+  /** `#{pane_pid}` — the process tmux started in the pane. */
+  pid: number;
+  /** `#{pane_dead}` — true for 1, false for 0, undefined when tmux said nothing. */
+  dead?: boolean;
+  /** `#{pane_dead_status}` — the exit code, absent when tmux reported none. */
+  exitStatus?: number;
+  /** `#{pane_dead_signal}` — the killing signal, absent before tmux 3.4 and when unsignalled. */
+  exitSignal?: number;
+}
+
 /**
- * Parse the output of `tmux list-panes -a -F '#{session_name}|#{pane_pid}'`
- * into a Map of session-name → pane pid. Exported for unit testing.
+ * One pane-exit reading, with the pane pid that produced it.
+ *
+ * The pid never leaves this module. It is what distinguishes "the same dead
+ * pane, seen again" from "a second command in the same pane that also exited
+ * with the same status", so the `at` stamp can hold across the first and must
+ * not across the second. {@link PaneExit} itself stays free of it: the pid on
+ * the session record is the attach client's, and a second pid there would
+ * invite exactly the confusion Ark0N/Codeman#446 is about.
+ */
+export interface PaneExitObservation {
+  /** `#{pane_pid}` of the pane this reading came from. */
+  panePid: number;
+  /** What to publish on the session record. */
+  exit: PaneExit;
+}
+
+/** Read one optional numeric field; a blank or non-numeric value is "not reported". */
+function paneField(fields: string[], index: number): number | undefined {
+  const raw = fields[index];
+  if (raw === undefined || raw === '') return undefined;
+  const value = parseInt(raw, 10);
+  return Number.isNaN(value) ? undefined : value;
+}
+
+/**
+ * Parse the output of `tmux list-panes -a -F` under {@link PANE_LIST_FORMAT}
+ * into one row per pane, in tmux's own order. Exported for unit testing.
  *
  * - Skips empty lines and lines without the separator.
  * - Skips entries with a non-numeric pid or empty name.
+ * - Leaves every field after the pid undefined when it is blank or absent, so a
+ *   row from an older tmux still yields its pid.
  */
-export function parsePaneList(output: string): Map<string, number> {
-  const result = new Map<string, number>();
+export function parsePaneRows(output: string): PaneRow[] {
+  const rows: PaneRow[] = [];
   for (const line of output.split('\n')) {
     if (!line) continue;
-    const sep = line.indexOf(PANE_LIST_SEP);
-    if (sep === -1) continue;
-    const name = line.slice(0, sep);
-    const pid = parseInt(line.slice(sep + 1), 10);
-    if (name && !Number.isNaN(pid)) {
-      result.set(name, pid);
-    }
+    if (!line.includes(PANE_LIST_SEP)) continue;
+    const fields = line.split(PANE_LIST_SEP);
+    const sessionName = fields[0];
+    const pid = parseInt(fields[1] ?? '', 10);
+    if (!sessionName || Number.isNaN(pid)) continue;
+    const deadFlag = fields[2];
+    rows.push({
+      sessionName,
+      pid,
+      dead: deadFlag === '1' ? true : deadFlag === '0' ? false : undefined,
+      exitStatus: paneField(fields, 3),
+      exitSignal: paneField(fields, 4),
+    });
   }
-  return result;
+  return rows;
+}
+
+/**
+ * Decide, from every pane tmux listed, which tmux sessions have an exited agent.
+ * Exported for unit testing. Returns one entry per session with a known answer;
+ * a session absent from the map is UNKNOWN, which must never render as alive.
+ *
+ * Two rules make a positive answer trustworthy:
+ *
+ * A session answers only when tmux listed EXACTLY ONE pane for it. Codeman
+ * creates one pane per session and `isPaneDead()` reads one pane, so a session
+ * the user has split by hand has no single "the agent" to report on, and
+ * guessing which of its panes speaks for the session could report a live
+ * session as exited.
+ *
+ * A pane answers only when `#{pane_dead}` said 1 or 0. An empty field is a tmux
+ * that did not answer, not a live pane.
+ *
+ * `status` and `signal` stay absent when tmux did not report them. Measured on
+ * tmux 3.2a, a SIGKILLed pane reports neither, so folding an absent status into
+ * 0 would turn an unexplained death into a clean exit.
+ */
+export function derivePaneExits(rows: PaneRow[], now: number): Map<string, PaneExitObservation> {
+  const panesPerSession = new Map<string, number>();
+  for (const row of rows) {
+    panesPerSession.set(row.sessionName, (panesPerSession.get(row.sessionName) ?? 0) + 1);
+  }
+  const exits = new Map<string, PaneExitObservation>();
+  for (const row of rows) {
+    if (panesPerSession.get(row.sessionName) !== 1) continue;
+    if (row.dead !== true) continue;
+    exits.set(row.sessionName, {
+      panePid: row.pid,
+      exit: {
+        ...(row.exitStatus !== undefined ? { status: row.exitStatus } : {}),
+        ...(row.exitSignal !== undefined ? { signal: row.exitSignal } : {}),
+        at: now,
+      },
+    });
+  }
+  return exits;
+}
+
+/**
+ * Could any of these tmux sessions ever produce a pane-exit answer? Exported
+ * for unit testing.
+ *
+ * Mirrors `Session.paneExitApplies`, which is where the rule is enforced. A
+ * remote session's local pane holds the ssh client, a docker case's holds a
+ * `docker exec` into the container's own tmux, and a record rebuilt from the
+ * socket carries no provenance at all, so the session end forces all three to
+ * UNKNOWN whatever tmux reports. A tick that sees only those has nothing to
+ * learn, and `refreshPaneExits()` skips its tmux read rather than paying for
+ * the answer.
+ *
+ * ⚠ This gates the READ, never the watcher. The watcher is always-on by
+ * design (see {@link TmuxManager.startPaneExitWatcher}), so it keeps ticking
+ * with nothing to observe and picks the read straight back up as soon as one
+ * local session exists.
+ */
+export function hasObservablePaneSession(sessions: Iterable<MuxSession>): boolean {
+  for (const session of sessions) {
+    if (session.remote) continue;
+    if (session.docker) continue;
+    if (session.discovered === true) continue;
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -1527,6 +1663,30 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   private mouseSyncInterval: NodeJS.Timeout | null = null;
   /** Track last-known pane count per session to avoid unnecessary tmux set-option calls */
   private lastPaneCount: Map<string, number> = new Map();
+  /**
+   * muxName → the exited agent the pane-exit watcher last observed
+   * (Ark0N/Codeman#446). Absence is the UNKNOWN arm of the tri-state, so an
+   * entry goes the moment tmux stops reporting the pane dead, and the map is
+   * empty until the first read runs. The manager reports what tmux says and
+   * nothing more: the scoping that hides this for remote and docker sessions
+   * lives on `Session`, because the remote-reconnect watcher above needs the
+   * raw pane reading.
+   */
+  private paneExits: Map<string, PaneExitObservation> = new Map();
+  /** The pane-exit watcher's own interval. Runs whether or not stats are on. */
+  private paneExitInterval: NodeJS.Timeout | null = null;
+  /**
+   * True while a pane read is in flight. `EXEC_TIMEOUT_MS` is 5000 ms against a
+   * poll interval of 2000 ms, so without this a slow read overlaps the next two
+   * and the older one can resolve last and win.
+   */
+  private paneExitReadInFlight = false;
+  /**
+   * Bumped by every deliberate {@link clearPaneExit}. A read that started before
+   * a clear carries the older generation and is discarded rather than writing
+   * the death back over the pane that has just replaced it.
+   */
+  private paneExitGeneration = 0;
 
   // ── COD-108 remote-reconnect watcher state ────────────────────────────────
   /** Periodic watcher that re-establishes dropped remote sessions. */
@@ -2298,6 +2458,11 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       );
       // Wait for the respawned process to start
       await new Promise((resolve) => setTimeout(resolve, TMUX_CREATION_WAIT_MS));
+      // The pane now runs a fresh command, so whatever the last read observed of
+      // the old one is history. Clearing it here rather than waiting for the next
+      // poll also invalidates any read already in flight, which would otherwise
+      // write the old death back over the pane that just replaced it.
+      this.clearPaneExit(muxName);
       const pid = this.getPanePid(muxName);
       if (pid) session.pid = pid;
       return pid;
@@ -2509,6 +2674,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         }
       }
       this.lastPaneCount.delete(session.muxName);
+      this.clearPaneExit(session.muxName);
       this.sessions.delete(sessionId);
       this.clearRemoteReconnectState(sessionId);
       this.saveSessions();
@@ -2619,6 +2785,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
     }
 
     this.lastPaneCount.delete(session.muxName);
+    this.clearPaneExit(session.muxName);
     this.sessions.delete(sessionId);
     this.clearRemoteReconnectState(sessionId);
     this.saveSessions();
@@ -2672,7 +2839,14 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         encoding: 'utf-8',
         timeout: EXEC_TIMEOUT_MS,
       }).trim();
-      active = parsePaneList(output);
+      const rows = parsePaneRows(output);
+      active = new Map(rows.map((row) => [row.sessionName, row.pid]));
+      // The same read answers both questions, so recovery starts with a pane-exit
+      // reading rather than waiting for the first stats tick — which may never
+      // come, since the collector only starts when boot found a live session.
+      if (rows.length > 0) {
+        this.applyPaneExits(derivePaneExits(rows, Date.now()));
+      }
     } catch (err) {
       console.error('[TmuxManager] Failed to list tmux panes:', err);
       active = new Map();
@@ -2687,6 +2861,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       } else {
         dead.push(sessionId);
         this.sessions.delete(sessionId);
+        this.clearPaneExit(session.muxName);
         this.clearRemoteReconnectState(sessionId);
         this.emit('sessionDied', { sessionId });
       }
@@ -2723,6 +2898,13 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         mode: 'claude',
         attached: false,
         name: `Restored: ${sessionName}`,
+        // Every field above except the name and the pid is a guess: this record
+        // was rebuilt from the socket because Codeman's own bookkeeping did not
+        // have it. The synthetic id also cannot find the session's state.json
+        // entry, so a remote or docker session rediscovered this way arrives
+        // looking local. Consumers that would be wrong about such a session
+        // read this flag and fail closed — see `Session.paneExitApplies`.
+        discovered: true,
       };
       this.sessions.set(sessionId, session);
       knownMuxNames.add(sessionName);
@@ -2881,6 +3063,172 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       ...session,
       stats: statsMap.get(session.pid) || undefined,
     }));
+  }
+
+  /**
+   * What the last pane read saw of this tmux session's agent. `undefined` is
+   * the UNKNOWN answer and must never be rendered as "alive": it covers a pane
+   * that is running, a tmux session that no longer exists, a probe that failed,
+   * and every poll that has not run yet. See {@link PaneExit}.
+   */
+  getPaneExit(muxName: string): PaneExit | undefined {
+    return this.paneExits.get(muxName)?.exit;
+  }
+
+  /**
+   * Re-read every pane on the socket and refresh {@link paneExits}. ONE batched
+   * `tmux list-panes -a` answers for every session at once, which is why this
+   * polls rather than probing per session.
+   *
+   * A failed or empty probe leaves the previous answers ALONE rather than
+   * clearing them, because the two cannot be told apart: the command ends in
+   * `|| true`, so a tmux that errored and a socket with genuinely no panes both
+   * arrive as empty output. Treating that as "tmux did not answer" is the
+   * conservative reading — clearing on it would turn a transient failure into a
+   * silent retraction of a death Codeman had already observed, and the cost of
+   * being wrong the other way is one stale entry for a socket that no longer
+   * has the pane. A NON-empty read is different: `list-panes -a` lists
+   * every pane on the socket, so it is authoritative and {@link applyPaneExits}
+   * prunes against it.
+   *
+   * Two guards keep a slow read from undoing a fast one. A read already in
+   * flight suppresses the next poll, and a read that started before a
+   * {@link clearPaneExit} is discarded when it lands.
+   *
+   * A third guard skips the read entirely while no session on this manager
+   * could produce an answer ({@link hasObservablePaneSession}). Skipping
+   * retracts nothing, for the same reason a failed read does not: the map
+   * still holds what the last real read saw, and every path that puts a new
+   * command in a pane calls {@link clearPaneExit} itself.
+   */
+  async refreshPaneExits(now: number = Date.now()): Promise<void> {
+    // Nothing on this socket could answer, so do not read tmux to find that
+    // out. See `hasObservablePaneSession`: the watcher above still ticks.
+    if (!hasObservablePaneSession(this.sessions.values())) return;
+    if (this.paneExitReadInFlight) return;
+
+    const generation = this.paneExitGeneration;
+    this.paneExitReadInFlight = true;
+    let rows: PaneRow[];
+    try {
+      rows = await this.readPaneRows();
+    } finally {
+      this.paneExitReadInFlight = false;
+    }
+    if (rows.length === 0) return;
+    // A pane was respawned or killed while this read was out, so what it saw is
+    // already history. Dropping it is what stops a freshly respawned pane from
+    // being republished as exited.
+    if (generation !== this.paneExitGeneration) return;
+
+    this.applyPaneExits(derivePaneExits(rows, now));
+  }
+
+  /**
+   * Read every pane on the socket. The ONLY part of the pane-exit watcher that
+   * touches tmux, which is what lets a test subclass drive the guards in
+   * {@link refreshPaneExits} — the in-flight suppression, the generation
+   * check, the empty-read retraction rule and the read gate — against rows it
+   * chooses. Split out for the reason `runRemoteReconnectTick` is: a guard no
+   * test can reach is a guard that can be deleted without anything failing.
+   *
+   * A failed read answers with NO rows, which the caller treats as "tmux did
+   * not answer" and which therefore retracts nothing.
+   */
+  protected async readPaneRows(): Promise<PaneRow[]> {
+    // The test-mode gate lives HERE rather than at the top of the tick, so that
+    // what tests cannot do is spawn a process, not exercise the bookkeeping.
+    if (IS_TEST_MODE) return [];
+    try {
+      // execAsync, not execSync: this runs on a 2000 ms timer, and a synchronous
+      // exec freezes the port while the process stays alive (see the
+      // event-loop-monitor note in CLAUDE.md). The three `isPaneDead()` callers
+      // stay synchronous because each is answering one request right then.
+      const { stdout } = await execAsync(`${this.tmux()} list-panes -a -F '${PANE_LIST_FORMAT}' 2>/dev/null || true`, {
+        encoding: 'utf-8',
+        timeout: EXEC_TIMEOUT_MS,
+      });
+      return parsePaneRows(stdout.trim());
+    } catch (err) {
+      console.error('[TmuxManager] Failed to read pane exit state:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Fold one authoritative observation into {@link paneExits}. Split out from
+   * the tmux call so the merge rules are unit-testable.
+   *
+   * `observed` comes from a read of EVERY pane on the socket, so a session
+   * missing from it has no exit to report and its entry goes. That is what
+   * keeps the map from growing without bound as tmux sessions come and go
+   * outside `killSession()`. Only the caller may decide a read is authoritative:
+   * a failed or empty one never reaches here.
+   *
+   * An entry keeps the `at` of the FIRST read that saw that exit, so the stamp
+   * says when the agent was found gone rather than when the last poll ran. A
+   * changed status, a changed signal, or a different pane pid all start a new
+   * observation — the pid is what catches a second command in the same pane
+   * that happened to exit the same way.
+   */
+  applyPaneExits(observed: Map<string, PaneExitObservation>): void {
+    for (const muxName of [...this.paneExits.keys()]) {
+      if (!observed.has(muxName)) this.paneExits.delete(muxName);
+    }
+    for (const [muxName, next] of observed) {
+      const prev = this.paneExits.get(muxName);
+      const sameExit =
+        prev !== undefined &&
+        prev.panePid === next.panePid &&
+        prev.exit.status === next.exit.status &&
+        prev.exit.signal === next.exit.signal;
+      this.paneExits.set(muxName, sameExit ? prev : next);
+    }
+  }
+
+  /**
+   * Forget a session's exit observation, e.g. once its pane has been respawned.
+   * Also invalidates any read already in flight, so the answer this retracts
+   * cannot be written back a moment later.
+   */
+  clearPaneExit(muxName: string): void {
+    this.paneExits.delete(muxName);
+    this.paneExitGeneration++;
+  }
+
+  /**
+   * Poll for exited agents, on the manager's own interval.
+   *
+   * Deliberately NOT part of `startStatsCollection()`. That collector is armed
+   * when the browser opens the Monitor panel and DISARMED when it closes it
+   * (`panels-ui.js`), and it is skipped at boot entirely when no session was
+   * recovered — so riding it would leave a session created on a freshly booted
+   * server reporting nothing at all, and would let one browser turn exit
+   * detection off for every other. Started unconditionally, like the mouse-mode
+   * sync and the remote-reconnect watcher below.
+   *
+   * The `paneExitsUpdated` event is internal to the server; nothing here adds an
+   * SSE event, and the field reaches the browser on `session:updated`.
+   */
+  startPaneExitWatcher(intervalMs: number = DEFAULT_PANE_EXIT_INTERVAL_MS): void {
+    if (this.paneExitInterval) {
+      clearInterval(this.paneExitInterval);
+    }
+    this.paneExitInterval = setInterval(() => {
+      // No IS_TEST_MODE guard: `readPaneRows()` is the only thing that would
+      // spawn a process and it refuses under test, so a test can drive this
+      // whole loop with fake timers instead of being locked out of it.
+      void this.refreshPaneExits()
+        .then(() => this.emit('paneExitsUpdated'))
+        .catch((err) => console.error('[TmuxManager] Pane exit watcher error:', err));
+    }, intervalMs);
+  }
+
+  stopPaneExitWatcher(): void {
+    if (this.paneExitInterval) {
+      clearInterval(this.paneExitInterval);
+      this.paneExitInterval = null;
+    }
   }
 
   startStatsCollection(intervalMs: number = DEFAULT_STATS_INTERVAL_MS): void {
@@ -3102,6 +3450,8 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
 
   destroy(): void {
     this.stopStatsCollection();
+    this.stopPaneExitWatcher();
+    this.paneExits.clear();
     this.stopMouseModeSync();
     this.stopRemoteReconnectWatcher();
     this.reconnectState.clear();

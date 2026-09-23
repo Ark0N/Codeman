@@ -20,11 +20,18 @@ Three ways to get one, all under **+** next to the case picker:
 | How               | Result                                                                                                 |
 | ----------------- | ------------------------------------------------------------------------------------------------------ |
 | **Create New**    | A fresh `~/codeman-cases/<name>` with a scaffolded `CLAUDE.md`.                                          |
-| **Clone Repo**    | A public repo cloned into `~/codeman-cases/<name>` and registered as a case.                            |
+| **Clone Repo**    | A repo cloned into `~/codeman-cases/<name>` and registered as a case. Private repos need this machine's own git credentials (see below). |
 | **Link Existing** | An existing folder anywhere on disk, registered in place. Nothing is copied or moved.                    |
 
 Linked cases keep living where they are. Deleting a case in Codeman removes the
 registration, and for a linked case that is all it removes.
+
+**Clone Repo never asks for credentials.** It uses whatever the server's own git already has:
+an ssh key, or a credential helper such as `gh auth setup-git`. The Docker image can include
+helpers for GitHub (`gh`) and Azure DevOps (`az`), turned on in `docker-compose.override.yml`;
+then signing those CLIs in once from a shell session is enough. See the private repositories
+section of `docker/README.md`. Without credentials a private repo fails straight away with an
+authentication error.
 
 **Cases created from scratch are the only copy of that code.** Uninstalling Codeman does not
 delete `~/codeman-cases/`, but treat that directory as real work, not scratch space.

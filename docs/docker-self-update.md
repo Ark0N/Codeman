@@ -10,15 +10,18 @@ this file covers only what the container changes.
 
 ## The short version
 
-| Change in the release            | Applied by                                       |
-| -------------------------------- | ------------------------------------------------ |
-| Application code                 | The in-app updater                               |
-| `docker/server.Dockerfile`       | `docker/Start-Codeman.sh` on the host            |
-| `docker/docker-compose.yaml`     | `docker/Start-Codeman.sh` on the host            |
-| New key in `docker/.env.example` | Add it to `docker/.env`, then `Start-Codeman.sh` |
+| Change in the release                     | Applied by                                                                      |
+| ----------------------------------------- | ------------------------------------------------------------------------------- |
+| Application code                          | The in-app updater                                                              |
+| `docker/server.Dockerfile`                | `docker/Start-Codeman.sh` on the host                                           |
+| `docker/docker-compose.yaml`              | `docker/Start-Codeman.sh` on the host                                           |
+| New key in `docker/.env.example`          | Add it to `docker/.env`, then `Start-Codeman.sh`                                |
+| A major update, or a Node base-image bump | `docker/Update-Codeman.sh` on the host (no-cache rebuild + fresh build volumes) |
 
-The in-app updater detects all three of the bottom rows itself and refuses with a
+The in-app updater detects the three middle rows itself and refuses with a
 message naming what changed, so you never have to work out which case you are in.
+`Update-Codeman.sh` is the heavier option for when `Start-Codeman.sh` is not
+enough: see "Major updates" in `docker/README.md`.
 
 ## Why the container needs its own path
 
@@ -224,7 +227,10 @@ the host and the in-app path works from then on.
 
 **Resetting the build artefacts** — `docker compose down -v`, then
 `Start-Codeman.sh`. This discards the named volumes and re-seeds them from a fresh
-image.
+image. `docker/Update-Codeman.sh` scripts the same reset by default for the two
+build-artefact volumes (`codeman-node-modules`, `codeman-dist`) only, plus an
+unconditional `--no-cache` rebuild, which a plain `Start-Codeman.sh` run does not
+force on its own. See "Major updates" in `docker/README.md`.
 
 ## Disabling it
 

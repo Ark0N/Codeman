@@ -48,6 +48,7 @@ One tab per session, in your order, and that order syncs across your devices.
 | Yellow tab, blinking          | The agent is waiting for input from you.                                 |
 | Red tab, blinking             | A question or permission prompt is blocking the session.                 |
 | No dot                        | The session is not running.                                              |
+| Muted grey dot plus an `exited (137)` badge | The agent inside the pane has exited, with that exit code (or `exited (signal 9)`). A bare `exited` means tmux saw the pane die but did not report how, which is not the same as a clean `exited (0)`. Detailed sidebar and rail rows read `exited` in their pill. |
 
 ![Tab alerts](https://raw.githubusercontent.com/Ark0N/Codeman/master/docs/images/tab-alerts-20260815.png)
 
@@ -116,6 +117,7 @@ The right side of the header. Almost all of these are off until you enable them 
 | Lifecycle Log          | Off                | Session start, exit, and kill audit trail.                                       |
 | Cron ⏰                | Off                | Scheduled jobs.                                                                   |
 | Multi-monitor          | Off, macOS         | Opens a window spanning every display.                                            |
+| Split                  | Off, desktop only  | View a second session beside the active one, with a draggable divider.           |
 | Tunnel indicator       | When a tunnel runs | Cloudflare tunnel status.                                                        |
 | Admin panel            | Multi-user only    | User administration.                                                              |
 

@@ -1,5 +1,10 @@
 # Tailscale Setup in the Installer (Plan)
 
+> Superseded in part by [`installer-v2-plan.md`](installer-v2-plan.md) (2026-09-20), which
+> moved every human step before the build, added the sub-path / second-port answer for an
+> occupied `:443`, the opt-in rename, flags, and the done screen with a QR code. The
+> state machine and safety rules below still hold.
+
 Goal: make "Codeman over Tailscale, with real HTTPS" a first-class, guided path in
 `install.sh`, instead of a one-line hint pointing at the docs. Today the safest
 recommended deployment (loopback bind + `tailscale serve`) is exactly what the

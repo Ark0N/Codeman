@@ -177,7 +177,11 @@ describe('selectSession font gate', () => {
 
   it('waits for the font before the first fit', () => {
     const wait = body.indexOf('await this._terminalFontReady');
-    const fit = body.indexOf('if (this.fitAddon) this.fitAddon.fit();');
+    // `syncTerminalGeometry()` replaced the bare `fitAddon.fit()` here: it fits
+    // AND applies the floor it reports, so xterm and the PTY cannot disagree
+    // (#464). The gate this test guards is unchanged — the font must be
+    // measured before the terminal is.
+    const fit = body.indexOf('this.syncTerminalGeometry();');
     expect(wait).toBeGreaterThan(-1);
     expect(fit).toBeGreaterThan(-1);
     expect(wait).toBeLessThan(fit);

@@ -1588,6 +1588,12 @@ export function registerSessionRoutes(
         name: session.name,
         mode: session.mode,
       });
+      // Persist, not just broadcast. Starting a command in the pane changes
+      // `pid` and retracts any `paneExit` (Ark0N/Codeman#446), and the pane-exit
+      // watcher cannot write that retraction to disk for us: its next tick finds
+      // the in-memory field already cleared, reports no change and persists
+      // nothing, so `state.json` would keep saying the agent had exited.
+      ctx.persistSessionState(session);
       ctx.broadcast(SseEvent.SessionInteractive, { id });
       ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
 
@@ -1617,6 +1623,9 @@ export function registerSessionRoutes(
         name: session.name,
         mode: 'shell',
       });
+      // Persist for the same reason /interactive does: a started pane retracts
+      // `paneExit`, and the watcher's next tick cannot write that retraction.
+      ctx.persistSessionState(session);
       ctx.broadcast(SseEvent.SessionInteractive, { id, mode: 'shell' });
       ctx.broadcast(SseEvent.SessionUpdated, { session: ctx.getSessionStateWithRespawn(session) });
       return {};
@@ -2120,7 +2129,13 @@ export function registerSessionRoutes(
     const session = findSessionOrFail(ctx, id, req);
 
     session.resize(cols, rows, { viewportType, force });
-    return {};
+    // Answer with the geometry the PTY ACTUALLY holds, which is not always the
+    // one asked for: `Session.resize` declines small-viewport requests while a
+    // desktop connection holds an active sizing claim. A browser terminal left
+    // at a shape the PTY refused renders garbled output, not merely wrong-sized
+    // output, so the client adopts this (issue #464). A session with no pane
+    // reports nothing rather than the constructor defaults — see `ptyGeometry`.
+    return session.ptyGeometry ?? {};
   });
 
   // ========== Get Last Response (from transcript JSONL) ==========

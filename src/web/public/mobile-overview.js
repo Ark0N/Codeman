@@ -60,6 +60,14 @@ const MOBILE_OVERVIEW_RUN_MODES = [
   { mode: 'shell', label: 'Terminal / Shell', short: 'Shell' },
 ];
 
+/**
+ * The one word every surface puts on the watching badge, and the tooltip that says
+ * what the pane actually reported. Both live here so the phone overview, the desktop
+ * home rail and the rich sidebar rows cannot word the same badge three ways.
+ */
+const WATCHING_BADGE_TEXT = 'watching';
+const watchingBadgeTitle = (label) => 'Still running in the background: ' + label;
+
 /** Pill copy per state. Kept short: a phone row has ~90px for it. */
 const MOBILE_OVERVIEW_PILL_LABEL = {
   needs: 'needs you',
@@ -185,6 +193,10 @@ Object.assign(CodemanApp.prototype, {
         dir: this._shortenHomePath ? this._shortenHomePath(session.workingDir) : session.workingDir || '',
         state,
         pill: MOBILE_OVERVIEW_PILL_LABEL[state] || state,
+        // What the pane's own footer says is still running in the background ("1 monitor",
+        // "2 shells"), straight off the session payload. A row that has one is quiet
+        // because the agent is waiting for that, not because it is waiting for you.
+        watching: typeof session.watching === 'string' ? session.watching : '',
         // Epoch ms, straight off the session payload; formatting happens at
         // render time so the clock can redo it without a re-render.
         createdAt: Number(session.createdAt) || 0,
@@ -713,6 +725,8 @@ Object.assign(CodemanApp.prototype, {
     pill.textContent = row.pill;
     item.appendChild(pill);
 
+    if (row.watching) item.appendChild(this._buildWatchingBadge(row.watching, 'mobile-overview-pill'));
+
     const chevron = document.createElement('span');
     chevron.className = 'mobile-overview-chevron';
     chevron.setAttribute('aria-hidden', 'true');
@@ -732,6 +746,40 @@ Object.assign(CodemanApp.prototype, {
     }
 
     return item;
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // Watching badge
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * The badge a session wears while work it started in the background is still
+   * running: a monitor, a backgrounded shell, a cloud session.
+   *
+   * It says one word, and the label the pane itself printed ("1 monitor") rides in
+   * the tooltip, because the badge shares a row with the state pill on the narrowest
+   * screen this app renders on. It does NOT replace that pill: an agent can arm a
+   * monitor and ask the user a question in the same breath, so the row still says
+   * "needs you" and this says what else is going on.
+   *
+   * Shared with the desktop home rail (home-sessions.js), for the same reason
+   * `_mobileOverviewState` is: one badge, one wording, one place to change it. The
+   * caller names its own pill class, because each surface styles its pills itself and
+   * the phone's live inside a media query the desktop never enters.
+   */
+  _buildWatchingBadge(label, baseClass) {
+    const badge = document.createElement('span');
+    const base = baseClass || 'mobile-overview-pill';
+    badge.className = base + ' ' + base + '--watching';
+    badge.setAttribute('data-i18n-skip', '');
+    badge.textContent = WATCHING_BADGE_TEXT;
+    // The label rides in BOTH, because a tooltip is desktop-only: a phone has no hover
+    // target, and a screen reader gets the one word either way. This is the surface the
+    // badge was built for first, so "watching" with no way to learn what would be the
+    // wrong place to save a line.
+    badge.title = watchingBadgeTitle(label);
+    badge.setAttribute('aria-label', watchingBadgeTitle(label));
+    return badge;
   },
 
   // ═══════════════════════════════════════════════════════════════

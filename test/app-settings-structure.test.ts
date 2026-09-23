@@ -99,7 +99,10 @@ describe('App Settings modal structure', () => {
     for (const [, attrs, body] of previewed) {
       const kind = attrs.match(/data-preview="([a-z]+)"/)?.[1];
       expect(['header', 'panel', 'toolbar', 'float']).toContain(kind);
-      expect(attrs, `chip ${body} needs a preview order`).toMatch(/data-preview-order="\d+"/);
+      // A decimal (e.g. "11.5") is allowed — Split sits between Multi-monitor
+      // (11) and Ultracode Agents (12) in the real header, and Number()
+      // parses it fine for the preview's own sort.
+      expect(attrs, `chip ${body} needs a preview order`).toMatch(/data-preview-order="\d+(\.\d+)?"/);
       // A text token replaces the icon for readouts (plan usage, CPU, font size).
       const hasIcon = body.includes('class="set-chip-ico') || attrs.includes('data-preview-text=');
       expect(hasIcon, `chip ${body} has nothing to render in the preview`).toBe(true);

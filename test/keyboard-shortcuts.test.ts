@@ -67,9 +67,14 @@ describe('keyboard shortcuts', () => {
     // selects real padding spaces, so the raw text is truthy and testing it would
     // spend the press on a copy of nothing — the same lost interrupt this test
     // guards, reached by a different door.
-    expect(terminalUiSource).toMatch(/const selection = this\.cleanedTerminalSelection\(\);/);
+    //
+    // The RAW selection is what travels on, because copyTerminalSelection cleans
+    // again on its own and the margin strip is not idempotent. Passing the
+    // cleaned string dedented every claude and codex copy twice; see
+    // test/terminal-copy-clean.test.ts for the branch's own pin.
+    expect(terminalUiSource).toMatch(/const selection = this\.cleanedTerminalSelection\(raw\);/);
     expect(terminalUiSource).toMatch(/if \(selection\.trim\(\)\) \{/);
-    expect(terminalUiSource).toContain('void this.copyTerminalSelection(selection);');
+    expect(terminalUiSource).toContain('void this.copyTerminalSelection(raw);');
     expect(appSource).toContain("id: 'copy-selection'");
   });
 

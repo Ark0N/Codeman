@@ -103,6 +103,30 @@ locked phone and the agent continues.
 With the inbox off, the buttons are stripped from the notification payload entirely rather
 than being shown and failing.
 
+## When a session is watching its own work
+
+An agent that starts a monitor, puts a shell in the background or hands a task to a cloud
+session is told by its CLI to end the turn and wait to be notified. The pane then goes
+quiet, and the CLI's idle notification arrives about a minute later — for a session that
+wants nothing from you.
+
+Codeman reads what the CLI prints about its own background work and treats that prompt
+differently. It raises no tab alert, no desktop notification and no push, the session stays
+out of NEEDS YOU on every surface, and the row wears a blue **watching** badge instead. Hover
+it, or read it on a phone through your screen reader, and it says what is running: "1
+monitor", "2 shells", "1 background terminal".
+
+The prompt itself is not thrown away. It sits in the Approvals drawer as an ordinary card,
+still answerable, with a line reading "quiet, watching 1 monitor" where a card you had
+already looked at would say nothing. The next time that session goes quiet for an ordinary
+reason, it alerts you exactly as before.
+
+Two limits are worth knowing. A permission prompt or a question dialog still goes red
+whatever else the agent started, because that one blocks it outright. A question asked in
+plain prose is not a dialog, so an agent that starts a monitor and then writes "which branch
+should I target?" is quiet along with the rest — check a watching session yourself if it has
+been quiet longer than the work it is waiting for should take.
+
 ## The phone overview
 
 On phones, tapping the "C" logo gives a session overview with **NEEDS YOU** first, then

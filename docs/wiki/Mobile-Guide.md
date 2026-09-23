@@ -60,14 +60,20 @@ On by default; it can be turned off in settings.
 
 A row of keys above the virtual keyboard, and what it contains depends on the session.
 
-**Agent sessions** get quick actions: `/init`, `/clear`, `/compact`, a clipboard key, `Esc`,
-a path picker, an image key, and 🧠 when Read My Mind is on. Destructive commands need a
-double press, so you cannot fire `/clear` with a stray thumb. On Codex sessions the bar also
-shows `⇧←` and `⇧→`, the Shift-modified arrows Codex binds to editing the last queued
-message and walking the prompt stack.
+**Agent sessions** get quick actions: `/init`, `/clear`, `/compact`, a Compose key, `Esc`,
+a path picker, and 🧠 when Read My Mind is on. Compose opens a multiline editor with
+autocorrect: Enter adds a new line, and only Send delivers the text, as one paste followed
+by Enter, so your line breaks reach the agent intact. Anything already typed on the terminal
+prompt moves into the editor when it opens. Drafts are kept per session and in memory only,
+so switching tabs keeps them and a page reload forgets them; a dot on the key shows a draft
+is parked. The editor's Image button attaches photos and puts their paths into the draft.
+Destructive commands need a double press, so you cannot fire `/clear` with a stray thumb. On
+Codex sessions the bar also shows `⇧←` and `⇧→`, the Shift-modified arrows Codex binds to
+editing the last queued message and walking the prompt stack.
 
 **Shell sessions** automatically swap it for terminal controls: `Ctrl`, `Esc`, `Tab`, four
-arrows, paste, and dismiss. Your normal preference is remembered and restored when you
+arrows, a direct Paste key (shell input is not an agent prompt, so there is no Compose
+there), and dismiss. Your normal preference is remembered and restored when you
 switch back to an agent session, so a settings change during a shell session cannot strip
 the bar away permanently.
 

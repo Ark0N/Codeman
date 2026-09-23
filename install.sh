@@ -2,7 +2,22 @@
 # Codeman Universal Installer
 # https://github.com/Ark0N/Codeman
 #
-# Usage: curl -fsSL https://raw.githubusercontent.com/Ark0N/Codeman/master/install.sh | bash
+# Usage: curl -fsSL https://getcodeman.com/install | bash
+#        curl -fsSL https://getcodeman.com/install | bash -s -- [flags] [subcommand]
+#
+# The flow: look at what is already on the machine, ask at most three
+# questions (how the dashboard is reached, optionally what to call this
+# machine on your tailnet, whether to run Codeman as a service), then do all
+# the work unattended and end on the URL, with a QR code for your phone.
+#
+# Flags (each has an environment-variable twin, listed below):
+#   --tailscale | --lan | --local   How the dashboard is reached (question 1)
+#   --name <n> | --no-rename        Rename this machine on the tailnet / never ask (question 2)
+#   --service | --run | --no-start  What to do at the end (question 3)
+#   --yes, -y                       Take every default; still waits on a Tailscale login URL
+#   --password <p>                  Dashboard password (visible in `ps`; prefer CODEMAN_PASSWORD)
+#   --port <n>                      Port Codeman listens on (default 3000)
+#   --help, -h                      Print this text
 #
 # Environment variables:
 #   CODEMAN_NONINTERACTIVE=1  - Skip all prompts and accept their defaults
@@ -10,27 +25,29 @@
 #                               that need system changes (sudo package
 #                               installs, AI CLI download); without it those
 #                               steps abort instead of running silently.
+#                               Never installs Tailscale, never renames.
 #   CODEMAN_INSTALL_DIR       - Custom install directory (default: ~/.codeman/app)
 #   CODEMAN_SKIP_SYSTEMD=1    - Skip systemd/launchd service setup prompt
 #   CODEMAN_NODE_VERSION      - Node.js major version to install (default: 22)
 #   CODEMAN_REPO_URL          - Custom git repository URL (default: upstream Codeman)
 #   CODEMAN_BRANCH            - Git branch to install (default: master)
 #   CODEMAN_HOST              - Preset the network binding and skip the prompt
-#                               (e.g. 0.0.0.0 for LAN access, 127.0.0.1 for
-#                               local-only; interactive default is 0.0.0.0,
-#                               non-interactive default is 127.0.0.1)
-#   CODEMAN_PASSWORD          - Preset the dashboard password (skips the
-#                               password prompt when binding to the network)
+#                               (0.0.0.0 for LAN access, 127.0.0.1 for local-only)
+#   CODEMAN_PASSWORD          - Preset the dashboard password
+#   CODEMAN_PORT              - Port Codeman listens on (default 3000); written
+#                               into the service and used as the serve target
 #   CODEMAN_TAILSCALE=1       - Preset the Tailscale choice: bind loopback and
-#                               front it with `tailscale serve` HTTPS (skips
-#                               the network prompt; never installs Tailscale
-#                               in non-interactive runs)
+#                               front it with `tailscale serve` HTTPS (never
+#                               installs Tailscale in non-interactive runs)
+#   CODEMAN_TAILSCALE_NAME    - Rename this machine on the tailnet (same as --name)
 #
 # Subcommands:
-#   install.sh update     - Update an existing install
-#   install.sh uninstall  - Remove services, symlinks and (optionally) data
-#   install.sh tailscale  - Set up (or repair) Tailscale serve HTTPS access
-#                           for an existing install
+#   install.sh update       - Update an existing install
+#   install.sh uninstall    - Remove services, symlinks and (optionally) data
+#   install.sh tailscale    - Set up (or repair) Tailscale HTTPS access for an existing install
+#   install.sh name [<n>]   - Rename this machine on your tailnet (default: codeman-<hostname>)
+#   install.sh status       - Print the URLs, the QR code and how to manage the service
+#   install.sh cloudflared  - Install cloudflared for the in-app Cloudflare tunnel
 
 set -euo pipefail
 
@@ -62,12 +79,73 @@ EXISTING_PASSWORD=""
 EXISTING_ACK="0"
 
 # Tailscale serve URL configured or detected during this run
-# (setup_tailscale_access / detect_tailscale_serve_url). Empty when the
-# Tailscale path was not taken or not completed.
+# (tailscale_apply / detect_tailscale_serve_url). Empty when the Tailscale path
+# was not taken or not completed.
 TAILSCALE_SERVE_URL=""
 # Set to 1 when serve commands must go through sudo because granting the user
 # tailscale "operator" rights failed (ensure_tailscale_operator).
 TS_NEED_ROOT="0"
+# Tailscale decisions taken in the question phase (tailscale_prepare) and
+# applied after the build (tailscale_apply). TS_READY=1 means preflight passed
+# (installed, logged in, HTTPS certs on) and a serve shape was chosen.
+# TS_SERVE_MODE: keep (our mapping already exists), root (https://<node>),
+# path (https://<node>/codeman, when :443 already belongs to another app),
+# port (https://<node>:<TS_SERVE_PORT>), replace (take :443 over).
+TS_READY="0"
+TS_SERVE_MODE=""
+TS_SERVE_PATH="/codeman"
+TS_SERVE_PORT="8443"
+# --name / CODEMAN_TAILSCALE_NAME, and --no-rename.
+TS_NAME="${CODEMAN_TAILSCALE_NAME:-}"
+TS_NO_RENAME="0"
+# Set to 1 when a rename took our serve mapping down (it is keyed by the old
+# name), so the caller knows to re-add it and never adds one that was not there.
+TS_MAPPING_REMOVED_BY_RENAME="0"
+# Set by the INT trap that is armed only while ensure_tailnet_https polls.
+TS_HTTPS_POLL_INTERRUPTED="0"
+# Where a rename is recorded so uninstall can offer to undo it (tailscaled does
+# not remember previous names).
+TS_RENAME_RECORD="$HOME/.codeman/tailscale-rename"
+
+# Sub-path Codeman is mounted under ('' for the root). Set by
+# tailscale_choose_mapping (path mode) or read back from the service file.
+BIND_BASE_URL=""
+EXISTING_BASE_URL=""
+EXISTING_VERSION=""
+
+# Answer presets from flags. LAUNCH_PRESET: 1 = run now, 2 = service, 3 = do
+# not start. ASSUME_YES=1 (--yes) takes every prompt's default but keeps the
+# terminal (a Tailscale login URL still waits for a human), unlike
+# CODEMAN_NONINTERACTIVE, which is the CI contract and never installs Tailscale.
+LAUNCH_PRESET=""
+ASSUME_YES="0"
+# Set by parse_flags when a flag asks to change how an existing install is
+# reached or run, so a bare re-run takes the full flow instead of a quiet update.
+RECONFIGURE="0"
+SUBCOMMAND=""
+SUBCOMMAND_ARG=""
+# Answers to question 3 (choose_launch_mode): LAUNCH_CHOICE 1/2/3 as above,
+# SERVICE_TYPE systemd | launchd | launchd-daemon (a foreign daemon we left
+# alone) | empty (no service manager here).
+LAUNCH_CHOICE="3"
+SERVICE_TYPE=""
+
+# Everything the unattended steps print goes here; the terminal gets one line
+# per step and the tail of this file on failure.
+LOG_FILE="$HOME/.codeman/install.log"
+SUDO_KEEPALIVE_PID=""
+SPINNER_PID=""
+# Set once the work phase (clone/build) has begun; gates the cleanup trap's
+# "partial installation may remain" advice. CURRENT_STEP names whatever the
+# installer was doing when a `set -e` failure ends it (a vendor installer that
+# times out otherwise leaves only its own last line on screen).
+INSTALL_STARTED="0"
+CURRENT_STEP=""
+
+# What preflight_detect found: the missing system packages as prose, and the
+# Tailscale state (absent | installed | connected | serving).
+MISSING_PKGS=""
+TS_STATE="absent"
 
 # puppeteer is a devDependency used only by scripts/browser-comparison.mjs — its
 # ~150MB chrome-headless-shell download is never needed to build or run Codeman.
@@ -178,7 +256,7 @@ print_security_notice() {
         echo -e "  ${DIM}Details: docs/security-architecture.md${NC}"
     elif [[ "$BIND_HOST" == "0.0.0.0" ]]; then
         echo -e "  ${YELLOW}${BOLD}Security:${NC}"
-        echo -e "    The dashboard is reachable from your network at port 3000 and is"
+        echo -e "    The dashboard is reachable from your network at port ${CODEMAN_PORT:-3000} and is"
         echo -e "    password-protected (user ${BOLD}admin${NC}). Keep that password strong:"
         echo -e "    whoever logs in can run commands through your agents."
         echo -e "    For access from OUTSIDE your network, prefer Tailscale or a tunnel."
@@ -218,11 +296,43 @@ print_security_notice() {
 # Cleanup on Failure
 # ============================================================================
 
+# End the spinner and the sudo keepalive. Called from the EXIT trap, and by
+# hand right before `exec` in main(): exec replaces this shell WITHOUT running
+# the trap, and the keepalive keys on $$, which is then the server's pid, so
+# it would refresh the sudo timestamp for the whole life of the server.
+stop_background_helpers() {
+    if [[ -n "$SPINNER_PID" ]]; then
+        kill "$SPINNER_PID" 2>/dev/null || true
+        SPINNER_PID=""
+        printf '\r\033[K' >&2
+    fi
+    if [[ -n "$SUDO_KEEPALIVE_PID" ]]; then
+        kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
+        SUDO_KEEPALIVE_PID=""
+    fi
+    return 0
+}
+
 cleanup() {
     local exit_code=$?
-    if [[ $exit_code -ne 0 ]]; then
+    stop_background_helpers
+    # The "partial install" advice is only true once the work phase has begun:
+    # a bad flag or a refused question exits before anything was written.
+    if [[ $exit_code -ne 0 && -n "$CURRENT_STEP" ]]; then
+        error "Failed while: $CURRENT_STEP (see the output above). Fix the cause and re-run this installer."
+    fi
+    if [[ $exit_code -ne 0 && "$INSTALL_STARTED" == "1" ]]; then
         error "Installation failed. Partial installation may remain at $INSTALL_DIR"
         error "To retry, run the installer again or remove the directory manually."
+        if [[ -s "$LOG_FILE" ]]; then
+            error "Step output was saved to $LOG_FILE"
+        fi
+    fi
+    # A rename takes our serve mapping down in the question phase and the
+    # after-the-build half puts it back; a failure in between leaves nothing
+    # fronting Codeman, and `install.sh tailscale` is what restores it.
+    if [[ $exit_code -ne 0 && "$TS_MAPPING_REMOVED_BY_RENAME" == "1" && -z "$TAILSCALE_SERVE_URL" ]]; then
+        error "The Tailscale serve mapping was taken down for the rename and not re-added. Restore it with: bash $INSTALL_DIR/install.sh tailscale"
     fi
 }
 
@@ -383,7 +493,7 @@ missing_build_tools() {
     local missing=""
     command -v make &>/dev/null || missing="make"
     if ! command -v c++ &>/dev/null && ! command -v g++ &>/dev/null && ! command -v clang++ &>/dev/null; then
-        missing="${missing:+$missing, }a C++ compiler (g++)"
+        missing="${missing:+$missing, }g++"
     fi
     command -v python3 &>/dev/null || missing="${missing:+$missing, }python3"
     printf '%s' "$missing"
@@ -1155,8 +1265,8 @@ prompt_yes_no() {
     local prompt="$1"
     local default="${2:-y}"
 
-    if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
-        # Non-interactive, use default
+    # Non-interactive, or --yes: take the default.
+    if [[ "$NONINTERACTIVE" == "1" ]] || [[ "$ASSUME_YES" == "1" ]] || ! has_tty; then
         [[ "$default" == "y" ]]
         return
     fi
@@ -1178,6 +1288,99 @@ prompt_yes_no() {
             *)                 echo "Please answer yes or no." >&2 ;;
         esac
     done
+}
+
+# Some steps need root (system packages, the Tailscale installer, `tailscale
+# up`, the operator grant). Ask for the password ONCE, up front, and keep the
+# sudo timestamp warm in the background for the rest of the run, instead of a
+# password prompt per step scattered around a multi-minute build.
+sudo_session_start() {
+    [[ $EUID -eq 0 ]] && return 0
+    [[ -n "$SUDO_KEEPALIVE_PID" ]] && return 0
+    command -v sudo &>/dev/null || return 0
+    if ! sudo -n true 2>/dev/null; then
+        echo "" >&2
+        info "Some steps need administrator rights. You will be asked for your password once."
+        if [[ -e /dev/tty ]]; then
+            sudo -v < /dev/tty || die "Failed to obtain sudo privileges."
+        else
+            sudo -v || die "Failed to obtain sudo privileges. Try running the script directly instead of piping."
+        fi
+    fi
+    # Refreshes the timestamp while this script lives; ends on its own once the
+    # installer is gone or the credential lapses.
+    (
+        while kill -0 "$$" 2>/dev/null; do
+            sudo -n true 2>/dev/null || exit 0
+            sleep 50
+        done
+    ) &
+    SUDO_KEEPALIVE_PID=$!
+    return 0
+}
+
+# Open a URL in the user's browser when there is one to open it in (macOS, a
+# desktop session, WSL). Silent no-op on a headless box: the URL is printed
+# anyway.
+open_in_browser() {
+    local url="$1"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        open "$url" >/dev/null 2>&1 || true
+    elif command -v wslview &>/dev/null; then
+        wslview "$url" >/dev/null 2>&1 || true
+    elif [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v xdg-open &>/dev/null; then
+        xdg-open "$url" >/dev/null 2>&1 &
+    fi
+    return 0
+}
+
+fmt_elapsed() {
+    local s="$1"
+    if [[ "$s" -ge 60 ]]; then
+        printf '%dm %02ds' $((s / 60)) $((s % 60))
+    else
+        printf '%ds' "$s"
+    fi
+}
+
+# run_step <label> <command...>: one unattended step, its output in LOG_FILE,
+# a spinner on a terminal, one line on success (with the elapsed time) and the
+# tail of the log on failure. stdin is /dev/null on purpose: under
+# `curl | bash` the script IS stdin, and a child that reads it eats the rest.
+run_step() {
+    local label="$1"; shift
+    local start=$SECONDS rc=0
+    mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+    if ! printf '\n==> %s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$label" >> "$LOG_FILE" 2>/dev/null; then
+        LOG_FILE=/dev/null
+    fi
+    if [[ -t 2 ]] && [[ -n "$NC" ]]; then
+        (
+            local frames='|/-\' i=0
+            while true; do
+                printf '\r  %s %s' "${frames:$((i % 4)):1}" "$label" >&2
+                i=$((i + 1))
+                sleep 0.2
+            done
+        ) &
+        SPINNER_PID=$!
+    else
+        info "$label..."
+    fi
+    "$@" >> "$LOG_FILE" 2>&1 < /dev/null || rc=$?
+    if [[ -n "$SPINNER_PID" ]]; then
+        kill "$SPINNER_PID" 2>/dev/null || true
+        wait "$SPINNER_PID" 2>/dev/null || true
+        SPINNER_PID=""
+        printf '\r\033[K' >&2
+    fi
+    if [[ "$rc" -eq 0 ]]; then
+        success "$label ($(fmt_elapsed $((SECONDS - start))))"
+        return 0
+    fi
+    error "$label failed (exit $rc). Last lines of $LOG_FILE:"
+    tail -n 25 "$LOG_FILE" 2>/dev/null | sed 's/^/    /' >&2
+    return "$rc"
 }
 
 # ============================================================================
@@ -1292,13 +1495,17 @@ remove_sc_alias() {
 # Network Binding
 # ============================================================================
 
-# Best-effort LAN IP for "open this URL from your phone" hints.
+# Best-effort LAN IP for "open this URL from your phone" hints: the address the
+# default route leaves from, not the first one `hostname -I` lists (on a box
+# with docker0, an LXD bridge or a tailscale interface that first one is often
+# not the LAN at all).
 detect_lan_ip() {
     local ip=""
     if [[ "$(uname -s)" == "Darwin" ]]; then
         ip=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)
     else
-        ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+        ip=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -1)
+        [[ -n "$ip" ]] || ip=$(hostname -I 2>/dev/null | awk '{print $1}')
     fi
     echo "${ip:-<your-ip>}"
 }
@@ -1323,11 +1530,14 @@ xml_unescape() {
 
 # Read the binding out of an already-installed service file, if any. A service
 # file WITHOUT our CODEMAN_HOST line is a pre-1.8 install, which effectively
-# ran loopback (the server default), so it reports 127.0.0.1.
+# ran loopback (the server default), so it reports 127.0.0.1. Also reads back
+# the sub-path (CODEMAN_BASE_URL) and the port the service was written with,
+# and the installed version, for the preflight summary and the re-run defaults.
 read_existing_binding() {
-    EXISTING_FOUND="0"; EXISTING_HOST=""; EXISTING_PASSWORD=""; EXISTING_ACK="0"
+    EXISTING_FOUND="0"; EXISTING_HOST=""; EXISTING_PASSWORD=""; EXISTING_ACK="0"; EXISTING_BASE_URL=""
     local unit="$HOME/.config/systemd/user/codeman-web.service"
     local plist="$HOME/Library/LaunchAgents/com.codeman.web.plist"
+    local existing_port=""
 
     if [[ -f "$unit" ]]; then
         EXISTING_FOUND="1"
@@ -1336,6 +1546,8 @@ read_existing_binding() {
         pwline=$(sed -n 's/^Environment="CODEMAN_PASSWORD=\(.*\)"$/\1/p' "$unit" | head -1)
         [[ -n "$pwline" ]] && EXISTING_PASSWORD=$(systemd_env_unescape "$pwline")
         grep -q '^Environment=CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1' "$unit" && EXISTING_ACK="1"
+        EXISTING_BASE_URL=$(sed -n 's/^Environment=CODEMAN_BASE_URL=//p' "$unit" | head -1)
+        existing_port=$(sed -n 's/^Environment=CODEMAN_PORT=//p' "$unit" | head -1)
     elif [[ -f "$plist" ]]; then
         EXISTING_FOUND="1"
         EXISTING_HOST=$(awk '/<key>CODEMAN_HOST<\/key>/{getline; print}' "$plist" | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')
@@ -1343,55 +1555,80 @@ read_existing_binding() {
         pwraw=$(awk '/<key>CODEMAN_PASSWORD<\/key>/{getline; print}' "$plist" | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')
         [[ -n "$pwraw" ]] && EXISTING_PASSWORD=$(xml_unescape "$pwraw")
         grep -q '<key>CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK</key>' "$plist" && EXISTING_ACK="1"
+        EXISTING_BASE_URL=$(awk '/<key>CODEMAN_BASE_URL<\/key>/{getline; print}' "$plist" | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')
+        existing_port=$(awk '/<key>CODEMAN_PORT<\/key>/{getline; print}' "$plist" | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')
     fi
 
     if [[ "$EXISTING_FOUND" == "1" && -z "$EXISTING_HOST" ]]; then
         EXISTING_HOST="127.0.0.1"
     fi
+    # The service's port is the port, unless the caller overrode it: every
+    # serve target and URL below reads ${CODEMAN_PORT:-3000}.
+    if [[ -z "${CODEMAN_PORT:-}" && -n "$existing_port" ]]; then
+        export CODEMAN_PORT="$existing_port"
+    fi
+    EXISTING_VERSION=""
+    if [[ -f "$INSTALL_DIR/package.json" ]]; then
+        EXISTING_VERSION=$(sed -n 's/^  *"version": *"\([^"]*\)".*/\1/p' "$INSTALL_DIR/package.json" | head -1)
+    fi
     return 0
 }
 
-# Ask how the dashboard should be reachable and set BIND_HOST/BIND_PASSWORD/
-# BIND_ACK. Interactive default is network access (0.0.0.0) because that is
-# what most installs need; loopback is offered as the safer alternative.
-# Non-interactive runs keep the safe loopback default unless CODEMAN_HOST is
-# preset. The server binary itself still defaults to 127.0.0.1 either way.
+# Question 1 of 3: how should the dashboard be reachable? Sets
+# BIND_HOST/BIND_PASSWORD/BIND_ACK, and on the Tailscale route runs everything
+# Tailscale that needs a human right here (tailscale_prepare), so the build
+# afterwards is unattended. Interactive default is Tailscale when it is
+# already connected, else network access (0.0.0.0), with loopback as the safer
+# alternative. Non-interactive runs keep the safe loopback default unless
+# CODEMAN_HOST is preset. The server binary itself still defaults to 127.0.0.1
+# either way.
 choose_network_binding() {
-    # Preset via environment: honor it and skip the prompt entirely.
+    # A previous install's choice is the baseline: re-installing must never
+    # silently loosen it. That holds for the preset paths below too: a flag
+    # re-run (`--lan --service` on a unit that carried a password) used to
+    # rewrite the unit without the password AND with the unauthenticated
+    # ack, and `--tailscale` dropped the password the same way (found in
+    # review, 2026-09-21). The caller's own CODEMAN_PASSWORD still wins.
+    read_existing_binding
+
+    # Preset via environment or flag: honor it and skip the prompt entirely.
     # CODEMAN_TAILSCALE=1 composes with a loopback (or absent) CODEMAN_HOST.
     if [[ -n "${CODEMAN_HOST:-}" ]]; then
         BIND_HOST="$CODEMAN_HOST"
-        BIND_PASSWORD="${CODEMAN_PASSWORD:-}"
+        BIND_PASSWORD="${CODEMAN_PASSWORD:-$EXISTING_PASSWORD}"
         if [[ "$BIND_HOST" != "127.0.0.1" && -z "$BIND_PASSWORD" ]]; then
             BIND_ACK="1"
         fi
-        info "Network binding preset via CODEMAN_HOST: $BIND_HOST"
+        if [[ -n "$EXISTING_PASSWORD" && -z "${CODEMAN_PASSWORD:-}" ]]; then
+            info "Keeping the existing dashboard password"
+        fi
+        info "Network binding preset: $BIND_HOST"
         if [[ "${CODEMAN_TAILSCALE:-0}" == "1" ]]; then
             if [[ "$BIND_HOST" == "127.0.0.1" ]]; then
-                setup_tailscale_access || true
+                tailscale_prepare || true
             else
-                warn "CODEMAN_TAILSCALE=1 ignored: CODEMAN_HOST=$BIND_HOST is not loopback."
+                warn "Tailscale preset ignored: CODEMAN_HOST=$BIND_HOST is not loopback."
             fi
         fi
         return 0
     fi
     if [[ "${CODEMAN_TAILSCALE:-0}" == "1" ]]; then
         BIND_HOST="127.0.0.1"
-        BIND_PASSWORD="${CODEMAN_PASSWORD:-}"
-        info "Tailscale access preset via CODEMAN_TAILSCALE=1"
-        setup_tailscale_access || true
+        BIND_PASSWORD="${CODEMAN_PASSWORD:-$EXISTING_PASSWORD}"
+        if [[ -n "$EXISTING_PASSWORD" && -z "${CODEMAN_PASSWORD:-}" ]]; then
+            info "Keeping the existing dashboard password"
+        fi
+        info "Tailscale access preset"
+        tailscale_prepare || true
         return 0
     fi
-
-    # A previous install's choice is the baseline: re-installing must never
-    # silently loosen it.
-    read_existing_binding
 
     if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
         if [[ "$EXISTING_FOUND" == "1" ]]; then
             BIND_HOST="$EXISTING_HOST"
             BIND_PASSWORD="$EXISTING_PASSWORD"
             BIND_ACK="$EXISTING_ACK"
+            BIND_BASE_URL="$EXISTING_BASE_URL"
             info "Non-interactive install: preserving existing binding ($BIND_HOST)"
         else
             BIND_HOST="127.0.0.1"
@@ -1402,15 +1639,17 @@ choose_network_binding() {
 
     # Tailscale state, for the menu hint and the default choice. Detection
     # only; never installs, logs in, or prompts for sudo here.
-    local ts_hint="will be installed for you" ts_ready="0" ts_detected_url=""
+    local ts_hint="will be installed for you" ts_ready="0" ts_detected_url="" ts_preview=""
     if check_tailscale; then
         ts_hint="installed, needs login"
-        if command -v node &>/dev/null && [[ "$(ts_status_field 's.BackendState')" == "Running" ]]; then
+        if command -v node &>/dev/null && [[ "$(ts_backend_state)" == "Running" ]]; then
             ts_ready="1"
             ts_hint="already connected"
+            ts_preview="https://$(ts_dns_name)"
             ts_detected_url=$(detect_tailscale_serve_url) || ts_detected_url=""
             if [[ -n "$ts_detected_url" ]]; then
                 ts_hint="already serving Codeman"
+                ts_preview="$ts_detected_url"
             fi
         fi
     fi
@@ -1430,11 +1669,9 @@ choose_network_binding() {
         default_choice="1"
     fi
 
-    echo -e "  ${BOLD}Network access${NC}"
+    echo -e "  ${BOLD}1/3  How should the Codeman dashboard be reachable?${NC}"
     echo ""
-    echo -e "  How should the Codeman dashboard be reachable?"
-    echo ""
-    echo -e "    ${CYAN}1)${NC} ${BOLD}Tailscale${NC} ${DIM}($ts_hint)${NC}"
+    echo -e "    ${CYAN}1)${NC} ${BOLD}Tailscale${NC} ${DIM}($ts_hint)${NC}${ts_preview:+  $ts_preview}"
     echo -e "       Private VPN access from your phone or laptop, anywhere."
     echo -e "       Real HTTPS, no password needed: your tailnet is the login."
     echo -e "    ${CYAN}2)${NC} ${BOLD}Any device on your network${NC} ${DIM}(0.0.0.0)${NC}"
@@ -1449,15 +1686,20 @@ choose_network_binding() {
     fi
 
     local bind_choice=""
-    while true; do
-        echo -en "${CYAN}Choose [1/2/3] (default $default_choice):${NC} " >&2
-        read_reply bind_choice || bind_choice="$default_choice"
-        bind_choice="${bind_choice:-$default_choice}"
-        case "$bind_choice" in
-            1|2|3) break ;;
-            *) echo "Please enter 1, 2, or 3." >&2 ;;
-        esac
-    done
+    if [[ "$ASSUME_YES" == "1" ]]; then
+        bind_choice="$default_choice"
+        info "Taking the default: option $bind_choice"
+    else
+        while true; do
+            echo -en "${CYAN}Choose [1/2/3] (default $default_choice):${NC} " >&2
+            read_reply bind_choice || bind_choice="$default_choice"
+            bind_choice="${bind_choice:-$default_choice}"
+            case "$bind_choice" in
+                1|2|3) break ;;
+                *) echo "Please enter 1, 2, or 3." >&2 ;;
+            esac
+        done
+    fi
 
     if [[ "$bind_choice" == "3" ]]; then
         BIND_HOST="127.0.0.1"
@@ -1467,7 +1709,7 @@ choose_network_binding() {
 
     if [[ "$bind_choice" == "1" ]]; then
         BIND_HOST="127.0.0.1"
-        setup_tailscale_access || true
+        tailscale_prepare || true
 
         # Password is optional here: the tailnet already authenticates devices.
         # An existing password is always kept (never silently loosen).
@@ -1513,6 +1755,7 @@ choose_network_binding() {
         return 0
     fi
 
+    # A password is not a default: --yes still asks for one here.
     echo ""
     local pw="" pw2="" keep_hint=""
     [[ -n "$EXISTING_PASSWORD" ]] && keep_hint="Enter to keep the current one" || keep_hint="Enter to skip"
@@ -1528,7 +1771,9 @@ choose_network_binding() {
             echo ""
             warn "Without a password, EVERY device on your network gets full access"
             warn "to your agents (they run commands as $USER)."
-            if prompt_yes_no "Continue WITHOUT a password?" "n"; then
+            # Owner decision (2026-09-20): Enter continues; the warning above and the
+            # red notice at the end are what carry the message, not a second prompt.
+            if prompt_yes_no "Continue WITHOUT a password?" "y"; then
                 BIND_ACK="1"
                 break
             fi
@@ -1557,9 +1802,17 @@ choose_network_binding() {
 # serve status` is the single source of truth, and `--bg` config persists
 # across reboots on its own.
 #
-# Safety rule for every function here: NEVER `tailscale serve reset` and never
-# touch mappings other than 443 -> Codeman's port. Users may have unrelated
-# serve config (other ports, other apps) that a reset would destroy.
+# Two phases, because the login URL, the operator grant and the tailnet HTTPS
+# toggle all need a human while `tailscale serve` does not:
+#   tailscale_prepare  (question phase)  install, login, operator, HTTPS certs,
+#                                        the optional rename, the serve shape
+#   tailscale_apply    (after the build) the one serve command, then verify
+#
+# Safety rules for every function here: NEVER `tailscale serve reset`, never
+# touch a mapping this installer did not create, never `tailscale funnel`
+# (that is the public internet, a different risk class), never advertise a
+# Tailscale Service. Users may have unrelated serve config that a reset would
+# destroy.
 
 get_tailscale_path() {
     if command -v tailscale &>/dev/null; then
@@ -1616,9 +1869,10 @@ ts_status_field() {
     ' "$1" 2>/dev/null
 }
 
-# Print the local port that the :443 web handler proxies to, empty when 443 is
-# unconfigured. Any scheme counts (http://, and https+insecure:// from setups
-# where Codeman itself runs --https), so legacy configs are recognized as ours.
+# Print the local port that the :443 root handler proxies to, empty when 443
+# has no "/" handler. Any scheme counts (http://, and https+insecure:// from
+# setups where Codeman itself runs --https), so legacy configs are recognized
+# as ours.
 ts_serve_443_target_port() {
     ts_cmd_serve serve status --json 2>/dev/null | node -e '
         let d = "";
@@ -1639,20 +1893,128 @@ ts_serve_443_target_port() {
     ' 2>/dev/null
 }
 
-# Print https://<node>.<tailnet>.ts.net when tailscale is running AND serve
-# already forwards 443 to Codeman's port; print nothing otherwise. Safe to call
-# anywhere (no sudo, no side effects); used by the security notice, uninstall,
-# and the re-run default.
+# Print "<hostport>|<path>|<url>" for the serve handler that proxies to local
+# port $1 (a :443 root mapping wins over the others), or nothing. Recognizes
+# the three shapes this installer can produce: https://<node>,
+# https://<node><path> and https://<node>:<port>.
+ts_serve_find_port_mapping() {
+    ts_cmd_serve serve status --json 2>/dev/null | node -e '
+        let d = "";
+        process.stdin.on("data", (c) => (d += c));
+        process.stdin.on("end", () => {
+            try {
+                const want = process.argv[1];
+                const s = JSON.parse(d);
+                const found = [];
+                for (const [hostport, cfg] of Object.entries(s.Web || {})) {
+                    const handlers = (cfg && cfg.Handlers) || {};
+                    for (const [path, h] of Object.entries(handlers)) {
+                        const proxy = h && h.Proxy;
+                        if (!proxy) continue;
+                        const m = String(proxy).match(/:(\d+)\/?$/);
+                        if (!m || m[1] !== want) continue;
+                        const i = hostport.lastIndexOf(":");
+                        const host = hostport.slice(0, i);
+                        const port = hostport.slice(i + 1);
+                        const url = "https://" + host + (port === "443" ? "" : ":" + port) + (path === "/" ? "" : path);
+                        found.push({ hostport, path, url, rank: (port === "443" ? 0 : 1) + (path === "/" ? 0 : 2) });
+                    }
+                }
+                found.sort((a, b) => a.rank - b.rank);
+                if (found.length) process.stdout.write(found[0].hostport + "|" + found[0].path + "|" + found[0].url);
+            } catch {}
+        });
+    ' "$1" 2>/dev/null
+}
+
+# Does any serve handler already listen on tailnet port $1?
+ts_serve_port_used() {
+    ts_cmd_serve serve status --json 2>/dev/null | node -e '
+        let d = "";
+        process.stdin.on("data", (c) => (d += c));
+        process.stdin.on("end", () => {
+            try {
+                const s = JSON.parse(d);
+                for (const hostport of Object.keys(s.Web || {})) {
+                    if (hostport.endsWith(":" + process.argv[1])) { process.stdout.write("1"); return; }
+                }
+            } catch {}
+        });
+    ' "$1" 2>/dev/null | grep -q 1
+}
+
+# The daemon state (Running, NeedsLogin, Stopped, ...) and this node's
+# MagicDNS name (no trailing dot), plus its short name and the tailnet suffix.
+# Both are read through node when it is there and with a line grep when it is
+# not: `tailscale status --json` is printed one key per line and Self precedes
+# Peer, so the first match is this node. The preflight summary is the one
+# reader that runs before node is installed, and it used to report a
+# logged-in node as "not logged in" on exactly the fresh box this installer
+# is for; everything else runs after ask_dependencies. Empty when tailscale
+# is not running.
+ts_backend_state() {
+    if command -v node &>/dev/null; then
+        ts_status_field 's.BackendState'
+        return 0
+    fi
+    ts_cmd status --json 2>/dev/null | sed -n 's/^ *"BackendState": *"\([^"]*\)".*/\1/p' | head -1 || true
+}
+
+ts_dns_name() {
+    local dns
+    if command -v node &>/dev/null; then
+        dns=$(ts_status_field 's.Self && s.Self.DNSName')
+    else
+        dns=$(ts_cmd status --json 2>/dev/null | sed -n 's/^ *"DNSName": *"\([^"]*\)".*/\1/p' | head -1 || true)
+    fi
+    printf '%s' "${dns%.}"
+}
+
+ts_node_name() {
+    local dns
+    dns=$(ts_dns_name)
+    printf '%s' "${dns%%.*}"
+}
+
+ts_tailnet_suffix() {
+    local dns
+    dns=$(ts_dns_name)
+    case "$dns" in
+        *.*) printf '%s' "${dns#*.}" ;;
+    esac
+}
+
+# A tailnet machine name: lowercase letters, digits and dashes, 63 at most.
+ts_sanitize_name() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9-]/-/g' -e 's/--*/-/g' -e 's/^-//' -e 's/-$//' | cut -c1-63
+}
+
+# Print the URL tailscale serve already forwards to Codeman's port (any of the
+# three shapes), or nothing. Safe to call anywhere (no sudo, no side effects);
+# used by the summary, the security notice, uninstall and the re-run default.
 detect_tailscale_serve_url() {
     check_tailscale || return 0
     command -v node &>/dev/null || return 0
-    [[ "$(ts_status_field 's.BackendState')" == "Running" ]] || return 0
+    [[ "$(ts_backend_state)" == "Running" ]] || return 0
+    local mapping
+    mapping=$(ts_serve_find_port_mapping "${CODEMAN_PORT:-3000}")
+    [[ -n "$mapping" ]] || return 0
+    echo "${mapping##*|}"
+}
+
+# The serve target for Codeman's port: the bare port (plain HTTP) normally,
+# https+insecure://localhost:<port> when a hand-run install answers HTTPS on
+# it (codeman web --https), which is the maintainer's own prod shape.
+ts_serve_target() {
     local port="${CODEMAN_PORT:-3000}"
-    [[ "$(ts_serve_443_target_port)" == "$port" ]] || return 0
-    local dns
-    dns=$(ts_status_field 's.Self && s.Self.DNSName')
-    [[ -n "$dns" ]] || return 0
-    echo "https://${dns%.}"
+    if command -v curl &>/dev/null; then
+        if ! curl -sm 3 -o /dev/null "http://127.0.0.1:$port/api/status" 2>/dev/null &&
+            curl -skm 3 -o /dev/null "https://127.0.0.1:$port/api/status" 2>/dev/null; then
+            echo "https+insecure://localhost:$port"
+            return 0
+        fi
+    fi
+    echo "$port"
 }
 
 tailscale_retrofit_hint() {
@@ -1680,6 +2042,7 @@ offer_install_tailscale() {
             info "Log in via the Tailscale menu-bar app if it asks."
         else
             info "Install the Tailscale app first: https://tailscale.com/download/macos"
+            open_in_browser "https://tailscale.com/download/macos"
             if ! prompt_yes_no "Continue once Tailscale is installed?" "n"; then
                 return 1
             fi
@@ -1688,7 +2051,8 @@ offer_install_tailscale() {
         if ! prompt_yes_no "Tailscale is not installed. Install it now (official installer from tailscale.com)?" "y"; then
             return 1
         fi
-        info "Running the official Tailscale installer (it may ask for sudo)..."
+        sudo_session_start
+        info "Running the official Tailscale installer..."
         # When piped (curl | bash), stdin is our pipe: give the child installer
         # the real terminal so its own sudo prompt works.
         if [[ -e /dev/tty ]]; then
@@ -1714,7 +2078,7 @@ offer_install_tailscale() {
 
 ensure_tailscale_login() {
     local state
-    state=$(ts_status_field 's.BackendState')
+    state=$(ts_backend_state)
     if [[ "$state" == "Running" ]]; then
         return 0
     fi
@@ -1731,6 +2095,7 @@ ensure_tailscale_login() {
         # The GUI app's CLI runs as the user; no root needed.
         if "$ts_bin" up --timeout=300s; then up_ok="1"; fi
     else
+        sudo_session_start
         if [[ -e /dev/tty ]]; then
             if run_as_root "$ts_bin" up --timeout=300s < /dev/tty; then up_ok="1"; fi
         else
@@ -1744,7 +2109,11 @@ ensure_tailscale_login() {
         fi
         return 1
     fi
-    [[ "$(ts_status_field 's.BackendState')" == "Running" ]]
+    if [[ "$(ts_backend_state)" == "Running" ]]; then
+        success "Connected to your tailnet as $(ts_node_name)"
+        return 0
+    fi
+    return 1
 }
 
 # Linux: `tailscale serve` needs root or operator rights. Grant operator once
@@ -1762,7 +2131,8 @@ ensure_tailscale_operator() {
         TS_NEED_ROOT="1"
         return 0
     fi
-    info "Granting your user Tailscale 'operator' rights (one-time sudo; lets serve run without root)..."
+    sudo_session_start
+    info "Granting your user Tailscale 'operator' rights (lets serve run without root from now on)..."
     local ts_bin
     ts_bin=$(get_tailscale_path) || return 0
     if run_as_root "$ts_bin" set --operator="$USER" 2>/dev/null && ts_cmd serve status &>/dev/null; then
@@ -1777,106 +2147,79 @@ ensure_tailscale_operator() {
 # HTTPS certificates are a per-tailnet admin toggle. Serve without them cannot
 # terminate TLS, and a plain-HTTP fallback would silently break the "real
 # HTTPS" promise (PWA install, web push), so guide the user through enabling
-# them instead of degrading.
+# them instead of degrading. Polls on its own (the toggle is flipped in a
+# browser, and the old "re-check now?" question was one more thing to answer);
+# opens the admin page where there is a browser to open it in.
 ensure_tailnet_https() {
+    # Ctrl+C during the poll used to end the whole installer (the only trap
+    # was EXIT) while the prompt said "give up", and the user re-answered every
+    # question on the retry. The INT trap is armed for the poll only and
+    # restored on every way out; the poll then returns 1, which lands on the
+    # retrofit hint like any other Tailscale fallback.
+    local rc=0
+    TS_HTTPS_POLL_INTERRUPTED="0"
+    trap 'TS_HTTPS_POLL_INTERRUPTED=1' INT
+    tailnet_https_poll || rc=$?
+    trap - INT
+    return "$rc"
+}
+
+tailnet_https_poll() {
+    local waited=0 printed="0" magic cert
     while true; do
-        local magic cert
+        if [[ "$TS_HTTPS_POLL_INTERRUPTED" == "1" ]]; then
+            echo "" >&2
+            warn "Interrupted; skipping Tailscale for this run."
+            return 1
+        fi
         magic=$(ts_status_field 's.CurrentTailnet && s.CurrentTailnet.MagicDNSEnabled ? "1" : ""')
         cert=$(ts_status_field 'Array.isArray(s.CertDomains) && s.CertDomains.length > 0 ? "1" : ""')
         if [[ "$magic" == "1" && "$cert" == "1" ]]; then
+            if [[ "$printed" == "1" ]]; then
+                echo "" >&2
+                success "HTTPS certificates are enabled for your tailnet"
+            fi
             return 0
         fi
-        warn "Your tailnet has not enabled HTTPS certificates yet (a one-time admin toggle)."
-        echo -e "    Open ${CYAN}https://login.tailscale.com/admin/dns${NC} and enable:" >&2
-        if [[ "$magic" == "1" ]]; then
-            echo -e "      ${CYAN}1.${NC} MagicDNS            ${GREEN}(already on)${NC}" >&2
-        else
-            echo -e "      ${CYAN}1.${NC} MagicDNS" >&2
+        if [[ "$printed" == "0" ]]; then
+            printed="1"
+            warn "Your tailnet has not enabled HTTPS certificates yet (a one-time admin toggle)."
+            echo -e "    Open ${CYAN}https://login.tailscale.com/admin/dns${NC} and enable:" >&2
+            if [[ "$magic" == "1" ]]; then
+                echo -e "      ${CYAN}1.${NC} MagicDNS            ${GREEN}(already on)${NC}" >&2
+            else
+                echo -e "      ${CYAN}1.${NC} MagicDNS" >&2
+            fi
+            if [[ "$cert" == "1" ]]; then
+                echo -e "      ${CYAN}2.${NC} HTTPS Certificates  ${GREEN}(already on)${NC}" >&2
+            else
+                echo -e "      ${CYAN}2.${NC} HTTPS Certificates" >&2
+            fi
+            if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
+                return 1
+            fi
+            open_in_browser "https://login.tailscale.com/admin/dns"
+            echo -e "    ${DIM}Waiting for the toggle (checking every 5 s; Ctrl+C skips Tailscale for this run)${NC}" >&2
         fi
-        if [[ "$cert" == "1" ]]; then
-            echo -e "      ${CYAN}2.${NC} HTTPS Certificates  ${GREEN}(already on)${NC}" >&2
-        else
-            echo -e "      ${CYAN}2.${NC} HTTPS Certificates" >&2
+        if [[ "$waited" -ge 300 ]]; then
+            echo "" >&2
+            if ! prompt_yes_no "Still not enabled. Keep waiting? (answering no skips Tailscale setup)" "y"; then
+                return 1
+            fi
+            waited=0
         fi
-        if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
-            return 1
-        fi
-        if ! prompt_yes_no "Re-check now? (answering no skips Tailscale setup)" "y"; then
-            return 1
-        fi
+        # A Ctrl+C lands in this sleep; the trap only records it.
+        sleep 5 || true
+        waited=$((waited + 5))
+        printf '.' >&2
     done
 }
 
-setup_tailscale_serve() {
-    local port="${CODEMAN_PORT:-3000}"
-    local dns url existing
-    dns=$(ts_status_field 's.Self && s.Self.DNSName')
-    if [[ -z "$dns" ]]; then
-        warn "Could not determine this machine's tailnet DNS name."
-        return 1
-    fi
-    url="https://${dns%.}"
-
-    existing=$(ts_serve_443_target_port)
-    if [[ "$existing" == "$port" ]]; then
-        TAILSCALE_SERVE_URL="$url"
-        success "Tailscale serve already forwards $url to port $port (kept as-is)"
-        return 0
-    fi
-    if [[ -n "$existing" ]]; then
-        warn "tailscale serve already forwards $url (port 443) to local port $existing."
-        if ! prompt_yes_no "Replace that mapping with Codeman (port $port)?" "n"; then
-            info "Keeping the existing mapping."
-            return 1
-        fi
-    fi
-
-    info "Configuring: tailscale serve --bg $port"
-    local serve_out
-    if serve_out=$(ts_cmd_serve serve --bg "$port" 2>&1); then
-        TAILSCALE_SERVE_URL="$url"
-        success "Tailscale HTTPS enabled: $url"
-        echo -e "  ${DIM}(persists across reboots; inspect with: tailscale serve status)${NC}"
-        return 0
-    fi
-    warn "tailscale serve failed:"
-    printf '%s\n' "$serve_out" | sed 's/^/    /' >&2
-    return 1
-}
-
-# Curl the ts.net URL until it answers. 200 = reachable; 401 = reachable behind
-# the dashboard password. The first request can be slow while tailscaled
-# obtains the Let's Encrypt certificate.
-verify_tailscale_access() {
-    if [[ -z "$TAILSCALE_SERVE_URL" ]]; then
-        return 0
-    fi
-    if ! command -v curl &>/dev/null; then
-        info "curl not available; open $TAILSCALE_SERVE_URL to verify."
-        return 0
-    fi
-    info "Verifying $TAILSCALE_SERVE_URL (first load can take ~30s while the HTTPS certificate is issued)..."
-    local i http_code
-    for ((i = 1; i <= 10; i++)); do
-        http_code=$(curl -skm 10 -o /dev/null -w '%{http_code}' "$TAILSCALE_SERVE_URL/api/status" 2>/dev/null) || http_code=""
-        if [[ "$http_code" == "200" || "$http_code" == "401" ]]; then
-            success "Reachable: $TAILSCALE_SERVE_URL"
-            return 0
-        fi
-        sleep 3
-    done
-    warn "Could not reach $TAILSCALE_SERVE_URL/api/status yet."
-    warn "It may need another minute (certificate issuance). Inspect: tailscale serve status"
-    warn "If Codeman itself runs with --https, the serve target must be:"
-    warn "  tailscale serve --bg https+insecure://localhost:${CODEMAN_PORT:-3000}"
-    return 1
-}
-
-# Orchestrator: walk every state (not installed -> logged out -> operator ->
-# tailnet HTTPS -> serve) and end with TAILSCALE_SERVE_URL set, or fall back
-# gracefully (the caller keeps the loopback bind either way).
-setup_tailscale_access() {
-    TAILSCALE_SERVE_URL=""
+# Everything Tailscale that needs a human, in the question phase: install
+# consent, the login URL, the one-time operator grant, the tailnet HTTPS
+# toggle. Ends with the node connected and certificate-capable, or falls back
+# to plain loopback with a retrofit hint.
+tailscale_preflight() {
     if ! check_tailscale; then
         if ! offer_install_tailscale; then
             tailscale_retrofit_hint "Tailscale is not installed"
@@ -1896,21 +2239,301 @@ setup_tailscale_access() {
         tailscale_retrofit_hint "HTTPS certificates are not enabled for your tailnet"
         return 1
     fi
-    if ! setup_tailscale_serve; then
+    return 0
+}
+
+# Question 2 of 3: optionally rename this machine on the tailnet so the URL
+# reads codeman-<hostname> instead of whatever the OS hostname is. Opt-in and
+# default NO, always: the tailnet name is what ssh and every other service on
+# this machine are reached by, so a rename is never something to slip past
+# someone. `--name <n>` answers it; `--no-rename`, `--yes` and non-interactive
+# runs skip it. With "force" (the `name` subcommand) the question is asked
+# even on a node already named codeman-*.
+tailscale_choose_name() {
+    local force="${1:-}"
+    [[ "$TS_NO_RENAME" == "1" ]] && return 0
+    local current target
+    current=$(ts_node_name)
+    [[ -n "$current" ]] || return 0
+    if [[ -n "$TS_NAME" ]]; then
+        target="$TS_NAME"
+    else
+        if [[ -z "$force" ]] && [[ "$current" == "codeman" || "$current" == codeman-* ]]; then
+            return 0
+        fi
+        if [[ "$NONINTERACTIVE" == "1" ]] || [[ "$ASSUME_YES" == "1" ]] || ! has_tty; then
+            return 0
+        fi
+        local suggested
+        suggested="codeman-$(ts_sanitize_name "$(hostname -s 2>/dev/null || hostname)")"
+        [[ "$suggested" != "$current" ]] || return 0
+        echo "" >&2
+        echo -e "  ${BOLD}2/3  Name this machine on your tailnet?${NC}" >&2
+        echo "" >&2
+        echo -e "  It is ${BOLD}$current${NC} today, so Codeman's URL will be ${BOLD}https://$(ts_dns_name)${NC}." >&2
+        echo -e "  It can be renamed to ${BOLD}$suggested${NC} instead. ${DIM}That renames it for ssh and${NC}" >&2
+        echo -e "  ${DIM}everything else on your tailnet too, which is why the default is no.${NC}" >&2
+        if ! prompt_yes_no "Rename this machine to $suggested?" "n"; then
+            return 0
+        fi
+        target="$suggested"
+    fi
+    target=$(ts_sanitize_name "$target")
+    if [[ -z "$target" ]]; then
+        warn "Not a usable tailnet name; keeping $current."
+        return 0
+    fi
+    [[ "$target" != "$current" ]] || return 0
+    tailscale_rename_node "$target"
+}
+
+# Rename the node. Serve config is keyed by the DNS name it was written under,
+# so a mapping of ours that already exists is taken down first and re-added by
+# tailscale_apply under the new name: the alternative is a stale entry only
+# `serve reset` could remove, and that command is off limits here.
+tailscale_rename_node() {
+    local target="$1" old newname i orig=""
+    old=$(ts_node_name)
+    if [[ -n "$(detect_tailscale_serve_url)" ]]; then
+        info "Taking down the serve mapping written under the old name (it is re-added after the rename)"
+        tailscale_remove_our_mapping || true
+        TS_MAPPING_REMOVED_BY_RENAME="1"
+        [[ "$TS_SERVE_MODE" != "keep" ]] || TS_SERVE_MODE=""
+    fi
+    info "Renaming this machine on your tailnet: $old -> $target"
+    if ! ts_cmd_serve set --hostname "$target"; then
+        warn "tailscale set --hostname failed; keeping the name $old."
+        return 1
+    fi
+    for ((i = 1; i <= 30; i++)); do
+        newname=$(ts_node_name)
+        if [[ -n "$newname" && "$newname" != "$old" ]]; then break; fi
+        sleep 2
+    done
+    newname=$(ts_node_name)
+    if [[ -z "$newname" || "$newname" == "$old" ]]; then
+        warn "The tailnet has not picked up the new name yet; it can take a minute (check: tailscale status)."
+        return 1
+    fi
+    if [[ "$newname" != "$target" ]]; then
+        warn "The name $target was taken; your tailnet assigned $newname."
+    fi
+    mkdir -p "$(dirname "$TS_RENAME_RECORD")" 2>/dev/null || true
+    [[ -f "$TS_RENAME_RECORD" ]] && orig=$(sed -n 's/^original=//p' "$TS_RENAME_RECORD" | head -1)
+    [[ -n "$orig" ]] || orig="$old"
+    printf 'original=%s\ncurrent=%s\n' "$orig" "$newname" > "$TS_RENAME_RECORD" 2>/dev/null || true
+    success "This machine is now $(ts_dns_name)"
+    return 0
+}
+
+# Remove OUR serve mapping (whatever shape it has) and nothing else. Never
+# `tailscale serve reset`: the other mappings on this node are not ours.
+tailscale_remove_our_mapping() {
+    local mapping hostport path port
+    mapping=$(ts_serve_find_port_mapping "${CODEMAN_PORT:-3000}")
+    [[ -n "$mapping" ]] || return 0
+    hostport="${mapping%%|*}"
+    path="${mapping#*|}"
+    path="${path%%|*}"
+    port="${hostport##*:}"
+    if [[ "$path" == "/" ]]; then
+        ts_cmd_serve serve --https="$port" off
+    else
+        ts_cmd_serve serve --https="$port" --set-path "$path" off
+    fi
+}
+
+# Decide the serve shape now (detection only, no serve mutation) so the build
+# and the service run unattended and the service unit already carries a
+# sub-path when one is needed. Sets TS_SERVE_MODE and BIND_BASE_URL.
+tailscale_choose_mapping() {
+    local port="${CODEMAN_PORT:-3000}" dns existing_url existing_root
+    dns=$(ts_dns_name)
+    if [[ -z "$dns" ]]; then
+        warn "Could not determine this machine's tailnet DNS name."
+        return 1
+    fi
+    existing_url=$(detect_tailscale_serve_url)
+    if [[ -n "$existing_url" ]]; then
+        TS_SERVE_MODE="keep"
+        # A path-shaped mapping of ours means the service keeps that sub-path.
+        local hostpart="${existing_url#https://}"
+        BIND_BASE_URL=""
+        case "$hostpart" in
+            */*) BIND_BASE_URL="/${hostpart#*/}" ;;
+        esac
+        info "Tailscale serve already forwards $existing_url to port $port (kept as-is)"
+        return 0
+    fi
+    existing_root=$(ts_serve_443_target_port)
+    if [[ -z "$existing_root" ]]; then
+        TS_SERVE_MODE="root"
+        BIND_BASE_URL=""
+        return 0
+    fi
+
+    # :443 belongs to another app on this node. Never clobber it silently.
+    local alt_port="$TS_SERVE_PORT" p
+    for p in 8443 8444 8445 10443; do
+        if ! ts_serve_port_used "$p"; then alt_port="$p"; break; fi
+    done
+    TS_SERVE_PORT="$alt_port"
+    echo "" >&2
+    warn "tailscale serve already sends https://$dns to local port $existing_root."
+    echo -e "    ${CYAN}1)${NC} Add Codeman under a path:   ${BOLD}https://$dns$TS_SERVE_PATH${NC}   ${DIM}(default)${NC}" >&2
+    echo -e "    ${CYAN}2)${NC} Use another port:           ${BOLD}https://$dns:$TS_SERVE_PORT${NC}" >&2
+    echo -e "    ${CYAN}3)${NC} Replace that mapping with Codeman" >&2
+    echo -e "    ${CYAN}4)${NC} Skip Tailscale for now" >&2
+    local choice="1"
+    if [[ "$NONINTERACTIVE" == "1" ]] || [[ "$ASSUME_YES" == "1" ]] || ! has_tty; then
+        info "Taking the default: a path"
+    else
+        while true; do
+            echo -en "${CYAN}Choose [1/2/3/4] (default 1):${NC} " >&2
+            read_reply choice || choice="1"
+            choice="${choice:-1}"
+            case "$choice" in
+                1|2|3|4) break ;;
+                *) echo "Please enter 1, 2, 3 or 4." >&2 ;;
+            esac
+        done
+    fi
+    case "$choice" in
+        1) TS_SERVE_MODE="path"; BIND_BASE_URL="$TS_SERVE_PATH" ;;
+        2) TS_SERVE_MODE="port"; BIND_BASE_URL="" ;;
+        3) TS_SERVE_MODE="replace"; BIND_BASE_URL="" ;;
+        4) return 1 ;;
+    esac
+    return 0
+}
+
+# The question-phase half: preflight, the optional rename, the serve shape.
+tailscale_prepare() {
+    TS_READY="0"
+    TAILSCALE_SERVE_URL=""
+    tailscale_preflight || return 1
+    tailscale_choose_name || true
+    if ! tailscale_choose_mapping; then
+        tailscale_retrofit_hint "no serve mapping was chosen"
+        return 1
+    fi
+    TS_READY="1"
+    return 0
+}
+
+# The after-the-build half: the one serve command the decision calls for. No
+# prompts here. Ends with TAILSCALE_SERVE_URL set, and starts the certificate
+# issuance in the background so the first real visit is not the slow one.
+tailscale_apply() {
+    [[ "$TS_READY" == "1" ]] || return 0
+    local dns target out=""
+    dns=$(ts_dns_name)
+    target=$(ts_serve_target)
+    case "$TS_SERVE_MODE" in
+        keep)
+            TAILSCALE_SERVE_URL=$(detect_tailscale_serve_url)
+            success "Tailscale serve: $TAILSCALE_SERVE_URL (kept as-is)"
+            return 0
+            ;;
+        root|replace)
+            info "Configuring: tailscale serve --bg $target"
+            if out=$(ts_cmd_serve serve --bg "$target" 2>&1); then
+                TAILSCALE_SERVE_URL="https://$dns"
+            fi
+            ;;
+        path)
+            info "Configuring: tailscale serve --bg --set-path $TS_SERVE_PATH $target"
+            if out=$(ts_cmd_serve serve --bg --set-path "$TS_SERVE_PATH" "$target" 2>&1); then
+                TAILSCALE_SERVE_URL="https://$dns$TS_SERVE_PATH"
+            fi
+            ;;
+        port)
+            info "Configuring: tailscale serve --bg --https=$TS_SERVE_PORT $target"
+            if out=$(ts_cmd_serve serve --bg --https="$TS_SERVE_PORT" "$target" 2>&1); then
+                TAILSCALE_SERVE_URL="https://$dns:$TS_SERVE_PORT"
+            fi
+            ;;
+        *)
+            warn "No Tailscale serve shape was chosen; skipping."
+            return 1
+            ;;
+    esac
+    if [[ -z "$TAILSCALE_SERVE_URL" ]]; then
+        warn "tailscale serve failed:"
+        printf '%s\n' "$out" | sed 's/^/    /' >&2
         tailscale_retrofit_hint "tailscale serve could not be configured"
         return 1
+    fi
+    success "Tailscale HTTPS enabled: $TAILSCALE_SERVE_URL"
+    echo -e "  ${DIM}(persists across reboots; inspect with: tailscale serve status)${NC}"
+    if command -v curl &>/dev/null; then
+        (curl -skm 90 -o /dev/null "$TAILSCALE_SERVE_URL/api/status" >/dev/null 2>&1 &)
     fi
     return 0
 }
 
+# Curl the ts.net URL until it answers. 200 = reachable; 401 = reachable behind
+# the dashboard password. The first request can be slow while tailscaled
+# obtains the Let's Encrypt certificate.
+verify_tailscale_access() {
+    if [[ -z "$TAILSCALE_SERVE_URL" ]]; then
+        return 0
+    fi
+    if ! command -v curl &>/dev/null; then
+        info "curl not available; open $TAILSCALE_SERVE_URL to verify."
+        return 0
+    fi
+    info "Verifying $TAILSCALE_SERVE_URL (the first load can take ~30 s while the certificate is issued)..."
+    local i http_code
+    for ((i = 1; i <= 15; i++)); do
+        http_code=$(curl -skm 10 -o /dev/null -w '%{http_code}' "$TAILSCALE_SERVE_URL/api/status" 2>/dev/null) || http_code=""
+        if [[ "$http_code" == "200" || "$http_code" == "401" ]]; then
+            success "Reachable: $TAILSCALE_SERVE_URL"
+            return 0
+        fi
+        sleep 3
+    done
+    warn "Could not reach $TAILSCALE_SERVE_URL/api/status yet."
+    warn "It may need another minute (certificate issuance). Inspect: tailscale serve status"
+    return 1
+}
+
+# Both halves back to back, for the retrofit paths (the `tailscale` subcommand
+# and the re-run repair offer). The caller verifies.
+setup_tailscale_access() {
+    tailscale_prepare || return 1
+    tailscale_apply
+}
+
+# A path-shaped mapping needs the service to run under that sub-path: rewrite
+# the unit from its existing binding and restart it. No-op when nothing
+# changed or no service is installed.
+sync_service_base_url() {
+    [[ "$EXISTING_FOUND" == "1" ]] || return 0
+    [[ "$BIND_BASE_URL" != "$EXISTING_BASE_URL" ]] || return 0
+    BIND_HOST="${EXISTING_HOST:-127.0.0.1}"
+    BIND_PASSWORD="$EXISTING_PASSWORD"
+    BIND_ACK="$EXISTING_ACK"
+    info "Updating the service to run under ${BIND_BASE_URL:-/} ..."
+    local rc=0
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        setup_launchd_service || rc=$?
+    else
+        setup_systemd_service || rc=$?
+    fi
+    # The unit now carries the new sub-path: that is what the done screen and
+    # the next re-run read back.
+    [[ "$rc" -ne 0 ]] || EXISTING_BASE_URL="$BIND_BASE_URL"
+    return "$rc"
+}
+
 # A loopback install with Tailscale already connected but nothing fronting
-# Codeman is one command away from working remote access — and that is exactly
+# Codeman is one command away from working remote access, and that is exactly
 # where a user lands when the first install died BEFORE the network-access
-# prompt (it runs after the build, so any build failure costs the network step
-# too) or when they finished a broken build by hand instead of re-running the
-# installer. Detect that state on re-run and offer the retrofit, rather than
-# leaving them to discover `install.sh tailscale` on their own. Never nags a
-# deliberate network bind, and never nags once a serve mapping already exists.
+# prompt or when they finished a broken build by hand instead of re-running
+# the installer. Detect that state on re-run and offer the retrofit, rather
+# than leaving them to discover `install.sh tailscale` on their own. Never
+# nags a deliberate network bind, and never nags once a serve mapping exists.
 maybe_offer_tailscale_repair() {
     # A non-loopback bind already has network access; leave that choice alone.
     if [[ "$EXISTING_FOUND" == "1" && -n "$EXISTING_HOST" && "$EXISTING_HOST" != "127.0.0.1" ]]; then
@@ -1918,7 +2541,7 @@ maybe_offer_tailscale_repair() {
     fi
     check_tailscale || return 0
     command -v node &>/dev/null || return 0
-    [[ "$(ts_status_field 's.BackendState')" == "Running" ]] || return 0
+    [[ "$(ts_backend_state)" == "Running" ]] || return 0
     # Already fronting Codeman: nothing to repair.
     [[ -z "$(detect_tailscale_serve_url)" ]] || return 0
 
@@ -1933,9 +2556,18 @@ maybe_offer_tailscale_repair() {
         return 0
     fi
     if setup_tailscale_access; then
+        sync_service_base_url || true
         verify_tailscale_access || true
     fi
     return 0
+}
+
+# Is Codeman answering on its port right now (HTTP or HTTPS)?
+codeman_answers_locally() {
+    local port="${CODEMAN_PORT:-3000}"
+    command -v curl &>/dev/null || return 1
+    curl -sm 5 -o /dev/null "http://127.0.0.1:$port/api/status" 2>/dev/null ||
+        curl -skm 5 -o /dev/null "https://127.0.0.1:$port/api/status" 2>/dev/null
 }
 
 # `install.sh tailscale`: retrofit Tailscale access onto an existing install
@@ -1954,28 +2586,116 @@ setup_tailscale_subcommand() {
         echo ""
     fi
 
-    if ! setup_tailscale_access; then
+    if ! tailscale_prepare; then
+        exit 1
+    fi
+    sync_service_base_url || true
+    if ! tailscale_apply; then
         exit 1
     fi
 
     # Verify end-to-end only when Codeman is actually answering locally.
-    local port="${CODEMAN_PORT:-3000}" server_up="0"
-    if command -v curl &>/dev/null; then
-        if curl -skm 5 -o /dev/null "http://127.0.0.1:$port/api/status" 2>/dev/null ||
-            curl -skm 5 -o /dev/null "https://127.0.0.1:$port/api/status" 2>/dev/null; then
-            server_up="1"
-        fi
-    fi
-    if [[ "$server_up" == "1" ]]; then
+    if codeman_answers_locally; then
         verify_tailscale_access || true
     else
-        info "Codeman does not appear to be running on port $port right now."
+        info "Codeman does not appear to be running on port ${CODEMAN_PORT:-3000} right now."
         info "Once it is, open: $TAILSCALE_SERVE_URL"
     fi
 
     BIND_HOST="${EXISTING_HOST:-127.0.0.1}"
     BIND_PASSWORD="$EXISTING_PASSWORD"
+    BIND_ACK="$EXISTING_ACK"
+    print_done_screen "" ""
     print_security_notice
+}
+
+# `install.sh name [<n>]`: rename this machine on the tailnet, re-adding our
+# serve mapping under the new name when there was one.
+setup_name_subcommand() {
+    print_banner
+    if ! command -v node &>/dev/null; then
+        die "node is required. Install Codeman first (run the installer without arguments)."
+    fi
+    check_tailscale || die "Tailscale is not installed. Run: bash $INSTALL_DIR/install.sh tailscale"
+    if [[ "$(ts_backend_state)" != "Running" ]]; then
+        die "Tailscale is not connected. Run: bash $INSTALL_DIR/install.sh tailscale"
+    fi
+    read_existing_binding
+    ensure_tailscale_operator
+    [[ -z "$SUBCOMMAND_ARG" ]] || TS_NAME="$SUBCOMMAND_ARG"
+    TS_NO_RENAME="0"
+
+    local before after
+    before=$(ts_node_name)
+    tailscale_choose_name force || true
+    after=$(ts_node_name)
+    if [[ "$before" == "$after" ]]; then
+        info "Name unchanged: $after"
+    fi
+    if [[ "$TS_MAPPING_REMOVED_BY_RENAME" == "1" ]]; then
+        if tailscale_choose_mapping; then
+            # The shape can change across a rename (a root mapping freed :443,
+            # or the user picks a port this time), and the unit must follow.
+            sync_service_base_url || true
+            TS_READY="1"
+            tailscale_apply || true
+            if codeman_answers_locally; then
+                verify_tailscale_access || true
+            fi
+        fi
+    fi
+
+    BIND_HOST="${EXISTING_HOST:-127.0.0.1}"
+    BIND_PASSWORD="$EXISTING_PASSWORD"
+    BIND_ACK="$EXISTING_ACK"
+    # With no service on disk the sub-path lives only in this run's choice.
+    [[ -n "$BIND_BASE_URL" ]] || BIND_BASE_URL="$EXISTING_BASE_URL"
+    print_done_screen "" ""
+    print_security_notice
+}
+
+# `install.sh status`: the done screen again, for the "what was my URL" moment.
+status_subcommand() {
+    print_banner
+    read_existing_binding
+    BIND_HOST="${EXISTING_HOST:-127.0.0.1}"
+    BIND_PASSWORD="$EXISTING_PASSWORD"
+    BIND_ACK="$EXISTING_ACK"
+    BIND_BASE_URL="$EXISTING_BASE_URL"
+    print_done_screen "" ""
+    print_security_notice
+}
+
+# `install.sh cloudflared`: the optional public-tunnel client, taken out of the
+# main flow (it was one more question for a thing few installs use). The
+# tunnel itself is switched on in App Settings -> Remote access.
+cloudflared_subcommand() {
+    print_banner
+    local os distro=""
+    os=$(detect_os)
+    [[ "$os" == "linux" ]] && distro=$(detect_linux_distro)
+    if check_cloudflared; then
+        success "cloudflared is already installed at $(get_cloudflared_path)"
+    else
+        headless_guard "install cloudflared (system package via sudo)"
+        if ! prompt_yes_no "Install cloudflared now?" "y"; then
+            exit 0
+        fi
+        install_dependency "cloudflared" "$os" "$distro"
+        hash -r 2>/dev/null || true
+        check_cloudflared || die "cloudflared installation failed. See https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"
+        success "cloudflared installed at $(get_cloudflared_path)"
+    fi
+    if [[ "$os" == "linux" ]] && command -v systemctl &>/dev/null && [[ -f "$INSTALL_DIR/scripts/codeman-tunnel.service" ]]; then
+        if prompt_yes_no "Also install the Cloudflare tunnel service? (requires CODEMAN_PASSWORD)" "n"; then
+            setup_tunnel_service
+        fi
+    fi
+    echo ""
+    echo -e "  Turn the tunnel on in ${BOLD}App Settings -> System -> Remote access${NC}, or with:"
+    echo -e "    ${CYAN}$INSTALL_DIR/scripts/tunnel.sh start${NC}"
+    echo -e "  ${YELLOW}A tunnel is a PUBLIC URL: set CODEMAN_PASSWORD first.${NC}"
+    echo ""
 }
 
 # ============================================================================
@@ -2004,14 +2724,15 @@ setup_launchd_service() {
 
     info "Setting up macOS LaunchAgent..."
 
-    # Remove any existing LaunchDaemon (system-level) to prevent duplicates.
-    # We standardize on LaunchAgent (user-level) — it doesn't require sudo,
-    # inherits the user's environment, and is the correct choice for user apps.
+    # A system-level LaunchDaemon is a deliberate setup: a headless Mac with no
+    # GUI login cannot start a LaunchAgent at boot, so its owner wrote a daemon
+    # by hand. This installer never writes one, so any daemon here is theirs.
+    # Leave it alone: an agent next to it would fight the daemon for the port.
     if [[ -f "$daemon_plist" ]]; then
-        warn "Found system-level LaunchDaemon at $daemon_plist — removing to prevent duplicate"
-        sudo launchctl unload "$daemon_plist" 2>/dev/null || true
-        sudo rm -f "$daemon_plist"
-        success "Removed duplicate LaunchDaemon"
+        warn "A system LaunchDaemon already supervises Codeman ($daemon_plist); leaving it in place."
+        echo -e "  ${DIM}To switch to a LaunchAgent: sudo launchctl unload $daemon_plist && sudo rm $daemon_plist, then re-run.${NC}" >&2
+        SERVICE_TYPE="launchd-daemon"
+        return 0
     fi
 
     # Unload existing agent before overwriting
@@ -2028,7 +2749,8 @@ setup_launchd_service() {
     local node_path
     node_path=$(command -v node)
 
-    # Binding chosen during install (empty on paths that never asked)
+    # Binding chosen during install (empty on paths that never asked), the
+    # sub-path and the port when they differ from the defaults.
     local bind_plist=""
     if [[ -n "$BIND_HOST" ]]; then
         bind_plist="    <key>CODEMAN_HOST</key>
@@ -2041,6 +2763,14 @@ setup_launchd_service() {
             bind_plist+=$'\n'"    <key>CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK</key>
     <string>1</string>"
         fi
+    fi
+    if [[ -n "$BIND_BASE_URL" ]]; then
+        bind_plist+=$'\n'"    <key>CODEMAN_BASE_URL</key>
+    <string>$(xml_escape "$BIND_BASE_URL")</string>"
+    fi
+    if [[ -n "${CODEMAN_PORT:-}" && "${CODEMAN_PORT}" != "3000" ]]; then
+        bind_plist+=$'\n'"    <key>CODEMAN_PORT</key>
+    <string>$(xml_escape "$CODEMAN_PORT")</string>"
     fi
 
     cat > "$agent_plist" << EOF
@@ -2107,7 +2837,8 @@ setup_systemd_service() {
     local node_path
     node_path=$(command -v node)
 
-    # Binding chosen during install (empty on paths that never asked)
+    # Binding chosen during install (empty on paths that never asked), the
+    # sub-path and the port when they differ from the defaults.
     local bind_env=""
     if [[ -n "$BIND_HOST" ]]; then
         bind_env="Environment=CODEMAN_HOST=$BIND_HOST"
@@ -2117,6 +2848,12 @@ setup_systemd_service() {
         if [[ "$BIND_ACK" == "1" ]]; then
             bind_env+=$'\n'"Environment=CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1"
         fi
+    fi
+    if [[ -n "$BIND_BASE_URL" ]]; then
+        bind_env="${bind_env:+$bind_env$'\n'}Environment=CODEMAN_BASE_URL=$BIND_BASE_URL"
+    fi
+    if [[ -n "${CODEMAN_PORT:-}" && "${CODEMAN_PORT}" != "3000" ]]; then
+        bind_env="${bind_env:+$bind_env$'\n'}Environment=CODEMAN_PORT=$CODEMAN_PORT"
     fi
 
     # Create service file
@@ -2192,11 +2929,17 @@ setup_tunnel_service() {
 
 # npm install with an actionable message for the failure that actually happens
 # on a fresh Linux box: no toolchain, so node-pty cannot compile.
+#
+# CODEMAN_NO_AUTOSTART=1 is load-bearing: scripts/postinstall.js otherwise
+# builds dist/ itself and starts a DETACHED `node dist/index.js web` on
+# 127.0.0.1:3000 (the npm-global-install convenience). Under this installer
+# that orphan outlived the step, the build ran a second time, and the service
+# written a minute later crash-looped on EADDRINUSE while the done screen
+# reported "running" off the orphan (measured in a fresh Ubuntu 24 sandbox,
+# 2026-09-20). The installer owns the build and the start; postinstall must
+# do neither here.
 npm_install_deps() {
-    if npm install --quiet --no-fund --no-audit 2>/dev/null; then
-        return 0
-    fi
-    if npm install --no-fund --no-audit; then
+    if run_step "Installing dependencies" env CODEMAN_NO_AUTOSTART=1 npm install --no-fund --no-audit; then
         return 0
     fi
 
@@ -2264,141 +3007,268 @@ main() {
         distro=$(detect_linux_distro)
     fi
 
-    info "Detected: $os ($arch)${distro:+ - $distro}"
-    echo ""
+    # ========================================================================
+    # Look first: what is already here (no prompts, no sudo, no changes)
+    # ========================================================================
+    preflight_detect "$os"
+    print_preflight_summary "$os" "$arch" "$distro"
 
     # ========================================================================
-    # Check/Install Dependencies
+    # Ask everything up front, so the build afterwards can run unattended
     # ========================================================================
+    ask_dependencies "$os" "$distro"
 
-    # Git
-    info "Checking Git..."
-    if ! check_git; then
-        headless_guard "install Git (system package via sudo)"
-        if prompt_yes_no "Git is not installed. Install it now?"; then
-            install_dependency "git" "$os" "$distro"
-        else
-            die "Git is required to install Codeman."
-        fi
-    else
-        success "Git is installed"
-    fi
-
-    # Node.js
-    info "Checking Node.js (v$MIN_NODE_VERSION+)..."
-    if ! check_node; then
-        local node_version=""
-        if command -v node &>/dev/null; then
-            node_version=$(node --version 2>/dev/null || echo "unknown")
-            warn "Node.js $node_version is installed but version $MIN_NODE_VERSION+ is required."
-        fi
-
-        headless_guard "install Node.js v$TARGET_NODE_VERSION (system package via sudo)"
-        if prompt_yes_no "Install Node.js v$TARGET_NODE_VERSION?"; then
-            install_dependency "node" "$os" "$distro"
-
-            # Rehash to pick up new node
-            hash -r 2>/dev/null || true
-        else
-            die "Node.js $MIN_NODE_VERSION+ is required to run Codeman."
-        fi
-    else
-        local node_ver
-        node_ver=$(node --version 2>/dev/null)
-        success "Node.js $node_ver is installed"
-    fi
-
-    # Verify npm (should come with Node.js)
-    if ! check_npm; then
-        die "npm is not available. Please reinstall Node.js."
-    fi
-
-    # Terminal multiplexer (tmux required)
-    info "Checking tmux..."
-    if check_tmux; then
-        success "tmux is installed"
-    else
-        headless_guard "install tmux (system package via sudo)"
-        if prompt_yes_no "tmux is not installed. Install it now?"; then
-            install_dependency "tmux" "$os" "$distro"
-        else
-            die "tmux is required for session persistence."
-        fi
-    fi
-
-    # Native build toolchain. node-pty compiles from source on Linux, so this is
-    # a hard requirement there, not a nicety.
-    if [[ "$os" == "linux" ]]; then
-        info "Checking build tools (node-pty compiles from source on Linux)..."
-        local missing_tools
-        missing_tools="$(missing_build_tools)"
-        if [[ -z "$missing_tools" ]]; then
-            success "Build tools are installed"
-        else
-            warn "Missing build tools: $missing_tools"
-            headless_guard "install build tools (system package via sudo)"
-            if prompt_yes_no "Install the build tools now?"; then
-                install_dependency "buildtools" "$os" "$distro"
-                hash -r 2>/dev/null || true
-                missing_tools="$(missing_build_tools)"
-                if [[ -n "$missing_tools" ]]; then
-                    die "Build tools still missing after install: $missing_tools. Install them manually and re-run."
-                fi
-                success "Build tools installed"
-            else
-                die "A build toolchain (make, g++, python3) is required: node-pty has no Linux prebuilds and compiles from source."
-            fi
-        fi
-    fi
-
-    # AI CLI. Codeman drives one of the CLIs in the generated catalogue above;
-    # this used to be a hand-written list here, in the gate below, and in the
-    # closing reminder — three places that had to agree and did not (the comment
-    # itself named six of the nine).
-    info "Checking AI CLI tools..."
+    # AI CLI: needs a human choice AND node (installed just above), so it sits
+    # here rather than in preflight. Codeman drives one of the CLIs in the
+    # generated catalogue; the menu, the detection and the closing reminder all
+    # read that one block.
+    CLI_DETECT_DONE=""
     detect_all_clis
-    local i
-    for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
-        [[ "${CLI_ENABLED[$i]}" == "1" ]] || continue
-        [[ "${CLI_BIN_LEN[$i]}" -gt 0 ]] || continue
-        if [[ -n "${CLI_FOUND_PATH[$i]}" ]]; then
-            success "${CLI_LABELS[$i]} found at ${CLI_FOUND_PATH[$i]}"
-        fi
-    done
-
     if [[ "$CLI_FOUND_COUNT" -eq 0 ]]; then
         offer_ai_cli_install
     fi
 
-
-    # cloudflared (optional — for remote/mobile access via Cloudflare Tunnel)
-    info "Checking cloudflared (optional, for remote access)..."
-    if check_cloudflared; then
-        success "cloudflared found at $(get_cloudflared_path)"
-    else
-        if prompt_yes_no "Install cloudflared? (enables remote/mobile access via Cloudflare Tunnel)" "n"; then
-            install_dependency "cloudflared" "$os" "$distro"
-            hash -r 2>/dev/null || true
-            if check_cloudflared; then
-                success "cloudflared installed at $(get_cloudflared_path)"
-            else
-                warn "cloudflared installation failed. You can install it manually later."
-            fi
-        else
-            info "Skipped (you can install cloudflared later for remote access)"
-        fi
-    fi
-
+    echo ""
+    choose_network_binding
+    echo ""
+    choose_launch_mode "$os"
     echo ""
 
     # ========================================================================
-    # Clone/Update Repository
+    # Work: unattended from here on
     # ========================================================================
+    info "Installing Codeman to $INSTALL_DIR (a few minutes; you can leave this running)"
+    INSTALL_STARTED="1"
+    install_or_update_repo
+    npm_install_deps
+    run_step "Building Codeman" npm run build || exit 1
+    install_symlink
 
-    info "Installing Codeman to $INSTALL_DIR..."
+    # The dispatcher at the bottom only routes a bare re-run to the quiet
+    # update path when this marker exists, so an aborted first install
+    # (failed npm install/build, Ctrl+C) re-runs the full setup flow
+    # (symlinks, PATH, launch menu) instead of silently "updating".
+    date -u +%Y-%m-%dT%H:%M:%SZ > "$INSTALL_DIR/.install-complete"
 
+    local service_ok="true"
+    if [[ "$LAUNCH_CHOICE" == "2" ]]; then
+        if [[ "$SERVICE_TYPE" == "launchd" ]]; then
+            setup_launchd_service || service_ok="false"
+        else
+            setup_systemd_service || service_ok="false"
+        fi
+    fi
+
+    tailscale_apply || true
+    # With Tailscale configured, prove the URL actually answers now that the
+    # server is up (never claim success blindly).
+    if [[ "$LAUNCH_CHOICE" == "2" && "$service_ok" == "true" && -n "$TAILSCALE_SERVE_URL" ]]; then
+        verify_tailscale_access || true
+    fi
+
+    # ========================================================================
+    # Done
+    # ========================================================================
+    print_done_screen "$LAUNCH_CHOICE" "$service_ok"
+
+    # Security notice: last informational block so it stays visible (when not
+    # auto-launching below; if we exec, the server prints the same notice anyway).
+    print_security_notice
+
+    # Run now in foreground (must be last: exec replaces the shell)
+    if [[ "$LAUNCH_CHOICE" == "1" ]]; then
+        local profile
+        profile=$(detect_shell_profile)
+
+        echo -e "  ${GREEN}${BOLD}Starting Codeman...${NC}"
+        echo -e "  ${DIM}Press Ctrl+C to stop${NC}"
+        echo ""
+
+        # Source profile to pick up PATH changes, then exec codeman
+        # shellcheck disable=SC1090
+        source "$profile" 2>/dev/null || true
+        export_bind_env
+        # exec skips the EXIT trap: end the sudo keepalive here, or it keeps
+        # refreshing the sudo timestamp for as long as the server runs.
+        stop_background_helpers
+        exec node "$INSTALL_DIR/dist/index.js" web
+    fi
+}
+
+# ----------------------------------------------------------------------------
+# Phase 0: look
+# ----------------------------------------------------------------------------
+
+# Detection only: no prompts, no sudo, nothing written. Fills MISSING_PKGS,
+# the CLI table, the existing binding and TS_STATE for the summary and the
+# questions that follow.
+preflight_detect() {
+    local os="$1"
+    MISSING_PKGS=""
+    check_git || MISSING_PKGS="git"
+    check_node || MISSING_PKGS="${MISSING_PKGS:+$MISSING_PKGS, }Node.js $TARGET_NODE_VERSION"
+    check_tmux || MISSING_PKGS="${MISSING_PKGS:+$MISSING_PKGS, }tmux"
+    if [[ "$os" == "linux" ]] && ! check_build_tools; then
+        MISSING_PKGS="${MISSING_PKGS:+$MISSING_PKGS, }build tools ($(missing_build_tools))"
+    fi
+    detect_all_clis
+    read_existing_binding
+    TS_STATE="absent"
+    if check_tailscale; then
+        TS_STATE="installed"
+        if [[ "$(ts_backend_state)" == "Running" ]]; then
+            TS_STATE="connected"
+            # "serving" needs the serve-status parser, and that needs node
+            # (installed by ask_dependencies when missing); the menu hint in
+            # choose_network_binding re-checks once it is there.
+            if [[ -n "$(detect_tailscale_serve_url)" ]]; then
+                TS_STATE="serving"
+            fi
+        fi
+    fi
+    return 0
+}
+
+print_preflight_summary() {
+    local os="$1" arch="$2" distro="$3"
+    local found="" i clis="" ts_line existing="none"
+    check_git && found="git $(git --version 2>/dev/null | awk '{print $3}')"
+    check_node && found="${found:+$found, }Node $(node --version 2>/dev/null)"
+    check_tmux && found="${found:+$found, }tmux $(tmux -V 2>/dev/null | awk '{print $2}')"
+    if [[ "$os" == "linux" ]] && check_build_tools; then
+        found="${found:+$found, }build tools"
+    fi
+    for ((i = 0; i < ${#CLI_IDS[@]}; i++)); do
+        [[ -n "${CLI_FOUND_PATH[$i]}" ]] || continue
+        clis="${clis:+$clis, }${CLI_LABELS[$i]}"
+    done
+    case "$TS_STATE" in
+        serving)   ts_line="serving Codeman at $(detect_tailscale_serve_url)" ;;
+        connected) ts_line="connected as $(ts_node_name) ($(ts_tailnet_suffix))" ;;
+        installed) ts_line="installed, not logged in" ;;
+        *)         ts_line="not installed" ;;
+    esac
     if [[ -d "$INSTALL_DIR/.git" ]]; then
-        info "Existing installation found, updating..."
+        existing="$INSTALL_DIR${EXISTING_VERSION:+ (v$EXISTING_VERSION)}"
+        if [[ "$EXISTING_FOUND" == "1" ]]; then
+            existing="$existing, service binds $EXISTING_HOST${EXISTING_BASE_URL:+ under $EXISTING_BASE_URL}"
+        fi
+    fi
+    echo -e "  ${BOLD}System${NC}      $os ($arch)${distro:+, $distro}"
+    echo -e "  ${BOLD}Found${NC}       ${found:-nothing yet}"
+    echo -e "  ${BOLD}Missing${NC}     ${MISSING_PKGS:-nothing}"
+    echo -e "  ${BOLD}AI CLIs${NC}     ${clis:-none found}"
+    echo -e "  ${BOLD}Tailscale${NC}   $ts_line"
+    echo -e "  ${BOLD}Existing${NC}    $existing"
+    echo ""
+    return 0
+}
+
+# ----------------------------------------------------------------------------
+# Phase 1: ask
+# ----------------------------------------------------------------------------
+
+# One consent for every missing system package (it used to be one prompt per
+# package, each followed by its own sudo prompt), then the installs, then a
+# check that proves each one is really there. The native build toolchain is a
+# hard requirement on Linux, not a nicety: node-pty compiles from source there.
+ask_dependencies() {
+    local os="$1" distro="$2"
+    [[ -n "$MISSING_PKGS" ]] || return 0
+    headless_guard "install $MISSING_PKGS (system packages via sudo)"
+    if ! prompt_yes_no "Install the missing pieces now ($MISSING_PKGS)?" "y"; then
+        die "Codeman needs $MISSING_PKGS. Install them and re-run this installer."
+    fi
+    if [[ "$os" == "linux" ]]; then
+        sudo_session_start
+    fi
+    if ! check_git; then
+        CURRENT_STEP="installing git"
+        install_dependency "git" "$os" "$distro"
+    fi
+    if ! check_node; then
+        if command -v node &>/dev/null; then
+            warn "Node.js $(node --version 2>/dev/null || echo unknown) is installed but version $MIN_NODE_VERSION+ is required."
+        fi
+        CURRENT_STEP="installing Node.js $TARGET_NODE_VERSION"
+        install_dependency "node" "$os" "$distro"
+        hash -r 2>/dev/null || true
+    fi
+    if ! check_tmux; then
+        CURRENT_STEP="installing tmux"
+        install_dependency "tmux" "$os" "$distro"
+    fi
+    if [[ "$os" == "linux" ]] && ! check_build_tools; then
+        CURRENT_STEP="installing the build tools"
+        install_dependency "buildtools" "$os" "$distro"
+    fi
+    CURRENT_STEP=""
+    hash -r 2>/dev/null || true
+
+    # Prove it, never assume it.
+    check_git || die "git is still missing after the install."
+    check_node || die "Node.js $MIN_NODE_VERSION+ is still missing after the install."
+    check_npm || die "npm is not available. Please reinstall Node.js."
+    check_tmux || die "tmux is still missing after the install (sessions live inside tmux)."
+    if [[ "$os" == "linux" ]] && ! check_build_tools; then
+        die "Build tools still missing after install: $(missing_build_tools). Install them manually and re-run."
+    fi
+    success "Dependencies installed"
+    return 0
+}
+
+# Question 3 of 3. Sets LAUNCH_CHOICE (1 run now, 2 service, 3 do not start)
+# and SERVICE_TYPE. Service is the default: it is what nearly every install
+# wants, and Enter used to re-prompt here instead of choosing anything.
+choose_launch_mode() {
+    local os="$1"
+    SERVICE_TYPE=""
+    if [[ "$os" == "linux" ]] && [[ "$SKIP_SYSTEMD" != "1" ]] && command -v systemctl &>/dev/null; then
+        SERVICE_TYPE="systemd"
+    elif [[ "$os" == "macos" ]] && [[ "$SKIP_SYSTEMD" != "1" ]]; then
+        SERVICE_TYPE="launchd"
+    fi
+
+    if [[ -n "$LAUNCH_PRESET" ]]; then
+        LAUNCH_CHOICE="$LAUNCH_PRESET"
+        if [[ "$LAUNCH_CHOICE" == "2" && -z "$SERVICE_TYPE" ]]; then
+            warn "No service manager available here; Codeman will not be started (run: codeman web)."
+            LAUNCH_CHOICE="3"
+        fi
+        return 0
+    fi
+    if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
+        LAUNCH_CHOICE="3"
+        info "No interactive terminal: not starting Codeman (run 'codeman web' when ready)"
+        return 0
+    fi
+
+    echo -e "  ${BOLD}3/3  Run Codeman in the background?${NC}"
+    echo ""
+    if [[ -n "$SERVICE_TYPE" ]]; then
+        local label="a systemd service"
+        [[ "$SERVICE_TYPE" == "launchd" ]] && label="a LaunchAgent"
+        if prompt_yes_no "Run Codeman as $label that starts on boot?" "y"; then
+            LAUNCH_CHOICE="2"
+            return 0
+        fi
+    fi
+    if prompt_yes_no "Start Codeman in this terminal when the install finishes? (Ctrl+C stops it)" "y"; then
+        LAUNCH_CHOICE="1"
+    else
+        LAUNCH_CHOICE="3"
+        info "Not starting. Later: codeman web"
+    fi
+    return 0
+}
+
+# ----------------------------------------------------------------------------
+# Phase 2: work
+# ----------------------------------------------------------------------------
+
+install_or_update_repo() {
+    if [[ -d "$INSTALL_DIR/.git" ]]; then
+        info "Existing installation found at $INSTALL_DIR, updating it"
         cd "$INSTALL_DIR"
         git remote set-url origin "$REPO_URL" 2>/dev/null || true
 
@@ -2406,13 +3276,13 @@ main() {
         if ! git diff --quiet 2>/dev/null || ! git diff --staged --quiet 2>/dev/null; then
             warn "Local changes detected in $INSTALL_DIR"
             if prompt_yes_no "Discard local changes and update?" "n"; then
-                git fetch --quiet origin
+                run_step "Fetching the latest Codeman" git fetch --quiet origin || exit 1
                 git reset --hard "origin/$BRANCH" --quiet
             else
                 info "Keeping existing installation, skipping update"
             fi
         else
-            git fetch --quiet origin
+            run_step "Fetching the latest Codeman" git fetch --quiet origin || exit 1
             git reset --hard "origin/$BRANCH" --quiet
         fi
     else
@@ -2420,29 +3290,15 @@ main() {
         mkdir -p "$(dirname "$INSTALL_DIR")"
 
         # Clone repository (shallow for speed)
-        git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR"
+        run_step "Cloning Codeman" git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR" || exit 1
         cd "$INSTALL_DIR"
     fi
+    return 0
+}
 
-    success "Repository ready"
-
-    # ========================================================================
-    # Build
-    # ========================================================================
-
-    info "Installing dependencies..."
-    npm_install_deps
-
-    info "Building..."
-    npm run build --quiet 2>/dev/null || npm run build
-
-    success "Build complete"
-
-    # ========================================================================
-    # Add to PATH
-    # ========================================================================
-
-    # Create symlink in a common PATH location
+# Create the `codeman` symlink in a common PATH location and make sure that
+# location is on PATH.
+install_symlink() {
     local symlink_dir="$HOME/.local/bin"
     mkdir -p "$symlink_dir" 2>/dev/null || true
     if [[ -d "$symlink_dir" ]]; then
@@ -2463,238 +3319,178 @@ main() {
             add_to_path "$symlink_dir"
         fi
     fi
+    return 0
+}
 
-    # ========================================================================
-    # Mark install complete
-    # ========================================================================
+# ----------------------------------------------------------------------------
+# Phase 3: done
+# ----------------------------------------------------------------------------
 
-    # The dispatcher at the bottom only routes a bare re-run to the quiet
-    # update path when this marker exists, so an aborted first install
-    # (failed npm install/build, Ctrl+C) re-runs the full setup flow
-    # (symlinks, PATH, launch menu) instead of silently "updating".
-    date -u +%Y-%m-%dT%H:%M:%SZ > "$INSTALL_DIR/.install-complete"
+# The environment a hand-started `codeman web` needs in order to match what
+# this run chose: every non-default value, composed in ONE place so the done
+# screen's Start line and the exec branch of main() cannot disagree (the Start
+# line used to print a bare `codeman web` under a URL that carried a sub-path
+# and a port). start_command_hint prints the line with a placeholder for the
+# password; export_bind_env exports the real values for the exec.
+start_command_hint() {
+    local env=""
+    if [[ -n "$BIND_HOST" && "$BIND_HOST" != "127.0.0.1" ]]; then
+        env="CODEMAN_HOST=$BIND_HOST"
+        [[ -n "$BIND_PASSWORD" ]] && env="$env CODEMAN_PASSWORD='<your-password>'"
+        [[ "$BIND_ACK" == "1" ]] && env="$env CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1"
+    fi
+    [[ -n "$BIND_BASE_URL" ]] && env="${env:+$env }CODEMAN_BASE_URL=$BIND_BASE_URL"
+    if [[ -n "${CODEMAN_PORT:-}" && "$CODEMAN_PORT" != "3000" ]]; then
+        env="${env:+$env }CODEMAN_PORT=$CODEMAN_PORT"
+    fi
+    printf '%s' "${env:+$env }codeman web"
+}
 
-    # ========================================================================
-    # Launch Options
-    # ========================================================================
+export_bind_env() {
+    if [[ -n "$BIND_HOST" ]]; then
+        export CODEMAN_HOST="$BIND_HOST"
+        [[ -n "$BIND_PASSWORD" ]] && export CODEMAN_PASSWORD="$BIND_PASSWORD"
+        [[ "$BIND_ACK" == "1" ]] && export CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1
+    fi
+    [[ -n "$BIND_BASE_URL" ]] && export CODEMAN_BASE_URL="$BIND_BASE_URL"
+    [[ -n "${CODEMAN_PORT:-}" ]] && export CODEMAN_PORT
+    return 0
+}
 
+# A QR code of the URL, for the phone in the user's hand. Uses the qrcode
+# package Codeman itself depends on, so nothing extra is installed; skipped on
+# a terminal without color support or too narrow to draw it.
+print_qr() {
+    local url="$1" cols qr
+    [[ -n "$NC" ]] || return 0
+    command -v node &>/dev/null || return 0
+    [[ -d "$INSTALL_DIR/node_modules/qrcode" ]] || return 0
+    cols=$(tput cols 2>/dev/null || echo 0)
+    [[ "$cols" -ge 50 ]] || return 0
+    qr=$(cd "$INSTALL_DIR" && node -e '
+        require("qrcode").toString(process.argv[1], { type: "terminal", small: true }, (err, s) => {
+            if (!err) process.stdout.write(s);
+        });
+    ' "$url" 2>/dev/null) || return 0
+    [[ -n "$qr" ]] || return 0
     echo ""
-    echo -e "${GREEN}${BOLD}============================================================${NC}"
-    echo -e "${GREEN}${BOLD}  Codeman installed successfully!${NC}"
-    echo -e "${GREEN}${BOLD}============================================================${NC}"
-    echo ""
+    printf '%s\n' "$qr" | sed 's/^/    /'
+    echo -e "    ${DIM}scan to open it on your phone${NC}"
+    return 0
+}
 
-    # Ask how the dashboard should be reachable BEFORE the launch menu, so the
-    # service files and the run-now path all inherit the choice.
-    choose_network_binding
-    echo ""
+# The closing screen: the URL first, a QR code, how to manage the service, and
+# nothing the user does not need right now. Also what `install.sh status`
+# prints. $1 is the launch choice (1/2/3, or empty when nothing was launched
+# by this run), $2 whether the service setup succeeded.
+print_done_screen() {
+    local launch="${1:-}" service_ok="${2:-}"
+    local port="${CODEMAN_PORT:-3000}" base="$BIND_BASE_URL" version="" running="0"
+    local unit="$HOME/.config/systemd/user/codeman-web.service"
+    local agent_plist="$HOME/Library/LaunchAgents/com.codeman.web.plist"
+    local daemon_plist="/Library/LaunchDaemons/com.codeman.web.plist"
 
-    local launch_choice=""
-    local has_service=false
-    local service_type=""
+    if [[ -f "$INSTALL_DIR/package.json" ]]; then
+        version=$(sed -n 's/^  *"version": *"\([^"]*\)".*/\1/p' "$INSTALL_DIR/package.json" | head -1)
+    fi
+    codeman_answers_locally && running="1"
 
-    if [[ "$os" == "linux" ]] && [[ "$SKIP_SYSTEMD" != "1" ]] && command -v systemctl &>/dev/null; then
-        has_service=true
-        service_type="systemd"
-    elif [[ "$os" == "macos" ]] && [[ "$SKIP_SYSTEMD" != "1" ]]; then
-        has_service=true
-        service_type="launchd"
+    # Which supervisor, when this run did not decide: whatever is on disk.
+    local svc="$SERVICE_TYPE" this_run="$launch"
+    if [[ -z "$launch" ]]; then
+        svc=""
+        if [[ -f "$unit" ]]; then svc="systemd"
+        elif [[ -f "$agent_plist" ]]; then svc="launchd"
+        elif [[ -f "$daemon_plist" ]]; then svc="launchd-daemon"
+        fi
+        launch="3"
+        [[ -n "$svc" ]] && launch="2"
+        service_ok="true"
     fi
 
-    if [[ "$has_service" == "true" ]]; then
-        local service_label="systemd service"
-        [[ "$service_type" == "launchd" ]] && service_label="LaunchAgent"
+    local ts_url="$TAILSCALE_SERVE_URL"
+    if [[ -z "$ts_url" ]]; then
+        ts_url=$(detect_tailscale_serve_url 2>/dev/null) || ts_url=""
+    fi
 
-        echo -e "  ${BOLD}How would you like to run Codeman?${NC}"
-        echo ""
-        echo -e "    ${CYAN}1)${NC} Run now in this terminal"
-        echo -e "    ${CYAN}2)${NC} Install as $service_label (auto-start on boot)"
-        echo -e "    ${CYAN}3)${NC} Don't start — I'll run it later"
-        echo ""
-
-        if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
-            launch_choice="3"
-            info "No interactive terminal detected: not starting (run 'codeman web' when ready)"
-        else
-            while true; do
-                echo -en "${CYAN}Choose [1/2/3]:${NC} " >&2
-                read_reply launch_choice || { launch_choice="3"; break; }
-                case "$launch_choice" in
-                    1|2|3) break ;;
-                    *) echo "Please enter 1, 2, or 3." >&2 ;;
-                esac
-            done
-        fi
+    echo ""
+    echo -e "${GREEN}${BOLD}============================================================${NC}"
+    if [[ "$running" == "1" && -n "$this_run" && "$svc" == "launchd-daemon" ]]; then
+        # This run built a new dist/ but left the daemon alone, so what answers
+        # on the port is still the previous build.
+        echo -e "${GREEN}${BOLD}  Codeman${version:+ $version} is built${NC} ${DIM}(the LaunchDaemon still runs the previous build until restarted)${NC}"
+    elif [[ "$running" == "1" ]]; then
+        echo -e "${GREEN}${BOLD}  Codeman${version:+ $version} is running${NC}"
     else
-        # No service manager available — only offer run now or skip
-        echo -e "  ${BOLD}Would you like to start Codeman now?${NC}"
-        echo ""
-        echo -e "    ${CYAN}1)${NC} Run now in this terminal"
-        echo -e "    ${CYAN}2)${NC} Don't start — I'll run it later"
-        echo ""
-
-        if [[ "$NONINTERACTIVE" == "1" ]] || ! has_tty; then
-            launch_choice="2"
-            info "No interactive terminal detected: not starting (run 'codeman web' when ready)"
-        else
-            while true; do
-                echo -en "${CYAN}Choose [1/2]:${NC} " >&2
-                read_reply launch_choice || { launch_choice="2"; break; }
-                case "$launch_choice" in
-                    1) break ;;
-                    2) break ;;
-                    *) echo "Please enter 1 or 2." >&2 ;;
-                esac
-            done
-        fi
-        # Remap: no-systemd choice "2" (skip) → internal "3"
-        [[ "$launch_choice" == "2" ]] && launch_choice="3"
+        echo -e "${GREEN}${BOLD}  Codeman${version:+ $version} is installed${NC} ${DIM}(not running yet)${NC}"
     fi
-
+    echo -e "${GREEN}${BOLD}============================================================${NC}"
     echo ""
 
-    # Handle service setup
-    if [[ "$launch_choice" == "2" ]]; then
-        local service_ok=true
-        if [[ "$service_type" == "launchd" ]]; then
-            setup_launchd_service || service_ok=false
-        else
-            setup_systemd_service || service_ok=false
-        fi
-
-        # Offer tunnel service if cloudflared is available (Linux only: systemd tunnel service).
-        # Skipped when service setup failed: it needs the same systemctl --user access.
-        if [[ "$service_ok" == "true" ]] && [[ "$service_type" == "systemd" ]] && check_cloudflared && [[ -f "$INSTALL_DIR/scripts/codeman-tunnel.service" ]]; then
-            echo ""
-            if prompt_yes_no "Also set up Cloudflare tunnel service? (requires CODEMAN_PASSWORD)" "n"; then
-                setup_tunnel_service
-            fi
-        fi
-
-        echo ""
-        if [[ "$service_ok" == "true" ]]; then
-            # With Tailscale configured, prove the URL actually answers now
-            # that the server is up (never claim success blindly).
-            if [[ -n "$TAILSCALE_SERVE_URL" ]]; then
-                verify_tailscale_access || true
-                echo ""
-            fi
-            echo -e "  ${GREEN}${BOLD}Codeman is running now!${NC}"
-            echo ""
-            echo -e "    ${CYAN}# Open in browser${NC}"
-            if [[ -n "$TAILSCALE_SERVE_URL" ]]; then
-                echo -e "    $TAILSCALE_SERVE_URL   ${DIM}(any device on your tailnet, HTTPS)${NC}"
-                echo -e "    http://localhost:3000       ${DIM}(this machine)${NC}"
-            elif [[ "$BIND_HOST" == "0.0.0.0" ]]; then
-                echo -e "    http://$(detect_lan_ip):3000   ${DIM}(any device on your network)${NC}"
-                echo -e "    http://localhost:3000       ${DIM}(this machine)${NC}"
-            else
-                echo -e "    http://localhost:3000"
-            fi
-        else
-            echo -e "  ${YELLOW}${BOLD}The service was set up but is not running yet${NC} (see warnings above)."
-            echo -e "  ${DIM}You can always run it directly:${NC} ${CYAN}codeman web${NC}"
-        fi
-        echo ""
-        echo -e "  ${BOLD}Manage the service:${NC}"
-        echo ""
-        if [[ "$service_type" == "launchd" ]]; then
-            echo -e "    ${CYAN}launchctl unload ~/Library/LaunchAgents/com.codeman.web.plist${NC}   # Stop"
-            echo -e "    ${CYAN}launchctl load ~/Library/LaunchAgents/com.codeman.web.plist${NC}     # Start"
-            echo -e "    ${CYAN}tail -f /tmp/codeman.log${NC}                                        # View logs"
-        else
-            echo -e "    ${CYAN}systemctl --user stop codeman-web${NC}    # Stop"
-            echo -e "    ${CYAN}systemctl --user restart codeman-web${NC} # Restart"
-            echo -e "    ${CYAN}systemctl --user status codeman-web${NC}  # Check status"
-            echo -e "    ${CYAN}journalctl --user -u codeman-web -f${NC}  # View logs"
-        fi
-        echo ""
+    local once="" qr_url=""
+    [[ "$running" == "1" ]] || once=", once running"
+    if [[ -n "$ts_url" ]]; then
+        echo -e "    ${BOLD}Your tailnet${NC}    $ts_url   ${DIM}(HTTPS, any of your devices$once)${NC}"
+        qr_url="$ts_url"
     fi
+    if [[ "$BIND_HOST" == "0.0.0.0" ]]; then
+        local lan="http://$(detect_lan_ip):$port$base"
+        echo -e "    ${BOLD}Your network${NC}    $lan   ${DIM}(any device on your Wi-Fi$once)${NC}"
+        [[ -n "$qr_url" ]] || qr_url="$lan"
+    fi
+    echo -e "    ${BOLD}This machine${NC}    http://localhost:$port$base"
+    if [[ -n "$qr_url" ]]; then
+        print_qr "$qr_url"
+    fi
+    echo ""
 
-    # Show quick-start help for non-service paths
-    if [[ "$launch_choice" != "2" ]]; then
-        echo -e "  ${BOLD}Quick Start:${NC}"
-        echo ""
+    if [[ "$launch" == "2" && "$service_ok" == "true" ]]; then
+        case "$svc" in
+            launchd)
+                echo -e "    ${BOLD}Manage${NC}    ${CYAN}launchctl unload ~/Library/LaunchAgents/com.codeman.web.plist${NC}   # stop"
+                echo -e "              ${CYAN}launchctl load ~/Library/LaunchAgents/com.codeman.web.plist${NC}     # start"
+                echo -e "              ${CYAN}tail -f /tmp/codeman.log${NC}                                        # logs"
+                echo -e "    ${DIM}A LaunchAgent starts after you log in to this Mac. For a headless Mac see the wiki (Running As A Service).${NC}"
+                ;;
+            launchd-daemon)
+                echo -e "    ${BOLD}Manage${NC}    ${CYAN}sudo launchctl kickstart -k system/com.codeman.web${NC}   # restart (picks up a new build)"
+                echo -e "              ${CYAN}sudo launchctl print system/com.codeman.web${NC}          # the LaunchDaemon that supervises it"
+                ;;
+            *)
+                echo -e "    ${BOLD}Manage${NC}    ${CYAN}systemctl --user restart codeman-web${NC}   ${CYAN}journalctl --user -u codeman-web -f${NC}"
+                ;;
+        esac
+    elif [[ "$launch" == "2" ]]; then
+        echo -e "    ${YELLOW}${BOLD}The service was set up but is not running yet${NC} (see the warnings above)."
+        echo -e "    ${DIM}You can always run it directly:${NC} ${CYAN}$(start_command_hint)${NC}"
+    elif [[ "$launch" == "3" ]]; then
+        echo -e "    ${BOLD}Start${NC}     ${CYAN}$(start_command_hint)${NC}"
         if [[ "$BIND_HOST" == "0.0.0.0" ]]; then
-            if [[ -n "$BIND_PASSWORD" ]]; then
-                echo -e "    ${CYAN}CODEMAN_HOST=0.0.0.0 CODEMAN_PASSWORD='<your-password>' codeman web${NC}"
-            else
-                echo -e "    ${CYAN}CODEMAN_HOST=0.0.0.0 codeman web${NC}"
-            fi
-            echo -e "    ${DIM}(a bare 'codeman web' binds 127.0.0.1, this machine only)${NC}"
-            echo ""
-            echo -e "    ${CYAN}# Open in browser${NC}"
-            echo -e "    http://$(detect_lan_ip):3000   ${DIM}(any device on your network)${NC}"
+            echo -e "              ${DIM}(a bare 'codeman web' binds 127.0.0.1, this machine only)${NC}"
+        elif [[ "$(start_command_hint)" == "codeman web" ]]; then
+            echo -e "              ${DIM}(or: codeman web -d to detach; codeman service install for boot)${NC}"
         else
-            echo -e "    ${CYAN}codeman web${NC}            # Start the web server"
-            echo -e "    ${CYAN}codeman web --https${NC}    # With HTTPS (for remote access)"
-            echo ""
-            echo -e "    ${CYAN}# Open in browser${NC}"
-            echo -e "    http://localhost:3000"
-            if [[ -n "$TAILSCALE_SERVE_URL" ]]; then
-                echo -e "    $TAILSCALE_SERVE_URL   ${DIM}(any device on your tailnet, once running)${NC}"
-            fi
+            echo -e "              ${DIM}(the same variables apply to: codeman web -d)${NC}"
         fi
-        echo ""
     fi
-
-    if [[ -n "$TAILSCALE_SERVE_URL" ]]; then
-        echo -e "  ${BOLD}Remote Access (Tailscale):${NC}"
-        echo ""
-        echo -e "    $TAILSCALE_SERVE_URL   ${DIM}(HTTPS, any device on your tailnet)${NC}"
-        echo -e "    ${CYAN}tailscale serve status${NC}      # Inspect the mapping"
-        echo ""
+    echo -e "    ${BOLD}Update${NC}    re-run the install line, or App Settings -> System -> Updates"
+    echo -e "    ${BOLD}Terminal${NC}  ${CYAN}codeman tui${NC}   ${DIM}(session dashboard over SSH, e.g. from Termius)${NC}"
+    echo -e "    ${BOLD}Docs${NC}      https://github.com/Ark0N/Codeman/wiki"
+    if [[ -z "$ts_url" ]] && [[ "$BIND_HOST" != "0.0.0.0" ]]; then
+        echo -e "    ${BOLD}Phone${NC}     ${CYAN}bash $INSTALL_DIR/install.sh tailscale${NC}   ${DIM}(HTTPS on your tailnet, recommended)${NC}"
     fi
-
     if check_cloudflared; then
-        echo -e "  ${BOLD}Remote Access (Cloudflare Tunnel):${NC}"
-        echo ""
-        echo -e "    ${CYAN}./scripts/tunnel.sh start${NC}   # Start tunnel"
-        echo -e "    ${CYAN}./scripts/tunnel.sh url${NC}     # Show tunnel URL"
-        echo -e "    ${CYAN}./scripts/tunnel.sh stop${NC}    # Stop tunnel"
-        echo ""
+        echo -e "    ${BOLD}Tunnel${NC}    ${CYAN}$INSTALL_DIR/scripts/tunnel.sh start${NC}   ${DIM}(Cloudflare, public URL: set CODEMAN_PASSWORD first)${NC}"
     fi
-
-    echo -e "  ${BOLD}Mobile Access (Termius/SSH):${NC}"
-    echo ""
-    echo -e "    ${CYAN}codeman tui${NC}     # Full-screen session dashboard"
-    echo -e "    ${CYAN}codeman tui 2${NC}   # Attach straight to session 2"
-    echo -e "    ${CYAN}codeman tui -l${NC}  # Numbered list, then exit"
-    echo ""
-
-    echo -e "  ${BOLD}Documentation:${NC}"
-    echo -e "    https://github.com/Ark0N/Codeman"
     echo ""
 
     detect_all_clis
     if [[ "$CLI_FOUND_COUNT" -eq 0 ]]; then
         echo -e "  ${YELLOW}${BOLD}Reminder:${NC} Install at least one AI CLI to start using Codeman:"
         cli_catalog_print_install_hints
-    fi
-
-    # Security notice — last informational block so it stays visible (when not
-    # auto-launching below; if we exec, the server prints the same notice anyway).
-    print_security_notice
-
-    # Run now in foreground (must be last — exec replaces the shell)
-    if [[ "$launch_choice" == "1" ]]; then
-        local profile
-        profile=$(detect_shell_profile)
-
-        echo -e "  ${GREEN}${BOLD}Starting Codeman...${NC}"
-        echo -e "  ${DIM}Press Ctrl+C to stop${NC}"
         echo ""
-
-        # Source profile to pick up PATH changes, then exec codeman
-        # shellcheck disable=SC1090
-        source "$profile" 2>/dev/null || true
-        if [[ -n "$BIND_HOST" ]]; then
-            export CODEMAN_HOST="$BIND_HOST"
-            [[ -n "$BIND_PASSWORD" ]] && export CODEMAN_PASSWORD="$BIND_PASSWORD"
-            [[ "$BIND_ACK" == "1" ]] && export CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK=1
-        fi
-        exec node "$INSTALL_DIR/dist/index.js" web
     fi
+    return 0
 }
 
 update() {
@@ -2703,6 +3499,7 @@ update() {
     fi
 
     info "Updating Codeman..."
+    INSTALL_STARTED="1"
     cd "$INSTALL_DIR"
     git remote set-url origin "$REPO_URL" 2>/dev/null || true
 
@@ -2720,10 +3517,10 @@ update() {
         fi
     fi
 
-    git fetch --quiet origin
+    run_step "Fetching the latest Codeman" git fetch --quiet origin || exit 1
     git reset --hard "origin/$BRANCH" --quiet
     npm_install_deps
-    npm run build --quiet 2>/dev/null || npm run build
+    run_step "Building Codeman" npm run build || exit 1
     date -u +%Y-%m-%dT%H:%M:%SZ > "$INSTALL_DIR/.install-complete"
     success "Updated to $(node -e "console.log(require('./package.json').version)")"
     echo ""
@@ -2744,9 +3541,14 @@ update() {
         launchctl unload "$agent_plist" 2>/dev/null || true
         launchctl load "$agent_plist" 2>/dev/null || true
         success "LaunchAgent restarted"
+    elif [[ -f "/Library/LaunchDaemons/com.codeman.web.plist" ]]; then
+        # Left alone on purpose (see setup_launchd_service); it keeps running
+        # the previous build until its owner restarts it.
+        info "A system LaunchDaemon supervises Codeman; restart it to run the new build:"
+        echo -e "    ${CYAN}sudo launchctl kickstart -k system/com.codeman.web${NC}"
     else
         echo -e "  ${DIM}Restart codeman web to use the new version:${NC}"
-        echo -e "    ${CYAN}pkill -f 'codeman.*web'; codeman web &${NC}"
+        echo -e "    ${CYAN}codeman web --stop; codeman web -d${NC}"
     fi
     echo ""
 
@@ -2757,12 +3559,16 @@ update() {
         BIND_HOST="$EXISTING_HOST"
         BIND_PASSWORD="$EXISTING_PASSWORD"
         BIND_ACK="$EXISTING_ACK"
+        BIND_BASE_URL="$EXISTING_BASE_URL"
     fi
 
     # An update is the only place a half-configured install gets a second
     # chance at remote access; the fresh-install path asks outright.
     maybe_offer_tailscale_repair
 
+    # The re-run is how everyone updates, and the first thing people try when
+    # they want the URL back: end on the same screen the install ends on.
+    print_done_screen "" ""
     print_security_notice
 }
 
@@ -2798,22 +3604,52 @@ uninstall() {
         success "Removed LaunchAgent"
     fi
     if [[ -f "$daemon_plist" ]]; then
-        sudo launchctl unload "$daemon_plist" 2>/dev/null || true
-        sudo rm -f "$daemon_plist"
-        success "Removed LaunchDaemon"
+        # This installer never writes a LaunchDaemon (setup_launchd_service
+        # leaves one alone), so this one is the user's own headless-Mac setup:
+        # ask before touching it. The default stays yes, because a daemon left
+        # pointing at a removed install restarts into failure every 10 s.
+        warn "A system LaunchDaemon supervises Codeman ($daemon_plist); this installer did not write it."
+        if prompt_yes_no "Remove that LaunchDaemon too (needs sudo)?" "y"; then
+            sudo launchctl unload "$daemon_plist" 2>/dev/null || true
+            sudo rm -f "$daemon_plist"
+            success "Removed LaunchDaemon"
+        else
+            info "Kept $daemon_plist. Remove it later with: sudo launchctl unload $daemon_plist && sudo rm $daemon_plist"
+        fi
     fi
 
-    # Remove OUR tailscale serve mapping (443 -> Codeman's port) only. Other
+    # Remove OUR tailscale serve mapping (whatever shape it has) only. Other
     # serve config stays untouched, and never `tailscale serve reset`.
     local ts_url=""
     ts_url=$(detect_tailscale_serve_url 2>/dev/null) || ts_url=""
     if [[ -n "$ts_url" ]]; then
         if prompt_yes_no "Remove the Tailscale serve mapping for Codeman ($ts_url)?" "y"; then
-            if ts_cmd_serve serve --https=443 off 2>/dev/null; then
+            if tailscale_remove_our_mapping 2>/dev/null; then
                 success "Removed tailscale serve mapping"
             else
-                warn "Could not remove it automatically. Run: tailscale serve --https=443 off"
+                warn "Could not remove it automatically. Inspect: tailscale serve status"
             fi
+        fi
+    fi
+
+    # A rename this installer performed is offered back; the record is dropped
+    # either way once it no longer describes the machine.
+    if [[ -f "$TS_RENAME_RECORD" ]] && check_tailscale && command -v node &>/dev/null; then
+        local ts_orig ts_cur ts_now
+        ts_orig=$(sed -n 's/^original=//p' "$TS_RENAME_RECORD" | head -1)
+        ts_cur=$(sed -n 's/^current=//p' "$TS_RENAME_RECORD" | head -1)
+        ts_now=$(ts_node_name)
+        if [[ -n "$ts_orig" && -n "$ts_now" && "$ts_now" == "$ts_cur" ]]; then
+            if prompt_yes_no "Rename this machine back to $ts_orig on your tailnet?" "y"; then
+                if ts_cmd_serve set --hostname "$ts_orig" 2>/dev/null; then
+                    success "Renamed back to $ts_orig"
+                    rm -f "$TS_RENAME_RECORD"
+                else
+                    warn "Could not rename it back. Run: sudo tailscale set --hostname $ts_orig"
+                fi
+            fi
+        else
+            rm -f "$TS_RENAME_RECORD"
         fi
     fi
 
@@ -2862,25 +3698,114 @@ uninstall() {
     echo ""
 }
 
+usage() {
+    cat << 'EOF'
+Codeman installer
+
+  curl -fsSL https://getcodeman.com/install | bash
+  curl -fsSL https://getcodeman.com/install | bash -s -- [flags] [subcommand]
+
+Flags
+  --tailscale | --lan | --local   How the dashboard is reached (question 1)
+  --name <n> | --no-rename        Rename this machine on the tailnet / never ask (question 2)
+  --service | --run | --no-start  What to do at the end (question 3)
+  --yes, -y                       Take every default; still waits on a Tailscale login URL
+  --password <p>                  Dashboard password (visible in ps; prefer CODEMAN_PASSWORD)
+  --port <n>                      Port Codeman listens on (default 3000)
+  --help, -h                      This text
+
+Subcommands
+  update        Update an existing install
+  uninstall     Remove services, symlinks and (optionally) data
+  tailscale     Set up (or repair) Tailscale HTTPS access for an existing install
+  name [<n>]    Rename this machine on your tailnet (default: codeman-<hostname>)
+  status        Print the URLs, the QR code and how to manage the service
+  cloudflared   Install cloudflared for the in-app Cloudflare tunnel
+
+Environment: CODEMAN_NONINTERACTIVE=1, CODEMAN_INSTALL_DIR, CODEMAN_HOST,
+CODEMAN_PASSWORD, CODEMAN_PORT, CODEMAN_TAILSCALE=1, CODEMAN_TAILSCALE_NAME,
+CODEMAN_SKIP_SYSTEMD=1, CODEMAN_NODE_VERSION, CODEMAN_REPO_URL, CODEMAN_BRANCH.
+EOF
+}
+
+# Flags set the same variables their environment-variable twins do, so every
+# function below reads one source of truth. A flag that changes how an existing
+# install is reached or run also flips RECONFIGURE, so a bare re-run takes the
+# full flow (which re-asks nothing the flag already answered) instead of the
+# quiet update. A password or a port lives in the unit, so those two reconfigure
+# as well: the quiet update never rewrites the unit and used to drop them
+# silently.
+parse_flags() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --tailscale)   CODEMAN_TAILSCALE=1; CODEMAN_HOST=""; RECONFIGURE="1" ;;
+            --lan)         CODEMAN_HOST="0.0.0.0"; CODEMAN_TAILSCALE=0; RECONFIGURE="1" ;;
+            --local)       CODEMAN_HOST="127.0.0.1"; CODEMAN_TAILSCALE=0; RECONFIGURE="1" ;;
+            --name)
+                shift
+                [[ $# -gt 0 ]] || die "--name needs a value (e.g. --name codeman-$(hostname -s 2>/dev/null || echo box))"
+                TS_NAME="$1"; RECONFIGURE="1" ;;
+            --name=*)      TS_NAME="${1#--name=}"; RECONFIGURE="1" ;;
+            --no-rename)   TS_NO_RENAME="1" ;;
+            --service)     LAUNCH_PRESET="2"; RECONFIGURE="1" ;;
+            --run)         LAUNCH_PRESET="1"; RECONFIGURE="1" ;;
+            --no-start)    LAUNCH_PRESET="3" ;;
+            --yes|-y)      ASSUME_YES="1" ;;
+            --password)
+                shift
+                [[ $# -gt 0 ]] || die "--password needs a value"
+                CODEMAN_PASSWORD="$1"; RECONFIGURE="1" ;;
+            --password=*)  CODEMAN_PASSWORD="${1#--password=}"; RECONFIGURE="1" ;;
+            --port)
+                shift
+                [[ $# -gt 0 ]] || die "--port needs a value"
+                CODEMAN_PORT="$1"; export CODEMAN_PORT; RECONFIGURE="1" ;;
+            --port=*)      CODEMAN_PORT="${1#--port=}"; export CODEMAN_PORT; RECONFIGURE="1" ;;
+            --help|-h)     usage; exit 0 ;;
+            update|uninstall|tailscale|name|status|cloudflared)
+                [[ -z "$SUBCOMMAND" ]] || die "Only one subcommand at a time ($SUBCOMMAND and $1 given)."
+                SUBCOMMAND="$1" ;;
+            -*)            die "Unknown option: $1 (see --help)" ;;
+            *)
+                if [[ "$SUBCOMMAND" == "name" && -z "$SUBCOMMAND_ARG" ]]; then
+                    SUBCOMMAND_ARG="$1"
+                else
+                    die "Unexpected argument: $1 (see --help)"
+                fi ;;
+        esac
+        shift
+    done
+    if [[ -n "${CODEMAN_PORT:-}" ]] && ! [[ "$CODEMAN_PORT" =~ ^[0-9]+$ && "$CODEMAN_PORT" -ge 1 && "$CODEMAN_PORT" -le 65535 ]]; then
+        die "Invalid port: $CODEMAN_PORT"
+    fi
+    return 0
+}
+
 # Sourcing guard: let the test harness load this file for its pure helpers
 # without running an install. bash 3.2 cannot be exercised any other way from
 # CI — see .github/workflows/ci.yml and test/install-sh-invariants.test.ts.
 if [[ -n "${CODEMAN_INSTALL_SH_LIB:-}" ]]; then return 0 2>/dev/null || exit 0; fi
 
 # Wrap in main to prevent partial execution on curl | bash
-case "${1:-}" in
-    update)    update ;;
-    uninstall) uninstall ;;
-    tailscale) setup_tailscale_subcommand ;;
+parse_flags "$@"
+case "$SUBCOMMAND" in
+    update)      update ;;
+    uninstall)   uninstall ;;
+    tailscale)   setup_tailscale_subcommand ;;
+    name)        setup_name_subcommand ;;
+    status)      status_subcommand ;;
+    cloudflared) cloudflared_subcommand ;;
     *)
         # Only a COMPLETED install re-runs as a quiet update. A partial one
         # (clone succeeded but build/menu never finished) lacks the marker and
         # re-runs the full flow, so a failed first attempt can actually finish.
-        if [[ -z "${1:-}" && -d "$INSTALL_DIR/.git" && -f "$INSTALL_DIR/.install-complete" ]]; then
+        # A flag that changes the setup (--tailscale, --service, ...) also takes
+        # the full flow: that is what the flag is for.
+        if [[ "$RECONFIGURE" != "1" && -d "$INSTALL_DIR/.git" && -f "$INSTALL_DIR/.install-complete" ]]; then
             print_banner
             update
         else
-            main "$@"
+            main
         fi
         ;;
 esac

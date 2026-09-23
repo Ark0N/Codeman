@@ -6,6 +6,8 @@ For the Compose configuration, environment settings, storage migration, and macv
 
 The image includes Claude Code, Codex, Gemini CLI, and OpenCode. Authenticate a CLI from its Codeman session; credentials are never baked into the image.
 
+It can also include the GitHub CLI (`gh`) and the Azure CLI (`az`) with the `azure-devops` extension, wired in as Git credential helpers, so Clone Repo and `git clone` reach private GitHub and Azure DevOps repositories once they are signed in. Both are off by default; [Turning them on](../docker/README.md#turning-them-on) shows the `docker-compose.override.yml` settings.
+
 ## Prerequisites
 
 - Docker Engine or Docker Desktop with Docker Compose v2
@@ -67,7 +69,7 @@ If that directory was created by an earlier root-running image, change its owner
 
 Codeman updates itself from **App Settings → Updates**, as it does on a bare host. The checkout mounted at `/opt/codeman` is the same directory Compose builds from, so the update's `git checkout` and rebuild land on the host and survive container recreation; the restart is the server exiting, which `restart: unless-stopped` turns into a relaunch on the new build.
 
-That applies application code only. A release that changes `docker/server.Dockerfile`, `docker/docker-compose.yaml`, or adds a key to `docker/.env.example` needs the image rebuilt or the container recreated, which a container cannot do to itself. The updater detects each case and refuses with a message naming what changed; run `docker/Start-Codeman.sh` on the host to apply those.
+That applies application code only. A release that changes `docker/server.Dockerfile`, `docker/docker-compose.yaml`, or adds a key to `docker/.env.example` needs the image rebuilt or the container recreated, which a container cannot do to itself. The updater detects each case and refuses with a message naming what changed; run `docker/Start-Codeman.sh` on the host to apply those. For a major update, or a base-image change `Start-Codeman.sh` does not fully pick up, `docker/Update-Codeman.sh` rebuilds with no layer cache and clears the two build-artefact volumes before handing off to it (see "Major updates" in `docker/README.md`).
 
 `CODEMAN_REPO_PATH` overrides which checkout is mounted. It defaults to the compose project's parent directory, so it normally needs no setting. Point it at a directory that is not a git checkout and in-app updates are reported as unavailable.
 

@@ -74,13 +74,25 @@ export function isLiveRow(session: TuiSessionRow): boolean {
  * outranks a stale `busy` status because the hook is the newer signal. An
  * errored session has no state of its own here and joins the waiting tier,
  * since it is equally something only a human can clear.
+ *
+ * ⚠️ An ACKNOWLEDGED item no longer decides the row. `acknowledgedAt` means the
+ * alert this prompt armed has been spent, either because somebody opened the
+ * session on another device or because the inbox opened the item that way for a
+ * session watching its own background work. The item itself stays pending and
+ * answerable, so the row keeps carrying it and the approval card still renders;
+ * it simply stops dragging the session into NEEDS YOU. The web has honoured
+ * that since acknowledgement existed (`approvals-ui.js` clears the pending hook
+ * that `_mobileOverviewState` reads), and this gate is where the TUI had been
+ * reading past it: acknowledging on a phone cleared the alert everywhere except
+ * here. Only `idle` can be acknowledged, so a permission or question dialog is
+ * unaffected by construction, and both are checked ahead of the flag anyway.
  */
 export function classifySession(session: TuiSessionRow, approval?: ApprovalItem): TuiSessionState {
   if (!isLiveRow(session)) return 'recent';
   if (approval) {
     if (approval.kind === 'permission') return 'blocked-permission';
     if (approval.kind === 'question') return 'blocked-question';
-    return 'waiting';
+    if (!approval.acknowledgedAt) return 'waiting';
   }
   if (session.status === 'error') return 'waiting';
   if (session.isWorking === true || session.status === 'busy') return 'working';
@@ -96,7 +108,11 @@ export function classifySession(session: TuiSessionRow, approval?: ApprovalItem)
  * turn's own start is the pane's last Enter.
  */
 export function stateSince(state: TuiSessionState, session: TuiSessionRow, approval?: ApprovalItem): number {
-  if (approval) return approval.createdAt;
+  // The prompt's own age measures the state only while the prompt is what put the
+  // row in that state. An acknowledged item still rides along on a row that is
+  // plainly idle or working, and dating such a row from it would report how long
+  // ago the prompt arrived as though it were how long the session has been quiet.
+  if (approval && STATE_GROUP[state] === 'needs-you') return approval.createdAt;
   if (state === 'working') return session.lastSubmitAt ?? session.createdAt ?? 0;
   return session.lastActivityAt ?? session.createdAt ?? 0;
 }

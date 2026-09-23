@@ -35,6 +35,12 @@ process.env.HOME = testHome;
 process.env.USERPROFILE = testHome;
 process.env.VITEST = 'true';
 
+for (const key of Object.keys(process.env)) {
+  if (key.startsWith('CODEMAN_')) delete process.env[key];
+}
+
+// Explicitly document the most consequential inherited settings below. The
+// loop above intentionally also catches future container/deployment variables.
 delete process.env.CODEMAN_PASSWORD;
 delete process.env.CODEMAN_USERNAME;
 // Gesture availability changes renderIndexHtml output (injects the
@@ -45,6 +51,12 @@ delete process.env.CODEMAN_GESTURE;
 // operator who exports it (exactly who the feature is for) would otherwise see the
 // root-install byte-identity assertions fail.
 delete process.env.CODEMAN_BASE_URL;
+// CLAUDE_CONFIG_DIR (#255) relocates Claude's whole tree, transcripts included, and
+// `claudeProjectsDir()` reads it before it ever looks at `homedir()`. A developer who runs
+// Codeman against a separate Claude account exports exactly this, and every test that writes
+// a transcript fixture under the temp HOME's `~/.claude/projects` then reads "no transcript"
+// (found at merge of #467: test/session-custom-model-restart.test.ts went red).
+delete process.env.CLAUDE_CONFIG_DIR;
 
 // Instance selection is PROCESS-WIDE and is what `src/config/instance.ts` derives
 // both the data dir and the tmux socket from, so a shell that exports any of these
@@ -78,6 +90,9 @@ delete process.env.CODEMAN_BASE_URL;
 delete process.env.CODEMAN_INSTANCE;
 delete process.env.CODEMAN_DATA_DIR;
 delete process.env.CODEMAN_TMUX_SOCKET;
+// Docker Compose binds cases outside HOME. Leaving this set makes route tests
+// write into the deployment's real case root instead of their temp HOME.
+delete process.env.CODEMAN_CASES_PATH;
 
 afterEach(() => {
   vi.clearAllMocks();

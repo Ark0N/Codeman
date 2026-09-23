@@ -36,7 +36,8 @@ interface CliEntry {
   launch: CliLaunch; // the structured argv template
   env: CliEnv; // exports, tmux setenv keys, the env-override allowlist
   capabilities: CliCapabilities; // what every call site reads instead of the id
-  //   .workDetect?: { promptGlyph, workingLine } — how this CLI's pane shows work
+  //   .workDetect?: { promptGlyph, workingLine, watchingLine?, watchingLines? } — how
+  //   this CLI's pane shows work, and how it shows work it started in the background
   overlays: CliOverlays; // remote-SSH / Docker pane commands, credential store
 }
 ```
@@ -45,9 +46,45 @@ interface CliEntry {
 
 ### Regexes that come from config
 
-Two capability fields carry a regular expression an override file can set: `discovery.version.regex` and `capabilities.workDetect.workingLine`. Both go through `compileVersionRegex()`, which caps the source at 200 characters, refuses the nested-quantifier shapes that cause catastrophic backtracking, and returns `null` rather than throwing so every caller degrades instead of crashing.
+Three capability fields carry a regular expression an override file can set: `discovery.version.regex`, `capabilities.workDetect.workingLine` and `capabilities.workDetect.watchingLine`. All three go through `compileVersionRegex()`, which caps the source at 200 characters, refuses the nested-quantifier shapes that cause catastrophic backtracking, and returns `null` rather than throwing so every caller degrades instead of crashing.
 
 `workingLine` is the one that matters most, because it is compiled once per session and then run against every accumulated PTY chunk and every pane capture. A nested quantifier there is a ReDoS against the event loop for the whole server, not just that session. The guard therefore runs in two places, and neither is redundant: `schema.ts` rejects the entry at LOAD time so a bad pattern never reaches a session, and `_workingLinePattern()` in `session.ts` compiles through the same helper so the runtime cannot end up with a pattern the schema would have refused.
+
+`watchingLine` reads a different row of the same screen. A CLI draws it while work the agent
+itself started is still running — Claude prints `⏵⏵ bypass permissions on · 1 monitor · ← for
+agents` while a monitor, a backgrounded shell or a cloud session is live. Codeman turns that
+into `Session.watching`, and an idle prompt from such a session opens already acknowledged,
+so a pane waiting for its own background work never raises an alert a human cannot answer.
+Group 1 is the label, and a CLI that declares no pattern reports no background work.
+
+Two CLIs declare such a row today, and they put it in different places. Claude writes its
+chip on the last row of the screen, so it keeps the default one-row window and anchors on
+the `·` its footer joins items with. Codex pins
+`1 background terminal running · /ps to view · /stop to close` ABOVE its composer, which
+puts the row third from the bottom once the status line and the composer are counted, so its
+entry declares `watchingLines: 3` and matches that row end to end. Both were measured
+against live panes rather than read out of a binary, which is the standard for adding a
+third.
+
+That label is the one value in the registry that an AGENT can influence, because it comes off
+the agent's own screen. Two things keep it honest, and both belong to whoever adds a pattern
+for a new CLI. `watchingLabel()` in `session-activity.ts` searches only the last few
+non-blank rows, which should be the part of the screen the CLI draws rather than the agent,
+and the pattern should anchor on chrome only that CLI can produce. Keep the window as small
+as the layout allows, since every row it adds is another row the agent may be able to write.
+The label is also ANSI-stripped and length-capped at the source, and every interpolation of
+it into markup goes through `escapeHtml()`, since it ends up on a badge and in an approval
+card.
+
+The two shipped entries do not sit equally well behind that rule, and the difference decides
+what a pattern is allowed to do. Claude's chip is the last row, so its one-row window holds
+nothing the agent can write — not even the status line above it, whose command a session
+running with permissions bypassed can write into its own `.claude/settings.json`. Codex's row
+shares its slot with the last row of the transcript whenever no terminal is running, so a
+message ending in that exact line is matched. What keeps that harmless is `hooks: 'none'`: no
+hook event from a codex session reaches the approvals inbox, so a forged label costs a wrong
+badge and cannot silence an alert. Before giving a CLI both hook signals and a pattern, make
+sure its row is one the agent cannot write.
 
 ### Three capabilities that must stay independent
 
@@ -102,6 +139,8 @@ It matches four shapes, not one: `mode === '<id>'`, `mode !== '<id>'`, `case '<i
 
 The allowlist is not a formality. If a branch is about what a CLI can DO it belongs in `CliCapabilities`; the entries that remain are things that are not CLI-behaviour branches at all — chiefly the legacy per-mode `<Mode>Config` objects on `POST /api/sessions`, which are a fact about the public HTTP API rather than about any CLI, plus a few documented cases where `mode === 'claude'` is genuinely the right question (Read My Mind reads Claude's _own_ transcript, so a capability there would be actively wrong).
 
+`test/frontend-cli-no-id-branching.test.ts` is the same guard for the two frontend files the CLI registry's Run-menu consolidation touches, `session-ui.js` and `mobile-overview.js` — deliberately not the rest of `src/web/public/`, whose per-CLI rules stay out of scope for now (see "Fields declared for later" below). Its allowlist keys on `<file>::<expression>` with no line number, since a single unrelated edit to a contended file would otherwise shift every subsequent line and make every entry go stale at once, and each entry additionally carries the exact number of approved call sites — a bare key would let a brand-new branch reusing an already-approved expression land unreviewed. Its comparison shape differs from the backend guard's in one respect: the left-hand side may be any identifier, not only one named `mode`, `id` or `agentType`, because the review of #458 found `const m = this._runMode; if (m === 'codex')` slipping past the named form while the scanned file already filters with `(m) => m !== 'shell'`.
+
 ## Two namespaces called `param`
 
 `launch.params` keys, `env.configSetenv[].fromParam` and `capabilities.privilegedParams[].param` all name a **launch param**. The **legacy wire field** a param arrives as is a separate namespace, and `launch.legacyConfigAliases` is the only bridge between the two.
@@ -112,7 +151,7 @@ This matters because it is invisible when it is wrong. `capabilities.privilegedP
 
 `shortBadge`, `accent`, `capabilities.echo`, `capabilities.wheelForward`, `capabilities.keyboardAccessory` and `capabilities.maxFrameBytes` are **declared but not yet read**. They all describe frontend behaviour, and the frontend is deliberately untouched here: `app.js`, `terminal-ui.js` and `styles.css` keep their own hand-authored per-CLI rules, and moving them is its own piece of work verified by a browser/mobile suite the CI gate cannot see.
 
-Treat those values as **transcribed, not authoritative** — nothing enforces that `echo.policy` matches `_updateLocalEchoState`'s fallthrough, or that `accent` matches the gradient CSS paints, so re-measure before wiring one up. A field that is both wrong and unread is worse than an absent one, because the next reader trusts it; `test/cli-registry-no-id-branching.test.ts` pins the list so it cannot quietly grow, and wiring one up makes its line there fail, which is the direction you want.
+Treat those values as **transcribed, not authoritative** — nothing enforces that `echo.policy` matches `_updateLocalEchoState`'s fallthrough, so re-measure before wiring one up. `accent` is the one exception: it was measured against styles.css on 2026-09-21 (method in the comment above `CLAUDE` in `stock.ts`), though nothing keeps it in step with the CSS either. A field that is both wrong and unread is worse than an absent one, because the next reader trusts it; `test/cli-registry-no-id-branching.test.ts` pins the list so it cannot quietly grow, and wiring one up makes its line there fail, which is the direction you want.
 
 `overlays.credStore` is in the same category, for a sharper reason: the Docker credential-seeding path still reads its own `CRED_STORES` table, because this shape allows ONE store per CLI and the live table needs two for gemini (`.gemini` for the CLI's own auth plus `.config/gcloud` for Vertex), while deepseek declares none here even though `.dsh` is seeded. Wiring it means making the field an array and correcting those two entries — a change to credential seeding, which is simultaneously the worst thing here to get wrong and the least covered by tests, since every docker IO path is no-op'd under vitest.
 

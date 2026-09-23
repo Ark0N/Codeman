@@ -40,6 +40,14 @@ function loadKeyboardHandler(opts: { viewportY: number; baseY: number }) {
   const app: any = {
     terminal,
     fitAddon: { fit: () => calls.push('fit') },
+    // The settle refits through the one function that also applies the floor
+    // it reports (#464), so that is what the fake has to offer. Recorded under
+    // its own name rather than 'fit': a bare fit here would be the divergence
+    // this test's subject was changed to avoid.
+    syncTerminalGeometry: () => {
+      calls.push('syncTerminalGeometry');
+      return { cols: 80, rows: 24 };
+    },
     // The real predicate (terminal-ui.js isTerminalAtBottom), reproduced so the
     // test exercises the same tolerance the runtime uses.
     isTerminalAtBottom: () => terminal.buffer.active.viewportY >= terminal.buffer.active.baseY - 2,
@@ -131,7 +139,7 @@ describe('keyboard settle preserves scroll intent (issue #259)', () => {
     kh._scheduleViewportSettle({});
     settle();
 
-    expect(calls).toContain('fit');
+    expect(calls).toContain('syncTerminalGeometry');
     expect(calls).not.toContain('scrollToBottom');
     expect(calls.some((c) => c.startsWith('scrollToLine'))).toBe(false);
   });

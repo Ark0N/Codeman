@@ -142,7 +142,7 @@ describe('_quickStartWithCustomModelConfirm', () => {
     })) as unknown as typeof fetch;
   }
 
-  it('returns the response directly when no confirmation is needed', async () => {
+  it('returns the response directly when no confirmation is needed, and records "last used"', async () => {
     const { win, app } = bootApp();
     withFetch(win, (body) => ({ success: true, data: { sessionId: 's1', modelSwapInProgress: false, body } }));
     const data = await app._quickStartWithCustomModelConfirm({
@@ -152,9 +152,17 @@ describe('_quickStartWithCustomModelConfirm', () => {
     expect(data.success).toBe(true);
     expect(data.data.sessionId).toBe('s1');
     expect(app._lastCustomModelLaunchResult).toEqual(data.data);
+    expect(win.localStorage.getItem('codeman:customModelLastUsed:codex:e')).toBe('m');
   });
 
-  it('confirming re-sends with confirmedSwap and returns the second response', async () => {
+  it('a plain launch with no customModel at all never touches the "last used" key (undefined endpointId/modelId would otherwise silently no-op it)', async () => {
+    const { win, app } = bootApp();
+    withFetch(win, () => ({ success: true, data: { sessionId: 's1' } }));
+    await app._quickStartWithCustomModelConfirm({ mode: 'codex' });
+    expect(win.localStorage.getItem('codeman:customModelLastUsed:codex:undefined')).toBeNull();
+  });
+
+  it('confirming re-sends with confirmedSwap, returns the second response, and only THEN records "last used"', async () => {
     const { win, app } = bootApp();
     app._confirmModelSwap = async () => true;
     let calls = 0;
@@ -183,9 +191,10 @@ describe('_quickStartWithCustomModelConfirm', () => {
     expect(calls).toBe(2);
     expect(data.data.sessionId).toBe('s1');
     expect(app._lastCustomModelLaunchResult.modelSwapInProgress).toBe(true);
+    expect(win.localStorage.getItem('codeman:customModelLastUsed:codex:e')).toBe('m');
   });
 
-  it('cancelling never re-sends, and reports a cancellation error', async () => {
+  it('cancelling never re-sends, reports a cancellation error, and must NEVER record "last used" for a launch that never happened', async () => {
     const { win, app } = bootApp();
     app._confirmModelSwap = async () => false;
     let calls = 0;
@@ -208,6 +217,7 @@ describe('_quickStartWithCustomModelConfirm', () => {
     expect(data.success).toBe(false);
     expect(data.error).toMatch(/cancelled/i);
     expect(app._lastCustomModelLaunchResult).toBeUndefined();
+    expect(win.localStorage.getItem('codeman:customModelLastUsed:codex:e')).toBeNull();
   });
 });
 

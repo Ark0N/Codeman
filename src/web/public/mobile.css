@@ -529,6 +529,11 @@ html.mobile-init .file-browser-panel {
   .btn-icon-header.btn-approvals {
     display: none !important;
   }
+  /* Split-pane is hidden here too, but the AUTHORITATIVE hard gate is the
+     wider `@media (max-width: 1179px)` rule in styles.css — this file only
+     loads up to 1023px, which does not cover the 1024-1179px tablet range
+     the split feature also needs to stay off (two 240px min-width panes plus
+     the divider need ~486px; the divider also has no touch handlers). */
 
   /* Read My Mind 🧠 header button: never in the phone header; the phone
      surface is the keyboard-accessory 🧠 key (same `readMyMindEnabled` gate,
@@ -687,6 +692,22 @@ html.mobile-init .file-browser-panel {
      32px tab would sit on top of the tab name. The glow is the phone's tell. */
   .session-tab .tab-status.busy::after {
     display: none;
+  }
+
+  /* The exited-agent mute, a third time, for the phone (Ark0N/Codeman#446).
+     The rule above enlarges the working dot and gives it a green glow with
+     !important, and `status` deliberately stays `busy` for a pane whose agent
+     died mid-turn — so without this a phone renders a 9px grey dot still
+     wearing the green halo, beside a badge reading "exited". Measured; the
+     desktop rules cannot reach it, since they declare no box-shadow and lose
+     to !important anyway. !important here for the reason the glow needs it:
+     the skin block in styles.css outranks any plain class rule in this file.
+     ⚠ The alert classes and the error state are excluded exactly as they are
+     on desktop — a colour that means "this needs you" outranks "it exited". */
+  .session-tab.tab-agent-exited:not(.tab-alert-action):not(.tab-alert-idle) .tab-status:not(.error) {
+    background: var(--text-muted) !important;
+    box-shadow: none !important;
+    opacity: 0.5;
   }
 
   /* Truncate tab names more aggressively on mobile */
@@ -928,40 +949,41 @@ html.mobile-init .file-browser-panel {
     border-color: rgba(16, 185, 129, 0.5);
   }
 
-  /* Gemini mode colors on mobile */
+  /* Gemini mode colors on mobile. Same `!important` rationale as the pi block below. */
   .btn-toolbar.btn-run.mode-gemini,
   .btn-toolbar.btn-run-gear.mode-gemini {
-    background: #10243f;
-    border-color: rgba(96, 165, 250, 0.3);
-    color: #dbeafe;
+    background: #10243f !important;
+    border-color: rgba(96, 165, 250, 0.3) !important;
+    color: #dbeafe !important;
   }
 
   .btn-toolbar.btn-run.mode-gemini:active,
   .btn-toolbar.btn-run-gear.mode-gemini:active {
-    background: #174ea6;
-    border-color: rgba(96, 165, 250, 0.5);
+    background: #174ea6 !important;
+    border-color: rgba(96, 165, 250, 0.5) !important;
   }
 
-  /* Antigravity mode colors on mobile */
+  /* Antigravity mode colors on mobile. Same `!important` rationale as the pi block below. */
   .btn-toolbar.btn-run.mode-antigravity,
   .btn-toolbar.btn-run-gear.mode-antigravity {
-    background: #0b2b33;
-    border-color: rgba(34, 211, 238, 0.3);
-    color: #cffafe;
+    background: #0b2b33 !important;
+    border-color: rgba(34, 211, 238, 0.3) !important;
+    color: #cffafe !important;
   }
 
   .btn-toolbar.btn-run.mode-antigravity:active,
   .btn-toolbar.btn-run-gear.mode-antigravity:active {
-    background: #0e7490;
-    border-color: rgba(34, 211, 238, 0.5);
+    background: #0e7490 !important;
+    border-color: rgba(34, 211, 238, 0.5) !important;
   }
 
   /* Pi mode colors on mobile.
      `!important` is load-bearing here, not noise: styles.css nests its skin rules
-     inside `html:not([data-skin="og"])`, so a bare `.btn-toolbar.btn-run` in there
-     resolves to (0,2,1) and outranks this (0,2,0) `.mode-pi` pair regardless of
-     load order. The antigravity block right above omits it and is consequently
-     dead on every non-og skin (i.e. on the default) — do not copy that. */
+     inside `html:not([data-skin="og"])`, so a bare `.btn-toolbar.btn-run` or
+     `.btn-toolbar.btn-run-gear` in there outranks this `.mode-pi` pair regardless
+     of load order. Without it the gear half keeps the skin accent while the body
+     takes the nested block's mode colour, so the split button renders two-tone
+     (gemini and antigravity shipped that way until they got `!important` too). */
   .btn-toolbar.btn-run.mode-pi,
   .btn-toolbar.btn-run-gear.mode-pi {
     background: #33121f !important;
@@ -2954,6 +2976,13 @@ html.mobile-init .file-browser-panel {
   .mobile-overview-pill--working {
     border-color: var(--green);
     color: var(--green);
+  }
+
+  /* Accent, and none of the three above: a session watching work it started itself
+     is not asking the user for anything, and red and yellow are what say it is. */
+  .mobile-overview-pill--watching {
+    border-color: var(--accent);
+    color: var(--accent);
   }
 
   .mobile-overview-chevron {

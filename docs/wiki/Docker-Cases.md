@@ -118,6 +118,35 @@ invisible from the host (`pi -c` and `grok -c` inside a docker case see only tha
 container's history). OMP's `sessions/` is the exception and is shared read-write, because
 Codeman reads it host-side for history and resume.
 
+**Git hosts.** The agent image can also include the GitHub CLI (`gh`) and the Azure CLI (`az`,
+with the `azure-devops` extension), off by default, and its git then uses them as credential
+helpers for github.com and Azure DevOps. When the matching switch is on, their sign-ins are
+seeded like everything else, file by file: `~/.config/gh/hosts.yml` and `config.yml`, and the
+sign-in files from `~/.azure` (not its logs or extensions). With a switch off they are never
+copied in, even if the files exist. So once a switch is on and `gh auth login` / `az login`
+have been run where Codeman runs, agents in a Docker case can clone and push private repos on
+those hosts. Two limits:
+
+- A token held in a desktop keyring or an encrypted token cache (Windows, macOS) is not
+  inside those files and does not carry in. Sign in inside the container instead. The Docker
+  server image and a headless Linux host keep it in the files, so they carry.
+- The sign-ins are mounted when a case container is **created**, so an existing container
+  never picks them up. After turning a switch on, signing in, or rebuilding the agent image,
+  **recreate the case container**: remove it, and the next session in that case creates a
+  fresh one. (Or sign in inside the existing container instead.)
+
+This hands a GitHub token and an Azure sign-in to every agent in a seeded Docker case, the
+same trust you already give it with Claude, Codex or gcloud. Turn seeding off for a case that
+should not have them.
+
+Both CLIs are opt-in. To build the agent image with them, set
+`CODEMAN_AGENT_IMAGE_INSTALL_GH=1` and/or `CODEMAN_AGENT_IMAGE_INSTALL_AZ=1` where the image
+is built: in front of `node scripts/build-agent-image.mjs`, or in the Codeman server's
+environment for the image it builds automatically (in the Docker deployment, `environment:`
+in `docker-compose.override.yml`), then rebuild the image with `--no-cache`.
+`docker/README.md` ("Private repositories") has the details and the matching switches for
+the server image.
+
 ## Isolation
 
 Every container runs hardened by default:

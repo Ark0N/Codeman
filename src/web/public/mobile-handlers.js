@@ -581,11 +581,10 @@ const KeyboardHandler = {
       this._settleRestoreScroll = false;
 
       if (typeof app !== 'undefined' && app.terminal) {
-        if (app.fitAddon) {
-          try {
-            app.fitAddon.fit();
-          } catch {}
-        }
+        // Floored fit, not a bare fitAddon.fit(): _shrinkPaddingToFit measures
+        // the leftover gap under the LAST row, so it has to run against the
+        // geometry xterm will actually keep (issue #464).
+        app.syncTerminalGeometry?.();
         if (this.keyboardVisible) this._shrinkPaddingToFit();
         // Following live output → bottom, as before. Reading history → back to
         // the pre-reflow anchor instead of being yanked down (#259).
@@ -601,25 +600,23 @@ const KeyboardHandler = {
     }, this.VIEWPORT_SETTLE_MS);
   },
 
-  /** Send current terminal dimensions to the server (one-shot, for keyboard open/close) */
+  /**
+   * Send the settled terminal dimensions to the server (one-shot, for keyboard
+   * open/close — `throttledResize` deliberately holds the PTY's shape for the
+   * whole animation, so this is what stops it going stale).
+   *
+   * ⚠️ Delegates rather than computing its own numbers. This used to re-read
+   * `proposeDimensions()` and floor only what it POSTed, so on a phone with the
+   * keyboard up — where the proposal is routinely under ten rows — the PTY was
+   * told ten and xterm kept six, which is the #464 divergence. Worse, it read
+   * the proposal AFTER `_shrinkPaddingToFit()` had moved the container, so even
+   * unfloored its answer could differ from the fit above it. `sendResize` fits,
+   * floors and applies in one step, and additionally gets the WS fast path and
+   * the detached-session yield this hand-rolled POST never had.
+   */
   _sendTerminalResize() {
-    if (typeof app === 'undefined' || !app.activeSessionId || !app.fitAddon) return;
-    try {
-      const dims = app.fitAddon.proposeDimensions();
-      if (dims) {
-        const cols = Math.max(dims.cols, 40);
-        const rows = Math.max(dims.rows, 10);
-        app._lastResizeDims = { cols, rows };
-        // Declare the viewport type so resize arbitration can ignore this
-        // while a desktop connection is sizing the same session.
-        const viewportType = MobileDetection.getDeviceType ? MobileDetection.getDeviceType() : 'mobile';
-        fetch(`/api/sessions/${app.activeSessionId}/resize`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cols, rows, viewportType }),
-        }).catch(() => {});
-      }
-    } catch {}
+    if (typeof app === 'undefined' || !app.activeSessionId) return;
+    app.sendResize?.(app.activeSessionId)?.catch?.(() => {});
   },
 
   /**
@@ -676,10 +673,8 @@ const KeyboardHandler = {
         const currentPadding = parseInt(main.style.paddingBottom) || 0;
         const floor = Math.min(currentPadding, this._fixedBottomBarsHeight());
         main.style.paddingBottom = Math.max(floor, currentPadding - gap) + 'px';
-        if (app.fitAddon)
-          try {
-            app.fitAddon.fit();
-          } catch {}
+        // Floored, like every other fit of the main terminal (#464).
+        app.syncTerminalGeometry?.();
       }
     } catch {}
   },

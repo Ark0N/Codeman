@@ -10,7 +10,7 @@
       "name": "codeman",
       "source": "./plugins/codeman",
       "description": "Drive Codeman from inside a Claude Code session: spawn worker sessions, prompt them, wait for them, read their answers, clean up. Acts only inside a Codeman-managed session.",
-      "version": "1.31.0",
+      "version": "1.32.1",
       "author": {
         "name": "Ark0N",
         "url": "https://github.com/Ark0N"

@@ -987,11 +987,24 @@ describe('terminal touch selection', () => {
     expect(select).toHaveBeenCalledWith(PATH_AT, 0, '/tmp/out/chart.png'.length);
   });
 
-  it('selects nothing when the press lands on blank space', () => {
+  it('swallows a blank-space long press without creating a selection', () => {
     const { app, select } = selectionHarness();
+    app._blurMobileTerminalInput = vi.fn();
+    app._suppressTrustedTapMouseEvents = vi.fn();
+    app._armTouchSelectionFocusGuard = vi.fn();
+    app._showTouchSelectionBar = vi.fn();
 
     expect(press(app, LINE.length + 10)).toBe(false);
+    expect(app._blurMobileTerminalInput).toHaveBeenCalledOnce();
+    expect(app._suppressTrustedTapMouseEvents).toHaveBeenCalledOnce();
+    expect(app._armTouchSelectionFocusGuard).toHaveBeenCalledOnce();
+    // touchend keys off this state to preventDefault the compatibility mouse
+    // sequence even though blank space produced no selection to keep alive.
+    expect(app._touchSelecting).toBe(true);
+    expect(app._touchSelectionActive).toBeFalsy();
+    expect(app._touchSelectionAnchor).toBeUndefined();
     expect(select).not.toHaveBeenCalled();
+    expect(app._showTouchSelectionBar).not.toHaveBeenCalled();
   });
 
   it('grows the selection as the finger drags past the anchor word', () => {

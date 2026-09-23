@@ -75,11 +75,24 @@ function agentDefaults(): Pick<
   };
 }
 
+// `accent` on every entry below (except SHELL, which the frontend renders no
+// distinct color for) is measured from the actual `.btn-toolbar.btn-run.mode-<id>`
+// CSS rule's `border-color` on the OG skin (styles.css) — the single cleanest
+// representative hex each entry's own multi-stop gradient resolves around.
+// Corrected 2026-09-21 after PR #458's review found several were simply wrong
+// (e.g. claude was registered as Anthropic's brand orange, `#d97757`, but the
+// button renders blue): `docs/cli-registry.md`'s own "transcribed, not
+// authoritative, re-measure before wiring one up" warning for this
+// DECLARED-FOR-LATER field, taken literally. The one exception is GEMINI, whose
+// run-button border (#60a5fa) is the only one that disagrees with its own tab badge
+// and run-mode dot (#8ab4f8); it takes the badge colour, so every accent names the
+// same hex the frontend uses as that CLI's flat identity. This is a data-accuracy fix only —
+// `accent` still has no reader, so nothing rendered changes because of it.
 const CLAUDE: CliEntry = {
   id: 'claude' as CliEntry['id'],
   label: 'Claude',
   shortBadge: 'CC',
-  accent: '#d97757',
+  accent: '#3b82f6',
   enabled: true,
   stock: true,
   order: 0,
@@ -200,12 +213,31 @@ const CLAUDE: CliEntry = {
   },
   capabilities: {
     external: false,
+    // Claude indents its transcript body two columns and puts its own ●/✻/❯ markers
+    // in them, so a copy can drop two and paste flush. Claude and codex are the only
+    // entries that declare this, because theirs are the only gutters that have been measured.
+    transcriptGutter: 2,
     // The historical hard-coded pair, now stated as data. `workingLine` matches both the
     // `✻ Actualizing… (39s · ↓ 2.0k tokens)` status line and the bare `esc to interrupt`
     // footer, because tmux repaints partially and only one of the two may land in a chunk.
     workDetect: {
       promptGlyph: '❯',
       workingLine: String.raw`…\s*\((?:\d+h\s+)?(?:\d+m\s+)?\d+s\b|esc to interrupt`,
+      // Claude prints what it started in the background on the footer row beneath its
+      // composer, as `⏵⏵ bypass permissions on · 1 monitor · ← for agents`. The labels are
+      // the CLI's own words for each kind of background task, and group 1 is the one
+      // Codeman badges the session with. Verified against a live 2.1.278 pane on
+      // 2026-09-21.
+      // ⚠️ Two things keep an agent from writing its own label here, and both matter.
+      // The footer is the LAST row, so the default one-row window (`WATCHING_TAIL_LINES`)
+      // holds nothing but Ink's own chrome — in particular it leaves out the status line
+      // directly above, whose content comes from a `statusLine` command a bypassed
+      // session can write into its own `.claude/settings.json`. And the leading `·` keeps
+      // the match on the footer's own item list rather than on any text that happens to
+      // carry a count. A footer that ever drew the chip as its only item would report no
+      // watching rather than open that door. See `watchingLabel()` in
+      // `session-activity.ts`.
+      watchingLine: String.raw`·\s*(\d+ (?:monitors?|shells?|teams?|local agents?|cloud sessions?|MCP tasks?|background tasks?|(?:background|remote) dynamic workflows?|Artifact comment monitors?))`,
     },
     requiresMux: false,
     // Claude installs Codeman's own hooks block into every workspace it runs in, so its
@@ -368,7 +400,7 @@ const OPENCODE: CliEntry = {
   id: 'opencode' as CliEntry['id'],
   label: 'OpenCode',
   shortBadge: 'OC',
-  accent: '#f59e0b',
+  accent: '#10b981',
   enabled: true,
   stock: true,
   order: 10,
@@ -454,7 +486,7 @@ const CODEX: CliEntry = {
   id: 'codex' as CliEntry['id'],
   label: 'Codex',
   shortBadge: 'CX',
-  accent: '#6b7fd7',
+  accent: '#a855f7',
   enabled: true,
   stock: true,
   order: 20,
@@ -518,7 +550,43 @@ const CODEX: CliEntry = {
     // `Working (2m 49s • esc to interrupt)` above it while a turn runs. It animates no
     // braille spinner, and it never prints `esc to interrupt` at rest, so that phrase
     // alone separates a running turn from an idle one.
-    workDetect: { promptGlyph: '›', workingLine: '[Ee]sc to interrupt' },
+    // Codex pins a row of its own while a background terminal it started is still
+    // running: `  1 background terminal running · /ps to view · /stop to close`. Unlike
+    // Claude's footer chip that row sits ABOVE the composer, which puts it third from the
+    // bottom once the status line and the composer are counted, hence `watchingLines`.
+    // Measured against a live codex-cli 0.154.0 pane on 2026-09-22: the row appears when
+    // the terminal starts, follows the composer down as the conversation grows, and is
+    // gone after `/stop`.
+    // ⚠️ This entry CANNOT promise what Claude's does, and the difference is Codex's
+    // layout rather than its pattern. The third row from the bottom is the chip only
+    // while a terminal runs; with none running it is the last row of the transcript,
+    // which the agent writes. Matching the complete row raises the bar — an assistant
+    // message has to end with this exact line, to the character — but nothing here makes
+    // forging it impossible, so do not read the Claude comment above as applying here.
+    // What contains it is that codex declares `hooks: 'none'`: no hook event from a codex
+    // session ever reaches `notePrompt()`, so there is no idle item to pre-acknowledge
+    // and a forged label costs a wrong badge and nothing else. A CLI that gains hook
+    // signals must not keep a pattern this soft.
+    // ⚠️ Background TERMINALS are the only background work codex advertises on screen.
+    // A sub-agent started without waiting outlives the turn just as a terminal does —
+    // measured 2026-09-22, the sandboxed process was still running — and the pane shows
+    // nothing at all for it: the last rows are the composer and the status line, and
+    // `Sub-agents running` lives in the on-demand `/subagents` panel, not above the
+    // composer. So a codex session waiting on a sub-agent reads as plainly idle here.
+    // Nothing is misfiled by that (codex raises no idle prompts), and there is no row to
+    // match until codex pins one.
+    workDetect: {
+      promptGlyph: '›',
+      workingLine: '[Ee]sc to interrupt',
+      watchingLine: String.raw`^\s{0,4}(\d+ background terminals?) running · /ps to view · /stop to close$`,
+      watchingLines: 3,
+    },
+    // Two columns, like claude's, measured on a live 0.154.0 answer: the `•`/`›`/`⚠`
+    // markers sit in the gutter, prose continuations sit at 2, and a nested YAML block
+    // the model wrote rendered at 2/4/6/8 for its own 0/2/4/6. Replayed at 100, 120,
+    // 160, 198, 235 and 282 columns the indents were 0, 2, 4, 6 and 8 at every one,
+    // never 1, so the width is not a function of the pane.
+    transcriptGutter: 2,
     transcript: 'codex-rollout',
     altScreen: 'strip-full',
     echo: { policy: 'predict', anchor: { kind: 'cursor' }, predictProfile: 'codex' },
@@ -565,7 +633,8 @@ const GEMINI: CliEntry = {
   id: 'gemini' as CliEntry['id'],
   label: 'Gemini',
   shortBadge: 'GM',
-  accent: '#4285f4',
+  // The tab badge / run-mode-dot colour, not the run-button border (see the note above CLAUDE).
+  accent: '#8ab4f8',
   enabled: true,
   stock: true,
   order: 30,
@@ -657,7 +726,7 @@ const ANTIGRAVITY: CliEntry = {
   id: 'antigravity' as CliEntry['id'],
   label: 'Antigravity',
   shortBadge: 'AG',
-  accent: '#8b5cf6',
+  accent: '#22d3ee',
   enabled: true,
   stock: true,
   order: 40,
@@ -727,7 +796,7 @@ const PI: CliEntry = {
   id: 'pi' as CliEntry['id'],
   label: 'Pi',
   shortBadge: 'PI',
-  accent: '#10b981',
+  accent: '#f472b6',
   enabled: true,
   stock: true,
   order: 50,
@@ -851,10 +920,10 @@ const GROK: CliEntry = {
   shortBadge: 'GK',
   // Upstream hand-authored a charcoal GRADIENT across 4+ CSS spots (welcome button, tab
   // badge, run-mode dot, mobile skin overrides) rather than one flat colour; our registry's
-  // `accent` is a single hex, so this is the closest single value (the run-mode-dot colour,
-  // zinc-400). Nothing reads `accent` yet — the frontend is untouched in this change and
-  // keeps its own hand-authored CSS; the field is here so the entry is complete.
-  accent: '#a1a1aa',
+  // `accent` is a single hex, so this is the closest single value (zinc-300, the run-button
+  // border and tab-badge colour). Nothing reads `accent` yet: the frontend keeps its own
+  // hand-authored CSS; the field is here so the entry is complete.
+  accent: '#d4d4d8',
   enabled: true,
   stock: true,
   order: 70,
@@ -986,7 +1055,7 @@ const DEEPSEEK: CliEntry = {
   id: 'deepseek' as CliEntry['id'],
   label: 'DeepSeek',
   shortBadge: 'DS',
-  accent: '#4d6bfe',
+  accent: '#7c93ff',
   enabled: true,
   stock: true,
   order: 80,
@@ -1151,7 +1220,7 @@ const OMP: CliEntry = {
   id: 'omp' as CliEntry['id'],
   label: 'OMP',
   shortBadge: 'OM',
-  accent: '#7c9cf5',
+  accent: '#818cf8',
   enabled: true,
   stock: true,
   order: 90,

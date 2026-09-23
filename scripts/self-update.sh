@@ -74,6 +74,15 @@ echo "[self-update] $(date) start tag=$TAG supervisor=$SUPERVISOR repo=$REPO"
 export PATH="$(dirname "$NODE"):$HOME/.local/bin:$HOME/.npm-global/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
 export GIT_TERMINAL_PROMPT=0
 
+# --node is the server's process.execPath, a VERSIONED path (Homebrew resolves it
+# into Cellar/node/<ver>/). A `brew upgrade node` under a long-running server
+# deletes it, and every status write then failed, so the status stayed "queued"
+# forever. Fall back to whatever node is on PATH.
+if [ ! -x "$NODE" ]; then
+  echo "[self-update] WARN: $NODE is not executable, falling back to node on PATH"
+  NODE="$(command -v node || echo node)"
+fi
+
 TO_VERSION="${TAG##*@}"   # codeman@0.9.4 → 0.9.4 (tag is validated upstream)
 STASH_REF=""
 MANUAL_CMD=""
@@ -276,7 +285,17 @@ case "$SUPERVISOR" in
     # domain needs root, but we don't need it — kill the server and launchd
     # respawns it on the new dist/ within ThrottleInterval seconds.
     if [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null; then
-      : # respawn is launchd's job from here
+      # Respawn is launchd's job, but only once the old process EXITS. A graceful
+      # shutdown that hangs leaves the port closed and the service down, so
+      # escalate to SIGKILL (tmux sessions live outside the server and survive).
+      for _ in $(seq 1 30); do
+        kill -0 "$SERVER_PID" 2>/dev/null || break
+        sleep 1
+      done
+      if kill -0 "$SERVER_PID" 2>/dev/null; then
+        echo "[self-update] server pid $SERVER_PID still alive 30s after SIGTERM, sending SIGKILL"
+        kill -9 "$SERVER_PID" 2>/dev/null || true
+      fi
     else
       MANUAL_CMD="sudo launchctl kickstart -k system/com.codeman.web"
       write_status "completed-needs-manual-restart" "Update staged — restart Codeman to apply v$TO_VERSION."

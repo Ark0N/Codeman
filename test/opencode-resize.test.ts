@@ -55,32 +55,46 @@ describe('OpenCode session initial resize', () => {
     await context?.close();
   });
 
-  it('selectSession is not bypassed when runOpenCode sets activeSessionId', async () => {
-    // This test verifies at the code level that runOpenCode does NOT
-    // pre-set activeSessionId before calling selectSession.
-    // If it did, selectSession would early-return and skip sendResize.
+  it('selectSession is not bypassed when the shared launcher sets activeSessionId', async () => {
+    // This test verifies at the code level that the OpenCode launch path does
+    // NOT pre-set activeSessionId before calling selectSession. If it did,
+    // selectSession would early-return and skip sendResize.
+    //
+    // PR B2 consolidated runOpenCode() (and 7 siblings) into one shared
+    // _runCliMode(mode) — runOpenCode is now a one-line wrapper
+    // (`return this._runCliMode('opencode')`), so inspecting ITS source would
+    // never see the real launch logic and this check would pass vacuously
+    // regardless of what _runCliMode actually does. Inspect _runCliMode itself.
     ({ context, page } = await freshPage());
     await navigateAndWait(page);
 
-    // Read the runOpenCode source from the live app and verify
-    // it doesn't assign activeSessionId before selectSession
-    const hasPreAssignment = await page.evaluate(() => {
-      const app = (window as unknown as { app: { runOpenCode: { toString: () => string } } }).app;
-      const source = app.runOpenCode.toString();
+    const { selectIdx, assignIdx } = await page.evaluate(() => {
+      const app = (window as unknown as { app: { _runCliMode: { toString: () => string } } }).app;
+      const source = app._runCliMode.toString();
 
-      // Check: the source should NOT have activeSessionId = ... before selectSession
-      // Find positions of both patterns
-      const assignIdx = source.indexOf('this.activeSessionId = data.sessionId');
-      const selectIdx = source.indexOf('this.selectSession(data.sessionId)');
-
-      // If assign doesn't exist at all, that's the correct fix
-      if (assignIdx === -1) return false;
-
-      // If assign comes before select, that's the bug
-      return assignIdx < selectIdx;
+      // The launcher hands the FIRST created session to selectSession
+      // (`_launchQuickStartInstances()` returns `firstSessionId`). An earlier
+      // version of this check looked for `this.selectSession(data.sessionId)`,
+      // a string that exists nowhere in session-ui.js, so both lookups came
+      // back -1 and the assertion could never fail. Hence the anti-vacuity
+      // check below: the select call itself must be found.
+      const selectIdx = source.indexOf('this.selectSession(firstSessionId)');
+      // ANY assignment to activeSessionId (whatever the right-hand side is
+      // called), not `==`/`===` comparisons and not the comment that mentions
+      // pre-setting it without a `this.` prefix.
+      const assign = /this\.activeSessionId\s*=(?!=)/.exec(source);
+      return { selectIdx, assignIdx: assign ? assign.index : -1 };
     });
 
-    expect(hasPreAssignment).toBe(false);
+    // Anti-vacuity: if the select call is renamed again, fail here rather
+    // than pass on two -1s.
+    expect(selectIdx).toBeGreaterThan(-1);
+    // Correct: no assignment at all. Bug: an assignment that lands BEFORE
+    // selectSession runs, which makes selectSession early-return.
+    expect(
+      assignIdx === -1 || assignIdx > selectIdx,
+      `activeSessionId is assigned at ${assignIdx}, before selectSession at ${selectIdx}`
+    ).toBe(true);
   });
 
   it('sends resize to server after creating a session via quick-start', async () => {

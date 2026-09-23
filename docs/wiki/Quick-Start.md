@@ -43,7 +43,7 @@ To make a new one, click **+** next to the picker. The Add Case dialog has three
 | Tab               | Use it when                                                                                                        |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------ |
 | **Create New**    | Starting a fresh project. Creates `~/codeman-cases/<name>` and scaffolds a `CLAUDE.md` into it.                     |
-| **Clone Repo**    | Working on an existing public repo. Paste the URL; Codeman preflights it as you type, offers the repo's real branches and tags, and fills in the case name. |
+| **Clone Repo**    | Working on an existing repo: public, or private once this machine's git can authenticate (the Docker image can include `gh`/`az` helpers for this). Paste the URL; Codeman preflights it as you type, offers the repo's real branches and tags, and fills in the case name. |
 | **Link Existing** | The code is already on disk. Point at the folder, with **Browse** if you would rather click than type.               |
 
 The gear next to the picker holds two per-case toggles: **Agent Teams** and

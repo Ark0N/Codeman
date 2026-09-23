@@ -71,10 +71,76 @@ describe('classifySession', () => {
     expect(classifySession(row, approval({ sessionId: 'a', kind: 'idle' }))).toBe('waiting');
   });
 
+  it('stops an ACKNOWLEDGED prompt deciding the row', () => {
+    // Acknowledgement means the alert this prompt armed has been spent, either because
+    // a human opened the session elsewhere or because the inbox opened the item that way
+    // for a session watching its own background work. The web has honoured that since
+    // acknowledgement existed; this gate used to read past it, so an alert cleared on a
+    // phone stayed lit here alone.
+    const quiet = session({ sessionId: 'a', status: 'idle' });
+    const seen = approval({ sessionId: 'a', kind: 'idle', acknowledgedAt: NOW - 1_000 });
+    expect(classifySession(quiet, seen)).toBe('idle');
+    expect(classifySession(session({ sessionId: 'a', status: 'busy' }), seen)).toBe('working');
+  });
+
+  it('keeps a blocking dialog lit whatever its acknowledgement says', () => {
+    // `acknowledge()` is idle-only by construction, so this cannot happen through the
+    // routes. It is pinned because the cost of the two being wired together later is a
+    // permission dialog that stops asking.
+    const row = session({ sessionId: 'a' });
+    const at = NOW - 1_000;
+    expect(classifySession(row, approval({ sessionId: 'a', kind: 'permission', acknowledgedAt: at }))).toBe(
+      'blocked-permission'
+    );
+    expect(classifySession(row, approval({ sessionId: 'a', kind: 'question', acknowledgedAt: at }))).toBe(
+      'blocked-question'
+    );
+  });
+
   it('classifies a row the server no longer has live as history', () => {
     expect(classifySession(session({ sessionId: 'a', sources: ['history'], status: 'busy' }))).toBe('recent');
     expect(classifySession(session({ sessionId: 'a', sources: ['persisted', 'lifecycle'] }))).toBe('recent');
     expect(classifySession(session({ sessionId: 'a', sources: ['history', 'live'] }))).toBe('idle');
+  });
+});
+
+describe('an acknowledged prompt on a watching session', () => {
+  const sessions = [session({ sessionId: 'watcher', status: 'idle', lastActivityAt: NOW - 120_000 })];
+  const approvals = approvalMap([
+    approval({
+      sessionId: 'watcher',
+      kind: 'idle',
+      createdAt: NOW - 30_000,
+      acknowledgedAt: NOW - 30_000,
+      acknowledgedReason: 'watching 1 monitor',
+    }),
+  ]);
+
+  it('raises no alert: the row leaves NEEDS YOU entirely', () => {
+    const groups = groupSessions(buildRows(sessions, approvals));
+    const byKey = Object.fromEntries(groups.map((group) => [group.key, group.rows.map((r) => r.session.sessionId)]));
+    expect(byKey['needs-you']).toEqual([]);
+    expect(byKey['idle']).toEqual(['watcher']);
+  });
+
+  it('keeps the item on the row, because it is still pending and still answerable', () => {
+    const [row] = buildRows(sessions, approvals);
+    expect(row.approval?.acknowledgedReason).toBe('watching 1 monitor');
+  });
+
+  it('dates the row from the pane going quiet, not from the prompt', () => {
+    // The prompt's age measures the state only while the prompt is what put the row in
+    // it. Reading it here would report "idle 30s" for a session quiet for two minutes.
+    const [row] = buildRows(sessions, approvals);
+    expect(row.since).toBe(NOW - 120_000);
+  });
+
+  it('alerts again once the same session goes quiet for an ordinary reason', () => {
+    // The inbox supersedes the acknowledged item and builds a fresh one, so this is the
+    // next prompt rather than the same one changing its mind.
+    const fresh = approvalMap([approval({ sessionId: 'watcher', kind: 'idle', createdAt: NOW - 1_000 })]);
+    const groups = groupSessions(buildRows(sessions, fresh));
+    expect(groups[0].rows.map((row) => row.session.sessionId)).toEqual(['watcher']);
   });
 });
 

@@ -200,12 +200,12 @@ describe('mobile filesystem picker actions', () => {
       _pendingInput: 'pending text',
       _localEchoEnabled: true,
       _localEchoOverlay: {
-        getFlushed: () => ({ count: 4, text: 'sent' }),
+        getFlushed: () => ({ count: 4, text: 'a😀b' }),
         clear,
         suppressBufferDetection,
       },
       _flushedOffsets: new Map([['session-1', 4]]),
-      _flushedTexts: new Map([['session-1', 'sent']]),
+      _flushedTexts: new Map([['session-1', 'a😀b']]),
       sendInput,
       showToast,
       terminal: { focus },
@@ -216,7 +216,7 @@ describe('mobile filesystem picker actions', () => {
     expect(app._pendingInput).toBe('');
     expect(clear).toHaveBeenCalledOnce();
     expect(suppressBufferDetection).toHaveBeenCalledOnce();
-    expect(sendInput).toHaveBeenCalledWith('\x7f'.repeat(4));
+    expect(sendInput).toHaveBeenCalledWith('\x7f'.repeat(3));
     expect(sendInput).not.toHaveBeenCalledWith('/clear');
     expect(app._flushedOffsets.size).toBe(0);
     expect(app._flushedTexts.size).toBe(0);

@@ -20,11 +20,15 @@ import { fileURLToPath } from 'node:url';
 import {
   agentImageBuildArgPairs as mjsPairs,
   agentImageNpmPackages as mjsPackages,
+  GIT_HOST_CLI_BUILD_ARGS as mjsGitHostArgs,
+  gitHostCliBuildArgPairs as mjsGitHostPairs,
 } from '../scripts/lib/cli-catalog.mjs';
 import {
   agentImageBuildArgPairs as tsPairs,
   agentImageBuildArgs,
   agentImageNpmPackages as tsPackages,
+  GIT_HOST_CLI_BUILD_ARGS as tsGitHostArgs,
+  gitHostCliBuildArgPairs as tsGitHostPairs,
 } from '../src/docker-hosts.js';
 
 const CATALOG = JSON.parse(readFileSync(fileURLToPath(new URL('../config/clis.stock.json', import.meta.url)), 'utf-8'));
@@ -94,5 +98,50 @@ describe('agent-image build args: the .mjs and the TS mirror agree', () => {
       return m![1];
     };
     expect(extract(tsSource, 'docker-hosts.ts')).toBe(extract(mjsSource, 'cli-catalog.mjs'));
+  });
+});
+
+describe('optional gh / az in the agent image: both producers pass the same switches', () => {
+  const ENV_GH = 'CODEMAN_AGENT_IMAGE_INSTALL_GH';
+  const ENV_AZ = 'CODEMAN_AGENT_IMAGE_INSTALL_AZ';
+
+  it('map the same environment variables to the same Dockerfile ARGs', () => {
+    expect(tsGitHostArgs).toEqual(mjsGitHostArgs);
+    expect(tsGitHostArgs.map(([, arg]) => arg)).toEqual(['CODEMAN_INSTALL_GH', 'CODEMAN_INSTALL_AZ']);
+  });
+
+  it('agree for every combination, and an unset or empty variable adds nothing', () => {
+    for (const gh of [undefined, '', '0', '1']) {
+      for (const az of [undefined, '', '0', '1']) {
+        const env: NodeJS.ProcessEnv = {};
+        if (gh !== undefined) env[ENV_GH] = gh;
+        if (az !== undefined) env[ENV_AZ] = az;
+        const expected: Array<[string, string]> = [];
+        if (gh) expected.push(['CODEMAN_INSTALL_GH', gh]);
+        if (az) expected.push(['CODEMAN_INSTALL_AZ', az]);
+        expect(tsGitHostPairs(env)).toEqual(expected);
+        expect(mjsGitHostPairs(env)).toEqual(expected);
+        expect(tsPairs(env)).toEqual(mjsPairs(CATALOG, env));
+      }
+    }
+  });
+
+  it('keeps the default argv unchanged when neither variable is set', () => {
+    expect(tsPairs({})).toEqual([['CLI_NPM_PACKAGES', tsPackages().join(' ')]]);
+  });
+
+  it('refuses anything but 0 or 1 on both sides, naming the variable', () => {
+    for (const bad of ['yes', 'true', '2', ' 1', '0 && echo']) {
+      expect(() => tsGitHostPairs({ [ENV_AZ]: bad })).toThrow(new RegExp(ENV_AZ));
+      expect(() => mjsGitHostPairs({ [ENV_AZ]: bad })).toThrow(new RegExp(ENV_AZ));
+    }
+  });
+
+  it('both Dockerfiles declare the switches, defaulting to OFF (opt-in)', () => {
+    for (const file of ['../docker/agent.Dockerfile', '../docker/server.Dockerfile']) {
+      const dockerfile = readFileSync(fileURLToPath(new URL(file, import.meta.url)), 'utf-8');
+      expect(dockerfile, file).toMatch(/^ARG CODEMAN_INSTALL_GH=0$/m);
+      expect(dockerfile, file).toMatch(/^ARG CODEMAN_INSTALL_AZ=0$/m);
+    }
   });
 });

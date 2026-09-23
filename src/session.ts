@@ -60,8 +60,11 @@ import {
   type SessionDocker,
   type SessionNameSource,
   type SessionWriteOptions,
+  type PaneExit,
 } from './types.js';
 import { resolveAndClaimOmpSessionId } from './utils/omp-session-resolver.js';
+import { claudeTranscriptExists } from './utils/claude-transcript.js';
+import { matchesPattern } from './config/cli-registry/patterns.js';
 import { probeDockerCliVersion } from './docker-hosts.js';
 import { probeRemoteCliVersion } from './remote-hosts.js';
 import type { TerminalMultiplexer, MuxSession } from './mux-interface.js';
@@ -81,6 +84,8 @@ import {
   trackActivityStreak,
   isSustainedActivity,
   isPaneQuiet,
+  watchingLabel,
+  WATCHING_TAIL_LINES,
   IDLE_RECHECK_MS,
   PANE_PROBE_MIN_INTERVAL_MS,
   PANE_PROBE_RECHECK_MS,
@@ -497,8 +502,35 @@ export class Session extends EventEmitter {
   private _activityStreak: ActivityStreak | null = null; // Unbroken run of PTY repaints (working detection)
   private _lastPaneProbeAt = 0; // Throttle for the tmux screen probe
   private _lastPaneProbeWorking: boolean | null = null; // Its last verdict (null = could not read)
+  /**
+   * Background work the pane's own footer reports, e.g. `1 monitor`; null for none.
+   *
+   * Cached BESIDE `_lastPaneProbeWorking` and refreshed only by a capture that really
+   * happened, so it goes stale exactly as that verdict does. The probe returns its
+   * cached boolean without re-capturing inside `PANE_PROBE_MIN_INTERVAL_MS`, and a
+   * label derived from a capture nobody took would be a guess wearing a fact's clothes.
+   *
+   * ⚠️ It then FREEZES once `_confirmIdle()` concludes: `activityTimeout` is null from
+   * there, and nothing looks at the pane again until it produces output. That is
+   * correct rather than merely tolerable, because work ending repaints the pane either
+   * way — a monitor firing wakes the agent, and codex drops its background-terminal row
+   * on its own. Do not add a timer to keep this fresh; it would spend a `capture-pane`
+   * per idle session per tick to learn nothing.
+   *
+   * A server restart is not a hole in that either, though it looks like one: this field
+   * is live state and starts empty. Reconciliation re-attaches the pane, the attach
+   * repaint carries the composer glyph, and the idle confirmation that arms on it probes
+   * and re-reads the label with no input from anyone — measured 2026-09-23 on a restarted
+   * instance, back within ~20 s for a session whose background terminal was still
+   * running. A session that comes back with no label has no chip on its screen.
+   */
+  private _watching: string | null = null;
   /** Lazily compiled `capabilities.workDetect.workingLine`. See _workingLinePattern(). */
   private _workingLineRe: RegExp | undefined = undefined;
+  /** Lazily compiled `capabilities.workDetect.watchingLine`. See _watchingLinePattern(). */
+  private _watchingLineRe: RegExp | null | undefined = undefined;
+  /** Resolved with the pattern above: how many rows at the foot of the screen to search. */
+  private _watchingWindow = WATCHING_TAIL_LINES;
   private _trustDialogAccepted: boolean = false; // Stops the trust-dialog scan (answered, or given up)
   private _trustDialogAttempts = 0; // Keystrokes sent at the trust dialog
   private _lastTrustDialogScanAt = 0; // Throttle for the trust-dialog screen read
@@ -542,6 +574,20 @@ export class Session extends EventEmitter {
   private _mux: TerminalMultiplexer | null = null;
   private _muxSession: MuxSession | null = null;
   private _useMux: boolean = false;
+  /**
+   * The agent in this session's local tmux pane has exited (Ark0N/Codeman#446).
+   * `null` is the UNKNOWN arm of the tri-state and is what {@link setPaneExit}
+   * stores for every session shape the field does not apply to. See
+   * {@link PaneExit} for the shapes and for why an unknown answer must never be
+   * rendered as "alive".
+   */
+  private _paneExit: PaneExit | null = null;
+  /**
+   * This session was rebuilt from the tmux socket rather than from Codeman's
+   * own records, so its `remote`/`docker` metadata is missing rather than known
+   * to be absent. See {@link MuxSession.discovered}.
+   */
+  private _discoveredMuxSession = false;
   // Flag to prevent new timers after session is stopped
   private _isStopped: boolean = false;
 
@@ -718,6 +764,10 @@ export class Session extends EventEmitter {
       lastSubmitAt?: number;
       /** Restored conversation chain, oldest first (see `claudeSessionChain`). */
       claudeSessionChain?: string[];
+      /** Restored agent-exit observation for this session's pane (see `paneExit`). */
+      paneExit?: PaneExit;
+      /** This session was rebuilt from the tmux socket, so its metadata is a guess. */
+      discoveredMuxSession?: boolean;
       /** Restored wall-clock ms of the pane's last output (recovery only; see `_wireActivityAt`). */
       lastActivityAt?: number;
       /** Remote execution metadata for sessions launched through SSH inside local tmux. */
@@ -870,6 +920,16 @@ export class Session extends EventEmitter {
     this._remote = config.remote;
     this._docker = config.docker;
     this._owner = config.owner;
+    this._discoveredMuxSession = config.discoveredMuxSession === true;
+    // Restored so a record that says the agent exited survives a server restart
+    // rather than being blanked by the first persist after boot. It runs here
+    // because the scoping reads `_remote`, `_docker` and the mux fields, all of
+    // which are set by now. It is a claim about a pane this process has not
+    // looked at yet, so every path that starts or re-attaches a pane drops it
+    // (see `_setupOrAttachMuxSession`) and the pane-exit watcher's own tick
+    // replaces it with a first-hand reading. NOT the stats collector, which a
+    // browser panel arms and disarms — see `startPaneExitWatcher`.
+    this.setPaneExit(config.paneExit);
     // Never self-parent: a session pointing at itself would draw a zero-length
     // lineage arc under its own tab. Only reachable via the recovery path, where
     // both the id and the saved parent come from disk.
@@ -1098,6 +1158,75 @@ export class Session extends EventEmitter {
   }
 
   /**
+   * True when a tmux pane's death would mean THIS session's agent has exited.
+   *
+   * Four shapes fail the test, and each would otherwise publish a death that is
+   * not the agent's. A direct-PTY session owns no pane at all. A remote SSH
+   * session's local pane holds the ssh client, whose death means a transport
+   * drop OR an exit, which is the ambiguity PR #355 was about. A docker case's
+   * local pane holds a `docker exec` into the container's own tmux.
+   *
+   * The fourth is a session rebuilt from the socket. Absent `remote`/`docker`
+   * normally means "this is local", but on a discovered record it only means
+   * "Codeman never found the metadata": the synthetic `restored-<fragment>` id
+   * matches no `state.json` entry, so a remote session rediscovered after
+   * `mux-sessions.json` was lost arrives looking local, and its next transport
+   * drop would be published as an agent exit. Unproven locality fails closed.
+   */
+  private get paneExitApplies(): boolean {
+    if (this._discoveredMuxSession) return false;
+    return this._useMux && this._muxSession !== null && !this._remote && !this._docker;
+  }
+
+  /** What Codeman last observed of this pane's agent, or undefined for UNKNOWN. */
+  get paneExit(): PaneExit | undefined {
+    return this._paneExit ?? undefined;
+  }
+
+  /**
+   * Forget this pane's exit, on both this record and the mux layer's cache.
+   * Every path that starts or relaunches a command in the pane calls it, and
+   * the mux half also invalidates a pane read already in flight.
+   *
+   * It does not persist or broadcast by itself; the caller owns both. ⚠ That
+   * caller MUST persist, and the pane-exit watcher is not a fallback for it:
+   * the watcher's next tick reads UNKNOWN, finds this field already cleared,
+   * reports no change and therefore writes nothing, so a caller that only
+   * broadcasts leaves `state.json` saying the agent exited for as long as the
+   * session stays quiet. `/interactive` and `/shell` did exactly that until
+   * Ark0N/Codeman#446 review; both now persist on their success path.
+   */
+  private clearPaneExitForNewPane(): void {
+    this.setPaneExit(undefined);
+    if (this._muxSession) this._mux?.clearPaneExit?.(this._muxSession.muxName);
+  }
+
+  /**
+   * Record what the mux layer observed of this pane's agent, and say whether
+   * that changed the answer. The caller persists and broadcasts on a true.
+   *
+   * A session the field does not apply to is forced to UNKNOWN here rather than
+   * at the reporting end, so the rule lives in one place and the mux layer stays
+   * free to report the raw pane reading its own remote-reconnect watcher needs.
+   */
+  setPaneExit(next: PaneExit | undefined): boolean {
+    const resolved = this.paneExitApplies ? (next ?? null) : null;
+    const prev = this._paneExit;
+    if (prev === resolved) return false;
+    if (
+      prev !== null &&
+      resolved !== null &&
+      prev.status === resolved.status &&
+      prev.signal === resolved.signal &&
+      prev.at === resolved.at
+    ) {
+      return false;
+    }
+    this._paneExit = resolved;
+    return true;
+  }
+
+  /**
    * True when this session's PTY is a tmux client rather than the program itself.
    * Read by the replay-side alt-screen strip, which must apply the same
    * `useMux` gate as the live strip (isMuxAltScreenOnlyStripMode).
@@ -1116,6 +1245,16 @@ export class Session extends EventEmitter {
 
   get isWorking(): boolean {
     return this._isWorking;
+  }
+
+  /**
+   * What the pane says is still running in the background, e.g. `1 monitor`, or null when
+   * nothing is. A session with a label here has ended its turn without wanting anything
+   * from the user, so a surface that would otherwise file it under "needs you" can say
+   * what it is waiting for instead.
+   */
+  get watching(): string | null {
+    return this._watching;
   }
 
   /**
@@ -1633,6 +1772,10 @@ export class Session extends EventEmitter {
       // by the constructor: a Codeman restart starts with a fresh breaker so boot
       // recovery can re-attach.
       respawnBlocked: this._respawnBlocked || undefined,
+      // Ark0N/Codeman#446 — the agent in this pane has exited, published here so
+      // it rides the existing `session:updated` broadcast and lands in state.json
+      // through the same persist. `status` and `pid` above stay untouched by it.
+      paneExit: this._paneExit ?? undefined,
       attachmentHistory: this.attachmentHistory.length > 0 ? this.attachmentHistory : undefined,
       lastSubmitAt: this._lastSubmitAt || undefined,
       // Only a chain the CLI's own hooks vouched for is persisted, and only when
@@ -1688,6 +1831,7 @@ export class Session extends EventEmitter {
       totalCost: this._totalCost,
       messageCount: this._messages.length,
       isWorking: this._isWorking,
+      watching: this._watching,
       lastPromptTime: this._lastPromptTime,
       // Buffer statistics for monitoring long-running sessions
       bufferStats: {
@@ -1744,41 +1888,82 @@ export class Session extends EventEmitter {
     respawnPaneOptions: import('./mux-interface.js').RespawnPaneOptions;
     createSessionOptions: import('./mux-interface.js').CreateSessionOptions;
     spawnErrLabel: string;
-  }): Promise<{ isRestored: boolean }> {
+  }): Promise<{ isRestored: boolean; respawnedResumeId?: string; respawnedDeadPane: boolean }> {
     const mux = this._mux!;
 
-    // Verify stale mux session — tmux may have been destroyed (e.g., killed externally)
+    // Verify stale mux session — tmux may have been destroyed (e.g., killed externally).
+    // A session that HAD a mux session relaunches its CLI below just like a failed
+    // respawn does (tmux kill-server, a tmux crash, an external kill-session), so
+    // its transcript collides with the bare `--session-id` the same way. A
+    // genuinely new session starts with `_muxSession` null and never sets this.
+    let muxSessionVanished = false;
     if (this._muxSession && !mux.muxSessionExists(this._muxSession.muxName)) {
       console.log('[Session] Stale mux session detected (tmux gone):', this._muxSession.muxName);
       this._muxSession = null;
+      muxSessionVanished = true;
     }
 
     // Check if session exists but pane is dead (remain-on-exit keeps it alive)
     // Respawn the pane instead of creating a whole new session — preserves tmux scrollback
     let needsNewSession = false;
+    let respawnedDeadPane = false;
+    let respawnedResumeId: string | undefined;
     if (this._muxSession && mux.isPaneDead(this._muxSession.muxName)) {
       console.log('[Session] Dead pane detected, respawning:', this._muxSession.muxName);
       // Confirmed dead — safe to resolve/pin now (see `_pinOmpRespawnId()`).
       // `options.respawnPaneOptions` was built eagerly before this dead-pane
       // check ran, so it still carries the pre-pin ompConfig; rebuild it.
       this._pinOmpRespawnId();
-      const newPid = await mux.respawnPane(this._buildRespawnPaneOptions());
+      const respawnOptions = await this._buildRespawnPaneOptionsWithResumePin();
+      const newPid = await mux.respawnPane(respawnOptions);
       if (!newPid) {
         console.error('[Session] Failed to respawn pane, will create new session');
         needsNewSession = true;
       } else {
+        respawnedDeadPane = true;
+        respawnedResumeId = respawnOptions.resumeSessionId;
         this._pendingEnvUnsets.clear();
         // Wait a moment for the respawned process to fully start
         await new Promise((resolve) => setTimeout(resolve, MUX_STARTUP_DELAY_MS));
       }
     }
 
+    // Whatever the last reading said about the OLD command in this pane is now
+    // history: the branch above either respawned the pane or found it alive, and
+    // the branch below creates a new one. The paths that reach here are boot
+    // recovery and an explicit start, NOT a click on an exited tab — the browser
+    // re-attaches only on a null pid, and the premise of Ark0N/Codeman#446 is
+    // that an exited pane keeps its pid. `restartCli()` clears separately.
+    this.clearPaneExitForNewPane();
+
     // Check if we already have a mux session (restored session)
     const isRestored = this._muxSession !== null && !needsNewSession;
     if (isRestored) {
       console.log('[Session] Attaching to existing mux session:', this._muxSession!.muxName);
     } else {
-      // Create a new mux session
+      // Create a new mux session. When this is the FALLBACK after a failed
+      // respawn, the eagerly-built create options still carry the unpinned
+      // launch seed, so a session whose transcript exists would meet the same
+      // `--session-id ... already in use` refusal the respawn just lost to —
+      // the recovery of last resort failing for the very reason it was needed.
+      // A genuinely new session has no transcript under any of its candidate
+      // ids, so nothing is pinned and its command shape is unchanged.
+      //
+      // `_resumeSessionId` is written alongside, not just the create options:
+      // this branch leaves `isRestored` false, so the block that sets
+      // `_claudeSessionId` below reads that field and would otherwise settle on
+      // `this.id` while the CLI resumes the chain tail. The response viewer,
+      // Read My Mind and the unified-list alias map all read `_claudeSessionId`
+      // until the next first-hand hook, so the two have to name the same
+      // conversation. The vanished-tmux-session branch above relaunches for the
+      // same reason and takes the same pin.
+      if (needsNewSession || muxSessionVanished) {
+        const pinned = (await this._buildRespawnPaneOptionsWithResumePin()).resumeSessionId;
+        if (pinned) {
+          options.createSessionOptions.resumeSessionId = pinned;
+          this._resumeSessionId = pinned;
+        }
+      }
       this._muxSession = await mux.createSession(options.createSessionOptions);
       console.log('[Session] Created mux session:', this._muxSession.muxName);
       // No extra sleep — createSession() already waits for tmux readiness
@@ -1813,13 +1998,14 @@ export class Session extends EventEmitter {
           env: buildMuxAttachEnv(cliExportsTruecolor(this.mode)),
         })
       );
+      this._notePtySpawnGeometry(ptyCols, ptyRows);
     } catch (spawnErr) {
       console.error(`[Session] Failed to spawn PTY for ${options.spawnErrLabel}:`, spawnErr);
       this.emit('error', `Failed to attach to mux session: ${spawnErr}`);
       throw spawnErr;
     }
 
-    return { isRestored };
+    return { isRestored, respawnedResumeId, respawnedDeadPane };
   }
 
   /**
@@ -1857,6 +2043,9 @@ export class Session extends EventEmitter {
       console.error('[Session] reattachRemote: respawnPane failed for', this._muxSession.muxName);
       return false;
     }
+    // No-op for the record (a remote session's field is always UNKNOWN), but the
+    // mux layer's cache is keyed by muxName and this pane now runs a new client.
+    this.clearPaneExitForNewPane();
     console.log('[Session] reattachRemote: reattached remote session', this._muxSession.muxName, 'pid', newPid);
     return true;
   }
@@ -1891,26 +2080,16 @@ export class Session extends EventEmitter {
     }
 
     this._pinOmpRespawnId();
-    const options = this._buildRespawnPaneOptions();
-    // Unlike the dead-pane respawn, this one kills a WORKING pane whose conversation
-    // already has a transcript, and a CLI that launches with `--session-id <id>` refuses
-    // an id that is already in use (claude: `Error: Session ID ... is already in use.`),
-    // which turned an endpoint switch into a dead pane and a lost session. A launch that
-    // declares a `fallback` chain renders `resume || new` once a resume id is set, the
-    // same `--resume <id> || --session-id <id>` shape the docker and remote pane commands
-    // already use, so pin the live conversation id for THIS respawn only. The registry
-    // shape is the gate, not the CLI's name: an entry whose resume id is minted by the
-    // CLI itself (codex/pi/omp/grok) never declares that chain, and its resume field is
-    // read from its own `<Mode>Config` rather than this top-level one anyway.
-    if (!options.resumeSessionId && getCli(this.mode)?.launch.chain === 'fallback') {
-      options.resumeSessionId = this._claudeSessionId ?? this.id;
-    }
-    const newPid = await mux.respawnPane(options);
+    const newPid = await mux.respawnPane(await this._buildRespawnPaneOptionsWithResumePin());
     if (!newPid) {
       console.error('[Session] restartCli: respawnPane failed for', this._muxSession.muxName);
       return false;
     }
     this._pendingEnvUnsets.clear();
+    // A relaunch in the same pane, so any exit observed of the previous command
+    // is history. Without this the caller's persist-and-broadcast writes the old
+    // exit straight back onto a session that is running again.
+    this.clearPaneExitForNewPane();
     console.log('[Session] restartCli: restarted CLI for', this._muxSession.muxName, 'pid', newPid);
     return true;
   }
@@ -1959,6 +2138,112 @@ export class Session extends EventEmitter {
       owner: this._owner,
     };
     return this._withCustomModelLaunchModel(options);
+  }
+
+  /**
+   * Respawn options for a pane whose command is being REPLACED, with the
+   * conversation pinned so the relaunch resumes rather than collides.
+   *
+   * A CLI that launches with `--session-id <id>` refuses an id that is already
+   * in use (claude: `Error: Session ID ... is already in use.`), and every
+   * session whose agent has been prompted owns a transcript under that id. So
+   * relaunching such a pane with the bare launch line fails, the pane dies
+   * again immediately, and the user's conversation is stranded. A launch that
+   * declares a `fallback` chain renders `resume || new` once a resume id is
+   * set, which is the shape that survives both cases.
+   *
+   * Three candidates are tried in priority order — the conversation chain's
+   * tail, the launch seed, then the session's own id — and the first one a
+   * transcript backs is pinned. Four conditions gate that walk, each protecting
+   * against a way of resuming the WRONG conversation or of making a working
+   * relaunch fail.
+   *
+   * ⚠️ **A remote or docker session is never pinned.** Unlike `restartCli()`,
+   * whose route refuses both, the dead-pane respawn is reached by every session
+   * shape. Their pane commands (`buildRemoteLaunchCommand`,
+   * `claudeDockerPaneCommand`) already render a SELF-HEALING
+   * `--session-id <sid> || --resume <sid>`, and both flip to resume-first the
+   * moment the resume id differs from the session id. The conversation lives on
+   * the far side, so a local id pinned onto it resolves to nothing there, the
+   * resume fails, and the `--session-id` fallback then collides with the
+   * transcript the far side really does hold — both branches fail and the pane
+   * dies. `_pinOmpRespawnId()` refuses remote for the same reason.
+   *
+   * ⚠️ **The candidates come from the conversation CHAIN, never from
+   * `_claudeSessionId`.** That field holds either a first-hand id from the
+   * CLI's own hook payload or a history correlation, which is a guess keyed on
+   * the working directory. `_recordClaudeSessionInChain()` refuses a guess
+   * precisely so it cannot "write a foreign conversation into this pane's
+   * permanent record", and launching from one would do worse than the display
+   * bug that rule exists to prevent: the relaunched CLI would open and WRITE to
+   * a conversation that was never this pane's. The chain's tail is the live
+   * conversation and is hook-vouched, so it leads the walk, ahead of the launch
+   * seed, which is written once at construction and never moves off a `/clear`.
+   *
+   * ⚠️ **Every candidate must be backed by a transcript, the session's own id
+   * included, and a candidate that has none is passed over rather than ending
+   * the walk.** A pin that differs from the session id leaves
+   * `--session-id <this.id>` in the fallback branch, so a resume that finds
+   * nothing collides there and the pane dies exactly as it did before this
+   * pinning existed. Pinning `this.id` renders the self-healing
+   * `--resume <id> || --session-id <id>`, which is correct whether or not a
+   * transcript exists, but a pane that has none pays for the shape twice:
+   * claude prints "No conversation found" into the scrollback of a session that
+   * is brand new, and `wrapWithNice()` prefixes only the FIRST branch of the
+   * rendered `a || b`, so the branch that actually runs loses its priority for
+   * the life of the session. Falling off the end of the walk therefore adds
+   * no pin (the options keep any launch seed they already carried), which is
+   * the right answer: with no transcript anywhere there is nothing for the
+   * bare `--session-id <this.id>` to collide with.
+   *
+   * The create route pre-validates a resume id for the same reason, though it
+   * additionally requires the transcript be substantial — here mere existence
+   * is the question, because a one-line transcript still makes `--session-id`
+   * collide.
+   *
+   * The registry shape is the last gate, not the CLI's name: an entry whose
+   * resume id is minted by the CLI itself (codex/pi/omp/grok) declares no
+   * `fallback` chain and reads its resume field from its own `<Mode>Config`.
+   *
+   * `reattachRemote()` deliberately does NOT call this. It re-runs the remote
+   * session command, which attaches to the durable remote tmux with the agent
+   * still inside it and renders no local `--session-id` to collide.
+   */
+  private async _buildRespawnPaneOptionsWithResumePin(): Promise<import('./mux-interface.js').RespawnPaneOptions> {
+    const options = this._buildRespawnPaneOptions();
+    if (this._remote || this._docker) return options;
+    const entry = getCli(this.mode);
+    if (entry?.launch.chain !== 'fallback') return options;
+
+    const resumeIdPattern = entry.launch.params?.resumeId;
+    const configDir = this._claudeConfigDir();
+    const chainTail = this._claudeSessionChain[this._claudeSessionChain.length - 1];
+    const candidates = [chainTail, options.resumeSessionId, this.id].filter((v): v is string => !!v);
+    for (const candidate of candidates) {
+      // A session Codeman DISCOVERED on the socket rather than created carries a
+      // synthetic `restored-<fragment>` id, which fails claude's `uuid` token
+      // pattern. The renderer would silently drop the resume flag and emit the
+      // unpinned command, so say so here rather than letting the caller believe
+      // the pane was pinned.
+      if (resumeIdPattern?.type === 'token' && !matchesPattern(resumeIdPattern.pattern, candidate)) {
+        console.log(`[Session] Not pinning resume id ${candidate} for relaunch: the CLI cannot accept that id shape`);
+        continue;
+      }
+      if (!(await claudeTranscriptExists(candidate, configDir))) continue;
+      options.resumeSessionId = candidate;
+      return options;
+    }
+    // Nothing on disk to collide with, so the bare `--session-id <this.id>` the
+    // unpinned options already carry is the correct command.
+    return options;
+  }
+
+  /** The session's Claude config dir when it has been relocated (#255), else undefined. */
+  private _claudeConfigDir(): string | undefined {
+    // Trimmed like `claudeProjectsDir()` trims the process-wide override: the
+    // envOverrides schema validates keys only, and a whitespace-only value would
+    // otherwise resolve to a relative path and read "no transcript" for everything.
+    return this._envOverrides?.CLAUDE_CONFIG_DIR?.trim() || undefined;
   }
 
   /**
@@ -2282,7 +2567,7 @@ export class Session extends EventEmitter {
     // If mux wrapping is enabled, create or attach to a mux session
     if (this._useMux && this._mux) {
       try {
-        const { isRestored } = await this._setupOrAttachMuxSession({
+        const { isRestored, respawnedResumeId, respawnedDeadPane } = await this._setupOrAttachMuxSession({
           // Single source of truth shared with reattachRemote() (COD-108).
           respawnPaneOptions: this._buildRespawnPaneOptions(),
           createSessionOptions: {
@@ -2330,7 +2615,18 @@ export class Session extends EventEmitter {
         // persisted chain's tail is that conversation, reported first-hand by
         // the CLI's own hook, so it outranks every fallback here. A NEW pane has
         // an empty chain and falls through to the resume/alias fallbacks.
-        restoredConversation = isRestored ? this._claudeSessionChain[this._claudeSessionChain.length - 1] : undefined;
+        //
+        // A dead-pane respawn is NOT that case for a CLI whose relaunch the resume
+        // pin walk governs (`launch.chain === 'fallback'`): the CLI did stop, and
+        // the walk may have passed over a chain tail with no transcript behind it,
+        // so the conversation is whatever the respawn actually resumed. Undefined
+        // there means the pane launched unpinned, which the fallbacks below name.
+        const pinGovernsRespawn = respawnedDeadPane && getCli(this.mode)?.launch.chain === 'fallback';
+        restoredConversation = pinGovernsRespawn
+          ? respawnedResumeId
+          : isRestored
+            ? this._claudeSessionChain[this._claudeSessionChain.length - 1]
+            : undefined;
         this._claudeSessionId =
           restoredConversation ||
           this._resumeSessionId ||
@@ -2431,6 +2727,7 @@ export class Session extends EventEmitter {
             env: { ...buildClaudeEnv(this.id), ...(this._envOverrides ?? {}) },
           })
         );
+        this._notePtySpawnGeometry(120, 40);
       } catch (spawnErr) {
         console.error('[Session] Failed to spawn Claude PTY:', spawnErr);
         this._status = 'stopped';
@@ -2724,7 +3021,61 @@ export class Session extends EventEmitter {
     this._lastPaneProbeAt = now;
     const text = this._mux.capturePaneText?.(this._muxSession.muxName) ?? null;
     this._lastPaneProbeWorking = text === null ? null : this._workingLinePattern().test(text);
+    this._readWatching(text);
     return this._lastPaneProbeWorking;
+  }
+
+  /**
+   * Read the background-work chip off the same capture the working probe just took.
+   *
+   * The two questions are different. A turn that is running is work the user is waiting
+   * for; a monitor, a backgrounded shell or a cloud session the agent started is work
+   * the AGENT is waiting for, and it is the reason a pane can sit at its composer with
+   * nothing to say and still not want anything from the user. `_confirmIdle` takes this
+   * capture at exactly the moment the turn ends, which is the moment the answer starts
+   * mattering.
+   *
+   * A capture that could not be read CLEARS the label rather than keeping the last one.
+   * The two wrong answers are not symmetric: a stale label opens the next idle prompt
+   * already acknowledged, so a failed capture would silence a real alert, while a dropped
+   * label only costs a card and an alert that the next readable capture takes back.
+   * Degrading toward the alert is the rule the whole signal is built on.
+   */
+  private _readWatching(paneText: string | null): void {
+    const pattern = this._watchingLinePattern();
+    if (!pattern) return;
+    // `null` is "the screen could not be read". That is no evidence either way, so the
+    // label falls to null (and the change is announced below like any other).
+    const label = paneText === null ? null : watchingLabel(paneText, pattern, this._watchingWindow);
+    if (label === this._watching) return;
+    this._watching = label;
+    // ⚠️ This CHANGES while the session's status does not, so it needs an event of its
+    // own. The label is usually set on the idle transition, which broadcasts anyway, but
+    // it CLEARS when the work ends — and for a CLI whose background work ends without
+    // taking a turn (measured on codex: a background terminal finishing repaints the row
+    // away and nothing else happens) the session is idle before and after. Without this,
+    // the server knew the badge was gone and every open page went on drawing it until
+    // some unrelated event arrived.
+    this.emit('watchingChanged');
+  }
+
+  /**
+   * The regex matching this CLI's background-work chip, or null for a CLI whose registry
+   * entry declares none. Compiled once per session, like the working-line pattern, and
+   * null rather than a fallback: no other CLI has been measured drawing such a chip, and
+   * guessing one would badge sessions on the strength of an unread screen.
+   */
+  private _watchingLinePattern(): RegExp | null {
+    if (this._watchingLineRe === undefined) {
+      // The pattern and the window it runs over are one decision, so they are resolved
+      // together: how far up the screen a CLI's row can sit is as much a property of its
+      // layout as the row itself. Claude writes on the last row and keeps the default,
+      // Codex pins one above its composer and declares more.
+      const detect = getCli(this.mode)?.capabilities.workDetect;
+      this._watchingLineRe = detect?.watchingLine ? compileVersionRegex(detect.watchingLine) : null;
+      this._watchingWindow = detect?.watchingLines ?? WATCHING_TAIL_LINES;
+    }
+    return this._watchingLineRe;
   }
 
   /**
@@ -2999,6 +3350,7 @@ export class Session extends EventEmitter {
             env: buildShellEnv(this.id),
           })
         );
+        this._notePtySpawnGeometry(120, 40);
       } catch (spawnErr) {
         console.error('[Session] Failed to spawn shell PTY:', spawnErr);
         this._status = 'stopped';
@@ -3108,6 +3460,7 @@ export class Session extends EventEmitter {
               env: { ...buildClaudeEnv(this.id), ...(this._envOverrides ?? {}) },
             })
           );
+          this._notePtySpawnGeometry(120, 40);
         } catch (spawnErr) {
           console.error('[Session] Failed to spawn Claude PTY for runPrompt:', spawnErr);
           this.emit(
@@ -3795,6 +4148,40 @@ export class Session extends EventEmitter {
   private _ptyRows = 40;
 
   /**
+   * Record the geometry a PTY was just spawned at. A reattached pane keeps the
+   * tmux window's size, not the constructor's 120x40, and without this
+   * `ptyGeometry` reported the old numbers for a live pane and the dedupe in
+   * `resize()` skipped a real resize that happened to match them.
+   */
+  private _notePtySpawnGeometry(cols: number, rows: number): void {
+    this._ptyCols = cols;
+    this._ptyRows = rows;
+  }
+
+  /**
+   * The geometry the CLI is actually drawing for, or null when nothing is
+   * drawing.
+   *
+   * Exposed because `resize()` can decline a request outright (arbitration
+   * below) and the asking client has no other way to find out: a browser
+   * terminal that keeps a shape the PTY refused renders garbled output rather
+   * than wrong-sized output, because Claude Code's repaints are computed from
+   * the width it was told (issue #464). Both transports report this back.
+   *
+   * ⚠️ NULL WITHOUT A PANE, never the field values. The fields are seeded at
+   * spawn (`_notePtySpawnGeometry`) and moved by `resize()`, but a session with
+   * a dead pane (or one created through the API and never started) still
+   * holds the constructor defaults of 120x40, or the size of a pane that is
+   * gone. Reporting those made a client adopt a size no process had ever
+   * been told, and on anything narrower than 120 columns it claimed another
+   * device owned the pane when none existed. `reconcilePtyGeometry` treats a
+   * report with no finite numbers as no evidence, which is the truth here.
+   */
+  get ptyGeometry(): { cols: number; rows: number } | null {
+    return this.ptyProcess ? { cols: this._ptyCols, rows: this._ptyRows } : null;
+  }
+
+  /**
    * Live WebSocket connections that have announced a desktop viewport for this
    * session. While at least one is registered, small-viewport (mobile/tablet)
    * resizes are ignored so a phone glancing at the session can't reflow the
@@ -3879,6 +4266,10 @@ export class Session extends EventEmitter {
     }
     if (isSmallViewport && this._desktopSizeClaims.size > 0) {
       if (Date.now() - this._lastDesktopActivityAt < Session.DESKTOP_CLAIM_IDLE_MS) {
+        // Declined. The caller is told nothing here on purpose — the decision
+        // belongs to the session, not the socket — but the caller MUST report
+        // `ptyGeometry` back afterwards so the asking client can adopt
+        // the shape it did not get. Both transports do; see issue #464.
         return;
       }
       this._mobileSizeOverride = true;
@@ -3978,6 +4369,9 @@ export class Session extends EventEmitter {
   async stop(killMux: boolean = true): Promise<void> {
     // Set stopped flag first to prevent new timers from being created
     this._isStopped = true;
+    // A pane that is gone is watching nothing. Nothing probes a stopped session, so
+    // without this the last chip it drew would ride along on its row forever.
+    this._watching = null;
 
     this._clearAllTimers();
 

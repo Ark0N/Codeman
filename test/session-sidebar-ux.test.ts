@@ -73,3 +73,53 @@ describe('vertical session navigation UX contract', () => {
     expect(i18n).toContain("'Adjust only session names in the vertical sidebar.':");
   });
 });
+
+describe('watching badge on a rich session row', () => {
+  it('reads the label off the session payload', () => {
+    expect(app).toContain("watching: typeof session.watching === 'string' ? session.watching : ''");
+  });
+
+  it('renders it beside the state pill rather than in place of it', () => {
+    // A session can be watching a monitor AND holding a question for the user, so the
+    // pill that says which one still decides the row; this badge only adds a fact.
+    const meta = app.slice(app.indexOf('_sidebarRichMetaHTML(row) {'));
+    const body = meta.slice(0, meta.indexOf('_sidebarRichStampText(timestamp, format) {'));
+    expect(body).toContain('tab-pill tab-pill--${escapeHtml(pillMod)}');
+    expect(body).toContain('tab-pill tab-pill--watching');
+    expect(body).toContain('Still running in the background:');
+  });
+
+  it('re-renders the row when the background work changes', () => {
+    // The meta line is rebuilt only when this signature moves, so a badge left out of
+    // it would appear and disappear a render late, or not at all.
+    expect(app).toContain(
+      "const sig = `${row.state}${row.exited ? '+exited' : ''}:${row.since ? row.since.at : 0}:${row.createdAt}:${row.watching}`"
+    );
+  });
+
+  it('escapes the label everywhere it reaches markup', () => {
+    // `watching` is pane-derived and a config-supplied pattern decides what its capture
+    // group holds, so every interpolation of it into HTML has to go through escapeHtml().
+    // The row is installed with innerHTML, which makes an unescaped quote in that
+    // attribute an injection rather than a cosmetic bug.
+    expect(app).toContain('${richRow.createdAt}:${escapeHtml(richRow.watching)}"');
+    expect(app).not.toContain('${richRow.createdAt}:${richRow.watching}"');
+  });
+
+  it('words the tooltip exactly as the phone overview does', () => {
+    // Both files build this sentence themselves, deliberately, so that a stale cached
+    // module still renders a complete row. Substring-matching the prefix would let the
+    // two drift; the whole sentence is what has to agree.
+    const overview = readFileSync(resolve(publicDir, 'mobile-overview.js'), 'utf8');
+    expect(overview).toContain("'Still running in the background: ' + label");
+    expect(app).toContain('`Still running in the background: ${row.watching}`');
+  });
+
+  it('colours it with the accent, never with the two colours that mean a human is needed', () => {
+    const rule = styles.slice(styles.indexOf('.tab-pill--watching'));
+    const block = rule.slice(0, rule.indexOf('}'));
+    expect(block).toContain('var(--accent)');
+    expect(block).not.toContain('var(--red)');
+    expect(block).not.toContain('var(--yellow)');
+  });
+});

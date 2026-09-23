@@ -15,6 +15,7 @@ import {
   isValidReleaseTag,
   parseGitHubRepo,
   reconcileStatusDecision,
+  expireStalledStatus,
 } from '../src/web/self-update.js';
 import type { UpdateStatus } from '../src/types/update.js';
 
@@ -165,5 +166,42 @@ describe('reconcileStatusDecision (boot handoff state machine)', () => {
     expect(reconcileStatusDecision(base({ phase: 'completed-needs-manual-restart' }), '0.9.3', NOW)).toBeNull();
     const noTarget = base({ phase: 'completed-needs-manual-restart', toVersion: undefined });
     expect(reconcileStatusDecision(noTarget, '0.9.4', NOW)).toBeNull();
+  });
+});
+
+describe('expireStalledStatus (runtime staleness backstop)', () => {
+  const NOW = 1_000_000_000_000;
+  const MIN = 60 * 1000;
+  const base = (over: Partial<UpdateStatus>): UpdateStatus => ({
+    updateId: 'u1',
+    phase: 'queued',
+    message: '',
+    fromVersion: '1.24.7',
+    toVersion: '1.29.0',
+    startedAt: NOW - 5_000,
+    updatedAt: NOW - 5_000,
+    ...over,
+  });
+
+  it('leaves a heartbeating update alone', () => {
+    expect(
+      expireStalledStatus(base({ phase: 'installing', startedAt: NOW - 60 * MIN, updatedAt: NOW - 3_000 }), NOW)
+    ).toBeNull();
+  });
+
+  it('fails a status that stopped heartbeating (queued forever: status writes were failing)', () => {
+    const out = expireStalledStatus(
+      base({ startedAt: NOW - 8 * 24 * 60 * MIN, updatedAt: NOW - 8 * 24 * 60 * MIN }),
+      NOW
+    );
+    expect(out?.phase).toBe('failed');
+    expect(out?.error).toContain('queued');
+    expect(out?.updatedAt).toBe(NOW);
+  });
+
+  it('never touches terminal phases or a missing status', () => {
+    expect(expireStalledStatus(null, NOW)).toBeNull();
+    expect(expireStalledStatus(base({ phase: 'completed', updatedAt: NOW - 60 * MIN }), NOW)).toBeNull();
+    expect(expireStalledStatus(base({ phase: 'failed', updatedAt: NOW - 60 * MIN }), NOW)).toBeNull();
   });
 });

@@ -23,6 +23,8 @@ import { isDeepSeekAvailable, isDeepSeekRunnable } from '../src/utils/deepseek-c
 import { isOmpAvailable } from '../src/utils/omp-cli-resolver.js';
 import { isCloudflaredAvailable } from '../src/utils/cloudflared-resolver.js';
 import { isGitAvailable } from '../src/git-clone.js';
+import { enabledClis } from '../src/config/cli-registry/registry.js';
+import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
 
 // renderIndexHtml probes the real PATH for every CLI, which would make the
 // assertions below depend on whatever happens to be installed on the machine
@@ -79,6 +81,14 @@ vi.mock('../src/utils/cloudflared-resolver.js', () => ({
 vi.mock('../src/git-clone.js', () => ({
   isGitAvailable: vi.fn(() => false),
 }));
+// The custom-model list carries `label`, a string a user's own clis.json can set.
+// Wrap enabledClis so ONE test below can hand renderIndexHtml a label with `$'`
+// in it while every other test still reads the real stock registry through the
+// real implementation.
+vi.mock('../src/config/cli-registry/registry.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/config/cli-registry/registry.js')>();
+  return { ...actual, enabledClis: vi.fn(actual.enabledClis) };
+});
 
 const TEMPLATE = [
   '<head>',
@@ -131,6 +141,19 @@ describe('WebServer.renderIndexHtml', () => {
     expect(readSettings).not.toHaveBeenCalled();
     // Solo skips settings, so the button is NOT revealed even though the setting is on.
     expect(html).toContain('btn-multimonitor--hidden');
+  });
+
+  it('injects the transcript-gutter map for a /session/:id window too', async () => {
+    // Every other payload is gated on !soloSessionId, but a solo window copies from a
+    // terminal like the main page does, so it needs the widths the copy strip keys on.
+    const { server } = makeServer();
+    const html = await render(server, 'sess-123');
+    const match = html.match(/window\.__codemanTranscriptGutter=(\{[^<]*\});/);
+    expect(match).not.toBeNull();
+    const map = JSON.parse(match![1]) as Record<string, number>;
+    expect(map.claude).toBe(2);
+    expect(map.codex).toBe(2);
+    expect(map.shell).toBeUndefined();
   });
 
   it('escapes the solo id so it cannot break out of the inline <script>', async () => {
@@ -220,6 +243,35 @@ describe('WebServer.renderIndexHtml', () => {
     // Proves it decodes back to the real value the way a browser's own JS
     // parser would, not just "the output contains no </script>".
     expect(eval(escaped)[0].label).toBe('</script><script>alert(1)</script>');
+  });
+
+  it("inserts a label containing $' verbatim instead of splicing the document into the script", async () => {
+    // `String.replace` with a STRING replacement interprets `$'` as "the text
+    // after the match", so a clis.json label carrying it used to re-inject the
+    // rest of the document (the whole <body>) into the inline script, past
+    // escapeScriptJson, which only neutralizes `<`. Every `</head>` injection
+    // passes a replacer FUNCTION instead, whose return value is inserted
+    // verbatim. The other `$` forms ride along so a partial escape cannot pass.
+    const claude = STOCK_CLIS.find((e) => e.id === 'claude')!;
+    const label = "Claude $' $& $` $1 $$";
+    const real = vi.mocked(enabledClis).getMockImplementation()!;
+    vi.mocked(enabledClis).mockImplementation(() => [{ ...claude, label }]);
+    try {
+      const { server } = makeServer({});
+      const html = await render(server);
+      expect(html.match(/<body>/g)).toHaveLength(1);
+      const clis = JSON.parse(html.match(/window\.__codemanCustomModelClis=(\[.*?\]);/)![1]);
+      expect(clis).toEqual([{ id: 'claude', label }]);
+    } finally {
+      vi.mocked(enabledClis).mockImplementation(real);
+    }
+  });
+
+  it("inserts a solo id containing $' verbatim, under the same replacer rule", async () => {
+    const { server } = makeServer({});
+    const html = await render(server, "sess$'x");
+    expect(html.match(/<body>/g)).toHaveLength(1);
+    expect(html).toContain(`window.__CODEMAN_SOLO__="sess$'x"`);
   });
 
   it('still emits the object when nothing at all is installed', async () => {

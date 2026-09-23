@@ -183,6 +183,34 @@ launch, with the endpoint's `defaultModelId` marked but not auto-chosen —
 the point of asking is letting one launch deliberately differ from the
 saved default, not just confirming it.
 
+The modal promotes exactly one row to the top of the list rather than
+always showing raw discovery order, so the zero-wait choice is the one
+under your thumb:
+
+- **"Currently loaded"** — a model from this host's own list that
+  llama-swap reports `ready` right now, queried via
+  `GET /api/model-endpoints/:id/running-status`. Bounded client-side to
+  ~800ms (`Promise.race`), on top of the route's own 5s server-side
+  timeout, so an endpoint that is asleep or firewalled cannot leave the
+  modal invisible for the full 5s after the Run menu has already closed.
+- **"Last used"** — shown only when nothing is currently loaded: the model
+  actually launched last for this exact (harness, endpoint) pair, read
+  from the per-device `codeman:customModelLastUsed:<mode>:<endpointId>`
+  localStorage key. Written by `_runCustomModelEntryViaRestart` (claude)
+  and `_quickStartWithCustomModelConfirm` (every one-shot launch; the
+  `runCustomModelEntry` entry point itself only dispatches between the
+  two) only once the model is actually applied, never on the mere click —
+  declining the context-window warning means this exact model cannot work
+  with this CLI at all, so promoting it next time would be actively wrong,
+  not just premature.
+
+Neither tag reorders anything past that one promoted row. The "Default"
+pill is a separate span, not a third value of the same slot: a promoted
+row that is also the endpoint's `defaultModelId` shows both tags (on a
+single-purpose GPU box that is the common case, and an exclusive slot
+silently dropped the Default marking for exactly that row), and a row
+with neither promotion nor default shows no tag at all.
+
 **How the launch itself applies the endpoint depends on the harness.** For
 opencode, Codex, Gemini, Pi, Grok, DeepSeek and OMP (`runCustomModelEntry` →
 `_runCustomModelEntryOneShot`), the endpoint/model is folded into the SAME

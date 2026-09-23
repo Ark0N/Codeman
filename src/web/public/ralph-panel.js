@@ -155,10 +155,9 @@ Object.assign(CodemanApp.prototype, {
       if (xtermViewport && scrollTop !== undefined) {
         xtermViewport.scrollTop = scrollTop;
       }
-      // Refit terminal to new container size
-      if (this.terminal && this.fitAddon) {
-        this.fitAddon.fit();
-      }
+      // Refit terminal to new container size. Through the one owner so the
+      // floor that is reported to the PTY is also the one xterm holds (#464).
+      this.syncTerminalGeometry?.();
     });
   },
 

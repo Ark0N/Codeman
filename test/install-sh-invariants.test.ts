@@ -179,8 +179,13 @@ describe('install.sh runtime safety', () => {
       /if \[\[ -n "\$\{CODEMAN_INSTALL_SH_LIB:-\}" \]\]; then return 0 2>\/dev\/null \|\| exit 0; fi/
     );
     const guardAt = SOURCE.indexOf('CODEMAN_INSTALL_SH_LIB');
-    const dispatchAt = SOURCE.indexOf('case "${1:-}" in');
+    const dispatchAt = SOURCE.indexOf('case "$SUBCOMMAND" in');
+    expect(dispatchAt, 'the dispatch case must exist').toBeGreaterThan(-1);
     expect(guardAt, 'the sourcing guard must precede the dispatch case').toBeLessThan(dispatchAt);
+    // parse_flags runs only in the dispatch tail, after the guard: a sourced copy must
+    // never consume the harness's own arguments.
+    const parseAt = SOURCE.indexOf('\nparse_flags "$@"');
+    expect(parseAt, 'parse_flags must be invoked after the sourcing guard').toBeGreaterThan(guardAt);
   });
 
   it('still sets the strict flags it has always run under', () => {
@@ -202,6 +207,104 @@ describe('install.sh DeepSeek identity probe', () => {
     expect(identity, 'the deepseek entry no longer declares an identity probe').toBeDefined();
     expect(identity?.arg).toBe('--help');
     expect(new RegExp(identity!.regex, 'i').test('DeepSeek Harness')).toBe(true);
+  });
+});
+
+describe('install.sh owns the build and the start', () => {
+  it('runs npm install with CODEMAN_NO_AUTOSTART=1', () => {
+    // scripts/postinstall.js builds dist/ and starts a detached `codeman web` on its
+    // own unless told not to. Under the installer that orphan made the service
+    // crash-loop on EADDRINUSE while the done screen reported "running" off the
+    // orphan (fresh Ubuntu 24 sandbox, 2026-09-20). Every npm install here must
+    // carry the opt-out.
+    // Executed installs only: the catalogue's `npm install -g` literals and the
+    // failure message that quotes the command are prose here.
+    const installs = CODE_LINES.filter(
+      (line) => /\bnpm install\b/.test(line) && !/npm install -g/.test(line) && !/\b(error|warn|info|echo) "/.test(line)
+    );
+    expect(installs.length, 'expected the one npm install call').toBeGreaterThan(0);
+    for (const line of installs) {
+      expect(line, `npm install without CODEMAN_NO_AUTOSTART=1:\n  ${line}`).toContain('CODEMAN_NO_AUTOSTART=1');
+    }
+  });
+});
+
+describe('install.sh Tailscale safety rules', () => {
+  // Every rule here protects config that is not ours. `serve reset` destroys a user's
+  // unrelated serve mappings (the maintainer's own node carries two); funnel is the
+  // public internet, a different risk class than tailnet-only serve; advertising a
+  // Tailscale Service requires a tagged node and admin approval and is documented
+  // as a hint only. All three are pinned as absences.
+  it('never runs `tailscale serve reset`', () => {
+    const offenders = CODE_LINES.filter((line) => /serve\s+reset\b/.test(line));
+    expect(offenders).toEqual([]);
+  });
+
+  it('never runs `tailscale funnel` and never advertises a Tailscale Service', () => {
+    // The installer's own `--service` flag (run as a service) is not Tailscale's
+    // `--service=svc:<name>`; the pin keys on the svc: prefix and the serve form.
+    const offenders = CODE_LINES.filter(
+      (line) => /\bfunnel\b/.test(line) || /\bsvc:/.test(line) || /\bserve\b.*--service/.test(line)
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('routes every serve mutation through ts_cmd_serve (the sudo-aware wrapper)', () => {
+    // A bare `tailscale serve --bg` or `set --hostname` would fail for a non-operator
+    // user on Linux, exactly the state the wrapper exists to handle.
+    const mutations = CODE_LINES.filter((line) => /\bserve --(bg|https)/.test(line) || /\bset --hostname\b/.test(line));
+    expect(mutations.length).toBeGreaterThan(0);
+    for (const line of mutations) {
+      // Prose in warn/info strings and manual-command hints are fine; executed lines
+      // must start with the wrapper.
+      const executed = /^\s*(if\s+)?(!\s*)?(out=\$\()?ts_cmd_serve\b/.test(line);
+      const quoted = /(info|warn|echo -e|success) /.test(line) || /Run: /.test(line) || /Configuring: /.test(line);
+      expect(executed || quoted, `serve mutation outside ts_cmd_serve:\n  ${line}`).toBe(true);
+    }
+  });
+
+  it('decides the rename before the serve shape, and applies serve only after the build', () => {
+    // Serve config is keyed by the DNS name it was written under: renaming after
+    // configuring would orphan the mapping (and only `serve reset` could remove the
+    // stale key). tailscale_prepare therefore asks the name first, chooses the shape
+    // second, and main() applies the shape only after the build and the service.
+    const prepare = SOURCE.slice(SOURCE.indexOf('tailscale_prepare() {'), SOURCE.indexOf('tailscale_apply() {'));
+    expect(prepare.indexOf('tailscale_choose_name')).toBeGreaterThan(-1);
+    expect(prepare.indexOf('tailscale_choose_name')).toBeLessThan(prepare.indexOf('tailscale_choose_mapping'));
+    const main = SOURCE.slice(SOURCE.indexOf('\nmain() {'), SOURCE.indexOf('\npreflight_detect() {'));
+    const order = [
+      'choose_network_binding',
+      'choose_launch_mode',
+      'install_or_update_repo',
+      'npm_install_deps',
+      'run_step "Building Codeman"',
+      'tailscale_apply',
+      'print_done_screen',
+    ];
+    const positions = order.map((needle) => main.indexOf(needle));
+    for (let i = 0; i < positions.length; i++) {
+      expect(positions[i], `${order[i]} missing from main()`).toBeGreaterThan(-1);
+      if (i > 0) expect(positions[i], `${order[i]} must come after ${order[i - 1]}`).toBeGreaterThan(positions[i - 1]);
+    }
+  });
+
+  it('documents every flag it parses', () => {
+    // The header comment is the only manual most people read (it is what `curl` shows
+    // them if they look). A flag parse_flags accepts and the header does not mention
+    // is a flag nobody finds.
+    const header = SOURCE.slice(0, SOURCE.indexOf('set -euo pipefail'));
+    const parse = SOURCE.slice(SOURCE.indexOf('parse_flags() {'), SOURCE.indexOf('# Sourcing guard'));
+    const flags = Array.from(parse.matchAll(/^\s+(--[a-z-]+)(?:[|)=\s])/gm), (m) => m[1]);
+    expect(flags.length).toBeGreaterThan(5);
+    for (const flag of new Set(flags)) {
+      expect(header.includes(flag), `${flag} is parsed but not documented in the header`).toBe(true);
+    }
+  });
+
+  it('renames only as an opt-in: the question defaults to no and --yes never renames', () => {
+    const fn = SOURCE.slice(SOURCE.indexOf('tailscale_choose_name() {'), SOURCE.indexOf('tailscale_rename_node() {'));
+    expect(fn).toMatch(/prompt_yes_no "Rename this machine to \$suggested\?" "n"/);
+    expect(fn).toMatch(/\[\[ "\$ASSUME_YES" == "1" \]\]/);
   });
 });
 
@@ -302,5 +405,129 @@ describe('install.sh detect_all_clis and a disabled entry', () => {
     const run = driveDetect(true);
     expect(run.stdout, run.stderr).toContain('path0=[]');
     expect(run.stdout).toContain('found=0');
+  });
+});
+
+describe('install.sh review fixes for #460', () => {
+  // Each pin here is a finding from the two reviews of PR #460 (the DeepSeek Harness
+  // pass, then the Claude pass), kept as a static guard so the fix cannot quietly rot.
+  const fn = (name: string, until: string) => {
+    const start = SOURCE.indexOf(`${name}() {`);
+    expect(start, `${name}() missing`).toBeGreaterThan(-1);
+    const end = SOURCE.indexOf(until, start);
+    expect(end, `${until} missing after ${name}()`).toBeGreaterThan(start);
+    return SOURCE.slice(start, end);
+  };
+
+  it('keeps an existing password on the flag and env preset paths', () => {
+    // `--lan --service` on a unit that carried a password used to rewrite it without the
+    // password and with the unauthenticated ack; `--tailscale` dropped it the same way.
+    const body = fn('choose_network_binding', 'get_tailscale_path() {');
+    expect(body.match(/BIND_PASSWORD="\$\{CODEMAN_PASSWORD:-\$EXISTING_PASSWORD\}"/g)?.length).toBe(2);
+    expect(body).not.toMatch(/BIND_PASSWORD="\$\{CODEMAN_PASSWORD:-\}"/);
+    // The presets can only keep what was read, so the read comes first.
+    expect(body.indexOf('read_existing_binding')).toBeLessThan(body.indexOf('CODEMAN_HOST:-'));
+  });
+
+  it('composes the hand-start environment in one place', () => {
+    // "Do not start" under a sub-path or a custom port used to print a bare `codeman web`
+    // under URLs that carried both.
+    const hint = fn('start_command_hint', 'export_bind_env() {');
+    const exported = fn('export_bind_env', '# A QR code of the URL');
+    for (const key of [
+      'CODEMAN_HOST',
+      'CODEMAN_PASSWORD',
+      'CODEMAN_ALLOW_UNAUTHENTICATED_NETWORK',
+      'CODEMAN_BASE_URL',
+      'CODEMAN_PORT',
+    ]) {
+      expect(hint, `${key} missing from start_command_hint`).toContain(key);
+      expect(exported, `${key} missing from export_bind_env`).toContain(key);
+    }
+    const done = fn('print_done_screen', '\nupdate() {');
+    expect(done).toContain('$(start_command_hint)');
+    expect(done).not.toMatch(/CODEMAN_HOST=0\.0\.0\.0 codeman web/);
+  });
+
+  it('flips RECONFIGURE for --password and --port', () => {
+    // Neither used to, so on a completed install both took the quiet update path, which
+    // never rewrites the unit: the password never landed and the port stayed at 3000.
+    const parse = fn('parse_flags', '# Sourcing guard');
+    for (const label of ['--password)', '--password=*)', '--port)', '--port=*)']) {
+      const at = parse.indexOf(label);
+      expect(at, `${label} missing`).toBeGreaterThan(-1);
+      expect(parse.slice(at, parse.indexOf(';;', at)), `${label} does not reconfigure`).toContain('RECONFIGURE="1"');
+    }
+  });
+
+  it('ends the sudo keepalive and exports the binding before the exec', () => {
+    // exec skips the EXIT trap, and the keepalive keys on $$, which becomes the server's
+    // pid: it refreshed the sudo timestamp for the server's whole life.
+    const execAt = SOURCE.indexOf('exec node "$INSTALL_DIR/dist/index.js" web');
+    expect(execAt).toBeGreaterThan(-1);
+    const before = SOURCE.slice(SOURCE.lastIndexOf('source "$profile"', execAt), execAt);
+    expect(before).toContain('export_bind_env');
+    expect(before).toContain('stop_background_helpers');
+  });
+
+  it('lets Ctrl+C skip the HTTPS-toggle poll instead of ending the run', () => {
+    const body = fn('ensure_tailnet_https', 'tailnet_https_poll() {');
+    expect(body).toMatch(/trap '[^']*' INT/);
+    expect(body).toContain('trap - INT');
+    expect(fn('tailnet_https_poll', '# Everything Tailscale that needs a human')).toContain('sleep 5 || true');
+  });
+
+  it('asks before removing a LaunchDaemon it never wrote', () => {
+    const body = fn('uninstall', '\nusage() {');
+    const ask = body.indexOf('prompt_yes_no "Remove that LaunchDaemon too');
+    expect(ask).toBeGreaterThan(-1);
+    expect(body.indexOf('sudo rm -f "$daemon_plist"')).toBeGreaterThan(ask);
+  });
+
+  it('re-syncs the unit after `install.sh name` re-adds the mapping, and ends an update on the done screen', () => {
+    const name = fn('setup_name_subcommand', '\nstatus_subcommand() {');
+    expect(name.indexOf('sync_service_base_url')).toBeGreaterThan(name.indexOf('tailscale_choose_mapping'));
+    expect(name.indexOf('sync_service_base_url')).toBeLessThan(name.indexOf('tailscale_apply'));
+    expect(fn('update', '\nuninstall() {')).toContain('print_done_screen "" ""');
+  });
+
+  it('reads the Tailscale state in the preflight without node, and no longer records TS_JOINED_HERE', () => {
+    const preflight = fn('preflight_detect', '\nprint_preflight_summary() {');
+    expect(preflight).toContain('ts_backend_state');
+    expect(preflight).not.toContain('command -v node');
+    expect(fn('ts_backend_state', '\nts_dns_name() {')).toContain('sed -n');
+    expect(SOURCE).not.toContain('TS_JOINED_HERE');
+    expect(CODE).not.toContain('at port 3000');
+  });
+
+  it('drives the kept password and the start line in a real bash', () => {
+    const DRIVER = `
+      set -euo pipefail
+      export CODEMAN_INSTALL_SH_LIB=1
+      . "$1"
+      read_existing_binding() { EXISTING_FOUND=1; EXISTING_HOST=0.0.0.0; EXISTING_PASSWORD=s3cret; EXISTING_ACK=0; EXISTING_BASE_URL=""; }
+      tailscale_prepare() { return 0; }
+      parse_flags $DRIVE_FLAGS
+      choose_network_binding >/dev/null 2>&1
+      echo "host=$BIND_HOST pw=$BIND_PASSWORD ack=$BIND_ACK"
+      BIND_HOST=0.0.0.0; BIND_PASSWORD=x; BIND_ACK=0; BIND_BASE_URL=/codeman; CODEMAN_PORT=4000
+      echo "hint=$(start_command_hint)"
+      BIND_HOST=127.0.0.1; BIND_PASSWORD=""; BIND_BASE_URL=""; CODEMAN_PORT=""
+      echo "bare=$(start_command_hint)"
+    `;
+    const drive = (flags: string) => {
+      const env = { ...process.env, DRIVE_FLAGS: flags };
+      delete env.CODEMAN_PASSWORD;
+      const result = spawnSync('bash', ['-c', DRIVER, 'bash', INSTALL_SH], { encoding: 'utf-8', timeout: 30_000, env });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    const lan = drive('--lan');
+    expect(lan).toContain('host=0.0.0.0 pw=s3cret ack=0');
+    expect(lan).toContain(
+      "hint=CODEMAN_HOST=0.0.0.0 CODEMAN_PASSWORD='<your-password>' CODEMAN_BASE_URL=/codeman CODEMAN_PORT=4000 codeman web"
+    );
+    expect(lan).toContain('bare=codeman web');
+    expect(drive('--tailscale')).toContain('host=127.0.0.1 pw=s3cret ack=0');
   });
 });

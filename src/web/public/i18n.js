@@ -73,6 +73,10 @@
     'File Viewer': '文件查看器',
     'Open file viewer': '打开文件查看器',
     'Open Codeman across all displays': '在所有显示器上打开 {name}',
+    'Split: open a second session beside this one': '分屏：在旁边打开第二个会话',
+    'Split: close the second session': '分屏：关闭第二个会话',
+    'Close split': '关闭分屏',
+    'No other sessions to split with': '没有其他可用于分屏的会话',
     'Ultracode / Workflow agents': 'Ultracode / Workflow 智能体',
     'Open ultracode workflow agents': '打开 Ultracode 工作流智能体',
     Notifications: '通知',
@@ -312,6 +316,8 @@
       '运行菜单选择器会为此端点应用该模型。请先发现可用模型。',
     'Custom Endpoints': '自定义端点',
     'Choose a model': '选择模型',
+    'Currently loaded': '当前已加载',
+    'Last used': '上次使用',
     'That endpoint no longer exists': '该端点已不存在',
     'No models discovered for this endpoint yet': '此端点尚未发现任何模型',
     'Subagent Options': '子智能体选项',
@@ -444,6 +450,17 @@
       '自定义键盘快捷键。点击按键组合即可录入新的组合。',
     'Show Shortcuts': '显示快捷键',
     'Full shortcut reference': '完整快捷键参考',
+
+    // Mobile prompt composer (keyboard-accessory.js). The textarea's own
+    // placeholder and label are looked up by the module at build time, since
+    // the DOM translator skips <textarea> subtrees.
+    'Compose prompt': '撰写提示词',
+    'Compose prompt, draft saved': '撰写提示词，草稿已保存',
+    'Resume saved prompt draft': '继续编辑已保存的提示词草稿',
+    'Enter adds a new line': '按 Enter 换行',
+    'Write your prompt…': '请输入提示词…',
+    'Use terminal keyboard': '使用终端键盘',
+    'Uploading…': '上传中…',
 
     // Mobile overview (phone home screen)
     'Needs you': '需要你',

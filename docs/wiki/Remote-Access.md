@@ -33,11 +33,12 @@ Your devices join a private network, and Codeman stays bound to loopback. Nothin
 published to the internet, and you get real HTTPS with a real certificate.
 
 The installer sets this up for you, including installing Tailscale, logging in, enabling
-tailnet HTTPS, and verifying the result end to end. To retrofit it onto an existing
-install:
+tailnet HTTPS, and verifying the result end to end. It ends on the URL with a QR code to
+scan. To retrofit it onto an existing install, or to see the URL and QR code again:
 
 ```bash
 install.sh tailscale
+install.sh status
 ```
 
 By hand:
@@ -49,6 +50,22 @@ tailscale serve status
 
 Then open `https://<machine>.<tailnet>.ts.net` from any device on your tailnet.
 
+### The name in the URL
+
+The URL is the machine's MagicDNS name, so on a machine called `tnode` it is
+`https://tnode.<tailnet>.ts.net`. Three ways to influence that, from least to most work:
+
+| You want                                   | How                                                                                                   |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| The machine's existing name (default)      | Nothing. This is what the installer does unless you say otherwise.                                     |
+| `https://codeman-<hostname>.<tailnet>.ts.net` | Answer yes to the installer's name question, pass `--name codeman-<hostname>`, or run `install.sh name`. This renames the machine tailnet-wide (SSH included), which is why the installer defaults to no. `install.sh uninstall` offers to rename it back. |
+| `https://codeman.<tailnet>.ts.net`         | A [Tailscale Service](https://tailscale.com/docs/features/tailscale-services). Only a **tagged** node can host one (a device signed in with a user account cannot), the service is defined and approved in the admin console, and the feature is in beta. The installer does not set this up; it is a `tailscale serve --service=svc:codeman --https=443 127.0.0.1:3000` on a tagged host once the service exists. |
+
+If `:443` on your node already belongs to another app, the installer offers Codeman under
+`https://<machine>.<tailnet>.ts.net/codeman` (the default, via `tailscale serve --set-path`
+plus Codeman's `--base-url`), on a second port (`https://<machine>.<tailnet>.ts.net:8443`),
+or replacing the other mapping. It never replaces anything without asking.
+
 Notes:
 
 - Keep the loopback bind. `tailscale serve` connects to `127.0.0.1:3000` locally, so
@@ -58,7 +75,11 @@ Notes:
 - Codeman's Host-header allowlist already accepts `.ts.net`, so no extra configuration is
   needed.
 - The installer never resets or rewrites `serve` mappings other than the one pointing at
-  Codeman's port, so unrelated serve configuration is left alone.
+  Codeman's port, so unrelated serve configuration is left alone. It also never opens a
+  `tailscale funnel` (that is the public internet) and never advertises a Tailscale Service.
+- On macOS, the App Store and standalone Tailscale apps only run once someone is logged in,
+  so a headless Mac needs the open-source `tailscaled` for the URL to come back after a
+  reboot on its own.
 
 ## Cloudflare tunnel
 

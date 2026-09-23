@@ -55,9 +55,36 @@ export function agentImageNpmPackages(catalog) {
   return packages;
 }
 
-/** The `--build-arg` pairs the agent image takes. PURE. */
-export function agentImageBuildArgPairs(catalog) {
-  return [['CLI_NPM_PACKAGES', agentImageNpmPackages(catalog).join(' ')]];
+/**
+ * Environment variable → agent.Dockerfile ARG for the optional git-host CLIs (gh, az).
+ * ⚠️ Mirrored by `GIT_HOST_CLI_BUILD_ARGS` in `src/docker-hosts.ts`; the parity test pins them.
+ */
+export const GIT_HOST_CLI_BUILD_ARGS = [
+  ['CODEMAN_AGENT_IMAGE_INSTALL_GH', 'CODEMAN_INSTALL_GH'],
+  ['CODEMAN_AGENT_IMAGE_INSTALL_AZ', 'CODEMAN_INSTALL_AZ'],
+];
+
+/**
+ * The `--build-arg` pairs for the optional git-host CLIs. PURE. An unset or empty variable
+ * contributes NOTHING, so the Dockerfile's own default (off) applies and the argv is the same
+ * as before these existed; anything other than 0/1 is refused rather than guessed at.
+ */
+export function gitHostCliBuildArgPairs(env) {
+  const pairs = [];
+  for (const [envName, argName] of GIT_HOST_CLI_BUILD_ARGS) {
+    const value = env[envName];
+    if (value === undefined || value === '') continue;
+    if (value !== '0' && value !== '1') {
+      throw new Error(`${envName} must be 0 or 1, got ${JSON.stringify(value)}`);
+    }
+    pairs.push([argName, value]);
+  }
+  return pairs;
+}
+
+/** The `--build-arg` pairs the agent image takes. PURE given `env`. */
+export function agentImageBuildArgPairs(catalog, env = process.env) {
+  return [['CLI_NPM_PACKAGES', agentImageNpmPackages(catalog).join(' ')], ...gitHostCliBuildArgPairs(env)];
 }
 
 /** Read the committed catalogue. IO. */

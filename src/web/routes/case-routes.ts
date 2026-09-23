@@ -129,6 +129,18 @@ const LOCAL_CLONE_ADMIN_ONLY =
   'Cloning from a local path is admin-only in multi-user mode. Use a repository URL instead.';
 
 /**
+ * Whether a clone or preflight must run with git's credential helpers cleared:
+ * a non-admin in multi-user mode. Every user's git runs as the one server
+ * account, so its helpers (the Docker image's opt-in `gh`/`az` ones, or any
+ * `gh auth setup-git`) would otherwise read a private repository with the
+ * signed-in admin's credentials, the same boundary the local-transport rule
+ * above guards. Admins and single-user mode keep the account's own helpers.
+ */
+export function cloneWithoutCredentialHelpers(req: FastifyRequest): boolean {
+  return isMultiUserMode() && !isAdmin(req);
+}
+
+/**
  * The one line of git's stderr worth appending to an error message.
  *
  * NOT the first line: `git clone` opens with "Cloning into '<dest>'…", so a naive
@@ -475,7 +487,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       if (!isGitAvailable()) {
         return { success: true, data: { parse: parsed, gitAvailable: false } };
       }
-      const remote = await probeGitRemote(parsed.repository);
+      const remote = await probeGitRemote(parsed.repository, undefined, {
+        withoutCredentialHelpers: cloneWithoutCredentialHelpers(req),
+      });
       return { success: true, data: { parse: parsed, remote, gitAvailable: true } };
     }
   );
@@ -491,8 +505,10 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
    * request died mid-clone still sees the case appear over SSE when git finishes.
    *
    * Deliberately NOT admin-gated in multi-user mode: unlike `/api/cases/link`,
-   * this writes only inside the caller's own `resolveCasesDir`. The one exception
-   * is a `local`-transport source, which would read through that boundary.
+   * this writes only inside the caller's own `resolveCasesDir`. Two things would
+   * otherwise read through that boundary: a `local`-transport source (refused for
+   * non-admins) and the server account's git credential helpers, which every user
+   * shares (cleared for non-admins, see `cloneWithoutCredentialHelpers`).
    *
    * Repository contents win over scaffolding: an existing CLAUDE.md is left
    * alone, and hooks are MERGED into whatever `.claude/settings.local.json` the
@@ -562,6 +578,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       const clone = await cloneRepository({
         repository: parsed.repository,
         destination: casePath,
+        withoutCredentialHelpers: cloneWithoutCredentialHelpers(req),
         ...(ref ? { ref } : {}),
         ...(shallow ? { shallow: true } : {}),
       });

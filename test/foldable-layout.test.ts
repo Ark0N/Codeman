@@ -313,11 +313,17 @@ describe('fold reserved region: every centred overlay is covered', () => {
   /**
    * The elements whose padding cascade is simulated: every derived overlay as
    * a bare element, plus the open command palette, which is a `.modal` wearing
-   * two more classes and the one overlay mobile.css pads with a shorthand.
+   * two more classes and the one overlay mobile.css pads with a shorthand, plus
+   * the mobile prompt composer, a `.paste-overlay` wearing a second class that
+   * carries its own `padding` shorthand. The derived list cannot see the
+   * composer (it inherits the centring declarations rather than declaring
+   * them), and simulating `['paste-overlay']` alone stayed green while the
+   * generic `.paste-overlay` fold rule erased the composer's bottom gutter.
    */
   const ELEMENTS: { name: string; classes: string[] }[] = [
     ...CENTRED_OVERLAYS.map((o) => ({ name: o.selector, classes: classCompound(o.selector)! })),
     { name: '.modal.command-palette-modal.active', classes: ['modal', 'command-palette-modal', 'active'] },
+    { name: '.paste-overlay.prompt-composer-overlay', classes: ['paste-overlay', 'prompt-composer-overlay'] },
   ];
 
   it('simulates the cascade the browser measured', () => {
@@ -330,7 +336,7 @@ describe('fold reserved region: every centred overlay is covered', () => {
     const picker = ['path-picker-overlay'];
     expect(cascadedPadding(picker, 'right', 393, false)).toBe('0');
     expect(cascadedPadding(picker, 'right', 626, false)).toBe('16px');
-    const palette = ELEMENTS.at(-1)!.classes;
+    const palette = ELEMENTS.find((e) => e.name === '.modal.command-palette-modal.active')!.classes;
     expect(cascadedPadding(palette, 'right', 393, false)).toBeNull();
     expect(cascadedPadding(palette, 'right', 626, false)).toBe('0.75rem');
     expect(cascadedPadding(palette, 'bottom', 626, false)).toBe('0');

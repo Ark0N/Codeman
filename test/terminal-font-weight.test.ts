@@ -74,6 +74,18 @@ function makeApp(opts: { teammates?: number; terminal?: ReturnType<typeof fakeTe
   }
   const app = {
     applyTerminalFontWeights: mixin.applyTerminalFontWeights,
+    // The REAL geometry chain, not stubs. A font change moves the cell size, so
+    // it moves cols/rows, and `applyTerminalFontWeights` now routes its refit
+    // through the one function that floors the result and reports it (#464).
+    // Wiring the real methods keeps `fit` an assertion about what the terminal
+    // actually did rather than about which helper happened to be called.
+    _refitAfterCellSizeChange: mixin._refitAfterCellSizeChange,
+    syncTerminalGeometry: mixin.syncTerminalGeometry,
+    _resizeTerminalTo: mixin._resizeTerminalTo,
+    getTerminalDimensions: mixin.getTerminalDimensions,
+    // No session: `_refitAfterCellSizeChange` then refits locally and sends
+    // nothing, which is what these cases are about.
+    activeSessionId: null,
     _awaitTerminalFont: vi.fn(() => Promise.resolve()),
     terminal: opts.terminal === undefined ? fakeTerminal() : opts.terminal,
     fitAddon: { fit },
