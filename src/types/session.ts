@@ -47,7 +47,16 @@ export type ClaudeMode = 'dangerously-skip-permissions' | 'auto' | 'normal' | 'a
 
 /** Session mode: which CLI backend a session runs */
 export type SessionMode =
-  'claude' | 'shell' | 'opencode' | 'codex' | 'gemini' | 'antigravity' | 'pi' | 'grok' | 'deepseek' | 'omp';
+  | 'claude'
+  | 'shell'
+  | 'opencode'
+  | 'codex'
+  | 'gemini'
+  | 'antigravity'
+  | 'pi'
+  | 'grok'
+  | 'deepseek'
+  | 'omp';
 
 /**
  * Who owns a session's name. `placeholder`: Codeman's own `w<n>-<case>` (or no

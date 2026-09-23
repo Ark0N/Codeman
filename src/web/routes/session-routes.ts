@@ -1081,7 +1081,8 @@ export function registerSessionRoutes(
     const model =
       modelSource?.source === 'flag'
         ? (legacyConfigForMode(mode, body as unknown as Record<string, unknown>)?.[modelSource.param ?? 'model'] as
-            string | undefined)
+            | string
+            | undefined)
         : modelSource?.source === 'claude-settings-file'
           ? modelConfig?.defaultModel || undefined
           : undefined;

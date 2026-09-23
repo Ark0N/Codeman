@@ -36,7 +36,12 @@ import { stripAnsi, CLAUDE_WORKING_LINE_PATTERN } from '../utils/index.js';
 export type ApprovalKind = 'permission' | 'question' | 'idle';
 
 export type ApprovalResolution =
-  'answered' | 'resolved_in_terminal' | 'superseded' | 'session_ended' | 'dismissed' | 'expired';
+  | 'answered'
+  | 'resolved_in_terminal'
+  | 'superseded'
+  | 'session_ended'
+  | 'dismissed'
+  | 'expired';
 
 /** A numbered choice parsed from the captured dialog frame. */
 export interface ApprovalOption {

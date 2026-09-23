@@ -1342,7 +1342,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       engine: result.manifest.engine,
       image: result.importedImage ?? result.manifest.image,
       network: (['bridge', 'none', 'custom'].includes(result.manifest.network) ? result.manifest.network : 'bridge') as
-        'bridge' | 'none' | 'custom',
+        | 'bridge'
+        | 'none'
+        | 'custom',
     };
     await writeDockerHosts(
       CODEMAN_CONFIG_DIR,
