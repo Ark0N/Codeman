@@ -659,7 +659,7 @@ Object.assign(CodemanApp.prototype, {
       dot.className = `run-mode-dot ${cli.id}`;
       dot.setAttribute('aria-hidden', 'true');
       option.appendChild(dot);
-      option.append(cli.label === 'Claude' ? 'Claude Code' : cli.label);
+      option.append(cli.label);
       container.appendChild(option);
     }
   },
@@ -4602,6 +4602,14 @@ Object.defineProperty(CodemanApp.prototype, 'runMode', {
   },
   set(mode) {
     const entry = registryCliById(mode);
-    this._runMode = (entry && entry.enabled) || (!entry && BUILT_IN_RUN_MODES.has(mode)) ? mode : 'claude';
+    if ((entry && entry.enabled) || (!entry && BUILT_IN_RUN_MODES.has(mode))) {
+      this._runMode = mode;
+      return;
+    }
+    // A disabled (or unknown) mode falls back to the first ENABLED catalogue entry, never a
+    // hardcoded 'claude': claude can be disabled too, and the server rejects a disabled mode.
+    const catalog = registryCliCatalog();
+    const firstEnabled = catalog.find((cli) => cli.enabled && cli.kind === 'agent') || catalog.find((cli) => cli.enabled);
+    this._runMode = firstEnabled ? firstEnabled.id : 'claude';
   },
 });

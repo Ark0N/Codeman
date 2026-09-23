@@ -564,13 +564,13 @@ describe('mobile overview Run picker, driven by the registry catalogue', () => {
 
   it('keeps the Run button on its word label, never the two-letter tab badge', () => {
     const { modes } = loadRunModes([
-      { id: 'claude', label: 'Claude', shortBadge: 'CC', kind: 'agent', enabled: true },
+      { id: 'claude', label: 'Claude Code', shortBadge: 'CC', kind: 'agent', enabled: true },
       { id: 'codex', label: 'Codex', shortBadge: 'CX', kind: 'agent', enabled: true },
       { id: 'grok', label: 'Grok', shortBadge: 'GK', kind: 'agent', enabled: false },
       { id: 'shell', label: 'Shell', shortBadge: 'SH', kind: 'shell', enabled: true },
     ]);
     expect(modes).toEqual([
-      { mode: 'claude', label: 'Claude Code', short: 'Claude' },
+      { mode: 'claude', label: 'Claude Code', short: 'Claude Code' },
       { mode: 'codex', label: 'Codex', short: 'Codex' },
       { mode: 'shell', label: 'Terminal / Shell', short: 'Shell' },
     ]);

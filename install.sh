@@ -169,7 +169,7 @@ export PUPPETEER_SKIP_DOWNLOAD="${PUPPETEER_SKIP_DOWNLOAD:-1}"
 # commit as the script itself. Nothing fetched at install time is ever executed; there is
 # no network refresh of these arrays. See cli_catalog_select_platform below.
 CLI_IDS=('claude' 'shell' 'opencode' 'codex' 'gemini' 'antigravity' 'pi' 'grok' 'deepseek' 'omp')
-CLI_LABELS=('Claude' 'Shell' 'OpenCode' 'Codex' 'Gemini' 'Antigravity' 'Pi' 'Grok' 'DeepSeek' 'OMP')
+CLI_LABELS=('Claude Code' 'Shell' 'OpenCode' 'Codex' 'Gemini' 'Antigravity' 'Pi' 'Grok' 'DeepSeek' 'OMP')
 CLI_ENABLED=(1 1 1 1 1 1 1 1 1 1)
 CLI_LAUNCHER_ONLY=(0 0 0 0 0 0 0 0 1 0)
 CLI_DOCS=('https://docs.claude.com/claude-code' '' 'https://opencode.ai/docs' 'https://developers.openai.com/codex/cli' 'https://github.com/google-gemini/gemini-cli' 'https://antigravity.google/cli' 'https://pi.dev' 'https://github.com/xai-org/grok-build' 'https://github.com/deepseek-ai/deepseek-harness' 'https://omp.sh')

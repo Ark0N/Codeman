@@ -12,12 +12,17 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, writeFileSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
-import { registerCliRegistryRoutes, type CliListItem } from '../../src/web/routes/cli-registry-routes.js';
+import { installEnv, registerCliRegistryRoutes, type CliListItem } from '../../src/web/routes/cli-registry-routes.js';
 import { SETTINGS_PATH } from '../../src/web/route-helpers.js';
-import { getCli, registryFilePath, resolveInstallCommandForPlatform } from '../../src/config/cli-registry/registry.js';
+import {
+  getCli,
+  registryFilePath,
+  reloadCliRegistry,
+  resolveInstallCommandForPlatform,
+} from '../../src/config/cli-registry/registry.js';
 
 // The install route spawns a real shell command, so `spawn` is replaced with a fake
 // child (every other child_process export stays real). The two cache invalidators are
@@ -395,7 +400,7 @@ describe('Custom CLI entries (Phase 5)', () => {
     });
     expect(res.json().errorCode).toBe('INVALID_INPUT');
     const list = await app.inject({ method: 'GET', url: '/api/clis' });
-    expect((list.json() as { data: CliListItem[] }).data.find((c) => c.id === 'claude')?.label).toBe('Claude');
+    expect((list.json() as { data: CliListItem[] }).data.find((c) => c.id === 'claude')?.label).toBe('Claude Code');
   });
 
   it('404s an update against a custom id that does not exist', async () => {
@@ -577,5 +582,131 @@ describe('resolver caches are forgotten when what a CLI resolves to changes', ()
     await app.inject({ method: 'DELETE', url: '/api/clis/test-forget' });
     expect(invalidateBinariesSpy).toHaveBeenCalledWith(['gone-bin']);
     expect(invalidateIdSpy).toHaveBeenCalledWith('test-forget');
+  });
+});
+
+/**
+ * The #476 review's must-fix items for the writer. Each reproduces the failure it reported:
+ * a corrupt hand-edit overwritten by one toggle, parallel toggles lost to a shared temp file,
+ * and a file the reader refuses rewritten as trusted 0600 config.
+ */
+describe('registry writes are serialized and never clobber a file the reader would refuse', () => {
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
+
+  /** Put the override file back to "absent" so later tests start from stock. */
+  function clearRegistryFile(): void {
+    rmSync(registryFilePath(), { force: true });
+    reloadCliRegistry();
+  }
+
+  it('refuses to overwrite a clis.json that does not parse, and leaves it untouched', async () => {
+    enableCliManagement();
+    mkdirSync(dirname(registryFilePath()), { recursive: true });
+    const handEdit = '{ "schemaVersion": 1, "clis": { "grok": { "accent": "#123456" }, }';
+    writeFileSync(registryFilePath(), handEdit, { mode: 0o600 });
+    const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+    const res = await app.inject({ method: 'PUT', url: '/api/clis/pi', payload: { enabled: false } });
+    expect(res.json().errorCode).toBe('CONFLICT');
+    expect(res.json().error).toContain('not valid JSON');
+    expect(readFileSync(registryFilePath(), 'utf-8')).toBe(handEdit);
+    clearRegistryFile();
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'refuses to rewrite a clis.json with group/world permission bits, naming the chmod fix',
+    async () => {
+      enableCliManagement();
+      mkdirSync(dirname(registryFilePath()), { recursive: true });
+      writeFileSync(registryFilePath(), JSON.stringify({ schemaVersion: 1, clis: {} }));
+      chmodSync(registryFilePath(), 0o644);
+      const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+      const res = await app.inject({ method: 'PUT', url: '/api/clis/pi', payload: { enabled: false } });
+      expect(res.json().errorCode).toBe('CONFLICT');
+      expect(res.json().error).toContain('chmod 600');
+      // Still the refused mode: the write did not turn it into trusted config.
+      expect(statSync(registryFilePath()).mode & 0o777).toBe(0o644);
+      clearRegistryFile();
+    }
+  );
+
+  it('keeps every one of several parallel toggles, with no failures', async () => {
+    enableCliManagement();
+    clearRegistryFile();
+    const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+    const ids = ['grok', 'pi', 'omp', 'gemini'];
+    const results = await Promise.all(
+      ids.map((id) => app.inject({ method: 'PUT', url: `/api/clis/${id}`, payload: { enabled: false } }))
+    );
+    expect(results.map((r) => r.statusCode)).toEqual(ids.map(() => 200));
+    const onDisk = JSON.parse(readFileSync(registryFilePath(), 'utf-8')) as {
+      clis: Record<string, { enabled?: boolean }>;
+    };
+    for (const id of ids) {
+      expect(onDisk.clis[id]?.enabled).toBe(false);
+      expect(getCli(id)?.enabled).toBe(false);
+    }
+    clearRegistryFile();
+  });
+
+  it('editing a disabled custom entry keeps it disabled when the body omits enabled', async () => {
+    enableCliManagement();
+    const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+    await app.inject({
+      method: 'POST',
+      url: '/api/clis',
+      payload: { id: 'test-keep-off', label: 'X', shortBadge: 'X', binaries: ['x'], argv: ['x'] },
+    });
+    await app.inject({ method: 'PUT', url: '/api/clis/test-keep-off', payload: { enabled: false } });
+    const update = await app.inject({
+      method: 'PUT',
+      url: '/api/clis/custom/test-keep-off',
+      payload: { label: 'Renamed', shortBadge: 'X', binaries: ['x'], argv: ['x'] },
+    });
+    expect(update.statusCode).toBe(200);
+    expect(getCli('test-keep-off')?.enabled).toBe(false);
+    expect(getCli('test-keep-off')?.label).toBe('Renamed');
+    await app.inject({ method: 'DELETE', url: '/api/clis/test-keep-off' });
+  });
+
+  it('answers 409 to a second install of the same CLI while the first is still running', async () => {
+    enableCliManagement();
+    let finish: (code: number) => void = () => {};
+    spawnMock.mockImplementation(() => {
+      const child = new EventEmitter() as EventEmitter & Record<string, unknown>;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      finish = (code) => child.emit('close', code);
+      return child;
+    });
+    const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+    const first = app.inject({ method: 'POST', url: '/api/clis/grok/install' });
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1));
+    const second = await app.inject({ method: 'POST', url: '/api/clis/grok/install' });
+    expect(second.json().errorCode).toBe('CONFLICT');
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    finish(0);
+    expect((await first).statusCode).toBe(200);
+    // The guard is released once the first finishes.
+    spawnMock.mockImplementation(() => fakeInstallChild(0));
+    const third = await app.inject({ method: 'POST', url: '/api/clis/grok/install' });
+    expect(third.statusCode).toBe(200);
+  });
+
+  it('hands the install script an environment with every CODEMAN_* variable stripped', async () => {
+    enableCliManagement();
+    process.env.CODEMAN_TEST_SECRET = 'do-not-leak';
+    try {
+      spawnMock.mockImplementation(() => fakeInstallChild(0));
+      const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+      await app.inject({ method: 'POST', url: '/api/clis/grok/install' });
+      const env = spawnMock.mock.calls[0][1].env as NodeJS.ProcessEnv;
+      expect(Object.keys(env).filter((k) => k.startsWith('CODEMAN_'))).toEqual([]);
+      expect(env.PATH).toBe(process.env.PATH);
+    } finally {
+      delete process.env.CODEMAN_TEST_SECRET;
+    }
+    expect(installEnv({ CODEMAN_PASSWORD: 'x', HOME: '/h' })).toEqual({ HOME: '/h' });
   });
 });

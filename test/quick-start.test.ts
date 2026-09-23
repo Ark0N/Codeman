@@ -4,7 +4,7 @@ import { existsSync, rmSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-const TEST_PORT = 3299;
+const TEST_PORT = 3099;
 const ORIGINAL_HOME = process.env.HOME;
 const TEST_HOME = mkdtempSync(join(tmpdir(), 'codeman-quick-start-'));
 const CASES_DIR = join(TEST_HOME, 'codeman-cases');
@@ -33,7 +33,7 @@ describe('Quick Start API', () => {
     server = await createTestServer(TEST_PORT);
     await server.start();
     baseUrl = `http://localhost:${TEST_PORT}`;
-  }, 30000);
+  });
 
   afterEach(() => {
     // Clean up cases created during this test

@@ -70,10 +70,10 @@ describe('CLI management: list rendering', () => {
   it('lists installed CLIs first, each group alphabetical, and gives shell no switch', () => {
     const { app, rows } = loadSettingsUi(true);
     app._cliList = [
-      { id: 'pi', label: 'Pi', shortBadge: 'PI', stock: true, installed: false, enabled: true },
-      { id: 'shell', label: 'Shell', shortBadge: 'SH', stock: true, installed: true, enabled: true },
-      { id: 'codex', label: 'Codex', shortBadge: 'CX', stock: true, installed: true, enabled: true },
-      { id: 'grok', label: 'Grok', shortBadge: 'GK', stock: true, installed: false, enabled: true },
+      { id: 'pi', label: 'Pi', shortBadge: 'PI', kind: 'agent', stock: true, installed: false, enabled: true },
+      { id: 'shell', label: 'Shell', shortBadge: 'SH', kind: 'shell', stock: true, installed: true, enabled: true },
+      { id: 'codex', label: 'Codex', shortBadge: 'CX', kind: 'agent', stock: true, installed: true, enabled: true },
+      { id: 'grok', label: 'Grok', shortBadge: 'GK', kind: 'agent', stock: true, installed: false, enabled: true },
     ];
     app.renderCliList();
     const order = [...rows.innerHTML.matchAll(/data-cli-id="([^"]+)"/g)].map((m) => m[1]);

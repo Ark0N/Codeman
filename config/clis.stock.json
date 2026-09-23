@@ -1,7 +1,7 @@
 [
   {
     "id": "claude",
-    "label": "Claude",
+    "label": "Claude Code",
     "shortBadge": "CC",
     "enabled": true,
     "order": 0,

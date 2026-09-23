@@ -72,7 +72,7 @@ import { imageWatcher } from '../image-watcher.js';
 import { workflowRunWatcher, summarizeRun } from '../workflow-run-watcher.js';
 import { attachmentRegistry, buildFileThumbnailRoute, registerExternalAttachment } from '../attachment-registry.js';
 import { getCli, enabledClis, listClis } from '../config/cli-registry/registry.js';
-import { isCliAvailable as isRegistryCliAvailable } from '../utils/cli-resolver.js';
+import { isCliEntryInstalled, probeStockCliAvailability } from '../utils/cli-installed-probes.js';
 import { readCustomModelHosts } from '../custom-model-hosts.js';
 import { applyCustomModelInjection, customModelConfigDir, removeConfigDir } from '../custom-model-injection-apply.js';
 import type { CustomModelBookkeeping } from '../types/session.js';
@@ -1623,47 +1623,20 @@ export class WebServer extends EventEmitter {
     //
     // Solo popups skip it: no settings modal, no welcome screen, no run menu.
     if (!soloSessionId) {
-      const [
-        { isClaudeAvailable },
-        { isOpenCodeAvailable },
-        { isCodexAvailable },
-        { isGeminiAvailable },
-        { isAntigravityAvailable },
-        { isPiAvailable },
-        { isGrokAvailable },
-        { isDeepSeekRunnable, isDeepSeekAvailable },
-        { isOmpAvailable },
-        { isCloudflaredAvailable },
-        { isGitAvailable },
-      ] = await Promise.all([
-        import('../utils/claude-cli-resolver.js'),
-        import('../utils/opencode-cli-resolver.js'),
-        import('../utils/codex-cli-resolver.js'),
-        import('../utils/gemini-cli-resolver.js'),
-        import('../utils/antigravity-cli-resolver.js'),
-        import('../utils/pi-cli-resolver.js'),
-        import('../utils/grok-cli-resolver.js'),
-        import('../utils/deepseek-cli-resolver.js'),
-        import('../utils/omp-cli-resolver.js'),
-        import('../utils/cloudflared-resolver.js'),
-        import('../git-clone.js'),
-      ]);
+      const [{ isDeepSeekAvailable }, { isCloudflaredAvailable }, { isGitAvailable }, stockAvailability] =
+        await Promise.all([
+          import('../utils/deepseek-cli-resolver.js'),
+          import('../utils/cloudflared-resolver.js'),
+          import('../git-clone.js'),
+          // Shared with GET /api/clis so the Settings badge and the Run menu cannot disagree.
+          probeStockCliAvailability(),
+        ]);
       const available: Record<string, boolean> = {
-        claude: isClaudeAvailable(),
-        opencode: isOpenCodeAvailable(),
-        codex: isCodexAvailable(),
-        gemini: isGeminiAvailable(),
-        antigravity: isAntigravityAvailable(),
-        pi: isPiAvailable(),
-        grok: isGrokAvailable(),
-        // RUNNABLE, not merely installed: `dsh` is a profile launcher, and a dsh
-        // with no pane-capable profile would offer a Run button that spawns a
-        // pane which dies on arrival. The Add-Profile affordance in the run menu
-        // keys off `deepseekBinary` instead, so a user who has the binary but no
-        // profile is offered the fix rather than a greyed-out entry.
-        deepseek: isDeepSeekRunnable(),
+        ...stockAvailability,
+        // `deepseek` above is RUNNABLE (binary + a pane-capable profile). The Add-Profile
+        // affordance in the run menu keys off `deepseekBinary` instead, so a user who has
+        // the binary but no profile is offered the fix rather than a greyed-out entry.
         deepseekBinary: isDeepSeekAvailable(),
-        omp: isOmpAvailable(),
         cloudflared: isCloudflaredAvailable(),
         // Not a run mode: the Add Case → Clone tab is an offer this box cannot
         // keep without git (issue #236), same reasoning as cloudflared above.
@@ -1680,11 +1653,7 @@ export class WebServer extends EventEmitter {
       // registry ids, so only the nine real SessionMode entries are gated.
       const cliCatalog = listClis().map((entry) => {
         const id = entry.id as string;
-        // Stock tools above retain their dedicated resolver semantics (in particular,
-        // DeepSeek is available only when it has a runnable terminal profile). A custom
-        // entry uses the registry's generic resolver, which understands its declared
-        // binary and search directories.
-        const installed = entry.kind === 'shell' || (id in available ? available[id] : isRegistryCliAvailable(id));
+        const installed = isCliEntryInstalled(entry, stockAvailability);
         const enabled = entry.enabled;
         available[id] = enabled && installed;
         return {

@@ -69,7 +69,9 @@ const ALL: ProbeEnvironment[] = ['linux', 'darwin', 'wsl', 'win32'];
  * shown to the user and claude's does not follow the pattern.
  */
 const DOCTOR_ROW_OVERRIDES: Record<string, { id?: string; label?: string; usedBy: string[] }> = {
-  claude: { usedBy: ['Claude Code sessions (default backend)'] },
+  // The label override keeps the doctor row's historical "Claude CLI" spelling now that
+  // the registry label is the product name, "Claude Code".
+  claude: { label: 'Claude CLI', usedBy: ['Claude Code sessions (default backend)'] },
   opencode: { usedBy: ['OpenCode sessions'] },
   codex: { usedBy: ['Codex sessions'] },
   gemini: { usedBy: ['Gemini sessions'] },

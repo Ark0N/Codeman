@@ -1325,7 +1325,6 @@ Object.assign(CodemanApp.prototype, {
       btn.type = 'button';
       btn.className = `welcome-btn welcome-btn-cli welcome-btn-${cli.id}`;
       btn.dataset.mode = cli.id;
-      btn.setAttribute('data-i18n-skip', '');
       const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       icon.setAttribute('width', '20');
       icon.setAttribute('height', '20');
@@ -1338,7 +1337,10 @@ Object.assign(CodemanApp.prototype, {
       play.setAttribute('points', '5 3 19 12 5 21 5 3');
       icon.appendChild(play);
       btn.appendChild(icon);
-      btn.append(`Run ${cli.kind === 'shell' ? 'Terminal / Shell' : cli.label}`);
+      // Same "Run <label>" text the static buttons had ("Run Claude Code", "Run Shell"),
+      // left translatable on purpose: i18n.js carries these strings, and a custom CLI's
+      // label simply has no dictionary entry, so it renders as typed.
+      btn.append(`Run ${cli.kind === 'shell' ? 'Shell' : cli.label}`);
       btn.onclick = () => {
         this.setRunMode(cli.id);
         void this.run();
@@ -2844,17 +2846,17 @@ Object.assign(CodemanApp.prototype, {
       list.innerHTML = '<p class="set-group-hint">No CLIs found.</p>';
       return;
     }
-    // Mirrors cli-registry-routes.ts's own UNDISABLEABLE_IDS: shell is the one
-    // entry the backend refuses to ever disable. Revised 2026-09-23: rather
+    // Mirrors cli-registry-routes.ts's own isUndisableable(): a kind 'shell' entry
+    // is the one the backend refuses to ever disable (keyed on kind, never an id).
+    // Revised 2026-09-23: rather
     // than render a permanently-greyed switch for it (which read as "broken"
     // next to every other row's working toggle), shell gets NO switch at all —
     // a plain "Always available" label, so there is nothing to click that
     // could look like it should work but doesn't.
-    const UNTOGGLEABLE = new Set(['shell']);
     list.innerHTML = clis
       .map((c) => {
         const idArg = escapeHtml(JSON.stringify(c.id));
-        const untoggleable = UNTOGGLEABLE.has(c.id);
+        const untoggleable = c.kind === 'shell';
         const installBtn =
           c.stock && !c.installed
             ? `<button type="button" class="btn-toolbar btn-sm" onclick="app.installCliEntry(${idArg})" id="cliInstallBtn-${escapeHtml(c.id)}">Install</button>`

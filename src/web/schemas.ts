@@ -2018,7 +2018,7 @@ const cliShellToken = z
   .max(256)
   .regex(/^[A-Za-z0-9._:@=+/,-]+$/, 'must be a plain word with no shell metacharacters');
 
-/** PUT /api/clis/:id (Phase 3) — stock enable/disable, the ONLY thing this endpoint can flip. */
+/** PUT /api/clis/:id (Phase 3) — enable/disable an existing entry, stock or custom; `enabled` is the ONLY thing this endpoint can flip. */
 export const CliEnableSchema = z.object({ enabled: z.boolean() });
 
 /**

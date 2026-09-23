@@ -100,8 +100,11 @@ export interface LoadResult {
  * as mode 0o666 there regardless of its actual ACL), so this check would flag every file on
  * Windows and silently ignore all user config. `win32` relies on NTFS ACLs instead, which
  * this check cannot see and does not attempt to.
+ *
+ * Exported for `registry-writer.ts`, which must refuse the same files: rewriting a refused
+ * file as 0600 would silently turn it into trusted config.
  */
-function isUnsafePermissions(path: string): boolean {
+export function isUnsafePermissions(path: string): boolean {
   if (process.platform === 'win32') return false;
   try {
     const mode = statSync(path).mode & 0o777;

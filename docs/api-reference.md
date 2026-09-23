@@ -691,6 +691,19 @@ normal `caseName`/`mode`/etc. body)
   jarring than a full relaunch, and folding it into the one-shot path is
   separate work — see `docs/custom-model-endpoints-plan.md`).
 
+## CLI management
+
+Read and write the CLI registry (`docs/cli-registry.md`). Every **write** route answers `403 FORBIDDEN` while `cliManagementEnabled` is off (the default), and for a non-admin in multi-user mode. A write that would overwrite a `clis.json` which does not parse, or which has group/world permission bits, is refused with `409 CONFLICT` and a message naming the fix; the file is left untouched.
+
+| Method   | Path                          | Body                                                    | Notes                                                                                                   |
+| -------- | ----------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/api/clis`                   | none                                                    | Every entry, disabled ones included: `id`, `label`, `shortBadge`, `order`, `kind`, `enabled`, `stock`, `installed`, and `installCommand` for a stock entry. Not gated; a non-admin in multi-user mode gets `[]`. |
+| `PUT`    | `/api/clis/:id`               | `{ enabled }`                                           | Toggle an existing entry, stock or custom. `404` for an unknown id; `400 INVALID_INPUT` when disabling a `kind: 'shell'` entry. |
+| `POST`   | `/api/clis/:id/install`       | none                                                    | Run a **stock** entry's install command (never a custom one: `400`). `409 CONFLICT` while an install for the same id is running; `422 OPERATION_FAILED` with the output tail when it fails. Never enables the entry. |
+| `POST`   | `/api/clis`                   | `{ id, label, shortBadge, binaries, argv, enabled? }`   | Create a custom entry. `409 ALREADY_EXISTS` for a stock id or an existing custom id. `enabled` defaults to `true`. |
+| `PUT`    | `/api/clis/custom/:id`        | `{ label, shortBadge, binaries, argv, enabled? }`       | Replace an existing custom entry. An absent `enabled` keeps the entry's current state. `400` for a stock id, `404` for an unknown one. |
+| `DELETE` | `/api/clis/:id`               | none                                                    | Delete a custom entry. `400` for a stock id, `404` for an unknown one.                                  |
+
 ## Voice dictation
 
 Browser dictation transcribed through this server's Claude Code login, i.e. the

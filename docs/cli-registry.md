@@ -18,7 +18,17 @@ Every run mode Codeman can launch — Claude Code, Terminal/Shell, OpenCode, Cod
 
 ## The override file
 
-`~/.codeman/clis.json` (instance-scoped through `dataPath()`) holds overrides and custom entries only, never a copy of the stock catalog: `{ "clis": { "<id>": { ...partial entry... } } }`. Objects merge key-wise onto the stock entry, arrays replace wholesale. **The file must be mode 0600**; the loader refuses any group/world permission bit, read bits included, so a file created with a normal umask (0644) is ignored until you `chmod 600` it. Every reason a file was ignored or an entry dropped is logged once, prefixed `[cli-registry]`, on the first load. A stock entry whose override fails validation falls back to the shipped definition; a custom entry that fails is dropped. The file is read once per process and re-read only on restart.
+`~/.codeman/clis.json` (instance-scoped through `dataPath()`) holds overrides and custom entries only, never a copy of the stock catalog: `{ "clis": { "<id>": { ...partial entry... } } }`. Objects merge key-wise onto the stock entry, arrays replace wholesale. **The file must be mode 0600**; the loader refuses any group/world permission bit, read bits included, so a file created with a normal umask (0644) is ignored until you `chmod 600` it. Every reason a file was ignored or an entry dropped is logged once, prefixed `[cli-registry]`, on the first load. A stock entry whose override fails validation falls back to the shipped definition; a custom entry that fails is dropped. The file is read once per process and re-read after a change made through CLI management (below).
+
+## Managing CLIs from Settings
+
+App Settings → Agents & CLIs → **CLI management** (`cliManagementEnabled`, default OFF; admin-only in multi-user mode) lists every entry with an installed/not-installed badge and:
+
+- toggles any entry on or off. A `kind: 'shell'` entry cannot be disabled, and the row shows no switch for it. A disabled CLI disappears from the Run menu, the welcome screen and the phone overview, and new session requests for it are rejected.
+- installs a missing **stock** CLI by running its shipped install command, after a confirm that names the exact command. Only one install per CLI runs at a time, and the command runs without any `CODEMAN_*` variable in its environment. A custom entry's install command is never executed.
+- adds, edits and deletes **custom** entries (id, label, badge, binaries, launch argv). The server re-validates the whole assembled entry through `CliEntrySchema`, so the form cannot bypass the load-time rules.
+
+These are the only writes to `clis.json`. They are serialized, and a file that does not parse or has unsafe permissions is refused rather than overwritten; fix it (or `chmod 600` it) and retry. The HTTP routes are listed in `docs/api-reference.md` under *CLI management*.
 
 ## The shape of an entry
 
@@ -149,7 +159,7 @@ This matters because it is invisible when it is wrong. `capabilities.privilegedP
 
 ## Fields declared for later
 
-`shortBadge`, `accent`, `capabilities.echo`, `capabilities.wheelForward`, `capabilities.keyboardAccessory` and `capabilities.maxFrameBytes` are **declared but not yet read**. They all describe frontend behaviour, and the frontend is deliberately untouched here: `app.js`, `terminal-ui.js` and `styles.css` keep their own hand-authored per-CLI rules, and moving them is its own piece of work verified by a browser/mobile suite the CI gate cannot see.
+`accent`, `capabilities.echo`, `capabilities.wheelForward`, `capabilities.keyboardAccessory` and `capabilities.maxFrameBytes` are **declared but not yet read**. (`shortBadge` was on this list until the CLI management list in Settings started showing it.) They all describe frontend behaviour, and the frontend is deliberately untouched here: `app.js`, `terminal-ui.js` and `styles.css` keep their own hand-authored per-CLI rules, and moving them is its own piece of work verified by a browser/mobile suite the CI gate cannot see.
 
 Treat those values as **transcribed, not authoritative** — nothing enforces that `echo.policy` matches `_updateLocalEchoState`'s fallthrough, so re-measure before wiring one up. `accent` is the one exception: it was measured against styles.css on 2026-09-21 (method in the comment above `CLAUDE` in `stock.ts`), though nothing keeps it in step with the CSS either. A field that is both wrong and unread is worse than an absent one, because the next reader trusts it; `test/cli-registry-no-id-branching.test.ts` pins the list so it cannot quietly grow, and wiring one up makes its line there fail, which is the direction you want.
 

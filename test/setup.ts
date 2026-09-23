@@ -35,12 +35,6 @@ process.env.HOME = testHome;
 process.env.USERPROFILE = testHome;
 process.env.VITEST = 'true';
 
-for (const key of Object.keys(process.env)) {
-  if (key.startsWith('CODEMAN_')) delete process.env[key];
-}
-
-// Explicitly document the most consequential inherited settings below. The
-// loop above intentionally also catches future container/deployment variables.
 delete process.env.CODEMAN_PASSWORD;
 delete process.env.CODEMAN_USERNAME;
 // Gesture availability changes renderIndexHtml output (injects the
@@ -90,9 +84,6 @@ delete process.env.CLAUDE_CONFIG_DIR;
 delete process.env.CODEMAN_INSTANCE;
 delete process.env.CODEMAN_DATA_DIR;
 delete process.env.CODEMAN_TMUX_SOCKET;
-// Docker Compose binds cases outside HOME. Leaving this set makes route tests
-// write into the deployment's real case root instead of their temp HOME.
-delete process.env.CODEMAN_CASES_PATH;
 
 afterEach(() => {
   vi.clearAllMocks();

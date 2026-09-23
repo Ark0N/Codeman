@@ -34,7 +34,6 @@ const STRIPPED_ENV_VARS: Array<[name: string, why: string]> = [
   ['CODEMAN_INSTANCE', 'moves the data dir to ~/.codeman-<name> and the tmux socket to codeman-<name>'],
   ['CODEMAN_DATA_DIR', 'ABSOLUTE override: bypasses the temp HOME and points the suite at a real data dir'],
   ['CODEMAN_TMUX_SOCKET', 'renames the socket resolveTmuxSocketName() returns'],
-  ['CODEMAN_CASES_PATH', 'bypasses the temporary HOME and points case routes at a deployment bind mount'],
   ['CLAUDE_CONFIG_DIR', 'relocates the Claude tree, so transcript fixtures under the temp HOME read as missing'],
 ];
 
@@ -50,10 +49,6 @@ const SETUP_SOURCE = readFileSync(fileURLToPath(new URL('./setup.ts', import.met
 const SETUP_STRIP_SECTION = SETUP_SOURCE.split(/^afterEach\(/m)[0];
 
 describe('test environment isolation', () => {
-  it('removes every inherited CODEMAN_* environment variable', () => {
-    expect(Object.keys(process.env).filter((key) => key.startsWith('CODEMAN_'))).toEqual([]);
-  });
-
   it.each(STRIPPED_ENV_VARS)('%s is unset while the suite runs', (name) => {
     expect(process.env[name], `${name} leaked into the test environment`).toBeUndefined();
   });

@@ -377,7 +377,7 @@ describe('Codex quick start settings', () => {
 
   describe('CLI availability gating (#200/#201)', () => {
     const CATALOG = [
-      { id: 'claude', label: 'Claude', shortBadge: 'CC', kind: 'agent', enabled: true },
+      { id: 'claude', label: 'Claude Code', shortBadge: 'CC', kind: 'agent', enabled: true },
       { id: 'opencode', label: 'OpenCode', shortBadge: 'OC', kind: 'agent', enabled: true },
       { id: 'codex', label: 'Codex', shortBadge: 'CX', kind: 'agent', enabled: true },
       { id: 'gemini', label: 'Gemini', shortBadge: 'GM', kind: 'agent', enabled: true },
@@ -396,9 +396,16 @@ describe('Codex quick start settings', () => {
         dataset: {},
         children: [] as any[],
         setAttribute: () => {},
-        appendChild(child: any) { this.children.push(child); return child; },
-        append(child: any) { this.children.push(child); },
-        replaceChildren(...children: any[]) { this.children = children; },
+        appendChild(child: any) {
+          this.children.push(child);
+          return child;
+        },
+        append(child: any) {
+          this.children.push(child);
+        },
+        replaceChildren(...children: any[]) {
+          this.children = children;
+        },
       };
       return el;
     }
@@ -416,7 +423,8 @@ describe('Codex quick start settings', () => {
         modeBtns[cli.id].dataset.mode = cli.id;
       }
       const menu = {
-        querySelector: (sel: string) => (sel === '#runModeDeepSeekInstall' || sel === '#runModeDeepSeekWeb' ? null : null),
+        querySelector: (sel: string) =>
+          sel === '#runModeDeepSeekInstall' || sel === '#runModeDeepSeekWeb' ? null : null,
         querySelectorAll: () => Object.values(modeBtns),
       };
       const context: any = vm.createContext({
@@ -499,6 +507,28 @@ describe('Codex quick start settings', () => {
       app.renderRegistryRunOptions();
       expect(runModeCliOptions.children.map((btn: any) => btn.dataset.mode)).toContain('custom-agent');
       expect(runModeCliOptions.children.map((btn: any) => btn.dataset.mode)).not.toContain('shell');
+    });
+
+    it('labels welcome buttons "Run <label>", the strings i18n.js translates ("Run Claude Code")', () => {
+      const { app, welcomeCliActions } = loadUi({ ...ALL_OFF, claude: true });
+      app.applyWelcomeCliVisibility();
+      const texts = welcomeCliActions.children.map((btn: any) =>
+        btn.children.filter((c: unknown) => typeof c === 'string').join('')
+      );
+      expect(texts).toEqual(['Run Claude Code', 'Run Shell']);
+    });
+
+    it('falls back to the first ENABLED agent when the chosen run mode is disabled, never a hardcoded claude', () => {
+      const catalog = CATALOG.map((cli) =>
+        cli.id === 'claude' || cli.id === 'codex' ? { ...cli, enabled: false } : cli
+      );
+      const { app } = loadUi(undefined, catalog);
+      app.runMode = 'codex';
+      expect(app.runMode).toBe('opencode');
+      app.runMode = 'claude';
+      expect(app.runMode).toBe('opencode');
+      app.runMode = 'gemini';
+      expect(app.runMode).toBe('gemini');
     });
 
     it('builds the run-mode menu from the registry rather than static markup', () => {

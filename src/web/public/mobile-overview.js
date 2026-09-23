@@ -49,7 +49,7 @@ const SHELL_KIND = 'shell';
  * (`#runModeMenu` in index.html). `short` is the badge on the Run button itself.
  */
 const MOBILE_OVERVIEW_RUN_MODES = [
-  { mode: 'claude', label: 'Claude Code', short: 'Claude' },
+  { mode: 'claude', label: 'Claude Code', short: 'Claude Code' },
   { mode: 'opencode', label: 'OpenCode', short: 'OpenCode' },
   { mode: 'codex', label: 'Codex', short: 'Codex' },
   { mode: 'gemini', label: 'Gemini', short: 'Gemini' },
@@ -77,7 +77,7 @@ function mobileOverviewRunModes() {
     .filter((entry) => entry.enabled)
     .map((entry) => ({
       mode: entry.id,
-      label: entry.kind === SHELL_KIND ? 'Terminal / Shell' : entry.label === 'Claude' ? 'Claude Code' : entry.label,
+      label: entry.kind === SHELL_KIND ? 'Terminal / Shell' : entry.label,
       // The registry `label`, not `shortBadge`: the Run button has always shown a word
       // ("Claude", "Codex", "Shell"), and every stock label IS that word, so this stays
       // identical to MOBILE_OVERVIEW_RUN_MODES above. `shortBadge` is the two-letter tab

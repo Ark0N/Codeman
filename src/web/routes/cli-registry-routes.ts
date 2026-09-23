@@ -4,15 +4,21 @@
  * (see that doc's "Decisions" section) rather than folded into a large diff.
  *
  * Phase 2: `GET /api/clis` — read-only list, ungated (reading is cheap, not the risky part).
- * Phase 3: `PUT /api/clis/:id` — stock enable/disable ONLY; 404 for a non-stock id, so this
- *   endpoint can never become a backdoor for creating an entry (that's Phase 5's job).
+ * Phase 3: `PUT /api/clis/:id` — enable/disable an EXISTING entry, stock or custom; 404 for an
+ *   id that does not exist, so this endpoint can never become a backdoor for creating an entry
+ *   (that's Phase 5's job).
  * Phase 4: `POST /api/clis/:id/install` — runs a STOCK entry's already-vetted install command
  *   (never a custom entry's — Decision 3). Never auto-enables; Phase 3's endpoint is still
  *   the only thing that flips `enabled`.
  * Phase 5: `POST /api/clis` (create) / `PUT /api/clis/custom/:id` (update) / `DELETE
  *   /api/clis/:id` (custom only) — a deliberately separate write surface from Phase 3's, so
- *   "stock entries can only have `enabled` toggled here, custom entries can be fully edited"
+ *   "stock entries can only have `enabled` toggled, custom entries can be fully edited"
  *   stays structurally true rather than depending on every caller remembering the rule.
+ *
+ * Every registry mutation runs through `mutateRegistryFile()` (registry-writer.ts): one at a
+ * time, the existence/duplicate checks inside the same serialized step as the write, and a
+ * `clis.json` that is corrupt or has unsafe permissions refused with 409 rather than
+ * overwritten.
  *
  * Every write endpoint answers the SAME way when `cliManagementEnabled` is off: 403
  * FORBIDDEN with a message naming the setting, via `requireCliManagementGate()`.
@@ -28,15 +34,16 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
 import { getAuthUser, isAdmin, parseBody, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
-import { listClis, reloadCliRegistry, resolveInstallCommandForPlatform } from '../../config/cli-registry/registry.js';
-import { readRegistryFileForWrite, writeRegistryFile } from '../../config/cli-registry/registry-writer.js';
+import { listClis, resolveInstallCommandForPlatform } from '../../config/cli-registry/registry.js';
+import { mutateRegistryFile, RegistryWriteRefusedError } from '../../config/cli-registry/registry-writer.js';
 import { CliEntrySchema } from '../../config/cli-registry/schema.js';
 import { STOCK_CLIS } from '../../config/cli-registry/stock.js';
 import type { CliEntry } from '../../config/cli-registry/types.js';
 import { CliCustomEntrySchema, CliEnableSchema } from '../schemas.js';
 import { appendAdminAudit } from '../admin-audit.js';
 import { invalidateCliExecutableResolvers } from '../../utils/cli-executable-resolver.js';
-import { invalidateCliResolverCache, isCliAvailable as isRegistryCliAvailable } from '../../utils/cli-resolver.js';
+import { invalidateCliResolverCache } from '../../utils/cli-resolver.js';
+import { isCliEntryInstalled, probeStockCliAvailability } from '../../utils/cli-installed-probes.js';
 
 /**
  * `cliManagementEnabled` defaults OFF, same reasoning as
@@ -68,47 +75,6 @@ export interface CliListItem {
 }
 
 /**
- * Per-STOCK-id installed probes, the same memoized resolvers `renderIndexHtml`
- * injects into `window.__codemanCliAvailable` (server.ts) — reused rather than
- * re-probed, since every resolver already memoizes its own PATH lookup for the
- * process lifetime. Dynamic imports so this module doesn't pay for all nine
- * resolvers when the CLI-management section is never opened; Node caches the
- * module after the first call, so repeat requests cost nothing extra.
- *
- * STOCK-ONLY by construction; a custom entry goes through the registry's generic
- * resolver instead (`probeInstalled` below).
- */
-const STOCK_INSTALLED_PROBES: Record<string, () => Promise<boolean>> = {
-  claude: async () => (await import('../../utils/claude-cli-resolver.js')).isClaudeAvailable(),
-  shell: async () => true, // no binary to probe — the server's own login shell
-  opencode: async () => (await import('../../utils/opencode-cli-resolver.js')).isOpenCodeAvailable(),
-  codex: async () => (await import('../../utils/codex-cli-resolver.js')).isCodexAvailable(),
-  gemini: async () => (await import('../../utils/gemini-cli-resolver.js')).isGeminiAvailable(),
-  antigravity: async () => (await import('../../utils/antigravity-cli-resolver.js')).isAntigravityAvailable(),
-  pi: async () => (await import('../../utils/pi-cli-resolver.js')).isPiAvailable(),
-  grok: async () => (await import('../../utils/grok-cli-resolver.js')).isGrokAvailable(),
-  // RUNNABLE (binary + a pane-capable profile), same choice server.ts's
-  // __codemanCliAvailable makes for the identical reason — see its comment.
-  deepseek: async () => (await import('../../utils/deepseek-cli-resolver.js')).isDeepSeekRunnable(),
-  omp: async () => (await import('../../utils/omp-cli-resolver.js')).isOmpAvailable(),
-};
-
-/**
- * A custom entry is probed through the registry's GENERIC resolver (cli-resolver.ts) —
- * the same one a session spawn uses (`missingCliMessage`/`resolveCliBinDir`) and the same
- * one `renderIndexHtml` uses for the Run menu. A private `which` here used to disagree with
- * both, since it ignored the entry's `searchDirs` and the login-shell lookup: the badge
- * could say "Not installed" for a CLI the Run menu happily launched.
- */
-async function probeInstalled(entry: CliEntry): Promise<boolean> {
-  if (entry.stock) {
-    const probe = STOCK_INSTALLED_PROBES[entry.id as string];
-    return probe ? probe() : false;
-  }
-  return isRegistryCliAvailable(entry.id as string);
-}
-
-/**
  * Forget every cached binary lookup for this CLI — the generic per-id resolver (which
  * captures the entry's binaries when first built) and every underlying per-binary cache,
  * success and negative-cache backoff alike. Called after anything that changes what is on
@@ -122,17 +88,28 @@ function forgetResolvedCli(id: string, binaries: readonly string[]): void {
 const STOCK_IDS = new Set(STOCK_CLIS.map((e) => e.id as string));
 
 /**
- * `shell` can never be disabled — enforced here, not just in the UI (a frontend-only guard
- * is bypassable with curl). Revised from Decision 4's original "shell/claude" scope
+ * A `kind: 'shell'` entry can never be disabled — enforced here, not just in the UI (a
+ * frontend-only guard is bypassable with curl). Keyed on KIND, never on an id, per the
+ * registry's no-id-branching rule. Revised from Decision 4's original "shell/claude" scope
  * (2026-09-23): `claude` is now a normal toggleable entry like any other CLI. Internal
  * session creation (tmux-manager.ts, session.ts, Ralph, plan-orchestrator) resolves a CLI
  * via `getCli()`, which does NOT check `enabled` at all, so disabling `claude` only affects
  * the Run menu and the HTTP-facing `sessionModeSchema()` (new session requests via the
  * normal API) — identical in kind to disabling any other CLI, never a break to an internal
- * fallback path. `shell` keeps the harder guarantee because it is the one non-agent mode
+ * fallback path. The shell keeps the harder guarantee because it is the one non-agent mode
  * several code paths assume always exists as a raw-terminal fallback.
  */
-const UNDISABLEABLE_IDS = new Set(['shell']);
+function isUndisableable(entry: CliEntry): boolean {
+  return entry.kind === 'shell';
+}
+
+/** A write `mutateRegistryFile()` refused (corrupt or unsafe `clis.json`) becomes a 409 naming the fix. */
+function refusedWriteResponse(err: unknown): ApiResponse<never> {
+  if (err instanceof RegistryWriteRefusedError) {
+    return createErrorResponse(ApiErrorCode.CONFLICT, err.message);
+  }
+  throw err;
+}
 
 /**
  * Every write endpoint (Phases 3-5) answers the SAME way when the feature is off or the
@@ -160,7 +137,7 @@ async function requireCliManagementGate(req: FastifyRequest): Promise<ApiRespons
  * only shapes the object, it is not itself the safety layer.
  */
 function buildCustomCliEntry(
-  input: { id: string; label: string; shortBadge: string; binaries: string[]; argv: string[]; enabled?: boolean },
+  input: { id: string; label: string; shortBadge: string; binaries: string[]; argv: string[]; enabled: boolean },
   order: number
 ): unknown {
   return {
@@ -168,7 +145,7 @@ function buildCustomCliEntry(
     label: input.label,
     shortBadge: input.shortBadge,
     accent: '#6b7280',
-    enabled: input.enabled ?? true,
+    enabled: input.enabled,
     stock: false,
     order,
     kind: 'agent',
@@ -224,6 +201,25 @@ function nextOrder(): number {
 /** Bounded execution: `PATH_INSTALL_TIMEOUT_MS`, output capped, process GROUP killed on timeout. */
 const CLI_INSTALL_TIMEOUT_MS = 300_000;
 
+/**
+ * Ids with an install running right now. A second request for the same id gets 409 rather
+ * than a second `curl | bash` or `npm install -g` racing the first over the same prefix.
+ */
+const installsInFlight = new Set<string>();
+
+/**
+ * The server's environment minus every `CODEMAN_*` variable. An install script is third-party
+ * code, and those variables carry Codeman's own secrets and wiring (`CODEMAN_PASSWORD`, the
+ * data dir, the tmux socket), none of which an installer needs.
+ */
+export function installEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (!key.startsWith('CODEMAN_')) env[key] = value;
+  }
+  return env;
+}
+
 interface InstallResult {
   code: number | null;
   output: string;
@@ -250,7 +246,7 @@ async function runInstallCommand(command: string): Promise<InstallResult> {
         // out into package-manager children, and spawn's own `timeout` option signals
         // only the direct child, leaving survivors holding the pipes open forever.
         detached: true,
-        env: process.env,
+        env: installEnv(),
       });
     } catch (err) {
       resolve({ code: null, output: `spawn failed: ${getErrorMessage(err)}`, timedOut: false });
@@ -316,20 +312,18 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
     if (isMultiUserMode() && !isAdmin(req)) {
       return { success: true, data: [] };
     }
-    const entries = listClis();
-    const data = await Promise.all(
-      entries.map(async (entry) => ({
-        id: entry.id as string,
-        label: entry.label,
-        shortBadge: entry.shortBadge,
-        order: entry.order,
-        kind: entry.kind,
-        enabled: entry.enabled,
-        stock: entry.stock,
-        installed: await probeInstalled(entry),
-        ...(entry.stock ? { installCommand: resolveInstallCommandForPlatform(entry) } : {}),
-      }))
-    );
+    const stockAvailability = await probeStockCliAvailability();
+    const data = listClis().map((entry) => ({
+      id: entry.id as string,
+      label: entry.label,
+      shortBadge: entry.shortBadge,
+      order: entry.order,
+      kind: entry.kind,
+      enabled: entry.enabled,
+      stock: entry.stock,
+      installed: isCliEntryInstalled(entry, stockAvailability),
+      ...(entry.stock ? { installCommand: resolveInstallCommandForPlatform(entry) } : {}),
+    }));
     return { success: true, data };
   });
 
@@ -351,22 +345,26 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const body = parseBody(CliEnableSchema, req.body);
 
-    if (UNDISABLEABLE_IDS.has(id) && !body.enabled) {
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, `"${id}" cannot be disabled`);
+    try {
+      return await mutateRegistryFile<ApiResponse<{ id: string; enabled: boolean }>>((file) => {
+        const entry = listClis().find((e) => (e.id as string) === id);
+        if (!entry) {
+          return { result: createErrorResponse(ApiErrorCode.NOT_FOUND, `"${id}" does not exist`) };
+        }
+        if (isUndisableable(entry) && !body.enabled) {
+          return { result: createErrorResponse(ApiErrorCode.INVALID_INPUT, `"${id}" cannot be disabled`) };
+        }
+        const existingOverride = (file.clis[id] as Record<string, unknown> | undefined) ?? {};
+        file.clis = { ...file.clis, [id]: { ...existingOverride, enabled: body.enabled } };
+        return { file, result: { success: true as const, data: { id, enabled: body.enabled } } };
+      });
+    } catch (err) {
+      return refusedWriteResponse(err);
     }
-    if (!listClis().some((e) => (e.id as string) === id)) {
-      return createErrorResponse(ApiErrorCode.NOT_FOUND, `"${id}" does not exist`);
-    }
-
-    const file = await readRegistryFileForWrite();
-    const existingOverride = (file.clis[id] as Record<string, unknown> | undefined) ?? {};
-    file.clis = { ...file.clis, [id]: { ...existingOverride, enabled: body.enabled } };
-    await writeRegistryFile(file);
-    reloadCliRegistry();
-    return { success: true, data: { id, enabled: body.enabled } };
   });
 
   // ---- Phase 4: auto-install (stock only) --------------------------------
+  // One install per id at a time (409 otherwise), and the script never sees CODEMAN_* env.
   // POST /api/clis/:id/install — runs the entry's already-vetted install
   // command. Separate endpoint from Phase 3's toggle: installing is a bigger
   // action than a boolean flip and gets its own audit entry. Never auto-
@@ -394,7 +392,16 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
         return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `"${id}" has no install command for this platform`);
       }
 
-      const result = await runInstallCommand(command);
+      if (installsInFlight.has(id)) {
+        return createErrorResponse(ApiErrorCode.CONFLICT, `"${id}" is already being installed`);
+      }
+      installsInFlight.add(id);
+      let result: InstallResult;
+      try {
+        result = await runInstallCommand(command);
+      } finally {
+        installsInFlight.delete(id);
+      }
       // Even a failed or timed-out install may have left a binary behind, so forget the
       // cached lookups either way: the next Run click or badge read probes afresh
       // instead of replaying a pre-install miss for up to the 5-minute backoff.
@@ -436,27 +443,33 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
         `"${body.id}" is a stock CLI id and cannot be used for a custom entry`
       );
     }
-    const file = await readRegistryFileForWrite();
-    if (Object.prototype.hasOwnProperty.call(file.clis, body.id)) {
-      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `A custom CLI "${body.id}" already exists`);
+    let outcome: ApiResponse<{ id: string }>;
+    try {
+      outcome = await mutateRegistryFile<ApiResponse<{ id: string }>>((file) => {
+        if (Object.prototype.hasOwnProperty.call(file.clis, body.id)) {
+          return {
+            result: createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `A custom CLI "${body.id}" already exists`),
+          };
+        }
+        const candidate = buildCustomCliEntry({ ...body, enabled: body.enabled ?? true }, nextOrder());
+        const parsed = CliEntrySchema.safeParse(candidate);
+        if (!parsed.success) {
+          return { result: createErrorResponse(ApiErrorCode.INVALID_INPUT, parsed.error.message) };
+        }
+        // Stored WITHOUT id/stock — those are forced back in by resolveRegistry() on every
+        // read, so the override file never duplicates what the key and provenance already say.
+        const { id: _id, stock: _stock, ...toStore } = parsed.data;
+        file.clis = { ...file.clis, [body.id]: toStore };
+        return { file, result: { success: true as const, data: { id: body.id } } };
+      });
+    } catch (err) {
+      return refusedWriteResponse(err);
     }
-
-    const candidate = buildCustomCliEntry(body, nextOrder());
-    const parsed = CliEntrySchema.safeParse(candidate);
-    if (!parsed.success) {
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, parsed.error.message);
-    }
-
-    // Stored WITHOUT id/stock — those are forced back in by resolveRegistry() on every
-    // read, so the override file never duplicates what the key and provenance already say.
-    const { id: _id, stock: _stock, ...toStore } = parsed.data;
-    file.clis = { ...file.clis, [body.id]: toStore };
-    await writeRegistryFile(file);
-    reloadCliRegistry();
+    if (!outcome.success) return outcome;
     // A resolver may already exist for this id (a same-named entry deleted earlier in
     // this process) and would keep probing that entry's binaries.
     forgetResolvedCli(body.id, body.binaries);
-    return { success: true, data: { id: body.id } };
+    return outcome;
   });
 
   // PUT /api/clis/custom/:id — full update of an EXISTING custom entry. A
@@ -475,28 +488,35 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, `"${id}" is a stock CLI; use PUT /api/clis/${id} instead`);
     }
     const body = parseBody(CliCustomEntrySchema, { ...(req.body as object), id });
-    const file = await readRegistryFileForWrite();
-    if (!Object.prototype.hasOwnProperty.call(file.clis, id)) {
-      return createErrorResponse(ApiErrorCode.NOT_FOUND, `No custom CLI "${id}"`);
+    let previousBinaries: readonly string[] = [];
+    let outcome: ApiResponse<{ id: string }>;
+    try {
+      outcome = await mutateRegistryFile<ApiResponse<{ id: string }>>((file) => {
+        if (!Object.prototype.hasOwnProperty.call(file.clis, id)) {
+          return { result: createErrorResponse(ApiErrorCode.NOT_FOUND, `No custom CLI "${id}"`) };
+        }
+        const existing = listClis().find((e) => (e.id as string) === id);
+        previousBinaries = existing?.discovery.binaries ?? [];
+        // The edit form never sends `enabled`, so an absent value keeps the entry's current
+        // state: editing a disabled CLI must not quietly re-enable it.
+        const enabled = body.enabled ?? existing?.enabled ?? true;
+        const candidate = buildCustomCliEntry({ ...body, enabled }, existing?.order ?? nextOrder());
+        const parsed = CliEntrySchema.safeParse(candidate);
+        if (!parsed.success) {
+          return { result: createErrorResponse(ApiErrorCode.INVALID_INPUT, parsed.error.message) };
+        }
+        const { id: _id, stock: _stock, ...toStore } = parsed.data;
+        file.clis = { ...file.clis, [id]: toStore };
+        return { file, result: { success: true as const, data: { id } } };
+      });
+    } catch (err) {
+      return refusedWriteResponse(err);
     }
-
-    const existing = listClis().find((e) => (e.id as string) === id);
-    const existingOrder = existing?.order ?? nextOrder();
-    const previousBinaries = existing?.discovery.binaries ?? [];
-    const candidate = buildCustomCliEntry(body, existingOrder);
-    const parsed = CliEntrySchema.safeParse(candidate);
-    if (!parsed.success) {
-      return createErrorResponse(ApiErrorCode.INVALID_INPUT, parsed.error.message);
-    }
-
-    const { id: _id, stock: _stock, ...toStore } = parsed.data;
-    file.clis = { ...file.clis, [id]: toStore };
-    await writeRegistryFile(file);
-    reloadCliRegistry();
+    if (!outcome.success) return outcome;
     // The generic resolver captured the OLD binaries when first built; without this a
     // session spawn kept launching the previous binary until a restart.
     forgetResolvedCli(id, [...previousBinaries, ...body.binaries]);
-    return { success: true, data: { id } };
+    return outcome;
   });
 
   // DELETE /api/clis/:id — refuses any STOCK id outright; deleting only ever
@@ -511,16 +531,23 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
     if (STOCK_IDS.has(id)) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, `"${id}" is a stock CLI and cannot be deleted`);
     }
-    const file = await readRegistryFileForWrite();
-    if (!Object.prototype.hasOwnProperty.call(file.clis, id)) {
-      return createErrorResponse(ApiErrorCode.NOT_FOUND, `No custom CLI "${id}"`);
+    let previousBinaries: readonly string[] = [];
+    let outcome: ApiResponse<{ id: string }>;
+    try {
+      outcome = await mutateRegistryFile<ApiResponse<{ id: string }>>((file) => {
+        if (!Object.prototype.hasOwnProperty.call(file.clis, id)) {
+          return { result: createErrorResponse(ApiErrorCode.NOT_FOUND, `No custom CLI "${id}"`) };
+        }
+        previousBinaries = listClis().find((e) => (e.id as string) === id)?.discovery.binaries ?? [];
+        const { [id]: _removed, ...rest } = file.clis;
+        file.clis = rest;
+        return { file, result: { success: true as const, data: { id } } };
+      });
+    } catch (err) {
+      return refusedWriteResponse(err);
     }
-    const previousBinaries = listClis().find((e) => (e.id as string) === id)?.discovery.binaries ?? [];
-    const { [id]: _removed, ...rest } = file.clis;
-    file.clis = rest;
-    await writeRegistryFile(file);
-    reloadCliRegistry();
+    if (!outcome.success) return outcome;
     forgetResolvedCli(id, previousBinaries);
-    return { success: true, data: { id } };
+    return outcome;
   });
 }
