@@ -17,6 +17,10 @@ import { dirname } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import { installEnv, registerCliRegistryRoutes, type CliListItem } from '../../src/web/routes/cli-registry-routes.js';
 import { SETTINGS_PATH } from '../../src/web/route-helpers.js';
+import { CreateSessionSchema } from '../../src/web/schemas.js';
+import { buildSpawnCommandFromRegistry } from '../../src/session-cli-registry-bridge.js';
+import { defaultRemoteCommandForMode } from '../../src/remote-hosts.js';
+import { defaultDockerCommandForMode } from '../../src/docker-hosts.js';
 import {
   getCli,
   registryFilePath,
@@ -708,5 +712,60 @@ describe('registry writes are serialized and never clobber a file the reader wou
       delete process.env.CODEMAN_TEST_SECRET;
     }
     expect(installEnv({ CODEMAN_PASSWORD: 'x', HOME: '/h' })).toEqual({ HOME: '/h' });
+  });
+});
+
+/**
+ * #343 review, finding 2: the run-mode allowlist used to be computed once at import, so a
+ * CLI toggled on in Settings still failed POST /api/sessions with INVALID_INPUT until a
+ * restart. Drives the real toggle/create routes and then the real session-create schema.
+ */
+describe('a toggle or new custom CLI reaches session-create validation with no restart', () => {
+  it('disabling grok rejects mode grok at once, and re-enabling accepts it again', async () => {
+    enableCliManagement();
+    const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+    expect(CreateSessionSchema.safeParse({ mode: 'grok' }).success).toBe(true);
+    await app.inject({ method: 'PUT', url: '/api/clis/grok', payload: { enabled: false } });
+    expect(CreateSessionSchema.safeParse({ mode: 'grok' }).success).toBe(false);
+    await app.inject({ method: 'PUT', url: '/api/clis/grok', payload: { enabled: true } });
+    expect(CreateSessionSchema.safeParse({ mode: 'grok' }).success).toBe(true);
+  });
+
+  it('a newly created custom CLI is a valid mode immediately, and stops being one when deleted', async () => {
+    enableCliManagement();
+    const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+    expect(CreateSessionSchema.safeParse({ mode: 'test-live-mode' }).success).toBe(false);
+    await app.inject({
+      method: 'POST',
+      url: '/api/clis',
+      payload: { id: 'test-live-mode', label: 'X', shortBadge: 'X', binaries: ['x'], argv: ['x'] },
+    });
+    expect(CreateSessionSchema.safeParse({ mode: 'test-live-mode' }).success).toBe(true);
+    await app.inject({ method: 'DELETE', url: '/api/clis/test-live-mode' });
+    expect(CreateSessionSchema.safeParse({ mode: 'test-live-mode' }).success).toBe(false);
+  });
+});
+
+/**
+ * #347 review, finding 5: a custom CLI was API-acceptable but not survivable downstream (a
+ * remote pane command came out as `cd <path> && undefined`). #476 makes custom entries
+ * creatable from Settings, so pin that one created here launches everywhere it can run.
+ */
+describe('a custom CLI created through the API launches locally, over ssh and in docker', () => {
+  it('renders its argv locally and its binary for the remote/docker overlays', async () => {
+    enableCliManagement();
+    const { app } = await createRouteTestHarness(registerCliRegistryRoutes);
+    await app.inject({
+      method: 'POST',
+      url: '/api/clis',
+      payload: { id: 'test-launch', label: 'X', shortBadge: 'X', binaries: ['my-agent'], argv: ['my-agent', '--yolo'] },
+    });
+    const entry = getCli('test-launch')!;
+    const mode = 'test-launch' as Parameters<typeof defaultRemoteCommandForMode>[0];
+    expect(buildSpawnCommandFromRegistry(entry, { mode, sessionId: 'sid' })).toBe('my-agent --yolo');
+    expect(defaultRemoteCommandForMode(mode)).toContain('my-agent');
+    expect(defaultRemoteCommandForMode(mode)).not.toContain('undefined');
+    expect(defaultDockerCommandForMode(mode)).toBe('exec my-agent');
+    await app.inject({ method: 'DELETE', url: '/api/clis/test-launch' });
   });
 });
