@@ -2776,14 +2776,17 @@ Object.assign(CodemanApp.prototype, {
       list.innerHTML = '<p class="set-group-hint">No CLIs found.</p>';
       return;
     }
-    // Mirrors cli-registry-routes.ts's own UNDISABLEABLE_IDS (2026-09-23 revision:
-    // claude is now a normal toggleable entry, only shell keeps the hard guarantee).
-    const UNDISABLEABLE = new Set(['shell']);
+    // Mirrors cli-registry-routes.ts's own UNDISABLEABLE_IDS: shell is the one
+    // entry the backend refuses to ever disable. Revised 2026-09-23: rather
+    // than render a permanently-greyed switch for it (which read as "broken"
+    // next to every other row's working toggle), shell gets NO switch at all —
+    // a plain "Always available" label, so there is nothing to click that
+    // could look like it should work but doesn't.
+    const UNTOGGLEABLE = new Set(['shell']);
     list.innerHTML = clis
       .map((c) => {
         const idArg = escapeHtml(JSON.stringify(c.id));
-        const undisableable = UNDISABLEABLE.has(c.id);
-        const toggleTitle = undisableable ? `title="${escapeHtml(c.id)} cannot be disabled"` : '';
+        const untoggleable = UNTOGGLEABLE.has(c.id);
         const installBtn =
           c.stock && !c.installed
             ? `<button type="button" class="btn-toolbar btn-sm" onclick="app.installCliEntry(${idArg})" id="cliInstallBtn-${escapeHtml(c.id)}">Install</button>`
@@ -2792,6 +2795,12 @@ Object.assign(CodemanApp.prototype, {
           ? ''
           : `<button type="button" class="btn-toolbar btn-sm" onclick="app.openCliCustomForm(${idArg})">Edit</button>
              <button type="button" class="btn-toolbar btn-danger btn-sm" onclick="app.deleteCliCustom(${idArg})">Delete</button>`;
+        const toggle = untoggleable
+          ? '<span class="set-row-desc">Always available</span>'
+          : `<label class="switch switch-sm">
+              <input type="checkbox" ${c.enabled ? 'checked' : ''} onchange="app.toggleCliEnabled(${idArg}, this)">
+              <span class="slider"></span>
+            </label>`;
         return `
           <div class="set-row" data-cli-id="${escapeHtml(c.id)}">
             <div class="set-row-text">
@@ -2801,11 +2810,7 @@ Object.assign(CodemanApp.prototype, {
             <div class="set-row-actions">
               ${installBtn}
               ${customActions}
-              <label class="switch switch-sm" ${toggleTitle}>
-                <input type="checkbox" ${c.enabled ? 'checked' : ''} ${undisableable ? 'disabled' : ''}
-                  onchange="app.toggleCliEnabled(${idArg}, this)">
-                <span class="slider"></span>
-              </label>
+              ${toggle}
             </div>
           </div>`;
       })
