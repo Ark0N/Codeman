@@ -4,7 +4,11 @@
 
 ### Patch Changes
 
-- **Finished sessions close themselves (#486).** A session whose agent you ended with `/exit` is now closed the same way the X button closes it, so finished sessions stop piling up on the board; the conversation stays resumable from the Resume list and the lifecycle log records "agent exited cleanly (status 0)". Only an explicit exit status 0 with no signal, confirmed by two pane reads, qualifies: a crashed or OOM-killed agent keeps its row with the exit code on the tab. The phone overview and desktop home rail now say `exited` instead of `idle`, reboot restore no longer offers to rebuild a session whose agent had exited, and closing one session no longer deletes the `.claude-images` directory that a sibling session in the same case still uses. Thanks @irisitymichaelgrundberg.
+- ### Thanks
+  - @irisitymichaelgrundberg for closing sessions whose agent exited cleanly (#486), built carefully around every way a pane exit can lie (a SIGKILL with no status, a single misread), with the `.claude-images` guard split into its own commit as asked.
+  - @opticon454 for the live-refreshing case picker and Manage search (#483), and for the uv/uvx, libsecret and pnpm additions to the Docker images (#487, #485).
+
+  **Finished sessions close themselves (#486).** A session whose agent you ended with `/exit` is now closed the same way the X button closes it, so finished sessions stop piling up on the board; the conversation stays resumable from the Resume list and the lifecycle log records "agent exited cleanly (status 0)". Only an explicit exit status 0 with no signal, confirmed by two pane reads, qualifies: a crashed or OOM-killed agent keeps its row with the exit code on the tab. The phone overview and desktop home rail now say `exited` instead of `idle`, reboot restore no longer offers to rebuild a session whose agent had exited, and closing one session no longer deletes the `.claude-images` directory that a sibling session in the same case still uses. Thanks @irisitymichaelgrundberg.
 
   **Search in the phone Select Case sheet (#488).** The bottom sheet gains a "Search cases" field that filters by name (every word must match, any order, ignoring case), Enter picks the case when exactly one row is left, and Escape clears then closes. Also fixes a dead band under Create New Case and a list shorter than the sheet could show.
 
