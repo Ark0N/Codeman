@@ -28,6 +28,7 @@ import type { MuxSession, TerminalMultiplexer } from '../src/mux-interface.js';
 import {
   CLEAN_EXIT_CLOSE_REASON,
   CLEAN_EXIT_CONFIRMING_READS,
+  CLEAN_EXIT_MIN_PANE_LIFETIME_MS,
   isCleanPaneExit,
   shouldCloseCleanlyExitedSession,
 } from '../src/pane-exit-sweep.js';
@@ -65,7 +66,20 @@ describe('shouldCloseCleanlyExitedSession', () => {
     confirmingReads: CLEAN_EXIT_CONFIRMING_READS,
     paneLifecycleInFlight: false,
     closing: false,
+    paneStartedAt: 0,
   };
+
+  it('keeps a clean exit that lands within the startup window, as a startup failure', () => {
+    const justStarted = AT - CLEAN_EXIT_MIN_PANE_LIFETIME_MS + 1;
+    expect(shouldCloseCleanlyExitedSession({ ...clean, paneStartedAt: justStarted, confirmingReads: 9 })).toBe(false);
+    // An exit read during the start itself is earlier than the stamp.
+    expect(shouldCloseCleanlyExitedSession({ ...clean, paneStartedAt: AT + 500, confirmingReads: 9 })).toBe(false);
+  });
+
+  it('closes a clean exit once the pane has outlived the startup window', () => {
+    const settled = AT - CLEAN_EXIT_MIN_PANE_LIFETIME_MS;
+    expect(shouldCloseCleanlyExitedSession({ ...clean, paneStartedAt: settled })).toBe(true);
+  });
 
   it('closes a clean exit that enough reads agreed on', () => {
     expect(CLEAN_EXIT_CONFIRMING_READS).toBe(2);
@@ -156,6 +170,16 @@ describe('the sweep on a real server', () => {
     tick();
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(cleanup).toHaveBeenCalledWith(session.id, true, CLEAN_EXIT_CLOSE_REASON);
+  });
+
+  it('keeps a session whose pane started moments before the clean exit', () => {
+    const { web, tick, cleanup } = build({ status: 0, at: AT }, 2);
+    const { session } = addSession(web);
+    (session as unknown as { _paneStartedAt: number })._paneStartedAt = AT - 2_000;
+
+    tick();
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(session.paneExit).toEqual({ status: 0, at: AT });
   });
 
   it('tries each exit once, so a failed close is not retried every tick', () => {

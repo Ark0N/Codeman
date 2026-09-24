@@ -590,6 +590,8 @@ export class Session extends EventEmitter {
    * operations cannot clear each other's mark.
    */
   private _paneLifecycleOps = 0;
+  /** When the last pane start, attach or relaunch finished (ms), 0 when none has run. */
+  private _paneStartedAt = 0;
   /**
    * The server has started closing this session, so no start or attach may
    * begin (see {@link markClosing}).
@@ -1207,6 +1209,18 @@ export class Session extends EventEmitter {
   }
 
   /**
+   * When the last start, attach or relaunch of this pane finished, or 0 when
+   * none has run in this process. The exited-agent sweep keeps an exit that
+   * lands within `CLEAN_EXIT_MIN_PANE_LIFETIME_MS` of it, since that reads as a
+   * CLI failing at startup rather than a user ending it. An attach to a pane
+   * that was already running stamps it too, which only costs a user who
+   * `/exit`s within seconds of a server restart a row to close by hand.
+   */
+  get paneStartedAt(): number {
+    return this._paneStartedAt;
+  }
+
+  /**
    * Mark this session as being closed, or clear the mark after a close that
    * failed. While it is set, {@link startInteractive} and {@link startShell}
    * refuse to run. A start that raced a close would otherwise launch a CLI in a
@@ -1223,6 +1237,7 @@ export class Session extends EventEmitter {
       return await op();
     } finally {
       this._paneLifecycleOps--;
+      this._paneStartedAt = Date.now();
     }
   }
 

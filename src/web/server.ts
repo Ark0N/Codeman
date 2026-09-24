@@ -2564,7 +2564,7 @@ export class WebServer extends EventEmitter {
    *
    * `shouldCloseCleanlyExitedSession()` (`pane-exit-sweep.ts`) holds the rule:
    * an explicit status of 0, confirmed by more than one pane read, with no
-   * start or attach in flight. A crashed agent keeps its row with the exit
+   * start or attach in flight and not within seconds of one (a startup error). A crashed agent keeps its row with the exit
    * code on it. `session.paneExit` is already scoped to local mux-backed
    * sessions by `setPaneExit()`, so a remote, docker or direct-PTY session is
    * never closed here.
@@ -2597,6 +2597,7 @@ export class WebServer extends EventEmitter {
         confirmingReads: readCount(muxName),
         paneLifecycleInFlight: session.paneLifecycleInFlight,
         closing: this.cleaningUp.has(session.id),
+        paneStartedAt: session.paneStartedAt,
       });
       if (!close) continue;
       const attempt = `${session.id}:${session.paneExit?.at ?? 0}`;

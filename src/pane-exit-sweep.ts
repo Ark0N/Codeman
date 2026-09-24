@@ -20,6 +20,11 @@
  * - No start, attach or relaunch may be in flight for the session. The
  *   dead-pane branch of `Session._setupOrAttachMuxSession()` respawns an exited
  *   pane on purpose, and for a few seconds that pane still reads as dead.
+ * - The exit must land at least {@link CLEAN_EXIT_MIN_PANE_LIFETIME_MS} after
+ *   the last start, attach or relaunch finished. A CLI that prints a startup
+ *   error ("not logged in", a bad profile, a config error) and exits 0 would
+ *   otherwise lose its tab, and the error with it, seconds after launch. Its
+ *   row stays, marked `exited (0)`, for the user to read and close.
  *
  * Scoping to local mux-backed sessions happens before this rule runs:
  * `Session.setPaneExit()` forces the field to UNKNOWN for direct-PTY, remote,
@@ -35,6 +40,13 @@ import type { PaneExit } from './types/index.js';
  * session disappears within about four seconds of its agent exiting.
  */
 export const CLEAN_EXIT_CONFIRMING_READS = 2;
+
+/**
+ * How long a pane must have been up before a clean exit closes its session.
+ * An exit sooner than this after the last pane start is read as a startup
+ * failure rather than a user ending the agent, and the row is kept.
+ */
+export const CLEAN_EXIT_MIN_PANE_LIFETIME_MS = 10_000;
 
 /** The lifecycle-log reason recorded when the sweep closes a session. */
 export const CLEAN_EXIT_CLOSE_REASON = 'agent exited cleanly (status 0)';
@@ -63,6 +75,11 @@ export interface CleanExitSweepCandidate {
   paneLifecycleInFlight: boolean;
   /** The session is already being closed or detached. */
   closing: boolean;
+  /**
+   * When the last start, attach or relaunch of this pane finished
+   * (`Session.paneStartedAt`), or 0 when none has run in this process.
+   */
+  paneStartedAt: number;
 }
 
 /** Should the sweep close this session now? See the file overview for the rule. */
@@ -70,5 +87,13 @@ export function shouldCloseCleanlyExitedSession(candidate: CleanExitSweepCandida
   if (candidate.closing) return false;
   if (candidate.paneLifecycleInFlight) return false;
   if (!isCleanPaneExit(candidate.paneExit)) return false;
+  // `at` is when this server first read the pane dead, so an exit during the
+  // start itself lands BEFORE `paneStartedAt` and is kept too.
+  if (
+    candidate.paneStartedAt > 0 &&
+    candidate.paneExit!.at - candidate.paneStartedAt < CLEAN_EXIT_MIN_PANE_LIFETIME_MS
+  ) {
+    return false;
+  }
   return candidate.confirmingReads >= CLEAN_EXIT_CONFIRMING_READS;
 }
