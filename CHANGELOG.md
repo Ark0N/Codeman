@@ -1,5 +1,16 @@
 # aicodeman
 
+## 1.33.1
+
+### Patch Changes
+
+- 8841bcc: Add a search box to the Manage tab of the Add Case dialog. It filters the case list by name or path, and the reorder arrows are disabled while a filter is active so a swap cannot involve a hidden case.
+- 8841bcc: The case picker now refreshes its list from `/api/cases` when it opens and every 5 seconds while it stays open, so folders deleted or created on disk appear without a page reload. If the selected case has been removed, the picker falls back to another case without saving it as the last-used one.
+- 77ba41f: Install pnpm in the Docker Compose server image. `dsh plugin` spawns a literal `pnpm` with no npm fallback, so the Run menu's "DeepSeek - add a terminal profile" button failed with `dsh: pnpm not found on PATH` in that image. Because this changes `server.Dockerfile`, the in-app updater will ask Compose deployments to rebuild the image (`Update-Codeman.sh`) rather than apply this release in place.
+- 77ba41f: Install `uv` and `uvx` in the Compose server image and the agent image, so MCP servers launched with `uvx` (such as the Nginx Proxy Manager MCP) can be enabled by Codex instead of failing with `uvx` not found. The server image also carries `pnpm` for `dsh plugin`.
+
+  Both images also install `libsecret-1-0`, the native library the `keytar` dependency of the Azure DevOps MCP (`@azure-devops/mcp`) needs; without it the server crashes before answering the MCP initialize handshake.
+
 ## 1.33.0
 
 ### Minor Changes
