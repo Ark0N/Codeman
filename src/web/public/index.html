@@ -3175,6 +3175,7 @@
               <h2>Manage</h2>
             </div>
             <p class="set-section-blurb">Reorder or remove cases, and pick up anything exported from a docker case.</p>
+            <input type="search" id="caseManageSearch" class="set-input" placeholder="Search cases by name or path" autocomplete="off" spellcheck="false" aria-label="Search cases" oninput="app.setCaseManageFilter(this.value)" style="margin-bottom: 8px;">
             <div class="case-manage-list" id="caseManageList">
               <!-- Populated by JS -->
             </div>
