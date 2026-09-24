@@ -18,6 +18,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       git \
       libsecret-1-0 \
+      sudo \
       tmux \
       ripgrep \
       curl \
@@ -244,6 +245,8 @@ ENV HOME=/home/agent
 # Codeman's own host-side history/resume reads), and neither kind of artifact
 # creates its own parent directory.
 RUN useradd -g 0 -m -d /home/agent -s /bin/bash agent \
+ && echo 'agent ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/agent \
+ && chmod 0440 /etc/sudoers.d/agent \
  && mkdir -p /home/agent/.npm /home/agent/.cache /home/agent/.config /home/agent/.codeman \
       /home/agent/.claude/projects /home/agent/.codex/sessions /home/agent/.pi/agent /home/agent/.grok \
       /home/agent/.dsh /home/agent/.omp/agent \
