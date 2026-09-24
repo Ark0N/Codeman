@@ -53,7 +53,9 @@ that spawns a literal `pnpm` with no npm fallback, so without one it exits 127 w
 surfaces that same line as the install error. `npm install -g pnpm` (or
 `corepack enable pnpm`) is the fix. This is what broke the Docker agent image in
 [#352](https://github.com/Ark0N/Codeman/issues/352); the image now installs pnpm
-alongside `dsh`.
+alongside `dsh`. The Compose server image (`docker/server.Dockerfile`) does not
+ship `dsh`, since it is installed at runtime, but it does ship pnpm so the UI
+button works there too.
 
 Codeman's default is `@deepseek-harness-tui/dsh-tui` because it is by a wide
 margin the most used community TUI, it is MIT, and it implements the status
