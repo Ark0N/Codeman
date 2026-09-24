@@ -212,6 +212,10 @@ RUN set -eux; \
 # minimal image of this exact shape). The four CLIs live only in this prefix,
 # so they still resolve; entrypoint.sh additionally pins its own PATH to the
 # system directories for the root part of the start.
+# uv/uvx: MCP servers are commonly launched with `uvx <package>` (e.g. the Nginx
+# Proxy Manager MCP), and Codex failed to enable them with "uvx not found". Copied
+# from the pinned upstream image into root-owned /usr/local/bin, never pip-installed.
+COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /uvx /usr/local/bin/
 ENV NPM_CONFIG_PREFIX=/opt/codeman-cli
 ENV PATH=$PATH:/opt/codeman-cli/bin
 # pnpm is not an agent CLI: it is here because `dsh plugin` (DeepSeek Harness, which
