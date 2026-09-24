@@ -3204,7 +3204,12 @@
           <h3>Select Case</h3>
           <button class="modal-close" onclick="app.closeMobileCasePicker()" aria-label="Close case picker">&times;</button>
         </div>
+        <div class="mobile-case-picker-search">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="search" id="mobileCaseSearch" placeholder="Search cases" aria-label="Search cases" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" oninput="app.filterMobileCases()" onkeydown="app.onMobileCaseSearchKey(event)">
+        </div>
         <div class="mobile-case-picker-body">
+          <div class="mobile-case-empty" id="mobileCaseEmpty" hidden>No matching cases</div>
           <div class="mobile-case-list" id="mobileCaseList">
             <!-- Cases populated by JS -->
           </div>

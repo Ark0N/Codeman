@@ -7072,12 +7072,61 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   color: #fff;
 }
 
+.mobile-case-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 20px 4px;
+  padding: 0 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  color: var(--text-dim);
+}
+
+.mobile-case-picker-search:focus-within {
+  border-color: var(--accent, #22c55e);
+}
+
+.mobile-case-picker-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  /* 16px keeps iOS Safari from zooming the page on focus */
+  font-size: 16px;
+}
+
+/* The wrapper draws the focus state; the global input focus ring doubled it */
+#mobileCaseSearch:focus {
+  outline: none;
+  border: none;
+  box-shadow: none;
+}
+
+.mobile-case-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+.mobile-case-empty[hidden],
+.mobile-case-item[hidden] {
+  display: none;
+}
+
 .mobile-case-picker-body {
   flex: 1;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   padding: 8px 0;
-  max-height: 50vh;
+  /* Fill the sheet (its max-height is the cap); a separate cap here left the
+     list shorter than the sheet could show. min-height lets flex shrink it. */
+  min-height: 0;
 }
 
 .mobile-case-list {

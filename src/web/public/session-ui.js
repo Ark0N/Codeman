@@ -4506,6 +4506,7 @@ Object.assign(CodemanApp.prototype, {
       const isSelected = c.name === currentCase;
       html += `
         <button class="mobile-case-item ${isSelected ? 'selected' : ''}"
+                data-search="${escapeHtml(`${c.label} ${c.name}`.toLowerCase())}"
                 onclick="app.selectMobileCase(${escapeHtml(JSON.stringify(c.name))})">
           <span class="mobile-case-item-icon">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -4528,7 +4529,61 @@ Object.assign(CodemanApp.prototype, {
     }
 
     listContainer.innerHTML = html;
+    // Every open starts unfiltered. The search box is not focused on purpose:
+    // that would raise the phone keyboard over a list most opens just tap.
+    const search = document.getElementById('mobileCaseSearch');
+    if (search) search.value = '';
+    listContainer.parentElement.style.minHeight = '';
+    this.filterMobileCases();
     modal.classList.add('active');
+    // Bring the current case into view when the list is longer than the sheet.
+    // Scroll the list's own box, never scrollIntoView(), which can also scroll
+    // the document under the fixed header.
+    const body = listContainer.parentElement;
+    const selected = listContainer.querySelector('.mobile-case-item.selected');
+    if (body && selected) {
+      const top = selected.offsetTop - body.offsetTop;
+      if (top + selected.offsetHeight > body.scrollTop + body.clientHeight) {
+        body.scrollTop = top - (body.clientHeight - selected.offsetHeight) / 2;
+      }
+    }
+  },
+
+  /** Hide case rows whose name does not contain every word typed in the search box. */
+  filterMobileCases() {
+    const search = document.getElementById('mobileCaseSearch');
+    const words = (search?.value || '').toLowerCase().split(/\s+/).filter(Boolean);
+    // Hold the list at its unfiltered height while searching, so the sheet (and
+    // the input under the thumb) does not jump as rows disappear.
+    const body = document.querySelector('.mobile-case-picker-body');
+    if (body && words.length && !body.style.minHeight) body.style.minHeight = `${body.offsetHeight}px`;
+    let shown = 0;
+    for (const item of document.querySelectorAll('#mobileCaseList .mobile-case-item')) {
+      const hay = item.dataset.search || '';
+      const match = words.every((w) => hay.includes(w));
+      item.hidden = !match;
+      if (match) shown++;
+    }
+    const empty = document.getElementById('mobileCaseEmpty');
+    if (empty) empty.hidden = shown > 0;
+  },
+
+  /** Enter picks the case when the search narrows the list to exactly one; Escape clears, then closes. */
+  onMobileCaseSearchKey(event) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      const visible = [...document.querySelectorAll('#mobileCaseList .mobile-case-item:not([hidden])')];
+      if (visible.length === 1) visible[0].click();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.target.value) {
+        event.target.value = '';
+        this.filterMobileCases();
+      } else {
+        this.closeMobileCasePicker();
+      }
+    }
   },
 
   closeMobileCasePicker() {

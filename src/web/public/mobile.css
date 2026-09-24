@@ -2165,9 +2165,11 @@ html.mobile-init .file-browser-panel {
     background: rgba(0, 0, 0, 0.5);
   }
 
+  /* The footer already reserves the home-indicator inset; padding the sheet too
+     counted it twice and left a dead band under Create New Case. */
   .mobile-case-picker-sheet {
-    max-height: 60vh;
-    padding-bottom: var(--safe-area-bottom);
+    max-height: 80vh;
+    max-height: 80dvh;
     animation: slideUp 0.2s ease-out;
   }
 
