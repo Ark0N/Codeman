@@ -39,6 +39,7 @@ RUN apt-get update \
       curl \
       g++ \
       git \
+      libsecret-1-0 \
       make \
       openssh-client \
       procps \
