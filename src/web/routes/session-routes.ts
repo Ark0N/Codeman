@@ -2014,7 +2014,7 @@ export function registerSessionRoutes(
     const stopDeathWatch = wantsWait ? watchForDeadWorker(ctx.mux, session, id) : () => {};
 
     // Write input to PTY. Direct write is synchronous; writeViaMux
-    // (tmux send-keys) is fire-and-forget to avoid blocking the HTTP response.
+    // (tmux paste + Enter) is fire-and-forget to avoid blocking the HTTP response.
     // Every write here is `fromUser`: this route carries a person's prompt, or an
     // agent's on their behalf, so it may name the tab (Ralph, respawn, cron and
     // approvals write through the session directly and never say so).
@@ -2037,7 +2037,7 @@ export function registerSessionRoutes(
     // A plain prompt (`<text>\r`) goes through the mux even when the caller did not
     // ask for it: written straight into the pane it arrives as one burst, and Claude
     // Code takes a long burst as a paste whose `\r` becomes a newline, so the prompt
-    // sat unsent (see isPlainPromptInput). The mux path types the text, presses Enter
+    // sat unsent (see isPlainPromptInput). The mux path pastes the text, presses Enter
     // separately and arms the SubmitVerifier. An explicit `useMux: false` keeps the
     // raw write for a caller that really wants it.
     const autoMux = useMux === undefined && isPlainPromptInput(inputStr);

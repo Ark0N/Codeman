@@ -4527,7 +4527,7 @@ export class Session extends EventEmitter {
    *
    * More reliable than direct PTY write for programmatic input, especially
    * with Claude CLI which uses Ink (React for terminals).
-   * Uses tmux `send-keys -l` to inject text + Enter.
+   * Uses tmux to inject the text (one bracketed paste) + Enter.
    *
    * @param data - Input data with optional `\r` for Enter
    * @returns true if input was sent, false if no mux session or PTY
