@@ -7,6 +7,8 @@ services:
       dockerfile: docker/server.Dockerfile
       args:
         CODEMAN_RUNTIME_USER: ${CODEMAN_RUNTIME_USER}
+        GIT_USER_EMAIL: ${GIT_USER_EMAIL:-}
+        GIT_USER_NAME: ${GIT_USER_NAME:-}
         PGID: ${PGID:-1000}
         PUID: ${PUID:-1000}
     image: ${CODEMAN_IMAGE}
@@ -32,6 +34,10 @@ services:
       CODEMAN_DOCKER_HOST_HOME: ${CODEMAN_APPDATA_PATH}
       CODEMAN_DOCKER_DISABLE_SWAP_LIMIT: ${CODEMAN_DOCKER_DISABLE_SWAP_LIMIT}
       CODEMAN_CASES_PATH: ${CODEMAN_CASES_PATH}
+      # Passed through only so Codeman can use the same identity when it builds
+      # the Docker-case agent image.
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-}
+      GIT_USER_NAME: ${GIT_USER_NAME:-}
       # Extra Host-header allowlist entries for a reverse-proxied deployment
       # (docker/README.md, "Reverse-proxy host allowlist"). Optional, so it
       # defaults to empty rather than requiring a line in every .env.

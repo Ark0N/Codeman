@@ -12,6 +12,9 @@
 # writable even though the uid is not the baked 1000.
 FROM node:22-bookworm-slim
 
+ARG GIT_USER_EMAIL=
+ARG GIT_USER_NAME=
+
 # Base toolchain. `curl` is needed for the hook callbacks (`curl -sk $CODEMAN_API_URL`),
 # `procps` for `ps`, `tmux` for the durable in-container session.
 RUN apt-get update \
@@ -26,6 +29,17 @@ RUN apt-get update \
       procps \
       openssh-client \
  && rm -rf /var/lib/apt/lists/*
+
+# Docker cases run with a fresh, container-owned home directory. Configure Git
+# at the system level during the build so the identity supplied in docker/.env
+# remains stable after an agent image rebuild. Refuse an incomplete identity.
+RUN set -eux; \
+    if [ -n "${GIT_USER_NAME}" ] || [ -n "${GIT_USER_EMAIL}" ]; then \
+      test -n "${GIT_USER_NAME}"; \
+      test -n "${GIT_USER_EMAIL}"; \
+      git config --system user.name "${GIT_USER_NAME}"; \
+      git config --system user.email "${GIT_USER_EMAIL}"; \
+    fi
 
 # GitHub CLI and Azure CLI (+ the azure-devops extension) with the same system
 # git credential helpers as docker/server.Dockerfile, so an agent in a Docker

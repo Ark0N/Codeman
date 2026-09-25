@@ -64,6 +64,12 @@ export const GIT_HOST_CLI_BUILD_ARGS = [
   ['CODEMAN_AGENT_IMAGE_INSTALL_AZ', 'CODEMAN_INSTALL_AZ'],
 ];
 
+/** Environment variables passed through to the agent image's system Git configuration. */
+export const GIT_IDENTITY_BUILD_ARGS = [
+  ['GIT_USER_NAME', 'GIT_USER_NAME'],
+  ['GIT_USER_EMAIL', 'GIT_USER_EMAIL'],
+];
+
 /**
  * The `--build-arg` pairs for the optional git-host CLIs. PURE. An unset or empty variable
  * contributes NOTHING, so the Dockerfile's own default (off) applies and the argv is the same
@@ -82,9 +88,24 @@ export function gitHostCliBuildArgPairs(env) {
   return pairs;
 }
 
+/** The `--build-arg` pairs for Git identity, requiring either both values or neither. */
+export function gitIdentityBuildArgPairs(env) {
+  const pairs = GIT_IDENTITY_BUILD_ARGS.map(([envName, argName]) => [argName, env[envName] ?? '']);
+  const configured = pairs.filter(([, value]) => value !== '');
+  if (configured.length === 0) return [];
+  if (configured.length !== pairs.length) {
+    throw new Error('GIT_USER_NAME and GIT_USER_EMAIL must both be set when configuring Git identity');
+  }
+  return pairs;
+}
+
 /** The `--build-arg` pairs the agent image takes. PURE given `env`. */
 export function agentImageBuildArgPairs(catalog, env = process.env) {
-  return [['CLI_NPM_PACKAGES', agentImageNpmPackages(catalog).join(' ')], ...gitHostCliBuildArgPairs(env)];
+  return [
+    ['CLI_NPM_PACKAGES', agentImageNpmPackages(catalog).join(' ')],
+    ...gitHostCliBuildArgPairs(env),
+    ...gitIdentityBuildArgPairs(env),
+  ];
 }
 
 /** Read the committed catalogue. IO. */

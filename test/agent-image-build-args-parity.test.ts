@@ -22,6 +22,8 @@ import {
   agentImageNpmPackages as mjsPackages,
   GIT_HOST_CLI_BUILD_ARGS as mjsGitHostArgs,
   gitHostCliBuildArgPairs as mjsGitHostPairs,
+  GIT_IDENTITY_BUILD_ARGS as mjsGitIdentityArgs,
+  gitIdentityBuildArgPairs as mjsGitIdentityPairs,
 } from '../scripts/lib/cli-catalog.mjs';
 import {
   agentImageBuildArgPairs as tsPairs,
@@ -29,6 +31,8 @@ import {
   agentImageNpmPackages as tsPackages,
   GIT_HOST_CLI_BUILD_ARGS as tsGitHostArgs,
   gitHostCliBuildArgPairs as tsGitHostPairs,
+  GIT_IDENTITY_BUILD_ARGS as tsGitIdentityArgs,
+  gitIdentityBuildArgPairs as tsGitIdentityPairs,
 } from '../src/docker-hosts.js';
 
 const CATALOG = JSON.parse(readFileSync(fileURLToPath(new URL('../config/clis.stock.json', import.meta.url)), 'utf-8'));
@@ -142,6 +146,45 @@ describe('optional gh / az in the agent image: both producers pass the same swit
       const dockerfile = readFileSync(fileURLToPath(new URL(file, import.meta.url)), 'utf-8');
       expect(dockerfile, file).toMatch(/^ARG CODEMAN_INSTALL_GH=0$/m);
       expect(dockerfile, file).toMatch(/^ARG CODEMAN_INSTALL_AZ=0$/m);
+    }
+  });
+});
+
+describe('Git identity in the agent image: both producers pass the same settings', () => {
+  it('maps the Git environment variables to matching Dockerfile ARGs', () => {
+    expect(tsGitIdentityArgs).toEqual(mjsGitIdentityArgs);
+    expect(tsGitIdentityArgs).toEqual([
+      ['GIT_USER_NAME', 'GIT_USER_NAME'],
+      ['GIT_USER_EMAIL', 'GIT_USER_EMAIL'],
+    ]);
+  });
+
+  it('passes a complete identity and omits an absent identity', () => {
+    const identity = { GIT_USER_NAME: 'Ada Lovelace', GIT_USER_EMAIL: 'ada@example.com' };
+    const expected: Array<[string, string]> = [
+      ['GIT_USER_NAME', 'Ada Lovelace'],
+      ['GIT_USER_EMAIL', 'ada@example.com'],
+    ];
+    expect(tsGitIdentityPairs(identity)).toEqual(expected);
+    expect(mjsGitIdentityPairs(identity)).toEqual(expected);
+    expect(tsGitIdentityPairs({})).toEqual([]);
+    expect(mjsGitIdentityPairs({})).toEqual([]);
+  });
+
+  it('refuses a partial identity in both build paths', () => {
+    for (const identity of [{ GIT_USER_NAME: 'Ada Lovelace' }, { GIT_USER_EMAIL: 'ada@example.com' }]) {
+      expect(() => tsGitIdentityPairs(identity)).toThrow(/GIT_USER_NAME and GIT_USER_EMAIL/);
+      expect(() => mjsGitIdentityPairs(identity)).toThrow(/GIT_USER_NAME and GIT_USER_EMAIL/);
+    }
+  });
+
+  it('both Dockerfiles configure system Git identity from the build arguments', () => {
+    for (const file of ['../docker/agent.Dockerfile', '../docker/server.Dockerfile']) {
+      const dockerfile = readFileSync(fileURLToPath(new URL(file, import.meta.url)), 'utf-8');
+      expect(dockerfile, file).toMatch(/^ARG GIT_USER_NAME=$/m);
+      expect(dockerfile, file).toMatch(/^ARG GIT_USER_EMAIL=$/m);
+      expect(dockerfile, file).toContain('git config --system user.name "${GIT_USER_NAME}"');
+      expect(dockerfile, file).toContain('git config --system user.email "${GIT_USER_EMAIL}"');
     }
   });
 });

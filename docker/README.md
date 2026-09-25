@@ -67,6 +67,25 @@ two volumes are removed, by name within this Compose project; any volume a
 `docker-compose.override.yml` adds is left alone, and application data and
 case workspaces are host bind mounts, never touched either way.
 
+## Git commit identity
+
+Set `GIT_USER_NAME` and `GIT_USER_EMAIL` in `docker/.env` before rebuilding:
+
+```sh
+GIT_USER_NAME='Your Name'
+GIT_USER_EMAIL='you@example.com'
+```
+
+Compose passes the values to the Codeman server build, and to the server process
+when it builds Docker-case agent images. Both images write the pair to Git's
+system configuration during their build, so commits retain the same identity
+after a container or agent image is recreated. Set both values together; an
+image build with only one value fails rather than using a partial identity.
+
+Run `bash docker/Start-Codeman.sh` after changing the server values. Rebuild an
+existing agent image with `node scripts/build-agent-image.mjs --no-cache` in the
+server container, then recreate any Docker cases that should use it.
+
 ## Private repositories (GitHub and Azure DevOps)
 
 The images can include the GitHub CLI (`gh`) and the Azure CLI (`az`, with the `azure-devops` extension), wired into the system Git configuration as credential helpers, so Codeman can clone private repositories. Both are **opt-in and off by default**, and are turned on per host in `docker-compose.override.yml`.
