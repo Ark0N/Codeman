@@ -763,6 +763,49 @@ function resolveTerminalFontWeights(settings) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Largest single input frame the server accepts, in UTF-16 code units.
+ * ⚠️ Must equal MAX_INPUT_LENGTH in src/config/terminal-limits.ts (pinned by
+ * test/input-size-limit.test.ts). Both transports reject a longer frame, and
+ * before issue #484 the durable input queue retried such a frame forever.
+ */
+const INPUT_FRAME_MAX_CHARS = 64 * 1024;
+
+/**
+ * Largest paste the client will deliver at all. Anything up to this is split
+ * into INPUT_FRAME_MAX_CHARS frames that go out in seq order, so the PTY sees
+ * one contiguous byte stream (bracketed-paste markers included). Past it the
+ * input is refused with a toast rather than queued: every frame is persisted
+ * and retried until ACKed, so a multi-megabyte paste would pin the queue.
+ */
+const INPUT_PASTE_MAX_CHARS = 1024 * 1024;
+
+/**
+ * Split input into frames no longer than `max` code units, never cutting a
+ * surrogate pair in half (a lone surrogate reaches the PTY as U+FFFD).
+ *
+ * @param {string} data
+ * @param {number} [max]
+ * @returns {string[]}
+ */
+function splitInputFrames(data, max = INPUT_FRAME_MAX_CHARS) {
+  if (typeof data !== 'string' || data.length === 0) return [];
+  if (!(max >= 2)) max = 2;
+  if (data.length <= max) return [data];
+  const frames = [];
+  let start = 0;
+  while (start < data.length) {
+    let end = Math.min(start + max, data.length);
+    if (end < data.length) {
+      const code = data.charCodeAt(end - 1);
+      if (code >= 0xd800 && code <= 0xdbff) end--; // keep the pair together
+    }
+    frames.push(data.slice(start, end));
+    start = end;
+  }
+  return frames;
+}
+
+/**
  * Upper bound on an AUTO-copied selection.
  *
  * A drag that runs off the top of the viewport autoscrolls, so one gesture can
@@ -939,6 +982,11 @@ if (typeof window !== 'undefined') {
     anchor: sessionActivityAnchor,
     compare: compareSessionActivity,
     sort: sortSessionsByActivity,
+  };
+  window.CodemanInputLimit = {
+    FRAME_MAX_CHARS: INPUT_FRAME_MAX_CHARS,
+    PASTE_MAX_CHARS: INPUT_PASTE_MAX_CHARS,
+    split: splitInputFrames,
   };
   window.CodemanAutoCopy = {
     decide: decideAutoCopy,

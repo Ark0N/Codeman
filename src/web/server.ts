@@ -33,7 +33,8 @@ import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
-import { startPasteImageGc } from './paste-image-gc.js';
+import { pasteImageDirInUseByOtherSession, startPasteImageGc } from './paste-image-gc.js';
+import { CLEAN_EXIT_CLOSE_REASON, shouldCloseCleanlyExitedSession } from '../pane-exit-sweep.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, chmodSync, rmSync, statSync } from 'node:fs';
@@ -1321,16 +1322,32 @@ export class WebServer extends EventEmitter {
   // Clean up all resources associated with a session
   // Track sessions currently being cleaned up to prevent concurrent cleanup races
   private cleaningUp: Set<string> = new Set();
+  /**
+   * The subset of {@link cleaningUp} whose tmux session is being KILLED rather
+   * than detached. The paste-image guard needs the difference: a detaching
+   * session keeps running in tmux and still uses its working directory.
+   */
+  private killingSessions: Set<string> = new Set();
 
   private async cleanupSession(sessionId: string, killMux: boolean = true, reason?: string): Promise<void> {
     // Guard against concurrent cleanup of the same session
     if (this.cleaningUp.has(sessionId)) return;
     this.cleaningUp.add(sessionId);
+    if (killMux) this.killingSessions.add(sessionId);
+    // Refuse a start or attach from here on (Ark0N/Codeman#446): a start that
+    // raced this cleanup would launch a CLI in a tmux session whose record is
+    // about to be deleted, leaving an orphan the next boot rediscovers.
+    const session = this.sessions.get(sessionId);
+    session?.markClosing(true);
 
     try {
       await this._doCleanupSession(sessionId, killMux, reason);
     } finally {
       this.cleaningUp.delete(sessionId);
+      this.killingSessions.delete(sessionId);
+      // A cleanup that failed leaves the session on the board, so it must be
+      // startable again.
+      if (this.sessions.get(sessionId) === session) session?.markClosing(false);
     }
   }
 
@@ -1482,8 +1499,24 @@ export class WebServer extends EventEmitter {
       attachmentRegistry.clearSession(sessionId);
       // Stop watching for images in this session's directory
       imageWatcher.unwatchSession(sessionId);
-      // Clean up pasted images directory for this session
-      if (killMux && session.workingDir) {
+      // Clean up pasted images directory for this session. The dir belongs to the
+      // working directory rather than the session, so it stays while another live
+      // session in the same case still uses it (Ark0N/Codeman#446).
+      if (
+        killMux &&
+        session.workingDir &&
+        !pasteImageDirInUseByOtherSession({
+          live: this.sessions.values(),
+          persisted: Object.entries(this.store.getSessions()).map(([id, record]) => ({
+            id,
+            workingDir: record.workingDir,
+            status: record.status,
+          })),
+          closingId: sessionId,
+          workingDir: session.workingDir,
+          killing: this.killingSessions,
+        })
+      ) {
         const pasteImageDir = join(session.workingDir, '.claude-images');
         try {
           rmSync(pasteImageDir, { recursive: true, force: true });
@@ -2502,6 +2535,9 @@ export class WebServer extends EventEmitter {
    * Nothing here touches `status` or `pid`. `status: 'error'` belongs to the
    * PTY-exit breaker and makes the browser offer a restart, and a null `pid` is
    * what makes the browser re-attach and launch a fresh CLI.
+   *
+   * Once the records are current, {@link closeCleanlyExitedSessions} closes the
+   * sessions whose agent the user ended.
    */
   private applyPaneExits(): void {
     const getPaneExit = this.mux.getPaneExit?.bind(this.mux);
@@ -2514,6 +2550,63 @@ export class WebServer extends EventEmitter {
       if (!session.setPaneExit(getPaneExit(muxName))) continue;
       this.persistSessionState(session);
       this.broadcastSessionStateDebounced(session.id);
+    }
+    this.closeCleanlyExitedSessions();
+  }
+
+  /**
+   * Close every session whose agent exited cleanly, through the same
+   * `cleanupSession()` the X button uses (Ark0N/Codeman#446). A pinned session
+   * is demoted to `status: 'stopped'` there rather than removed, and either way
+   * the reboot restore stops offering it back. The conversation stays
+   * resumable, since the Resume list reads the lifecycle log and the transcript
+   * files, and the pane owns neither.
+   *
+   * `shouldCloseCleanlyExitedSession()` (`pane-exit-sweep.ts`) holds the rule:
+   * an explicit status of 0, confirmed by more than one pane read, with no
+   * start or attach in flight and not within seconds of one (a startup error). A crashed agent keeps its row with the exit
+   * code on it. `session.paneExit` is already scoped to local mux-backed
+   * sessions by `setPaneExit()`, so a remote, docker or direct-PTY session is
+   * never closed here.
+   *
+   * The close runs in the background. `cleanupSession()` ignores a second call
+   * for a session it is already closing, and the `closing` check below keeps
+   * the next tick from queueing one.
+   *
+   * Each exit is attempted ONCE, keyed by session id and the exit's `at`
+   * stamp. A close that fails leaves the session on the board with its exit
+   * badge, which is where a crashed agent's row would be too, rather than
+   * retrying and logging every two seconds. A new exit in the same pane has a
+   * new `at` and gets its own attempt.
+   */
+  /** Exits the clean-exit sweep has already tried to close, as `<sessionId>:<exit.at>`. */
+  private cleanExitCloseAttempts: Set<string> = new Set();
+
+  private closeCleanlyExitedSessions(): void {
+    const readCount = this.mux.getPaneExitReadCount?.bind(this.mux);
+    if (!readCount) return;
+    // Forget attempts for sessions that are gone, so the set stays bounded.
+    for (const key of this.cleanExitCloseAttempts) {
+      if (!this.sessions.has(key.slice(0, key.lastIndexOf(':')))) this.cleanExitCloseAttempts.delete(key);
+    }
+    for (const session of [...this.sessions.values()]) {
+      const muxName = session.muxName;
+      if (!muxName) continue;
+      const close = shouldCloseCleanlyExitedSession({
+        paneExit: session.paneExit,
+        confirmingReads: readCount(muxName),
+        paneLifecycleInFlight: session.paneLifecycleInFlight,
+        closing: this.cleaningUp.has(session.id),
+        paneStartedAt: session.paneStartedAt,
+      });
+      if (!close) continue;
+      const attempt = `${session.id}:${session.paneExit?.at ?? 0}`;
+      if (this.cleanExitCloseAttempts.has(attempt)) continue;
+      this.cleanExitCloseAttempts.add(attempt);
+      console.log(`[Server] Closing session ${session.id} (${session.name}): ${CLEAN_EXIT_CLOSE_REASON}`);
+      void this.cleanupSession(session.id, true, CLEAN_EXIT_CLOSE_REASON).catch((err) => {
+        console.error(`[Server] Failed to close cleanly exited session ${session.id}:`, err);
+      });
     }
   }
 
@@ -3963,6 +4056,7 @@ export class WebServer extends EventEmitter {
     }
     this.activePlanOrchestrators.clear();
     this.cleaningUp.clear();
+    this.killingSessions.clear();
 
     // Dispose push store (flush pending saves)
     this.pushStore.dispose();

@@ -3427,7 +3427,26 @@ class CodemanApp {
    */
   _sendInputAsync(sessionId, input, opts) {
     if (!sessionId || !input) return;
-    this._reliableSend(sessionId, input, opts?.useMux === true);
+    const useMux = opts?.useMux === true;
+    // Both transports refuse a frame over the server's limit (issue #484), and a
+    // refused frame used to sit at the head of the durable queue for good. So an
+    // oversized paste goes out as several in-limit frames, delivered in seq order
+    // as one contiguous stream. A mux write is line-oriented (it strips newlines
+    // and sends Enter on its own), so it is never split: refuse it instead.
+    const limit = window.CodemanInputLimit;
+    if (limit && input.length > limit.FRAME_MAX_CHARS) {
+      if (useMux || input.length > limit.PASTE_MAX_CHARS) {
+        const max = useMux ? limit.FRAME_MAX_CHARS : limit.PASTE_MAX_CHARS;
+        this.showToast?.(
+          `Input too large (${Math.ceil(input.length / 1024)} KB, limit ${Math.floor(max / 1024)} KB); not sent`,
+          'error'
+        );
+        return;
+      }
+      for (const frame of limit.split(input)) this._reliableSend(sessionId, frame, false);
+      return;
+    }
+    this._reliableSend(sessionId, input, useMux);
   }
 
   /**
@@ -3547,6 +3566,12 @@ class CodemanApp {
             // Session no longer exists — the input can never land. Drop it
             // rather than retry forever (not a "lost" prompt: the target is gone).
             this._ackDelivery(sessionId, rec.seq);
+          } else if (resp && (resp.status === 400 || resp.status === 413)) {
+            // The frame itself was refused, so a retry gets the same answer. Kept
+            // queued, it was re-POSTed every 2 s forever and blocked every later
+            // input for this session behind it (issue #484). 401/403 stay
+            // transient: an expired login delivers fine once the user signs in.
+            this._dropRejectedInput(sessionId, rec);
           } else {
             break; // offline / 5xx — leave queued; sweep + reconnect retry later
           }
@@ -3555,6 +3580,12 @@ class CodemanApp {
         this._postDraining.delete(sessionId);
       }
     })();
+  }
+
+  /** Drop a frame the server refused for good, and say so once. */
+  _dropRejectedInput(sessionId, rec) {
+    this._ackDelivery(sessionId, rec.seq);
+    this.showToast?.(`Input refused by the server (${Math.ceil(rec.data.length / 1024)} KB); not sent`, 'error');
   }
 
   /** Drop an ACKed record (by exact seq) and persist. */
@@ -3601,6 +3632,13 @@ class CodemanApp {
   _onWsInputAck(seq, msg) {
     const sessionId = this._wsSessionId;
     if (!sessionId || !Number.isInteger(seq)) return;
+    if (msg && msg.err) {
+      // Refused for good (e.g. over the size limit): retrying cannot help.
+      const rec = (this._pendingDeliveries.get(sessionId) || []).find((r) => r.seq === seq);
+      if (rec) this._dropRejectedInput(sessionId, rec);
+      else this._ackDelivery(sessionId, seq);
+      return;
+    }
     if (msg && msg.dup) {
       const list = this._pendingDeliveries.get(sessionId);
       const rec = list && list.find((r) => r.seq === seq);
@@ -3714,20 +3752,22 @@ class CodemanApp {
       if (saved && saved.pending) {
         for (const [s, recs] of Object.entries(saved.pending)) {
           if (Array.isArray(recs) && recs.length) {
-            // Reset sentAt so they re-deliver promptly on this fresh load.
-            this._pendingDeliveries.set(
-              s,
-              recs
-                .filter((r) => r && typeof r.data === 'string' && Number.isInteger(r.seq))
-                .map((r) => ({
-                  seq: r.seq,
-                  data: r.data,
-                  useMux: !!r.useMux,
-                  ts: r.ts || Date.now(),
-                  tries: 0,
-                  sentAt: 0,
-                }))
-            );
+            const frameMax = window.CodemanInputLimit?.FRAME_MAX_CHARS ?? Infinity;
+            const kept = recs
+              .filter((r) => r && typeof r.data === 'string' && Number.isInteger(r.seq))
+              // A frame over the server's limit can never be ACKed; one persisted
+              // by an older build would otherwise come back on every load (#484).
+              .filter((r) => r.data.length <= frameMax)
+              // Reset sentAt so they re-deliver promptly on this fresh load.
+              .map((r) => ({
+                seq: r.seq,
+                data: r.data,
+                useMux: !!r.useMux,
+                ts: r.ts || Date.now(),
+                tries: 0,
+                sentAt: 0,
+              }));
+            if (kept.length) this._pendingDeliveries.set(s, kept);
           }
         }
       }
@@ -4878,9 +4918,10 @@ class CodemanApp {
     // `state` keys SESSION_ACTIVITY_RANK and the sort, while `status` stays idle
     // or busy for an exited pane by design, so without this the muted dot sits
     // beside a pill saying "idle". A pending alert still wins, exactly as it
-    // does for the dot.
-    const exited = !!paneExitLabel(session.paneExit) && (state === 'idle' || state === 'working');
-    const exitAt = exited ? Number(session.paneExit.at) || 0 : 0;
+    // does for the dot. The rule is `_mobileOverviewExit()`, shared with both
+    // home screens so the three surfaces agree on which sessions have exited.
+    const exit = this._mobileOverviewExit ? this._mobileOverviewExit(state, session) : null;
+    const exited = !!exit;
     return {
       state,
       exited,
@@ -4891,13 +4932,7 @@ class CodemanApp {
       // state pill and never replaces it.
       watching: typeof session.watching === 'string' ? session.watching : '',
       createdAt: Number(session.createdAt) || 0,
-      since: exitAt
-        ? { key: 'exited', at: exitAt }
-        : exited
-          ? null
-          : this._mobileOverviewSince
-            ? this._mobileOverviewSince(state, session)
-            : null,
+      since: exit ? exit.since : this._mobileOverviewSince ? this._mobileOverviewSince(state, session) : null,
     };
   }
 

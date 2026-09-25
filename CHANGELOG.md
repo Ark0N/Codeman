@@ -1,5 +1,30 @@
 # aicodeman
 
+## 1.33.1
+
+### Patch Changes
+
+- ### Thanks
+  - @irisitymichaelgrundberg for closing sessions whose agent exited cleanly (#486), built carefully around every way a pane exit can lie (a SIGKILL with no status, a single misread), with the `.claude-images` guard split into its own commit as asked.
+  - @opticon454 for the live-refreshing case picker and Manage search (#483), and for the uv/uvx, libsecret and pnpm additions to the Docker images (#487, #485).
+
+  **Finished sessions close themselves (#486).** A session whose agent you ended with `/exit` is now closed the same way the X button closes it, so finished sessions stop piling up on the board; the conversation stays resumable from the Resume list and the lifecycle log records "agent exited cleanly (status 0)". Only an explicit exit status 0 with no signal, confirmed by two pane reads, qualifies: a crashed or OOM-killed agent keeps its row with the exit code on the tab. The phone overview and desktop home rail now say `exited` instead of `idle`, reboot restore no longer offers to rebuild a session whose agent had exited, and closing one session no longer deletes the `.claude-images` directory that a sibling session in the same case still uses. Thanks @irisitymichaelgrundberg.
+
+  **Search in the phone Select Case sheet (#488).** The bottom sheet gains a "Search cases" field that filters by name (every word must match, any order, ignoring case), Enter picks the case when exactly one row is left, and Escape clears then closes. Also fixes a dead band under Create New Case and a list shorter than the sheet could show.
+
+  **An oversized paste no longer jams a session's input (#484).** A single input over the 64 KiB frame limit used to be refused by both transports, retried every 2 s forever, block every later input for that session and come back from localStorage on each reload. Pastes over the limit are now split into in-limit frames delivered in order (up to 1 MiB; larger ones are refused with a toast and never queued), a refused frame is dropped instead of retried, frames persisted by an older build are pruned on load, and the WebSocket answers an oversized frame with an explicit `too_large` error instead of silence.
+
+- 8841bcc: Add a search box to the Manage tab of the Add Case dialog. It filters the case list by name or path, and the reorder arrows are disabled while a filter is active so a swap cannot involve a hidden case.
+- 8841bcc: The case picker now refreshes its list from `/api/cases` when it opens and every 5 seconds while it stays open, so folders deleted or created on disk appear without a page reload. If the selected case has been removed, the picker falls back to another case without saving it as the last-used one.
+
+  Thanks @opticon454.
+
+- 77ba41f: Install `uv` and `uvx` in the Compose server image and the agent image, so MCP servers launched with `uvx` (such as the Nginx Proxy Manager MCP) can be enabled by Codex instead of failing with `uvx` not found. Both images also install `libsecret-1-0`, the native library the `keytar` dependency of the Azure DevOps MCP (`@azure-devops/mcp`) needs; without it the server crashes before answering the MCP initialize handshake.
+
+  The Compose server image now also carries `pnpm`: `dsh plugin` spawns a literal `pnpm` with no npm fallback, so the Run menu's "DeepSeek - add a terminal profile" button failed with `dsh: pnpm not found on PATH` there. Because this release changes `server.Dockerfile`, the in-app updater asks Compose deployments to rebuild the image (`Update-Codeman.sh`) rather than applying it in place.
+
+  Thanks @opticon454 (#487, #485).
+
 ## 1.33.0
 
 ### Minor Changes

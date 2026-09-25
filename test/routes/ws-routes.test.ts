@@ -282,6 +282,22 @@ describe('ws-routes', () => {
       }
     });
 
+    it('refuses an oversized sequenced frame with an error ACK, so the client can drop it', async () => {
+      // Issue #484: a silent return left the frame unACKed, and the client's
+      // durable queue re-sent it every few seconds forever.
+      const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
+      try {
+        const session = ctx._session;
+        const hugeInput = 'y'.repeat(MAX_INPUT_LENGTH + 1);
+        ws.send(JSON.stringify({ t: 'i', d: hugeInput, cid: 'c1', seq: 3 }));
+
+        expect(await nextMessage(ws)).toEqual({ t: 'ia', seq: 3, err: 'too_large', max: MAX_INPUT_LENGTH });
+        expect(session.writeBuffer).not.toContain(hugeInput);
+      } finally {
+        ws.close();
+      }
+    });
+
     it('ignores malformed JSON messages', async () => {
       const ws = await connectWs('/ws/sessions/ws-test-session/terminal');
       try {

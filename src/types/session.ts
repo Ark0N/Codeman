@@ -649,12 +649,13 @@ export interface CustomModelBookkeeping extends CustomModelSelection {
  * ⚠ AN ABSENT `status` STAYS ABSENT. Never write `status ?? 0`, and never read
  * "no signal was reported" as "the exit must have been clean". On tmux 3.2a
  * the absent status IS how a signal death presents, so absent-stays-absent is
- * the only thing keeping a future clean-exit sweep away from crashed agents:
- * an agent SIGKILLed by the OOM killer would otherwise read as a user typing
- * `/exit` and be swept. Nothing here fails when somebody adds that `??` — the
- * types allow it, the label still renders, and the damage shows up only once
- * the sweep lands. The rule is enforced in `derivePaneExits()`
- * (`tmux-manager.ts`), which omits the key rather than defaulting it.
+ * the only thing keeping the clean-exit sweep (`pane-exit-sweep.ts`) away
+ * from crashed agents: an agent SIGKILLed by the OOM killer would otherwise
+ * read as a user typing `/exit` and be closed. Nothing here fails when
+ * somebody adds that `??` — the types allow it and the label still renders.
+ * The rule is enforced in `derivePaneExits()` (`tmux-manager.ts`), which omits
+ * the key rather than defaulting it, and again in `isCleanPaneExit()`, which
+ * accepts only an explicit 0.
  */
 export interface PaneExit {
   /**

@@ -66,6 +66,31 @@ each `(clientId, seq)` at most once, so a resend can't type the prompt twice.
   (the 200 is the client's ACK). `curl`/legacy callers omit the fields and always
   apply.
 
+## Oversized input (issue #484)
+
+Delivery has a third outcome besides "applied" and "retry": **refused for good**.
+Both transports refuse a frame longer than `MAX_INPUT_LENGTH` (64 KiB,
+`src/config/terminal-limits.ts`; the POST schema uses the same constant). Before
+#484 the client treated that like a transient failure, so an oversized paste sat
+at the head of the queue, was re-sent every 2 s forever, blocked every later
+input for the session, and came back from localStorage on each reload.
+
+- `_sendInputAsync()` splits a paste over the frame limit into in-limit frames
+  (`CodemanInputLimit.split`, constants.js, never cutting a surrogate pair). They
+  go out in seq order, so the PTY sees one contiguous stream. A paste over
+  `PASTE_MAX_CHARS` (1 MiB), or an oversized `useMux` write (line-oriented, never
+  split), is refused with a toast and never queued.
+- The WebSocket answers an oversized sequenced frame with
+  `{t:'ia', seq, err:'too_large', max}`; the client drops it with a toast. A
+  client that predates `err` reads it as a plain ACK and drops it too.
+- The POST drain drops a frame answered `400`/`413` (`401`/`403` stay transient:
+  an expired login delivers once the user signs in again).
+- `_loadReliableState()` prunes persisted frames over the limit, so a queue
+  poisoned by an older build heals on the first load after upgrading.
+- ⚠️ The frontend limit (`INPUT_FRAME_MAX_CHARS`) and the composer's
+  `COMPOSER_INPUT_FRAME_LIMIT` must equal `MAX_INPUT_LENGTH`; pinned by
+  `test/input-size-limit.test.ts`.
+
 ## Known limitation
 
 Dedup state is in-memory on the server. A **server restart** between a write and
@@ -79,3 +104,5 @@ across the narrow restart window.
   semantics (monotonic, per-client, gap-tolerant, eviction-safe).
 - `test/routes/session-routes.test.ts` — POST `/input` applies a tagged
   `(clientId, seq)` once on redelivery; untagged input always applies.
+- `test/input-size-limit.test.ts`: one input limit on both sides, frame
+  splitting, and dropping (never retrying) a frame refused for good (#484).

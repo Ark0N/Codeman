@@ -287,6 +287,19 @@ export interface PaneExitObservation {
   exit: PaneExit;
 }
 
+/**
+ * A {@link PaneExitObservation} as the manager stores it, with a count of the
+ * authoritative reads that have seen this same exit. The count is what lets
+ * the exited-agent sweep act only on a death that more than one read agreed on
+ * (`CLEAN_EXIT_CONFIRMING_READS` in `pane-exit-sweep.ts`). A failed or skipped
+ * read never reaches {@link TmuxManager.applyPaneExits}, so it neither raises
+ * the count nor resets it.
+ */
+interface TrackedPaneExit extends PaneExitObservation {
+  /** Authoritative reads that saw this exit, counting the first. */
+  reads: number;
+}
+
 /** Read one optional numeric field; a blank or non-numeric value is "not reported". */
 function paneField(fields: string[], index: number): number | undefined {
   const raw = fields[index];
@@ -1672,7 +1685,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * lives on `Session`, because the remote-reconnect watcher above needs the
    * raw pane reading.
    */
-  private paneExits: Map<string, PaneExitObservation> = new Map();
+  private paneExits: Map<string, TrackedPaneExit> = new Map();
   /** The pane-exit watcher's own interval. Runs whether or not stats are on. */
   private paneExitInterval: NodeJS.Timeout | null = null;
   /**
@@ -3076,6 +3089,16 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
   }
 
   /**
+   * How many authoritative pane reads have agreed on the exit that
+   * {@link getPaneExit} reports, or 0 when it reports none. A new observation
+   * starts at 1, and every later read that sees the same pane with the same
+   * status and signal adds one.
+   */
+  getPaneExitReadCount(muxName: string): number {
+    return this.paneExits.get(muxName)?.reads ?? 0;
+  }
+
+  /**
    * Re-read every pane on the socket and refresh {@link paneExits}. ONE batched
    * `tmux list-panes -a` answers for every session at once, which is why this
    * polls rather than probing per session.
@@ -3170,6 +3193,9 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
    * changed status, a changed signal, or a different pane pid all start a new
    * observation — the pid is what catches a second command in the same pane
    * that happened to exit the same way.
+   *
+   * The same rule decides the read count: a repeat of the stored exit adds one,
+   * and anything that starts a new observation starts the count again at 1.
    */
   applyPaneExits(observed: Map<string, PaneExitObservation>): void {
     for (const muxName of [...this.paneExits.keys()]) {
@@ -3182,7 +3208,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
         prev.panePid === next.panePid &&
         prev.exit.status === next.exit.status &&
         prev.exit.signal === next.exit.signal;
-      this.paneExits.set(muxName, sameExit ? prev : next);
+      this.paneExits.set(muxName, sameExit ? { ...prev, reads: prev.reads + 1 } : { ...next, reads: 1 });
     }
   }
 

@@ -122,6 +122,9 @@ const RUN_MODE_LAUNCH = {
  * (`openSessionOptions`), guaranteed to drift from each other the moment a
  * ninth CLI landed in one and not the other.
  */
+/** How often the OPEN case picker re-reads /api/cases (it also refreshes once on open). */
+const CASE_PICKER_REFRESH_MS = 5000;
+
 const EXTERNAL_CLI_MODES = new Set(Object.keys(RUN_MODE_LAUNCH));
 const BUILT_IN_RUN_MODES = new Set(['claude', 'shell', ...Object.keys(RUN_MODE_LAUNCH)]);
 
@@ -246,16 +249,74 @@ Object.assign(CodemanApp.prototype, {
     const input = document.getElementById('quickStartCaseSearch');
     const list = document.getElementById('quickStartCaseList');
     if (!input || !list) return;
+    const wasOpen = this._casePickerOpen === true;
     this._casePickerOpen = true;
     this._casePickerFilter = filter;
     this._casePickerActiveIndex = 0;
     input.setAttribute('aria-expanded', 'true');
     this.renderCasePickerList();
+    // Every keystroke re-enters here, so only the closed -> open transition
+    // refreshes and arms the timer; typing must not fire a fetch per key.
+    if (!wasOpen) this._startCasePickerRefresh();
+  },
+
+  /** Re-read the case list while the picker is open, so folders deleted or created on disk show up without a page reload. */
+  _startCasePickerRefresh() {
+    void this.refreshCasePickerCases();
+    if (this._casePickerRefreshTimer) return;
+    this._casePickerRefreshTimer = setInterval(() => void this.refreshCasePickerCases(), CASE_PICKER_REFRESH_MS);
+  },
+
+  _stopCasePickerRefresh() {
+    if (this._casePickerRefreshTimer) clearInterval(this._casePickerRefreshTimer);
+    this._casePickerRefreshTimer = null;
+  },
+
+  /**
+   * Lighter than loadQuickStartCases(): that one closes the picker and re-picks a
+   * selection, which would yank the list away from someone mid-browse. This only
+   * swaps the data and repaints, and does nothing when the list is unchanged.
+   */
+  async refreshCasePickerCases() {
+    if (this._casePickerRefreshInFlight) return;
+    this._casePickerRefreshInFlight = true;
+    try {
+      const res = await fetch('/api/cases');
+      if (!res.ok) return;
+      const cases = (await res.json()).data;
+      if (!Array.isArray(cases) || !this._casePickerOpen) return;
+      const signature = list => JSON.stringify((list || []).map(c => [c.name, c.path, c.location]));
+      if (signature(cases) === signature(this.cases)) return;
+      this.cases = cases;
+
+      const select = document.getElementById('quickStartCase');
+      if (select) {
+        const previous = select.value;
+        this.renderQuickStartCaseSelectOptions(select, this.getCasePickerOptions());
+        if (cases.some(c => c.name === previous)) {
+          select.value = previous;
+        } else if (cases.length > 0) {
+          // The selected case was removed on disk: fall back the way the initial
+          // load does, without saving it as the user's last-used case.
+          const fallback = cases.find(c => c.name === 'testcase') || cases[0];
+          select.value = fallback.name;
+          this.updateDirDisplayForCase(fallback.name);
+          this.updateMobileCaseLabel(fallback.name);
+          this.updateCasePickerInput(fallback.name);
+        }
+      }
+      this.renderCasePickerList();
+    } catch {
+      // A failed poll leaves the list as it was; the next tick retries.
+    } finally {
+      this._casePickerRefreshInFlight = false;
+    }
   },
 
   closeCasePicker() {
     const input = document.getElementById('quickStartCaseSearch');
     const list = document.getElementById('quickStartCaseList');
+    this._stopCasePickerRefresh();
     this._casePickerOpen = false;
     this._casePickerFilter = '';
     input?.setAttribute('aria-expanded', 'false');
@@ -4286,6 +4347,11 @@ Object.assign(CodemanApp.prototype, {
   // Case Management (reorder + delete)
   // ═══════════════════════════════════════════════════════════════
 
+  setCaseManageFilter(value) {
+    this._caseManageFilter = String(value || '');
+    this.renderCaseManageList();
+  },
+
   renderCaseManageList() {
     const container = document.getElementById('caseManageList');
     const cases = this.cases || [];
@@ -4293,6 +4359,18 @@ Object.assign(CodemanApp.prototype, {
       container.innerHTML = '<div class="form-hint" style="text-align: center; padding: 2rem 0;">No cases yet</div>';
       return;
     }
+
+    // Every term must appear in the name or path (same rule as the Run picker's
+    // filter). Reordering stays on the FULL list, so the arrows are disabled while
+    // a filter is active: a swap with a neighbour the user cannot see is a surprise.
+    const terms = (this._caseManageFilter || '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const filtering = terms.length > 0;
+    const visible = filtering
+      ? cases.filter(c => {
+          const haystack = `${c.name} ${c.path || ''}`.toLowerCase();
+          return terms.every(term => haystack.includes(term));
+        })
+      : cases;
 
     // Cases an agent worker created (server-side marker file, see agent-case-marker.ts).
     // A long orchestration leaves one scratch directory per worker behind, so they get
@@ -4305,9 +4383,14 @@ Object.assign(CodemanApp.prototype, {
                   title="Review and delete the scratch cases agent workers left behind">Clean up</button>
          </div>`
       : '';
-    cases.forEach((c, idx) => {
-      const isFirst = idx === 0;
-      const isLast = idx === cases.length - 1;
+    if (filtering && visible.length === 0) {
+      html += '<div class="form-hint" style="text-align: center; padding: 2rem 0;">No cases match</div>';
+    }
+    visible.forEach(c => {
+      const idx = cases.indexOf(c);
+      const isFirst = filtering || idx === 0;
+      const isLast = filtering || idx === cases.length - 1;
+      const reorderTitle = filtering ? 'Clear the search to reorder' : null;
       // Was `/Users/<user>` only, the mirror image of the Run menu's bug: every
       // case path on a Linux host rendered in full, unabbreviated.
       const pathDisplay = c.path ? this._shortenHomePath(c.path) : '';
@@ -4331,9 +4414,9 @@ Object.assign(CodemanApp.prototype, {
                 : ''
             }
             <button class="case-manage-btn" onclick="app.moveCaseUp(${escapeHtml(JSON.stringify(c.name))})"
-                    title="Move up" ${isFirst ? 'disabled' : ''}>&#x25B2;</button>
+                    title="${reorderTitle || 'Move up'}" ${isFirst ? 'disabled' : ''}>&#x25B2;</button>
             <button class="case-manage-btn" onclick="app.moveCaseDown(${escapeHtml(JSON.stringify(c.name))})"
-                    title="Move down" ${isLast ? 'disabled' : ''}>&#x25BC;</button>
+                    title="${reorderTitle || 'Move down'}" ${isLast ? 'disabled' : ''}>&#x25BC;</button>
             <button class="case-manage-btn case-manage-btn-delete" onclick="app.deleteCase(${escapeHtml(JSON.stringify(c.name))})"
                     title="Delete case">&#x2715;</button>
           </div>
@@ -4506,6 +4589,7 @@ Object.assign(CodemanApp.prototype, {
       const isSelected = c.name === currentCase;
       html += `
         <button class="mobile-case-item ${isSelected ? 'selected' : ''}"
+                data-search="${escapeHtml(`${c.label} ${c.name}`.toLowerCase())}"
                 onclick="app.selectMobileCase(${escapeHtml(JSON.stringify(c.name))})">
           <span class="mobile-case-item-icon">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -4528,7 +4612,61 @@ Object.assign(CodemanApp.prototype, {
     }
 
     listContainer.innerHTML = html;
+    // Every open starts unfiltered. The search box is not focused on purpose:
+    // that would raise the phone keyboard over a list most opens just tap.
+    const search = document.getElementById('mobileCaseSearch');
+    if (search) search.value = '';
+    listContainer.parentElement.style.minHeight = '';
+    this.filterMobileCases();
     modal.classList.add('active');
+    // Bring the current case into view when the list is longer than the sheet.
+    // Scroll the list's own box, never scrollIntoView(), which can also scroll
+    // the document under the fixed header.
+    const body = listContainer.parentElement;
+    const selected = listContainer.querySelector('.mobile-case-item.selected');
+    if (body && selected) {
+      const top = selected.offsetTop - body.offsetTop;
+      if (top + selected.offsetHeight > body.scrollTop + body.clientHeight) {
+        body.scrollTop = top - (body.clientHeight - selected.offsetHeight) / 2;
+      }
+    }
+  },
+
+  /** Hide case rows whose name does not contain every word typed in the search box. */
+  filterMobileCases() {
+    const search = document.getElementById('mobileCaseSearch');
+    const words = (search?.value || '').toLowerCase().split(/\s+/).filter(Boolean);
+    // Hold the list at its unfiltered height while searching, so the sheet (and
+    // the input under the thumb) does not jump as rows disappear.
+    const body = document.querySelector('.mobile-case-picker-body');
+    if (body && words.length && !body.style.minHeight) body.style.minHeight = `${body.offsetHeight}px`;
+    let shown = 0;
+    for (const item of document.querySelectorAll('#mobileCaseList .mobile-case-item')) {
+      const hay = item.dataset.search || '';
+      const match = words.every((w) => hay.includes(w));
+      item.hidden = !match;
+      if (match) shown++;
+    }
+    const empty = document.getElementById('mobileCaseEmpty');
+    if (empty) empty.hidden = shown > 0;
+  },
+
+  /** Enter picks the case when the search narrows the list to exactly one; Escape clears, then closes. */
+  onMobileCaseSearchKey(event) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      const visible = [...document.querySelectorAll('#mobileCaseList .mobile-case-item:not([hidden])')];
+      if (visible.length === 1) visible[0].click();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.target.value) {
+        event.target.value = '';
+        this.filterMobileCases();
+      } else {
+        this.closeMobileCasePicker();
+      }
+    }
   },
 
   closeMobileCasePicker() {

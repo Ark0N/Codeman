@@ -20,6 +20,7 @@ import {
 import { MAX_EDITABLE_BYTES } from '../config/file-editing.js';
 import { MIN_MATCH_LENGTH, MAX_MATCH_LENGTH } from '../config/agent-wait.js';
 import { MAX_WAKE_MACS } from '../config/remote-wake-limits.js';
+import { MAX_INPUT_LENGTH } from '../config/terminal-limits.js';
 import { enabledCliIds, enabledClis } from '../config/cli-registry/registry.js';
 import type { SessionMode } from '../types.js';
 
@@ -1500,7 +1501,10 @@ export const SettingsUpdateSchema = z
  * Schema for POST /api/sessions/:id/input with length limit
  */
 export const SessionInputWithLimitSchema = z.object({
-  input: z.string().max(100000), // 100KB max input
+  // One limit for both transports (issue #484): the route's own length check and
+  // ws-routes.ts read the same constant, so a schema cap above it only hid which
+  // check refused the input.
+  input: z.string().max(MAX_INPUT_LENGTH),
   useMux: z.boolean().optional(),
   // Reliable-delivery dedup (optional; absent for curl/legacy clients). The web
   // client tags each input with a stable clientId + a monotonic per-session seq

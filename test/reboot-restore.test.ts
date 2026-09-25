@@ -108,6 +108,25 @@ describe('which dead sessions may be rebuilt', () => {
     expect(plan.skipped).toEqual([{ sessionId: 'gone', reason: 'no-persisted-record' }]);
   });
 
+  it('never revives a session whose agent the user ended with a clean exit (#446)', () => {
+    // The clean-exit sweep would have closed it, had the power not gone first.
+    const persisted = { exited: persistedSession({ id: 'exited', paneExit: { status: 0, at: NOW - HOUR } }) };
+    const plan = planRebootRestore(['exited'], persisted, () => true);
+    expect(plan.restore).toEqual([]);
+    expect(plan.skipped).toEqual([{ sessionId: 'exited', reason: 'agent-exited' }]);
+  });
+
+  it('still offers a crashed agent, and one whose exit status tmux never reported', () => {
+    // Same explicit-0 rule as the sweep: an absent status is unknown, not clean,
+    // and a crash keeps its row on the board, so it stays eligible here too.
+    const persisted = {
+      crashed: persistedSession({ id: 'crashed', paneExit: { status: 137, at: NOW - HOUR } }),
+      killed: persistedSession({ id: 'killed', paneExit: { at: NOW - HOUR } }),
+    };
+    const plan = planRebootRestore(['crashed', 'killed'], persisted, () => true);
+    expect(plan.restore.map((s) => s.sessionId)).toEqual(['crashed', 'killed']);
+  });
+
   it('never revives a pane whose PTY-exit breaker had tripped', () => {
     const persisted = { crashy: persistedSession({ id: 'crashy', respawnBlocked: true }) };
     expect(planRebootRestore(['crashy'], persisted, () => true).skipped[0].reason).toBe('respawn-blocked');

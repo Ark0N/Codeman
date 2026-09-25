@@ -583,6 +583,21 @@ export class Session extends EventEmitter {
    */
   private _paneExit: PaneExit | null = null;
   /**
+   * How many starts, attaches or relaunches are running for this session's
+   * pane. While one is, a dead-pane reading may describe a pane that is being
+   * revived on purpose, so the exited-agent sweep leaves the session alone
+   * (Ark0N/Codeman#446). A counter rather than a flag, so two overlapping
+   * operations cannot clear each other's mark.
+   */
+  private _paneLifecycleOps = 0;
+  /** When the last pane start, attach or relaunch finished (ms), 0 when none has run. */
+  private _paneStartedAt = 0;
+  /**
+   * The server has started closing this session, so no start or attach may
+   * begin (see {@link markClosing}).
+   */
+  private _closing = false;
+  /**
    * This session was rebuilt from the tmux socket rather than from Codeman's
    * own records, so its `remote`/`docker` metadata is missing rather than known
    * to be absent. See {@link MuxSession.discovered}.
@@ -1181,6 +1196,49 @@ export class Session extends EventEmitter {
   /** What Codeman last observed of this pane's agent, or undefined for UNKNOWN. */
   get paneExit(): PaneExit | undefined {
     return this._paneExit ?? undefined;
+  }
+
+  /**
+   * True while a start, attach or relaunch is running for this session's pane.
+   * The exited-agent sweep reads it (see `pane-exit-sweep.ts`): the dead-pane
+   * branch of {@link _setupOrAttachMuxSession} respawns an exited pane, and
+   * until it finishes and clears the exit, the pane still reads as dead.
+   */
+  get paneLifecycleInFlight(): boolean {
+    return this._paneLifecycleOps > 0;
+  }
+
+  /**
+   * When the last start, attach or relaunch of this pane finished, or 0 when
+   * none has run in this process. The exited-agent sweep keeps an exit that
+   * lands within `CLEAN_EXIT_MIN_PANE_LIFETIME_MS` of it, since that reads as a
+   * CLI failing at startup rather than a user ending it. An attach to a pane
+   * that was already running stamps it too, which only costs a user who
+   * `/exit`s within seconds of a server restart a row to close by hand.
+   */
+  get paneStartedAt(): number {
+    return this._paneStartedAt;
+  }
+
+  /**
+   * Mark this session as being closed, or clear the mark after a close that
+   * failed. While it is set, {@link startInteractive} and {@link startShell}
+   * refuse to run. A start that raced a close would otherwise launch a CLI in a
+   * tmux session whose record is about to be deleted (Ark0N/Codeman#446).
+   */
+  markClosing(closing: boolean): void {
+    this._closing = closing;
+  }
+
+  /** Run one pane start, attach or relaunch with {@link paneLifecycleInFlight} raised. */
+  private async _withPaneLifecycle<T>(op: () => Promise<T>): Promise<T> {
+    this._paneLifecycleOps++;
+    try {
+      return await op();
+    } finally {
+      this._paneLifecycleOps--;
+      this._paneStartedAt = Date.now();
+    }
   }
 
   /**
@@ -1889,6 +1947,14 @@ export class Session extends EventEmitter {
     createSessionOptions: import('./mux-interface.js').CreateSessionOptions;
     spawnErrLabel: string;
   }): Promise<{ isRestored: boolean; respawnedResumeId?: string; respawnedDeadPane: boolean }> {
+    return this._withPaneLifecycle(() => this._doSetupOrAttachMuxSession(options));
+  }
+
+  private async _doSetupOrAttachMuxSession(options: {
+    respawnPaneOptions: import('./mux-interface.js').RespawnPaneOptions;
+    createSessionOptions: import('./mux-interface.js').CreateSessionOptions;
+    spawnErrLabel: string;
+  }): Promise<{ isRestored: boolean; respawnedResumeId?: string; respawnedDeadPane: boolean }> {
     const mux = this._mux!;
 
     // Verify stale mux session — tmux may have been destroyed (e.g., killed externally).
@@ -2071,6 +2137,10 @@ export class Session extends EventEmitter {
    *   the mux session is gone — see {@link reattachRemote} for that reasoning).
    */
   async restartCli(): Promise<boolean> {
+    return this._withPaneLifecycle(() => this._doRestartCli());
+  }
+
+  private async _doRestartCli(): Promise<boolean> {
     if (!this._useMux || !this._mux || !this._muxSession) return false;
     const mux = this._mux;
 
@@ -2458,6 +2528,9 @@ export class Session extends EventEmitter {
   async startInteractive(): Promise<void> {
     if (this.ptyProcess) {
       throw new Error('Session already has a running process');
+    }
+    if (this._closing) {
+      throw new Error('Session is being closed');
     }
 
     // Bounds the workspace-trust scan (see _maybeAcceptTrustDialog). Stamped here
@@ -3279,6 +3352,9 @@ export class Session extends EventEmitter {
   async startShell(): Promise<void> {
     if (this.ptyProcess) {
       throw new Error('Session already has a running process');
+    }
+    if (this._closing) {
+      throw new Error('Session is being closed');
     }
 
     this._resetBuffers();

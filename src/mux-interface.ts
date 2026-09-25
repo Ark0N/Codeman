@@ -336,6 +336,14 @@ export interface TerminalMultiplexer extends EventEmitter {
    */
   getPaneExit?(muxName: string): PaneExit | undefined;
 
+  /**
+   * How many authoritative pane reads have agreed on the exit `getPaneExit()`
+   * reports, or 0 when it reports none. The exited-agent sweep closes a session
+   * only once this reaches `CLEAN_EXIT_CONFIRMING_READS` (`pane-exit-sweep.ts`),
+   * and a multiplexer without this method never has a session closed by it.
+   */
+  getPaneExitReadCount?(muxName: string): number;
+
   /** Forget a session's exit observation, e.g. once its pane has been respawned. */
   clearPaneExit?(muxName: string): void;
 

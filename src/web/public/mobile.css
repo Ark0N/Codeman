@@ -2165,9 +2165,11 @@ html.mobile-init .file-browser-panel {
     background: rgba(0, 0, 0, 0.5);
   }
 
+  /* The footer already reserves the home-indicator inset; padding the sheet too
+     counted it twice and left a dead band under Create New Case. */
   .mobile-case-picker-sheet {
-    max-height: 60vh;
-    padding-bottom: var(--safe-area-bottom);
+    max-height: 80vh;
+    max-height: 80dvh;
     animation: slideUp 0.2s ease-out;
   }
 
@@ -2976,6 +2978,13 @@ html.mobile-init .file-browser-panel {
   .mobile-overview-pill--working {
     border-color: var(--green);
     color: var(--green);
+  }
+
+  /* An exited agent (Ark0N/Codeman#446): neutral, since nothing is running behind
+     the row. The dot and the row take `--exited` too and keep their base rules. */
+  .mobile-overview-pill--exited {
+    border-color: var(--text-muted);
+    color: var(--text-muted);
   }
 
   /* Accent, and none of the three above: a session watching work it started itself

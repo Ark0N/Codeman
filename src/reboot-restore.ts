@@ -19,19 +19,22 @@
  * touching its status, so a pinned session a reboot killed still reads `idle` or
  * `busy` and stays eligible.
  *
- * ⚠️ Ending the AGENT rather than the session is a shape this module CANNOT
- * recognise today, and a reboot restores it. `/exit` ends the CLI inside the
- * pane, `remain-on-exit` keeps the pane, and the PTY Codeman owns is the
- * `tmux attach-session` process, which stays alive throughout — so no exit
- * handler runs, no lifecycle `exit` is logged, and the record keeps both its pid
- * and `status: 'idle'`. Nothing durable distinguishes it from a session that was
- * simply idle when the power went. Ark0N/Codeman#446 covers making Codeman
- * notice the dead pane; until a record can say the agent is gone, this pass will
- * offer those sessions back, and the user dismisses or closes them.
+ * ⚠️ Ending the AGENT rather than the session leaves no trace in `status` or
+ * `pid`. `/exit` ends the CLI inside the pane, `remain-on-exit` keeps the pane,
+ * and the PTY Codeman owns is the `tmux attach-session` process, which stays
+ * alive throughout — so no exit handler runs, no lifecycle `exit` is logged,
+ * and the record keeps both its pid and `status: 'idle'`. Ark0N/Codeman#446
+ * handles it in two steps. The pane-exit watcher persists `paneExit`, and the
+ * clean-exit sweep (`pane-exit-sweep.ts`) closes a session whose agent exited
+ * with status 0 through `cleanupSession()`, which leaves the durable record
+ * described above. This module also refuses a record whose persisted
+ * `paneExit` is a clean exit, which covers a session that exited moments
+ * before the power went, before the sweep reached it. A crashed agent's record
+ * stays eligible, like the row the sweep leaves on the board for it.
  *
- * The `pid` check below is therefore NOT that rule. It refuses a record whose
- * attach process was already gone, which is a session that never started or
- * whose pane died outright.
+ * The `pid` check below is NOT that rule. It refuses a record whose attach
+ * process was already gone, which is a session that never started or whose
+ * pane died outright.
  *
  * @dependencies types (SessionState), config/cli-registry
  * @consumedby web/server (plan build at boot), web/routes/reboot-restore-routes
@@ -41,6 +44,7 @@
 
 import type { SessionState } from './types.js';
 import { getCli } from './config/cli-registry/registry.js';
+import { isCleanPaneExit } from './pane-exit-sweep.js';
 
 /** Session statuses a reboot restore may rebuild. `stopped` is the kill marker. */
 const RESTORABLE_STATUSES: ReadonlySet<string> = new Set(['idle', 'busy', 'error']);
@@ -109,7 +113,7 @@ export function resolveResumeConversationId(state: SessionState): string {
 /**
  * Why one session was passed over. Reported for logging and shown to the user.
  *
- * The first seven are decided before anything is built. `capacity-reached` and
+ * All but the last two are decided before anything is built. `capacity-reached` and
  * `rebuild-failed` can only happen once a click is spending the plan, and they
  * are the two the banner must not confuse with a missing workspace: one means
  * "try again after closing something", the other means the CLI would not start.
@@ -120,6 +124,7 @@ export interface RebootRestoreRejection {
     | 'no-persisted-record'
     | 'intentionally-ended'
     | 'not-running'
+    | 'agent-exited'
     | 'respawn-blocked'
     | 'remote-or-docker'
     | 'unsupported-mode'
@@ -191,13 +196,21 @@ export function planRebootRestore(
       //
       // ⚠️ This does NOT catch a session the user ended with `/exit`. See the
       // module header: that leaves the pid in place, because the pid is the tmux
-      // attach process and `remain-on-exit` keeps it alive.
+      // attach process and `remain-on-exit` keeps it alive. The `paneExit` check
+      // below catches it instead.
       //
       // Conservative on purpose. A session that somehow persisted no pid while
       // genuinely running is not offered, and its conversation stays reachable
       // from the Resume list, which is where every session would be without this
       // feature.
       skipped.push({ sessionId, reason: 'not-running' });
+      continue;
+    }
+    if (isCleanPaneExit(state.paneExit)) {
+      // The user ended the agent, and the clean-exit sweep would have closed the
+      // session had the power not gone first (Ark0N/Codeman#446). The same
+      // explicit-0 rule applies: an absent status is unknown, not clean.
+      skipped.push({ sessionId, reason: 'agent-exited' });
       continue;
     }
     if (state.respawnBlocked === true) {

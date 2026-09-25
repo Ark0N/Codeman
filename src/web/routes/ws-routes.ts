@@ -175,7 +175,16 @@ export function registerWsRoutes(app: FastifyInstance, ctx: SessionPort, getHost
         try {
           const msg = JSON.parse(String(raw));
           if (msg.t === 'i' && typeof msg.d === 'string') {
-            if (msg.d.length > MAX_INPUT_LENGTH) return;
+            if (msg.d.length > MAX_INPUT_LENGTH) {
+              // Refused for good, so say so: a silent return left the frame
+              // unACKed and the client redelivered it every few seconds forever
+              // (issue #484). A client that predates `err` reads this as a plain
+              // ACK and drops the frame, which is also the right outcome.
+              if (Number.isInteger(msg.seq) && socket.readyState === 1) {
+                socket.send(`{"t":"ia","seq":${msg.seq as number},"err":"too_large","max":${MAX_INPUT_LENGTH}}`);
+              }
+              return;
+            }
             // Reliable delivery: when the frame carries a clientId + seq, apply it
             // exactly once (skip a duplicate redelivery) but ACK it regardless so
             // the client can drop it from its durable queue. Frames without seq
