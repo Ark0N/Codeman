@@ -25,8 +25,6 @@ RUN npm ci \
 FROM node:22-bookworm-slim
 
 ARG CODEMAN_RUNTIME_USER=codeman
-ARG GIT_USER_EMAIL=
-ARG GIT_USER_NAME=
 ARG PUID=1000
 ARG PGID=1000
 
@@ -49,18 +47,6 @@ RUN apt-get update \
       ripgrep \
       tmux \
  && rm -rf /var/lib/apt/lists/*
-
-# A runtime home is normally a bind mount, so user-level Git configuration is
-# not durable across a fresh deployment. Keep the operator-supplied identity in
-# the image's system config instead. Both values are required together to avoid
-# producing commits with a misleading partial identity.
-RUN set -eux; \
-    if [ -n "${GIT_USER_NAME}" ] || [ -n "${GIT_USER_EMAIL}" ]; then \
-      test -n "${GIT_USER_NAME}"; \
-      test -n "${GIT_USER_EMAIL}"; \
-      git config --system user.name "${GIT_USER_NAME}"; \
-      git config --system user.email "${GIT_USER_EMAIL}"; \
-    fi
 
 # The Docker CLI, taken from the official image rather than Debian's `docker.io`.
 # That package is the full ENGINE: with --no-install-recommends it still pulls 15
@@ -312,6 +298,21 @@ EXPOSE 3000
 # steps, leaving the caller in full control.
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
+
+# Declare the optional identity immediately before configuring it so a change
+# invalidates only this final layer. This is declarative setup: a persisted
+# ~/.gitconfig in CODEMAN_APPDATA_PATH still overrides the system-level values.
+ARG GIT_USER_EMAIL=
+ARG GIT_USER_NAME=
+RUN set -eux; \
+    if [ -n "${GIT_USER_NAME}" ] || [ -n "${GIT_USER_EMAIL}" ]; then \
+      if [ -z "${GIT_USER_NAME}" ] || [ -z "${GIT_USER_EMAIL}" ]; then \
+        echo 'Git user name and email must both be set when configuring Git identity' >&2; \
+        exit 1; \
+      fi; \
+      git config --system user.name "${GIT_USER_NAME}"; \
+      git config --system user.email "${GIT_USER_EMAIL}"; \
+    fi
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 

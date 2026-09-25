@@ -80,7 +80,9 @@ Compose passes the values to the Codeman server build, and to the server process
 when it builds Docker-case agent images. Both images write the pair to Git's
 system configuration during their build, so commits retain the same identity
 after a container or agent image is recreated. Set both values together; an
-image build with only one value fails rather than using a partial identity.
+image build with only one value fails rather than using a partial identity. An
+identity already present in `CODEMAN_APPDATA_PATH`'s `~/.gitconfig` overrides
+the server image's system-level default.
 
 Run `bash docker/Start-Codeman.sh` after changing the server values. Rebuild an
 existing agent image with `node scripts/build-agent-image.mjs --no-cache` in the

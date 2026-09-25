@@ -66,8 +66,8 @@ export const GIT_HOST_CLI_BUILD_ARGS = [
 
 /** Environment variables passed through to the agent image's system Git configuration. */
 export const GIT_IDENTITY_BUILD_ARGS = [
-  ['GIT_USER_NAME', 'GIT_USER_NAME'],
-  ['GIT_USER_EMAIL', 'GIT_USER_EMAIL'],
+  ['CODEMAN_AGENT_IMAGE_GIT_USER_NAME', 'GIT_USER_NAME'],
+  ['CODEMAN_AGENT_IMAGE_GIT_USER_EMAIL', 'GIT_USER_EMAIL'],
 ];
 
 /**
@@ -94,7 +94,7 @@ export function gitIdentityBuildArgPairs(env) {
   const configured = pairs.filter(([, value]) => value !== '');
   if (configured.length === 0) return [];
   if (configured.length !== pairs.length) {
-    throw new Error('GIT_USER_NAME and GIT_USER_EMAIL must both be set when configuring Git identity');
+    throw new Error('Git user name and email must both be set when configuring Git identity');
   }
   return pairs;
 }

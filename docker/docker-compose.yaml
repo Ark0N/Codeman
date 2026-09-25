@@ -36,8 +36,8 @@ services:
       CODEMAN_CASES_PATH: ${CODEMAN_CASES_PATH}
       # Passed through only so Codeman can use the same identity when it builds
       # the Docker-case agent image.
-      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-}
-      GIT_USER_NAME: ${GIT_USER_NAME:-}
+      CODEMAN_AGENT_IMAGE_GIT_USER_EMAIL: ${GIT_USER_EMAIL:-}
+      CODEMAN_AGENT_IMAGE_GIT_USER_NAME: ${GIT_USER_NAME:-}
       # Extra Host-header allowlist entries for a reverse-proxied deployment
       # (docker/README.md, "Reverse-proxy host allowlist"). Optional, so it
       # defaults to empty rather than requiring a line in every .env.

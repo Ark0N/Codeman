@@ -154,13 +154,16 @@ describe('Git identity in the agent image: both producers pass the same settings
   it('maps the Git environment variables to matching Dockerfile ARGs', () => {
     expect(tsGitIdentityArgs).toEqual(mjsGitIdentityArgs);
     expect(tsGitIdentityArgs).toEqual([
-      ['GIT_USER_NAME', 'GIT_USER_NAME'],
-      ['GIT_USER_EMAIL', 'GIT_USER_EMAIL'],
+      ['CODEMAN_AGENT_IMAGE_GIT_USER_NAME', 'GIT_USER_NAME'],
+      ['CODEMAN_AGENT_IMAGE_GIT_USER_EMAIL', 'GIT_USER_EMAIL'],
     ]);
   });
 
   it('passes a complete identity and omits an absent identity', () => {
-    const identity = { GIT_USER_NAME: 'Ada Lovelace', GIT_USER_EMAIL: 'ada@example.com' };
+    const identity = {
+      CODEMAN_AGENT_IMAGE_GIT_USER_NAME: 'Ada Lovelace',
+      CODEMAN_AGENT_IMAGE_GIT_USER_EMAIL: 'ada@example.com',
+    };
     const expected: Array<[string, string]> = [
       ['GIT_USER_NAME', 'Ada Lovelace'],
       ['GIT_USER_EMAIL', 'ada@example.com'],
@@ -172,9 +175,12 @@ describe('Git identity in the agent image: both producers pass the same settings
   });
 
   it('refuses a partial identity in both build paths', () => {
-    for (const identity of [{ GIT_USER_NAME: 'Ada Lovelace' }, { GIT_USER_EMAIL: 'ada@example.com' }]) {
-      expect(() => tsGitIdentityPairs(identity)).toThrow(/GIT_USER_NAME and GIT_USER_EMAIL/);
-      expect(() => mjsGitIdentityPairs(identity)).toThrow(/GIT_USER_NAME and GIT_USER_EMAIL/);
+    for (const identity of [
+      { CODEMAN_AGENT_IMAGE_GIT_USER_NAME: 'Ada Lovelace' },
+      { CODEMAN_AGENT_IMAGE_GIT_USER_EMAIL: 'ada@example.com' },
+    ]) {
+      expect(() => tsGitIdentityPairs(identity)).toThrow(/Git user name and email/);
+      expect(() => mjsGitIdentityPairs(identity)).toThrow(/Git user name and email/);
     }
   });
 
