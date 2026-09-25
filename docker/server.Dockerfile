@@ -117,7 +117,10 @@ RUN set -eux; \
       chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg; \
       echo "deb [arch=${arch} signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
         > /etc/apt/sources.list.d/github-cli.list; \
-      pkgs="${pkgs} gh"; \
+      # GitHub CLI copies its device-login code with xclip when available. Keep
+      # this dependency inside the existing opt-in GitHub CLI branch so images
+      # without gh do not gain desktop-clipboard tooling. \
+      pkgs="${pkgs} gh xclip"; \
     fi; \
     if [ "${CODEMAN_INSTALL_AZ}" = 1 ]; then \
       curl -fsSL -o /etc/apt/keyrings/microsoft.asc \

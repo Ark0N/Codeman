@@ -144,4 +144,11 @@ describe('optional gh / az in the agent image: both producers pass the same swit
       expect(dockerfile, file).toMatch(/^ARG CODEMAN_INSTALL_AZ=0$/m);
     }
   });
+
+  it('installs clipboard support only with the optional GitHub CLI', () => {
+    for (const file of ['../docker/agent.Dockerfile', '../docker/server.Dockerfile']) {
+      const dockerfile = readFileSync(fileURLToPath(new URL(file, import.meta.url)), 'utf-8');
+      expect(dockerfile, file).toMatch(/if \[ "\$\{CODEMAN_INSTALL_GH\}" = 1 \]; then[\s\S]*?pkgs="\$\{pkgs\} gh xclip"/);
+    }
+  });
 });

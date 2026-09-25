@@ -1,5 +1,9 @@
 # aicodeman
 
+## 20260925-1326
+
+- Added optional clipboard support alongside the GitHub CLI in Docker images.
+
 ## 1.33.0
 
 ### Minor Changes

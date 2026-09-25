@@ -94,6 +94,10 @@ They are not `.env` settings: turning a CLI on is a per-host choice, which is wh
 
 The Azure CLI is the large one, about 600 MB of the roughly 670 MB the pair adds. A CLI left off leaves nothing functional behind: no apt repository, no package, no `azure-devops` extension and no credential-helper entry, so git for that host behaves exactly as it does without this feature. With both off the image is functionally unchanged; it still carries the `AZURE_EXTENSION_DIR` variable, an empty extensions directory and one small layer that copies and then removes the helper script.
 
+When GitHub CLI is enabled, the images also install the small `xclip` helper so
+`gh auth login` can copy its device-login code where an X11 clipboard is
+available. It is not installed when `CODEMAN_INSTALL_GH=0`.
+
 ### Signing in
 
 With a CLI on, the system Git configuration routes credentials through it:
