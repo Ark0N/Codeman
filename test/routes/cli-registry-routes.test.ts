@@ -713,6 +713,12 @@ describe('registry writes are serialized and never clobber a file the reader wou
     }
     expect(installEnv({ CODEMAN_PASSWORD: 'x', HOME: '/h' })).toEqual({ HOME: '/h' });
   });
+
+  it('redirects npm installs to the persistent HOME inside the Compose container', () => {
+    expect(
+      installEnv({ CODEMAN_IN_CONTAINER: '1', HOME: '/home/codeman', NPM_CONFIG_PREFIX: '/opt/codeman-cli' })
+    ).toEqual({ HOME: '/home/codeman', NPM_CONFIG_PREFIX: '/home/codeman/.local' });
+  });
 });
 
 /**
