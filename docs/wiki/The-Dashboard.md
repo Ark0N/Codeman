@@ -153,8 +153,9 @@ Worth knowing:
   Shell sessions open from a bounded recent tail so a large transcript cannot stall tab
   switching; press **Load full history** to pull the rest explicitly. Ordinary Shell scrolling
   and automatic output recovery stay within the bounded browser buffer.
-- **Wheel and touch scrolling** are forwarded into Claude's own transcript on recent Claude
-  versions, so the wheel scrolls the conversation rather than the terminal. `Shift+Wheel` is
+- **Wheel and touch scrolling** are forwarded into Claude's own transcript when a recent
+  Claude runs fullscreen, so the wheel scrolls the conversation rather than the terminal.
+  Claude's default inline view keeps its history in the terminal and scrolls locally. `Shift+Wheel` is
   always local scrollback. Other CLIs scroll locally.
 - **Selection copy.** `Ctrl+C` copies when text is selected and interrupts when it is not.
   `Ctrl+Shift+C` always copies.
