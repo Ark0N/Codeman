@@ -6367,7 +6367,33 @@ class CodemanApp {
       // Bail on a tab switch mid-fetch: writing here would paint another session's
       // history into the terminal the user is now looking at.
       if (!buffer || this.activeSessionId !== sessionId) return;
-      if (this._replayWouldShrinkBuffer(buffer)) {
+      const windowRows = this._estimateReplayRows(buffer, this.terminal.cols);
+      // A bounded window no longer than the browser's buffer buys nothing, and
+      // resetting to rewrite it would jump the viewport on every scroll that
+      // outlasts the cooldown at the top. This runs BEFORE the downgrade guard
+      // on purpose: that guard reads "smaller than the browser" as "tmux has
+      // nothing more to give", which is true of an unbounded capture but not of a
+      // window cut at the tail size, so a bounded window must never reach the
+      // exhausted path, which would take Load full history off the banner while
+      // tmux still holds the rest. Nothing was written here, so the banner state
+      // is left as the load that produced it set it: re-labelling it from this
+      // payload would call a terminal that holds ALL of a Load full history pull
+      // "the most recent 1 MiB".
+      if (boundedShellPull && windowRows <= this.terminal.buffer.active.length) {
+        // An untruncated window IS all of tmux's history, so nothing is missing,
+        // and the next burst of output can put more in tmux than the browser has:
+        // keep the normal 4 s cooldown. A truncated one is the opposite case, since
+        // the gesture can never reach anything older than what the browser already
+        // shows, and every ask costs the server a synchronous capture-pane of the
+        // whole history (`tail` is applied after the capture): back off to 60 s.
+        // Trade-off: only a successful replay clears that latch, so a tab switch or
+        // burst that shrinks the browser's buffer below the window can leave a
+        // scroll-to-top inert for up to a minute. Load full history (`force`)
+        // bypasses the cooldown, and the latch is bounded, never permanent.
+        if (payload.truncated) (this._fullHistoryRepullUseless ||= new Set()).add(sessionId);
+        return;
+      }
+      if (this._replayWouldShrinkBuffer(buffer, windowRows)) {
         timing.refused = true;
         timing.totalMs = performance.now() - requestStartedAt;
         this._recordTerminalLoadTiming(timing);
@@ -6376,20 +6402,6 @@ class CodemanApp {
         // The browser already holds more than tmux can give back, so there is
         // nothing further to offer and the indicator must stop promising it.
         this._setHistoryTruncation(sessionId, { ...payload, exhausted: true });
-        return;
-      }
-      // A bounded window no longer than the browser's buffer buys nothing, and
-      // resetting to rewrite it would jump the viewport on every scroll that
-      // outlasts the cooldown at the top. An untruncated window IS all of tmux's
-      // history, so nothing is missing; a window cut at the tail size would trade
-      // more old rows than it recovers, and its 'tail' truncation keeps the
-      // banner offering the unbounded pull. Not latched as useless: the next
-      // burst of output can put more history in tmux than the browser has.
-      if (
-        boundedShellPull &&
-        this._estimateReplayRows(buffer, this.terminal.cols) <= this.terminal.buffer.active.length
-      ) {
-        this._setHistoryTruncation(sessionId, payload);
         return;
       }
       this._setHistoryTruncation(sessionId, payload);

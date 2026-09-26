@@ -3354,13 +3354,17 @@ Object.assign(CodemanApp.prototype, {
    * below the last line, and _estimateReplayRows can only approximate wrapping.
    * Only a capture that is worse by more than a full screen counts as a
    * downgrade, which leaves every genuine recovery case untouched.
+   *
+   * A caller that already estimated the capture's rows passes them as
+   * `estimatedRows`, so a megabyte capture is not scanned twice.
    */
-  _replayWouldShrinkBuffer(capture) {
+  _replayWouldShrinkBuffer(capture, estimatedRows) {
     const term = this.terminal;
     const rowsNow = term?.buffer?.active?.length || 0;
     if (!rowsNow) return false;
     const screen = term?.rows || 24;
-    return this._estimateReplayRows(capture, term?.cols) + screen < rowsNow;
+    const rows = estimatedRows ?? this._estimateReplayRows(capture, term?.cols);
+    return rows + screen < rowsNow;
   },
 
   /**
