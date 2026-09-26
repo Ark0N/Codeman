@@ -28,11 +28,14 @@ The frontend is plain JS served from `src/web/public/` with no bundler in dev: e
 CI runs all of these, so save yourself a round trip:
 
 ```bash
-npm run typecheck              # tsc --noEmit, strict mode
+npm run typecheck               # tsc --noEmit, strict mode
 npm run lint
 npm run format:check
-npm run check:frontend-syntax  # syntax-checks the plain-JS frontend modules
+npm run check:frontend-syntax   # syntax-checks the plain-JS frontend modules
+npm run check:browser-excludes  # every browser-driven test is kept out of `npm test`
 ```
+
+`npm install` also installs a `pre-push` git hook that runs these static checks (~15s) and blocks the push if one fails. Skip it once with `CODEMAN_SKIP_PREPUSH=1 git push`; it never replaces a `pre-push` hook of your own.
 
 ### Tests
 
