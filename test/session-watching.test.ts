@@ -133,12 +133,47 @@ describe('watchingLabel', () => {
       '1 MCP task',
       '1 background dynamic workflow',
       '2 remote dynamic workflows',
-      '1 Artifact comment monitor',
       '2 teams',
     ];
     for (const label of labels) {
       expect(watchingLabel(pane(`⏵⏵ bypass permissions on · ${label} · ← for agents`), CLAUDE_WATCHING)).toBe(label);
     }
+  });
+
+  it('reports no watching while the agent waits for comments on an artifact', () => {
+    // An agent that publishes an artifact arms a monitor for its comments and ends its
+    // turn. That monitor waits on the user, so the idle alert has to reach them. The
+    // singular footer is a live capture from 2026-09-25; the plural is assumed.
+    expect(
+      watchingLabel(pane('⏵⏵ bypass permissions on · 1 Artifact comment monitor · ← for agents'), CLAUDE_WATCHING)
+    ).toBeNull();
+    expect(
+      watchingLabel(pane('⏵⏵ bypass permissions on · 2 Artifact comment monitors · ← for agents'), CLAUDE_WATCHING)
+    ).toBeNull();
+  });
+
+  it('lets a comment monitor outrank other background work on the same row', () => {
+    // A shell beside the monitor is still running, but the agent needs the user all the
+    // same, and the chip order on the footer must not decide that. The second row is
+    // the one that needs the `^` in front of the lookahead.
+    expect(
+      watchingLabel(
+        pane('⏵⏵ bypass permissions on · 1 shell · 1 Artifact comment monitor · ← for agents'),
+        CLAUDE_WATCHING
+      )
+    ).toBeNull();
+    expect(
+      watchingLabel(
+        pane('⏵⏵ bypass permissions on · 1 Artifact comment monitor · 1 shell · ← for agents'),
+        CLAUDE_WATCHING
+      )
+    ).toBeNull();
+  });
+
+  it('still refuses a footer cut off in the middle of the comment monitor', () => {
+    expect(
+      watchingLabel(pane('⏵⏵ bypass permissions on · 1 shell · 1 Artifact comment moni…'), CLAUDE_WATCHING)
+    ).toBeNull();
   });
 
   it('says nothing about a pane that is running nothing', () => {

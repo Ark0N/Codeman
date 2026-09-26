@@ -127,6 +127,10 @@ plain prose is not a dialog, so an agent that starts a monitor and then writes "
 should I target?" is quiet along with the rest — check a watching session yourself if it has
 been quiet longer than the work it is waiting for should take.
 
+An agent waiting for your comments on an artifact it published never counts as watching.
+Claude shows that as "1 Artifact comment monitor", but the agent hears nothing until you
+comment, so the session alerts you like any other quiet session.
+
 ## The phone overview
 
 On phones, tapping the "C" logo gives a session overview with **NEEDS YOU** first, then

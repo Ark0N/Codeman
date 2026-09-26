@@ -66,6 +66,9 @@ agents` while a monitor, a backgrounded shell or a cloud session is live. Codema
 into `Session.watching`, and an idle prompt from such a session opens already acknowledged,
 so a pane waiting for its own background work never raises an alert a human cannot answer.
 Group 1 is the label, and a CLI that declares no pattern reports no background work.
+Claude's Artifact comment monitor is the one chip that does not count. It waits for a human
+to comment on a page the agent published, so Claude's pattern refuses any footer that
+carries it, and the idle alert goes out as usual.
 
 Two CLIs declare such a row today, and they put it in different places. Claude writes its
 chip on the last row of the screen, so it keeps the default one-row window and anchors on
