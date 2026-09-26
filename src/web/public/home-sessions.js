@@ -72,6 +72,7 @@ const HOME_SESSIONS_PILL_LABEL = {
 
 /** Short backend badge, mirroring `.tab-mode` in the tab strip. */
 const HOME_SESSIONS_MODE_BADGE = {
+  claude: 'cc',
   shell: 'sh',
   opencode: 'oc',
   codex: 'cx',
