@@ -299,6 +299,21 @@ EXPOSE 3000
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
 
+# Declare the optional identity immediately before configuring it so a change
+# invalidates only this final layer. This is declarative setup: a persisted
+# ~/.gitconfig in CODEMAN_APPDATA_PATH still overrides the system-level values.
+ARG GIT_USER_EMAIL=
+ARG GIT_USER_NAME=
+RUN set -eux; \
+    if [ -n "${GIT_USER_NAME}" ] || [ -n "${GIT_USER_EMAIL}" ]; then \
+      if [ -z "${GIT_USER_NAME}" ] || [ -z "${GIT_USER_EMAIL}" ]; then \
+        echo 'Git user name and email must both be set when configuring Git identity' >&2; \
+        exit 1; \
+      fi; \
+      git config --system user.name "${GIT_USER_NAME}"; \
+      git config --system user.email "${GIT_USER_EMAIL}"; \
+    fi
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 CMD ["node", "dist/index.js", "web"]

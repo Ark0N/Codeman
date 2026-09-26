@@ -254,6 +254,21 @@ RUN useradd -g 0 -m -d /home/agent -s /bin/bash agent \
  && chgrp -R 0 /home/agent \
  && chmod -R g=u /home/agent
 
+# Docker cases have a fresh, container-owned home directory. Declare the
+# optional identity here so changing it invalidates only this final layer, then
+# configure Git's system defaults. A user-level config still takes precedence.
+ARG GIT_USER_EMAIL=
+ARG GIT_USER_NAME=
+RUN set -eux; \
+    if [ -n "${GIT_USER_NAME}" ] || [ -n "${GIT_USER_EMAIL}" ]; then \
+      if [ -z "${GIT_USER_NAME}" ] || [ -z "${GIT_USER_EMAIL}" ]; then \
+        echo 'Git user name and email must both be set when configuring Git identity' >&2; \
+        exit 1; \
+      fi; \
+      git config --system user.name "${GIT_USER_NAME}"; \
+      git config --system user.email "${GIT_USER_EMAIL}"; \
+    fi
+
 USER agent
 WORKDIR /home/agent
 
