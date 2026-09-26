@@ -6320,10 +6320,15 @@ class CodemanApp {
     if (!sessionId || this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
     if (this.detachedSessions?.has(sessionId)) return;
     const session = this.sessions.get(sessionId);
-    // A shell's full capture can be many megabytes. Replaying it from an
-    // ordinary scroll gesture blocks xterm's main thread, so keep that cost
-    // behind the explicit "Load full history" button.
-    if (!force && session?.mode === 'shell') return;
+    // A shell's full capture can be many megabytes, and replaying all of it from
+    // an ordinary scroll gesture blocks xterm's main thread. So a shell scroll
+    // pulls a BOUNDED window of tmux's full history (the same 1 MiB a tab switch
+    // loads, but of the scrollback rather than the visible frame) and the
+    // unbounded pull stays behind the "Load full history" button. Declining
+    // outright left a shell pane about one screen of browser scrollback after any
+    // burst, and the button only renders once a replay was truncated, so a young
+    // shell tab had no way back to output tmux was still holding.
+    const boundedShellPull = !force && session?.mode === 'shell';
     const now = Date.now();
     // Momentum scrolling fires this dozens of times per flick, and a burst of new
     // output is the normal reason to want a re-pull, so cooldown rather than latch.
@@ -6336,7 +6341,12 @@ class CodemanApp {
     this._fullHistoryRepullInFlight = true;
     try {
       const requestStartedAt = performance.now();
-      const capture = await this._fetchTerminalCapture(`/api/sessions/${sessionId}/terminal?full=1`, { full: true });
+      const capture = await this._fetchTerminalCapture(
+        boundedShellPull
+          ? `/api/sessions/${sessionId}/terminal?full=1&tail=${TERMINAL_TAIL_SIZE}`
+          : `/api/sessions/${sessionId}/terminal?full=1`,
+        { full: true }
+      );
       const headersReceivedAt = capture.headersAt;
       const payload = capture.json?.data ?? {};
       const bodyParsedAt = performance.now();
@@ -6366,6 +6376,20 @@ class CodemanApp {
         // The browser already holds more than tmux can give back, so there is
         // nothing further to offer and the indicator must stop promising it.
         this._setHistoryTruncation(sessionId, { ...payload, exhausted: true });
+        return;
+      }
+      // A bounded window no longer than the browser's buffer buys nothing, and
+      // resetting to rewrite it would jump the viewport on every scroll that
+      // outlasts the cooldown at the top. An untruncated window IS all of tmux's
+      // history, so nothing is missing; a window cut at the tail size would trade
+      // more old rows than it recovers, and its 'tail' truncation keeps the
+      // banner offering the unbounded pull. Not latched as useless: the next
+      // burst of output can put more history in tmux than the browser has.
+      if (
+        boundedShellPull &&
+        this._estimateReplayRows(buffer, this.terminal.cols) <= this.terminal.buffer.active.length
+      ) {
+        this._setHistoryTruncation(sessionId, payload);
         return;
       }
       this._setHistoryTruncation(sessionId, payload);

@@ -151,8 +151,9 @@ Worth knowing:
 
 - **Scrollback.** Agent/TUI sessions pull their entire tmux scrollback on first open.
   Shell sessions open from a bounded recent tail so a large transcript cannot stall tab
-  switching; press **Load full history** to pull the rest explicitly. Ordinary Shell scrolling
-  and automatic output recovery stay within the bounded browser buffer.
+  switching. Scrolling to the top of a Shell pane pulls the most recent 1 MiB of its tmux
+  history; press **Load full history** to pull the rest explicitly. Automatic output
+  recovery stays within the bounded browser buffer.
 - **Wheel and touch scrolling** are forwarded into Claude's own transcript on recent Claude
   versions, so the wheel scrolls the conversation rather than the terminal. `Shift+Wheel` is
   always local scrollback. Other CLIs scroll locally.

@@ -3304,9 +3304,9 @@ Object.assign(CodemanApp.prototype, {
   /**
    * Post-scroll companion to _noteTerminalUserScroll: hitting the TOP of the
    * buffer while scrolling up gives the app a chance to pull the rest of tmux's
-   * scrollback (issue #205, see _maybeRefetchFullHistory). Shell sessions decline
-   * automatic pulls because their captures can be large; their banner button is
-   * the explicit path. Must be called AFTER scrollLines(), since the check is on
+   * scrollback (issue #205, see _maybeRefetchFullHistory). Shell sessions pull a
+   * bounded window because their captures can be large; their banner button is
+   * the unbounded path. Must be called AFTER scrollLines(), since the check is on
    * the resulting position, and it is deliberately not folded into
    * _noteTerminalUserScroll for exactly that reason.
    */
