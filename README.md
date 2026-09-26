@@ -20,6 +20,10 @@
 </p>
 
 <p align="center">
+  ⭐ <strong>Like Codeman? <a href="https://github.com/Ark0N/Codeman">Give it a star on GitHub!</a></strong> It takes one click and helps more people find the project. ⭐
+</p>
+
+<p align="center">
   <strong>English</strong> &bull; <a href="README.zh-CN.md">简体中文</a>
 </p>
 
