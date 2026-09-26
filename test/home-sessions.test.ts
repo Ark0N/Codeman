@@ -165,25 +165,28 @@ describe('home sessions column: model', () => {
     const [row] = app.buildHomeSessionRows();
     expect(row.caseName).toBe('claudeman');
     expect(row.modeBadge).toBe('cx');
-    // claude is the default backend and gets no badge — the strip does the same.
-    const plain = loadHomeSessionsApp({
+    const claude = loadHomeSessionsApp({
       sessions: sessionMap([{ id: 'a', mode: 'claude' }]),
       sessionOrder: ['a'],
       cases: CASES,
     });
-    expect(plain.buildHomeSessionRows()[0].modeBadge).toBe('');
+    expect(claude.buildHomeSessionRows()[0].modeBadge).toBe('cc');
   });
 
-  it('badges every non-claude backend, so a new run mode cannot read as claude here', () => {
+  it('badges every supported backend', () => {
     // The badge map is a per-mode lookup with a '' fallback, so a mode missing from it
-    // is indistinguishable from claude in this rail while the tab strip badges it fine.
+    // is visually indistinguishable from an unrecognised session in this rail.
     for (const [mode, badge] of [
+      ['claude', 'cc'],
       ['shell', 'sh'],
       ['opencode', 'oc'],
       ['codex', 'cx'],
       ['gemini', 'gm'],
       ['antigravity', 'ag'],
       ['pi', 'pi'],
+      ['grok', 'gk'],
+      ['deepseek', 'ds'],
+      ['omp', 'om'],
     ] as const) {
       const app = loadHomeSessionsApp({
         sessions: sessionMap([{ id: 'a', mode }]),
