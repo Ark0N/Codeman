@@ -225,6 +225,63 @@ describe('spreadsheet preview renderer', () => {
     expect(document.body.textContent).not.toContain('old cell');
   });
 
+  it('sizes row and column headings from the same axis math as the cells', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }));
+    const renderer = loadRenderer(fetchMock);
+    renderer.open({ container: document.querySelector('#preview'), url: '/book.xlsx', size: 8 });
+    const worker = WorkerMock.instances[0];
+    worker.emit({ type: 'ready' });
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    // Column B 18 wide and row 2 30pt tall, as the worker reports the fixture in
+    // spreadsheet-preview-worker.test.ts; row 3 and column C hidden.
+    worker.emit({
+      type: 'metadata',
+      styles: [],
+      sheets: [
+        {
+          id: '1',
+          name: 'Summary',
+          rows: 4,
+          cols: 4,
+          defaultRowHeight: 20,
+          defaultColumnWidth: 64,
+          rowOverrides: [
+            [2, 40],
+            [3, 0],
+          ],
+          columnOverrides: [
+            [2, 126],
+            [3, 0],
+          ],
+        },
+      ],
+    });
+    const request = worker.postMessage.mock.calls.at(-1)?.[0];
+    worker.emit({
+      type: 'tile',
+      requestId: request.requestId,
+      sheetId: '1',
+      cells: [{ row: 2, col: 2, text: 'B2', styleId: 0 }],
+      warnings: [],
+    });
+    const cell = document.querySelector('.spreadsheet-cell') as HTMLElement;
+    const heading = (selector: string, text: string) =>
+      [...document.querySelectorAll(selector)].find((element) => element.textContent === text) as
+        | HTMLElement
+        | undefined;
+    const columnB = heading('.spreadsheet-column-heading', 'B');
+    const row2 = heading('.spreadsheet-row-heading', '2');
+    expect(columnB?.style.width).toBe(cell.style.width);
+    expect(columnB?.style.left).toBe(cell.style.left);
+    expect(row2?.style.height).toBe(cell.style.height);
+    expect(row2?.style.top).toBe(cell.style.top);
+    expect(heading('.spreadsheet-column-heading', 'A')?.style.width).toBe('64px');
+    expect(heading('.spreadsheet-row-heading', '1')?.style.height).toBe('20px');
+    // A hidden row or column has no size, so it gets no heading at all.
+    expect(heading('.spreadsheet-column-heading', 'C')).toBeUndefined();
+    expect(heading('.spreadsheet-row-heading', '3')).toBeUndefined();
+  });
+
   it('emits colour and background together or not at all', async () => {
     const fetchMock = vi.fn(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }));
     const renderer = loadRenderer(fetchMock);

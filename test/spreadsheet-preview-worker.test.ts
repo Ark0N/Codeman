@@ -2,10 +2,20 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { crc32 } from 'node:zlib';
 import vm from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import ExcelJS from 'exceljs';
 import * as fflate from 'fflate';
+
+// A negative UTC offset is what turned ExcelJS `Date` cells into the previous
+// day. Node re-reads TZ on assignment; the date test asserts it took effect.
+const originalTz = process.env.TZ;
+process.env.TZ = 'America/New_York';
+afterAll(() => {
+  if (originalTz === undefined) delete process.env.TZ;
+  else process.env.TZ = originalTz;
+});
 
 const root = resolve(import.meta.dirname, '..');
 const workerSource = readFileSync(resolve(root, 'src/web/public/spreadsheet-preview-worker.js'), 'utf8');
@@ -121,6 +131,7 @@ function createHarness() {
   return {
     messages,
     imports,
+    self,
     send: async (data: unknown) => {
       await (self.onmessage as (event: { data: unknown }) => Promise<void>)({ data });
     },
@@ -234,4 +245,266 @@ describe('spreadsheet preview worker', () => {
     await harness.send({ type: 'load', bytes: await fixtureWithChartPart() });
     expect(harness.messages.at(-1)).toMatchObject({ type: 'metadata', warnings: ['charts'] });
   });
+});
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+async function writeWorkbook(workbook: ExcelJS.Workbook): Promise<ArrayBuffer> {
+  return toArrayBuffer(new Uint8Array(await workbook.xlsx.writeBuffer()));
+}
+
+type Harness = ReturnType<typeof createHarness>;
+type Range = { r1: number; c1: number; r2: number; c2: number };
+
+async function loadMetadata(harness: Harness, bytes: ArrayBuffer): Promise<Record<string, any>> {
+  await harness.send({ type: 'load', bytes });
+  const metadata = harness.messages.at(-1) as Record<string, any>;
+  expect(metadata.type, JSON.stringify(metadata)).toBe('metadata');
+  return metadata;
+}
+
+async function requestTile(harness: Harness, sheetId: string, range: Range): Promise<Record<string, any>> {
+  await harness.send({ type: 'tile', requestId: 1, sheetId, range });
+  return harness.messages.at(-1) as Record<string, any>;
+}
+
+/** The range spreadsheet-preview.js asks for at scroll 0 with its fallback 800x500 viewport. */
+function defaultViewportRange(harness: Harness, sheet: Record<string, any>): Range {
+  const core = harness.self.CodemanSpreadsheetXlsxCore as {
+    createSparseAxis(count: number, size: number, overrides: Array<[number, number]>): unknown;
+    axisIndexAt(axis: unknown, offset: number): number;
+  };
+  const rows = core.createSparseAxis(sheet.rows, sheet.defaultRowHeight, sheet.rowOverrides);
+  const cols = core.createSparseAxis(sheet.cols, sheet.defaultColumnWidth, sheet.columnOverrides);
+  return {
+    r1: 1,
+    c1: 1,
+    r2: Math.min(sheet.rows, core.axisIndexAt(rows, 500) + 2),
+    c2: Math.min(sheet.cols, core.axisIndexAt(cols, 800) + 2),
+  };
+}
+
+describe('spreadsheet preview worker: ExcelJS value shapes', () => {
+  it('formats Date, rich text, hyperlink, error and formula-result cells as ExcelJS loads them', async () => {
+    // Proves the negative-offset TZ is really in force for this file.
+    expect(new Date(Date.UTC(2024, 0, 15)).getDate()).toBe(14);
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Values');
+    const day = new Date(Date.UTC(2024, 0, 15));
+    sheet.getCell('A1').value = day;
+    sheet.getCell('A1').numFmt = 'yyyy-mm-dd';
+    sheet.getCell('A2').value = new Date(Date.UTC(2024, 0, 15, 13, 45));
+    sheet.getCell('A2').numFmt = 'yyyy-mm-dd hh:mm';
+    sheet.getCell('A3').value = day; // ExcelJS's default date format (mm-dd-yy)
+    sheet.getCell('A4').value = { richText: [{ text: 'Hello ' }, { font: { bold: true }, text: 'World' }] };
+    sheet.getCell('A5').value = { text: 'Codeman', hyperlink: 'https://example.invalid/' };
+    sheet.getCell('A6').value = { error: '#DIV/0!' } as ExcelJS.CellErrorValue;
+    sheet.getCell('A7').value = { formula: '1/0', result: { error: '#DIV/0!' } } as ExcelJS.CellFormulaValue;
+    sheet.getCell('A8').value = { formula: 'ROW()', result: 8, shareType: 'shared', ref: 'A8:A9' } as never;
+    sheet.getCell('A9').value = { sharedFormula: 'A8', result: 9 } as ExcelJS.CellSharedFormulaValue;
+    sheet.getCell('A10').value = { formula: 'DATE(2024,1,15)', result: day } as ExcelJS.CellFormulaValue;
+    sheet.getCell('A10').numFmt = 'yyyy-mm-dd';
+    sheet.getCell('A11').value = new Date(Date.UTC(1899, 11, 30, 6, 30, 15));
+    sheet.getCell('A11').numFmt = 'hh:mm:ss';
+    // Float error lands this one just under 00:05; truncating it showed 00:04.
+    sheet.getCell('A12').value = new Date(Date.UTC(2020, 0, 1, 0, 5));
+    sheet.getCell('A12').numFmt = 'yyyy-mm-dd hh:mm';
+
+    const harness = createHarness();
+    const metadata = await loadMetadata(harness, await writeWorkbook(workbook));
+    const tile = await requestTile(harness, metadata.sheets[0].id, { r1: 1, c1: 1, r2: 12, c2: 1 });
+    expect(tile.type).toBe('tile');
+    const text = new Map((tile.cells as Array<{ row: number; text: string }>).map((cell) => [cell.row, cell.text]));
+    expect(Object.fromEntries(text)).toEqual({
+      1: '2024-01-15',
+      2: '2024-01-15 13:45',
+      3: '2024-01-15',
+      4: 'Hello World',
+      5: 'Codeman',
+      6: '#DIV/0!',
+      7: '#DIV/0!',
+      8: '8',
+      9: '9',
+      10: '2024-01-15',
+      11: '06:30:15',
+      12: '2020-01-01 00:05',
+    });
+    for (const value of text.values()) expect(value).not.toMatch(/object Object|GMT/);
+  });
+});
+
+describe('spreadsheet preview worker: hidden rows and dense tiles', () => {
+  it('skips filtered-out rows and hidden columns at the renderer default viewport', async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Filtered');
+    for (let row = 1; row <= 1000; row += 1) {
+      for (let col = 1; col <= 6; col += 1) sheet.getCell(row, col).value = row * 10 + col;
+    }
+    sheet.autoFilter = 'A1:F1000';
+    for (let row = 2; row <= 981; row += 1) sheet.getRow(row).hidden = true; // 980 rows filtered out
+    sheet.getColumn(3).hidden = true;
+
+    const harness = createHarness();
+    const metadata = await loadMetadata(harness, await writeWorkbook(workbook));
+    const range = defaultViewportRange(harness, metadata.sheets[0]);
+    expect(range).toEqual({ r1: 1, c1: 1, r2: 1000, c2: 6 });
+    const tile = await requestTile(harness, metadata.sheets[0].id, range);
+
+    expect(tile.type, JSON.stringify(tile)).toBe('tile');
+    const cells = tile.cells as Array<{ row: number; col: number }>;
+    expect(cells).toHaveLength(20 * 5);
+    expect(cells.some((cell) => cell.row >= 2 && cell.row <= 981)).toBe(false);
+    expect(cells.some((cell) => cell.col === 3)).toBe(false);
+    expect(tile.warnings).toEqual([]);
+  });
+
+  it('returns a truncated tile with a warning instead of failing on a dense 60x60 block', async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Dense');
+    for (let row = 1; row <= 60; row += 1) {
+      for (let col = 1; col <= 60; col += 1) sheet.getCell(row, col).value = row * 100 + col;
+    }
+    const harness = createHarness();
+    const metadata = await loadMetadata(harness, await writeWorkbook(workbook));
+    const tile = await requestTile(harness, metadata.sheets[0].id, { r1: 1, c1: 1, r2: 60, c2: 60 });
+
+    expect(tile.type, JSON.stringify(tile)).toBe('tile');
+    expect(tile.cells).toHaveLength(2500);
+    expect(tile.cells[0]).toMatchObject({ row: 1, col: 1, text: '101' });
+    expect(tile.warnings).toEqual([expect.stringMatching(/truncated/i)]);
+  });
+});
+
+type ZipPart = { name: string; data: Uint8Array; method: 0 | 8; size: number; crc: number };
+
+function zipPart(name: string, content: Uint8Array, method: 0 | 8): ZipPart {
+  return {
+    name,
+    data: method === 8 ? fflate.deflateSync(content) : content,
+    method,
+    size: content.length,
+    crc: crc32(content) >>> 0,
+  };
+}
+
+function localHeader(part: ZipPart): Uint8Array {
+  const name = fflate.strToU8(part.name);
+  const header = new Uint8Array(30 + name.length);
+  const view = new DataView(header.buffer);
+  view.setUint32(0, 0x04034b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(8, part.method, true);
+  view.setUint32(14, part.crc, true);
+  view.setUint32(18, part.data.length, true);
+  view.setUint32(22, part.size, true);
+  view.setUint16(26, name.length, true);
+  header.set(name, 30);
+  return header;
+}
+
+function centralHeader(part: ZipPart, offset: number): Uint8Array {
+  const name = fflate.strToU8(part.name);
+  const header = new Uint8Array(46 + name.length);
+  const view = new DataView(header.buffer);
+  view.setUint32(0, 0x02014b50, true);
+  view.setUint16(4, 20, true);
+  view.setUint16(6, 20, true);
+  view.setUint16(10, part.method, true);
+  view.setUint32(16, part.crc, true);
+  view.setUint32(20, part.data.length, true);
+  view.setUint32(24, part.size, true);
+  view.setUint16(28, name.length, true);
+  view.setUint32(42, offset, true);
+  header.set(name, 46);
+  return header;
+}
+
+function concatBytes(chunks: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.length, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
+
+/**
+ * The reviewer's bypass: a STORED carrier entry whose data is a complete local
+ * entry for a huge `sheet1.xml`, followed later by a one-cell decoy `sheet1.xml`.
+ * The central directory points `sheet1.xml` INSIDE the carrier, so a local-header
+ * walk (admission) meets the decoy while JSZip (ExcelJS) reads the hidden sheet.
+ */
+async function overlappingEntryWorkbook(hiddenRows = 11_000, hiddenCols = 10): Promise<Uint8Array> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.addWorksheet('Data').getCell('A1').value = 'decoy';
+  const entries = fflate.unzipSync(new Uint8Array(await workbook.xlsx.writeBuffer()));
+  const decoyXml = fflate.strFromU8(entries['xl/worksheets/sheet1.xml']);
+  const letters = Array.from({ length: hiddenCols }, (_, index) => String.fromCharCode(65 + index));
+  let rows = '';
+  for (let row = 1; row <= hiddenRows; row += 1) {
+    rows += `<row r="${row}">${letters.map((letter) => `<c r="${letter}${row}"><v>${row}</v></c>`).join('')}</row>`;
+  }
+  const hiddenXml = decoyXml.replace(/<sheetData>[\s\S]*<\/sheetData>/, `<sheetData>${rows}</sheetData>`);
+  expect(hiddenXml).not.toBe(decoyXml);
+
+  const hidden = zipPart('xl/worksheets/sheet1.xml', fflate.strToU8(hiddenXml), 8);
+  const carrier = zipPart('docProps/carrier.bin', concatBytes([localHeader(hidden), hidden.data]), 0);
+  const decoy = zipPart('xl/worksheets/sheet1.xml', entries['xl/worksheets/sheet1.xml'], 8);
+  const others = Object.keys(entries)
+    .filter((name) => name !== 'xl/worksheets/sheet1.xml')
+    .map((name) => zipPart(name, entries[name], 8));
+
+  const locals: Uint8Array[] = [];
+  const central: Uint8Array[] = [];
+  let offset = 0;
+  const emit = (part: ZipPart) => {
+    const at = offset;
+    const chunk = concatBytes([localHeader(part), part.data]);
+    locals.push(chunk);
+    offset += chunk.length;
+    return at;
+  };
+  for (const part of others) central.push(centralHeader(part, emit(part)));
+  const carrierOffset = emit(carrier);
+  central.push(centralHeader(carrier, carrierOffset));
+  emit(decoy); // streamed by admission, absent from the central directory
+  const hiddenOffset = carrierOffset + 30 + fflate.strToU8(carrier.name).length;
+  central.push(centralHeader(hidden, hiddenOffset));
+
+  const directory = concatBytes(central);
+  const eocd = new Uint8Array(22);
+  const view = new DataView(eocd.buffer);
+  view.setUint32(0, 0x06054b50, true);
+  view.setUint16(8, central.length, true);
+  view.setUint16(10, central.length, true);
+  view.setUint32(12, directory.length, true);
+  view.setUint32(16, offset, true);
+  return concatBytes([...locals, directory, eocd]);
+}
+
+describe('spreadsheet preview worker: ExcelJS sees only what admission checked', () => {
+  it('parses the admitted decoy, never a sheet hidden inside an overlapping stored entry', async () => {
+    const crafted = await overlappingEntryWorkbook();
+    // The unpatched pipeline: JSZip, reading the central directory, finds the hidden sheet.
+    const direct = new ExcelJS.Workbook();
+    await direct.xlsx.load(toArrayBuffer(crafted));
+    expect(direct.worksheets[0].rowCount).toBe(11_000);
+
+    const harness = createHarness();
+    const core = harness.self.CodemanSpreadsheetXlsxCore as {
+      admitXlsx(bytes: Uint8Array, zip: typeof fflate): { counts: { cells: number } };
+    };
+    // Admission walks local headers, so it only ever counts the one-cell decoy.
+    expect(core.admitXlsx(crafted, fflate).counts.cells).toBe(1);
+
+    await harness.send({ type: 'load', bytes: toArrayBuffer(crafted) });
+    const result = harness.messages.at(-1) as Record<string, any>;
+    // Either outcome is safe; parsing the 110k hidden cells is not.
+    if (result.type === 'metadata') expect(result.sheets[0]).toMatchObject({ rows: 1, cols: 1 });
+    else expect(result.type).toBe('error');
+  }, 60_000);
 });

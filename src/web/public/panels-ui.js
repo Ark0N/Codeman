@@ -4790,7 +4790,7 @@ Object.assign(CodemanApp.prototype, {
           <div class="attachment-history-empty-title">No attachments yet</div>
           <div>Show a file here by running:</div>
           <code>codeman attach /absolute/path/to/file.pptx</code>
-          <div>Supports .pptx, .docx, .pdf, .png, .md, and .txt.</div>
+          <div>Supports .pptx, .docx, .xlsx, .pdf, .png, .md, and .txt.</div>
         </div>
       `;
       return;

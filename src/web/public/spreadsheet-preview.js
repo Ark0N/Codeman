@@ -20,7 +20,7 @@
 (function initSpreadsheetPreview(global) {
   'use strict';
 
-  const SPREADSHEET_ASSET_VERSION = '4b7074e75ab1';
+  const SPREADSHEET_ASSET_VERSION = '91b615278d5b';
   const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
   const DEFAULT_TIMEOUT_MS = 20000;
   const MAX_SCROLL_PX = 8000000;
@@ -213,22 +213,38 @@
         element.style.width = `${Math.max(0, (axisOffset(sheet.cols, sheet.defaultColumnWidth, sheet.columnOverrides, finalCol + 1) - axisOffset(sheet.cols, sheet.defaultColumnWidth, sheet.columnOverrides, cell.col)) / scaleX)}px`;
         cellsLayer.appendChild(element);
       }
-      for (let row = latestRange.r1; row <= latestRange.r2 && row < latestRange.r1 + 200; row += 1) {
+      // Headings take their size from the same axis math as the cells, so custom
+      // widths/heights line up; hidden (0 px) rows and columns get no heading and
+      // do not count against the heading caps.
+      let rowHeadings = 0;
+      for (let row = latestRange.r1; row <= latestRange.r2 && rowHeadings < 200; row += 1) {
+        const top = axisOffset(sheet.rows, sheet.defaultRowHeight, sheet.rowOverrides, row);
+        const height = (axisOffset(sheet.rows, sheet.defaultRowHeight, sheet.rowOverrides, row + 1) - top) / scaleY;
+        if (height <= 0) continue;
+        rowHeadings += 1;
         const heading = document.createElement('div');
         heading.className = 'spreadsheet-row-heading';
         heading.textContent = String(row);
-        heading.style.top = `${COLUMN_HEADING_HEIGHT + axisOffset(sheet.rows, sheet.defaultRowHeight, sheet.rowOverrides, row) / scaleY}px`;
+        heading.style.top = `${COLUMN_HEADING_HEIGHT + top / scaleY}px`;
+        heading.style.height = `${height}px`;
         heading.style.left = `${grid.scrollLeft}px`;
         headingsLayer.appendChild(heading);
       }
-      for (let col = latestRange.c1; col <= latestRange.c2 && col < latestRange.c1 + 100; col += 1) {
+      let columnHeadings = 0;
+      for (let col = latestRange.c1; col <= latestRange.c2 && columnHeadings < 100; col += 1) {
+        const left = axisOffset(sheet.cols, sheet.defaultColumnWidth, sheet.columnOverrides, col);
+        const width =
+          (axisOffset(sheet.cols, sheet.defaultColumnWidth, sheet.columnOverrides, col + 1) - left) / scaleX;
+        if (width <= 0) continue;
+        columnHeadings += 1;
         const heading = document.createElement('div');
         heading.className = 'spreadsheet-column-heading';
         let label = '';
         for (let value = col; value > 0; value = Math.floor((value - 1) / 26))
           label = String.fromCharCode(65 + ((value - 1) % 26)) + label;
         heading.textContent = label;
-        heading.style.left = `${ROW_HEADING_WIDTH + axisOffset(sheet.cols, sheet.defaultColumnWidth, sheet.columnOverrides, col) / scaleX}px`;
+        heading.style.left = `${ROW_HEADING_WIDTH + left / scaleX}px`;
+        heading.style.width = `${width}px`;
         heading.style.top = `${grid.scrollTop}px`;
         headingsLayer.appendChild(heading);
       }

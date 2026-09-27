@@ -15,6 +15,8 @@ async function workbookBytes(): Promise<Buffer> {
   const summary = workbook.addWorksheet('Summary');
   summary.getCell('A1').value = 'Local workbook';
   summary.getCell('B2').value = 42;
+  summary.getColumn(2).width = 18;
+  summary.getRow(2).height = 30;
   summary.mergeCells('A3:C3');
   summary.getCell('A3').value = 'Merged cells';
   summary.getCell('A100').value = 'Far row';
@@ -92,6 +94,24 @@ describe('spreadsheet preview browser boundary', () => {
     });
     expect(initialGeometry.left).toBeGreaterThanOrEqual(36);
     expect(initialGeometry.top).toBeGreaterThanOrEqual(20);
+    // Headings line up with a custom-width column and a custom-height row.
+    const headingFit = await page.locator('.spreadsheet-grid').evaluate((grid) => {
+      const rect = (selector: string, text: string) => {
+        const element = [...grid.querySelectorAll(selector)].find((node) => node.textContent === text);
+        if (!element) throw new Error(`Missing ${selector} ${text}`);
+        return element.getBoundingClientRect();
+      };
+      const cell = rect('.spreadsheet-cell', '42');
+      const column = rect('.spreadsheet-column-heading', 'B');
+      const row = rect('.spreadsheet-row-heading', '2');
+      return {
+        cell: [cell.left, cell.width, cell.top, cell.height],
+        heading: [column.left, column.width, row.top, row.height],
+      };
+    });
+    expect(headingFit.cell[1]).toBe(126);
+    expect(headingFit.cell[3]).toBe(40);
+    expect(headingFit.heading).toEqual(headingFit.cell);
     await page.locator('.spreadsheet-grid').evaluate((grid) => {
       grid.scrollTop = 400;
       grid.scrollLeft = 400;

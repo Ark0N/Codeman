@@ -5,7 +5,11 @@
  * test/spreadsheet-xlsx-core.test.ts. `admitXlsx()` walks the ZIP central
  * directory and streams every entry through fflate BEFORE ExcelJS sees the
  * bytes, enforcing {@link LIMITS}; a workbook that trips any cap is refused
- * rather than truncated.
+ * rather than truncated. It returns the entries it inflated, and the worker
+ * hands ExcelJS a STORE-only archive rebuilt from exactly those
+ * (`buildAdmittedArchive()`), never the original bytes: admission follows local
+ * headers while ExcelJS (JSZip) follows the central directory, so overlapping
+ * entries could otherwise show each reader a different file.
  */
 
 (function initSpreadsheetXlsxCore(global) {
@@ -157,6 +161,7 @@
     const expectedEntries = new Map();
     for (const entry of directory.entries) expectedEntries.set(entry.name, (expectedEntries.get(entry.name) || 0) + 1);
     const streamedEntries = new Map();
+    const inflatedEntries = Object.create(null);
     const counts = { worksheets: 0, cells: 0, merges: 0, styles: 0 };
     const features = new Set();
     let totalInflated = 0;
@@ -164,6 +169,9 @@
     let thrown;
     const unzip = new zipApi.Unzip((file) => {
       if (!directoryByName.has(file.name)) fail('malformed', 'Local XLSX entry is absent from the central directory');
+      // The admitted archive is rebuilt from these entries, which cannot hold two
+      // files under one name, so a duplicate name is refused rather than dropped.
+      if (streamedEntries.has(file.name)) fail('malformed', 'Duplicate XLSX entry name');
       streamedEntries.set(file.name, (streamedEntries.get(file.name) || 0) + 1);
       seenEntries += 1;
       if (seenEntries > limits.maxEntries) fail('entry-limit', 'Workbook exceeds the ZIP entries limit');
@@ -175,8 +183,10 @@
       if (feature) features.add(feature);
       const counter = createXmlCounter(file.name, counts, limits);
       let entryInflated = 0;
+      const chunks = [];
       file.ondata = (error, chunk, final) => {
         if (error) throw error;
+        chunks.push(chunk.slice());
         entryInflated += chunk.length;
         totalInflated += chunk.length;
         if (entryInflated > limits.maxEntryBytes) fail('entry-size', 'Inflated ZIP entry exceeds the entry limit');
@@ -186,6 +196,16 @@
           fail('compression-ratio', 'ZIP entry exceeds the compression ratio limit');
         }
         counter.push(chunk, final);
+        if (final) {
+          const data = new Uint8Array(entryInflated);
+          let offset = 0;
+          for (const part of chunks) {
+            data.set(part, offset);
+            offset += part.length;
+          }
+          chunks.length = 0;
+          inflatedEntries[file.name] = data;
+        }
       };
       file.start();
     });
@@ -203,7 +223,17 @@
     for (const [name, count] of expectedEntries) {
       if (streamedEntries.get(name) !== count) fail('malformed', 'Central XLSX entry was not streamed for admission');
     }
-    return { counts, features: Array.from(features), inflatedBytes: totalInflated };
+    for (const name of streamedEntries.keys()) {
+      if (!(name in inflatedEntries)) fail('malformed', 'XLSX entry did not finish streaming for admission');
+    }
+    return { counts, features: Array.from(features), inflatedBytes: totalInflated, entries: inflatedEntries };
+  }
+
+  // The ONLY bytes ExcelJS may parse: the entries admission itself inflated and
+  // counted, re-packed uncompressed. Its size is ~ the inflated total (already
+  // capped at LIMITS.maxInflatedBytes) plus per-entry headers.
+  function buildAdmittedArchive(admission, zipApi) {
+    return zipApi.zipSync(admission.entries, { level: 0 });
   }
 
   function parseCellRef(ref) {
@@ -292,37 +322,82 @@
     });
   }
 
+  // Rounded to whole milliseconds: `new Date(fraction)` truncates, which turned
+  // midnight minus a float error into the previous day.
   function excelDate(serial, date1904) {
-    if (date1904) return new Date(Date.UTC(1904, 0, 1) + Number(serial) * 86400000);
+    if (date1904) return new Date(Math.round(Date.UTC(1904, 0, 1) + Number(serial) * 86400000));
     const numeric = Number(serial);
     const adjusted = numeric >= 60 ? numeric - 1 : numeric;
-    return new Date(Date.UTC(1899, 11, 31) + adjusted * 86400000);
+    return new Date(Math.round(Date.UTC(1899, 11, 31) + adjusted * 86400000));
   }
 
+  function isDateValue(value) {
+    return Object.prototype.toString.call(value) === '[object Date]' && Number.isFinite(value.getTime());
+  }
+
+  // Inverse of ExcelJS's own `excelToDate()` (utils.js), which builds the Date
+  // from the serial in UTC. Recovering the serial keeps the result independent of
+  // the viewer's timezone; `String(date)` rendered it in local time, a day early
+  // at any negative UTC offset.
+  function dateToSerial(date, date1904) {
+    return 25569 + date.getTime() / 86400000 - (date1904 ? 1462 : 0);
+  }
+
+  const DATE_FORMAT = /^[ymd\-/ ]+$/i;
+  const TIME_FORMAT = /^[hms: ]+$/i;
+  const DATE_TIME_FORMAT = /^[ymdhis\-/: ]+$/i;
+
+  function isFormulaValue(value) {
+    return 'formula' in value || 'sharedFormula' in value;
+  }
+
+  // Every non-scalar shape ExcelJS loads a cell value as. Anything not handled
+  // here would otherwise reach String() and render as "[object Object]".
   function formatCellValue(value, format, date1904) {
-    if (value && typeof value === 'object' && 'formula' in value) {
-      if (value.result !== undefined && value.result !== null) return formatCellValue(value.result, format, date1904);
-      return { text: `=${String(value.formula)}`, warning: 'Formula has no cached result' };
-    }
     if (value === null || value === undefined) return { text: '' };
+    if (isDateValue(value)) {
+      const code = String(format || 'General');
+      const known = DATE_FORMAT.test(code) || TIME_FORMAT.test(code) || DATE_TIME_FORMAT.test(code);
+      const serial = dateToSerial(value, date1904);
+      if (known) return formatCellValue(serial, code, date1904);
+      const fallback = serial % 1 === 0 ? 'yyyy-mm-dd' : 'yyyy-mm-dd hh:mm';
+      const formatted = formatCellValue(serial, fallback, date1904);
+      return /^General$/i.test(code)
+        ? formatted
+        : { text: formatted.text, warning: `Unsupported number format: ${code}` };
+    }
+    if (typeof value === 'object') {
+      if (isFormulaValue(value)) {
+        if (value.result !== undefined && value.result !== null) return formatCellValue(value.result, format, date1904);
+        const source = typeof value.formula === 'string' ? `=${value.formula}` : '';
+        return { text: source, warning: 'Formula has no cached result' };
+      }
+      if (typeof value.error === 'string') return { text: value.error };
+      if (Array.isArray(value.richText)) {
+        return { text: value.richText.map((run) => (typeof run?.text === 'string' ? run.text : '')).join('') };
+      }
+      // Hyperlink: the display text, never the target. The text may be rich.
+      if ('text' in value) return formatCellValue(value.text, 'General', date1904);
+      return { text: '', warning: 'Unsupported cell value' };
+    }
     const code = String(format || 'General');
     if (typeof value !== 'number') return { text: String(value) };
     if (/^General$/i.test(code)) return { text: String(value) };
-    if (/^[ymd\-/ ]+$/i.test(code)) {
+    if (DATE_FORMAT.test(code)) {
       const date = excelDate(value, Boolean(date1904));
       const yyyy = date.getUTCFullYear();
       const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
       const dd = String(date.getUTCDate()).padStart(2, '0');
       return { text: `${yyyy}-${mm}-${dd}` };
     }
-    if (/^[hms: ]+$/i.test(code)) {
+    if (TIME_FORMAT.test(code)) {
       const seconds = Math.round((value - Math.floor(value)) * 86400) % 86400;
       const hh = String(Math.floor(seconds / 3600)).padStart(2, '0');
       const mm = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0');
       const ss = String(seconds % 60).padStart(2, '0');
       return { text: `${hh}:${mm}:${ss}` };
     }
-    if (/^[ymdhis\-/: ]+$/i.test(code)) {
+    if (DATE_TIME_FORMAT.test(code)) {
       const date = excelDate(value, Boolean(date1904));
       const yyyy = date.getUTCFullYear();
       const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
@@ -567,6 +642,7 @@
     XlsxPreviewError,
     inspectZipDirectory,
     admitXlsx,
+    buildAdmittedArchive,
     parseCellRef,
     parseRange,
     deriveExtent,

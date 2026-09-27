@@ -10,6 +10,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { DOCUMENT_ATTACHMENT_EXTENSIONS, isSupportedAttachmentExtension } from '../src/attachment-registry.js';
 
 const root = resolve(import.meta.dirname, '..');
 const read = (path: string) => readFileSync(resolve(root, path), 'utf8');
@@ -80,5 +81,16 @@ describe('spreadsheet preview assets', () => {
     expect(check).toContain('spreadsheet-xlsx-core.js');
     expect(check).toContain("createHash('sha256')");
     expect(read('src/web/public/spreadsheet-preview.js')).toMatch(/const SPREADSHEET_ASSET_VERSION = '[a-f0-9]{12}'/);
+  });
+
+  it('names every accepted document type in the attachments panel help', () => {
+    expect(DOCUMENT_ATTACHMENT_EXTENSIONS).toContain('xlsx');
+    const help = /<div>Supports ([^<]+)<\/div>/.exec(read('src/web/public/panels-ui.js'))?.[1] || '';
+    for (const extension of DOCUMENT_ATTACHMENT_EXTENSIONS) {
+      expect(isSupportedAttachmentExtension(extension)).toBe(true);
+      expect(help).toContain(`.${extension}`);
+    }
+    // The CLI's refusal text is built from the same list rather than restating it.
+    expect(read('src/cli.ts')).toContain("DOCUMENT_ATTACHMENT_EXTENSIONS.join(', ')");
   });
 });

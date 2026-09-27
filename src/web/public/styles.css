@@ -19167,15 +19167,15 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   pointer-events: none;
 }
 
+/* Only the fixed gutter dimension lives here; the per-row height and per-column
+   width come inline from spreadsheet-preview.js's axis math. */
 .spreadsheet-row-heading {
   left: 0;
   width: 36px;
-  height: 20px;
 }
 
 .spreadsheet-column-heading {
   top: 0;
-  width: 64px;
   height: 20px;
 }
 

@@ -3,7 +3,9 @@
  *
  * Runs off the main thread and is the ONLY place the spreadsheet vendor bundles
  * load: fflate + the pure core at worker start, ExcelJS only after the ZIP has
- * passed `admitXlsx()` (entry/inflate/ratio/cell/style caps). The page never
+ * passed `admitXlsx()` (entry/inflate/ratio/cell/style caps). ExcelJS is then
+ * given a STORE-only archive rebuilt from the entries admission inflated, never
+ * the fetched bytes, so it can only parse what admission counted. The page never
  * loads either vendor file. Cell values are sent back as plain strings; the
  * renderer writes them with `textContent`. Formulas are never evaluated (the
  * cached result is shown, else the formula text), and nothing here fetches:
@@ -35,22 +37,16 @@ function postError(error) {
   });
 }
 
-// ExcelJS keeps the workbook's raw theme XML on `_themes.theme1`; the
-// fflate re-read is a fallback (admission already bounded the file) and the
-// default Office palette is the last resort.
-function readThemeXml(loadedWorkbook, bytes) {
+// Maximum cells in one tile reply; the renderer draws at most this many too.
+const MAX_TILE_CELLS = 2500;
+
+// ExcelJS keeps the workbook's raw theme XML on `_themes.theme1`; the admitted
+// entry is the fallback and the default Office palette is the last resort.
+function readThemeXml(loadedWorkbook, admittedEntries) {
   const stashed = loadedWorkbook?._themes?.theme1;
   if (typeof stashed === 'string' && stashed.length > 0) return stashed;
-  try {
-    const entries = self.fflate.unzipSync(new Uint8Array(bytes), {
-      filter: (file) => file.name === 'xl/theme/theme1.xml',
-    });
-    const theme = entries['xl/theme/theme1.xml'];
-    if (theme) return new TextDecoder().decode(theme);
-  } catch (error) {
-    void error;
-  }
-  return '';
+  const theme = admittedEntries?.['xl/theme/theme1.xml'];
+  return theme ? new TextDecoder().decode(theme) : '';
 }
 
 function normalizeStyle(cell) {
@@ -126,14 +122,15 @@ function cellDisplay(cell, date1904, warnings) {
 
 async function loadWorkbook(bytes) {
   const admission = core.admitXlsx(new Uint8Array(bytes), self.fflate);
+  const admitted = core.buildAdmittedArchive(admission, self.fflate);
   if (!self.ExcelJS) importScripts(`vendor/exceljs.min.js${spreadsheetAssetQuery}`);
   const nextWorkbook = new self.ExcelJS.Workbook();
-  await nextWorkbook.xlsx.load(bytes);
+  await nextWorkbook.xlsx.load(admitted);
   const nextSheets = new Map();
   const nextRows = new Map();
   normalizedStyles = [];
   styleIds = new Map();
-  themePalette = core.parseThemePalette(readThemeXml(nextWorkbook, bytes));
+  themePalette = core.parseThemePalette(readThemeXml(nextWorkbook, admission.entries));
   const sheets = [];
   for (const sheet of nextWorkbook.worksheets) {
     if (sheet.state === 'hidden' || sheet.state === 'veryHidden') continue;
@@ -164,9 +161,22 @@ function sendTile(message) {
   const warnings = new Set();
   const cells = [];
   const seenCells = new Set();
+  let truncated = false;
+  // Hidden rows and columns are 0 px, so a viewport can span thousands of them
+  // (a filtered sheet); they are never drawn, so never sent.
+  const hiddenColumns = new Map();
+  const columnHidden = (col) => {
+    if (!hiddenColumns.has(col)) hiddenColumns.set(col, Boolean(sheet.getColumn(col).hidden));
+    return hiddenColumns.get(col);
+  };
   const addCell = (cell) => {
     const key = `${cell.row}:${cell.col}`;
     if (seenCells.has(key) || (cell.isMerged && cell.master !== cell)) return;
+    if (sheet.getRow(cell.row).hidden || columnHidden(cell.col)) return;
+    if (cells.length >= MAX_TILE_CELLS) {
+      truncated = true;
+      return;
+    }
     seenCells.add(key);
     cells.push({
       row: cell.row,
@@ -177,20 +187,22 @@ function sendTile(message) {
   };
   const populatedRows = populatedRowsById.get(String(message.sheetId)) || [];
   for (const rowNumber of populatedRows) {
+    if (truncated) break;
     if (rowNumber < range.r1) continue;
     if (rowNumber > range.r2) break;
     const row = sheet.getRow(rowNumber);
+    if (row.hidden) continue;
     row.eachCell({ includeEmpty: false }, (cell) => {
       if (cell.col < range.c1 || cell.col > range.c2) return;
       addCell(cell);
     });
-    if (cells.length > 2500) throw new core.XlsxPreviewError('tile-limit', 'Spreadsheet tile exceeds the cell limit');
   }
   const merges = core.intersectingMerges(Array.from(sheet.model?.merges || []), range);
   for (const merge of merges) {
     const anchor = core.parseRange(merge);
     if (anchor) addCell(sheet.getCell(anchor.r1, anchor.c1));
   }
+  if (truncated) warnings.add(`View truncated to the first ${MAX_TILE_CELLS} cells`);
   self.postMessage({
     type: 'tile',
     requestId: message.requestId,

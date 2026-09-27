@@ -11,6 +11,7 @@ type Core = {
   XlsxPreviewError: new (code: string, message: string) => Error & { code: string };
   inspectZipDirectory(bytes: Uint8Array, limits?: Record<string, number>): { entries: Array<{ name: string }> };
   admitXlsx(bytes: Uint8Array, zip: typeof fflate, limits?: Record<string, number>): unknown;
+  buildAdmittedArchive(admission: unknown, zip: typeof fflate): Uint8Array;
   parseCellRef(ref: string): { row: number; col: number } | null;
   deriveExtent(cells: string[], merges: string[]): { rows: number; cols: number };
   createSparseAxis(count: number, defaultSize: number, overrides: Array<[number, number]>): unknown;
@@ -108,6 +109,41 @@ describe('spreadsheet XLSX core', () => {
     };
     expect(result.counts).toEqual({ worksheets: 1, cells: 1, merges: 1, styles: 1 });
     expect(result.features).toEqual(expect.arrayContaining(['charts', 'externalLinks']));
+  });
+
+  it('rebuilds a STORE-only archive from exactly the entries admission inflated', () => {
+    const zip = workbookZip();
+    const admission = core.admitXlsx(zip, fflate) as { entries: Record<string, Uint8Array>; inflatedBytes: number };
+    expect(Object.keys(admission.entries).sort()).toEqual(Object.keys(fflate.unzipSync(zip)).sort());
+    const rebuilt = core.buildAdmittedArchive(admission, fflate);
+    const directory = core.inspectZipDirectory(rebuilt).entries as Array<{
+      name: string;
+      compressedSize: number;
+      declaredSize: number;
+    }>;
+    for (const entry of directory) expect(entry.compressedSize).toBe(entry.declaredSize);
+    const roundTrip = fflate.unzipSync(rebuilt);
+    for (const [name, data] of Object.entries(admission.entries)) expect(roundTrip[name]).toEqual(data);
+  });
+
+  it('refuses a local entry name streamed twice, since the rebuilt archive could hold only one', () => {
+    const zip = workbookZip();
+    class DuplicateUnzip {
+      constructor(private readonly onFile: (file: any) => void) {}
+      register() {}
+      push(_bytes: Uint8Array, final: boolean) {
+        if (!final) return;
+        for (let i = 0; i < 2; i += 1) {
+          const file: Record<string, any> = {
+            name: 'xl/workbook.xml',
+            start: () => file.ondata(null, new Uint8Array(1), true),
+          };
+          this.onFile(file);
+        }
+      }
+    }
+    const duplicate = { Unzip: DuplicateUnzip, UnzipInflate: class {} } as unknown as typeof fflate;
+    expect(() => core.admitXlsx(zip, duplicate)).toThrowError(/duplicate/i);
   });
 
   it('derives bounded extents from real cells and merges', () => {
