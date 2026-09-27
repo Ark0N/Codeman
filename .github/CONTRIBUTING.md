@@ -35,7 +35,7 @@ npm run check:frontend-syntax   # syntax-checks the plain-JS frontend modules
 npm run check:browser-excludes  # every browser-driven test is kept out of `npm test`
 ```
 
-`npm install` also installs a `pre-push` git hook that runs these static checks (~15s) and blocks the push if one fails. Skip it once with `CODEMAN_SKIP_PREPUSH=1 git push`; it never replaces a `pre-push` hook of your own.
+`npm install` also installs a `pre-push` git hook that runs these static checks (about 10-40s, machine-dependent) and blocks the push if one fails. It skips itself when you push something other than the checked-out HEAD, or when the tree has uncommitted changes the checks would read. Skip it once with `CODEMAN_SKIP_PREPUSH=1 git push`; it never replaces a `pre-push` hook of your own.
 
 ### Tests
 

@@ -47,8 +47,10 @@ npm test -- test/<file>.test.ts   # one file, the normal way
 npm run test:ci                    # the full CI sweep
 ```
 
-`npm install` installs a `pre-push` git hook that runs the static checks above (~15s) and
-blocks a push that would fail them. Skip it once with `CODEMAN_SKIP_PREPUSH=1 git push`; a
+`npm install` installs a `pre-push` git hook that runs the static checks above (about 10-40s,
+machine-dependent) and blocks a push that would fail them. It skips itself when you push
+something other than the checked-out HEAD, or when the tree has uncommitted changes the
+checks would read. Skip it once with `CODEMAN_SKIP_PREPUSH=1 git push`; a
 `pre-push` hook of your own is never overwritten.
 
 **Never run bare `npm test`.** The default configuration includes browser-driven Playwright

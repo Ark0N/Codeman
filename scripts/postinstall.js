@@ -387,7 +387,7 @@ fi
             // hook the developer wrote themselves is left alone.
             const action = installPrePushHook(gitHooksDir);
             if (action === 'write') {
-                console.log(colors.green('✓ Git pre-push hook installed') + colors.dim(' (static CI checks, ~15s)'));
+                console.log(colors.green('✓ Git pre-push hook installed') + colors.dim(' (static CI checks, ~10-40s)'));
             } else if (action === 'skip-foreign') {
                 console.log(colors.dim('  Existing pre-push hook left untouched (not Codeman-managed)'));
             }

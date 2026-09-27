@@ -4,8 +4,10 @@
  * Two properties matter more than the hook's contents, because the older pre-commit
  * installer gets both wrong and this one must not copy it:
  *   1. It is MARKER-OWNED: a hook the developer wrote by hand is never overwritten.
- *   2. The hooks directory is resolved via `git rev-parse --git-path hooks`, since in a
- *      worktree `.git` is a FILE and `<root>/.git/hooks` does not exist.
+ *   2. The hooks directory is resolved through git, since in a worktree `.git` is a FILE
+ *      and `<root>/.git/hooks` does not exist, and it is ONLY ever the repo's own
+ *      `<git-common-dir>/hooks`: a `core.hooksPath` elsewhere (typically a global one) is
+ *      never written to.
  *
  * ⚠️ Every filesystem/git test here runs against THROWAWAY repositories under a temp dir.
  * Never point the installer at this checkout: its hooks directory is shared with every
@@ -29,6 +31,7 @@ import { join, resolve } from 'node:path';
 import {
   PRE_PUSH_CHECKS,
   PRE_PUSH_MARKER,
+  PRE_PUSH_WATCHED_PATHS,
   installPrePushHook,
   planHookInstall,
   renderPrePushHook,
@@ -149,6 +152,64 @@ describe('resolveGitHooksDir (temp repos)', () => {
     expect(resolveGitHooksDir(dir)).toBeNull();
   });
 
+  it('returns null when a repo-local core.hooksPath points outside the repo', () => {
+    const repo = newRepo();
+    const outside = join(scratch, `shared-hooks-${counter}`);
+    mkdirSync(outside);
+    git(repo, ['config', 'core.hooksPath', outside]);
+    expect(resolveGitHooksDir(repo)).toBeNull();
+  });
+
+  it('returns null when core.hooksPath points at a directory that does not exist yet', () => {
+    const repo = newRepo();
+    git(repo, ['config', 'core.hooksPath', join(scratch, `missing-${counter}`, 'hooks')]);
+    expect(resolveGitHooksDir(repo)).toBeNull();
+  });
+
+  it("still resolves when core.hooksPath points at the repo's OWN .git/hooks", () => {
+    const repo = newRepo();
+    git(repo, ['config', 'core.hooksPath', join(repo, '.git', 'hooks')]);
+    expect(resolveGitHooksDir(repo)).toBe(join(repo, '.git', 'hooks'));
+  });
+
+  it('resolves before .git/hooks exists (compares the would-be path)', () => {
+    const repo = newRepo();
+    rmSync(join(repo, '.git', 'hooks'), { recursive: true, force: true });
+    expect(resolveGitHooksDir(repo)).toBe(join(repo, '.git', 'hooks'));
+  });
+
+  it('returns null under a GLOBAL core.hooksPath, from a checkout and from a worktree', () => {
+    const repo = newRepo();
+    const wt = join(scratch, `wt-global-${counter}`);
+    git(repo, ['worktree', 'add', '-q', wt, '-b', 'wt-global']);
+    const globalHooks = join(scratch, `global-hooks-${counter}`);
+    mkdirSync(globalHooks);
+    const globalConfig = join(scratch, `gitconfig-${counter}`);
+    writeFileSync(globalConfig, `[core]\n\thooksPath = ${globalHooks}\n`);
+    // resolveGitHooksDir runs git with the ambient environment, so scope the fake global
+    // config to this test through process.env (never the developer's real ~/.gitconfig).
+    const saved = {
+      GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+      GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
+    };
+    process.env.GIT_CONFIG_GLOBAL = globalConfig;
+    process.env.GIT_CONFIG_NOSYSTEM = '1';
+    try {
+      expect(git(repo, ['rev-parse', '--git-path', 'hooks'], { ...GIT_ENV, GIT_CONFIG_GLOBAL: globalConfig })).toBe(
+        globalHooks
+      );
+      expect(resolveGitHooksDir(repo)).toBeNull();
+      expect(resolveGitHooksDir(wt)).toBeNull();
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+    // Control: the same repo resolves again once the global setting is gone.
+    expect(resolveGitHooksDir(repo)).toBe(join(repo, '.git', 'hooks'));
+  });
+
   it("returns null for a copy nested inside someone else's repo (e.g. under node_modules)", () => {
     const repo = newRepo();
     const nested = join(repo, 'node_modules', 'aicodeman');
@@ -257,6 +318,84 @@ describe('the installed hook on a real push (temp repos)', () => {
     const r = push(['-q', 'origin', '--delete', 'doomed']);
     expect(r.status, r.stderr).toBe(0);
     expect(ran()).toEqual([]);
+  });
+
+  it('skips when the pushed ref is not the checked-out HEAD', () => {
+    const { ran, push, repo } = setup({ failing: 'lint' });
+    git(repo, ['branch', 'other']);
+    git(repo, ['commit', '-q', '--allow-empty', '-m', 'only on main']);
+    git(repo, ['checkout', '-q', 'other']);
+    // HEAD is `other`; pushing `main` would check a working tree that is not main's.
+    const r = push(['origin', 'main']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout + r.stderr).toContain(
+      'pre-push: skipping static checks: refs/heads/main is not the checked-out HEAD'
+    );
+    expect(ran()).toEqual([]);
+  });
+
+  it('skips when any one of several pushed refs is not HEAD', () => {
+    const { ran, push, repo } = setup({ failing: 'lint' });
+    git(repo, ['branch', 'behind']);
+    git(repo, ['commit', '-q', '--allow-empty', '-m', 'ahead']);
+    const r = push(['origin', 'main', 'behind']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout + r.stderr).toContain('is not the checked-out HEAD');
+    expect(ran()).toEqual([]);
+  });
+
+  it('still checks an annotated tag that points at HEAD (the tag is peeled)', () => {
+    const { ran, push, repo } = setup();
+    git(repo, ['tag', '-a', 'v1', '-m', 'v1']);
+    const r = push(['-q', 'origin', 'v1']);
+    expect(r.status, r.stderr + r.stdout).toBe(0);
+    expect(ran()).toEqual(expectedRuns);
+  });
+
+  it.each(['src/wip.ts', 'config/wip.json', 'scripts/wip.mjs', 'test/wip.test.ts', 'install.sh'])(
+    'skips when %s is untracked (another session may own it)',
+    (rel) => {
+      const { ran, push, repo } = setup({ failing: 'lint' });
+      mkdirSync(join(repo, rel, '..'), { recursive: true });
+      writeFileSync(join(repo, rel), 'wip\n');
+      const r = push(['origin', 'main']);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout + r.stderr).toContain('pre-push: skipping static checks: uncommitted changes under');
+      expect(ran()).toEqual([]);
+    }
+  );
+
+  it('skips when a tracked package.json has an unstaged edit', () => {
+    const { ran, push, repo } = setup({ failing: 'lint' });
+    const pkg = join(repo, 'package.json');
+    writeFileSync(pkg, readFileSync(pkg, 'utf8') + '\n');
+    const r = push(['origin', 'main']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout + r.stderr).toContain('uncommitted changes under');
+    expect(ran()).toEqual([]);
+  });
+
+  it('still checks when the only uncommitted changes are outside the watched paths', () => {
+    const { ran, push, repo } = setup({ failing: 'lint' });
+    mkdirSync(join(repo, 'docs'));
+    writeFileSync(join(repo, 'docs', 'notes.md'), 'draft\n');
+    writeFileSync(join(repo, 'README.md'), 'draft\n');
+    const r = push(['origin', 'main']);
+    expect(r.status).not.toBe(0);
+    expect(r.stdout + r.stderr).toContain('pre-push: FAILED  npm run lint');
+    expect(ran()).toEqual(expectedRuns);
+  });
+
+  it('watches exactly the paths the checks read', () => {
+    expect(PRE_PUSH_WATCHED_PATHS).toEqual([
+      'src',
+      'config',
+      'scripts',
+      'test',
+      'package.json',
+      'package-lock.json',
+      'install.sh',
+    ]);
   });
 
   it('skips (never blocks) when node_modules is absent', () => {

@@ -19,6 +19,9 @@
  *    (`inline-rename`, `opencode-resize`, `webgl-fallback`,
  *    `terminal-copy-shortcut`, `codex-predictive-echo`). What actually makes a
  *    file dangerous is importing a browser driver, so that is what is tested.
+ *    ⚠️ Only a DIRECT import is seen: a test that reaches playwright through a
+ *    helper module (e.g. `test/mobile/helpers/browser.ts`) is not detected, so
+ *    such a test still has to be added to `BROWSER_TEST_GLOBS` by hand.
  *
  * 2. **The exclusion side is answered by vitest itself**, via
  *    `vitest list --filesOnly`, rather than by re-implementing glob matching
