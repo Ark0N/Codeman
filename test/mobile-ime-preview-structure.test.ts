@@ -72,6 +72,7 @@ function createPreviewHarness(
     createThrows?: boolean;
     omitGlobal?: boolean;
     themeForeground?: string;
+    themeBackground?: string;
     themeGetterThrows?: boolean;
   } = {}
 ) {
@@ -140,12 +141,17 @@ function createPreviewHarness(
   });
   windowStub.codemanCurrentXtermTheme = () => {
     if (options.themeGetterThrows) throw new Error('theme unavailable');
-    return { foreground: '#334455' };
+    return { foreground: '#334455', background: '#223344' };
   };
   const app: App = Object.assign(Object.create(mixin), {
     terminal: {
       textarea: {},
-      options: { theme: options.themeForeground ? { foreground: options.themeForeground } : undefined },
+      options: {
+        theme:
+          options.themeForeground || options.themeBackground
+            ? { foreground: options.themeForeground, background: options.themeBackground }
+            : undefined,
+      },
       element: { querySelector: (selector: string) => (selector === '.xterm-helpers' ? helpers : null) },
     },
     activeSessionId: 'session-a',
@@ -202,6 +208,9 @@ describe('mobile IME preview lifecycle', () => {
     app._initMobileImePreview();
     expect(mobileImePreview?.create).toHaveBeenCalledOnce();
     expect(mobileImePreview?.create.mock.calls[0][0].textarea).toBe(app.terminal.textarea);
+    // Keydown is observed on the terminal element (an ancestor of the
+    // textarea), so it runs before xterm's own capture listener finalizes.
+    expect(mobileImePreview?.create.mock.calls[0][0].keydownTarget).toBe(app.terminal.element);
     expect(helpers.children).toEqual([previewNodes[0]]);
     expect(previewNodes[0]).toMatchObject({ className: 'codeman-ime-preview', hidden: true });
     expect(previewNodes[0].attributes['aria-hidden']).toBe('true');
@@ -233,6 +242,21 @@ describe('mobile IME preview lifecycle', () => {
     expect(windowStub.removeEventListener).toHaveBeenCalledTimes(2);
   });
 
+  it('pagehide resets the controller instead of destroying it, so a bfcache restore keeps the preview', () => {
+    const { app, createdControllers, previewNodes, windowStub } = createPreviewHarness();
+    app._initMobileImePreview();
+    const pagehide = (windowStub.addEventListener as Fn).mock.calls.find((call) => call[0] === 'pagehide')?.[1];
+    expect(pagehide).toBeTypeOf('function');
+    pagehide();
+    expect(createdControllers[0].reset).toHaveBeenCalledOnce();
+    expect(createdControllers[0].destroy).not.toHaveBeenCalled();
+    expect(previewNodes[0].remove).not.toHaveBeenCalled();
+    expect(app._mobileImePreview).toBe(createdControllers[0]);
+    // A second hide after the page came back from the cache still works.
+    pagehide();
+    expect(createdControllers[0].reset).toHaveBeenCalledTimes(2);
+  });
+
   it('resets the controller exactly once when the active session changes', () => {
     const { app, createdControllers } = createPreviewHarness();
     app._initMobileImePreview();
@@ -256,9 +280,10 @@ describe('mobile IME preview lifecycle', () => {
     expect(helpers.classList.contains('codeman-ime-preview-owned')).toBe(false);
   });
 
-  it('uses the terminal foreground while mirroring native composition font metrics', () => {
+  it('uses the terminal foreground and opaque background while mirroring native composition font metrics', () => {
     const { app, compositionView, previewNodes, createdControllers } = createPreviewHarness({
       themeForeground: '#1f2328',
+      themeBackground: '#fafafa',
     });
     app._initMobileImePreview();
     createdControllers[0].callbacks.render({ text: '入力', phase: 'provisional' });
@@ -270,7 +295,15 @@ describe('mobile IME preview lifecycle', () => {
       lineHeight: compositionView.style.lineHeight,
       height: compositionView.style.height,
       color: '#1f2328',
+      backgroundColor: '#fafafa',
     });
+  });
+
+  it('falls back to the current skin theme when the terminal options carry no theme', () => {
+    const { app, previewNodes, createdControllers } = createPreviewHarness();
+    app._initMobileImePreview();
+    createdControllers[0].callbacks.render({ text: '入力', phase: 'provisional' });
+    expect(previewNodes[0].style).toMatchObject({ color: '#334455', backgroundColor: '#223344' });
   });
 
   it('keeps rendering with a safe foreground when the theme getter throws', () => {
@@ -279,6 +312,7 @@ describe('mobile IME preview lifecycle', () => {
     expect(() => createdControllers[0].callbacks.render({ text: '安全', phase: 'provisional' })).not.toThrow();
     expect(previewNodes[0].textContent).toBe('安全');
     expect(previewNodes[0].style.color).toBe('#e0e0e0');
+    expect(previewNodes[0].style.backgroundColor).toBe('#0d0d0d');
   });
 
   it.each(['query', 'create', 'append', 'className', 'hidden'] as const)(
@@ -464,15 +498,32 @@ describe('mobile IME commit onData routing', () => {
   });
 
   it.each([
-    ['the overlay is missing', { overlayMissing: true }, '日本'],
     ['appendText throws', { appendThrows: true }, '失敗'],
     ['addChar throws', { addThrows: true }, '字'],
-  ])('sends the committed text exactly once when %s', (_label, extra, text) => {
+  ])('never sends a commit the overlay may already hold when %s', (_label, extra, text) => {
+    // One code path with typed text: no send-on-throw fallback, which would
+    // double-send if the overlay threw after appending.
     const { controller, sent, handle } = onDataApp({ localEcho: true, ...extra });
-    expect(() => handle(text)).not.toThrow();
-    expect(sent).toEqual([text]);
-    // Nothing else shows the text yet, so the preview keeps it.
+    expect(() => handle(text)).toThrow('overlay failed');
+    expect(sent).toEqual([]);
+    // Nothing shows the text, so the preview keeps it until its fallback.
     expect(controller.completeCommit).not.toHaveBeenCalled();
+  });
+
+  it('keeps the preview when the overlay is missing, exactly like typed text', () => {
+    const { controller, sent, handle } = onDataApp({ localEcho: true, overlayMissing: true });
+    expect(() => handle('日本')).not.toThrow();
+    expect(sent).toEqual([]);
+    expect(controller.completeCommit).not.toHaveBeenCalled();
+  });
+
+  it('completes the commit only after the printable branch has put it in the overlay', () => {
+    const { controller, overlay, handle } = onDataApp({ localEcho: true });
+    controller.completeCommit.mockImplementation(() => {
+      expect(overlay.pendingText).toBe('界');
+    });
+    handle('界');
+    expect(controller.completeCommit).toHaveBeenCalledOnce();
   });
 
   it('keeps an untagged paste on the existing local echo path', () => {

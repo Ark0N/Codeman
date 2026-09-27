@@ -10,7 +10,18 @@
  * onData, the caller hands it to `consumeTerminalData()`, which switches the
  * preview to `phase: 'committed'` until something else shows the text: the
  * local echo overlay or a prediction (`completeCommit`), authoritative
- * terminal output (`noteAuthoritativeOutput`), or a 2 s fallback timer.
+ * terminal output (`noteAuthoritativeOutput`), or a 2 s fallback timer. The
+ * same 2 s bound applies while waiting for a commit that never reaches onData
+ * (the user deleted the whole composition), so a later unrelated chunk is never
+ * mistaken for it.
+ *
+ * Keydown ordering: xterm registers its textarea keydown listener in the
+ * capture phase inside terminal.open() and finalizes the composition there
+ * (CompositionHelper.keydown), emitting the commit through onData
+ * synchronously. The controller therefore observes keydown in the capture
+ * phase on an ANCESTOR (`keydownTarget`, the terminal element), which runs
+ * before any listener on the textarea itself, and finalizes on exactly the
+ * keys xterm does.
  *
  * VISUAL ONLY: the controller never sends, consumes or reorders input bytes,
  * and every callback is wrapped so a failing render cannot block the wire.
@@ -25,6 +36,10 @@
 
   const COMMITTED_VISUAL_TTL = 2000;
   const PREVIEW_CAP = 2048;
+  // keyCodes on which xterm 6's CompositionHelper.keydown keeps composing
+  // (CapsLock, the IME "composition character", Shift/Ctrl/Alt). Any other
+  // keydown during a composition finalizes it.
+  const KEEP_COMPOSING_KEYCODES = new Set([20, 229, 16, 17, 18]);
   const CONTROL_OR_LINE_BREAK = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 
   function isIosWebKitTouch(nav = navigator) {
@@ -38,6 +53,9 @@
 
   function create(options) {
     const textarea = options.textarea;
+    // Must be the textarea or an ancestor of it, so its capture listener runs
+    // before xterm's capture listener on the textarea.
+    const keydownTarget = options.keydownTarget || textarea;
     const render = typeof options.render === 'function' ? options.render : function () {};
     const clear = typeof options.clear === 'function' ? options.clear : function () {};
     const onCommit = typeof options.onCommit === 'function' ? options.onCommit : function () {};
@@ -135,6 +153,25 @@
       updateComposition({ data: event.data == null ? textarea.value : event.data });
     }
 
+    function armFallbackTimer(isCurrent) {
+      const token = { generation, id: undefined };
+      timerToken = token;
+      const callback = function () {
+        if (destroyed || timerToken !== token || token.generation !== generation || !isCurrent()) return;
+        timerToken = null;
+        cleanup();
+      };
+      const id = safely(setTimer, callback, COMMITTED_VISUAL_TTL);
+      if (timerToken === token) {
+        if (id === undefined) {
+          timerToken = null;
+          return false;
+        }
+        token.id = id;
+      }
+      return true;
+    }
+
     function finalizeComposition(value, fromKeydown) {
       if (!composing) return;
       composing = false;
@@ -143,6 +180,13 @@
       finalizedByKeydown = fromKeydown;
       latestValue = value == null ? latestValue : String(value);
       scheduleLatestPreview('provisional');
+      // A commit that never reaches onData (the composition was deleted, so
+      // xterm emits nothing) must not leave the controller waiting forever.
+      cancelCommittedTimer();
+      const owner = generation;
+      armFallbackTimer(function () {
+        return awaitingCommit && generation === owner;
+      });
     }
 
     function onCompositionEnd(event) {
@@ -153,10 +197,15 @@
       finalizeComposition(event.data, false);
     }
 
+    // Mirrors CompositionHelper.keydown in @xterm/xterm 6.0.0
+    // (src/browser/input/CompositionHelper.ts:94-108): while composing, keyCode
+    // 20/229 and 16/17/18 keep the composition open and every other keyCode
+    // finalizes it. `isComposing` and `key` are deliberately not consulted,
+    // because xterm does not consult them.
     function onKeydown(event) {
-      if (composing && event.isComposing === false && event.key !== 'Process' && event.key !== 'Unidentified') {
-        finalizeComposition(latestValue, true);
-      }
+      if (keydownTarget !== textarea && event.target !== textarea) return;
+      if (!composing || KEEP_COMPOSING_KEYCODES.has(event.keyCode)) return;
+      finalizeComposition(latestValue, true);
     }
 
     function reset() {
@@ -190,22 +239,10 @@
       scheduleLatestPreview('committed');
       if (destroyed || generation !== owner || !committed) return true;
 
-      const token = { generation, id: undefined };
-      timerToken = token;
-      const callback = function () {
-        if (destroyed || timerToken !== token || token.generation !== generation || !committed) return;
-        timerToken = null;
-        cleanup();
-      };
-      const id = safely(setTimer, callback, COMMITTED_VISUAL_TTL);
-      if (timerToken === token) {
-        if (id === undefined) {
-          timerToken = null;
-          if (!destroyed && generation === owner && committed) cleanup();
-        } else {
-          token.id = id;
-        }
-      }
+      const armed = armFallbackTimer(function () {
+        return committed;
+      });
+      if (!armed && !destroyed && generation === owner && committed) cleanup();
       return true;
     }
 
@@ -220,19 +257,19 @@
     }
 
     const listeners = [
-      ['compositionstart', beginComposition],
-      ['compositionupdate', updateComposition],
-      ['input', onComposingInput],
-      ['compositionend', onCompositionEnd],
-      ['keydown', onKeydown, true],
-      ['blur', reset],
+      [textarea, 'compositionstart', beginComposition],
+      [textarea, 'compositionupdate', updateComposition],
+      [textarea, 'input', onComposingInput],
+      [textarea, 'compositionend', onCompositionEnd],
+      [keydownTarget, 'keydown', onKeydown, true],
+      [textarea, 'blur', reset],
     ];
-    for (const [type, listener, capture] of listeners) textarea.addEventListener(type, listener, capture);
+    for (const [target, type, listener, capture] of listeners) target.addEventListener(type, listener, capture);
 
     function destroy() {
       if (destroyed) return;
       destroyed = true;
-      for (const [type, listener, capture] of listeners) textarea.removeEventListener(type, listener, capture);
+      for (const [target, type, listener, capture] of listeners) target.removeEventListener(type, listener, capture);
       cleanup();
     }
 

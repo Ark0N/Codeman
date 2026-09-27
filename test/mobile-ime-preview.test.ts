@@ -1,15 +1,21 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 type Listener = (event: Record<string, unknown>) => void;
 type ListenerOptions = boolean | { capture?: boolean };
 type RegisteredListener = { listener: Listener; capture: boolean };
 
-class FakeTextarea {
-  value = 'unchanged';
-  private listeners = new Map<string, RegisteredListener[]>();
+/**
+ * A DOM node with just enough event dispatch to reproduce listener ORDER: an
+ * ancestor's capture listeners, then the target's capture listeners, then the
+ * target's bubble listeners (at-target capture-first, as in Chromium 89+ and
+ * WebKit), then the ancestor's bubble listeners.
+ */
+class FakeNode {
+  parent: FakeNode | null = null;
+  protected listeners = new Map<string, RegisteredListener[]>();
 
   addEventListener(type: string, listener: Listener, options?: ListenerOptions) {
     const listeners = this.listeners.get(type) ?? [];
@@ -26,13 +32,20 @@ class FakeTextarea {
     if (index >= 0) listeners.splice(index, 1);
   }
 
-  dispatch(type: string, event: Record<string, unknown> = {}) {
-    const listeners = [...(this.listeners.get(type) ?? [])];
-    for (const phase of [true, false]) {
-      for (const registered of listeners) {
-        if (registered.capture === phase) registered.listener({ type, ...event });
-      }
+  run(type: string, capture: boolean, event: Record<string, unknown>) {
+    for (const registered of [...(this.listeners.get(type) ?? [])]) {
+      if (registered.capture === capture) registered.listener(event);
     }
+  }
+
+  dispatch(type: string, event: Record<string, unknown> = {}) {
+    const full = { type, target: this, ...event };
+    const ancestors: FakeNode[] = [];
+    for (let node = this.parent; node; node = node.parent) ancestors.unshift(node);
+    for (const ancestor of ancestors) ancestor.run(type, true, full);
+    this.run(type, true, full);
+    this.run(type, false, full);
+    for (const ancestor of [...ancestors].reverse()) ancestor.run(type, false, full);
   }
 
   listenerCount() {
@@ -40,17 +53,25 @@ class FakeTextarea {
   }
 }
 
+class FakeTextarea extends FakeNode {
+  value = 'unchanged';
+}
+
 type Scheduled = { id: number; callback: () => void; delay?: number };
 
 function harness(
   overrides: Record<string, unknown> = {},
-  beforeCreate?: (textarea: FakeTextarea, getController: () => Record<string, unknown> | undefined) => void
+  beforeCreate?: (textarea: FakeTextarea, getController: () => Record<string, any> | undefined) => void
 ) {
   const source = readFileSync(new URL('../src/web/public/mobile-ime-preview.js', import.meta.url), 'utf8');
   const context = vm.createContext({ navigator: {} });
   vm.runInContext(source, context, { filename: 'mobile-ime-preview.js' });
   const api = vm.runInContext('MobileImePreview', context);
+  // The terminal element: an ancestor of the helper textarea, like xterm's
+  // `.xterm` root is of `.xterm-helper-textarea`.
+  const element = new FakeNode();
   const textarea = new FakeTextarea();
+  textarea.parent = element;
   const frames: Scheduled[] = [];
   const timers: Scheduled[] = [];
   let nextId = 1;
@@ -79,6 +100,7 @@ function harness(
   beforeCreate?.(textarea, () => controller);
   controller = api.create({
     textarea,
+    keydownTarget: element,
     render,
     clear,
     onCommit,
@@ -93,6 +115,7 @@ function harness(
 
   return {
     api,
+    element,
     textarea,
     frames,
     timers,
@@ -222,34 +245,177 @@ describe('MobileImePreview', () => {
     const h = harness();
     h.textarea.dispatch('compositionstart');
     h.textarea.dispatch('compositionupdate', { data: '確定' });
-    h.textarea.dispatch('keydown', { key: 'Enter', isComposing: false });
+    h.textarea.dispatch('keydown', { key: 'Enter', keyCode: 13, isComposing: false });
     expect(h.controller.consumeTerminalData('確定')).toBe(true);
     h.textarea.dispatch('compositionend', { data: 'stale' });
     expect(h.controller.consumeTerminalData('stale')).toBe(false);
   });
 
-  test('capture keydown finalization precedes an earlier xterm bubble onData listener', () => {
-    const consumed: boolean[] = [];
+  /**
+   * Stand-in for xterm 6.0: `terminal.open()` registers a CAPTURE keydown
+   * listener on the helper textarea (CoreBrowserTerminal.ts:379), and
+   * CompositionHelper.keydown (CompositionHelper.ts:94-108) finalizes the
+   * composition there, emitting the commit through onData synchronously, for
+   * every keyCode except 20/229 and 16/17/18. It is registered BEFORE the
+   * controller is created, exactly as terminal.open() precedes
+   * _initMobileImePreview().
+   */
+  function withXtermStandIn() {
+    const emitted: Array<{ data: string; consumed: boolean }> = [];
+    let composing = false;
+    let composition = '';
     const h = harness({}, (textarea, getController) => {
-      textarea.addEventListener('keydown', () => {
-        const controller = getController() as { consumeTerminalData(data: string): boolean };
-        consumed.push(controller.consumeTerminalData('確定'));
+      const emit = (data: string) => emitted.push({ data, consumed: getController()?.consumeTerminalData(data) });
+      textarea.addEventListener('compositionstart', () => {
+        composing = true;
+        composition = '';
       });
+      textarea.addEventListener('compositionupdate', (event) => {
+        composition = String(event.data ?? '');
+      });
+      textarea.addEventListener(
+        'keydown',
+        (event) => {
+          if (composing && ![20, 229, 16, 17, 18].includes(event.keyCode as number)) {
+            composing = false;
+            emit(composition);
+          }
+          if (event.keyCode === 13) emit('\r');
+        },
+        true
+      );
     });
+    return { ...h, emitted, isXtermComposing: () => composing };
+  }
+
+  test('Enter mid-composition hands the commit xterm emits in its capture keydown to the preview', () => {
+    const h = withXtermStandIn();
     h.textarea.dispatch('compositionstart');
     h.textarea.dispatch('compositionupdate', { data: '確定' });
-    h.textarea.dispatch('keydown', { key: 'Enter', isComposing: false });
+    h.flushFrame();
+    h.textarea.dispatch('keydown', { key: 'Enter', keyCode: 13, isComposing: false });
 
-    expect(consumed).toEqual([true]);
-    expect(h.controller.consumeTerminalData('確定')).toBe(false);
-    expect(h.onCommit).toHaveBeenCalledOnce();
+    expect(h.emitted).toEqual([
+      { data: '確定', consumed: true },
+      { data: '\r', consumed: false },
+    ]);
+    expect(h.onCommit).toHaveBeenCalledWith('確定');
+    expect(h.controller.state).toMatchObject({ composing: false, awaitingCommit: false, committed: true });
+    h.flushFrame();
+    expect(h.render).toHaveBeenLastCalledWith({ text: '確定', phase: 'committed' });
 
+    // The next unrelated keystroke is ordinary input, not an IME commit.
+    expect(h.controller.consumeTerminalData('x')).toBe(false);
+  });
+
+  test.each([
+    // keyCode 229 with isComposing:false and a real key identity: xterm keeps
+    // composing, so the controller must too.
+    ['the IME composition character', 'k', 229],
+    ['CapsLock', 'CapsLock', 20],
+    ['Shift', 'Shift', 16],
+    ['Control', 'Control', 17],
+    ['Alt', 'Alt', 18],
+  ])('a keydown for %s keeps tracking the composition xterm is still composing', (_label, key, keyCode) => {
+    const h = withXtermStandIn();
+    h.textarea.dispatch('compositionstart');
+    h.textarea.dispatch('compositionupdate', { data: 'か' });
+    h.textarea.dispatch('keydown', { key, keyCode, isComposing: false });
+    expect(h.isXtermComposing()).toBe(true);
+    expect(h.controller.state).toMatchObject({ composing: true, awaitingCommit: false });
+
+    // The preview follows the composition instead of freezing on the old value.
+    h.textarea.dispatch('compositionupdate', { data: 'かな' });
+    h.flushFrame();
+    expect(h.render).toHaveBeenLastCalledWith({ text: 'かな', phase: 'provisional' });
+    expect(h.emitted).toEqual([]);
+  });
+
+  test('ignores keydowns that did not target the helper textarea', () => {
+    const h = harness();
+    const sibling = new FakeNode();
+    sibling.parent = h.element;
+    h.textarea.dispatch('compositionstart');
+    h.textarea.dispatch('compositionupdate', { data: '漢字' });
+    sibling.dispatch('keydown', { key: 'Enter', keyCode: 13, isComposing: false });
+    expect(h.controller.state).toMatchObject({ composing: true, awaitingCommit: false });
+  });
+
+  test('destroy stops the controller observing keydown on the terminal element', () => {
+    const h = withXtermStandIn();
     h.controller.destroy();
     h.textarea.dispatch('compositionstart');
     h.textarea.dispatch('compositionupdate', { data: 'later' });
-    h.textarea.dispatch('keydown', { key: 'Enter', isComposing: false });
-    expect(consumed).toEqual([true, false]);
-    expect(h.onCommit).toHaveBeenCalledOnce();
+    h.textarea.dispatch('keydown', { key: 'Enter', keyCode: 13, isComposing: false });
+    expect(h.emitted).toEqual([
+      { data: 'later', consumed: false },
+      { data: '\r', consumed: false },
+    ]);
+    expect(h.onCommit).not.toHaveBeenCalled();
+    expect(h.element.listenerCount()).toBe(0);
+  });
+
+  describe('a commit that never reaches onData', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    function realTimerHarness() {
+      return harness({
+        setTimer: (callback: () => void, delay: number) => setTimeout(callback, delay),
+        clearTimer: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
+      });
+    }
+
+    test.each([
+      ['compositionend', (h: ReturnType<typeof harness>) => h.textarea.dispatch('compositionend', { data: '' })],
+      [
+        'a finalizing keydown',
+        (h: ReturnType<typeof harness>) => h.textarea.dispatch('keydown', { key: 'Enter', keyCode: 13 }),
+      ],
+    ])('stops waiting after the same 2 s bound when finalized by %s', (_label, finalize) => {
+      const h = realTimerHarness();
+      h.textarea.dispatch('compositionstart');
+      h.textarea.dispatch('compositionupdate', { data: 'deleted' });
+      finalize(h);
+      h.clear.mockClear();
+      expect(h.controller.state).toMatchObject({ awaitingCommit: true, timerPending: true });
+
+      vi.advanceTimersByTime(1999);
+      expect(h.controller.state.awaitingCommit).toBe(true);
+      vi.advanceTimersByTime(1);
+      expect(h.controller.state).toMatchObject({ awaitingCommit: false, latest: '', timerPending: false });
+      expect(h.clear).toHaveBeenCalledOnce();
+
+      // The next unrelated keystroke or paste is not adopted as the IME commit.
+      expect(h.controller.consumeTerminalData('x')).toBe(false);
+      expect(h.controller.consumeTerminalData('pasted line')).toBe(false);
+      expect(h.onCommit).not.toHaveBeenCalled();
+    });
+
+    test('a commit that arrives in time replaces the wait bound with the committed one', () => {
+      const h = realTimerHarness();
+      h.textarea.dispatch('compositionstart');
+      h.textarea.dispatch('compositionend', { data: '日本' });
+      vi.advanceTimersByTime(1500);
+      expect(h.controller.consumeTerminalData('日本')).toBe(true);
+      // The wait bound would have fired at 2000 ms; the committed bound runs
+      // a full 2 s from the commit instead.
+      vi.advanceTimersByTime(1000);
+      expect(h.controller.state.committed).toBe(true);
+      vi.advanceTimersByTime(1000);
+      expect(h.controller.state.committed).toBe(false);
+    });
+
+    test('a new composition cancels the previous wait bound', () => {
+      const h = realTimerHarness();
+      h.textarea.dispatch('compositionstart');
+      h.textarea.dispatch('compositionend', { data: '' });
+      vi.advanceTimersByTime(1500);
+      h.textarea.dispatch('compositionstart');
+      h.textarea.dispatch('compositionupdate', { data: 'next' });
+      vi.advanceTimersByTime(1000);
+      expect(h.controller.state).toMatchObject({ composing: true, latest: 'next' });
+    });
   });
 
   test('generation fences stale frames and timers', () => {
@@ -332,6 +498,7 @@ describe('MobileImePreview', () => {
     destroy.textarea.dispatch('compositionend');
     expect(destroy.controller.consumeTerminalData('final')).toBe(true);
     expect(destroy.textarea.listenerCount()).toBe(0);
+    expect(destroy.element.listenerCount()).toBe(0);
     expect(destroy.frames).toHaveLength(0);
     expect(destroy.timers).toHaveLength(0);
     expect(destroy.controller.state.latest).toBe('');
@@ -353,6 +520,7 @@ describe('MobileImePreview', () => {
     clearController = clear.controller;
     expect(() => clear.textarea.dispatch('compositionstart')).not.toThrow();
     expect(clear.textarea.listenerCount()).toBe(0);
+    expect(clear.element.listenerCount()).toBe(0);
     expect(clear.frames).toHaveLength(0);
     expect(clear.timers).toHaveLength(0);
   });
@@ -453,10 +621,12 @@ describe('MobileImePreview', () => {
     const h = harness();
     h.textarea.dispatch('compositionstart');
     h.textarea.dispatch('compositionupdate', { data: 'pending' });
-    expect(h.textarea.listenerCount()).toBe(6);
+    expect(h.textarea.listenerCount()).toBe(5);
+    expect(h.element.listenerCount()).toBe(1);
     h.controller.destroy();
     h.controller.destroy();
     expect(h.textarea.listenerCount()).toBe(0);
+    expect(h.element.listenerCount()).toBe(0);
     expect(h.frames).toHaveLength(0);
     h.textarea.dispatch('compositionupdate', { data: 'ignored' });
     expect(h.scheduleFrame).toHaveBeenCalledOnce();
