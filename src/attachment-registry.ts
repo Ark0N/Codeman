@@ -62,6 +62,8 @@ const SUPPORTED_ATTACHMENT_EXTENSIONS = new Set([
   'pdf',
   'docx',
   'pptx',
+  // Previewed client-side (spreadsheet-preview-worker.js); served raw like the rest.
+  'xlsx',
   'md',
   'txt',
   ...VIDEO_ATTACHMENT_EXTENSIONS,
@@ -154,6 +156,7 @@ export function getAttachmentType(extension: string): AttachmentDetectedType {
   if (AUDIO_ATTACHMENT_EXTENSIONS.has(normalized)) return 'audio';
   if (normalized === 'pdf') return 'pdf';
   if (normalized === 'pptx') return 'presentation';
+  if (normalized === 'xlsx') return 'spreadsheet';
   if (normalized === 'md') return 'markdown';
   // Everything else in the text family reads as text, including code and
   // config: the card and the preview both treat it as a plain-text file.

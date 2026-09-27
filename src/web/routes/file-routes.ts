@@ -73,6 +73,35 @@ import {
   isEditableFileName,
 } from '../../config/file-editing.js';
 
+/**
+ * Upper bound on an XLSX the browser preview will fetch (`?preview=true`).
+ * Parsing happens client-side in spreadsheet-preview-worker.js, so this caps
+ * what a single preview can hand the worker; the renderer refuses the same size
+ * before fetching. An explicit download is unaffected (global download cap).
+ */
+export const MAX_XLSX_BROWSER_PREVIEW_BYTES = 10 * 1024 * 1024;
+
+/** Whether a raw request is an XLSX browser preview over the preview cap. */
+function exceedsXlsxPreviewLimit(extension: string, query: { preview?: string; download?: string }, size: number) {
+  return (
+    extension === 'xlsx' &&
+    query.preview === 'true' &&
+    query.download !== 'true' &&
+    size > MAX_XLSX_BROWSER_PREVIEW_BYTES
+  );
+}
+
+function sendXlsxPreviewTooLarge(reply: FastifyReply, size: number): void {
+  reply
+    .code(413)
+    .send(
+      createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        `File too large to preview (${Math.ceil(size / 1024 / 1024)}MB > ${MAX_XLSX_BROWSER_PREVIEW_BYTES / 1024 / 1024}MB limit)`
+      )
+    );
+}
+
 const MIME_TYPES: Record<string, string> = {
   png: 'image/png',
   jpg: 'image/jpeg',
@@ -100,6 +129,7 @@ const MIME_TYPES: Record<string, string> = {
   pdf: 'application/pdf',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   json: 'application/json',
   md: 'text/markdown',
   txt: 'text/plain',
@@ -1778,13 +1808,15 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       const fileRawUrl = `/api/sessions/${id}/file-raw?path=${encodeURIComponent(filePath)}`;
 
       if (raw === 'true' || mediaType || otherBinaryExts.has(ext)) {
-        // Return metadata for media/binary files (no text body)
+        // Return metadata for media/binary files (no text body). XLSX is still a
+        // binary here (no text body); `spreadsheet` tells the overlay it can parse
+        // it client-side from `url`. xls/ods stay plain binary (download only).
         return {
           success: true,
           data: {
             path: filePath,
             size: stat.size,
-            type: mediaType ?? 'binary',
+            type: mediaType ?? (ext === 'xlsx' ? 'spreadsheet' : 'binary'),
             extension: ext,
             url: fileRawUrl,
           },
@@ -2009,7 +2041,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // Serve raw file content (for images/binary files)
   app.get('/api/sessions/:id/file-raw', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const { path: filePath, download } = req.query as { path?: string; download?: string };
+    const { path: filePath, download, preview } = req.query as { path?: string; download?: string; preview?: string };
     const session = findSessionOrFail(ctx, id, req);
 
     if (!filePath) {
@@ -2039,6 +2071,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       }
 
       const ext = filePath.split('.').pop()?.toLowerCase() || '';
+      if (exceedsXlsxPreviewLimit(ext, { preview, download }, size)) {
+        sendXlsxPreviewTooLarge(reply, size);
+        return;
+      }
       const mimeTypes: Record<string, string> = {
         png: 'image/png',
         jpg: 'image/jpeg',
@@ -2216,7 +2252,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
   // attachment-guard policy on every request (defense-in-depth) before streaming.
   app.get('/api/sessions/:id/attachments/:attachmentId/raw', async (req, reply) => {
     const { id, attachmentId } = req.params as { id: string; attachmentId: string };
-    const { download } = req.query as { download?: string };
+    const { download, preview } = req.query as { download?: string; preview?: string };
     const session = findSessionOrFail(ctx, id, req);
     const record = getAttachmentOr404(reply, id, attachmentId);
     if (!record) return;
@@ -2236,6 +2272,10 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
           ? { kind: 'remote', resolvedPath: servable.path, relativePath: '', remote, probe: servable.probe }
           : { kind: 'local', resolvedPath: servable.path, relativePath: '' };
       const size = servable.probe ? servable.probe.size : (await fs.stat(servable.path)).size;
+      if (exceedsXlsxPreviewLimit(record.extension, { preview, download }, size)) {
+        sendXlsxPreviewTooLarge(reply, size);
+        return;
+      }
       await serveRawFile(
         reply,
         target,
