@@ -287,10 +287,19 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * iOS Safari IME preview (mobile-ime-preview.js). WebKit does not show the
-   * text an IME is composing inside the terminal, so the user types blind; this
-   * paints it in a span inside `.xterm-helpers`, positioned by the same
-   * --xterm-helper-left/top vars as the helper textarea. Visual only: nothing
-   * here touches the input path, and every failure leaves no DOM behind.
+   * text an IME is composing inside the terminal, so the user types blind.
+   *
+   * Two homes, chosen per render:
+   * - Local echo on: typed text sits in the LocalEchoOverlay and the PTY
+   *   cursor stays at the prompt start, under the overlay's opaque text (z 7,
+   *   `.xterm-screen`). So the overlay draws the composition itself, as an
+   *   underlined tail after its pending text (`setComposition`).
+   * - Otherwise (a shell, or the overlay could not place it): a span inside
+   *   `.xterm-helpers`, positioned by the same --xterm-helper-left/top vars as
+   *   the helper textarea, which follow the PTY cursor.
+   *
+   * Visual only: nothing here touches the input path, and every failure
+   * leaves no DOM behind.
    */
   _initMobileImePreview() {
     this._destroyMobileImePreview();
@@ -339,7 +348,18 @@ Object.assign(CodemanApp.prototype, {
           // Typography matching is visual-only and must not block input.
         }
       };
-      const clearPreview = () => {
+      // The overlay only when it is what shows typed text right now (local echo
+      // on, and not handed back to plain PTY echo by a composer nav key).
+      const localEchoOverlay = () =>
+        this._localEchoEnabled && !this._echoPassthroughSessions?.has(this.activeSessionId)
+          ? this._localEchoOverlay || null
+          : null;
+      const clearOverlayComposition = () => {
+        try {
+          if (this._localEchoOverlay?.composition) this._localEchoOverlay.setComposition('');
+        } catch {}
+      };
+      const hideSpan = () => {
         try {
           preview.hidden = true;
         } catch {}
@@ -353,6 +373,10 @@ Object.assign(CodemanApp.prototype, {
           helpers.classList.remove('codeman-ime-preview-owned');
         } catch {}
       };
+      const clearPreview = () => {
+        clearOverlayComposition();
+        hideSpan();
+      };
       const controller = MobileImePreview.create({
         textarea,
         // An ancestor of the textarea: its capture-phase keydown listener runs
@@ -361,6 +385,19 @@ Object.assign(CodemanApp.prototype, {
         keydownTarget: this.terminal.element,
         render: ({ text, phase }) => {
           try {
+            const overlay = localEchoOverlay();
+            if (overlay && typeof overlay.setComposition === 'function') {
+              overlay.setComposition(text);
+              // No prompt found = nothing drawn: fall back to the span.
+              if (!text || overlay.state?.visible) {
+                hideSpan();
+                helpers.classList.toggle('codeman-ime-preview-owned', !!text);
+                return;
+              }
+              overlay.setComposition('');
+            } else {
+              clearOverlayComposition();
+            }
             syncPreviewTypography();
             preview.textContent = text;
             preview.dataset.phase = phase;

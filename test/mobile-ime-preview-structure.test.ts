@@ -280,6 +280,63 @@ describe('mobile IME preview lifecycle', () => {
     expect(helpers.classList.contains('codeman-ime-preview-owned')).toBe(false);
   });
 
+  // With local echo on, typed text sits in the overlay (z-index 7) and the PTY
+  // cursor that places the span stays at the prompt start, under that text. The
+  // overlay draws the composition instead. Real-xterm proof of the covering:
+  // test/mobile-ime-preview.browser.test.ts.
+  function withOverlay(app: App, visible = true) {
+    const overlay = {
+      composition: '',
+      setComposition: vi.fn(function (this: { composition: string }, text: string) {
+        this.composition = text;
+      }),
+      state: { visible },
+    };
+    Object.assign(app, { _localEchoEnabled: true, _localEchoOverlay: overlay });
+    return overlay;
+  }
+
+  it('routes the preview into the local echo overlay when local echo is on', () => {
+    const { app, helpers, previewNodes, createdControllers } = createPreviewHarness();
+    const overlay = withOverlay(app);
+    app._initMobileImePreview();
+    const callbacks = createdControllers[0].callbacks;
+    callbacks.render({ text: '天気', phase: 'provisional' });
+    expect(overlay.setComposition).toHaveBeenLastCalledWith('天気');
+    expect(previewNodes[0]).toMatchObject({ textContent: '', hidden: true });
+    expect(helpers.classList.contains('codeman-ime-preview-owned')).toBe(true);
+    callbacks.clear();
+    expect(overlay.setComposition).toHaveBeenLastCalledWith('');
+    expect(helpers.classList.contains('codeman-ime-preview-owned')).toBe(false);
+  });
+
+  it('uses the span when the overlay cannot place the composition (no prompt found)', () => {
+    const { app, previewNodes, createdControllers } = createPreviewHarness();
+    const overlay = withOverlay(app, false);
+    app._initMobileImePreview();
+    createdControllers[0].callbacks.render({ text: '天気', phase: 'provisional' });
+    expect(overlay.composition).toBe('');
+    expect(previewNodes[0]).toMatchObject({ textContent: '天気', hidden: false });
+  });
+
+  it('uses the span, not the overlay, when local echo is off or handed back to PTY echo', () => {
+    const off = createPreviewHarness();
+    const offOverlay = withOverlay(off.app);
+    Object.assign(off.app, { _localEchoEnabled: false });
+    off.app._initMobileImePreview();
+    off.createdControllers[0].callbacks.render({ text: 'かな', phase: 'provisional' });
+    expect(offOverlay.setComposition).not.toHaveBeenCalled();
+    expect(off.previewNodes[0]).toMatchObject({ textContent: 'かな', hidden: false });
+
+    const passthrough = createPreviewHarness();
+    const passOverlay = withOverlay(passthrough.app);
+    Object.assign(passthrough.app, { _echoPassthroughSessions: new Set(['session-a']) });
+    passthrough.app._initMobileImePreview();
+    passthrough.createdControllers[0].callbacks.render({ text: 'かな', phase: 'provisional' });
+    expect(passOverlay.setComposition).not.toHaveBeenCalled();
+    expect(passthrough.previewNodes[0]).toMatchObject({ textContent: 'かな', hidden: false });
+  });
+
   it('uses the terminal foreground and opaque background while mirroring native composition font metrics', () => {
     const { app, compositionView, previewNodes, createdControllers } = createPreviewHarness({
       themeForeground: '#1f2328',

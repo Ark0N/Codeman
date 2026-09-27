@@ -15,7 +15,9 @@
  *   npm run test:browser -- test/mobile-ime-preview.browser.test.ts
  */
 
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { build } from 'esbuild';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 
@@ -124,5 +126,167 @@ describe('mobile IME preview with real xterm', () => {
     ]);
     expect(result.onData).toEqual([{ data: 'pasted', consumed: false }]);
     expect(result.state).toMatchObject({ awaitingCommit: false, committed: false });
+  });
+});
+
+/**
+ * The preview with local echo ON, the default for Claude sessions on phones.
+ * Committed text then sits in the LocalEchoOverlay (a z-index 7 layer in
+ * `.xterm-screen`) and never reaches the PTY before Enter, so the PTY cursor,
+ * which is where the helper span sits, stays at the prompt start: under the
+ * overlay's own opaque text. So a composition that follows text already in the
+ * overlay must be drawn by the overlay itself, after that text.
+ *
+ * Loads the real pieces: xterm 6, the overlay bundled from its package source
+ * exactly as scripts/postinstall.js bundles it (plus the same LocalEchoOverlay
+ * alias), styles.css, mobile-ime-preview.js, and terminal-ui.js's own
+ * `_initMobileImePreview` on a bare CodemanApp prototype.
+ */
+describe('mobile IME preview over the local echo overlay', () => {
+  let browser: Browser;
+  let page: Page;
+
+  beforeAll(async () => {
+    const bundled = await build({
+      entryPoints: [resolve(root, 'packages/xterm-zerolag-input/src/zerolag-input-addon.ts')],
+      bundle: true,
+      format: 'iife',
+      globalName: 'XtermZerolagInput',
+      write: false,
+      logLevel: 'silent',
+    });
+    const overlayBundle =
+      bundled.outputFiles[0].text +
+      '\nwindow.ZerolagInputAddon=XtermZerolagInput.ZerolagInputAddon;' +
+      'window.LocalEchoOverlay=class extends XtermZerolagInput.ZerolagInputAddon{' +
+      'constructor(terminal){super({prompt:{type:"character",char:"\\u276f",offset:2}});this.activate(terminal);}};\n';
+
+    browser = await chromium.launch({ headless: true });
+    page = await browser.newPage({ viewport: { width: 800, height: 400 }, deviceScaleFactor: 1 });
+    await page.setContent(
+      '<html class="touch-device"><body><div id="t" style="width:600px;height:240px"></div></body></html>'
+    );
+    await page.addStyleTag({ path: resolve(root, 'node_modules/@xterm/xterm/css/xterm.css') });
+    await page.addStyleTag({ content: readFileSync(resolve(root, 'src/web/public/styles.css'), 'utf8') });
+    await page.addScriptTag({ path: resolve(root, 'node_modules/@xterm/xterm/lib/xterm.js') });
+    await page.addScriptTag({ content: overlayBundle });
+    await page.addScriptTag({ path: resolve(root, 'src/web/public/mobile-ime-preview.js') });
+    await page.addScriptTag({ content: 'window.CodemanApp = class CodemanApp {};' });
+    await page.addScriptTag({ path: resolve(root, 'src/web/public/terminal-ui.js') });
+  }, 60000);
+
+  afterAll(async () => {
+    if (browser) await browser.close();
+  });
+
+  /**
+   * Types `pending` into the overlay (as the printable/paste branch does), then
+   * composes `composing` and reports what is PAINTED at the cell right after
+   * the pending text and at the PTY cursor. Painted = topmost by hit-testing
+   * with pointer-events forced on, since the overlay and the preview are
+   * pointer-events:none.
+   */
+  async function composeAfter(pending: string, composing: string, commit: boolean) {
+    return page.evaluate(
+      async ({ pending, composing, commit }) => {
+        const w = window as any;
+        const host = document.getElementById('t') as HTMLElement;
+        host.innerHTML = '';
+        const term = new w.Terminal({
+          cols: 40,
+          rows: 8,
+          fontSize: 14,
+          fontFamily: 'monospace',
+          allowProposedApi: true,
+        });
+        term.open(host);
+        await new Promise<void>((r) => term.write('\u276f ', () => r()));
+        const app = new w.CodemanApp();
+        app.terminal = term;
+        app._localEchoEnabled = true;
+        app._localEchoOverlay = new w.LocalEchoOverlay(term);
+        w.MobileImePreview.isIosWebKitTouch = () => true;
+        app._initMobileImePreview();
+
+        // The helper textarea and span follow the PTY cursor (col 2, row 0), as
+        // _syncMobileHelperTextareaToCursor places them.
+        const screen = term.element.querySelector('.xterm-screen') as HTMLElement;
+        const dims = term._core._renderService.dimensions.css.cell;
+        term.element.style.setProperty('--xterm-helper-left', 2 * dims.width + 'px');
+        term.element.style.setProperty('--xterm-helper-top', '0px');
+
+        if (pending) app._localEchoOverlay.appendText(pending);
+        const textarea = term.textarea as HTMLTextAreaElement;
+        textarea.focus();
+        textarea.dispatchEvent(new CompositionEvent('compositionstart', { data: '' }));
+        textarea.value = composing;
+        textarea.dispatchEvent(new CompositionEvent('compositionupdate', { data: composing }));
+        await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 20)));
+
+        const force = document.createElement('style');
+        force.textContent = '.xterm * { pointer-events: auto !important; }';
+        document.head.appendChild(force);
+        const rect = screen.getBoundingClientRect();
+        const widthOf = (s: string) => term._core.unicodeService.getStringCellWidth(s);
+        const paintedAt = (col: number) => {
+          const el = document.elementFromPoint(
+            rect.left + (col + 0.5) * dims.width,
+            rect.top + 0.5 * dims.height
+          ) as HTMLElement | null;
+          return {
+            text: el?.textContent ?? null,
+            composition: !!el?.closest?.('[data-zerolag-composition]'),
+            preview: !!el?.closest?.('.codeman-ime-preview'),
+          };
+        };
+        const afterPending = paintedAt(2 + widthOf(pending));
+        force.remove();
+
+        let afterCommit = null;
+        if (commit) {
+          textarea.dispatchEvent(new CompositionEvent('compositionend', { data: composing }));
+          // What the printable/paste branch of terminal-ui.js's onData does.
+          if (app._consumeMobileImeTerminalData(composing)) {
+            app._localEchoOverlay.appendText(composing);
+            app._transferMobileImeCommitToLocalEcho();
+          }
+          await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 20)));
+          afterCommit = {
+            pendingText: app._localEchoOverlay.pendingText,
+            compositionSpans: term.element.querySelectorAll('[data-zerolag-composition]').length,
+            overlayText: app._localEchoOverlay._overlay?.textContent,
+          };
+        }
+        const result = {
+          afterPending,
+          pendingText: app._localEchoOverlay.pendingText,
+          afterCommit,
+        };
+        app._destroyMobileImePreview();
+        app._localEchoOverlay.dispose();
+        term.dispose();
+        return result;
+      },
+      { pending, composing, commit }
+    );
+  }
+
+  it('first composition on an empty prompt: the overlay draws it at the prompt', async () => {
+    const result = await composeAfter('', '今日は', false);
+    expect(result.afterPending).toEqual({ text: '今', composition: true, preview: false });
+    expect(result.pendingText).toBe('');
+  });
+
+  it('a second composition is painted after the text already in the overlay, not under it', async () => {
+    const result = await composeAfter('今日は', '天気', false);
+    expect(result.afterPending.text).toBe('天');
+    expect(result.afterPending.composition).toBe(true);
+    // Provisional text is never taken into the overlay's pending (unsent) text.
+    expect(result.pendingText).toBe('今日は');
+  });
+
+  it('the commit lands once in the overlay and the composition tail is gone', async () => {
+    const result = await composeAfter('今日は', '天気', true);
+    expect(result.afterCommit).toEqual({ pendingText: '今日は天気', compositionSpans: 0, overlayText: '今日は天気' });
   });
 });

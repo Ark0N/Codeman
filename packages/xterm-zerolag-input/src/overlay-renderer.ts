@@ -58,6 +58,7 @@ export function stringCellWidth(terminal: XtermTerminal | null | undefined, str:
 export function renderOverlay(container: HTMLDivElement, params: RenderParams): void {
   const {
     lines,
+    compositionStart,
     startCol,
     totalCols,
     cellW,
@@ -90,12 +91,24 @@ export function renderOverlay(container: HTMLDivElement, params: RenderParams): 
   // `startCol` indents only the line that begins at the prompt marker, so it is
   // dropped along with that line when the tail is all that fits.
   const rows = totalRows && totalRows > 0 ? totalRows : terminal?.rows;
+  // Code-point offset of each line in the whole text, so the composition
+  // styling survives the tail slice below.
+  const lineOffsets: number[] = [];
+  {
+    let offset = 0;
+    for (const line of lines) {
+      lineOffsets.push(offset);
+      offset += [...line].length;
+    }
+  }
   let visibleLines = lines;
+  let firstVisible = 0;
   let keepsPromptLine = true;
   let topRow = promptRow;
   if (rows && rows > 0) {
     if (lines.length > rows) {
-      visibleLines = lines.slice(lines.length - rows);
+      firstVisible = lines.length - rows;
+      visibleLines = lines.slice(firstVisible);
       keepsPromptLine = false;
       topRow = 0;
     } else if (promptRow + lines.length > rows) {
@@ -116,7 +129,21 @@ export function renderOverlay(container: HTMLDivElement, params: RenderParams): 
     const leftPx = indents ? startCol * cellW : 0;
     const widthPx = indents ? fullWidthPx - leftPx : fullWidthPx;
     const topPx = i * cellH;
-    const lineEl = makeLine(visibleLines[i], leftPx, topPx, widthPx, cellH, cellW, charTop, charHeight, font, terminal);
+    const lineCompositionFrom =
+      compositionStart === undefined ? undefined : compositionStart - lineOffsets[firstVisible + i];
+    const lineEl = makeLine(
+      visibleLines[i],
+      leftPx,
+      topPx,
+      widthPx,
+      cellH,
+      cellW,
+      charTop,
+      charHeight,
+      font,
+      terminal,
+      lineCompositionFrom
+    );
     container.appendChild(lineEl);
   }
 
@@ -144,7 +171,10 @@ export function renderOverlay(container: HTMLDivElement, params: RenderParams): 
  * Create a styled line `<div>` with per-character grid positioning.
  *
  * Each character gets its own `<span>` positioned by visual column offset.
- * CJK wide characters occupy 2 cell widths.
+ * CJK wide characters occupy 2 cell widths. Characters at or after
+ * `compositionFrom` (a code-point index into `text`, may be negative) are IME
+ * composition text: underlined, like xterm's own composition view, and marked
+ * `data-zerolag-composition` + `aria-hidden` since they are provisional.
  */
 function makeLine(
   text: string,
@@ -156,7 +186,8 @@ function makeLine(
   _charTop: number,
   _charHeight: number,
   font: FontStyle,
-  terminal?: XtermTerminal | null
+  terminal?: XtermTerminal | null,
+  compositionFrom?: number
 ): HTMLDivElement {
   const el = document.createElement('div');
   el.style.cssText = 'position:absolute;pointer-events:none';
@@ -172,6 +203,7 @@ function makeLine(
 
   // CJK wide chars occupy 2 cells — position by visual column offset
   let colOffset = 0;
+  let index = 0;
   for (const ch of text) {
     const cw = charCellWidth(terminal, ch);
     const span = document.createElement('span');
@@ -189,9 +221,15 @@ function makeLine(
     span.style.fontWeight = font.fontWeight;
     span.style.color = font.color;
     if (font.letterSpacing) span.style.letterSpacing = font.letterSpacing;
+    if (compositionFrom !== undefined && index >= compositionFrom) {
+      span.style.textDecoration = 'underline';
+      span.setAttribute('data-zerolag-composition', '');
+      span.setAttribute('aria-hidden', 'true');
+    }
     span.textContent = ch;
     el.appendChild(span);
     colOffset += cw;
+    index++;
   }
 
   return el;
