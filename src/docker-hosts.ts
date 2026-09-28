@@ -615,7 +615,10 @@ export const GIT_HOST_CLI_BUILD_ARGS: ReadonlyArray<readonly [string, string]> =
   ['CODEMAN_AGENT_IMAGE_INSTALL_AZ', 'CODEMAN_INSTALL_AZ'],
 ];
 
-/** Environment variables passed through to the agent image's system Git configuration. */
+/**
+ * Environment variable → Dockerfile ARG for the image's system Git identity.
+ * ⚠️ Mirrors `GIT_IDENTITY_BUILD_ARGS` in `scripts/lib/cli-catalog.mjs`; the parity test pins them.
+ */
 export const GIT_IDENTITY_BUILD_ARGS: ReadonlyArray<readonly [string, string]> = [
   ['CODEMAN_AGENT_IMAGE_GIT_USER_NAME', 'GIT_USER_NAME'],
   ['CODEMAN_AGENT_IMAGE_GIT_USER_EMAIL', 'GIT_USER_EMAIL'],
@@ -642,13 +645,15 @@ export function gitHostCliBuildArgPairs(env: NodeJS.ProcessEnv): Array<[string, 
 /**
  * The `--build-arg` pairs for a configured Git identity. An absent pair leaves
  * Git unconfigured, preserving existing deployments; a partial pair is refused.
+ * ⚠️ Mirrors `gitIdentityBuildArgPairs()` in `scripts/lib/cli-catalog.mjs`; the parity test pins them.
  */
 export function gitIdentityBuildArgPairs(env: NodeJS.ProcessEnv): Array<[string, string]> {
   const pairs = GIT_IDENTITY_BUILD_ARGS.map(([envName, argName]) => [argName, env[envName] ?? ''] as [string, string]);
   const configured = pairs.filter(([, value]) => value !== '');
   if (configured.length === 0) return [];
   if (configured.length !== pairs.length) {
-    throw new Error('Git user name and email must both be set when configuring Git identity');
+    const names = GIT_IDENTITY_BUILD_ARGS.map(([envName]) => envName).join(' and ');
+    throw new Error(`${names} must both be set when configuring Git identity`);
   }
   return pairs;
 }

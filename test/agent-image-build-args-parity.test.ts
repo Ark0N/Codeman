@@ -172,6 +172,9 @@ describe('Git identity in the agent image: both producers pass the same settings
     expect(mjsGitIdentityPairs(identity)).toEqual(expected);
     expect(tsGitIdentityPairs({})).toEqual([]);
     expect(mjsGitIdentityPairs({})).toEqual([]);
+    // The combined argv, not just the helper: the manual build path could drop the identity otherwise.
+    expect(tsPairs(identity)).toEqual(mjsPairs(CATALOG, identity));
+    expect(tsPairs(identity)).toEqual(expect.arrayContaining(expected));
   });
 
   it('refuses a partial identity in both build paths', () => {
@@ -179,8 +182,9 @@ describe('Git identity in the agent image: both producers pass the same settings
       { CODEMAN_AGENT_IMAGE_GIT_USER_NAME: 'Ada Lovelace' },
       { CODEMAN_AGENT_IMAGE_GIT_USER_EMAIL: 'ada@example.com' },
     ]) {
-      expect(() => tsGitIdentityPairs(identity)).toThrow(/Git user name and email/);
-      expect(() => mjsGitIdentityPairs(identity)).toThrow(/Git user name and email/);
+      const named = /CODEMAN_AGENT_IMAGE_GIT_USER_NAME and CODEMAN_AGENT_IMAGE_GIT_USER_EMAIL must both be set/;
+      expect(() => tsGitIdentityPairs(identity)).toThrow(named);
+      expect(() => mjsGitIdentityPairs(identity)).toThrow(named);
     }
   });
 
