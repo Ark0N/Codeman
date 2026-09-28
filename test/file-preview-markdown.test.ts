@@ -50,7 +50,15 @@ const MARKDOWN_HTML =
   '<a href="guide/x.md#sec" target="_blank" rel="noopener noreferrer">x</a>' +
   '<a href="../CHANGELOG.md" target="_blank" rel="noopener noreferrer">up</a>' +
   '<a href="#top">t</a>' +
-  '<a href="https://e.com" target="_blank" rel="noopener noreferrer">e</a>';
+  '<a href="https://e.com" target="_blank" rel="noopener noreferrer">e</a>' +
+  // marked percent-encodes destinations; a query rides along on GitHub-style refs.
+  '<img src="my%20image.png" alt="space">' +
+  '<img src="raw.png?raw=true" alt="raw">' +
+  '<img src="bad%zz.png" alt="bad">' +
+  '<img src="/assets/root.png" alt="root">' +
+  '<img src="//cdn.example.com/p.png" alt="protorel">' +
+  '<a href="%E5%9B%BE%E7%89%87/%E6%88%AA%E5%9B%BE.md" target="_blank" rel="noopener noreferrer">cjk</a>' +
+  '<a href="/docs/root.md" target="_blank" rel="noopener noreferrer">rootlink</a>';
 
 const MD_CONTENT = '# Title\n\nx\n';
 const TXT_CONTENT = 'one\n\n  three\tfour\n';
@@ -198,6 +206,32 @@ describe('file viewer rendered markdown', () => {
     const external = anchors.find((a) => a.textContent === 'e')!;
     expect(external.getAttribute('href')).toBe('https://e.com');
     expect(external.getAttribute('target')).toBe('_blank');
+  });
+
+  it('decodes percent-encoded refs, drops the query, and resolves root-relative refs against the workspace', async () => {
+    const { app, body } = loadApp();
+
+    await app.openFilePreview('docs/README.md', 's1');
+    const src = (alt: string) => body.querySelector(`img[alt="${alt}"]`)!.getAttribute('src');
+    const raw = (path: string) => `/api/sessions/s1/file-raw?path=${encodeURIComponent(path)}`;
+
+    // Decoded once here, encoded once for the route: never `my%2520image.png`.
+    expect(src('space')).toBe(raw('docs/my image.png'));
+    expect(src('raw')).toBe(raw('docs/raw.png'));
+    // A malformed escape keeps the ref as written.
+    expect(src('bad')).toBe(raw('docs/bad%zz.png'));
+    // Root-relative is the workspace root, as on GitHub; protocol-relative is remote.
+    expect(src('root')).toBe(raw('assets/root.png'));
+    expect(src('protorel')).toBe('//cdn.example.com/p.png');
+
+    const anchors = Array.from(body.querySelectorAll('a'));
+    expect(anchors.find((a) => a.textContent === 'cjk')!.getAttribute('data-path')).toBe('docs/图片/截图.md');
+    expect(anchors.find((a) => a.textContent === 'rootlink')!.getAttribute('data-path')).toBe('docs/root.md');
+    // Every rebased link names the preview's session, so the delegate opens it
+    // in that workspace even when another tab is active.
+    const rebased = body.querySelectorAll('a.rv-path');
+    expect(rebased.length).toBe(4);
+    for (const a of rebased) expect(a.getAttribute('data-session-id')).toBe('s1');
   });
 
   it('degrades an image that fails to load to its alt text', async () => {

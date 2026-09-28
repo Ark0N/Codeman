@@ -145,6 +145,6 @@ describe('response viewer file-path linkifier', () => {
     // either leaves inert paths (no linkify) or dead links (no handler).
     expect(APP_SOURCE).toContain('this._linkifyFilePaths(renderedText)');
     expect(APP_SOURCE).toMatch(/closest\('a\.rv-path'\)/);
-    expect(APP_SOURCE).toMatch(/openFilePreview\(filePath, this\.activeSessionId\)/);
+    expect(APP_SOURCE).toMatch(/openFilePreview\(filePath, pathLink\.dataset\.sessionId \|\| this\.activeSessionId\)/);
   });
 });

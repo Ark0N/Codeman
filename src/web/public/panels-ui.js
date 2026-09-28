@@ -4357,28 +4357,42 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Point a rendered document's relative references at the file it came from.
+   * Point a rendered document's workspace references at the file it came from.
    *
    * Images are rebased onto the workspace-confined file-raw route under the
-   * document's directory (the server refuses escapes, so `..` is safe to
-   * forward). Whatever fails to load degrades to its alt text with one error
-   * handler: a remote image the page CSP blocks, a 404 for a document outside
-   * the workspace, an SVG that file-raw serves as a download. Relative links
+   * document's directory, root-relative ones (`/docs/x.png`) under the
+   * workspace root as on GitHub (the server refuses escapes, so `..` is safe
+   * to forward). Whatever fails to load degrades to its alt text with one
+   * error handler: a remote image the page CSP blocks, a 404 for a document
+   * outside the workspace, an SVG that file-raw serves as a download. Links
    * take the `a.rv-path` shape the Response Viewer delegate already opens in
    * this overlay, minus the target/rel `_renderMarkdown` gave them, which
-   * would otherwise open <origin>/docs/x.md in a new tab.
+   * would otherwise open <origin>/docs/x.md in a new tab, and carry the
+   * preview's own session so a document opened from another session's
+   * attachment card resolves against that workspace, not the active tab's.
    */
   _rebaseFilePreviewMarkdownRefs(root, { sessionId, filePath }) {
     const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/') + 1) : '';
-    // Relative = no scheme, not root-relative (which includes //host), not a fragment.
-    const isRelative = (ref) => !!ref && !/^[a-z][a-z0-9+.-]*:/i.test(ref) && !ref.startsWith('/') && !ref.startsWith('#');
-    // GitHub-style `img.png#gh-dark-mode-only` and `doc.md#section`: the
-    // fragment is not part of the path. `.` and `..` segments are collapsed so
-    // the title reads `README.md`, not `docs/../README.md`; a `..` that climbs
+    // Workspace ref = no scheme, not protocol-relative (//host), not a fragment.
+    const isWorkspaceRef = (ref) =>
+      !!ref && !/^[a-z][a-z0-9+.-]*:/i.test(ref) && !ref.startsWith('//') && !ref.startsWith('#');
+    // GitHub-style `img.png#gh-dark-mode-only`, `doc.md#section` and
+    // `img.png?raw=true`: neither fragment nor query is part of the path.
+    // marked percent-encodes destinations (`my image.png` arrives as
+    // `my%20image.png`), so decode before the route encodes again, or file-raw
+    // looks for a file literally named `my%20image.png`; a malformed escape
+    // keeps the ref as written. `.` and `..` segments are collapsed so the
+    // title reads `README.md`, not `docs/../README.md`; a `..` that climbs
     // past the start is kept and left for the server to refuse.
     const resolveRef = (ref) => {
+      let rel = ref.split('#')[0].split('?')[0];
+      try {
+        rel = decodeURIComponent(rel);
+      } catch {
+        /* malformed escape: keep the ref as written */
+      }
       const parts = [];
-      for (const seg of (dir + ref.split('#')[0]).split('/')) {
+      for (const seg of (rel.startsWith('/') ? rel.slice(1) : dir + rel).split('/')) {
         if (seg === '.' || (seg === '' && parts.length)) continue;
         if (seg === '..' && parts.length && parts[parts.length - 1] !== '..' && parts[parts.length - 1] !== '') parts.pop();
         else parts.push(seg);
@@ -4387,7 +4401,7 @@ Object.assign(CodemanApp.prototype, {
     };
     for (const img of root.querySelectorAll('img[src]')) {
       const src = img.getAttribute('src') || '';
-      if (isRelative(src)) {
+      if (isWorkspaceRef(src)) {
         const path = resolveRef(src);
         img.setAttribute('src', CodemanBase.url(`/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(path)}`));
       }
@@ -4395,9 +4409,10 @@ Object.assign(CodemanApp.prototype, {
     }
     for (const a of root.querySelectorAll('a[href]')) {
       const href = a.getAttribute('href') || '';
-      if (!isRelative(href)) continue;
+      if (!isWorkspaceRef(href)) continue;
       a.className = 'rv-path';
       a.dataset.path = resolveRef(href);
+      a.dataset.sessionId = sessionId;
       a.setAttribute('href', '#');
       a.removeAttribute('target');
       a.removeAttribute('rel');
