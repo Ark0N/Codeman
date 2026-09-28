@@ -165,7 +165,11 @@ function registerCrudRoutes(app: FastifyInstance, ctx: EventPort & TabLayoutPort
       });
       throw error;
     }
-    ctx.broadcast(SseEvent.WebviewChanged, { action: 'created', id: created.id });
+    ctx.broadcast(SseEvent.WebviewChanged, {
+      action: 'created',
+      id: created.id,
+      owner: ownerLayoutKey(created.owner),
+    });
     return { success: true, data: created };
   });
 
@@ -195,7 +199,11 @@ function registerCrudRoutes(app: FastifyInstance, ctx: EventPort & TabLayoutPort
     // Any edit invalidates the outstanding capability. Otherwise a token minted
     // against the OLD url keeps proxying to it after the user repointed the tab.
     webviewCapabilities.revokeWebview(id);
-    ctx.broadcast(SseEvent.WebviewChanged, { action: 'updated', id });
+    ctx.broadcast(SseEvent.WebviewChanged, {
+      action: 'updated',
+      id,
+      owner: ownerLayoutKey(updated.owner),
+    });
     return { success: true, data: updated };
   });
 
@@ -231,7 +239,11 @@ function registerCrudRoutes(app: FastifyInstance, ctx: EventPort & TabLayoutPort
 
     webviewCapabilities.revokeWebview(id);
     socketCounts.delete(id);
-    ctx.broadcast(SseEvent.WebviewChanged, { action: 'deleted', id });
+    ctx.broadcast(SseEvent.WebviewChanged, {
+      action: 'deleted',
+      id,
+      owner: ownerLayoutKey(result.owner),
+    });
     return { success: true, data: { id } };
   });
 
