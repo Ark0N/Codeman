@@ -11,7 +11,9 @@ import { join, resolve } from 'node:path';
 import {
   findBrowserTests,
   findLeaks,
+  findTestFiles,
   importsBrowserDriver,
+  listingMatchesTree,
   parseVitestFileList,
 } from '../scripts/check-browser-test-excludes.mjs';
 import { BROWSER_TEST_GLOBS } from '../config/test-suites';
@@ -68,6 +70,15 @@ describe('findBrowserTests (fixture tree)', () => {
       'test/new.browser.test.ts',
     ]);
   });
+
+  it('lists every test file, browser-driven or not, in the same form', () => {
+    expect(findTestFiles(root)).toEqual([
+      'test/legacy-name.test.ts',
+      'test/nested/deep.test.ts',
+      'test/new.browser.test.ts',
+      'test/unit.test.ts',
+    ]);
+  });
 });
 
 describe('parseVitestFileList + findLeaks', () => {
@@ -82,6 +93,19 @@ describe('parseVitestFileList + findLeaks', () => {
       'test/legacy-name.test.ts',
     ]);
     expect(findLeaks(['test/new.browser.test.ts'], ci)).toEqual([]);
+  });
+
+  it('flags a non-empty listing whose paths never match the tree instead of passing vacuously', () => {
+    const tree = ['test/legacy-name.test.ts', 'test/unit.test.ts'];
+    // e.g. a vitest upgrade that starts printing absolute paths: nothing leaks, but only
+    // because nothing matches, so the checker must refuse rather than report success.
+    const drifted = parseVitestFileList('/repo/test/legacy-name.test.ts\n/repo/test/unit.test.ts\n');
+    expect(drifted.size).toBe(2);
+    expect(findLeaks(['test/legacy-name.test.ts'], drifted)).toEqual([]);
+    expect(listingMatchesTree(drifted, tree)).toBe(false);
+
+    const healthy = parseVitestFileList('test/legacy-name.test.ts\ntest/unit.test.ts\n');
+    expect(listingMatchesTree(healthy, tree)).toBe(true);
   });
 });
 

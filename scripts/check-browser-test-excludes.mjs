@@ -63,17 +63,26 @@ function walk(dir) {
 }
 
 /**
- * Every `*.test.ts` under `<root>/test` that imports a browser driver, as sorted
- * repo-relative POSIX paths (the form `vitest list` prints).
+ * Every `*.test.ts` under `<root>/test`, as sorted repo-relative POSIX paths (the form
+ * `vitest list` prints).
+ *
+ * @param {string} root
+ * @returns {string[]}
+ */
+export function findTestFiles(root) {
+  return walk(join(root, 'test'))
+    .map((file) => relative(root, file).split(sep).join('/'))
+    .sort();
+}
+
+/**
+ * The subset of {@link findTestFiles} that imports a browser driver.
  *
  * @param {string} root
  * @returns {string[]}
  */
 export function findBrowserTests(root) {
-  return walk(join(root, 'test'))
-    .filter((file) => importsBrowserDriver(readFileSync(file, 'utf8')))
-    .map((file) => relative(root, file).split(sep).join('/'))
-    .sort();
+  return findTestFiles(root).filter((file) => importsBrowserDriver(readFileSync(join(root, file), 'utf8')));
 }
 
 /**
@@ -94,6 +103,19 @@ export function parseVitestFileList(output) {
 }
 
 /**
+ * Whether the `vitest list` paths and the walked tree name at least one file in common.
+ * False means the two sides are not speaking the same path format (absolute paths, backslashes
+ * or a new prefix after a vitest upgrade), and then {@link findLeaks} would find nothing
+ * against a perfectly non-empty listing.
+ *
+ * @param {Set<string>} ciFiles
+ * @param {string[]} testFiles
+ */
+export function listingMatchesTree(ciFiles, testFiles) {
+  return testFiles.some((file) => ciFiles.has(file));
+}
+
+/**
  * @param {string[]} browserTests
  * @param {Set<string>} ciFiles
  * @returns {string[]} browser-driven files that the CI config would still collect
@@ -103,6 +125,7 @@ export function findLeaks(browserTests, ciFiles) {
 }
 
 function main() {
+  const testFiles = findTestFiles(ROOT);
   const browserTests = findBrowserTests(ROOT);
 
   let collected;
@@ -122,6 +145,16 @@ function main() {
   if (ciFiles.size === 0) {
     // An empty list would make every browser test look excluded: fail rather than pass vacuously.
     console.error('✗ `vitest list` reported no test files; refusing to pass on an empty CI set.');
+    process.exit(1);
+  }
+  // Same vacuous pass, one step removed: a listing whose paths never match the tree. This guard,
+  // not `vitest list --json`, is the answer to format drift: the JSON form prints absolute paths
+  // that would need canonicalizing against ROOT (symlinked checkouts), and its shape can drift too.
+  if (!listingMatchesTree(ciFiles, testFiles)) {
+    const sample = [...ciFiles].slice(0, 3).join(', ');
+    console.error(
+      `✗ none of the ${ciFiles.size} paths \`vitest list\` reported (e.g. ${sample}) is one of the ${testFiles.length} test/**/*.test.ts files; its output format has probably changed.`
+    );
     process.exit(1);
   }
 

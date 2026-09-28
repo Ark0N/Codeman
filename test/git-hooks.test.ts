@@ -24,6 +24,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -133,6 +134,24 @@ describe('planHookInstall', () => {
 });
 
 describe('resolveGitHooksDir (temp repos)', () => {
+  // resolveGitHooksDir runs git with process.env, so an exported GIT_CONFIG_GLOBAL or a system
+  // gitconfig carrying core.hooksPath would otherwise redirect every expectation below.
+  // test/setup.ts swaps HOME, which only covers ~/.gitconfig.
+  const ambient = {
+    GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+    GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
+  };
+  beforeAll(() => {
+    process.env.GIT_CONFIG_NOSYSTEM = '1';
+    process.env.GIT_CONFIG_GLOBAL = '/dev/null';
+  });
+  afterAll(() => {
+    for (const [k, v] of Object.entries(ambient)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
   it('resolves <root>/.git/hooks in a plain checkout', () => {
     const repo = newRepo();
     expect(resolveGitHooksDir(repo)).toBe(join(repo, '.git', 'hooks'));
@@ -352,18 +371,24 @@ describe('the installed hook on a real push (temp repos)', () => {
     expect(ran()).toEqual(expectedRuns);
   });
 
-  it.each(['src/wip.ts', 'config/wip.json', 'scripts/wip.mjs', 'test/wip.test.ts', 'install.sh'])(
-    'skips when %s is untracked (another session may own it)',
-    (rel) => {
-      const { ran, push, repo } = setup({ failing: 'lint' });
-      mkdirSync(join(repo, rel, '..'), { recursive: true });
-      writeFileSync(join(repo, rel), 'wip\n');
-      const r = push(['origin', 'main']);
-      expect(r.status, r.stderr).toBe(0);
-      expect(r.stdout + r.stderr).toContain('pre-push: skipping static checks: uncommitted changes under');
-      expect(ran()).toEqual([]);
-    }
-  );
+  it.each([
+    'src/wip.ts',
+    'config/wip.json',
+    'scripts/wip.mjs',
+    'test/wip.test.ts',
+    'install.sh',
+    'tsconfig.json',
+    '.prettierignore',
+    '.editorconfig',
+  ])('skips when %s is untracked (another session may own it)', (rel) => {
+    const { ran, push, repo } = setup({ failing: 'lint' });
+    mkdirSync(join(repo, rel, '..'), { recursive: true });
+    writeFileSync(join(repo, rel), 'wip\n');
+    const r = push(['origin', 'main']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout + r.stderr).toContain('pre-push: skipping static checks: uncommitted changes under');
+    expect(ran()).toEqual([]);
+  });
 
   it('skips when a tracked package.json has an unstaged edit', () => {
     const { ran, push, repo } = setup({ failing: 'lint' });
@@ -395,6 +420,9 @@ describe('the installed hook on a real push (temp repos)', () => {
       'package.json',
       'package-lock.json',
       'install.sh',
+      'tsconfig.json',
+      '.prettierignore',
+      '.editorconfig',
     ]);
   });
 
@@ -403,6 +431,24 @@ describe('the installed hook on a real push (temp repos)', () => {
     const r = push(['origin', 'main']);
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout + r.stderr).toContain('node_modules missing');
+    expect(ran()).toEqual([]);
+  });
+
+  it('skips (never blocks) when npm is not on PATH, as under a GUI git client', () => {
+    const { ran, push } = setup({ failing: 'lint' });
+    // A PATH holding only what git and the hook need, and no npm/node. Symlinks rather than
+    // the real directories, since /usr/bin usually holds npm right next to git.
+    const bin = join(scratch, `bin-${counter}`);
+    mkdirSync(bin);
+    for (const tool of ['git', 'sh', 'mktemp', 'tail', 'rm', 'cat']) {
+      const found = spawnSync('sh', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).stdout.trim();
+      expect(found, `${tool} not found on the test PATH`).toMatch(/^\//);
+      symlinkSync(found, join(bin, tool));
+    }
+    expect(spawnSync('sh', ['-c', 'command -v npm'], { env: { PATH: bin } }).status).not.toBe(0);
+    const r = push(['origin', 'main'], { PATH: bin });
+    expect(r.status, r.stderr + r.stdout).toBe(0);
+    expect(r.stdout + r.stderr).toContain('pre-push: npm not on PATH, skipping checks.');
     expect(ran()).toEqual([]);
   });
 });

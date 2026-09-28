@@ -28,7 +28,11 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
-/** Ownership marker. Bump the version suffix when the body changes meaningfully. */
+/**
+ * Ownership marker. ⚠️ Never bump the version suffix: ownership is matched on this exact
+ * string, so a `v2` would read every installed `v1` hook as foreign and never refresh it.
+ * A changed body still reaches installed hooks, because the refresh compares the whole file.
+ */
 export const PRE_PUSH_MARKER = '# codeman-managed-hook: pre-push v1';
 
 /**
@@ -52,8 +56,10 @@ export const PRE_PUSH_CHECKS = [
  * check:frontend-syntax), config/ (eslint + vitest configs, test-suites.ts, the CLI
  * catalogue), scripts/ (every check is a script there, and typecheck's second pass compiles
  * one), test/ (check:browser-excludes scans it and runs `vitest list` over it),
- * package.json + package-lock.json (check:lockfile) and install.sh (generate:cli-catalog
- * --check diffs its generated block).
+ * package.json + package-lock.json (check:lockfile), install.sh (generate:cli-catalog
+ * --check diffs its generated block), tsconfig.json (typecheck, and
+ * config/tsconfig.scripts.json extends it) and .prettierignore + .editorconfig
+ * (format:check; the Prettier CLI honours .editorconfig by default).
  */
 export const PRE_PUSH_WATCHED_PATHS = [
   'src',
@@ -63,6 +69,9 @@ export const PRE_PUSH_WATCHED_PATHS = [
   'package.json',
   'package-lock.json',
   'install.sh',
+  'tsconfig.json',
+  '.prettierignore',
+  '.editorconfig',
 ];
 
 /**
@@ -94,6 +103,10 @@ if [ ! -d node_modules ]; then
   echo "pre-push: node_modules missing, skipping checks (run 'npm install' to enable them)."
   exit 0
 fi
+
+# GUI git clients and IDEs often run hooks with a minimal PATH that lacks an nvm or
+# Homebrew Node. Every check would then fail with "npm: not found", so skip instead.
+command -v npm >/dev/null 2>&1 || { echo "pre-push: npm not on PATH, skipping checks."; exit 0; }
 
 # git feeds us "<localref> <localsha> <remoteref> <remotesha>" per ref. A deletion has an
 # all-zero local sha and no tree worth checking; if every ref is a deletion, skip.
