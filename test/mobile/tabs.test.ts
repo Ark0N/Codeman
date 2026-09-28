@@ -88,9 +88,10 @@ describe('Tab Navigation', () => {
       if (tabNameExists) {
         const maxWidth = await getCSSProperty(page, SELECTORS.TAB_NAME, 'max-width');
         const maxWidthPx = parseFloat(maxWidth);
-        // Should be 50px on mobile
-        expect(maxWidthPx).toBeLessThanOrEqual(60);
-        expect(maxWidthPx).toBeGreaterThan(0);
+        // 80px on phones: wide enough to get past a shared `w1-` prefix,
+        // still short enough that several tabs fit the strip.
+        expect(maxWidthPx).toBeLessThanOrEqual(96);
+        expect(maxWidthPx).toBeGreaterThanOrEqual(72);
       }
     });
 
