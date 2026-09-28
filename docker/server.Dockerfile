@@ -219,6 +219,9 @@ RUN set -eux; \
 COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /uvx /usr/local/bin/
 ENV NPM_CONFIG_PREFIX=/opt/codeman-cli
 ENV PATH=$PATH:/opt/codeman-cli/bin
+# CLIs installed at runtime (Settings -> CLIs, npm redirected to ~/.local by installEnv()) live on the
+# persistent home mount, so they survive a container recreate. Appended for the same reason as above.
+ENV PATH=$PATH:/home/${CODEMAN_RUNTIME_USER}/.local/bin
 # pnpm is not an agent CLI: it is here because `dsh plugin` (DeepSeek Harness, which
 # this image leaves to be installed at runtime, see SERVER_INTENTIONAL_OMISSIONS in
 # test/docker-agent-image-coverage.test.ts) spawns a literal `pnpm` with no npm

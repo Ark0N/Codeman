@@ -217,6 +217,13 @@ export function installEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.Proc
   for (const [key, value] of Object.entries(source)) {
     if (!key.startsWith('CODEMAN_')) env[key] = value;
   }
+  // ⚠️ In the Docker Compose deployment the image sets NPM_CONFIG_PREFIX=/opt/codeman-cli, which is IMAGE
+  // content: `Update-Codeman.sh` recreates the container and every CLI installed there (dsh, pi, ...)
+  // vanishes. HOME is the persistent bind mount and `~/.local/bin` is already on every resolver's search
+  // list, so npm-based installs are redirected there. curl|bash installers already target HOME.
+  if (source.CODEMAN_IN_CONTAINER === '1' && source.HOME) {
+    env.NPM_CONFIG_PREFIX = `${source.HOME}/.local`;
+  }
   return env;
 }
 
