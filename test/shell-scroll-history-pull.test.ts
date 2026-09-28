@@ -12,7 +12,9 @@
  *
  * The gesture now pulls a BOUNDED window (`?full=1&tail=TERMINAL_TAIL_SIZE`),
  * the button stays the unbounded path, and a window the browser already holds
- * in full is not rewritten.
+ * in full is not rewritten. Neither is one a browser at xterm's scrollback cap
+ * could never hold, and a window cut from a byte-capped capture is still labelled
+ * recoverable, since Load full history can reach past it.
  *
  * ORDER MATTERS: that skip must run BEFORE the downgrade guard. The guard reads
  * "smaller than the browser" as "tmux has nothing more to give", which is true of
@@ -104,7 +106,12 @@ const TAIL_CUT = {
 
 function makeApp(
   mode: string,
-  { bufferRows, capture, payload = {} }: { bufferRows: number; capture: string; payload?: Record<string, unknown> }
+  {
+    bufferRows,
+    capture,
+    payload = {},
+    scrollback = 0,
+  }: { bufferRows: number; capture: string; payload?: Record<string, unknown>; scrollback?: number }
 ) {
   const urls: string[] = [];
   const app = {
@@ -119,6 +126,8 @@ function makeApp(
     terminal: {
       cols: 80,
       rows: 30,
+      // xterm's scrollback option; 0 leaves the browser-cap check out of a test.
+      options: { scrollback },
       buffer: { active: { length: bufferRows } },
       scrollToLine: vi.fn(),
       scrollToTop: vi.fn(),
@@ -183,6 +192,60 @@ describe('shell scroll-up pulls a bounded window of tmux history', () => {
     expect(app._fullHistoryRepullUseless.has('s1')).toBe(false);
     // Nothing was written, so the banner state is left exactly as it was.
     expect(app._setHistoryTruncation).not.toHaveBeenCalled();
+    // …but the skip is visible to someone diagnosing "scroll-to-top does nothing".
+    expect(app._logScrollRouting).toHaveBeenCalledWith('repull-skipped-bounded');
+  });
+
+  it("a browser at xterm's scrollback cap stops replaying a window it can never hold, and backs off", async () => {
+    // xterm keeps at most `scrollback + rows` rows while tmux keeps 100k lines, so
+    // a 1 MiB window of short lines can carry more rows than the browser ever will.
+    // `windowRows <= rows held` then never comes true, and every scroll-to-top
+    // past the cooldown reset and re-parsed the window. Untruncated on purpose:
+    // the back-off has to come from the full browser, not from `truncated`.
+    const { app } = makeApp('shell', { bufferRows: 40, capture: lines(2000), scrollback: 1000 });
+
+    // The first pull has room to grow, so it replays.
+    await refetch.call(app);
+    expect(app._resetTerminalForReplay).toHaveBeenCalledTimes(1);
+    expect(app._fullHistoryRepullUseless.has('s1')).toBe(false);
+    // xterm kept only the last `scrollback + rows` of the 2000 rows written.
+    app.terminal.buffer.active.length = 1000 + 30;
+
+    // Past the 4 s cooldown: the browser is full, so nothing is replayed and the
+    // session backs off for a minute.
+    app._fullHistoryRepullAt.set('s1', Date.now() - 5000);
+    await refetch.call(app);
+    expect(app._fetchTerminalCapture).toHaveBeenCalledTimes(2);
+    expect(app._resetTerminalForReplay).toHaveBeenCalledTimes(1);
+    expect(app.chunkedTerminalWrite).toHaveBeenCalledTimes(1);
+    expect(app._fullHistoryRepullUseless.has('s1')).toBe(true);
+
+    // So a scroll 10 s later does not even ask the server for another capture.
+    app._fullHistoryRepullAt.set('s1', Date.now() - 10_000);
+    await refetch.call(app);
+    expect(app._fetchTerminalCapture).toHaveBeenCalledTimes(2);
+    expect(app._resetTerminalForReplay).toHaveBeenCalledTimes(1);
+  });
+
+  it('a replayed window cut from a byte-capped capture still offers Load full history', async () => {
+    // The route keeps `truncationReason: 'capped'` through the tail cut when the
+    // full capture exceeded the byte cap. On a bounded window that is not "gone for
+    // good": the unbounded pull behind the button returns up to the cap itself.
+    const capped = { ...TAIL_CUT, truncationReason: 'capped', fullSize: 40 * 1024 * 1024 };
+    const { app } = makeApp('shell', { bufferRows: 40, capture: lines(300), payload: capped });
+
+    await refetch.call(app);
+
+    expect(app._resetTerminalForReplay).toHaveBeenCalledTimes(1);
+    expect(app._setHistoryTruncation).toHaveBeenCalledWith('s1', expect.objectContaining({ truncationReason: 'tail' }));
+    const notice = computeNotice(app._historyTruncation.get('s1') as Record<string, unknown>);
+    expect(notice.visible).toBe(true);
+    expect(notice.canLoadMore).toBe(true);
+
+    // The button's own unbounded pull is the one place 'capped' is the truth.
+    const button = makeApp('shell', { bufferRows: 40, capture: lines(300), payload: capped });
+    await refetch.call(button.app, { force: true });
+    expect(computeNotice(button.app._historyTruncation.get('s1') as Record<string, unknown>).canLoadMore).toBe(false);
   });
 });
 

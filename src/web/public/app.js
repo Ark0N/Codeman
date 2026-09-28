@@ -6379,18 +6379,29 @@ class CodemanApp {
       // is left as the load that produced it set it: re-labelling it from this
       // payload would call a terminal that holds ALL of a Load full history pull
       // "the most recent 1 MiB".
-      if (boundedShellPull && windowRows <= this.terminal.buffer.active.length) {
+      //
+      // A browser already at xterm's cap buys nothing either. xterm keeps at most
+      // `scrollback + rows` rows (DEFAULT_SCROLLBACK 50k) while tmux keeps 100k
+      // lines by default, so a 1 MiB window of short lines can render to more rows
+      // than the browser can ever hold, and `windowRows <= rowsNow` then never
+      // comes true: without this every scroll-to-top would reset and re-parse it.
+      const rowsNow = this.terminal.buffer.active.length;
+      const scrollbackCap = this.terminal.options?.scrollback || 0;
+      const browserFull = scrollbackCap > 0 && rowsNow >= scrollbackCap + this.terminal.rows;
+      if (boundedShellPull && (windowRows <= rowsNow || browserFull)) {
         // An untruncated window IS all of tmux's history, so nothing is missing,
         // and the next burst of output can put more in tmux than the browser has:
         // keep the normal 4 s cooldown. A truncated one is the opposite case, since
         // the gesture can never reach anything older than what the browser already
         // shows, and every ask costs the server a synchronous capture-pane of the
         // whole history (`tail` is applied after the capture): back off to 60 s.
+        // A full browser backs off too, since no window can ever fit in it.
         // Trade-off: only a successful replay clears that latch, so a tab switch or
         // burst that shrinks the browser's buffer below the window can leave a
         // scroll-to-top inert for up to a minute. Load full history (`force`)
         // bypasses the cooldown, and the latch is bounded, never permanent.
-        if (payload.truncated) (this._fullHistoryRepullUseless ||= new Set()).add(sessionId);
+        if (payload.truncated || browserFull) (this._fullHistoryRepullUseless ||= new Set()).add(sessionId);
+        this._logScrollRouting?.('repull-skipped-bounded');
         return;
       }
       if (this._replayWouldShrinkBuffer(buffer, windowRows)) {
@@ -6404,7 +6415,14 @@ class CodemanApp {
         this._setHistoryTruncation(sessionId, { ...payload, exhausted: true });
         return;
       }
-      this._setHistoryTruncation(sessionId, payload);
+      // A bounded window that was cut is always recoverable: a capture over the
+      // byte cap keeps `truncationReason: 'capped'` through the tail cut, and that
+      // would tell the user the rest "cannot be recovered" and drop Load full
+      // history, whose unbounded pull returns up to the cap itself.
+      this._setHistoryTruncation(
+        sessionId,
+        boundedShellPull && payload.truncated ? { ...payload, truncationReason: 'tail' } : payload
+      );
       this._fullHistoryRepullUseless?.delete(sessionId);
       const rowsBefore = this.terminal.buffer.active.length;
       const replayStartedAt = performance.now();

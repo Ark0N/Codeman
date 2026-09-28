@@ -114,7 +114,7 @@ describe('full-history re-pull downgrade guard (issue #205 round 2)', () => {
     // Also anchored on the open paren: the guard is handed the rows the caller
     // already estimated, and this test is about ORDER, not the argument list.
     const guard = source.indexOf('this._replayWouldShrinkBuffer(buffer', start);
-    const boundedSkip = source.indexOf('boundedShellPull && windowRows <=', start);
+    const boundedSkip = source.indexOf('boundedShellPull && (windowRows <= rowsNow || browserFull)', start);
     const reset = source.indexOf('this._resetTerminalForReplay()', start);
 
     expect(start).toBeGreaterThan(-1);
