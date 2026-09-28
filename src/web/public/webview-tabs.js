@@ -492,7 +492,9 @@ Object.assign(CodemanApp.prototype, {
 
   openWebviewExternal(id) {
     const webview = this.webviews.get(id || this.activeWebviewId);
-    if (webview) window.open(webview.url, '_blank', 'noopener');
+    if (!webview) return;
+    if (this.openInHostWindow?.(webview.url)) return;
+    window.open(webview.url, '_blank', 'noopener');
   },
 
   closeWebviewTab(id) {

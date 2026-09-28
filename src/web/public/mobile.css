@@ -39,8 +39,10 @@ html.mobile-init .file-browser-panel {
 
   /* No "open in new window" (detach) on phones/tablets — popped-out browser
      windows aren't usable there. !important beats the hover/detached reveal
-     rules in styles.css */
-  .session-tab .tab-detach {
+     rules in styles.css. A native wrapper that opens windows of its own (side
+     by side on a foldable) keeps it at tablet widths: app.js sets
+     html.host-windows. Phone widths hide it again in the 599px block. */
+  html:not(.host-windows) .session-tab .tab-detach {
     display: none !important;
   }
 }
@@ -749,6 +751,13 @@ html.mobile-init .file-browser-panel {
   .session-tab .tab-close,
   .session-tab .tab-gear {
     display: none;
+  }
+
+  /* The tap-zone reserve counts gear + close only (test/mobile-tab-tap-zones),
+     so the pop-out icon stays off phone tabs even under a window-opening host,
+     which offers the pop-out from its own chrome (app.detachSession). */
+  .session-tab .tab-detach {
+    display: none !important;
   }
 
   /* Gear icon on active tab - tiny, subtle */
