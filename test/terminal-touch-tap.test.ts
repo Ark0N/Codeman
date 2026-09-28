@@ -683,10 +683,12 @@ describe('terminal touch tap mouse guard', () => {
     // (the codex transcript lives there — inline viewport, no in-app pager) sat unused.
     app.sessions = new Map([['sess-1', { mode: 'codex' }]]);
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
-    app.sessions = new Map([['sess-1', { mode: 'codex', cliVersion: '9.9.9' }]]); // no version rescues it
+    // Tracking on and a high version, so only the mode check can say no: without
+    // them the gate is false for claude too and this would pin nothing.
+    app.sessions = new Map([['sess-1', { mode: 'codex', cliVersion: '9.9.9', cliMouseTracking: true }]]); // no version rescues it
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
 
-    app.sessions = new Map([['sess-1', { mode: 'gemini', cliVersion: '9.9.9' }]]); // unverified TUI
+    app.sessions = new Map([['sess-1', { mode: 'gemini', cliVersion: '9.9.9', cliMouseTracking: true }]]); // unverified TUI
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
   });
 

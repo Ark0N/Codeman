@@ -155,7 +155,8 @@ Worth knowing:
   history; press **Load full history** to pull the rest explicitly. Automatic output
   recovery stays within the bounded browser buffer.
 - **Wheel and touch scrolling** are forwarded into Claude's own transcript when a recent
-  Claude runs fullscreen, so the wheel scrolls the conversation rather than the terminal.
+  Claude runs fullscreen (`CLAUDE_CODE_NO_FLICKER=1`, or `"tui": "fullscreen"` in
+  `~/.claude/settings.json`), so the wheel scrolls the conversation rather than the terminal.
   Claude's default inline view keeps its history in the terminal and scrolls locally. `Shift+Wheel` is
   always local scrollback. Other CLIs scroll locally.
 - **Selection copy.** `Ctrl+C` copies when text is selected and interrupts when it is not.
