@@ -5151,6 +5151,14 @@ Object.assign(CodemanApp.prototype, {
     const sessionMode = session?.mode || 'claude';
     if (sessionMode !== 'claude') return false;
     if (!this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;
+    // Only while Claude is actually listening for the mouse. In its default
+    // inline renderer (2.1.280 measured: alternate_on=0, mouse_any_flag=0) the
+    // transcript lives in real scrollback, like codex, and SGR wheel reports are
+    // ignored, so forwarding made every swipe and wheel tick dead. Fullscreen
+    // (CLAUDE_CODE_NO_FLICKER=1) turns on alt-screen + mode 1003/1006, which the
+    // server records as cliMouseTracking. A stale-false flag after a server
+    // restart falls through to _maybePageCliTranscript, so it never goes dead.
+    if (session?.cliMouseTracking !== true) return false;
     // Deliberately NOT gated on _terminalViewportAtBottom(). It used to be, so
     // that leaving the bottom handed the wheel back to local scrollback and both
     // histories stayed reachable without a mode switch. In practice that inverted
