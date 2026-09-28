@@ -311,6 +311,15 @@ worker's prompt but never submitted, and the wait then runs its full timeout on 
 turn that never started. Verified live; this is the most common silent failure on
 this endpoint.
 
+A **plain prompt** (printable text followed by exactly one `\r`, nothing else) is
+delivered through tmux even without `useMux`: the text is typed, Enter is pressed as
+a separate key, and the server re-presses Enter while the prompt is still visibly
+sitting on the composer. Written straight into the pane in one piece, a prompt of
+about a hundred characters or more is taken as a paste by Claude Code, its `\r`
+becomes a newline, and the prompt stays unsent (measured on 2.1.283). Any other
+input (escape sequences, a bracketed-paste frame, a line feed, a bare `\r`) keeps
+the raw write, and an explicit `"useMux": false` forces it.
+
 ```bash
 curl -s -X POST "$API/api/v1/sessions/$SID/input" \
   -H 'Content-Type: application/json' \
