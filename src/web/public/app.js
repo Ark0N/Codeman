@@ -6320,10 +6320,15 @@ class CodemanApp {
     if (!sessionId || this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
     if (this.detachedSessions?.has(sessionId)) return;
     const session = this.sessions.get(sessionId);
-    // A shell's full capture can be many megabytes. Replaying it from an
-    // ordinary scroll gesture blocks xterm's main thread, so keep that cost
-    // behind the explicit "Load full history" button.
-    if (!force && session?.mode === 'shell') return;
+    // A shell's full capture can be many megabytes, and replaying all of it from
+    // an ordinary scroll gesture blocks xterm's main thread. So a shell scroll
+    // pulls a BOUNDED window of tmux's full history (the same 1 MiB a tab switch
+    // loads, but of the scrollback rather than the visible frame) and the
+    // unbounded pull stays behind the "Load full history" button. Declining
+    // outright left a shell pane about one screen of browser scrollback after any
+    // burst, and the button only renders once a replay was truncated, so a young
+    // shell tab had no way back to output tmux was still holding.
+    const boundedShellPull = !force && session?.mode === 'shell';
     const now = Date.now();
     // Momentum scrolling fires this dozens of times per flick, and a burst of new
     // output is the normal reason to want a re-pull, so cooldown rather than latch.
@@ -6336,7 +6341,12 @@ class CodemanApp {
     this._fullHistoryRepullInFlight = true;
     try {
       const requestStartedAt = performance.now();
-      const capture = await this._fetchTerminalCapture(`/api/sessions/${sessionId}/terminal?full=1`, { full: true });
+      const capture = await this._fetchTerminalCapture(
+        boundedShellPull
+          ? `/api/sessions/${sessionId}/terminal?full=1&tail=${TERMINAL_TAIL_SIZE}`
+          : `/api/sessions/${sessionId}/terminal?full=1`,
+        { full: true }
+      );
       const headersReceivedAt = capture.headersAt;
       const payload = capture.json?.data ?? {};
       const bodyParsedAt = performance.now();
@@ -6357,7 +6367,33 @@ class CodemanApp {
       // Bail on a tab switch mid-fetch: writing here would paint another session's
       // history into the terminal the user is now looking at.
       if (!buffer || this.activeSessionId !== sessionId) return;
-      if (this._replayWouldShrinkBuffer(buffer)) {
+      const windowRows = this._estimateReplayRows(buffer, this.terminal.cols);
+      // A bounded window no longer than the browser's buffer buys nothing, and
+      // resetting to rewrite it would jump the viewport on every scroll that
+      // outlasts the cooldown at the top. This runs BEFORE the downgrade guard
+      // on purpose: that guard reads "smaller than the browser" as "tmux has
+      // nothing more to give", which is true of an unbounded capture but not of a
+      // window cut at the tail size, so a bounded window must never reach the
+      // exhausted path, which would take Load full history off the banner while
+      // tmux still holds the rest. Nothing was written here, so the banner state
+      // is left as the load that produced it set it: re-labelling it from this
+      // payload would call a terminal that holds ALL of a Load full history pull
+      // "the most recent 1 MiB".
+      if (boundedShellPull && windowRows <= this.terminal.buffer.active.length) {
+        // An untruncated window IS all of tmux's history, so nothing is missing,
+        // and the next burst of output can put more in tmux than the browser has:
+        // keep the normal 4 s cooldown. A truncated one is the opposite case, since
+        // the gesture can never reach anything older than what the browser already
+        // shows, and every ask costs the server a synchronous capture-pane of the
+        // whole history (`tail` is applied after the capture): back off to 60 s.
+        // Trade-off: only a successful replay clears that latch, so a tab switch or
+        // burst that shrinks the browser's buffer below the window can leave a
+        // scroll-to-top inert for up to a minute. Load full history (`force`)
+        // bypasses the cooldown, and the latch is bounded, never permanent.
+        if (payload.truncated) (this._fullHistoryRepullUseless ||= new Set()).add(sessionId);
+        return;
+      }
+      if (this._replayWouldShrinkBuffer(buffer, windowRows)) {
         timing.refused = true;
         timing.totalMs = performance.now() - requestStartedAt;
         this._recordTerminalLoadTiming(timing);

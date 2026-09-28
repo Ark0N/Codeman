@@ -122,7 +122,7 @@ describe('the in-terminal truncation line is gone (static guard)', () => {
     expect(app).not.toContain('earlier output truncated for performance');
   });
 
-  it('loads a bounded shell tail first and keeps full history user-triggered', () => {
+  it('loads a bounded shell tail first and keeps unbounded full history user-triggered', () => {
     const app = readFileSync(resolve(PUBLIC, 'app.js'), 'utf8');
     expect(app).toContain("session?.mode !== 'shell' && !this._fullHistoryLoaded.has(sessionId)");
     expect(app).toContain("!restoredSnapshot && session?.mode !== 'shell'");
@@ -131,10 +131,13 @@ describe('the in-terminal truncation line is gone (static guard)', () => {
     // an abort deadline (a `?full=1` body can be megabytes and used to hang
     // indefinitely on a stalled mobile link). The URL and the full-vs-tail
     // decision this guard exists to pin are unchanged.
-    expect(app).toContain('this._fetchTerminalCapture(`/api/sessions/${sessionId}/terminal?full=1`, { full: true })');
+    expect(app).toContain(': `/api/sessions/${sessionId}/terminal?full=1`,\n        { full: true }');
     expect(app).toContain("if (this.sessions.get(sessionId)?.mode !== 'shell')");
     expect(app).toContain("if (session?.mode === 'shell')");
-    expect(app).toContain("if (!force && session?.mode === 'shell') return;");
+    // A shell scroll gesture pulls a BOUNDED window of full history; only the
+    // button pulls all of it (behaviour pinned in shell-scroll-history-pull.test.ts).
+    expect(app).toContain("const boundedShellPull = !force && session?.mode === 'shell';");
+    expect(app).toContain('`/api/sessions/${sessionId}/terminal?full=1&tail=${TERMINAL_TAIL_SIZE}`');
     expect(app).toContain("trigger: force ? 'full-history-button' : 'full-history-scroll'");
   });
 
