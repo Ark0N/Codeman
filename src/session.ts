@@ -4208,6 +4208,16 @@ export class Session extends EventEmitter {
   }
 
   /**
+   * Arm the composer check for a prompt that went out some other way than
+   * `writeViaMux`, e.g. cron's paste mode, which writes the body raw and its Enter
+   * separately. `text` is what the composer line starts with while the prompt is still
+   * unsent; the check re-presses Enter only while that holds.
+   */
+  verifySubmitted(text: string): void {
+    this._verifySubmitted(`${text}\r`);
+  }
+
+  /**
    * Arm the composer check for a write that carried Enter (session-submit-verifier.ts):
    * Claude Code 2.1.277+ ignores Enter for the first 30-50 s after the composer paints,
    * so the pair `sendInput` just sent can leave the text stranded. Only a mux session

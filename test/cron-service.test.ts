@@ -16,7 +16,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CronService, clampCronExternalCliConfigs, type CronDeps } from '../src/cron/cron-service.js';
+import {
+  CronService,
+  clampCronExternalCliConfigs,
+  deliverCronPrompt,
+  type CronDeps,
+} from '../src/cron/cron-service.js';
+import { CRON_PASTE_ENTER_DELAY_MS } from '../src/config/server-timing.js';
 import { CronJobSchema } from '../src/web/schemas.js';
 import { MAX_CRON_JOBS } from '../src/config/map-limits.js';
 import type { CronJob, CronJobRun } from '../src/types/cron.js';
@@ -703,5 +709,79 @@ describe('clampCronExternalCliConfigs', () => {
     for (const mode of ['claude', 'shell', 'opencode', 'codex', 'antigravity'] as const) {
       expect(clampCronExternalCliConfigs(mode, false)).toEqual({ geminiConfig: undefined, piConfig: undefined });
     }
+  });
+});
+
+/**
+ * Paste mode used to write `<text>\r` in one piece. Claude Code takes a raw burst of
+ * about a hundred characters as a paste and turns its `\r` into a newline, so the
+ * prompt sat unsent on the composer while the run said `prompt_sent`.
+ */
+describe('deliverCronPrompt', () => {
+  const PROMPT =
+    'Reply with only the word ok and nothing else, this sentence is padding to reach about one hundred chars.';
+
+  function fakeTarget(ok = true) {
+    const calls: string[] = [];
+    const target = {
+      write: vi.fn((d: string) => {
+        calls.push(`write:${JSON.stringify(d)}`);
+        return ok;
+      }),
+      writeViaMux: vi.fn(async (d: string) => {
+        calls.push(`mux:${JSON.stringify(d)}`);
+        return ok;
+      }),
+      verifySubmitted: vi.fn((t: string) => {
+        calls.push(`verify:${JSON.stringify(t)}`);
+      }),
+    };
+    return { target, calls };
+  }
+  const noWait = async (): Promise<void> => {};
+
+  it('paste mode writes the text and its Enter separately, then arms the composer check', async () => {
+    const { target, calls } = fakeTarget();
+    const waits: number[] = [];
+
+    const ok = await deliverCronPrompt(target, PROMPT, 'paste', async (ms) => {
+      waits.push(ms);
+      calls.push('wait');
+    });
+
+    expect(ok).toBe(true);
+    expect(calls).toEqual([
+      `write:${JSON.stringify(PROMPT)}`,
+      'wait',
+      'write:"\\r"',
+      `verify:${JSON.stringify(PROMPT)}`,
+    ]);
+    expect(waits).toEqual([CRON_PASTE_ENTER_DELAY_MS]);
+    expect(target.writeViaMux).not.toHaveBeenCalled();
+  });
+
+  it('never puts the Enter in the same write as the text', async () => {
+    const { target } = fakeTarget();
+
+    await deliverCronPrompt(target, `${PROMPT}\r`, 'paste', noWait);
+
+    for (const [data] of target.write.mock.calls) {
+      expect(data === '\r' || !data.includes('\r')).toBe(true);
+    }
+  });
+
+  it('typed mode is unchanged: one mux write that carries the Enter', async () => {
+    const { target, calls } = fakeTarget();
+
+    await deliverCronPrompt(target, PROMPT, 'typed', noWait);
+
+    expect(calls).toEqual([`mux:${JSON.stringify(`${PROMPT}\r`)}`]);
+  });
+
+  it('reports a session it could not write to, instead of claiming the prompt went out', async () => {
+    const { target } = fakeTarget(false);
+
+    expect(await deliverCronPrompt(target, PROMPT, 'paste', noWait)).toBe(false);
+    expect(target.verifySubmitted).not.toHaveBeenCalled();
   });
 });

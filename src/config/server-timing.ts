@@ -99,3 +99,11 @@ export const STALE_DATA_MAX_AGE_MS = 60 * 60 * 1000;
 
 /** Standard 5-minute inactivity timeout for streams and caches (ms) */
 export const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Gap between a paste-mode cron prompt's text and its Enter (ms). The two must be
+ * separate writes: Claude Code takes a raw `<text>\r` burst of about a hundred
+ * characters as a paste and turns its `\r` into a newline. A separate `\r` 80 ms
+ * after the text was measured to submit; this leaves room for a longer prompt.
+ */
+export const CRON_PASTE_ENTER_DELAY_MS = 300;
