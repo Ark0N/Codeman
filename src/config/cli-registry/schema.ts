@@ -338,6 +338,15 @@ const capabilitiesSchema = z
         // Bounded hard: this is how far up the screen a config file may push the search,
         // and every row it adds is one more row the agent itself may be able to write.
         watchingLines: z.number().int().min(1).max(8).optional(),
+        // Same guard again: tested against a pane row every time a session settles.
+        awaitingLine: z
+          .string()
+          .min(1)
+          .refine(
+            (src) => compileVersionRegex(src) !== null,
+            'awaitingLine must be a regex compileVersionRegex() accepts: at most 200 characters, no nested quantifiers'
+          )
+          .optional(),
       })
       .strict()
       // A window with nothing to search is a typo, not a configuration. Refused at LOAD

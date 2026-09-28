@@ -238,6 +238,14 @@ const CLAUDE: CliEntry = {
       // watching rather than open that door. See `watchingLabel()` in
       // `session-activity.ts`.
       watchingLine: String.raw`·\s*(\d+ (?:monitors?|shells?|teams?|local agents?|cloud sessions?|MCP tasks?|background tasks?|(?:background|remote) dynamic workflows?|Artifact comment monitors?))`,
+      // When a turn ends while background agents or an ultracode workflow are still
+      // running, Claude swaps its `✻ Brewed for 1m 18s` closing row for
+      // `✻ Waiting for 2 background agents and 1 dynamic workflow to finish` and resumes
+      // by itself when they report back. Read from the 2.1.283 bundle (the turn-duration
+      // renderer) and a live pane on 2026-09-28. The row is a snapshot taken at turn end
+      // and never redrawn, which is why only the newest row above the composer counts.
+      // Anchored on column 0: Claude's own rows start there, the agent's prose never does.
+      awaitingLine: String.raw`^✻ Waiting for \d+ (?:background agents?|dynamic workflows?)\b`,
     },
     requiresMux: false,
     // Claude installs Codeman's own hooks block into every workspace it runs in, so its

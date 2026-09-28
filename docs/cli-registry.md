@@ -46,8 +46,9 @@ interface CliEntry {
   launch: CliLaunch; // the structured argv template
   env: CliEnv; // exports, tmux setenv keys, the env-override allowlist
   capabilities: CliCapabilities; // what every call site reads instead of the id
-  //   .workDetect?: { promptGlyph, workingLine, watchingLine?, watchingLines? } — how
-  //   this CLI's pane shows work, and how it shows work it started in the background
+  //   .workDetect?: { promptGlyph, workingLine, watchingLine?, watchingLines?, awaitingLine? }
+  //   — how this CLI's pane shows work, work it started in the background, and a turn
+  //   that ended waiting for workers it will resume from
   overlays: CliOverlays; // remote-SSH / Docker pane commands, credential store
 }
 ```
@@ -56,7 +57,7 @@ interface CliEntry {
 
 ### Regexes that come from config
 
-Three capability fields carry a regular expression an override file can set: `discovery.version.regex`, `capabilities.workDetect.workingLine` and `capabilities.workDetect.watchingLine`. All three go through `compileVersionRegex()`, which caps the source at 200 characters, refuses the nested-quantifier shapes that cause catastrophic backtracking, and returns `null` rather than throwing so every caller degrades instead of crashing.
+Four capability fields carry a regular expression an override file can set: `discovery.version.regex`, `capabilities.workDetect.workingLine`, `capabilities.workDetect.watchingLine` and `capabilities.workDetect.awaitingLine`. All four go through `compileVersionRegex()`, which caps the source at 200 characters, refuses the nested-quantifier shapes that cause catastrophic backtracking, and returns `null` rather than throwing so every caller degrades instead of crashing.
 
 `workingLine` is the one that matters most, because it is compiled once per session and then run against every accumulated PTY chunk and every pane capture. A nested quantifier there is a ReDoS against the event loop for the whole server, not just that session. The guard therefore runs in two places, and neither is redundant: `schema.ts` rejects the entry at LOAD time so a bad pattern never reaches a session, and `_workingLinePattern()` in `session.ts` compiles through the same helper so the runtime cannot end up with a pattern the schema would have refused.
 
@@ -75,6 +76,18 @@ puts the row third from the bottom once the status line and the composer are cou
 entry declares `watchingLines: 3` and matches that row end to end. Both were measured
 against live panes rather than read out of a binary, which is the standard for adding a
 third.
+
+`awaitingLine` covers the quiet pane that is neither idle nor watching: a turn that ENDED
+to wait for workers the CLI will resume from by itself. When background agents or an
+ultracode workflow are still running at turn end, Claude closes the turn with
+`✻ Waiting for 1 dynamic workflow to finish` instead of `✻ Brewed for 1m 18s`, and a pane
+showing that row counts as working. ⚠️ Claude renders the row once and never redraws it, so
+the words are still on screen after the workers report back and the follow-up turn ends.
+The pattern is therefore never run over the whole pane: `isAwaitingWorkers()`
+(`session-activity.ts`) walks up from the composer past blank, framed and indented rows and
+tests only the first row that starts in column 0, which is the newest transcript row. Claude
+starts its own rows in column 0 and the agent's prose never does, so the anchor also keeps an
+agent from holding its own session busy.
 
 That label is the one value in the registry that an AGENT can influence, because it comes off
 the agent's own screen. Two things keep it honest, and both belong to whoever adds a pattern
