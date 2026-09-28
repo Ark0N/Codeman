@@ -263,6 +263,8 @@ const CLAUDE: CliEntry = {
     transcript: 'claude-jsonl',
     altScreen: 'strip-full',
     echo: { policy: 'buffer', anchor: { kind: 'glyph', glyph: '❯', offset: 2 } },
+    // Declared-for-later: the live rule (`_shouldForwardWheelToApp`, terminal-ui.js) is this version
+    // AND the server-published `cliMouseTracking` flag (#498), so wiring this field up needs both.
     wheelForward: { mode: 'version-gated', minVersion: '2.1.187' },
     keyboardAccessory: 'agent',
     privilegedCommandGate: false,
