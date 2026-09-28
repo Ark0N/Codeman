@@ -13,7 +13,8 @@ It renders what it can:
 
 | Kind                     | Behaviour                                                                 |
 | ------------------------ | ------------------------------------------------------------------------- |
-| Text and code            | Syntax-aware preview. Long files are truncated in plain preview.           |
+| Text and code            | Plain preview with Lines (line numbers) and Wrap toggles in the header. Long files are truncated in plain preview. |
+| Markdown                 | Rendered by default: headings, tables, code blocks with copy buttons, images and links relative to the file. The MD pill in the header flips to source. |
 | Images                   | Inline.                                                                    |
 | Audio and video          | Inline with a working scrub bar, because range requests are supported.     |
 | PDF and Office documents | Converted for preview when a converter is available.                       |

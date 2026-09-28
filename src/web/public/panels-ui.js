@@ -20,6 +20,20 @@ const FILE_BROWSER_SHOW_HIDDEN_KEY = 'codeman:fileBrowserShowHidden';
 // a huge log is a partial read rather than a download the viewer throws away.
 const TEXT_PREVIEW_MAX_BYTES = 512 * 1024;
 const TEXT_PREVIEW_MAX_LINES = 500;
+// A markdown document gets the route's ceiling instead of the 500-line preview
+// cap: a rendered README cut mid-way reads as the whole document.
+const MARKDOWN_PREVIEW_MAX_LINES = 10000;
+const MARKDOWN_EXTS = new Set(['md', 'markdown']);
+// File Viewer text-view prefs: per-device, in their own localStorage keys for
+// the same reason as FILE_BROWSER_SHOW_HIDDEN_KEY (the app-settings object is
+// rebuilt from the settings modal on save, so a key toggled from the viewer
+// would be dropped on the next save).
+const FILE_PREVIEW_PREF_KEYS = {
+  mdRendered: 'codeman:filePreviewMdRendered',
+  lineNumbers: 'codeman:filePreviewLineNumbers',
+  wrap: 'codeman:filePreviewWrap',
+};
+const FILE_PREVIEW_PREF_DEFAULTS = { mdRendered: true, lineNumbers: false, wrap: true };
 const AWAY_DIGEST_SECTIONS = [
   ['needsAttention', 'Needs Attention'],
   ['completed', 'Completed'],
@@ -4012,6 +4026,10 @@ Object.assign(CodemanApp.prototype, {
     this.filePreviewDetachUrl = '';
     const detachBtn = this.$('filePreviewDetachBtn');
     if (detachBtn) detachBtn.hidden = true;
+    // Same for the text-view toggles: they act on the text this load has not
+    // fetched yet, and an image or PDF has nothing for them to toggle.
+    this.filePreviewText = null;
+    this._updateFilePreviewToolbar('none');
 
     // Show overlay with loading state
     overlay.classList.add('visible');
@@ -4095,12 +4113,17 @@ Object.assign(CodemanApp.prototype, {
           const text = await res.text();
           const clippedByBytes = res.status === 206 && text.length >= TEXT_PREVIEW_MAX_BYTES;
           const lines = text.split('\n');
-          const clippedByLines = lines.length > TEXT_PREVIEW_MAX_LINES;
-          const shown = clippedByLines ? lines.slice(0, TEXT_PREVIEW_MAX_LINES).join('\n') : text;
-          bodyEl.innerHTML = `<pre><code>${escapeHtml(shown)}</code></pre>`;
+          // Markdown keeps every line the Range read returned: the byte bound is
+          // what protects the tab, and a rendered document cut at 500 lines
+          // reads as the whole document.
+          const lineCap = MARKDOWN_EXTS.has(ext) ? Infinity : TEXT_PREVIEW_MAX_LINES;
+          const clippedByLines = lines.length > lineCap;
+          const shown = clippedByLines ? lines.slice(0, lineCap).join('\n') : text;
           this.filePreviewContent = shown;
+          this.filePreviewText = { ext, sessionId, filePath };
+          this._renderFilePreviewText();
           if (clippedByLines || clippedByBytes) {
-            const note = clippedByLines ? `showing first ${TEXT_PREVIEW_MAX_LINES} lines` : 'showing the start of the file';
+            const note = clippedByLines ? `showing first ${lineCap} lines` : 'showing the start of the file';
             footerEl.textContent = `${footerEl.textContent} (${note})`;
           }
         } catch (err) {
@@ -4146,8 +4169,13 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
 
+    // 500 lines is what keeps a huge log from locking the tab in one <pre>;
+    // markdown is rendered as a document and takes the route's ceiling instead.
+    const lineCap = MARKDOWN_EXTS.has(ext) ? MARKDOWN_PREVIEW_MAX_LINES : TEXT_PREVIEW_MAX_LINES;
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/file-content?path=${encodeURIComponent(filePath)}&lines=500`);
+      const res = await fetch(
+        `/api/sessions/${sessionId}/file-content?path=${encodeURIComponent(filePath)}&lines=${lineCap}`
+      );
       if (!res.ok) throw new Error('Failed to load file');
 
       const result = await res.json();
@@ -4172,10 +4200,11 @@ Object.assign(CodemanApp.prototype, {
         bodyEl.innerHTML = `<div class="binary-message">Binary file (${this.formatFileSize(data.size)})<br>Cannot preview<br><a href="${escapeHtml(downloadHref)}" download>Download</a></div>`;
         footerEl.textContent = data.extension || 'binary';
       } else {
-        // Text content
+        // Text content: rendered markdown or plain text, per the viewer's toggles.
         this.filePreviewContent = data.content;
-        bodyEl.innerHTML = `<pre><code>${escapeHtml(data.content)}</code></pre>`;
-        const truncNote = data.truncated ? ` (showing 500/${data.totalLines} lines)` : '';
+        this.filePreviewText = { ext, sessionId, filePath };
+        this._renderFilePreviewText();
+        const truncNote = data.truncated ? ` (showing ${lineCap}/${data.totalLines} lines)` : '';
         footerEl.textContent = `${data.totalLines} lines \u2022 ${this.formatFileSize(data.size)}${truncNote}`;
         // Edit affordance only when the server says an edit=1 re-fetch would
         // succeed (workspace text file inside the allowlist and size cap).
@@ -4203,6 +4232,8 @@ Object.assign(CodemanApp.prototype, {
     // audible and keeps streaming from the server. Closing has to stop it.
     this._stopFilePreviewMedia();
     this.filePreviewContent = '';
+    this.filePreviewText = null;
+    this._updateFilePreviewToolbar('none');
     this.filePreviewDetachUrl = '';
     const detachBtn = this.$('filePreviewDetachBtn');
     if (detachBtn) detachBtn.hidden = true;
@@ -4249,6 +4280,168 @@ Object.assign(CodemanApp.prototype, {
       }
     }
     bodyEl.innerHTML = '';
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // File Viewer text view: rendered markdown, line numbers, wrap
+  // ═══════════════════════════════════════════════════════════════
+
+  _filePreviewPref(name) {
+    try {
+      const stored = localStorage.getItem(FILE_PREVIEW_PREF_KEYS[name]);
+      if (stored === '1') return true;
+      if (stored === '0') return false;
+    } catch {
+      /* private mode: fall through to the default */
+    }
+    return FILE_PREVIEW_PREF_DEFAULTS[name];
+  },
+
+  _setFilePreviewPref(name, on) {
+    try {
+      localStorage.setItem(FILE_PREVIEW_PREF_KEYS[name], on ? '1' : '0');
+    } catch {
+      /* private mode: the toggle still applies for this page load */
+    }
+  },
+
+  /**
+   * Paint the loaded text (filePreviewContent) into the preview body: a
+   * rendered document for .md/.markdown while the MD toggle is on, otherwise
+   * plain text with one span per line so the Lines toggle can number them.
+   * The MD toggle re-runs this without a refetch.
+   *
+   * Markdown goes through the same pipeline as the Response Viewer
+   * (`_renderMarkdown`: marked + the DOMPurify allowlist), never a second
+   * parser, and is built inside a <template>: a detached div with innerHTML
+   * already set starts fetching every <img src>, so the document's relative
+   * image paths would hit the server as /docs/img.png 404s before
+   * `_rebaseFilePreviewMarkdownRefs` rewrote them.
+   */
+  _renderFilePreviewText() {
+    const info = this.filePreviewText;
+    const bodyEl = this.$('filePreviewBody');
+    if (!info || !bodyEl) return;
+    const isMarkdown = MARKDOWN_EXTS.has(info.ext);
+    const rendered = isMarkdown && this._filePreviewPref('mdRendered');
+    if (rendered) {
+      // data-i18n-skip: the translator's MutationObserver would otherwise
+      // rewrite the document's own headings and paragraphs.
+      const tmpl = document.createElement('template');
+      tmpl.innerHTML = `<div class="rv-text file-preview-md" data-i18n-skip>${this._renderMarkdown(this.filePreviewContent)}</div>`;
+      const doc = tmpl.content.firstElementChild;
+      this._rebaseFilePreviewMarkdownRefs(doc, info);
+      this._linkifyFilePaths(doc);
+      bodyEl.replaceChildren(tmpl.content);
+      // The Response Viewer's click delegate (path links, code-block copy
+      // buttons, loopback links): container-bound and idempotent, so binding it
+      // on the body once serves every preview.
+      this._bindResponseViewerInteractions(bodyEl);
+    } else {
+      const pre = document.createElement('pre');
+      pre.className = 'file-preview-text';
+      pre.classList.toggle('wrap', this._filePreviewPref('wrap'));
+      pre.classList.toggle('show-lines', this._filePreviewPref('lineNumbers'));
+      const code = document.createElement('code');
+      // One span per line joined by real newlines: empty lines survive, select
+      // and copy return the exact text, and the gutter counter hangs off the
+      // spans' ::before so the numbers are never part of the text.
+      code.innerHTML = this.filePreviewContent
+        .split('\n')
+        .map((line) => `<span class="fp-line">${escapeHtml(line)}</span>`)
+        .join('\n');
+      pre.appendChild(code);
+      bodyEl.replaceChildren(pre);
+    }
+    this._updateFilePreviewToolbar(rendered ? 'markdown' : 'text');
+  },
+
+  /**
+   * Point a rendered document's relative references at the file it came from.
+   *
+   * Images are rebased onto the workspace-confined file-raw route under the
+   * document's directory (the server refuses escapes, so `..` is safe to
+   * forward). Whatever fails to load degrades to its alt text with one error
+   * handler: a remote image the page CSP blocks, a 404 for a document outside
+   * the workspace, an SVG that file-raw serves as a download. Relative links
+   * take the `a.rv-path` shape the Response Viewer delegate already opens in
+   * this overlay, minus the target/rel `_renderMarkdown` gave them, which
+   * would otherwise open <origin>/docs/x.md in a new tab.
+   */
+  _rebaseFilePreviewMarkdownRefs(root, { sessionId, filePath }) {
+    const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/') + 1) : '';
+    // Relative = no scheme, not root-relative (which includes //host), not a fragment.
+    const isRelative = (ref) => !!ref && !/^[a-z][a-z0-9+.-]*:/i.test(ref) && !ref.startsWith('/') && !ref.startsWith('#');
+    // GitHub-style `img.png#gh-dark-mode-only` and `doc.md#section`: the
+    // fragment is not part of the path. `.` and `..` segments are collapsed so
+    // the title reads `README.md`, not `docs/../README.md`; a `..` that climbs
+    // past the start is kept and left for the server to refuse.
+    const resolveRef = (ref) => {
+      const parts = [];
+      for (const seg of (dir + ref.split('#')[0]).split('/')) {
+        if (seg === '.' || (seg === '' && parts.length)) continue;
+        if (seg === '..' && parts.length && parts[parts.length - 1] !== '..' && parts[parts.length - 1] !== '') parts.pop();
+        else parts.push(seg);
+      }
+      return parts.join('/');
+    };
+    for (const img of root.querySelectorAll('img[src]')) {
+      const src = img.getAttribute('src') || '';
+      if (isRelative(src)) {
+        const path = resolveRef(src);
+        img.setAttribute('src', CodemanBase.url(`/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(path)}`));
+      }
+      img.addEventListener('error', () => img.replaceWith(img.getAttribute('alt') || src), { once: true });
+    }
+    for (const a of root.querySelectorAll('a[href]')) {
+      const href = a.getAttribute('href') || '';
+      if (!isRelative(href)) continue;
+      a.className = 'rv-path';
+      a.dataset.path = resolveRef(href);
+      a.setAttribute('href', '#');
+      a.removeAttribute('target');
+      a.removeAttribute('rel');
+    }
+  },
+
+  /**
+   * Show the toggles that apply to the current view: MD for a markdown file in
+   * either view, Lines/Wrap for the plain-text view only; `'none'` (loading,
+   * image, media, PDF, edit mode) hides all three.
+   */
+  _updateFilePreviewToolbar(view) {
+    const set = (id, shown, pressed) => {
+      const btn = this.$(id);
+      if (!btn) return;
+      btn.hidden = !shown;
+      if (shown) btn.setAttribute('aria-pressed', String(pressed));
+    };
+    const isMarkdown = view !== 'none' && MARKDOWN_EXTS.has(this.filePreviewText?.ext || '');
+    set('filePreviewMdBtn', isMarkdown, view === 'markdown');
+    set('filePreviewLinesBtn', view === 'text', this._filePreviewPref('lineNumbers'));
+    set('filePreviewWrapBtn', view === 'text', this._filePreviewPref('wrap'));
+  },
+
+  toggleFilePreviewMd() {
+    this._setFilePreviewPref('mdRendered', !this._filePreviewPref('mdRendered'));
+    this._renderFilePreviewText();
+  },
+
+  toggleFilePreviewLines() {
+    this._toggleFilePreviewTextClass('lineNumbers', 'show-lines');
+  },
+
+  toggleFilePreviewWrap() {
+    this._toggleFilePreviewTextClass('wrap', 'wrap');
+  },
+
+  /** Lines and Wrap are pure class flips on the <pre>; no re-render needed. */
+  _toggleFilePreviewTextClass(pref, className) {
+    const on = !this._filePreviewPref(pref);
+    this._setFilePreviewPref(pref, on);
+    const pre = this.$('filePreviewBody')?.querySelector(':scope > pre.file-preview-text');
+    if (pre) pre.classList.toggle(className, on);
+    this._updateFilePreviewToolbar('text');
   },
 
   // ═══════════════════════════════════════════════════════════════
@@ -4318,6 +4511,8 @@ Object.assign(CodemanApp.prototype, {
     textarea.addEventListener('input', () => this._onFilePreviewEditInput());
     bodyEl.innerHTML = '';
     bodyEl.appendChild(textarea);
+    // The MD/Lines/Wrap toggles act on the text view this textarea replaced.
+    this._updateFilePreviewToolbar('none');
     // Deliberately no autofocus: on phones that would pop the OS keyboard
     // before the user has scrolled to the line they want to change.
 

@@ -681,6 +681,18 @@ describe('file-routes', () => {
       expect(body.data.url).toContain('file-raw');
     });
 
+    it('classifies avif as an image so the viewer renders it instead of dumping bytes', async () => {
+      mockedStat.mockResolvedValue({ size: 1024 } as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/file-content?path=photo.avif`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.data.type).toBe('image');
+    });
+
     it('returns audio metadata for audio files', async () => {
       mockedStat.mockResolvedValue({ size: 2048 } as never);
 
@@ -815,6 +827,19 @@ describe('file-routes', () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.headers['content-type']).toBe('image/png');
+    });
+
+    it('serves avif with its image type, since <img> refuses an octet-stream', async () => {
+      const content = Buffer.from('fake avif data');
+      mockedCreateReadStream.mockReturnValue(Readable.from([content]) as never);
+      mockedStat.mockResolvedValue({ size: content.length } as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/file-raw?path=photo.avif`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toBe('image/avif');
     });
 
     it('serves workspace SVG as an untrusted attachment instead of inline image/svg+xml', async () => {
