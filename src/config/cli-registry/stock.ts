@@ -237,7 +237,15 @@ const CLAUDE: CliEntry = {
       // carry a count. A footer that ever drew the chip as its only item would report no
       // watching rather than open that door. See `watchingLabel()` in
       // `session-activity.ts`.
-      watchingLine: String.raw`·\s*(\d+ (?:monitors?|shells?|teams?|local agents?|cloud sessions?|MCP tasks?|background tasks?|(?:background|remote) dynamic workflows?|Artifact comment monitors?))`,
+      // ⚠️ An Artifact comment monitor is the one chip that waits on the user. The agent
+      // has published a page and hears nothing until somebody comments on it, so the
+      // lookahead refuses the whole row while that chip is on it, whatever else is
+      // running beside it. The `^` is what makes the lookahead judge the row once:
+      // without it the engine retries from each later position, and a start past the
+      // chip reports the shell beside it. The lookahead stops short of "monitor", so a
+      // footer cut off mid-chip still counts. Counting the chip as watching kept the
+      // idle alert quiet for a session that was waiting for a human.
+      watchingLine: String.raw`^(?!.*Artifact comment).*?·\s*(\d+ (?:monitors?|shells?|teams?|local agents?|cloud sessions?|MCP tasks?|background tasks?|(?:background|remote) dynamic workflows?))`,
       // When a turn ends while background agents or an ultracode workflow are still
       // running, Claude swaps its `✻ Brewed for 1m 18s` closing row for
       // `✻ Waiting for 2 background agents and 1 dynamic workflow to finish` and resumes
