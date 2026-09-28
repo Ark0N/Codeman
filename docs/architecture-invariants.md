@@ -514,7 +514,7 @@ Adding the header changed the preamble, so `CODEMAN_PREAMBLE` was bumped (1.22.0
 
 ⚠️ `KILL` is in that list for tini, not the entrypoint: `init: true` keeps tini as root while the server runs as PUID, and without CAP_KILL its SIGTERM forward fails and the server is SIGKILLed on every `compose down`/`restart` instead of flushing state.
 
-⚠️ `/opt/codeman-cli` (the runtime-owned CLI prefix) is APPENDED to `PATH`, never prepended, and the entrypoint pins its own `PATH` to the system dirs: the root part of the start resolves `setpriv` by bare name, and a prefix ahead of `/usr/bin` let a planted `setpriv` run as uid 0 (measured).
+⚠️ `/opt/codeman-cli` (the runtime-owned CLI prefix) and `~/.local/bin` (where Settings installs CLIs, on the home bind mount so they survive a rebuild) are APPENDED to `PATH`, never prepended, and the entrypoint pins its own `PATH` to the system dirs: the root part of the start resolves `setpriv` by bare name, and a prefix ahead of `/usr/bin` let a planted `setpriv` run as uid 0 (measured). `~/.local/bin` is writable from the host as well, and root `docker exec` and the healthcheck inherit the image `PATH` without the entrypoint's pin; `test/docker-entrypoint.test.ts` requires every `ENV PATH=` line to start `$PATH:`.
 
 `CODEMAN_DOCKER_DISABLE_SWAP_LIMIT=1` drops `--memory-swap` (and filters only that one kernel warning) for hosts without swap accounting; `--memory` still applies.
 

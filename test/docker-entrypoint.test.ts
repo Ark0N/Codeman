@@ -110,15 +110,14 @@ describe('docker-compose.yaml cap_add covers what entrypoint.sh and init:true ne
 });
 
 describe('the runtime-owned CLI prefix never shadows root commands', () => {
-  it('server.Dockerfile appends /opt/codeman-cli/bin to PATH rather than prepending it', () => {
+  it('server.Dockerfile appends the runtime-writable CLI dirs to PATH rather than prepending them', () => {
     const pathLines = dockerfile.split('\n').filter((l) => /^ENV PATH=/.test(l));
     expect(pathLines.length).toBeGreaterThan(0);
     for (const line of pathLines) {
-      expect(line, 'a writable prefix ahead of $PATH lets a planted setpriv run as root').not.toMatch(
-        /^ENV PATH=\/opt\/codeman-cli/
-      );
+      expect(line, 'a writable prefix ahead of $PATH lets a planted setpriv run as root').toMatch(/^ENV PATH=\$PATH:/);
     }
     expect(pathLines).toContain('ENV PATH=$PATH:/opt/codeman-cli/bin');
+    expect(pathLines).toContain('ENV PATH=$PATH:/home/${CODEMAN_RUNTIME_USER}/.local/bin');
   });
 
   it('entrypoint.sh pins PATH to the system directories before its first command', () => {

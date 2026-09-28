@@ -210,7 +210,9 @@ const installsInFlight = new Set<string>();
 /**
  * The server's environment minus every `CODEMAN_*` variable. An install script is third-party
  * code, and those variables carry Codeman's own secrets and wiring (`CODEMAN_PASSWORD`, the
- * data dir, the tmux socket), none of which an installer needs.
+ * data dir, the tmux socket), none of which an installer needs. Inside the Docker Compose
+ * container (`CODEMAN_IN_CONTAINER=1`) it also points `NPM_CONFIG_PREFIX` at `$HOME/.local`,
+ * so an `npm install -g` lands on the persistent home mount instead of the image.
  */
 export function installEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
