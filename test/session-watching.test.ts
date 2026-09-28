@@ -174,6 +174,9 @@ describe('watchingLabel', () => {
     expect(
       watchingLabel(pane('⏵⏵ bypass permissions on · 1 shell · 1 Artifact comment moni…'), CLAUDE_WATCHING)
     ).toBeNull();
+    // Cut before "comment" is complete: the lookahead keys on "Artifact" alone for these.
+    expect(watchingLabel(pane('⏵⏵ bypass permissions on · 1 shell · 1 Artifact comm…'), CLAUDE_WATCHING)).toBeNull();
+    expect(watchingLabel(pane('⏵⏵ bypass permissions on · 1 shell · 1 Artifact…'), CLAUDE_WATCHING)).toBeNull();
   });
 
   it('says nothing about a pane that is running nothing', () => {

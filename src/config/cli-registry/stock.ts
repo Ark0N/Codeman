@@ -242,10 +242,11 @@ const CLAUDE: CliEntry = {
       // lookahead refuses the whole row while that chip is on it, whatever else is
       // running beside it. The `^` is what makes the lookahead judge the row once:
       // without it the engine retries from each later position, and a start past the
-      // chip reports the shell beside it. The lookahead stops short of "monitor", so a
-      // footer cut off mid-chip still counts. Counting the chip as watching kept the
+      // chip reports the shell beside it. The lookahead keys on "Artifact" alone, so a
+      // footer cut off mid-chip (`· 1 Artifact…`, `· 1 Artifact comm…`) is still refused;
+      // no other chip on this row says "Artifact". Counting the chip as watching kept the
       // idle alert quiet for a session that was waiting for a human.
-      watchingLine: String.raw`^(?!.*Artifact comment).*?·\s*(\d+ (?:monitors?|shells?|teams?|local agents?|cloud sessions?|MCP tasks?|background tasks?|(?:background|remote) dynamic workflows?))`,
+      watchingLine: String.raw`^(?!.*Artifact).*?·\s*(\d+ (?:monitors?|shells?|teams?|local agents?|cloud sessions?|MCP tasks?|background tasks?|(?:background|remote) dynamic workflows?))`,
       // When a turn ends while background agents or an ultracode workflow are still
       // running, Claude swaps its `✻ Brewed for 1m 18s` closing row for
       // `✻ Waiting for 2 background agents and 1 dynamic workflow to finish` and resumes
