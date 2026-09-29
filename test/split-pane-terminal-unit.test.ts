@@ -54,6 +54,8 @@ type PaneUnderTest = {
   _historyPullUseless: boolean;
   _liveQueue: unknown[] | null;
   _onWheel: unknown;
+  _wsClosed: boolean;
+  detachedSessions: Set<string> | undefined;
   destroy(): void;
   _loadBuffer(): Promise<void>;
   _refreshBuffer(): void;
@@ -62,6 +64,7 @@ type PaneUnderTest = {
   _onLiveOutput(data: string): void;
   _onLiveClear(): void;
   _installWheelListener(): void;
+  _writeDisconnectedMarker(): void;
 };
 
 const fetchMock = vi.fn();
@@ -93,8 +96,12 @@ function loadSplitTerminalPane() {
 
 const SplitTerminalPane = loadSplitTerminalPane();
 
-function makePane(mode = 'claude', mount: unknown = {}): PaneUnderTest & { terminal: FakeTerminal } {
-  const pane = new SplitTerminalPane('s1', mount, { mode });
+function makePane(
+  mode = 'claude',
+  mount: unknown = {},
+  opts: { detachedSessions?: Set<string> } = {}
+): PaneUnderTest & { terminal: FakeTerminal } {
+  const pane = new SplitTerminalPane('s1', mount, { mode, ...opts });
   pane.terminal = {
     // xterm invokes a write's callback once everything before it is parsed.
     write: vi.fn((_data: string, done?: () => void) => done?.()),
@@ -319,6 +326,17 @@ describe('SplitTerminalPane scroll-to-top history pull', () => {
     fullScreenApp._maybeLoadMoreHistory();
 
     await settle();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('stands aside for a detached session, mirroring _sendResize()', async () => {
+    // A detached session's own window already owns its PTY size and
+    // scrollback (buildSplitPickerSessions() already refuses to open one).
+    const pane = makePane('shell', {}, { detachedSessions: new Set(['s1']) });
+
+    pane._maybeLoadMoreHistory();
+    await settle();
+
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -646,5 +664,63 @@ describe('SplitTerminalPane scroll-to-top history pull', () => {
     expect(connect).toContain('this._installWheelListener();');
     expect(connect).toContain('this._onLiveClear();');
     expect(connect).not.toContain('this.terminal.clear();');
+  });
+
+  it('re-stamps the disconnected marker after a replay if the socket closed before the pull started', async () => {
+    // onclose already wrote the marker once; a replay's own `\x1bc` would wipe
+    // it and paint a fresh, current-looking history while onData keeps
+    // silently dropping every keystroke on the dead socket.
+    const pane = makePane('shell');
+    pane._wsClosed = true;
+    fetchMock.mockResolvedValueOnce(jsonResponse(rowsOf(100)));
+
+    void pane._pullHistory();
+    await settle();
+
+    const marker = expect.stringContaining('Pane B disconnected');
+    const writes = pane.terminal.write.mock.calls.map((c) => c[0]);
+    expect(writes.at(-1)).toEqual(expect.stringMatching(/Pane B disconnected/));
+    expect(pane.terminal.write).toHaveBeenCalledWith(marker);
+  });
+
+  it('re-stamps the disconnected marker after a replay if the socket closes mid-fetch', async () => {
+    // The other order Ark0N's review called out: the close lands while the
+    // capture is in flight, so the HTTP pull still succeeds (a Codeman
+    // restart drops the WS while the tmux session, and so the pull, survives).
+    const pane = makePane('shell');
+    const response = deferred<ReturnType<typeof jsonResponse>>();
+    fetchMock.mockReturnValueOnce(response.promise);
+
+    const pull = pane._pullHistory();
+    pane._wsClosed = true; // the close arrives mid-fetch, before the response
+    response.resolve(jsonResponse(rowsOf(100)));
+    await pull;
+
+    expect(pane.terminal.write.mock.calls.at(-1)?.[0]).toEqual(expect.stringMatching(/Pane B disconnected/));
+  });
+
+  it('does not re-stamp the marker when the socket is still open', async () => {
+    const pane = makePane('shell');
+    fetchMock.mockResolvedValueOnce(jsonResponse(rowsOf(100)));
+
+    void pane._pullHistory();
+    await settle();
+
+    for (const call of pane.terminal.write.mock.calls) {
+      expect(call[0]).toEqual(expect.not.stringMatching(/Pane B disconnected/));
+    }
+  });
+
+  it('does not re-stamp the marker when the pull never replayed (skip/downgrade path)', async () => {
+    // Nothing erased the marker in this path, so re-stamping it would be a
+    // second, redundant write.
+    const pane = makePane('shell');
+    pane._wsClosed = true;
+    fetchMock.mockResolvedValueOnce(jsonResponse(rowsOf(30))); // held in full already: no replay
+
+    void pane._pullHistory();
+    await settle();
+
+    expect(pane.terminal.write).not.toHaveBeenCalled();
   });
 });

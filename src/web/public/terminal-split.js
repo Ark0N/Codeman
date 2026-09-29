@@ -71,6 +71,7 @@
       this.fitAddon = null;
       this.ws = null;
       this._wsReady = false;
+      this._wsClosed = false;
       this._destroyed = false;
       // Single-flight state for _loadBuffer()/_refreshBuffer() below.
       this._bufferLoading = false;
@@ -294,12 +295,19 @@
       // user's place in Pane B's scrollback for a transient blip.
       this.ws.onclose = () => {
         this._wsReady = false;
-        this.terminal?.write('\r\n\x1b[2m[Pane B disconnected — close and reopen the split to reconnect]\x1b[0m\r\n');
+        this._wsClosed = true;
+        this._writeDisconnectedMarker();
       };
 
       this.ws.onerror = () => {
         // onclose fires after onerror — cleanup happens there.
       };
+    }
+
+    // Extracted so both onclose and a history-pull replay that lands on an
+    // already-closed socket can write it (see _pullHistory()'s finally block).
+    _writeDisconnectedMarker() {
+      this.terminal?.write('\r\n\x1b[2m[Pane B disconnected — close and reopen the split to reconnect]\x1b[0m\r\n');
     }
 
     // Fetches and writes the session's current scrollback. Used both by
@@ -386,12 +394,18 @@
     // tmux holds every line — and nothing here ever went back to ask, so the
     // history was unreachable. The primary pane has the same pull
     // (app.js _maybeRefetchFullHistory); Pane B is a separate xterm and needs its
-    // own. Shell only: a repaint-mode agent CLI keeps no tmux history to recover,
-    // and its load already takes `full=1`. Skipped on the alternate screen
-    // (nano, vim, less), where the wheel belongs to the app, not the scrollback.
+    // own. Shell only: a non-shell CLI's history is out of scope for this pull
+    // (its load already takes `full=1`; codex and Claude's inline renderer do
+    // grow tmux history, this just isn't how they recover it). The alternate-
+    // screen skip (nano, vim, less) only matters for a direct-PTY shell — under
+    // tmux the browser xterm never enters the alternate buffer.
     _maybeLoadMoreHistory() {
       if (this.sessionMode !== 'shell' || this._destroyed || !this.terminal) return;
       if (this._bufferLoading) return;
+      // Mirrors app.js _maybeRefetchFullHistory and this pane's own
+      // _sendResize(): a detached session's own window already owns its PTY
+      // size and scrollback, so Pane B has nothing of its own to reconcile.
+      if (this.detachedSessions?.has(this.sessionId)) return;
       const active = this.terminal.buffer.active;
       if (active.type !== 'normal' || active.viewportY !== 0) return;
       // Momentum scrolling fires this dozens of times per flick, so cooldown
@@ -477,6 +491,14 @@
           if (entry.clear) this.terminal?.clear();
           else this.terminal?.write(entry.data);
         }
+        // A replay's own `\x1bc` wipes the disconnected marker onclose wrote,
+        // painting a fresh, current-looking history while onData keeps
+        // silently dropping every keystroke on the dead socket. Re-stamp it
+        // if the socket closed in either order (before the pull started, or
+        // while the fetch was in flight) — checked after the queue flush so
+        // it is the last thing on screen, matching what onclose would have
+        // left had the pull never run.
+        if (replayed && this._wsClosed) this._writeDisconnectedMarker();
         this._endBufferLoad();
       }
     }
