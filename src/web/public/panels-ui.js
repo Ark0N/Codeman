@@ -380,7 +380,15 @@ Object.assign(CodemanApp.prototype, {
       prev.focus();
       return;
     }
-    if (this.activeSessionId) this.terminal?.focus?.();
+    // ⚠️ `activeSessionId` alone only covers the welcome screen. On a touch device
+    // with the keyboard down, focus sits on `<body>`, so focusing the terminal here
+    // would summon the on-screen keyboard — `selectSession()` deliberately skips the
+    // focus for exactly that reason, and this would override it. The app's own
+    // predicate already encodes the rule (true on desktop, on touch only while the
+    // keyboard is open); the optional call keeps the vm test harness working.
+    if (this.activeSessionId && this._shouldFocusTerminalForTabSwitch?.() !== false) {
+      this.terminal?.focus?.();
+    }
   },
 
   openCommandPalette() {
@@ -404,7 +412,15 @@ Object.assign(CodemanApp.prototype, {
 
   closeCommandPalette() {
     const modal = document.getElementById('commandPaletteModal');
-    if (modal) modal.classList.remove('active');
+    // ⚠️ Bail out when it was not open. The global Escape handler calls this on
+    // EVERY Escape (app.js), in the CAPTURE phase, so an unconditional restore
+    // runs before the focused element's own Escape handler and steals focus into
+    // the terminal: keys typed after Escape in split Pane B land in Pane A, keys
+    // typed in any text field land in the terminal, and the inline tab rename's
+    // Escape fires the input's blur (which commits) before its own handler
+    // (which cancels), turning a cancel into a rename.
+    if (!modal?.classList?.contains('active')) return;
+    modal.classList.remove('active');
     this._restoreOverlayFocus('_commandPalettePrevFocus');
   },
 
@@ -674,7 +690,9 @@ Object.assign(CodemanApp.prototype, {
 
   closeSessionManager() {
     const modal = document.getElementById('sessionManagerModal');
-    if (modal) modal.classList.remove('active');
+    // Same guard as closeCommandPalette — see the note there.
+    if (!modal?.classList?.contains('active')) return;
+    modal.classList.remove('active');
     this._restoreOverlayFocus('_sessionManagerPrevFocus');
   },
 

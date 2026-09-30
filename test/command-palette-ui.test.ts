@@ -111,7 +111,7 @@ function loadPaletteHarness(overrides: Record<string, any> = {}) {
   app.getSessionName = (session: any) =>
     session.name || session.workingDir?.split('/').pop() || app.getShortId(session.id);
 
-  return { app, elements, listeners };
+  return { app, elements, listeners, makeClassList };
 }
 
 describe('Command-K session palette', () => {
@@ -492,7 +492,7 @@ describe('overlay focus restoration (Escape must not strand the keyboard)', () =
     const priorElement = { focus: vi.fn(), isConnected: true, tagName: 'TEXTAREA' };
     const body = { tagName: 'BODY' };
     let active: any = priorElement;
-    const { app, elements } = loadPaletteHarness({
+    const { app, elements, makeClassList } = loadPaletteHarness({
       document: {
         getElementById: (id: string) => (globalThis as any).__els?.[id] ?? null,
         get activeElement() {
@@ -509,7 +509,7 @@ describe('overlay focus restoration (Escape must not strand the keyboard)', () =
     elements.commandPaletteSearch.focus = vi.fn(() => {
       active = elements.commandPaletteSearch;
     });
-    return { app, elements, priorElement, terminalTextarea, body, setActive: (v: any) => (active = v) };
+    return { app, elements, priorElement, terminalTextarea, body, makeClassList, setActive: (v: any) => (active = v) };
   }
 
   it('returns focus to whatever had it when the command palette closes', () => {
@@ -546,9 +546,33 @@ describe('overlay focus restoration (Escape must not strand the keyboard)', () =
     expect(terminalTextarea.focus).toHaveBeenCalledTimes(1);
   });
 
+  it('leaves focus alone when neither overlay was open — the path every Escape takes', () => {
+    // app.js's global Escape handler calls both close methods on EVERY Escape,
+    // in the capture phase. Nothing was saved, so an unguarded restore would fall
+    // through to the terminal and steal focus from split Pane B, from any text
+    // field, and turn the inline rename's Escape into a commit.
+    const { app, elements, terminalTextarea, priorElement, makeClassList } = focusHarness();
+    elements.sessionManagerModal = { classList: makeClassList(), addEventListener: vi.fn() };
+    app.closeCommandPalette();
+    app.closeSessionManager();
+    expect(terminalTextarea.focus).not.toHaveBeenCalled();
+    expect(priorElement.focus).not.toHaveBeenCalled();
+  });
+
+  it('does not focus the terminal on touch while the keyboard is down', () => {
+    const { app, terminalTextarea, body, setActive } = focusHarness();
+    app._shouldFocusTerminalForTabSwitch = () => false;
+    setActive(body);
+    app.openCommandPalette();
+    app.closeCommandPalette();
+    expect(terminalTextarea.focus).not.toHaveBeenCalled();
+  });
+
   it('restores focus on the session manager too, not just the palette', async () => {
-    const { app, elements, priorElement } = focusHarness();
-    elements.sessionManagerModal = { classList: { add: vi.fn(), remove: vi.fn() }, addEventListener: vi.fn() };
+    const { app, elements, priorElement, makeClassList } = focusHarness();
+    // A real classList: the close guard reads `contains('active')`, and a stub
+    // without it reports "not open" and skips the restore this test is about.
+    elements.sessionManagerModal = { classList: makeClassList(), addEventListener: vi.fn() };
     elements.sessionManagerSearch = { value: '', focus: vi.fn(), addEventListener: vi.fn() };
     elements.sessionManagerList = { replaceChildren: vi.fn(), appendChild: vi.fn() };
     app._loadSessionManagerList = vi.fn();
