@@ -301,6 +301,28 @@ describe('paste trap clipboard fallback', () => {
     expect(h.toasts).toHaveLength(1);
   });
 
+  it('resolves the fallback when clipboard.read() never settles (unanswerable permission prompt)', async () => {
+    const h = loadPasteHarness({
+      // Some engines leave read() pending forever instead of rejecting.
+      clipboardRead: () => new Promise<ClipboardItemLike[]>(() => {}),
+    });
+
+    h.firePaste({ nullImages: ['image/png'] });
+    await h.awaitFallback();
+
+    // Still waiting: no toast yet, and the read was attempted once.
+    expect(h.clipboardReadCalls()).toBe(1);
+    expect(h.uploadedBatches).toEqual([]);
+    expect(h.toasts).toEqual([]);
+
+    // The bounded wait elapses; the toast appears instead of silence.
+    h.runTimers();
+    await h.awaitFallback();
+
+    expect(h.uploadedBatches).toEqual([]);
+    expect(h.toasts).toEqual([{ message: 'Could not read the pasted image from the clipboard', kind: 'warning' }]);
+  });
+
   it('never touches the async Clipboard API for plain-text pastes', async () => {
     const h = loadPasteHarness({
       clipboardRead: async () => {

@@ -200,15 +200,19 @@ Object.assign(CodemanApp.prototype, {
    * data was present but yielded no blobs.
    *
    * @returns {Promise<Blob[]>} The image blobs read, or [] when none could be.
+   *   The promise always settles: if the platform leaves read() pending
+   *   forever (e.g. an unanswerable permission prompt), it resolves [] after
+   *   a bounded wait so the caller can show the failure toast.
    */
   _readPastedImageViaClipboardApi() {
+    var readAttempt;
     try {
       var secure =
         typeof window !== 'undefined' && window.isSecureContext &&
         typeof navigator !== 'undefined' && navigator.clipboard &&
         typeof navigator.clipboard.read === 'function';
       if (!secure) return Promise.resolve([]);
-      return navigator.clipboard.read().then(function(clipboardItems) {
+      readAttempt = navigator.clipboard.read().then(function(clipboardItems) {
         var blobs = [];
         var pending = [];
         (clipboardItems || []).forEach(function(clipboardItem) {
@@ -231,6 +235,16 @@ Object.assign(CodemanApp.prototype, {
     } catch (err) {
       return Promise.resolve([]);
     }
+    // Some engines leave the read() promise pending forever when the
+    // permission prompt can never be answered (observed in headless
+    // Firefox). Bound the wait so the caller always gets an answer and can
+    // show the "could not read" toast instead of silently doing nothing.
+    return Promise.race([
+      readAttempt,
+      new Promise(function(resolve) {
+        setTimeout(function() { resolve([]); }, 10000);
+      }),
+    ]);
   },
 
   // Max images accepted in one batch (paste / drop / mobile picker). Each is
