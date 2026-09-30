@@ -151,6 +151,16 @@ describe('which dead sessions may be rebuilt', () => {
     expect(planRebootRestore(['d'], persisted, () => true).skipped[0].reason).toBe('remote-or-docker');
   });
 
+  it('refuses an adopted session: Codeman never started the process it wrapped', () => {
+    const persisted = {
+      a: persistedSession({
+        id: 'a',
+        adopt: { location: 'local', socketPath: '/tmp/tmux-1000/default', targetSession: 'work', viewSession: 'v' },
+      } as Partial<SessionState> & { id: string }),
+    };
+    expect(planRebootRestore(['a'], persisted, () => true).skipped[0].reason).toBe('adopted');
+  });
+
   it('skips a CLI whose history the claude transcript reader does not understand', () => {
     const persisted = { c: persistedSession({ id: 'c', mode: 'codex' }) };
     expect(planRebootRestore(['c'], persisted, () => true).skipped[0].reason).toBe('unsupported-mode');

@@ -2215,6 +2215,9 @@ Object.assign(CodemanApp.prototype, {
       if (overlay) overlay.classList.remove('visible');
       this.hideHomeSessions?.();
       this.showMobileOverview();
+      // The phone overview hosts the same list in its own container.
+      this.wireForeignSessions?.();
+      this.startForeignPolling?.();
       this._updateCjkInputState?.();
       return;
     }
@@ -2229,6 +2232,10 @@ Object.assign(CodemanApp.prototype, {
       // Open tabs down the left gutter. Self-gating: a window too narrow to hold
       // the column without overlapping the content leaves it hidden.
       this.showHomeSessions?.();
+      // Sessions a human opened outside Codeman. Polls only while this screen is
+      // up (stopped in hideWelcome) — see foreign-sessions.js.
+      this.wireForeignSessions?.();
+      this.startForeignPolling?.();
     }
     // Home screen has no input target — hide the CJK textarea (activeSessionId
     // is null by the time we get here). Guarded: defined on the app object.
@@ -2238,6 +2245,7 @@ Object.assign(CodemanApp.prototype, {
   hideWelcome() {
     this.hideMobileOverview?.();
     this.hideHomeSessions?.();
+    this.stopForeignPolling?.();
     const overlay = document.getElementById('welcomeOverlay');
     if (overlay) {
       overlay.classList.remove('visible');

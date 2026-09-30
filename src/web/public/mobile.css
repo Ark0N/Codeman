@@ -4027,6 +4027,18 @@ html[data-session-list="sidebar"] .session-sidebar .session-tab .tab-close {
   }
 }
 
+/* Foreign sessions block inside the phone overview (foreign-sessions.js).
+   The desktop block sits inside the welcome column; here it is a full-width
+   section between CURRENT and PAST, so it only needs the surrounding spacing —
+   every row style is shared with styles.css on purpose. */
+.mobile-foreign-sessions {
+  margin: 0.75rem 0.75rem 0;
+}
+
+.mobile-foreign-sessions .foreign-list {
+  max-height: none;
+}
+
 /* Folding devices, tabletop pose: cap the response viewer to the bottom
    segment. Twin of the rule at the end of styles.css, needed here because the
    phone block (under 600px) above sets `max-height: 92dvh` on the same selector at the same

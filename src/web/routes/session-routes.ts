@@ -30,6 +30,16 @@ import {
   type OmpConfig,
   type RemoteHost,
 } from '../../types.js';
+import { AdoptForeignSessionSchema } from '../schemas.js';
+import {
+  discoverForeignSessions,
+  invalidateForeignCache,
+  readAllDockerCases,
+  readAllRemoteHosts,
+} from '../../foreign-tmux-discovery.js';
+import { foreignViewSessionName } from '../../foreign-tmux.js';
+import { requireAdmin } from '../route-helpers.js';
+import type { SessionAdopt } from '../../types/session.js';
 import { Session, isAltScreenStripMode, isExternalCliMode, isMuxAltScreenOnlyStripMode } from '../../session.js';
 import type { PaneCaptureOptions } from '../../mux-interface.js';
 import { SseEvent } from '../sse-events.js';
@@ -1154,6 +1164,149 @@ export function registerSessionRoutes(
     const lightState = ctx.getSessionStateWithRespawn(session);
     ctx.broadcast(SseEvent.SessionCreated, lightState);
     return { session: lightState };
+  });
+
+  // ========== Adopt a foreign tmux session ==========
+
+  /**
+   * Wrap a tmux session a HUMAN started (local, in a container, or over ssh) in a
+   * Codeman session, so it appears as a tab and can be driven from the browser.
+   *
+   * Four things make this safe, and each is load-bearing:
+   *
+   * 1. **The body carries only an opaque id.** The socket path, session name and
+   *    host are re-resolved by re-running discovery here. A browser therefore
+   *    never supplies a fragment of the command we are about to run, which is the
+   *    same rule that keeps docker-adopt and remote-attach injection-free.
+   * 2. **The candidate must still exist.** Discovery is re-run rather than cached,
+   *    so a session that died between the listing and the click fails with a 404
+   *    instead of producing a wrapper attached to nothing.
+   * 3. **One wrapper per target.** Two wrappers on one foreign session would each
+   *    create their own grouped view and each think they own the tab; the guard
+   *    is here rather than in the button's in-flight lock, which only stops a
+   *    double-click on one device.
+   * 4. **Admin-only under multi-user.** Discovery already is (it exposes other
+   *    users' processes), and adopting someone's `shell` is arbitrary execution
+   *    as the server account — which is exactly what the `can-bypass-permissions`
+   *    grant gates elsewhere. The admin gate subsumes it, so there is deliberately
+   *    no second grant check here.
+   */
+  app.post('/api/sessions/adopt', async (req, reply) => {
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
+
+    const owner = ownerFor(req);
+    const capMsg = sessionCapacityMessage(ctx.sessions, owner);
+    if (capMsg) return createErrorResponse(ApiErrorCode.SESSION_BUSY, capMsg);
+
+    const body = parseBody(AdoptForeignSessionSchema, req.body, 'Invalid request body');
+
+    // Re-resolve rather than trust: point 1 and 2 above.
+    const found = await discoverForeignSessions({
+      local: true,
+      force: true,
+      dockerCases: body.docker ? await readAllDockerCases() : undefined,
+      remoteHosts: body.remote ? await readAllRemoteHosts() : undefined,
+    });
+    const target = found.sessions.find((f) => f.id === body.id);
+    if (!target) {
+      // ⚠️ "Not in the re-resolve" has two very different causes and they must not
+      // be reported as one. The session really being gone is the ordinary case;
+      // the OTHER case is a location we could not reach this time, which on a
+      // flaky link makes a perfectly live remote session read as deleted. Measured
+      // against a real VM whose ssh path dropped ~10% of connections: clicking
+      // Open failed with "no longer there" while the session was sitting right
+      // there. Discovery already knows which it was — it wrote a note — so say so.
+      const reach = found.notes.filter((n) => !/skipped/.test(n));
+      return createErrorResponse(
+        ApiErrorCode.NOT_FOUND,
+        reach.length
+          ? `Could not reach it just now (${reach.join('; ')}). It may still be running — try again.`
+          : 'That tmux session is no longer there. Refresh the list and try again.'
+      );
+    }
+
+    // Point 3 — one wrapper per (socket, session).
+    const existing = ctx.mux
+      .getSessions()
+      .find((m) => m.adopt?.socketPath === target.socketPath && m.adopt?.targetSession === target.sessionName);
+    if (existing) {
+      const live = ctx.sessions.get(existing.sessionId);
+      if (live) return { session: ctx.getSessionStateWithRespawn(live), alreadyAdopted: true };
+    }
+
+    // Connection facts are copied onto the session rather than referenced by id:
+    // a wrapper restored after a server restart must be able to rebuild its
+    // command even if the host registry was edited in the meantime.
+    const adopt: SessionAdopt = {
+      location: target.location,
+      socketPath: target.socketPath,
+      targetSession: target.sessionName,
+      viewSession: '',
+      paneCurrentPath: target.workingDir,
+    };
+
+    if (target.location === 'docker') {
+      const hosts = await readDockerHosts(CODEMAN_CONFIG_DIR);
+      const host = hosts.find((h) => h.id === target.hostId);
+      if (!target.containerName) {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Container name missing for a docker candidate');
+      }
+      adopt.docker = {
+        hostId: target.hostId ?? '',
+        label: target.hostLabel ?? target.containerName,
+        engine: host?.engine ?? 'docker',
+        containerName: target.containerName,
+        daemonHost: host?.daemonHost,
+        context: host?.context,
+      };
+    } else if (target.location === 'remote') {
+      const host = (await readRemoteHosts(CODEMAN_CONFIG_DIR)).find((h) => h.id === target.hostId);
+      if (!host) return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Remote host not found');
+      adopt.remote = {
+        hostId: host.id,
+        label: host.label,
+        host: host.host,
+        username: host.username,
+        port: host.port,
+        identityFile: host.identityFile,
+        socksProxy: host.socksProxy,
+        jumpHost: host.jumpHost,
+        extraSshOptions: host.extraSshOptions,
+      };
+    }
+
+    const adoptHistoryConfig = await ctx.getTerminalHistoryConfig();
+
+    // ⚠️ `workingDir` for an adopted session is the FOREIGN pane's cwd, which may
+    // not exist on this host (a container path, a remote path). It is recorded as
+    // an observation for display; the wrapper pane is never `cd`'d into it, and
+    // the case-space confinement that guards a real workingDir does not apply
+    // because nothing is created there.
+    const session = new Session({
+      workingDir: target.workingDir || process.cwd(),
+      mode: target.mode,
+      name: body.name || target.sessionName,
+      mux: ctx.mux,
+      useMux: true,
+      tmuxHistoryLimit: adoptHistoryConfig.tmuxHistoryLimit,
+      adopt,
+      owner,
+      parentSessionId: resolveParentSessionId(ctx, req, body.parentSessionId, owner),
+    });
+    // The view session name is derived from the Codeman session id, so it can only
+    // be filled once the Session exists.
+    adopt.viewSession = foreignViewSessionName(session.id);
+
+    await ctx.addSession(session);
+    ctx.store.incrementSessionsCreated();
+    ctx.persistSessionState(session);
+    await ctx.setupSessionListeners(session);
+    getLifecycleLog().log({ event: 'created', sessionId: session.id, name: session.name });
+    invalidateForeignCache();
+
+    const lightState = ctx.getSessionStateWithRespawn(session);
+    ctx.broadcast(SseEvent.SessionCreated, lightState);
+    return { session: lightState, adopted: true };
   });
 
   // ========== Rename Session ==========

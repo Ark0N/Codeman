@@ -7477,6 +7477,25 @@ class CodemanApp {
     const sessionNameEl = document.getElementById('closeConfirmSessionName');
     sessionNameEl.textContent = name;
 
+    // ⚠️ An ADOPTED session has no "kill" outcome to offer. Its wrapper is the
+    // only thing Codeman owns; the server's killSession refuses to reach the
+    // foreign server at all (see the adopted early return in tmux-manager). So
+    // the red "Terminate the session completely" option is not merely redundant
+    // here, it is a false promise about someone else's live work — and the kind
+    // of false promise that stops a user closing the tab at all. Hide it, and say
+    // what actually happens instead.
+    const killBtn = document.getElementById('closeConfirmKillBtn');
+    const keepTitle = document.getElementById('closeConfirmKeepTitle');
+    const keepDesc = document.getElementById('closeConfirmKeepDesc');
+    const adopted = !!session.adopt;
+    if (killBtn) killBtn.style.display = adopted ? 'none' : '';
+    if (keepTitle) keepTitle.textContent = adopted ? 'Close Tab' : 'Remove Tab';
+    if (keepDesc) {
+      keepDesc.textContent = adopted
+        ? `Detaches only — "${session.adopt.targetSession}" keeps running for whoever started it`
+        : 'Tmux session keeps running in background';
+    }
+
     // Update kill button text based on session mode
     const killTitle = document.getElementById('closeConfirmKillTitle');
     if (killTitle) {
@@ -7511,9 +7530,20 @@ class CodemanApp {
     const sessionId = this.pendingCloseSessionId;
     this.cancelCloseSession();
 
-    if (sessionId) {
-      await this.closeSession(sessionId, killMux);
-    }
+    if (!sessionId) return;
+
+    // ⚠️ For an ADOPTED session `killMux` does not mean what it means everywhere
+    // else. There is no agent of ours to terminate: the only thing it can reach
+    // is the WRAPPER we created, and the server's adopted branch in
+    // `killSession` tears that down without ever touching the foreign server.
+    // So "keep the tmux session running" has no useful meaning here — taking it
+    // literally leaves our wrapper AND its grouped view session parked on the
+    // user's own socket forever, one pair per tab they ever closed (measured:
+    // `codeman-view-*` survived every close and the row stayed "Go to tab" with
+    // no tab behind it). Always tear the wrapper down; the foreign session is
+    // structurally out of reach either way.
+    const adopted = !!this.sessions.get(sessionId)?.adopt;
+    await this.closeSession(sessionId, adopted ? true : killMux);
   }
 
   nextSession() {

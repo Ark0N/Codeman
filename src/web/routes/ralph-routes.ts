@@ -53,6 +53,17 @@ export function registerRalphRoutes(
       };
     const session = findSessionOrFail(ctx, id, req);
 
+    // ⚠️ Adoption gate, kept SEPARATE from the external-CLI gate above: an adopted
+    // session can be `mode: 'claude'` and still be a process we never launched.
+    // Everything below drives the pane on the assumption Codeman owns what runs
+    // in it — sending `/clear`, killing and relaunching the agent — which against
+    // someone else's live session is destructive, not merely unsupported.
+    if (session.isAdopted) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'The Ralph tracker is not available for adopted sessions: Codeman did not start this agent and must not drive its lifecycle'
+      );
+    }
     // Ralph tracker is not supported for external-CLI sessions (opencode/codex)
     if (isExternalCliMode(session.mode)) {
       return createErrorResponse(
