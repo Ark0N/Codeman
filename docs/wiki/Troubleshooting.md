@@ -161,6 +161,18 @@ CODEMAN_INSTANCE=beta CODEMAN_PORT=5000 codeman web
 `codeman web -d` and `codeman service install` both refuse to start a second server on one
 data directory for exactly this reason.
 
+### `Context size has been exceeded` from a local llama.cpp model
+
+Sessions pointed at a llama.cpp or llama-swap endpoint (see [Custom Model
+Endpoints](Custom-Model-Endpoints)) fail with `500 Context size has been exceeded`, usually
+when Claude Code runs subagents, or an agent fails with `Prompt is too long` while the main
+session carries on. The server runs several parallel slots that share one pool of context,
+and every Claude Code request carries about 40K tokens of its own system prompt and tools, so
+a few concurrent requests use the pool up. Start the model with a single slot by adding
+`--parallel 1` to its launch command, or give it a context large enough that each slot holds
+40K tokens. Check the current count with `GET /props` on the server: `total_slots` is the
+number of slots and `n_ctx` the shared context.
+
 ## The terminal
 
 ### I cannot scroll back through history

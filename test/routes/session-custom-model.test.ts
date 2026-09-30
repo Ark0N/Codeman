@@ -449,6 +449,87 @@ describe('POST /api/sessions/:id/custom-model', () => {
       expect(session.restartCli).not.toHaveBeenCalled();
     });
 
+    // llama-server splits its context across --parallel slots, and Claude Code sends several
+    // requests at once, so a context that clears the floor as a whole can still fail per slot.
+    describe('parallel slots share the context', () => {
+      const slotEndpoint = (contextLength: number, slots?: number, serverContext?: number): CustomModelHost => ({
+        id: 'ep-slots',
+        label: 'multi-slot box',
+        baseUrl: 'http://192.168.1.52:8080',
+        apiKey: 'k',
+        modelContextLengths: { m: contextLength },
+        ...(slots === undefined ? {} : { modelSlotCounts: { m: slots } }),
+        ...(serverContext === undefined ? {} : { modelServerContexts: { m: serverContext } }),
+      });
+
+      async function apply(endpoint: CustomModelHost) {
+        const { app, ctx } = await setup();
+        await writeCustomModelHosts(getDataDir(), [CLAUDE_ENDPOINT, endpoint]);
+        const session = ctx.sessions.get('test-session-1')!;
+        session.mode = 'claude';
+        const res = await app.inject({
+          method: 'POST',
+          url: '/api/sessions/test-session-1/custom-model',
+          payload: { endpointId: endpoint.id, modelId: 'm' },
+        });
+        return { body: res.json(), session };
+      }
+
+      it('warns when the context divided across the slots is below the floor, and reports the slot count', async () => {
+        // the measured case: ~131k shared by 4 slots is ~33k each, under the 40k a request needs
+        const { body, session } = await apply(slotEndpoint(131072, 4));
+
+        expect(body.requiresContextWarning).toBe(true);
+        expect(body.contextLength).toBe(131072);
+        expect(body.slotCount).toBe(4);
+        expect(body.poolContext).toBe(131072);
+        expect(session.setCustomModel).not.toHaveBeenCalled();
+      });
+
+      it('divides the server-reported context, not the --fit-ctx floor, across the slots', async () => {
+        // a floor of 65,536 over 4 slots would be 16,384, but the server really has 262,144 (65,536 each)
+        const roomy = await apply(slotEndpoint(65536, 4, 262144));
+        expect(roomy.body.requiresContextWarning).toBeUndefined();
+        expect(roomy.session.setCustomModel).toHaveBeenCalledTimes(1);
+      });
+
+      it('warns with the server-reported pool when that is still too small per slot', async () => {
+        const { body } = await apply(slotEndpoint(65536, 4, 131072));
+
+        expect(body.requiresContextWarning).toBe(true);
+        expect(body.contextLength).toBe(65536);
+        expect(body.poolContext).toBe(131072);
+        expect(body.slotCount).toBe(4);
+      });
+
+      it('does not warn once every slot can hold the floor', async () => {
+        const { body, session } = await apply(slotEndpoint(262144, 4)); // 65,536 each
+
+        expect(body.requiresContextWarning).toBeUndefined();
+        expect(session.setCustomModel).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not warn for a single slot with the same context that failed across four', async () => {
+        const { body, session } = await apply(slotEndpoint(131072, 1));
+
+        expect(body.requiresContextWarning).toBeUndefined();
+        expect(session.setCustomModel).toHaveBeenCalledTimes(1);
+      });
+
+      it('an unknown slot count is treated as one slot, never guessed', async () => {
+        const { body } = await apply(slotEndpoint(131072));
+
+        expect(body.requiresContextWarning).toBeUndefined();
+      });
+
+      it('omits slotCount from the warning when the context is too small on its own with a single slot', async () => {
+        const { body } = await apply(slotEndpoint(16384, 1));
+
+        expect(body.requiresContextWarning).toBe(true);
+        expect(body.slotCount).toBeUndefined();
+      });
+    });
+
     it('applies once confirmed, skipping the context check the second time', async () => {
       const { app, ctx } = await setup();
       await writeCustomModelHosts(getDataDir(), [CLAUDE_ENDPOINT, SMALL_CTX_ENDPOINT]);

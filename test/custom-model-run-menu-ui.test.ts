@@ -1281,12 +1281,36 @@ describe("Custom Model Endpoint Profiles: requiresContextWarning (this CLI's own
 
     await app.runCustomModelEntry('claude', 'llama-box', 'qwen3');
 
-    expect(confirmArgs).toEqual(['qwen3', 16384, 40000]);
+    expect(confirmArgs).toEqual(['qwen3', 16384, 40000, undefined, undefined]);
     expect(applyBodies).toEqual([
       { endpointId: 'llama-box', modelId: 'qwen3' },
       { endpointId: 'llama-box', modelId: 'qwen3', confirmedContext: true },
     ]);
     expect(win.localStorage.getItem('codeman:customModelLastUsed:claude:llama-box')).toBe('qwen3');
+  });
+
+  it('forwards the slot count from the apply response into the modal', async () => {
+    const { app, applyBodies } = launchHarness([
+      {
+        requiresContextWarning: true,
+        modelId: 'qwen3',
+        contextLength: 131072,
+        minSafeContextTokens: 40000,
+        slotCount: 4,
+        poolContext: 262144,
+      },
+      { customModel: { endpointId: 'llama-box' }, restarted: true, modelSwapInProgress: false },
+    ]);
+    let confirmArgs: unknown[] | undefined;
+    app._confirmContextWarning = async (...args: unknown[]) => {
+      confirmArgs = args;
+      return true;
+    };
+
+    await app.runCustomModelEntry('claude', 'llama-box', 'qwen3');
+
+    expect(confirmArgs).toEqual(['qwen3', 131072, 40000, 4, 262144]);
+    expect(applyBodies).toHaveLength(2);
   });
 
   it('declining the in-app context-warning modal keeps the native backend, never re-sends the apply, and must NEVER record this model as "last used" — it cannot work with this CLI at all', async () => {
@@ -1359,6 +1383,51 @@ describe('Custom Model Endpoint Profiles: _confirmContextWarning (in-app modal, 
     app._resolveContextWarningConfirm(false);
     expect(await promise).toBe(false);
     expect(win.document.getElementById('customModelContextWarningModal')!.classList.contains('active')).toBe(false);
+  });
+
+  it('explains shared parallel slots, and the --parallel 1 fix, when the context is enough only as a whole', async () => {
+    const { win, app } = bootApp({});
+    void app._confirmContextWarning('qwen3.8-27b-ud-q4_k_xl', 131072, 40000, 4);
+    const message = win.document.getElementById('customModelContextWarningMessage')!.textContent!;
+    expect(message).toContain('qwen3.8-27b-ud-q4_k_xl');
+    expect(message).toContain('4 parallel');
+    expect(message).toContain('131,072');
+    expect(message).toContain('32,768'); // per slot
+    expect(message).toContain('--parallel 1');
+    expect(message).toContain('Context size has been exceeded');
+    // this is not the "first message fails outright" case, so it must not claim that
+    expect(message).not.toMatch(/first message will fail/i);
+    expect(win.document.getElementById('customModelContextWarningModal')!.classList.contains('active')).toBe(true);
+    app._resolveContextWarningConfirm(false);
+  });
+
+  it('uses the server-reported pool for the per-slot figure when one is given', async () => {
+    const { win, app } = bootApp({});
+    void app._confirmContextWarning('qwen3', 65536, 40000, 4, 131072);
+    const message = win.document.getElementById('customModelContextWarningMessage')!.textContent!;
+    expect(message).toContain('131,072');
+    expect(message).toContain('32,768'); // 131,072 / 4
+    expect(message).not.toContain('16,384'); // not the floor divided by four
+    app._resolveContextWarningConfirm(false);
+  });
+
+  it('keeps the too-small-context message for a small model and adds the slot advice when slots are known', async () => {
+    const { win, app } = bootApp({});
+    void app._confirmContextWarning('qwen3', 16384, 40000, 4);
+    const message = win.document.getElementById('customModelContextWarningMessage')!.textContent!;
+    expect(message).toContain('16,384');
+    expect(message).toMatch(/first message will fail/i);
+    expect(message).toContain('4 parallel slots');
+    expect(message).toContain('--parallel 1');
+    app._resolveContextWarningConfirm(false);
+  });
+
+  it('does not mention slots when there is one (or none known)', async () => {
+    const { win, app } = bootApp({});
+    void app._confirmContextWarning('qwen3', 16384, 40000, 1);
+    const message = win.document.getElementById('customModelContextWarningMessage')!.textContent!;
+    expect(message).not.toMatch(/parallel/i);
+    app._resolveContextWarningConfirm(false);
   });
 
   it('describes an unknown context length without printing a bogus number', async () => {
