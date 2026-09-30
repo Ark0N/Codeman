@@ -49,7 +49,7 @@
   <!-- Synchronous mobile detection — runs before first paint to prevent panel flash -->
   <script>if(window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024))document.documentElement.classList.add('mobile-init');</script>
   <!-- Synchronous skin selection — runs before first paint to prevent theme flash -->
-  <script>try{var s=localStorage.getItem('codeman:skin'),a=['og','daylight-green','daylight-blue','paper-gray','solarized-light','catppuccin-latte','rose-pine-dawn'];if(a.indexOf(s)<0)s='daylight-blue';document.documentElement.dataset.skin=s;window.__codemanSkin=s;}catch(e){document.documentElement.dataset.skin='daylight-blue';window.__codemanSkin='daylight-blue';}</script>
+  <script>try{var s=localStorage.getItem('codeman:skin'),a=['og','daylight-green','daylight-blue','night-owl','paper-gray','solarized-light','catppuccin-latte','rose-pine-dawn'];if(a.indexOf(s)<0)s='daylight-blue';document.documentElement.dataset.skin=s;window.__codemanSkin=s;}catch(e){document.documentElement.dataset.skin='daylight-blue';window.__codemanSkin='daylight-blue';}</script>
   <!-- Apply the saved per-device language before first paint. The full translation
        layer loads below; setting lang/dir here prevents an English accessibility
        tree from flashing while the deferred scripts start. -->
@@ -1964,6 +1964,7 @@
                         <option value="daylight-blue">Daylight Blue</option>
                         <option value="daylight-green">Daylight Green</option>
                         <option value="og">OG Codeman</option>
+                        <option value="night-owl">Night Owl</option>
                       </optgroup>
                     </select>
                   </div>

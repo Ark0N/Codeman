@@ -202,6 +202,27 @@ html[data-skin="og"] {
   --ui-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
+/* ===== Skin: Night Owl (Sarah Drasner's Night Owl palette) ===== */
+html[data-skin="night-owl"] {
+  --bg-dark: #011627; --bg-card: #0b2942; --bg-input: #0e2d49; --bg-hover: #13344f;
+  --border: #1d3b53; --border-light: #2a4a66;
+  --text: #d6deeb; --text-dim: #8ba5bf; --text-muted: #5f7e97;
+  --accent: #82aaff; --accent-hover: #a0bfff;
+  --term-bg: #011627;
+  --green: #22da6e; --yellow: #ecc48d; --red: #ef5350;
+  --glass-bg: rgba(11, 41, 66, 0.85); --glass-border: rgba(130, 170, 255, 0.1);
+  --floating-bg: rgba(11, 41, 66, 0.96);
+  --accent-d: #5f8ae8; --emerald: #7fdbca; --teal: #21c7a8;
+  --accent-soft: #addb67; --accent-ink: #011627;
+  --accent-rgb: 130, 170, 255;
+  --accent-grad-a: #82aaff; --accent-grad-b: #5f8ae8;
+  --run-hover-a: #a0bfff; --run-hover-b: #7a9ff2; --gear-hover: #5f8ae8;
+  --ring-glow: 0 0 12px -2px rgba(130, 170, 255, 0.55);
+  --session-red: #ef5350; --session-orange: #f78c6c; --session-yellow: #ecc48d;
+  --session-green: #addb67; --session-blue: #82aaff; --session-purple: #c792ea; --session-pink: #ff869a;
+  --ui-font: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
 /* ===== Light skins =====
    Each palette covers both the application chrome and the xterm palette in
    terminal-ui.js. The names reference their source palettes; Paper Gray is a
