@@ -480,6 +480,84 @@ describe('Session Manager unified list', () => {
   });
 });
 
+describe('overlay focus restoration (Escape must not strand the keyboard)', () => {
+  /**
+   * Both overlays focus their search box on open. Closing them used to leave
+   * focus on <body>, so after Escape every keystroke went nowhere until the
+   * user clicked the terminal — measured in a real browser against a shell
+   * session: activeElement BODY, zero onData for anything typed afterwards.
+   */
+  function focusHarness() {
+    const terminalTextarea = { focus: vi.fn(), isConnected: true };
+    const priorElement = { focus: vi.fn(), isConnected: true, tagName: 'TEXTAREA' };
+    const body = { tagName: 'BODY' };
+    let active: any = priorElement;
+    const { app, elements } = loadPaletteHarness({
+      document: {
+        getElementById: (id: string) => (globalThis as any).__els?.[id] ?? null,
+        get activeElement() {
+          return active;
+        },
+        body,
+      },
+    });
+    (globalThis as any).__els = elements;
+    app.terminal = { focus: terminalTextarea.focus };
+    app.activeSessionId = 'sess-beta';
+    // The overlay's own focus() is what moves focus in a real browser; the
+    // fake document needs the same transition or the test proves nothing.
+    elements.commandPaletteSearch.focus = vi.fn(() => {
+      active = elements.commandPaletteSearch;
+    });
+    return { app, elements, priorElement, terminalTextarea, body, setActive: (v: any) => (active = v) };
+  }
+
+  it('returns focus to whatever had it when the command palette closes', () => {
+    const { app, priorElement } = focusHarness();
+    app.openCommandPalette();
+    expect(priorElement.focus).not.toHaveBeenCalled();
+    app.closeCommandPalette();
+    expect(priorElement.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the terminal when the prior element is gone, but only with a live session', () => {
+    const { app, priorElement, terminalTextarea } = focusHarness();
+    app.openCommandPalette();
+    priorElement.isConnected = false;
+    app.closeCommandPalette();
+    expect(priorElement.focus).not.toHaveBeenCalled();
+    expect(terminalTextarea.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('never focuses the terminal from the welcome screen (a phone would pop the keyboard)', () => {
+    const { app, priorElement, terminalTextarea } = focusHarness();
+    app.activeSessionId = null;
+    app.openCommandPalette();
+    priorElement.isConnected = false;
+    app.closeCommandPalette();
+    expect(terminalTextarea.focus).not.toHaveBeenCalled();
+  });
+
+  it('does not restore focus to <body>, which is the bug itself', () => {
+    const { app, terminalTextarea, body, setActive } = focusHarness();
+    setActive(body);
+    app.openCommandPalette();
+    app.closeCommandPalette();
+    expect(terminalTextarea.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores focus on the session manager too, not just the palette', async () => {
+    const { app, elements, priorElement } = focusHarness();
+    elements.sessionManagerModal = { classList: { add: vi.fn(), remove: vi.fn() }, addEventListener: vi.fn() };
+    elements.sessionManagerSearch = { value: '', focus: vi.fn(), addEventListener: vi.fn() };
+    elements.sessionManagerList = { replaceChildren: vi.fn(), appendChild: vi.fn() };
+    app._loadSessionManagerList = vi.fn();
+    await app.openSessionManager();
+    app.closeSessionManager();
+    expect(priorElement.focus).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('panel close helpers', () => {
   it('closes panels when the mobile header helper is unavailable', () => {
     const CodemanApp = function CodemanApp(this: any) {};

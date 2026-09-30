@@ -339,6 +339,50 @@ Object.assign(CodemanApp.prototype, {
     return true;
   },
 
+  /**
+   * Save what had focus before a search-first overlay takes it.
+   *
+   * The Command Palette and the Session Manager both call `search.focus()` on
+   * open, and both used to close by removing the `active` class and nothing
+   * else. Hiding the focused input does not hand focus back to anyone — the
+   * browser drops it on `<body>` — so after Escape closed the overlay every
+   * keystroke went nowhere and the user had to click the terminal to type
+   * again (measured: `document.activeElement` is BODY afterwards and the
+   * terminal emits no onData at all). Every close path has the same hole, so
+   * the restore lives in the close functions, not in the global Escape chain.
+   *
+   * ⚠️ Deliberately only the save/restore half of {@link FocusTrap}, not the
+   * whole thing. `FocusTrap.activate()` moves focus to the first focusable
+   * element, which in both of these overlays is not the search box — adopting
+   * it wholesale would fix the focus loss by breaking the thing Cmd+K exists
+   * for, typing a filter the moment it opens.
+   */
+  _rememberOverlayFocus(key) {
+    this[key] = (typeof document !== 'undefined' && document.activeElement) || null;
+  },
+
+  /**
+   * Hand focus back to whatever {@link _rememberOverlayFocus} saved.
+   *
+   * ⚠️ The terminal fallback is gated on there being an active session: an
+   * overlay opened from the welcome screen has no terminal to return to, and
+   * focusing one on a phone summons the on-screen keyboard over a screen that
+   * has no input on it.
+   */
+  _restoreOverlayFocus(key) {
+    const prev = this[key];
+    this[key] = null;
+    const body = typeof document !== 'undefined' ? document.body : null;
+    // `isConnected === false` means the element was removed while the overlay
+    // was open (a re-render of the tab strip, say); anything else — including
+    // a stub with no such property — is treated as still focusable.
+    if (prev && prev !== body && prev.isConnected !== false && typeof prev.focus === 'function') {
+      prev.focus();
+      return;
+    }
+    if (this.activeSessionId) this.terminal?.focus?.();
+  },
+
   openCommandPalette() {
     const modal = document.getElementById('commandPaletteModal');
     const search = document.getElementById('commandPaletteSearch');
@@ -351,6 +395,9 @@ Object.assign(CodemanApp.prototype, {
     this._wireCommandPalette();
     this.renderCommandPalette();
 
+    // BEFORE the steal, not after: `search.focus()` below is what loses the
+    // caller's focus, so the read has to happen while it is still there.
+    this._rememberOverlayFocus('_commandPalettePrevFocus');
     search.focus();
     search.select?.();
   },
@@ -358,6 +405,7 @@ Object.assign(CodemanApp.prototype, {
   closeCommandPalette() {
     const modal = document.getElementById('commandPaletteModal');
     if (modal) modal.classList.remove('active');
+    this._restoreOverlayFocus('_commandPalettePrevFocus');
   },
 
   _wireCommandPalette() {
@@ -618,6 +666,7 @@ Object.assign(CodemanApp.prototype, {
         });
       }
       search.value = '';
+      this._rememberOverlayFocus('_sessionManagerPrevFocus');
       search.focus();
     }
     await this._loadSessionManagerList('');
@@ -626,6 +675,7 @@ Object.assign(CodemanApp.prototype, {
   closeSessionManager() {
     const modal = document.getElementById('sessionManagerModal');
     if (modal) modal.classList.remove('active');
+    this._restoreOverlayFocus('_sessionManagerPrevFocus');
   },
 
   /** Replace the Session Manager list body with a single status line. */
