@@ -33,23 +33,53 @@ interface FakeTrap {
   addEventListener: (ev: string, fn: TrapListener) => void;
 }
 
+interface FirePayload {
+  text?: string;
+  /** image/* items whose getAsFile() returns a blob (the healthy path) */
+  images?: string[];
+  /** image/* items whose getAsFile() returns null (the intermittent failure) */
+  nullImages?: string[];
+  /** kind='file' items with an empty MIME type whose getAsFile() returns a blob of the given type */
+  emptyMimeFiles?: string[];
+  /** clipboardData.files entries, by MIME type */
+  dtFiles?: string[];
+}
+
+interface ClipboardItemLike {
+  types: string[];
+  getType: (t: string) => Promise<unknown>;
+}
+
+interface HarnessOptions {
+  secureContext?: boolean;
+  /** navigator.clipboard.read implementation; absent means the API does not exist */
+  clipboardRead?: () => Promise<ClipboardItemLike[]>;
+}
+
 interface Harness {
   /** Fire a paste event on the trap the last _handleImagePaste() call created. */
-  firePaste: (payload: { text?: string; images?: string[] }) => void;
+  firePaste: (payload: FirePayload) => void;
+  /** Let the async clipboard.read() fallback settle (uses real node timers). */
+  awaitFallback: () => Promise<void>;
   /** Text handed to xterm's terminal.paste(), one entry per call. */
   pastedText: string[];
   /** Image batches handed to _uploadAndInsertImages(), one entry per call. */
   uploadedBatches: Array<Array<{ type: string }>>;
+  /** Toasts shown, in order. */
+  toasts: Array<{ message: string; kind: string }>;
+  /** How many times navigator.clipboard.read() was invoked. */
+  clipboardReadCalls: () => number;
   /** How many trap divs are still attached to the fake body. */
   attachedTraps: () => number;
   runTimers: () => void;
 }
 
-function loadPasteHarness(): Harness {
+function loadPasteHarness(options: HarnessOptions = {}): Harness {
   const traps: FakeTrap[] = [];
   const listeners: TrapListener[] = [];
   const attached = new Set<FakeTrap>();
   const timers: Array<() => void> = [];
+  let clipboardReadCalls = 0;
 
   const documentObj = {
     createElement: (): FakeTrap => {
@@ -81,8 +111,20 @@ function loadPasteHarness(): Harness {
     getElementById: () => null,
   };
 
+  const navigatorObj: Record<string, unknown> = {};
+  if (options.clipboardRead) {
+    const readImpl = options.clipboardRead;
+    navigatorObj.clipboard = {
+      read: () => {
+        clipboardReadCalls++;
+        return readImpl();
+      },
+    };
+  }
+
   const context = vm.createContext({
-    window: {},
+    window: { isSecureContext: options.secureContext ?? true },
+    navigator: navigatorObj,
     document: documentObj,
     setTimeout: (fn: () => void) => {
       timers.push(fn);
@@ -98,6 +140,7 @@ function loadPasteHarness(): Harness {
 
   const pastedText: string[] = [];
   const uploadedBatches: Array<Array<{ type: string }>> = [];
+  const toasts: Array<{ message: string; kind: string }> = [];
   const app = new CodemanApp();
   app.activeSessionId = 'session-1';
   app.terminal = {
@@ -107,16 +150,24 @@ function loadPasteHarness(): Harness {
   app._uploadAndInsertImages = (files: Array<{ type: string }>) => {
     uploadedBatches.push(Array.from(files));
   };
-  app.showToast = () => {};
+  app.showToast = (message: string, kind: string) => {
+    toasts.push({ message, kind });
+  };
 
   (app._handleImagePaste as () => void).call(app);
 
   return {
-    firePaste({ text = '', images = [] }) {
-      const items = images.map((type) => ({ type, getAsFile: () => ({ type }) }));
+    firePaste({ text = '', images = [], nullImages = [], emptyMimeFiles = [], dtFiles = [] }) {
+      const items = [
+        ...images.map((type) => ({ type, kind: 'file', getAsFile: () => ({ type }) })),
+        ...nullImages.map((type) => ({ type, kind: 'file', getAsFile: () => null })),
+        ...emptyMimeFiles.map((blobType) => ({ type: '', kind: 'file', getAsFile: () => ({ type: blobType }) })),
+      ];
+      const files = dtFiles.map((type) => ({ type }));
       const event = {
         clipboardData: {
           items,
+          files,
           getData: () => text,
         },
         preventDefault: () => {},
@@ -124,8 +175,13 @@ function loadPasteHarness(): Harness {
       };
       for (const fn of listeners) fn(event);
     },
+    awaitFallback: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    },
     pastedText,
     uploadedBatches,
+    toasts,
+    clipboardReadCalls: () => clipboardReadCalls,
     attachedTraps: () => attached.size,
     runTimers: () => {
       const pending = timers.splice(0, timers.length);
@@ -187,6 +243,147 @@ describe('Ctrl+V paste trap', () => {
 
     h.runTimers();
     expect(h.attachedTraps()).toBe(0);
+  });
+});
+
+describe('paste trap clipboard fallback', () => {
+  it('recovers via navigator.clipboard.read() when getAsFile() returns null', async () => {
+    const h = loadPasteHarness({
+      clipboardRead: async () => [{ types: ['image/png'], getType: async () => ({ type: 'image/png' }) }],
+    });
+
+    h.firePaste({ nullImages: ['image/png'] });
+    await h.awaitFallback();
+
+    expect(h.uploadedBatches).toHaveLength(1);
+    expect(h.uploadedBatches[0]).toEqual([{ type: 'image/png' }]);
+    expect(h.pastedText).toEqual([]);
+    expect(h.toasts).toEqual([]);
+  });
+
+  it('toasts instead of failing silently when the Clipboard API is absent', async () => {
+    const h = loadPasteHarness();
+
+    h.firePaste({ nullImages: ['image/png'] });
+    await h.awaitFallback();
+
+    expect(h.uploadedBatches).toEqual([]);
+    expect(h.pastedText).toEqual([]);
+    expect(h.toasts).toEqual([{ message: 'Could not read the pasted image from the clipboard', kind: 'warning' }]);
+  });
+
+  it('toasts when the Clipboard API is unavailable on a non-secure context', async () => {
+    const h = loadPasteHarness({
+      secureContext: false,
+      clipboardRead: async () => {
+        throw new Error('must not be called without a secure context');
+      },
+    });
+
+    h.firePaste({ nullImages: ['image/png'] });
+    await h.awaitFallback();
+
+    expect(h.uploadedBatches).toEqual([]);
+    expect(h.toasts).toHaveLength(1);
+  });
+
+  it('toasts when clipboard.read() is denied', async () => {
+    const h = loadPasteHarness({
+      clipboardRead: async () => {
+        throw new Error('denied');
+      },
+    });
+
+    h.firePaste({ nullImages: ['image/png'] });
+    await h.awaitFallback();
+
+    expect(h.uploadedBatches).toEqual([]);
+    expect(h.toasts).toHaveLength(1);
+  });
+
+  it('never touches the async Clipboard API for plain-text pastes', async () => {
+    const h = loadPasteHarness({
+      clipboardRead: async () => {
+        throw new Error('must not prompt for a text paste');
+      },
+    });
+
+    h.firePaste({ text: 'hello world' });
+    await h.awaitFallback();
+
+    expect(h.pastedText).toEqual(['hello world']);
+    expect(h.clipboardReadCalls()).toBe(0);
+    expect(h.toasts).toEqual([]);
+  });
+
+  it('uploads empty-MIME file items through the synchronous path', async () => {
+    const h = loadPasteHarness({
+      clipboardRead: async () => {
+        throw new Error('must not be called when the sync path succeeds');
+      },
+    });
+
+    h.firePaste({ emptyMimeFiles: ['image/png'] });
+    await h.awaitFallback();
+
+    expect(h.uploadedBatches).toHaveLength(1);
+    expect(h.uploadedBatches[0]).toEqual([{ type: 'image/png' }]);
+    expect(h.clipboardReadCalls()).toBe(0);
+    expect(h.toasts).toEqual([]);
+  });
+
+  it('uploads clipboardData.files entries through the synchronous path', async () => {
+    const h = loadPasteHarness({
+      clipboardRead: async () => {
+        throw new Error('must not be called when the sync path succeeds');
+      },
+    });
+
+    h.firePaste({ dtFiles: ['image/jpeg'] });
+    await h.awaitFallback();
+
+    expect(h.uploadedBatches).toHaveLength(1);
+    expect(h.clipboardReadCalls()).toBe(0);
+  });
+
+  it('attempts the fallback only once when two paste events arrive', async () => {
+    const h = loadPasteHarness({ clipboardRead: async () => [] });
+
+    h.firePaste({ nullImages: ['image/png'] });
+    h.firePaste({ nullImages: ['image/png'] });
+    await h.awaitFallback();
+
+    expect(h.clipboardReadCalls()).toBe(1);
+    expect(h.toasts).toHaveLength(1);
+  });
+});
+
+describe('pasted image collection', () => {
+  it('collects the same blob once when a browser exposes it via both items and files', () => {
+    const app = loadImageInputApp();
+    const blob = { type: 'image/png' };
+
+    const collected = app._collectPastedImages({
+      items: [{ type: 'image/png', kind: 'file', getAsFile: () => blob }],
+      files: [blob],
+    });
+
+    expect(collected.files).toEqual([blob]);
+    expect(collected.sawImageData).toBe(true);
+  });
+
+  it('keeps distinct blobs collected from items and files', () => {
+    const app = loadImageInputApp();
+    const fromItems = { type: 'image/png' };
+    const fromFiles = { type: 'image/png' };
+
+    const collected = app._collectPastedImages({
+      items: [{ type: 'image/png', kind: 'file', getAsFile: () => fromItems }],
+      files: [fromFiles],
+    });
+
+    expect(collected.files).toEqual([fromItems, fromFiles]);
+    expect(collected.sawImageData).toBe(true);
   });
 });
 

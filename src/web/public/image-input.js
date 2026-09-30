@@ -77,17 +77,14 @@ Object.assign(CodemanApp.prototype, {
       if (pasteConsumed) return;
       pasteConsumed = true;
 
-      // Check for images in clipboard items
-      var imageFiles = [];
-      var items = e.clipboardData && e.clipboardData.items;
-      if (items) {
-        for (var i = 0; i < items.length; i++) {
-          if (items[i].type.startsWith('image/')) {
-            var blob = items[i].getAsFile();
-            if (blob) imageFiles.push(blob);
-          }
-        }
-      }
+      // Collect image blobs out of the paste event's DataTransfer. Some
+      // clipboard providers expose image bytes with an empty MIME type, and
+      // DataTransferItem.getAsFile() returns null intermittently depending on
+      // browser state, clipboard provider, or timing — the collector reports
+      // those cases via sawImageData so the async Clipboard API fallback below
+      // gets a chance instead of the paste dying silently.
+      var collected = self._collectPastedImages(e.clipboardData);
+      var imageFiles = collected.files;
 
       // Clean up the trap
       setTimeout(function() {
@@ -106,13 +103,134 @@ Object.assign(CodemanApp.prototype, {
         // indistinguishable from typed input, weakening the CLI's
         // prompt-injection defenses.
         var text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
-        if (text && self.terminal) self.terminal.paste(text);
+        if (text) {
+          if (self.terminal) self.terminal.paste(text);
+        } else if (collected.sawImageData) {
+          // Image data was on the clipboard but the synchronous APIs could
+          // not surface it. Try the async Clipboard API; where it is
+          // unavailable this resolves empty and the user gets a toast instead
+          // of the previous silent no-op.
+          self._readPastedImageViaClipboardApi().then(function(blobs) {
+            if (blobs.length > 0) {
+              self._uploadAndInsertImages(blobs);
+            } else if (self.showToast) {
+              self.showToast('Could not read the pasted image from the clipboard', 'warning');
+            }
+          });
+        }
       }
     });
 
     // Trigger the browser's native paste via execCommand
     // (this fires the paste event on our focused trap element)
     document.execCommand('paste');
+  },
+
+  /** Synchronously collect image blobs from a paste event's DataTransfer.
+   *
+   * Reads `items` first (guarding getAsFile(), which can throw or return null
+   * depending on browser state, clipboard provider, or timing), then
+   * `DataTransfer.files`, which some browsers populate independently of
+   * `items`. Items with an empty MIME type are probed too: some clipboard
+   * providers expose image bytes without a type, and the upload pipeline's
+   * canvas re-encode plus the server's magic-byte check decide whether the
+   * bytes really are an image.
+   *
+   * @param {DataTransfer|null|undefined} clipboardData
+   * @returns {{ files: Blob[], sawImageData: boolean }} The blobs found, plus
+   *   whether the clipboard offered image-flavored data at all (used to decide
+   *   whether the async Clipboard API fallback is worth attempting).
+   */
+  _collectPastedImages(clipboardData) {
+    var files = [];
+    var sawImageData = false;
+    // A browser may expose the same file through both `items` and `files`;
+    // without this, one paste would upload it twice.
+    var seen = new Set();
+    if (!clipboardData) return { files: files, sawImageData: sawImageData };
+
+    var pushUnique = function (blob) {
+      if (blob && !seen.has(blob)) {
+        seen.add(blob);
+        files.push(blob);
+      }
+    };
+
+    var items = clipboardData.items;
+    if (items) {
+      for (var i = 0; i < items.length; i++) {
+        var item = items[i];
+        var itemType = item.type || '';
+        if (itemType.startsWith('image/') || (itemType === '' && item.kind === 'file')) {
+          sawImageData = true;
+          var blob = null;
+          try {
+            blob = item.getAsFile();
+          } catch (err) {
+            // Leave blob null; the async fallback gets a chance below.
+          }
+          pushUnique(blob);
+        }
+      }
+    }
+
+    var dtFiles = clipboardData.files;
+    if (dtFiles) {
+      for (var j = 0; j < dtFiles.length; j++) {
+        var f = dtFiles[j];
+        if (f && (f.type || '').startsWith('image/')) {
+          sawImageData = true;
+          pushUnique(f);
+        }
+      }
+    }
+
+    return { files: files, sawImageData: sawImageData };
+  },
+
+  /** Best-effort async fallback for pasted images the synchronous clipboard
+   * APIs could not surface.
+   *
+   * Reads through `navigator.clipboard.read()`, which takes a different path
+   * than the paste event's DataTransfer. It needs a secure context and the
+   * `clipboard-read` permission, so on plain-HTTP installs (where the paste
+   * trap exists precisely because this API is unavailable) it resolves to an
+   * empty array instead of throwing. Never triggers a permission prompt for
+   * plain-text pastes: callers only invoke it when image-flavored clipboard
+   * data was present but yielded no blobs.
+   *
+   * @returns {Promise<Blob[]>} The image blobs read, or [] when none could be.
+   */
+  _readPastedImageViaClipboardApi() {
+    try {
+      var secure =
+        typeof window !== 'undefined' && window.isSecureContext &&
+        typeof navigator !== 'undefined' && navigator.clipboard &&
+        typeof navigator.clipboard.read === 'function';
+      if (!secure) return Promise.resolve([]);
+      return navigator.clipboard.read().then(function(clipboardItems) {
+        var blobs = [];
+        var pending = [];
+        (clipboardItems || []).forEach(function(clipboardItem) {
+          (clipboardItem.types || []).forEach(function(mimeType) {
+            if (String(mimeType).startsWith('image/')) {
+              pending.push(
+                clipboardItem.getType(mimeType).then(function(blob) {
+                  if (blob) blobs.push(blob);
+                }).catch(function() {
+                  // One unreadable type must not sink the batch.
+                })
+              );
+            }
+          });
+        });
+        return Promise.all(pending).then(function() { return blobs; });
+      }).catch(function() {
+        return [];
+      });
+    } catch (err) {
+      return Promise.resolve([]);
+    }
   },
 
   // Max images accepted in one batch (paste / drop / mobile picker). Each is

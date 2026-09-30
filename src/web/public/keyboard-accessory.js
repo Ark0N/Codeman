@@ -647,6 +647,79 @@ const COMPOSER_PASTE_START = '\x1b[200~';
 const COMPOSER_PASTE_END = '\x1b[201~';
 
 /**
+ * Synchronously collect image blobs from a paste event's DataTransfer.
+ *
+ * Mirrors CodemanApp._collectPastedImages (image-input.js), which the terminal
+ * paste trap uses. Kept as a file-local function instead of calling
+ * app._collectPastedImages so the accessory bar works standalone with a
+ * minimal `app` — test/mobile-prompt-composer.test.ts evaluates this file in
+ * isolation. If the collection rules change, update both.
+ *
+ * Reads `items` first (guarding getAsFile(), which can throw or return null
+ * depending on browser state, clipboard provider, or timing), then
+ * `DataTransfer.files`, which some browsers populate independently of
+ * `items`. Items with an empty MIME type are probed too: some clipboard
+ * providers expose image bytes without a type. A blob already collected via
+ * `items` is not added twice from `files`.
+ */
+function collectPastedImages(clipboardData) {
+  var files = [];
+  var sawImageData = false;
+  var seen = new Set();
+  if (!clipboardData) return { files: files, sawImageData: sawImageData };
+
+  var pushUnique = function (blob) {
+    if (blob && !seen.has(blob)) {
+      seen.add(blob);
+      files.push(blob);
+    }
+  };
+
+  var items = clipboardData.items;
+  if (items) {
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      var itemType = item.type || '';
+      if (itemType.startsWith('image/') || (itemType === '' && item.kind === 'file')) {
+        sawImageData = true;
+        var blob = null;
+        try {
+          blob = item.getAsFile();
+        } catch (err) {
+          // Leave blob null; the async fallback gets a chance below.
+        }
+        pushUnique(blob);
+      }
+    }
+  }
+
+  var dtFiles = clipboardData.files;
+  if (dtFiles) {
+    for (var j = 0; j < dtFiles.length; j++) {
+      var f = dtFiles[j];
+      if (f && (f.type || '').startsWith('image/')) {
+        sawImageData = true;
+        pushUnique(f);
+      }
+    }
+  }
+
+  return { files: files, sawImageData: sawImageData };
+}
+
+/**
+ * Best-effort plain-text read from a paste event's DataTransfer. The getData
+ * call is guarded because synthetic or minimal clipboardData objects (and
+ * some mobile browsers) may not implement it.
+ */
+function getClipboardPlainText(clipboardData) {
+  if (clipboardData && typeof clipboardData.getData === 'function') {
+    return clipboardData.getData('text/plain') || '';
+  }
+  return '';
+}
+
+/**
  * KeyboardAccessoryBar - Quick action buttons shown above keyboard when typing.
  */
 const KeyboardAccessoryBar = {
@@ -1363,15 +1436,23 @@ const KeyboardAccessoryBar = {
 
     textarea.addEventListener('input', saveDraft);
     textarea.addEventListener('paste', (event) => {
-      const items = event.clipboardData?.items;
-      if (!items) return;
-      const images = Array.from(items)
-        .filter((item) => item.type.startsWith('image/'))
-        .map((item) => item.getAsFile())
-        .filter(Boolean);
-      if (images.length > 0) {
+      const collected = collectPastedImages(event.clipboardData);
+      const text = getClipboardPlainText(event.clipboardData);
+      if (collected.files.length > 0) {
         event.preventDefault();
-        void handleImages(images);
+        void handleImages(collected.files);
+      } else if (!text && collected.sawImageData && typeof app._readPastedImageViaClipboardApi === 'function') {
+        // The clipboard offered image data the synchronous APIs could not
+        // surface (getAsFile() intermittently returns null). Try the async
+        // Clipboard API before giving up, mirroring the terminal paste trap.
+        event.preventDefault();
+        void app._readPastedImageViaClipboardApi().then((blobs) => {
+          if (blobs.length > 0) {
+            void handleImages(blobs);
+          } else if (typeof app.showToast === 'function') {
+            app.showToast('Could not read the pasted image from the clipboard', 'warning');
+          }
+        });
       }
     });
     overlay.addEventListener('keydown', (event) => {
@@ -1454,18 +1535,22 @@ const KeyboardAccessoryBar = {
 
     // Best-effort: capture images pasted straight into the textarea.
     textarea.addEventListener('paste', (e) => {
-      const items = e.clipboardData && e.clipboardData.items;
-      if (!items) return;
-      const imageFiles = [];
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type.startsWith('image/')) {
-          const blob = items[i].getAsFile();
-          if (blob) imageFiles.push(blob);
-        }
-      }
-      if (imageFiles.length > 0) {
+      const collected = collectPastedImages(e.clipboardData);
+      const text = getClipboardPlainText(e.clipboardData);
+      if (collected.files.length > 0) {
         e.preventDefault();
-        handleImages(imageFiles);
+        handleImages(collected.files);
+      } else if (!text && collected.sawImageData && typeof app._readPastedImageViaClipboardApi === 'function') {
+        // getAsFile() came back empty; try the async Clipboard API before
+        // giving up, mirroring the terminal paste trap (image-input.js).
+        e.preventDefault();
+        void app._readPastedImageViaClipboardApi().then((blobs) => {
+          if (blobs.length > 0) {
+            handleImages(blobs);
+          } else if (typeof app.showToast === 'function') {
+            app.showToast('Could not read the pasted image from the clipboard', 'warning');
+          }
+        });
       }
     });
 
