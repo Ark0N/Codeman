@@ -104,6 +104,7 @@ import {
   validatePathWithinBase,
 } from '../route-helpers.js';
 import { buildAgentCaseMarker, writeAgentCaseMarker } from '../../agent-case-marker.js';
+import { RemoteFileAccessError, remoteEnsureDir, remoteProbePaths, remoteWriteFile } from '../../remote-files.js';
 import { canUsernameRunPrivilegedCommands, resolveClaudeModeForUsername } from '../../user-store.js';
 import { clampEnvOverridesForOwner } from '../../session-env-clamp.js';
 import { enabledClis, getCli } from '../../config/cli-registry/registry.js';
@@ -5178,6 +5179,49 @@ export function registerSessionRoutes(
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Image bytes do not match declared type ${ext}`);
     }
 
+    // Date.now() collides on same-ms uploads from two tabs (last-write wins
+    // silently). Append 8 hex chars so concurrent pastes get distinct names.
+    const filename = `paste-${Date.now()}-${randomBytes(4).toString('hex')}${ext}`;
+
+    // Remote-SSH case: workingDir is an absolute path on ANOTHER host, so the
+    // local-fs save below cannot work there (it died as a 500 ENOENT). Pipe
+    // the already-validated bytes over ssh instead: mkdir the remote dir, then
+    // verify it probed back as a real directory strictly inside the workspace
+    // (a planted `.claude-images -> /…` symlink resolves elsewhere and is
+    // refused, mirroring the local lstat guard), then stream the bytes in.
+    if (session.remote) {
+      const remote = session.remote;
+      const remoteDir = join(session.workingDir, '.claude-images');
+      const remoteFilepath = join(remoteDir, filename);
+      try {
+        await remoteEnsureDir(remote, remoteDir);
+        const [workProbe, dirProbe] = await remoteProbePaths(remote, [session.workingDir, remoteDir]);
+        const workReal = workProbe && workProbe.kind === 'directory' ? workProbe.realPath : null;
+        if (
+          !workReal ||
+          !dirProbe ||
+          dirProbe.kind !== 'directory' ||
+          dirProbe.realPath !== `${workReal}/.claude-images`
+        ) {
+          reply.code(403);
+          return createErrorResponse(ApiErrorCode.INVALID_INPUT, '.claude-images is not a regular directory');
+        }
+        await remoteWriteFile(remote, remoteFilepath, imageBytes);
+      } catch (err: unknown) {
+        // An unreachable host is an infrastructure answer, not a 500 with a
+        // local path in it: the case points at a host this server could not reach.
+        if (err instanceof RemoteFileAccessError) {
+          reply.code(502);
+          return createErrorResponse(
+            ApiErrorCode.OPERATION_FAILED,
+            `Could not save image on remote host: ${err.message}`
+          );
+        }
+        throw err;
+      }
+      return { path: remoteFilepath, filename };
+    }
+
     // Save to {workingDir}/.claude-images/
     // Refuse symlinks at imageDir — an agent or postinstall script could plant
     // `.claude-images -> ~/.ssh/` and redirect future writes outside workingDir.
@@ -5210,9 +5254,6 @@ export function registerSessionRoutes(
         }
       }
     }
-    // Date.now() collides on same-ms uploads from two tabs (last-write wins
-    // silently). Append 8 hex chars so concurrent pastes get distinct names.
-    const filename = `paste-${Date.now()}-${randomBytes(4).toString('hex')}${ext}`;
     const filepath = join(imageDir, filename);
     // O_EXCL: refuse to overwrite (collision is impossible with random suffix,
     // but defends against TOCTOU). O_NOFOLLOW: refuse if filepath is a symlink.

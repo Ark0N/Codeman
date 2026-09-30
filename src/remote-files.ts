@@ -21,8 +21,12 @@
  * each see one opaque argument. Never build a command here by concatenating a raw
  * path into the string.
  *
- * Read-only by design: previews, text reads and streaming. Writing to a remote file
- * is deliberately NOT implemented (docs/file-viewer-edit-plan.md §6), nor are the
+ * Read-only by design, with ONE narrow exception: previews, text reads and
+ * streaming are the only file-route consumers — except paste-image uploads
+ * (`remoteEnsureDir`/`remoteWriteFile` below), which write a server-generated
+ * filename of already-validated image bytes into the session's own
+ * `.claude-images` directory. Writing to a remote file is otherwise deliberately
+ * NOT implemented (docs/file-viewer-edit-plan.md §6), nor are the
  * office-conversion/thumbnail paths that would need the bytes on the server's disk.
  */
 
@@ -370,6 +374,104 @@ export function remoteCreateReadStream(
       child.kill('SIGTERM');
     },
   };
+}
+
+/**
+ * Bound on a remote write: one mkdir plus a piped upload of up to the
+ * paste-image size cap. Generous on purpose — a 50MB photo over a slow link
+ * must not die mid-transfer and leave a truncated file the route reports as
+ * success (the exit-status check below would catch it, but only after waiting
+ * out the full window).
+ */
+const REMOTE_WRITE_TIMEOUT_MS = 120_000;
+
+/**
+ * Inner shell command that reads the file's bytes from stdin.
+ *
+ * Pure (no connection) so tests can pin the quoting without ssh: the path is
+ * one shellescaped token, exactly like the read side.
+ */
+export function buildRemoteWriteCommand(remotePath: string): string {
+  return `cat > ${shellescape(remotePath)}`;
+}
+
+/**
+ * Create a remote directory, parents included (`mkdir -p`).
+ *
+ * Only ever called with a server-built path (the session's `.claude-images`
+ * dir), never a browser-supplied one — but the escaping discipline holds
+ * regardless: one shellescaped token inside the shared ssh line.
+ */
+export async function remoteEnsureDir(remote: SessionRemote, remoteDir: string): Promise<void> {
+  assertNotUnderTest();
+  const command = buildRemoteFileCommand(remote, `mkdir -p ${shellescape(remoteDir)}`);
+  try {
+    await runWithRemoteSshLimit(() => execAsync(command, { timeout: REMOTE_PROBE_TIMEOUT_MS }));
+  } catch (err) {
+    throw new RemoteFileAccessError(
+      `remote host ${remote.label || remote.host} unreachable: ${describeExecError(err)}`
+    );
+  }
+}
+
+/**
+ * Write bytes to a remote path, piped over the ssh connection's stdin.
+ *
+ * Bytes never touch the command line (no argv cap, nothing secret-adjacent in
+ * `ps` output): the remote end is just `cat > <one shellescaped token>`. A
+ * non-zero ssh exit — including a transfer cut short by the timeout kill —
+ * rejects, so the caller never reports a truncated file as saved.
+ *
+ * Callers must verify the destination FIRST (probe the parent dir: real
+ * directory, resolved inside the workspace). The filename itself is always
+ * server-generated (paste-<ts>-<rand>.<ext>), so no browser input reaches the
+ * remote shell.
+ */
+export async function remoteWriteFile(remote: SessionRemote, remotePath: string, data: Buffer): Promise<void> {
+  assertNotUnderTest();
+  const command = buildRemoteFileCommand(remote, buildRemoteWriteCommand(remotePath));
+  await runWithRemoteSshLimit(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const settle = (fn: () => void): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          fn();
+        };
+        const child = spawn(command, { shell: true, stdio: ['pipe', 'ignore', 'pipe'] });
+        const timer = setTimeout(() => {
+          child.kill('SIGKILL');
+          settle(() => reject(new RemoteFileAccessError('remote write timed out')));
+        }, REMOTE_WRITE_TIMEOUT_MS);
+        let stderr = '';
+        child.stderr?.on('data', (chunk: Buffer) => {
+          if (stderr.length < 2000) stderr += chunk.toString();
+        });
+        child.on('error', (err: Error) => {
+          settle(() => reject(new RemoteFileAccessError(`remote write failed: ${err.message.slice(0, 200)}`)));
+        });
+        child.on('close', (code: number | null) => {
+          settle(() => {
+            if (code === 0) {
+              resolve();
+            } else {
+              const detail = stderr.trim().split('\n')[0];
+              reject(
+                new RemoteFileAccessError(
+                  `remote write failed (ssh exit ${code})${detail ? `: ${detail.slice(0, 200)}` : ''}`
+                )
+              );
+            }
+          });
+        });
+        // An early remote close surfaces as EPIPE here; the 'close' handler
+        // above owns the rejection, so this must never throw unhandled.
+        child.stdin?.on('error', () => {});
+        child.stdin?.end(data);
+      })
+  );
 }
 
 /**

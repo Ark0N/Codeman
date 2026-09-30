@@ -24,11 +24,14 @@ import {
   buildRemoteFileCommand,
   buildRemoteProbeCommand,
   buildRemoteReadCommand,
+  buildRemoteWriteCommand,
   parseRemoteProbeRecord,
   parseRemoteProbeOutput,
+  remoteEnsureDir,
   remoteProbePaths,
   remoteReadFile,
   remoteCreateReadStream,
+  remoteWriteFile,
 } from '../src/remote-files.js';
 import type { SessionRemote } from '../src/types/session.js';
 
@@ -377,6 +380,13 @@ describe('under vitest', () => {
     await expect(remoteReadFile(remote, '/srv/case/a.txt', 1024)).rejects.toThrow(/disabled under test/);
   });
 
+  it('never opens a connection: writes and mkdir reject with a clear error', async () => {
+    await expect(remoteEnsureDir(remote, '/srv/case/.claude-images')).rejects.toThrow(/disabled under test/);
+    await expect(remoteWriteFile(remote, '/srv/case/.claude-images/paste-1.png', Buffer.from('x'))).rejects.toThrow(
+      /disabled under test/
+    );
+  });
+
   it('never opens a connection: a stream fails through its own error path', async () => {
     const { stream, close } = remoteCreateReadStream(remote, '/srv/case/a.mp4');
     const failure = await new Promise<Error>((resolveError) => stream.on('error', resolveError));
@@ -398,5 +408,15 @@ describe('buildRemoteReadCommand', () => {
 
   it('covers the first byte of the file (tail -c +1, not +0)', () => {
     expect(buildRemoteReadCommand('/f', { start: 0, end: 0 })).toBe("tail -c +1 '/f' | head -c 1");
+  });
+});
+
+describe('buildRemoteWriteCommand', () => {
+  it('reads stdin into one shellescaped token', () => {
+    expect(buildRemoteWriteCommand("/srv/case/it's.png")).toBe("cat > '/srv/case/it'\\''s.png'");
+  });
+
+  it('quotes spaces, globs and command substitution as literal filename text', () => {
+    expect(buildRemoteWriteCommand('/srv/case/$(touch pwned) *.png')).toBe("cat > '/srv/case/$(touch pwned) *.png'");
   });
 });
