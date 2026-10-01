@@ -250,6 +250,235 @@ Object.assign(CodemanApp.prototype, {
     this._keyCode229Recovery = null;
   },
 
+  _destroyMobileImePreview() {
+    try {
+      this._mobileImePreview?.destroy?.();
+    } catch {
+      // The preview is visual-only; terminal replacement must continue.
+    }
+    this._mobileImePreview = null;
+    this._mobileImePreviewSessionId = null;
+    this._mobileImeCommitOutputSeq = null;
+    try {
+      this._mobileImePreviewNode?.remove?.();
+    } catch {
+      // Best-effort node cleanup only.
+    }
+    try {
+      this._mobileImePreviewHelpers?.classList?.remove('codeman-ime-preview-owned');
+    } catch {
+      // Best-effort ownership cleanup only.
+    }
+    this._mobileImePreviewNode = null;
+    this._mobileImePreviewHelpers = null;
+    try {
+      if (this._mobileImePreviewOfflineHandler) {
+        window.removeEventListener('offline', this._mobileImePreviewOfflineHandler);
+      }
+      if (this._mobileImePreviewPagehideHandler) {
+        window.removeEventListener('pagehide', this._mobileImePreviewPagehideHandler);
+      }
+    } catch {
+      // Best-effort listener cleanup only.
+    }
+    this._mobileImePreviewOfflineHandler = null;
+    this._mobileImePreviewPagehideHandler = null;
+  },
+
+  /**
+   * iOS Safari IME preview (mobile-ime-preview.js). WebKit does not show the
+   * text an IME is composing inside the terminal, so the user types blind.
+   *
+   * Two homes, chosen per render:
+   * - Local echo on: typed text sits in the LocalEchoOverlay and the PTY
+   *   cursor stays at the prompt start, under the overlay's opaque text (z 7,
+   *   `.xterm-screen`). So the overlay draws the composition itself, as an
+   *   underlined tail after its pending text (`setComposition`).
+   * - Otherwise (a shell, or the overlay could not place it): a span inside
+   *   `.xterm-helpers`, positioned by the same --xterm-helper-left/top vars as
+   *   the helper textarea, which follow the PTY cursor.
+   *
+   * Visual only: nothing here touches the input path, and every failure
+   * leaves no DOM behind.
+   */
+  _initMobileImePreview() {
+    this._destroyMobileImePreview();
+    let preview = null;
+    let helpers = null;
+    try {
+      if (typeof MobileImePreview === 'undefined' || !MobileImePreview?.isIosWebKitTouch?.()) return;
+      const textarea = this.terminal?.textarea;
+      helpers = this.terminal?.element?.querySelector?.('.xterm-helpers');
+      if (!textarea || !helpers) return;
+
+      preview = document.createElement('span');
+      this._mobileImePreviewNode = preview;
+      this._mobileImePreviewHelpers = helpers;
+      preview.className = 'codeman-ime-preview';
+      preview.setAttribute('aria-hidden', 'true');
+      preview.hidden = true;
+      helpers.appendChild(preview);
+      const syncPreviewTypography = () => {
+        try {
+          const compositionView =
+            helpers.querySelector?.('.composition-view') || this.terminal?.element?.querySelector?.('.composition-view');
+          if (!compositionView || !preview.style) return;
+          const style = typeof getComputedStyle === 'function' ? getComputedStyle(compositionView) : compositionView.style;
+          for (const property of ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'height']) {
+            const value = style?.[property] || compositionView.style?.[property];
+            if (value) preview.style[property] = value;
+          }
+          const theme = this.terminal?.options?.theme;
+          let foreground = theme?.foreground;
+          let background = theme?.background;
+          if (!foreground || !background) {
+            try {
+              const current = window.codemanCurrentXtermTheme?.();
+              foreground = foreground || current?.foreground;
+              background = background || current?.background;
+            } catch {
+              // Theme lookup is best-effort; retain the safe terminal fallback.
+            }
+          }
+          preview.style.color = foreground || '#e0e0e0';
+          // Opaque, like xterm's own composition view, so the preview does not
+          // overprint whatever sits at the cursor (a dim composer placeholder).
+          preview.style.backgroundColor = background || '#0d0d0d';
+        } catch {
+          // Typography matching is visual-only and must not block input.
+        }
+      };
+      // The overlay only when it is what shows typed text right now (local echo
+      // on, and not handed back to plain PTY echo by a composer nav key).
+      const localEchoOverlay = () =>
+        this._localEchoEnabled && !this._echoPassthroughSessions?.has(this.activeSessionId)
+          ? this._localEchoOverlay || null
+          : null;
+      const clearOverlayComposition = () => {
+        try {
+          if (this._localEchoOverlay?.composition) this._localEchoOverlay.setComposition('');
+        } catch {}
+      };
+      const hideSpan = () => {
+        try {
+          preview.hidden = true;
+        } catch {}
+        try {
+          preview.textContent = '';
+        } catch {}
+        try {
+          delete preview.dataset.phase;
+        } catch {}
+        try {
+          helpers.classList.remove('codeman-ime-preview-owned');
+        } catch {}
+      };
+      const clearPreview = () => {
+        clearOverlayComposition();
+        hideSpan();
+      };
+      const controller = MobileImePreview.create({
+        textarea,
+        // An ancestor of the textarea: its capture-phase keydown listener runs
+        // before xterm's capture listener on the textarea, which finalizes the
+        // composition and emits the commit synchronously.
+        keydownTarget: this.terminal.element,
+        render: ({ text, phase }) => {
+          try {
+            const overlay = localEchoOverlay();
+            if (overlay && typeof overlay.setComposition === 'function') {
+              overlay.setComposition(text);
+              // No prompt found = nothing drawn: fall back to the span.
+              if (!text || overlay.state?.visible) {
+                hideSpan();
+                helpers.classList.toggle('codeman-ime-preview-owned', !!text);
+                return;
+              }
+              overlay.setComposition('');
+            } else {
+              clearOverlayComposition();
+            }
+            syncPreviewTypography();
+            preview.textContent = text;
+            preview.dataset.phase = phase;
+            preview.hidden = !text;
+            helpers.classList.toggle('codeman-ime-preview-owned', !!text);
+          } catch {
+            clearPreview();
+          }
+        },
+        clear: clearPreview,
+      });
+      this._mobileImePreview = controller;
+      this._mobileImePreviewSessionId = this.activeSessionId;
+
+      // Offline and pagehide only reset: initTerminal() runs once per page
+      // load, so destroying on pagehide would leave the preview off for good
+      // after a back-forward cache restore (iOS Safari keeps pages there).
+      this._mobileImePreviewOfflineHandler = () => {
+        try {
+          this._mobileImePreview?.reset?.();
+        } catch {
+          // Disconnect cleanup is visual-only.
+        }
+      };
+      this._mobileImePreviewPagehideHandler = this._mobileImePreviewOfflineHandler;
+      window.addEventListener('offline', this._mobileImePreviewOfflineHandler);
+      window.addEventListener('pagehide', this._mobileImePreviewPagehideHandler);
+    } catch {
+      this._destroyMobileImePreview();
+    }
+  },
+
+  /**
+   * Tell the IME preview about a chunk xterm emitted through onData. Returns
+   * true when the chunk is the IME's committed text, in which case the preview
+   * holds it (phase 'committed') until something else shows it. Never throws.
+   */
+  _consumeMobileImeTerminalData(data) {
+    let isImeCommit = false;
+    try {
+      isImeCommit = this._mobileImePreview?.consumeTerminalData?.(data) === true;
+    } catch {
+      // The preview is visual-only; normal terminal input must continue.
+    }
+    // Output accepted from here on can carry the echo of this commit.
+    if (isImeCommit) this._mobileImeCommitOutputSeq = this._terminalOutputSeq || 0;
+    return isImeCommit;
+  },
+
+  /**
+   * Clear a committed IME preview once terminal output accepted AFTER the
+   * commit has been parsed. `flushedOutputSeq` is the output sequence a fully
+   * written flush covered (null when part of it was deferred), so output that
+   * was already queued before the commit can never clear it early.
+   */
+  _noteMobileImeAuthoritativeOutput(flushedOutputSeq, sessionId) {
+    try {
+      const commitSeq = this._mobileImeCommitOutputSeq;
+      if (commitSeq === null || commitSeq === undefined || flushedOutputSeq === null) return;
+      if (sessionId !== this.activeSessionId || !(flushedOutputSeq > commitSeq)) return;
+      this._mobileImeCommitOutputSeq = null;
+      this._mobileImePreview?.noteAuthoritativeOutput?.();
+    } catch {
+      // Authoritative output is never delayed or consumed by the preview.
+    }
+  },
+
+  /**
+   * The local echo overlay has just taken a committed IME chunk through the
+   * ordinary printable/paste branch, so it now shows the text: release the
+   * preview instead of waiting for terminal output.
+   */
+  _transferMobileImeCommitToLocalEcho() {
+    this._mobileImeCommitOutputSeq = null;
+    try {
+      this._mobileImePreview?.completeCommit?.({ predicted: true });
+    } catch {
+      // Ownership transfer is visual-only.
+    }
+  },
+
   initTerminal() {
     // Load scrollback setting from localStorage, treating DEFAULT_SCROLLBACK as a floor
     // so users who picked up the previous (smaller) default get the new minimum on upgrade.
@@ -307,6 +536,7 @@ Object.assign(CodemanApp.prototype, {
 
     const container = document.getElementById('terminalContainer');
     this.terminal.open(container);
+    this._initMobileImePreview();
     this._installMobileTapMouseGuard();
     this._installShiftDragSelection();
     this._installTouchSelectionFocusGuard();
@@ -1212,6 +1442,8 @@ Object.assign(CodemanApp.prototype, {
     // survives tab switches and reconnects.
 
     const handleTerminalData = (data) => {
+      // Before anything can rewrite `data`: is this chunk the IME's commit?
+      const isImeCommit = this._consumeMobileImeTerminalData(data);
       // Mouse SGR reports (tap-to-position) are NOT IME input — they must reach
       // the PTY even while the CJK input field owns focus. Without this exception
       // tapping to move the cursor silently does nothing whenever Chinese input
@@ -1289,6 +1521,8 @@ Object.assign(CodemanApp.prototype, {
         // When enabled, keystrokes are buffered locally in the overlay for
         // instant visual feedback.  Nothing is sent to the PTY until Enter
         // (or a control char) is pressed — avoids out-of-order char delivery.
+        // An IME commit takes the same printable/paste branch as typed text,
+        // and the overlay then shows it in place of the preview.
         if (this._localEchoEnabled && !echoPassthrough) {
           if (data === '\x7f') {
             const source = this._localEchoOverlay?.removeChar();
@@ -1345,6 +1579,7 @@ Object.assign(CodemanApp.prototype, {
           if (data.length > 1 && data.charCodeAt(0) >= 32) {
             // Paste: append to overlay only (sent on Enter)
             this._localEchoOverlay?.appendText(data);
+            if (isImeCommit && this._localEchoOverlay) this._transferMobileImeCommitToLocalEcho();
             return;
           }
           if (data.charCodeAt(0) < 32) {
@@ -1490,6 +1725,7 @@ Object.assign(CodemanApp.prototype, {
           if (data.length === 1 && data.charCodeAt(0) >= 32) {
             // Printable char: add to overlay only (sent on Enter)
             this._localEchoOverlay?.addChar(data);
+            if (isImeCommit && this._localEchoOverlay) this._transferMobileImeCommitToLocalEcho();
             return;
           }
         }
@@ -3522,6 +3758,9 @@ Object.assign(CodemanApp.prototype, {
   },
 
   batchTerminalWrite(data) {
+    // Arrival order of output, so the IME preview can tell output that
+    // followed a commit from output that was already queued before it.
+    this._terminalOutputSeq = (this._terminalOutputSeq || 0) + 1;
     // Feed the renderer watchdog. Recorded before the buffer-load early return
     // below: a write that is queued rather than written still means the pipeline
     // owes us a frame once it drains.
@@ -3585,6 +3824,7 @@ Object.assign(CodemanApp.prototype, {
 
     // Accumulate raw data (may contain DEC 2026 markers)
     this.pendingWrites.push(data);
+    this._pendingWritesOutputSeq = this._terminalOutputSeq;
     this._scheduleTerminalWriteFlush();
   },
 
@@ -3616,6 +3856,7 @@ Object.assign(CodemanApp.prototype, {
 
     // Transfer buffered data to normal pending writes
     this.pendingWrites.push(this.flickerFilterBuffer);
+    this._pendingWritesOutputSeq = this._terminalOutputSeq;
     this.flickerFilterBuffer = '';
     this.flickerFilterActive = false;
 
@@ -3646,6 +3887,15 @@ Object.assign(CodemanApp.prototype, {
    * Position is tracked dynamically by _findPrompt() on every render.
    */
   _updateLocalEchoState() {
+    if (this._mobileImePreviewSessionId !== this.activeSessionId) {
+      this._mobileImePreviewSessionId = this.activeSessionId;
+      this._mobileImeCommitOutputSeq = null;
+      try {
+        this._mobileImePreview?.reset?.();
+      } catch {
+        // The preview is visual-only; session switching must continue.
+      }
+    }
     const settings = this.loadAppSettingsFromStorage();
     const session = this.activeSessionId ? this.sessions.get(this.activeSessionId) : null;
     const echoEnabled = settings.localEchoEnabled ?? MobileDetection.isTouchDevice();
@@ -3851,6 +4101,9 @@ Object.assign(CodemanApp.prototype, {
       this.pendingWrites.push(joined.slice(MAX_FRAME_BYTES));
       deferred = true;
     }
+    // Newest output this chunk fully contains, for the IME preview. A split
+    // chunk may not hold that output yet, so it reports nothing.
+    const flushedOutputSeq = deferred ? null : (this._pendingWritesOutputSeq ?? null);
     this._terminalWriteInFlight = true;
     this._terminalWriteInFlightBytes = writeChunk.length;
     try {
@@ -3868,6 +4121,7 @@ Object.assign(CodemanApp.prototype, {
         // because the test's write mock moved the viewport synchronously.)
         this._restoreTerminalViewport(preserveViewportY, flushSessionId);
         this._scheduleTerminalWriteFlush();
+        this._noteMobileImeAuthoritativeOutput(flushedOutputSeq, flushSessionId);
       });
     } catch (err) {
       this._terminalWriteInFlight = false;
