@@ -14,6 +14,9 @@
  */
 
 (function (global) {
+  // How long a scroll-to-top history pull may hold Pane B's live output.
+  const HISTORY_PULL_TIMEOUT_MS = 10000;
+
   /**
    * Minimal chunked write for Pane B's own xterm instance — write() in
    * TERMINAL_CHUNK_SIZE slices, yielding a frame between each, instead of one
@@ -68,10 +71,18 @@
       this.fitAddon = null;
       this.ws = null;
       this._wsReady = false;
+      this._wsClosed = false;
       this._destroyed = false;
       // Single-flight state for _loadBuffer()/_refreshBuffer() below.
       this._bufferLoading = false;
       this._bufferRefreshPending = false;
+      // Scroll-to-top history pull (shell panes only), see _maybeLoadMoreHistory().
+      // `_liveQueue` is non-null exactly while a pull is replaying: live frames
+      // are held there with their arrival time instead of written under it.
+      this._historyPullAt = 0;
+      this._historyPullUseless = false;
+      this._liveQueue = null;
+      this._onWheel = null;
     }
 
     async connect() {
@@ -94,6 +105,8 @@
       this.terminal.loadAddon(this.fitAddon);
       this.terminal.open(this.mountEl);
       this.fitAddon.fit();
+
+      this._installWheelListener();
 
       this.terminal.onData((data) => {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -254,9 +267,9 @@
         try {
           const msg = JSON.parse(event.data);
           if (msg.t === 'o') {
-            this.terminal.write(msg.d);
+            this._onLiveOutput(msg.d);
           } else if (msg.t === 'c') {
-            this.terminal.clear();
+            this._onLiveClear();
           } else if (msg.t === 'r') {
             // Server-triggered refresh (SSE backpressure cleared, terminal
             // data was dropped). The primary pane routes this to
@@ -282,12 +295,19 @@
       // user's place in Pane B's scrollback for a transient blip.
       this.ws.onclose = () => {
         this._wsReady = false;
-        this.terminal?.write('\r\n\x1b[2m[Pane B disconnected — close and reopen the split to reconnect]\x1b[0m\r\n');
+        this._wsClosed = true;
+        this._writeDisconnectedMarker();
       };
 
       this.ws.onerror = () => {
         // onclose fires after onerror — cleanup happens there.
       };
+    }
+
+    // Extracted so both onclose and a history-pull replay that lands on an
+    // already-closed socket can write it (see _pullHistory()'s finally block).
+    _writeDisconnectedMarker() {
+      this.terminal?.write('\r\n\x1b[2m[Pane B disconnected — close and reopen the split to reconnect]\x1b[0m\r\n');
     }
 
     // Fetches and writes the session's current scrollback. Used both by
@@ -324,11 +344,162 @@
       } catch {
         /* Best-effort — live output still arrives once the socket connects. */
       } finally {
-        this._bufferLoading = false;
+        this._endBufferLoad();
       }
+    }
+
+    // Ends a single-flight load (initial, refresh or history pull): clears the
+    // flag, then runs the ONE trailing refresh that arrived while it was busy.
+    _endBufferLoad() {
+      this._bufferLoading = false;
       if (this._bufferRefreshPending && !this._destroyed) {
         this._bufferRefreshPending = false;
         this._refreshBuffer();
+      }
+    }
+
+    // Live terminal output. Written straight through, except while a history
+    // pull is replaying: a capture is current only up to the instant tmux took
+    // it, so a frame arriving mid-replay is held with its arrival time and
+    // replayed behind the snapshot by _pullHistory() (the primary pane's
+    // _finishBufferLoad `since` rule), never written underneath it.
+    _onLiveOutput(data) {
+      if (this._liveQueue) this._liveQueue.push({ at: performance.now(), data });
+      else this.terminal?.write(data);
+    }
+
+    // The server's `{t:'c'}` clear frame takes the same route as output, for the
+    // same reason: clearing straight away, mid-replay, would wipe the half-written
+    // snapshot and leave _pullHistory() measuring a buffer that is no longer the
+    // one it is restoring. Queued, it lands in order with the frames around it.
+    _onLiveClear() {
+      if (this._liveQueue) this._liveQueue.push({ at: performance.now(), clear: true });
+      else this.terminal?.clear();
+    }
+
+    // Capture phase, because xterm's own wheel handler stopPropagation()s every
+    // event it consumes, so a bubbling listener here would never see the wheel
+    // while the pane still has scrollback to scroll. Passive: this only observes,
+    // xterm keeps doing the scrolling.
+    _installWheelListener() {
+      this._onWheel = (ev) => {
+        if (ev.deltaY < 0) this._maybeLoadMoreHistory();
+      };
+      this.mountEl.addEventListener('wheel', this._onWheel, { capture: true, passive: true });
+    }
+
+    // Wheel-up at the top of a SHELL pane's scrollback. tmux repaints a burst of
+    // output (`cat` of a file longer than the screen) instead of scrolling it,
+    // so this pane's xterm ends up with about one screen of scrollback while
+    // tmux holds every line — and nothing here ever went back to ask, so the
+    // history was unreachable. The primary pane has the same pull
+    // (app.js _maybeRefetchFullHistory); Pane B is a separate xterm and needs its
+    // own. Shell only: a non-shell CLI's history is out of scope for this pull
+    // (its load already takes `full=1`; codex and Claude's inline renderer do
+    // grow tmux history, this just isn't how they recover it). The alternate-
+    // screen skip (nano, vim, less) only matters for a direct-PTY shell — under
+    // tmux the browser xterm never enters the alternate buffer.
+    _maybeLoadMoreHistory() {
+      if (this.sessionMode !== 'shell' || this._destroyed || !this.terminal) return;
+      if (this._bufferLoading) return;
+      // Mirrors app.js _maybeRefetchFullHistory and this pane's own
+      // _sendResize(): a detached session's own window already owns its PTY
+      // size and scrollback, so Pane B has nothing of its own to reconcile.
+      if (this.detachedSessions?.has(this.sessionId)) return;
+      const active = this.terminal.buffer.active;
+      if (active.type !== 'normal' || active.viewportY !== 0) return;
+      // Momentum scrolling fires this dozens of times per flick, so cooldown
+      // rather than latch; a pull that could only have downgraded the pane
+      // waits far longer.
+      const cooldown = this._historyPullUseless ? 60000 : 4000;
+      const now = Date.now();
+      if (now - this._historyPullAt < cooldown) return;
+      this._historyPullAt = now;
+      void this._pullHistory();
+    }
+
+    // Pulls a BOUNDED window of tmux's full history (the same TERMINAL_TAIL_SIZE
+    // a tab switch loads, so a multi-megabyte capture never lands on xterm's
+    // main thread) and replays it under the reader's current place. Holds the
+    // single-flight flag across the fetch AND the replay, like _loadBuffer().
+    async _pullHistory() {
+      this._bufferLoading = true;
+      this._liveQueue = [];
+      let replayed = false;
+      let capturedAt = 0;
+      try {
+        // A deadline, because live output is held for as long as this runs: a
+        // request that hangs would otherwise freeze the whole pane. Aborting
+        // lands in the catch below, which releases the flag and the queue. It
+        // covers the body read too, not just the headers.
+        const res = await fetch(`/api/sessions/${this.sessionId}/terminal?full=1&tail=${TERMINAL_TAIL_SIZE}`, {
+          signal: global.AbortSignal?.timeout?.(HISTORY_PULL_TIMEOUT_MS),
+        });
+        // The cutoff below is the response's arrival, the same `since` rule the
+        // primary pane uses (_finishBufferLoad). It is a client clock standing in
+        // for the instant tmux took the capture, which lies somewhere in the
+        // round trip, so a frame in that window can be lost or doubled. Bounded
+        // by one round trip and not closable without a server-side capture time.
+        capturedAt = performance.now();
+        const payload = (await res.json())?.data;
+        const buffer = payload?.terminalBuffer;
+        const term = this.terminal;
+        if (!buffer || !term || this._destroyed) return;
+        const rowsBefore = term.buffer.active.length;
+        const rowsIncoming = global.app?._estimateReplayRows?.(buffer, term.cols) ?? buffer.split('\n').length;
+        // xterm keeps at most `scrollback + rows` rows while tmux keeps far more
+        // lines, so a window of short lines can carry more rows than this pane
+        // can ever hold, and `rowsIncoming <= rowsBefore` would never come true.
+        const scrollbackCap = term.options?.scrollback || 0;
+        const paneFull = scrollbackCap > 0 && rowsBefore >= scrollbackCap + term.rows;
+        // Nothing to gain (this also covers a downgrade, which would delete
+        // history mid-scroll), and a reset+rewrite would jump the viewport. An
+        // untruncated window IS all of tmux's history and the next burst can add
+        // more, so keep the 4 s cooldown. A truncated window can never reach past
+        // what the pane shows, and every ask costs the server a capture-pane of
+        // the whole history (`tail` is cut after it): back off to 60 s, as the
+        // primary pane does (app.js _maybeRefetchFullHistory). A full pane backs
+        // off too, since no window can ever fit in it.
+        if (rowsIncoming <= rowsBefore || paneFull) {
+          if (payload.truncated || paneFull) this._historyPullUseless = true;
+          return;
+        }
+        this._historyPullUseless = false;
+        term.write('\x1bc');
+        replayed = true;
+        await writeChunked(term, buffer, () => this._destroyed);
+        if (this._destroyed || !this.terminal) return;
+        // xterm parses asynchronously: an empty write's callback fires only
+        // after everything before it, so the row count below is the settled one.
+        await new Promise((resolve) => this.terminal.write('', resolve));
+        if (this._destroyed || !this.terminal) return;
+        // The replay grew the buffer UPWARD, so what was row 0 is now `delta`
+        // rows down; land there and the recovered history sits above it.
+        const delta = this.terminal.buffer.active.length - rowsBefore;
+        if (delta > 0) this.terminal.scrollToLine(delta);
+        else this.terminal.scrollToTop();
+      } catch {
+        /* Best-effort — live output keeps arriving whatever happens here. */
+      } finally {
+        const queued = this._liveQueue ?? [];
+        this._liveQueue = null;
+        // After a replay, only frames that arrived after the capture are news;
+        // earlier ones are already in it. With no replay, every held frame is.
+        const cutoff = replayed ? capturedAt : 0;
+        for (const entry of queued) {
+          if (entry.at < cutoff) continue;
+          if (entry.clear) this.terminal?.clear();
+          else this.terminal?.write(entry.data);
+        }
+        // A replay's own `\x1bc` wipes the disconnected marker onclose wrote,
+        // painting a fresh, current-looking history while onData keeps
+        // silently dropping every keystroke on the dead socket. Re-stamp it
+        // if the socket closed in either order (before the pull started, or
+        // while the fetch was in flight) — checked after the queue flush so
+        // it is the last thing on screen, matching what onclose would have
+        // left had the pull never run.
+        if (replayed && this._wsClosed) this._writeDisconnectedMarker();
+        this._endBufferLoad();
       }
     }
 
@@ -381,6 +552,10 @@
 
     destroy() {
       this._destroyed = true;
+      if (this._onWheel) {
+        this.mountEl?.removeEventListener('wheel', this._onWheel, { capture: true });
+        this._onWheel = null;
+      }
       if (this.ws) {
         this.ws.onopen = null;
         this.ws.onmessage = null;
