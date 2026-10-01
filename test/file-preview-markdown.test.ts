@@ -21,21 +21,31 @@
  *     and while editing.
  *  5. `FILE_PREVIEW_EXTENSIONS` gained avif/ico and still has no `md`
  *     (in-workspace text keeps the tail viewer, see architecture-invariants).
+ *  6. A preview opened by attachment id under a bare file name has no
+ *     directory to resolve against, so its relative images degrade to alt text
+ *     and its relative links to plain text instead of landing on the workspace
+ *     root's files; an absolute-path attachment keeps resolving.
+ *  7. A file renders without chat line breaks (`breaks: false`): a paragraph
+ *     hard-wrapped in the source is one paragraph, while the Response Viewer
+ *     keeps a <br> per newline.
  *
  * Loaded via `vm` with a jsdom document injected (the technique from
  * response-viewer-file-links.test.ts): constants.js + panels-ui.js only, with
- * the app.js markdown pipeline stubbed to a fixed fragment.
+ * the app.js markdown pipeline stubbed to a fixed fragment, except for rule 7,
+ * which runs the shipping app.js + vendored marked + DOMPurify end to end.
  */
 
 import { readFileSync } from 'node:fs';
+import { performance } from 'node:perf_hooks';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
 import { describe, expect, it, vi } from 'vitest';
 
 const PUBLIC = resolve(import.meta.dirname, '../src/web/public');
-const constantsJs = readFileSync(resolve(PUBLIC, 'constants.js'), 'utf8');
-const panelsJs = readFileSync(resolve(PUBLIC, 'panels-ui.js'), 'utf8');
+const publicFile = (name: string) => readFileSync(resolve(PUBLIC, name), 'utf8');
+const constantsJs = publicFile('constants.js');
+const panelsJs = publicFile('panels-ui.js');
 
 // A real origin: vitest's equality walker reaches the window through a node's
 // ownerDocument, and jsdom's localStorage getter throws on an opaque one.
@@ -69,6 +79,8 @@ function jsonResponse(body: unknown) {
 
 /** Answer file-content like the route does: text as JSON, an image as metadata. */
 function fetchStub(url: string) {
+  // An attachment's by-id raw route answers the bytes themselves.
+  if (url.includes('/attachments/')) return { ok: true, status: 200, text: async () => MD_CONTENT };
   const path = decodeURIComponent(new URL(url, 'http://x').searchParams.get('path') || '');
   const ext = path.split('.').pop() || '';
   if (ext === 'png') {
@@ -88,6 +100,18 @@ function fetchStub(url: string) {
     success: true,
     data: { path, content, totalLines: 3, size: content.length, truncated: false, extension: ext, editable: true },
   });
+}
+
+/** The file-preview overlay's elements, as index.html ships them. */
+function mountPreviewDom() {
+  document.body.innerHTML = `
+    <div id="filePreviewOverlay"></div><span id="filePreviewTitle"></span>
+    <button id="filePreviewMdBtn" hidden></button>
+    <button id="filePreviewLinesBtn" hidden></button>
+    <button id="filePreviewWrapBtn" hidden></button>
+    <button id="filePreviewEditBtn" hidden></button>
+    <button id="filePreviewDetachBtn" hidden></button>
+    <div id="filePreviewBody"></div><div id="filePreviewFooter"></div>`;
 }
 
 function loadApp(prefs: Record<string, string> = {}) {
@@ -114,14 +138,7 @@ function loadApp(prefs: Record<string, string> = {}) {
     filename: 'panels-ui.js',
   });
 
-  document.body.innerHTML = `
-    <div id="filePreviewOverlay"></div><span id="filePreviewTitle"></span>
-    <button id="filePreviewMdBtn" hidden></button>
-    <button id="filePreviewLinesBtn" hidden></button>
-    <button id="filePreviewWrapBtn" hidden></button>
-    <button id="filePreviewEditBtn" hidden></button>
-    <button id="filePreviewDetachBtn" hidden></button>
-    <div id="filePreviewBody"></div><div id="filePreviewFooter"></div>`;
+  mountPreviewDom();
 
   const app = new CodemanApp();
   app.$ = (id: string) => document.getElementById(id);
@@ -154,7 +171,8 @@ describe('file viewer rendered markdown', () => {
     const doc = body.firstElementChild as HTMLElement;
     expect(doc.matches('.rv-text.file-preview-md[data-i18n-skip]')).toBe(true);
     expect(doc.querySelector('h1')?.textContent).toBe('Title');
-    expect(app._renderMarkdown).toHaveBeenCalledWith(MD_CONTENT);
+    // A file, not a chat message: source newlines inside a paragraph are not breaks.
+    expect(app._renderMarkdown).toHaveBeenCalledWith(MD_CONTENT, { breaks: false });
     // Identity, not deep equality: DOM nodes are compared by reference here.
     expect(app._linkifyFilePaths.mock.calls[0][0]).toBe(doc);
     expect(app._bindResponseViewerInteractions.mock.calls[0][0]).toBe(body);
@@ -210,6 +228,14 @@ describe('file viewer rendered markdown', () => {
 
   it('decodes percent-encoded refs, drops the query, and resolves root-relative refs against the workspace', async () => {
     const { app, body } = loadApp();
+    // An absolute path in the document's prose, linked by the Response
+    // Viewer's linkifier, which knows nothing of the preview's session.
+    app._linkifyFilePaths.mockImplementation((root: HTMLElement) => {
+      const a = root.ownerDocument.createElement('a');
+      a.className = 'rv-path';
+      a.dataset.path = '/tmp/out/run.log';
+      root.appendChild(a);
+    });
 
     await app.openFilePreview('docs/README.md', 's1');
     const src = (alt: string) => body.querySelector(`img[alt="${alt}"]`)!.getAttribute('src');
@@ -227,11 +253,48 @@ describe('file viewer rendered markdown', () => {
     const anchors = Array.from(body.querySelectorAll('a'));
     expect(anchors.find((a) => a.textContent === 'cjk')!.getAttribute('data-path')).toBe('docs/图片/截图.md');
     expect(anchors.find((a) => a.textContent === 'rootlink')!.getAttribute('data-path')).toBe('docs/root.md');
-    // Every rebased link names the preview's session, so the delegate opens it
-    // in that workspace even when another tab is active.
+    // Every rebased link, and every path the linkifier found in the prose,
+    // names the preview's session, so the delegate opens it in that workspace
+    // even when another tab is active.
     const rebased = body.querySelectorAll('a.rv-path');
-    expect(rebased.length).toBe(4);
+    expect(rebased.length).toBe(5);
     for (const a of rebased) expect(a.getAttribute('data-session-id')).toBe('s1');
+  });
+
+  it('degrades relative refs of an attachment opened by bare file name instead of resolving them in the workspace', async () => {
+    const { app, body, fetchMock } = loadApp();
+
+    // An attachment card passes the registry's bare file name: the document's
+    // directory is unknown, so `img/a.png` must not become the workspace root's.
+    await app.openFilePreview('report.md', 's1', 'att-1');
+
+    expect(fetchMock.mock.calls[0][0]).toContain('/attachments/att-1/raw');
+    expect(body.innerHTML).not.toContain('file-raw');
+    // Relative and root-relative images are their alt text, as a text node.
+    for (const alt of ['Alt A', 'space', 'raw', 'bad', 'root']) {
+      expect(body.querySelector(`img[alt="${alt}"]`)).toBeNull();
+      expect(body.textContent).toContain(alt);
+    }
+    // Remote images and links keep today's handling.
+    expect(body.querySelector('img[alt="remote"]')!.getAttribute('src')).toBe('https://cdn.example.com/r.png');
+    expect(body.querySelector('img[alt="protorel"]')!.getAttribute('src')).toBe('//cdn.example.com/p.png');
+    // Relative links are unwrapped to their text; fragment and http(s) links stay.
+    expect(body.querySelectorAll('a.rv-path')).toHaveLength(0);
+    const anchors = Array.from(body.querySelectorAll('a')).map((a) => a.textContent);
+    expect(anchors).toEqual(['t', 'e']);
+    for (const text of ['x', 'up', 'cjk', 'rootlink']) expect(body.textContent).toContain(text);
+  });
+
+  it('keeps resolving refs of an absolute-path attachment against its own directory', async () => {
+    const { app, body } = loadApp();
+
+    await app.openFilePreview('/tmp/out/report.md', 's1', 'att-2');
+
+    const raw = (path: string) => `/api/sessions/s1/file-raw?path=${encodeURIComponent(path)}`;
+    expect(body.querySelector('img[alt="Alt A"]')!.getAttribute('src')).toBe(raw('/tmp/out/img/a.png'));
+    const rel = Array.from(body.querySelectorAll('a.rv-path')).find((a) => a.textContent === 'x')!;
+    expect(rel.getAttribute('data-path')).toBe('/tmp/out/guide/x.md');
+    expect(rel.getAttribute('data-session-id')).toBe('s1');
   });
 
   it('degrades an image that fails to load to its alt text', async () => {
@@ -313,6 +376,90 @@ describe('file viewer Lines and Wrap toggles', () => {
     await app.enterFilePreviewEdit();
     expect(body.querySelector('textarea.file-preview-editor')).not.toBeNull();
     expect(btn.md.hidden && btn.lines.hidden && btn.wrap.hidden).toBe(true);
+  });
+});
+
+/** A vendored UMD build (or sanitize-html.js), evaluated as CommonJS the way the other suites do. */
+function loadCommonJs<T>(name: string): T {
+  const module: { exports: unknown } = { exports: {} };
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
+  new Function('module', 'exports', publicFile(name))(module, module.exports);
+  return module.exports as T;
+}
+
+/**
+ * The SHIPPING pipeline end to end: app.js (`_renderMarkdown` and the Response
+ * Viewer's message builder) with panels-ui.js mixed in, the vendored marked,
+ * and DOMPurify behind the real sanitize-html.js config. `content` is what the
+ * file-content route answers for every path.
+ */
+function loadShippingApp(content: string) {
+  const createDOMPurify = loadCommonJs<(win: unknown) => unknown>('vendor/dompurify.min.js');
+  const { createMarkdownSanitizer } = loadCommonJs<{ createMarkdownSanitizer: (dp: unknown) => unknown }>(
+    'sanitize-html.js'
+  );
+  const context = vm.createContext({
+    console: { ...console, warn: vi.fn(), error: vi.fn() },
+    performance,
+    setInterval: vi.fn(),
+    clearInterval: vi.fn(),
+    setTimeout,
+    clearTimeout,
+    requestAnimationFrame: vi.fn(),
+    HTMLCanvasElement: class HTMLCanvasElement {},
+    document,
+    NodeFilter: dom.window.NodeFilter,
+    localStorage: { length: 0, key: vi.fn(), getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() },
+    // _sanitizeHtml fails closed without the page's sanitizer, which would make
+    // every assertion below vacuous.
+    window: {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      sanitizeMarkdownHtml: createMarkdownSanitizer(createDOMPurify(dom.window)),
+    },
+    marked: loadCommonJs('vendor/marked.min.js'),
+    MobileDetection: {},
+    confirm: () => true,
+    fetch: vi.fn(async () =>
+      jsonResponse({
+        success: true,
+        data: { content, totalLines: 2, size: content.length, truncated: false, extension: 'md' },
+      })
+    ),
+  });
+  vm.runInContext(
+    `${constantsJs}\n${publicFile('app.js')}\n${panelsJs}\nglobalThis.__CodemanApp = CodemanApp;`,
+    context,
+    { filename: 'app.js' }
+  );
+  const CodemanApp = (context as { __CodemanApp: { prototype: object } }).__CodemanApp;
+
+  mountPreviewDom();
+  const app = Object.create(CodemanApp.prototype) as Record<string, any>;
+  app.$ = (id: string) => document.getElementById(id);
+  app.sessions = new Map();
+  app.filePreviewContent = '';
+  return app;
+}
+
+describe('file viewer markdown line breaks', () => {
+  // A README hard-wrapped at the column limit: one paragraph in the source.
+  const WRAPPED = 'A paragraph hard-wrapped\nat the column limit.';
+
+  it('renders a hard-wrapped paragraph as one paragraph in the file view, while chat keeps a break per newline', async () => {
+    const app = loadShippingApp(`${WRAPPED}\n`);
+
+    await app.openFilePreview('docs/README.md', 's1');
+    const para = document.querySelector('#filePreviewBody .file-preview-md p')!;
+    expect(para, 'the document rendered through marked').not.toBeNull();
+    expect(para.querySelector('br')).toBeNull();
+    expect(para.textContent).toBe(WRAPPED);
+
+    // The Response Viewer renders the same text the chat way, a <br> per newline.
+    const message = app._buildResponseViewerMessage(WRAPPED, 'assistant', 'Claude') as HTMLElement;
+    const chatPara = message.querySelector('.rv-text p')!;
+    expect(chatPara.querySelectorAll('br')).toHaveLength(1);
+    expect(chatPara.textContent).toBe(WRAPPED.replace('\n', ''));
   });
 });
 

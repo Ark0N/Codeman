@@ -2296,13 +2296,18 @@ class CodemanApp {
     return processed.replace(/__CODEMAN_FENCE_(\d+)__/g, (_m, i) => placeholders[Number(i)]);
   }
 
-  /** Render markdown to sanitized HTML, falling back to plain text if marked.js unavailable */
-  _renderMarkdown(text) {
+  /**
+   * Render markdown to sanitized HTML, falling back to plain text if marked.js unavailable.
+   * `breaks` turns every source newline into a <br>: right for chat, where a
+   * newline is the agent's line break, wrong for a file (the File Viewer passes
+   * false), where a README hard-wrapped at 80 columns would break at every wrap.
+   */
+  _renderMarkdown(text, { breaks = true } = {}) {
     const src = text || '';
     if (typeof marked !== 'undefined' && marked.parse) {
       try {
         const prepared = this._preprocessAsciiArt(src);
-        let html = this._sanitizeHtml(marked.parse(prepared, { breaks: true, gfm: true }));
+        let html = this._sanitizeHtml(marked.parse(prepared, { breaks, gfm: true }));
         // Wrap tables in a horizontal-scroll container so they overflow gracefully
         // on mobile without collapsing into block-level cells.
         html = html.replace(/<table>/g, '<div class="rv-table-wrap"><table>')

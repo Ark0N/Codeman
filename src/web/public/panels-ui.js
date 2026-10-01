@@ -4197,7 +4197,9 @@ Object.assign(CodemanApp.prototype, {
           const clippedByLines = lines.length > lineCap;
           const shown = clippedByLines ? lines.slice(0, lineCap).join('\n') : text;
           this.filePreviewContent = shown;
-          this.filePreviewText = { ext, sessionId, filePath };
+          // attachmentId: a card's filePath is the bare file name, so the
+          // rebase pass must know there is no directory to resolve against.
+          this.filePreviewText = { ext, sessionId, filePath, attachmentId };
           this._renderFilePreviewText();
           if (clippedByLines || clippedByBytes) {
             const note = clippedByLines ? `showing first ${lineCap} lines` : 'showing the start of the file';
@@ -4393,7 +4395,9 @@ Object.assign(CodemanApp.prototype, {
    * parser, and is built inside a <template>: a detached div with innerHTML
    * already set starts fetching every <img src>, so the document's relative
    * image paths would hit the server as /docs/img.png 404s before
-   * `_rebaseFilePreviewMarkdownRefs` rewrote them.
+   * `_rebaseFilePreviewMarkdownRefs` rewrote them. `breaks: false` because a
+   * file is not a chat message: a paragraph hard-wrapped in the source is one
+   * paragraph, as on GitHub.
    */
   _renderFilePreviewText() {
     const info = this.filePreviewText;
@@ -4405,10 +4409,13 @@ Object.assign(CodemanApp.prototype, {
       // data-i18n-skip: the translator's MutationObserver would otherwise
       // rewrite the document's own headings and paragraphs.
       const tmpl = document.createElement('template');
-      tmpl.innerHTML = `<div class="rv-text file-preview-md" data-i18n-skip>${this._renderMarkdown(this.filePreviewContent)}</div>`;
+      tmpl.innerHTML = `<div class="rv-text file-preview-md" data-i18n-skip>${this._renderMarkdown(this.filePreviewContent, { breaks: false })}</div>`;
       const doc = tmpl.content.firstElementChild;
       this._rebaseFilePreviewMarkdownRefs(doc, info);
       this._linkifyFilePaths(doc);
+      // The linkifier's absolute paths name no session; give them the
+      // preview's, like the rebased links, or they open in the active tab's.
+      for (const a of doc.querySelectorAll('a.rv-path:not([data-session-id])')) a.dataset.sessionId = info.sessionId;
       bodyEl.replaceChildren(tmpl.content);
       // The Response Viewer's click delegate (path links, code-block copy
       // buttons, loopback links): container-bound and idempotent, so binding it
@@ -4447,9 +4454,17 @@ Object.assign(CodemanApp.prototype, {
    * would otherwise open <origin>/docs/x.md in a new tab, and carry the
    * preview's own session so a document opened from another session's
    * attachment card resolves against that workspace, not the active tab's.
+   *
+   * A preview opened by attachment id under a bare file name (attachment
+   * cards and the history drawer: the registry keeps no relative path) has no
+   * directory to resolve against, and the workspace root is the wrong one for
+   * docs/report.md and for a file outside the workspace alike. Its workspace
+   * refs degrade instead: images to their alt text, links to their text,
+   * rather than a missing image or a silently different file.
    */
-  _rebaseFilePreviewMarkdownRefs(root, { sessionId, filePath }) {
+  _rebaseFilePreviewMarkdownRefs(root, { sessionId, filePath, attachmentId }) {
     const dir = filePath.includes('/') ? filePath.slice(0, filePath.lastIndexOf('/') + 1) : '';
+    const unresolvable = !!attachmentId && !filePath.startsWith('/');
     // Workspace ref = no scheme, not protocol-relative (//host), not a fragment.
     const isWorkspaceRef = (ref) =>
       !!ref && !/^[a-z][a-z0-9+.-]*:/i.test(ref) && !ref.startsWith('//') && !ref.startsWith('#');
@@ -4478,6 +4493,10 @@ Object.assign(CodemanApp.prototype, {
     };
     for (const img of root.querySelectorAll('img[src]')) {
       const src = img.getAttribute('src') || '';
+      if (unresolvable && isWorkspaceRef(src)) {
+        img.replaceWith(img.getAttribute('alt') || src);
+        continue;
+      }
       if (isWorkspaceRef(src)) {
         const path = resolveRef(src);
         img.setAttribute('src', CodemanBase.url(`/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(path)}`));
@@ -4487,6 +4506,10 @@ Object.assign(CodemanApp.prototype, {
     for (const a of root.querySelectorAll('a[href]')) {
       const href = a.getAttribute('href') || '';
       if (!isWorkspaceRef(href)) continue;
+      if (unresolvable) {
+        a.replaceWith(...a.childNodes);
+        continue;
+      }
       a.className = 'rv-path';
       a.dataset.path = resolveRef(href);
       a.dataset.sessionId = sessionId;
