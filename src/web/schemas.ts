@@ -526,6 +526,16 @@ export const CreateSessionSchema = z.object({
   effort: effortLevelSchema,
   /** Model override to write to .claude/settings.local.json (e.g., "opus[1m]"). Empty string clears. */
   modelOverride: z.string().max(50).optional(),
+  /**
+   * Claude model for THIS session only, passed as `claude --model <id>`; nothing is written to
+   * disk. Wins over the app-wide default model. Same character set as the registry's
+   * `model-claude` pattern, so a value accepted here is never rejected at launch.
+   */
+  model: z
+    .string()
+    .max(100)
+    .regex(/^[a-zA-Z0-9._\-[\]]+$/)
+    .optional(),
   openCodeConfig: OpenCodeConfigSchema,
   codexConfig: CodexConfigSchema,
   geminiConfig: GeminiConfigSchema,

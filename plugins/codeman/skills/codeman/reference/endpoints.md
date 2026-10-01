@@ -384,7 +384,8 @@ every claude create path installs them, so a linked case and a raw path both get
 
 **The two-step alternative, `POST /api/v1/sessions`.** Use it when you need a session in
 a directory that is not a case (body takes `workingDir`, `mode`, `name`, `effort`,
-`envOverrides`). Three differences that break copied code:
+`envOverrides`, and for claude a per-session `model` passed as `--model`). Three
+differences that break copied code:
 
 - The id is at **`.data.session.id`**, not quick-start's `.data.sessionId`
   (`session-routes.ts:878` returns `{ session: lightState }`).
