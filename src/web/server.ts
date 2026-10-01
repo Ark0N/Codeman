@@ -3796,6 +3796,13 @@ export class WebServer extends EventEmitter {
     const workspaces = new Set<string>();
     for (const session of this.sessions.values()) {
       if (session.mode !== 'claude' || session.remote) continue;
+      // ⚠️ An ADOPTED session is not caught by the `remote` check above: its
+      // connection facts live on `adopt.remote` / `adopt.docker`, so a session
+      // wrapping someone's in-container or over-ssh claude looks local here.
+      // Its workspace was never Codeman's to begin with, so installing hooks
+      // there writes `.claude/settings.local.json` into the human's own repo —
+      // on EVERY restart, since this sweep runs from boot recovery.
+      if (session.isAdopted) continue;
       if (session.docker && !session.docker.hooksEnabled) continue;
       if (session.workingDir) workspaces.add(session.workingDir);
     }

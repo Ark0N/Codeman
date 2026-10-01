@@ -69,6 +69,7 @@
  */
 
 import { collectDescendants } from './proc-tree.js';
+import { listClis } from './config/cli-registry/registry.js';
 import { FOREIGN_MAX_PANES, FOREIGN_MAX_PROCS, FOREIGN_MAX_SOCKETS } from './config/foreign-tmux.js';
 import type { ForeignPaneProbe, ForeignTmuxLocationKind } from './types/foreign-tmux.js';
 import type { SessionMode } from './types/session.js';
@@ -239,23 +240,69 @@ export function parseForeignProbeOutput(stdout: string): ForeignProbeOutput {
 // ===========================================================================
 
 /**
- * argv signatures for the CLIs Codeman knows, most specific first.
+ * argv signatures, derived from the registry rather than written here.
  *
  * Matched against the WHOLE argv of a pane descendant, so `node .../bin/claude`
- * hits the claude rule via the path. `dsh` needs a tighter rule than the rest:
- * Debian ships an unrelated `dsh` (distributed shell), which is exactly the trap
- * `deepseek-cli-resolver.ts` guards against with an identity probe.
+ * hits the claude rule via the path. The binary names come from each entry's
+ * `discovery.binaries` — the one place that already knows a mode name is NOT
+ * always a binary name (`antigravity` runs `agy`). The hand-written table this
+ * replaces keyed on CLI ids, which CLAUDE.md forbids outside `stock.ts`, and it
+ * had already fallen behind: `omp` was missing, so a hand-started omp pane read
+ * as a plain shell.
+ *
+ * Resolved at CALL time, never into a module-level const: a CLI enabled (or a
+ * custom entry added) at runtime must be recognised without a restart.
+ *
+ * ⚠️ Longest name first. `pi` is two characters and its "command itself" form
+ * would otherwise be tried before `opencode`'s; length order is what keeps a
+ * short generic name from claiming a pane that belongs to a longer one.
+ *
+ * ⚠️ Names are regex-ESCAPED. They reach here from `~/.codeman/clis.json`, and
+ * while the schema's SHELL_TOKEN already refuses the dangerous shapes, building
+ * a pattern out of an unescaped foreign string is how a config value turns into
+ * a regex. Escaping means the worst a bad name can do is match nothing.
  */
-export const FOREIGN_CLI_SIGNATURES: ReadonlyArray<{ mode: SessionMode; test: RegExp }> = [
-  { mode: 'claude', test: /(^|\/)claude(\s|$)|[/\\]\.?claude[/\\][^\s]*cli\.js|[/\\]bin[/\\]claude\b/ },
-  { mode: 'codex', test: /(^|\/)codex(\s|$)|[/\\]bin[/\\]codex\b|[/\\]@openai[/\\]codex/ },
-  { mode: 'opencode', test: /(^|\/)opencode(\s|$)|[/\\]bin[/\\]opencode\b/ },
-  { mode: 'antigravity', test: /(^|\/)agy(\s|$)|[/\\]bin[/\\]agy\b|antigravity/ },
-  { mode: 'gemini', test: /(^|\/)gemini(\s|$)|[/\\]bin[/\\]gemini\b/ },
-  { mode: 'grok', test: /(^|\/)grok(\s|$)|[/\\]bin[/\\]grok\b/ },
-  { mode: 'deepseek', test: /(^|\/)dsh(\s|$)|[/\\]bin[/\\]dsh\b|deepseek[-_]?harness/i },
-  { mode: 'pi', test: /(^|\/)pi(\s|$)|[/\\]bin[/\\]pi\b/ },
-];
+export function foreignCliSignatures(): ReadonlyArray<{ mode: SessionMode; test: RegExp }> {
+  const seen = new Set<string>();
+  const out: { mode: SessionMode; test: RegExp }[] = [];
+  // `listClis()`, not `enabledClis()`: classification is a description of what is
+  // ALREADY running in someone else's pane, not a decision to launch anything.
+  // A disabled CLI still deserves its real name on the row.
+  const named: { mode: SessionMode; name: string }[] = [];
+  for (const entry of listClis()) {
+    // ⚠️ Stock entries only, and this is a `stock` check rather than an id check
+    // on purpose: `SessionMode` is the CLOSED union of the stock ids, so a custom
+    // entry has no SessionMode to be. Letting one through would put a value the
+    // union does not contain on `SessionState.mode`. A custom CLI's pane falls to
+    // the `shell` answer below, which is the honest one — Codeman has no name for
+    // it, and an adopted wrapper runs `attach` either way.
+    if (!entry.stock) continue;
+    for (const binary of entry.discovery.binaries) {
+      // `shell` declares none, which is right: it is the FALLBACK answer, never a
+      // signature match.
+      if (!binary || seen.has(binary)) continue;
+      seen.add(binary);
+      named.push({ mode: entry.id as SessionMode, name: binary });
+    }
+  }
+  named.sort((a, b) => b.name.length - a.name.length);
+  for (const { mode, name } of named) {
+    const n = escapeRegExp(name);
+    out.push({
+      mode,
+      test: new RegExp(
+        // the command itself · a `bin/` path · a node launcher under the CLI's
+        // own dot-directory (`~/.claude/local/.../cli.js`)
+        `(^|[/\\\\])${n}(\\s|$)|[/\\\\]bin[/\\\\]${n}\\b|[/\\\\]\\.?${n}[/\\\\][^\\s]*cli\\.js`
+      ),
+    });
+  }
+  return out;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /** Commands that mean "this is a plain shell", not an unidentified agent. */
 const SHELL_COMMANDS = new Set([
@@ -300,7 +347,14 @@ export function classifyForeignPaneMode(
   const direct = matchSignature(own);
   if (direct) return { mode: direct, command: truncate(own) };
 
-  const descendants = collectDescendants(pane.panePid, probe.byParent);
+  // ⚠️ Report truncation. A walk that stopped at a cap returns "nothing matched",
+  // which is byte-identical to the answer for a real shell — without this line a
+  // deep or wide tree silently downgrades an agent pane to `shell` and there is
+  // nothing anywhere to tell the two apart.
+  const descendants = collectDescendants(pane.panePid, probe.byParent, {
+    onTruncated: (root, cap, reason) =>
+      console.warn(`[foreign-tmux] descendant walk for ${root} hit the ${cap}-${reason} cap; truncating`),
+  });
   for (const pid of descendants) {
     const argv = probe.argvByPid.get(pid);
     if (!argv) continue;
@@ -325,7 +379,7 @@ function matchSignature(argv: string): SessionMode | null {
   if (!argv) return null;
   const base = basenameOf(argv);
   if (SHELL_COMMANDS.has(base)) return null;
-  for (const sig of FOREIGN_CLI_SIGNATURES) {
+  for (const sig of foreignCliSignatures()) {
     if (sig.test.test(argv)) return sig.mode;
   }
   return null;

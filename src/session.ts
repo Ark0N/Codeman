@@ -3028,6 +3028,14 @@ export class Session extends EventEmitter {
    */
   private _maybeAcceptTrustDialog(): void {
     if (this._trustDialogAccepted) return;
+    // ⚠️ Never answer a dialog in someone else's pane. An adopted session wraps a
+    // claude the human started, and this scan reads the pane and SENDS KEYS for 90
+    // seconds after `startInteractive()` — which boot recovery re-runs for every
+    // wrapper, so it is not a one-time window at adoption.
+    if (this._adopt) {
+      this._trustDialogAccepted = true;
+      return;
+    }
     const now = Date.now();
     if (now - this._interactiveStartedAt > TRUST_DIALOG_WINDOW_MS) {
       this._trustDialogAccepted = true; // window closed; anything matching now is not the dialog

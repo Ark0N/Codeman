@@ -6,7 +6,7 @@
  * would quietly undo. Each one has a comment naming what actually went wrong.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   buildForeignProbeScript,
   parseForeignProbeOutput,
@@ -20,7 +20,11 @@ import {
   buildForeignDockerAttachCommand,
   buildForeignRemoteAttachCommand,
   buildForeignTmuxInvocation,
+  foreignCliSignatures,
 } from '../src/foreign-tmux.js';
+import { PROC_WALK_MAX_NODES } from '../src/proc-tree.js';
+import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
+import { hooksAvailableForMode, sessionHookOptions } from '../src/web/session-wait-registry.js';
 
 // A probe transcript in exactly the shape a real run produces. The pane rows use
 // the LITERAL backslash-t that tmux's `-F` emits (verified on next-3.7 and 3.3a),
@@ -383,5 +387,92 @@ describe('attach command builders', () => {
     it('single-quotes the whole remote invocation', () => {
       expect(cmd).toMatch(/me@host '.*tmux -S .*'$/);
     });
+  });
+});
+
+describe('foreignCliSignatures', () => {
+  it('covers every stock CLI that declares a binary — including the one the hand-written table missed', () => {
+    // The table this replaced listed eight CLI ids by hand and had already gone
+    // stale: `omp` shipped without a signature, so a hand-started omp pane was
+    // classified `shell`. Deriving from `discovery.binaries` makes that class of
+    // drift impossible rather than merely fixed once.
+    const covered = new Set(foreignCliSignatures().map((sig) => sig.mode));
+    const expected = STOCK_CLIS.filter((e) => e.discovery.binaries.length > 0).map((e) => e.id as string);
+    expect(expected).toContain('omp');
+    for (const id of expected) expect(covered).toContain(id);
+  });
+
+  it('leaves shell out — it declares no binary and is the FALLBACK answer', () => {
+    expect(foreignCliSignatures().some((sig) => sig.mode === 'shell')).toBe(false);
+  });
+
+  it('orders longest binary name first, so a two-letter name cannot win early', () => {
+    // `pi` matches `(^|/)pi(\s|$)`, which is the loosest rule in the table. If it
+    // were tried before `opencode`'s, nothing would break on these two names, but
+    // the ordering is the only thing standing between a future one-letter binary
+    // and every pane on the machine.
+    const names = foreignCliSignatures().map((sig) => sig.mode);
+    expect(names.indexOf('pi')).toBeGreaterThan(names.indexOf('opencode'));
+  });
+
+  it('classifies an omp pane as omp rather than shell', () => {
+    const empty = { byParent: new Map(), argvByPid: new Map() };
+    expect(classifyForeignPaneMode({ panePid: 1, paneCurrentCommand: 'omp' }, empty).mode).toBe('omp');
+  });
+
+  it('still finds claude under its own dot-directory node launcher', () => {
+    // The derived "node launcher" shape has to reproduce what claude's hand-written
+    // `[/\\]\.?claude[/\\][^\s]*cli\.js` rule covered, or every claude installed
+    // the normal way (a `node ~/.claude/local/.../cli.js` argv) silently reads as shell.
+    const argv = 'node /home/u/.claude/local/node_modules/@anthropic-ai/claude-code/cli.js';
+    const probe = { byParent: new Map([[7, [8]]]), argvByPid: new Map([[8, argv]]) };
+    expect(classifyForeignPaneMode({ panePid: 7, paneCurrentCommand: 'node' }, probe).mode).toBe('claude');
+  });
+
+  it('does not let a binary name match inside a longer command', () => {
+    const empty = { byParent: new Map(), argvByPid: new Map() };
+    expect(classifyForeignPaneMode({ panePid: 1, paneCurrentCommand: '/usr/bin/pip install x' }, empty).mode).toBe(
+      'shell'
+    );
+  });
+});
+
+describe('classifyForeignPaneMode truncation reporting', () => {
+  it('reports a truncated descendant walk instead of silently answering shell', () => {
+    // A capped walk returns "nothing matched", which is byte-identical to the
+    // answer for a real shell. Without the warning there is nothing anywhere to
+    // tell a wide process tree apart from a plain bash pane.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const byParent = new Map<number, number[]>();
+      byParent.set(
+        1,
+        Array.from({ length: PROC_WALK_MAX_NODES + 10 }, (_, i) => i + 100)
+      );
+      const result = classifyForeignPaneMode(
+        { panePid: 1, paneCurrentCommand: 'bash' },
+        { byParent, argvByPid: new Map() }
+      );
+      expect(result.mode).toBe('shell');
+      expect(warn).toHaveBeenCalled();
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(/nodes cap|-nodes/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe('hooksAvailableForMode for an adopted session', () => {
+  it('refuses claude when the process was adopted', () => {
+    // Adoption asks who STARTED the process. Codeman never installed its hooks
+    // block in that workspace, so answering by mode would dress an infinite wait
+    // up as a timeout.
+    expect(hooksAvailableForMode('claude')).toBe(true);
+    expect(hooksAvailableForMode('claude', { adopted: true })).toBe(false);
+  });
+
+  it('derives `adopted` from the session, so every call site inherits it', () => {
+    expect(sessionHookOptions({ adopt: { targetSession: 'work' } }).adopted).toBe(true);
+    expect(sessionHookOptions({}).adopted).toBe(false);
   });
 });

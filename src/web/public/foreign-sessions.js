@@ -21,11 +21,17 @@
  * tab keeps sweeping tmux sockets forever. `startForeignPolling` /
  * `stopForeignPolling` are called from `showWelcome`/`hideWelcome`.
  *
- * ⚠️ Docker and remote locations are NOT polled. Each costs a `docker exec` or a
- * full ssh handshake per target, and doing that on every home-screen load is the
- * one cost the server-side design explicitly refuses. They are fetched only when
- * the user asks, via the "scan containers & hosts" toggle, which then rides along
- * with the same poll.
+ * ⚠️ Docker and remote locations are NOT in that poll. Each costs a `docker exec`
+ * or a full ssh handshake per target, each with a ~12s timeout, so riding them
+ * along on an 8s tick stacks connections on a slow host — the one cost the
+ * server-side design explicitly refuses. The wide scan is therefore ONE-SHOT:
+ * turning the toggle on fetches once, and after that it is the user's Rescan
+ * button. The periodic poll stays local-only forever.
+ *
+ * The wide rows are kept separately (`_foreignWideSessions`) and merged into
+ * every local render, because a local-only poll's payload does not contain them
+ * and would otherwise wipe the container/remote rows off the list one tick after
+ * they appeared. Turning the toggle off discards them.
  *
  * ⚠️ Adoption creates a REAL session, so the button locks while in flight and the
  * result goes through the app's normal idempotent create path
@@ -74,6 +80,7 @@ Object.assign(CodemanApp.prototype, {
     if (this._foreignPollTimer) return;
     void this.loadForeignSessions();
     this._foreignPollTimer = setInterval(() => {
+      // Local only — see @fileoverview. The wide scan never rides the timer.
       void this.loadForeignSessions();
     }, this._foreignPollMs || FOREIGN_POLL_FALLBACK_MS);
   },
@@ -90,19 +97,46 @@ Object.assign(CodemanApp.prototype, {
     return this._foreignScanRemote === true;
   },
 
+  /**
+   * Flip the wide scan. ON fetches containers and hosts ONCE; OFF discards what
+   * that fetch found, because those rows are not re-confirmed by any later poll
+   * and leaving them up would show a container session that may be long gone.
+   */
   toggleForeignScanRemote() {
     this._foreignScanRemote = !this._foreignScanRemote;
-    void this.loadForeignSessions();
+    if (!this._foreignScanRemote) {
+      this._foreignWideSessions = [];
+      this._foreignWideNotes = [];
+      this.renderAllForeignSessions();
+      return;
+    }
+    void this.loadForeignSessions({ wide: true });
+  },
+
+  /** Re-run the expensive scan on demand. The only way wide rows ever refresh. */
+  rescanForeignWide() {
+    if (!this.foreignScanRemote()) return;
+    void this.loadForeignSessions({ wide: true });
   },
 
   // ═══════════════════════════════════════════════════════════════
   // Data
   // ═══════════════════════════════════════════════════════════════
 
-  async loadForeignSessions() {
-    const wide = this.foreignScanRemote();
+  /**
+   * Fetch the list. `wide` asks the server for containers and ssh hosts too, and
+   * ONLY an explicit user action ever passes it — never the interval.
+   */
+  async loadForeignSessions({ wide = false } = {}) {
     const qs = wide ? '?docker=1&remote=1' : '';
-    const data = await this._apiJson(`/api/mux/foreign${qs}`);
+    if (wide) this._foreignWideLoading = true;
+    this.renderAllForeignSessions();
+    let data;
+    try {
+      data = await this._apiJson(`/api/mux/foreign${qs}`);
+    } finally {
+      if (wide) this._foreignWideLoading = false;
+    }
     if (!data) {
       // A failed poll must not blank a list the user is looking at: keep the
       // last good result and let the next tick recover.
@@ -111,11 +145,32 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
     this._foreignError = false;
-    this._foreignSessions = Array.isArray(data.sessions) ? data.sessions : [];
-    this._foreignNotes = Array.isArray(data.notes) ? data.notes : [];
+    const rows = Array.isArray(data.sessions) ? data.sessions : [];
+    const notes = Array.isArray(data.notes) ? data.notes : [];
+    if (wide) {
+      // Split by location: the local rows refresh on every tick, the rest only
+      // here, so they have to be stored apart or the next local-only payload
+      // (which cannot contain them) would read as "those sessions are gone".
+      this._foreignSessions = rows.filter((r) => (r.location || 'local') === 'local');
+      this._foreignWideSessions = rows.filter((r) => (r.location || 'local') !== 'local');
+      this._foreignNotes = notes;
+      this._foreignWideNotes = [];
+      this._foreignWideAt = Date.now();
+    } else {
+      this._foreignSessions = rows;
+      this._foreignNotes = notes;
+    }
     this._foreignCanScanWide = data.canScanWide === true;
     if (Number.isFinite(data.pollIntervalMs)) this._foreignPollMs = data.pollIntervalMs;
     this.renderAllForeignSessions();
+  },
+
+  /** Local rows plus whatever the last wide scan found. The render's one input. */
+  _allForeignRows() {
+    const local = Array.isArray(this._foreignSessions) ? this._foreignSessions : [];
+    if (!this.foreignScanRemote()) return local;
+    const wide = Array.isArray(this._foreignWideSessions) ? this._foreignWideSessions : [];
+    return wide.length ? local.concat(wide) : local;
   },
 
   /**
@@ -138,28 +193,46 @@ Object.assign(CodemanApp.prototype, {
         body.docker = true;
         body.remote = true;
       }
-      const data = await this._apiJson('/api/sessions/adopt', { method: 'POST', body });
-      if (!data || !data.session) {
-        this.showToast?.(
-          codemanT
-            ? codemanT('That session is gone. Refreshing the list.')
-            : 'That session is gone. Refreshing the list.',
-          'error'
-        );
+      // ⚠️ `_api`, not `_apiJson`: the latter folds a network failure, a non-2xx
+      // and `success:false` all into null, and the server deliberately tells
+      // two different stories here — "that tmux session is no longer there" vs
+      // "could not reach it just now (…) — try again". Collapsing them showed a
+      // live remote session as deleted every time the link flickered.
+      const res = await this._api('/api/sessions/adopt', { method: 'POST', body });
+      const payload = await this._readJsonBody(res);
+      const session = payload && payload.success !== false ? payload.data?.session : null;
+      if (!session) {
+        const fallback = codemanT
+          ? codemanT('Could not open that session. Refreshing the list.')
+          : 'Could not open that session. Refreshing the list.';
+        this.showToast?.(payload?.error || fallback, 'error');
         await this.loadForeignSessions();
         return;
       }
+      const data = { session };
       // Go through the app's normal create path so tab order, lineage lines and
       // SSE-vs-POST ordering behave exactly as they do for a Run.
       this._onSessionCreated?.(data.session);
       await this.selectSession(data.session.id);
-      await this.loadForeignSessions();
+      // Still one explicit user action, so a wide row's "Open" refreshes the
+      // wide list too — otherwise the row just adopted keeps reading as free.
+      await this.loadForeignSessions({ wide: this.foreignScanRemote() });
     } finally {
       this._foreignAdoptInFlight = false;
       if (buttonEl) {
         buttonEl.disabled = false;
         buttonEl.textContent = codemanT ? codemanT('Open') : 'Open';
       }
+    }
+  },
+
+  /** The error envelope, or null when there was no readable body at all. */
+  async _readJsonBody(res) {
+    if (!res) return null;
+    try {
+      return await res.json();
+    } catch {
+      return null;
     }
   },
 
@@ -183,7 +256,7 @@ Object.assign(CodemanApp.prototype, {
    * near `innerHTML`.
    */
   renderForeignSessions(container) {
-    const rows = Array.isArray(this._foreignSessions) ? this._foreignSessions : [];
+    const rows = this._allForeignRows();
     container.innerHTML = '';
 
     if (!rows.length) {
@@ -192,7 +265,9 @@ Object.assign(CodemanApp.prototype, {
       // A note is a REASON the list is empty, so a block carrying one must stay
       // visible — hiding it is exactly how "where did my session go" becomes
       // unanswerable.
-      const hasNotes = Array.isArray(this._foreignNotes) && this._foreignNotes.length > 0;
+      const hasNotes =
+        (Array.isArray(this._foreignNotes) && this._foreignNotes.length > 0) ||
+        (Array.isArray(this._foreignWideNotes) && this._foreignWideNotes.length > 0);
       // ⚠️ `canScanWide` must keep the block visible even with nothing to show.
       // The scan toggle lives in the header, so hiding an empty block also hides
       // the only control that could fill it — on a host with containers but no
@@ -242,7 +317,9 @@ Object.assign(CodemanApp.prototype, {
    * as text.
    */
   _appendForeignNotes(container) {
-    const notes = Array.isArray(this._foreignNotes) ? this._foreignNotes : [];
+    const local = Array.isArray(this._foreignNotes) ? this._foreignNotes : [];
+    const wide = this.foreignScanRemote() && Array.isArray(this._foreignWideNotes) ? this._foreignWideNotes : [];
+    const notes = wide.length ? local.concat(wide) : local;
     if (!notes.length) return;
     const box = document.createElement('div');
     box.className = 'foreign-notes';
@@ -283,6 +360,27 @@ Object.assign(CodemanApp.prototype, {
       : 'Also scan containers and remote hosts (slower)';
     scan.textContent = this.foreignScanRemote() ? '⟳ all' : '⟳ local';
     header.appendChild(scan);
+
+    // The wide scan is one-shot, so without this button its rows could only
+    // ever be refreshed by toggling off and on again.
+    if (this.foreignScanRemote()) {
+      const rescan = document.createElement('button');
+      rescan.type = 'button';
+      rescan.className = 'foreign-scan-toggle';
+      rescan.dataset.foreignAction = 'rescan-wide';
+      rescan.disabled = this._foreignWideLoading === true;
+      rescan.title = codemanT
+        ? codemanT('Scan containers and remote hosts again')
+        : 'Scan containers and remote hosts again';
+      rescan.textContent = this._foreignWideLoading
+        ? codemanT
+          ? codemanT('Scanning…')
+          : 'Scanning…'
+        : codemanT
+          ? codemanT('Rescan')
+          : 'Rescan';
+      header.appendChild(rescan);
+    }
 
     return header;
   },
@@ -353,6 +451,8 @@ Object.assign(CodemanApp.prototype, {
         void this.selectSession(el.dataset.foreignSession);
       } else if (action === 'toggle-scan') {
         this.toggleForeignScanRemote();
+      } else if (action === 'rescan-wide') {
+        this.rescanForeignWide();
       }
     });
   },

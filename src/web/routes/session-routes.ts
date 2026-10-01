@@ -1191,6 +1191,13 @@ export function registerSessionRoutes(
    *    grant gates elsewhere. The admin gate subsumes it, so there is deliberately
    *    no second grant check here.
    */
+  /**
+   * The wrapper pane for an adopted session runs `tmux attach`, never the agent,
+   * so it needs no workspace — and must not borrow the foreign one. Same value
+   * `resolveMuxAttachCwd()` gives remote and docker panes.
+   */
+  const ADOPTED_WRAPPER_WORKING_DIR = '/tmp';
+
   app.post('/api/sessions/adopt', async (req, reply) => {
     if (isMultiUserMode() && !requireAdmin(req, reply)) return;
 
@@ -1277,13 +1284,16 @@ export function registerSessionRoutes(
 
     const adoptHistoryConfig = await ctx.getTerminalHistoryConfig();
 
-    // ⚠️ `workingDir` for an adopted session is the FOREIGN pane's cwd, which may
-    // not exist on this host (a container path, a remote path). It is recorded as
-    // an observation for display; the wrapper pane is never `cd`'d into it, and
-    // the case-space confinement that guards a real workingDir does not apply
-    // because nothing is created there.
+    // ⚠️ The wrapper's `workingDir` is a NEUTRAL LOCAL path, never the foreign
+    // pane's cwd. That cwd is an observation about another machine: it can carry
+    // characters outside SAFE_PATH_PATTERN (`~/c++`, `Program Files (x86)`), which
+    // makes `createSession` throw so the tab never starts at all, and when it is a
+    // container or ssh path every local consumer of `workingDir` — the Files panel,
+    // the boot hook sweep, the fs watchers — reads it as a path on THIS host. The
+    // foreign cwd stays on `adopt.paneCurrentPath`, which is for display only.
+    // `/tmp` is the same neutral cwd `resolveMuxAttachCwd` already gives the pane.
     const session = new Session({
-      workingDir: target.workingDir || process.cwd(),
+      workingDir: ADOPTED_WRAPPER_WORKING_DIR,
       mode: target.mode,
       name: body.name || target.sessionName,
       mux: ctx.mux,
@@ -1712,6 +1722,10 @@ export function registerSessionRoutes(
       // and belongs in its own PR, not in a refactor that is meant to change nothing.
       if (
         !isExternalCliMode(session.mode) &&
+        // ⚠️ And never for an adopted session, whose mode can be claude while the
+        // agent in that pane belongs to someone else. Kept as its own clause for
+        // the same reason the respawn and Ralph routes keep theirs separate.
+        !session.isAdopted &&
         ctx.store.getConfig().ralphEnabled &&
         !session.ralphTracker.autoEnableDisabled
       ) {
@@ -3303,6 +3317,16 @@ export function registerSessionRoutes(
     const { id } = req.params as { id: string };
     const body = parseBody(AutoClearSchema, req.body, 'Invalid request body');
     const session = findSessionOrFail(ctx, id, req);
+    // ⚠️ Separate from the external-CLI gate on purpose: an adopted session's mode
+    // can perfectly well BE claude, and this drives the pane of a session someone
+    // else is using. Merging the two checks means a future change to the
+    // external-CLI rule silently reopens this one.
+    if (session.isAdopted) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Auto-clear is not available for adopted sessions: Codeman did not start this agent and must not drive it'
+      );
+    }
 
     session.setAutoClear(body.enabled, body.threshold);
     persistAndBroadcastSession(ctx, session);
@@ -3324,6 +3348,16 @@ export function registerSessionRoutes(
     const { id } = req.params as { id: string };
     const body = parseBody(AutoCompactSchema, req.body, 'Invalid request body');
     const session = findSessionOrFail(ctx, id, req);
+    // ⚠️ Separate from the external-CLI gate on purpose: an adopted session's mode
+    // can perfectly well BE claude, and this drives the pane of a session someone
+    // else is using. Merging the two checks means a future change to the
+    // external-CLI rule silently reopens this one.
+    if (session.isAdopted) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Auto-compact is not available for adopted sessions: Codeman did not start this agent and must not drive it'
+      );
+    }
 
     session.setAutoCompact(body.enabled, body.threshold, body.prompt);
     persistAndBroadcastSession(ctx, session);
@@ -3346,6 +3380,16 @@ export function registerSessionRoutes(
     const { id } = req.params as { id: string };
     const body = parseBody(AutoResumeSchema, req.body, 'Invalid request body');
     const session = findSessionOrFail(ctx, id, req);
+    // ⚠️ Separate from the external-CLI gate on purpose: an adopted session's mode
+    // can perfectly well BE claude, and this drives the pane of a session someone
+    // else is using. Merging the two checks means a future change to the
+    // external-CLI rule silently reopens this one.
+    if (session.isAdopted) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Auto-resume is not available for adopted sessions: Codeman did not start this agent and must not drive it'
+      );
+    }
 
     session.setAutoResume(body.enabled);
     persistAndBroadcastSession(ctx, session);

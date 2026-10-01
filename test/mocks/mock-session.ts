@@ -19,6 +19,13 @@ export class MockSession extends EventEmitter {
    * over ssh instead of with local `fs` (#415).
    */
   remote?: SessionRemote;
+  /**
+   * Mirrors `Session.isAdopted` — true when this session wraps a process SOMEONE
+   * ELSE started (a hand-opened tmux session Codeman attached to). A plain field
+   * rather than a getter over `adopt`, because the routes only ever read the
+   * boolean and the tests only ever need to set it.
+   */
+  isAdopted: boolean = false;
   /** Mirrors Session.attachmentHistory (the attachment panel's source of truth). */
   attachmentHistory: SessionAttachmentHistoryItem[] = [];
   /** Mirrors Session.getAttachmentHistoryForPersist(). */
@@ -323,6 +330,18 @@ export class MockSession extends EventEmitter {
   }
 
   /** Auto-resume on usage limit (token pause control) */
+  autoClearEnabled: boolean = false;
+  autoClearThreshold: number = 0;
+  setAutoClear = vi.fn((enabled: boolean, threshold?: number) => {
+    this.autoClearEnabled = enabled;
+    if (typeof threshold === 'number') this.autoClearThreshold = threshold;
+  });
+  autoCompactEnabled: boolean = false;
+  autoCompactThreshold: number = 0;
+  setAutoCompact = vi.fn((enabled: boolean, threshold?: number) => {
+    this.autoCompactEnabled = enabled;
+    if (typeof threshold === 'number') this.autoCompactThreshold = threshold;
+  });
   autoResumeEnabled: boolean = false;
   autoResumeAt: number | null = null;
   isLimitPaused: boolean = false;
