@@ -195,6 +195,7 @@ export function registerRebootRestoreRoutes(app: FastifyInstance, ctx: RebootRes
               (saved as { __envOverrides?: Record<string, string> }).__envOverrides
             ),
             effort: saved.effort,
+            model: saved.model,
             attachmentHistory:
               (saved as { __attachmentHistory?: SessionAttachmentHistoryItem[] }).__attachmentHistory ??
               saved.attachmentHistory,

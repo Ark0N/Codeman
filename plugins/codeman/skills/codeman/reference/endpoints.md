@@ -384,17 +384,18 @@ every claude create path installs them, so a linked case and a raw path both get
 
 **The two-step alternative, `POST /api/v1/sessions`.** Use it when you need a session in
 a directory that is not a case (body takes `workingDir`, `mode`, `name`, `effort`,
-`envOverrides`). Three differences that break copied code:
+`envOverrides`, and for claude a per-session `model` passed as `--model`). Three
+differences that break copied code:
 
 - The id is at **`.data.session.id`**, not quick-start's `.data.sessionId`
-  (`session-routes.ts:878` returns `{ session: lightState }`).
+  (the `POST /api/sessions` handler in `session-routes.ts` returns `{ session: lightState }`).
 - **It spawns no PTY.** The session exists with `pid:null` and nothing running, so
   `wait?until=exit` answers `exit` immediately. Follow it with
   `POST /api/v1/sessions/:id/interactive` (claude and the other agent CLIs) or
   `POST /api/v1/sessions/:id/shell` (shell mode) to actually start the worker.
 - Its capacity failure is **`OPERATION_FAILED` (422)**, not quick-start's
   `SESSION_BUSY` (409), from the same global-50 / per-user-25 caps
-  (`session-routes.ts:648`).
+  (`sessionCapacityMessage()` in `route-helpers.ts`).
 
 ⚠️ `POST .../interactive` accepts `{"clearBreaker":true}`, which resets the **PTY-exit
 circuit breaker**. That breaker exists to stop a session that keeps crashing on spawn

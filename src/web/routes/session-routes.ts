@@ -888,6 +888,15 @@ export function registerSessionRoutes(
     if (capMsg) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, capMsg);
 
     const body = parseBody(CreateSessionSchema, req.body);
+    // The top-level `model` is Claude's per-session `--model`. Every other CLI takes its model
+    // in its own config object (`codexConfig.model` and so on), so a `model` here would be
+    // dropped without a word; refuse it before anything is written for the session.
+    if (body.model && getCli(body.mode ?? 'claude')?.capabilities.model.source !== 'claude-settings-file') {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'model applies to claude sessions only; other CLIs take their model in their own config object, such as codexConfig.model'
+      );
+    }
     let workingDir = body.workingDir || process.cwd();
     let remote = undefined;
 
@@ -1073,9 +1082,10 @@ export function registerSessionRoutes(
     // genuinely different mechanisms:
     //   'flag'                 — the CLI takes --model, so read the value the caller sent
     //                            in that CLI's own config object.
-    //   'claude-settings-file' — claude alone, whose model is written to
-    //                            <case>/.claude/settings.local.json rather than passed as
-    //                            a flag, so the app-wide default applies here.
+    //   'claude-settings-file' — claude alone, whose persistent model is written to
+    //                            <case>/.claude/settings.local.json (`modelOverride`). A
+    //                            per-session `model` from the caller goes out as --model and
+    //                            wins; without one, the app-wide default applies.
     //   'none'                 — shell has no model; deepseek's is a composition entry in
     //                            the profile's config tree, not a session field
     //                            (docs/deepseek-integration.md). Both get nothing.
@@ -1086,7 +1096,7 @@ export function registerSessionRoutes(
             | string
             | undefined)
         : modelSource?.source === 'claude-settings-file'
-          ? modelConfig?.defaultModel || undefined
+          ? body.model || modelConfig?.defaultModel || undefined
           : undefined;
     const claudeModeConfig = await ctx.getClaudeModeConfig();
     // Section 6.3: force non-granted users to a classifier-guarded mode.
