@@ -28,10 +28,13 @@ describe('codexConfig.reasoningEffort', () => {
     }
   });
 
-  it('rejects a level codex does not know, and anything shaped like shell', () => {
+  it('rejects a level codex does not know, and anything shaped like shell, on both create routes', () => {
     for (const reasoningEffort of ['bogus', 'HIGH', 'high; rm -rf /', '']) {
       expect(() =>
         CreateSessionSchema.parse({ workingDir: '/tmp', mode: 'codex', codexConfig: { reasoningEffort } })
+      ).toThrow();
+      expect(() =>
+        QuickStartSchema.parse({ caseName: 'work', mode: 'codex', codexConfig: { reasoningEffort } })
       ).toThrow();
     }
   });
