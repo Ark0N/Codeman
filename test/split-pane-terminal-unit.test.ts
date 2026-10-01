@@ -65,6 +65,7 @@ type PaneUnderTest = {
   _onLiveClear(): void;
   _installWheelListener(): void;
   _writeDisconnectedMarker(): void;
+  _onSocketClosed(): void;
 };
 
 const fetchMock = vi.fn();
@@ -132,6 +133,8 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+const isMarker = (data: unknown) => typeof data === 'string' && data.includes('Pane B disconnected');
 
 /** Lets every microtask the vm-side promise chain queued run. */
 const settle = () => new Promise((r) => setTimeout(r, 0));
@@ -664,6 +667,18 @@ describe('SplitTerminalPane scroll-to-top history pull', () => {
     expect(connect).toContain('this._installWheelListener();');
     expect(connect).toContain('this._onLiveClear();');
     expect(connect).not.toContain('this.terminal.clear();');
+    // The tests below drive the close through _onSocketClosed() directly.
+    expect(connect).toContain('this.ws.onclose = () => this._onSocketClosed();');
+  });
+
+  it('a close with no pull running writes the marker straight away', () => {
+    const pane = makePane('shell');
+
+    pane._onSocketClosed();
+
+    expect(pane._wsClosed).toBe(true);
+    expect(pane.terminal.write).toHaveBeenCalledTimes(1);
+    expect(isMarker(pane.terminal.write.mock.calls[0][0])).toBe(true);
   });
 
   it('re-stamps the disconnected marker after a replay if the socket closed before the pull started', async () => {
@@ -683,20 +698,77 @@ describe('SplitTerminalPane scroll-to-top history pull', () => {
     expect(pane.terminal.write).toHaveBeenCalledWith(marker);
   });
 
-  it('re-stamps the disconnected marker after a replay if the socket closes mid-fetch', async () => {
-    // The other order Ark0N's review called out: the close lands while the
-    // capture is in flight, so the HTTP pull still succeeds (a Codeman
-    // restart drops the WS while the tmux session, and so the pull, survives).
+  it('writes the disconnected marker once, after the replay, if the socket closes mid-fetch', async () => {
+    // The close lands while the capture is in flight, so the HTTP pull still
+    // succeeds (a Codeman restart drops the WS while the tmux session, and so
+    // the pull, survives) and the replay that follows is what the marker must
+    // end up below.
     const pane = makePane('shell');
     const response = deferred<ReturnType<typeof jsonResponse>>();
     fetchMock.mockReturnValueOnce(response.promise);
 
     const pull = pane._pullHistory();
-    pane._wsClosed = true; // the close arrives mid-fetch, before the response
+    pane._onSocketClosed(); // the close arrives mid-fetch, before the response
+    expect(pane.terminal.write).not.toHaveBeenCalled();
     response.resolve(jsonResponse(rowsOf(100)));
     await pull;
 
-    expect(pane.terminal.write.mock.calls.at(-1)?.[0]).toEqual(expect.stringMatching(/Pane B disconnected/));
+    const writes = pane.terminal.write.mock.calls.map((c) => c[0]);
+    expect(writes.filter(isMarker)).toHaveLength(1);
+    expect(isMarker(writes.at(-1))).toBe(true);
+  });
+
+  it.each([
+    ['a skip', 40, () => fetchMock.mockResolvedValueOnce(jsonResponse(rowsOf(30)))],
+    ['a downgrade', 500, () => fetchMock.mockResolvedValueOnce(jsonResponse(rowsOf(5)))],
+    ['a failed fetch', 40, () => fetchMock.mockRejectedValueOnce(new Error('offline'))],
+  ])(
+    'a close mid-fetch that ends in %s writes the marker last, after the held frames',
+    async (_label, rowsHeld, mockFetch) => {
+      // No replay ever runs here, so nothing would wipe a marker written at the
+      // close; written straight away it sat ABOVE the output the pull was still
+      // holding, which the finally block then flushed underneath it.
+      const pane = makePane('shell');
+      pane.terminal.buffer.active.length = rowsHeld;
+      mockFetch();
+
+      const pull = pane._pullHistory();
+      pane._onLiveOutput('frame-A');
+      pane._onLiveOutput('frame-B');
+      pane._onSocketClosed();
+      expect(pane.terminal.write).not.toHaveBeenCalled();
+      await pull;
+
+      const writes = pane.terminal.write.mock.calls.map((c) => c[0]);
+      expect(writes.slice(0, 2)).toEqual(['frame-A', 'frame-B']);
+      expect(writes).toHaveLength(3);
+      expect(isMarker(writes[2])).toBe(true);
+      expect(pane._liveQueue).toBeNull();
+    }
+  );
+
+  it('a close during the chunked replay writes exactly one marker, at the end', async () => {
+    const pane = makePane('shell');
+    const response = deferred<ReturnType<typeof jsonResponse>>();
+    fetchMock.mockReturnValueOnce(response.promise);
+
+    const pull = pane._pullHistory();
+    // Three chunks, so the replay is still mid-write once the fetch lands.
+    const bigReplay = Array.from({ length: 200 }, () => 'y'.repeat(400)).join('\n');
+    response.resolve(jsonResponse(bigReplay));
+    await settle();
+    expect(rafQueue).toHaveLength(1);
+
+    // Written now, the marker would land between two chunks of recovered history.
+    pane._onSocketClosed();
+    rafQueue.shift()!();
+    rafQueue.shift()!();
+    await pull;
+
+    const writes = pane.terminal.write.mock.calls.map((c) => c[0]);
+    expect(writes[0]).toBe('\x1bc');
+    expect(writes.filter(isMarker)).toHaveLength(1);
+    expect(isMarker(writes.at(-1))).toBe(true);
   });
 
   it('does not re-stamp the marker when the socket is still open', async () => {

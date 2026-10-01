@@ -293,19 +293,26 @@
       // normal while it quietly ate everything typed into it. v1 scope is
       // "say so", not reconnect — collapsing the split would lose the
       // user's place in Pane B's scrollback for a transient blip.
-      this.ws.onclose = () => {
-        this._wsReady = false;
-        this._wsClosed = true;
-        this._writeDisconnectedMarker();
-      };
+      this.ws.onclose = () => this._onSocketClosed();
 
       this.ws.onerror = () => {
         // onclose fires after onerror — cleanup happens there.
       };
     }
 
-    // Extracted so both onclose and a history-pull replay that lands on an
-    // already-closed socket can write it (see _pullHistory()'s finally block).
+    // The socket's close, split out of connect() so the tests can drive it.
+    // While a history pull is running the marker waits for the pull's finally
+    // block: written now, it would sit above the output the pull is still
+    // holding (flushed after it on a skip, a downgrade or a failed fetch) or
+    // land in the middle of a chunked replay.
+    _onSocketClosed() {
+      this._wsReady = false;
+      this._wsClosed = true;
+      if (!this._liveQueue) this._writeDisconnectedMarker();
+    }
+
+    // Extracted so both _onSocketClosed() and a history pull that ends on a
+    // closed socket can write it (see _pullHistory()'s finally block).
     _writeDisconnectedMarker() {
       this.terminal?.write('\r\n\x1b[2m[Pane B disconnected — close and reopen the split to reconnect]\x1b[0m\r\n');
     }
@@ -423,6 +430,8 @@
     // main thread) and replays it under the reader's current place. Holds the
     // single-flight flag across the fetch AND the replay, like _loadBuffer().
     async _pullHistory() {
+      // A close before the pull already wrote its marker; one during it did not.
+      const closedBefore = this._wsClosed;
       this._bufferLoading = true;
       this._liveQueue = [];
       let replayed = false;
@@ -491,14 +500,15 @@
           if (entry.clear) this.terminal?.clear();
           else this.terminal?.write(entry.data);
         }
-        // A replay's own `\x1bc` wipes the disconnected marker onclose wrote,
+        // A replay's own `\x1bc` wipes a marker written before the pull,
         // painting a fresh, current-looking history while onData keeps
-        // silently dropping every keystroke on the dead socket. Re-stamp it
-        // if the socket closed in either order (before the pull started, or
-        // while the fetch was in flight) — checked after the queue flush so
-        // it is the last thing on screen, matching what onclose would have
+        // silently dropping every keystroke on the dead socket, so re-stamp it
+        // after a replay. A close DURING the pull wrote no marker at all
+        // (_onSocketClosed() defers it while the queue is live), so write it
+        // whether or not this pull replayed. Checked after the queue flush so
+        // it is the last thing on screen, matching what the close would have
         // left had the pull never run.
-        if (replayed && this._wsClosed) this._writeDisconnectedMarker();
+        if (this._wsClosed && (replayed || !closedBefore)) this._writeDisconnectedMarker();
         this._endBufferLoad();
       }
     }
