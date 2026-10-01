@@ -50,6 +50,7 @@ import {
 } from '../../git-clone.js';
 import type { GitRemoteProbe, GitUrlParse } from '../../git-clone.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
+import { boundedPathExists } from '../../utils/bounded-path-probe.js';
 import { readAgentCaseMarker, type AgentCaseMarker } from '../../agent-case-marker.js';
 import { settingsWriteBlocker, writeHooksConfig } from '../../hooks-config.js';
 import {
@@ -162,8 +163,11 @@ function gitDiagnosticLine(stderr: string): string {
  * hooks, which run on the user's machine when a session starts in the case, so
  * the clone response says so out loud instead of silently merging into them.
  */
-function repoShipsClaudeSettings(casePath: string): boolean {
-  return ['settings.json', 'settings.local.json'].some((file) => existsSync(join(casePath, '.claude', file)));
+async function repoShipsClaudeSettings(casePath: string): Promise<boolean> {
+  for (const file of ['settings.json', 'settings.local.json']) {
+    if (await boundedPathExists(join(casePath, '.claude', file))) return true;
+  }
+  return false;
 }
 
 /**
@@ -266,7 +270,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
           cases.push({
             name: e.name,
             path: casePath,
-            hasClaudeMd: existsSync(join(casePath, 'CLAUDE.md')),
+            hasClaudeMd: await boundedPathExists(join(casePath, 'CLAUDE.md')),
             location: 'local',
             ...(marker ? { agentCreated: agentCreatedInfo(marker) } : {}),
           });
@@ -281,11 +285,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     const existingNames = new Set(cases.map((c) => c.name));
     if (admin) {
       for (const [name, path] of Object.entries(linkedCases)) {
-        if (!existingNames.has(name) && SAFE_CASE_NAME.test(name) && existsSync(path)) {
+        if (!existingNames.has(name) && SAFE_CASE_NAME.test(name) && (await boundedPathExists(path))) {
           cases.push({
             name,
             path,
-            hasClaudeMd: existsSync(join(path, 'CLAUDE.md')),
+            hasClaudeMd: await boundedPathExists(join(path, 'CLAUDE.md')),
             linked: true,
             location: 'linked-local',
           });
@@ -333,7 +337,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       const dockerCaseInfo: CaseInfo = {
         name: dockerCase.name,
         path: dockerDisplayPath({ container, path: dockerCase.hostWorkspacePath }),
-        hasClaudeMd: existsSync(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
+        hasClaudeMd: await boundedPathExists(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
         location: 'docker',
         docker: {
           hostId: host.id,
@@ -615,7 +619,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
         } else {
           warnings.push('Kept the repository’s own CLAUDE.md.');
         }
-        if (repoShipsClaudeSettings(casePath)) {
+        if (await repoShipsClaudeSettings(casePath)) {
           warnings.push(
             'This repository ships its own .claude/settings files. Codeman merged its hooks alongside them without removing anything — review them before starting a session, since repo-supplied hooks run on this machine.'
           );
@@ -1618,7 +1622,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       return {
         name,
         path: dockerDisplayPath({ container, path: dockerCase.hostWorkspacePath }),
-        hasClaudeMd: existsSync(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
+        hasClaudeMd: await boundedPathExists(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
         location: 'docker',
         docker: {
           hostId: host.id,
@@ -1634,7 +1638,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
     const casePath = await resolveCasePath(name, getAuthUser(req));
 
-    if (!existsSync(casePath)) {
+    if (!(await boundedPathExists(casePath))) {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Case not found');
     }
 
@@ -1642,7 +1646,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     return {
       name,
       path: casePath,
-      hasClaudeMd: existsSync(join(casePath, 'CLAUDE.md')),
+      hasClaudeMd: await boundedPathExists(join(casePath, 'CLAUDE.md')),
       ...(linked && { linked: true }),
     };
   });
@@ -1660,7 +1664,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
     const fixPlanPath = join(casePath, '@fix_plan.md');
 
-    if (!existsSync(fixPlanPath)) {
+    if (!(await boundedPathExists(fixPlanPath))) {
       return { exists: false, content: null, todos: [] };
     }
 
