@@ -127,6 +127,7 @@ export interface RebootRestoreRejection {
     | 'agent-exited'
     | 'respawn-blocked'
     | 'remote-or-docker'
+    | 'adopted'
     | 'unsupported-mode'
     | 'no-working-dir'
     | 'workspace-missing'
@@ -222,6 +223,15 @@ export function planRebootRestore(
       // Both need another host or a container to be up, which a just-booted machine
       // cannot promise. The remote reconnect watcher owns the remote case already.
       skipped.push({ sessionId, reason: 'remote-or-docker' });
+      continue;
+    }
+    if (state.adopt) {
+      // ⚠️ Same family as the rule above, different reason. Codeman never started the
+      // process this session wrapped: all it ever had was an attach command. Replaying
+      // that builds a connection to a foreign session that a reboot has almost certainly
+      // taken with it, and — worse — the rebuilt tab would present whatever the attach
+      // lands on as a session we restored, passing someone else's work off as ours.
+      skipped.push({ sessionId, reason: 'adopted' });
       continue;
     }
     // Capability, not a CLI id: this pass resumes by handing the CLI a conversation

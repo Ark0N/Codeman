@@ -507,6 +507,16 @@ Object.assign(CodemanApp.prototype, {
       )
     );
 
+    // Sessions a human opened outside Codeman. Its own container, rebuilt by the
+    // ONE renderer in foreign-sessions.js — the phone must not grow a second row
+    // builder that could describe the same session differently from the desktop.
+    const foreign = document.createElement('div');
+    foreign.className = 'foreign-sessions mobile-foreign-sessions';
+    foreign.id = 'mobileForeignSessions';
+    foreign.hidden = true;
+    el.appendChild(foreign);
+    this.renderForeignSessions?.(foreign);
+
     el.appendChild(
       this._buildMobileOverviewSection(
         'Past sessions',

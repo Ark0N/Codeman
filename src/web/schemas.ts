@@ -2067,3 +2067,24 @@ export const CustomModelSelectionSchema = z.union([
   }),
   z.object({ clear: z.literal(true) }),
 ]);
+/**
+ * Adopt a FOREIGN tmux session (one a human started outside Codeman).
+ *
+ * ⚠️ The body carries ONLY the opaque candidate id from `GET /api/mux/foreign`.
+ * The socket path, session name and host are re-resolved server-side by re-running
+ * discovery, so a browser can never hand the launch chain a path or a session name
+ * to interpolate. That is the same discipline that keeps the docker-adopt and
+ * remote-attach paths free of caller-supplied command fragments.
+ */
+export const AdoptForeignSessionSchema = z
+  .object({
+    id: z.string().min(1).max(64),
+    /** Optional tab name; defaults to the foreign session's own name. */
+    name: z.string().max(128).optional(),
+    /** Include docker locations in the re-resolve (must match the listing call). */
+    docker: z.boolean().optional(),
+    /** Include remote locations in the re-resolve. */
+    remote: z.boolean().optional(),
+    parentSessionId: z.string().max(64).optional(),
+  })
+  .strict();

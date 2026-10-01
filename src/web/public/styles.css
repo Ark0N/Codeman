@@ -19153,3 +19153,173 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   font-size: 13px;
   color: var(--text-muted);
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Foreign sessions — tmux sessions a human started outside Codeman
+   (foreign-sessions.js). Rendered on the welcome screen and, with the
+   same row builder, inside the phone overview.
+
+   Colour vocabulary is deliberately the session-tab one: a mode dot on
+   the left, name over a dim meta line, action pinned right. A block that
+   invented its own language here would read as a different product.
+   ═══════════════════════════════════════════════════════════════ */
+
+.welcome-foreign {
+  width: 100%;
+  margin-top: 0.75rem;
+}
+
+.foreign-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  text-align: left;
+}
+
+/* `.foreign-sessions` is a flex container, so `[hidden]` needs re-asserting or
+   the module's only visibility lever does nothing (same trap as .home-sessions). */
+.foreign-sessions[hidden] {
+  display: none;
+}
+
+.foreign-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.foreign-title {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  font-weight: 500;
+  text-align: left;
+}
+
+.foreign-count {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  white-space: nowrap;
+}
+
+.foreign-scan-toggle {
+  margin-left: auto;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  cursor: pointer;
+}
+
+.foreign-scan-toggle[aria-pressed='true'] {
+  color: var(--session-blue, #4a9eff);
+  border-color: var(--session-blue, #4a9eff);
+}
+
+.foreign-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: min(40vh, 320px);
+  overflow-y: auto;
+}
+
+.foreign-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  min-width: 0;
+}
+
+.foreign-row--open {
+  opacity: 0.62;
+}
+
+.foreign-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--text-muted, #888);
+}
+
+.foreign-dot--claude {
+  background: #d97757;
+}
+.foreign-dot--codex {
+  background: #9b8cff;
+}
+.foreign-dot--shell {
+  background: #4caf7d;
+}
+
+.foreign-row-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.foreign-row-name {
+  font-size: 0.82rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.foreign-row-sub {
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.foreign-open-btn {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  padding: 0.22rem 0.6rem;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.foreign-open-btn:hover:not(:disabled) {
+  border-color: var(--session-blue, #4a9eff);
+  color: var(--session-blue, #4a9eff);
+}
+
+.foreign-open-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.foreign-empty {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  padding: 0.3rem 0.1rem;
+}
+
+.foreign-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.foreign-note {
+  font-size: 0.66rem;
+  color: var(--text-dim);
+  opacity: 0.85;
+  line-height: 1.35;
+}

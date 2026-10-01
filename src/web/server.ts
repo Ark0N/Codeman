@@ -1821,13 +1821,20 @@ export class WebServer extends EventEmitter {
     this.runSummaryTrackers.set(session.id, summaryTracker);
     summaryTracker.recordSessionStarted(session.mode, session.workingDir);
 
-    // Set working directory for Ralph tracker to auto-load @fix_plan.md (not supported for external CLIs)
-    if (!isExternalCliMode(session.mode)) {
+    // Set working directory for Ralph tracker to auto-load @fix_plan.md (not supported for external CLIs).
+    // ⚠️ Also skipped for an ADOPTED session, and for two reasons: Ralph is refused
+    // for one anyway, and its `workingDir` is the FOREIGN pane's cwd — a path that
+    // need not exist on this host at all. Watching it logged a caught ENOENT on
+    // every in-container adoption (`watch '/workspace/pythonserver'`), which is
+    // noise pointing at a real category error rather than a real failure.
+    if (!isExternalCliMode(session.mode) && !session.isAdopted) {
       session.ralphTracker.setWorkingDir(session.workingDir);
     }
 
     // Start watching for new images in this session's working directory (if enabled globally and per-session)
-    if ((await this.isImageWatcherEnabled()) && session.imageWatcherEnabled) {
+    if ((await this.isImageWatcherEnabled()) && session.imageWatcherEnabled && !session.isAdopted) {
+      // Same reason as the Ralph watcher above: an adopted session's workingDir is
+      // an observation about ANOTHER host's (or container's) filesystem.
       imageWatcher.watchSession(session.id, session.workingDir);
     }
 
@@ -3524,6 +3531,14 @@ export class WebServer extends EventEmitter {
               // MuxSession.docker; state.json carries SessionState.docker), so recovery
               // rebuilds the `docker exec` launch instead of a broken local command.
               docker: muxSession.docker ?? savedState?.docker,
+              // Adoption metadata round-trips for the same reason remote/docker do,
+              // and one more: it is the ONLY thing that marks this session as
+              // wrapping a process Codeman never launched. Dropping it on recovery
+              // silently re-enabled respawn, Ralph and hook-backed waits against
+              // someone else's live tmux session after every server restart —
+              // measured, not hypothetical. The mux record is preferred because it
+              // is what `killSession`'s detach-not-kill guard already reads.
+              adopt: muxSession.adopt ?? savedState?.adopt,
               owner: recoveredOwner,
               // Tab lineage survives a restart. It is only decoration, so a parent
               // that did NOT come back is harmless: the frontend draws an edge only
@@ -3781,6 +3796,13 @@ export class WebServer extends EventEmitter {
     const workspaces = new Set<string>();
     for (const session of this.sessions.values()) {
       if (session.mode !== 'claude' || session.remote) continue;
+      // ⚠️ An ADOPTED session is not caught by the `remote` check above: its
+      // connection facts live on `adopt.remote` / `adopt.docker`, so a session
+      // wrapping someone's in-container or over-ssh claude looks local here.
+      // Its workspace was never Codeman's to begin with, so installing hooks
+      // there writes `.claude/settings.local.json` into the human's own repo —
+      // on EVERY restart, since this sweep runs from boot recovery.
+      if (session.isAdopted) continue;
       if (session.docker && !session.docker.hooksEnabled) continue;
       if (session.workingDir) workspaces.add(session.workingDir);
     }

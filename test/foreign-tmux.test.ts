@@ -1,0 +1,478 @@
+/**
+ * Foreign tmux adoption — the pure core.
+ *
+ * These pin the properties that were established by MEASUREMENT against a real
+ * tmux (3.3a) while the feature was built, and that a plausible-looking refactor
+ * would quietly undo. Each one has a comment naming what actually went wrong.
+ */
+
+import { describe, it, expect, vi } from 'vitest';
+import {
+  buildForeignProbeScript,
+  parseForeignProbeOutput,
+  classifyForeignPaneMode,
+  isCodemanOwnedPane,
+  foreignSessionId,
+  foreignViewSessionName,
+  isAdoptableSessionName,
+  isAdoptableSocketPath,
+  buildForeignAttachCommand,
+  buildForeignDockerAttachCommand,
+  buildForeignRemoteAttachCommand,
+  buildForeignTmuxInvocation,
+  foreignCliSignatures,
+} from '../src/foreign-tmux.js';
+import { PROC_WALK_MAX_NODES } from '../src/proc-tree.js';
+import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
+import { hooksAvailableForMode, sessionHookOptions } from '../src/web/session-wait-registry.js';
+
+// A probe transcript in exactly the shape a real run produces. The pane rows use
+// the LITERAL backslash-t that tmux's `-F` emits (verified on next-3.7 and 3.3a),
+// while the socket line is space-separated because `sh`'s builtin `echo` expands
+// a backslash-t to a real TAB — two different meanings for one escape, two lines
+// apart, which is why the socket marker carries no separator at all.
+const PROBE = [
+  'CMFS /tmp/tmux-0/default',
+  'CMFP\\t/tmp/tmux-0/default\\t631\\t0\\t1\\t1788092494\\t1\\t%0\\tclaude\\twork\\t/srv/app',
+  'CMFP\\t/tmp/tmux-0/default\\t900\\t0\\t1\\t1788092500\\t0\\t%1\\tbash\\tscratch\\t/home/me',
+  'CMFP\\t/tmp/tmux-0/default\\t950\\t0\\t2\\t1788092600\\t0\\t%2\\tnode\\tcodex-work\\t/srv/app',
+  'CMFQ',
+  '  631   630 -bash',
+  ' 4056   631 claude --dangerously-skip-permissions',
+  ' 4104  4056 /usr/local/bin/ortg --repo /ortg mcp',
+  '  900   630 -bash',
+  '  950   630 node /opt/homebrew/bin/codex',
+].join('\n');
+
+describe('buildForeignProbeScript', () => {
+  it('contains no single quote — it is wrapped in one to cross ssh and docker exec', () => {
+    // The script is embedded as `ssh host '<script>'` and `docker exec c sh -lc
+    // '<script>'`. One single quote inside ends the wrapper early and the rest is
+    // re-tokenized by the remote shell.
+    expect(buildForeignProbeScript()).not.toContain("'");
+  });
+
+  it('does not disable globbing — the socket sweep IS a glob', () => {
+    // A `set -f` here turned the whole loop into one literal non-match, and the
+    // probe reported zero sessions on a machine that had three.
+    expect(buildForeignProbeScript()).not.toMatch(/\bset -f\b/);
+  });
+
+  it('keeps the shell variables unexpanded for the INNER shell', () => {
+    // Running this through anything that adds an outer shell (execSync spawns
+    // `sh -c`) expands `$TMUX_TMPDIR`/`$U` too early. Callers must use an argv
+    // array locally; the script's job is only to still contain them.
+    const s = buildForeignProbeScript();
+    expect(s).toContain('${TMUX_TMPDIR:-/tmp}');
+    expect(s).toContain('$TD/tmux-$U/*');
+  });
+});
+
+describe('parseForeignProbeOutput', () => {
+  it('parses pane rows, the socket list and the process snapshot', () => {
+    const out = parseForeignProbeOutput(PROBE);
+    expect(out.sockets).toEqual(['/tmp/tmux-0/default']);
+    expect(out.panes).toHaveLength(3);
+    expect(out.panes[0]).toMatchObject({
+      socketPath: '/tmp/tmux-0/default',
+      sessionName: 'work',
+      panePid: 631,
+      paneCurrentCommand: 'claude',
+      paneCurrentPath: '/srv/app',
+      sessionAttached: true,
+      windows: 1,
+    });
+    expect(out.argvByPid.get(4056)).toBe('claude --dangerously-skip-permissions');
+    expect(out.byParent.get(631)).toEqual([4056]);
+  });
+
+  it('never throws on garbage and simply skips unusable rows', () => {
+    const out = parseForeignProbeOutput('nonsense\nCMFP\\ttoo\\tfew\nCMFQ\nnot a proc row\n');
+    expect(out.panes).toHaveLength(0);
+    expect(out.argvByPid.size).toBe(0);
+  });
+
+  it('tolerates a real TAB, in case a tmux build expands the escape', () => {
+    const withTabs = PROBE.split('\n')
+      .map((l) => (l.startsWith('CMFP') ? l.replace(/\\t/g, '\t') : l))
+      .join('\n');
+    expect(parseForeignProbeOutput(withTabs).panes).toHaveLength(3);
+  });
+
+  it('keeps the pane path even when the SESSION NAME contains a separator', () => {
+    // The two free-form fields sit last for exactly this: the path is taken from
+    // the END and the name is whatever lies between the fixed prefix and it, so a
+    // separator inside a user-chosen name cannot shift the path out of place.
+    const row = 'CMFP\\t/s\\t1\\t0\\t1\\t100\\t0\\t%0\\tbash\\tmy\\tname\\t/srv/x';
+    const out = parseForeignProbeOutput(`${row}\nCMFQ\n`);
+    expect(out.panes[0].paneCurrentPath).toBe('/srv/x');
+    expect(out.panes[0].sessionName).toBe('my\tname');
+  });
+});
+
+describe('classifyForeignPaneMode', () => {
+  const probe = parseForeignProbeOutput(PROBE);
+
+  it('finds claude through the process tree, not the pane command', () => {
+    // `#{pane_current_command}` is `node` for BOTH claude and codex, and the
+    // pane's own pid is the SHELL. Only the descendant walk can tell them apart.
+    const pane = probe.panes.find((p) => p.sessionName === 'work')!;
+    expect(classifyForeignPaneMode(pane, probe).mode).toBe('claude');
+  });
+
+  it('finds codex the same way', () => {
+    const pane = probe.panes.find((p) => p.sessionName === 'codex-work')!;
+    expect(classifyForeignPaneMode(pane, probe).mode).toBe('codex');
+  });
+
+  it('calls a plain shell a shell — the case this feature exists for', () => {
+    const pane = probe.panes.find((p) => p.sessionName === 'scratch')!;
+    const c = classifyForeignPaneMode(pane, probe);
+    expect(c.mode).toBe('shell');
+    expect(c.command).toBe('-bash');
+  });
+
+  it("falls back to tmux's own answer when there is no process snapshot", () => {
+    // A host whose `ps` refused both forms still gets a usable classification:
+    // `pane_current_command` is the FOREGROUND process, so it names the agent
+    // even though the pane pid names the shell.
+    const empty = { byParent: new Map(), argvByPid: new Map() };
+    expect(classifyForeignPaneMode({ panePid: 1, paneCurrentCommand: 'claude' }, empty).mode).toBe('claude');
+    expect(classifyForeignPaneMode({ panePid: 1, paneCurrentCommand: 'zsh' }, empty).mode).toBe('shell');
+  });
+});
+
+describe('isCodemanOwnedPane', () => {
+  const pane = (socketPath: string, sessionName: string) => ({ socketPath, sessionName });
+
+  it("excludes this instance's own socket", () => {
+    expect(isCodemanOwnedPane(pane('/tmp/tmux-0/codeman-beta', 'x'), 'codeman-beta')).toBe(true);
+  });
+
+  it('excludes ANOTHER Codeman instance too', () => {
+    // Otherwise a beta would offer to adopt prod's sessions, attaching a second
+    // PTY to a live pane prod is already driving.
+    expect(isCodemanOwnedPane(pane('/tmp/tmux-0/codeman', 'x'), 'codeman-beta')).toBe(true);
+    expect(isCodemanOwnedPane(pane('/tmp/tmux-0/codeman-remote', 'x'), 'codeman-beta')).toBe(true);
+  });
+
+  it('excludes Codeman-minted session names on a foreign socket', () => {
+    // Our own grouped view sessions live on the foreign server; without this a
+    // second scan would offer to adopt our own view.
+    expect(isCodemanOwnedPane(pane('/tmp/tmux-0/default', 'codeman-view-abc12345'), 'codeman')).toBe(true);
+    expect(isCodemanOwnedPane(pane('/tmp/tmux-0/default', 'claudeman-abc'), 'codeman')).toBe(true);
+  });
+
+  it('admits an ordinary hand-made session', () => {
+    expect(isCodemanOwnedPane(pane('/tmp/tmux-0/default', 'work'), 'codeman')).toBe(false);
+  });
+});
+
+describe('adoptability gate (security)', () => {
+  it('refuses a name carrying command substitution', () => {
+    // The local launch chain ends at `bash -c ${JSON.stringify(cmd)}`, and the
+    // OUTER shell expands `$(...)` and backticks inside its double quotes before
+    // bash ever sees the inner single quotes. Measured: a launchCmd of
+    // `: 'x$(touch A)`touch B`'` created BOTH files. A foreign session name is
+    // chosen by someone else, so it must never reach that string.
+    expect(isAdoptableSessionName('work;$(touch /tmp/PWNED)')).toBe(false);
+    expect(isAdoptableSessionName('work`touch /tmp/PWNED`')).toBe(false);
+    expect(isAdoptableSessionName('work$HOME')).toBe(false);
+    expect(isAdoptableSessionName('a\\b')).toBe(false);
+    expect(isAdoptableSessionName('a"b')).toBe(false);
+    expect(isAdoptableSessionName("a'b")).toBe(false);
+    expect(isAdoptableSessionName('a\nb')).toBe(false);
+    expect(isAdoptableSessionName('')).toBe(false);
+  });
+
+  it('still admits the names people actually use', () => {
+    // A refusal here is a session the user cannot open at all, so the allowlist
+    // has to cover real life: spaces, CJK, punctuation.
+    for (const n of ['work', 'my-project', 'feat/login', 'weird name', 'zh-会话', 'v1.2_build', 'a+b@c']) {
+      expect(isAdoptableSessionName(n)).toBe(true);
+    }
+  });
+
+  it('holds the socket path to the same rule, plus absoluteness', () => {
+    // A socket is `tmux -L <name>` under a user-controlled directory, so its
+    // path is attacker-influenceable in exactly the same way.
+    expect(isAdoptableSocketPath('/tmp/tmux-0/default')).toBe(true);
+    expect(isAdoptableSocketPath('/tmp/tmux-0/$(id)')).toBe(false);
+    expect(isAdoptableSocketPath('relative/path')).toBe(false);
+    expect(isAdoptableSocketPath('/tmp/../etc/x')).toBe(false);
+  });
+});
+
+describe('identity', () => {
+  it('is stable across scans and distinct per target', () => {
+    const a = foreignSessionId('local', 'local', '/tmp/tmux-0/default', 'work');
+    expect(foreignSessionId('local', 'local', '/tmp/tmux-0/default', 'work')).toBe(a);
+    expect(foreignSessionId('local', 'local', '/tmp/tmux-0/default', 'other')).not.toBe(a);
+    expect(foreignSessionId('remote', 'h1', '/tmp/tmux-0/default', 'work')).not.toBe(a);
+  });
+
+  it('names the view session after the Codeman session', () => {
+    expect(foreignViewSessionName('a10674f9-abce-4551')).toBe('codeman-view-a10674f9');
+  });
+});
+
+describe('attach command builders', () => {
+  const target = { socketPath: '/tmp/tmux-0/default', targetSession: 'work', viewSession: 'codeman-view-abc12345' };
+
+  it('creates the view session ATTACHED, never with -d', () => {
+    // tmux's `server_check_unattached()` runs every server loop, so a DETACHED
+    // session carrying `destroy-unattached on` is destroyed almost immediately.
+    const cmd = buildForeignTmuxInvocation(target);
+    expect(cmd).toContain('new-session -t');
+    expect(cmd).not.toMatch(/new-session\s+-d/);
+  });
+
+  it('checks the target exists BEFORE new-session, because new-session invents one', () => {
+    // ⚠️ `new-session -t` does not fail on a missing target. Measured on tmux 3.3a
+    // with only `work-prod` present: `new-session -t work` succeeded and joined our
+    // view into `work-prod`'s group — someone else's session. On a socket with no
+    // server it starts one. The wrapper pane re-runs this on every respawn, and boot
+    // recovery respawns every dead pane, so without this guard the owner exiting
+    // their session leaves Codeman creating shells on their machine.
+    const cmd = buildForeignTmuxInvocation(target);
+    const guard = cmd.indexOf('has-session');
+    const create = cmd.indexOf('new-session');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(create);
+    expect(cmd).toMatch(/has-session -t '=work'/);
+    // Fails closed with a message rather than falling through to new-session.
+    expect(cmd).toMatch(/has-session[^;]*\|\|\s*\{\s*echo[^;]*;\s*exit 1;\s*\}/);
+  });
+
+  it('uses the exact-match = only where a session is looked UP, never on new-session -t', () => {
+    // Measured: tmux reads the `=` on `new-session -t` as part of the name and
+    // creates a group literally called `=work`, so the guard has to be separate.
+    // Without `=`, `has-session -t work` matches `work-prod` (verified on 3.3a).
+    const cmd = buildForeignTmuxInvocation(target);
+    expect(cmd).toContain("new-session -t 'work'");
+    expect(cmd).not.toContain("new-session -t '=work'");
+    // The two commands that LOOK a session up both take `=`.
+    expect(cmd).toContain("has-session -t '=work'");
+    expect(cmd).toContain("kill-session -t '=codeman-view-abc12345'");
+  });
+
+  it('keeps the guard on all three locations, not just the local one', () => {
+    // The guard lives in the one shared invocation builder, so docker and remote
+    // inherit it. A future split into per-location strings must keep that true:
+    // the ssh and container paths are exactly where a stray session costs most.
+    expect(buildForeignDockerAttachCommand({ ...target, dockerBase: 'docker', containerName: 'box' })).toContain(
+      'has-session'
+    );
+    expect(
+      buildForeignRemoteAttachCommand({
+        ...target,
+        sshArgs: ['ssh', '-o BatchMode=yes'],
+        sshTarget: 'u@h',
+      })
+    ).toContain('has-session');
+  });
+
+  it('sets destroy-unattached so the view dies with our pane', () => {
+    expect(buildForeignTmuxInvocation(target)).toContain('destroy-unattached on');
+  });
+
+  it('never sets window-size on the shared window', () => {
+    // Measured: `window-size largest` is the only setting that protects an
+    // actively-used session's size, but it is a WINDOW option on a SHARED window
+    // and SURVIVES our detach — it would permanently rewrite the owner's config.
+    expect(buildForeignTmuxInvocation(target)).not.toContain('window-size');
+  });
+
+  it('leaves NO degraded fallback — it either groups or fails with a message', () => {
+    // A read-only `attach-session -r` used to hang off `||`, nominally for a tmux
+    // too old to group. But `||` fires on ANY new-session failure, and the one that
+    // happens is a leftover view with the same name: measured, new-session answers
+    // `duplicate session: …` and the fallback then handed the user a read-only
+    // client where typed input is dropped while the API reported success.
+    const cmd = buildForeignTmuxInvocation(target);
+    expect(cmd).not.toContain('attach-session');
+    expect(cmd).not.toMatch(/new-session[^;]*\|\|/);
+  });
+
+  it('clears OUR OWN stale view before creating it, and only ours', () => {
+    // The view name is derived from Codeman's own session id, so a session with
+    // that name can only ever be ours. `=` keeps the match exact, and killing a
+    // session in a group removes only that session (measured: the owner's `work`
+    // survived its grouped view being killed).
+    const cmd = buildForeignTmuxInvocation(target);
+    expect(cmd).toContain("kill-session -t '=codeman-view-abc12345'");
+    expect(cmd).not.toContain("kill-session -t '=work'");
+    const kill = cmd.indexOf('kill-session');
+    expect(kill).toBeGreaterThan(cmd.indexOf('has-session'));
+    expect(kill).toBeLessThan(cmd.indexOf('new-session'));
+    // A missing stale view is the normal case, never a reason to abort.
+    expect(cmd).toMatch(/kill-session[^;]*2>\/dev\/null \|\| true/);
+  });
+
+  it('stays on ONE line — it crosses `bash -c "..."` where a newline dies', () => {
+    expect(buildForeignAttachCommand(target)).not.toContain('\n');
+  });
+
+  it('uses no command substitution — the outer shell would evaluate it first', () => {
+    // Same rule the docker launch chain states, and the same trap that emptied
+    // `$TMUX_TMPDIR` during development.
+    expect(buildForeignAttachCommand(target)).not.toContain('$(');
+  });
+
+  it('shell-quotes every caller-supplied value', () => {
+    const nasty = buildForeignAttachCommand({
+      socketPath: '/tmp/a b',
+      targetSession: 'ev;il`x`',
+      viewSession: 'codeman-view-1',
+    });
+    expect(nasty).toContain("'/tmp/a b'");
+    // The metacharacters survive only INSIDE quotes, never as shell syntax. Checked
+    // by stripping every single-quoted span and looking at what is left, rather than
+    // by what character precedes the name: the "session is gone" message quotes the
+    // name too, with a space in front of it, and a lookbehind assertion reads that
+    // as an escape when it is not one.
+    const outsideQuotes = nasty
+      .split("'")
+      .filter((_, i) => i % 2 === 0)
+      .join(' ');
+    expect(outsideQuotes).not.toContain('ev;il');
+    expect(outsideQuotes).not.toContain('`');
+  });
+
+  describe('docker', () => {
+    const cmd = buildForeignDockerAttachCommand({
+      ...target,
+      dockerBase: 'docker --context ci',
+      containerName: 'my-box',
+    });
+
+    it('looks, then execs — never create, never start', () => {
+      // An adopted container belongs to the user. Mirrors the adopted branch of
+      // buildDockerLaunchCommand, which fails closed rather than mutating it.
+      expect(cmd).toContain('inspect');
+      expect(cmd).toContain('exec -it');
+      expect(cmd).not.toMatch(/\bdocker[^;]*\bstart\b/);
+      expect(cmd).not.toMatch(/\bdocker[^;]*\bcreate\b/);
+      expect(cmd).not.toMatch(/\bdocker[^;]*\brun\b/);
+    });
+
+    it('refuses a stopped container with a message instead of starting it', () => {
+      expect(cmd).toContain('State.Running');
+      expect(cmd).toMatch(/not running/);
+    });
+
+    it('carries the engine flags it was given', () => {
+      expect(cmd).toContain('docker --context ci');
+    });
+  });
+
+  describe('remote', () => {
+    const cmd = buildForeignRemoteAttachCommand({
+      ...target,
+      sshArgs: ['ssh', '-o BatchMode=yes', '-o ConnectTimeout=10', '-p 2222'],
+      sshTarget: 'me@host',
+    });
+
+    it('requests a PTY right after BatchMode, like buildRemoteAttachCommand', () => {
+      // Interactive tmux needs a TTY; the position matches the existing remote
+      // attach builder so the two connect on identical terms.
+      expect(cmd.startsWith('ssh -o BatchMode=yes -t ')).toBe(true);
+    });
+
+    it('keeps every connection option it was handed', () => {
+      expect(cmd).toContain('-p 2222');
+      expect(cmd).toContain('me@host');
+    });
+
+    it('single-quotes the whole remote invocation', () => {
+      expect(cmd).toMatch(/me@host '.*tmux -S .*'$/);
+    });
+  });
+});
+
+describe('foreignCliSignatures', () => {
+  it('covers every stock CLI that declares a binary — including the one the hand-written table missed', () => {
+    // The table this replaced listed eight CLI ids by hand and had already gone
+    // stale: `omp` shipped without a signature, so a hand-started omp pane was
+    // classified `shell`. Deriving from `discovery.binaries` makes that class of
+    // drift impossible rather than merely fixed once.
+    const covered = new Set(foreignCliSignatures().map((sig) => sig.mode));
+    const expected = STOCK_CLIS.filter((e) => e.discovery.binaries.length > 0).map((e) => e.id as string);
+    expect(expected).toContain('omp');
+    for (const id of expected) expect(covered).toContain(id);
+  });
+
+  it('leaves shell out — it declares no binary and is the FALLBACK answer', () => {
+    expect(foreignCliSignatures().some((sig) => sig.mode === 'shell')).toBe(false);
+  });
+
+  it('orders longest binary name first, so a two-letter name cannot win early', () => {
+    // `pi` matches `(^|/)pi(\s|$)`, which is the loosest rule in the table. If it
+    // were tried before `opencode`'s, nothing would break on these two names, but
+    // the ordering is the only thing standing between a future one-letter binary
+    // and every pane on the machine.
+    const names = foreignCliSignatures().map((sig) => sig.mode);
+    expect(names.indexOf('pi')).toBeGreaterThan(names.indexOf('opencode'));
+  });
+
+  it('classifies an omp pane as omp rather than shell', () => {
+    const empty = { byParent: new Map(), argvByPid: new Map() };
+    expect(classifyForeignPaneMode({ panePid: 1, paneCurrentCommand: 'omp' }, empty).mode).toBe('omp');
+  });
+
+  it('still finds claude under its own dot-directory node launcher', () => {
+    // The derived "node launcher" shape has to reproduce what claude's hand-written
+    // `[/\\]\.?claude[/\\][^\s]*cli\.js` rule covered, or every claude installed
+    // the normal way (a `node ~/.claude/local/.../cli.js` argv) silently reads as shell.
+    const argv = 'node /home/u/.claude/local/node_modules/@anthropic-ai/claude-code/cli.js';
+    const probe = { byParent: new Map([[7, [8]]]), argvByPid: new Map([[8, argv]]) };
+    expect(classifyForeignPaneMode({ panePid: 7, paneCurrentCommand: 'node' }, probe).mode).toBe('claude');
+  });
+
+  it('does not let a binary name match inside a longer command', () => {
+    const empty = { byParent: new Map(), argvByPid: new Map() };
+    expect(classifyForeignPaneMode({ panePid: 1, paneCurrentCommand: '/usr/bin/pip install x' }, empty).mode).toBe(
+      'shell'
+    );
+  });
+});
+
+describe('classifyForeignPaneMode truncation reporting', () => {
+  it('reports a truncated descendant walk instead of silently answering shell', () => {
+    // A capped walk returns "nothing matched", which is byte-identical to the
+    // answer for a real shell. Without the warning there is nothing anywhere to
+    // tell a wide process tree apart from a plain bash pane.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const byParent = new Map<number, number[]>();
+      byParent.set(
+        1,
+        Array.from({ length: PROC_WALK_MAX_NODES + 10 }, (_, i) => i + 100)
+      );
+      const result = classifyForeignPaneMode(
+        { panePid: 1, paneCurrentCommand: 'bash' },
+        { byParent, argvByPid: new Map() }
+      );
+      expect(result.mode).toBe('shell');
+      expect(warn).toHaveBeenCalled();
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(/nodes cap|-nodes/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe('hooksAvailableForMode for an adopted session', () => {
+  it('refuses claude when the process was adopted', () => {
+    // Adoption asks who STARTED the process. Codeman never installed its hooks
+    // block in that workspace, so answering by mode would dress an infinite wait
+    // up as a timeout.
+    expect(hooksAvailableForMode('claude')).toBe(true);
+    expect(hooksAvailableForMode('claude', { adopted: true })).toBe(false);
+  });
+
+  it('derives `adopted` from the session, so every call site inherits it', () => {
+    expect(sessionHookOptions({ adopt: { targetSession: 'work' } }).adopted).toBe(true);
+    expect(sessionHookOptions({}).adopted).toBe(false);
+  });
+});
