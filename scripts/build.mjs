@@ -86,6 +86,7 @@ run('minify input-cjk.js', 'npx esbuild dist/web/public/input-cjk.js --minify --
 run('minify terminal-keycode229-recovery.js', 'npx esbuild dist/web/public/terminal-keycode229-recovery.js --minify --outfile=dist/web/public/terminal-keycode229-recovery.js --allow-overwrite');
 run('minify i18n.js', 'npx esbuild dist/web/public/i18n.js --minify --outfile=dist/web/public/i18n.js --allow-overwrite');
 run('minify sanitize-html.js', 'npx esbuild dist/web/public/sanitize-html.js --minify --outfile=dist/web/public/sanitize-html.js --allow-overwrite');
+run('minify tab-layout-browser.js', 'npx esbuild dist/web/public/tab-layout-browser.js --minify --outfile=dist/web/public/tab-layout-browser.js --allow-overwrite');
 run('minify app.js', 'npx esbuild dist/web/public/app.js --minify --outfile=dist/web/public/app.js --allow-overwrite');
 run('minify tab-rail-resize.js', 'npx esbuild dist/web/public/tab-rail-resize.js --minify --outfile=dist/web/public/tab-rail-resize.js --allow-overwrite');
 run('minify terminal-ui.js', 'npx esbuild dist/web/public/terminal-ui.js --minify --outfile=dist/web/public/terminal-ui.js --allow-overwrite');
@@ -113,6 +114,7 @@ console.log('\n[build] content-hash cache busting');
     'input-cjk.js',
     'terminal-keycode229-recovery.js',
     'sanitize-html.js',
+    'tab-layout-browser.js',
     'app.js',
     'tab-rail-resize.js',
     'terminal-ui.js',
