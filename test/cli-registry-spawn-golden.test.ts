@@ -54,6 +54,19 @@ describe('claude', () => {
     );
   });
 
+  it('renders a model as the quoted value of --model, even one that opens with a dash', () => {
+    // POST /api/sessions admits a leading '-' in `model`. It still lands as the option's
+    // value: quoted here, and Claude's option parser takes the word after `--model` as its
+    // value whatever it starts with, so it can never become a flag of its own.
+    expect(claude({ model: 'claude-fable-5-1' })).toBe(
+      'claude --dangerously-skip-permissions --session-id "0f9c2b14-1111-2222-3333-444455556666" --model "claude-fable-5-1"'
+    );
+    expect(claude({ model: '--dangerously-skip-permissions' })).toBe(
+      'claude --dangerously-skip-permissions --session-id "0f9c2b14-1111-2222-3333-444455556666" ' +
+        '--model "--dangerously-skip-permissions"'
+    );
+  });
+
   it('resumes through a shell fallback to a fresh session', () => {
     // The ` || ` is emitted by the ENGINE, not by config — no registry field can hold shell
     // text. This pin is what proves the fallback chain still renders as one command line.

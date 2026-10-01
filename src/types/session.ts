@@ -796,6 +796,13 @@ export interface SessionState {
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort?: EffortLevel;
   /**
+   * The model the session was LAUNCHED with (`--model`): the caller's per-session `model`, or
+   * the app-wide default when there was none. Persisted so a recovered session relaunches on
+   * the same model rather than whatever the default is by then. Not `cliModel`, which is what
+   * the CLI's banner reports.
+   */
+  model?: string;
+  /**
    * Custom Model Endpoint Profiles (docs/custom-model-endpoints-plan.md): the custom
    * OpenAI-compatible endpoint (local or cloud) this session's CLI is currently pointed
    * at, if any. Undefined = the harness's native cloud default. No secrets here — the

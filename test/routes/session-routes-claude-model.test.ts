@@ -75,12 +75,30 @@ describe('POST /api/sessions model', () => {
     expect(await launchedModel({ mode: 'claude' })).toBe('sonnet');
   });
 
-  it('writes no model into the case directory', async () => {
-    // The create still installs Codeman's workspace hooks into settings.local.json, so the
-    // file exists; what must not be in it is a model that would outlive this session.
-    await launchedModel({ mode: 'claude', model: 'opus' });
-    const settings = await readFile(join(workingDir, '.claude', 'settings.local.json'), 'utf8').catch(() => '{}');
-    expect(JSON.parse(settings)).not.toHaveProperty('model');
+  it('launches on `model` while `modelOverride` alone reaches the case file', async () => {
+    // Sent together, each lands where it belongs: the persistent default in the case's
+    // settings.local.json, and this session's model on its launch line. A route that wrote
+    // `model` to disk would put 'opus' in the file; one that ignored it would launch 'sonnet'.
+    expect(await launchedModel({ mode: 'claude', model: 'opus', modelOverride: 'sonnet' })).toBe('opus');
+    const settings = JSON.parse(await readFile(join(workingDir, '.claude', 'settings.local.json'), 'utf8'));
+    expect(settings.model).toBe('sonnet');
+  });
+
+  it('reads an empty model as no model, as modelOverride does', async () => {
+    harness.ctx.getModelConfig.mockResolvedValue({ defaultModel: 'sonnet' });
+    expect(await launchedModel({ mode: 'claude', model: '' })).toBe('sonnet');
+  });
+
+  it('refuses a model for a CLI that takes its model in its own config object', async () => {
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workingDir, mode: 'codex', model: 'gpt-5' },
+    });
+    const parsed = JSON.parse(res.body);
+    expect(parsed.success).toBe(false);
+    expect(parsed.errorCode).toBe('INVALID_INPUT');
+    expect(harness.ctx.sessions.size).toBe(1); // only the session the mock context starts with
   });
 
   it('rejects a model with characters the launch pattern refuses', async () => {

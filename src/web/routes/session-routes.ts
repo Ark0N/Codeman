@@ -888,6 +888,15 @@ export function registerSessionRoutes(
     if (capMsg) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, capMsg);
 
     const body = parseBody(CreateSessionSchema, req.body);
+    // The top-level `model` is Claude's per-session `--model`. Every other CLI takes its model
+    // in its own config object (`codexConfig.model` and so on), so a `model` here would be
+    // dropped without a word; refuse it before anything is written for the session.
+    if (body.model && getCli(body.mode ?? 'claude')?.capabilities.model.source !== 'claude-settings-file') {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'model applies to claude sessions only; other CLIs take their model in their own config object, such as codexConfig.model'
+      );
+    }
     let workingDir = body.workingDir || process.cwd();
     let remote = undefined;
 
