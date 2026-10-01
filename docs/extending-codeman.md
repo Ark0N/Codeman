@@ -355,7 +355,16 @@ When that window already shows the dashboard, only the fragment differs. The
 browser therefore keeps the page loaded, and the dashboard switches tabs without
 reloading it. A session the window has shown before appears at once. A session
 your page has only just created may not be listed yet, so the dashboard waits
-for its `session:created` event and selects it then.
+for its `session:created` event and selects it then. That wait lasts at most 30
+seconds: a link whose session never appears (a closed session, a typo, or in
+multi-user mode another user's session) is dropped with a "Session not found"
+notice. Clicking another tab, going Home or opening a web tab also ends the
+wait, so a session that turns up later never takes the screen from the person.
+
+When your page holds the window reference (`const win = window.open(...)`),
+prefer `win.location.replace(url)` for later links: it still fires `hashchange`
+without a reload, but adds no history entry, so Back in the dashboard window
+does not turn into a silent no-op.
 
 Following a link does not count as someone looking at the session, so it
 leaves the session's idle alert in place. The alert clears when the person

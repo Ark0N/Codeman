@@ -274,7 +274,10 @@ Object.assign(CodemanApp.prototype, {
         // one `/`, and refuse whatever still opens a second one. The proxied form
         // is refused server-side as well (resolveUpstreamUrl).
         const path = data.path.replace(/[\t\n\r]/g, '').replace(/^[/\\]+/, '/');
-        void this.openWebview(id, { path: path.startsWith('/') && !/^\/[/\\]/.test(path) ? path : '/' });
+        void this.openWebview(id, {
+          path: path.startsWith('/') && !/^\/[/\\]/.test(path) ? path : '/',
+          auto: true,
+        });
         return;
       }
     };
@@ -356,14 +359,22 @@ Object.assign(CodemanApp.prototype, {
    */
   /**
    * @param {string} id
-   * @param {{path?: string}} [options] `path` (pathname+search+hash) opens a
+   * @param {{path?: string, auto?: boolean}} [options] `path` (pathname+search+hash) opens a
    *   deep link inside the dashboard: appended to the proxy prefix, or resolved
    *   against the real URL in direct mode. A mounted frame is navigated there
-   *   rather than left on whatever page it was showing.
+   *   rather than left on whatever page it was showing. `auto: true` marks an
+   *   open the APP made (a frame recovering itself, the fallback after the
+   *   active web tab closes), as on selectSession().
    */
   async openWebview(id, options = {}) {
     const webview = this.webviews.get(id);
     if (!webview) return;
+
+    // Opening a web tab yourself is choosing something else, so a
+    // `#session=<id>` link still waiting for its session must not take the
+    // screen from this tab later. Retired before the await below, which a
+    // session:created could otherwise land inside.
+    if (options.auto !== true) this._retireUrlSession?.();
 
     if (!this.webviewOrder.includes(id)) {
       this.webviewOrder.push(id);
@@ -513,7 +524,7 @@ Object.assign(CodemanApp.prototype, {
       this.activeWebviewId = null;
       const next = this.webviewOrder[0];
       if (next) {
-        this.openWebview(next);
+        this.openWebview(next, { auto: true });
       } else {
         this._hideWebviewLayer();
         // Fall back to whatever session was last shown, or the welcome screen.

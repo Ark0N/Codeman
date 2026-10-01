@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { performance } from 'node:perf_hooks';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 function loadHelper() {
   const context = vm.createContext({ window: {}, globalThis: {}, URLSearchParams });
@@ -50,10 +50,12 @@ describe('CodemanUrlSession.sessionIdFromFragment', () => {
 
 // The dashboard side: reading the link, holding an id it does not list yet,
 // and handing the selection over. Loaded like session-select-ack-gate.test.ts,
-// on a bare instance whose DOM-touching methods are stubbed.
+// on a bare instance whose DOM-touching methods are stubbed. webview-tabs.js
+// rides along because opening a web tab is one of the ways a waiting link ends.
 function loadApp() {
   const constants = readFileSync(resolve(import.meta.dirname, '../src/web/public/constants.js'), 'utf8');
   const app = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
+  const webviewTabs = readFileSync(resolve(import.meta.dirname, '../src/web/public/webview-tabs.js'), 'utf8');
   const location = { hash: '', pathname: '/', search: '' };
   const history = {
     state: null,
@@ -80,8 +82,12 @@ function loadApp() {
     window: { addEventListener: vi.fn(), removeEventListener: vi.fn() },
     MobileDetection: { isTouchDevice: () => false },
   });
-  vm.runInContext(`${constants}\n${app}\nglobalThis.__CodemanApp = CodemanApp;`, context);
+  vm.runInContext(
+    `${constants}\n${app}\n${webviewTabs}\nglobalThis.__CodemanApp = CodemanApp;\nglobalThis.__waitMs = URL_SESSION_WAIT_MS;`,
+    context
+  );
   const CodemanApp = (context as { __CodemanApp: { prototype: object } }).__CodemanApp;
+  const waitMs = (context as { __waitMs: number }).__waitMs;
   const make = (ids: string[]) => {
     const inst = Object.create(CodemanApp.prototype) as Record<string, any>;
     inst.sessions = new Map(ids.map((id) => [id, { id, name: id }]));
@@ -90,7 +96,9 @@ function loadApp() {
     inst.detachedWindows = new Map();
     inst.isSoloWindow = false;
     inst._urlSessionId = null;
+    inst._urlSessionWaitTimer = null;
     inst.selectSession = vi.fn();
+    inst.showToast = vi.fn();
     for (const stub of [
       'saveSessionOrder',
       'markSessionTabEntering',
@@ -103,7 +111,7 @@ function loadApp() {
     }
     return inst;
   };
-  return { make, location, history, CodemanApp };
+  return { make, location, history, CodemanApp, waitMs };
 }
 
 describe('dashboard handling of a #session=<id> link', () => {
@@ -163,6 +171,15 @@ describe('dashboard handling of a #session=<id> link', () => {
     expect(app._urlSessionId).toBe('later');
   });
 
+  it('starts the wait for an unlisted link once the page has loaded its session list', () => {
+    const source = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
+    const link = source.indexOf('if (this._urlSessionId && this.sessions.has(this._urlSessionId))');
+    const wait = source.indexOf('if (this._urlSessionId) this._armUrlSessionWait(this._urlSessionId);');
+    const restore = source.indexOf("restoreId = localStorage.getItem('codeman-active-session')");
+    expect(wait).toBeGreaterThan(link);
+    expect(wait).toBeLessThan(restore);
+  });
+
   it('puts the link ahead of restoring the last active tab when the page loads', () => {
     const source = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
     const link = source.indexOf('if (this._urlSessionId && this.sessions.has(this._urlSessionId))');
@@ -175,5 +192,121 @@ describe('dashboard handling of a #session=<id> link', () => {
     const source = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
     expect(source).toContain('this._urlSessionId = this.isSoloWindow ? null : this._takeUrlSession();');
     expect(source).toMatch(/if \(!this\.isSoloWindow\) \{\s*window\.addEventListener\('hashchange'/);
+  });
+});
+
+// A link whose session never turns up: a stale link (the session is closed), a
+// typo, or in multi-user mode another user's session, which is never in this
+// client's list. It must not wait forever with nothing on screen, and choosing
+// something else must end it, or a session turning up later takes the screen.
+describe('a #session=<id> link that is still waiting', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('waits 30 seconds', () => {
+    expect(loadApp().waitMs).toBe(30_000);
+  });
+
+  it('is dropped with a toast when its session has not appeared in time', () => {
+    vi.useFakeTimers();
+    const { make, waitMs } = loadApp();
+    const app = make([]);
+    app._urlSessionId = 'gone';
+    expect(app._selectUrlSession()).toBe(false);
+    vi.advanceTimersByTime(waitMs - 1);
+    expect(app._urlSessionId).toBe('gone');
+    expect(app.showToast).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(app._urlSessionId).toBeNull();
+    expect(app._urlSessionWaitTimer).toBeNull();
+    expect(app.showToast).toHaveBeenCalledWith('Session not found', 'warning');
+    // Retired for good: the session turning up afterwards does not take the tab.
+    app._onSessionCreated({ id: 'gone', name: 'gone' });
+    expect(app.selectSession).not.toHaveBeenCalled();
+  });
+
+  it('still selects a session that arrives before the wait runs out, and stops the timer', () => {
+    vi.useFakeTimers();
+    const { make, waitMs } = loadApp();
+    const app = make([]);
+    app._urlSessionId = 'new';
+    app._selectUrlSession();
+    vi.advanceTimersByTime(waitMs - 1);
+    app._onSessionCreated({ id: 'new', name: 'new' });
+    expect(app.selectSession).toHaveBeenCalledWith('new', { auto: true });
+    expect(app._urlSessionWaitTimer).toBeNull();
+    vi.advanceTimersByTime(waitMs);
+    expect(app.showToast).not.toHaveBeenCalled();
+  });
+
+  it('does not restart its wait when handleInit asks again', () => {
+    vi.useFakeTimers();
+    const { make, waitMs } = loadApp();
+    const app = make([]);
+    app._urlSessionId = 'gone';
+    app._armUrlSessionWait('gone');
+    vi.advanceTimersByTime(waitMs - 1000);
+    app._armUrlSessionWait('gone');
+    vi.advanceTimersByTime(1000);
+    expect(app._urlSessionId).toBeNull();
+    expect(app.showToast).toHaveBeenCalledTimes(1);
+  });
+
+  it('is retired by going Home', () => {
+    vi.useFakeTimers();
+    const { make, waitMs } = loadApp();
+    const app = make([]);
+    app.terminal = { clear: vi.fn() };
+    app.showWelcome = vi.fn();
+    app.renderRalphStatePanel = vi.fn();
+    app._urlSessionId = 'later';
+    app._selectUrlSession();
+    app.goHome();
+    expect(app._urlSessionId).toBeNull();
+    expect(app._urlSessionWaitTimer).toBeNull();
+    app._onSessionCreated({ id: 'later', name: 'later' });
+    expect(app.selectSession).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(waitMs);
+    expect(app.showToast).not.toHaveBeenCalled();
+  });
+
+  function withWebTab(app: Record<string, any>) {
+    const webview = { id: 'dash', name: 'Dash', url: 'http://127.0.0.1:8080/' };
+    app.webviews = new Map([['dash', webview]]);
+    app.webviewOrder = ['dash'];
+    app._persistWebviewOrder = vi.fn();
+    app._apiJson = vi.fn(async () => ({ webview, embedUrl: '/webview/cap/' }));
+    app._mountWebviewFrame = vi.fn();
+    app.hideWelcome = vi.fn();
+    app._updateActiveWebviewTab = vi.fn();
+    app.closeSessionSidebarOnHandheld = vi.fn();
+    return app;
+  }
+
+  it('is retired by opening a web tab', async () => {
+    vi.useFakeTimers();
+    const { make, waitMs } = loadApp();
+    const app = withWebTab(make([]));
+    app._urlSessionId = 'later';
+    app._selectUrlSession();
+    const opening = app.openWebview('dash');
+    // Before the open's await: a session:created landing inside it finds no link.
+    expect(app._urlSessionId).toBeNull();
+    expect(app._urlSessionWaitTimer).toBeNull();
+    await opening;
+    expect(app.activeWebviewId).toBe('dash');
+    app._onSessionCreated({ id: 'later', name: 'later' });
+    expect(app.selectSession).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(waitMs);
+    expect(app.showToast).not.toHaveBeenCalled();
+  });
+
+  it('survives a web tab the app opens itself', async () => {
+    const { make } = loadApp();
+    const app = withWebTab(make([]));
+    app._urlSessionId = 'later';
+    await app.openWebview('dash', { auto: true });
+    expect(app._urlSessionId).toBe('later');
   });
 });
