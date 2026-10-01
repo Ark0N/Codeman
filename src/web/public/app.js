@@ -2399,7 +2399,9 @@ class CodemanApp {
         ev.preventDefault();
         ev.stopPropagation();
         const filePath = pathLink.dataset.path;
-        if (filePath) this.openFilePreview(filePath, this.activeSessionId);
+        // A rendered document's links name the session the preview was opened
+        // for (_rebaseFilePreviewMarkdownRefs), which need not be the active tab.
+        if (filePath) this.openFilePreview(filePath, pathLink.dataset.sessionId || this.activeSessionId);
         return;
       }
 

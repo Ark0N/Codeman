@@ -84,7 +84,10 @@
   /**
    * Attributes allowed on the tags above. `style` is intentionally absent (CSS-based vectors).
    * `class`/`id` survive because the response viewer adds wrapper classes downstream and code
-   * blocks may carry `language-*` classes from marked.
+   * blocks may carry `language-*` classes from marked. `name` is absent on purpose: marked never
+   * emits it, and `<img name="app">` would make `document.app` that image, which every inline
+   * `onclick="app.…()"` handler resolves before the global (DOM clobbering), so one rendered
+   * README could break every button until a reload.
    */
   var ALLOWED_ATTR = [
     'href',
@@ -93,7 +96,6 @@
     'title',
     'class',
     'id',
-    'name',
     'colspan',
     'rowspan',
     'align',

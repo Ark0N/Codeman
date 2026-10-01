@@ -1458,7 +1458,7 @@ function computeRewriteScrollLine(input) {
  * a `/g` regex, so {@link absoluteFilePathPattern} mints a fresh one per call.
  */
 const FILE_PATH_LINK_PATTERN =
-  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html|toml|ini|sql|png|jpe?g|gif|webp|bmp|svg|pdf|docx|pptx|mp4|webm|mov|mp3|wav))\b/g;
+  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html|toml|ini|sql|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|mp4|webm|mov|mp3|wav))\b/g;
 
 /** A fresh, zero-state instance of {@link FILE_PATH_LINK_PATTERN}. */
 function absoluteFilePathPattern() {
@@ -1476,7 +1476,7 @@ function absoluteFilePathPattern() {
  * file in /tmp played fine. test/media-extension-parity.test.ts pins the sync.
  */
 const FILE_PREVIEW_EXTENSIONS = new Set(
-  ('png jpg jpeg gif webp bmp svg pdf docx pptx mp4 webm mov m4v ogv mp3 wav ogg oga m4a aac flac opus').split(' ')
+  ('png jpg jpeg gif webp avif bmp ico svg pdf docx pptx mp4 webm mov m4v ogv mp3 wav ogg oga m4a aac flac opus').split(' ')
 );
 
 /** Whether a path's extension is one {@link FILE_PREVIEW_EXTENSIONS} covers. */

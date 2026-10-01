@@ -1724,7 +1724,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
       // breadth of formats the attachments viewer renders (image/audio/video/pdf)
       // so the file viewer can open the same files.
       const ext = filePath.split('.').pop()?.toLowerCase() || '';
-      const imageExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico']);
+      const imageExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'svg', 'bmp', 'ico']);
       // Shared with the attachment registry so a video plays the same whether it
       // sits in the workspace or is reached by id from outside it.
       const videoExts = VIDEO_ATTACHMENT_EXTENSIONS;
@@ -2045,6 +2045,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         jpeg: 'image/jpeg',
         gif: 'image/gif',
         webp: 'image/webp',
+        avif: 'image/avif',
         ico: 'image/x-icon',
         bmp: 'image/bmp',
         mp4: 'video/mp4',
