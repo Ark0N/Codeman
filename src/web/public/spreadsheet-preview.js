@@ -20,7 +20,7 @@
 (function initSpreadsheetPreview(global) {
   'use strict';
 
-  const SPREADSHEET_ASSET_VERSION = '91b615278d5b';
+  const SPREADSHEET_ASSET_VERSION = '078d54b1055a';
   const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
   const DEFAULT_TIMEOUT_MS = 20000;
   const MAX_SCROLL_PX = 8000000;
@@ -82,14 +82,37 @@
       return metadata?.sheets.find((sheet) => String(sheet.id) === String(activeSheetId));
     }
 
+    // Prefix sums per override list, built once per sheet's axis: renderTile
+    // asks for several offsets per cell, so a linear walk over every override
+    // (one per row on a sheet with explicit heights) made each tile O(n) per cell.
+    const axisDeltas = new WeakMap();
+
+    function overrideDeltas(overrides, defaultSize) {
+      let entry = axisDeltas.get(overrides);
+      if (!entry || entry.defaultSize !== defaultSize) {
+        const deltas = [];
+        let delta = 0;
+        for (const [, size] of overrides) {
+          delta += size - defaultSize;
+          deltas.push(delta);
+        }
+        entry = { defaultSize, deltas };
+        axisDeltas.set(overrides, entry);
+      }
+      return entry.deltas;
+    }
+
     function axisOffset(count, defaultSize, overrides, index) {
       const bounded = Math.max(1, Math.min(count + 1, index));
-      let value = (bounded - 1) * defaultSize;
-      for (const [overrideIndex, size] of overrides || []) {
-        if (overrideIndex >= bounded) break;
-        value += size - defaultSize;
+      const list = overrides || [];
+      let low = 0;
+      let high = list.length;
+      while (low < high) {
+        const mid = (low + high) >> 1;
+        if (list[mid][0] < bounded) low = mid + 1;
+        else high = mid;
       }
-      return value;
+      return (bounded - 1) * defaultSize + (low ? overrideDeltas(list, defaultSize)[low - 1] : 0);
     }
 
     function axisIndex(count, defaultSize, overrides, offset) {

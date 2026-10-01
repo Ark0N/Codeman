@@ -11,6 +11,11 @@ type Core = {
   XlsxPreviewError: new (code: string, message: string) => Error & { code: string };
   inspectZipDirectory(bytes: Uint8Array, limits?: Record<string, number>): { entries: Array<{ name: string }> };
   admitXlsx(bytes: Uint8Array, zip: typeof fflate, limits?: Record<string, number>): unknown;
+  createXmlCounter(
+    name: string,
+    counts: { cells: number; merges: number; styles: number },
+    limits: Record<string, number>
+  ): { push(chunk: Uint8Array, final: boolean): void };
   buildAdmittedArchive(admission: unknown, zip: typeof fflate): Uint8Array;
   parseCellRef(ref: string): { row: number; col: number } | null;
   deriveExtent(cells: string[], merges: string[]): { rows: number; cols: number };
@@ -107,7 +112,8 @@ describe('spreadsheet XLSX core', () => {
       counts: { worksheets: number; cells: number; merges: number; styles: number };
       features: string[];
     };
-    expect(result.counts).toEqual({ worksheets: 1, cells: 1, merges: 1, styles: 1 });
+    // The 2x2 merge costs its four covered cells on top of the one real cell.
+    expect(result.counts).toEqual({ worksheets: 1, cells: 5, merges: 1, styles: 1 });
     expect(result.features).toEqual(expect.arrayContaining(['charts', 'externalLinks']));
   });
 
@@ -146,6 +152,63 @@ describe('spreadsheet XLSX core', () => {
     expect(() => core.admitXlsx(zip, duplicate)).toThrowError(/duplicate/i);
   });
 
+  it('charges a merged range its full area and refuses one that does not parse', () => {
+    const merged = (ref: string) =>
+      workbookZip(
+        `<worksheet><sheetData><row><c r="A1"/></row></sheetData><mergeCells><mergeCell ref="${ref}"/></mergeCells></worksheet>`
+      );
+    expect(() => core.admitXlsx(merged('A1:CV30000'), fflate)).toThrowError(/cells limit/i);
+    // Reversed corners describe the same area.
+    expect(() => core.admitXlsx(merged('CV30000:A1'), fflate)).toThrowError(/cells limit/i);
+    expect(() => core.admitXlsx(merged('A1:XFE2'), fflate)).toThrowError(/merged range/i);
+    expect(() => core.admitXlsx(merged('not-a-range'), fflate)).toThrowError(/merged range/i);
+    const admitted = core.admitXlsx(merged('A1:J10'), fflate) as { counts: { cells: number } };
+    expect(admitted.counts.cells).toBe(101);
+  });
+
+  it('refuses a <col> whose min or max is past the last Excel column', () => {
+    const cols = (attrs: string) =>
+      workbookZip(
+        `<worksheet><cols><col ${attrs} width="9"/></cols><sheetData><row><c r="A1"/></row></sheetData></worksheet>`
+      );
+    expect(() => core.admitXlsx(cols('min="1" max="3000000"'), fflate)).toThrowError(/column max/i);
+    expect(() => core.admitXlsx(cols('min="16385" max="16385"'), fflate)).toThrowError(/column min/i);
+    expect(() => core.admitXlsx(cols('min="1" max="1e9"'), fflate)).toThrowError(/column max/i);
+    expect(() => core.admitXlsx(cols('min="1" max="16384"'), fflate)).not.toThrow();
+  });
+
+  it('reads a merge or col tag whole even when a stream chunk boundary cuts through it', () => {
+    // Markup on both sides, so a cut can land 128+ bytes past the tag's start.
+    const pad = '<sheetView workbookViewId="0"/>'.repeat(12);
+    const cases: Array<[string, RegExp]> = [
+      [`<worksheet>${pad}<cols><col min="1" max="99999"/></cols>${pad}</worksheet>`, /column max/i],
+      [`<worksheet>${pad}<mergeCells><mergeCell ref="A1:CV30000"/></mergeCells>${pad}</worksheet>`, /cells limit/i],
+    ];
+    for (const [xml, pattern] of cases) {
+      const bytes = fflate.strToU8(xml);
+      for (let cut = 1; cut < bytes.length; cut += 1) {
+        const counter = core.createXmlCounter(
+          'xl/worksheets/sheet1.xml',
+          { cells: 0, merges: 0, styles: 0 },
+          core.LIMITS
+        );
+        expect(() => {
+          counter.push(bytes.subarray(0, cut), false);
+          counter.push(bytes.subarray(cut), true);
+        }, `cut at ${cut}`).toThrowError(pattern);
+      }
+    }
+  });
+
+  it('refuses an entry whose declared compressed size runs past the file', () => {
+    const zip = workbookZip();
+    const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+    const eocd = zip.length - 22;
+    const centralStart = view.getUint32(eocd + 16, true);
+    view.setUint32(centralStart + 20, 0x7fffffff, true);
+    expect(() => core.inspectZipDirectory(zip)).toThrowError(/compressed bytes/i);
+  });
+
   it('derives bounded extents from real cells and merges', () => {
     expect(core.parseCellRef('XFD1048576')).toEqual({ row: 1_048_576, col: 16_384 });
     expect(core.parseCellRef('XFE1')).toBeNull();
@@ -162,6 +225,18 @@ describe('spreadsheet XLSX core', () => {
     const [start, end] = core.computeViewport(axis, 199, 60, 1);
     expect(start).toBeLessThanOrEqual(9);
     expect(end - start).toBeLessThan(10);
+  });
+
+  it('matches a plain walk over the overrides at every index', () => {
+    const overrides: Array<[number, number]> = [];
+    for (let index = 3; index <= 400; index += 7) overrides.push([index, (index * 13) % 50]);
+    const axis = core.createSparseAxis(500, 20, overrides);
+    for (let index = 0; index <= 502; index += 1) {
+      const bounded = Math.max(1, Math.min(501, index));
+      let expected = (bounded - 1) * 20;
+      for (const [at, size] of overrides) if (at < bounded) expected += size - 20;
+      expect(core.axisOffset(axis, index), `index ${index}`).toBe(expected);
+    }
   });
 
   it('returns intersecting merges even when their anchor is offscreen', () => {

@@ -98,6 +98,11 @@
       const localExtraLength = u16(bytes, localHeaderOffset + 28);
       const localNameEnd = localHeaderOffset + 30 + localNameLength;
       if (localNameEnd + localExtraLength > directoryOffset) fail('malformed', 'Malformed XLSX local entry bounds');
+      // The compression-ratio cap divides by this declared size, so it must
+      // describe bytes that actually exist before the central directory.
+      if (localNameEnd + localExtraLength + compressedSize > directoryOffset) {
+        fail('malformed', 'XLSX entry declares more compressed bytes than the file holds');
+      }
       const localName = new TextDecoder().decode(bytes.subarray(localHeaderOffset + 30, localNameEnd));
       if (localName !== name) fail('malformed', 'XLSX local and central directory names do not match');
       entries.push({ name, compressedSize, declaredSize, localHeaderOffset });
@@ -115,6 +120,36 @@
     return null;
   }
 
+  // Longest single XML tag the streaming counter will carry across chunks. Real
+  // worksheet tags are a few hundred bytes; this only stops a pathological tag
+  // from turning the carried tail into quadratic re-scanning.
+  const MAX_CARRIED_TAG = 256 * 1024;
+
+  function attribute(tag, name) {
+    const match = new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(tag);
+    return match ? (match[1] ?? match[2]) : null;
+  }
+
+  // ExcelJS expands a merge into one cell object per covered cell at load time,
+  // so a merge costs its AREA, not one tag.
+  function mergeArea(tag) {
+    const range = parseRange(attribute(tag, 'ref'));
+    if (!range) fail('malformed', 'Worksheet has a merged range that does not parse');
+    return (Math.abs(range.r2 - range.r1) + 1) * (Math.abs(range.c2 - range.c1) + 1);
+  }
+
+  // ExcelJS builds one column object for every index up to `<col max>`, unclamped.
+  function checkColumnSpan(tag) {
+    for (const name of ['min', 'max']) {
+      const value = attribute(tag, name);
+      if (value === null) continue;
+      const index = Number(value);
+      if (!Number.isInteger(index) || index < 1 || index > MAX_COL) {
+        fail('malformed', `Worksheet column ${name} is outside 1-${MAX_COL}`);
+      }
+    }
+  }
+
   function createXmlCounter(name, counts, limits) {
     let tail = '';
     const decoder = new TextDecoder();
@@ -123,22 +158,34 @@
     let inCellXfs = false;
     const worksheet = /^xl\/worksheets\/[^/]+\.xml$/i.test(name);
     const styles = name === 'xl/styles.xml';
+    const addCells = (cells) => {
+      sheetCells += cells;
+      counts.cells += cells;
+      if (sheetCells > limits.maxCellsPerSheet || counts.cells > limits.maxCells)
+        fail('cell-limit', 'Workbook exceeds the cells limit');
+    };
     return {
       push(chunk, final) {
         if (!worksheet && !styles) return;
         const text = tail + decoder.decode(chunk, { stream: !final });
-        const safeEnd = final ? text.length : Math.max(0, text.length - 128);
+        // Scan only up to a tag boundary: a tag cut by a chunk edge is carried
+        // whole into the next scan, so its attributes are read in one piece.
+        let safeEnd = text.length;
+        if (!final) {
+          const open = text.lastIndexOf('<');
+          if (open > text.lastIndexOf('>')) safeEnd = open;
+        }
         const scan = text.slice(0, safeEnd);
         if (worksheet) {
-          const cells = (scan.match(/<c(?:\s|>)/g) || []).length;
-          const merges = (scan.match(/<mergeCell(?:\s|>)/g) || []).length;
-          sheetCells += cells;
-          sheetMerges += merges;
-          counts.cells += cells;
-          counts.merges += merges;
-          if (sheetCells > limits.maxCellsPerSheet || counts.cells > limits.maxCells)
-            fail('cell-limit', 'Workbook exceeds the cells limit');
-          if (sheetMerges > limits.maxMergesPerSheet) fail('merge-limit', 'Worksheet exceeds the merged ranges limit');
+          addCells((scan.match(/<c(?:\s|>)/g) || []).length);
+          for (const [tag] of scan.matchAll(/<mergeCell(?:\s[^>]*)?>/g)) {
+            sheetMerges += 1;
+            counts.merges += 1;
+            if (sheetMerges > limits.maxMergesPerSheet)
+              fail('merge-limit', 'Worksheet exceeds the merged ranges limit');
+            addCells(mergeArea(tag));
+          }
+          for (const [tag] of scan.matchAll(/<col(?:\s[^>]*)?>/g)) checkColumnSpan(tag);
         }
         if (styles) {
           const tokens = scan.match(/<cellXfs(?:\s|>)|<\/cellXfs\s*>|<xf(?:\s|\/?>)/g) || [];
@@ -150,6 +197,7 @@
           if (counts.styles > limits.maxStyles) fail('style-limit', 'Workbook exceeds the cell styles limit');
         }
         tail = text.slice(safeEnd);
+        if (tail.length > MAX_CARRIED_TAG) fail('malformed', 'Workbook XML has an oversized tag');
       },
     };
   }
@@ -277,17 +325,34 @@
       .filter(([index, size]) => index >= 1 && index <= count && Number.isFinite(size))
       .map(([index, size]) => [index, Math.max(0, size)])
       .sort((a, b) => a[0] - b[0]);
-    return { count: Math.max(0, count), defaultSize: Math.max(0, defaultSize), overrides: sorted };
+    const base = Math.max(0, defaultSize);
+    // deltas[i] is the summed size change of overrides[0..i], so an offset is
+    // one binary search instead of a walk over every override.
+    const deltas = [];
+    let delta = 0;
+    for (const [, size] of sorted) {
+      delta += size - base;
+      deltas.push(delta);
+    }
+    return { count: Math.max(0, count), defaultSize: base, overrides: sorted, deltas };
+  }
+
+  // Number of overrides whose index is below `bounded`.
+  function overridesBefore(overrides, bounded) {
+    let low = 0;
+    let high = overrides.length;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (overrides[mid][0] < bounded) low = mid + 1;
+      else high = mid;
+    }
+    return low;
   }
 
   function axisOffset(axis, index) {
     const bounded = Math.max(1, Math.min(axis.count + 1, index));
-    let offset = (bounded - 1) * axis.defaultSize;
-    for (const [overrideIndex, size] of axis.overrides) {
-      if (overrideIndex >= bounded) break;
-      offset += size - axis.defaultSize;
-    }
-    return offset;
+    const before = overridesBefore(axis.overrides, bounded);
+    return (bounded - 1) * axis.defaultSize + (before ? axis.deltas[before - 1] : 0);
   }
 
   function axisIndexAt(axis, offset) {
@@ -641,6 +706,7 @@
     MAX_COL,
     XlsxPreviewError,
     inspectZipDirectory,
+    createXmlCounter,
     admitXlsx,
     buildAdmittedArchive,
     parseCellRef,

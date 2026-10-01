@@ -125,7 +125,10 @@ async function loadWorkbook(bytes) {
   const admitted = core.buildAdmittedArchive(admission, self.fflate);
   if (!self.ExcelJS) importScripts(`vendor/exceljs.min.js${spreadsheetAssetQuery}`);
   const nextWorkbook = new self.ExcelJS.Workbook();
-  await nextWorkbook.xlsx.load(admitted);
+  // ExcelJS expands every address of a `<dataValidation sqref>` into its own
+  // object (a whole-column dropdown is a million), and the preview never shows
+  // validations, so they are not parsed at all.
+  await nextWorkbook.xlsx.load(admitted, { ignoreNodes: ['dataValidations'] });
   const nextSheets = new Map();
   const nextRows = new Map();
   normalizedStyles = [];

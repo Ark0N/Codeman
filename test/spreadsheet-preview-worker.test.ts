@@ -132,6 +132,8 @@ function createHarness() {
     messages,
     imports,
     self,
+    /** Evaluate an expression against the worker's own top-level bindings. */
+    peek: (expression: string): unknown => vm.runInContext(expression, context),
     send: async (data: unknown) => {
       await (self.onmessage as (event: { data: unknown }) => Promise<void>)({ data });
     },
@@ -507,4 +509,67 @@ describe('spreadsheet preview worker: ExcelJS sees only what admission checked',
     if (result.type === 'metadata') expect(result.sheets[0]).toMatchObject({ rows: 1, cols: 1 });
     else expect(result.type).toBe('error');
   }, 60_000);
+});
+
+/** A one-cell ExcelJS workbook whose sheet1.xml gets `xml` spliced in at `where`. */
+async function sheetWithInjectedXml(where: 'before-sheetData' | 'after-sheetData', xml: string): Promise<ArrayBuffer> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.addWorksheet('Data').getCell('A1').value = 'one';
+  const entries = fflate.unzipSync(new Uint8Array(await workbook.xlsx.writeBuffer()));
+  const sheet = fflate.strFromU8(entries['xl/worksheets/sheet1.xml']);
+  const patched =
+    where === 'before-sheetData'
+      ? sheet.replace('<sheetData>', `${xml}<sheetData>`)
+      : sheet.replace('</sheetData>', `</sheetData>${xml}`);
+  expect(patched).not.toBe(sheet);
+  entries['xl/worksheets/sheet1.xml'] = fflate.strToU8(patched);
+  return toArrayBuffer(fflate.zipSync(entries));
+}
+
+describe('spreadsheet preview worker: admission bounds what ExcelJS expands', () => {
+  // ExcelJS creates one cell object per covered cell of a merge, so a single
+  // `<mergeCell>` tag over 3M cells took 10 s and a gigabyte of heap.
+  it('refuses a merge whose area exceeds the cell caps before ExcelJS loads', async () => {
+    const harness = createHarness();
+    await harness.send({
+      type: 'load',
+      bytes: await sheetWithInjectedXml(
+        'after-sheetData',
+        '<mergeCells count="1"><mergeCell ref="A1:CV30000"/></mergeCells>'
+      ),
+    });
+    expect(harness.messages.at(-1)).toMatchObject({ type: 'error', code: 'cell-limit' });
+    expect(harness.imports.some((url) => url.includes('exceljs'))).toBe(false);
+  });
+
+  // `Column.fromModel` builds every column up to `<col max>` with no clamp.
+  it('refuses a <col> range past column 16384 before ExcelJS loads', async () => {
+    const harness = createHarness();
+    await harness.send({
+      type: 'load',
+      bytes: await sheetWithInjectedXml('before-sheetData', '<cols><col min="1" max="3000000" width="9"/></cols>'),
+    });
+    expect(harness.messages.at(-1)).toMatchObject({ type: 'error', code: 'malformed' });
+    expect(harness.imports.some((url) => url.includes('exceljs'))).toBe(false);
+  });
+
+  // A whole-column dropdown is a few bytes of XML that ExcelJS expands into one
+  // object per address (5 s here; a whole-sheet range was still running after
+  // 60 s). The preview never shows validations, so the worker does not parse
+  // them, and the file still previews.
+  it('previews a sheet with a whole-column data validation without expanding it', async () => {
+    const harness = createHarness();
+    const metadata = await loadMetadata(
+      harness,
+      await sheetWithInjectedXml(
+        'after-sheetData',
+        '<dataValidations count="1"><dataValidation type="list" allowBlank="1" sqref="B2:B1048576">' +
+          '<formula1>"a,b"</formula1></dataValidation></dataValidations>'
+      )
+    );
+    expect(harness.peek('Object.keys(workbook.worksheets[0].dataValidations.model).length')).toBe(0);
+    expect(metadata.sheets[0]).toMatchObject({ rows: 1, cols: 1 });
+    const tile = await requestTile(harness, metadata.sheets[0].id, { r1: 1, c1: 1, r2: 1, c2: 1 });
+    expect(tile.cells).toEqual([expect.objectContaining({ row: 1, col: 1, text: 'one' })]);
+  }, 30_000);
 });
