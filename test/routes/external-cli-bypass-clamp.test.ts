@@ -104,6 +104,20 @@ describe('clampExternalCliBypassForOwner — multi-user mode', () => {
     expect(out.grokConfig).toEqual({ alwaysApprove: false, model: 'grok-4.5' });
   });
 
+  it("keeps a non-granted owner's codex reasoning effort while forcing bypass off", async () => {
+    // The clamp rewrites one field and must carry the rest; a clamp rebuilt from named
+    // fields would drop the effort here without a word.
+    const out = await _clampExternalCliBypassForOwner(
+      'peon',
+      { dangerouslyBypassApprovals: true, reasoningEffort: 'xhigh' },
+      undefined,
+      undefined,
+      undefined,
+      undefined
+    );
+    expect(out.codexConfig).toEqual({ dangerouslyBypassApprovals: false, reasoningEffort: 'xhigh' });
+  });
+
   it('leaves codex/antigravity/grok absent when nothing was sent (they already spawn safe)', async () => {
     const out = await _clampExternalCliBypassForOwner('peon', undefined, undefined, undefined, undefined, undefined);
     expect(out.codexConfig).toBeUndefined();

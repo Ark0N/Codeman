@@ -24,6 +24,7 @@
 import { describe, it, expect } from 'vitest';
 import { getCli } from '../src/config/cli-registry/registry.js';
 import { buildSpawnCommandFromRegistry, type SpawnBridgeOptions } from '../src/session-cli-registry-bridge.js';
+import { CODEX_REASONING_EFFORTS } from '../src/types/session.js';
 
 /** A fixed session id, so `--session-id` is stable across runs. */
 const SID = '0f9c2b14-1111-2222-3333-444455556666';
@@ -130,6 +131,18 @@ describe('codex', () => {
 
   it('resumes with a POSITIONAL subcommand, not a flag', () => {
     expect(cx({ model: 'gpt-5', resumeSessionId: 'roll_42' })).toBe('codex --model gpt-5 resume roll_42');
+  });
+
+  it('sends reasoning effort as one model_reasoning_effort config value, for every level', () => {
+    for (const level of CODEX_REASONING_EFFORTS) {
+      expect(cx({ reasoningEffort: level })).toBe(`codex --config model_reasoning_effort=${level}`);
+    }
+  });
+
+  it('keeps reasoning effort ahead of the resume subcommand', () => {
+    expect(cx({ model: 'gpt-5', reasoningEffort: 'high', resumeSessionId: 'roll_42' })).toBe(
+      'codex --model gpt-5 --config model_reasoning_effort=high resume roll_42'
+    );
   });
 });
 
