@@ -11,6 +11,7 @@
  */
 
 import type { CliEntry } from './types.js';
+import { CODEX_REASONING_EFFORTS } from '../../types/session.js';
 
 const HOME_DIRS = {
   local: '~/.local/bin',
@@ -532,6 +533,7 @@ const CODEX: CliEntry = {
       bypassApprovals: { type: 'bool' },
       animations: { type: 'bool' },
       model: { type: 'token', pattern: 'model' },
+      reasoningEffort: { type: 'enum', values: [...CODEX_REASONING_EFFORTS] },
       resumeId: { type: 'token', pattern: 'id' },
     },
     variants: [
@@ -543,6 +545,14 @@ const CODEX: CliEntry = {
           { flag: '--config', value: 'tui.animations=true', when: { param: 'animations', is: true } },
           { flag: '--config', value: 'tui.animations=false', when: { param: 'animations', is: false } },
           { flag: '--model', valueFrom: 'model', when: { param: 'model', state: 'set' } },
+          // One literal per level: an argv token cannot splice a value into a literal, and
+          // `model_reasoning_effort=<level>` is a single `--config` value. The enum above is
+          // what admits a level, so an unknown one emits nothing.
+          ...CODEX_REASONING_EFFORTS.map((level) => ({
+            flag: '--config',
+            value: `model_reasoning_effort=${level}`,
+            when: { param: 'reasoningEffort', is: level },
+          })),
           { lit: 'resume', when: { param: 'resumeId', state: 'set' } },
           { valueFrom: 'resumeId', when: { param: 'resumeId', state: 'set' } },
         ],
