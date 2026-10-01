@@ -382,11 +382,20 @@ Object.assign(CodemanApp.prototype, {
    * overlay opened from the welcome screen has no terminal to return to, and
    * focusing one on a phone summons the on-screen keyboard over a screen that
    * has no input on it.
+   *
+   * ⚠️ A focus that already left the overlay is kept, not overridden. The
+   * Session Manager's row menu ("Switch to session", "Open folder") calls
+   * selectSession(), which focuses the terminal, BEFORE closeSessionManager();
+   * restoring there would pull focus back to the header button that opened the
+   * modal. Only a focus still inside `modal`, or one dropped on `<body>`, is
+   * the overlay's to hand back.
    */
-  _restoreOverlayFocus(key) {
+  _restoreOverlayFocus(key, modal) {
     const prev = this[key];
     this[key] = null;
     const body = typeof document !== 'undefined' ? document.body : null;
+    const current = typeof document !== 'undefined' ? document.activeElement : null;
+    if (current && current !== body && modal?.contains?.(current) === false) return;
     // `isConnected === false` means the element was removed while the overlay
     // was open (a re-render of the tab strip, say); anything else — including
     // a stub with no such property — is treated as still focusable.
@@ -435,7 +444,7 @@ Object.assign(CodemanApp.prototype, {
     // (which cancels), turning a cancel into a rename.
     if (!modal?.classList?.contains('active')) return;
     modal.classList.remove('active');
-    this._restoreOverlayFocus('_commandPalettePrevFocus');
+    this._restoreOverlayFocus('_commandPalettePrevFocus', modal);
   },
 
   _wireCommandPalette() {
@@ -707,7 +716,7 @@ Object.assign(CodemanApp.prototype, {
     // Same guard as closeCommandPalette — see the note there.
     if (!modal?.classList?.contains('active')) return;
     modal.classList.remove('active');
-    this._restoreOverlayFocus('_sessionManagerPrevFocus');
+    this._restoreOverlayFocus('_sessionManagerPrevFocus', modal);
   },
 
   /** Replace the Session Manager list body with a single status line. */

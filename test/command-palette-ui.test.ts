@@ -492,16 +492,19 @@ describe('overlay focus restoration (Escape must not strand the keyboard)', () =
     const priorElement = { focus: vi.fn(), isConnected: true, tagName: 'TEXTAREA' };
     const body = { tagName: 'BODY' };
     let active: any = priorElement;
+    // The harness builds its element map internally, so getElementById reads it
+    // through this binding, filled in once the harness returns.
+    let els: Record<string, any> = {};
     const { app, elements, makeClassList } = loadPaletteHarness({
       document: {
-        getElementById: (id: string) => (globalThis as any).__els?.[id] ?? null,
+        getElementById: (id: string) => els[id] ?? null,
         get activeElement() {
           return active;
         },
         body,
       },
     });
-    (globalThis as any).__els = elements;
+    els = elements;
     app.terminal = { focus: terminalTextarea.focus };
     app.activeSessionId = 'sess-beta';
     // The overlay's own focus() is what moves focus in a real browser; the
@@ -509,7 +512,36 @@ describe('overlay focus restoration (Escape must not strand the keyboard)', () =
     elements.commandPaletteSearch.focus = vi.fn(() => {
       active = elements.commandPaletteSearch;
     });
-    return { app, elements, priorElement, terminalTextarea, body, makeClassList, setActive: (v: any) => (active = v) };
+    // The restore keeps a focus that already left the overlay, so the modal has
+    // to know its own search box is inside it, as the real DOM does.
+    elements.commandPaletteModal.contains = (el: any) => el === elements.commandPaletteSearch;
+    // Same wiring for the Session Manager. A real classList: the close guard
+    // reads `contains('active')`, and a stub without it reports "not open" and
+    // skips the restore.
+    const installSessionManager = () => {
+      const search: any = { value: '', addEventListener: vi.fn() };
+      search.focus = vi.fn(() => {
+        active = search;
+      });
+      elements.sessionManagerSearch = search;
+      elements.sessionManagerModal = {
+        classList: makeClassList(),
+        addEventListener: vi.fn(),
+        contains: (el: any) => el === search,
+      };
+      elements.sessionManagerList = { replaceChildren: vi.fn(), appendChild: vi.fn() };
+      app._loadSessionManagerList = vi.fn();
+    };
+    return {
+      app,
+      elements,
+      priorElement,
+      terminalTextarea,
+      body,
+      makeClassList,
+      installSessionManager,
+      setActive: (v: any) => (active = v),
+    };
   }
 
   it('returns focus to whatever had it when the command palette closes', () => {
@@ -569,16 +601,26 @@ describe('overlay focus restoration (Escape must not strand the keyboard)', () =
   });
 
   it('restores focus on the session manager too, not just the palette', async () => {
-    const { app, elements, priorElement, makeClassList } = focusHarness();
-    // A real classList: the close guard reads `contains('active')`, and a stub
-    // without it reports "not open" and skips the restore this test is about.
-    elements.sessionManagerModal = { classList: makeClassList(), addEventListener: vi.fn() };
-    elements.sessionManagerSearch = { value: '', focus: vi.fn(), addEventListener: vi.fn() };
-    elements.sessionManagerList = { replaceChildren: vi.fn(), appendChild: vi.fn() };
-    app._loadSessionManagerList = vi.fn();
+    const { app, priorElement, installSessionManager } = focusHarness();
+    installSessionManager();
     await app.openSessionManager();
     app.closeSessionManager();
     expect(priorElement.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the terminal focus the row menu gave it when the session manager closes', async () => {
+    // "Switch to session" and "Open folder" (terminal-ui.js) call selectSession(),
+    // which focuses the terminal on desktop, and only THEN closeSessionManager().
+    // Opened from its header button, the saved focus is that button, so an
+    // unconditional restore pulled focus off the session the user just picked.
+    const { app, priorElement, terminalTextarea, installSessionManager, setActive } = focusHarness();
+    installSessionManager();
+    await app.openSessionManager();
+    app.selectSession = vi.fn(() => setActive(terminalTextarea));
+    app.selectSession('sess-alpha');
+    app.closeSessionManager();
+    expect(priorElement.focus).not.toHaveBeenCalled();
+    expect(terminalTextarea.focus).not.toHaveBeenCalled();
   });
 });
 
