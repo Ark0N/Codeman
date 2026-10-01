@@ -480,9 +480,22 @@ export interface ForeignAttachTarget {
  * The tmux invocation that joins a foreign session, as ONE line of POSIX sh.
  *
  * Shape and why:
- *   tmux -S <sock> new-session -t <target> -s <view> ; set destroy-unattached on ; set status off
- *     || exec tmux -S <sock> attach-session -r -t <target>
+ *   tmux -S <sock> has-session -t '=<target>' || { echo gone; exit 1; } ;
+ *   tmux -S <sock> kill-session -t '=<view>' 2>/dev/null ;
+ *   exec tmux -S <sock> new-session -t <target> -s <view> ; set destroy-unattached on ; set status off
  *
+ * - ⚠️ The `has-session` guard comes FIRST because `new-session -t` does not fail
+ *   on a missing target, it invents one. Measured on tmux 3.4: with `work` gone it
+ *   joined `work-prod`, with nothing matching it created a fresh shell, and on a
+ *   socket with no server it STARTED one. This line re-runs every time the wrapper
+ *   pane is respawned, and boot recovery does that for every dead pane, so once the
+ *   owner exits their session the next Codeman restart would leave a new shell on
+ *   their machine, in their container or on their ssh host. `=` is what makes the
+ *   check exact (no prefix match), and `2>/dev/null` keeps tmux's own "no server"
+ *   noise out of the pane — the message we print says it better.
+ * - ⚠️ The `=` prefix cannot go on `new-session -t` itself: tmux reads it as part of
+ *   the name and creates a group literally called `=work`. It has to be a separate
+ *   `has-session`. The read-only `attach-session` fallback takes `=` too.
  * - `new-session -t` creates a session in the target's GROUP: same windows, our
  *   own session options and current window (NOT our own size — see @fileoverview
  *   for the measurement that disproved that).
@@ -491,23 +504,41 @@ export interface ForeignAttachTarget {
  * - No `-d`: the session must be attached before `destroy-unattached` lands on it.
  * - The escaped semicolons reach tmux as plain command separators after one shell
  *   parse — the same convention the docker launch chain uses.
- * - The `||` fallback is a READ-ONLY attach, for a tmux too old to group. It is
- *   read-only on purpose: a writable bare attach would resize the owner's
- *   terminal, which is the one outcome this design exists to prevent. The caller
- *   records it as `SessionAdopt.readOnly` so the UI can say so.
+ * - ⚠️ There is NO degraded fallback, on purpose. A read-only `attach-session -r`
+ *   used to hang off `||` "for a tmux too old to group", but `||` fires on ANY
+ *   `new-session` failure. The one that actually happens is a leftover view with
+ *   the same name (the in-container leak described above): measured, `new-session`
+ *   answers `duplicate session: codeman-view-…` and the fallback then handed the
+ *   user a read-only client showing the owner's status bar, where everything typed
+ *   is dropped while the API reports success. That is the worst shape a failure can
+ *   take here. So: clear OUR OWN stale view first, then either group successfully
+ *   or exit with a message.
+ * - The `kill-session` is safe by construction and cannot touch the human's work:
+ *   the name is `codeman-view-<our own session id>`, `=` makes the match exact, and
+ *   killing a session in a group removes only that session (measured: the owner's
+ *   `work` survived its grouped view being killed). `2>/dev/null` because "no such
+ *   session" is the normal case, not an error.
  * - Single line: the string crosses `bash -c "..."`, where a real newline would
  *   not survive JSON escaping.
  */
 export function buildForeignTmuxInvocation(target: ForeignAttachTarget): string {
   const sock = fshq(target.socketPath);
   const t = fshq(target.targetSession);
+  // `=name` is tmux's exact-match form. Only for the two commands that LOOK UP a
+  // session; never for `new-session -t`, which would name the group `=name`.
+  const exact = fshq(`=${target.targetSession}`);
   const v = fshq(target.viewSession);
+  const gone = fshq(
+    `Codeman: session ${target.targetSession} is gone. Codeman never creates a session it does not own.`
+  );
+  const guard = `tmux -S ${sock} has-session -t ${exact} 2>/dev/null || { echo ${gone}; exit 1; }`;
+  // Our own leftover view from a previous adoption of the same Codeman session.
+  const dropStaleView = `tmux -S ${sock} kill-session -t ${fshq(`=${target.viewSession}`)} 2>/dev/null || true`;
   const group =
-    `tmux -S ${sock} new-session -t ${t} -s ${v} \\; ` +
+    `exec tmux -S ${sock} new-session -t ${t} -s ${v} \\; ` +
     `set-option -t ${v} destroy-unattached on \\; ` +
     `set-option -t ${v} status off`;
-  const readOnly = `exec tmux -S ${sock} attach-session -r -t ${t}`;
-  return `${group} || ${readOnly}`;
+  return `${guard} ; ${dropStaleView} ; ${group}`;
 }
 
 /** Local adoption: run the invocation directly in the wrapper pane. */

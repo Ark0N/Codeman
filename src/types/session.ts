@@ -424,12 +424,6 @@ export interface SessionAdopt {
    * Created with `destroy-unattached on` so it evaporates with our pane.
    */
   viewSession: string;
-  /**
-   * True when the foreign tmux was too old to group and we fell back to a
-   * READ-ONLY attach. Surfaced in the UI — the fallback must never silently be
-   * a writable bare attach, which would resize the owner's terminal.
-   */
-  readOnly?: boolean;
   /** The pane cwd at adoption time. Informational: an adopted pane is never `cd`'d. */
   paneCurrentPath?: string;
   remote?: AdoptRemoteConnection;

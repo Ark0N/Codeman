@@ -223,6 +223,51 @@ describe('attach command builders', () => {
     expect(cmd).not.toMatch(/new-session\s+-d/);
   });
 
+  it('checks the target exists BEFORE new-session, because new-session invents one', () => {
+    // ⚠️ `new-session -t` does not fail on a missing target. Measured on tmux 3.3a
+    // with only `work-prod` present: `new-session -t work` succeeded and joined our
+    // view into `work-prod`'s group — someone else's session. On a socket with no
+    // server it starts one. The wrapper pane re-runs this on every respawn, and boot
+    // recovery respawns every dead pane, so without this guard the owner exiting
+    // their session leaves Codeman creating shells on their machine.
+    const cmd = buildForeignTmuxInvocation(target);
+    const guard = cmd.indexOf('has-session');
+    const create = cmd.indexOf('new-session');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(create);
+    expect(cmd).toMatch(/has-session -t '=work'/);
+    // Fails closed with a message rather than falling through to new-session.
+    expect(cmd).toMatch(/has-session[^;]*\|\|\s*\{\s*echo[^;]*;\s*exit 1;\s*\}/);
+  });
+
+  it('uses the exact-match = only where a session is looked UP, never on new-session -t', () => {
+    // Measured: tmux reads the `=` on `new-session -t` as part of the name and
+    // creates a group literally called `=work`, so the guard has to be separate.
+    // Without `=`, `has-session -t work` matches `work-prod` (verified on 3.3a).
+    const cmd = buildForeignTmuxInvocation(target);
+    expect(cmd).toContain("new-session -t 'work'");
+    expect(cmd).not.toContain("new-session -t '=work'");
+    // The two commands that LOOK a session up both take `=`.
+    expect(cmd).toContain("has-session -t '=work'");
+    expect(cmd).toContain("kill-session -t '=codeman-view-abc12345'");
+  });
+
+  it('keeps the guard on all three locations, not just the local one', () => {
+    // The guard lives in the one shared invocation builder, so docker and remote
+    // inherit it. A future split into per-location strings must keep that true:
+    // the ssh and container paths are exactly where a stray session costs most.
+    expect(buildForeignDockerAttachCommand({ ...target, dockerBase: 'docker', containerName: 'box' })).toContain(
+      'has-session'
+    );
+    expect(
+      buildForeignRemoteAttachCommand({
+        ...target,
+        sshArgs: ['ssh', '-o BatchMode=yes'],
+        sshTarget: 'u@h',
+      })
+    ).toContain('has-session');
+  });
+
   it('sets destroy-unattached so the view dies with our pane', () => {
     expect(buildForeignTmuxInvocation(target)).toContain('destroy-unattached on');
   });
@@ -234,11 +279,30 @@ describe('attach command builders', () => {
     expect(buildForeignTmuxInvocation(target)).not.toContain('window-size');
   });
 
-  it('falls back to a READ-ONLY attach, never a writable bare one', () => {
-    // A writable bare attach is precisely the thing that resizes the owner's
-    // terminal, so the degraded path must be the harmless one.
+  it('leaves NO degraded fallback — it either groups or fails with a message', () => {
+    // A read-only `attach-session -r` used to hang off `||`, nominally for a tmux
+    // too old to group. But `||` fires on ANY new-session failure, and the one that
+    // happens is a leftover view with the same name: measured, new-session answers
+    // `duplicate session: …` and the fallback then handed the user a read-only
+    // client where typed input is dropped while the API reported success.
     const cmd = buildForeignTmuxInvocation(target);
-    expect(cmd).toMatch(/\|\|\s*exec tmux -S .* attach-session -r -t/);
+    expect(cmd).not.toContain('attach-session');
+    expect(cmd).not.toMatch(/new-session[^;]*\|\|/);
+  });
+
+  it('clears OUR OWN stale view before creating it, and only ours', () => {
+    // The view name is derived from Codeman's own session id, so a session with
+    // that name can only ever be ours. `=` keeps the match exact, and killing a
+    // session in a group removes only that session (measured: the owner's `work`
+    // survived its grouped view being killed).
+    const cmd = buildForeignTmuxInvocation(target);
+    expect(cmd).toContain("kill-session -t '=codeman-view-abc12345'");
+    expect(cmd).not.toContain("kill-session -t '=work'");
+    const kill = cmd.indexOf('kill-session');
+    expect(kill).toBeGreaterThan(cmd.indexOf('has-session'));
+    expect(kill).toBeLessThan(cmd.indexOf('new-session'));
+    // A missing stale view is the normal case, never a reason to abort.
+    expect(cmd).toMatch(/kill-session[^;]*2>\/dev\/null \|\| true/);
   });
 
   it('stays on ONE line — it crosses `bash -c "..."` where a newline dies', () => {
@@ -258,8 +322,17 @@ describe('attach command builders', () => {
       viewSession: 'codeman-view-1',
     });
     expect(nasty).toContain("'/tmp/a b'");
-    // The metacharacters survive only INSIDE quotes, never as shell syntax.
-    expect(nasty).not.toMatch(/[^']ev;il/);
+    // The metacharacters survive only INSIDE quotes, never as shell syntax. Checked
+    // by stripping every single-quoted span and looking at what is left, rather than
+    // by what character precedes the name: the "session is gone" message quotes the
+    // name too, with a space in front of it, and a lookbehind assertion reads that
+    // as an escape when it is not one.
+    const outsideQuotes = nasty
+      .split("'")
+      .filter((_, i) => i % 2 === 0)
+      .join(' ');
+    expect(outsideQuotes).not.toContain('ev;il');
+    expect(outsideQuotes).not.toContain('`');
   });
 
   describe('docker', () => {
