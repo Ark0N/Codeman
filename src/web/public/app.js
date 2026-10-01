@@ -602,6 +602,9 @@ class CodemanApp {
     // service-worker shell loads), with the server-injected global as a fallback.
     this.soloSessionId = this._detectSoloSessionId();
     this.isSoloWindow = !!this.soloSessionId;
+    // A session another page asked for with a `#session=<id>` link. It waits
+    // here until the session list has that id (see _selectUrlSession).
+    this._urlSessionId = this.isSoloWindow ? null : this._takeUrlSession();
     this.detachedSessions = new Set();   // dashboard-side: ids currently popped out
     this.detachedWindows = new Map();    // dashboard-side: id -> WindowProxy
     this._detachWatchTimers = new Map(); // dashboard-side: id -> setInterval handle
@@ -997,6 +1000,16 @@ class CodemanApp {
     // strip never flashes before handleInit selects the target session.
     this._initWindowChannel();
     if (this.isSoloWindow) document.body.classList.add('solo-mode');
+    // A page holding this window switches its tab by changing only the
+    // fragment, which keeps the page loaded (see sessionIdFromFragment).
+    if (!this.isSoloWindow) {
+      window.addEventListener('hashchange', () => {
+        const id = this._takeUrlSession();
+        if (!id) return;
+        this._urlSessionId = id;
+        this._selectUrlSession();
+      });
+    }
     // Initialize mobile handlers
     KeyboardHandler.init();
     SwipeHandler.init();
@@ -1366,6 +1379,33 @@ class CodemanApp {
       const m = path.match(/^\/session\/([^/]+)\/?$/);
       return m ? decodeURIComponent(m[1]) : null;
     } catch { return null; }
+  }
+
+  /** Read a `#session=<id>` link off the URL and drop the fragment. The next
+   *  link to the same session is then a change the browser reports, even
+   *  after you have clicked away to another tab. Returns the id or null. */
+  _takeUrlSession() {
+    const id = window.CodemanUrlSession?.sessionIdFromFragment(location.hash) ?? null;
+    if (id) {
+      try { history.replaceState(history.state, '', location.pathname + location.search); } catch {}
+    }
+    return id;
+  }
+
+  /** Show the session a `#session=<id>` link asked for, once the session list
+   *  has it. A page that has just created a session can link to it before
+   *  session:created arrives here, so an unknown id stays pending and
+   *  _onSessionCreated tries again.
+   *
+   *  ⚠️ The selection is `auto`. The page that set the fragment may be a
+   *  script, and this window may not even be in front, so following a link is
+   *  not a human looking at the session and must not spend its idle alert. */
+  _selectUrlSession() {
+    const id = this._urlSessionId;
+    if (!id || !this.sessions.has(id)) return false;
+    this._urlSessionId = null;
+    this.selectSession(id, { auto: true });
+    return true;
   }
 
   /**
@@ -1949,6 +1989,7 @@ class CodemanApp {
     this.updateCost();
     // Start stats polling when first session appears
     if (this.sessions.size === 1) this.startSystemStatsPolling();
+    if (this._urlSessionId === data.id) this._selectUrlSession();
   }
 
   _onSessionUpdated(data) {
@@ -4367,6 +4408,13 @@ class CodemanApp {
       return;
     }
 
+    // A `#session=<id>` link wins over restoring the last active tab.
+    if (this._urlSessionId && this.sessions.has(this._urlSessionId)) {
+      this.activeSessionId = null;
+      this._selectUrlSession();
+      return;
+    }
+
     const previousActiveId = this.activeSessionId;
     if (this.sessionOrder.length === 0) {
       this.activeSessionId = null;
@@ -6560,6 +6608,12 @@ class CodemanApp {
   }
 
   async selectSession(sessionId, options = {}) {
+    // Picking another tab yourself retires a `#session=<id>` link still
+    // waiting for its session, which would otherwise take the tab from you
+    // whenever that session turned up (see _selectUrlSession).
+    if (options?.auto !== true && this._urlSessionId && this._urlSessionId !== sessionId) {
+      this._urlSessionId = null;
+    }
     // If this session is popped out into its own window, raise that window
     // instead of showing it inline (focus-on-click for detached tabs). If we
     // owned a now-closed window, _raiseDetached re-docks and returns false so

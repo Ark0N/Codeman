@@ -1853,10 +1853,27 @@ function reconcilePtyGeometry(local, pty) {
   return { adopt: true, cols: pty.cols };
 }
 
+/**
+ * Which session does a dashboard URL's fragment ask for? Another page that
+ * holds the dashboard's window, such as a task board, points it at
+ * `/#session=<id>`. Only the fragment changes between two such links, so the
+ * browser keeps the page loaded and fires `hashchange`, and the dashboard
+ * switches tabs without reloading. Any other fragment asks for nothing.
+ *
+ * @param {string} hash - `location.hash`, with or without its leading `#`
+ * @returns {string|null} the session id, or null
+ */
+function sessionIdFromFragment(hash) {
+  const params = new URLSearchParams(String(hash || '').replace(/^#/, ''));
+  const id = params.get('session');
+  return id && id.trim() ? id.trim() : null;
+}
+
 if (typeof window !== 'undefined') {
   window.CodemanHistoryFormat = { formatHistoryBytes, computeHistoryTruncationNotice, computeRewriteScrollLine };
   window.CodemanFilePaths = { absoluteFilePathPattern, previewsInFileViewer, FILE_PREVIEW_EXTENSIONS };
   window.CodemanTerminalLines = { terminalLogicalLine };
+  window.CodemanUrlSession = { sessionIdFromFragment };
   window.CodemanSplitPane = {
     clampDividerPercent,
     buildSplitPickerSessions,
