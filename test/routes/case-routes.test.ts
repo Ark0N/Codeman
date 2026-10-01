@@ -35,6 +35,7 @@ vi.mock('node:fs', async (importOriginal) => {
 
 vi.mock('node:fs/promises', () => ({
   default: {
+    stat: vi.fn(),
     readdir: vi.fn(async () => []),
     readFile: vi.fn(async () => {
       const err = new Error('ENOENT') as NodeJS.ErrnoException;
@@ -74,6 +75,7 @@ const mockedReaddirSync = vi.mocked(readdirSync);
 const mockedReaddir = vi.mocked(fs.readdir);
 const mockedReadFile = vi.mocked(fs.readFile);
 const mockedWriteFile = vi.mocked(fs.writeFile);
+const mockedStat = vi.mocked(fs.stat);
 const mockedCheckRemoteTmux = vi.mocked(checkRemoteTmuxAvailable);
 
 interface CaseRouteHarness {
@@ -127,6 +129,12 @@ describe('case-routes', () => {
     // Default: existsSync returns false, readFile throws ENOENT
     mockedExistsSync.mockReturnValue(false);
     mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    // Async stat (the bounded path probe) follows the mocked existsSync, so a
+    // test that sets up a path's presence via existsSync drives both the same way.
+    mockedStat.mockImplementation(async (path) => {
+      if (mockedExistsSync(path)) return { isDirectory: () => true } as never;
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
   });
 
   afterEach(async () => {
@@ -209,6 +217,42 @@ describe('case-routes', () => {
       const body = JSON.parse(res.body);
       // Should have both regular and linked cases
       expect(body.data.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('still answers promptly when a linked case sits on an unreachable mount', async () => {
+      // A hard network mount that went away: a synchronous probe blocks the
+      // thread (simulated by a busy-wait), and an async stat never settles.
+      const stalledPath = '/mnt/unreachable/linked-nfs';
+      const BLOCK_MS = 4_000;
+      mockedReaddir.mockResolvedValue([] as never);
+      mockedReadFile.mockResolvedValueOnce(JSON.stringify({ 'linked-nfs': stalledPath }) as never);
+      mockedExistsSync.mockImplementation((p) => {
+        if (String(p) !== stalledPath) return false;
+        const until = Date.now() + BLOCK_MS;
+        while (Date.now() < until) {
+          // spin: the event loop is frozen for as long as the mount does not answer
+        }
+        return true;
+      });
+      let release: (() => void) | undefined;
+      mockedStat.mockImplementation((p) => {
+        if (String(p) !== stalledPath) {
+          return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+        }
+        return new Promise((resolve) => {
+          release = () => resolve({ isDirectory: () => true } as never);
+        });
+      });
+
+      const started = Date.now();
+      const res = await harness.app.inject({ method: 'GET', url: '/api/cases' });
+      const elapsed = Date.now() - started;
+      release?.();
+
+      expect(res.statusCode).toBe(200);
+      expect(elapsed).toBeLessThan(BLOCK_MS - 1_000);
+      // The unreachable case is left out rather than holding the list hostage.
+      expect(JSON.parse(res.body).data).toEqual([]);
     });
   });
 
