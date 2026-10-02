@@ -90,6 +90,9 @@ export interface CliVariant {
   args: ArgSpec[];
 }
 
+/** The newline chord a CLI's composer reads as "insert a line break" (see `CliCapabilities.newline`). */
+export type NewlineSequence = 'line-feed' | 'esc-enter';
+
 export interface CliLaunch {
   params: Record<string, ParamSpec>;
   /**
@@ -511,6 +514,14 @@ export interface CliCapabilities {
   gates: Record<string, { minVersion: string; failClosed: boolean }>;
   /** Cap on a single terminal frame, when this CLI needs a tighter one than the default. */
   maxFrameBytes?: number;
+  /**
+   * The bytes the web UI types into this CLI's pane for Shift+Enter (the `send-key` route).
+   * `line-feed` (`0x0a`, also what Ctrl+Enter sends) is what Claude Code's Ink input and most TUIs
+   * read as "insert a newline"; `esc-enter` (`ESC` `CR`, the same chord as Option/Alt+Enter and
+   * the mobile ⌥Enter key) is for a TUI that ignores a bare line feed. Absent = `line-feed`.
+   * Data, not a branch on the CLI id, so supporting another CLI's quirk is one line here.
+   */
+  newline?: NewlineSequence;
   /**
    * How this CLI is pointed at a user-supplied custom OpenAI-compatible
    * endpoint (local, e.g. llama.cpp, or cloud, e.g. Azure AI Foundry) — the

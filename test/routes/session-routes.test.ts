@@ -165,6 +165,48 @@ describe('session-routes', () => {
       expect(argv).toContain('-H');
     });
 
+    describe('newline chord comes from the CLI registry (capabilities.newline)', () => {
+      const sentHex = async (mode: string, key: string): Promise<string[]> => {
+        execFile.mockReset();
+        execFile.mockImplementation((_bin: string, _argv: string[], _opts: unknown, cb: (e: Error | null) => void) =>
+          cb(null)
+        );
+        const session = harness.ctx._session as unknown as { mode: string };
+        const before = session.mode;
+        session.mode = mode;
+        try {
+          const res = await harness.app.inject({
+            method: 'POST',
+            url: '/api/sessions/test-session-1/send-key',
+            payload: { key },
+          });
+          expect(res.statusCode).toBe(200);
+        } finally {
+          session.mode = before;
+        }
+        const argv = execFile.mock.calls[0][1] as string[];
+        return argv.slice(argv.indexOf('-H') + 3); // after "-H -t <pane>"
+      };
+
+      it('sends a line feed for Shift+Enter to a CLI that declares nothing', async () => {
+        expect(await sentHex('claude', 'S-Enter')).toEqual(['0a']);
+        expect(await sentHex('opencode', 'S-Enter')).toEqual(['0a']);
+      });
+
+      it('sends Esc+Enter for Shift+Enter to a CLI that declares esc-enter', async () => {
+        expect(await sentHex('codex', 'S-Enter')).toEqual(['1b', '0d']);
+      });
+
+      it('always sends a line feed for Ctrl+Enter', async () => {
+        expect(await sentHex('codex', 'C-Enter')).toEqual(['0a']);
+        expect(await sentHex('claude', 'C-Enter')).toEqual(['0a']);
+      });
+
+      it('falls back to a line feed for a mode the registry does not know', async () => {
+        expect(await sentHex('no-such-cli', 'S-Enter')).toEqual(['0a']);
+      });
+    });
+
     it('rejects keys outside the hex allowlist without invoking tmux', async () => {
       execFile.mockReset();
       const res = await harness.app.inject({
