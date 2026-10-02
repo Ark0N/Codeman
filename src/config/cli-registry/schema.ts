@@ -377,6 +377,19 @@ const capabilitiesSchema = z
     privilegedEnvKeys: z.array(envName).max(8),
     gates: z.record(z.string(), z.object({ minVersion: z.string().max(20), failClosed: z.boolean() }).strict()),
     maxFrameBytes: z.number().int().positive().optional(),
+    mcpConfig: z
+      .object({
+        // Home-relative, no traversal: sync writes to this path.
+        path: z
+          .string()
+          .min(1)
+          .max(100)
+          .regex(/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/)
+          .refine((v) => !v.split('/').includes('..'), 'must not contain ..'),
+        format: z.enum(['claude-json', 'gemini-json', 'codex-toml', 'opencode-json']),
+      })
+      .strict()
+      .optional(),
     customModelInjection: z.discriminatedUnion('kind', [
       z
         .object({

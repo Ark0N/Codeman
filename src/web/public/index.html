@@ -2474,6 +2474,23 @@
                   </div>
                 </div>
               </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>MCP servers</h4><span class="set-scope">server</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="mcp server sync claude codex gemini opencode">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Sync MCP servers across CLIs</span>
+                      <span class="set-row-desc">Copies each enabled CLI's MCP servers into the others' config files. Only adds missing servers; never edits or removes one. The previous file is kept as <code>.codeman-bak</code>.</span>
+                    </div>
+                    <span>
+                      <button class="btn-toolbar btn-sm" id="mcpSyncPreviewBtn" onclick="app.mcpSync(false)">Preview</button>
+                      <button class="btn-toolbar btn-sm btn-primary" id="mcpSyncApplyBtn" onclick="app.mcpSync(true)">Sync now</button>
+                    </span>
+                  </div>
+                  <div id="mcpSyncResult" class="set-note" style="display:none"></div>
+                </div>
+              </div>
             </section>
 
             <!-- ══ Notifications ════════════════════════════════════════════ -->

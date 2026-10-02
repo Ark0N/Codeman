@@ -1114,6 +1114,35 @@ Object.assign(CodemanApp.prototype, {
     this._updateCheck = null;
   },
 
+  /** Preview (apply=false) or run (apply=true) the MCP server sync across enabled CLIs. */
+  async mcpSync(apply) {
+    const out = this.$('mcpSyncResult');
+    const show = (html) => {
+      if (out) { out.style.display = 'block'; out.innerHTML = html; }
+    };
+    if (apply && !confirm('Add missing MCP servers to every enabled CLI\'s config file?')) return;
+    show('Working…');
+    const res = apply ? await this._apiPost('/api/mcp-sync', {}) : await this._api('/api/mcp-sync');
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    if (!res || !res.ok || !body || body.success === false) {
+      show(escapeHtml(body?.error || 'MCP sync failed.'));
+      return;
+    }
+    const data = body.data;
+    const rows = data.targets.map((t) => {
+      if (t.status !== 'ok') return `<li><b>${escapeHtml(t.label)}</b>: not touched (${escapeHtml(t.error || 'unreadable')})</li>`;
+      const verb = data.applied ? 'added' : 'would add';
+      const parts = [t.added.length ? `${verb} ${t.added.map(escapeHtml).join(', ')}` : 'up to date'];
+      if (t.skipped.length) parts.push(`can't express ${t.skipped.map(escapeHtml).join(', ')}`);
+      return `<li><b>${escapeHtml(t.label)}</b> (${t.servers.length} servers): ${parts.join('; ')}</li>`;
+    });
+    const conflicts = data.conflicts.length
+      ? `<p>Defined differently across CLIs, left unchanged: ${data.conflicts.map(escapeHtml).join(', ')}</p>`
+      : '';
+    show(`<ul>${rows.join('')}</ul>${conflicts}`);
+  },
+
   _setUpdateResult(html) {
     const el = this.$('updateResult');
     if (el) { el.style.display = 'block'; el.innerHTML = html; }

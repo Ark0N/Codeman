@@ -512,6 +512,13 @@ export interface CliCapabilities {
   /** Cap on a single terminal frame, when this CLI needs a tighter one than the default. */
   maxFrameBytes?: number;
   /**
+   * Where this CLI keeps its user-level MCP server list, for MCP sync (`src/mcp-sync.ts`).
+   * `path` is relative to the home directory. `format` names the file dialect the sync
+   * adapter reads and writes. Absent = no known/verified MCP config file, so the CLI is
+   * skipped by sync rather than guessed at.
+   */
+  mcpConfig?: { path: string; format: 'claude-json' | 'gemini-json' | 'codex-toml' | 'opencode-json' };
+  /**
    * How this CLI is pointed at a user-supplied custom OpenAI-compatible
    * endpoint (local, e.g. llama.cpp, or cloud, e.g. Azure AI Foundry) — the
    * Custom Model Endpoint Profiles feature (`docs/custom-model-endpoints-plan.md`). Declared

@@ -28,6 +28,7 @@ export { registerWsRoutes } from './ws-routes.js';
 export { registerVoiceRoutes } from './voice-routes.js';
 export { registerWebviewRoutes, tryWebviewRefererFallback } from './webview-routes.js';
 export { registerTabLayoutRoutes } from './tab-layout-routes.js';
+export { registerMcpSyncRoutes } from './mcp-sync-routes.js';
 export {
   registerCustomModelRoutes,
   refreshAllCustomModelHosts,
