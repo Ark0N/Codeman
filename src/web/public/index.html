@@ -2829,6 +2829,20 @@
               </div>
               <p class="set-section-blurb">Paths, automation and remote access. Set once, rarely touched.</p>
 
+              <div class="set-group" id="doctorGroup">
+                <div class="set-group-head"><h4>Diagnostics</h4><span class="set-scope">server</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="diagnostics doctor dependencies tmux node claude codex check install">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Check this machine</span>
+                      <span class="set-row-desc">Runs <code>codeman doctor</code> on the server: which agent CLIs, tmux, Node and the optional office tools are installed, their versions, and how to install what is missing.</span>
+                    </div>
+                    <button class="btn-toolbar btn-sm" id="doctorRunBtn" onclick="app.runDoctor()">Run checks</button>
+                  </div>
+                  <div id="doctorResult" class="set-note" style="display:none" data-i18n-skip></div>
+                </div>
+              </div>
+
               <div class="set-group">
                 <div class="set-group-head"><h4>Paths</h4><span class="set-scope">synced</span></div>
                 <div class="set-group-body">

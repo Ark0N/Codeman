@@ -1364,6 +1364,67 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  /**
+   * Settings → System → Diagnostics: run `codeman doctor` on the server (GET /api/doctor) and list
+   * each tool. Built with DOM nodes and textContent: paths and versions come from the host.
+   */
+  async runDoctor() {
+    const out = document.getElementById('doctorResult');
+    const btn = document.getElementById('doctorRunBtn');
+    if (!out) return;
+    const say = (text) => {
+      out.replaceChildren(document.createTextNode(text));
+      out.style.display = 'block';
+    };
+    if (btn) btn.disabled = true;
+    say('Checking…');
+    try {
+      const res = await this._api('/api/doctor');
+      let body = null;
+      try { body = res ? await res.json() : null; } catch { /* fall through */ }
+      if (!res || !res.ok || !body || body.success === false) {
+        say(body?.error || 'The check failed.');
+        return;
+      }
+      const { tools, summary, platform } = body.data;
+      const glyph = { ok: '✓', missing: '✗', outdated: '!', error: '!', skipped: '–' };
+      const list = document.createElement('ul');
+      list.style.margin = '0';
+      list.style.paddingLeft = '1.2em';
+      for (const t of tools) {
+        const li = document.createElement('li');
+        const strong = document.createElement('b');
+        strong.textContent = `${glyph[t.status] || '?'} ${t.label}`;
+        li.append(strong);
+        const bits = [t.status];
+        if (t.version) bits.push(t.version);
+        if (t.status !== 'ok' && t.status !== 'skipped') bits.push(t.required ? 'required' : 'optional');
+        if (t.reason) bits.push(t.reason);
+        li.append(document.createTextNode(` ${bits.join(' · ')}`));
+        if (t.path) {
+          const p = document.createElement('div');
+          p.className = 'mono';
+          p.textContent = t.path;
+          li.append(p);
+        }
+        if (t.status === 'missing' && t.installHint) {
+          const h = document.createElement('div');
+          h.textContent = `Install: ${t.installHint}`;
+          li.append(h);
+        }
+        list.append(li);
+      }
+      const head = document.createElement('p');
+      head.textContent =
+        `${summary.ok} ok · ${summary.requiredMissing} required missing · ${summary.optionalMissing} optional missing` +
+        ` (${platform.environment})`;
+      out.replaceChildren(head, list);
+      out.style.display = 'block';
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  },
+
   _setUpdateResult(html) {
     const el = this.$('updateResult');
     if (el) { el.style.display = 'block'; el.innerHTML = html; }
