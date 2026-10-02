@@ -90,6 +90,9 @@ export interface CliVariant {
   args: ArgSpec[];
 }
 
+/** The MCP config dialects `src/mcp-sync.ts` has an adapter for. */
+export type McpConfigFormat = 'claude-json' | 'gemini-json' | 'codex-toml' | 'opencode-json' | 'antigravity-json';
+
 export interface CliLaunch {
   params: Record<string, ParamSpec>;
   /**
@@ -517,10 +520,7 @@ export interface CliCapabilities {
    * adapter reads and writes. Absent = no known/verified MCP config file, so the CLI is
    * skipped by sync rather than guessed at.
    */
-  mcpConfig?: {
-    path: string;
-    format: 'claude-json' | 'gemini-json' | 'codex-toml' | 'opencode-json' | 'antigravity-json';
-  };
+  mcpConfig?: { path: string; format: McpConfigFormat };
   /**
    * How this CLI is pointed at a user-supplied custom OpenAI-compatible
    * endpoint (local, e.g. llama.cpp, or cloud, e.g. Azure AI Foundry) — the
