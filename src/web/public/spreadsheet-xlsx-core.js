@@ -23,6 +23,8 @@
     maxWorksheets: 50,
     maxCells: 250000,
     maxCellsPerSheet: 100000,
+    maxRows: 250000,
+    maxRowsPerSheet: 100000,
     maxMergesPerSheet: 5000,
     maxStyles: 5000,
   });
@@ -125,24 +127,49 @@
   // from turning the carried tail into quadratic re-scanning.
   const MAX_CARRIED_TAG = 256 * 1024;
 
-  function attribute(tag, name) {
-    const match = new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`).exec(tag);
-    return match ? (match[1] ?? match[2]) : null;
+  // XML attribute syntax, read in order from just after the tag name. A quoted
+  // value may hold a raw `>` or the other quote character, so a value is always
+  // consumed whole; a tag is only understood if this walk reaches its `>`.
+  const XML_SPACE = '[ \\t\\r\\n]';
+  const ATTRIBUTE = new RegExp(
+    `${XML_SPACE}+([^ \\t\\r\\n=/>]+)${XML_SPACE}*=${XML_SPACE}*(?:"([^"]*)"|'([^']*)')`,
+    'y'
+  );
+  const TAG_END = new RegExp(`${XML_SPACE}*/?>`, 'y');
+
+  /**
+   * Parse the attributes of the tag whose name ends at `from` in `text`.
+   * Returns the attributes, or null when they do not parse cleanly up to the
+   * tag's closing `/>` or `>` (or a name repeats, which XML forbids).
+   */
+  function readTagAttributes(text, from) {
+    const attributes = new Map();
+    let at = from;
+    for (;;) {
+      ATTRIBUTE.lastIndex = at;
+      const match = ATTRIBUTE.exec(text);
+      if (!match) break;
+      if (attributes.has(match[1])) return null;
+      attributes.set(match[1], match[2] ?? match[3]);
+      at = ATTRIBUTE.lastIndex;
+    }
+    TAG_END.lastIndex = at;
+    return TAG_END.test(text) ? attributes : null;
   }
 
   // ExcelJS expands a merge into one cell object per covered cell at load time,
   // so a merge costs its AREA, not one tag.
-  function mergeArea(tag) {
-    const range = parseRange(attribute(tag, 'ref'));
+  function mergeArea(attributes) {
+    const range = parseRange(attributes.get('ref'));
     if (!range) fail('malformed', 'Worksheet has a merged range that does not parse');
     return (Math.abs(range.r2 - range.r1) + 1) * (Math.abs(range.c2 - range.c1) + 1);
   }
 
   // ExcelJS builds one column object for every index up to `<col max>`, unclamped.
-  function checkColumnSpan(tag) {
+  function checkColumnSpan(attributes) {
     for (const name of ['min', 'max']) {
-      const value = attribute(tag, name);
-      if (value === null) continue;
+      const value = attributes.get(name);
+      if (value === undefined) continue;
       const index = Number(value);
       if (!Number.isInteger(index) || index < 1 || index > MAX_COL) {
         fail('malformed', `Worksheet column ${name} is outside 1-${MAX_COL}`);
@@ -155,7 +182,7 @@
     const decoder = new TextDecoder();
     let sheetCells = 0;
     let sheetMerges = 0;
-    let inCellXfs = false;
+    let sheetRows = 0;
     const worksheet = /^xl\/worksheets\/[^/]+\.xml$/i.test(name);
     const styles = name === 'xl/styles.xml';
     const addCells = (cells) => {
@@ -168,32 +195,37 @@
       push(chunk, final) {
         if (!worksheet && !styles) return;
         const text = tail + decoder.decode(chunk, { stream: !final });
-        // Scan only up to a tag boundary: a tag cut by a chunk edge is carried
-        // whole into the next scan, so its attributes are read in one piece.
-        let safeEnd = text.length;
-        if (!final) {
-          const open = text.lastIndexOf('<');
-          if (open > text.lastIndexOf('>')) safeEnd = open;
-        }
+        // `<` can never appear inside an attribute value, so every tag before the
+        // last `<` is complete. Carry everything from that `<` into the next scan
+        // so a tag cut by a chunk edge is always read in one piece.
+        const safeEnd = final ? text.length : Math.max(0, text.lastIndexOf('<'));
         const scan = text.slice(0, safeEnd);
         if (worksheet) {
           addCells((scan.match(/<c(?:\s|>)/g) || []).length);
-          for (const [tag] of scan.matchAll(/<mergeCell(?:\s[^>]*)?>/g)) {
+          // ExcelJS keeps a Row object for every <row>, with or without cells.
+          const rows = (scan.match(/<row(?=[\s/>])/g) || []).length;
+          sheetRows += rows;
+          counts.rows += rows;
+          if (sheetRows > limits.maxRowsPerSheet || counts.rows > limits.maxRows)
+            fail('row-limit', 'Workbook exceeds the rows limit');
+          for (const match of scan.matchAll(/<(mergeCell|col)(?=[\s/>])/g)) {
+            const attributes = readTagAttributes(scan, match.index + match[0].length);
+            if (!attributes) fail('malformed', `Worksheet has a <${match[1]}> whose attributes do not parse`);
+            if (match[1] === 'col') {
+              checkColumnSpan(attributes);
+              continue;
+            }
             sheetMerges += 1;
             counts.merges += 1;
             if (sheetMerges > limits.maxMergesPerSheet)
               fail('merge-limit', 'Worksheet exceeds the merged ranges limit');
-            addCells(mergeArea(tag));
+            addCells(mergeArea(attributes));
           }
-          for (const [tag] of scan.matchAll(/<col(?:\s[^>]*)?>/g)) checkColumnSpan(tag);
         }
         if (styles) {
-          const tokens = scan.match(/<cellXfs(?:\s|>)|<\/cellXfs\s*>|<xf(?:\s|\/?>)/g) || [];
-          for (const token of tokens) {
-            if (token.startsWith('<cellXfs')) inCellXfs = true;
-            else if (token.startsWith('</cellXfs')) inCellXfs = false;
-            else if (inCellXfs) counts.styles += 1;
-          }
+          // Every <xf> counts, cellStyleXfs included: tracking which list a tag
+          // sits in can be desynced by a closing tag inside an XML comment.
+          counts.styles += (scan.match(/<xf(?=[\s/>])/g) || []).length;
           if (counts.styles > limits.maxStyles) fail('style-limit', 'Workbook exceeds the cell styles limit');
         }
         tail = text.slice(safeEnd);
@@ -210,7 +242,7 @@
     for (const entry of directory.entries) expectedEntries.set(entry.name, (expectedEntries.get(entry.name) || 0) + 1);
     const streamedEntries = new Map();
     const inflatedEntries = Object.create(null);
-    const counts = { worksheets: 0, cells: 0, merges: 0, styles: 0 };
+    const counts = { worksheets: 0, cells: 0, rows: 0, merges: 0, styles: 0 };
     const features = new Set();
     let totalInflated = 0;
     let seenEntries = 0;

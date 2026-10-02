@@ -113,7 +113,7 @@ describe('spreadsheet XLSX core', () => {
       features: string[];
     };
     // The 2x2 merge costs its four covered cells on top of the one real cell.
-    expect(result.counts).toEqual({ worksheets: 1, cells: 5, merges: 1, styles: 1 });
+    expect(result.counts).toEqual({ worksheets: 1, cells: 5, rows: 0, merges: 1, styles: 1 });
     expect(result.features).toEqual(expect.arrayContaining(['charts', 'externalLinks']));
   });
 
@@ -182,6 +182,7 @@ describe('spreadsheet XLSX core', () => {
     const pad = '<sheetView workbookViewId="0"/>'.repeat(12);
     const cases: Array<[string, RegExp]> = [
       [`<worksheet>${pad}<cols><col min="1" max="99999"/></cols>${pad}</worksheet>`, /column max/i],
+      [`<worksheet>${pad}<cols><col x=">" min="1" max="99999"/></cols>${pad}</worksheet>`, /column max/i],
       [`<worksheet>${pad}<mergeCells><mergeCell ref="A1:CV30000"/></mergeCells>${pad}</worksheet>`, /cells limit/i],
     ];
     for (const [xml, pattern] of cases) {
@@ -198,6 +199,46 @@ describe('spreadsheet XLSX core', () => {
         }, `cut at ${cut}`).toThrowError(pattern);
       }
     }
+  });
+
+  it('reads attributes in order, so a quoted value cannot hide or fake one', () => {
+    const counter = () =>
+      core.createXmlCounter(
+        'xl/worksheets/sheet1.xml',
+        { cells: 0, merges: 0, styles: 0, rows: 0 } as never,
+        core.LIMITS
+      );
+    const push = (xml: string) => counter().push(fflate.strToU8(xml), true);
+    // A raw `>` or the other quote character is legal inside a value.
+    expect(() => push(`<mergeCell x=' ref="A1"' ref="A1:CV30000"/>`)).toThrowError(/cells limit/i);
+    expect(() => push('<col x=">" min="1" max="3000000"/>')).toThrowError(/column max/i);
+    expect(() => push(`<col x=' max="1"' min="1" max="3000000"/>`)).toThrowError(/column max/i);
+    // Anything the walk cannot read up to `>` is refused, as is a repeated name.
+    expect(() => push('<mergeCell ref="A1:B2" junk/>')).toThrowError(/do not parse/i);
+    expect(() => push('<mergeCell ref="A1" ref="A1:CV30000"/>')).toThrowError(/do not parse/i);
+    expect(() => push('<cols><col min="1" max="3" width="9"></col></cols><mergeCell ref="A1:B2" />')).not.toThrow();
+  });
+
+  it('counts every <row>, empty or not, against per-sheet and total caps', () => {
+    const rows = (n: number) => '<worksheet><sheetData>' + '<row r="1"/>'.repeat(n) + '</sheetData></worksheet>';
+    expect(() => core.admitXlsx(workbookZip(rows(4)), fflate, { maxRowsPerSheet: 3 })).toThrowError(/rows limit/i);
+    expect(() => core.admitXlsx(workbookZip(rows(4)), fflate, { maxRows: 3 })).toThrowError(/rows limit/i);
+    const admitted = core.admitXlsx(workbookZip(rows(3)), fflate, { maxRowsPerSheet: 3 }) as {
+      counts: { rows: number };
+    };
+    expect(admitted.counts.rows).toBe(3);
+    // <rowBreaks>/<rows...> style names are not rows.
+    expect(
+      (core.admitXlsx(workbookZip('<worksheet><rowBreaks/></worksheet>'), fflate) as { counts: { rows: number } })
+        .counts.rows
+    ).toBe(0);
+  });
+
+  it('counts every <xf> in styles.xml, so a </cellXfs> inside a comment cannot hide styles', () => {
+    const counts = { cells: 0, merges: 0, styles: 0, rows: 0 };
+    const counter = core.createXmlCounter('xl/styles.xml', counts as never, { ...core.LIMITS, maxStyles: 100 });
+    const xml = '<styleSheet><cellXfs><!-- </cellXfs> -->' + '<xf/>'.repeat(200) + '</cellXfs></styleSheet>';
+    expect(() => counter.push(fflate.strToU8(xml), true)).toThrowError(/styles limit/i);
   });
 
   it('refuses an entry whose declared compressed size runs past the file', () => {

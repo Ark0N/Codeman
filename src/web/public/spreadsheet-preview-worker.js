@@ -127,8 +127,12 @@ async function loadWorkbook(bytes) {
   const nextWorkbook = new self.ExcelJS.Workbook();
   // ExcelJS expands every address of a `<dataValidation sqref>` into its own
   // object (a whole-column dropdown is a million), and the preview never shows
-  // validations, so they are not parsed at all.
-  await nextWorkbook.xlsx.load(admitted, { ignoreNodes: ['dataValidations'] });
+  // validations, so they are not parsed at all. `maxRows` is a per-sheet
+  // backstop behind admission's row count, which also caps the workbook total.
+  await nextWorkbook.xlsx.load(admitted, {
+    ignoreNodes: ['dataValidations'],
+    maxRows: core.LIMITS.maxRowsPerSheet,
+  });
   const nextSheets = new Map();
   const nextRows = new Map();
   normalizedStyles = [];

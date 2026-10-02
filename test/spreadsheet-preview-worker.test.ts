@@ -573,3 +573,55 @@ describe('spreadsheet preview worker: admission bounds what ExcelJS expands', ()
     expect(tile.cells).toEqual([expect.objectContaining({ row: 1, col: 1, text: 'one' })]);
   }, 30_000);
 });
+
+describe('spreadsheet preview worker: quoted attribute values and empty rows', () => {
+  // XML allows a raw `>` and the other quote character inside an attribute
+  // value. Each of these was admitted before and made ExcelJS build millions of
+  // cells or columns.
+  it.each([
+    [
+      'a quoted fake ref before the real merge ref',
+      'after-sheetData',
+      `<mergeCells count="1"><mergeCell x=' ref="A1"' ref="A1:CV30000"/></mergeCells>`,
+      'cell-limit',
+    ],
+    [
+      'a quoted > before the real col max',
+      'before-sheetData',
+      '<cols><col x=">" min="1" max="3000000"/></cols>',
+      'malformed',
+    ],
+    [
+      'a quoted fake max before the real col max',
+      'before-sheetData',
+      `<cols><col x=' max="1"' min="1" max="3000000"/></cols>`,
+      'malformed',
+    ],
+  ] as const)('refuses %s before ExcelJS loads', async (_label, where, xml, code) => {
+    const harness = createHarness();
+    await harness.send({ type: 'load', bytes: await sheetWithInjectedXml(where, xml) });
+    expect(harness.messages.at(-1)).toMatchObject({ type: 'error', code });
+    expect(harness.imports.some((url) => url.includes('exceljs'))).toBe(false);
+  });
+
+  // ExcelJS keeps a Row object for every <row>, so cell-less rows cost memory
+  // too: three sheets of a million empty rows sat inside every cell cap.
+  it('refuses a sheet of empty rows past the row cap before ExcelJS loads', async () => {
+    const harness = createHarness();
+    const rows = Array.from({ length: 100_001 }, (_, i) => `<row r="${i + 2}"/>`).join('');
+    await harness.send({ type: 'load', bytes: await emptyRowsWorkbook(rows) });
+    expect(harness.messages.at(-1)).toMatchObject({ type: 'error', code: 'row-limit' });
+    expect(harness.imports.some((url) => url.includes('exceljs'))).toBe(false);
+  }, 30_000);
+});
+
+async function emptyRowsWorkbook(extraRows: string): Promise<ArrayBuffer> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.addWorksheet('Data').getCell('A1').value = 'one';
+  const entries = fflate.unzipSync(new Uint8Array(await workbook.xlsx.writeBuffer()));
+  const sheet = fflate.strFromU8(entries['xl/worksheets/sheet1.xml']);
+  const patched = sheet.replace('</sheetData>', `${extraRows}</sheetData>`);
+  expect(patched).not.toBe(sheet);
+  entries['xl/worksheets/sheet1.xml'] = fflate.strToU8(patched);
+  return toArrayBuffer(fflate.zipSync(entries));
+}
