@@ -219,6 +219,8 @@ jobs:
         run: npx vitest run
         working-directory: packages/xterm-zerolag-input
 
+# The browser suite also runs nightly (and on demand) in .github/workflows/browser-suite.yml;
+# that job is informational and never gates a push or a PR.
 # Note: three suites are excluded from CI, each with its own local runner:
 #   npm run test:browser  Playwright + chromium (+ a live server, and a real
 #                         codex binary for codex-predictive-echo)
