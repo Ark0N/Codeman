@@ -49,14 +49,20 @@ describe('Webhook settings in a real browser', () => {
 
   const result = () => page.textContent('#webhookResult');
 
+  // The checkbox sits behind a styled slider, so click the switch like a user does.
+  const setSwitch = async (on: boolean) => {
+    if ((await page.isChecked('#webhookEnabled')) !== on) await page.click('label.switch:has(#webhookEnabled)');
+    expect(await page.isChecked('#webhookEnabled')).toBe(on);
+  };
+
   it('shows the group, starts empty, and refuses to enable without a URL', async () => {
     expect(await page.textContent('#webhookUrlHint')).toBe('Nothing saved yet.');
-    await page.check('#webhookEnabled');
+    await setSwitch(true);
     await page.click('#webhookSaveBtn');
     await page.waitForFunction(() =>
       /Add a webhook URL/.test(document.getElementById('webhookResult')?.textContent ?? '')
     );
-    await page.uncheck('#webhookEnabled');
+    await setSwitch(false);
   });
 
   it('refuses a cloud-metadata URL with the server’s reason', async () => {
@@ -70,7 +76,7 @@ describe('Webhook settings in a real browser', () => {
   it('saves a URL, shows only scheme and host, and empties the secret field', async () => {
     await page.selectOption('#webhookKind', 'ntfy');
     await page.fill('#webhookUrl', `http://127.0.0.1:${receiverPort}/${SECRET}`);
-    await page.check('#webhookEnabled');
+    await setSwitch(true);
     await page.click('#webhookSaveBtn');
     await page.waitForFunction(() => /Saved\./.test(document.getElementById('webhookResult')?.textContent ?? ''));
     expect(await page.textContent('#webhookUrlHint')).toBe(`Saved: http://127.0.0.1:${receiverPort}/•••`);
