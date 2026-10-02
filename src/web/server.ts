@@ -197,6 +197,7 @@ import {
   registerVoiceRoutes,
   registerWebviewRoutes,
   registerTabLayoutRoutes,
+  registerMcpSyncRoutes,
   registerCustomModelRoutes,
   refreshAllCustomModelHosts,
   readCustomModelEndpointsEnabled,
@@ -1130,6 +1131,7 @@ export class WebServer extends EventEmitter {
     registerOrchestratorRoutes(this.app, ctx);
     registerWebviewRoutes(this.app, ctx, this.basePath);
     registerTabLayoutRoutes(this.app, ctx);
+    registerMcpSyncRoutes(this.app);
     registerCustomModelRoutes(this.app);
     registerCliRegistryRoutes(this.app);
 

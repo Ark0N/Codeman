@@ -416,6 +416,9 @@ Object.assign(CodemanApp.prototype, {
     // .checked fires no onchange, so the list's visibility (and lazy load)
     // needs an explicit sync on every open, not just a save.
     this.applyCliManagementVisibility();
+    // MCP server sync: synced, default OFF; same explicit-sync reasoning as above.
+    document.getElementById('appSettingsMcpSync').checked = settings.mcpSyncEnabled === true;
+    this.applyMcpSyncVisibility();
     // Read My Mind: synced, default OFF (opt-in; capture + prediction cost real tokens).
     document.getElementById('appSettingsReadMyMind').checked = settings.readMyMindEnabled === true;
     document.getElementById('appSettingsUltracodeFloatingWindows').checked =
@@ -1112,6 +1115,56 @@ Object.assign(CodemanApp.prototype, {
       if (el) el.style.display = 'none';
     }
     this._updateCheck = null;
+  },
+
+  /**
+   * MCP sync is opt-in (`mcpSyncEnabled`): with the flag off the action row is hidden rather than
+   * shown disabled, because both endpoints would only answer 403. Called on open and from the
+   * checkbox's own onchange (assigning .checked fires no change event).
+   */
+  applyMcpSyncVisibility() {
+    const on = document.getElementById('appSettingsMcpSync')?.checked ?? false;
+    const row = document.getElementById('mcpSyncActionRow');
+    if (row) row.style.display = on ? '' : 'none';
+    const out = this.$('mcpSyncResult');
+    if (!on && out) { out.style.display = 'none'; out.innerHTML = ''; }
+  },
+
+  /** Preview (apply=false) or run (apply=true) the MCP server sync across enabled CLIs. */
+  async mcpSync(apply) {
+    const out = this.$('mcpSyncResult');
+    const show = (html) => {
+      if (out) { out.style.display = 'block'; out.innerHTML = html; }
+    };
+    if (apply && !confirm('Add missing MCP servers to every installed, enabled CLI\'s config file? Env values and headers on those servers are copied too.')) return;
+    show('Working…');
+    const res = apply ? await this._apiPost('/api/mcp-sync', {}) : await this._api('/api/mcp-sync');
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    if (!res || !res.ok || !body || body.success === false) {
+      show(escapeHtml(body?.error || 'MCP sync failed.'));
+      return;
+    }
+    const data = body.data;
+    const rows = data.targets.map((t) => {
+      if (t.status === 'absent') return `<li><b>${escapeHtml(t.label)}</b>: not installed, skipped</li>`;
+      if (t.status === 'unreadable') return `<li><b>${escapeHtml(t.label)}</b>: not touched, file can't be read safely (${escapeHtml(t.error || 'unreadable')})</li>`;
+      if (t.status === 'failed') return `<li><b>${escapeHtml(t.label)}</b>: failed (${escapeHtml(t.error || 'error')}); the file may be unchanged</li>`;
+      const verb = data.applied ? 'added' : 'would add';
+      const parts = [t.added.length ? `${verb} ${t.added.map(escapeHtml).join(', ')}` : 'up to date'];
+      if (t.skipped.length) parts.push(`can't express ${t.skipped.map(escapeHtml).join(', ')}`);
+      return `<li><b>${escapeHtml(t.label)}</b> (${t.servers.length} servers): ${parts.join('; ')}</li>`;
+    });
+    const conflicts = data.conflicts.length
+      ? `<p>Defined differently across CLIs (each existing definition is kept; the first CLI's is copied where the name is missing): ${data.conflicts.map(escapeHtml).join(', ')}</p>`
+      : '';
+    const disabled = data.disabled?.length
+      ? `<p>Switched off in their own CLI, so not copied: ${data.disabled.map(escapeHtml).join(', ')}</p>`
+      : '';
+    const unsupported = data.unsupported?.length
+      ? `<p>No MCP config support for: ${data.unsupported.map(escapeHtml).join(', ')}</p>`
+      : '';
+    show(`<ul>${rows.join('')}</ul>${conflicts}${disabled}${unsupported}`);
   },
 
   _setUpdateResult(html) {
@@ -2159,6 +2212,7 @@ Object.assign(CodemanApp.prototype, {
       approvalsInboxEnabled: document.getElementById('appSettingsApprovalsInbox').checked,
       customModelEndpointsEnabled: document.getElementById('appSettingsCustomModelEndpoints').checked,
       cliManagementEnabled: document.getElementById('appSettingsCliManagement').checked,
+      mcpSyncEnabled: document.getElementById('appSettingsMcpSync').checked,
       readMyMindEnabled: document.getElementById('appSettingsReadMyMind').checked,
       ultracodeFloatingWindows: document.getElementById('appSettingsUltracodeFloatingWindows').checked,
       showMultiMonitorButton: document.getElementById('appSettingsShowMultiMonitorButton').checked,
