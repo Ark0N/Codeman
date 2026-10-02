@@ -158,3 +158,59 @@ export function watchingLabel(
   }
   return null;
 }
+
+/**
+ * How many rows above the composer the turn's closing row may sit. Between the two Claude
+ * draws only its composer border and, sometimes, a right-aligned hint
+ * (`new task? /clear to save 169.1k tokens`), so this leaves room for a blank row or two
+ * and no more. A bound, not a tuning knob: the walk must never reach far enough up the
+ * transcript to find an old turn's row.
+ */
+export const AWAITING_SEARCH_ROWS = 6;
+
+/** A row that opens with a box-drawing character is the composer's frame, not transcript. */
+const COMPOSER_FRAME_ROW = /^[─-╿]/;
+
+/**
+ * Whether the pane's newest turn ended by handing off to workers the CLI will wait for,
+ * e.g. Claude's `✻ Waiting for 1 dynamic workflow to finish`.
+ *
+ * Such a pane is quiet and shows its composer, so every other signal calls it idle, yet
+ * nothing is being asked of the user: the CLI resumes by itself when the workers report
+ * back. That is why a session in this state counts as working.
+ *
+ * ⚠️ The row is a snapshot. Claude renders it once, at the end of the turn, and never
+ * updates it, so after the workers finish the same words are still on screen above the
+ * follow-up turn. Matching them anywhere on the pane would pin the session busy for as
+ * long as they stay visible. Only the newest transcript row counts: the walk starts at
+ * the composer (the LAST row carrying `promptGlyph`), steps up past blank rows, the
+ * composer's frame and anything indented (a right-aligned hint, a wrapped continuation),
+ * and tests the first row that starts in column 0. A follow-up turn always puts rows of
+ * its own there, so the stale copy is never the one tested.
+ *
+ * @param promptGlyph the CLI's composer glyph (`capabilities.workDetect.promptGlyph`)
+ * @returns false when the screen shows no composer, which is no evidence either way
+ */
+export function isAwaitingWorkers(paneText: string | null | undefined, pattern: RegExp, promptGlyph: string): boolean {
+  if (!paneText) return false;
+  const rows = stripAnsi(paneText)
+    .split('\n')
+    .map((row) => row.trimEnd());
+  let composer = -1;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    // Claude has drawn its composer both bare (`❯ …` between rules) and boxed (`│ ❯ … │`).
+    if (rows[i].replace(/^[\s│]+/, '').startsWith(promptGlyph)) {
+      composer = i;
+      break;
+    }
+  }
+  if (composer < 0) return false;
+  for (let i = composer - 1; i >= Math.max(0, composer - AWAITING_SEARCH_ROWS); i--) {
+    const row = rows[i];
+    if (row === '' || /^\s/.test(row) || COMPOSER_FRAME_ROW.test(row)) continue;
+    // Same reasoning as watchingLabel(): a caller's `g` flag must not make this flap.
+    pattern.lastIndex = 0;
+    return pattern.test(row);
+  }
+  return false;
+}

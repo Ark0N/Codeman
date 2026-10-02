@@ -571,6 +571,8 @@
     'Task Complete': '任务完成',
     'Copied to clipboard': '已复制到剪贴板',
     'Nothing to copy': '没有可复制的内容',
+    // A `#session=<id>` link whose session never appeared (app.js _armUrlSessionWait).
+    'Session not found': '未找到会话',
     // Terminal touch-selection bar (long-press to select). The bar is a sibling of
     // `.xterm`, not a descendant, so SKIP_SELECTOR does not cover it and these apply.
     Copy: '复制',
@@ -727,6 +729,9 @@
     'Source type filter': '来源类型筛选',
     'Copy content': '复制内容',
     'Edit file': '编辑文件',
+    'Rendered markdown': '渲染 Markdown',
+    'Line numbers': '行号',
+    'Wrap lines': '自动换行',
     'Unsaved changes': '未保存的更改',
     Saved: '已保存',
     'Export as JSON': '导出为 JSON',

@@ -5,9 +5,10 @@
  * `selectSession()` acknowledges the session's idle approval item server-side
  * (`markIdleAlertSeen` → `POST /api/approvals/session/:id/viewed`), which is
  * what makes "I checked it" survive a reload and reach the user's other
- * devices. Three call sites are the APP choosing a session rather than the
- * user: the boot restore, a solo (popped-out) window opening its target, and
- * the fallback after the active session is deleted. Those pass `auto: true`
+ * devices. Four call sites are the APP choosing a session rather than the
+ * user: the boot restore, a solo (popped-out) window opening its target, a
+ * `#session=<id>` link from another page, and the fallback after the active
+ * session is deleted. Those pass `auto: true`
  * and must not spend the alert, or a yellow tab would clear itself every time
  * the page loaded and the user would never see it.
  *
@@ -110,7 +111,7 @@ describe('selectSession acknowledgement gate', () => {
   });
 
   describe('the call sites the app drives itself', () => {
-    // Source guard: these three are the reason the flag exists. If a refactor
+    // Source guard: these call sites are the reason the flag exists. If a refactor
     // moves or reformats them, fail loudly rather than silently going back to
     // "every page load clears the user's yellow tab".
     it.each([
@@ -118,6 +119,7 @@ describe('selectSession acknowledgement gate', () => {
       ['boot restore, first tab fallback', 'this.selectSession(this.sessionOrder[0], { auto: true });'],
       ['solo window opening its target', 'this.selectSession(this.soloSessionId, { auto: true });'],
       ['fallback after the active session is removed', 'this.selectSession(nextSessionId, { auto: true });'],
+      ['a #session=<id> link from another page', 'this.selectSession(id, { auto: true });'],
     ])('%s passes auto: true', (_label, call) => {
       expect(APP_SOURCE).toContain(call);
     });

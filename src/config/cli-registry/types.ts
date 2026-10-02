@@ -362,6 +362,19 @@ export interface CliCapabilities {
      * alert. See `watchingLabel()` in `session-activity.ts`.
      */
     watchingLines?: number;
+    /**
+     * Source of a regex matching the row this CLI closes a turn with when it ended that
+     * turn to WAIT for workers it started and will resume on its own once they finish,
+     * e.g. Claude's `✻ Waiting for 1 dynamic workflow to finish`. A pane showing it counts
+     * as working, not idle: nothing is being asked of the user, and the next turn starts
+     * without them.
+     *
+     * Unlike `workingLine` this is never searched across the pane. The CLI prints the row
+     * once and never updates it, so the copy from an earlier turn is still on screen after
+     * the workers are done. Only the newest transcript row directly above the composer is
+     * tested. See `isAwaitingWorkers()` in `session-activity.ts`.
+     */
+    awaitingLine?: string;
   };
   /**
    * How many columns this CLI indents its transcript body by, so a copy taken from its

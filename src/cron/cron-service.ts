@@ -20,7 +20,7 @@ import { getErrorMessage, createErrorResponse, ApiErrorCode } from '../types/api
 import { MAX_CONCURRENT_SESSIONS, MAX_CRON_JOBS, MAX_CRON_RUN_HISTORY } from '../config/map-limits.js';
 import { canUsernameRunPrivilegedCommands, resolveClaudeModeForUsername } from '../user-store.js';
 import { sessionCapacityState, isWorkingDirAllowedForUsername } from '../web/route-helpers.js';
-import { CRON_READY_MAX_ATTEMPTS, CRON_READY_SETTLE_MS } from '../config/server-timing.js';
+import { CRON_PASTE_ENTER_DELAY_MS, CRON_READY_MAX_ATTEMPTS, CRON_READY_SETTLE_MS } from '../config/server-timing.js';
 import {
   DEFAULT_BLOCKED_TREES,
   isBlockedAttachmentPath,
@@ -99,6 +99,41 @@ const CRON_WORKING_DIR_BLOCKED_TREES: readonly string[] = [...DEFAULT_BLOCKED_TR
 
 /** Prompt delivery is single-line only (writeViaMux/Ink constraint). */
 const HAS_NEWLINE = /[\r\n]/;
+
+/** The three session calls prompt delivery needs, so it can be tested without a PTY. */
+type CronPromptTarget = Pick<Session, 'write' | 'writeViaMux' | 'verifySubmitted'>;
+
+/**
+ * Send a cron job's (single-line) prompt into its session and press Enter.
+ *
+ * `typed` goes through the mux: the text is typed, Enter is its own key, and the
+ * session re-presses it while the prompt is still on the composer.
+ *
+ * `paste` writes the text straight into the PTY, and must send its Enter as a
+ * SEPARATE write. It used to send `<text>\r` in one piece, and Claude Code (measured
+ * on 2.1.283) takes a burst of about a hundred characters as a paste, so the `\r`
+ * landed as a newline and the prompt sat unsent while the run reported
+ * `prompt_sent`. The Enter goes down the same PTY as the text, so it cannot overtake
+ * it, and the same composer check then covers a CLI that was not taking Enter yet.
+ *
+ * @returns false when the session had no PTY or mux to write to
+ */
+export async function deliverCronPrompt(
+  target: CronPromptTarget,
+  prompt: string,
+  inputMode: CronJob['inputMode'],
+  wait: (ms: number) => Promise<void> = delay
+): Promise<boolean> {
+  if (inputMode !== 'paste') {
+    return target.writeViaMux(prompt.endsWith('\r') ? prompt : `${prompt}\r`);
+  }
+  const text = prompt.replace(/[\r\n]+$/, '');
+  if (!target.write(text)) return false;
+  await wait(CRON_PASTE_ENTER_DELAY_MS);
+  if (!target.write('\r')) return false;
+  target.verifySubmitted(text);
+  return true;
+}
 
 /** Order-insensitive equality for the weekly-days arrays. */
 function sameDays(a: number[] | undefined, b: number[] | undefined): boolean {
@@ -623,15 +658,9 @@ export class CronService {
         const s = this.deps.sessions.get(sessionId);
         if (!s) return;
         try {
-          const payload = prompt.endsWith('\r') ? prompt : `${prompt}\r`;
-          let delivered = true;
-          if (job.inputMode === 'paste') {
-            s.write(payload);
-          } else {
-            delivered = await s.writeViaMux(payload);
-          }
+          const delivered = await deliverCronPrompt(s, prompt, job.inputMode);
           if (!delivered) {
-            this.failRun(job, run, 'Failed to send prompt: mux write failed');
+            this.failRun(job, run, 'Failed to send prompt: the session could not be written to');
             return;
           }
           run.status = 'prompt_sent';

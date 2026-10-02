@@ -40,6 +40,10 @@ A **MAJOR** bump is required to break any of these after 1.0:
    optional fields, new error codes, new SSE events) are non-breaking; breaking
    changes ship under a new prefix (`/api/v2`). The unversioned `/api/...` alias
    is kept working for the bundled UI.
+5. **The dashboard's `#session=<id>` link.** Opening the dashboard URL with a
+   `#session=<id>` fragment selects that session if this client can see it. The
+   fragment name and that meaning are stable; see
+   [Opening a session from your own page](extending-codeman.md#opening-a-session-from-your-own-page).
 
 ## What SemVer does NOT cover (internal surfaces — may change in any release)
 

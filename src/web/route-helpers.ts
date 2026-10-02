@@ -438,6 +438,26 @@ export function parseBody<T>(schema: z.ZodType<T>, body: unknown, errorMessage?:
 }
 
 /**
+ * Whether an input body is a plain prompt: printable text followed by exactly one
+ * carriage return, and nothing else.
+ *
+ * That is the shape a script, a bot or a curl call sends to submit a prompt, and the
+ * one that must NOT be written into the pane in one piece. Measured on Claude Code
+ * 2.1.283 (2026-09-28): a direct write of `<text>\r` arrives as a single burst, and a
+ * burst of about a hundred characters or more is taken as a paste, so its trailing
+ * `\r` lands as a NEWLINE in the composer and the prompt sits there unsent. A later
+ * bare `\r` written the same way does not recover it; a tmux `send-keys Enter` does.
+ * Short bursts (tens of characters) submit, which is why the failure looked random.
+ *
+ * Anything with another control character (escape sequences, a bracketed-paste frame,
+ * a line feed, a tab, C1 controls) is raw terminal input and keeps the direct write.
+ */
+export function isPlainPromptInput(input: string): boolean {
+  // eslint-disable-next-line no-control-regex -- matching control characters is the point
+  return /^[^\x00-\x1f\x7f-\x9f]+\r$/.test(input);
+}
+
+/**
  * Persist session state and broadcast a SessionUpdated event.
  * Replaces the repeated two-line pattern across route handlers.
  */

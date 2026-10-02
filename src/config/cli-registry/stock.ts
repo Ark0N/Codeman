@@ -237,7 +237,24 @@ const CLAUDE: CliEntry = {
       // carry a count. A footer that ever drew the chip as its only item would report no
       // watching rather than open that door. See `watchingLabel()` in
       // `session-activity.ts`.
-      watchingLine: String.raw`·\s*(\d+ (?:monitors?|shells?|teams?|local agents?|cloud sessions?|MCP tasks?|background tasks?|(?:background|remote) dynamic workflows?|Artifact comment monitors?))`,
+      // ⚠️ An Artifact comment monitor is the one chip that waits on the user. The agent
+      // has published a page and hears nothing until somebody comments on it, so the
+      // lookahead refuses the whole row while that chip is on it, whatever else is
+      // running beside it. The `^` is what makes the lookahead judge the row once:
+      // without it the engine retries from each later position, and a start past the
+      // chip reports the shell beside it. The lookahead keys on "Artifact" alone, so a
+      // footer cut off mid-chip (`· 1 Artifact…`, `· 1 Artifact comm…`) is still refused;
+      // no other chip on this row says "Artifact". Counting the chip as watching kept the
+      // idle alert quiet for a session that was waiting for a human.
+      watchingLine: String.raw`^(?!.*Artifact).*?·\s*(\d+ (?:monitors?|shells?|teams?|local agents?|cloud sessions?|MCP tasks?|background tasks?|(?:background|remote) dynamic workflows?))`,
+      // When a turn ends while background agents or an ultracode workflow are still
+      // running, Claude swaps its `✻ Brewed for 1m 18s` closing row for
+      // `✻ Waiting for 2 background agents and 1 dynamic workflow to finish` and resumes
+      // by itself when they report back. Read from the 2.1.283 bundle (the turn-duration
+      // renderer) and a live pane on 2026-09-28. The row is a snapshot taken at turn end
+      // and never redrawn, which is why only the newest row above the composer counts.
+      // Anchored on column 0: Claude's own rows start there, the agent's prose never does.
+      awaitingLine: String.raw`^✻ Waiting for \d+ (?:background agents?|dynamic workflows?)\b`,
     },
     requiresMux: false,
     // Claude installs Codeman's own hooks block into every workspace it runs in, so its
@@ -246,6 +263,8 @@ const CLAUDE: CliEntry = {
     transcript: 'claude-jsonl',
     altScreen: 'strip-full',
     echo: { policy: 'buffer', anchor: { kind: 'glyph', glyph: '❯', offset: 2 } },
+    // Declared-for-later: the live rule (`_shouldForwardWheelToApp`, terminal-ui.js) is this version
+    // AND the server-published `cliMouseTracking` flag (#498), so wiring this field up needs both.
     wheelForward: { mode: 'version-gated', minVersion: '2.1.187' },
     keyboardAccessory: 'agent',
     privilegedCommandGate: false,

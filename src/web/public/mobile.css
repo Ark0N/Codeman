@@ -332,6 +332,39 @@ html.mobile-init .file-browser-panel {
   }
 }
 
+/* Edge fade for the phone's header tab strip (used in the block below).
+   Registered so the keyframes can interpolate them as lengths; @property is
+   only valid at the top level, hence out here. */
+@property --tab-strip-fade-start {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --tab-strip-fade-end {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
+/* Driven by the strip's own scroll position, not by time: at the start only the
+   end edge fades, at the end only the start edge, and in between both. */
+@keyframes tab-strip-edge-fade {
+  0% {
+    --tab-strip-fade-start: 0px;
+    --tab-strip-fade-end: 28px;
+  }
+  10%,
+  90% {
+    --tab-strip-fade-start: 28px;
+    --tab-strip-fade-end: 28px;
+  }
+  100% {
+    --tab-strip-fade-start: 28px;
+    --tab-strip-fade-end: 0px;
+  }
+}
+
 /* ============================================================================
    Phone Breakpoint (<600px)
    ============================================================================ */
@@ -652,12 +685,42 @@ html.mobile-init .file-browser-panel {
     overscroll-behavior-x: contain;
     scrollbar-width: none;
     max-height: 36px;
-    gap: 2px;
+    gap: 6px;
     padding: 0;
   }
 
   .session-tabs::-webkit-scrollbar {
     display: none;
+  }
+
+  /* Fade the strip's edges while there is more to scroll to, so the tab that
+     does not fit dissolves into the edge instead of being cut mid-word against
+     the connection dot. Scroll-driven, no JS: the timeline is the strip's own
+     inline scroll (keyframes + registered properties above this block). A strip
+     that does not overflow has an INACTIVE timeline, so the animation applies
+     nothing and both widths stay at their registered 0px, which is no mask at
+     all. Browsers without scroll timelines skip the block and keep the hard
+     edge. Header only: in sidebar layout the same list scrolls vertically. */
+  @supports (animation-timeline: scroll()) {
+    .header .session-tabs {
+      -webkit-mask-image: linear-gradient(
+        to right,
+        transparent,
+        #000 var(--tab-strip-fade-start),
+        #000 calc(100% - var(--tab-strip-fade-end)),
+        transparent
+      );
+      mask-image: linear-gradient(
+        to right,
+        transparent,
+        #000 var(--tab-strip-fade-start),
+        #000 calc(100% - var(--tab-strip-fade-end)),
+        transparent
+      );
+      /* The shorthand resets animation-timeline, so the timeline comes after. */
+      animation: tab-strip-edge-fade linear both;
+      animation-timeline: scroll(self inline);
+    }
   }
 
   /* Smaller tabs for mobile */
@@ -671,10 +734,46 @@ html.mobile-init .file-browser-panel {
     border-radius: 4px;
   }
 
-  /* Smaller status indicator on mobile */
+  /* Every tab in the header strip is a chip, not only the active one. Left
+     transparent, the strip read as a row of disabled labels: grey 11px text
+     floating in unmarked gaps, with nothing saying "tap me". Fill and border
+     come from the skin's control tokens, so the four light skins (which repaint
+     the header with --glass-bg) get a matching chip with no override block, and
+     the active tab's !important fill and border in styles.css still win.
+     `:where(.header)` keeps this at (0,1,0): the per-colour left border
+     (`.session-tab[data-color="red"]`, (0,2,0)) must still outrank the
+     border-color here, and in sidebar layout the list leaves the header, so
+     its rows are untouched. */
+  :where(.header) .session-tab {
+    border-radius: 8px;
+    background: var(--control-bg-hover);
+    border-color: var(--control-border-hover);
+    color: var(--text);
+  }
+
+  :where(.header) .session-tab .tab-name {
+    font-weight: 500;
+  }
+
+  /* Only the active tab shows its action icons on a phone (see below), so on
+     every other tab the container is empty but still a flex item, and its gap
+     made the chip visibly wider on the right than on the left. */
+  :where(.header) .session-tab:not(.active) .tab-actions {
+    display: none;
+  }
+
+  /* The boxed digit is the Alt+1..9 shortcut hint. A phone has no Alt key, so
+     here it was only a second grey box inside every tab, and 20px of the name's
+     width. Every header tab is therefore numberless on a phone, which is the
+     case the active-tab reserve below is already sized for. */
+  :where(.header) .session-tab .tab-number {
+    display: none;
+  }
+
+  /* Status dot: 6px so an idle green reads at arm's length (4px was a speck). */
   .session-tab .tab-status {
-    width: 4px;
-    height: 4px;
+    width: 6px;
+    height: 6px;
   }
 
   /* The working dot is the one glance-state a phone needs: keep idle tiny, but
@@ -710,9 +809,12 @@ html.mobile-init .file-browser-panel {
     opacity: 0.5;
   }
 
-  /* Truncate tab names more aggressively on mobile */
+  /* Truncate tab names on mobile. 80px, not the old 50px: session names share
+     a `w1-` style prefix, and at 50px "w1-ingest-pipeline" became "w1-inge…"
+     and a clipped tab just "w1-", which says nothing about which session it is.
+     The 20px the hidden tab number gave back pays for most of the difference. */
   .session-tab .tab-name {
-    max-width: 50px;
+    max-width: 80px;
     overflow: hidden;
     text-overflow: ellipsis;
   }
@@ -726,20 +828,19 @@ html.mobile-init .file-browser-panel {
      difference instead, which costs a little strip space on exactly one tab
      and keeps tap-to-switch the majority of it.
 
-     ⚠️ The floor is set by the 10th tab onward, NOT by the numbered tabs you
-     are looking at. `.tab-number` is rendered only for `_tabIdx < 9` (app.js),
-     so tab 10 loses 16px + a 4px gap off its left and its centre sits 10px
-     further right. The centre clears the icons when
+     ⚠️ The floor is set by a NUMBERLESS tab. `.tab-number` is rendered only
+     for `_tabIdx < 9` (app.js), and the header hides it on phones altogether
+     (above), so every phone tab is that case now; a numbered one would sit 10px
+     further left and hide the problem. The centre clears the icons when
 
          reserved > icons + rightEdge - leftRunUp - gap
-                  =    50 +         9 -        17 -   4  = 38px
+                  =    50 +         9 -        19 -   4  = 36px
 
      with icons = gear 32 + close 20 - close's -2px margin, leftRunUp = border 1
-     + padding 8 + status dot 4 + gap 4, and rightEdge = padding 8 + border 1.
-     Hit testing snaps to whole pixels, so 39px still lands on the gear: the
-     practical floor is 40px and 44px keeps 4px of headroom. A NUMBERED tab
-     clears it at 20px, so reasoning from the tabs on screen is exactly what
-     would put the centre back on the gear. Pinned by
+     + padding 8 + status dot 6 + gap 4, and rightEdge = padding 8 + border 1.
+     Hit testing snaps to whole pixels, so a centre half a pixel short still
+     lands on the gear: the practical floor was measured at 40px (with the
+     older 4px dot) and 44px keeps headroom. Pinned by
      test/mobile-tab-tap-zones.test.ts. */
   .session-tab.active .tab-name {
     min-width: 44px;

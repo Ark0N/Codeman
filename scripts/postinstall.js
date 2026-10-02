@@ -372,14 +372,17 @@ if (!isGlobalInstall) {
 }
 
 // ----------------------------------------------------------------------------
-// 5. Install git pre-commit hook (format check)
+// 5. Install git hooks (pre-commit format check, pre-push static checks)
 // ----------------------------------------------------------------------------
 
 if (!isGlobalInstall) {
     try {
         const { writeFileSync, mkdirSync } = await import('fs');
-        const gitHooksDir = join(import.meta.dirname, '..', '.git', 'hooks');
-        if (existsSync(join(import.meta.dirname, '..', '.git'))) {
+        const { resolveGitHooksDir, installPrePushHook } = await import('./git-hooks.mjs');
+        // Resolved through git, not `../.git/hooks`: in a worktree `.git` is a file.
+        // null when this directory is not the top of a git checkout.
+        const gitHooksDir = resolveGitHooksDir(join(import.meta.dirname, '..'));
+        if (gitHooksDir) {
             mkdirSync(gitHooksDir, { recursive: true });
             const hook = `#!/bin/bash
 # Auto-installed by postinstall — prevents CI format failures
@@ -395,9 +398,18 @@ fi
             const hookPath = join(gitHooksDir, 'pre-commit');
             writeFileSync(hookPath, hook, { mode: 0o755 });
             console.log(colors.green('✓ Git pre-commit hook installed (prettier check)'));
+
+            // Unlike the pre-commit hook above, this one is marker-owned: a pre-push
+            // hook the developer wrote themselves is left alone.
+            const action = installPrePushHook(gitHooksDir);
+            if (action === 'write') {
+                console.log(colors.green('✓ Git pre-push hook installed') + colors.dim(' (static CI checks, ~10-40s)'));
+            } else if (action === 'skip-foreign') {
+                console.log(colors.dim('  Existing pre-push hook left untouched (not Codeman-managed)'));
+            }
         }
     } catch {
-        // Non-critical — git hook is a convenience
+        // Non-critical — git hooks are a convenience
     }
 }
 

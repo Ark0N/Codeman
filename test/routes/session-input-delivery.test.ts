@@ -14,11 +14,12 @@
 
 import fastifyCookie from '@fastify/cookie';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Session } from '../../src/session.js';
 import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
+import { isPlainPromptInput } from '../../src/web/route-helpers.js';
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 
@@ -153,5 +154,108 @@ describe('POST /api/sessions/:id/input rollback wiring', () => {
 
     expect(res.statusCode).toBe(200);
     expect(session.shouldApplyInput('c2', 5)).toBe(true);
+  });
+});
+
+/**
+ * A plain prompt goes through the mux even when the caller did not say `useMux`.
+ *
+ * Measured on Claude Code 2.1.283: a direct write of `<text>\r` arrives as one burst,
+ * a burst of about a hundred characters is taken as a paste, and its `\r` lands as a
+ * newline in the composer, so a script's prompt sat there unsent while the route
+ * answered 200. The mux path types the text, presses Enter on its own, and arms the
+ * submit verifier.
+ */
+describe('POST /api/sessions/:id/input plain-prompt routing', () => {
+  let harness: { app: FastifyInstance; ctx: MockRouteContext };
+
+  beforeEach(async () => {
+    harness = await createEnvelopeHarness();
+  });
+  afterEach(async () => {
+    await harness.app.close();
+  });
+
+  const post = (body: Record<string, unknown>) =>
+    harness.app.inject({ method: 'POST', url: '/api/sessions/test-session-1/input', payload: body });
+  const spies = () => {
+    const session = harness.ctx.sessions.get('test-session-1')!;
+    return { session, viaMux: vi.spyOn(session, 'writeViaMux'), direct: vi.spyOn(session, 'write') };
+  };
+  const LONG_PROMPT =
+    'Reply with only the word ok and nothing else, this sentence is padding to reach about one hundred chars.\r';
+
+  it('sends a prompt with no useMux through the mux, not as one burst', async () => {
+    const { viaMux, direct } = spies();
+
+    const res = await post({ input: LONG_PROMPT });
+
+    expect(res.statusCode).toBe(200);
+    expect(viaMux).toHaveBeenCalledWith(LONG_PROMPT, { fromUser: true });
+    expect(direct).not.toHaveBeenCalled();
+  });
+
+  it('answers only once the mux write is done, so the next frame cannot overtake it', async () => {
+    // The browser's POST fallback sends frames one at a time and waits for each 2xx;
+    // a fire-and-forget write here would let its next keystroke land before the Enter.
+    const { viaMux } = spies();
+    let finished = false;
+    viaMux.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      finished = true;
+      return true;
+    });
+
+    await post({ input: 'ok\r', clientId: 'browser-1', seq: 1 });
+
+    expect(finished).toBe(true);
+  });
+
+  it('falls back to the direct write when the mux write fails', async () => {
+    const { viaMux, direct } = spies();
+    viaMux.mockResolvedValue(false);
+
+    await post({ input: 'hello\r' });
+
+    expect(direct).toHaveBeenCalledWith('hello\r', { fromUser: true });
+  });
+
+  it('keeps the raw write for an explicit useMux: false', async () => {
+    const { viaMux, direct } = spies();
+
+    await post({ input: LONG_PROMPT, useMux: false });
+
+    expect(direct).toHaveBeenCalledWith(LONG_PROMPT, { fromUser: true });
+    expect(viaMux).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a bare Enter', '\r'],
+    ['text with no Enter', 'hello'],
+    ['an arrow key', '\x1b[A'],
+    ['a bracketed paste frame', '\x1b[200~line one\nline two\x1b[201~'],
+    ['a line feed inside', 'line one\nline two\r'],
+    ['two Enters', 'hello\r\r'],
+    ['a tab', 'a\tb\r'],
+  ])('leaves %s on the direct write', async (_label, input) => {
+    const { viaMux, direct } = spies();
+
+    await post({ input });
+
+    expect(direct).toHaveBeenCalledWith(input, { fromUser: true });
+    expect(viaMux).not.toHaveBeenCalled();
+  });
+});
+
+describe('isPlainPromptInput', () => {
+  it('accepts printable text ending in exactly one carriage return', () => {
+    expect(isPlainPromptInput('run the tests\r')).toBe(true);
+    expect(isPlainPromptInput('ünïcødé and emoji 🚀\r')).toBe(true);
+  });
+
+  it('refuses anything carrying another control character', () => {
+    for (const input of ['\r', 'x', 'x\n', 'x\r\n', 'x\r\r', '\x1b[Ax\r', 'a\tb\r', 'x\x7f\r', 'x\u009b\r', '\rx']) {
+      expect(isPlainPromptInput(input), JSON.stringify(input)).toBe(false);
+    }
   });
 });

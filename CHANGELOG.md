@@ -1,5 +1,58 @@
 # aicodeman
 
+## 1.33.3
+
+### Patch Changes
+
+- f776ad8: ### Thanks
+  - @JDProfresh for rendering Markdown in the File Viewer (#503) through the chat's existing markdown pipeline and sanitizer rather than a second one, plus the Lines and Wrap toggles and the sanitizer fix that stops a document from clobbering `document.app`.
+  - @timkjr for bringing the Shell scroll-to-top history pull to the split view's second pane (#506), following #494's rules down to the back-off, with tests that fail on the code before each fix.
+  - @irisitymichaelgrundberg for the `#session=<id>` dashboard link (#507), so a page that keeps one Codeman window open can switch it between sessions without reloading it.
+  - @dignfei for handing focus back when the Command Palette or the Session Manager closes (#509), and for the six-overlay measurement that showed exactly which two were broken.
+
+  **Markdown files render in the File Viewer (#503).** Opening a `.md` or `.markdown` file now shows it as a document: headings, tables, code blocks with the same copy buttons as the chat, images relative to the file, and links to other documents that open inside the viewer. An `MD` pill switches back to the source, and Edit works from either view. Plain text gets a `Lines` gutter (never part of a copy) and a `Wrap` toggle, all three remembered per device. `.avif` images preview inline, and printed `.avif`/`.ico` paths open the viewer instead of the tail view. An in-workspace file path clicked in the terminal still opens the live tail view.
+
+  **Link a dashboard window to a session (#507).** An outside page, such as a task board, that keeps one Codeman window open can now switch it to a session by pointing it at `/#session=<id>`. Only the fragment changes, so the page stays loaded and the switch is an ordinary tab selection. A link to a session the dashboard does not list yet waits up to 30 seconds for it to appear and then shows "Session not found"; picking another tab, going Home or opening a web tab cancels the wait. Following a link does not count as looking at the session, so its idle alert stays armed. The fragment is documented in `docs/extending-codeman.md` and is now a stable surface under `docs/versioning-policy.md`.
+
+  **Escape no longer strands the keyboard (#509).** Closing the Command Palette or the Session Manager now hands focus back to whatever held it before they opened, usually the terminal, so you can keep typing without clicking first. An Escape pressed while neither is open changes nothing.
+
+  **Split view: a Shell Pane B scrolls back into tmux history (#506).** Wheel up at the top of a Shell session in the split view's second pane now pulls the most recent 1 MiB of its tmux history and keeps your place, the same as the primary pane since 1.33.2.
+
+  **Fixes applied while landing.** Markdown opened from an attachment card no longer resolves relative images and links against the workspace root, where they could show a missing image or open a different file of the same name; they render as their alt text and link text instead. Rendered files no longer turn every source line break into a hard break the way chat messages do, so a README wrapped at 80 columns reads as flowing paragraphs. Absolute-path links inside a rendered document open in that document's session. A disconnected Pane B keeps its "disconnected" marker as the last line even when the socket closes in the middle of a history pull. Closing the Session Manager through a row's "Switch to session" or "Open folder" no longer pulls focus back from the terminal to the header button.
+
+## 1.33.2
+
+### Patch Changes
+
+- e439cf0: ### Thanks
+  - @aakhter for keeping web-tab events private to their owner in multi-user mode (#501), with end-to-end isolation tests that fail without the fix, and for the browser-test exclusion check and pre-push hook (#500), including the hooks-dir resolution that never writes outside the repo's own `.git/hooks`.
+  - @opticon454 for keeping CLIs installed from Settings across Docker container updates (#490) and for the static Git identity for the Docker images (#492).
+  - @timkjr for letting a Shell pane's scroll-to-top reach tmux history (#494), with tests that fail on the commit before each fix.
+  - @JDProfresh for tracking down why wheel and touch scrolling did nothing in Claude's default inline view (#498), with the tmux measurements that proved it.
+  - @irisitymichaelgrundberg for the follow-up that makes an agent waiting on artifact comments raise its alert again (#491).
+
+  **A tab stays busy while Claude waits for its own workers.** When Claude hands work to an ultracode workflow or background agents, it ends its turn with `✻ Waiting for 1 dynamic workflow to finish` and resumes by itself when they report back. The idle probe used to call that session idle for the whole wait, and at phone width nothing on screen changes for minutes. A new optional registry field, `capabilities.workDetect.awaitingLine`, names that closing row, and only the newest column-0 row directly above the composer counts, so the session goes idle normally once the follow-up turn ends.
+
+  **Prompts sent through the API are no longer left unsent.** A prompt posted to `POST /api/sessions/:id/input` without `useMux` was written into the pane in one piece, and Claude Code (measured on 2.1.283) takes a burst of about a hundred characters or more as a paste, so the trailing `\r` became a newline and the prompt sat on the composer while the route answered 200. Short prompts went through, which is why it looked random; Codex and OpenCode showed the same thing. A plain prompt (printable text plus exactly one trailing `\r`) now goes through tmux: the text is typed, Enter is pressed as its own key, and the server presses it again while the prompt is still on the composer. Raw frames (escape sequences, a bracketed paste, a line feed, a bare `\r`) and an explicit `"useMux": false` keep the direct write. The same fix reaches cron jobs in "Paste (direct)" input mode, which reported `prompt_sent` for a prompt that never left the composer: the text is written raw, Enter follows as its own write 300 ms later, and the session presses it again while the prompt is still unsent. A cron run with no session to write to now fails instead of reporting the prompt as sent.
+
+  **Scrolling works again in Claude's default inline view (#498).** Wheel and touch gestures were forwarded to every Claude 2.1.187+ session as mouse reports, but only Claude's fullscreen renderer (`CLAUDE_CODE_NO_FLICKER=1`, or `"tui": "fullscreen"` in `~/.claude/settings.json`) listens for them, so in the default view scrolling did nothing. Codeman now forwards them only while Claude has mouse tracking switched on, and otherwise scrolls the terminal's own scrollback.
+
+  **Shell panes scroll back into tmux history (#494).** Scrolling to the top of a Shell pane now pulls the most recent 1 MiB of its tmux history, so output that arrived in a burst is reachable without pressing **Load full history**, which still loads the rest.
+
+  **An agent waiting on artifact comments alerts again (#491).** A session whose agent published an artifact and is waiting for somebody to comment on it now raises the normal idle alert and lands in NEEDS YOU, instead of being treated as busy with background work.
+
+  **Web-tab changes stay private in multi-user mode (#501).** The `webview:changed` event reached every connected user, exposing the ids of other users' web-tab creates, edits and deletes. It now carries the tab's owner and reaches that owner plus admins only. Single-user mode is unchanged apart from a new optional `owner` field on the event.
+
+  **Phone header tabs look like tabs (#504).** On phones every header tab is now a chip with a fill and a border, the Alt+N digit (a keyboard hint a phone cannot use) is hidden, names get 80px instead of 50px, and the strip fades at whichever edge still has tabs scrolled out of view.
+
+  **Docker: CLIs installed from Settings survive container updates (#490).** On the Compose deployment, CLIs installed from App Settings (DeepSeek, Pi and other npm-based CLIs) now go to `~/.local` on the persistent home mount, and `~/.local/bin` is on the image PATH, so recreating the container no longer discards them. Anything installed from Settings before this release has to be installed once more after the rebuild.
+
+  **Docker: a static Git identity for the server and agent images (#492).** Set `GIT_USER_NAME` and `GIT_USER_EMAIL` in `docker/.env` (or `CODEMAN_AGENT_IMAGE_GIT_USER_NAME` / `CODEMAN_AGENT_IMAGE_GIT_USER_EMAIL` on a bare-host install) and the identity is written to `/etc/gitconfig` in the server image and the Docker-case agent image. A half-set pair is refused on every build path. Both Docker changes edit `server.Dockerfile`, so the in-app updater asks Compose deployments to rebuild with `docker/Start-Codeman.sh` instead of updating in place.
+
+  **Contributor tooling (#500).** `npm run check:browser-excludes`, now a CI step, fails when a test that drives a real browser is still collected by `npm test`. `npm install` also installs a pre-push hook that runs the static CI checks before a push; it steps aside when the pushed ref is not HEAD or the tree has uncommitted changes the checks would read, and `CODEMAN_SKIP_PREPUSH=1 git push` skips it once.
+
+  **Fixes applied while landing.** A Shell pane's scroll-to-top (#494) no longer re-pulls the same window on every gesture once the browser's 50,000-row scrollback is full, and a pull that hit the byte cap no longer claims the older history is gone. The scroll-routing diagnostics (#498) now log whether Claude has mouse tracking on. The artifact-comment check (#491) also refuses a footer cut off in the middle of the chip. The pre-push hook (#500) steps aside when `npm` is not on PATH, as in some GUI git clients, instead of blocking every push. The Docker Git identity error (#492) names the two variables to set. New tests pin the image PATH order, the identity on both agent-image build paths, and the `?full=1&tail=` terminal route.
+
 ## 1.33.1
 
 ### Patch Changes

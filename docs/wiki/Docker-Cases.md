@@ -147,6 +147,12 @@ in `docker-compose.override.yml`), then rebuild the image with `--no-cache`.
 `docker/README.md` ("Private repositories") has the details and the matching switches for
 the server image.
 
+To give agents a fixed Git commit identity, set `CODEMAN_AGENT_IMAGE_GIT_USER_NAME` and
+`CODEMAN_AGENT_IMAGE_GIT_USER_EMAIL` together in that same environment (in the Docker
+deployment, set `GIT_USER_NAME` and `GIT_USER_EMAIL` in `docker/.env` instead, which feeds
+both images). An existing `codeman/agent:base` only picks it up after a `--no-cache` rebuild
+and recreated case containers; `docker/README.md` ("Git commit identity") has the details.
+
 ## Isolation
 
 Every container runs hardened by default:

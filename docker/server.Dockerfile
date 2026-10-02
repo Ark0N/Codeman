@@ -219,6 +219,9 @@ RUN set -eux; \
 COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /uvx /usr/local/bin/
 ENV NPM_CONFIG_PREFIX=/opt/codeman-cli
 ENV PATH=$PATH:/opt/codeman-cli/bin
+# CLIs installed at runtime (Settings -> CLIs, npm redirected to ~/.local by installEnv()) live on the
+# persistent home mount, so they survive a container recreate. Appended for the same reason as above.
+ENV PATH=$PATH:/home/${CODEMAN_RUNTIME_USER}/.local/bin
 # pnpm is not an agent CLI: it is here because `dsh plugin` (DeepSeek Harness, which
 # this image leaves to be installed at runtime, see SERVER_INTENTIONAL_OMISSIONS in
 # test/docker-agent-image-coverage.test.ts) spawns a literal `pnpm` with no npm
@@ -298,6 +301,21 @@ EXPOSE 3000
 # steps, leaving the caller in full control.
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
+
+# Declare the optional identity immediately before configuring it so a change
+# invalidates only this final layer. This is declarative setup: a persisted
+# ~/.gitconfig in CODEMAN_APPDATA_PATH still overrides the system-level values.
+ARG GIT_USER_EMAIL=
+ARG GIT_USER_NAME=
+RUN set -eux; \
+    if [ -n "${GIT_USER_NAME}" ] || [ -n "${GIT_USER_EMAIL}" ]; then \
+      if [ -z "${GIT_USER_NAME}" ] || [ -z "${GIT_USER_EMAIL}" ]; then \
+        echo 'Git user name and email must both be set when configuring Git identity' >&2; \
+        exit 1; \
+      fi; \
+      git config --system user.name "${GIT_USER_NAME}"; \
+      git config --system user.email "${GIT_USER_EMAIL}"; \
+    fi
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 

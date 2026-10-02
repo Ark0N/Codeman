@@ -567,6 +567,14 @@ const DEFAULT_SHORTCUTS = [
  */
 const SIDEBAR_RICH_CLOCK_MS = 20000;
 
+/**
+ * How long a `#session=<id>` link waits for the session list to name its id
+ * before the dashboard drops it with a "Session not found" toast (see
+ * _armUrlSessionWait). Long enough for a page that has just created the
+ * session to see its session:created land here.
+ */
+const URL_SESSION_WAIT_MS = 30000;
+
 class CodemanApp {
   constructor() {
     this.sessions = new Map();
@@ -602,6 +610,10 @@ class CodemanApp {
     // service-worker shell loads), with the server-injected global as a fallback.
     this.soloSessionId = this._detectSoloSessionId();
     this.isSoloWindow = !!this.soloSessionId;
+    // A session another page asked for with a `#session=<id>` link. It waits
+    // here until the session list has that id (see _selectUrlSession).
+    this._urlSessionId = this.isSoloWindow ? null : this._takeUrlSession();
+    this._urlSessionWaitTimer = null;    // bounds that wait (_armUrlSessionWait)
     this.detachedSessions = new Set();   // dashboard-side: ids currently popped out
     this.detachedWindows = new Map();    // dashboard-side: id -> WindowProxy
     this._detachWatchTimers = new Map(); // dashboard-side: id -> setInterval handle
@@ -997,6 +1009,18 @@ class CodemanApp {
     // strip never flashes before handleInit selects the target session.
     this._initWindowChannel();
     if (this.isSoloWindow) document.body.classList.add('solo-mode');
+    // A page holding this window switches its tab by changing only the
+    // fragment, which keeps the page loaded (see sessionIdFromFragment).
+    if (!this.isSoloWindow) {
+      window.addEventListener('hashchange', () => {
+        const id = this._takeUrlSession();
+        if (!id) return;
+        // A new link replaces one still waiting, and gets a wait of its own.
+        this._retireUrlSession();
+        this._urlSessionId = id;
+        this._selectUrlSession();
+      });
+    }
     // Initialize mobile handlers
     KeyboardHandler.init();
     SwipeHandler.init();
@@ -1366,6 +1390,69 @@ class CodemanApp {
       const m = path.match(/^\/session\/([^/]+)\/?$/);
       return m ? decodeURIComponent(m[1]) : null;
     } catch { return null; }
+  }
+
+  /** Read a `#session=<id>` link off the URL and drop the fragment. The next
+   *  link to the same session is then a change the browser reports, even
+   *  after you have clicked away to another tab. Returns the id or null. */
+  _takeUrlSession() {
+    const id = window.CodemanUrlSession?.sessionIdFromFragment(location.hash) ?? null;
+    if (id) {
+      try { history.replaceState(history.state, '', location.pathname + location.search); } catch {}
+    }
+    return id;
+  }
+
+  /** Show the session a `#session=<id>` link asked for, once the session list
+   *  has it. A page that has just created a session can link to it before
+   *  session:created arrives here, so an unknown id stays pending (for at most
+   *  URL_SESSION_WAIT_MS) and _onSessionCreated tries again.
+   *
+   *  ⚠️ The selection is `auto`. The page that set the fragment may be a
+   *  script, and this window may not even be in front, so following a link is
+   *  not a human looking at the session and must not spend its idle alert. */
+  _selectUrlSession() {
+    const id = this._urlSessionId;
+    if (!id) return false;
+    if (!this.sessions.has(id)) {
+      this._armUrlSessionWait(id);
+      return false;
+    }
+    this._retireUrlSession();
+    this.selectSession(id, { auto: true });
+    return true;
+  }
+
+  /** Bound the wait for a link whose id the session list does not have. A
+   *  stale link (that session is closed), a typo, or in multi-user mode another
+   *  user's session (never in this client's list) would otherwise wait with
+   *  nothing on screen, and take the tab whenever a matching session turned up.
+   *  One timer per link: handleInit running again (an SSE reconnect) does not
+   *  restart it, and every way a link ends goes through _retireUrlSession. */
+  _armUrlSessionWait(id) {
+    if (this._urlSessionWaitTimer) return;
+    this._urlSessionWaitTimer = setTimeout(() => {
+      this._urlSessionWaitTimer = null;
+      if (this._urlSessionId !== id) return;
+      // Listed by a path other than session:created (a session:updated): select it.
+      if (this.sessions.has(id)) {
+        this._selectUrlSession();
+        return;
+      }
+      this._retireUrlSession();
+      this.showToast?.('Session not found', 'warning');
+    }, URL_SESSION_WAIT_MS);
+  }
+
+  /** Drop a waiting `#session=<id>` link and its timer: the link was followed,
+   *  replaced by a newer one, timed out, or the user chose something else
+   *  (another tab, Home, a web tab). */
+  _retireUrlSession() {
+    this._urlSessionId = null;
+    if (this._urlSessionWaitTimer) {
+      clearTimeout(this._urlSessionWaitTimer);
+      this._urlSessionWaitTimer = null;
+    }
   }
 
   /**
@@ -1949,6 +2036,7 @@ class CodemanApp {
     this.updateCost();
     // Start stats polling when first session appears
     if (this.sessions.size === 1) this.startSystemStatsPolling();
+    if (this._urlSessionId === data.id) this._selectUrlSession();
   }
 
   _onSessionUpdated(data) {
@@ -2255,13 +2343,18 @@ class CodemanApp {
     return processed.replace(/__CODEMAN_FENCE_(\d+)__/g, (_m, i) => placeholders[Number(i)]);
   }
 
-  /** Render markdown to sanitized HTML, falling back to plain text if marked.js unavailable */
-  _renderMarkdown(text) {
+  /**
+   * Render markdown to sanitized HTML, falling back to plain text if marked.js unavailable.
+   * `breaks` turns every source newline into a <br>: right for chat, where a
+   * newline is the agent's line break, wrong for a file (the File Viewer passes
+   * false), where a README hard-wrapped at 80 columns would break at every wrap.
+   */
+  _renderMarkdown(text, { breaks = true } = {}) {
     const src = text || '';
     if (typeof marked !== 'undefined' && marked.parse) {
       try {
         const prepared = this._preprocessAsciiArt(src);
-        let html = this._sanitizeHtml(marked.parse(prepared, { breaks: true, gfm: true }));
+        let html = this._sanitizeHtml(marked.parse(prepared, { breaks, gfm: true }));
         // Wrap tables in a horizontal-scroll container so they overflow gracefully
         // on mobile without collapsing into block-level cells.
         html = html.replace(/<table>/g, '<div class="rv-table-wrap"><table>')
@@ -2358,7 +2451,9 @@ class CodemanApp {
         ev.preventDefault();
         ev.stopPropagation();
         const filePath = pathLink.dataset.path;
-        if (filePath) this.openFilePreview(filePath, this.activeSessionId);
+        // A rendered document's links name the session the preview was opened
+        // for (_rebaseFilePreviewMarkdownRefs), which need not be the active tab.
+        if (filePath) this.openFilePreview(filePath, pathLink.dataset.sessionId || this.activeSessionId);
         return;
       }
 
@@ -4367,6 +4462,16 @@ class CodemanApp {
       return;
     }
 
+    // A `#session=<id>` link wins over restoring the last active tab.
+    if (this._urlSessionId && this.sessions.has(this._urlSessionId)) {
+      this.activeSessionId = null;
+      this._selectUrlSession();
+      return;
+    }
+    // Not listed yet: its wait starts now that the list has loaded, and the
+    // last active tab is restored meanwhile.
+    if (this._urlSessionId) this._armUrlSessionWait(this._urlSessionId);
+
     const previousActiveId = this.activeSessionId;
     if (this.sessionOrder.length === 0) {
       this.activeSessionId = null;
@@ -6320,10 +6425,15 @@ class CodemanApp {
     if (!sessionId || this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
     if (this.detachedSessions?.has(sessionId)) return;
     const session = this.sessions.get(sessionId);
-    // A shell's full capture can be many megabytes. Replaying it from an
-    // ordinary scroll gesture blocks xterm's main thread, so keep that cost
-    // behind the explicit "Load full history" button.
-    if (!force && session?.mode === 'shell') return;
+    // A shell's full capture can be many megabytes, and replaying all of it from
+    // an ordinary scroll gesture blocks xterm's main thread. So a shell scroll
+    // pulls a BOUNDED window of tmux's full history (the same 1 MiB a tab switch
+    // loads, but of the scrollback rather than the visible frame) and the
+    // unbounded pull stays behind the "Load full history" button. Declining
+    // outright left a shell pane about one screen of browser scrollback after any
+    // burst, and the button only renders once a replay was truncated, so a young
+    // shell tab had no way back to output tmux was still holding.
+    const boundedShellPull = !force && session?.mode === 'shell';
     const now = Date.now();
     // Momentum scrolling fires this dozens of times per flick, and a burst of new
     // output is the normal reason to want a re-pull, so cooldown rather than latch.
@@ -6336,7 +6446,12 @@ class CodemanApp {
     this._fullHistoryRepullInFlight = true;
     try {
       const requestStartedAt = performance.now();
-      const capture = await this._fetchTerminalCapture(`/api/sessions/${sessionId}/terminal?full=1`, { full: true });
+      const capture = await this._fetchTerminalCapture(
+        boundedShellPull
+          ? `/api/sessions/${sessionId}/terminal?full=1&tail=${TERMINAL_TAIL_SIZE}`
+          : `/api/sessions/${sessionId}/terminal?full=1`,
+        { full: true }
+      );
       const headersReceivedAt = capture.headersAt;
       const payload = capture.json?.data ?? {};
       const bodyParsedAt = performance.now();
@@ -6357,7 +6472,44 @@ class CodemanApp {
       // Bail on a tab switch mid-fetch: writing here would paint another session's
       // history into the terminal the user is now looking at.
       if (!buffer || this.activeSessionId !== sessionId) return;
-      if (this._replayWouldShrinkBuffer(buffer)) {
+      const windowRows = this._estimateReplayRows(buffer, this.terminal.cols);
+      // A bounded window no longer than the browser's buffer buys nothing, and
+      // resetting to rewrite it would jump the viewport on every scroll that
+      // outlasts the cooldown at the top. This runs BEFORE the downgrade guard
+      // on purpose: that guard reads "smaller than the browser" as "tmux has
+      // nothing more to give", which is true of an unbounded capture but not of a
+      // window cut at the tail size, so a bounded window must never reach the
+      // exhausted path, which would take Load full history off the banner while
+      // tmux still holds the rest. Nothing was written here, so the banner state
+      // is left as the load that produced it set it: re-labelling it from this
+      // payload would call a terminal that holds ALL of a Load full history pull
+      // "the most recent 1 MiB".
+      //
+      // A browser already at xterm's cap buys nothing either. xterm keeps at most
+      // `scrollback + rows` rows (DEFAULT_SCROLLBACK 50k) while tmux keeps 100k
+      // lines by default, so a 1 MiB window of short lines can render to more rows
+      // than the browser can ever hold, and `windowRows <= rowsNow` then never
+      // comes true: without this every scroll-to-top would reset and re-parse it.
+      const rowsNow = this.terminal.buffer.active.length;
+      const scrollbackCap = this.terminal.options?.scrollback || 0;
+      const browserFull = scrollbackCap > 0 && rowsNow >= scrollbackCap + this.terminal.rows;
+      if (boundedShellPull && (windowRows <= rowsNow || browserFull)) {
+        // An untruncated window IS all of tmux's history, so nothing is missing,
+        // and the next burst of output can put more in tmux than the browser has:
+        // keep the normal 4 s cooldown. A truncated one is the opposite case, since
+        // the gesture can never reach anything older than what the browser already
+        // shows, and every ask costs the server a synchronous capture-pane of the
+        // whole history (`tail` is applied after the capture): back off to 60 s.
+        // A full browser backs off too, since no window can ever fit in it.
+        // Trade-off: only a successful replay clears that latch, so a tab switch or
+        // burst that shrinks the browser's buffer below the window can leave a
+        // scroll-to-top inert for up to a minute. Load full history (`force`)
+        // bypasses the cooldown, and the latch is bounded, never permanent.
+        if (payload.truncated || browserFull) (this._fullHistoryRepullUseless ||= new Set()).add(sessionId);
+        this._logScrollRouting?.('repull-skipped-bounded');
+        return;
+      }
+      if (this._replayWouldShrinkBuffer(buffer, windowRows)) {
         timing.refused = true;
         timing.totalMs = performance.now() - requestStartedAt;
         this._recordTerminalLoadTiming(timing);
@@ -6368,7 +6520,14 @@ class CodemanApp {
         this._setHistoryTruncation(sessionId, { ...payload, exhausted: true });
         return;
       }
-      this._setHistoryTruncation(sessionId, payload);
+      // A bounded window that was cut is always recoverable: a capture over the
+      // byte cap keeps `truncationReason: 'capped'` through the tail cut, and that
+      // would tell the user the rest "cannot be recovered" and drop Load full
+      // history, whose unbounded pull returns up to the cap itself.
+      this._setHistoryTruncation(
+        sessionId,
+        boundedShellPull && payload.truncated ? { ...payload, truncationReason: 'tail' } : payload
+      );
       this._fullHistoryRepullUseless?.delete(sessionId);
       const rowsBefore = this.terminal.buffer.active.length;
       const replayStartedAt = performance.now();
@@ -6506,6 +6665,12 @@ class CodemanApp {
   }
 
   async selectSession(sessionId, options = {}) {
+    // Picking another tab yourself retires a `#session=<id>` link still
+    // waiting for its session, which would otherwise take the tab from you
+    // whenever that session turned up (see _selectUrlSession).
+    if (options?.auto !== true && this._urlSessionId && this._urlSessionId !== sessionId) {
+      this._retireUrlSession();
+    }
     // If this session is popped out into its own window, raise that window
     // instead of showing it inline (focus-on-click for detached tabs). If we
     // owned a now-closed window, _raiseDetached re-docks and returns false so
@@ -6515,12 +6680,13 @@ class CodemanApp {
     }
     const forceReload = options?.forceReload === true;
     // ⚠️ `auto: true` marks a selection the APP made rather than the human:
-    // the boot restore, a solo window opening its target, the fallback after
-    // the active session is deleted. Those must NOT spend a pending idle alert
-    // (the yellow survives until a real tap), because "the app put this on
-    // screen" is not "I checked it". The DEFAULT is user-initiated, so a call
-    // site nobody tagged fails toward acknowledging rather than toward an
-    // alert that can never be cleared.
+    // the boot restore, a solo window opening its target, a `#session=<id>`
+    // link from another page, the fallback after the active session is
+    // deleted. Those must NOT spend a pending idle alert (the yellow survives
+    // until a real tap), because "the app put this on screen" is not "I
+    // checked it". The DEFAULT is user-initiated, so a call site nobody tagged
+    // fails toward acknowledging rather than toward an alert that can never be
+    // cleared.
     const userInitiated = options?.auto !== true;
     if (this.activeSessionId === sessionId && !forceReload) {
       // Tapping the tab you are already on is still "I checked it". The alert
@@ -7483,6 +7649,9 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   goHome() {
+    // Going Home is choosing something else, so a `#session=<id>` link still
+    // waiting for its session must not take the screen later.
+    this._retireUrlSession();
     // Deselect active session and show welcome screen
     this.activeSessionId = null;
     try { localStorage.removeItem('codeman-active-session'); } catch {}

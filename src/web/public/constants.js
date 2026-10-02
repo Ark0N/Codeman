@@ -1458,7 +1458,7 @@ function computeRewriteScrollLine(input) {
  * a `/g` regex, so {@link absoluteFilePathPattern} mints a fresh one per call.
  */
 const FILE_PATH_LINK_PATTERN =
-  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html|toml|ini|sql|png|jpe?g|gif|webp|bmp|svg|pdf|docx|pptx|xlsx|mp4|webm|mov|mp3|wav))\b/g;
+  /(\/(?:home|Users|tmp|var|private|opt|mnt|srv|media|data|workspace)\/[^\s"'<>|;&\n\x00-\x1f]*\.(?:log|txt|json|md|ya?ml|csv|xml|sh|py|tsx|ts|jsx|js|mjs|cjs|css|html|toml|ini|sql|png|jpe?g|gif|webp|avif|bmp|ico|svg|pdf|docx|pptx|xlsx|mp4|webm|mov|mp3|wav))\b/g;
 
 /** A fresh, zero-state instance of {@link FILE_PATH_LINK_PATTERN}. */
 function absoluteFilePathPattern() {
@@ -1476,7 +1476,7 @@ function absoluteFilePathPattern() {
  * file in /tmp played fine. test/media-extension-parity.test.ts pins the sync.
  */
 const FILE_PREVIEW_EXTENSIONS = new Set(
-  ('png jpg jpeg gif webp bmp svg pdf docx pptx xlsx mp4 webm mov m4v ogv mp3 wav ogg oga m4a aac flac opus').split(' ')
+  ('png jpg jpeg gif webp avif bmp ico svg pdf docx pptx xlsx mp4 webm mov m4v ogv mp3 wav ogg oga m4a aac flac opus').split(' ')
 );
 
 /** Whether a path's extension is one {@link FILE_PREVIEW_EXTENSIONS} covers. */
@@ -1853,10 +1853,27 @@ function reconcilePtyGeometry(local, pty) {
   return { adopt: true, cols: pty.cols };
 }
 
+/**
+ * Which session does a dashboard URL's fragment ask for? Another page that
+ * holds the dashboard's window, such as a task board, points it at
+ * `/#session=<id>`. Only the fragment changes between two such links, so the
+ * browser keeps the page loaded and fires `hashchange`, and the dashboard
+ * switches tabs without reloading. Any other fragment asks for nothing.
+ *
+ * @param {string} hash - `location.hash`, with or without its leading `#`
+ * @returns {string|null} the session id, or null
+ */
+function sessionIdFromFragment(hash) {
+  const params = new URLSearchParams(String(hash || '').replace(/^#/, ''));
+  const id = params.get('session');
+  return id && id.trim() ? id.trim() : null;
+}
+
 if (typeof window !== 'undefined') {
   window.CodemanHistoryFormat = { formatHistoryBytes, computeHistoryTruncationNotice, computeRewriteScrollLine };
   window.CodemanFilePaths = { absoluteFilePathPattern, previewsInFileViewer, FILE_PREVIEW_EXTENSIONS };
   window.CodemanTerminalLines = { terminalLogicalLine };
+  window.CodemanUrlSession = { sessionIdFromFragment };
   window.CodemanSplitPane = {
     clampDividerPercent,
     buildSplitPickerSessions,

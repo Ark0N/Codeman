@@ -10984,6 +10984,19 @@ kbd {
 .file-preview-actions {
   display: flex;
   gap: 0.25rem;
+  /* The title yields on a phone, not the buttons. */
+  flex-shrink: 0;
+}
+
+.file-preview-actions .btn-icon-sm[aria-pressed='true'] {
+  color: var(--accent, #4ea1ff);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+}
+
+.file-preview-actions .file-preview-pill {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .file-preview-body {
@@ -11006,6 +11019,58 @@ kbd {
 
 .file-preview-body pre code {
   font-family: inherit;
+}
+
+/* ---- File Viewer text view: Lines / Wrap toggles ----
+   Child-combinator scoped so none of this leaks into the code blocks of a
+   rendered markdown document, which are <pre>s too. */
+
+.file-preview-body > pre.file-preview-text {
+  counter-reset: fp-line;
+  tab-size: 4;
+}
+
+.file-preview-body > pre.file-preview-text:not(.wrap) {
+  white-space: pre;
+  word-break: normal;
+  overflow-x: auto;
+}
+
+/* Numbers hug the left edge (4px, left-aligned) instead of sitting behind the
+   pre's own padding right-aligned in a 4ch column, where "1" landed 40px in. */
+.file-preview-body > pre.file-preview-text.show-lines {
+  padding-left: 4px;
+}
+
+.file-preview-body > pre.file-preview-text.show-lines .fp-line::before {
+  counter-increment: fp-line;
+  content: counter(fp-line);
+  display: inline-block;
+  min-width: 4ch;
+  margin-right: 1ch;
+  text-align: left;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+/* ---- File Viewer rendered markdown ----
+   Styling comes from the Response Viewer's .rv-text rules; .rv-text itself
+   carries no padding or base font (the chat card supplies those). */
+
+.file-preview-body > .file-preview-md {
+  padding: 1rem 1.25rem 2rem;
+  font-size: 15px;
+  line-height: 1.55;
+  max-width: 960px;
+}
+
+/* Relative links in the document are rebased onto a.rv-path so the Response
+   Viewer delegate opens them here; keep them reading as prose, not as paths.
+   Three-class selector on purpose: `.rv-text a.rv-path` (the monospace path
+   style) is declared later in this file and ties on specificity otherwise. */
+.file-preview-body .file-preview-md a.rv-path {
+  font: inherit;
+  word-break: normal;
 }
 
 .file-preview-body img {

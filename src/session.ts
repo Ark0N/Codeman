@@ -85,6 +85,7 @@ import {
   isSustainedActivity,
   isPaneQuiet,
   watchingLabel,
+  isAwaitingWorkers,
   WATCHING_TAIL_LINES,
   IDLE_RECHECK_MS,
   PANE_PROBE_MIN_INTERVAL_MS,
@@ -531,6 +532,8 @@ export class Session extends EventEmitter {
   private _watchingLineRe: RegExp | null | undefined = undefined;
   /** Resolved with the pattern above: how many rows at the foot of the screen to search. */
   private _watchingWindow = WATCHING_TAIL_LINES;
+  /** Lazily compiled `capabilities.workDetect.awaitingLine`. See _awaitingLinePattern(). */
+  private _awaitingLineRe: RegExp | null | undefined = undefined;
   private _trustDialogAccepted: boolean = false; // Stops the trust-dialog scan (answered, or given up)
   private _trustDialogAttempts = 0; // Keystrokes sent at the trust dialog
   private _lastTrustDialogScanAt = 0; // Throttle for the trust-dialog screen read
@@ -3093,7 +3096,10 @@ export class Session extends EventEmitter {
     if (now - this._lastPaneProbeAt < PANE_PROBE_MIN_INTERVAL_MS) return this._lastPaneProbeWorking;
     this._lastPaneProbeAt = now;
     const text = this._mux.capturePaneText?.(this._muxSession.muxName) ?? null;
-    this._lastPaneProbeWorking = text === null ? null : this._workingLinePattern().test(text);
+    // A turn that ended by handing off to workers the CLI waits for is work too: the
+    // composer is up and the pane is quiet, but the next turn starts without the user.
+    this._lastPaneProbeWorking =
+      text === null ? null : this._workingLinePattern().test(text) || this._paneAwaitsWorkers(text);
     this._readWatching(text);
     return this._lastPaneProbeWorking;
   }
@@ -3149,6 +3155,21 @@ export class Session extends EventEmitter {
       this._watchingWindow = detect?.watchingLines ?? WATCHING_TAIL_LINES;
     }
     return this._watchingLineRe;
+  }
+
+  /**
+   * Whether the newest turn on this screen ended waiting for workers the CLI started
+   * (Claude's `✻ Waiting for 1 dynamic workflow to finish`). False for a CLI whose
+   * registry entry declares no `awaitingLine`. See `isAwaitingWorkers()`.
+   */
+  private _paneAwaitsWorkers(paneText: string): boolean {
+    if (this._awaitingLineRe === undefined) {
+      const src = getCli(this.mode)?.capabilities.workDetect?.awaitingLine;
+      this._awaitingLineRe = src ? compileVersionRegex(src) : null;
+    }
+    if (!this._awaitingLineRe) return false;
+    const glyph = getCli(this.mode)?.capabilities.workDetect?.promptGlyph ?? '❯';
+    return isAwaitingWorkers(paneText, this._awaitingLineRe, glyph);
   }
 
   /**
@@ -4184,6 +4205,16 @@ export class Session extends EventEmitter {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Arm the composer check for a prompt that went out some other way than
+   * `writeViaMux`, e.g. cron's paste mode, which writes the body raw and its Enter
+   * separately. `text` is what the composer line starts with while the prompt is still
+   * unsent; the check re-presses Enter only while that holds.
+   */
+  verifySubmitted(text: string): void {
+    this._verifySubmitted(`${text}\r`);
   }
 
   /**

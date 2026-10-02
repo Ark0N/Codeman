@@ -164,8 +164,11 @@ Scrollback behaviour depends on the CLI, and Codeman adjusts what it strips per 
 Things to try:
 
 - `Shift+Wheel` always scrolls the local buffer, whatever else is going on.
-- On Claude sessions with a recent CLI, the wheel is forwarded into Claude's own transcript,
-  so it scrolls the conversation rather than the terminal buffer. That is intended.
+- On Claude sessions running fullscreen (recent CLI with mouse tracking on), the wheel is
+  forwarded into Claude's own transcript, so it scrolls the conversation rather than the
+  terminal buffer. That is intended. Claude's default inline view scrolls locally; turn
+  fullscreen on with `CLAUDE_CODE_NO_FLICKER=1` or `"tui": "fullscreen"` in
+  `~/.claude/settings.json`.
 - Scrolling to the very top pulls the full tmux scrollback again on demand.
 
 ### The wheel does nothing in a Codex session

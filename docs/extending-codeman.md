@@ -338,6 +338,42 @@ codeman ralph start|stop|status|reset    codeman users add|passwd|list
 codeman status | list | attach <path>    codeman doctor
 ```
 
+### Opening a session from your own page
+
+To send someone from your page to one session, link to the dashboard with the
+session id in the fragment, as in `http://127.0.0.1:3000/#session=<id>`. The
+dashboard selects that tab when it loads. It also removes the fragment from its
+own URL, so a later link to the same session still counts as a change.
+
+Keep reusing one named window to make later links fast:
+
+```js
+window.open(`${codeman}/#session=${encodeURIComponent(id)}`, 'codeman');
+```
+
+When that window already shows the dashboard, only the fragment differs. The
+browser therefore keeps the page loaded, and the dashboard switches tabs without
+reloading it. A session the window has shown before appears at once. A session
+your page has only just created may not be listed yet, so the dashboard waits
+for its `session:created` event and selects it then. That wait lasts at most 30
+seconds: a link whose session never appears (a closed session, a typo, or in
+multi-user mode another user's session) is dropped with a "Session not found"
+notice. Clicking another tab, going Home or opening a web tab also ends the
+wait, so a session that turns up later never takes the screen from the person.
+
+When your page holds the window reference (`const win = window.open(...)`),
+prefer `win.location.replace(url)` for later links: it still fires `hashchange`
+without a reload, but adds no history entry, so Back in the dashboard window
+does not turn into a silent no-op.
+
+Following a link does not count as someone looking at the session, so it
+leaves the session's idle alert in place. The alert clears when the person
+clicks the tab or types into the session. A link to a session that is popped
+out into its own window asks that window to come forward, as clicking its tab does.
+
+A link to `/session/<id>` opens a page showing that session alone, and that
+page loads from scratch for every link.
+
 ## Seam 4: Hooks
 
 Claude Code hooks post to `POST /api/v1/hook-event` from inside an agent session.

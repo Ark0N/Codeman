@@ -13,7 +13,8 @@ It renders what it can:
 
 | Kind                     | Behaviour                                                                 |
 | ------------------------ | ------------------------------------------------------------------------- |
-| Text and code            | Syntax-aware preview. Long files are truncated in plain preview.           |
+| Text and code            | Plain preview with Lines (line numbers) and Wrap toggles in the header. Long files are truncated in plain preview. |
+| Markdown                 | Rendered by default: headings, tables, code blocks with copy buttons, images and links relative to the file (root-relative ones resolve from the workspace root, as on GitHub). Opened from an attachment card, where the file's folder is unknown, relative images show their alt text and relative links show as plain text. The MD pill in the header flips to source. |
 | Images                   | Inline.                                                                    |
 | Audio and video          | Inline with a working scrub bar, because range requests are supported.     |
 | PDF and Office documents | Converted for preview when a converter is available.                       |
@@ -85,8 +86,9 @@ File paths in a session are links. That works in two places:
   render as underlined monospace links.
 
 Clicking one opens it in the preview: images and PDFs render, video and audio play with a
-working scrub bar, documents convert, text and Markdown show inline. Log-shaped files open in
-the tail viewer instead, which follows a file that is still being written.
+working scrub bar, documents convert, text shows inline and Markdown renders. The exception is
+a text or Markdown file inside the workspace clicked in the terminal: that opens in the tail
+viewer instead, which follows a file that is still being written.
 
 Paths **outside** the session's workspace work too, which matters because that is where most
 of an agent's output lands: a screenshot in `/tmp`, a capture in its own scratchpad, a file in

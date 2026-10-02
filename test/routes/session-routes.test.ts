@@ -920,6 +920,53 @@ describe('session-routes', () => {
       expect(res.headers['server-timing']).toMatch(/^capture;dur=\d+\.\d, prepare;dur=\d+\.\d, total;dur=\d+\.\d$/);
     });
 
+    it('full reload with a tail (?full=1&tail=) cuts the full capture to its newest bytes, cursor restore intact', async () => {
+      // A Shell scroll-to-top asks for exactly this (`_maybeRefetchFullHistory`):
+      // tmux's whole scrollback, bounded to the tab-switch tail size. The client
+      // relies on all three answers below, so a refactor that dropped the tail on
+      // a full capture (an unbounded pull from an ordinary scroll) or cut off the
+      // closing cursor move (a caret parked below the prompt) must fail here.
+      const tail = 1024 * 1024;
+      const oldestMarker = 'BOUNDED_OLDEST_LINE_00001';
+      const newestMarker = 'BOUNDED_NEWEST_LINE_40000';
+      const rows: string[] = [oldestMarker];
+      for (let i = 2; i < 40_000; i++) rows.push(`shell history line ${String(i).padStart(5, '0')} lorem ipsum`);
+      rows.push(newestMarker);
+      // What formatCursorRestore appends: up from the last row, then the column.
+      const cursorRestore = '\x1b[3A\r\x1b[2C';
+      const fullHistoryCapture = `${rows.join('\r\n')}${cursorRestore}`;
+      expect(fullHistoryCapture.length).toBeGreaterThan(tail);
+
+      harness.ctx._session.mode = 'shell';
+      harness.ctx._session.terminalBuffer = '';
+      const captureSpy = vi.fn((_name: string, opts?: { fullHistory?: boolean }) =>
+        opts?.fullHistory ? fullHistoryCapture : 'only the visible frame'
+      );
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = captureSpy;
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?full=1&tail=${tail}`,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      // Still the scrollback, not the visible frame a plain `?tail=` gets.
+      expect(captureSpy).toHaveBeenCalledWith(
+        harness.ctx._session.muxName,
+        expect.objectContaining({ fullHistory: true })
+      );
+      expect(body.data.source).toBe('mux-full-history');
+      // Recoverable, not 'capped': Load full history can still bring the rest back.
+      expect(body.data.truncated).toBe(true);
+      expect(body.data.truncationReason).toBe('tail');
+      expect(body.data.fullSize).toBe(fullHistoryCapture.length);
+      expect(body.data.terminalBuffer.length).toBeLessThanOrEqual(tail);
+      expect(body.data.terminalBuffer).toContain(newestMarker);
+      expect(body.data.terminalBuffer).not.toContain(oldestMarker);
+      expect(body.data.terminalBuffer.endsWith(`${newestMarker}${cursorRestore}`)).toBe(true);
+    });
+
     it('full reload (?full=1) returns the tmux capture ALONE — byte history is not duplicated', async () => {
       // The full-history capture is the rendered form of everything already in
       // the byte buffer; prepending the byte history would replay the whole

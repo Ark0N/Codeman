@@ -585,7 +585,7 @@ describe('terminal touch tap mouse guard', () => {
   it('wheel: forwards to the app for verified sessions without Shift, at ANY scroll position', () => {
     const { app } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.187' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.187', cliMouseTracking: true }]]);
     app.terminal = {
       modes: { mouseTrackingMode: 'none' },
       buffer: { active: { viewportY: 50, baseY: 50 } },
@@ -638,7 +638,7 @@ describe('terminal touch tap mouse guard', () => {
       buffer: { active: { viewportY: 50, baseY: 50 } },
     };
     const withVersion = (cliVersion?: string) => {
-      app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion }]]);
+      app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion, cliMouseTracking: true }]]);
       return app._shouldForwardWheelToApp({ shiftKey: false });
     };
 
@@ -648,6 +648,25 @@ describe('terminal touch tap mouse guard', () => {
     expect(withVersion('2.2.0')).toBe(true);
     expect(withVersion('3.0.0')).toBe(true);
     expect(withVersion('garbage')).toBe(false); // unparseable → assume older
+  });
+
+  it('wheel: inline claude (no mouse tracking) keeps the local wheel', () => {
+    // Claude 2.1.280's default inline renderer never enables mouse tracking and
+    // keeps its transcript in real scrollback, so SGR wheel reports are ignored.
+    // Forwarding there made every swipe dead on iOS Safari while codex scrolled.
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+    app.terminal = {
+      modes: { mouseTrackingMode: 'none' },
+      buffer: { active: { viewportY: 50, baseY: 50 } },
+    };
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.280' }]]);
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.280', cliMouseTracking: false }]]);
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+    // Fullscreen (CLAUDE_CODE_NO_FLICKER=1) turns tracking on → forwarding resumes.
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.280', cliMouseTracking: true }]]);
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(true);
   });
 
   it('wheel: only claude forwards — codex and gemini keep the local wheel', () => {
@@ -664,17 +683,19 @@ describe('terminal touch tap mouse guard', () => {
     // (the codex transcript lives there — inline viewport, no in-app pager) sat unused.
     app.sessions = new Map([['sess-1', { mode: 'codex' }]]);
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
-    app.sessions = new Map([['sess-1', { mode: 'codex', cliVersion: '9.9.9' }]]); // no version rescues it
+    // Tracking on and a high version, so only the mode check can say no: without
+    // them the gate is false for claude too and this would pin nothing.
+    app.sessions = new Map([['sess-1', { mode: 'codex', cliVersion: '9.9.9', cliMouseTracking: true }]]); // no version rescues it
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
 
-    app.sessions = new Map([['sess-1', { mode: 'gemini', cliVersion: '9.9.9' }]]); // unverified TUI
+    app.sessions = new Map([['sess-1', { mode: 'gemini', cliVersion: '9.9.9', cliMouseTracking: true }]]); // unverified TUI
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
   });
 
   it('wheel: the local-scrollback opt-out pins the plain wheel to local scrollback (issue #154)', () => {
     const { app } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.187' }]]);
+    app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: '2.1.187', cliMouseTracking: true }]]);
     app.terminal = {
       modes: { mouseTrackingMode: 'none' },
       buffer: { active: { viewportY: 50, baseY: 50 } },

@@ -6,6 +6,8 @@ For the Compose configuration, environment settings, storage migration, and macv
 
 The image includes Claude Code, Codex, Gemini CLI, and OpenCode. Authenticate a CLI from its Codeman session; credentials are never baked into the image.
 
+CLIs installed from **App Settings → Agents & CLIs → CLI management** (DeepSeek Harness, Pi, and the other npm-based ones) go to `~/.local` on the `CODEMAN_APPDATA_PATH` mount, so they survive an image rebuild and a container recreate. Releases up to 1.33.1 installed them into the image instead, so a CLI installed from Settings on one of those has to be installed again once after the rebuild. The same applies to a hand-run `npm install -g` inside a session: it writes to the image prefix (`/opt/codeman-cli`) and is lost on the next rebuild, so use `npm install -g --prefix ~/.local <package>` instead.
+
 It can also include the GitHub CLI (`gh`) and the Azure CLI (`az`) with the `azure-devops` extension, wired in as Git credential helpers, so Clone Repo and `git clone` reach private GitHub and Azure DevOps repositories once they are signed in. Both are off by default; [Turning them on](../docker/README.md#turning-them-on) shows the `docker-compose.override.yml` settings.
 
 ## Prerequisites

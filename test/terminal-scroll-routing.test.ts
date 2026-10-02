@@ -47,11 +47,13 @@ function loadTerminalUiHarness() {
 }
 
 /** A Claude session whose local buffer holds exactly one screen (baseY 0). */
-function hollowClaudeApp(overrides: { cliVersion?: string; rows?: number } = {}) {
+function hollowClaudeApp(overrides: { cliVersion?: string; rows?: number; cliMouseTracking?: boolean } = {}) {
   const { app, logs } = loadTerminalUiHarness();
   const sent: Array<{ id: string; data: string }> = [];
   app.activeSessionId = 'sess-1';
-  app.sessions = new Map([['sess-1', { mode: 'claude', cliVersion: overrides.cliVersion }]]);
+  app.sessions = new Map([
+    ['sess-1', { mode: 'claude', cliVersion: overrides.cliVersion, cliMouseTracking: overrides.cliMouseTracking }],
+  ]);
   app._sendInputEphemeral = (id: string, data: string) => sent.push({ id, data });
   app.terminal = {
     cols: 80,
@@ -111,12 +113,20 @@ describe('full-history re-pull downgrade guard (issue #205 round 2)', () => {
     // Anchor on the open paren, not the full empty signature: the method takes
     // options since #258 ({ force }) and this guard is about ORDER, not arity.
     const start = source.indexOf('async _maybeRefetchFullHistory(');
-    const guard = source.indexOf('this._replayWouldShrinkBuffer(buffer)', start);
+    // Also anchored on the open paren: the guard is handed the rows the caller
+    // already estimated, and this test is about ORDER, not the argument list.
+    const guard = source.indexOf('this._replayWouldShrinkBuffer(buffer', start);
+    const boundedSkip = source.indexOf('boundedShellPull && (windowRows <= rowsNow || browserFull)', start);
     const reset = source.indexOf('this._resetTerminalForReplay()', start);
 
     expect(start).toBeGreaterThan(-1);
     expect(guard).toBeGreaterThan(start);
     expect(guard).toBeLessThan(reset); // refuse first, only then reset+rewrite
+    // A bounded shell window is skipped BEFORE the guard sees it: the guard reads
+    // "smaller than the browser" as "tmux has nothing more", which a window cut at
+    // the tail size does not mean (see shell-scroll-history-pull.test.ts).
+    expect(boundedSkip).toBeGreaterThan(start);
+    expect(boundedSkip).toBeLessThan(guard);
     // A hollow pane must also stop re-fetching megabytes on every scroll-up.
     expect(source).toContain('this._fullHistoryRepullUseless');
     expect(source).toContain('this._fullHistoryRepullUseless?.has(sessionId) ? 60000 : 4000');
@@ -186,7 +196,8 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
     // "Wheel scrolls local history" ON pins the wheel to a buffer that, for a
     // repaint-mode CLI, is empty — a user who flipped it while hunting for a fix
     // on 1.11.x would have ended up with a completely dead wheel on 1.12.0.
-    const { app, sent } = hollowClaudeApp({ cliVersion: '2.1.223' }); // gate would forward…
+    // Version and tracking both qualify, so the opt-out is the only thing saying no.
+    const { app, sent } = hollowClaudeApp({ cliVersion: '2.1.223', cliMouseTracking: true }); // gate would forward…
     app.loadAppSettingsFromStorage = () => ({ terminalWheelLocalScrollback: true });
 
     expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false); // …but the opt-out wins
@@ -228,10 +239,19 @@ describe('scroll routing diagnostic (issue #205 round 2)', () => {
     expect(logs[0]).toContain('cliVersion=2.1.100');
     expect(logs[0]).toContain('localScrollbackOptOut=false');
     expect(logs[0]).toContain('mouseTracking=none');
+    // The gate's real tracking input: xterm's own mode above is always 'none'
+    // for Claude, since the server strips the DECSETs.
+    expect(logs[0]).toContain('cliMouseTracking=false');
 
     app._logScrollRouting('page-keys'); // a changed route still prints
     expect(logs).toHaveLength(2);
     expect(logs[1]).toContain('page-keys');
+
+    // The CLI turning tracking on changes the gate, so it prints again.
+    app.sessions.get('sess-1').cliMouseTracking = true;
+    app._logScrollRouting('page-keys');
+    expect(logs).toHaveLength(3);
+    expect(logs[2]).toContain('cliMouseTracking=true');
   });
 
   it('reports an unknown CLI version, the false-path that disables forwarding', () => {
