@@ -169,14 +169,17 @@
         // session (this.sessionId), never the primary pane's
         // activeSessionId, and has no local-echo overlay of its own to flush
         // first (Pane B is deliberately plainer — see the fileoverview).
-        if (ev.key === 'Enter' && (ev.shiftKey || ev.ctrlKey) && ev.type === 'keydown') {
-          fetch(`/api/sessions/${this.sessionId}/send-key`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: ev.ctrlKey ? 'C-Enter' : 'S-Enter' }),
-          }).catch(() => {
-            /* Best-effort, matching this pane's tolerance elsewhere. */
-          });
+        // Swallow keypress/keyup too (xterm would send \r for a Shift-only keypress); only keydown sends.
+        if (ev.key === 'Enter' && (ev.shiftKey || ev.ctrlKey)) {
+          if (ev.type === 'keydown') {
+            fetch(`/api/sessions/${this.sessionId}/send-key`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ key: ev.ctrlKey ? 'C-Enter' : 'S-Enter' }),
+            }).catch(() => {
+              /* Best-effort, matching this pane's tolerance elsewhere. */
+            });
+          }
           return false;
         }
         // Smart copy (mirrors terminal-ui.js's Ctrl+C gate, #211): with a
