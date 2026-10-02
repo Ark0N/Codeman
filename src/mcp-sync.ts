@@ -74,6 +74,9 @@ export interface McpSyncResult {
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/** Names that would reach Object.prototype through a plain-object table (`out[name] = ...`). */
+const UNSAFE_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
+
 function strMap(v: unknown): Record<string, string> | undefined {
   if (!isRecord(v)) return undefined;
   const out: Record<string, string> = {};
@@ -323,7 +326,7 @@ function parseTomlKey(src: string, start: number): [string, number] {
 
 /** Split a table header like `mcp_servers."my.srv".env` into dotted key parts. */
 function parseTomlHeader(line: string): string[] | null {
-  const m = /^\[([^\]\[].*)\]\s*(#.*)?$/.exec(line.trim());
+  const m = /^\[([^[\]].*)\]\s*(#.*)?$/.exec(line.trim());
   if (!m) return null;
   const body = m[1];
   const parts: string[] = [];
@@ -357,6 +360,7 @@ function parseCodexTables(text: string): Record<string, Record<string, TomlValue
       if (trimmed.startsWith('[[')) continue;
       const parts = parseTomlHeader(trimmed);
       if (parts && parts[0] === 'mcp_servers' && (parts.length === 2 || parts.length === 3)) {
+        if (UNSAFE_NAMES.has(parts[1])) continue;
         current = out[parts[1]] ??= {};
         sub = parts.length === 3 ? parts[2] : null;
         if (sub && !isRecord(current[sub])) current[sub] = {};
@@ -424,6 +428,7 @@ export function parseServers(format: McpFormat, text: string | null): McpServerM
   if (text === null || !text.trim()) return out;
   if (format === 'codex-toml') {
     for (const [name, table] of Object.entries(parseCodexTables(text))) {
+      if (UNSAFE_NAMES.has(name)) continue;
       const s = fromCodex(table);
       if (s) out[name] = s;
     }
@@ -436,6 +441,7 @@ export function parseServers(format: McpFormat, text: string | null): McpServerM
   if (table === undefined) return out;
   if (!isRecord(table)) throw new Error(`"${dialect.key}" is not an object`);
   for (const [name, raw] of Object.entries(table)) {
+    if (UNSAFE_NAMES.has(name)) continue;
     const s = dialect.from(raw);
     if (s) out[name] = s;
   }

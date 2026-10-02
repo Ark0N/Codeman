@@ -134,6 +134,28 @@ describe('real CLI output (captured from `agy`/`gemini`/`codex mcp add`)', () =>
   });
 });
 
+describe('hostile config files', () => {
+  it('never lets a server name reach Object.prototype (toml and json)', () => {
+    const toml = parseServers(
+      'codex-toml',
+      '[mcp_servers.__proto__]\ncommand = "x"\npolluted = "yes"\n[mcp_servers.ok]\ncommand = "y"\n'
+    );
+    expect(Object.keys(toml)).toEqual(['ok']);
+    const json = parseServers(
+      'claude-json',
+      '{"mcpServers":{"__proto__":{"command":"x"},"constructor":{"command":"x"},"ok":{"command":"y"}}}'
+    );
+    expect(Object.keys(json)).toEqual(['ok']);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(({} as Record<string, unknown>).command).toBeUndefined();
+  });
+
+  it('rejects a non-object server table instead of overwriting it', () => {
+    expect(() => parseServers('claude-json', '{"mcpServers":[]}')).toThrow();
+    expect(() => parseServers('claude-json', '[]')).toThrow();
+  });
+});
+
 describe('addServers', () => {
   it('preserves other keys and existing servers, appends codex tables without touching the rest', () => {
     const out = JSON.parse(
