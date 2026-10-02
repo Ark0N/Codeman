@@ -634,6 +634,79 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-info {
   min-width: 0;
 }
 
+/* --- Grouped rail (owner tab layout) ---------------------------------- */
+/* Only rendered when the owner has at least one group (tab-layout-browser.js).
+   Each group's rows sit in their OWN flex column, so the activity sort's inline
+   `order` (and web tabs' `order: 9999`) rank rows within a group, never across. */
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group,
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-refs {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group + .tab-layout-group {
+  margin-top: 4px;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px 2px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: left;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-toggle:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.tab-layout-group-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-layout-group-count {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.tab-layout-group-chevron::before {
+  content: '\25BE';
+  display: inline-block;
+}
+
+.tab-layout-group-toggle[aria-expanded='false'] .tab-layout-group-chevron::before {
+  content: '\25B8';
+}
+
 html[data-tab-orientation='vertical'] .header-right {
   margin-left: auto;
 }
@@ -1707,7 +1780,9 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-prefix {
   line-height: 1;
   color: var(--text-muted);
   overflow: hidden;
-  cursor: default;
+  /* A control, like its gear/detach siblings: the pointer must not read as
+     "nothing here" over the one button that closes the session. */
+  cursor: pointer;
   border-radius: 3px;
   /* Performance: use transform for GPU acceleration */
   transition: opacity 0.05s ease-out, width 0.05s ease-out, padding 0.05s ease-out;
@@ -10508,6 +10583,21 @@ kbd {
   opacity: 0.85;
   filter: drop-shadow(0 0 4px var(--lineage-color, var(--session-blue, #2b8fd9)))
     drop-shadow(0 0 9px var(--lineage-color, var(--session-blue, #2b8fd9)));
+}
+
+/* An arc re-anchored to a collapsed group's header (its row is hidden): quieter
+   and dotted, so it reads as "somewhere in there" rather than a real row. */
+.connection-line.lineage-line--proxied {
+  stroke-dasharray: 2 7;
+  opacity: 0.46;
+}
+
+.connection-line.lineage-line--proxied.lineage-line--working {
+  opacity: 0.62;
+}
+
+.lineage-line-dot.lineage-line-dot--proxied {
+  opacity: 0.46;
 }
 
 /* The child end marches while that worker is actually working, so the line
