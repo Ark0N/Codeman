@@ -18815,6 +18815,17 @@ html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail
   line-clamp: 3;
 }
 
+/* The rule above out-ranks the shared "unclamp while renaming" override (it carries four more
+   selectors of specificity), so a detailed-rail row kept its 3-line clamp around the inline
+   editor. Restate the override at the same weight; it must stay AFTER the rule it beats. */
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact)
+  .tab-rail
+  .session-tab
+  .tab-name.tab-name-renaming {
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+}
+
 html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab .tab-folder {
   font-size: 0.66rem;
   margin-top: 0.1rem;

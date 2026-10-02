@@ -581,54 +581,66 @@ describe('Inline rename input', () => {
     expect(await input.evaluate((node) => node.getBoundingClientRect().width)).toBeGreaterThan(0);
   });
 
-  it('Vertical rail paints typing in an unclamped editor and restores the clamp on cancel', async () => {
-    await resetState();
-    const id = 'vertical-live-input';
+  // Both rail layouts: the simple rows clamp a name to 2 lines, the detailed (default) card rows to 3.
+  // The detailed rule out-ranks the shared "unclamp while renaming" override unless it is restated.
+  it.each([
+    ['simple', '2'],
+    ['rich', '3'],
+  ])(
+    'Vertical %s rail paints typing in an unclamped editor and restores its clamp on cancel',
+    async (detail, clamp) => {
+      await resetState();
+      const id = `vertical-live-input-${detail}`;
 
-    await page.evaluate((sessionId) => {
-      const app = (
-        window as unknown as {
-          app: {
-            sessions: Map<string, { id: string; name: string }>;
-            startInlineRename: (id: string) => void;
-          };
-        }
-      ).app;
-      document.documentElement.dataset.tabOrientation = 'vertical';
-      const rail = document.getElementById('tabRail') as HTMLElement;
-      const tab = document.createElement('div');
-      tab.setAttribute('data-test-tab', '1');
-      tab.className = 'session-tab';
-      tab.innerHTML =
-        `<span class="tab-name" data-session-id="${sessionId}">` +
-        '<span class="tab-name-prefix">w9-case: </span>old</span>';
-      rail.appendChild(tab);
-      app.sessions.set(sessionId, { id: sessionId, name: 'w9-case: old' });
-      app.startInlineRename(sessionId);
-    }, id);
+      await page.evaluate(
+        ({ sessionId, railDetail }) => {
+          const app = (
+            window as unknown as {
+              app: {
+                sessions: Map<string, { id: string; name: string }>;
+                startInlineRename: (id: string) => void;
+              };
+            }
+          ).app;
+          document.documentElement.dataset.tabOrientation = 'vertical';
+          document.documentElement.dataset.tabRailDetail = railDetail;
+          const rail = document.getElementById('tabRail') as HTMLElement;
+          const tab = document.createElement('div');
+          tab.setAttribute('data-test-tab', '1');
+          tab.className = 'session-tab';
+          tab.innerHTML =
+            `<span class="tab-name" data-session-id="${sessionId}">` +
+            '<span class="tab-name-prefix">w9-case: </span>old</span>';
+          rail.appendChild(tab);
+          app.sessions.set(sessionId, { id: sessionId, name: 'w9-case: old' });
+          app.startInlineRename(sessionId);
+        },
+        { sessionId: id, railDetail: detail }
+      );
 
-    const label = page.locator(`.tab-name[data-session-id="${id}"]`);
-    const input = label.locator('input.tab-rename-input');
-    await input.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
-    await page.keyboard.type('edited title');
+      const label = page.locator(`.tab-name[data-session-id="${id}"]`);
+      const input = label.locator('input.tab-rename-input');
+      await input.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+      await page.keyboard.type('edited title');
 
-    expect(await input.inputValue()).toBe('edited title');
-    expect(await input.evaluate((node) => document.activeElement === node)).toBe(true);
-    expect(await label.evaluate((node) => node.classList.contains('tab-name-renaming'))).toBe(true);
-    expect(await label.evaluate((node) => getComputedStyle(node).webkitLineClamp)).toBe('none');
-    expect(await input.evaluate((node) => node.getBoundingClientRect().width)).toBeGreaterThan(0);
+      expect(await input.inputValue()).toBe('edited title');
+      expect(await input.evaluate((node) => document.activeElement === node)).toBe(true);
+      expect(await label.evaluate((node) => node.classList.contains('tab-name-renaming'))).toBe(true);
+      expect(await label.evaluate((node) => getComputedStyle(node).webkitLineClamp)).toBe('none');
+      expect(await input.evaluate((node) => node.getBoundingClientRect().width)).toBeGreaterThan(0);
 
-    const settled = await page.evaluate((sessionId) => {
-      const app = (window as unknown as { app: { _activeRename: { cancel: () => void } | null } }).app;
-      app._activeRename?.cancel();
-      const label = document.querySelector(`.tab-name[data-session-id="${sessionId}"]`) as HTMLElement;
-      return {
-        classActive: label.classList.contains('tab-name-renaming'),
-        inputPresent: !!label.querySelector('input.tab-rename-input'),
-        webkitLineClamp: getComputedStyle(label).webkitLineClamp,
-      };
-    }, id);
+      const settled = await page.evaluate((sessionId) => {
+        const app = (window as unknown as { app: { _activeRename: { cancel: () => void } | null } }).app;
+        app._activeRename?.cancel();
+        const label = document.querySelector(`.tab-name[data-session-id="${sessionId}"]`) as HTMLElement;
+        return {
+          classActive: label.classList.contains('tab-name-renaming'),
+          inputPresent: !!label.querySelector('input.tab-rename-input'),
+          webkitLineClamp: getComputedStyle(label).webkitLineClamp,
+        };
+      }, id);
 
-    expect(settled).toEqual({ classActive: false, inputPresent: false, webkitLineClamp: '2' });
-  });
+      expect(settled).toEqual({ classActive: false, inputPresent: false, webkitLineClamp: clamp });
+    }
+  );
 });
