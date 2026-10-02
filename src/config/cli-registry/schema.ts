@@ -386,7 +386,7 @@ const capabilitiesSchema = z
           .max(100)
           .regex(/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/)
           .refine((v) => !v.split('/').includes('..'), 'must not contain ..'),
-        format: z.enum(['claude-json', 'gemini-json', 'codex-toml', 'opencode-json']),
+        format: z.enum(['claude-json', 'gemini-json', 'codex-toml', 'opencode-json', 'antigravity-json']),
       })
       .strict()
       .optional(),

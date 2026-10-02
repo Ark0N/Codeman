@@ -804,6 +804,7 @@ const ANTIGRAVITY: CliEntry = {
     // Like codex: an ABSENT config already defaults safe (no bypass flag), so only a
     // SENT config needs the flag forced off — nothing is materialized.
     privilegedParams: [{ param: 'dangerouslySkipPermissions', clampTo: false }],
+    mcpConfig: { path: '.gemini/config/mcp_config.json', format: 'antigravity-json' },
     // No known CLI/env/config mechanism — Antigravity's own docs describe a GUI-only
     // custom-endpoint setting and explicitly say it "cannot currently" become the core
     // reasoning model. Toolbar entry stays disabled for this mode.

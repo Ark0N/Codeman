@@ -25,7 +25,7 @@ import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-export type McpFormat = 'claude-json' | 'gemini-json' | 'codex-toml' | 'opencode-json';
+export type McpFormat = 'claude-json' | 'gemini-json' | 'codex-toml' | 'opencode-json' | 'antigravity-json';
 
 export interface McpServer {
   transport: 'stdio' | 'http' | 'sse';
@@ -64,6 +64,8 @@ export interface McpSyncResult {
   targets: McpSyncTargetResult[];
   /** Names defined differently by different CLIs; left untouched. */
   conflicts: string[];
+  /** Enabled agent CLIs with no known MCP config file, so sync cannot touch them. */
+  unsupported: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -124,9 +126,13 @@ function toClaude(s: McpServer): Record<string, unknown> {
 
 function fromGemini(raw: unknown): McpServer | null {
   if (!isRecord(raw)) return null;
+  // `httpUrl` is the legacy streamable-http key; `url` + `type` is what `gemini mcp add` writes
+  // today, and a bare `url` with no type is the legacy SSE form.
   if (typeof raw.httpUrl === 'string')
     return clean({ transport: 'http', url: raw.httpUrl, headers: strMap(raw.headers) });
-  if (typeof raw.url === 'string') return clean({ transport: 'sse', url: raw.url, headers: strMap(raw.headers) });
+  if (typeof raw.url === 'string') {
+    return clean({ transport: raw.type === 'http' ? 'http' : 'sse', url: raw.url, headers: strMap(raw.headers) });
+  }
   if (typeof raw.command === 'string') {
     return clean({
       transport: 'stdio',
@@ -148,7 +154,26 @@ function toGemini(s: McpServer): Record<string, unknown> {
       ...(s.cwd ? { cwd: s.cwd } : {}),
     };
   }
-  return { [s.transport === 'http' ? 'httpUrl' : 'url']: s.url, ...(s.headers ? { headers: s.headers } : {}) };
+  return { url: s.url, type: s.transport, ...(s.headers ? { headers: s.headers } : {}) };
+}
+
+/** Antigravity (`agy mcp add`): stdio or http only; http servers use `serverUrl`. */
+function fromAntigravity(raw: unknown): McpServer | null {
+  if (!isRecord(raw)) return null;
+  if (typeof raw.serverUrl === 'string')
+    return clean({ transport: 'http', url: raw.serverUrl, headers: strMap(raw.headers) });
+  if (typeof raw.command === 'string') {
+    return clean({ transport: 'stdio', command: raw.command, args: strArr(raw.args), env: strMap(raw.env) });
+  }
+  return null;
+}
+
+function toAntigravity(s: McpServer): Record<string, unknown> | null {
+  if (s.transport === 'sse') return null;
+  if (s.transport === 'stdio') {
+    return { command: s.command, args: s.args ?? [], ...(s.env ? { env: s.env } : {}), disabled: false };
+  }
+  return { serverUrl: s.url, ...(s.headers ? { headers: s.headers } : {}), disabled: false };
 }
 
 function fromOpencode(raw: unknown): McpServer | null {
@@ -185,9 +210,10 @@ interface JsonDialect {
   seed?: Record<string, unknown>;
 }
 
-const JSON_DIALECTS: Record<'claude-json' | 'gemini-json' | 'opencode-json', JsonDialect> = {
+const JSON_DIALECTS: Record<Exclude<McpFormat, 'codex-toml'>, JsonDialect> = {
   'claude-json': { key: 'mcpServers', from: fromClaude, to: toClaude },
   'gemini-json': { key: 'mcpServers', from: fromGemini, to: toGemini },
+  'antigravity-json': { key: 'mcpServers', from: fromAntigravity, to: toAntigravity },
   'opencode-json': {
     key: 'mcp',
     from: fromOpencode,
@@ -418,7 +444,7 @@ export function parseServers(format: McpFormat, text: string | null): McpServerM
 
 /** Whether this dialect can express the server. */
 export function canExpress(format: McpFormat, s: McpServer): boolean {
-  if (format === 'codex-toml') return s.transport !== 'sse';
+  if (format === 'codex-toml' || format === 'antigravity-json') return s.transport !== 'sse';
   return true;
 }
 
@@ -482,7 +508,11 @@ export interface McpSyncOptions {
  * Sync across `targets` (already filtered to enabled CLIs with an `mcpConfig`, in priority
  * order: when two CLIs define a name differently, the first one's definition is the one copied).
  */
-export async function syncMcpServers(targets: McpSyncTarget[], opts: McpSyncOptions): Promise<McpSyncResult> {
+export async function syncMcpServers(
+  targets: McpSyncTarget[],
+  opts: McpSyncOptions,
+  unsupported: string[] = []
+): Promise<McpSyncResult> {
   const home = opts.home ?? homedir();
   const seen = new Set<string>();
   const live = targets.filter((t) => (seen.has(t.path) ? false : (seen.add(t.path), true)));
@@ -551,5 +581,5 @@ export async function syncMcpServers(targets: McpSyncTarget[], opts: McpSyncOpti
     }
   }
 
-  return { applied: opts.apply, targets: state.map((s) => s.res), conflicts: [...conflicts].sort() };
+  return { applied: opts.apply, targets: state.map((s) => s.res), conflicts: [...conflicts].sort(), unsupported };
 }

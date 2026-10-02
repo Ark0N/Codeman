@@ -9,6 +9,7 @@ const TARGETS: McpSyncTarget[] = [
   { id: 'claude', label: 'Claude', path: '.claude.json', format: 'claude-json' },
   { id: 'gemini', label: 'Gemini', path: '.gemini/settings.json', format: 'gemini-json' },
   { id: 'codex', label: 'Codex', path: '.codex/config.toml', format: 'codex-toml' },
+  { id: 'antigravity', label: 'Antigravity', path: '.gemini/config/mcp_config.json', format: 'antigravity-json' },
   { id: 'opencode', label: 'OpenCode', path: '.config/opencode/opencode.json', format: 'opencode-json' },
 ];
 
@@ -89,6 +90,50 @@ describe('dialect parsing', () => {
   });
 });
 
+describe('real CLI output (captured from `agy`/`gemini`/`codex mcp add`)', () => {
+  it('reads and writes the antigravity dialect', () => {
+    const real = JSON.stringify({
+      mcpServers: {
+        fs: { args: ['-y', '@mcp/fs'], command: 'npx', disabled: false, env: { K: 'v' } },
+        web: { disabled: false, headers: { Authorization: 'Bearer T' }, serverUrl: 'https://x.test/mcp' },
+      },
+    });
+    const servers = parseServers('antigravity-json', real);
+    expect(servers.fs).toEqual({ transport: 'stdio', command: 'npx', args: ['-y', '@mcp/fs'], env: { K: 'v' } });
+    expect(servers.web).toEqual({
+      transport: 'http',
+      url: 'https://x.test/mcp',
+      headers: { Authorization: 'Bearer T' },
+    });
+    const out = JSON.parse(
+      addServers('antigravity-json', null, { ...servers, s: { transport: 'sse', url: 'https://s' } })
+    );
+    expect(out.mcpServers.web.serverUrl).toBe('https://x.test/mcp');
+    expect(out.mcpServers.fs.disabled).toBe(false);
+    expect(out.mcpServers.s).toBeUndefined();
+  });
+
+  it('writes gemini http/sse as url + type, as `gemini mcp add` does', () => {
+    const out = JSON.parse(
+      addServers('gemini-json', null, {
+        web: { transport: 'http', url: 'https://x.test/mcp', headers: { A: 'b' } },
+        s: { transport: 'sse', url: 'https://x.test/sse' },
+      })
+    );
+    expect(out.mcpServers.web).toEqual({ url: 'https://x.test/mcp', type: 'http', headers: { A: 'b' } });
+    expect(out.mcpServers.s).toEqual({ url: 'https://x.test/sse', type: 'sse' });
+    expect(parseServers('gemini-json', JSON.stringify(out)).web.transport).toBe('http');
+  });
+
+  it('reads codex output as written by `codex mcp add`', () => {
+    const real =
+      '[mcp_servers.fs]\ncommand = "npx"\nargs = ["-y", "@mcp/fs"]\n\n[mcp_servers.fs.env]\nK = "v"\n\n[mcp_servers.web]\nurl = "https://x.test/mcp"\n';
+    const servers = parseServers('codex-toml', real);
+    expect(servers.fs).toEqual({ transport: 'stdio', command: 'npx', args: ['-y', '@mcp/fs'], env: { K: 'v' } });
+    expect(servers.web).toEqual({ transport: 'http', url: 'https://x.test/mcp' });
+  });
+});
+
 describe('addServers', () => {
   it('preserves other keys and existing servers, appends codex tables without touching the rest', () => {
     const out = JSON.parse(
@@ -118,6 +163,11 @@ describe('syncMcpServers', () => {
   const claudeFile = JSON.stringify({
     numStartups: 3,
     mcpServers: { fs: { type: 'stdio', command: 'npx', args: ['-y', 'fs'], env: { T: 's3cret' } } },
+  });
+
+  it('passes the unsupported list through to the result', async () => {
+    const r = await syncMcpServers(TARGETS, { apply: false, home }, ['Pi']);
+    expect(r.unsupported).toEqual(['Pi']);
   });
 
   it('previews without writing and never leaks env values', async () => {

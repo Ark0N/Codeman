@@ -30,12 +30,19 @@ function gate(req: FastifyRequest): ApiResponse<never> | null {
   return null;
 }
 
+/** Enabled agent CLIs with no known MCP config file (sync cannot touch them). */
+export function mcpUnsupportedLabels(): string[] {
+  return enabledClis()
+    .filter((e) => e.kind === 'agent' && !e.capabilities.mcpConfig)
+    .map((e) => e.label);
+}
+
 export function registerMcpSyncRoutes(app: FastifyInstance): void {
   const run = async (req: FastifyRequest, apply: boolean): Promise<ApiResponse<McpSyncResult>> => {
     const denied = gate(req);
     if (denied) return denied;
     try {
-      return { success: true, data: await syncMcpServers(mcpSyncTargets(), { apply }) };
+      return { success: true, data: await syncMcpServers(mcpSyncTargets(), { apply }, mcpUnsupportedLabels()) };
     } catch (err) {
       return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
     }

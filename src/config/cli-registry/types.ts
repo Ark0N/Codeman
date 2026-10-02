@@ -517,7 +517,10 @@ export interface CliCapabilities {
    * adapter reads and writes. Absent = no known/verified MCP config file, so the CLI is
    * skipped by sync rather than guessed at.
    */
-  mcpConfig?: { path: string; format: 'claude-json' | 'gemini-json' | 'codex-toml' | 'opencode-json' };
+  mcpConfig?: {
+    path: string;
+    format: 'claude-json' | 'gemini-json' | 'codex-toml' | 'opencode-json' | 'antigravity-json';
+  };
   /**
    * How this CLI is pointed at a user-supplied custom OpenAI-compatible
    * endpoint (local, e.g. llama.cpp, or cloud, e.g. Azure AI Foundry) — the

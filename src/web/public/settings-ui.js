@@ -1140,7 +1140,10 @@ Object.assign(CodemanApp.prototype, {
     const conflicts = data.conflicts.length
       ? `<p>Defined differently across CLIs, left unchanged: ${data.conflicts.map(escapeHtml).join(', ')}</p>`
       : '';
-    show(`<ul>${rows.join('')}</ul>${conflicts}`);
+    const unsupported = data.unsupported?.length
+      ? `<p>No MCP config support for: ${data.unsupported.map(escapeHtml).join(', ')}</p>`
+      : '';
+    show(`<ul>${rows.join('')}</ul>${conflicts}${unsupported}`);
   },
 
   _setUpdateResult(html) {
