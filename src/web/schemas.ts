@@ -1827,6 +1827,19 @@ export const RespawnEnableSchema = z.object({
 // ========== Web Push ==========
 
 /** POST /api/push/subscribe */
+/**
+ * PUT /api/webhook. `.strict()` like every settings-shaped schema; `url` is optional so a change of
+ * kind or scope never needs the secret re-sent, and an empty string clears it.
+ */
+export const WebhookUpdateSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    kind: z.enum(['ntfy', 'slack', 'discord', 'generic']).optional(),
+    scope: z.enum(['attention', 'all']).optional(),
+    url: z.string().max(2048).optional(),
+  })
+  .strict();
+
 export const PushSubscribeSchema = z.object({
   endpoint: z
     .string()

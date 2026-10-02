@@ -416,6 +416,7 @@ Object.assign(CodemanApp.prototype, {
     // .checked fires no onchange, so the list's visibility (and lazy load)
     // needs an explicit sync on every open, not just a save.
     this.applyCliManagementVisibility();
+    this.loadWebhook();
     // Read My Mind: synced, default OFF (opt-in; capture + prediction cost real tokens).
     document.getElementById('appSettingsReadMyMind').checked = settings.readMyMindEnabled === true;
     document.getElementById('appSettingsUltracodeFloatingWindows').checked =
@@ -1112,6 +1113,88 @@ Object.assign(CodemanApp.prototype, {
       if (el) el.style.display = 'none';
     }
     this._updateCheck = null;
+  },
+
+  /**
+   * Webhook notifications (Settings → Notifications). Server-side config behind /api/webhook, not a
+   * settings-payload field: the URL is a secret, so it never round-trips through settings.json or
+   * this page. The URL box is write-only; the status line shows scheme + host only.
+   */
+  _webhookSay(text, bad = false) {
+    const out = document.getElementById('webhookResult');
+    if (!out) return;
+    out.textContent = text;
+    out.style.display = text ? 'block' : 'none';
+    out.style.color = bad ? 'var(--danger, #e5534b)' : '';
+  },
+
+  async loadWebhook() {
+    const group = document.getElementById('webhookGroup');
+    if (!group) return;
+    const res = await this._api('/api/webhook');
+    if (!res || !res.ok) {
+      group.style.display = 'none'; // not an admin in multi-user mode, or the server predates the route
+      return;
+    }
+    let body = null;
+    try { body = await res.json(); } catch { /* leave hidden */ }
+    if (!body || body.success === false) { group.style.display = 'none'; return; }
+    const d = body.data;
+    group.style.display = '';
+    document.getElementById('webhookEnabled').checked = d.enabled === true;
+    document.getElementById('webhookKind').value = d.kind;
+    document.getElementById('webhookScope').value = d.scope;
+    const url = document.getElementById('webhookUrl');
+    url.value = '';
+    url.placeholder = d.hasUrl ? 'Saved. Paste a new URL to replace it' : 'https://ntfy.sh/your-topic';
+    document.getElementById('webhookUrlHint').textContent = d.hasUrl ? `Saved: ${d.urlMasked}` : 'Nothing saved yet.';
+    if (d.lastResult) {
+      const when = new Date(d.lastResult.at).toLocaleString();
+      this._webhookSay(
+        d.lastResult.ok ? `Last delivery succeeded (${when}).` : `Last delivery failed (${when}): ${d.lastResult.error}`,
+        !d.lastResult.ok
+      );
+    } else {
+      this._webhookSay('');
+    }
+  },
+
+  async saveWebhook() {
+    const payload = {
+      enabled: document.getElementById('webhookEnabled').checked,
+      kind: document.getElementById('webhookKind').value,
+      scope: document.getElementById('webhookScope').value,
+    };
+    const url = document.getElementById('webhookUrl').value.trim();
+    if (url) payload.url = url; // blank = keep the saved one
+    const res = await this._api('/api/webhook', { method: 'PUT', body: payload });
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    if (!res || !res.ok || !body || body.success === false) {
+      this._webhookSay(body?.error || 'Could not save the webhook.', true);
+      return;
+    }
+    await this.loadWebhook();
+    this._webhookSay('Saved.');
+  },
+
+  async testWebhook() {
+    const btn = document.getElementById('webhookTestBtn');
+    if (btn) btn.disabled = true;
+    this._webhookSay('Sending…');
+    try {
+      const res = await this._apiPost('/api/webhook/test', {});
+      let body = null;
+      try { body = res ? await res.json() : null; } catch { /* fall through */ }
+      if (!res || !res.ok || !body || body.success === false) {
+        this._webhookSay(body?.error || 'Could not send the test.', true);
+        return;
+      }
+      const r = body.data;
+      this._webhookSay(r.ok ? 'Test sent. Check your phone or channel.' : `Delivery failed: ${r.error}`, !r.ok);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   },
 
   _setUpdateResult(html) {
