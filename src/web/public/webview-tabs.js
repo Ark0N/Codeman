@@ -355,6 +355,7 @@ Object.assign(CodemanApp.prototype, {
       // A web tab is active, so no session tab may also look active.
       for (const tab of container.querySelectorAll('.session-tab[data-id]')) tab.classList.remove('active');
     }
+    this._syncTabTreeSelection?.(container);
   },
 
   // ── Opening / closing ─────────────────────────────────────────────────────

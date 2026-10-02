@@ -5,8 +5,9 @@
  * owner's groups only when it is vertical AND there is at least one group (every
  * other case must be byte-for-byte the flat rail), collapse is per-device and
  * keeps the active row, a structural change escapes the incremental patch path,
- * drag-reorder is withheld, and lineage arcs to a collapse-hidden session anchor
- * to its group header.
+ * drag-reorder is withheld, lineage arcs to a collapse-hidden session anchor
+ * to its group header, and the grouped rail (only) is an ARIA tree with one
+ * roving tab stop, a tree keyboard model and focus restored across rebuilds.
  *
  * The real modules run INSIDE a JSDOM window (runScripts: 'outside-only'), so
  * `document`, `localStorage` and `window` below are that window's, not Node's.
@@ -373,5 +374,230 @@ describe('lineage in the grouped rail', () => {
 
     expect(svg.querySelectorAll('.lineage-line')).toHaveLength(0);
     expect(app._lineageEdgeCount).toBe(0);
+  });
+});
+
+describe('grouped rail tree semantics', () => {
+  const tabs = () => document.getElementById('sessionTabs')!;
+  const press = (key: string, init: Record<string, unknown> = {}) =>
+    (document.activeElement as HTMLElement).dispatchEvent(
+      new window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init })
+    );
+  const focused = () => {
+    const el = document.activeElement as HTMLElement;
+    return el.dataset.tabGroupHeader ? `group:${el.dataset.tabGroupHeader}` : el.dataset.webviewId || el.dataset.id;
+  };
+  const row = (id: string) => document.querySelector<HTMLElement>(`[data-id="${id}"], [data-webview-id="${id}"]`)!;
+
+  function makeTreeApp(options: { tabLayout?: unknown } = {}) {
+    const app = makeApp(options);
+    // The container as index.html ships it.
+    tabs().setAttribute('role', 'tablist');
+    tabs().setAttribute('aria-label', 'Session tabs');
+    app.selectSession = vi.fn();
+    app.openWebview = vi.fn();
+    app.openTabRailActionMenu = vi.fn();
+    app.showWebviewModal = vi.fn();
+    return app;
+  }
+
+  it('is a tree only while grouped, and the flat list returns byte-identical as a tablist', () => {
+    const app = makeTreeApp({ tabLayout: null });
+    app._fullRenderSessionTabs();
+    const flat = tabs().innerHTML;
+    expect(tabs().querySelectorAll('[role="tree"], [role="treeitem"], [role="group"]')).toHaveLength(0);
+    expect(tabs().querySelectorAll('.session-tab[role="tab"]')).toHaveLength(4);
+
+    app._applyTabLayout(layout);
+    expect(tabs().getAttribute('role')).toBe('tree');
+    expect(tabs().getAttribute('aria-label')).toBe('Sessions');
+    expect(tabs().querySelectorAll('[role="tab"]')).toHaveLength(0);
+    expect(tabs().querySelectorAll('.session-tab[role="treeitem"]')).toHaveLength(4);
+
+    app._applyTabLayout(null);
+    expect(tabs().getAttribute('role')).toBe('tablist');
+    expect(tabs().getAttribute('aria-label')).toBe('Session tabs');
+    expect(tabs().innerHTML).toBe(flat);
+
+    // The horizontal strip never becomes a tree, groups or not.
+    document.documentElement.setAttribute('data-tab-orientation', 'horizontal');
+    app._applyTabLayout(layout);
+    expect(tabs().getAttribute('role')).toBe('tablist');
+    expect(tabs().querySelectorAll('[role="treeitem"]')).toHaveLength(0);
+  });
+
+  it('nests group rows under their owning header with levels and positions', () => {
+    const app = makeTreeApp();
+    app._fullRenderSessionTabs();
+    const header = document.querySelector<HTMLElement>('[data-tab-group-header="group-x"]')!;
+    const group = document.getElementById(header.getAttribute('aria-owns')!)!;
+    expect(group.getAttribute('role')).toBe('group');
+    expect(
+      [...group.querySelectorAll<HTMLElement>('[role="treeitem"]')].map((el) => el.dataset.webviewId || el.dataset.id)
+    ).toEqual(['s2', 'w1', 's1']);
+    const aria = (el: HTMLElement) => ['aria-level', 'aria-posinset', 'aria-setsize'].map((a) => el.getAttribute(a));
+    // Level 1: the group header and the ungrouped row.
+    expect(aria(header)).toEqual(['1', '1', '2']);
+    expect(aria(row('s3'))).toEqual(['1', '2', '2']);
+    expect(aria(row('s2'))).toEqual(['2', '1', '3']);
+    expect(aria(row('w1'))).toEqual(['2', '2', '3']);
+    expect(aria(row('s1'))).toEqual(['2', '3', '3']);
+    // aria-selected follows the active row, exactly once.
+    expect([...tabs().querySelectorAll('[aria-selected="true"]')].map((el) => (el as HTMLElement).dataset.id)).toEqual([
+      's2',
+    ]);
+  });
+
+  it('has exactly one tab stop, on the selected row, and no tabbable control inside rows', () => {
+    const app = makeTreeApp();
+    app._fullRenderSessionTabs();
+    const stops = [...tabs().querySelectorAll<HTMLElement>('[tabindex="0"]')];
+    expect(stops).toEqual([row('s2')]);
+    const controls = [...tabs().querySelectorAll<HTMLElement>('.session-tab button, .session-tab [tabindex]')];
+    expect(controls.length).toBeGreaterThan(0);
+    expect(controls.every((el) => el.tabIndex === -1)).toBe(true);
+
+    // Collapse keeps a single stop (the selection stays visible as a level-1 item).
+    app.toggleTabGroupCollapsed('group-x', true);
+    expect(tabs().querySelectorAll('[tabindex="0"]')).toHaveLength(1);
+    expect(row('s2').getAttribute('aria-level')).toBe('1');
+    expect(document.querySelector('[data-tab-group-header="group-x"]')!.hasAttribute('aria-owns')).toBe(false);
+  });
+
+  it('walks Up/Down/Home/End, collapses and enters groups with Left/Right, and activates with Enter/Space', () => {
+    const app = makeTreeApp();
+    app._fullRenderSessionTabs();
+    row('s2').focus();
+    press('ArrowUp');
+    expect(focused()).toBe('group:group-x');
+    press('ArrowUp');
+    expect(focused()).toBe('s3');
+    press('Home');
+    expect(focused()).toBe('group:group-x');
+    press('End');
+    expect(focused()).toBe('s3');
+    // An ungrouped row has no parent to climb to.
+    expect(press('ArrowLeft')).toBe(true);
+    expect(focused()).toBe('s3');
+
+    row('w1').focus();
+    press('Enter');
+    expect(app.openWebview).toHaveBeenCalledWith('w1');
+    row('s1').focus();
+    press(' ');
+    expect(app.selectSession).toHaveBeenCalledWith('s1', { forceReload: true });
+    expect(app.selectSession).toHaveBeenCalledTimes(1);
+
+    press('ArrowLeft');
+    expect(focused()).toBe('group:group-x');
+    press('ArrowLeft');
+    expect(app.collapsedTabGroupIds.has('group-x')).toBe(true);
+    // The header was re-rendered; focus and the tab stop moved to the new node.
+    expect(focused()).toBe('group:group-x');
+    expect(document.querySelector('[data-tab-group-header="group-x"]')!.getAttribute('tabindex')).toBe('0');
+    press('ArrowRight');
+    expect(app.collapsedTabGroupIds.has('group-x')).toBe(false);
+    expect(focused()).toBe('group:group-x');
+    press('ArrowRight');
+    expect(focused()).toBe('s2');
+    press('Home');
+    press('Enter');
+    expect(app.collapsedTabGroupIds.has('group-x')).toBe(true);
+    expect(tabs().querySelectorAll('[tabindex="0"]')).toHaveLength(1);
+  });
+
+  it('opens row actions from the keyboard, since its controls left the tab order', () => {
+    const app = makeTreeApp();
+    app._fullRenderSessionTabs();
+    row('s2').focus();
+    press('F10', { shiftKey: true });
+    expect(app.openTabRailActionMenu).toHaveBeenCalledWith(expect.objectContaining({ currentTarget: row('s2') }), 's2');
+    row('w1').focus();
+    press('ContextMenu');
+    expect(app.showWebviewModal).toHaveBeenCalledWith('w1');
+    press('F10');
+    expect(app.showWebviewModal).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores focus by identity across a background rebuild and follows pointer focus', () => {
+    const app = makeTreeApp();
+    app._fullRenderSessionTabs();
+    row('w1').focus();
+    app._fullRenderSessionTabs();
+    expect(focused()).toBe('w1');
+    expect([...tabs().querySelectorAll('[tabindex="0"]')]).toEqual([row('w1')]);
+
+    // Focus arriving by pointer (or any other route) takes the tab stop with it.
+    row('s3').focus();
+    expect([...tabs().querySelectorAll('[tabindex="0"]')]).toEqual([row('s3')]);
+
+    // A rebuild never pulls focus into the rail when it was elsewhere.
+    (document.activeElement as HTMLElement).blur();
+    app._fullRenderSessionTabs();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('keeps aria-selected in step when the selection changes without a rebuild', () => {
+    const app = makeTreeApp();
+    app._fullRenderSessionTabs();
+    const full = vi.spyOn(app, '_fullRenderSessionTabs');
+    app.activeSessionId = 's1';
+    app._updateActiveTabImmediate('s1');
+    expect(full).not.toHaveBeenCalled();
+    expect([...tabs().querySelectorAll('[aria-selected="true"]')].map((el) => (el as HTMLElement).dataset.id)).toEqual([
+      's1',
+    ]);
+  });
+
+  it('walks a sorted rail in painted order: per group in the tree, across the list when flat', () => {
+    const app = makeTreeApp();
+    app._fullRenderSessionTabs();
+    document.documentElement.dataset.tabRailSort = 'activity';
+    row('s1').style.order = '0';
+    row('s2').style.order = '1';
+    row('w1').style.order = '9999';
+    row('s3').style.order = '2';
+    document.querySelector<HTMLElement>('[data-tab-group-header="group-x"]')!.focus();
+    const walk = () =>
+      Array.from({ length: 4 }, () => {
+        press('ArrowDown');
+        return focused();
+      });
+    expect(walk()).toEqual(['s1', 's2', 'w1', 's3']);
+
+    const flat = makeTreeApp({ tabLayout: null });
+    flat._fullRenderSessionTabs();
+    document.documentElement.dataset.tabRailSort = 'activity';
+    row('s1').style.order = '2';
+    row('s2').style.order = '0';
+    row('s3').style.order = '1';
+    row('w1').style.order = '9999'; // styles.css pins web tabs last; JSDOM loads no stylesheet
+    row('s2').focus();
+    expect(
+      Array.from({ length: 3 }, () => {
+        press('ArrowDown');
+        return focused();
+      })
+    ).toEqual(['s3', 's1', 'w1']);
+  });
+});
+
+describe('flat list keyboard activation', () => {
+  it('opens a web tab with Enter/Space instead of selecting an undefined session', () => {
+    const app = makeApp({ tabLayout: null });
+    app.selectSession = vi.fn();
+    app.openWebview = vi.fn();
+    app._fullRenderSessionTabs();
+    const web = document.querySelector<HTMLElement>('[data-webview-id="w1"]')!;
+    web.focus();
+    web.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    web.dispatchEvent(new window.KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
+    expect(app.openWebview).toHaveBeenCalledTimes(2);
+    expect(app.selectSession).not.toHaveBeenCalled();
+
+    const s2 = document.querySelector<HTMLElement>('[data-id="s2"]')!;
+    s2.focus();
+    s2.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    expect(app.selectSession).toHaveBeenCalledWith('s2', { forceReload: true });
   });
 });

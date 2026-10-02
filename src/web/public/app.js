@@ -5104,6 +5104,7 @@ class CodemanApp {
         tab.classList.remove('active');
       }
     }
+    this._syncTabTreeSelection(container);
     // #257: selection used to stop at the class toggle. On phones/tablets the
     // strip scrolls horizontally, so a tab selected from the palette, a swipe,
     // Alt+N or a push notification could stay parked off-screen.
@@ -5600,6 +5601,12 @@ class CodemanApp {
     const prevScrollTop = container.scrollTop;
     const prevActiveTabId = this._lastRenderedActiveTabId;
     const isFirstRender = !container.querySelector('.session-tab');
+    // The rebuild below destroys the focused row. In the grouped tree, put focus
+    // back on the same item (by identity) so a background render or a keyboard
+    // collapse does not drop a keyboard user to <body>.
+    const focusWasInside = container.contains(document.activeElement);
+    const focusIdentity = this._tabFocusIdentity || (focusWasInside ? this._tabTreeIdentity(document.activeElement) : null);
+    this._tabFocusIdentity = null;
 
     // Build tabs HTML using array for better string concatenation performance.
     // Iterate in sessionOrder to respect the user's custom tab arrangement, on
@@ -5740,6 +5747,8 @@ class CodemanApp {
 
     container.innerHTML = parts.join('');
     container.classList.toggle('session-tabs--grouped', !!groupProjection);
+    this._applyTabListRole(container, !!groupProjection);
+    if (groupProjection) this._applyTabTreeSemantics(container, { identity: focusIdentity, refocus: focusWasInside });
 
     // Put the strip back where the user left it, then reveal the active tab
     // only when it CHANGED (or on the first paint). Restoring unconditionally
@@ -5790,6 +5799,12 @@ class CodemanApp {
     }
 
     this._tabKeydownHandler = (e) => {
+      // The grouped rail is a tree with its own key model; everything else
+      // (header strip, sidebar, flat rail) keeps the tab-strip walk below.
+      if (container.getAttribute('role') === 'tree') {
+        this._handleTabTreeKeydown(e, container);
+        return;
+      }
       // Up/Down are aliases of Left/Right, not replacements: the strip stays
       // arrow-key navigable exactly as before, the vertical sidebar just gains
       // the axis a user reaches for there.
@@ -5807,19 +5822,14 @@ class CodemanApp {
       // sort is stable, so equal orders keep DOM order, which is the unsorted case.
       if (this.isTabRailSorted()) {
         const orderOf = (el) => Number(getComputedStyle(el).order) || 0;
-        // Grouped rail: `order` only sorts WITHIN a group's own flex column, so
-        // the walk sorts by group first (-1 for every row of the flat strip).
-        const groups = [...container.querySelectorAll('.tab-layout-group')];
-        const groupOf = (el) => groups.indexOf(el.closest('.tab-layout-group'));
-        tabs.sort((a, b) => groupOf(a) - groupOf(b) || orderOf(a) - orderOf(b));
+        tabs.sort((a, b) => orderOf(a) - orderOf(b));
       }
       const currentIndex = tabs.indexOf(document.activeElement);
 
       // Enter or Space activates the tab
       if ((e.key === 'Enter' || e.key === ' ') && currentIndex >= 0) {
         e.preventDefault();
-        const sessionId = tabs[currentIndex].dataset.id;
-        this.selectSession(sessionId, { forceReload: true });
+        this._activateTabRow(tabs[currentIndex]);
         return;
       }
 
@@ -5850,6 +5860,216 @@ class CodemanApp {
     };
 
     container.addEventListener('keydown', this._tabKeydownHandler);
+
+    // Grouped tree: a row or header focused by pointer becomes the tab stop, so
+    // Tab-ing away and back returns to it and there is still exactly one stop.
+    if (!this._tabTreeFocusinHandler) {
+      this._tabTreeFocusinHandler = (e) => {
+        if (container.getAttribute('role') !== 'tree') return;
+        const item = e.target?.closest?.('[role="treeitem"]');
+        if (item && container.contains(item)) this._setTabTreeStop(container, item);
+      };
+      container.addEventListener('focusin', this._tabTreeFocusinHandler);
+    }
+  }
+
+  /** Select a session row or open a web-tab row (Enter/Space, either layout). */
+  _activateTabRow(row) {
+    if (row?.dataset.webviewId) return this.openWebview(row.dataset.webviewId);
+    if (row?.dataset.id) return this.selectSession(row.dataset.id, { forceReload: true });
+    return undefined;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Grouped rail: tree semantics and keyboard model
+  // ═══════════════════════════════════════════════════════════════
+  //
+  // Only the GROUPED vertical rail is a tree. #sessionTabs becomes role=tree;
+  // named-group headers are level-1 treeitems that own their rows (level 2);
+  // ungrouped rows and a collapsed group's kept selection are level 1. One item
+  // carries tabindex=0 (roving), every control inside a row is removed from the
+  // tab order, and focus is restored by identity across full re-renders. The
+  // flat rail and the header strip keep role=tablist / role=tab untouched.
+
+  /** #sessionTabs is a tablist (index.html) except while it holds the grouped tree. */
+  _applyTabListRole(container, grouped) {
+    if (grouped) {
+      container.setAttribute('role', 'tree');
+      container.setAttribute('aria-label', 'Sessions');
+    } else if (container.getAttribute('role') === 'tree') {
+      container.setAttribute('role', 'tablist');
+      container.setAttribute('aria-label', 'Session tabs');
+    }
+  }
+
+  /** Stable identity of a tree item (or anything inside one) across re-renders. */
+  _tabTreeIdentity(element) {
+    const item = element?.closest?.('[data-tab-group-header], .session-tab');
+    if (!item) return null;
+    if (item.dataset.tabGroupHeader) return `group:${item.dataset.tabGroupHeader}`;
+    if (item.dataset.webviewId) return `webview:${item.dataset.webviewId}`;
+    if (item.dataset.id) return `session:${item.dataset.id}`;
+    return null;
+  }
+
+  /**
+   * Visible tree items in the order the eye reads them: each section's header,
+   * then its rows. A sorted rail paints rows with the flex `order` property
+   * inside their own group column, so rows are ordered by COMPUTED order within
+   * a section (stable, so the unsorted rail keeps DOM order).
+   */
+  _tabTreeItems(container) {
+    const sorted = this.isTabRailSorted();
+    const orderOf = (el) => Number(getComputedStyle(el).order) || 0;
+    const items = [];
+    for (const section of container.querySelectorAll('.tab-layout-group')) {
+      const header = section.querySelector(':scope > [role="treeitem"]');
+      if (header) items.push(header);
+      const rows = [...section.querySelectorAll('.session-tab[role="treeitem"]:not(.tab-filtered-out)')];
+      if (sorted) rows.sort((a, b) => orderOf(a) - orderOf(b));
+      items.push(...rows);
+    }
+    return items;
+  }
+
+  /** Move the single tab stop to `item` (every other tree item gets -1). */
+  _setTabTreeStop(container, item) {
+    for (const el of container.querySelectorAll('[role="treeitem"]')) el.tabIndex = el === item ? 0 : -1;
+  }
+
+  /**
+   * Turn freshly rendered rows into tree items and place the roving tab stop.
+   * Rows arrive as the flat strip's markup (role=tab, tabindex=0 on the row and
+   * its controls); only their semantics change here, never their content.
+   */
+  _applyTabTreeSemantics(container, { identity = null, refocus = false } = {}) {
+    for (const row of container.querySelectorAll('.session-tab')) {
+      row.setAttribute('role', 'treeitem');
+      row.setAttribute('aria-selected', row.classList.contains('active') ? 'true' : 'false');
+      row.setAttribute('aria-level', row.closest('[role="group"]') ? '2' : '1');
+      // Controls stay clickable, but leave the tab order: the tree has ONE stop,
+      // and a row's actions are reachable from it with Shift+F10 / ContextMenu.
+      for (const control of row.querySelectorAll('[tabindex], button, a[href], input, select, textarea')) {
+        control.tabIndex = -1;
+      }
+    }
+    for (const header of container.querySelectorAll('[data-tab-group-header]')) header.setAttribute('aria-level', '1');
+    // Position within each level: the level-1 run (headers, ungrouped rows, a
+    // collapsed group's kept row) and each group's own rows.
+    const items = this._tabTreeItems(container);
+    const sets = new Map();
+    for (const item of items) {
+      const owner = item.getAttribute('aria-level') === '2' ? item.closest('[role="group"]') : container;
+      if (!sets.has(owner)) sets.set(owner, []);
+      sets.get(owner).push(item);
+    }
+    for (const members of sets.values()) {
+      members.forEach((item, index) => {
+        item.setAttribute('aria-setsize', String(members.length));
+        item.setAttribute('aria-posinset', String(index + 1));
+      });
+    }
+
+    const byIdentity = (id) => (id ? items.find((item) => this._tabTreeIdentity(item) === id) : null);
+    // A focused row that a collapse just hid hands focus to its group header.
+    const hiddenIn = identity ? this._hiddenTabGroupByRef?.get(identity) : null;
+    const target =
+      byIdentity(identity) ||
+      (hiddenIn ? byIdentity(`group:${hiddenIn}`) : null) ||
+      items.find((item) => item.getAttribute('aria-selected') === 'true') ||
+      items[0];
+    if (!target) return;
+    this._setTabTreeStop(container, target);
+    if (refocus && document.activeElement !== target) target.focus();
+  }
+
+  /** Keep aria-selected on the grouped tree in step with the .active class. */
+  _syncTabTreeSelection(container) {
+    if (container?.getAttribute('role') !== 'tree') return;
+    for (const row of container.querySelectorAll('.session-tab')) {
+      row.setAttribute('aria-selected', row.classList.contains('active') ? 'true' : 'false');
+    }
+  }
+
+  /**
+   * Keyboard model of the grouped tree (WAI-ARIA tree view): Up/Down walk the
+   * visible items, Home/End jump, Right expands a header or enters it, Left
+   * collapses a header or climbs from a row to its header, Enter/Space select a
+   * row or toggle a header, Shift+F10 / ContextMenu open a row's actions.
+   */
+  _handleTabTreeKeydown(e, container) {
+    if (e.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+    const items = this._tabTreeItems(container);
+    const current = e.target?.closest?.('[role="treeitem"]');
+    const index = items.indexOf(current);
+    if (index < 0) return;
+    const groupId = current.dataset.tabGroupHeader || null;
+    const expanded = current.getAttribute('aria-expanded') === 'true';
+    const focusAt = (next) => {
+      if (!next) return;
+      this._setTabTreeStop(container, next);
+      next.focus();
+    };
+    const toggle = (collapse) => {
+      // The toggle re-renders the rail; keep focus on this header through it.
+      this._tabFocusIdentity = `group:${groupId}`;
+      this.toggleTabGroupCollapsed(groupId, collapse);
+    };
+
+    switch (e.key) {
+      case 'ArrowDown':
+      case 'ArrowUp': {
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        focusAt(items[(index + step + items.length) % items.length]);
+        break;
+      }
+      case 'Home':
+        focusAt(items[0]);
+        break;
+      case 'End':
+        focusAt(items[items.length - 1]);
+        break;
+      case 'ArrowRight':
+        if (!groupId) return;
+        if (!expanded) toggle(false);
+        else {
+          const child = items.find((item) => item.closest('[role="group"]')?.id === current.getAttribute('aria-owns'));
+          if (!child) return;
+          focusAt(child);
+        }
+        break;
+      case 'ArrowLeft':
+        if (groupId) {
+          if (!expanded) return;
+          toggle(true);
+        } else {
+          const group = current.closest('[role="group"]');
+          const header = group ? container.querySelector(`[aria-owns="${CSS.escape(group.id)}"]`) : null;
+          if (!header) return;
+          focusAt(header);
+        }
+        break;
+      case 'Enter':
+      case ' ':
+        if (groupId) toggle();
+        else this._activateTabRow(current);
+        break;
+      case 'F10':
+      case 'ContextMenu':
+        if (e.key === 'F10' && !e.shiftKey) return;
+        if (current.dataset.id) {
+          this.openTabRailActionMenu?.(
+            { preventDefault() {}, stopPropagation() {}, currentTarget: current },
+            current.dataset.id
+          );
+        } else if (current.dataset.webviewId) {
+          this.showWebviewModal?.(current.dataset.webviewId);
+        } else return;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
   }
 
   handleSessionTabClick(event, sessionId) {
