@@ -249,6 +249,12 @@ A module-level const freezes at first import, and the failure is asymmetric: a C
 4. Only if it cannot install with a plain `npm install -g <pkg>`: give it a layer in `docker/agent.Dockerfile` and set `discovery.install.agentImageLayer: { kind: 'dedicated', reason }` on its entry in `stock.ts`. `test/docker-agent-image-coverage.test.ts` requires both, so an exclusion cannot quietly become an omission. An entry with no `npmPackage` needs only the Dockerfile layer, since it never enters the shared npm layer in the first place.
 5. That is usually all. If you find yourself wanting to add an `if` somewhere, the guard test will tell you — and the answer is a capability field, or a named profile if it genuinely needs to run code.
 
+## MCP server sync
+
+`capabilities.mcpConfig` (`{ path, format }`, `path` relative to the home directory) names the file a CLI keeps its user-level MCP server list in and the dialect it is written in. `src/mcp-sync.ts` reads that list from every ENABLED CLI that declares one and adds any server a CLI is missing from the others; `GET`/`POST /api/mcp-sync` and Settings → Agents & CLIs → MCP servers drive it. Declared today for claude, gemini, codex, opencode and antigravity; every format was checked against what the CLI's own `mcp add` writes, except opencode's (documented, not installed to check). A CLI with no entry (pi, grok, omp, deepseek) is not guessed at: it is listed as `unsupported` in the result when enabled. Adding one is a registry entry plus a small adapter in `mcp-sync.ts`, and a verified fixture in `test/mcp-sync.test.ts`.
+
+Three rules the module keeps and the tests pin: it only ADDS (an existing server is never edited or removed, a same-name difference is reported as a conflict), it never writes a file it could not parse (opencode JSONC with comments), and its result carries server names only, never env values or headers. The schema restricts `path` to a home-relative path without `..`, since sync writes to it.
+
 ## See also
 
 - [Agent CLIs](wiki/Agent-CLIs.md) — the user-facing per-CLI guide.

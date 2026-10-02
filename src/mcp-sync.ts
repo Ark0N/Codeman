@@ -449,7 +449,7 @@ export function parseServers(format: McpFormat, text: string | null): McpServerM
 }
 
 /** Whether this dialect can express the server. */
-export function canExpress(format: McpFormat, s: McpServer): boolean {
+function canExpress(format: McpFormat, s: McpServer): boolean {
   if (format === 'codex-toml' || format === 'antigravity-json') return s.transport !== 'sse';
   return true;
 }
