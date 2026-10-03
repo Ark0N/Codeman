@@ -515,12 +515,23 @@ export const DeepSeekWebStartSchema = z
  */
 const parentSessionIdSchema = z.string().max(100).optional();
 
+/**
+ * Tab group the new session should be placed in (the group's "New session"
+ * action). Advisory like parentSessionId: the layout service looks the id up in
+ * the creating owner's own layout and ignores one it cannot find, so a stale or
+ * foreign id never fails a spawn. A malformed value (null, empty, over-long) is
+ * still a 400, because only the browser sends it.
+ */
+const tabGroupIdSchema = z.string().min(1).max(100).optional();
+
 export const CreateSessionSchema = z.object({
   workingDir: safePathSchema.optional(),
   mode: sessionModeSchema().optional(),
   name: z.string().max(100).optional(),
   /** Session that spawned this one — see parentSessionIdSchema. */
   parentSessionId: parentSessionIdSchema,
+  /** Tab group to place the new session in: see tabGroupIdSchema. */
+  tabGroupId: tabGroupIdSchema,
   envOverrides: safeEnvOverridesSchema,
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort: effortLevelSchema,
@@ -1038,6 +1049,8 @@ export const QuickStartSchema = z.object({
   sessionName: z.string().max(128).optional(),
   /** Session that spawned this one — see parentSessionIdSchema. */
   parentSessionId: parentSessionIdSchema,
+  /** Tab group to place the new session in: see tabGroupIdSchema. */
+  tabGroupId: tabGroupIdSchema,
   /** Model override written to <case>/.claude/settings.local.json (e.g. "opus[1m]").
    *  Empty string clears. Applied for local AND docker cases (the docker workspace is
    *  a real host dir, so the settings file crosses the bind mount); rejected for

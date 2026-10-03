@@ -115,6 +115,12 @@
    * tab, else the active session), so selecting a hidden session by keyboard,
    * palette or Alt+N never leaves the user with no visible selection.
    *
+   * `options.parents` (child session id -> parent session id) places a live
+   * session the layout has not stored yet right after its parent's rows when
+   * the parent IS stored: that is where the server puts a child that follows its
+   * parent, so a spawned session appears in its parent's group at once instead
+   * of jumping there from Ungrouped once the layout re-read lands.
+   *
    * @returns {null | { sections, visibleRefs, hiddenTabGroupByRef }} null when the
    *   layout has no groups: the caller renders the flat rail unchanged.
    */
@@ -133,6 +139,7 @@
         ? `session:${options.activeSessionId}`
         : '';
     const renderable = (ref) => (ref.kind === 'session' ? live.has(ref.id) : open.has(ref.id));
+    const withFollowers = followingChildren(layout, liveSessionIds, options.parents);
     const placed = new Set();
     const visibleRefs = [];
     const hiddenTabGroupByRef = {};
@@ -159,18 +166,59 @@
 
     for (const group of layout.groups) {
       const isCollapsed = collapsed.has(group.id);
-      const { shown, count } = place(group.refs, group.id, isCollapsed);
+      const { shown, count } = place(withFollowers(group.refs), group.id, isCollapsed);
       sections.push({ id: group.id, name: group.name, refs: shown, count, collapsed: isCollapsed });
     }
     const omissions = [
       ...liveSessionIds.map((id) => ({ kind: 'session', id })),
       ...openWebviewIds.map((id) => ({ kind: 'webview', id })),
     ];
-    const ungrouped = place([...layout.ungrouped, ...omissions], null, false);
+    const ungrouped = place([...withFollowers(layout.ungrouped), ...omissions], null, false);
     if (ungrouped.count > 0) {
       sections.push({ id: null, name: '', refs: ungrouped.shown, count: ungrouped.count, collapsed: false });
     }
     return { sections, visibleRefs, hiddenTabGroupByRef };
+  }
+
+  /**
+   * For project(): returns `expand(refs)`, which inserts each live, not-yet-stored
+   * child session right after its parent's rows in the parent's container. A
+   * child of such a child follows it the same way. Without `parents` it is the
+   * identity, so callers that pass no lineage see no change.
+   */
+  function followingChildren(layout, liveSessionIds, parents) {
+    if (!parents || typeof parents !== 'object') return (refs) => refs;
+    const stored = new Set(refLocations(layout).map((item) => refKey(item.ref)));
+    const accepted = new Set();
+    const pending = new Map();
+    // Accept parents before their children (bounded: one pass per accepted child).
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const id of liveSessionIds) {
+        const key = `session:${id}`;
+        const parentId = parents[id];
+        if (stored.has(key) || accepted.has(key) || typeof parentId !== 'string' || parentId === id) continue;
+        const parentKey = `session:${parentId}`;
+        if (!stored.has(parentKey) && !accepted.has(parentKey)) continue;
+        accepted.add(key);
+        if (!pending.has(parentKey)) pending.set(parentKey, []);
+        pending.get(parentKey).push({ kind: 'session', id });
+        changed = true;
+      }
+    }
+    if (!pending.size) return (refs) => refs;
+    return (refs) => {
+      const out = [...refs];
+      for (const [parentKey, children] of pending) {
+        const block = lineageBlock(layout, { kind: 'session', id: parentKey.slice(8) }, parents);
+        let at = -1;
+        out.forEach((ref, index) => {
+          if (block.has(refKey(ref))) at = index;
+        });
+        if (at >= 0) out.splice(at + 1, 0, ...children);
+      }
+      return out;
+    };
   }
 
   /**
@@ -335,6 +383,35 @@
   }
 
   /**
+   * How a child session is placed, for the row menu. null for a session with no
+   * parent (or not stored). Otherwise `{ state, parentId, canFollow }`:
+   *  - inherited: it follows its parent (moves with it).
+   *  - manual: placed by hand; "Follow parent again" puts it back.
+   *  - dangling: its parent is not in this layout (closed, or another owner's),
+   *    so it stands on its own; nothing re-adopts it automatically.
+   *  - cycle: the parent chain loops back to it; it stands on its own.
+   */
+  function placementState(layoutInput, ref, parents) {
+    const layout = normalizeLayout(layoutInput);
+    if (!validRef(ref) || ref.kind !== 'session') return null;
+    const parentId = parents?.[ref.id];
+    if (typeof parentId !== 'string' || !parentId || parentId === ref.id) return null;
+    const stored = new Map(refLocations(layout).map((item) => [refKey(item.ref), item.ref]));
+    const own = stored.get(refKey(ref));
+    if (!own) return null;
+    if (!stored.has(`session:${parentId}`)) return { state: 'dangling', parentId, canFollow: false };
+    // Walk up the stored ancestors; meeting this session again is a loop.
+    const seen = new Set([ref.id]);
+    for (let id = parentId; id && stored.has(`session:${id}`); id = parents[id]) {
+      if (seen.has(id)) return { state: 'cycle', parentId, canFollow: false };
+      seen.add(id);
+    }
+    return own.placement === 'manual'
+      ? { state: 'manual', parentId, canFollow: true }
+      : { state: 'inherited', parentId, canFollow: false };
+  }
+
+  /**
    * Where a moved row lands, as the server's `index` (counted AFTER the moved
    * block is taken out): before or after `anchor` in that container, or at its
    * end when there is no anchor.
@@ -458,6 +535,36 @@
         layout.ungrouped = layout.ungrouped.filter((ref) => !keys.has(refKey(ref)));
         const destination = containerRefs(layout, destinationId);
         destination.splice(clampIndex(op.index, destination.length), 0, ...block);
+        return layout;
+      }
+      case 'followParent': {
+        // Clear a hand placement: the child (with the sessions that follow it)
+        // goes back after its parent's rows. The server re-derives the exact
+        // order on save; this only has to put the row in the right group now.
+        const state = placementState(layout, op.ref, op.parents);
+        if (!state || state.state === 'dangling' || state.state === 'cycle') editError('no parent to follow');
+        if (state.state !== 'manual') return layout;
+        const targetKey = refKey(op.ref);
+        const clear = (ref) => (refKey(ref) === targetKey ? { kind: ref.kind, id: ref.id } : ref);
+        for (const group of layout.groups) group.refs = group.refs.map(clear);
+        layout.ungrouped = layout.ungrouped.map(clear);
+        const childKeys = new Set();
+        for (const key of lineageBlock(layout, op.ref, op.parents)) childKeys.add(key);
+        const block = refLocations(layout)
+          .filter((item) => childKeys.has(refKey(item.ref)))
+          .map((item) => copyRef(item.ref));
+        block.sort((a, b) => (refKey(a) === targetKey ? -1 : refKey(b) === targetKey ? 1 : 0));
+        for (const group of layout.groups) group.refs = group.refs.filter((ref) => !childKeys.has(refKey(ref)));
+        layout.ungrouped = layout.ungrouped.filter((ref) => !childKeys.has(refKey(ref)));
+        const parentRef = { kind: 'session', id: state.parentId };
+        const home = refLocations(layout).find((item) => refKey(item.ref) === refKey(parentRef));
+        const container = containerRefs(layout, home.groupId);
+        const parentBlock = lineageBlock(layout, parentRef, op.parents);
+        let at = -1;
+        container.forEach((ref, index) => {
+          if (parentBlock.has(refKey(ref))) at = index;
+        });
+        container.splice(at + 1, 0, ...block);
         return layout;
       }
       default:
@@ -643,6 +750,7 @@
     applyOperation,
     moveDestination,
     movingRefKeys: (layout, ref, parents) => [...lineageBlock(normalizeLayout(layout), ref, parents)],
+    placementState,
     dropOperation,
     contentKey,
     createEditCoordinator,

@@ -111,6 +111,39 @@ describe('projection', () => {
   });
 });
 
+describe('projection: sessions spawned by another session', () => {
+  const grouped = () => ({
+    version: 3,
+    updatedAt: '',
+    groups: [{ id: 'g1', name: 'Core', refs: [s('p'), s('p-kid'), s('x')] }],
+    ungrouped: [s('u')],
+  });
+  const s = (id: string) => ({ kind: 'session', id });
+
+  it("draws a child the layout has not stored yet inside its parent's group, after the parent's rows", () => {
+    const h = loadHelper();
+    const result = h.project(grouped(), {
+      liveSessionIds: ['p', 'p-kid', 'x', 'u', 'new', 'grandkid', 'orphan'],
+      parents: { 'p-kid': 'p', new: 'p', grandkid: 'new', orphan: 'gone' },
+    });
+    expect(result.sections.map((section: any) => [section.id, ids(section.refs)])).toEqual([
+      ['g1', ['session:p', 'session:p-kid', 'session:new', 'session:grandkid', 'session:x']],
+      // A child whose parent is not in the layout has nothing to follow.
+      [null, ['session:u', 'session:orphan']],
+    ]);
+  });
+
+  it('leaves a stored child where the layout put it, and changes nothing without lineage', () => {
+    const h = loadHelper();
+    const layout = { ...grouped(), ungrouped: [s('u'), s('manual-kid')] };
+    const live = ['p', 'p-kid', 'x', 'u', 'manual-kid'];
+    const withParents = h.project(layout, { liveSessionIds: live, parents: { 'manual-kid': 'p' } });
+    expect(ids(withParents.sections[1].refs)).toEqual(['session:u', 'session:manual-kid']);
+    const without = h.project(layout, { liveSessionIds: [...live, 'new'] });
+    expect(ids(without.sections[1].refs)).toEqual(['session:u', 'session:manual-kid', 'session:new']);
+  });
+});
+
 describe('structure key', () => {
   it('changes with every structural input and ignores everything else', () => {
     const h = loadHelper();

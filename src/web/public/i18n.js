@@ -81,6 +81,11 @@
     'Move down': '下移',
     'Move to Ungrouped': '移到未分组',
     'Move to new group': '移到新分组',
+    'New session': '新建会话',
+    'A session is already starting.': '已有会话正在启动。',
+    'Follow parent again': '重新跟随父会话',
+    'Parent closed; placed on its own': '父会话已关闭；单独放置',
+    'Parent loop; placed on its own': '父会话形成循环；单独放置',
     'Could not save tab groups.': '无法保存标签分组。',
     'Tab groups changed elsewhere; part of your edit no longer applies.':
       '标签分组已在别处更改；你的部分编辑已不再适用。',
@@ -948,6 +953,9 @@
       [/^Failed to (.+)$/, (_m, action) => `操作失败：${action}`],
       // Group names are user text: they pass through untranslated.
       [/^Move to (.+)$/, (_m, group) => `移到 ${group}`],
+      // Session names are user text too.
+      [/^Follows (.+)$/, (_m, parent) => `跟随 ${parent}`],
+      [/^Placed by hand \(parent: (.+)\)$/, (_m, parent) => `已手动放置（父会话：${parent}）`],
       [
         /^Delete group "(.+)"\? Its tabs move to Ungrouped\.$/,
         (_m, group) => `删除分组“${group}”？其中的标签将移到未分组。`,

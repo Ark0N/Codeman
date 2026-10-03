@@ -2766,6 +2766,17 @@ html[data-tab-orientation='vertical'].tab-rail-compact .session-tab .tab-actions
   color: var(--red);
 }
 
+/* A child session's placement line: information, not an action. */
+.tab-rail-action-menu button.tab-rail-action-menu-note {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  cursor: default;
+}
+
+.tab-rail-action-menu button.tab-rail-action-menu-note:hover {
+  background: transparent;
+}
+
 :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-range-field {
   display: grid;
   grid-template-columns: minmax(112px, 1fr) 44px;
