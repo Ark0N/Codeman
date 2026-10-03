@@ -4178,6 +4178,8 @@ Object.assign(CodemanApp.prototype, {
         bodyEl.innerHTML = `<iframe src="${escapeHtml(`${base}/raw`)}" title="${escapeHtml(filePath)}"></iframe>`;
       } else if (ext === 'docx' || ext === 'pptx') {
         bodyEl.innerHTML = `<iframe src="${escapeHtml(`${base}/preview`)}" title="${escapeHtml(filePath)}"></iframe>`;
+      } else if (ext === 'xlsx') {
+        this._openSpreadsheetPreview(bodyEl, `${base}/raw`, externalSize);
       } else {
         try {
           // Bounded like the workspace text preview: a Range for the first
@@ -4274,6 +4276,9 @@ Object.assign(CodemanApp.prototype, {
       } else if (data.type === 'audio') {
         bodyEl.innerHTML = `<audio src="${escapeHtml(CodemanBase.url(data.url))}" controls autoplay preload="metadata"></audio>`;
         footerEl.textContent = `${this.formatFileSize(data.size)} \u2022 ${data.extension}`;
+      } else if (data.type === 'spreadsheet') {
+        this._openSpreadsheetPreview(bodyEl, CodemanBase.url(data.url), data.size);
+        footerEl.textContent = `${this.formatFileSize(data.size)} \u2022 ${data.extension}`;
       } else if (data.type === 'binary') {
         const downloadHref = CodemanBase.url(`/api/sessions/${sessionId}/file-raw?path=${encodeURIComponent(filePath)}&download=true`);
         bodyEl.innerHTML = `<div class="binary-message">Binary file (${this.formatFileSize(data.size)})<br>Cannot preview<br><a href="${escapeHtml(downloadHref)}" download>Download</a></div>`;
@@ -4347,6 +4352,9 @@ Object.assign(CodemanApp.prototype, {
    * the in-flight network fetch and puts the element back in NETWORK_EMPTY.
    */
   _stopFilePreviewMedia() {
+    // A spreadsheet preview owns a fetch and a Web Worker; emptying the body
+    // leaves both running, so tear them down with the rest of the media.
+    this._disposeSpreadsheetPreview();
     const bodyEl = this.$('filePreviewBody');
     if (!bodyEl) return;
     for (const media of bodyEl.querySelectorAll('video, audio')) {
@@ -4359,6 +4367,42 @@ Object.assign(CodemanApp.prototype, {
       }
     }
     bodyEl.innerHTML = '';
+  },
+
+  /**
+   * Render an XLSX into the preview body via spreadsheet-preview.js, which
+   * parses it in a Web Worker (the ExcelJS bundle loads there, on demand, and
+   * never on page load). `url` is a raw route; the renderer adds `?preview=true`
+   * so the server applies its preview size cap. Superseded by the next
+   * _stopFilePreviewMedia(), which runs on every open and on close.
+   */
+  _openSpreadsheetPreview(bodyEl, url, size) {
+    this._disposeSpreadsheetPreview();
+    const renderer = window.CodemanSpreadsheetPreview;
+    if (!renderer?.open) {
+      bodyEl.innerHTML = '<div class="binary-message">Spreadsheet preview is unavailable.</div>';
+      return;
+    }
+    bodyEl.textContent = '';
+    const token = {};
+    this._spreadsheetPreviewToken = token;
+    this._spreadsheetPreview = renderer.open({
+      container: bodyEl,
+      url,
+      size,
+      isCurrent: () => this._spreadsheetPreviewToken === token,
+    });
+  },
+
+  _disposeSpreadsheetPreview() {
+    const handle = this._spreadsheetPreview;
+    this._spreadsheetPreview = null;
+    this._spreadsheetPreviewToken = null;
+    try {
+      handle?.dispose();
+    } catch (err) {
+      console.warn('Failed to dispose spreadsheet preview:', err);
+    }
   },
 
   // ═══════════════════════════════════════════════════════════════
@@ -5056,7 +5100,7 @@ Object.assign(CodemanApp.prototype, {
           <div class="attachment-history-empty-title">No attachments yet</div>
           <div>Show a file here by running:</div>
           <code>codeman attach /absolute/path/to/file.pptx</code>
-          <div>Supports .pptx, .docx, .pdf, .png, .md, and .txt.</div>
+          <div>Supports .pptx, .docx, .xlsx, .pdf, .png, .md, and .txt.</div>
         </div>
       `;
       return;

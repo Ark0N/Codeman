@@ -33,6 +33,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/split-pane-terminal.browser.test.ts',
   'test/split-pane-orchestration.browser.test.ts',
   'test/split-pane-auto-collapse.browser.test.ts',
+  'test/spreadsheet-preview.browser.test.ts',
 ];
 
 /**
