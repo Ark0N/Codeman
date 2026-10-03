@@ -319,6 +319,8 @@ const _SSE_HANDLER_MAP = [
 
   // Session order (global tab order sync, COD-131)
   [SSE_EVENTS.SESSION_ORDER_CHANGED, '_onSessionOrderChanged'],
+  // Owner tab layout (grouped vertical rail)
+  [SSE_EVENTS.TAB_LAYOUT_CHANGED, '_onTabLayoutChanged'],
 
   // Web tabs (dashboard URLs)
   [SSE_EVENTS.WEBVIEW_CHANGED, '_onWebviewChanged'],
@@ -581,6 +583,12 @@ class CodemanApp {
     this._shortIdCache = new Map(); // Cache session ID .slice(0, 8) results
     this.sessionOrder = []; // Track tab order for drag-and-drop reordering
     this.draggedTabId = null; // Currently dragged tab session ID
+    // Owner tab layout (GET /api/tab-layout), read-only here: it only changes how
+    // the vertical rail GROUPS rows. sessionOrder above stays the tab order.
+    this.tabLayout = null;
+    this.collapsedTabGroupIds = new Set(); // per-device, localStorage-backed
+    this._hiddenTabGroupByRef = new Map(); // 'session:<id>' -> collapsed group id
+    this._lastTabGroupStructureKey = null;
     this.cases = [];
     this.currentRun = null;
     this.totalTokens = 0;
@@ -858,6 +866,8 @@ class CodemanApp {
     // Flush the durable queue synchronously when the page is hidden/closed —
     // debounced persistence may have a pending write we mustn't lose on reload.
     window.addEventListener('pagehide', () => this._persistReliableNow());
+    // Tab group edits not yet confirmed by the server survive a reload.
+    window.addEventListener('pagehide', () => this._persistPendingTabLayoutEdits());
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') this._persistReliableNow();
       // A background tab's timers are throttled, so the 5s watchdog may not
@@ -1253,6 +1263,16 @@ class CodemanApp {
 
       // Escape - close panels and modals (different logic: no preventDefault, no return)
       if (e.key === 'Escape') {
+        // An open group menu (or a grouped-rail drag) owns this Escape: close
+        // just that, not every panel behind it.
+        if (this._tabGroupMenu && this._tabGroupMenuKeydown) {
+          this._tabGroupMenuKeydown(e);
+          return;
+        }
+        if (this._tabLayoutDrag?.active && this._tabLayoutDragKeydown) {
+          this._tabLayoutDragKeydown(e);
+          return;
+        }
         this.closeAllPanels();
         this.closeHelp();
         if (this.attachmentHistoryDrawerOpen) this.closeAttachmentHistory();
@@ -4361,6 +4381,10 @@ class CodemanApp {
     // Sync sessionOrder with current sessions (preserve order, add new, remove stale)
     this.syncSessionOrder();
 
+    // (Re)read the owner tab layout on every init, including SSE reconnects: a
+    // tab:layoutChanged sent while this client was disconnected is never replayed.
+    this._loadTabLayout();
+
     if (data.respawnStatus) {
       this.respawnStatus = data.respawnStatus;
     } else {
@@ -5183,6 +5207,12 @@ class CodemanApp {
   _updateActiveTabImmediate(sessionId) {
     const container = this.$('sessionTabs');
     if (!container) return;
+    // Grouped rail: selecting a session hidden in a collapsed group must show it
+    // (and re-hide the previous exception), which a class toggle cannot do.
+    if (this._isTabGroupStructureStale()) {
+      this._fullRenderSessionTabs();
+      return;
+    }
     const tabs = container.querySelectorAll('.session-tab[data-id]');
     for (const tab of tabs) {
       if (tab.dataset.id === sessionId) {
@@ -5191,6 +5221,7 @@ class CodemanApp {
         tab.classList.remove('active');
       }
     }
+    this._syncTabTreeSelection(container);
     // #257: selection used to stop at the class toggle. On phones/tablets the
     // strip scrolls horizontally, so a tab selected from the palette, a swipe,
     // Alt+N or a push notification could stay parked off-screen.
@@ -5342,7 +5373,12 @@ class CodemanApp {
     const container = this.$('sessionTabs');
     const existingTabs = container.querySelectorAll('.session-tab[data-id]');
     const existingIds = new Set([...existingTabs].map(t => t.dataset.id));
-    const currentIds = new Set(this.sessions.keys());
+    // Grouped rail: a collapsed group keeps its rows out of the DOM, so compare
+    // against the rows the projection SHOWS, not every live session.
+    const groupProjection = this._projectTabGroups();
+    const currentIds = groupProjection
+      ? new Set(groupProjection.visibleRefs.filter((ref) => ref.kind === 'session').map((ref) => ref.id))
+      : new Set(this.sessions.keys());
 
     // Web tabs live in the same strip but are not in this.sessions, so they need
     // their own change check. Without it, the session-only comparison below is
@@ -5351,14 +5387,20 @@ class CodemanApp {
     const existingWebIds = [...container.querySelectorAll('.session-tab[data-webview-id]')].map(
       t => t.dataset.webviewId
     );
-    const wantedWebIds = (this.webviewOrder || []).filter(id => this.webviews?.has(id));
+    const wantedWebIds = groupProjection
+      ? groupProjection.visibleRefs.filter((ref) => ref.kind === 'webview').map((ref) => ref.id)
+      : (this.webviewOrder || []).filter(id => this.webviews?.has(id));
     const webTabsUnchanged =
       existingWebIds.length === wantedWebIds.length && existingWebIds.every((id, i) => id === wantedWebIds[i]);
 
     // Check if we can do incremental update (same session IDs and same web tabs)
+    // The grouped rail's structure (sections, collapse, the shown exception) can
+    // change while the id sets stay equal; the in-place patch below cannot move
+    // or hide a row, so any structural change takes the full rebuild.
     const canIncremental = existingIds.size === currentIds.size &&
       [...existingIds].every(id => currentIds.has(id)) &&
-      webTabsUnchanged;
+      webTabsUnchanged &&
+      !this._isTabGroupStructureStale(groupProjection);
 
     if (canIncremental) {
       // Read once for the whole pass, like the full-rebuild path: this touches
@@ -5650,6 +5692,8 @@ class CodemanApp {
   _fullRenderSessionTabs() {
     this.closeTabRailActionMenu?.();
     if (this._inlineRenameActive) return;
+    // The group menu's trigger is about to be replaced.
+    this.closeTabGroupMenu();
     const container = this.$('sessionTabs');
 
     // Sidebar rows are always tall (name + folder) and never wrap. Re-assert it
@@ -5676,6 +5720,14 @@ class CodemanApp {
     const prevScrollTop = container.scrollTop;
     const prevActiveTabId = this._lastRenderedActiveTabId;
     const isFirstRender = !container.querySelector('.session-tab');
+    // The rebuild below destroys the focused row. In the grouped tree, put focus
+    // back on the same item (by identity) so a background render or a keyboard
+    // collapse does not drop a keyboard user to <body>.
+    // An edit made from a menu (focus now on <body>) asks to land back in the rail.
+    const focusWasInside = container.contains(document.activeElement) || this._tabRefocusAfterEdit === true;
+    const focusIdentity = this._tabFocusIdentity || (focusWasInside ? this._tabTreeIdentity(document.activeElement) : null);
+    this._tabFocusIdentity = null;
+    this._tabRefocusAfterEdit = false;
 
     // Build tabs HTML using array for better string concatenation performance.
     // Iterate in sessionOrder to respect the user's custom tab arrangement, on
@@ -5696,6 +5748,10 @@ class CodemanApp {
     // layout, and the tabs then carry no inline order at all — the header
     // strip's markup is byte-identical to before.
     const railSortOrder = this._tabRailSortOrder(tabOrder.filter((id) => this.sessions.has(id)));
+    // One row per session, in tab order. The flat strip emits them as-is; the
+    // grouped rail places the SAME markup into its sections, so a row never
+    // differs between the two (badge = Alt+N slot in sessionOrder either way).
+    const rowHtml = new Map();
     let _tabIdx = 0;
     for (const id of tabOrder) {
       const session = this.sessions.get(id);
@@ -5759,7 +5815,7 @@ class CodemanApp {
       const inlineSessionActions = this.shouldInlineSessionActions();
       const tabActionsHtml = `<span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span><button type="button" class="tab-more" onclick="event.stopPropagation(); app.openTabRailActionMenu(event, ${escapeHtml(JSON.stringify(id))})" title="Session actions" aria-label="Session actions">&#x22EF;</button></span>`;
 
-      parts.push(`<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${paneExitBadge ? ' tab-agent-exited' : ''}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}"${richData}${railOrderStyle} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
+      rowHtml.set(id, `<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${paneExitBadge ? ' tab-agent-exited' : ''}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}"${richData}${railOrderStyle} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
           ${_tabIdx < 9 ? '<span class="tab-number">' + (_tabIdx + 1) + '</span>' : ''}
           ${loadState ? '<span class="tab-load-spinner" aria-hidden="true"></span>' : ''}
           <span class="tab-status ${status}" aria-hidden="true"></span>
@@ -5782,12 +5838,38 @@ class CodemanApp {
       _tabIdx++;
     }
 
-    // Web tabs (dashboard URLs) render after the session tabs, continuing the
-    // Alt+N numbering. They carry data-webview-id instead of data-id, so every
-    // session-tab code path above (drag-and-drop, alerts, badges) skips them.
-    parts.push(this.renderWebviewTabs ? this.renderWebviewTabs(_tabIdx) : '');
+    const groupProjection = this._projectTabGroups();
+    if (groupProjection) {
+      // Grouped vertical rail. Web tabs keep their flat-strip Alt+N slot (after
+      // every session), wherever their group puts them.
+      const webviewSlots = new Map(
+        (this.webviewOrder || []).filter((wid) => this.webviews?.has(wid)).map((wid, i) => [wid, _tabIdx + i])
+      );
+      parts.push(
+        window.CodemanTabLayout.renderProjection(
+          groupProjection,
+          (ref) =>
+            ref.kind === 'session'
+              ? rowHtml.get(ref.id) || ''
+              : this.renderWebviewTab?.(ref.id, webviewSlots.get(ref.id) ?? Infinity) || '',
+          escapeHtml
+        )
+      );
+      this._hiddenTabGroupByRef = new Map(Object.entries(groupProjection.hiddenTabGroupByRef));
+    } else {
+      parts.push(...rowHtml.values());
+      // Web tabs (dashboard URLs) render after the session tabs, continuing the
+      // Alt+N numbering. They carry data-webview-id instead of data-id, so every
+      // session-tab code path above (drag-and-drop, alerts, badges) skips them.
+      parts.push(this.renderWebviewTabs ? this.renderWebviewTabs(_tabIdx) : '');
+      this._hiddenTabGroupByRef = new Map();
+    }
+    this._lastTabGroupStructureKey = this._tabGroupStructureKey(groupProjection);
 
     container.innerHTML = parts.join('');
+    container.classList.toggle('session-tabs--grouped', !!groupProjection);
+    this._applyTabListRole(container, !!groupProjection);
+    if (groupProjection) this._applyTabTreeSemantics(container, { identity: focusIdentity, refocus: focusWasInside });
 
     // Put the strip back where the user left it, then reveal the active tab
     // only when it CHANGED (or on the first paint). Restoring unconditionally
@@ -5803,6 +5885,9 @@ class CodemanApp {
 
     // Set up drag-and-drop handlers for tab reordering
     this.setupTabDragHandlers();
+    // The grouped rail drags with its own pointer model (rows across groups,
+    // group reorder); bound once, inert unless the rail is grouped.
+    this._bindTabLayoutPointerDrag(container);
 
     // Set up keyboard navigation for tabs
     this.setupTabKeyboardNavigation(container);
@@ -5838,6 +5923,12 @@ class CodemanApp {
     }
 
     this._tabKeydownHandler = (e) => {
+      // The grouped rail is a tree with its own key model; everything else
+      // (header strip, sidebar, flat rail) keeps the tab-strip walk below.
+      if (container.getAttribute('role') === 'tree') {
+        this._handleTabTreeKeydown(e, container);
+        return;
+      }
       // Up/Down are aliases of Left/Right, not replacements: the strip stays
       // arrow-key navigable exactly as before, the vertical sidebar just gains
       // the axis a user reaches for there.
@@ -5862,8 +5953,7 @@ class CodemanApp {
       // Enter or Space activates the tab
       if ((e.key === 'Enter' || e.key === ' ') && currentIndex >= 0) {
         e.preventDefault();
-        const sessionId = tabs[currentIndex].dataset.id;
-        this.selectSession(sessionId, { forceReload: true });
+        this._activateTabRow(tabs[currentIndex]);
         return;
       }
 
@@ -5894,6 +5984,220 @@ class CodemanApp {
     };
 
     container.addEventListener('keydown', this._tabKeydownHandler);
+
+    // Grouped tree: a row or header focused by pointer becomes the tab stop, so
+    // Tab-ing away and back returns to it and there is still exactly one stop.
+    if (!this._tabTreeFocusinHandler) {
+      this._tabTreeFocusinHandler = (e) => {
+        if (container.getAttribute('role') !== 'tree') return;
+        const item = e.target?.closest?.('[role="treeitem"]');
+        if (item && container.contains(item)) this._setTabTreeStop(container, item);
+      };
+      container.addEventListener('focusin', this._tabTreeFocusinHandler);
+    }
+  }
+
+  /** Select a session row or open a web-tab row (Enter/Space, either layout). */
+  _activateTabRow(row) {
+    if (row?.dataset.webviewId) return this.openWebview(row.dataset.webviewId);
+    if (row?.dataset.id) return this.selectSession(row.dataset.id, { forceReload: true });
+    return undefined;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Grouped rail: tree semantics and keyboard model
+  // ═══════════════════════════════════════════════════════════════
+  //
+  // Only the GROUPED vertical rail is a tree. #sessionTabs becomes role=tree;
+  // named-group headers are level-1 treeitems that own their rows (level 2);
+  // ungrouped rows and a collapsed group's kept selection are level 1. One item
+  // carries tabindex=0 (roving), every control inside a row is removed from the
+  // tab order, and focus is restored by identity across full re-renders. The
+  // flat rail and the header strip keep role=tablist / role=tab untouched.
+
+  /** #sessionTabs is a tablist (index.html) except while it holds the grouped tree. */
+  _applyTabListRole(container, grouped) {
+    if (grouped) {
+      container.setAttribute('role', 'tree');
+      container.setAttribute('aria-label', 'Sessions');
+    } else if (container.getAttribute('role') === 'tree') {
+      container.setAttribute('role', 'tablist');
+      container.setAttribute('aria-label', 'Session tabs');
+    }
+  }
+
+  /** Stable identity of a tree item (or anything inside one) across re-renders. */
+  _tabTreeIdentity(element) {
+    const item = element?.closest?.('[data-tab-group-header], .session-tab');
+    if (!item) return null;
+    if (item.dataset.tabGroupHeader) return `group:${item.dataset.tabGroupHeader}`;
+    if (item.dataset.webviewId) return `webview:${item.dataset.webviewId}`;
+    if (item.dataset.id) return `session:${item.dataset.id}`;
+    return null;
+  }
+
+  /**
+   * Visible tree items in the order the eye reads them: each section's header,
+   * then its rows. A sorted rail paints rows with the flex `order` property
+   * inside their own group column, so rows are ordered by COMPUTED order within
+   * a section (stable, so the unsorted rail keeps DOM order).
+   */
+  _tabTreeItems(container) {
+    const sorted = this.isTabRailSorted();
+    const orderOf = (el) => Number(getComputedStyle(el).order) || 0;
+    const items = [];
+    for (const section of container.querySelectorAll('.tab-layout-group')) {
+      const header = section.querySelector(':scope > [role="treeitem"]');
+      if (header) items.push(header);
+      const rows = [...section.querySelectorAll('.session-tab[role="treeitem"]:not(.tab-filtered-out)')];
+      if (sorted) rows.sort((a, b) => orderOf(a) - orderOf(b));
+      items.push(...rows);
+    }
+    return items;
+  }
+
+  /** Move the single tab stop to `item` (every other tree item gets -1). */
+  _setTabTreeStop(container, item) {
+    for (const el of container.querySelectorAll('[role="treeitem"]')) el.tabIndex = el === item ? 0 : -1;
+  }
+
+  /**
+   * Turn freshly rendered rows into tree items and place the roving tab stop.
+   * Rows arrive as the flat strip's markup (role=tab, tabindex=0 on the row and
+   * its controls); only their semantics change here, never their content.
+   */
+  _applyTabTreeSemantics(container, { identity = null, refocus = false } = {}) {
+    for (const row of container.querySelectorAll('.session-tab')) {
+      row.setAttribute('role', 'treeitem');
+      row.setAttribute('aria-selected', row.classList.contains('active') ? 'true' : 'false');
+      row.setAttribute('aria-level', row.closest('[role="group"]') ? '2' : '1');
+      // Controls stay clickable, but leave the tab order: the tree has ONE stop,
+      // and a row's actions are reachable from it with Shift+F10 / ContextMenu.
+      for (const control of row.querySelectorAll('[tabindex], button, a[href], input, select, textarea')) {
+        control.tabIndex = -1;
+      }
+    }
+    for (const header of container.querySelectorAll('[data-tab-group-header]')) header.setAttribute('aria-level', '1');
+    // Position within each level: the level-1 run (headers, ungrouped rows, a
+    // collapsed group's kept row) and each group's own rows.
+    const items = this._tabTreeItems(container);
+    const sets = new Map();
+    for (const item of items) {
+      const owner = item.getAttribute('aria-level') === '2' ? item.closest('[role="group"]') : container;
+      if (!sets.has(owner)) sets.set(owner, []);
+      sets.get(owner).push(item);
+    }
+    for (const members of sets.values()) {
+      members.forEach((item, index) => {
+        item.setAttribute('aria-setsize', String(members.length));
+        item.setAttribute('aria-posinset', String(index + 1));
+      });
+    }
+
+    const byIdentity = (id) => (id ? items.find((item) => this._tabTreeIdentity(item) === id) : null);
+    // A focused row that a collapse just hid hands focus to its group header.
+    const hiddenIn = identity ? this._hiddenTabGroupByRef?.get(identity) : null;
+    const target =
+      byIdentity(identity) ||
+      (hiddenIn ? byIdentity(`group:${hiddenIn}`) : null) ||
+      items.find((item) => item.getAttribute('aria-selected') === 'true') ||
+      items[0];
+    if (!target) return;
+    this._setTabTreeStop(container, target);
+    if (refocus && document.activeElement !== target) target.focus();
+  }
+
+  /** Keep aria-selected on the grouped tree in step with the .active class. */
+  _syncTabTreeSelection(container) {
+    if (container?.getAttribute('role') !== 'tree') return;
+    for (const row of container.querySelectorAll('.session-tab')) {
+      row.setAttribute('aria-selected', row.classList.contains('active') ? 'true' : 'false');
+    }
+  }
+
+  /**
+   * Keyboard model of the grouped tree (WAI-ARIA tree view): Up/Down walk the
+   * visible items, Home/End jump, Right expands a header or enters it, Left
+   * collapses a header or climbs from a row to its header, Enter/Space select a
+   * row or toggle a header, Shift+F10 / ContextMenu open a row's actions.
+   */
+  _handleTabTreeKeydown(e, container) {
+    if (e.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+    const items = this._tabTreeItems(container);
+    const current = e.target?.closest?.('[role="treeitem"]');
+    const index = items.indexOf(current);
+    if (index < 0) return;
+    const groupId = current.dataset.tabGroupHeader || null;
+    const expanded = current.getAttribute('aria-expanded') === 'true';
+    const focusAt = (next) => {
+      if (!next) return;
+      this._setTabTreeStop(container, next);
+      next.focus();
+    };
+    const toggle = (collapse) => {
+      // The toggle re-renders the rail; keep focus on this header through it.
+      this._tabFocusIdentity = `group:${groupId}`;
+      this.toggleTabGroupCollapsed(groupId, collapse);
+    };
+
+    switch (e.key) {
+      case 'ArrowDown':
+      case 'ArrowUp': {
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        focusAt(items[(index + step + items.length) % items.length]);
+        break;
+      }
+      case 'Home':
+        focusAt(items[0]);
+        break;
+      case 'End':
+        focusAt(items[items.length - 1]);
+        break;
+      case 'ArrowRight':
+        if (!groupId) return;
+        if (!expanded) toggle(false);
+        else {
+          const child = items.find((item) => item.closest('[role="group"]')?.id === current.getAttribute('aria-owns'));
+          if (!child) return;
+          focusAt(child);
+        }
+        break;
+      case 'ArrowLeft':
+        if (groupId) {
+          if (!expanded) return;
+          toggle(true);
+        } else {
+          const group = current.closest('[role="group"]');
+          const header = group ? container.querySelector(`[aria-owns="${CSS.escape(group.id)}"]`) : null;
+          if (!header) return;
+          focusAt(header);
+        }
+        break;
+      case 'Enter':
+      case ' ':
+        if (groupId) toggle();
+        else this._activateTabRow(current);
+        break;
+      case 'F2':
+        if (!groupId || !this.startTabGroupRename(groupId)) return;
+        break;
+      case 'F10':
+      case 'ContextMenu': {
+        if (e.key === 'F10' && !e.shiftKey) return;
+        const synthetic = { preventDefault() {}, stopPropagation() {}, currentTarget: current };
+        if (groupId) {
+          this.openTabGroupMenu(synthetic, groupId);
+        } else if (current.dataset.id) {
+          this.openTabRailActionMenu?.(synthetic, current.dataset.id);
+        } else if (current.dataset.webviewId) {
+          this.openTabWebviewMenu(synthetic, current.dataset.webviewId);
+        } else return;
+        break;
+      }
+      default:
+        return;
+    }
+    e.preventDefault();
   }
 
   handleSessionTabClick(event, sessionId) {
@@ -5978,6 +6282,700 @@ class CodemanApp {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // Owner tab layout: grouped vertical rail (read-only)
+  // ═══════════════════════════════════════════════════════════════
+  //
+  // The server owns named tab groups (GET /api/tab-layout, tab-layout*.ts) and
+  // already projects them onto the global session order, so sessionOrder, Alt+N,
+  // Ctrl+Tab and every other order consumer are untouched here. This layer only
+  // decides how the VERTICAL rail draws rows: in sections, with per-device
+  // collapse. With no groups (or any read failure) the rail is the flat list it
+  // has always been.
+
+  _ensureTabLayoutCoordinator() {
+    if (this._tabLayoutCoordinator) return this._tabLayoutCoordinator;
+    if (!window.CodemanTabLayout) return null;
+    this._tabLayoutCoordinator = window.CodemanTabLayout.createLoadCoordinator({
+      fetchLayout: async () => {
+        const data = await this._apiJson('/api/tab-layout');
+        if (!data?.layout) throw new Error('Tab layout unavailable');
+        return data.layout;
+      },
+      applyLayout: (layout) => this._applyTabLayout(layout),
+      applyFallback: () => this._applyTabLayout(null),
+      scheduleRetry: (retry) => setTimeout(retry, 5000),
+      cancelRetry: (timer) => clearTimeout(timer),
+    });
+    return this._tabLayoutCoordinator;
+  }
+
+  _loadTabLayout() {
+    return this._ensureTabLayoutCoordinator()?.load() ?? Promise.resolve(false);
+  }
+
+  /** SSE tab:layoutChanged carries `{ owner, version }`; the layout itself is re-read. */
+  _onTabLayoutChanged(data) {
+    const me = window.__codemanUser;
+    // Another user's layout changed: nothing of ours moved. (The GET is
+    // owner-scoped server-side, so this is a saved request, not a guard.)
+    if (me?.multiUser && typeof data?.owner === 'string' && data.owner !== me.username) return;
+    if (Number.isSafeInteger(data?.version) && this.tabLayout && data.version <= this.tabLayout.version) return;
+    // Our own write is in flight: its response is the newer truth, and a read
+    // racing it could repaint the pre-edit layout. Re-read once it settles.
+    if (this._tabLayoutEditor?.hasPending()) {
+      this._tabLayoutReloadPending = true;
+      return;
+    }
+    this._loadTabLayout();
+  }
+
+  /** Adopt a layout read (or null after a failed read, which renders flat). */
+  _applyTabLayout(layout) {
+    let next = null;
+    if (layout) {
+      try {
+        next = window.CodemanTabLayout.normalizeLayout(layout);
+      } catch {
+        next = null;
+      }
+    }
+    // An overtaken response is already dropped by the coordinator; this guards a
+    // reordering between the coordinator and an SSE-triggered reload.
+    if (next && this.tabLayout && next.version < this.tabLayout.version) return;
+    const editor = this._tabLayoutEditor;
+    if (editor) {
+      if (next && editor.isWriting()) {
+        // The write's own response decides; read again after it.
+        this._tabLayoutReloadPending = true;
+        return;
+      }
+      // Unsaved edits are rebased onto the read (adoptExternal repaints); with
+      // none, the editor is simply rebuilt from the new layout on next use.
+      if (next && editor.hasPending() && editor.adoptExternal(next)) return;
+      editor.dispose();
+      this._tabLayoutEditor = null;
+    }
+    this.tabLayout = next;
+    const storage = this._getTabCollapseStorage();
+    const collapsed = storage && next
+      ? window.CodemanTabLayout.loadCollapsedGroupIds(storage, next.groups.map((group) => group.id))
+      : { ids: [], ok: !next };
+    if (!collapsed.ok) this._tabCollapseStorageFailed = true;
+    this.collapsedTabGroupIds = new Set(collapsed.ids);
+    this._fullRenderSessionTabs();
+    // Edits left unsaved by the previous page (see _persistPendingTabLayoutEdits).
+    if (next && !this._tabLayoutRestoreChecked) {
+      this._tabLayoutRestoreChecked = true;
+      this._restorePendingTabLayoutEdits();
+    }
+  }
+
+  /** localStorage, or null once it has failed (collapse then stays all-expanded). */
+  _getTabCollapseStorage() {
+    if (this._tabCollapseStorageFailed) return null;
+    try {
+      return window.localStorage;
+    } catch {
+      this._tabCollapseStorageFailed = true;
+      return null;
+    }
+  }
+
+  /**
+   * The grouped projection for the CURRENT render, or null when the rail should
+   * render flat: horizontal strip (incl. phones and the sidebar, which force it),
+   * no layout yet, a failed read, or a layout without groups.
+   */
+  _projectTabGroups() {
+    if (!this.tabLayout || this._tabOrientation() !== 'vertical' || !window.CodemanTabLayout) return null;
+    return window.CodemanTabLayout.project(this.tabLayout, {
+      // sessionOrder, not the sessions Map: rows are built in that order, so a
+      // session the layout has not placed yet lands where the flat strip has it.
+      liveSessionIds: this.sessionOrder.filter((id) => this.sessions.has(id)),
+      openWebviewIds: (this.webviewOrder || []).filter((id) => this.webviews?.has(id)),
+      collapsedGroupIds: [...this.collapsedTabGroupIds],
+      activeSessionId: this.activeSessionId,
+      activeWebviewId: this.activeWebviewId,
+    });
+  }
+
+  _tabGroupStructureKey(projection) {
+    return window.CodemanTabLayout?.structureKey(this.tabLayout, projection, [...this.collapsedTabGroupIds]) ?? null;
+  }
+
+  /** True when the DOM's grouping no longer matches what a render would draw. */
+  _isTabGroupStructureStale(projection = this._projectTabGroups()) {
+    return this._tabGroupStructureKey(projection) !== this._lastTabGroupStructureKey;
+  }
+
+  /**
+   * Collapse/expand one group (header click). Per-device: stored in localStorage,
+   * never sent to the server, so collapsing on a laptop leaves the desktop alone.
+   * A storage failure leaves every group expanded rather than half-remembered.
+   */
+  toggleTabGroupCollapsed(groupId, forceCollapsed) {
+    if (!this.tabLayout?.groups?.some((group) => group.id === groupId)) return false;
+    const next = new Set(this.collapsedTabGroupIds);
+    const shouldCollapse = forceCollapsed === undefined ? !next.has(groupId) : forceCollapsed === true;
+    if (shouldCollapse) next.add(groupId);
+    else next.delete(groupId);
+    const storage = this._getTabCollapseStorage();
+    const saved = storage
+      ? window.CodemanTabLayout.saveCollapsedGroupIds(storage, [...next])
+      : { ids: [], ok: false };
+    if (!saved.ok) this._tabCollapseStorageFailed = true;
+    this.collapsedTabGroupIds = new Set(saved.ids);
+    // The full render also redraws connectors anchored to rows that just moved.
+    this._fullRenderSessionTabs();
+    return this.collapsedTabGroupIds.has(groupId) === shouldCollapse;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Owner tab layout: editing groups from the vertical rail
+  // ═══════════════════════════════════════════════════════════════
+  //
+  // Every edit is a named operation (tab-layout-browser.js) applied to the rail
+  // at once and saved by ONE serialized PUT /api/tab-layout at a time, with the
+  // version the server last returned. A 409 is rebased onto the server's layout
+  // and retried; a failure re-reads. Editing is a vertical-rail feature: the
+  // header strip, the sidebar and phones never offer it.
+
+  _tabLayoutEditable() {
+    return !!(this.tabLayout && window.CodemanTabLayout && this._tabOrientation() === 'vertical');
+  }
+
+  /** child session id -> parent session id, so a moved session takes the sessions that follow it. */
+  _tabLayoutParents() {
+    const parents = {};
+    for (const session of this.sessions.values()) {
+      if (session?.parentSessionId && session.parentSessionId !== session.id) parents[session.id] = session.parentSessionId;
+    }
+    return parents;
+  }
+
+  async _putTabLayout({ baseVersion, layout }) {
+    const body = { baseVersion, layout: { ...layout, updatedAt: layout.updatedAt || new Date().toISOString() } };
+    const response = await this._api('/api/tab-layout', { method: 'PUT', body });
+    if (!response) return { ok: false, status: 0, layout: null };
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {}
+    return { ok: response.ok, status: response.status, layout: data?.data?.layout || null };
+  }
+
+  _ensureTabLayoutEditor() {
+    if (this._tabLayoutEditor || !this.tabLayout) return this._tabLayoutEditor || null;
+    this._tabLayoutEditor = window.CodemanTabLayout.createEditCoordinator({
+      initialLayout: this.tabLayout,
+      put: (request) => this._putTabLayout(request),
+      fetchLayout: async () => {
+        const data = await this._apiJson('/api/tab-layout');
+        if (!data?.layout) throw new Error('Tab layout unavailable');
+        return data.layout;
+      },
+      applyLayout: (layout) => this._adoptEditedTabLayout(layout),
+      reportError: (message) => this.showToast?.(message, 'error'),
+      onFailure: () => {
+        // The rail may still show an edit the server refused: read the truth.
+        this._tabLayoutReloadPending = true;
+      },
+      onSettled: () => {
+        if (!this._tabLayoutReloadPending) return;
+        this._tabLayoutReloadPending = false;
+        this._loadTabLayout();
+      },
+    });
+    return this._tabLayoutEditor;
+  }
+
+  /** The editor's view of the layout (optimistic or confirmed) becomes the rail. */
+  _adoptEditedTabLayout(layout) {
+    this.tabLayout = layout;
+    const storage = this._getTabCollapseStorage();
+    if (storage) {
+      // Forget collapse state for groups that no longer exist.
+      const collapsed = window.CodemanTabLayout.loadCollapsedGroupIds(storage, layout.groups.map((group) => group.id));
+      if (collapsed.ok) this.collapsedTabGroupIds = new Set(collapsed.ids);
+    }
+    this._fullRenderSessionTabs();
+  }
+
+  /**
+   * Apply one edit. `focusIdentity` names the tree item that should hold focus
+   * afterwards (the moved row, the renamed group), so a keyboard user who acted
+   * from a menu lands back in the rail rather than on <body>.
+   */
+  editTabLayout(operation, focusIdentity) {
+    if (!this._tabLayoutEditable()) return false;
+    const active = document.activeElement;
+    const rail = this.$('sessionTabs');
+    if (focusIdentity && (!active || active === document.body || rail?.contains(active))) {
+      this._tabFocusIdentity = focusIdentity;
+      this._tabRefocusAfterEdit = true;
+    }
+    try {
+      this._ensureTabLayoutEditor().enqueue(operation);
+      return true;
+    } catch (error) {
+      this._tabRefocusAfterEdit = false;
+      this.showToast?.(error?.message || 'Could not save tab groups.', 'error');
+      return false;
+    }
+  }
+
+  _newTabGroupId() {
+    return globalThis.crypto?.randomUUID?.() || `group-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  /** New group (optionally holding `ref`), then straight into renaming it. */
+  createTabGroup({ ref = null, index } = {}) {
+    if (!this._tabLayoutEditable()) return false;
+    const id = this._newTabGroupId();
+    const name = window.CodemanI18n?.t?.('New group') || 'New group';
+    if (!this.editTabLayout({ type: 'createGroup', id, name, ...(Number.isInteger(index) ? { index } : {}) }, `group:${id}`)) {
+      return false;
+    }
+    if (ref) this.editTabLayout({ type: 'moveRef', ref, groupId: id, index: 0, parents: this._tabLayoutParents() });
+    this.startTabGroupRename(id);
+    return true;
+  }
+
+  deleteTabGroup(groupId) {
+    const groups = this.tabLayout?.groups || [];
+    const index = groups.findIndex((group) => group.id === groupId);
+    if (index < 0) return false;
+    if (!window.confirm(`Delete group "${groups[index].name}"? Its tabs move to Ungrouped.`)) return false;
+    const neighbour = groups[index + 1] || groups[index - 1];
+    return this.editTabLayout({ type: 'deleteGroup', groupId }, neighbour ? `group:${neighbour.id}` : null);
+  }
+
+  moveTabGroup(groupId, delta) {
+    const groups = this.tabLayout?.groups || [];
+    const from = groups.findIndex((group) => group.id === groupId);
+    const to = from + delta;
+    if (from < 0 || to < 0 || to >= groups.length) return false;
+    return this.editTabLayout({ type: 'reorderGroup', groupId, index: to }, `group:${groupId}`);
+  }
+
+  /** Where a ref is stored: { groupId (null = Ungrouped), refs, index } or null. */
+  _tabRefLocation(ref) {
+    const same = (candidate) => candidate.kind === ref.kind && candidate.id === ref.id;
+    for (const group of this.tabLayout?.groups || []) {
+      const index = group.refs.findIndex(same);
+      if (index >= 0) return { groupId: group.id, refs: group.refs, index };
+    }
+    const index = this.tabLayout?.ungrouped?.findIndex(same) ?? -1;
+    return index >= 0 ? { groupId: null, refs: this.tabLayout.ungrouped, index } : null;
+  }
+
+  moveTabRef(ref, groupId, anchor = null, placement = 'before') {
+    const parents = this._tabLayoutParents();
+    let destination;
+    try {
+      destination = window.CodemanTabLayout.moveDestination(this.tabLayout, ref, groupId, anchor, placement, parents);
+    } catch {
+      return false;
+    }
+    return this.editTabLayout({ type: 'moveRef', ref, ...destination, parents }, `${ref.kind}:${ref.id}`);
+  }
+
+  /**
+   * Group placement actions for a row's action menu: reorder within its
+   * container, move to another group, out to Ungrouped, or into a new group.
+   * Empty outside the vertical rail, so the header strip's menu is unchanged.
+   */
+  _tabRefMoveActions(ref) {
+    if (!this._tabLayoutEditable()) return [];
+    const location = this._tabRefLocation(ref);
+    if (!location) return [];
+    const actions = [];
+    const grouped = this.tabLayout.groups.length > 0;
+    // Up/down follow the STORED order, which is what the rail paints unless a
+    // sort is on (then the sort decides and there is nothing to reorder).
+    if (grouped && !this.isTabRailSorted()) {
+      // The sessions that follow this one move with it, so "down" means past
+      // the first row that is not part of that block.
+      const moving = new Set(window.CodemanTabLayout.movingRefKeys(this.tabLayout, ref, this._tabLayoutParents()));
+      const previous = location.refs[location.index - 1];
+      const next = location.refs.slice(location.index + 1).find((candidate) => !moving.has(`${candidate.kind}:${candidate.id}`));
+      if (previous) actions.push({ label: 'Move up', run: () => this.moveTabRef(ref, location.groupId, previous, 'before') });
+      if (next) actions.push({ label: 'Move down', run: () => this.moveTabRef(ref, location.groupId, next, 'after') });
+    }
+    for (const group of this.tabLayout.groups) {
+      if (group.id === location.groupId) continue;
+      actions.push({ label: `Move to ${group.name}`, run: () => this.moveTabRef(ref, group.id) });
+    }
+    if (location.groupId !== null) actions.push({ label: 'Move to Ungrouped', run: () => this.moveTabRef(ref, null) });
+    actions.push({ label: 'Move to new group', run: () => this.createTabGroup({ ref }) });
+    return actions;
+  }
+
+  // ─── Group and web-tab menus (right-click, the header's ⋯, Shift+F10) ──
+
+  /**
+   * Close the open group / web-tab menu. Every dismissal path lands here:
+   * Escape, a pointer outside it, focus leaving it, Tab, a viewport resize, an
+   * action, and any full re-render of the rail (which would orphan its trigger).
+   */
+  closeTabGroupMenu({ restoreFocus = false } = {}) {
+    const menu = this._tabGroupMenu;
+    if (!menu) return;
+    const trigger = this._tabGroupMenuTrigger;
+    const identity = this._tabGroupMenuKey;
+    this._tabGroupMenu = null;
+    this._tabGroupMenuTrigger = null;
+    this._tabGroupMenuKey = null;
+    document.removeEventListener('pointerdown', this._tabGroupMenuOutside, true);
+    document.removeEventListener('keydown', this._tabGroupMenuKeydown, true);
+    window.removeEventListener('resize', this._tabGroupMenuResize);
+    this._tabGroupMenuOutside = this._tabGroupMenuKeydown = this._tabGroupMenuResize = null;
+    menu.remove();
+    if (!restoreFocus) return;
+    // The trigger may have been re-rendered while the menu was open; find the
+    // live tree item by identity.
+    const rail = this.$('sessionTabs');
+    const item =
+      (trigger?.isConnected && trigger.closest('[role="treeitem"]')) ||
+      [...(rail?.querySelectorAll('[role="treeitem"]') || [])].find((el) => this._tabTreeIdentity(el) === identity);
+    item?.focus();
+  }
+
+  openTabGroupMenu(event, groupId) {
+    const groups = this.tabLayout?.groups || [];
+    const index = groups.findIndex((group) => group.id === groupId);
+    if (index < 0) return false;
+    return this._openTabLayoutMenu(event, `group:${groupId}`, 'Group actions', [
+      { label: 'Rename group', run: () => this.startTabGroupRename(groupId) },
+      { label: 'New group', run: () => this.createTabGroup({ index: index + 1 }) },
+      ...(index > 0 ? [{ label: 'Move group up', run: () => this.moveTabGroup(groupId, -1) }] : []),
+      ...(index < groups.length - 1 ? [{ label: 'Move group down', run: () => this.moveTabGroup(groupId, 1) }] : []),
+      { label: 'Delete group', className: 'danger', run: () => this.deleteTabGroup(groupId) },
+    ]);
+  }
+
+  /** Keyboard actions for a web-tab row in the vertical rail: its settings plus group moves. */
+  openTabWebviewMenu(event, webviewId) {
+    const moves = this._tabRefMoveActions({ kind: 'webview', id: webviewId });
+    if (!moves.length) {
+      this.showWebviewModal?.(webviewId);
+      return false;
+    }
+    return this._openTabLayoutMenu(event, `webview:${webviewId}`, 'Web tab actions', [
+      { label: 'Web tab settings', run: () => this.showWebviewModal?.(webviewId) },
+      ...moves,
+    ]);
+  }
+
+  _openTabLayoutMenu(event, identity, ariaLabel, actions) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    const trigger = event?.currentTarget || null;
+    // Opening the same menu again closes it (a toggle, like the row menu).
+    if (this._tabGroupMenu && this._tabGroupMenuKey === identity) {
+      this.closeTabGroupMenu();
+      return false;
+    }
+    this.closeTabGroupMenu();
+    this.closeTabRailActionMenu?.();
+    if (!this._tabLayoutEditable()) return false;
+    const menu = document.createElement('div');
+    menu.className = 'tab-rail-action-menu tab-layout-group-action-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', ariaLabel);
+    for (const action of actions) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.setAttribute('role', 'menuitem');
+      button.textContent = action.label;
+      if (action.className) button.className = action.className;
+      button.addEventListener('click', () => {
+        this.closeTabGroupMenu();
+        action.run();
+      });
+      menu.appendChild(button);
+    }
+    document.body.appendChild(menu);
+    const anchor = (trigger?.getBoundingClientRect ? trigger : null) || this.$('sessionTabs');
+    const rect = anchor?.getBoundingClientRect?.() || { left: 8, bottom: 8, right: 8 };
+    const menuRect = menu.getBoundingClientRect();
+    const left = event?.clientX && event.type === 'contextmenu' ? event.clientX : rect.left;
+    menu.style.left = `${Math.max(8, Math.min(left, window.innerWidth - menuRect.width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuRect.height - 8))}px`;
+
+    this._tabGroupMenu = menu;
+    this._tabGroupMenuTrigger = trigger;
+    this._tabGroupMenuKey = identity;
+    this._tabGroupMenuOutside = (pointerEvent) => {
+      if (menu.contains(pointerEvent.target) || (trigger && trigger.contains?.(pointerEvent.target))) return;
+      this.closeTabGroupMenu();
+    };
+    // Capture on document, so Escape closes THIS menu and nothing else (the
+    // global Escape handler defers to it, see the keydown listener in init).
+    this._tabGroupMenuKeydown = (keyEvent) => {
+      if (keyEvent.key !== 'Escape') return;
+      keyEvent.preventDefault();
+      keyEvent.stopImmediatePropagation();
+      this.closeTabGroupMenu({ restoreFocus: true });
+    };
+    this._tabGroupMenuResize = () => this.closeTabGroupMenu();
+    document.addEventListener('pointerdown', this._tabGroupMenuOutside, true);
+    document.addEventListener('keydown', this._tabGroupMenuKeydown, true);
+    window.addEventListener('resize', this._tabGroupMenuResize);
+    menu.addEventListener('keydown', (keyEvent) => {
+      const buttons = [...menu.querySelectorAll('button')];
+      const at = buttons.indexOf(document.activeElement);
+      if (keyEvent.key === 'ArrowDown' || keyEvent.key === 'ArrowUp') {
+        keyEvent.preventDefault();
+        buttons[(at + (keyEvent.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus();
+      } else if (keyEvent.key === 'Home' || keyEvent.key === 'End') {
+        keyEvent.preventDefault();
+        buttons[keyEvent.key === 'Home' ? 0 : buttons.length - 1]?.focus();
+      } else if (keyEvent.key === 'Tab') {
+        // Tab would walk out and leave the popup on screen: dismiss to the row.
+        keyEvent.preventDefault();
+        this.closeTabGroupMenu({ restoreFocus: true });
+      }
+    });
+    // Focus leaving by any other route (a click elsewhere, a programmatic move).
+    // Hops between the menu's own items are not a departure.
+    menu.addEventListener('focusout', (focusEvent) => {
+      if (focusEvent.relatedTarget && menu.contains(focusEvent.relatedTarget)) return;
+      if (this._tabGroupMenu === menu) this.closeTabGroupMenu();
+    });
+    menu.querySelector('button')?.focus();
+    return true;
+  }
+
+  // ─── Inline group rename ───────────────────────────────────────────
+
+  /**
+   * Rename a group in place. Shares the session rename's ownership handle
+   * (`_activeRename`), so starting one cancels the other and only the CURRENT
+   * editor may release the render guard. Enter or blur commits, Escape cancels,
+   * IME composition keys belong to the IME. The commit goes through the edit
+   * coordinator, so it is serialized behind any write already in flight.
+   */
+  startTabGroupRename(groupId) {
+    if (!this.tabLayout?.groups?.some((candidate) => candidate.id === groupId)) return false;
+    // Cancelling another editor re-renders the rail, so look the header up after.
+    this._activeRename?.cancel();
+    const group = this.tabLayout?.groups?.find((candidate) => candidate.id === groupId);
+    const header = this.$('sessionTabs')?.querySelector(`[data-tab-group-header="${CSS.escape(groupId)}"]`);
+    const label = header?.querySelector('.tab-layout-group-name');
+    if (!group || !label) return false;
+    this._inlineRenameActive = true;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'tab-layout-group-rename-input';
+    input.value = group.name;
+    input.maxLength = 60;
+    input.setAttribute('aria-label', 'Group name');
+    label.classList.add('tab-layout-group-name--renaming');
+    label.replaceChildren(input);
+    // The header toggles collapse on click and opens its menu on right-click;
+    // neither may fire from inside the editor.
+    for (const type of ['click', 'contextmenu', 'pointerdown']) input.addEventListener(type, (e) => e.stopPropagation());
+
+    let settled = false;
+    const handle = { groupId, cancel: () => settle(false) };
+    const settle = (commit) => {
+      if (settled) return;
+      settled = true;
+      const name = input.value.trim();
+      // Only the current editor owns the guard: a newer rename keeps it.
+      if (this._activeRename !== handle) return;
+      this._activeRename = null;
+      this._inlineRenameActive = false;
+      const current = this.tabLayout?.groups?.find((candidate) => candidate.id === groupId);
+      if (commit && current && name && name !== current.name) {
+        if (this.editTabLayout({ type: 'renameGroup', groupId, name }, `group:${groupId}`)) return;
+      }
+      this._tabFocusIdentity = `group:${groupId}`;
+      this._tabRefocusAfterEdit = true;
+      this._fullRenderSessionTabs();
+    };
+    this._activeRename = handle;
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        settle(true);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        settle(false);
+      }
+    });
+    input.addEventListener('blur', () => settle(true));
+    input.focus();
+    input.select();
+    return true;
+  }
+
+  // ─── Pointer drag in the grouped rail ──────────────────────────────
+
+  /**
+   * Drag rows between groups and reorder groups, in the GROUPED rail only.
+   * Pointer Events (mouse and pen; touch keeps scrolling the rail), bound once
+   * on the container, which survives every re-render. The flat rail and the
+   * header strip keep the HTML5 drag in setupTabDragHandlers() untouched.
+   * Keyboard equivalents live in the row and group menus.
+   */
+  _bindTabLayoutPointerDrag(container) {
+    if (!container || container._tabLayoutDragBound) return;
+    container._tabLayoutDragBound = true;
+    container.addEventListener('pointerdown', (e) => this._onTabLayoutPointerDown(e, container));
+    container.addEventListener('pointermove', (e) => this._onTabLayoutPointerMove(e, container));
+    container.addEventListener('pointerup', (e) => this._finishTabLayoutPointerDrag(e, container));
+    container.addEventListener('pointercancel', () => this._cancelTabLayoutPointerDrag(container));
+    container.addEventListener('lostpointercapture', () => this._cancelTabLayoutPointerDrag(container));
+  }
+
+  _onTabLayoutPointerDown(e, container) {
+    if (e.button !== 0 || e.pointerType === 'touch' || !container.classList.contains('session-tabs--grouped')) return;
+    if (this._inlineRenameActive || !this._tabLayoutEditable()) return;
+    // Controls keep their own click; only the row body or the header drags.
+    if (e.target.closest('.tab-actions, .tab-badge, .tab-layout-group-menu, button, input, [onclick*="stopPropagation"]')) return;
+    const header = e.target.closest('[data-tab-group-header]');
+    const row = header ? null : e.target.closest('.session-tab');
+    let source = null;
+    if (header) source = { type: 'group', groupId: header.dataset.tabGroupHeader };
+    else if (row?.dataset.webviewId) source = { type: 'ref', ref: { kind: 'webview', id: row.dataset.webviewId } };
+    else if (row?.dataset.id) source = { type: 'ref', ref: { kind: 'session', id: row.dataset.id } };
+    if (!source) return;
+    this._tabLayoutDrag = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, source, origin: header || row, active: false, target: null };
+  }
+
+  /** What a pointer at (x, y) would drop onto, from the rendered rail. */
+  _tabLayoutDropTarget(x, y, container) {
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || !container.contains(hit)) return null;
+    const row = hit.closest('.session-tab');
+    const section = hit.closest('.tab-layout-group');
+    const sectionGroup = section ? section.dataset.tabGroupId || null : undefined;
+    // A sorted rail paints its own order, so a row can only be dropped INTO a
+    // group, never between two rows.
+    if (row && section && !this.isTabRailSorted()) {
+      const ref = row.dataset.webviewId ? { kind: 'webview', id: row.dataset.webviewId } : { kind: 'session', id: row.dataset.id };
+      const rect = row.getBoundingClientRect();
+      return { type: 'ref', ref, groupId: sectionGroup, placement: y >= rect.top + rect.height / 2 ? 'after' : 'before', element: row };
+    }
+    if (sectionGroup === undefined) return null;
+    const element = section.querySelector(':scope > .tab-layout-group-header');
+    return sectionGroup === null ? { type: 'ungrouped', element } : { type: 'group', groupId: sectionGroup, element };
+  }
+
+  _clearTabLayoutDropMarks(container) {
+    container.querySelectorAll('.tab-layout-drop-before, .tab-layout-drop-after, .tab-layout-drop-into').forEach((el) =>
+      el.classList.remove('tab-layout-drop-before', 'tab-layout-drop-after', 'tab-layout-drop-into')
+    );
+  }
+
+  _onTabLayoutPointerMove(e, container) {
+    const drag = this._tabLayoutDrag;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    if (!drag.active) {
+      if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
+      drag.active = true;
+      drag.origin.classList.add('tab-layout-dragging');
+      container.classList.add('tab-layout-drag-active');
+      this.closeTabGroupMenu();
+      this.closeTabRailActionMenu?.();
+      try {
+        container.setPointerCapture(e.pointerId);
+      } catch {}
+      this._tabLayoutDragKeydown = (keyEvent) => {
+        if (keyEvent.key !== 'Escape') return;
+        keyEvent.preventDefault();
+        keyEvent.stopImmediatePropagation();
+        this._cancelTabLayoutPointerDrag(container);
+      };
+      document.addEventListener('keydown', this._tabLayoutDragKeydown, true);
+    }
+    e.preventDefault();
+    const target = this._tabLayoutDropTarget(e.clientX, e.clientY, container);
+    this._clearTabLayoutDropMarks(container);
+    drag.target = target;
+    if (!target?.element) return;
+    const cls = target.type === 'ref' && drag.source.type === 'ref' ? `tab-layout-drop-${target.placement}` : 'tab-layout-drop-into';
+    target.element.classList.add(cls);
+  }
+
+  _cancelTabLayoutPointerDrag(container) {
+    const drag = this._tabLayoutDrag;
+    if (!drag) return;
+    this._tabLayoutDrag = null;
+    drag.origin?.classList.remove('tab-layout-dragging');
+    container?.classList.remove('tab-layout-drag-active');
+    if (container) this._clearTabLayoutDropMarks(container);
+    if (this._tabLayoutDragKeydown) document.removeEventListener('keydown', this._tabLayoutDragKeydown, true);
+    this._tabLayoutDragKeydown = null;
+    if (drag.active) {
+      // The click that ends a drag must not also select the row or toggle the header.
+      const swallow = (clickEvent) => {
+        clickEvent.stopPropagation();
+        clickEvent.preventDefault();
+      };
+      window.addEventListener('click', swallow, { capture: true, once: true });
+      setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 0);
+    }
+  }
+
+  _finishTabLayoutPointerDrag(e, container) {
+    const drag = this._tabLayoutDrag;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    const target = drag.active ? this._tabLayoutDropTarget(e.clientX, e.clientY, container) || drag.target : null;
+    this._cancelTabLayoutPointerDrag(container);
+    if (!target) return;
+    const operation = window.CodemanTabLayout.dropOperation(this.tabLayout, drag.source, target, this._tabLayoutParents());
+    if (!operation) return;
+    const identity = drag.source.type === 'group' ? `group:${drag.source.groupId}` : `${drag.source.ref.kind}:${drag.source.ref.id}`;
+    this.editTabLayout(operation, identity);
+  }
+
+  // ─── Unsaved edits across a reload ─────────────────────────────────
+
+  /**
+   * The page is going away with edits not yet confirmed: send them with a
+   * keepalive PUT (it outlives the page) AND keep a copy in sessionStorage. If
+   * the keepalive lands, the copy replays to no change after reload; if it lost
+   * a race, the copy is rebased onto the fresh layout and saved properly.
+   */
+  _persistPendingTabLayoutEdits() {
+    const editor = this._tabLayoutEditor;
+    const operations = editor?.pendingOperations?.() || [];
+    if (!operations.length) return false;
+    try {
+      sessionStorage.setItem('codeman:tab-layout-pending', JSON.stringify({ operations }));
+    } catch {}
+    try {
+      const layout = editor.getLayout();
+      void fetch('/api/tab-layout', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseVersion: editor.baseVersion(), layout: { ...layout, updatedAt: layout.updatedAt || new Date().toISOString() } }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch {}
+    return true;
+  }
+
+  _restorePendingTabLayoutEdits() {
+    let operations;
+    try {
+      const raw = sessionStorage.getItem('codeman:tab-layout-pending');
+      if (!raw) return false;
+      sessionStorage.removeItem('codeman:tab-layout-pending');
+      operations = JSON.parse(raw)?.operations;
+    } catch {
+      return false;
+    }
+    if (!Array.isArray(operations) || !operations.length || !this.tabLayout || !window.CodemanTabLayout) return false;
+    return this._ensureTabLayoutEditor().restore(operations);
+  }
+
   // Set up drag-and-drop handlers on tab elements
   setupTabDragHandlers() {
     const container = this.$('sessionTabs');
@@ -5989,7 +6987,10 @@ class CodemanApp {
     // affordance instead of lying about it — `tabRailSort: 'manual'` is the way
     // back to drag-reordering, and Alt+N / Ctrl+Shift+{ } still walk the strip
     // order this list is no longer showing.
-    if (this.isTabRailSorted()) {
+    // The grouped rail is read-only for now: a flat-order drag cannot express
+    // "move into that group", and the server would re-rank it within its old
+    // group anyway. Grouped editing comes with its own drag model.
+    if (this.isTabRailSorted() || container.classList.contains('session-tabs--grouped')) {
       tabs.forEach((tab) => tab.setAttribute('draggable', 'false'));
       return;
     }
