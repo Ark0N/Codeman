@@ -746,3 +746,113 @@ describe('spreadsheet preview worker: tiles reuse the merges read at load', () =
     expect(tile.cells).toContainEqual(expect.objectContaining({ row: 4, col: 1, text: 'Merged' }));
   });
 });
+
+/** Row and Worksheet prototypes of the ExcelJS build the harness hands the worker. */
+function excelJsPrototypes(): { row: Record<string, unknown>; sheet: Record<string, unknown> } {
+  const probe = new ExcelJS.Workbook().addWorksheet('probe');
+  return { row: Object.getPrototypeOf(probe.getRow(1)), sheet: Object.getPrototypeOf(probe) };
+}
+
+/** Make ExcelJS's dense row, cell and model walks throw until the returned restore runs. */
+function forbidDenseWalks(): () => void {
+  const { row, sheet } = excelJsPrototypes();
+  const saved = [
+    [sheet, 'eachRow', Object.getOwnPropertyDescriptor(sheet, 'eachRow')],
+    [row, 'eachCell', Object.getOwnPropertyDescriptor(row, 'eachCell')],
+    [row, 'hasValues', Object.getOwnPropertyDescriptor(row, 'hasValues')],
+  ] as const;
+  for (const [target, name] of saved) {
+    Object.defineProperty(target, name, {
+      configurable: true,
+      get() {
+        throw new Error(`${name} touched`);
+      },
+    });
+  }
+  // `sheet.model` rebuilds every row and cell model the same dense way; load
+  // still needs its setter, so only reading it throws.
+  const model = Object.getOwnPropertyDescriptor(sheet, 'model')!;
+  Object.defineProperty(sheet, 'model', {
+    configurable: true,
+    get() {
+      throw new Error('model touched');
+    },
+    set: model.set,
+  });
+  return () => {
+    for (const [target, name, descriptor] of saved) Object.defineProperty(target, name, descriptor!);
+    Object.defineProperty(sheet, 'model', model);
+  };
+}
+
+describe('spreadsheet preview worker: rows and cells are indexed by their present keys', () => {
+  // ExcelJS keeps a row's cells at `_cells[col - 1]`; one far-column cell makes
+  // eachCell and hasValues (behind eachRow) visit every index up to 16,384.
+  it('loads and serves a tile without ExcelJS eachRow, eachCell, hasValues or sheet.model', async () => {
+    const harness = createHarness();
+    const bytes = await fixture();
+    const restore = forbidDenseWalks();
+    try {
+      const metadata = await loadMetadata(harness, bytes);
+      expect(metadata.sheets[0]).toMatchObject({ rows: 4, cols: 3 });
+      expect(metadata.sheets[0].rowOverrides).toContainEqual([2, 40]);
+      expect(metadata.sheets[0].merges).toEqual(['A4:C4']);
+      const tile = await requestTile(harness, metadata.sheets[0].id, { r1: 1, c1: 1, r2: 4, c2: 3 });
+      expect(tile.type, JSON.stringify(tile)).toBe('tile');
+      expect(
+        (tile.cells as Array<{ row: number; col: number; text: string }>).map(({ row, col, text }) => [row, col, text])
+      ).toEqual([
+        [1, 1, 'Revenue'],
+        [2, 2, '$1,234.50'],
+        [3, 3, '$1,234.50'],
+        [4, 1, 'Merged'],
+      ]);
+      expect(tile.merges).toEqual(['A4:C4']);
+    } finally {
+      restore();
+    }
+  });
+
+  // eachCell and eachRow skip a cell whose value is Null (a styled empty `<c/>`),
+  // and a row holding only such cells; the key walk must skip them the same way.
+  it('skips value-less cells and the rows that hold only them, as ExcelJS eachRow/eachCell do', async () => {
+    const bytes = await emptyRowsWorkbook(
+      '<row r="3" ht="30" customHeight="1"><c r="E3" s="1"/></row><row r="4"><c r="B4" s="1"/><c r="C4"><v>7</v></c></row>'
+    );
+    const harness = createHarness();
+    const metadata = await loadMetadata(harness, bytes);
+    // The styled empty cells really exist in ExcelJS, as Null-type cells.
+    expect(harness.peek('sheetsById.values().next().value.findCell(3, 5)?.type')).toBe(0);
+    expect(harness.peek('sheetsById.values().next().value.findCell(4, 2)?.type')).toBe(0);
+    expect(metadata.sheets[0]).toMatchObject({ rows: 4, cols: 3 });
+    expect(metadata.sheets[0].rowOverrides).toEqual([]);
+    const tile = await requestTile(harness, metadata.sheets[0].id, { r1: 1, c1: 1, r2: 4, c2: 5 });
+    expect((tile.cells as Array<{ row: number; col: number }>).map(({ row, col }) => [row, col])).toEqual([
+      [1, 1],
+      [4, 3],
+    ]);
+  });
+
+  it('loads and tiles 3,000 rows that each hold one XFD cell', async () => {
+    const rows = Array.from(
+      { length: 3_000 },
+      (_, i) => `<row r="${i + 2}" ht="0.01" customHeight="1"><c r="XFD${i + 2}"><v>${i + 2}</v></c></row>`
+    ).join('');
+    const bytes = await emptyRowsWorkbook(rows);
+    const harness = createHarness();
+    const restore = forbidDenseWalks();
+    try {
+      const started = performance.now();
+      const metadata = await loadMetadata(harness, bytes);
+      expect(metadata.sheets[0]).toMatchObject({ rows: 3_001, cols: 16_384 });
+      expect(metadata.sheets[0].rowOverrides).toHaveLength(3_000);
+      const tile = await requestTile(harness, metadata.sheets[0].id, { r1: 1, c1: 16_380, r2: 3_001, c2: 16_384 });
+      expect(tile.type, JSON.stringify(tile).slice(0, 200)).toBe('tile');
+      expect(tile.cells).toHaveLength(2_500);
+      expect(tile.cells[0]).toMatchObject({ row: 2, col: 16_384, text: '2' });
+      expect(performance.now() - started).toBeLessThan(5_000);
+    } finally {
+      restore();
+    }
+  }, 60_000);
+});

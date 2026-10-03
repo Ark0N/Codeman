@@ -412,6 +412,23 @@ const themeXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </a:clrScheme></a:themeElements></a:theme>`;
 
 describe('spreadsheet XLSX colour resolution', () => {
+  // The clrScheme and slot patterns rescan to the end of the text for every
+  // unclosed opening tag, so a padded theme is quadratic.
+  it('uses the default palette for a theme above 64 KB, even a 1 MB run of unclosed clrScheme tags', () => {
+    const padded = '<a:clrScheme>'.repeat(Math.ceil((1024 * 1024) / 13));
+    expect(padded.length).toBeGreaterThanOrEqual(1024 * 1024);
+    const started = performance.now();
+    expect(core.parseThemePalette(padded)).toEqual(core.DEFAULT_THEME_PALETTE);
+    expect(performance.now() - started).toBeLessThan(1_000);
+
+    // The cap is on characters: a real theme padded to exactly 64 KB still parses, one more does not.
+    const fill = (length: number) =>
+      themeXml.replace('</a:theme>', `<!--${' '.repeat(length - themeXml.length - 7)}--></a:theme>`);
+    expect(fill(64 * 1024)).toHaveLength(64 * 1024);
+    expect(core.parseThemePalette(fill(64 * 1024))[4]).toBe('#ff0000');
+    expect(core.parseThemePalette(fill(64 * 1024 + 1))).toEqual(core.DEFAULT_THEME_PALETTE);
+  });
+
   it('parses a theme palette into styles.xml index order, swapping lt/dk against clrScheme order', () => {
     const palette = core.parseThemePalette(themeXml);
     expect(palette).toHaveLength(12);

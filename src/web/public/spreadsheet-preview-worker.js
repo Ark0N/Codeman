@@ -24,6 +24,8 @@ importScripts(`vendor/fflate.min.js${spreadsheetAssetQuery}`, `spreadsheet-xlsx-
 const core = self.CodemanSpreadsheetXlsxCore;
 let workbook = null;
 let sheetsById = new Map();
+// Per sheet: its populated rows in order, each with its populated cells in
+// column order, built once at load from the keys that exist (`populatedRowIndex`).
 let populatedRowsById = new Map();
 // Merges read once at load: `sheet.model` rebuilds every row and cell model,
 // which is far too much to pay on every tile.
@@ -78,23 +80,56 @@ function normalizeStyle(cell) {
   return id;
 }
 
+// Ascending numeric own keys of a sparse array. ExcelJS keeps rows at
+// `_rows[r - 1]` and a row's cells at `_cells[col - 1]`, and one far index puts
+// the array in dictionary mode, where its own `eachRow`, `eachCell` and
+// `hasValues` (forEach/some) visit every index up to the largest: a single XFD
+// cell per row costs 16,384 steps a row. Walking the keys that exist does not.
+function presentIndices(sparse) {
+  const indices = [];
+  for (const key of Object.keys(sparse || [])) {
+    const index = Number(key);
+    if (Number.isInteger(index) && index >= 0) indices.push(index);
+  }
+  return indices.sort((a, b) => a - b);
+}
+
+// The rows and cells `sheet.eachRow({ includeEmpty: false })` and
+// `row.eachCell({ includeEmpty: false })` would visit, in the same order: a
+// cell counts when it exists and its type is not `ValueType.Null`, and a row
+// counts when it holds at least one such cell (ExcelJS's `row.hasValues`).
+function populatedRowIndex(sheet) {
+  const nullType = self.ExcelJS.ValueType.Null;
+  const rows = [];
+  for (const rowIndex of presentIndices(sheet._rows)) {
+    const row = sheet._rows[rowIndex];
+    if (!row) continue;
+    const cells = [];
+    for (const cellIndex of presentIndices(row._cells)) {
+      const cell = row._cells[cellIndex];
+      if (cell && cell.type !== nullType) cells.push(cell);
+    }
+    if (cells.length > 0) rows.push({ number: row.number, row, cells });
+  }
+  return rows;
+}
+
 function worksheetMetadata(sheet) {
   const cellRefs = [];
-  const populatedRows = [];
-  sheet.eachRow({ includeEmpty: false }, (row) => {
-    populatedRows.push(row.number);
-    row.eachCell({ includeEmpty: false }, (cell) => {
+  const rowOverrides = [];
+  const populatedRows = populatedRowIndex(sheet);
+  for (const { number, row, cells } of populatedRows) {
+    for (const cell of cells) {
       cellRefs.push(cell.address);
       normalizeStyle(cell);
-    });
-  });
-  const merges = Array.from(sheet.model?.merges || []);
+    }
+    if (row.hidden) rowOverrides.push([number, 0]);
+    else if (row.height) rowOverrides.push([number, Math.min(546, Math.max(0, row.height * (4 / 3)))]);
+  }
+  // `sheet.model` rebuilds every row and cell model, so merges come straight
+  // from ExcelJS's own merge map, in the order the model getter would list them.
+  const merges = Object.values(sheet._merges || {}).map((merge) => merge.range);
   const extent = core.deriveExtent(cellRefs, merges);
-  const rowOverrides = [];
-  sheet.eachRow({ includeEmpty: false }, (row) => {
-    if (row.hidden) rowOverrides.push([row.number, 0]);
-    else if (row.height) rowOverrides.push([row.number, Math.min(546, Math.max(0, row.height * (4 / 3)))]);
-  });
   const columnOverrides = [];
   for (let col = 1; col <= extent.cols; col += 1) {
     const column = sheet.getColumn(col);
@@ -207,16 +242,16 @@ function sendTile(message) {
     });
   };
   const populatedRows = populatedRowsById.get(String(message.sheetId)) || [];
-  for (const rowNumber of populatedRows) {
+  for (const populated of populatedRows) {
     if (truncated) break;
-    if (rowNumber < range.r1) continue;
-    if (rowNumber > range.r2) break;
-    const row = sheet.getRow(rowNumber);
-    if (row.hidden) continue;
-    row.eachCell({ includeEmpty: false }, (cell) => {
-      if (cell.col < range.c1 || cell.col > range.c2) return;
+    if (populated.number < range.r1) continue;
+    if (populated.number > range.r2) break;
+    if (populated.row.hidden) continue;
+    for (const cell of populated.cells) {
+      if (cell.col < range.c1) continue;
+      if (cell.col > range.c2) break;
       addCell(cell);
-    });
+    }
   }
   const merges = core.intersectingMerges(mergesById.get(String(message.sheetId)) || [], range);
   for (const merge of merges) {

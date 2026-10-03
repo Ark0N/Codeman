@@ -744,9 +744,17 @@
     return undefined;
   }
 
+  // Real theme1.xml files are under 10 KB. The scheme and slot patterns below
+  // rescan to the end of the text for every opening tag that has no close, so a
+  // padded theme is quadratic (1 MB of `<a:clrScheme>` took 21.8 s); above this
+  // many characters (UTF-16 code units of the decoded XML) the default palette
+  // is used instead.
+  const MAX_THEME_XML_CHARS = 64 * 1024;
+
   function parseThemePalette(xml) {
     const palette = DEFAULT_THEME_PALETTE.slice();
     const text = typeof xml === 'string' ? xml : '';
+    if (text.length > MAX_THEME_XML_CHARS) return palette;
     const scheme = /<(?:[A-Za-z0-9_]+:)?clrScheme\b[^>]*>([\s\S]*?)<\/(?:[A-Za-z0-9_]+:)?clrScheme\s*>/.exec(text);
     if (!scheme) return palette;
     // Fresh pattern per call: a shared /g regex would carry lastIndex across calls.
