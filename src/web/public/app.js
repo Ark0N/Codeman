@@ -2287,10 +2287,17 @@ class CodemanApp {
 
   _onSessionCreated(data) {
     this.sessions.set(data.id, data);
-    // Add new session to end of tab order
     if (!this.sessionOrder.includes(data.id)) {
-      this.sessionOrder.push(data.id);
-      this.saveSessionOrder();
+      if (this._serverPlacesSessions()) {
+        // The server already placed it (a child after its parent, a grouped
+        // creation in its group) and broadcast that order; adopt it. Echoing a
+        // local append back as a hand order would pin every child in place.
+        this.syncSessionOrder();
+      } else {
+        // Add new session to end of tab order
+        this.sessionOrder.push(data.id);
+        this.saveSessionOrder();
+      }
     }
     // Idempotent per id: the POST response and the session:created event both
     // land here, and a batch launched together cascades in creation order.
@@ -7371,6 +7378,8 @@ class CodemanApp {
       collapsedGroupIds: [...this.collapsedTabGroupIds],
       activeSessionId: this.activeSessionId,
       activeWebviewId: this.activeWebviewId,
+      // A session spawned by another one shows up in its parent's group at once.
+      parents: this._tabLayoutParents(),
     });
   }
 
@@ -7417,6 +7426,18 @@ class CodemanApp {
 
   _tabLayoutEditable() {
     return !!(this.tabLayout && window.CodemanTabLayout && this._tabOrientation() === 'vertical');
+  }
+
+  /**
+   * True while the owner has tab groups: session creation and deletion are then
+   * placed by the server (TabLayoutService), which broadcasts the resulting
+   * order. The browser must not echo its own guess back through
+   * PUT /api/session-order, which the server reads as a hand arrangement and
+   * answers by pinning every child session where it stands. Without groups the
+   * strip keeps its long-standing append-and-save behaviour.
+   */
+  _serverPlacesSessions() {
+    return !!(this.tabLayout && window.CodemanTabLayout?.hasGroups(this.tabLayout));
   }
 
   /** child session id -> parent session id, so a moved session takes the sessions that follow it. */
@@ -7568,8 +7589,8 @@ class CodemanApp {
     if (!this._tabLayoutEditable()) return [];
     const location = this._tabRefLocation(ref);
     if (!location) return [];
-    const actions = [];
     const grouped = this.tabLayout.groups.length > 0;
+    const actions = grouped ? this._tabRefPlacementActions(ref) : [];
     // Up/down follow the STORED order, which is what the rail paints unless a
     // sort is on (then the sort decides and there is nothing to reorder).
     if (grouped && !this.isTabRailSorted()) {
@@ -7592,6 +7613,52 @@ class CodemanApp {
     // At the server's group cap a new group can only fail, so it is not offered.
     if (this._canCreateTabGroup()) actions.push({ label: 'Move to new group', run: () => this.createTabGroup({ ref }) });
     return actions;
+  }
+
+  /**
+   * A child session's placement, for its row menu: an informational line (where
+   * it sits and why, never actionable) and, for a child placed by hand, "Follow
+   * parent again". A child follows its parent into the parent's group until it
+   * is moved by hand; a child whose parent is gone stands on its own and is
+   * never re-adopted automatically.
+   */
+  _tabRefPlacementActions(ref) {
+    const parents = this._tabLayoutParents();
+    const placement = window.CodemanTabLayout.placementState(this.tabLayout, ref, parents);
+    if (!placement) return [];
+    const parent = this.sessions.get(placement.parentId);
+    const parentName = parent ? this.getSessionName(parent) : placement.parentId;
+    const summary = {
+      inherited: `Follows ${parentName}`,
+      manual: `Placed by hand (parent: ${parentName})`,
+      dangling: 'Parent closed; placed on its own',
+      cycle: 'Parent loop; placed on its own',
+    }[placement.state];
+    const actions = [{ label: summary, disabled: true }];
+    if (placement.canFollow) {
+      actions.push({
+        label: 'Follow parent again',
+        run: () => this.editTabLayout({ type: 'followParent', ref, parents: this._tabLayoutParents() }, `${ref.kind}:${ref.id}`),
+      });
+    }
+    return actions;
+  }
+
+  /**
+   * The group menu's "New session": launch ONE session with the current case and
+   * run mode, placed at the end of this group by the server in the same write
+   * that records it (the group id rides the create request). A collapsed group
+   * expands first so the new tab is visible when it arrives.
+   */
+  async createSessionInTabGroup(groupId) {
+    if (!this._tabLayoutEditable() || !this.tabLayout.groups.some((group) => group.id === groupId)) return false;
+    if (this._runInFlight) {
+      this.showToast?.('A session is already starting.', 'info');
+      return false;
+    }
+    this.toggleTabGroupCollapsed(groupId, false);
+    await this.run({ count: 1, tabGroupId: groupId });
+    return true;
   }
 
   // ─── Group and web-tab menus (right-click, the header's ⋯, Shift+F10) ──
@@ -7634,6 +7701,7 @@ class CodemanApp {
     const index = groups.findIndex((group) => group.id === groupId);
     if (index < 0) return false;
     return this._openTabLayoutMenu(event, `group:${groupId}`, 'Group actions', [
+      { label: 'New session', run: () => this.createSessionInTabGroup(groupId) },
       ...(this.canOpenTileGrid?.() ? [{ label: 'Open group as tiles', run: () => this.openGroupAsTiles(groupId) }] : []),
       { label: 'Rename group', run: () => this.startTabGroupRename(groupId) },
       ...(this._canCreateTabGroup() ? [{ label: 'New group', run: () => this.createTabGroup({ index: index + 1 }) }] : []),
@@ -9591,7 +9659,8 @@ class CodemanApp {
     const orderIndex = this.sessionOrder.indexOf(sessionId);
     if (orderIndex !== -1) {
       this.sessionOrder.splice(orderIndex, 1);
-      this.saveSessionOrder();
+      // With groups, the server's deletion already re-projected the order.
+      if (!this._serverPlacesSessions()) this.saveSessionOrder();
     }
     this.terminalBuffers.delete(sessionId);
     this.terminalBufferCache.delete(sessionId);

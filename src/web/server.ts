@@ -59,7 +59,8 @@ import { RespawnController, RespawnConfig } from '../respawn-controller.js';
 import type { TerminalMultiplexer } from '../mux-interface.js';
 import { createMultiplexer } from '../mux-factory.js';
 import { getStore } from '../state-store.js';
-import { TabLayoutService } from '../tab-layout-service.js';
+import { TabLayoutService, type SessionPlacementHint } from '../tab-layout-service.js';
+import type { TabLayout } from '../tab-layout.js';
 import { ownerLayoutKey } from '../tab-layout-persistence.js';
 import { readWebviews } from '../webview-store.js';
 import { extractCompletionPhrase } from '../ralph-config.js';
@@ -708,15 +709,19 @@ export class WebServer extends EventEmitter {
     }
   }
 
-  /** Add a tentative session only after its owner layout accepts the creation. */
-  private async registerSessionWithLayout(session: Session): Promise<void> {
-    this.sessions.set(session.id, session);
-    try {
-      await this.tabLayouts.sessionCreated(ownerLayoutKey(session.owner));
-    } catch (error) {
-      this.sessions.delete(session.id);
-      throw error;
-    }
+  /**
+   * Add a tentative session only after its owner layout accepts the creation.
+   * The session enters the live map inside the layout service's owner lock, so
+   * the placement it asked for (`tabGroupId`) lands in the same versioned write
+   * that first records it.
+   */
+  private async registerSessionWithLayout(session: Session, placement?: SessionPlacementHint): Promise<TabLayout> {
+    return this.tabLayouts.sessionCreated(ownerLayoutKey(session.owner), session.id, placement, () => {
+      this.sessions.set(session.id, session);
+      return () => {
+        if (this.sessions.get(session.id) === session) this.sessions.delete(session.id);
+      };
+    });
   }
 
   /**

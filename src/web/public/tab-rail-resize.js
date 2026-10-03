@@ -341,7 +341,13 @@ Object.assign(CodemanApp.prototype, {
       button.setAttribute('role', 'menuitem');
       button.textContent = action.label;
       if (action.className) button.className = action.className;
+      // An informational line (a child session's placement): readable, never acts.
+      if (action.disabled) {
+        button.setAttribute('aria-disabled', 'true');
+        button.classList.add('tab-rail-action-menu-note');
+      }
       button.addEventListener('click', () => {
+        if (action.disabled) return;
         this.closeTabRailActionMenu();
         action.run();
       });
