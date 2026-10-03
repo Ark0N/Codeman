@@ -285,6 +285,10 @@ const capabilitiesSchema = z
     wheelForward: z
       .object({ mode: z.enum(['never', 'version-gated']), minVersion: z.string().max(20).optional() })
       .strict(),
+    // Whether a hollow pane's wheel/touch scroll may be turned into PageUp/PageDown for
+    // the CLI to page its own transcript. Distinct from wheelForward (SGR reports).
+    // Optional: absent means no paging, the safe default for an unmeasured CLI.
+    transcriptPageKeys: z.boolean().optional(),
     keyboardAccessory: z.enum(['agent', 'shell']),
     privilegedCommandGate: z.boolean(),
     startMode: z.enum(['interactive', 'shell']),

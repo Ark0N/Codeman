@@ -266,6 +266,10 @@ const CLAUDE: CliEntry = {
     // Declared-for-later: the live rule (`_shouldForwardWheelToApp`, terminal-ui.js) is this version
     // AND the server-published `cliMouseTracking` flag (#498), so wiring this field up needs both.
     wheelForward: { mode: 'version-gated', minVersion: '2.1.187' },
+    // A repaint-mode Claude pane keeps no local history, so when the wheel is not
+    // forwarded (older CLI, inline renderer, the local-scrollback opt-out) a scroll is
+    // turned into PageUp/PageDown, which Claude pages its transcript on (#205).
+    transcriptPageKeys: true,
     keyboardAccessory: 'agent',
     privilegedCommandGate: false,
     startMode: 'interactive',
@@ -610,6 +614,11 @@ const CODEX: CliEntry = {
     altScreen: 'strip-full',
     echo: { policy: 'predict', anchor: { kind: 'cursor' }, predictProfile: 'codex' },
     wheelForward: { mode: 'never' }, // #227: codex ignores SGR wheel reports, never forward
+    // ...but it DOES page its transcript on PageUp/PageDown. Measured on 0.157.1 (local,
+    // alternate screen inside tmux, so xterm holds no history) and 0.160 (remote): PageUp
+    // moved the visible transcript while SGR wheel reports and local scrolling did nothing.
+    // This is the page-key fallback for a hollow pane, not wheel forwarding.
+    transcriptPageKeys: true,
     maxFrameBytes: 32 * 1024,
     // codex's own bare-spawn default (no config sent) is already safe (no bypass flag), so
     // the multi-user clamp only needs to force an EXPLICITLY-SENT bypass back off.

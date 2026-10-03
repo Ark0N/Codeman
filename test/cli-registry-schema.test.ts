@@ -363,4 +363,24 @@ describe('capability shapes', () => {
       (e.capabilities as Record<string, unknown>).transcript = 'some-future-format';
     }, 'a transcript reader that does not exist would silently read nothing');
   });
+  it('takes transcriptPageKeys as an optional boolean, absent meaning no paging', () => {
+    for (const value of [true, false]) {
+      const entry = baseEntry();
+      (entry.capabilities as Record<string, unknown>).transcriptPageKeys = value;
+      expect(CliEntrySchema.safeParse(entry).success, `transcriptPageKeys=${value}`).toBe(true);
+    }
+    const absent = baseEntry();
+    delete (absent.capabilities as Record<string, unknown>).transcriptPageKeys;
+    expect(CliEntrySchema.safeParse(absent).success).toBe(true);
+    expectRejected((e) => {
+      (e.capabilities as Record<string, unknown>).transcriptPageKeys = 'yes';
+    }, 'transcriptPageKeys is a boolean');
+  });
+
+  it('declares transcriptPageKeys for exactly the CLIs measured to page on PageUp/PageDown', () => {
+    // claude (repaint mode) and codex (alternate screen) were measured paging their
+    // own transcript on PageUp/PageDown; no other stock entry has been.
+    const paging = STOCK_CLIS.filter((e) => e.capabilities.transcriptPageKeys === true).map((e) => e.id as string);
+    expect(paging.sort()).toEqual(['claude', 'codex']);
+  });
 });

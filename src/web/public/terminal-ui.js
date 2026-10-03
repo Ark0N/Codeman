@@ -75,7 +75,7 @@
   const REPLAY_ESCAPE_RE =
     /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-9;?<>=!]*[ -/]*[@-~]|\x1b[()#][0-9A-Za-z]|\x1b[=>78M]/g;
   // PageUp / PageDown as xterm.js encodes them. Used as the LAST-RESORT scroll
-  // gesture for a repaint-mode CLI whose local buffer holds no scrollback
+  // gesture for a CLI whose local buffer holds no scrollback
   // (_maybePageCliTranscript).
   const KEY_PAGE_UP = '\x1b[5~';
   const KEY_PAGE_DOWN = '\x1b[6~';
@@ -88,6 +88,12 @@
   // Bound on page keys emitted from one gesture batch, mirroring the SGR tick
   // cap: a fling must not build a backlog that keeps paging after it stops.
   const PAGE_KEY_MAX_PER_BATCH = 3;
+  // A page-key scroll event after this much quiet, or in the opposite direction,
+  // starts a NEW gesture, and the first event of a gesture pages at once rather
+  // than waiting for half a screen of travel (a trackpad flick never got there).
+  const PAGE_KEY_GESTURE_GAP_MS = 150;
+  // ...but not for sub-row jitter (0.1 row, ~2px).
+  const PAGE_KEY_MIN_START_ROWS = 0.1;
   const TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM = 4;
   // Composer navigation keys as xterm.js encodes user keystrokes: plain and
   // modified arrows (CSI A-D, CSI 1;mA-D, SS3 A-D), Home/End (CSI H/F, SS3
@@ -225,6 +231,8 @@
     KEY_PAGE_DOWN,
     PAGE_KEY_SCREEN_FRACTION,
     PAGE_KEY_MAX_PER_BATCH,
+    PAGE_KEY_GESTURE_GAP_MS,
+    PAGE_KEY_MIN_START_ROWS,
     TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
     MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR,
     MOBILE_KEYBOARD_DISMISS_TAP_SLOP,
@@ -5219,15 +5227,22 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * True when this session's LOCAL scrollback is structurally empty: a Claude
-   * pane in repaint mode, where tmux reports `history_size≈0` and every frame
-   * overwrites the last, so xterm's normal buffer never grows past one screen
-   * (`baseY === 0`). Scrolling that buffer is a no-op no matter how the gesture
-   * is routed — the "wheel does nothing at all" half of the #205 retest.
+   * True when this session's LOCAL scrollback is structurally empty and its CLI
+   * can page its own transcript. A Claude pane in repaint mode reports tmux
+   * `history_size≈0` and every frame overwrites the last; Codex draws on tmux's
+   * alternate screen, which the strip hides from xterm. Either way xterm's
+   * normal buffer never grows past one screen (`baseY === 0`), so scrolling it
+   * is a no-op no matter how the gesture is routed (the "wheel does nothing at
+   * all" half of the #205 retest).
+   *
+   * ⚠️ Which modes page is read from `window.__codemanTranscriptPageKeys`, the
+   * list the server builds from the `transcriptPageKeys` CAPABILITY, never an id
+   * literal here. A missing list means no mode pages.
    */
   _localScrollbackIsHollow() {
     const mode = this.sessions?.get(this.activeSessionId)?.mode || 'claude';
-    if (mode !== 'claude') return false;
+    const pagingModes = window.__codemanTranscriptPageKeys;
+    if (!Array.isArray(pagingModes) || !pagingModes.includes(mode)) return false;
     const buf = this.terminal?.buffer?.active;
     if (!buf || buf.type === 'alternate') return false;
     return (buf.baseY || 0) === 0;
@@ -5238,18 +5253,30 @@ Object.assign(CodemanApp.prototype, {
    * coalesced PageUp/PageDown key sends so the CLI pages its OWN transcript.
    *
    * The rescue path for every way `_shouldForwardWheelToApp` can come back false
-   * on a Claude session that has no local history to fall back on: the CLI
+   * on a session that has no local history to fall back on. For Claude: the CLI
    * version probe failed or is genuinely older than 2.1.187, the CLI's mouse
    * tracking flag is unset (the inline renderer, or fullscreen right after a
    * server restart), or the user turned on "Wheel scrolls local history" (which
    * pins the wheel to a buffer that, for a repaint-mode CLI, is empty: the
    * setting's footgun). Before this, all of those produced a completely dead
    * gesture; the #205 reporter proved the keyboard route works by paging back
-   * through intact text with Fn+Up.
+   * through intact text with Fn+Up. For Codex the gate is ALWAYS false, because
+   * codex ignores SGR wheel reports (#227) and is never forwarded the wheel;
+   * measured on codex 0.157.1, PageUp moves its alternate-screen transcript
+   * while wheel reports and local scrolling do nothing. So this is not wheel
+   * forwarding: it sends plain keys, and only over a hollow buffer.
    *
-   * Triple-guarded (claude mode + gate false + `baseY === 0`), so a session with
-   * real local scrollback is never touched. Shift is excluded on purpose: it is
-   * the explicit "give me local scrollback" gesture and must keep that meaning.
+   * Triple-guarded (`transcriptPageKeys` capability + gate false + `baseY === 0`),
+   * so a session with real local scrollback is never touched. Shift is excluded
+   * on purpose: it is the explicit "give me local scrollback" gesture and must
+   * keep that meaning.
+   *
+   * The FIRST event of a gesture pages at once. Waiting for half a screen of
+   * travel (19 rows, ~475px on a 38-row pane) meant an ordinary trackpad flick
+   * never sent a key at all. That page is pre-paid: the travel it skipped is
+   * owed back by the rest of the gesture, so the rate stays one page per
+   * `perPage` rows. A pause (PAGE_KEY_GESTURE_GAP_MS), a direction change or a
+   * tab switch starts a new gesture.
    *
    * @returns true when the gesture was consumed here (the caller must not also
    *          scroll locally).
@@ -5261,9 +5288,28 @@ Object.assign(CodemanApp.prototype, {
     if (this._pageKeySession !== this.activeSessionId) {
       this._pageKeySession = this.activeSessionId;
       this._pageKeyPending = 0;
+      this._pageKeyLastAt = undefined;
     }
     const tuning = window.CodemanTerminalInput;
     const perPage = Math.max(2, Math.round((this.terminal?.rows || 24) * tuning.PAGE_KEY_SCREEN_FRACTION));
+    const now = performance.now();
+    const dir = lines < 0 ? -1 : 1;
+    const gestureStart =
+      typeof this._pageKeyLastAt !== 'number' ||
+      now - this._pageKeyLastAt > tuning.PAGE_KEY_GESTURE_GAP_MS ||
+      dir !== this._pageKeyDir;
+    this._pageKeyLastAt = now;
+    this._pageKeyDir = dir;
+    if (gestureStart) {
+      this._pageKeyPending = 0;
+      if (Math.abs(lines) >= tuning.PAGE_KEY_MIN_START_ROWS && Math.abs(lines) < perPage) {
+        // Pre-pay one page; the skipped travel is owed back (pending carries the opposite sign).
+        this._pageKeyPending = lines - dir * perPage;
+        this._queueScrollBytes(dir < 0 ? tuning.KEY_PAGE_UP : tuning.KEY_PAGE_DOWN);
+        this._logScrollRouting('page-keys');
+        return true;
+      }
+    }
     const pending = (this._pageKeyPending || 0) + lines;
     const pages = Math.trunc(pending / perPage);
     this._pageKeyPending = pending - pages * perPage;
