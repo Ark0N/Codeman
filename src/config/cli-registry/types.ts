@@ -490,6 +490,20 @@ export interface CliCapabilities {
   };
   /** Forwarding the wheel to the CLI's own transcript. 'never' keeps local scrollback. */
   wheelForward: { mode: 'never' | 'version-gated'; minVersion?: string };
+  /**
+   * The CLI pages its OWN transcript on PageUp/PageDown, so a wheel or touch scroll over
+   * a pane with no local history can be turned into those keys instead of doing nothing
+   * (`_maybePageCliTranscript` in terminal-ui.js). Read by the frontend through
+   * `window.__codemanTranscriptPageKeys`, which the server builds from this field.
+   *
+   * ⚠ NOT wheel forwarding. `wheelForward` above sends SGR mouse wheel REPORTS; this sends
+   * plain keys, and only when the local buffer is hollow (normal buffer, `baseY === 0`).
+   * A CLI can ignore one and honour the other: codex ignores SGR wheel reports (so its
+   * `wheelForward` stays 'never') yet pages on PageUp/PageDown.
+   *
+   * Absent means no paging, so a CLI nobody has measured keeps plain local scrolling.
+   */
+  transcriptPageKeys?: boolean;
   keyboardAccessory: 'agent' | 'shell';
   /** Multi-user: this CLI is a raw shell, so its commands need the privileged gate. */
   privilegedCommandGate: boolean;
