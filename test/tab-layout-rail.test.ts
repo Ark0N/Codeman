@@ -727,10 +727,17 @@ describe('grouped rail tree semantics', () => {
     row('s2').focus();
     press('F10', { shiftKey: true });
     expect(app.openTabRailActionMenu).toHaveBeenCalledWith(expect.objectContaining({ currentTarget: row('s2') }), 's2');
+    // A web tab's keys open its menu (settings + group moves); settings is one item.
     row('w1').focus();
     press('ContextMenu');
+    const settings = [...document.querySelectorAll<HTMLElement>('.tab-layout-group-action-menu button')].find(
+      (button) => button.textContent === 'Web tab settings'
+    )!;
+    settings.click();
     expect(app.showWebviewModal).toHaveBeenCalledWith('w1');
+    row('w1').focus();
     press('F10');
+    expect(document.querySelector('.tab-layout-group-action-menu')).toBeNull();
     expect(app.showWebviewModal).toHaveBeenCalledTimes(1);
   });
 
