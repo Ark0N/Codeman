@@ -309,8 +309,16 @@ describe('browser wiring', () => {
     expect(APP_SOURCE).toContain("[SSE_EVENTS.TAB_LAYOUT_CHANGED, '_onTabLayoutChanged']");
   });
 
-  it('never writes the layout from the browser in this slice', () => {
-    expect(APP_SOURCE).not.toMatch(/['"`]PUT['"`][^\n]*tab-layout|tab-layout[^\n]*['"`]PUT['"`]/);
+  it('writes the layout only through the edit coordinator (and its keepalive twin)', () => {
+    // Exactly two PUT sites: _putTabLayout (the coordinator's transport) and the
+    // pagehide keepalive. Anything else would bypass serialization.
+    const writes = APP_SOURCE.split('\n').filter(
+      (line) => line.includes("'/api/tab-layout'") && !line.includes("_apiJson('/api/tab-layout')")
+    );
+    expect(writes).toHaveLength(2);
+    expect(APP_SOURCE).toContain("this._api('/api/tab-layout', { method: 'PUT', body })");
+    expect(APP_SOURCE).toContain("void fetch('/api/tab-layout', {");
+    // The pure module never does IO itself.
     expect(SOURCE).not.toContain('fetch(');
   });
 });

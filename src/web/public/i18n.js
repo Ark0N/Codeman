@@ -68,6 +68,23 @@
     'Session Manager': '会话管理器',
     'Session actions': '会话操作',
     Ungrouped: '未分组',
+    'Group actions': '分组操作',
+    'Group name': '分组名称',
+    'Web tab actions': '网页标签操作',
+    'Web tab settings': '网页标签设置',
+    'New group': '新建分组',
+    'Rename group': '重命名分组',
+    'Move group up': '上移分组',
+    'Move group down': '下移分组',
+    'Delete group': '删除分组',
+    'Move up': '上移',
+    'Move down': '下移',
+    'Move to Ungrouped': '移到未分组',
+    'Move to new group': '移到新分组',
+    'Could not save tab groups.': '无法保存标签分组。',
+    'Tab groups changed elsewhere; part of your edit no longer applies.':
+      '标签分组已在别处更改；你的部分编辑已不再适用。',
+    'Tab groups kept changing elsewhere; your edit was not saved.': '标签分组在别处持续更改；你的编辑未保存。',
     'Open session manager': '打开会话管理器',
     Attachments: '附件',
     'Open attachment history': '打开附件历史',
@@ -929,6 +946,12 @@
       [/^Update available: v(.+)$/, (_m, version) => `有可用更新：v${version}`],
       [/^Selected: (.+)$/, (_m, value) => `已选择：${value}`],
       [/^Failed to (.+)$/, (_m, action) => `操作失败：${action}`],
+      // Group names are user text: they pass through untranslated.
+      [/^Move to (.+)$/, (_m, group) => `移到 ${group}`],
+      [
+        /^Delete group "(.+)"\? Its tabs move to Ungrouped\.$/,
+        (_m, group) => `删除分组“${group}”？其中的标签将移到未分组。`,
+      ],
     ];
     for (const [pattern, replacement] of patterns) {
       const match = source.match(pattern);
