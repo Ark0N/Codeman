@@ -377,6 +377,7 @@ const capabilitiesSchema = z
     privilegedEnvKeys: z.array(envName).max(8),
     gates: z.record(z.string(), z.object({ minVersion: z.string().max(20), failClosed: z.boolean() }).strict()),
     maxFrameBytes: z.number().int().positive().optional(),
+    newline: z.enum(['line-feed', 'esc-enter']).optional(),
     customModelInjection: z.discriminatedUnion('kind', [
       z
         .object({
