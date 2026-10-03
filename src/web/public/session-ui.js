@@ -549,9 +549,12 @@ Object.assign(CodemanApp.prototype, {
 
   /** Ensure a newly-created session is visible without waiting for the SSE event.
    *  The POST response and session:created can arrive in either order, so the
-   *  normal idempotent SSE handler remains the single state-upsert path. */
-  async _ensureCreatedSessionVisible(sessionId, sessionSnapshot) {
+   *  normal idempotent SSE handler remains the single state-upsert path.
+   *  `tabLayout` is the layout a grouped creation returns (see run()'s
+   *  `tabGroupId`): adopting it first draws the new tab inside its group. */
+  async _ensureCreatedSessionVisible(sessionId, sessionSnapshot, tabLayout) {
     if (!sessionId) return;
+    if (tabLayout) this._applyTabLayout?.(tabLayout);
 
     let session = sessionSnapshot;
     if (!session && !this.sessions?.has(sessionId)) {
@@ -567,8 +570,13 @@ Object.assign(CodemanApp.prototype, {
     this._renderSessionTabsImmediate?.();
   },
 
-  /** Run using the selected mode (Claude Code, OpenCode, Codex, Gemini, or Antigravity) */
-  async run() {
+  /**
+   * Run using the selected mode (Claude Code, OpenCode, Codex, Gemini, or Antigravity).
+   * `options` comes from the tab group menu's "New session": `count` overrides
+   * the instance steppers for this launch only, `tabGroupId` rides every create
+   * request so the server places the session in that group.
+   */
+  async run(options = {}) {
     if (this._runInFlight) return;
 
     const startedAt = Date.now();
@@ -583,12 +591,12 @@ Object.assign(CodemanApp.prototype, {
     try {
       const mode = this._runMode || 'claude';
       if (mode === 'shell') {
-        return await this.runShell();
+        return await this.runShell(options);
       }
       if (mode === 'claude' || !isExternalCliRunMode(mode)) {
-        return await this.runClaude();
+        return await this.runClaude(options);
       }
-      return await this._runCliMode(mode);
+      return await this._runCliMode(mode, options);
     } finally {
       const remaining = minLockMs - (Date.now() - startedAt);
       if (remaining > 0) await new Promise(resolve => setTimeout(resolve, remaining));
@@ -1847,9 +1855,10 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  async runClaude() {
+  async runClaude(options = {}) {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    const tabCount = this._readTabCount();
+    const tabCount = this._readTabCount(options.count);
+    const group = options.tabGroupId ? { tabGroupId: options.tabGroupId } : {};
 
     const ownsLaunchTerminal = this._beginSessionLaunchStatus(
       `Starting ${tabCount} Claude session(s) in ${caseName}...`
@@ -1905,6 +1914,7 @@ Object.assign(CodemanApp.prototype, {
         for (let i = 0; i < tabCount; i++) {
           const quickStartBody = JSON.stringify({
             caseName, mode: 'claude', sessionName: `w${startNumber + i}-${caseName}`,
+            ...group,
             ...(dockerModelOverride !== undefined ? { modelOverride: dockerModelOverride } : {})
           });
           const doQuickStart = async () => {
@@ -1933,7 +1943,7 @@ Object.assign(CodemanApp.prototype, {
             }
           }
           if (!data.success) throw new Error(data.error || 'Failed to start remote Claude session');
-          await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
+          await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session, data.data.tabLayout);
           remoteIds.push(data.data.sessionId);
         }
         this._appendSessionLaunchStatus(ownsLaunchTerminal, `All ${tabCount} remote session(s) ready`);
@@ -1978,6 +1988,7 @@ Object.assign(CodemanApp.prototype, {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             workingDir, name,
+            ...group,
             ...(hasEnvOverrides ? { envOverrides } : {}),
             ...(effort ? { effort } : {}),
             ...(modelOverride !== undefined ? { modelOverride } : {}),
@@ -1990,7 +2001,7 @@ Object.assign(CodemanApp.prototype, {
       const sessionIds = [];
       for (const result of createResults) {
         if (!result.success) throw new Error(result.error);
-        await this._ensureCreatedSessionVisible(result.data.session.id, result.data.session);
+        await this._ensureCreatedSessionVisible(result.data.session.id, result.data.session, result.data.tabLayout);
         sessionIds.push(result.data.session.id);
       }
       firstSessionId = sessionIds[0];
@@ -2059,9 +2070,13 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  async runShell() {
+  async runShell(options = {}) {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    const shellCount = Math.min(20, Math.max(1, parseInt(document.getElementById('shellCount').value) || 1));
+    const shellCount = Math.min(
+      20,
+      Math.max(1, options.count ?? (parseInt(document.getElementById('shellCount').value) || 1))
+    );
+    const group = options.tabGroupId ? { tabGroupId: options.tabGroupId } : {};
 
     const ownsLaunchTerminal = this._beginSessionLaunchStatus(
       `Starting ${shellCount} Shell session(s) in ${caseName}...`,
@@ -2103,11 +2118,11 @@ Object.assign(CodemanApp.prototype, {
           const res = await fetch('/api/quick-start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ caseName, mode: 'shell', sessionName: `s${startNumber + i}-${caseName}` })
+            body: JSON.stringify({ caseName, mode: 'shell', sessionName: `s${startNumber + i}-${caseName}`, ...group })
           });
           const data = await res.json();
           if (!data.success) throw new Error(data.error || 'Failed to start remote shell session');
-          await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
+          await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session, data.data.tabLayout);
           remoteIds.push(data.data.sessionId);
         }
         if (remoteIds[0]) {
@@ -2133,7 +2148,7 @@ Object.assign(CodemanApp.prototype, {
         fetch('/api/sessions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...(isRemoteCase ? { caseName } : { workingDir }), mode: 'shell', name })
+          body: JSON.stringify({ ...(isRemoteCase ? { caseName } : { workingDir }), mode: 'shell', name, ...group })
         }).then(r => r.json())
       );
       const createResults = await Promise.all(createPromises);
@@ -2141,7 +2156,7 @@ Object.assign(CodemanApp.prototype, {
       const sessionIds = [];
       for (const result of createResults) {
         if (!result.success) throw new Error(result.error);
-        await this._ensureCreatedSessionVisible(result.data.session.id, result.data.session);
+        await this._ensureCreatedSessionVisible(result.data.session.id, result.data.session, result.data.tabLayout);
         sessionIds.push(result.data.session.id);
       }
 
@@ -2182,8 +2197,8 @@ Object.assign(CodemanApp.prototype, {
    * their try block, to put the count in the opening banner: `#tabCount` ships
    * unconditionally today, but a throw here would escape the launch-error path.
    */
-  _readTabCount() {
-    return Math.min(20, Math.max(1, parseInt(document.getElementById('tabCount')?.value) || 1));
+  _readTabCount(override) {
+    return Math.min(20, Math.max(1, override ?? (parseInt(document.getElementById('tabCount')?.value) || 1)));
   },
 
   /**
@@ -2216,7 +2231,7 @@ Object.assign(CodemanApp.prototype, {
       );
       if (!data.success) throw new Error(data.error || `Failed to start ${label}`);
       customModelAnswered = true;
-      await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session);
+      await this._ensureCreatedSessionVisible(data.data.sessionId, data.data.session, data.data.tabLayout);
       if (!firstSessionId) firstSessionId = data.data.sessionId;
     }
     if (tabCount > 1) {
@@ -2234,7 +2249,7 @@ Object.assign(CodemanApp.prototype, {
    * menu call them directly by name (`app.runOpenCode()` etc.), and several
    * tests assert on that name directly too.
    */
-  async _runCliMode(mode) {
+  async _runCliMode(mode, options = {}) {
     const catalogEntry = registryCliById(mode);
     const entry = RUN_MODE_LAUNCH[mode] ||
       (catalogEntry && {
@@ -2251,7 +2266,7 @@ Object.assign(CodemanApp.prototype, {
     const _runLoc = (this.cases || []).find(c => c.name === caseName)?.location;
     const isRemote = _runLoc === 'remote' || _runLoc === 'docker';
 
-    const tabCount = this._readTabCount();
+    const tabCount = this._readTabCount(options.count);
     const ownsLaunchTerminal = this._beginSessionLaunchStatus(
       `Starting ${tabCount} ${entry.label} session(s) in ${caseName}...`
     );
@@ -2289,6 +2304,7 @@ Object.assign(CodemanApp.prototype, {
           caseName,
           mode,
           sessionName,
+          ...(options.tabGroupId ? { tabGroupId: options.tabGroupId } : {}),
           ...(isRemote ? {} : {
             ...(entry.buildConfig(globalSettings) || {}),
             ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
@@ -2574,6 +2590,41 @@ Object.assign(CodemanApp.prototype, {
     if (payload && payload.success === false) return null;
     const confirmed = payload?.data?.name;
     return typeof confirmed === 'string' ? confirmed : name;
+  },
+
+  /**
+   * Write an inline rename, one PUT per session at a time, in the order the
+   * user made them. The editor can be reopened (or cancelled, or replaced by a
+   * group rename) while a PUT is in flight, so the write lives here rather than
+   * in the editor: a confirmed name is applied locally even after its editor is
+   * gone, and the "already that name" check runs only once the earlier writes
+   * have landed, so confirming the name still on screen is a real write.
+   * Resolves { status: 'confirmed' | 'failed' | 'deleted' }; never rejects.
+   */
+  _queueInlineSessionName(sessionId, desiredName) {
+    this._inlineRenameWrites ??= new Map();
+    const writes = this._inlineRenameWrites;
+    const task = (writes.get(sessionId) || Promise.resolve()).then(async () => {
+      const session = this.sessions.get(sessionId);
+      if (!session) return { status: 'deleted' };
+      if (session.name === desiredName) return { status: 'confirmed' };
+      let confirmed = null;
+      try {
+        confirmed = await this._putSessionName(sessionId, desiredName);
+      } catch {
+        // A failure is a value, so a later write in the chain still runs.
+      }
+      if (!this.sessions.has(sessionId)) return { status: 'deleted' };
+      if (confirmed === null) return { status: 'failed' };
+      this._applyLocalSessionName(sessionId, confirmed);
+      this.renderSessionTabs();
+      return { status: 'confirmed' };
+    });
+    writes.set(sessionId, task);
+    task.then(() => {
+      if (writes.get(sessionId) === task) writes.delete(sessionId);
+    });
+    return task;
   },
 
   async saveSessionName() {
@@ -2944,18 +2995,15 @@ Object.assign(CodemanApp.prototype, {
       if (fullName === session.name) restoreOriginalChildren();
       else tabName.textContent = fullName || originalContent;
 
-      // Skip the API call if the session vanished between focus and blur.
-      const stillExists = this.sessions.has(sessionId);
-      if (stillExists && fullName !== session.name) {
-        const confirmed = await this._putSessionName(sessionId, fullName);
+      // Skip the API call if the session vanished between focus and blur. The
+      // queue applies the confirmed name to this.sessions before the re-render
+      // below repaints from it (see _applyLocalSessionName()).
+      if (this.sessions.has(sessionId)) {
+        const result = await this._queueInlineSessionName(sessionId, fullName);
         if (invalidated || this._activeRename !== renameHandle || !this.sessions.has(sessionId)) return;
-        if (confirmed === null) {
+        if (result.status === 'failed') {
           restoreOriginalChildren();
           this.showToast('Failed to rename', 'error');
-        } else {
-          // The re-render below repaints from this.sessions, so the new name has
-          // to be in the map before it runs (see _applyLocalSessionName()).
-          this._applyLocalSessionName(sessionId, confirmed);
         }
       }
       // Re-render tabs to restore full tab structure

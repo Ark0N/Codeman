@@ -325,6 +325,8 @@ Object.assign(CodemanApp.prototype, {
     const settings = this.loadAppSettingsFromStorage();
     const actions = [
       { label: 'Session options', run: () => this.openSessionOptions(sessionId) },
+      // Group placement (vertical rail with a tab layout only; [] elsewhere).
+      ...(this._tabRefMoveActions?.({ kind: 'session', id: sessionId }) || []),
       ...(settings.showTabDetachButton || this.detachedSessions?.has(sessionId)
         ? [{ label: 'Open in a new window', run: () => this.detachSession(sessionId) }]
         : []),
@@ -336,7 +338,13 @@ Object.assign(CodemanApp.prototype, {
       button.setAttribute('role', 'menuitem');
       button.textContent = action.label;
       if (action.className) button.className = action.className;
+      // An informational line (a child session's placement): readable, never acts.
+      if (action.disabled) {
+        button.setAttribute('aria-disabled', 'true');
+        button.classList.add('tab-rail-action-menu-note');
+      }
       button.addEventListener('click', () => {
+        if (action.disabled) return;
         this.closeTabRailActionMenu();
         action.run();
       });

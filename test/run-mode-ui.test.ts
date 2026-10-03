@@ -177,7 +177,9 @@ describe('Run launch synchronization', () => {
     // once. Confirmed live: adding `this.terminal.clear()` to `_runCliMode`
     // left this test 32/32 green under the old pattern.
     const bodies = new Map<string, string>();
-    const header = /^ {2}async (_?run[A-Za-z]*)\(\w*\) \{$/gm;
+    // Any parameter list (`(mode, options = {})` included), never `\(\w*\)`
+    // alone, or a launcher that grew a second parameter silently drops out.
+    const header = /^ {2}async (_?run[A-Za-z]*)\([^)\n]*\) \{$/gm;
     for (let m = header.exec(src); m; m = header.exec(src)) {
       const start = m.index + m[0].length;
       const end = src.indexOf('\n  },', start);

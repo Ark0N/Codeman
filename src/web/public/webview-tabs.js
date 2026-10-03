@@ -304,13 +304,26 @@ Object.assign(CodemanApp.prototype, {
     let idx = startIndex;
 
     for (const id of this.webviewOrder) {
-      const webview = this.webviews.get(id);
-      if (!webview) continue;
-      const isActive = id === this.activeWebviewId;
-      const jsonId = escapeHtml(JSON.stringify(id));
-      const icon = webview.icon ? escapeHtml(webview.icon) : '';
+      if (!this.webviews.get(id)) continue;
+      parts.push(this.renderWebviewTab(id, idx));
+      idx++;
+    }
+    return parts.join('');
+  },
 
-      parts.push(`<div class="session-tab session-tab--web ${isActive ? 'active' : ''}" data-webview-id="${escapeHtml(id)}"
+  /**
+   * One web tab's HTML; `idx` is its zero-based Alt+N slot (no badge from 9 up).
+   * The grouped vertical rail places single web tabs into their group with this,
+   * so a web tab's markup is the same in every layout.
+   */
+  renderWebviewTab(id, idx) {
+    const webview = this.webviews.get(id);
+    if (!webview) return '';
+    const isActive = id === this.activeWebviewId;
+    const jsonId = escapeHtml(JSON.stringify(id));
+    const icon = webview.icon ? escapeHtml(webview.icon) : '';
+
+    return `<div class="session-tab session-tab--web ${isActive ? 'active' : ''}" data-webview-id="${escapeHtml(id)}"
           onclick="app.handleWebviewTabClick(event, ${jsonId})"
           tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}"
           aria-label="${escapeHtml(webview.name)} web tab" title="${escapeHtml(webview.url)}">
@@ -322,10 +335,7 @@ Object.assign(CodemanApp.prototype, {
             </span>
           </span>
           <span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.showWebviewModal(${jsonId})" title="URL settings" aria-label="URL settings" tabindex="0">&#x2699;</span><span class="tab-close" onclick="event.stopPropagation(); app.closeWebviewTab(${jsonId})" title="Close tab" aria-label="Close web tab" tabindex="0">&times;</span></span>
-        </div>`);
-      idx++;
-    }
-    return parts.join('');
+        </div>`;
   },
 
   _webviewGlobeIcon() {
@@ -348,6 +358,7 @@ Object.assign(CodemanApp.prototype, {
       // A web tab is active, so no session tab may also look active.
       for (const tab of container.querySelectorAll('.session-tab[data-id]')) tab.classList.remove('active');
     }
+    this._syncTabTreeSelection?.(container);
   },
 
   // ── Opening / closing ─────────────────────────────────────────────────────

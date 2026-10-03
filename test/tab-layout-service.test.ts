@@ -1273,3 +1273,144 @@ describe('TabLayoutService', () => {
     expect(Object.hasOwn(h.store.commitTabLayoutProjection.mock.calls.at(-1)![0], 'bob')).toBe(true);
   });
 });
+
+describe('TabLayoutService grouped session creation', () => {
+  const grouped = (version = 7): TabLayout => ({
+    version,
+    groups: [
+      { id: 'g1', name: 'Core', refs: [{ kind: 'session', id: 'a' }] },
+      { id: 'g2', name: 'Ops', refs: [] },
+    ],
+    ungrouped: [{ kind: 'session', id: 'b' }],
+    updatedAt: '2026-08-15T00:00:00.000Z',
+  });
+  const facts = (owner = 'alice') => [
+    { id: 'a', owner, createdAt: 1 },
+    { id: 'b', owner, createdAt: 2 },
+  ];
+  /** Registers `id` the way server.ts does: inside the owner lock, with a rollback. */
+  const register = (h: ReturnType<typeof createHarness>, fact: SessionFact) =>
+    vi.fn(() => {
+      h.live.set(fact.id, fact as never);
+      return () => h.live.delete(fact.id);
+    });
+
+  it('places a new session at the end of the requested group in ONE versioned write', async () => {
+    const h = createHarness({ layouts: { alice: grouped() }, live: facts() });
+    const added = register(h, { id: 'new', owner: 'alice', createdAt: 3 });
+
+    const layout = await h.service.sessionCreated('alice', 'new', { tabGroupId: 'g1' }, added);
+
+    expect(added).toHaveBeenCalledOnce();
+    expect(layout.version).toBe(8);
+    expect(layout.groups[0].refs).toEqual([
+      { kind: 'session', id: 'a' },
+      { kind: 'session', id: 'new' },
+    ]);
+    expect(layout.ungrouped).toEqual([{ kind: 'session', id: 'b' }]);
+    expect(h.layouts.alice).toEqual(layout);
+    expect(h.store.commitTabLayoutProjection).toHaveBeenCalledTimes(1);
+    expect(h.broadcast.mock.calls.filter(([event]) => event === SseEvent.TabLayoutChanged)).toEqual([
+      [SseEvent.TabLayoutChanged, { owner: 'alice', version: 8 }],
+    ]);
+  });
+
+  it('registers the session INSIDE the owner lock, so a queued edit cannot commit it first', async () => {
+    const h = createHarness({ layouts: { alice: grouped() }, live: facts(), order: ['a', 'b'] });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => (release = resolve));
+    h.readWebviews.mockImplementationOnce(async () => {
+      await blocked;
+      return [];
+    });
+    const occupied = h.service.get('alice');
+    await vi.waitFor(() => expect(h.readWebviews).toHaveBeenCalledOnce());
+    const added = register(h, { id: 'new', owner: 'alice', createdAt: 3 });
+
+    const created = h.service.sessionCreated('alice', 'new', { tabGroupId: 'g2' }, added);
+    await Promise.resolve();
+    expect(added).not.toHaveBeenCalled();
+    release();
+    await occupied;
+    const layout = await created;
+
+    expect(layout.groups[1].refs).toEqual([{ kind: 'session', id: 'new' }]);
+    // The queued read committed nothing; the creation is the only write.
+    expect(h.store.commitTabLayoutProjection).toHaveBeenCalledTimes(1);
+    expect(layout.version).toBe(8);
+  });
+
+  it('treats an unknown group as a hint, not an error: the session lands where it normally would', async () => {
+    const h = createHarness({ layouts: { alice: grouped() }, live: facts() });
+    const layout = await h.service.sessionCreated(
+      'alice',
+      'new',
+      { tabGroupId: 'gone' },
+      register(h, { id: 'new', owner: 'alice', createdAt: 3 })
+    );
+    expect(layout.ungrouped.map((ref) => ref.id)).toEqual(['b', 'new']);
+    expect(layout.groups.flatMap((group) => group.refs.map((ref) => ref.id))).toEqual(['a']);
+  });
+
+  it("never places a session into another owner's group", async () => {
+    const h = createHarness({
+      layouts: { alice: grouped(), bob: existing([{ kind: 'session', id: 'bob-1' }], 3) },
+      live: [...facts(), { id: 'bob-1', owner: 'bob', createdAt: 4 }],
+    });
+    const layout = await h.service.sessionCreated(
+      'bob',
+      'bob-new',
+      { tabGroupId: 'g1' },
+      register(h, { id: 'bob-new', owner: 'bob', createdAt: 5 })
+    );
+    expect(layout.groups).toEqual([]);
+    expect(layout.ungrouped.map((ref) => ref.id)).toEqual(['bob-1', 'bob-new']);
+    expect(h.layouts.alice).toEqual(grouped());
+  });
+
+  it("a child follows its parent into the parent's group; an explicit group pins it manual", async () => {
+    const h = createHarness({ layouts: { alice: grouped() }, live: facts() });
+    const followed = await h.service.sessionCreated(
+      'alice',
+      'child',
+      {},
+      register(h, { id: 'child', owner: 'alice', createdAt: 3, parentSessionId: 'a' })
+    );
+    expect(followed.groups[0].refs).toEqual([
+      { kind: 'session', id: 'a' },
+      { kind: 'session', id: 'child' },
+    ]);
+
+    const pinned = await h.service.sessionCreated(
+      'alice',
+      'child-2',
+      { tabGroupId: 'g2' },
+      register(h, { id: 'child-2', owner: 'alice', createdAt: 4, parentSessionId: 'a' })
+    );
+    expect(pinned.groups[1].refs).toEqual([{ kind: 'session', id: 'child-2', placement: 'manual' }]);
+    // Moving the parent later leaves the hand-placed child where it was.
+    const moved = await h.service.put(
+      'alice',
+      {
+        ...pinned,
+        groups: [{ ...pinned.groups[0], refs: [] }, pinned.groups[1]],
+        ungrouped: [...pinned.ungrouped, ...pinned.groups[0].refs],
+      },
+      pinned.version
+    );
+    expect(moved.layout.groups[1].refs).toEqual([{ kind: 'session', id: 'child-2', placement: 'manual' }]);
+    expect(moved.layout.ungrouped.map((ref) => ref.id)).toEqual(['b', 'a', 'child']);
+  });
+
+  it('rolls the registration back when the layout write fails', async () => {
+    const h = createHarness({ layouts: { alice: grouped() }, live: facts() });
+    h.store.commitTabLayoutProjection.mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+    const added = register(h, { id: 'new', owner: 'alice', createdAt: 3 });
+    await expect(h.service.sessionCreated('alice', 'new', { tabGroupId: 'g1' }, added)).rejects.toThrow('disk full');
+    expect(added).toHaveBeenCalledOnce();
+    expect(h.live.has('new')).toBe(false);
+    expect(h.layouts.alice).toEqual(grouped());
+  });
+});
