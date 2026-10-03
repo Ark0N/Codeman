@@ -50,6 +50,7 @@ import {
 } from '../../git-clone.js';
 import type { GitRemoteProbe, GitUrlParse } from '../../git-clone.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
+import { prepareNewCasePath } from '../case-path.js';
 import { readAgentCaseMarker, type AgentCaseMarker } from '../../agent-case-marker.js';
 import { settingsWriteBlocker, writeHooksConfig } from '../../hooks-config.js';
 import {
@@ -424,8 +425,98 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     return { success: true, data: { cases: summaries } };
   });
 
-  app.post('/api/cases', async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
-    const { name, description } = parseBody(CreateCaseSchema, req.body);
+  /**
+   * `POST /api/cases` with a `path`: create the folder (or fill an EMPTY existing one), scaffold it
+   * exactly like a normal case, and register it in the linked-cases registry so it lists, resolves
+   * and deletes (unlinks, never removes files) like any linked case. Everything is judged before
+   * anything is written; a failure after the first write undoes what this call created.
+   */
+  async function createCaseInCustomFolder(
+    name: string,
+    description: string | undefined,
+    customPath: string,
+    req: FastifyRequest,
+    reply: { code: (n: number) => unknown }
+  ): Promise<ApiResponse<{ case: { name: string; path: string } }>> {
+    if (existsSync(join(resolveCasesDir(getAuthUser(req)), name))) {
+      reply.code(409);
+      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'A case with this name already exists in codeman-cases.');
+    }
+    const linkedCases = await readLinkedCases();
+    if (linkedCases[name]) {
+      reply.code(409);
+      return createErrorResponse(
+        ApiErrorCode.ALREADY_EXISTS,
+        `Case "${name}" is already linked to ${linkedCases[name]}`
+      );
+    }
+
+    const prepared = await prepareNewCasePath(customPath, { home: homedir(), dataDir: getDataDir() });
+    if (!prepared.ok) {
+      const status = prepared.code === 'NOT_FOUND' ? 404 : prepared.code === 'EXISTS' ? 409 : 400;
+      reply.code(status);
+      const code =
+        prepared.code === 'NOT_FOUND'
+          ? ApiErrorCode.NOT_FOUND
+          : prepared.code === 'EXISTS'
+            ? ApiErrorCode.ALREADY_EXISTS
+            : ApiErrorCode.INVALID_INPUT;
+      return createErrorResponse(code, prepared.reason);
+    }
+    const casePath = prepared.path;
+    const alreadyAs = Object.entries(linkedCases).find(([, p]) => p === casePath)?.[0];
+    if (alreadyAs) {
+      reply.code(409);
+      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `That folder is already the case "${alreadyAs}"`);
+    }
+
+    const made: string[] = [];
+    try {
+      if (!prepared.existedEmpty) {
+        mkdirSync(casePath);
+        made.push(casePath);
+      }
+      mkdirSync(join(casePath, 'src'));
+      made.push(join(casePath, 'src'));
+      const templatePath = await ctx.getDefaultClaudeMdPath();
+      writeFileSync(join(casePath, 'CLAUDE.md'), generateClaudeMd(name, description || '', templatePath));
+      made.push(join(casePath, 'CLAUDE.md'));
+      made.push(join(casePath, '.claude')); // before the write, so a half-written one is undone too
+      await writeHooksConfig(casePath);
+
+      const codemanDir = getDataDir();
+      if (!existsSync(codemanDir)) mkdirSync(codemanDir, { recursive: true });
+      // Re-read right before writing: another request may have linked a case since the check above.
+      const fresh = await readLinkedCases();
+      if (fresh[name]) throw Object.assign(new Error(`Case "${name}" was just linked`), { conflict: true });
+      fresh[name] = casePath;
+      await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(fresh, null, 2));
+
+      ctx.broadcast(SseEvent.CaseCreated, { name, path: casePath });
+      return { success: true, data: { case: { name, path: casePath } } };
+    } catch (err) {
+      // Undo only what this call made. The whole folder if we created it, otherwise the scaffold
+      // entries inside the empty folder the user picked; never anything else.
+      for (const p of made.reverse()) await fs.rm(p, { recursive: true, force: true }).catch(() => undefined);
+      if ((err as { conflict?: boolean }).conflict) {
+        reply.code(409);
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, getErrorMessage(err));
+      }
+      reply.code(500);
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+    }
+  }
+
+  app.post('/api/cases', async (req, reply): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
+    const { name, description, path: customPath } = parseBody(CreateCaseSchema, req.body);
+
+    // A custom folder writes outside the cases directory and registers the path in the shared,
+    // ownerless linked-cases registry, so it carries the same bar as POST /api/cases/link.
+    if (customPath !== undefined) {
+      const denied = adminOnly(req, reply);
+      if (denied) return denied;
+      return createCaseInCustomFolder(name, description, customPath, req, reply);
+    }
 
     const casePath = validatePathWithinBase(name, resolveCasesDir(getAuthUser(req)));
     if (!casePath) {

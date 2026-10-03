@@ -3098,6 +3098,16 @@ Object.assign(CodemanApp.prototype, {
   showCreateCaseModal() {
     document.getElementById('newCaseName').value = '';
     document.getElementById('newCaseDescription').value = '';
+    // Custom folder starts off each time, and is not offered to a non-admin in multi-user mode: the
+    // server refuses it (it writes outside the cases directory and into the shared registry).
+    const customToggle = document.getElementById('newCaseCustomPathToggle');
+    if (customToggle) customToggle.checked = false;
+    const customPath = document.getElementById('newCasePath');
+    if (customPath) customPath.value = '';
+    const me = window.__codemanUser || {};
+    const customRow = document.getElementById('newCaseCustomPathToggleRow');
+    if (customRow) customRow.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
+    this.toggleNewCaseCustomPath();
     document.getElementById('linkCaseName').value = '';
     document.getElementById('linkCasePath').value = '';
     const remoteFields = [
@@ -3265,6 +3275,55 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  /**
+   * Custom-folder row for Create New: shows or hides the parent-folder field, and keeps it and the
+   * Docker option mutually exclusive (a Docker case has its own workspace flow, and the quick-create
+   * route has no `path`).
+   */
+  toggleNewCaseCustomPath() {
+    const custom = document.getElementById('newCaseCustomPathToggle');
+    const docker = document.getElementById('newCaseDocker');
+    const row = document.getElementById('newCaseCustomPathRow');
+    if (!custom || !row) return;
+    row.style.display = custom.checked ? '' : 'none';
+    custom.disabled = !!docker?.checked;
+    custom.title = docker?.checked ? 'Not available for a Docker case' : '';
+    if (docker) {
+      docker.disabled = custom.checked;
+      docker.title = custom.checked ? 'Not available with a custom folder' : '';
+    }
+    this.updateNewCasePathPreview();
+  },
+
+  /** The folder the case would be created in: the parent field plus the case name. */
+  _newCaseTargetPath() {
+    const parent = (document.getElementById('newCasePath')?.value || '').trim().replace(/\/+$/, '');
+    const name = (document.getElementById('newCaseName')?.value || '').trim();
+    return parent && name ? `${parent}/${name}` : '';
+  },
+
+  updateNewCasePathPreview() {
+    const hint = document.getElementById('newCasePathPreview');
+    if (!hint) return;
+    const target = this._newCaseTargetPath();
+    hint.textContent = target ? `Will create: ${target}` : 'Pick the folder the new case folder should be created inside.';
+  },
+
+  openNewCasePathPicker() {
+    const input = document.getElementById('newCasePath');
+    PathPicker.open({
+      title: 'Choose the folder to create the case in',
+      initialPath: input.value.trim(),
+      directoriesOnly: true,
+      onSelect: (path) => {
+        input.value = path;
+        this.updateNewCasePathPreview();
+        input.focus();
+        input.setSelectionRange(path.length, path.length);
+      },
+    });
+  },
+
   async createCase() {
     const name = document.getElementById('newCaseName').value.trim();
     const description = document.getElementById('newCaseDescription').value.trim();
@@ -3282,10 +3341,17 @@ Object.assign(CodemanApp.prototype, {
     // One-click "Run in Docker": create the case folder AND a container, then start
     // a session inside it. Optional expandable settings override the defaults.
     const inDocker = document.getElementById('newCaseDocker')?.checked;
+    const customFolder = !inDocker && document.getElementById('newCaseCustomPathToggle')?.checked;
+    if (customFolder && !(document.getElementById('newCasePath')?.value || '').trim()) {
+      this.showToast('Choose the folder to create the case in', 'error');
+      return;
+    }
     const endpoint = inDocker ? '/api/cases/docker-quickcreate' : '/api/cases';
     const payload = inDocker
       ? { name, description, ...this._collectDockerQuickSettings() }
-      : { name, description };
+      : customFolder
+        ? { name, description, path: this._newCaseTargetPath() }
+        : { name, description };
 
     try {
       const res = await fetch(endpoint, {
@@ -3307,7 +3373,7 @@ Object.assign(CodemanApp.prototype, {
           // Start a session INSIDE the container (routes through quick-start).
           await this.runClaude();
         } else {
-          this.showToast(`Case "${name}" created`, 'success');
+          this.showToast(customFolder ? `Case "${name}" created in ${payload.path}` : `Case "${name}" created`, 'success');
         }
       } else {
         this.showToast(data.error || 'Failed to create case', 'error');

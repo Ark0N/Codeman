@@ -700,6 +700,20 @@ normal `caseName`/`mode`/etc. body)
   jarring than a full relaunch, and folding it into the one-shot path is
   separate work — see `docs/custom-model-endpoints-plan.md`).
 
+## Creating a case in a custom folder
+
+`POST /api/cases` takes `{ name, description?, path? }`. Without `path` it creates `<cases dir>/<name>` as always. With `path` (absolute, or starting with `~`) the case folder is created at that exact path instead, scaffolded the same way (`CLAUDE.md`, `src/`, `.claude/settings.local.json`), and registered in the linked-cases registry, so it lists, resolves and deletes like a linked case (deleting unlinks; it never removes files). Response: `{ case: { name, path } }`, where `path` is the symlink-resolved folder.
+
+The target is judged before anything is written:
+
+- It must be absolute with no `..` and none of the shell metacharacters a session working directory is rejected for (spaces are fine). `400 INVALID_INPUT` otherwise.
+- It must not be a system directory (`/etc`, `/usr`, `/proc`, ...), the home folder itself, Codeman's own data folder, or a credential/config tree (`~/.ssh`, `~/.aws`, `~/.claude`, ...). Judged on the path as typed and on its symlink-resolved form. `400`.
+- Its parent must already exist (one folder is created, never a chain): `404 NOT_FOUND`.
+- The folder must not exist, or must be an **empty** directory; a folder with contents is Link Existing's job: `409 ALREADY_EXISTS`. A symlink or a plain file at the target is `400`.
+- `409 ALREADY_EXISTS` also for a case name already in use (in the cases dir or the registry) and for a folder that is already a case.
+
+Admin only in multi-user mode (`403`), like `POST /api/cases/link`: it writes outside the cases directory and into the shared, ownerless registry. If anything fails after the first write, what this call created is removed (the whole folder if it created it, otherwise only the scaffold inside the empty folder you picked) and the response is `500`.
+
 ## CLI management
 
 Read and write the CLI registry (`docs/cli-registry.md`). Every **write** route answers `403 FORBIDDEN` while `cliManagementEnabled` is off (the default), and for a non-admin in multi-user mode. A write that would overwrite a `clis.json` which does not parse, or which has group/world permission bits, is refused with `409 CONFLICT` and a message naming the fix; the file is left untouched.
