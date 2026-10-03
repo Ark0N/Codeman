@@ -22,7 +22,7 @@ describe('spreadsheet preview assets', () => {
       devDependencies?: Record<string, string>;
     };
     expect(pkg.devDependencies?.exceljs).toBe('4.4.0');
-    expect(pkg.devDependencies?.fflate).toBe('0.8.2');
+    expect(pkg.devDependencies?.fflate).toBe('0.8.3');
     // They are vendored into dist/ at build time; a runtime install never needs them.
     expect(pkg.dependencies?.exceljs).toBeUndefined();
     expect(pkg.dependencies?.fflate).toBeUndefined();

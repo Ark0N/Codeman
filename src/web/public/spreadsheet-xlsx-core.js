@@ -9,7 +9,9 @@
  * hands ExcelJS a STORE-only archive rebuilt from exactly those
  * (`buildAdmittedArchive()`), never the original bytes: admission follows local
  * headers while ExcelJS (JSZip) follows the central directory, so overlapping
- * entries could otherwise show each reader a different file.
+ * entries could otherwise show each reader a different file. Entries are
+ * counted and rebuilt under the name ExcelJS will see (`excelJsEntryName()`),
+ * never the stored spelling, so `/xl/...` or `xl/./...` cannot skip a counter.
  */
 
 (function initSpreadsheetXlsxCore(global) {
@@ -55,6 +57,36 @@
     return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(offset, true);
   }
 
+  /**
+   * The name ExcelJS will give a ZIP entry. JSZip resolves every name on load
+   * (`utils.resolve` in jszip/lib/utils.js, called from lib/load.js): `.` and
+   * empty middle segments are dropped and `..` pops the previous segment. ExcelJS
+   * then strips ONE leading `/` (lib/xlsx/xlsx.js, the `load` loop). Admission
+   * counts, and the admitted archive is rebuilt, under this name, so the
+   * stored spelling of a name cannot steer an entry past the counters.
+   */
+  function excelJsEntryName(name) {
+    const parts = String(name).split('/');
+    const resolved = [];
+    for (let index = 0; index < parts.length; index += 1) {
+      const part = parts[index];
+      // JSZip keeps an empty first or last segment (a leading or trailing `/`).
+      if (part === '.' || (part === '' && index !== 0 && index !== parts.length - 1)) continue;
+      if (part === '..') resolved.pop();
+      else resolved.push(part);
+    }
+    const joined = resolved.join('/');
+    return joined[0] === '/' ? joined.slice(1) : joined;
+  }
+
+  // ExcelJS's own worksheet test, copied verbatim (lib/xlsx/xlsx.js): it is
+  // UNANCHORED, so `xl/xl/worksheets/sheet1.xml` and `.../sheet1.xml.x` are
+  // worksheets too. The older anchored test stays as a conservative superset.
+  const EXCELJS_WORKSHEET = /xl\/worksheets\/sheet(\d+)[.]xml/;
+  function isWorksheetName(name) {
+    return EXCELJS_WORKSHEET.test(name) || /^xl\/worksheets\/[^/]+\.xml$/i.test(name);
+  }
+
   function inspectZipDirectory(bytes, overrides) {
     const limits = mergedLimits(overrides);
     if (bytes.length >= 4 && bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0) {
@@ -78,6 +110,7 @@
     if (entryCount > limits.maxEntries) fail('entry-limit', `Workbook exceeds ${limits.maxEntries} ZIP entries`);
     if (directoryOffset + directorySize > eocd) fail('malformed', 'Malformed XLSX central directory bounds');
     const entries = [];
+    const excelJsNames = new Set();
     let cursor = directoryOffset;
     for (let i = 0; i < entryCount; i += 1) {
       if (cursor + 46 > eocd || u32(bytes, cursor) !== 0x02014b50)
@@ -107,7 +140,13 @@
       }
       const localName = new TextDecoder().decode(bytes.subarray(localHeaderOffset + 30, localNameEnd));
       if (localName !== name) fail('malformed', 'XLSX local and central directory names do not match');
-      entries.push({ name, compressedSize, declaredSize, localHeaderOffset });
+      // JSZip keeps only the last of two entries that resolve to one name, and
+      // the rebuilt archive can hold only one, so both are refused.
+      const excelJsName = excelJsEntryName(name);
+      if (excelJsName === '') fail('malformed', 'XLSX entry name resolves to nothing');
+      if (excelJsNames.has(excelJsName)) fail('malformed', 'Two XLSX entries resolve to the same name');
+      excelJsNames.add(excelJsName);
+      entries.push({ name, excelJsName, compressedSize, declaredSize, localHeaderOffset });
       cursor = end;
     }
     return { entries };
@@ -183,8 +222,9 @@
     let sheetCells = 0;
     let sheetMerges = 0;
     let sheetRows = 0;
-    const worksheet = /^xl\/worksheets\/[^/]+\.xml$/i.test(name);
-    const styles = name === 'xl/styles.xml';
+    const excelJsName = excelJsEntryName(name);
+    const worksheet = isWorksheetName(excelJsName);
+    const styles = excelJsName === 'xl/styles.xml';
     const addCells = (cells) => {
       sheetCells += cells;
       counts.cells += cells;
@@ -255,13 +295,15 @@
       streamedEntries.set(file.name, (streamedEntries.get(file.name) || 0) + 1);
       seenEntries += 1;
       if (seenEntries > limits.maxEntries) fail('entry-limit', 'Workbook exceeds the ZIP entries limit');
-      if (/^xl\/worksheets\/[^/]+\.xml$/i.test(file.name)) {
+      // Everything below keys on the name ExcelJS will see, never the stored one.
+      const name = directoryByName.get(file.name).excelJsName;
+      if (isWorksheetName(name)) {
         counts.worksheets += 1;
         if (counts.worksheets > limits.maxWorksheets) fail('worksheet-limit', 'Workbook exceeds the worksheet limit');
       }
-      const feature = featureForName(file.name);
+      const feature = featureForName(name);
       if (feature) features.add(feature);
-      const counter = createXmlCounter(file.name, counts, limits);
+      const counter = createXmlCounter(name, counts, limits);
       let entryInflated = 0;
       const chunks = [];
       file.ondata = (error, chunk, final) => {
@@ -284,7 +326,7 @@
             offset += part.length;
           }
           chunks.length = 0;
-          inflatedEntries[file.name] = data;
+          inflatedEntries[name] = data;
         }
       };
       file.start();
@@ -304,7 +346,9 @@
       if (streamedEntries.get(name) !== count) fail('malformed', 'Central XLSX entry was not streamed for admission');
     }
     for (const name of streamedEntries.keys()) {
-      if (!(name in inflatedEntries)) fail('malformed', 'XLSX entry did not finish streaming for admission');
+      if (!(directoryByName.get(name).excelJsName in inflatedEntries)) {
+        fail('malformed', 'XLSX entry did not finish streaming for admission');
+      }
     }
     return { counts, features: Array.from(features), inflatedBytes: totalInflated, entries: inflatedEntries };
   }
@@ -741,6 +785,7 @@
     createXmlCounter,
     admitXlsx,
     buildAdmittedArchive,
+    excelJsEntryName,
     parseCellRef,
     parseRange,
     deriveExtent,

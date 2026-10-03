@@ -160,6 +160,10 @@ describe('dependency security policy', () => {
     expectEveryLockedVersionAtLeast(lock, 'find-my-way', '9.7.0');
     expectEveryLockedVersionAtLeast(lock, 'basic-ftp', '5.3.1');
     expectEveryLockedVersionAtLeast(lock, 'flatted', '3.4.2');
+    // GHSA-px8p-9vwx-vf98 (unbounded loop on a ZIP64 marker in a local header)
+    // covers <=0.8.2. The XLSX preview worker streams untrusted files through
+    // fflate's Unzip before any admission callback runs.
+    expectEveryLockedVersionAtLeast(lock, 'fflate', '0.8.3');
     expectNoVulnerableBraceExpansion(lock);
     expectNoVulnerableVite(lock);
     expectNoVulnerablePicomatch(lock);

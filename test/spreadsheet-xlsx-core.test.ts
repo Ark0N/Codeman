@@ -17,6 +17,7 @@ type Core = {
     limits: Record<string, number>
   ): { push(chunk: Uint8Array, final: boolean): void };
   buildAdmittedArchive(admission: unknown, zip: typeof fflate): Uint8Array;
+  excelJsEntryName(name: string): string;
   parseCellRef(ref: string): { row: number; col: number } | null;
   deriveExtent(cells: string[], merges: string[]): { rows: number; cols: number };
   createSparseAxis(count: number, defaultSize: number, overrides: Array<[number, number]>): unknown;
@@ -150,6 +151,54 @@ describe('spreadsheet XLSX core', () => {
     }
     const duplicate = { Unzip: DuplicateUnzip, UnzipInflate: class {} } as unknown as typeof fflate;
     expect(() => core.admitXlsx(zip, duplicate)).toThrowError(/duplicate/i);
+  });
+
+  it('names every entry the way JSZip and ExcelJS will see it', () => {
+    expect(core.excelJsEntryName('xl/worksheets/sheet1.xml')).toBe('xl/worksheets/sheet1.xml');
+    expect(core.excelJsEntryName('/xl/worksheets/sheet1.xml')).toBe('xl/worksheets/sheet1.xml');
+    expect(core.excelJsEntryName('xl/./worksheets/sheet1.xml')).toBe('xl/worksheets/sheet1.xml');
+    expect(core.excelJsEntryName('xl//worksheets/sheet1.xml')).toBe('xl/worksheets/sheet1.xml');
+    expect(core.excelJsEntryName('xl/foo/../worksheets/sheet1.xml')).toBe('xl/worksheets/sheet1.xml');
+    expect(core.excelJsEntryName('../xl/styles.xml')).toBe('xl/styles.xml');
+    expect(core.excelJsEntryName('//xl/styles.xml')).toBe('xl/styles.xml');
+    expect(core.excelJsEntryName('xl/media/')).toBe('xl/media/');
+  });
+
+  it('refuses two entries that resolve to the same name', () => {
+    const entries = fflate.unzipSync(workbookZip());
+    const big = '<worksheet><sheetData>' + '<c r="A1"/>'.repeat(4) + '</sheetData></worksheet>';
+    for (const twin of ['/xl/worksheets/sheet1.xml', 'xl/./worksheets/sheet1.xml', 'xl/x/../worksheets/sheet1.xml']) {
+      const zip = fflate.zipSync({ ...entries, [twin]: fflate.strToU8(big) });
+      expect(() => core.admitXlsx(zip, fflate), twin).toThrowError(/same name/i);
+    }
+  });
+
+  it('counts and rebuilds entries under the names ExcelJS will see', () => {
+    const cells = '<worksheet><sheetData>' + '<c r="A1"/>'.repeat(4) + '</sheetData></worksheet>';
+    const renamed = (name: string) => {
+      const entries = fflate.unzipSync(workbookZip(cells));
+      const sheet = entries['xl/worksheets/sheet1.xml'];
+      delete entries['xl/worksheets/sheet1.xml'];
+      return fflate.zipSync({ ...entries, [name]: sheet });
+    };
+    for (const name of ['/xl/worksheets/sheet1.xml', 'xl/./worksheets/sheet1.xml', 'a/xl/worksheets/sheet2.xml.x']) {
+      expect(() => core.admitXlsx(renamed(name), fflate, { maxCellsPerSheet: 3 }), name).toThrowError(/cells/i);
+      expect(() => core.admitXlsx(renamed(name), fflate, { maxWorksheets: 0 }), name).toThrowError(/worksheet/i);
+    }
+    const admission = core.admitXlsx(renamed('/xl/./worksheets/sheet1.xml'), fflate) as {
+      entries: Record<string, Uint8Array>;
+    };
+    expect(Object.keys(admission.entries)).toContain('xl/worksheets/sheet1.xml');
+    expect(Object.keys(fflate.unzipSync(core.buildAdmittedArchive(admission, fflate)))).toContain(
+      'xl/worksheets/sheet1.xml'
+    );
+
+    // `/xl/styles.xml` is ExcelJS's `xl/styles.xml`, so its <xf> tags count.
+    const styles = fflate.unzipSync(workbookZip());
+    const xf = styles['xl/styles.xml'];
+    delete styles['xl/styles.xml'];
+    const leading = fflate.zipSync({ ...styles, '/xl/styles.xml': xf });
+    expect(() => core.admitXlsx(leading, fflate, { maxStyles: 0 })).toThrowError(/styles limit/i);
   });
 
   it('charges a merged range its full area and refuses one that does not parse', () => {

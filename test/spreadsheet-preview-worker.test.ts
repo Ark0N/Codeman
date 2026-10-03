@@ -625,3 +625,74 @@ async function emptyRowsWorkbook(extraRows: string): Promise<ArrayBuffer> {
   entries['xl/worksheets/sheet1.xml'] = fflate.strToU8(patched);
   return toArrayBuffer(fflate.zipSync(entries));
 }
+
+/**
+ * A one-cell workbook whose sheet carries a merge one cell over the per-sheet
+ * cap, stored under `entryName` instead of `xl/worksheets/sheet1.xml`. JSZip
+ * (inside ExcelJS) resolves `.`, `..` and empty segments, and ExcelJS strips one
+ * leading `/` and matches worksheets with an unanchored pattern, so each of
+ * these names still reaches ExcelJS as a worksheet.
+ */
+async function renamedOversizedSheet(entryName: string, relTarget?: string): Promise<ArrayBuffer> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.addWorksheet('Data').getCell('A1').value = 'one';
+  const entries = fflate.unzipSync(new Uint8Array(await workbook.xlsx.writeBuffer()));
+  const sheet = fflate.strFromU8(entries['xl/worksheets/sheet1.xml']);
+  const patched = sheet.replace(
+    '</sheetData>',
+    '</sheetData><mergeCells count="1"><mergeCell ref="A1:A100001"/></mergeCells>'
+  );
+  expect(patched).not.toBe(sheet);
+  delete entries['xl/worksheets/sheet1.xml'];
+  entries[entryName] = fflate.strToU8(patched);
+  if (relTarget) {
+    const rels = fflate.strFromU8(entries['xl/_rels/workbook.xml.rels']);
+    const retargeted = rels.replace('Target="worksheets/sheet1.xml"', `Target="${relTarget}"`);
+    expect(retargeted).not.toBe(rels);
+    entries['xl/_rels/workbook.xml.rels'] = fflate.strToU8(retargeted);
+  }
+  return toArrayBuffer(fflate.zipSync(entries));
+}
+
+describe('spreadsheet preview worker: entry names as ExcelJS sees them', () => {
+  it.each([
+    ['/xl/worksheets/sheet1.xml', undefined],
+    ['xl/./worksheets/sheet1.xml', undefined],
+    ['xl//worksheets/sheet1.xml', undefined],
+    ['xl/xl/worksheets/sheet1.xml', 'xl/worksheets/sheet1.xml'],
+    ['xl/worksheets/sheet1.xml.x', 'worksheets/sheet1.xml.x'],
+  ] as const)(
+    'counts a sheet stored as %s and refuses it before ExcelJS loads',
+    async (entryName, relTarget) => {
+      const bytes = await renamedOversizedSheet(entryName, relTarget);
+      // The fixture is real: unguarded ExcelJS parses this entry as the sheet.
+      const direct = new ExcelJS.Workbook();
+      await direct.xlsx.load(bytes.slice(0));
+      expect(direct.worksheets[0]?.model.merges).toContain('A1:A100001');
+
+      const harness = createHarness();
+      await harness.send({ type: 'load', bytes });
+      expect(harness.messages.at(-1)).toMatchObject({ type: 'error', code: 'cell-limit' });
+      expect(harness.imports.some((url) => url.includes('exceljs'))).toBe(false);
+    },
+    30_000
+  );
+});
+
+describe('spreadsheet preview worker: defined names', () => {
+  // ExcelJS's DefinedNames model setter creates one object per cell of every
+  // range; a whole-sheet name exhausted a 4 GB heap. The preview never shows
+  // defined names, so they are not expanded at all.
+  it('loads a workbook with a defined name without expanding its range', async () => {
+    const workbook = new ExcelJS.Workbook();
+    workbook.addWorksheet('Data').getCell('A1').value = 'one';
+    workbook.definedNames.add('Data!$A$1:$J$10', 'Block');
+    const bytes = await writeWorkbook(workbook);
+    expect(fflate.strFromU8(fflate.unzipSync(new Uint8Array(bytes))['xl/workbook.xml'])).toContain('Block');
+
+    const harness = createHarness();
+    const metadata = await loadMetadata(harness, bytes);
+    expect(metadata.sheets[0]).toMatchObject({ name: 'Data', rows: 1, cols: 1 });
+    expect(harness.peek('Object.keys(workbook.definedNames.matrixMap).length')).toBe(0);
+  });
+});

@@ -125,6 +125,13 @@ async function loadWorkbook(bytes) {
   const admitted = core.buildAdmittedArchive(admission, self.fflate);
   if (!self.ExcelJS) importScripts(`vendor/exceljs.min.js${spreadsheetAssetQuery}`);
   const nextWorkbook = new self.ExcelJS.Workbook();
+  // ExcelJS's DefinedNames model setter expands every range into one object per
+  // cell (a whole-sheet name exhausts the heap), and admission never scans
+  // xl/workbook.xml. The preview never shows defined names, so they are not
+  // stored at all; print areas and titles are split off before this setter runs.
+  // defineProperty throws if a future ExcelJS renames `_definedNames`, rather
+  // than silently expanding again.
+  Object.defineProperty(nextWorkbook._definedNames, 'model', { configurable: true, get: () => [], set: () => {} });
   // ExcelJS expands every address of a `<dataValidation sqref>` into its own
   // object (a whole-column dropdown is a million), and the preview never shows
   // validations, so they are not parsed at all. `maxRows` is a per-sheet
