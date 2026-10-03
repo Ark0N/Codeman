@@ -283,6 +283,49 @@ describe('spreadsheet XLSX core', () => {
     ).toBe(0);
   });
 
+  // ExcelJS stores a row at `_rows[r - 1]` and walks `_rows` up to the largest
+  // index on every eachRow and `sheet.model`, so the index a row CLAIMS is cost.
+  it('refuses a <row r> that is not plain digits in 1-1048576 and a <row> whose attributes do not parse', () => {
+    const sheet = (rowTag: string) =>
+      workbookZip(`<worksheet><sheetData><row r="1"><c r="A1"/></row>${rowTag}</sheetData></worksheet>`);
+    for (const r of ['50000000', '1048577', '0', '1a', '-1', '1e3', ' 2', '']) {
+      expect(() => core.admitXlsx(sheet(`<row r="${r}"/>`), fflate), r).toThrowError(/row index/i);
+    }
+    expect(() => core.admitXlsx(sheet('<row r="2" junk/>'), fflate)).toThrowError(/do not parse/i);
+    // A quoted fake `r` cannot stand in for the real one.
+    expect(() => core.admitXlsx(sheet(`<row x=' r="2"' r="50000000"/>`), fflate)).toThrowError(/row index/i);
+    for (const ok of ['<row r="1048576"/>', '<row/>', '<row spans="1:1"><c r="A2"/></row>']) {
+      expect(() => core.admitXlsx(sheet(ok), fflate), ok).not.toThrow();
+    }
+  });
+
+  // ExcelJS stores a sheet at `_worksheets[sheetId]`, and the `worksheets`
+  // getter slices and sorts that array, so a large id allocates a huge array.
+  it('refuses a <sheet sheetId> in xl/workbook.xml that is not plain digits or is above the cap', () => {
+    expect(core.LIMITS.maxSheetId).toBe(65535);
+    const book = (sheets: string, name = 'xl/workbook.xml') => {
+      const entries = fflate.unzipSync(workbookZip());
+      delete entries['xl/workbook.xml'];
+      entries[name] = fflate.strToU8(`<workbook><sheets>${sheets}</sheets></workbook>`);
+      return fflate.zipSync(entries);
+    };
+    const one = (id: string) => `<sheet name="S" sheetId="${id}" r:id="rId1"/>`;
+    for (const id of ['30000000', '65536', '1a', '-1', '1e3', ' 1', '']) {
+      expect(() => core.admitXlsx(book(one(id)), fflate), id).toThrowError(/sheetId/i);
+    }
+    // Every <sheet> is read, not just the first; the name is the one ExcelJS sees.
+    expect(() => core.admitXlsx(book(one('1') + one('30000000')), fflate)).toThrowError(/sheetId/i);
+    expect(() => core.admitXlsx(book(one('30000000'), '/xl/./workbook.xml'), fflate)).toThrowError(/sheetId/i);
+    expect(() => core.admitXlsx(book('<sheet name="S" sheetId="1" junk/>'), fflate)).toThrowError(/do not parse/i);
+    expect(() => core.admitXlsx(book(`<sheet x=' sheetId="1"' sheetId="30000000"/>`), fflate)).toThrowError(/sheetId/i);
+    // `<sheets>` is the container, never a sheet; an absent sheetId is harmless.
+    expect(() => core.admitXlsx(book(one('1') + one('65535') + '<sheet name="S"/>'), fflate)).not.toThrow();
+    // Only the workbook part is read this way.
+    const counts = { cells: 0, merges: 0, styles: 0, rows: 0 };
+    const other = core.createXmlCounter('xl/other.xml', counts as never, core.LIMITS);
+    expect(() => other.push(fflate.strToU8(one('30000000')), true)).not.toThrow();
+  });
+
   it('counts every <xf> in styles.xml, so a </cellXfs> inside a comment cannot hide styles', () => {
     const counts = { cells: 0, merges: 0, styles: 0, rows: 0 };
     const counter = core.createXmlCounter('xl/styles.xml', counts as never, { ...core.LIMITS, maxStyles: 100 });
@@ -343,6 +386,11 @@ describe('spreadsheet XLSX core', () => {
     expect(core.formatCellValue(1.5, 'yyyy-mm-dd hh:mm').text).toBe('1900-01-01 12:00');
     expect(core.formatCellValue(7, '[Red][<0]0.0')).toMatchObject({ text: '7', warning: expect.any(String) });
     expect(core.formatCellValue({ formula: 'SUM(A1:A2)' }, 'General')).toMatchObject({ text: '=SUM(A1:A2)' });
+  });
+
+  // toLocaleString throws a RangeError above 100 fraction digits; Excel caps at 30.
+  it('caps a number format at 30 decimals instead of throwing', () => {
+    expect(core.formatCellValue(1.5, `0.${'0'.repeat(120)}`).text).toBe(`1.5${'0'.repeat(29)}`);
   });
 });
 

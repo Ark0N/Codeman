@@ -25,6 +25,9 @@ const core = self.CodemanSpreadsheetXlsxCore;
 let workbook = null;
 let sheetsById = new Map();
 let populatedRowsById = new Map();
+// Merges read once at load: `sheet.model` rebuilds every row and cell model,
+// which is far too much to pay on every tile.
+let mergesById = new Map();
 let normalizedStyles = [];
 let styleIds = new Map();
 let themePalette = core.DEFAULT_THEME_PALETTE;
@@ -100,6 +103,7 @@ function worksheetMetadata(sheet) {
   }
   return {
     populatedRows,
+    merges,
     metadata: {
       id: String(sheet.id),
       name: sheet.name,
@@ -126,8 +130,8 @@ async function loadWorkbook(bytes) {
   if (!self.ExcelJS) importScripts(`vendor/exceljs.min.js${spreadsheetAssetQuery}`);
   const nextWorkbook = new self.ExcelJS.Workbook();
   // ExcelJS's DefinedNames model setter expands every range into one object per
-  // cell (a whole-sheet name exhausts the heap), and admission never scans
-  // xl/workbook.xml. The preview never shows defined names, so they are not
+  // cell (a whole-sheet name exhausts the heap), and admission reads only the
+  // `<sheet>` ids in xl/workbook.xml, never defined names. The preview never shows defined names, so they are not
   // stored at all; print areas and titles are split off before this setter runs.
   // defineProperty throws if a future ExcelJS renames `_definedNames`, rather
   // than silently expanding again.
@@ -142,6 +146,7 @@ async function loadWorkbook(bytes) {
   });
   const nextSheets = new Map();
   const nextRows = new Map();
+  const nextMerges = new Map();
   normalizedStyles = [];
   styleIds = new Map();
   themePalette = core.parseThemePalette(readThemeXml(nextWorkbook, admission.entries));
@@ -152,11 +157,13 @@ async function loadWorkbook(bytes) {
     const metadata = sheetResult.metadata;
     nextSheets.set(metadata.id, sheet);
     nextRows.set(metadata.id, sheetResult.populatedRows);
+    nextMerges.set(metadata.id, sheetResult.merges);
     sheets.push(metadata);
   }
   workbook = nextWorkbook;
   sheetsById = nextSheets;
   populatedRowsById = nextRows;
+  mergesById = nextMerges;
   self.postMessage({
     type: 'metadata',
     sheets,
@@ -211,7 +218,7 @@ function sendTile(message) {
       addCell(cell);
     });
   }
-  const merges = core.intersectingMerges(Array.from(sheet.model?.merges || []), range);
+  const merges = core.intersectingMerges(mergesById.get(String(message.sheetId)) || [], range);
   for (const merge of merges) {
     const anchor = core.parseRange(merge);
     if (anchor) addCell(sheet.getCell(anchor.r1, anchor.c1));
@@ -236,6 +243,7 @@ self.onmessage = async (event) => {
       workbook = null;
       sheetsById = new Map();
       populatedRowsById = new Map();
+      mergesById = new Map();
       themePalette = core.DEFAULT_THEME_PALETTE;
     }
   } catch (error) {

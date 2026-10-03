@@ -29,6 +29,10 @@
     maxRowsPerSheet: 100000,
     maxMergesPerSheet: 5000,
     maxStyles: 5000,
+    // ExcelJS stores each sheet at `_worksheets[sheetId]`, so the id is an array
+    // length. Excel numbers sheets from 1 and never reuses an id, so real ids
+    // stay small; 65535 leaves room for heavy editing at a negligible cost.
+    maxSheetId: 65535,
   });
   const MAX_ROW = 1048576;
   const MAX_COL = 16384;
@@ -216,6 +220,26 @@
     }
   }
 
+  // ExcelJS stores each row at `_rows[r - 1]`, and eachRow and `sheet.model`
+  // walk every index up to the largest, so the index a row CLAIMS is a cost.
+  function checkRowIndex(attributes) {
+    const value = attributes.get('r');
+    if (value === undefined) return;
+    if (!/^[0-9]+$/.test(value) || Number(value) < 1 || Number(value) > MAX_ROW) {
+      fail('malformed', `Worksheet row index is outside 1-${MAX_ROW}`);
+    }
+  }
+
+  // ExcelJS stores each sheet at `_worksheets[sheetId]` (an absent id parses to
+  // NaN, a plain property, so it is harmless).
+  function checkSheetId(attributes, limits) {
+    const value = attributes.get('sheetId');
+    if (value === undefined) return;
+    if (!/^[0-9]+$/.test(value) || Number(value) > limits.maxSheetId) {
+      fail('malformed', `Workbook sheetId is not a number up to ${limits.maxSheetId}`);
+    }
+  }
+
   function createXmlCounter(name, counts, limits) {
     let tail = '';
     const decoder = new TextDecoder();
@@ -225,6 +249,7 @@
     const excelJsName = excelJsEntryName(name);
     const worksheet = isWorksheetName(excelJsName);
     const styles = excelJsName === 'xl/styles.xml';
+    const workbook = excelJsName === 'xl/workbook.xml';
     const addCells = (cells) => {
       sheetCells += cells;
       counts.cells += cells;
@@ -233,7 +258,7 @@
     };
     return {
       push(chunk, final) {
-        if (!worksheet && !styles) return;
+        if (!worksheet && !styles && !workbook) return;
         const text = tail + decoder.decode(chunk, { stream: !final });
         // `<` can never appear inside an attribute value, so every tag before the
         // last `<` is complete. Carry everything from that `<` into the next scan
@@ -248,9 +273,13 @@
           counts.rows += rows;
           if (sheetRows > limits.maxRowsPerSheet || counts.rows > limits.maxRows)
             fail('row-limit', 'Workbook exceeds the rows limit');
-          for (const match of scan.matchAll(/<(mergeCell|col)(?=[\s/>])/g)) {
+          for (const match of scan.matchAll(/<(mergeCell|col|row)(?=[\s/>])/g)) {
             const attributes = readTagAttributes(scan, match.index + match[0].length);
             if (!attributes) fail('malformed', `Worksheet has a <${match[1]}> whose attributes do not parse`);
+            if (match[1] === 'row') {
+              checkRowIndex(attributes);
+              continue;
+            }
             if (match[1] === 'col') {
               checkColumnSpan(attributes);
               continue;
@@ -260,6 +289,14 @@
             if (sheetMerges > limits.maxMergesPerSheet)
               fail('merge-limit', 'Worksheet exceeds the merged ranges limit');
             addCells(mergeArea(attributes));
+          }
+        }
+        if (workbook) {
+          // `<sheets>` is the container; the lookahead keeps it from matching.
+          for (const match of scan.matchAll(/<sheet(?=[\s/>])/g)) {
+            const attributes = readTagAttributes(scan, match.index + match[0].length);
+            if (!attributes) fail('malformed', 'Workbook has a <sheet> whose attributes do not parse');
+            checkSheetId(attributes, limits);
           }
         }
         if (styles) {
@@ -548,7 +585,8 @@
       return { text: `${yyyy}-${mm}-${dd} ${hh}:${minutes}` };
     }
     const percent = code.includes('%');
-    const decimals = code.match(/\.([0#]+)/)?.[1].length || 0;
+    // toLocaleString throws above 100 fraction digits; Excel itself caps at 30.
+    const decimals = Math.min(code.match(/\.([0#]+)/)?.[1].length || 0, 30);
     const numericPattern = /^[€£¥$]?[#,0]+(?:\.[0#]+)?%?$/;
     if (numericPattern.test(code)) {
       const currency = /^[€£¥$]/.exec(code)?.[0] || '';

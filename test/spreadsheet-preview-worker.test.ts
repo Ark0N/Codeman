@@ -696,3 +696,53 @@ describe('spreadsheet preview worker: defined names', () => {
     expect(harness.peek('Object.keys(workbook.definedNames.matrixMap).length')).toBe(0);
   });
 });
+
+describe('spreadsheet preview worker: indices a row or sheet claims', () => {
+  // ExcelJS stores a row at `_rows[r - 1]`, and eachRow and `sheet.model` walk
+  // every index up to the largest, so one far row made each tile cost seconds.
+  it('refuses a <row r> past the last Excel row before ExcelJS loads', async () => {
+    const rows =
+      Array.from({ length: 4 }, (_, i) => `<row r="${i + 2}"><c r="A${i + 2}"><v>${i + 2}</v></c></row>`).join('') +
+      '<row r="50000000"><c r="A50000000"><v>6</v></c></row>';
+    const bytes = await emptyRowsWorkbook(rows);
+    const harness = createHarness();
+    await harness.send({ type: 'load', bytes });
+    expect(harness.messages.at(-1)).toMatchObject({ type: 'error', code: 'malformed' });
+    expect(harness.imports.some((url) => url.includes('exceljs'))).toBe(false);
+  }, 60_000);
+
+  // ExcelJS stores a sheet at `_worksheets[sheetId]`; 30,000,000 took 1.6 s
+  // and 557 MB on a one-cell workbook.
+  it('refuses a sheetId above the cap in xl/workbook.xml before ExcelJS loads', async () => {
+    const workbook = new ExcelJS.Workbook();
+    workbook.addWorksheet('Data').getCell('A1').value = 'one';
+    const entries = fflate.unzipSync(new Uint8Array(await workbook.xlsx.writeBuffer()));
+    const book = fflate.strFromU8(entries['xl/workbook.xml']);
+    const patched = book.replace('sheetId="1"', 'sheetId="30000000"');
+    expect(patched).not.toBe(book);
+    entries['xl/workbook.xml'] = fflate.strToU8(patched);
+    const harness = createHarness();
+    await harness.send({ type: 'load', bytes: toArrayBuffer(fflate.zipSync(entries)) });
+    expect(harness.messages.at(-1)).toMatchObject({ type: 'error', code: 'malformed' });
+    expect(harness.imports.some((url) => url.includes('exceljs'))).toBe(false);
+  }, 60_000);
+});
+
+describe('spreadsheet preview worker: tiles reuse the merges read at load', () => {
+  // `sheet.model` rebuilds every row and cell model; a tile must not pay that.
+  it('serves a tile with its merge without touching sheet.model', async () => {
+    const harness = createHarness();
+    const metadata = await loadMetadata(harness, await fixture());
+    const sheetId = metadata.sheets[0].id;
+    harness.peek(
+      `Object.defineProperty(sheetsById.get(${JSON.stringify(sheetId)}), 'model', {
+        configurable: true,
+        get() { throw new Error('sheet.model touched'); },
+      })`
+    );
+    const tile = await requestTile(harness, sheetId, { r1: 4, c1: 2, r2: 4, c2: 3 });
+    expect(tile.type, JSON.stringify(tile)).toBe('tile');
+    expect(tile.merges).toEqual(['A4:C4']);
+    expect(tile.cells).toContainEqual(expect.objectContaining({ row: 4, col: 1, text: 'Merged' }));
+  });
+});
