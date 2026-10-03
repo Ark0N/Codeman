@@ -120,7 +120,7 @@ sure its row is one the agent cannot write.
 
 ## The newline chord
 
-`capabilities.newline` (`'line-feed'` | `'esc-enter'`, absent = line feed) is the byte sequence the `send-key` route types into the pane for Shift+Enter. A line feed (`0x0a`, also Ctrl+Enter) is what Claude Code's Ink input reads as "insert a newline"; `esc-enter` (`ESC CR`, the Option/Alt+Enter chord) is for a composer that ignores a bare line feed, which Codex does in some terminals (#495). It is an enum rather than a byte string on purpose: config never carries bytes that get typed into a pane. Settings → Terminal & Input → **Key tester** prints what a browser reports for keydown/keypress/keyup, to see whether a device is sending what you think.
+`capabilities.newline` (`'line-feed'` | `'esc-enter'`, absent = line feed) is the byte sequence the `send-key` route types into the pane for Shift+Enter. A line feed (`0x0a`, also Ctrl+Enter) is what Claude Code's Ink input reads as "insert a newline"; `esc-enter` (`ESC CR`, the Option/Alt+Enter chord) is there for a composer that ignores a bare line feed. No stock CLI declares it today: the bytes are typed by tmux on the server, so the browser's OS cannot change what a CLI reads, and Codex 0.147.0 was checked to take a line feed (a Shift+Enter that submits is the keypress leak fixed in #520, not a byte problem). A user `clis.json` can set it for a CLI that needs it. It is an enum rather than a byte string on purpose: config never carries bytes that get typed into a pane. Settings → Terminal & Input → **Key tester** prints what a browser reports for keydown/keypress/keyup, to see whether a device is sending what you think.
 
 ## Arg-template safety
 

@@ -10,11 +10,11 @@ import type { CliEntry } from '../src/config/cli-registry/types.js';
 const claude = () => structuredClone(STOCK_CLIS.find((e) => (e.id as string) === 'claude')!) as CliEntry;
 
 describe('capabilities.newline', () => {
-  it('only codex declares a non-default chord today', () => {
-    const declared = Object.fromEntries(
-      STOCK_CLIS.filter((e) => e.capabilities.newline).map((e) => [e.id as string, e.capabilities.newline])
-    );
-    expect(declared).toEqual({ codex: 'esc-enter' });
+  it('no stock CLI declares a chord: every one keeps the line feed', () => {
+    // codex 0.147.0 takes a line feed (checked against a real tmux pane), so there is no CLI that
+    // needs esc-enter yet. The capability exists for a user clis.json override and the next CLI.
+    const declared = STOCK_CLIS.filter((e) => e.capabilities.newline).map((e) => e.id as string);
+    expect(declared).toEqual([]);
   });
 
   it.each(['line-feed', 'esc-enter'])('schema accepts %s', (value) => {

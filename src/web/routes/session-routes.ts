@@ -2093,8 +2093,9 @@ export function registerSessionRoutes(
 
   // ========== Send Named Key (tmux send-keys -H) ==========
   // Sends raw hex bytes to tmux pane for keys like Shift+Enter / Ctrl+Enter.
-  // Uses send-keys -H (hex) to inject 0x0a (line feed) which Claude Code's
-  // Ink input recognizes as "insert newline" vs 0x0d (carriage return = submit).
+  // Uses send-keys -H (hex) to inject a newline chord: 0x0a (line feed) by default, or the CLI's
+  // own `capabilities.newline`. Claude Code's Ink input recognizes 0x0a as "insert newline" vs
+  // 0x0d (carriage return = submit).
 
   app.post('/api/sessions/:id/send-key', async (req) => {
     const { id } = req.params as { id: string };

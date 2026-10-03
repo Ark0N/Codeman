@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
 
-const PORT = 3197;
+const PORT = 3194;
 
 describe('Key tester in a real browser', () => {
   let server: WebServer;
@@ -43,6 +43,49 @@ describe('Key tester in a real browser', () => {
     const text = await log();
     expect(text).toMatch(/keydown\s+key="Enter" code=Enter mods=ctrl/);
     expect(text).toMatch(/keyup/);
+    // Chromium emits no keypress for a Ctrl chord, which is why only Shift+Enter ever leaked a \r.
+    expect(text).not.toMatch(/keypress/);
+  });
+
+  it('lets no app shortcut fire for keys pressed in the field (Ctrl+W, Ctrl+L, Escape, Alt+1, Ctrl+K)', async () => {
+    // The shortcut dispatcher is a capture-phase document listener, so without a guard it ran before
+    // the field's own handler: Ctrl+W killed the active session, Ctrl+L cleared the terminal and
+    // Escape closed Settings, while this row says nothing is sent to a session.
+    await page.evaluate(() => {
+      const app = (window as any).app;
+      const calls: string[] = [];
+      (window as any).__calls = calls;
+      for (const name of ['killActiveSession', 'clearTerminal', 'openCommandPalette', 'closeAllPanels']) {
+        app[name] = (...args: unknown[]) => void calls.push(name + args.length);
+      }
+    });
+    await page.focus('#keyTesterInput');
+    // [chord, what the tester must report for it]; checked one at a time because the log keeps 14 lines.
+    const chords: [string, RegExp][] = [
+      ['Control+W', /key="w" code=KeyW mods=ctrl/i],
+      ['Control+L', /key="l" code=KeyL mods=ctrl/i],
+      ['Escape', /key="Escape" code=Escape/],
+      ['Alt+1', /code=Digit1 mods=alt/],
+      ['Control+K', /key="k" code=KeyK mods=ctrl/i],
+    ];
+    for (const [chord, seen] of chords) {
+      await page.evaluate(() => (document.getElementById('keyTesterLog')!.textContent = ''));
+      await page.keyboard.press(chord);
+      expect(await log(), chord).toMatch(seen);
+      expect(await page.evaluate(() => (window as any).__calls), chord).toEqual([]);
+    }
+    expect(await page.evaluate(() => document.getElementById('appSettingsModal')!.classList.contains('active'))).toBe(
+      true
+    );
+  });
+
+  it('still lets the shortcut fire anywhere else (the guard is scoped to data-raw-keys)', async () => {
+    await page.evaluate(() => {
+      (window as any).__calls.length = 0;
+      (document.activeElement as HTMLElement | null)?.blur();
+    });
+    await page.keyboard.press('Escape');
+    expect(await page.evaluate(() => (window as any).__calls)).toContain('closeAllPanels0');
   });
 
   it('keeps only the last 14 lines and never types into the field', async () => {

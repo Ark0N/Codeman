@@ -17,7 +17,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyMultipart from '@fastify/multipart';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { registryFilePath, reloadCliRegistry } from '../../src/config/cli-registry/registry.js';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
@@ -193,8 +195,34 @@ describe('session-routes', () => {
         expect(await sentHex('opencode', 'S-Enter')).toEqual(['0a']);
       });
 
-      it('sends Esc+Enter for Shift+Enter to a CLI that declares esc-enter', async () => {
-        expect(await sentHex('codex', 'S-Enter')).toEqual(['1b', '0d']);
+      it('sends a line feed to Codex too: no stock CLI declares a chord', async () => {
+        expect(await sentHex('codex', 'S-Enter')).toEqual(['0a']);
+      });
+
+      describe('a CLI that declares esc-enter (here via a user clis.json override of codex)', () => {
+        beforeEach(() => {
+          const file = registryFilePath();
+          mkdirSync(dirname(file), { recursive: true });
+          writeFileSync(
+            file,
+            JSON.stringify({ schemaVersion: 1, clis: { codex: { capabilities: { newline: 'esc-enter' } } } }),
+            { mode: 0o600 }
+          );
+          reloadCliRegistry();
+        });
+        afterEach(() => {
+          rmSync(registryFilePath(), { force: true });
+          reloadCliRegistry();
+        });
+
+        it('sends Esc+Enter for Shift+Enter, and only to that CLI', async () => {
+          expect(await sentHex('codex', 'S-Enter')).toEqual(['1b', '0d']);
+          expect(await sentHex('claude', 'S-Enter')).toEqual(['0a']);
+        });
+
+        it('still sends a line feed for Ctrl+Enter', async () => {
+          expect(await sentHex('codex', 'C-Enter')).toEqual(['0a']);
+        });
       });
 
       it('always sends a line feed for Ctrl+Enter', async () => {

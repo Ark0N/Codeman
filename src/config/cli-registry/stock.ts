@@ -620,9 +620,6 @@ const CODEX: CliEntry = {
     // `dangerouslyBypassApprovals` on the wire), so it is the one that would have caught a
     // regression; `schema.ts` now rejects a name that is not a declared param.
     privilegedParams: [{ param: 'bypassApprovals', clampTo: false }],
-    // Codex's composer ignores a bare line feed in some terminals (Windows browsers, #495); the
-    // Esc+Enter chord is the one its own Option+Enter uses.
-    newline: 'esc-enter',
     // Verified by hand against a real llama.cpp server. Written to an isolated CODEX_HOME
     // so the user's real ~/.codex/config.toml is never touched.
     customModelInjection: {
