@@ -634,6 +634,151 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-info {
   min-width: 0;
 }
 
+/* --- Grouped rail (owner tab layout) ---------------------------------- */
+/* Only rendered when the owner has at least one group (tab-layout-browser.js).
+   Each group's rows sit in their OWN flex column, so the activity sort's inline
+   `order` (and web tabs' `order: 9999`) rank rows within a group, never across. */
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group,
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-refs {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group + .tab-layout-group {
+  margin-top: 4px;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px 2px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: left;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-toggle:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.tab-layout-group-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-layout-group-count {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.tab-layout-group-chevron::before {
+  content: '\25BE';
+  display: inline-block;
+}
+
+.tab-layout-group-toggle[aria-expanded='false'] .tab-layout-group-chevron::before {
+  content: '\25B8';
+}
+
+/* Group editing: the header's menu glyph, the inline rename editor, and the
+   pointer-drag marks. All of it lives inside the grouped rail only. */
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-menu {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0;
+  letter-spacing: 0;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header:hover .tab-layout-group-menu,
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header:focus-visible .tab-layout-group-menu {
+  opacity: 1;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-menu:hover {
+  color: var(--text);
+  background: var(--bg-tertiary, var(--bg-hover));
+}
+
+/* The label is a nowrap ellipsis box; while it holds the editor it becomes a
+   plain flex slot so the input gets the whole width and repaints as you type. */
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-name--renaming {
+  display: flex;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-rename-input {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  padding: 1px 4px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  outline: none;
+  color: var(--text);
+  background: var(--bg-input);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: normal;
+  user-select: text;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .session-tabs--grouped .session-tab,
+html[data-tab-orientation='vertical'] .tab-rail .session-tabs--grouped .tab-layout-group-header {
+  user-select: none;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-drag-active {
+  cursor: grabbing;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-dragging {
+  opacity: 0.45;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-drop-into {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 html[data-tab-orientation='vertical'] .header-right {
   margin-left: auto;
 }
@@ -1666,22 +1811,52 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-prefix {
   -webkit-line-clamp: unset;
   line-clamp: unset;
   overflow: visible;
+  /* An input's intrinsic width counts toward the label's min-content, so with
+     the default min-width:auto a long `w<n>-<case>` prefix plus the input
+     pushed the label past its row: the prefix slid out of view and, in the
+     compact rail, the input was clipped mid-word. */
+  min-width: 0;
 }
 
+/* The prefix gives way first, down to a stub with an ellipsis. */
 :is(
   html[data-tab-orientation='vertical'] .tab-rail,
   html[data-session-list='sidebar'] .session-sidebar
 ) .tab-name-renaming .tab-rename-prefix {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 2rem;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* The input always keeps room to type. `!important` beats the editor's inline
+   `min-width: 0`, which the header strip's fixed-width editor relies on. */
 :is(
   html[data-tab-orientation='vertical'] .tab-rail,
   html[data-session-list='sidebar'] .session-sidebar
 ) .tab-name-renaming .tab-rename-input {
   flex: 1 1 0;
   width: auto;
-  min-width: 0;
+  min-width: 4rem !important;
+}
+
+/* A compact rail row has no room for both the editor and its adornments, so
+   they step aside while the name is being edited (the re-render that ends the
+   edit brings them back). */
+html[data-tab-orientation='vertical'].tab-rail-compact
+  .tab-rail
+  .session-tab:has(.tab-name-renaming)
+  :is(
+    .tab-mode,
+    .tab-exited-badge,
+    .tab-detached-badge,
+    .tab-badge,
+    .tab-subagent-badge,
+    .tab-ultracode-badge,
+    .tab-actions
+  ) {
+  display: none;
 }
 
 /* Tab folder path — hidden by default, shown via .tabs-show-folder on container */
@@ -1707,7 +1882,9 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-prefix {
   line-height: 1;
   color: var(--text-muted);
   overflow: hidden;
-  cursor: default;
+  /* A control, like its gear/detach siblings: the pointer must not read as
+     "nothing here" over the one button that closes the session. */
+  cursor: pointer;
   border-radius: 3px;
   /* Performance: use transform for GPU acceleration */
   transition: opacity 0.05s ease-out, width 0.05s ease-out, padding 0.05s ease-out;
@@ -10510,6 +10687,21 @@ kbd {
     drop-shadow(0 0 9px var(--lineage-color, var(--session-blue, #2b8fd9)));
 }
 
+/* An arc re-anchored to a collapsed group's header (its row is hidden): quieter
+   and dotted, so it reads as "somewhere in there" rather than a real row. */
+.connection-line.lineage-line--proxied {
+  stroke-dasharray: 2 7;
+  opacity: 0.46;
+}
+
+.connection-line.lineage-line--proxied.lineage-line--working {
+  opacity: 0.62;
+}
+
+.lineage-line-dot.lineage-line-dot--proxied {
+  opacity: 0.46;
+}
+
 /* The child end marches while that worker is actually working, so the line
    itself carries the signal. Motion is opt-out-able at the OS level. */
 @media (prefers-reduced-motion: no-preference) {
@@ -18692,6 +18884,13 @@ html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail
      height instead of pushing the pill or the stamps off the row. */
   -webkit-line-clamp: 3;
   line-clamp: 3;
+}
+
+/* ...except while it is being edited: this rule outranks the shared renaming
+   rule's unclamp, so restate it (the editor is a flex row, never clamped). */
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab .tab-name.tab-name-renaming {
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
 }
 
 html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab .tab-folder {
