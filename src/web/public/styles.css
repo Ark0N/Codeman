@@ -1811,22 +1811,52 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-prefix {
   -webkit-line-clamp: unset;
   line-clamp: unset;
   overflow: visible;
+  /* An input's intrinsic width counts toward the label's min-content, so with
+     the default min-width:auto a long `w<n>-<case>` prefix plus the input
+     pushed the label past its row: the prefix slid out of view and, in the
+     compact rail, the input was clipped mid-word. */
+  min-width: 0;
 }
 
+/* The prefix gives way first, down to a stub with an ellipsis. */
 :is(
   html[data-tab-orientation='vertical'] .tab-rail,
   html[data-session-list='sidebar'] .session-sidebar
 ) .tab-name-renaming .tab-rename-prefix {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 2rem;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* The input always keeps room to type. `!important` beats the editor's inline
+   `min-width: 0`, which the header strip's fixed-width editor relies on. */
 :is(
   html[data-tab-orientation='vertical'] .tab-rail,
   html[data-session-list='sidebar'] .session-sidebar
 ) .tab-name-renaming .tab-rename-input {
   flex: 1 1 0;
   width: auto;
-  min-width: 0;
+  min-width: 4rem !important;
+}
+
+/* A compact rail row has no room for both the editor and its adornments, so
+   they step aside while the name is being edited (the re-render that ends the
+   edit brings them back). */
+html[data-tab-orientation='vertical'].tab-rail-compact
+  .tab-rail
+  .session-tab:has(.tab-name-renaming)
+  :is(
+    .tab-mode,
+    .tab-exited-badge,
+    .tab-detached-badge,
+    .tab-badge,
+    .tab-subagent-badge,
+    .tab-ultracode-badge,
+    .tab-actions
+  ) {
+  display: none;
 }
 
 /* Tab folder path — hidden by default, shown via .tabs-show-folder on container */
@@ -18789,6 +18819,13 @@ html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail
      height instead of pushing the pill or the stamps off the row. */
   -webkit-line-clamp: 3;
   line-clamp: 3;
+}
+
+/* ...except while it is being edited: this rule outranks the shared renaming
+   rule's unclamp, so restate it (the editor is a flex row, never clamped). */
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab .tab-name.tab-name-renaming {
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
 }
 
 html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab .tab-folder {
