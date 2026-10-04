@@ -289,4 +289,104 @@ describe('mobile IME preview over the local echo overlay', () => {
     const result = await composeAfter('今日は', '天気', true);
     expect(result.afterCommit).toEqual({ pendingText: '今日は天気', compositionSpans: 0, overlayText: '今日は天気' });
   });
+
+  /**
+   * Composes `composing` after `pending`, then streams output through the REAL
+   * write path (batchTerminalWrite, the scheduled flushPendingWrites, xterm's
+   * async parse) that moves the ❯ row from 0 to 3, then one more frame that
+   * leaves the prompt where it is (a status-line repaint). Reports the overlay
+   * row after each frame.
+   *
+   * The post-write re-place runs right after terminal.write() returns, before
+   * xterm parses that chunk, so it sees the buffer as of the previous frame: the
+   * overlay reaches the new row on the frame after the move. That timing is the
+   * same for pending text; the composition-only overlay used to never get there
+   * because the re-place was gated on hasPending, which excludes it.
+   */
+  async function composeThenMovePrompt(pending: string, composing: string) {
+    return page.evaluate(
+      async ({ pending, composing }) => {
+        const w = window as any;
+        const host = document.getElementById('t') as HTMLElement;
+        host.innerHTML = '';
+        const term = new w.Terminal({
+          cols: 40,
+          rows: 8,
+          fontSize: 14,
+          fontFamily: 'monospace',
+          allowProposedApi: true,
+        });
+        term.open(host);
+        await new Promise<void>((r) => term.write('❯ ', () => r()));
+        const app = new w.CodemanApp();
+        Object.assign(app, {
+          terminal: term,
+          _localEchoEnabled: true,
+          _localEchoOverlay: new w.LocalEchoOverlay(term),
+          pendingWrites: [],
+          activeSessionId: 'session-a',
+          sessions: new Map([['session-a', { mode: 'claude' }]]),
+        });
+        w.MobileImePreview.isIosWebKitTouch = () => true;
+        app._initMobileImePreview();
+
+        if (pending) app._localEchoOverlay.appendText(pending);
+        const textarea = term.textarea as HTMLTextAreaElement;
+        textarea.focus();
+        textarea.dispatchEvent(new CompositionEvent('compositionstart', { data: '' }));
+        textarea.value = composing;
+        textarea.dispatchEvent(new CompositionEvent('compositionupdate', { data: composing }));
+        await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 20)));
+
+        const cellH = term._core._renderService.dimensions.css.cell.height;
+        const overlayEl = app._localEchoOverlay._overlay as HTMLElement;
+        const overlayRow = () =>
+          overlayEl.style.display === 'none' ? null : Math.round(parseFloat(overlayEl.style.top) / cellH);
+        // Output goes through the app's own scheduler; wait until it has been
+        // flushed and parsed.
+        const stream = async (data: string) => {
+          app.batchTerminalWrite(data);
+          for (let i = 0; i < 200; i++) {
+            if (!app.writeFrameScheduled && !app._terminalWriteInFlight && app.pendingWrites.length === 0) break;
+            await new Promise((r) => setTimeout(r, 10));
+          }
+          await new Promise<void>((r) => term.write('', () => r()));
+        };
+
+        const before = overlayRow();
+        await stream('\r\x1b[2Kline 1\r\nline 2\r\nline 3\r\n❯ ');
+        const promptRow = app._localEchoOverlay.findPrompt()?.row ?? null;
+        await stream('\x1b7\x1b[8;1Hworking\x1b8');
+        const result = {
+          before,
+          promptRow,
+          after: overlayRow(),
+          composition: Array.from(term.element.querySelectorAll('[data-zerolag-composition]'))
+            .map((el) => (el as HTMLElement).textContent)
+            .join(''),
+          hasPending: app._localEchoOverlay.hasPending,
+        };
+        app._destroyMobileImePreview();
+        app._localEchoOverlay.dispose();
+        term.dispose();
+        return result;
+      },
+      { pending, composing }
+    );
+  }
+
+  it('a composition on an empty prompt follows the prompt when output moves it', async () => {
+    const result = await composeThenMovePrompt('', '今日');
+    expect(result.before).toBe(0);
+    expect(result.promptRow).toBe(3);
+    // Nothing is pending: before the fix this stayed on row 0, over "line 1".
+    expect(result.hasPending).toBe(false);
+    expect(result.after).toBe(3);
+    expect(result.composition).toBe('今日');
+  });
+
+  it('a composition after pending text follows it the same way', async () => {
+    const result = await composeThenMovePrompt('abc', '今日');
+    expect(result).toEqual({ before: 0, promptRow: 3, after: 3, composition: '今日', hasPending: true });
+  });
 });

@@ -1407,9 +1407,10 @@ Object.assign(CodemanApp.prototype, {
         // has to re-resolve their gate before the redraw, not just move them.
         this.applyLineageLineSettings?.();
         this.updateConnectionLines();
-        if (this._localEchoOverlay?.hasPending) {
-          this._localEchoOverlay.rerender();
-        }
+        // Unguarded on purpose: hasPending excludes an IME composition, so a
+        // composition-only overlay would stay on the old prompt row. rerender()
+        // is a no-op when the overlay has nothing to draw.
+        this._localEchoOverlay?.rerender();
         // Pane B (split view) has its own container and its own fit()/resize
         // frame — this observer only ever measured Pane A's container, so
         // without this call Pane B never learned about a window resize, an
@@ -4161,9 +4162,10 @@ Object.assign(CodemanApp.prototype, {
 
     // Re-position local echo overlay after terminal writes — Ink redraws can
     // move the ❯ prompt to a different row, making the overlay invisible.
-    if (this._localEchoOverlay?.hasPending) {
-      this._localEchoOverlay.rerender();
-    }
+    // Unguarded on purpose: hasPending excludes an IME composition, so a
+    // composition-only overlay (the first word of a prompt) would otherwise
+    // stay on the old row. rerender() is a no-op when there is nothing to draw.
+    this._localEchoOverlay?.rerender();
 
     // After Tab completion: detect the completed text in the overlay.
     // Use terminal.write('', callback) to defer detection until xterm.js

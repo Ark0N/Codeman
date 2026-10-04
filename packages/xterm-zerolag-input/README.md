@@ -106,10 +106,10 @@ terminal.onData((data) => {
   }
 });
 
-// 3. Re-render after terminal output (for full-screen TUI frameworks like Ink)
-terminal.onWriteParsed(() => {
-  if (zerolag.hasPending) zerolag.rerender();
-});
+// 3. Re-render after terminal output (for full-screen TUI frameworks like Ink).
+//    Unconditional: rerender() is a no-op when there is nothing to draw, and
+//    hasPending would miss an overlay that shows only an IME composition.
+terminal.onWriteParsed(() => zerolag.rerender());
 ```
 
 That is the whole integration. Everything below is for tuning it.
@@ -186,7 +186,7 @@ If one terminal hosts several CLIs with different prompts, swap the strategy in 
 zerolag.setPrompt({ type: 'character', char: '❯', offset: 2 });
 ```
 
-`setPrompt()` clears the cached prompt position and re-renders if anything is pending, so a mode switch cannot leave the overlay pinned to the old column.
+`setPrompt()` clears the cached prompt position and re-renders if the overlay has anything to draw, so a mode switch cannot leave the overlay pinned to the old column.
 
 ---
 
@@ -202,8 +202,9 @@ Implements the xterm.js `ITerminalAddon` interface. It deliberately does **not**
 |--------|---------|-------------|
 | `addChar(char)` | `void` | Add a single printable character. Auto-detects existing buffer text on the first keystroke. |
 | `appendText(text)` | `void` | Append multiple characters (paste). |
-| `removeChar()` | `'pending'` \| `'flushed'` \| `false` | Remove the last character. See [backspace handling](#backspace-handling). |
-| `clear()` | `void` | Clear all state and hide the overlay. Call on Enter, Ctrl+C, Escape. |
+| `removeChar()` | `'pending'` \| `'flushed'` \| `false` | Remove the last character and drop any IME composition. See [backspace handling](#backspace-handling). |
+| `clear()` | `void` | Clear all state, the composition included, and hide the overlay. Call on Enter, Ctrl+C, Escape. |
+| `setComposition(text)` | `void` | Show text an IME is still composing as an underlined tail after the typed text. Pass `''` to remove it. See [IME composition](#ime-composition). |
 
 ### Backspace handling
 
@@ -216,6 +217,19 @@ Implements the xterm.js `ITerminalAddon` interface. It deliberately does **not**
 | `false` | Nothing to remove | Do nothing |
 
 The cascade order is pending text, then flushed text, then auto-detected buffer text (which is what makes backspace work after tab completion). Backspace "just works" across any combination of typed, in-flight and completed text.
+
+### IME composition
+
+While an input method (Japanese kana, Chinese pinyin, Korean) is still composing, the text is not committed yet, so it is not in `pendingText` either. `setComposition(text)` draws it as an underlined, `aria-hidden` tail right after the pending and flushed text, using the same wrapping and on-screen layout as the rest of the overlay.
+
+```typescript
+const textarea = terminal.textarea!;
+textarea.addEventListener('compositionupdate', (e) => zerolag.setComposition(e.data));
+textarea.addEventListener('compositionend', () => zerolag.setComposition(''));
+// xterm then emits the committed text through onData: add it with addChar()/appendText() as usual.
+```
+
+The composition is visual only: it is never part of `pendingText`, `hasPending` or `state`, so it can never be sent. Control characters and line breaks are stripped from it. `clear()` and `removeChar()` drop it. Because `hasPending` excludes it, re-place the overlay after output or a resize with an unconditional `rerender()`, not one gated on `hasPending`.
 
 ### Flushed text
 
@@ -242,7 +256,7 @@ Finds text that exists after the prompt but was never typed through the overlay.
 
 | Method | Description |
 |--------|-------------|
-| `rerender()` | Force a re-render. Call after buffer reloads, screen redraws, resizes and reconnects. |
+| `rerender()` | Force a re-render. Call after buffer reloads, screen redraws, resizes and reconnects. A no-op when there is nothing to draw, so it needs no guard. |
 | `refreshFont()` | Re-cache font and color properties from the terminal. Call after a font size or theme change. |
 
 ### Prompt
@@ -258,7 +272,8 @@ Finds text that exists after the prompt but was never typed through the overlay.
 | Property | Type | Description |
 |----------|------|-------------|
 | `pendingText` | `string` | Unacknowledged text (read-only) |
-| `hasPending` | `boolean` | `true` if the overlay has any content |
+| `hasPending` | `boolean` | `true` if there is pending or flushed text. Excludes the IME composition, so it can be `false` while the overlay still shows one |
+| `composition` | `string` | The text set by `setComposition()`, `''` when none (read-only) |
 | `state` | `ZerolagInputState` | Full snapshot: `pendingText`, `flushedLength`, `flushedText`, `visible`, `promptPosition` |
 
 ### Options

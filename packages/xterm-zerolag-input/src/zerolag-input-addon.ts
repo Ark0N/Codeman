@@ -208,9 +208,13 @@ export class ZerolagInputAddon implements XtermAddon {
    * - `'flushed'`: A character was removed from text already sent to the PTY.
    *   The consumer SHOULD send backspace to the PTY.
    * - `false`: Nothing to remove. The consumer should NOT send backspace.
+   *
+   * Any IME composition is dropped in every case, and the overlay is repainted
+   * without it (hidden when nothing else is left).
    */
   removeChar(): 'pending' | 'flushed' | false {
     // A backspace that reaches the overlay means no composition is open.
+    const droppedComposition = this._composition.length > 0;
     this._composition = '';
     if (this._pendingText.length > 0) {
       this._pendingText = this._pendingText.slice(0, -1);
@@ -247,6 +251,9 @@ export class ZerolagInputAddon implements XtermAddon {
       return 'flushed';
     }
 
+    // Nothing to remove, but a composition-only overlay is still on screen
+    // drawing the text dropped above.
+    if (droppedComposition) this._hide();
     return false;
   }
 
@@ -460,7 +467,13 @@ export class ZerolagInputAddon implements XtermAddon {
     return this._pendingText;
   }
 
-  /** Whether there is any overlay content (pending or flushed). */
+  /**
+   * Whether there is pending or flushed text. Excludes the IME composition,
+   * which is never sent, so an overlay showing only a composition reports
+   * `false` while still on screen. To re-place the overlay after output or a
+   * resize, call `rerender()` unconditionally: it is a no-op when there is
+   * nothing to draw.
+   */
   get hasPending(): boolean {
     return this._pendingText.length > 0 || this._flushedOffset > 0;
   }

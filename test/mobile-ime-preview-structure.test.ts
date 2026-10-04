@@ -690,6 +690,25 @@ describe('mobile IME commit and authoritative terminal output', () => {
     expect(controller.noteAuthoritativeOutput).not.toHaveBeenCalled();
   });
 
+  it('re-places an overlay that holds only a composition after output (hasPending is false there)', () => {
+    const { app, flush } = outputHarness();
+    const overlay = { hasPending: false, pendingText: '', composition: '今日', rerender: vi.fn() };
+    app._localEchoOverlay = overlay;
+    app.batchTerminalWrite('output that moves the prompt');
+    flush();
+    expect(overlay.rerender).toHaveBeenCalledOnce();
+  });
+
+  it('re-places it after a resize too: no rerender() site is gated on hasPending', () => {
+    // The resize observer is a closure inside initTerminal(), so it is pinned
+    // by source; the post-write follow runs against real xterm in
+    // test/mobile-ime-preview.browser.test.ts.
+    expect(terminalSource).toMatch(
+      /this\.updateConnectionLines\(\);\s*(?:\/\/[^\n]*\n\s*)*this\._localEchoOverlay\?\.rerender\(\);/
+    );
+    expect(terminalSource).not.toMatch(/hasPending\)\s*\{?\s*this\._localEchoOverlay\.rerender\(\)/);
+  });
+
   it('notifies once per commit, never for later output', () => {
     const { app, controller, flush, parseNext } = outputHarness();
     app._consumeMobileImeTerminalData('你好');

@@ -169,6 +169,26 @@ describe('setComposition', () => {
     expect(lineText(lineDivs(overlay)[0])).toBe('ab');
   });
 
+  it('removeChar() with nothing to remove still takes a composition-only overlay off screen', () => {
+    const { addon, overlay } = setup();
+    addon.setComposition('ka');
+    expect(compositionText(overlay)).toBe('ka');
+    expect(addon.removeChar()).toBe(false);
+    expect(addon.composition).toBe('');
+    expect(compositionText(overlay)).toBe('');
+    expect(overlay.style.display).toBe('none');
+    expect(addon.state.visible).toBe(false);
+  });
+
+  it('removeChar() repaints flushed text without the dropped composition', () => {
+    const { addon, overlay } = setup();
+    addon.setFlushed(3, 'abc');
+    addon.setComposition('xy');
+    expect(addon.removeChar()).toBe('flushed');
+    expect(compositionText(overlay)).toBe('');
+    expect(lineText(lineDivs(overlay)[0])).toBe('ab');
+  });
+
   it('text appended while composing lands before the tail', () => {
     const { addon, overlay } = setup();
     addon.appendText('ab');
