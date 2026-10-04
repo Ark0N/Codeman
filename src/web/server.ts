@@ -44,6 +44,8 @@ import { hostname as getHostname, uptime as osUptime } from 'node:os';
 import { looksLikeHostReboot, newestPersistedActivity, planRebootRestore } from '../reboot-restore.js';
 import { rebootRestoreRegistry } from './reboot-restore-registry.js';
 import { dataPath, getDataDir, CODEMAN_INSTANCE } from '../config/instance.js';
+import { WebhookNotifier, readWebhookConfig, type WebhookUrgency } from '../webhook-notify.js';
+import { webviewFetch } from './webview-egress.js';
 import { readRemoteHosts, rehydrateRemoteHostFields } from '../remote-hosts.js';
 import type { RemoteWakeRegistry } from '../remote-wake.js';
 import { normalizeBasePath, stripBasePath, joinBasePath } from '../config/base-path.js';
@@ -198,6 +200,7 @@ import {
   registerWebviewRoutes,
   registerTabLayoutRoutes,
   registerMcpSyncRoutes,
+  registerWebhookRoutes,
   registerCustomModelRoutes,
   refreshAllCustomModelHosts,
   readCustomModelEndpointsEnabled,
@@ -369,6 +372,8 @@ export class WebServer extends EventEmitter {
   private hookSecretFailures: StaleExpirationMap<string, number> | null = null;
   private userFailures: StaleExpirationMap<string, number> | null = null;
   private pushStore: PushSubscriptionStore = new PushSubscriptionStore();
+  /** ntfy / Slack / Discord / generic webhook for the push events; config in webhook.json (0600). */
+  private webhookNotifier = new WebhookNotifier(() => readWebhookConfig(getDataDir()), webviewFetch);
   private teamWatcher: TeamWatcher = new TeamWatcher();
   private _orchestratorLoop: import('../orchestrator-loop.js').OrchestratorLoop | null = null;
   private readonly titleHostname: string;
@@ -1132,6 +1137,11 @@ export class WebServer extends EventEmitter {
     registerWebviewRoutes(this.app, ctx, this.basePath);
     registerTabLayoutRoutes(this.app, ctx);
     registerMcpSyncRoutes(this.app);
+    registerWebhookRoutes(this.app, {
+      notifier: this.webhookNotifier,
+      configDir: getDataDir(),
+      hostTitle: () => this.windowTitle,
+    });
     registerCustomModelRoutes(this.app);
     registerCliRegistryRoutes(this.app);
 
@@ -2654,6 +2664,25 @@ export class WebServer extends EventEmitter {
     const template = WebServer.PUSH_EVENT_MAP[event];
     if (!template) return;
 
+    const sessionName = (data.sessionName as string) || '';
+    const sessionId = (data.sessionId as string) || '';
+    const body = WebServer.pushBodyText(event, data, sessionName);
+
+    // Webhook channel (ntfy / Slack / Discord / generic): independent of Web Push, so it runs BEFORE
+    // the "no subscriptions" return below, which is exactly the headless-server case it exists for.
+    // Fire-and-forget; WebhookNotifier dedupes, caps what is in flight and never throws.
+    void this.webhookNotifier
+      .notify({
+        event,
+        title: template.title,
+        body,
+        urgency: template.urgency as WebhookUrgency,
+        sessionId: sessionId || undefined,
+        sessionName: sessionName || undefined,
+        host: this.windowTitle,
+      })
+      .catch(() => undefined);
+
     const subscriptions = this.pushStore.getAll();
     if (subscriptions.length === 0) return;
 
@@ -2672,34 +2701,12 @@ export class WebServer extends EventEmitter {
     const vapidKeys = this.pushStore.getVapidKeys();
     webpush.setVapidDetails('mailto:codeman@localhost', vapidKeys.publicKey, vapidKeys.privateKey);
 
-    const sessionName = (data.sessionName as string) || '';
-    const sessionId = (data.sessionId as string) || '';
-
     // Multi-user: a session-scoped push (all PUSH_EVENT_MAP events carry a sessionId)
     // must reach only the owner's devices (+ admins) — the body embeds the session
     // name + activity, so cross-user delivery would leak it. Resolved once here; the
     // per-subscription gate below is a no-op in single-user (send to all).
     const multiUserPush = isMultiUserMode();
     const pushSessionOwner = sessionId ? this.sessions.get(sessionId)?.owner : undefined;
-
-    // Build body text from event data
-    let body = sessionName ? `[${sessionName}]` : '';
-    if (event === SseEvent.SessionError && data.error) {
-      body += body ? ' ' : '';
-      body += String(data.error).slice(0, 200);
-    } else if (event === SseEvent.RespawnBlocked && data.reason) {
-      body += body ? ' ' : '';
-      body += String(data.reason);
-    } else if (event === SseEvent.SessionRalphCompletionDetected && data.phrase) {
-      body += body ? ' ' : '';
-      body += String(data.phrase);
-    } else if (event === SseEvent.SessionRespawnBreakerTripped && data.count) {
-      body += body ? ' ' : '';
-      body += `Stopped after ${Number(data.count)} rapid crashes — restart the session to retry`;
-    } else if (event === SseEvent.HookPermissionPrompt && data.tool_name) {
-      body += body ? ' ' : '';
-      body += `Tool: ${String(data.tool_name)}`;
-    }
 
     const payload = JSON.stringify({
       title: template.title,
@@ -2752,6 +2759,28 @@ export class WebServer extends EventEmitter {
         }
       });
     }
+  }
+
+  /** The notification body for an event (shared by Web Push and the webhook channel). */
+  private static pushBodyText(event: string, data: Record<string, unknown>, sessionName: string): string {
+    let body = sessionName ? `[${sessionName}]` : '';
+    if (event === SseEvent.SessionError && data.error) {
+      body += body ? ' ' : '';
+      body += String(data.error).slice(0, 200);
+    } else if (event === SseEvent.RespawnBlocked && data.reason) {
+      body += body ? ' ' : '';
+      body += String(data.reason);
+    } else if (event === SseEvent.SessionRalphCompletionDetected && data.phrase) {
+      body += body ? ' ' : '';
+      body += String(data.phrase);
+    } else if (event === SseEvent.SessionRespawnBreakerTripped && data.count) {
+      body += body ? ' ' : '';
+      body += `Stopped after ${Number(data.count)} rapid crashes — restart the session to retry`;
+    } else if (event === SseEvent.HookPermissionPrompt && data.tool_name) {
+      body += body ? ' ' : '';
+      body += `Tool: ${String(data.tool_name)}`;
+    }
+    return body;
   }
 
   private cleanupDeadSSEClients(): void {

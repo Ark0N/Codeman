@@ -733,6 +733,18 @@ Result (`data`):
 
 The result carries server **names** only, never `env` values or `headers`. Each changed file keeps its previous content as `<file>.codeman-bak` (overwritten by each sync); a file that receives servers carrying `env` or `headers` is left mode `0600`.
 
+## Webhook notifications
+
+Posts the Web Push events to ntfy, Slack, Discord or a generic JSON URL (Settings → Notifications). Off by default. The webhook URL is a bearer secret (anyone holding a Slack/Discord URL can post as it), so it lives in `~/.codeman/webhook.json` (0600), is **never returned**, and is kept out of `settings.json`. All three routes answer `403` for a non-admin in multi-user mode.
+
+| Method | Path                 | Body                                         | Notes |
+| ------ | -------------------- | -------------------------------------------- | ----- |
+| `GET`  | `/api/webhook`       | none                                         | `{ enabled, kind, scope, hasUrl, urlMasked, lastResult }`. `urlMasked` is scheme + host only. `lastResult` is the last delivery (`ok`, `status?`, `error?`, `at`) or `null`. |
+| `PUT`  | `/api/webhook`       | `{ enabled?, kind?, scope?, url? }` (strict) | `kind`: `ntfy` \| `slack` \| `discord` \| `generic`. `scope`: `attention` (skip "response complete") \| `all`. An absent `url` keeps the saved one; `""` clears it. `400` for a non-http(s) URL, `user:pass@`, a link-local or cloud-metadata target, or enabling with no URL. |
+| `POST` | `/api/webhook/test`  | none                                         | Sends one message with the saved config, even while disabled. `200` with `data.ok` telling whether the webhook accepted it; `400` if no URL is saved. |
+
+Delivery goes through the same egress guard as web tabs (refused on the resolved address too), does not follow redirects, times out after 5 s, sends the same event for the same session at most once per 3 s, and has at most 5 requests in flight. Error text never contains the URL.
+
 ## Voice dictation
 
 Browser dictation transcribed through this server's Claude Code login, i.e. the

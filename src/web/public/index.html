@@ -2641,6 +2641,53 @@
                   </div>
                 </div>
               </div>
+            
+              <div class="set-group" id="webhookGroup" style="display:none">
+                <div class="set-group-head"><h4>Webhook (ntfy, Slack, Discord)</h4><span class="set-scope">server</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="webhook ntfy slack discord notification phone headless">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Send alerts to a webhook</span>
+                      <span class="set-row-desc">Posts the same events as push notifications (permission prompts, questions, errors, idle) to ntfy, Slack, Discord or any URL, so a server with no browser open can still reach your phone. The URL is a secret: it is stored on the server only and is never shown again once saved.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="webhookEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Service</span></div>
+                    <select id="webhookKind" class="set-select">
+                      <option value="ntfy">ntfy</option>
+                      <option value="slack">Slack</option>
+                      <option value="discord">Discord</option>
+                      <option value="generic">Generic JSON</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Webhook URL</span>
+                      <span class="set-row-desc" id="webhookUrlHint">Nothing saved yet.</span>
+                    </div>
+                    <input type="password" id="webhookUrl" class="set-select" autocomplete="off" spellcheck="false" placeholder="https://ntfy.sh/your-topic">
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Which events</span>
+                      <span class="set-row-desc">"Needs attention" skips the routine "response complete" message.</span>
+                    </div>
+                    <select id="webhookScope" class="set-select">
+                      <option value="attention">Needs attention</option>
+                      <option value="all">Everything</option>
+                    </select>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-row-text"><span class="set-row-label">Save and test</span></div>
+                    <span>
+                      <button class="btn-toolbar btn-sm btn-primary" id="webhookSaveBtn" onclick="app.saveWebhook()">Save</button>
+                      <button class="btn-toolbar btn-sm" id="webhookTestBtn" onclick="app.testWebhook()">Send test</button>
+                    </span>
+                  </div>
+                  <div id="webhookResult" class="set-note" style="display:none" data-i18n-skip></div>
+                </div>
+              </div>
             </section>
 
             <!-- ══ Voice ════════════════════════════════════════════════════ -->
