@@ -805,8 +805,11 @@ describe('SplitTerminalPane scroll-to-top history pull', () => {
   });
 
   it('back-to-back refreshes on a closed socket leave exactly one marker, at the end', async () => {
-    // R1's finally runs the trailing refresh R2; each load settles its own
-    // marker, so R1 never stamps onto R2's freshly cleared terminal.
+    // R1's finally runs the trailing refresh R2, so R1 leaves the owed marker to
+    // R2 instead of stamping it: in real xterm R1's write would still be queued
+    // when R2's synchronous clear() runs, and would land above R2's replay. The
+    // write mock records every stamp whatever clear() does, so counting marker
+    // writes pins that R1 never stamps (the async-parse test below shows why).
     const pane = makePane('shell');
     pane._wsClosed = true;
     const first = deferred<ReturnType<typeof jsonResponse>>();
@@ -825,6 +828,7 @@ describe('SplitTerminalPane scroll-to-top history pull', () => {
     const writes = pane.terminal.write.mock.calls.map((c) => c[0]);
     expect(writes.at(-1)).toSatisfy(isMarker);
     expect(writes.lastIndexOf('second')).toBe(writes.length - 2);
+    expect(writes.filter(isMarker)).toHaveLength(1);
   });
 
   it('the pull gives the request the long budget and the body read the short one', async () => {
@@ -921,6 +925,64 @@ describe('SplitTerminalPane scroll-to-top history pull', () => {
     expect(writes).toContain('refreshed');
     expect(isMarker(writes.at(-1))).toBe(true);
     expect(writes.lastIndexOf('refreshed')).toBeLessThan(writes.length - 1);
+    // The pull left the owed marker to the refresh rather than stamping it too.
+    expect(writes.filter(isMarker)).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      'back-to-back refreshes',
+      async (pane: PaneUnderTest) => {
+        pane._wsClosed = true;
+        fetchMock.mockResolvedValueOnce(jsonResponse('first')).mockResolvedValueOnce(jsonResponse('second'));
+        pane._refreshBuffer();
+        pane._refreshBuffer(); // coalesced into the trailing re-run
+      },
+    ],
+    [
+      'a pull with a queued refresh and a close mid-pull',
+      async (pane: PaneUnderTest) => {
+        const held = headersOnly();
+        fetchMock.mockResolvedValueOnce(held.response).mockResolvedValueOnce(jsonResponse('second'));
+        void pane._pullHistory();
+        await settle(); // the response landed: the queue is open
+        pane._refreshBuffer(); // coalesced into the trailing re-run
+        pane._onSocketClosed();
+        held.release(rowsOf(30)); // no replay
+      },
+    ],
+  ])('with xterm parsing writes on a later tick, %s leave one marker on screen, last', async (_label, drive) => {
+    // Real xterm queues write() and parses it on a later tick (WriteBuffer's
+    // setTimeout), while clear() rewrites the buffer at once. The default fake
+    // applies writes synchronously and so cannot show a marker overtaken by a
+    // trailing refresh's clear(): parsed after it, that marker sat above the
+    // refresh's replay as a second, stale copy.
+    const pane = makePane('shell');
+    const screen: string[] = [];
+    const pending: Array<{ data: string; done?: () => void }> = [];
+    pane.terminal.write = vi.fn((data: string, done?: () => void) => {
+      if (pending.length === 0) {
+        setTimeout(() => {
+          for (const entry of pending.splice(0)) {
+            if (entry.data === '\x1bc') screen.length = 0;
+            else if (entry.data) screen.push(entry.data);
+            entry.done?.();
+          }
+        }, 0);
+      }
+      pending.push({ data, done });
+    });
+    pane.terminal.clear = vi.fn(() => {
+      screen.length = 0;
+    });
+
+    await drive(pane);
+    for (let i = 0; i < 5; i++) await settle();
+
+    expect(pane._bufferLoading).toBe(false);
+    expect(screen.filter(isMarker)).toHaveLength(1);
+    expect(screen.at(-1)).toSatisfy(isMarker);
+    expect(screen.indexOf('second')).toBe(screen.length - 2);
   });
 
   it('a refresh on an open socket does not stamp a marker', async () => {

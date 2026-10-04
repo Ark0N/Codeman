@@ -307,10 +307,13 @@
     }
 
     // The socket's close, split out of connect() so the tests can drive it.
-    // While a history pull is running the marker waits for the pull's finally
-    // block: written now, it would sit above the output the pull is still
-    // holding (flushed after it on a skip, a downgrade or a failed fetch) or
-    // land in the middle of a chunked replay.
+    // While any load runs (a history pull or a `{t:'r'}` refresh) the marker is
+    // only owed, and that load's finally block settles it (_stampMarkerIfOwed()):
+    // written now, it would sit above the output a pull is still holding (flushed
+    // after it on a skip, a downgrade or a failed fetch), above a refresh's
+    // replay, or in the middle of a chunked replay. A pull still waiting for its
+    // response holds the marker too, for as long as the request takes (up to its
+    // budget, see _pullHistory()).
     _onSocketClosed() {
       this._wsReady = false;
       this._wsClosed = true;
@@ -320,16 +323,21 @@
 
     // Settles a marker the pane owes: set when a close lands during a load (the
     // replay would otherwise sit below it) or when a load wipes the terminal on
-    // a closed socket. Called from each load's own finally, before a trailing
-    // refresh starts, so a nested refresh stamps its own.
+    // a closed socket. Called from each load's own finally, just before
+    // _endBufferLoad() starts any trailing refresh.
     _stampMarkerIfOwed() {
+      // A trailing refresh is about to clear() synchronously, while xterm parses
+      // a write() on a later tick: a marker written here would land in the
+      // freshly cleared buffer ABOVE that refresh's replay, a second, stale copy.
+      // The refresh re-owes the marker on a closed socket and stamps it itself.
+      if (this._bufferRefreshPending && !this._destroyed) return;
       const owed = this._markerOwed;
       this._markerOwed = false;
       if (owed && this._wsClosed && !this._destroyed) this._writeDisconnectedMarker();
     }
 
-    // Extracted so both _onSocketClosed() and a history pull that ends on a
-    // closed socket can write it (see _pullHistory()'s finally block).
+    // Extracted so both _onSocketClosed() and a load that ends owing it on a
+    // closed socket can write it (see _stampMarkerIfOwed()).
     _writeDisconnectedMarker() {
       this.terminal?.write('\r\n\x1b[2m[Pane B disconnected — close and reopen the split to reconnect]\x1b[0m\r\n');
     }
@@ -452,12 +460,15 @@
       let replayed = false;
       let capturedAt = 0;
       // Two budgets on one signal. The request itself gets the primary pane's
-      // (CodemanFetchDeadline, constants.js): nothing is held while it runs. Once
-      // the headers land live output IS held, so the body read gets the short one
-      // instead: a body that hangs would otherwise freeze the pane for the long
-      // budget. Aborting lands in the catch below, which releases the flag and
-      // the queue. AbortSignal.timeout() alone cannot be re-armed, hence the
-      // controller; without AbortController the pull simply has no deadline.
+      // (CodemanFetchDeadline, constants.js): live output is not held while it
+      // runs, but the single-flight flag is, so a coalesced `{t:'r'}` refresh and
+      // the marker owed by a close (_onSocketClosed()) both wait for it, at worst
+      // for that whole budget. Once the headers land live output IS held, so the
+      // body read gets the short one instead: a body that hangs would otherwise
+      // freeze the pane for the long budget. Aborting lands in the catch below,
+      // which releases the flag and the queue. AbortSignal.timeout() alone cannot
+      // be re-armed, hence the controller; without AbortController the pull
+      // simply has no deadline.
       const controller = global.AbortController ? new global.AbortController() : null;
       let abortTimer = null;
       const armDeadline = (ms) => {
@@ -539,7 +550,8 @@
         // it while a load runs), and a replay's own `\x1bc` (flagged above) wipes
         // one written before it, which would paint a fresh, current-looking
         // history while onData keeps silently dropping every keystroke on the
-        // dead socket. A trailing refresh (_endBufferLoad) settles its own.
+        // dead socket. With a trailing refresh pending (_endBufferLoad) the marker
+        // is left to that refresh, which writes it below its own replay.
         this._stampMarkerIfOwed();
         this._endBufferLoad();
       }
