@@ -1691,7 +1691,7 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
     const originalName = pathBasename(part.filename || 'upload');
     const safeName =
       originalName
-        .replace(/[\/\\]/g, '_')
+        .replace(/[/\\]/g, '_')
         .replace(/[^\x20-\x7e]/g, '_')
         .trim() || 'upload';
     const filename = `${Date.now()}-${randomBytes(4).toString('hex')}-${safeName}`;
