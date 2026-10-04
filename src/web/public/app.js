@@ -3229,14 +3229,20 @@ class CodemanApp {
     // broken feature rather than as an idle window (reported 2026-09-01). A
     // missing CODEX bucket means the opposite — that plan has no such limit —
     // so those stay omitted rather than showing a dash forever.
+    // Every window also carries a ring (the Compact header style) and a meter
+    // (Tiles). styles.css hides both in the classic style, so the chip there
+    // reads exactly as before. `fill` is clamped for the two graphics only; the
+    // label keeps the real number.
     const seg = (label, p, idle) => {
       if (p === null) {
         if (!idle) return '';
-        return `<span class="pu-win pu-win-idle"><span class="pu-label">${label}</span><span class="pu-val">—</span></span>`;
+        return `<span class="pu-win pu-win-idle"><span class="pu-ring" style="--pu:0"></span><span class="pu-label">${label}</span><span class="pu-val">—</span><span class="pu-meter"><i style="width:0%"></i></span></span>`;
       }
       const n = Math.round(Number(p));
       if (!Number.isFinite(n)) return '';
-      return `<span class="pu-win"><span class="pu-label">${label}</span><span class="pu-val ${colorClass(n)}">${n}%</span></span>`;
+      const fill = Math.min(100, Math.max(0, n));
+      const cls = colorClass(n);
+      return `<span class="pu-win"><span class="pu-ring ${cls}" style="--pu:${fill}"></span><span class="pu-label">${label}</span><span class="pu-val ${cls}">${n}%</span><span class="pu-meter ${cls}"><i style="width:${fill}%"></i></span></span>`;
     };
     // The provider label only earns its space when there is more than one
     // provider to tell apart: a machine with Claude alone shows bare windows.
@@ -4021,6 +4027,36 @@ class CodemanApp {
     };
   }
 
+  /**
+   * The two words the Tiles header style shows for the connection indicator
+   * (label over value), derived from the descriptor rather than added to it,
+   * so the descriptor and its pinned strings stay exactly what they were. The
+   * classic text line (queued bytes and all) stays in the DOM and the full
+   * detail stays in the tooltip.
+   * @param {{dotClass: string, text: string}} desc
+   * @returns {{label: string, value: string, state: string}}
+   */
+  _connectionTileWords(desc) {
+    const state = (desc.dotClass || '').replace('connection-dot', '').trim();
+    const text = desc.text || '';
+    switch (state) {
+      case 'connected':
+        return { label: 'WS', value: 'live', state };
+      case 'fallback':
+        return { label: 'HTTP', value: 'fallback', state };
+      case 'offline':
+        return { label: 'NET', value: 'offline', state };
+      case 'draining':
+        return { label: 'SEND', value: 'queued', state };
+      case 'reconnecting':
+        // The same dot covers the terminal WebSocket and, with no session
+        // open, the SSE event stream; the classic text already tells them apart.
+        return { label: text.startsWith('WS') ? 'WS' : 'SSE', value: 'retry', state };
+      default:
+        return { label: '', value: '', state };
+    }
+  }
+
   _updateConnectionIndicator() {
     const indicator = this.$('connectionIndicator');
     const dot = this.$('connectionDot');
@@ -4048,6 +4084,14 @@ class CodemanApp {
       dot.className = next.dotClass;
       text.textContent = next.text;
       indicator.title = next.title;
+      const tileLabel = this.$('connectionTileLabel');
+      const tileValue = this.$('connectionTileValue');
+      if (tileLabel && tileValue) {
+        const words = this._connectionTileWords(next);
+        tileLabel.textContent = words.label;
+        tileValue.textContent = words.value;
+        tileValue.className = `connection-tile-value ${words.state}`.trim();
+      }
     }
   }
 
@@ -4753,6 +4797,128 @@ class CodemanApp {
   }
 
   /**
+   * True when the tab list groups by state (`tabGrouping: 'state'`, the default;
+   * Discussion #426 option C): a row per state in the header strip, a section
+   * per state in the flat side rail and the sidebar, most urgent on top.
+   *
+   * Read off <html> like the rail gates (applyTabOrientation() owns the
+   * attribute). Named groups in the vertical rail still win, because they are
+   * the user's own structure: `_tabTriageLayout()` returns null while the
+   * grouped projection is on, and the grouped tree renders as it always did.
+   */
+  isTabTriage() {
+    return document.documentElement.dataset.tabGrouping === 'state';
+  }
+
+  /**
+   * Order values and visible groups for one render pass, or null when the list
+   * is not grouped by state. The pure core is `CodemanTabTriage.layout()`
+   * (constants.js); this only feeds it the same classification both home
+   * screens and the sorted rail use.
+   *
+   * Inside a group a row keeps its tab order on the header strip, so the strip
+   * only moves a tab when its state changes. A sorted rail ranks rows inside
+   * each section the way it ranks the whole flat rail (`railSortOrder`).
+   *
+   * @param {Array<string>} ids live session ids, in tab order
+   * @param {object|null} groupProjection the grouped rail's projection, if any
+   * @param {Map<string, number>|null} railSortOrder `_tabRailSortOrder(ids)`
+   */
+  _tabTriageLayout(ids, groupProjection, railSortOrder) {
+    if (groupProjection || !this.isTabTriage()) return null;
+    if (!window.CodemanTabTriage || typeof this._mobileOverviewState !== 'function') return null;
+    const rows = [];
+    for (let i = 0; i < ids.length; i++) {
+      const session = this.sessions.get(ids[i]);
+      if (!session) continue;
+      const state = this._mobileOverviewState(session, this.pendingHooks?.get(ids[i]));
+      rows.push({
+        id: ids[i],
+        state,
+        exited: !!this._mobileOverviewExit?.(state, session),
+        pos: railSortOrder?.has(ids[i]) ? railSortOrder.get(ids[i]) : i,
+      });
+    }
+    const webviewIds = (this.webviewOrder || []).filter((wid) => this.webviews?.has(wid));
+    return window.CodemanTabTriage.layout(rows, webviewIds);
+  }
+
+  /**
+   * Keep the state headings, the row breaks and the web tabs' `order` in step
+   * with one pass's triage layout. Runs after BOTH render paths, because a
+   * session changing state is an incremental pass (no tab is added or removed)
+   * and can still empty a group or fill a new one.
+   *
+   * Headings and breaks are keyed by group and reconciled in place, never
+   * rebuilt, so an SSE tick that changes nothing writes nothing. They are
+   * direct children of #sessionTabs placed purely by `order`, so where they sit
+   * in the DOM does not matter, and `aria-hidden` keeps them out of the tablist,
+   * whose children must all be tabs. (A tab's state is not announced either way:
+   * its status dot is aria-hidden, as before.) With `triage` null this removes
+   * them all and clears the web tabs' inline order, which is what leaves the
+   * ungrouped strip exactly as it was.
+   */
+  _syncTabTriageChrome(container, triage) {
+    if (!container) return;
+    container.classList.toggle('tabs-triage', !!triage);
+    const wanted = new Map((triage?.groups || []).map((group) => [group.key, group]));
+    for (const el of [...container.querySelectorAll(':scope > .tab-triage-head, :scope > .tab-triage-break')]) {
+      if (!wanted.has(el.dataset.triageGroup)) el.remove();
+    }
+    const ensure = (className, key) => {
+      let el = container.querySelector(`:scope > .${className}[data-triage-group="${key}"]`);
+      if (!el) {
+        el = document.createElement('div');
+        el.className = className === 'tab-triage-head' ? `tab-triage-head tab-triage-head--${key}` : className;
+        el.dataset.triageGroup = key;
+        el.setAttribute('aria-hidden', 'true');
+        container.appendChild(el);
+      }
+      return el;
+    };
+    for (const group of wanted.values()) {
+      const head = ensure('tab-triage-head', group.key);
+      if (!head.firstElementChild) {
+        const label = document.createElement('span');
+        label.className = 'tab-triage-label';
+        label.textContent = group.label;
+        const count = document.createElement('span');
+        count.className = 'tab-triage-count';
+        head.append(label, count);
+      }
+      const count = String(group.count);
+      if (head.lastElementChild.textContent !== count) head.lastElementChild.textContent = count;
+      const headOrder = String(group.headOrder);
+      if (head.style.order !== headOrder) head.style.order = headOrder;
+      const brk = ensure('tab-triage-break', group.key);
+      const breakOrder = String(group.breakOrder);
+      if (brk.style.order !== breakOrder) brk.style.order = breakOrder;
+    }
+    for (const web of container.querySelectorAll(':scope > .session-tab[data-webview-id]')) {
+      const wid = web.dataset.webviewId;
+      const value = triage?.webOrder.has(wid) ? String(triage.webOrder.get(wid)) : '';
+      if (web.style.order !== value) web.style.order = value;
+    }
+  }
+
+  /**
+   * A drag in a state-grouped strip may only reorder WITHIN a group. Inside a
+   * group the rows sit in tab order, so a drop there moves the tab exactly where
+   * it was dropped; across groups the dragged tab would stay in its own group
+   * (its state did not change) and land somewhere the user did not put it.
+   * Groups are bands of `order` values, so comparing bands is enough.
+   */
+  _isTabDropAcrossTriageGroups(targetTab) {
+    const container = this.$('sessionTabs');
+    if (!container?.classList.contains('tabs-triage') || !this.draggedTabId || !targetTab) return false;
+    const dragged = container.querySelector(`.session-tab[data-id="${this.draggedTabId}"]`);
+    if (!dragged) return false;
+    const stride = window.CodemanTabTriage?.STRIDE || 10000;
+    const band = (el) => Math.floor((Number(el.style.order) || 0) / stride);
+    return band(dragged) !== band(targetTab);
+  }
+
+  /**
    * True where the sidebar is a MODAL off-canvas drawer over the terminal
    * instead of a docked column.
    *
@@ -5004,6 +5170,9 @@ class CodemanApp {
     const reachable =
       this.isSessionSidebarActive() && document.documentElement.dataset.sidebar !== 'collapsed';
     const needle = reachable ? this._sidebarFilter : '';
+    // State headings count the whole group, so they step aside while a filter
+    // is narrowing the rows under them (styles.css, .tabs-filtering).
+    container.classList.toggle('tabs-filtering', !!needle);
     for (const tab of container.querySelectorAll('.session-tab')) {
       if (!needle) {
         tab.classList.remove('tab-filtered-out');
@@ -5425,7 +5594,13 @@ class CodemanApp {
       // that sees one — a session going working→idle never adds or removes a
       // tab, so the full rebuild below is not reached. Recomputed per pass for
       // the same reason the rich meta line is: the order IS the state.
-      const railSortOrder = this._tabRailSortOrder(this.sessionOrder.filter((sid) => this.sessions.has(sid)));
+      const liveIds = this.sessionOrder.filter((sid) => this.sessions.has(sid));
+      const railSortOrder = this._tabRailSortOrder(liveIds);
+      // Grouped by state: same reasoning, a state change moves a tab between
+      // rows. Its order values replace the rail sort's (which it already folded
+      // in as the rank inside each section).
+      const triage = this._tabTriageLayout(liveIds, groupProjection, railSortOrder);
+      const listOrder = triage ? triage.order : railSortOrder;
       // Incremental update - only modify changed properties
       for (const [id, session] of this.sessions) {
         const tab = container.querySelector(`.session-tab[data-id="${id}"]`);
@@ -5433,7 +5608,7 @@ class CodemanApp {
 
         // An empty string clears the property, which is also what un-sorts the
         // rail when the setting (or the layout) flips without a full rebuild.
-        const railOrder = railSortOrder?.has(id) ? String(railSortOrder.get(id)) : '';
+        const railOrder = listOrder?.has(id) ? String(listOrder.get(id)) : '';
         if (tab.style.order !== railOrder) tab.style.order = railOrder;
 
         // A web tab owns the active state while one is open. activeSessionId stays
@@ -5611,6 +5786,7 @@ class CodemanApp {
         this._applyTabTreePositions(container);
         this._syncTabGroupHeaderAlerts(container, groupProjection);
       }
+      this._syncTabTriageChrome(container, triage);
     } else {
       // Full rebuild needed (sessions added/removed)
       this._fullRenderSessionTabs();
@@ -5676,6 +5852,15 @@ class CodemanApp {
 
     if (manualTwoRows || deviceType !== 'desktop') {
       container.classList.remove('tabs-auto-wrap');
+      return;
+    }
+
+    // Grouped by state, the header strip IS rows (one per state), so it always
+    // wraps: the row breaks only take effect in a wrapping flex line. Narrower
+    // screens keep the single scrolling row above, where the headings read as
+    // inline dividers instead.
+    if (container.classList.contains('tabs-triage')) {
+      container.classList.add('tabs-auto-wrap');
       return;
     }
 
@@ -5771,7 +5956,14 @@ class CodemanApp {
     // below still counts the strip, not the sorted list. Null in every other
     // layout, and the tabs then carry no inline order at all — the header
     // strip's markup is byte-identical to before.
-    const railSortOrder = this._tabRailSortOrder(tabOrder.filter((id) => this.sessions.has(id)));
+    const liveIds = tabOrder.filter((id) => this.sessions.has(id));
+    const railSortOrder = this._tabRailSortOrder(liveIds);
+    // Grouped by state (tabGrouping, the default): the same `order` mechanism,
+    // one band of values per state. Null in the grouped rail and with grouping
+    // off, and the rows then carry exactly the inline order they did before.
+    const groupProjection = this._projectTabGroups();
+    const triage = this._tabTriageLayout(liveIds, groupProjection, railSortOrder);
+    const listOrder = triage ? triage.order : railSortOrder;
     // One row per session, in tab order. The flat strip emits them as-is; the
     // grouped rail places the SAME markup into its sections, so a row never
     // differs between the two (badge = Alt+N slot in sessionOrder either way).
@@ -5780,7 +5972,7 @@ class CodemanApp {
     for (const id of tabOrder) {
       const session = this.sessions.get(id);
       if (!session) continue; // Skip if session was removed
-      const railOrderStyle = railSortOrder?.has(id) ? ` style="order:${railSortOrder.get(id)}"` : '';
+      const railOrderStyle = listOrder?.has(id) ? ` style="order:${listOrder.get(id)}"` : '';
 
       // See the note in the incremental path: a web tab owns the active highlight
       // while one is open, even though activeSessionId stays set.
@@ -5862,7 +6054,6 @@ class CodemanApp {
       _tabIdx++;
     }
 
-    const groupProjection = this._projectTabGroups();
     if (groupProjection) {
       // Grouped vertical rail. Web tabs keep their flat-strip Alt+N slot (after
       // every session), wherever their group puts them.
@@ -5897,6 +6088,7 @@ class CodemanApp {
       this._applyTabTreeSemantics(container, { identity: focusIdentity, refocus: focusWasInside });
       this._syncTabGroupHeaderAlerts(container, groupProjection);
     }
+    this._syncTabTriageChrome(container, triage);
 
     // Put the strip back where the user left it, then reveal the active tab
     // only when it CHANGED (or on the first paint). Restoring unconditionally
@@ -5971,7 +6163,7 @@ class CodemanApp {
       // the inline one, or web tabs (pinned past the cards by a CSS `order: 9999`
       // rather than an inline style) read as 0 and the walk starts on them. Array
       // sort is stable, so equal orders keep DOM order, which is the unsorted case.
-      if (this.isTabRailSorted()) {
+      if (this.isTabRailSorted() || container.classList.contains('tabs-triage')) {
         const orderOf = (el) => Number(getComputedStyle(el).order) || 0;
         tabs.sort((a, b) => orderOf(a) - orderOf(b));
       }
@@ -7172,6 +7364,9 @@ class CodemanApp {
       });
 
       tab.addEventListener('dragover', (e) => {
+        // Grouped by state: a tab in another group is not a drop target, and
+        // leaving the event alone (no preventDefault) is what shows "no drop".
+        if (this._isTabDropAcrossTriageGroups(tab)) return;
         e.preventDefault();
         if (!this.draggedTabId || this.draggedTabId === tab.dataset.id) return;
 
@@ -7201,6 +7396,7 @@ class CodemanApp {
         tab.classList.remove('drag-over-left', 'drag-over-right');
 
         if (!this.draggedTabId || this.draggedTabId === tab.dataset.id) return;
+        if (this._isTabDropAcrossTriageGroups(tab)) return;
 
         const targetId = tab.dataset.id;
         const draggedId = this.draggedTabId;

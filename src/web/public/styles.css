@@ -19788,3 +19788,373 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
   padding-left: 0.4rem;
   border-left: 1px solid var(--border);
 }
+
+/* ============================================================
+   Tab grouping by state (tabGrouping: 'state', the default;
+   Discussion #426 option C)
+   ============================================================
+   app.js writes a flex `order` per tab plus one heading and one row break per
+   non-empty state, all direct children of #sessionTabs (_syncTabTriageChrome).
+   The DOM stays in tab order; computeTabTriageLayout() in constants.js owns the
+   bands. With grouping off none of this matches anything. */
+.tab-triage-head {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  gap: 5px;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  padding: 0 6px 0 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--text-muted);
+  user-select: none;
+  pointer-events: none;
+}
+
+.tab-triage-count {
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
+.tab-triage-head--needs .tab-triage-label {
+  color: var(--red);
+}
+
+.tab-triage-head--waiting .tab-triage-label {
+  color: var(--yellow);
+}
+
+.tab-triage-head--working .tab-triage-label {
+  color: var(--green);
+}
+
+.tab-triage-break {
+  display: none;
+}
+
+/* Counts describe the whole group, so they step aside while the sidebar
+   filter narrows the rows under them. */
+.session-tabs.tabs-filtering > .tab-triage-head {
+  display: none;
+}
+
+/* Header strip, wrapping (desktop): one row per state. Each heading sits in a
+   left gutter, so a group too long for one line continues under its own tabs
+   rather than under its heading, and each row ends with a full-width break. */
+.session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) {
+  --tab-triage-gutter: 92px;
+  padding-left: calc(0.25rem + var(--tab-triage-gutter));
+}
+
+.session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) > .tab-triage-head {
+  width: var(--tab-triage-gutter);
+  margin-left: calc(-1 * var(--tab-triage-gutter));
+}
+
+.session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) > .tab-triage-break {
+  display: block;
+  flex: 0 0 100%;
+  height: 0;
+}
+
+/* Side rail and sidebar: each heading is a section row above its rows. */
+html[data-tab-orientation='vertical'] .tab-rail .session-tabs.tabs-triage > .tab-triage-head,
+html[data-session-list='sidebar'] .session-sidebar .session-tabs.tabs-triage > .tab-triage-head {
+  align-self: auto;
+  width: 100%;
+  padding: 8px 6px 3px;
+}
+
+/* The collapsed sidebar is a 44px icon rail with no room for a label. */
+html[data-session-list='sidebar'][data-sidebar='collapsed'] .session-sidebar .tab-triage-head {
+  display: none;
+}
+
+/* ============================================================
+   Header stats styles (headerStatsStyle; Discussion #426 option G)
+   ============================================================
+   html[data-header-stats] picks how the WS / CPU / MEM / plan-usage cluster
+   is drawn. 'classic' matches nothing below except the hidden parts, so the
+   header looks exactly as before. 'compact' and 'tiles' are desktop only
+   (settings-ui.js resolves anything narrower, and a solo window, to
+   'classic'), and applyHeaderStatsStyle() has already moved
+   #connectionIndicator into #headerSystemStats and #planUsageChip right after
+   it, so the cluster is contiguous. */
+
+/* Parts only the two new styles draw. */
+.stat-spark,
+.connection-tile-label,
+.connection-tile-value,
+.header-plan-usage .pu-ring,
+.header-plan-usage .pu-meter {
+  display: none;
+}
+
+/* --- Compact: one system pill with sparklines, one plan-ring pill ------- */
+html[data-header-stats='compact'] .header-system-stats {
+  align-items: center;
+  gap: 0;
+  height: 24px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  font-size: 0.68rem;
+  color: var(--text);
+}
+
+html[data-header-stats='compact'] .header-system-stats > .connection-indicator {
+  color: var(--text);
+}
+
+html[data-header-stats='compact'] .header-system-stats > .connection-indicator::after,
+html[data-header-stats='compact'] .header-system-stats > .stat-item + .stat-item::before {
+  content: '·';
+  margin: 0 8px;
+  color: var(--text-muted);
+}
+
+html[data-header-stats='compact'] .header-system-stats .stat-label {
+  min-width: 0;
+  font-size: 0.62rem;
+  color: var(--text-muted);
+}
+
+html[data-header-stats='compact'] .header-system-stats .stat-bar {
+  display: none;
+}
+
+html[data-header-stats='compact'] .header-system-stats .stat-value {
+  min-width: 0;
+  text-align: left;
+  color: var(--text);
+}
+
+html[data-header-stats='compact'] .stat-spark {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 10px;
+}
+
+html[data-header-stats='compact'] .stat-spark i {
+  width: 3px;
+  height: 10%;
+  border-radius: 1px;
+  background: var(--accent);
+  transition: height 0.3s ease;
+}
+
+html[data-header-stats='compact'] .header-plan-usage {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: var(--control-bg);
+  border-color: var(--control-border);
+}
+
+html[data-header-stats='compact'] .header-plan-usage .pu-row {
+  align-items: center;
+  gap: 6px;
+}
+
+html[data-header-stats='compact'] .header-plan-usage .pu-provider {
+  width: auto;
+  flex: none;
+}
+
+html[data-header-stats='compact'] .header-plan-usage .pu-windows {
+  align-items: center;
+  gap: 10px;
+}
+
+html[data-header-stats='compact'] .header-plan-usage .pu-sep {
+  display: none;
+}
+
+html[data-header-stats='compact'] .header-plan-usage .pu-win {
+  align-items: center;
+}
+
+html[data-header-stats='compact'] .header-plan-usage .pu-label {
+  font-weight: 500;
+  text-transform: none;
+  color: var(--text-dim);
+}
+
+/* A ring per window: a conic fill masked down to a 2px stroke, coloured like
+   the value next to it (the pu-green/-yellow/-red class sits on both). */
+html[data-header-stats='compact'] .header-plan-usage .pu-ring {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 50%;
+  background: conic-gradient(currentColor calc(var(--pu, 0) * 1%), var(--control-border) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+}
+
+/* --- Tiles: label over value, a bar underneath, no icons ----------------- */
+html[data-header-stats='tiles'] .header-system-stats {
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+}
+
+html[data-header-stats='tiles'] .header-system-stats > .connection-indicator,
+html[data-header-stats='tiles'] .header-system-stats > .stat-item,
+html[data-header-stats='tiles'] .header-plan-usage .pu-win {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1px;
+  min-width: 44px;
+  height: 28px;
+  padding: 0 8px 3px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  overflow: hidden;
+  font-family: 'SF Mono', Monaco, monospace;
+  line-height: 1.05;
+}
+
+/* The tile label and value: the stat items already carry a label and a value,
+   the connection indicator gets its own pair (its text line keeps the classic
+   wording, queued bytes included, and stays the accessible name via title). */
+html[data-header-stats='tiles'] .header-system-stats .stat-label,
+html[data-header-stats='tiles'] .connection-tile-label,
+html[data-header-stats='tiles'] .header-plan-usage .pu-label {
+  display: block;
+  min-width: 0;
+  font-size: 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+html[data-header-stats='tiles'] .header-system-stats .stat-value,
+html[data-header-stats='tiles'] .connection-tile-value,
+html[data-header-stats='tiles'] .header-plan-usage .pu-val {
+  display: block;
+  min-width: 0;
+  text-align: left;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+/* Plan values keep their green/yellow/red; the stat values read as plain text
+   unless they are running high. */
+html[data-header-stats='tiles'] .header-system-stats .stat-value:not(.high),
+html[data-header-stats='tiles'] .connection-tile-value {
+  color: var(--text);
+}
+
+html[data-header-stats='tiles'] .header-system-stats > .connection-indicator > .connection-dot,
+html[data-header-stats='tiles'] .header-system-stats > .connection-indicator > .connection-text {
+  display: none;
+}
+
+html[data-header-stats='tiles'] .connection-tile-value.connected {
+  color: var(--green);
+}
+
+html[data-header-stats='tiles'] .connection-tile-value.fallback,
+html[data-header-stats='tiles'] .connection-tile-value.reconnecting,
+html[data-header-stats='tiles'] .connection-tile-value.draining {
+  color: var(--yellow);
+}
+
+html[data-header-stats='tiles'] .connection-tile-value.offline {
+  color: var(--red);
+}
+
+/* The bar runs along the bottom edge of the tile. */
+html[data-header-stats='tiles'] .header-system-stats .stat-bar,
+html[data-header-stats='tiles'] .header-plan-usage .pu-meter {
+  display: block;
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 3px;
+  width: auto;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(127, 127, 127, 0.18);
+  overflow: hidden;
+}
+
+html[data-header-stats='tiles'] .header-plan-usage .pu-meter > i {
+  display: block;
+  height: 100%;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+html[data-header-stats='tiles'] .header-plan-usage {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  min-height: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+}
+
+html[data-header-stats='tiles'] .header-plan-usage .pu-row {
+  align-items: center;
+  gap: 6px;
+}
+
+html[data-header-stats='tiles'] .header-plan-usage .pu-provider {
+  width: auto;
+  flex: none;
+  font-size: 0.55rem;
+}
+
+html[data-header-stats='tiles'] .header-plan-usage .pu-windows {
+  align-items: center;
+  gap: 6px;
+}
+
+html[data-header-stats='tiles'] .header-plan-usage .pu-sep {
+  display: none;
+}
+
+/* An idle window keeps its tile and dims the whole thing. */
+html[data-header-stats='tiles'] .header-plan-usage .pu-win-idle {
+  opacity: 0.55;
+}
+
+/* Before the first plan reading the chip holds a bare em dash; give it a tile
+   of its own so it does not read as a stray mark between the tiles. */
+html[data-header-stats='tiles'] .header-plan-usage:not(:has(.pu-row)) {
+  justify-content: center;
+  min-width: 44px;
+  height: 28px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  color: var(--text-muted);
+}

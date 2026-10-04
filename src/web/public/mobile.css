@@ -755,6 +755,14 @@ html.mobile-init .file-browser-panel {
     font-weight: 500;
   }
 
+  /* Grouped by state (tabGrouping), the phone strip keeps its one scrolling
+     row: the tabs still come in state order, most urgent first, but the
+     headings would cost chips and the dots already say which state is which.
+     The phone overview is where the labelled sections live. */
+  :where(.header) .tab-triage-head {
+    display: none;
+  }
+
   /* Only the active tab shows its action icons on a phone (see below), so on
      every other tab the container is empty but still a flex item, and its gap
      made the chip visibly wider on the right than on the left. */

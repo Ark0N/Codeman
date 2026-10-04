@@ -205,10 +205,11 @@ describe('vertical tab rail row order', () => {
   it('keeps the Alt+N badge on the tab index while the cards are sorted', () => {
     // `_tabIdx` counts the loop over sessionOrder, and only `style="order:…"`
     // moves the card — so the badge names a shortcut, not a row position.
-    expect(appJs).toContain(
-      'const railSortOrder = this._tabRailSortOrder(tabOrder.filter((id) => this.sessions.has(id)));'
-    );
-    expect(appJs).toContain('` style="order:${railSortOrder.get(id)}"`');
+    // `listOrder` is the rail sort's map, or the state grouping's when that is
+    // on (test/tab-triage.test.ts); either way it only sets the inline order.
+    expect(appJs).toContain('const liveIds = tabOrder.filter((id) => this.sessions.has(id));');
+    expect(appJs).toContain('const railSortOrder = this._tabRailSortOrder(liveIds);');
+    expect(appJs).toContain('` style="order:${listOrder.get(id)}"`');
     expect(appJs).toMatch(/_tabIdx < 9 \? '<span class="tab-number">' \+ \(_tabIdx \+ 1\)/);
     // The loop itself still walks the user's order, which is what makes the
     // badge, drag-and-drop and the arrow-key walk agree with each other.
@@ -219,12 +220,11 @@ describe('vertical tab rail row order', () => {
     // A session going working→idle never adds or removes a tab, so the full
     // rebuild is not reached — and a rebuild here would restart every card's
     // animation on every SSE tick anyway.
-    expect(appJs).toContain(
-      'const railSortOrder = this._tabRailSortOrder(this.sessionOrder.filter((sid) => this.sessions.has(sid)));'
-    );
+    expect(appJs).toContain('const liveIds = this.sessionOrder.filter((sid) => this.sessions.has(sid));');
+    expect(appJs).toContain('const railSortOrder = this._tabRailSortOrder(liveIds);');
     expect(appJs).toContain('if (tab.style.order !== railOrder) tab.style.order = railOrder;');
     // An empty string is what clears the property when the rail stops sorting.
-    expect(appJs).toContain("const railOrder = railSortOrder?.has(id) ? String(railSortOrder.get(id)) : '';");
+    expect(appJs).toContain("const railOrder = listOrder?.has(id) ? String(listOrder.get(id)) : '';");
   });
 
   it('drops the drag affordance while sorting, so a card cannot snap back', () => {
@@ -280,9 +280,10 @@ describe('vertical tab rail sort setting', () => {
     expect(html).toContain("document.documentElement.dataset.tabRailSort='activity';");
     expect(settingsUi).toContain('root.dataset.tabRailSort = sort;');
     // A sort flip leaves orientation on 'vertical' both times, so it has to
-    // count as a change of its own or nothing re-renders.
+    // count as a change of its own or nothing re-renders. The same holds for a
+    // grouping flip (tabGrouping, test/tab-triage.test.ts).
     expect(settingsUi).toContain(
-      'const changed = orientationChanged || previousDetail !== detail || previousSort !== sort;'
+      'const changed = orientationChanged || previousDetail !== detail || previousSort !== sort || previousGrouping !== grouping;'
     );
   });
 });

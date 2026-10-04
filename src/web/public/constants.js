@@ -658,6 +658,123 @@ function sortSessionsByActivity(rows) {
   return (Array.isArray(rows) ? rows.slice() : []).sort(compareSessionActivity);
 }
 
+// Tab grouping by state (`tabGrouping: 'state'`, Discussion #426 option C).
+//
+// The tab list answers "who wants me?" the way the home screens do: a row (the
+// header strip) or a section (the flat side rail, the sidebar) per state, most
+// urgent on top. The states are the home screens' own, from
+// `_mobileOverviewState()` (mobile-overview.js); this only folds the six into
+// four groups a strip can hold:
+//
+//   needs   red: a permission or question dialog is blocking the agent. A
+//           failed session joins it, since it also needs a human and the home
+//           screens rank it right below.
+//   waiting yellow: the agent finished its turn and is waiting on you.
+//   working a turn is running.
+//   idle    everything quiet: idle, ended, and an agent that exited inside a
+//           live pane (#446), which may still read as working on screen but is
+//           running nothing. Web tabs close the group.
+//
+// Applied as the flex `order` property, never by reordering the DOM, the same
+// design as the sorted rail (`_tabRailSortOrder`, app.js): `#sessionTabs` stays
+// in `sessionOrder`, so Alt+N, drag-and-drop and the keyboard walk keep reading
+// the list they always read, and a state change moves one inline style instead
+// of rebuilding the strip. Each group owns a band of `TAB_TRIAGE_STRIDE` order
+// values: its heading at the start of the band, its rows after it, its web tabs
+// after those and the line break that ends the header row at the very end.
+//
+// Pure: no DOM, no `this`. Unit-tested in test/tab-triage.test.ts.
+const TAB_TRIAGE_GROUPS = [
+  { key: 'needs', label: 'Needs you' },
+  { key: 'waiting', label: 'Waiting' },
+  { key: 'working', label: 'Working' },
+  { key: 'idle', label: 'Idle' },
+];
+
+const TAB_TRIAGE_GROUP_OF_STATE = {
+  needs: 'needs',
+  error: 'needs',
+  waiting: 'waiting',
+  working: 'working',
+  idle: 'idle',
+  done: 'idle',
+};
+
+const TAB_TRIAGE_STRIDE = 10000;
+/** Offset of a group's web tabs inside its band, past any plausible session count. */
+const TAB_TRIAGE_WEB_OFFSET = 5000;
+
+/**
+ * Which group a session belongs to.
+ * @param {string} state a `_mobileOverviewState()` value
+ * @param {boolean} exited the agent inside the pane has exited (`_mobileOverviewExit()` non-null)
+ * @returns {'needs'|'waiting'|'working'|'idle'}
+ */
+function tabTriageGroupFor(state, exited) {
+  const group = TAB_TRIAGE_GROUP_OF_STATE[state] || 'idle';
+  return exited && group === 'working' ? 'idle' : group;
+}
+
+/**
+ * Order values and visible groups for one pass.
+ *
+ * @param {Array<{id: string, state: string, exited?: boolean, pos?: number}>} rows
+ *   live sessions; `pos` ranks a row inside its group (tab order on the header
+ *   strip, the activity sort's position on a sorted rail). Rows without one keep
+ *   the order they were passed in.
+ * @param {Array<string>} webviewIds open web tabs, in their own tab order
+ * @returns {{
+ *   order: Map<string, number>,
+ *   webOrder: Map<string, number>,
+ *   groups: Array<{key: string, label: string, count: number, headOrder: number, breakOrder: number}>
+ * }} `groups` lists only the non-empty groups, most urgent first.
+ */
+function computeTabTriageLayout(rows, webviewIds) {
+  const list = Array.isArray(rows) ? rows : [];
+  const webs = Array.isArray(webviewIds) ? webviewIds : [];
+  const baseOf = {};
+  const counts = {};
+  TAB_TRIAGE_GROUPS.forEach((group, i) => {
+    baseOf[group.key] = (i + 1) * TAB_TRIAGE_STRIDE;
+    counts[group.key] = 0;
+  });
+
+  const placed = list
+    .filter((row) => row && typeof row.id === 'string')
+    .map((row, i) => ({
+      id: row.id,
+      group: tabTriageGroupFor(row.state, !!row.exited),
+      pos: Number.isFinite(row.pos) ? row.pos : i,
+      index: i,
+    }));
+  const byGroup = {};
+  for (const row of placed) (byGroup[row.group] = byGroup[row.group] || []).push(row);
+
+  const order = new Map();
+  for (const key of Object.keys(byGroup)) {
+    // Stable: equal positions keep the order the caller passed.
+    byGroup[key].sort((a, b) => a.pos - b.pos || a.index - b.index);
+    byGroup[key].forEach((row, i) => order.set(row.id, baseOf[key] + 1 + i));
+    counts[key] = byGroup[key].length;
+  }
+
+  const webOrder = new Map();
+  webs.forEach((id, i) => {
+    if (typeof id === 'string' && id) webOrder.set(id, baseOf.idle + TAB_TRIAGE_WEB_OFFSET + i);
+  });
+  counts.idle += webOrder.size;
+
+  const groups = TAB_TRIAGE_GROUPS.filter((group) => counts[group.key] > 0).map((group) => ({
+    key: group.key,
+    label: group.label,
+    count: counts[group.key],
+    headOrder: baseOf[group.key],
+    breakOrder: baseOf[group.key] + TAB_TRIAGE_STRIDE - 1,
+  }));
+
+  return { order, webOrder, groups };
+}
+
 // Terminal font stack — the single source for every xterm surface (the main
 // terminal in terminal-ui.js, the log-viewer terminal in panels-ui.js).
 // "Symbols Nerd Font Mono" is a bundled icons-only webfont (fonts/ +
@@ -982,6 +1099,12 @@ if (typeof window !== 'undefined') {
     anchor: sessionActivityAnchor,
     compare: compareSessionActivity,
     sort: sortSessionsByActivity,
+  };
+  window.CodemanTabTriage = {
+    GROUPS: TAB_TRIAGE_GROUPS,
+    STRIDE: TAB_TRIAGE_STRIDE,
+    groupFor: tabTriageGroupFor,
+    layout: computeTabTriageLayout,
   };
   window.CodemanInputLimit = {
     FRAME_MAX_CHARS: INPUT_FRAME_MAX_CHARS,

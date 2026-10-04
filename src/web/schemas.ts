@@ -1404,6 +1404,14 @@ export const SettingsUpdateSchema = z
      */
     tabRailSort: z.enum(['activity', 'manual']).optional(),
     /**
+     * Tab grouping. Display key (per-device).
+     * 'state' = the strip is split into state rows (needs you, waiting,
+     *           working, idle; Discussion #426 option C), and the flat side
+     *           rail and the sidebar get the same sections. The default.
+     * 'none'  = one flat list in tab order, as before.
+     */
+    tabGrouping: z.enum(['state', 'none']).optional(),
+    /**
      * Session list layout. Display key (per-device).
      * 'header'       = horizontal tab strip
      * 'sidebar'      = collapsible left sidebar, one compact row per session
@@ -1434,6 +1442,14 @@ export const SettingsUpdateSchema = z
     // UI visibility
     showFontControls: z.boolean().optional(),
     showSystemStats: z.boolean().optional(),
+    /**
+     * How the header draws its WS / CPU / MEM / plan-usage cluster. Display key
+     * (per-device), desktop only (the cluster is hidden below 768px).
+     * 'classic' = the bars and the 5H · 7D chip, as before
+     * 'compact' = one system pill with sparklines plus a plan-usage ring pill
+     * 'tiles'   = label over value with a bar underneath, no icons. The default.
+     */
+    headerStatsStyle: z.enum(['classic', 'compact', 'tiles']).optional(),
     showTokenCount: z.boolean().optional(),
     showCost: z.boolean().optional(),
     showLifecycleLog: z.boolean().optional(),

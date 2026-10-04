@@ -6028,6 +6028,11 @@ Object.assign(CodemanApp.prototype, {
       }
     }
 
+    // Sparklines for the Compact header style. Always recorded (four numbers a
+    // poll), so switching styles shows history at once instead of empty bars.
+    this._pushStatSpark('cpu', stats.cpu);
+    this._pushStatSpark('mem', stats.memory?.percent);
+
     if (memEl && memBar) {
       const memGB = (stats.memory.usedMB / 1024).toFixed(1);
       memEl.textContent = `${memGB}G`;
@@ -6042,6 +6047,27 @@ Object.assign(CodemanApp.prototype, {
       } else if (stats.memory.percent > 50) {
         memBar.classList.add('medium');
       }
+    }
+  },
+
+  /**
+   * Record one percentage sample and redraw that stat's sparkline: one bar per
+   * sample, newest on the right, as many samples as the template has bars.
+   * Bars stay 10% tall at minimum so an idle machine still draws a baseline.
+   */
+  _pushStatSpark(key, percent) {
+    const history = (this._statSparkHistory ||= { cpu: [], mem: [] })[key];
+    if (!history) return;
+    const el = this.$(key === 'cpu' ? 'statCpuSpark' : 'statMemSpark');
+    const size = el?.children.length || 4;
+    const value = Number(percent);
+    history.push(Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0);
+    while (history.length > size) history.shift();
+    if (!el) return;
+    const offset = size - history.length;
+    for (let i = 0; i < el.children.length; i++) {
+      const sample = history[i - offset];
+      el.children[i].style.height = sample === undefined ? '' : `${Math.max(10, Math.round(sample))}%`;
     }
   },
 

@@ -27,13 +27,38 @@ Session List Layout** can move it into a vertical sidebar on the left instead, a
 
 | Layout               | Behaviour                                                                       |
 | -------------------- | --------------------------------------------------------------------------------- |
-| **Header tab strip** | The default. Wraps to a second row on desktop, scrolls sideways on a phone.        |
+| **Header tab strip** | The default. On desktop it is one row per state (see [Tab grouping by state](#tab-grouping-by-state)); it scrolls sideways on a phone. |
 | **Left sidebar**     | A vertical list with a filter box and a live session count. `Alt+B` collapses it to a narrow rail that keeps the status dots and task badges visible. On a phone it is an off-canvas drawer rather than a docked rail. A detailed variant adds the home screen's per-session line (`created 3d ago · working 12m`) and a status pill. |
 | **Vertical rail**    | The strip turned vertical beside the terminal, resizable, with detailed rows by default. **Vertical Rail Order** sorts it by activity (blocked on you first, then longest running, then most recently quiet), the same order as the home screens; pick *Manual* to get your own order and drag-reordering back. **Tab groups:** pick *Move to new group* from a row's ⋯ menu (or Shift+F10 on it) to make the first one; a group header's menu (right-click, Shift+F10 or its ⋯ glyph) renames it (also F2), reorders or deletes it, rows move between groups from their own menu or by dragging with a mouse or pen, and a collapsed group stays collapsed on that device. Desktop and tablet only. |
 
 It is the same list either way, just re-hosted: tab order, drag-to-reorder, the `Alt+1`
 to `Alt+9` numbers and every status colour below behave identically in both. The setting is
 per device, so a sidebar on your desktop does not force one onto your phone.
+
+## Tab grouping by state
+
+By default the tabs are grouped by what each session needs from you, most urgent on top:
+
+| Group         | Who is in it                                                                        |
+| ------------- | ----------------------------------------------------------------------------------- |
+| **Needs you** | Red: a question or permission prompt is blocking the agent. A failed session too.   |
+| **Waiting**   | Yellow: the agent finished its turn and is waiting for your next prompt.            |
+| **Working**   | A turn is running.                                                                  |
+| **Idle**      | Everything quiet, including ended sessions, agents that exited inside their pane, and web tabs. |
+
+In the header each group is a row with its name and count on the left; a group with more
+tabs than fit on one line continues under its own tabs. The vertical rail and the left
+sidebar show the same groups as sections. Empty groups are not shown. These are the same
+states the phone overview and the desktop home rail use.
+
+Tabs move between groups on their own as their state changes. Inside a group they keep your
+tab order (on a rail sorted *By activity*, the activity order), and the `Alt+1` to `Alt+9`
+numbers never change. Dragging reorders tabs within a group. On a phone the strip stays a
+single scrolling row: the tabs come in group order, without the headings. If you have named
+tab groups in the vertical rail, those take precedence there.
+
+Turn it off with **App Settings → Appearance → Tabs → Tab Grouping → None** to get one list
+in tab order. Per device.
 
 ## Session tabs
 
@@ -102,7 +127,7 @@ The right side of the header. Almost all of these are off until you enable them 
 | ---------------------- | ------------------ | ------------------------------------------------------------------------------- |
 | Connection dot         | Always on          | SSE connection health. Green is connected.                                       |
 | Font size `-` / `+`    | Always on          | `Ctrl +` / `Ctrl -` do the same.                                                 |
-| CPU / MEM bars         | On                 | Server resource use.                                                             |
+| CPU / MEM              | On                 | Server resource use. Drawn as tiles by default; see Header Stats Style below.    |
 | File Viewer            | On                 | Toggles the file browser panel.                                                  |
 | Settings gear          | Always on          | App Settings.                                                                    |
 | Plan usage chip        | On, desktop only   | Live Claude subscription usage. Claude-only, and needs its telemetry exporter, which the same setting installs. |
@@ -120,6 +145,19 @@ The right side of the header. Almost all of these are off until you enable them 
 | Split                  | Off, desktop only  | View a second session beside the active one, with a draggable divider.           |
 | Tunnel indicator       | When a tunnel runs | Cloudflare tunnel status.                                                        |
 | Admin panel            | Multi-user only    | User administration.                                                              |
+
+### Header Stats Style
+
+The connection readout, CPU, MEM and the plan usage windows can be drawn three ways
+(**App Settings → Header & Panels → Header Stats Style**, per device, desktop only):
+
+| Style          | Look                                                                                   |
+| -------------- | -------------------------------------------------------------------------------------- |
+| **Tiles**      | The default. One small tile each (`WS live`, `CPU 22%`, `MEM 14.4G`, `5H 28%`, `7D 35%`): label over value, a thin bar underneath, no icons. |
+| **Compact**    | One pill with `WS · CPU · MEM` and a tiny sparkline of the last few samples, then a pill with a ring per plan window. Hands the tabs back the most room. |
+| **As before**  | The bars and the `5H · 7D` chip, exactly as they were.                                 |
+
+Hiding System Stats or Plan Usage still hides them in every style.
 
 New header controls never appear on phones. Phone layout is deliberately minimal and is
 covered in [Mobile Guide](Mobile-Guide).

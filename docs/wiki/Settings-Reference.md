@@ -69,6 +69,9 @@ by folder** (per device, on by default) shows changed files under collapsed fold
 window; off lists every file by its full path.
 
 Most default to off. The stock desktop header is system stats, File Viewer, and the gear.
+**Header Stats Style** picks how the system stats and plan usage are drawn: *Tiles*
+(default; label over value with a bar underneath), *Compact* (one pill with sparklines plus
+plan-usage rings) or *As before* (the bars and the `5H · 7D` chip). Desktop only, per device.
 New header controls never appear on phones. Split is desktop-only regardless of this
 setting — the button and the feature both stay off below a ~1180px viewport, where two
 resizable panes plus their divider have nowhere to go.
@@ -86,7 +89,8 @@ every session or only the active tab.
 | Interface Language     | English or Simplified Chinese. Per device.                                                 |
 | Session List Layout    | Header tab strip (default), a collapsible left sidebar, or the sidebar with detailed rows. See [The Dashboard](The-Dashboard#session-list-layout). |
 | Tab Orientation        | Keeps the header list but turns the strip vertical beside the terminal, resizable, with detailed rows by default. Desktop and tablet only. |
-| Vertical Rail Order    | *By activity* (default) sorts the rail the way the home screens are sorted; *Manual* keeps your tab order and drag-reordering. |
+| Tab Grouping           | *By state* (default) splits the tabs into needs you, waiting, working and idle: rows in the header, sections in the rail and sidebar. *None* keeps one list in tab order. See [The Dashboard](The-Dashboard#tab-grouping-by-state). |
+| Vertical Rail Order    | *By activity* (default) sorts the rail the way the home screens are sorted; *Manual* keeps your tab order and drag-reordering. With grouping by state it orders the rows inside each section. |
 | Tall Tabs              | Taller tab strip.                                                                          |
 | Pop-out Button on Tabs | Adds the detach control to tabs, with a per-tab override.                                  |
 | Spawn Lineage Lines    | Arcs from a parent tab to sessions it spawned. Desktop only, on by default.                |
