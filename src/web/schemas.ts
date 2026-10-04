@@ -18,6 +18,7 @@ import {
   MIN_TERMINAL_SCROLLBACK_LINES,
 } from '../config/terminal-history.js';
 import { MAX_EDITABLE_BYTES } from '../config/file-editing.js';
+import { CODEX_REASONING_EFFORTS } from '../types/session.js';
 import { MIN_MATCH_LENGTH, MAX_MATCH_LENGTH } from '../config/agent-wait.js';
 import { MAX_WAKE_MACS } from '../config/remote-wake-limits.js';
 import { MAX_INPUT_LENGTH } from '../config/terminal-limits.js';
@@ -298,6 +299,7 @@ const CodexConfigSchema = z
       .max(100)
       .regex(/^[a-zA-Z0-9._\-/]+$/)
       .optional(),
+    reasoningEffort: z.enum(CODEX_REASONING_EFFORTS).optional(),
     resumeSessionId: z
       .string()
       .max(100)

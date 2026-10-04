@@ -377,6 +377,16 @@ export function isEffortLevel(value: string | undefined): value is EffortLevel {
   return value !== undefined && (EFFORT_LEVELS as readonly string[]).includes(value);
 }
 
+/**
+ * Reasoning effort levels codex accepts as `model_reasoning_effort` (codex-cli 0.154.0).
+ * Which of them a given model honours is codex's business; Codeman only keeps the value
+ * to a known word, since it lands in the launch argv.
+ */
+export const CODEX_REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
+
+/** Codex reasoning effort for a session, passed as `--config model_reasoning_effort=<level>` */
+export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+
 /** OpenCode session configuration */
 export interface OpenCodeConfig {
   /** Model identifier (e.g., "anthropic/claude-sonnet-4-5", "openai/gpt-5.2", "ollama/codellama") */
@@ -398,6 +408,8 @@ export type CodexRenderMode = 'hybrid';
 export interface CodexConfig {
   /** Model identifier (e.g., "gpt-5", "o4-mini"). Passed via --model. */
   model?: string;
+  /** Reasoning effort for this session. Passed via --config model_reasoning_effort=<level>. */
+  reasoningEffort?: CodexReasoningEffort;
   /** Resume a previous codex conversation by session id (passed via --resume) */
   resumeSessionId?: string;
   /** Bypass approval prompts (passes --dangerously-bypass-approvals-and-sandbox) */
