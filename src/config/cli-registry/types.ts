@@ -530,8 +530,15 @@ export interface CliCapabilities {
    * `path` is relative to the home directory. `format` names the file dialect the sync
    * adapter reads and writes. Absent = no known/verified MCP config file, so the CLI is
    * skipped by sync rather than guessed at.
+   *
+   * `relocation` names the env var the CLI itself reads to move that file (codex's
+   * `CODEX_HOME`, claude's `CLAUDE_CONFIG_DIR`, opencode's `XDG_CONFIG_HOME`). When the SERVER
+   * process env (what the CLIs Codeman spawns inherit) sets it to an absolute directory, the
+   * file is `<that dir>/<relocation.path>` instead; set to anything else, the target is
+   * reported `skipped` rather than written somewhere the CLI never reads. Absent = the file
+   * only follows `$HOME`.
    */
-  mcpConfig?: { path: string; format: McpConfigFormat };
+  mcpConfig?: { path: string; format: McpConfigFormat; relocation?: { envVar: string; path: string } };
   /**
    * How this CLI is pointed at a user-supplied custom OpenAI-compatible
    * endpoint (local, e.g. llama.cpp, or cloud, e.g. Azure AI Foundry) — the

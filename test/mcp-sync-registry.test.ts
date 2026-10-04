@@ -31,6 +31,26 @@ describe('capabilities.mcpConfig', () => {
     expect(withMcp({ path: '.tool/mcp.json', format: 'claude-json' }).success).toBe(true);
   });
 
+  it("declares each CLI's own relocation env var, and none for antigravity (HOME only)", () => {
+    const reloc = Object.fromEntries(
+      STOCK_CLIS.flatMap((e) =>
+        e.capabilities.mcpConfig ? [[e.id as string, e.capabilities.mcpConfig.relocation]] : []
+      )
+    );
+    expect(reloc).toEqual({
+      claude: { envVar: 'CLAUDE_CONFIG_DIR', path: '.claude.json' },
+      opencode: { envVar: 'XDG_CONFIG_HOME', path: 'opencode/opencode.json' },
+      codex: { envVar: 'CODEX_HOME', path: 'config.toml' },
+      gemini: { envVar: 'GEMINI_CLI_HOME', path: '.gemini/settings.json' },
+      antigravity: undefined,
+    });
+  });
+
+  it('accepts a relocation with an env var name and a relative path', () => {
+    const value = { path: '.a/mcp.json', format: 'claude-json', relocation: { envVar: 'A_HOME', path: 'mcp.json' } };
+    expect(withMcp(value).success).toBe(true);
+  });
+
   it.each([
     ['parent traversal', { path: '../evil.json', format: 'claude-json' }],
     ['nested traversal', { path: '.a/../../evil.json', format: 'claude-json' }],
@@ -38,6 +58,18 @@ describe('capabilities.mcpConfig', () => {
     ['shell metacharacters', { path: '.a;rm -rf', format: 'claude-json' }],
     ['unknown format', { path: '.a/mcp.json', format: 'yaml' }],
     ['extra key', { path: '.a/mcp.json', format: 'claude-json', mode: 'rw' }],
+    [
+      'relocation path traversal',
+      { path: '.a/mcp.json', format: 'claude-json', relocation: { envVar: 'A_HOME', path: '../x.json' } },
+    ],
+    [
+      'relocation absolute path',
+      { path: '.a/mcp.json', format: 'claude-json', relocation: { envVar: 'A_HOME', path: '/etc/x.json' } },
+    ],
+    [
+      'relocation env var that is not a name',
+      { path: '.a/mcp.json', format: 'claude-json', relocation: { envVar: 'a-home', path: 'x.json' } },
+    ],
   ])('rejects %s', (_label, value) => {
     expect(withMcp(value).success).toBe(false);
   });

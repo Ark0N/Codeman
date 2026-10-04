@@ -7,20 +7,27 @@
  * Opt-in: both verbs answer 403 until `mcpSyncEnabled` is on (default OFF), because this writes
  * OTHER tools' own user config. Writes files in the SERVER user's home, so in multi-user mode it
  * is admin only. A second apply while one is running answers 409. Responses carry server names
- * only, never env values or headers.
+ * only, never env values, headers or file content (a parse failure is reported by position).
  *
  * A CLI takes part when it is ENABLED in the registry, declares an `mcpConfig`, and is installed
  * or already has its config file; one that is enabled but absent from the machine is reported
- * `absent` and never created.
+ * `absent` and never created. Its file is located with this process's env (the env the CLIs
+ * Codeman spawns inherit), so a relocation var such as `CODEX_HOME` is followed.
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
+import {
+  ApiErrorCode,
+  createErrorResponse,
+  getErrorMessage,
+  type ApiResponse,
+  type McpSyncResult,
+} from '../../types.js';
 import { isAdmin, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { enabledClis } from '../../config/cli-registry/registry.js';
 import { isCliEntryInstalled, probeStockCliAvailability } from '../../utils/cli-installed-probes.js';
-import { McpSyncBusyError, syncMcpServers, type McpSyncResult, type McpSyncTarget } from '../../mcp-sync.js';
+import { McpSyncBusyError, syncMcpServers, type McpSyncTarget } from '../../mcp-sync.js';
 
 /** Default OFF, same shape as `readCliManagementEnabled`: read fresh so a toggle applies at once. */
 export async function readMcpSyncEnabled(): Promise<boolean> {
@@ -29,8 +36,7 @@ export async function readMcpSyncEnabled(): Promise<boolean> {
 }
 
 /** Enabled CLIs that declare an MCP config file, in registry order (first definition wins). */
-export async function mcpSyncTargets(): Promise<McpSyncTarget[]> {
-  const availability = await probeStockCliAvailability();
+export function mcpSyncTargets(availability: Record<string, boolean>): McpSyncTarget[] {
   return enabledClis()
     .filter((e) => e.capabilities.mcpConfig)
     .sort((a, b) => a.order - b.order)
@@ -42,10 +48,13 @@ export async function mcpSyncTargets(): Promise<McpSyncTarget[]> {
     }));
 }
 
-/** Enabled agent CLIs with no known MCP config file (sync cannot touch them). */
-export function mcpUnsupportedLabels(): string[] {
+/**
+ * Installed, enabled agent CLIs with no known MCP config file (sync cannot touch them). One that
+ * is not installed is left out, the same way a supported one that is not installed reads `absent`.
+ */
+export function mcpUnsupportedLabels(availability: Record<string, boolean>): string[] {
   return enabledClis()
-    .filter((e) => e.kind === 'agent' && !e.capabilities.mcpConfig)
+    .filter((e) => e.kind === 'agent' && !e.capabilities.mcpConfig && isCliEntryInstalled(e, availability))
     .map((e) => e.label);
 }
 
@@ -54,7 +63,10 @@ async function gate(req: FastifyRequest): Promise<ApiResponse<never> | null> {
     return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Admin only in multi-user mode');
   }
   if (!(await readMcpSyncEnabled())) {
-    return createErrorResponse(ApiErrorCode.FORBIDDEN, 'MCP sync is disabled. Enable it in Settings first.');
+    return createErrorResponse(
+      ApiErrorCode.FORBIDDEN,
+      'MCP sync is disabled. Turn on "Enable MCP server sync" in Settings and save first.'
+    );
   }
   return null;
 }
@@ -67,7 +79,10 @@ export function registerMcpSyncRoutes(app: FastifyInstance): void {
       return denied;
     }
     try {
-      return { success: true, data: await syncMcpServers(await mcpSyncTargets(), { apply }, mcpUnsupportedLabels()) };
+      const availability = await probeStockCliAvailability();
+      const targets = mcpSyncTargets(availability);
+      const data = await syncMcpServers(targets, { apply, env: process.env }, mcpUnsupportedLabels(availability));
+      return { success: true, data };
     } catch (err) {
       if (err instanceof McpSyncBusyError) {
         reply.code(409);

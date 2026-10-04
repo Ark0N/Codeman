@@ -458,3 +458,130 @@ describe('syncMcpServers', () => {
     });
   });
 });
+
+describe('error messages never quote the config file (it holds env values and headers)', () => {
+  const claudeWithSecret = JSON.stringify({
+    mcpServers: { fs: { type: 'stdio', command: 'npx', env: { TOKEN: 'sk-COPIED-SECRET' } } },
+  });
+
+  it('reports an unparseable TOML file by line and column only', async () => {
+    put('.claude.json', claudeWithSecret);
+    put(
+      '.codex/config.toml',
+      'model = "gpt-5"\n[mcp_servers.linear]\nenv = { LINEAR_API_KEY = "lin_SECRET_abc" broken }\n'
+    );
+    const r = await syncMcpServers(only('claude', 'codex'), { apply: true, home });
+    const codex = result(r, 'codex');
+    expect(codex.status).toBe('unreadable');
+    expect(codex.error).toMatch(/^not valid TOML \(line 3, column \d+\)$/);
+    expect(JSON.stringify(r)).not.toContain('lin_SECRET_abc');
+    expect(JSON.stringify(r)).not.toContain('LINEAR_API_KEY');
+  });
+
+  it('reports an unparseable JSON file by position, or by category when V8 quotes source instead', async () => {
+    put('.claude.json', claudeWithSecret);
+    // V8: `Unexpected token 's', ..."TOKEN":sk-GEMINI-SECRET}"... is not valid JSON` (no position).
+    put('.gemini/settings.json', '{"mcpServers":{"g":{"command":"x","env":{"TOKEN":sk-GEMINI-SECRET}}}}');
+    // V8: `Expected ',' or '}' after property value in JSON at position N (line 2 column M)`.
+    put('.gemini/config/mcp_config.json', '{\n "mcpServers": {"a": {"env": {"K": "sk-AGY-SECRET" "x"}}}\n}');
+    const r = await syncMcpServers(only('claude', 'gemini', 'antigravity'), { apply: false, home });
+    expect(result(r, 'gemini').status).toBe('unreadable');
+    expect(result(r, 'gemini').error).toBe('not valid JSON');
+    expect(result(r, 'antigravity').error).toMatch(/^not valid JSON \(line 2, column \d+\)$/);
+    const body = JSON.stringify(r);
+    for (const secret of ['sk-GEMINI-SECRET', 'sk-AGY-SECRET', 'TOKEN']) expect(body).not.toContain(secret);
+  });
+
+  it('a write refused at the re-parse quotes neither the file nor the copied server', async () => {
+    put('.claude.json', claudeWithSecret);
+    // An inline top-level table parses, but appending `[mcp_servers.fs]` to it does not.
+    const inline = 'mcp_servers = { a = { command = "x", env = { K = "sk-FILE-SECRET" } } }\n';
+    put('.codex/config.toml', inline);
+    const r = await syncMcpServers(only('claude', 'codex'), { apply: true, home });
+    const codex = result(r, 'codex');
+    expect(codex.status).toBe('failed');
+    expect(codex.error).toMatch(/^not valid TOML \(line \d+, column \d+\)$/);
+    expect(get('.codex/config.toml')).toBe(inline);
+    const body = JSON.stringify(r);
+    expect(body).not.toContain('sk-FILE-SECRET');
+    expect(body).not.toContain('sk-COPIED-SECRET');
+  });
+});
+
+describe('relocated config dirs (the CLI reads its file somewhere else)', () => {
+  const claudeFile = JSON.stringify({ mcpServers: { fs: { type: 'stdio', command: 'npx', args: ['-y', 'fs'] } } });
+  const CODEX_RELOC = { relocation: { envVar: 'CODEX_HOME', path: 'config.toml' } };
+  const CLAUDE_RELOC = { relocation: { envVar: 'CLAUDE_CONFIG_DIR', path: '.claude.json' } };
+  const OPENCODE_RELOC = { relocation: { envVar: 'XDG_CONFIG_HOME', path: 'opencode/opencode.json' } };
+
+  it('writes $CODEX_HOME/config.toml, never the default ~/.codex/config.toml', async () => {
+    put('.claude.json', claudeFile);
+    const codexHome = join(home, 'elsewhere/codex');
+    const r = await syncMcpServers([target('claude'), target('codex', CODEX_RELOC)], {
+      apply: true,
+      home,
+      env: { CODEX_HOME: codexHome },
+    });
+    expect(result(r, 'codex').file).toBe(join(codexHome, 'config.toml'));
+    expect(result(r, 'codex').added).toEqual(['fs']);
+    expect(readFileSync(join(codexHome, 'config.toml'), 'utf8')).toContain('[mcp_servers.fs]');
+    expect(existsSync(join(home, '.codex'))).toBe(false);
+  });
+
+  it('reads the source from $CLAUDE_CONFIG_DIR and writes $XDG_CONFIG_HOME/opencode', async () => {
+    const claudeDir = join(home, 'accounts/work');
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(join(claudeDir, '.claude.json'), claudeFile);
+    // A default-location file that claude does NOT read under CLAUDE_CONFIG_DIR: its server must not spread.
+    put('.claude.json', JSON.stringify({ mcpServers: { stray: { type: 'stdio', command: 'nope' } } }));
+    const xdg = join(home, 'xdg');
+    const r = await syncMcpServers([target('claude', CLAUDE_RELOC), target('opencode', OPENCODE_RELOC)], {
+      apply: true,
+      home,
+      env: { CLAUDE_CONFIG_DIR: claudeDir, XDG_CONFIG_HOME: xdg },
+    });
+    expect(result(r, 'claude').servers).toEqual(['fs']);
+    expect(Object.keys(JSON.parse(readFileSync(join(xdg, 'opencode/opencode.json'), 'utf8')).mcp)).toEqual(['fs']);
+    expect(existsSync(join(home, '.config'))).toBe(false);
+  });
+
+  it('reports a relative relocation value as skipped and writes nothing anywhere', async () => {
+    put('.claude.json', claudeFile);
+    const r = await syncMcpServers([target('claude'), target('codex', CODEX_RELOC)], {
+      apply: true,
+      home,
+      env: { CODEX_HOME: 'relative/codex' },
+    });
+    const codex = result(r, 'codex');
+    expect(codex.status).toBe('skipped');
+    expect(codex.error).toMatch(/CODEX_HOME is set to a relative path/);
+    expect(codex.added).toEqual([]);
+    expect(existsSync(join(home, '.codex'))).toBe(false);
+    expect(existsSync(join(process.cwd(), 'relative'))).toBe(false);
+  });
+
+  it('an empty value means unset, as it does for the CLI', async () => {
+    put('.claude.json', claudeFile);
+    const r = await syncMcpServers([target('claude'), target('codex', CODEX_RELOC)], {
+      apply: true,
+      home,
+      env: { CODEX_HOME: '' },
+    });
+    expect(result(r, 'codex').file).toBe(join(home, '.codex/config.toml'));
+    expect(get('.codex/config.toml')).toContain('[mcp_servers.fs]');
+  });
+
+  it("ignores the caller's own env when home is overridden and no env is passed", async () => {
+    put('.claude.json', claudeFile);
+    const saved = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = join(home, 'from-process-env');
+    try {
+      const r = await syncMcpServers([target('claude'), target('codex', CODEX_RELOC)], { apply: true, home });
+      expect(result(r, 'codex').file).toBe(join(home, '.codex/config.toml'));
+      expect(existsSync(join(home, 'from-process-env'))).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = saved;
+    }
+  });
+});

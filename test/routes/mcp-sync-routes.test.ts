@@ -7,7 +7,7 @@
  * ⚠️ test/setup.ts gives the whole FILE one temp HOME, so each test wipes the config files it
  * creates. Port: N/A (app.inject()).
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -15,6 +15,7 @@ import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerMcpSyncRoutes } from '../../src/web/routes/mcp-sync-routes.js';
 import { SETTINGS_PATH } from '../../src/web/route-helpers.js';
 import { registryFilePath, reloadCliRegistry } from '../../src/config/cli-registry/registry.js';
+import { STOCK_CLIS } from '../../src/config/cli-registry/stock.js';
 
 // Which CLIs are installed on the machine running the tests must not decide the outcome: nothing
 // is installed, so only a CLI whose config file exists takes part.
@@ -36,10 +37,27 @@ vi.mock('../../src/mcp-sync.js', async (importOriginal) => {
   };
 });
 
+// Nothing is installed unless a test adds the id here.
+const installed = vi.hoisted(() => new Set<string>());
 vi.mock('../../src/utils/cli-installed-probes.js', () => ({
   probeStockCliAvailability: async () => ({}),
-  isCliEntryInstalled: () => false,
+  isCliEntryInstalled: (e: { id: string }) => installed.has(e.id),
 }));
+
+// The route follows each CLI's relocation env var (CODEX_HOME, CLAUDE_CONFIG_DIR, XDG_CONFIG_HOME,
+// ...) from process.env, so the runner's own values (CI images set XDG_CONFIG_HOME) must never
+// aim a test write outside the temp HOME. Cleared before every test, restored after the file.
+const RELOCATION_VARS = STOCK_CLIS.flatMap((e) => {
+  const envVar = e.capabilities.mcpConfig?.relocation?.envVar;
+  return envVar ? [envVar] : [];
+});
+const savedEnv = Object.fromEntries(RELOCATION_VARS.map((k) => [k, process.env[k]]));
+afterAll(() => {
+  for (const [k, v] of Object.entries(savedEnv)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+});
 
 const home = () => homedir();
 const write = (rel: string, text: string) => {
@@ -64,9 +82,11 @@ const CODEX = '.codex/config.toml';
 const GEMINI = '.gemini/settings.json';
 
 beforeEach(() => {
+  for (const k of RELOCATION_VARS) delete process.env[k];
+  installed.clear();
   rmSync(registryFilePath(), { force: true });
   reloadCliRegistry();
-  for (const d of ['.claude.json', '.codex', '.gemini', '.config'])
+  for (const d of ['.claude.json', '.codex', '.gemini', '.config', 'relocated'])
     rmSync(join(home(), d), { recursive: true, force: true });
   write(CLAUDE, JSON.stringify({ mcpServers: { fs: { type: 'stdio', command: 'npx', args: ['-y', 'fs'] } } }));
   // Codex and Gemini have been set up on this machine (their config files exist).
@@ -148,13 +168,48 @@ describe('/api/mcp-sync', () => {
     expect(JSON.parse(readFileSync(join(home(), GEMINI), 'utf8')).mcpServers.fs.command).toBe('npx');
   });
 
-  it('lists enabled agent CLIs without MCP support, and omits disabled ones and the shell', async () => {
+  it('lists installed, enabled agent CLIs without MCP support, and omits disabled, uninstalled ones and the shell', async () => {
+    installed.add('grok').add('pi');
     disable('pi');
     const { app } = await createRouteTestHarness(registerMcpSyncRoutes);
     const { unsupported } = (await app.inject({ method: 'GET', url: '/api/mcp-sync' })).json().data;
-    expect(unsupported).toContain('Grok');
-    expect(unsupported).not.toContain('Pi');
-    expect(unsupported.some((l: string) => /shell|terminal/i.test(l))).toBe(false);
+    expect(unsupported).toEqual(['Grok']);
+  });
+
+  it('follows CODEX_HOME from the server env instead of writing the default ~/.codex', async () => {
+    const codexHome = join(home(), 'relocated/codex');
+    process.env.CODEX_HOME = codexHome;
+    write('relocated/codex/config.toml', 'model = "gpt-5"\n');
+    const before = readFileSync(join(home(), CODEX), 'utf8');
+    const { app } = await createRouteTestHarness(registerMcpSyncRoutes);
+    const res = await app.inject({ method: 'POST', url: '/api/mcp-sync' });
+    const codex = res.json().data.targets.find((t: { id: string }) => t.id === 'codex');
+    expect(codex.file).toBe(join(codexHome, 'config.toml'));
+    expect(codex.added).toEqual(['fs']);
+    expect(readFileSync(join(codexHome, 'config.toml'), 'utf8')).toContain('[mcp_servers.fs]');
+    expect(readFileSync(join(home(), CODEX), 'utf8')).toBe(before);
+  });
+
+  it('reports a relative CODEX_HOME as skipped and writes no codex file', async () => {
+    process.env.CODEX_HOME = 'relative/codex';
+    installed.add('codex');
+    const before = readFileSync(join(home(), CODEX), 'utf8');
+    const { app } = await createRouteTestHarness(registerMcpSyncRoutes);
+    const res = await app.inject({ method: 'POST', url: '/api/mcp-sync' });
+    const codex = res.json().data.targets.find((t: { id: string }) => t.id === 'codex');
+    expect(codex.status).toBe('skipped');
+    expect(codex.error).toMatch(/CODEX_HOME/);
+    expect(readFileSync(join(home(), CODEX), 'utf8')).toBe(before);
+  });
+
+  it('never echoes the text of a config file it cannot parse', async () => {
+    write(CODEX, 'model = "gpt-5"\n[mcp_servers.linear]\nenv = { LINEAR_API_KEY = "lin_SECRET_abc" broken }\n');
+    const { app } = await createRouteTestHarness(registerMcpSyncRoutes);
+    const res = await app.inject({ method: 'GET', url: '/api/mcp-sync' });
+    const codex = res.json().data.targets.find((t: { id: string }) => t.id === 'codex');
+    expect(codex.status).toBe('unreadable');
+    expect(codex.error).toMatch(/^not valid TOML \(line 3, column \d+\)$/);
+    expect(res.body).not.toContain('lin_SECRET_abc');
   });
 
   it('never returns env values or headers', async () => {

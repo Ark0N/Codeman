@@ -27,6 +27,7 @@
  * | push         | PushSubscriptionRecord, VapidKeys, WebhookConfig, WebhookStatus, WebhookResult | `~/.codeman/push-keys.json`, `~/.codeman/push-subscriptions.json`, `~/.codeman/webhook.json` |
  * | plan         | PlanItem, PlanTaskStatus, TddPhase                                    | In-memory → `GET /api/sessions/:id/plan/tasks` |
  * | orchestrator | OrchestratorState, OrchestratorPlan, OrchestratorConfig, OrchestratorPersistState | `~/.codeman/state.json` → `GET /api/orchestrator/status` |
+ * | mcp-sync     | McpSyncResult, McpSyncTargetResult                                    | Other CLIs' own config files → `GET`/`POST /api/mcp-sync` |
  *
  * ## Cross-domain relationship map
  *
@@ -72,3 +73,4 @@ export * from './search.js';
 export * from './user.js';
 export * from './webview.js';
 export * from './intent.js';
+export * from './mcp-sync.js';

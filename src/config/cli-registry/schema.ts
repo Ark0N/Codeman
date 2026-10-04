@@ -28,6 +28,14 @@ const envName = z
   .regex(/^[A-Z_][A-Z0-9_]*$/, 'env var name must be UPPER_SNAKE_CASE')
   .max(64);
 
+/** A relative file path with no traversal or odd characters (MCP sync writes to it). */
+const mcpRelativePath = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/)
+  .refine((v) => !v.split('/').includes('..'), 'must not contain ..');
+
 /**
  * A shell-safe bare word: no space, quote, backtick, `$`, `;`, `&`, `|`, `<`, `>`, parens,
  * braces, newline or backslash. Every LITERAL in the launch spec (base command, flag names,
@@ -382,12 +390,7 @@ const capabilitiesSchema = z
     mcpConfig: z
       .object({
         // Home-relative, no traversal: sync writes to this path.
-        path: z
-          .string()
-          .min(1)
-          .max(100)
-          .regex(/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/)
-          .refine((v) => !v.split('/').includes('..'), 'must not contain ..'),
+        path: mcpRelativePath,
         // Every value must be a known McpConfigFormat (types.ts); mcp-sync.ts's dialect table is
         // keyed by the same type, so an adapter-less format fails to compile there.
         format: z.enum([
@@ -397,6 +400,9 @@ const capabilitiesSchema = z
           'opencode-json',
           'antigravity-json',
         ] as const satisfies readonly McpConfigFormat[]),
+        // The env var the CLI reads to move the file, and the path under it (same no-traversal
+        // rule: sync writes there too). Resolved from the server env at call time, never here.
+        relocation: z.object({ envVar: envName, path: mcpRelativePath }).strict().optional(),
       })
       .strict()
       .optional(),

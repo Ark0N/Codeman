@@ -25,9 +25,13 @@
  *     readable by its owner only.
  *   - Servers a dialect cannot express (SSE for codex) are skipped and reported.
  *   - Only one apply runs at a time.
+ *   - A CLI whose file was moved by its own env var (`mcpConfig.relocation`: `CODEX_HOME`,
+ *     `CLAUDE_CONFIG_DIR`, ...) is followed there, as the SERVER env sets it; a relative value
+ *     cannot be located safely, so that target is reported `skipped` and never written.
  *
- * The result types never carry env values or headers: those commonly hold secrets and the
- * result is returned over HTTP.
+ * The result types (src/types/mcp-sync.ts) never carry env values or headers: those commonly
+ * hold secrets and the result is returned over HTTP. For the same reason a parse failure is
+ * reported by position only (`describeMcpSyncError`): parsers quote the offending source.
  *
  * @module mcp-sync
  */
@@ -35,9 +39,10 @@
 import { promises as fs } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { parse as parseToml } from 'smol-toml';
+import { dirname, isAbsolute, join } from 'node:path';
+import { parse as parseToml, TomlError } from 'smol-toml';
 import type { McpConfigFormat } from './config/cli-registry/types.js';
+import type { McpSyncResult, McpSyncTargetResult } from './types/mcp-sync.js';
 
 export type McpFormat = McpConfigFormat;
 
@@ -58,39 +63,13 @@ export type McpServerMap = Record<string, McpServer>;
 export interface McpSyncTarget {
   id: string;
   label: string;
+  /** Home-relative default location of the config file. */
   path: string;
   format: McpFormat;
+  /** The env var the CLI reads to move the file, and the path under it (`mcpConfig.relocation`). */
+  relocation?: { envVar: string; path: string };
   /** The CLI's binary resolves on this machine. A CLI that is not installed and has no config file is left alone. */
   installed: boolean;
-}
-
-export interface McpSyncTargetResult {
-  id: string;
-  label: string;
-  file: string;
-  /**
-   * `absent`: not installed and no config file, so neither read nor created.
-   * `unreadable`: the file exists but cannot be parsed safely, so it is not written.
-   * `failed`: a read or write error (the file may be unchanged).
-   */
-  status: 'ok' | 'absent' | 'unreadable' | 'failed';
-  error?: string;
-  servers: string[];
-  /** Servers added (apply) or that would be added (plan). */
-  added: string[];
-  /** Missing servers this dialect cannot express. */
-  skipped: string[];
-}
-
-export interface McpSyncResult {
-  applied: boolean;
-  targets: McpSyncTargetResult[];
-  /** Names defined differently by different CLIs; existing definitions are left untouched. */
-  conflicts: string[];
-  /** Names left out because the only definitions are switched off in their own CLI. */
-  disabled: string[];
-  /** Enabled agent CLIs with no known MCP config file, so sync cannot touch them. */
-  unsupported: string[];
 }
 
 /** A second apply was requested while one was running. */
@@ -99,6 +78,39 @@ export class McpSyncBusyError extends Error {
     super('An MCP sync is already running');
     this.name = 'McpSyncBusyError';
   }
+}
+
+/**
+ * An error whose message this module wrote itself. It names keys Codeman chose and server names
+ * (which the result reports anyway), never a value from the file, so it may be shown as is.
+ */
+class McpConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'McpConfigError';
+  }
+}
+
+/**
+ * What a target's `error` may say. A parser's own message can quote the file: smol-toml's
+ * `TomlError` carries a code frame of the offending line and the one before it, and V8's JSON
+ * "Unexpected token" errors quote about ten characters of source. These files hold env values
+ * and headers and the result goes over HTTP, so a parse failure is reported by position only,
+ * an errno failure by Node's own message (code, syscall and path: no file content), and anything
+ * else by a fixed category.
+ */
+function describeMcpSyncError(err: unknown): string {
+  if (err instanceof McpConfigError) return err.message;
+  if (err instanceof TomlError) return `not valid TOML (line ${err.line}, column ${err.column})`;
+  if (err instanceof SyntaxError) {
+    const lc = /\(line (\d+) column (\d+)\)/.exec(err.message);
+    if (lc) return `not valid JSON (line ${lc[1]}, column ${lc[2]})`;
+    const pos = /at position (\d+)/.exec(err.message);
+    return pos ? `not valid JSON (position ${pos[1]})` : 'not valid JSON';
+  }
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  if (err instanceof Error && typeof code === 'string' && /^E[A-Z0-9]+$/.test(code)) return err.message;
+  return 'unexpected error';
 }
 
 // ---------------------------------------------------------------------------
@@ -349,15 +361,15 @@ function mcpTable(format: McpFormat, text: string | null): Record<string, unknow
     const doc = parseToml(text);
     const table = doc.mcp_servers;
     if (table === undefined) return dict<unknown>();
-    if (!isRecord(table)) throw new Error('"mcp_servers" is not a table');
+    if (!isRecord(table)) throw new McpConfigError('"mcp_servers" is not a table');
     return table;
   }
   const dialect = JSON_DIALECTS[format];
   const doc: unknown = JSON.parse(text);
-  if (!isRecord(doc)) throw new Error('top level is not a JSON object');
+  if (!isRecord(doc)) throw new McpConfigError('top level is not a JSON object');
   const table = doc[dialect.key];
   if (table === undefined) return dict<unknown>();
-  if (!isRecord(table)) throw new Error(`"${dialect.key}" is not an object`);
+  if (!isRecord(table)) throw new McpConfigError(`"${dialect.key}" is not an object`);
   return table;
 }
 
@@ -434,12 +446,12 @@ export function addServers(format: McpFormat, text: string | null, add: McpServe
   // Re-read what we are about to write.
   const after = parseConfig(format, out);
   for (const n of before.names) {
-    if (!after.names.has(n)) throw new Error(`refusing to write: "${n}" would be lost`);
+    if (!after.names.has(n)) throw new McpConfigError(`refusing to write: "${n}" would be lost`);
   }
   for (const n of names) {
     const got = after.servers[n];
     if (!got || fullIdentity(got) !== fullIdentity(todo[n])) {
-      throw new Error(`refusing to write: "${n}" does not read back as written`);
+      throw new McpConfigError(`refusing to write: "${n}" does not read back as written`);
     }
   }
   return out;
@@ -481,7 +493,7 @@ async function writeAtomic(file: string, text: string, secret: boolean): Promise
     // ENOENT from realpath on a dangling link, or lstat on a missing file: tell them apart.
     try {
       await fs.lstat(file);
-      throw new Error('config path is a dangling symlink');
+      throw new McpConfigError('config path is a dangling symlink');
     } catch (inner) {
       if ((inner as NodeJS.ErrnoException).code !== 'ENOENT') throw inner;
     }
@@ -514,6 +526,36 @@ export interface McpSyncOptions {
   /** false = report what would change without writing. */
   apply: boolean;
   home?: string;
+  /**
+   * Where relocation env vars (`McpSyncTarget.relocation`) are read from: the env the CLIs
+   * Codeman spawns would inherit. Defaults to `process.env`, except when `home` is overridden
+   * (tests, throwaway homes): then it defaults to none, so a relocation var in the caller's own
+   * env can never aim a write outside that home.
+   */
+  env?: Record<string, string | undefined>;
+}
+
+/**
+ * The config file a target means, honouring its relocation env var. `skip` is set when the var
+ * holds something that cannot be located safely (a relative path resolves against the CLI's
+ * working directory, which differs per session), so the target is neither read nor written.
+ */
+function resolveFile(
+  t: McpSyncTarget,
+  home: string,
+  env: Record<string, string | undefined>
+): { file: string; skip?: string } {
+  const rel = t.relocation;
+  const dir = rel ? env[rel.envVar] : undefined;
+  // Every CLI declared today treats an empty value as unset (`||` / a non-empty filter).
+  if (!rel || dir === undefined || dir === '') return { file: join(home, t.path) };
+  if (!isAbsolute(dir)) {
+    return {
+      file: `$${rel.envVar}/${rel.path}`,
+      skip: `${rel.envVar} is set to a relative path, so the file ${t.label} reads cannot be located safely`,
+    };
+  }
+  return { file: join(dir, rel.path) };
 }
 
 let applying = false;
@@ -541,16 +583,19 @@ export async function syncMcpServers(
 
 async function run(targets: McpSyncTarget[], opts: McpSyncOptions, unsupported: string[]): Promise<McpSyncResult> {
   const home = opts.home ?? homedir();
+  const env = opts.env ?? (opts.home === undefined ? process.env : {});
   const seen = new Set<string>();
-  const live = targets.filter((t) => (seen.has(t.path) ? false : (seen.add(t.path), true)));
+  const live = targets
+    .map((t) => ({ t, ...resolveFile(t, home, env) }))
+    .filter(({ file }) => (seen.has(file) ? false : (seen.add(file), true)));
 
-  const state = live.map((t) => {
-    const file = join(home, t.path);
+  const state = live.map(({ t, file, skip }) => {
     const res: McpSyncTargetResult = {
       id: t.id,
       label: t.label,
       file,
-      status: 'ok',
+      status: skip ? 'skipped' : 'ok',
+      ...(skip ? { error: skip } : {}),
       servers: [],
       added: [],
       skipped: [],
@@ -559,6 +604,7 @@ async function run(targets: McpSyncTarget[], opts: McpSyncOptions, unsupported: 
   });
 
   for (const s of state) {
+    if (s.res.status !== 'ok') continue;
     try {
       if (!s.t.installed && !(await exists(s.file))) {
         s.res.status = 'absent';
@@ -570,7 +616,7 @@ async function run(targets: McpSyncTarget[], opts: McpSyncOptions, unsupported: 
       s.res.servers = [...parsed.names];
     } catch (err) {
       s.res.status = 'unreadable';
-      s.res.error = err instanceof Error ? err.message : String(err);
+      s.res.error = describeMcpSyncError(err);
     }
   }
 
@@ -618,7 +664,7 @@ async function run(targets: McpSyncTarget[], opts: McpSyncOptions, unsupported: 
       s.res.added = written;
     } catch (err) {
       s.res.status = 'failed';
-      s.res.error = err instanceof Error ? err.message : String(err);
+      s.res.error = describeMcpSyncError(err);
       s.res.added = [];
     }
   }

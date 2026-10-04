@@ -122,6 +122,7 @@ instead of its native cloud backend. See [Custom Model Endpoints](Custom-Model-E
 | Nice priority / value            | Runs agent processes at a lower CPU priority.                                                  |
 | Bypass approvals and sandbox     | Pi's project trust. Read [Agent CLIs](Agent-CLIs) before enabling.                             |
 | Animated status effects          | Cosmetic.                                                                                      |
+| MCP server sync                  | Copies the MCP servers each installed, enabled CLI (Claude, Codex, Gemini, OpenCode, Antigravity) has into the others' own config files. Synced, off by default, admin only in multi-user mode. Turn it on and save, then **Preview** shows what would change and **Sync now** applies it. It only adds missing servers, keeps the previous file as `.codeman-bak`, and leaves a file that receives env values or headers readable by you only. A config dir moved by `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME` or `GEMINI_CLI_HOME` in Codeman's own environment is followed. |
 
 ### Notifications
 

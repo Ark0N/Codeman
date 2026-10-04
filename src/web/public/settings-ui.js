@@ -417,7 +417,10 @@ Object.assign(CodemanApp.prototype, {
     // needs an explicit sync on every open, not just a save.
     this.applyCliManagementVisibility();
     // MCP server sync: synced, default OFF; same explicit-sync reasoning as above.
-    document.getElementById('appSettingsMcpSync').checked = settings.mcpSyncEnabled === true;
+    // The routes read the SAVED setting, so remember what it was on open: switching it on
+    // here does nothing server-side until Save (see mcpSync()).
+    this._mcpSyncSavedOn = settings.mcpSyncEnabled === true;
+    document.getElementById('appSettingsMcpSync').checked = this._mcpSyncSavedOn;
     this.applyMcpSyncVisibility();
     this.loadWebhook();
     // Read My Mind: synced, default OFF (opt-in; capture + prediction cost real tokens).
@@ -1173,6 +1176,20 @@ Object.assign(CodemanApp.prototype, {
     if (row) row.style.display = on ? '' : 'none';
     const out = this.$('mcpSyncResult');
     if (!on && out) { out.style.display = 'none'; out.innerHTML = ''; }
+    this._applyMcpSyncAdminGate();
+  },
+
+  /**
+   * Both /api/mcp-sync verbs are admin-only in multi-user mode (they write files in the server
+   * user's home), so a non-admin gets no MCP group at all, switch included, the same way
+   * _applyCliManagementAdminGate hides the CLI list. Also wired to `codeman:me`, because
+   * `window.__codemanUser`'s real role can resolve after settings were opened once.
+   */
+  _applyMcpSyncAdminGate() {
+    const group = document.getElementById('mcpSyncGroup');
+    if (!group) return;
+    const me = window.__codemanUser || {};
+    group.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
   },
 
   /** Preview (apply=false) or run (apply=true) the MCP server sync across enabled CLIs. */
@@ -1181,6 +1198,11 @@ Object.assign(CodemanApp.prototype, {
     const show = (html) => {
       if (out) { out.style.display = 'block'; out.innerHTML = html; }
     };
+    // Switched on in this modal but not saved yet: the routes would only answer "disabled".
+    if (!this._mcpSyncSavedOn) {
+      show('Save settings to turn MCP sync on first, then reopen Settings to preview or sync.');
+      return;
+    }
     if (apply && !confirm('Add missing MCP servers to every installed, enabled CLI\'s config file? Env values and headers on those servers are copied too.')) return;
     show('Working…');
     const res = apply ? await this._apiPost('/api/mcp-sync', {}) : await this._api('/api/mcp-sync');
@@ -1193,12 +1215,14 @@ Object.assign(CodemanApp.prototype, {
     const data = body.data;
     const rows = data.targets.map((t) => {
       if (t.status === 'absent') return `<li><b>${escapeHtml(t.label)}</b>: not installed, skipped</li>`;
+      if (t.status === 'skipped') return `<li><b>${escapeHtml(t.label)}</b>: not touched (${escapeHtml(t.error || 'config location unknown')})</li>`;
       if (t.status === 'unreadable') return `<li><b>${escapeHtml(t.label)}</b>: not touched, file can't be read safely (${escapeHtml(t.error || 'unreadable')})</li>`;
       if (t.status === 'failed') return `<li><b>${escapeHtml(t.label)}</b>: failed (${escapeHtml(t.error || 'error')}); the file may be unchanged</li>`;
       const verb = data.applied ? 'added' : 'would add';
       const parts = [t.added.length ? `${verb} ${t.added.map(escapeHtml).join(', ')}` : 'up to date'];
       if (t.skipped.length) parts.push(`can't express ${t.skipped.map(escapeHtml).join(', ')}`);
-      return `<li><b>${escapeHtml(t.label)}</b> (${t.servers.length} servers): ${parts.join('; ')}</li>`;
+      const count = `${t.servers.length} server${t.servers.length === 1 ? '' : 's'}`;
+      return `<li><b>${escapeHtml(t.label)}</b> (${count}): ${parts.join('; ')}</li>`;
     });
     const conflicts = data.conflicts.length
       ? `<p>Defined differently across CLIs (each existing definition is kept; the first CLI's is copied where the name is missing): ${data.conflicts.map(escapeHtml).join(', ')}</p>`
@@ -4348,4 +4372,5 @@ Object.assign(CodemanApp.prototype, {
 document.addEventListener?.('codeman:me', () => {
   window.app?._applyCustomModelAdminGate?.();
   window.app?._applyCliManagementAdminGate?.();
+  window.app?._applyMcpSyncAdminGate?.();
 });
