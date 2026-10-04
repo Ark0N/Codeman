@@ -153,7 +153,6 @@ Object.assign(CodemanApp.prototype, {
 
     const edges = this._collectLineageEdges();
     if (edges.length === 0) return;
-    this._lineageEdgeCount = edges.length;
     if (!rects) rects = new Map();
 
     // PHASE 1 — reads.
@@ -162,19 +161,35 @@ Object.assign(CodemanApp.prototype, {
     const stripRect = strip.getBoundingClientRect();
     const orientation =
       document.documentElement.getAttribute('data-tab-orientation') === 'vertical' ? 'vertical' : 'horizontal';
+    // A session hidden inside a collapsed group of the grouped rail has no row
+    // to anchor to, so its end of the arc moves to that group's header (a
+    // "proxied" endpoint, drawn quieter). Two endpoints proxied to the SAME
+    // header would be an arc from a row to itself: skipped.
+    const resolveEndpoint = (id) => {
+      const tab = strip.querySelector(`.session-tab[data-id="${CSS.escape(id)}"]`);
+      if (tab) return { key: 'tab:' + id, element: tab, proxied: false };
+      const groupId = this._hiddenTabGroupByRef?.get('session:' + id);
+      if (!groupId) return { key: 'tab:' + id, element: null, proxied: false };
+      const header = strip.querySelector(`[data-tab-group-header="${CSS.escape(groupId)}"]`);
+      return { key: 'group:' + groupId, element: header, proxied: !!header };
+    };
+    const resolvedEdges = [];
     for (const edge of edges) {
-      for (const id of [edge.parentId, edge.childId]) {
-        const key = 'tab:' + id;
-        if (rects.has(key)) continue;
-        const tab = strip.querySelector(`.session-tab[data-id="${CSS.escape(id)}"]`);
-        rects.set(key, tab ? tab.getBoundingClientRect() : null);
+      const parentEndpoint = resolveEndpoint(edge.parentId);
+      const childEndpoint = resolveEndpoint(edge.childId);
+      if (parentEndpoint.key === childEndpoint.key) continue;
+      resolvedEdges.push({ edge, parentEndpoint, childEndpoint });
+      for (const endpoint of [parentEndpoint, childEndpoint]) {
+        if (rects.has(endpoint.key)) continue;
+        rects.set(endpoint.key, endpoint.element ? endpoint.element.getBoundingClientRect() : null);
       }
     }
+    this._lineageEdgeCount = resolvedEdges.length;
 
     // PHASE 2 — writes, from the cache only.
-    for (const edge of edges) {
-      const parentRect = rects.get('tab:' + edge.parentId);
-      const childRect = rects.get('tab:' + edge.childId);
+    for (const { edge, parentEndpoint, childEndpoint } of resolvedEdges) {
+      const parentRect = rects.get(parentEndpoint.key);
+      const childRect = rects.get(childEndpoint.key);
       if (!parentRect || !childRect) continue;
 
       const geom = compute({
@@ -191,7 +206,8 @@ Object.assign(CodemanApp.prototype, {
       // The working class marches the dashes, so an active worker is visible along
       // the line itself. `status` is the CHILD's, which is the interesting end.
       const working = edge.status === 'working' ? ' lineage-line--working' : '';
-      line.setAttribute('class', 'connection-line lineage-line' + working);
+      const proxied = parentEndpoint.proxied || childEndpoint.proxied;
+      line.setAttribute('class', 'connection-line lineage-line' + working + (proxied ? ' lineage-line--proxied' : ''));
       // The PARENT's colour rides a CSS custom property so the stylesheet keeps owning
       // opacity, glow and dash; an empty colour leaves the --session-blue fallback.
       // Every arc out of one tab shares it — see _lineageColorFor().
@@ -211,7 +227,7 @@ Object.assign(CodemanApp.prototype, {
       // Resting radius; `lineage-dot-pulse` breathes it 3.5 → 4.5 while the child
       // works, so the two have to be changed together.
       dot.setAttribute('r', '3.5');
-      dot.setAttribute('class', 'lineage-line-dot' + working);
+      dot.setAttribute('class', 'lineage-line-dot' + working + (proxied ? ' lineage-line-dot--proxied' : ''));
       dot.setAttribute('data-child-tab', edge.childId);
       if (color) dot.style.setProperty('--lineage-color', color);
       svg.appendChild(dot);

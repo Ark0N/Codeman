@@ -296,7 +296,14 @@ So: `_confirmIdle()` (session.ts) requires the pane to go quiet, and then asks t
 
 **Owner tab layouts** (COD-359, `tab-layout*.ts` + `GET`/`PUT /api/tab-layout`): named tab GROUPS over the flat tab strip, scoped per owner (`SINGLE_USER_LAYOUT_OWNER` = `@single` when multi-user is off), persisted under the `tabLayouts` key in state.json. The pure model is `tab-layout.ts`, `tab-layout-service.ts` is the sole mutation boundary, plus `tab-layout-persistence.ts` and `tab-layout-legacy-order.ts`. A layout is `{version, groups[], ungrouped[], updatedAt}` whose refs point at either a session or a saved webview (`TabRefKind`), capped at 32 groups / 512 refs.
 
-⚠️ **BACKEND ONLY as of 1.24.1**: nothing in `src/web/public/` calls these routes yet, so a UI built on top is new frontend work, not a rewiring job.
+⚠️ **The frontend READS the layout; nothing writes it yet.** `tab-layout-browser.js` (pure, loaded before app.js) projects it onto what is live in the page, and app.js's grouped-rail block draws the VERTICAL rail as collapsible group sections. The rules that keep it safe:
+
+- **Grouped iff vertical AND the owner has at least one group.** No layout, a failed `GET` (retried, newest-wins via `createLoadCoordinator`) or zero groups renders the flat rail unchanged; the horizontal strip, phones and the sidebar never group.
+- **A render layer, never an order source.** `sessionOrder` (the server-projected global order), Alt+N, Ctrl+Tab and the palette are untouched; a grouped session row is the flat row's markup, so its badge still names its Alt+N slot. Web tabs keep their slot after every session wherever their group puts them (`renderWebviewTab`).
+- **Collapse is per-device** (`codeman:tab-groups-collapsed` in localStorage, ids of deleted groups garbage-collected on adoption, any storage failure means all-expanded). A collapsed group still SHOWS the active row, and `_updateActiveTabImmediate` falls through to a full render whenever the structure key changes, since a class toggle cannot reveal a hidden row.
+- **Lineage arcs to a collapse-hidden session anchor to its group header** (`lineage-line--proxied`); two endpoints proxied to one header draw nothing.
+- **Drag-reorder is off in the grouped rail** until grouped editing lands: a flat-order drop cannot express a group move, and the server re-ranks within the old group.
+
 
 ⚠️ **`TabLayoutService` is the single mutation boundary** and every lifecycle caller (session created/removed, webview created/deleted, a legacy order PUT) describes ONE completed server action and gets AT MOST ONE versioned write; writing layout state from a route or a manager directly is what the service exists to prevent.
 
