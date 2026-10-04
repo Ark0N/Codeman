@@ -450,6 +450,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowSessionButton').checked = settings.showSessionButton ?? defaults.showSessionButton ?? false;
     document.getElementById('appSettingsShowAwayDigestButton').checked = settings.showAwayDigestButton ?? defaults.showAwayDigestButton ?? false;
     document.getElementById('appSettingsShowCronButton').checked = settings.showCronButton ?? defaults.showCronButton ?? false;
+    document.getElementById('appSettingsShowGitStatus').checked = settings.showGitStatus ?? defaults.showGitStatus ?? false;
     // Gesture control lives in the Input section (alongside Local Echo / CJK Input)
     // but is only available when the instance runs with CODEMAN_GESTURE=1 (server sets
     // window.__codemanGestureAvailable). Hide just this item otherwise so the toggle
@@ -2422,6 +2423,7 @@ Object.assign(CodemanApp.prototype, {
       showSessionButton: document.getElementById('appSettingsShowSessionButton').checked,
       showAwayDigestButton: document.getElementById('appSettingsShowAwayDigestButton').checked,
       showCronButton: document.getElementById('appSettingsShowCronButton').checked,
+      showGitStatus: document.getElementById('appSettingsShowGitStatus').checked,
       gestureControlEnabled: document.getElementById('appSettingsGestureControl').checked,
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
@@ -2674,6 +2676,8 @@ Object.assign(CodemanApp.prototype, {
       showSessionButton: _ssb,
       showAwayDigestButton: _adb,
       showCronButton: _crb,
+      // Per-device bottom-bar indicator, absent from SettingsUpdateSchema (.strict()): it must not reach the PUT.
+      showGitStatus: _sgs,
       showTabDetachButton: _tdb,
       // Phone-only home surface, and absent from SettingsUpdateSchema (.strict()).
       mobileOverviewEnabled: _mov,
@@ -3613,6 +3617,10 @@ Object.assign(CodemanApp.prototype, {
       cronBtn.classList.toggle('btn-cron--hidden', !showCronButton);
     }
 
+    // Bottom-bar Git indicator (git-status-ui.js): opt-in, per-device. Starts or stops its poll to
+    // match the setting, so a live toggle needs no reload.
+    this.applyGitStatusVisibility?.();
+
     // Notification bell is retired (notifications live in Settings → Notifications
     // + the drawer); keep it hidden regardless of the notification-enabled state.
     const notifBtn = document.querySelector('.btn-notifications');
@@ -3961,7 +3969,7 @@ Object.assign(CodemanApp.prototype, {
           'language',
           'terminalWheelLocalScrollback',
           'autoCopySelection', 'copyStripMargin',
-          'showSessionButton', 'showAwayDigestButton', 'showCronButton',
+          'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus',
           'showTabDetachButton',
           'mobileOverviewEnabled',
           'sessionLineageLines',

@@ -1,0 +1,5 @@
+---
+"aicodeman": minor
+---
+
+Git status in the bottom bar. Agents leave work uncommitted and unpushed; turn on Settings → Header & Panels → Bottom bar → "Git status" (per-device, off by default) and a small indicator at the right of the bottom bar shows the active session's repository at a glance (`● 3` uncommitted files, `↑ 2` commits not pushed, `✓` when everything is committed and pushed). Click it for a draggable window, like the Files window, listing exactly which files are uncommitted (staged, not staged, untracked, merge conflicts; click one to preview it) and which commits are not pushed. When a session's folder holds several projects rather than being a repository itself, every repository found up to two levels down gets its own collapsible section and the indicator adds them up; an unrelated repository above the workspace (such as a dotfiles repo in your home folder) is ignored. Read-only and offline: Codeman never fetches or changes the repository, so "behind" is as of your last fetch. Not shown for Docker or remote sessions. New `GET /api/sessions/:id/git-status`.

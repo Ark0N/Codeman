@@ -19274,3 +19274,304 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   font-size: 13px;
   color: var(--text-muted);
 }
+
+
+/* ── Git status: bottom-bar indicator + panel (git-status-ui.js) ─────────────── */
+
+/* .btn-toolbar sets display:flex, which beats the [hidden] attribute's UA display:none. */
+.btn-git-status[hidden] {
+  display: none;
+}
+
+.btn-git-status {
+  gap: 0.4rem;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.68rem;
+  padding: 0.2rem 0.55rem;
+  white-space: nowrap;
+}
+
+.btn-git-status .git-status-label {
+  letter-spacing: 0.02em;
+}
+
+/* The skin block in styles.css nests every .btn-toolbar rule under html:not([data-skin="og"]), which
+   out-ranks a bare .btn-git-status.<tone> rule, so the tones carry the same `html .toolbar` prefix
+   (specificity (0,3,1) against the skin's (0,2,1)). Without it the amber never shows. */
+html .toolbar .btn-git-status.git-status--clean {
+  color: var(--text-muted);
+}
+
+html .toolbar .btn-git-status.git-status--clean svg {
+  color: rgb(34, 197, 94);
+}
+
+html .toolbar .btn-git-status.git-status--dirty {
+  color: #e0a030;
+  border-color: rgba(224, 160, 48, 0.4);
+}
+
+html .toolbar .btn-git-status.git-status--conflict {
+  color: #e5534b;
+  border-color: rgba(229, 83, 75, 0.5);
+}
+
+.btn-git-status[aria-expanded='true'] {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* Same look as the Files window. Default spot is just left of it so both can be open. */
+.git-status-panel {
+  position: fixed;
+  top: calc(var(--header-height) + 10px);
+  right: 320px;
+  width: 380px;
+  height: calc(100vh - var(--header-height) - var(--toolbar-height) - 40px);
+  height: calc(100dvh - var(--header-height) - var(--toolbar-height) - 40px);
+  max-height: 600px;
+  min-width: 260px;
+  min-height: 220px;
+  background: var(--floating-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 100;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  resize: both;
+}
+
+.git-status-panel.visible {
+  display: flex;
+}
+
+.git-status-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.git-status-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.git-status-branch {
+  margin-left: 0.4rem;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.git-status-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.git-status-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.74rem;
+  color: var(--text);
+}
+
+.git-status-footer {
+  padding: 0.35rem 0.6rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.64rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.git-status-empty,
+.git-status-ok,
+.git-status-note,
+.git-status-more {
+  color: var(--text-muted);
+  padding: 0.25rem 0;
+}
+
+.git-status-ok {
+  color: rgb(34, 197, 94);
+}
+
+.git-status-branchline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.6rem;
+}
+
+.git-status-chip {
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.66rem;
+  color: var(--text-muted);
+}
+
+.git-status-chip--warn {
+  color: #e0a030;
+  border-color: rgba(224, 160, 48, 0.4);
+}
+
+.git-status-section {
+  margin-bottom: 0.75rem;
+}
+
+.git-status-section-title {
+  margin: 0 0 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.git-status-group {
+  margin-bottom: 0.4rem;
+}
+
+.git-status-group-title {
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin: 0.2rem 0;
+}
+
+.git-status-file,
+.git-status-commit {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.15rem 0.25rem;
+  border-radius: 4px;
+  min-width: 0;
+}
+
+.git-status-file--clickable {
+  cursor: pointer;
+}
+
+.git-status-file--clickable:hover,
+.git-status-file--clickable:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.git-status-badge {
+  flex: 0 0 1.1rem;
+  text-align: center;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: #e0a030;
+}
+
+.git-status-badge--A,
+.git-status-badge--new {
+  color: rgb(34, 197, 94);
+}
+
+.git-status-badge--D,
+.git-status-badge--U {
+  color: #e5534b;
+}
+
+.git-status-path,
+.git-status-subject {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+}
+
+.git-status-subject {
+  font-family: inherit;
+  flex: 1;
+}
+
+.git-status-orig,
+.git-status-commit-meta {
+  flex: 0 0 auto;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+.git-status-hash {
+  flex: 0 0 auto;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.66rem;
+  color: #e0a030;
+}
+
+/* One section per repository when a session's folder holds several (git-status-ui.js). */
+.git-status-repo {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 0.5rem;
+  overflow: hidden;
+}
+
+.git-status-repo-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  cursor: pointer;
+  background: var(--bg-input);
+  list-style: none;
+  min-width: 0;
+}
+
+.git-status-repo-summary::-webkit-details-marker {
+  display: none;
+}
+
+.git-status-repo-name {
+  font-weight: 600;
+  font-size: 0.74rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-status-repo-path,
+.git-status-repo-branch {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.git-status-repo-state {
+  margin-left: auto;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.git-status-repo-state--dirty {
+  color: #e0a030;
+}
+
+.git-status-repo-body {
+  padding: 0.5rem 0.6rem;
+}
