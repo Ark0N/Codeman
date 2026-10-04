@@ -1031,7 +1031,11 @@ export async function ensureStatusLineExporterScript(): Promise<string> {
     // render, and a truncate-then-write (plus a chmod AFTER the write) opened two
     // windows in which Claude Code could run an empty or non-executable file.
     // rename() swaps the complete, already-executable file in atomically.
-    const tmpPath = `${scriptPath}.${process.pid}.${Date.now()}.tmp`;
+    // ⚠️ The temp name must be unique per CALL, not per millisecond: sessions created
+    // concurrently (spawn_workers, a multi-tab Run) refresh this together, a shared
+    // name let the first rename consume the others' temp file, and their ENOENT
+    // dropped those sessions from tmux to the direct-PTY fallback.
+    const tmpPath = `${scriptPath}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
     await writeFile(tmpPath, desired);
     await chmod(tmpPath, 0o755);
     await rename(tmpPath, scriptPath);
