@@ -5,9 +5,11 @@
  * owner's groups only when it is vertical AND there is at least one group (every
  * other case must be byte-for-byte the flat rail), collapse is per-device and
  * keeps the active row, a structural change escapes the incremental patch path,
- * drag-reorder is withheld, lineage arcs to a collapse-hidden session anchor
- * to its group header, and the grouped rail (only) is an ARIA tree with one
- * roving tab stop, a tree keyboard model and focus restored across rebuilds.
+ * drag-reorder and cross-group Ctrl+Shift moves are withheld, a collapsed
+ * header carries the alert it hides, layout reads rebuild only on a structural
+ * change and back off when they fail, lineage arcs to a collapse-hidden session
+ * anchor to its group header, and the grouped rail (only) is an ARIA tree with
+ * one roving tab stop, a tree keyboard model and focus restored across rebuilds.
  *
  * The real modules run INSIDE a JSDOM window (runScripts: 'outside-only'), so
  * `document`, `localStorage` and `window` below are that window's, not Node's.
@@ -17,6 +19,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -277,6 +280,76 @@ describe('grouped vertical rail', () => {
     expect(document.querySelectorAll('.tab-layout-group')).toHaveLength(2);
     expect(app.collapsedTabGroupIds.size).toBe(0);
   });
+
+  it('keeps collapse working after a malformed stored value, and repairs it', () => {
+    localStorage.setItem('codeman:tab-groups-collapsed', '{"group-x":true}');
+    const app = makeApp({ tabLayout: null });
+    app._applyTabLayout(layout);
+    expect(app._tabCollapseStorageFailed).toBe(false);
+    expect(localStorage.getItem('codeman:tab-groups-collapsed')).toBe('[]');
+    expect(app.toggleTabGroupCollapsed('group-x', true)).toBe(true);
+    expect(localStorage.getItem('codeman:tab-groups-collapsed')).toBe('["group-x"]');
+    expect(document.querySelector('[data-tab-group-header="group-x"]')?.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('lights a collapsed header with the most urgent alert it hides, on both render paths', () => {
+    const app = makeApp();
+    app.tabAlerts.set('s1', 'idle');
+    app.collapsedTabGroupIds = new Set(['group-x']);
+    app._fullRenderSessionTabs();
+    const header = () => document.querySelector('[data-tab-group-header="group-x"]')!;
+    const ring = () => ['tab-alert-action', 'tab-alert-idle'].filter((c) => header().classList.contains(c));
+    // s1 is hidden (s2 is the kept selection): its yellow alert moves to the header.
+    expect(rowIds()).toEqual(['s2', 's3']);
+    expect(ring()).toEqual(['tab-alert-idle']);
+
+    // A red alert arriving later is patched in place, without a rebuild.
+    const full = vi.spyOn(app, '_fullRenderSessionTabs');
+    app.tabAlerts.set('s1', 'action');
+    app._renderSessionTabsImmediate();
+    expect(full).not.toHaveBeenCalled();
+    expect(ring()).toEqual(['tab-alert-action']);
+
+    // The kept selection draws its own ring, so its alert never reaches the header.
+    app.tabAlerts.clear();
+    app.tabAlerts.set('s2', 'action');
+    app._renderSessionTabsImmediate();
+    expect(ring()).toEqual([]);
+    expect(document.querySelector('[data-id="s2"]')!.classList.contains('tab-alert-action')).toBe(true);
+
+    // Expanded, every row shows its own alert and the header shows none.
+    app.tabAlerts.set('s1', 'action');
+    app.toggleTabGroupCollapsed('group-x', false);
+    expect(ring()).toEqual([]);
+  });
+
+  it("lets Ctrl+Shift moves swap only within the active session's own section", () => {
+    const app = makeApp();
+    app.saveSessionOrder = vi.fn();
+    app._fullRenderSessionTabs();
+    // s2's neighbours in sessionOrder (s1,s2,s3): s3 is Ungrouped, s1 shares group-x.
+    app.moveActiveTabRight();
+    expect(app.sessionOrder).toEqual(['s1', 's2', 's3']);
+    expect(app.saveSessionOrder).not.toHaveBeenCalled();
+    app.moveActiveTabLeft();
+    expect(app.sessionOrder).toEqual(['s2', 's1', 's3']);
+    expect(app.saveSessionOrder).toHaveBeenCalledTimes(1);
+
+    // A row a collapse hides is still in its section.
+    app.sessionOrder = ['s1', 's2', 's3'];
+    app.collapsedTabGroupIds = new Set(['group-x']);
+    app._fullRenderSessionTabs();
+    expect(rowIds()).not.toContain('s1');
+    app.moveActiveTabLeft();
+    expect(app.sessionOrder).toEqual(['s2', 's1', 's3']);
+
+    // The flat rail (and the strip) keep moving across every neighbour.
+    const flat = makeApp({ tabLayout: null });
+    flat.saveSessionOrder = vi.fn();
+    flat._fullRenderSessionTabs();
+    flat.moveActiveTabRight();
+    expect(flat.sessionOrder).toEqual(['s1', 's3', 's2']);
+  });
 });
 
 describe('layout adoption', () => {
@@ -292,6 +365,67 @@ describe('layout adoption', () => {
     expect(app.tabLayout).toBeNull();
     expect(document.querySelectorAll('.tab-layout-group')).toHaveLength(0);
     expect(rowIds()).toEqual(['s1', 's2', 's3', 'w1']);
+  });
+
+  it('rebuilds the strip on adoption only when what the rail draws changed', () => {
+    const flat = makeApp({ tabLayout: null });
+    flat._fullRenderSessionTabs();
+    const flatRender = vi.spyOn(flat, '_fullRenderSessionTabs');
+    // The flat rail (every owner without groups) never rebuilds for a layout read.
+    flat._applyTabLayout({ version: 3, groups: [], ungrouped: [{ kind: 'session', id: 's3' }] });
+    flat._applyTabLayout({ version: 4, groups: [], ungrouped: [] });
+    flat._applyTabLayout(null);
+    expect(flatRender).not.toHaveBeenCalled();
+
+    const app = makeApp({ tabLayout: null });
+    app._fullRenderSessionTabs();
+    const render = vi.spyOn(app, '_fullRenderSessionTabs');
+    app._applyTabLayout(layout);
+    expect(render).toHaveBeenCalledTimes(1);
+    // A version bump that moves nothing (the broadcast after any session event).
+    app._applyTabLayout({ ...layout, version: 9 });
+    expect(render).toHaveBeenCalledTimes(1);
+    // A rename does change the rail.
+    app._applyTabLayout({ ...layout, version: 10, groups: [{ ...layout.groups[0], name: 'Ops' }] });
+    expect(render).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('.tab-layout-group-name')?.textContent).toBe('Ops');
+    // Grouped to flat (a failed read) rebuilds once.
+    app._applyTabLayout(null);
+    expect(render).toHaveBeenCalledTimes(3);
+    expect(document.querySelectorAll('.tab-layout-group')).toHaveLength(0);
+  });
+
+  it('backs off failed layout reads and stops, without rebuilding a flat rail', async () => {
+    const app = makeApp({ tabLayout: null });
+    app._fullRenderSessionTabs();
+    app._tabLayoutCoordinator = null;
+    app._apiJson = vi.fn(async () => {
+      throw new Error('offline');
+    });
+    const render = vi.spyOn(app, '_fullRenderSessionTabs');
+    const realSetTimeout = window.setTimeout;
+    const delays: number[] = [];
+    let queued: (() => Promise<boolean>) | null = null;
+    window.setTimeout = (fn: () => Promise<boolean>, ms: number) => {
+      delays.push(ms);
+      queued = fn;
+      return delays.length;
+    };
+    try {
+      await app._loadTabLayout();
+      // Bounded: an uncapped retry must fail the assertion below, not hang.
+      for (let drained = 0; queued && drained < 10; drained++) {
+        const next: () => Promise<boolean> = queued;
+        queued = null;
+        await next();
+      }
+    } finally {
+      window.setTimeout = realSetTimeout;
+    }
+    expect(delays).toEqual([5000, 10000, 20000, 40000]);
+    expect(app._apiJson).toHaveBeenCalledTimes(5);
+    expect(render).not.toHaveBeenCalled();
+    app._tabLayoutCoordinator.dispose();
   });
 
   it('ignores an older layout than the one it already shows', () => {
@@ -503,7 +637,88 @@ describe('grouped rail tree semantics', () => {
     press('Home');
     press('Enter');
     expect(app.collapsedTabGroupIds.has('group-x')).toBe(true);
+    // The header was rebuilt by the toggle; focus followed it, never to <body>.
+    expect(focused()).toBe('group:group-x');
     expect(tabs().querySelectorAll('[tabindex="0"]')).toHaveLength(1);
+  });
+
+  it('leaves keys pressed on a control inside a row to that control', () => {
+    const app = makeTreeApp();
+    app._fullRenderSessionTabs();
+    // The overflow button gets focus from a click, or back from its action menu.
+    const more = row('s2').querySelector<HTMLElement>('.tab-more')!;
+    more.focus();
+    expect(press('Enter')).toBe(true);
+    expect(press(' ')).toBe(true);
+    expect(press('ArrowDown')).toBe(true);
+    expect(press('ArrowLeft')).toBe(true);
+    expect(app.selectSession).not.toHaveBeenCalled();
+    expect(app.collapsedTabGroupIds.size).toBe(0);
+    expect(document.activeElement).toBe(more);
+  });
+
+  it('treats a group with no open rows as a leaf that Left/Right cannot open or close', () => {
+    const app = makeTreeApp({
+      tabLayout: { ...layout, groups: [...layout.groups, { id: 'empty', name: 'Empty', refs: [] }] },
+    });
+    app._fullRenderSessionTabs();
+    const header = document.querySelector<HTMLElement>('[data-tab-group-header="empty"]')!;
+    expect(header.hasAttribute('aria-expanded')).toBe(false);
+    expect(header.hasAttribute('aria-owns')).toBe(false);
+    header.focus();
+    press('ArrowRight');
+    press('ArrowLeft');
+    expect(app.collapsedTabGroupIds.size).toBe(0);
+    expect(focused()).toBe('group:empty');
+  });
+
+  it('keeps tree positions in painted order when the sorted rail re-sorts rows in place', () => {
+    const app = makeTreeApp();
+    document.documentElement.dataset.tabRailSort = 'activity';
+    let order = new Map([
+      ['s2', 0],
+      ['s1', 1],
+      ['s3', 2],
+    ]);
+    app._tabRailSortOrder = () => order;
+    app._fullRenderSessionTabs();
+    row('w1').style.order = '9999'; // styles.css pins web tabs last; JSDOM loads no stylesheet
+    app._applyTabTreePositions(tabs());
+    const pos = (id: string) => row(id).getAttribute('aria-posinset');
+    expect([pos('s2'), pos('s1'), pos('w1')]).toEqual(['1', '2', '3']);
+
+    // s1 goes working: the incremental pass moves its card up with `order` only.
+    const full = vi.spyOn(app, '_fullRenderSessionTabs');
+    order = new Map([
+      ['s1', 0],
+      ['s2', 1],
+      ['s3', 2],
+    ]);
+    app._renderSessionTabsImmediate();
+    expect(full).not.toHaveBeenCalled();
+    expect(row('s1').style.order).toBe('0');
+    expect([pos('s1'), pos('s2'), pos('w1')]).toEqual(['1', '2', '3']);
+    expect(row('s1').getAttribute('aria-setsize')).toBe('3');
+  });
+
+  it('exempts tree items from the touch keyboard dismissal, like every other control', () => {
+    // terminal-ui.js publishes the selector on window.CodemanTerminalInput; its
+    // top level only needs a window and a CodemanApp prototype to assign to.
+    const context = vm.createContext({ window: {}, CodemanApp: function CodemanApp() {} });
+    vm.runInContext(readFileSync(join(PUBLIC, 'terminal-ui.js'), 'utf8'), context);
+    const selector = (context.window as any).CodemanTerminalInput.MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR as string;
+
+    const app = makeTreeApp();
+    app._fullRenderSessionTabs();
+    const header = document.querySelector<HTMLElement>('[data-tab-group-header="group-x"]')!;
+    // The roving stop sits on s2: the header and the other rows are tabindex=-1.
+    expect(header.tabIndex).toBe(-1);
+    expect(row('s1').tabIndex).toBe(-1);
+    for (const target of [header, header.querySelector('.tab-layout-group-name')!, row('s1'), row('w1')]) {
+      expect(target.closest(selector), (target as HTMLElement).className).not.toBeNull();
+    }
+    // Inert rail chrome still dismisses.
+    expect(document.querySelector('.tab-layout-ungrouped-header')!.closest(selector)).toBeNull();
   });
 
   it('opens row actions from the keyboard, since its controls left the tab order', () => {

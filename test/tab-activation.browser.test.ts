@@ -9,8 +9,9 @@
  *
  * DOM emulation cannot answer either question (hit testing, hover reveal and
  * layout are Chromium's), which is why this runs in a real browser. The shipping
- * app.js, webview-tabs.js and styles.css are loaded into a page; the CodemanApp
- * instance gets stub actions that only record what ran.
+ * app.js, webview-tabs.js, terminal-ui.js (for the touch keyboard dismissal) and
+ * styles.css are loaded into a page; the CodemanApp instance gets stub actions
+ * that only record what ran.
  *
  * Port: none (page.setContent, no server).
  */
@@ -57,6 +58,7 @@ describe('tab row activation in Chromium', () => {
         '\nwindow.CodemanApp = CodemanApp; window.__setApp = (value) => { app = value; };',
     });
     await page.addScriptTag({ content: read('webview-tabs.js') });
+    await page.addScriptTag({ content: read('terminal-ui.js') });
     await page.evaluate(() => {
       const w = window as any;
       const app = Object.create(w.CodemanApp.prototype);
@@ -288,6 +290,88 @@ describe('tab row activation in Chromium', () => {
     await page.keyboard.press('Enter');
     expect((await result()).activation).toBe('webview:web');
     expect(await page.locator('#sessionTabs [tabindex="0"]').count()).toBe(1);
+  });
+
+  it('leaves Enter on a focused in-row control to that control in the tree', async () => {
+    await render('vertical', true);
+    // A click focuses the overflow button (the action menu hands focus back the
+    // same way on Escape). Enter there must run the button, not re-select the row.
+    await page.locator('[data-id="one"] .tab-more').click();
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('tab-more'))).toBe(true);
+    await reset();
+    await page.keyboard.press('Enter');
+    expect(await result()).toEqual({ activation: null, action: 'overflow' });
+    await page.keyboard.press('ArrowDown');
+    expect(await page.evaluate(() => document.activeElement?.classList.contains('tab-more'))).toBe(true);
+  });
+
+  it('keeps the touch keyboard up when a tree header or unselected row is tapped', async () => {
+    await render('vertical', true);
+    const state = await page.evaluate(() => {
+      const w = window as any;
+      const app = w.__app;
+      const input = document.createElement('textarea');
+      input.className = 'xterm-helper-textarea';
+      document.body.appendChild(input);
+      app._installMobileKeyboardDismiss();
+      // A finger that lifts where it landed (no travel): the handler reads only
+      // `touches`, so a plain Event carrying them stands in for a TouchEvent.
+      const tap = (target: Element) => {
+        const at = (type: string, touches: Array<{ clientX: number; clientY: number }>) => {
+          const ev = new Event(type, { bubbles: true });
+          Object.defineProperty(ev, 'touches', { value: touches });
+          target.dispatchEvent(ev);
+        };
+        at('touchstart', [{ clientX: 10, clientY: 10 }]);
+        at('touchend', []);
+      };
+      const keptAfterTap = (selector: string) => {
+        input.focus();
+        tap(document.querySelector(selector)!);
+        return document.activeElement === input;
+      };
+      const out = {
+        header: keptAfterTap('[data-tab-group-header="g"] .tab-layout-group-name'),
+        unselectedRow: keptAfterTap('[data-webview-id="web"] .tab-name'),
+        inertChrome: false,
+      };
+      // Inert chrome still dismisses, so the handler is live.
+      out.inertChrome = !keptAfterTap('.tab-layout-ungrouped-header');
+      document.removeEventListener('touchstart', app._mobileKeyboardDismissStart);
+      document.removeEventListener('touchmove', app._mobileKeyboardDismissMove);
+      document.removeEventListener('touchend', app._mobileKeyboardDismissHandler);
+      app._mobileKeyboardDismissHandler = null;
+      input.remove();
+      return out;
+    });
+    expect(state).toEqual({ header: true, unselectedRow: true, inertChrome: true });
+  });
+
+  it('rings a collapsed header in the tab alert colour of the row it hides', async () => {
+    await render('vertical', true);
+    const ring = await page.evaluate(() => {
+      const app = (window as any).__app;
+      // "two" is the selection, so collapsing the group hides "one".
+      app.activeSessionId = 'two';
+      app.tabAlerts.set('one', 'action');
+      app.toggleTabGroupCollapsed('g', true);
+      const header = document.querySelector('[data-tab-group-header="g"]')!;
+      const before = getComputedStyle(header, '::before');
+      const out = {
+        hidden: !document.querySelector('[data-id="one"]'),
+        className: header.classList.contains('tab-alert-action'),
+        content: before.content,
+        borderColor: before.borderTopColor,
+      };
+      app.tabAlerts.clear();
+      app.toggleTabGroupCollapsed('g', false);
+      return out;
+    });
+    expect(ring.hidden).toBe(true);
+    expect(ring.className).toBe(true);
+    expect(ring.content).not.toBe('none');
+    // --red, whatever the skin resolves it to: a real colour, not transparent.
+    expect(ring.borderColor).not.toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
   });
 
   it('keeps tab semantics and no tree roles without groups', async () => {

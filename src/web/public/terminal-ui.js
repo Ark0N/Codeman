@@ -55,6 +55,9 @@
   // (_installMobileKeyboardDismiss). Two groups: anything that is about to take
   // focus itself, and the accessory bar, which is built to be used while the
   // keyboard is open.
+  // ⚠️ A roving-tabindex widget parks every item but one at tabindex=-1, so the
+  // `[tabindex]` arm cannot see its items: the grouped tab rail's rows and
+  // headers are listed by role instead, or tapping one would drop the keyboard.
   const MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR = [
     'input',
     'textarea',
@@ -64,6 +67,7 @@
     '[contenteditable=""]',
     '[contenteditable="true"]',
     '[tabindex]:not([tabindex="-1"])',
+    '[role="treeitem"]',
     '.keyboard-accessory-bar',
     '.path-picker-overlay',
   ].join(',');

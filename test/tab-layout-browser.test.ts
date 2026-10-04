@@ -104,6 +104,16 @@ describe('projection', () => {
     expect(collapsed.sections[0].count).toBe(3);
     expect(collapsed.sections[0].collapsed).toBe(true);
     expect(collapsed.hiddenTabGroupByRef).toEqual({ 'session:s2': 'g1', 'webview:w1': 'g1' });
+    expect(ids(collapsed.sections[0].hidden)).toEqual(['session:s2', 'webview:w1']);
+    // Every placed row knows its section, shown or hidden (null = Ungrouped).
+    expect(collapsed.sectionByRef).toEqual({
+      'session:s2': 'g1',
+      'webview:w1': 'g1',
+      'session:s1': 'g1',
+      'session:s3': 'g2',
+      'webview:w2': null,
+      'session:s4': null,
+    });
 
     // An active web tab owns the highlight even while a session stays selected.
     const web = h.project(layout(), { ...common, activeSessionId: 's1', activeWebviewId: 'w1' });
@@ -117,12 +127,64 @@ describe('structure key', () => {
     const opts = { liveSessionIds: ['s1', 's2', 's3'], openWebviewIds: [] };
     const base = h.structureKey(layout(), h.project(layout(), opts), []);
     expect(h.structureKey(layout(), h.project(layout(), opts), [])).toBe(base);
-    expect(h.structureKey(layout(5), h.project(layout(5), opts), [])).not.toBe(base);
     expect(h.structureKey(layout(), h.project(layout(), { ...opts, collapsedGroupIds: ['g1'] }), ['g1'])).not.toBe(
       base
     );
     expect(h.structureKey(layout(), h.project(layout(), { ...opts, liveSessionIds: ['s1', 's2'] }), [])).not.toBe(base);
+    const renamed = { ...layout(), groups: [{ ...layout().groups[0], name: 'Renamed' }, layout().groups[1]] };
+    expect(h.structureKey(renamed, h.project(renamed, opts), [])).not.toBe(base);
     expect(h.structureKey(layout(), null, [])).toBeNull();
+  });
+
+  it('ignores a version bump that moves nothing, so a lifecycle broadcast costs no rebuild', () => {
+    const h = loadHelper();
+    const opts = { liveSessionIds: ['s1', 's2', 's3'], openWebviewIds: [] };
+    expect(h.structureKey(layout(5), h.project(layout(5), opts), [])).toBe(
+      h.structureKey(layout(4), h.project(layout(4), opts), [])
+    );
+  });
+
+  it('changes when a collapse hides a different row, even with equal counts and shown rows', () => {
+    const h = loadHelper();
+    const two = (refs: Ref[][]) => ({
+      version: 1,
+      groups: [
+        { id: 'a', name: 'A', refs: refs[0] },
+        { id: 'b', name: 'B', refs: refs[1] },
+      ],
+      ungrouped: [],
+    });
+    const s = (id: string): Ref => ({ kind: 'session', id });
+    const opts = { liveSessionIds: ['x', 'y'], openWebviewIds: [], collapsedGroupIds: ['a', 'b'] };
+    const before = two([[s('x')], [s('y')]]);
+    const after = two([[s('y')], [s('x')]]);
+    // Lineage anchors a hidden row to its header, so who hides where is structure.
+    expect(h.structureKey(after, h.project(after, opts), ['a', 'b'])).not.toBe(
+      h.structureKey(before, h.project(before, opts), ['a', 'b'])
+    );
+  });
+});
+
+describe('collapsed header alerts', () => {
+  it('reports the most urgent alert among the session rows a collapse hides', () => {
+    const h = loadHelper();
+    const alerts = new Map([
+      ['s2', 'idle'],
+      ['s1', 'action'],
+      ['s3', 'idle'],
+      ['s4', 'action'],
+    ]);
+    const alertOf = (id: string) => alerts.get(id);
+    const common = { liveSessionIds: ['s1', 's2', 's3', 's4'], openWebviewIds: ['w1', 'w2'] };
+    // s1 is the kept selection, so it draws its own ring: only s2 (idle) is behind g1.
+    const kept = h.project(layout(), { ...common, collapsedGroupIds: ['g1', 'g2'], activeSessionId: 's1' });
+    expect(h.hiddenGroupAlerts(kept, alertOf)).toEqual({ g1: 'idle', g2: 'idle' });
+    // With s1 hidden too, the red one wins over the yellow one.
+    const hidden = h.project(layout(), { ...common, collapsedGroupIds: ['g1'], activeSessionId: 's4' });
+    expect(h.hiddenGroupAlerts(hidden, alertOf)).toEqual({ g1: 'action' });
+    // Expanded groups and the ungrouped section never report (their rows are on screen).
+    expect(h.hiddenGroupAlerts(h.project(layout(), common), alertOf)).toEqual({});
+    expect(h.hiddenGroupAlerts(null, alertOf)).toEqual({});
   });
 });
 
@@ -152,7 +214,7 @@ describe('per-device collapse storage', () => {
     expect(local.setItem).toHaveBeenLastCalledWith('codeman:tab-groups-collapsed', '["g1"]');
   });
 
-  it('reports failure (all-expanded) on unreadable, malformed or unwritable storage', () => {
+  it('reports failure (all-expanded) on unreadable or unwritable storage', () => {
     const h = loadHelper();
     const throwing = {
       getItem: () => {
@@ -163,8 +225,22 @@ describe('per-device collapse storage', () => {
       },
     };
     expect(h.loadCollapsedGroupIds(throwing, ['g1'])).toEqual({ ids: [], ok: false });
-    expect(h.loadCollapsedGroupIds(storage('{"g1":true}'), ['g1'])).toEqual({ ids: [], ok: false });
     expect(h.saveCollapsedGroupIds(throwing, ['g1'])).toEqual({ ids: [], ok: false });
+  });
+
+  it('reads a malformed stored value as nothing collapsed and repairs it, so collapse keeps working', () => {
+    const h = loadHelper();
+    for (const bad of ['{"g1":true}', 'not json', '"g1"', 'null']) {
+      const local = storage(bad);
+      expect(h.loadCollapsedGroupIds(local, ['g1']), bad).toEqual({ ids: [], ok: true });
+      expect(local.setItem, bad).toHaveBeenLastCalledWith('codeman:tab-groups-collapsed', '[]');
+      expect(h.saveCollapsedGroupIds(local, ['g1']), bad).toEqual({ ids: ['g1'], ok: true });
+      expect(h.loadCollapsedGroupIds(local, ['g1']), bad).toEqual({ ids: ['g1'], ok: true });
+    }
+    // Without a group list to validate against, nothing is written.
+    const untouched = storage('{"g1":true}');
+    expect(h.loadCollapsedGroupIds(untouched)).toEqual({ ids: [], ok: true });
+    expect(untouched.setItem).not.toHaveBeenCalled();
   });
 });
 
@@ -224,6 +300,27 @@ describe('grouped markup', () => {
   });
 });
 
+describe('empty groups', () => {
+  it('renders a group with no open rows as a tree leaf, expanded or collapsed', () => {
+    const h = loadHelper();
+    for (const collapsedGroupIds of [[], ['g2']]) {
+      const projection = h.project(layout(), { liveSessionIds: ['s1', 's2'], openWebviewIds: [], collapsedGroupIds });
+      expect(projection.sections[1]).toMatchObject({ id: 'g2', count: 0, refs: [] });
+      const html = h.renderProjection(projection, () => '', escape);
+      const doc = new JSDOM(`<main>${html}</main>`).window.document;
+      const header = doc.querySelector('[data-tab-group-header="g2"]')!;
+      expect(header.getAttribute('role')).toBe('treeitem');
+      expect(header.hasAttribute('aria-expanded')).toBe(false);
+      expect(header.hasAttribute('aria-owns')).toBe(false);
+      expect(header.closest('section')!.querySelector('.tab-layout-group-refs')!.getAttribute('role')).toBe(
+        'presentation'
+      );
+      // The populated group is unaffected.
+      expect(doc.querySelector('[data-tab-group-header="g1"]')!.getAttribute('aria-expanded')).toBe('true');
+    }
+  });
+});
+
 describe('load coordination', () => {
   it('applies only the newest response when loads overlap', async () => {
     const h = loadHelper();
@@ -269,6 +366,51 @@ describe('load coordination', () => {
     expect(applyLayout).not.toHaveBeenCalled();
     await retry!();
     expect(applyLayout).toHaveBeenCalledWith(layout(7));
+  });
+
+  it('backs off failed retries, stops after the cap, and starts over after a success', async () => {
+    const h = loadHelper();
+    const delays: number[] = [];
+    let pending: (() => Promise<boolean>) | null = null;
+    let failing = true;
+    const applyFallback = vi.fn();
+    const coordinator = h.createLoadCoordinator({
+      fetchLayout: async () => {
+        if (failing) throw new Error('offline');
+        return layout(1);
+      },
+      applyLayout: vi.fn(),
+      applyFallback,
+      retryDelayMs: 5000,
+      maxRetryDelayMs: 30000,
+      maxRetries: 4,
+      scheduleRetry: (fn: () => Promise<boolean>, delay: number) => {
+        delays.push(delay);
+        pending = fn;
+        return delays.length;
+      },
+      cancelRetry: vi.fn(),
+    });
+    await coordinator.load();
+    // Bounded drain: an uncapped retry must fail here, not spin forever (the
+    // loop only awaits microtasks, so vitest's own timeout could never fire).
+    for (let drained = 0; pending && drained < 10; drained++) {
+      const next: () => Promise<boolean> = pending;
+      pending = null;
+      await next();
+    }
+    // Four retries (5 s doubling, capped at 30 s), then nothing more is scheduled.
+    expect(delays).toEqual([5000, 10000, 20000, 30000]);
+    expect(applyFallback).toHaveBeenCalledTimes(5);
+
+    // An outside load (SSE init, tab:layoutChanged) still tries, and a success
+    // resets the count, so the next outage gets the full schedule again.
+    failing = false;
+    expect(await coordinator.load()).toBe(true);
+    failing = true;
+    await coordinator.load();
+    expect(delays.at(-1)).toBe(5000);
+    coordinator.dispose();
   });
 
   it('cancels a pending retry and ignores in-flight results after dispose', async () => {

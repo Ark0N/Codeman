@@ -677,6 +677,8 @@ html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group + .tab-layout-
 }
 
 html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header {
+  /* Positioned so a collapsed header can carry the tab alert ring (::before). */
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -728,7 +730,9 @@ html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-toggle:focus-v
   display: inline-block;
 }
 
-.tab-layout-group-toggle[aria-expanded='false'] .tab-layout-group-chevron::before {
+/* Keyed on the section, not aria-expanded: a group with no open rows is a tree
+   leaf with no aria-expanded at all, and its chevron must still show its state. */
+.tab-layout-group--collapsed > .tab-layout-group-toggle .tab-layout-group-chevron::before {
   content: '\25B8';
 }
 
@@ -1860,7 +1864,8 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-prefix {
    The overlay paints above the tab's inline content (positioned vs flow), which
    is fine at these alphas and is exactly what keeps it visible over the active
    tab's opaque-ish background. */
-.session-tabs .session-tab.tab-alert-action::before {
+.session-tabs .session-tab.tab-alert-action::before,
+.session-tabs .tab-layout-group-header.tab-alert-action::before {
   content: '';
   position: absolute;
   inset: -2px;
@@ -1885,7 +1890,8 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-prefix {
   box-shadow: 0 0 6px rgba(239, 68, 68, 0.7);
 }
 
-.session-tabs .session-tab.tab-alert-idle::before {
+.session-tabs .session-tab.tab-alert-idle::before,
+.session-tabs .tab-layout-group-header.tab-alert-idle::before {
   content: '';
   position: absolute;
   inset: -2px;

@@ -5581,6 +5581,15 @@ class CodemanApp {
           subagentBadgeEl.remove();
         }
       }
+      // Grouped tree: the loop above can re-sort rows (`style.order`), move the
+      // highlight, and change the alerts a collapsed header stands in for, none
+      // of which rebuilds the rail. Keep what assistive tech and the headers
+      // report in step. The flat list (role=tablist) never takes this branch.
+      if (groupProjection && container.getAttribute('role') === 'tree') {
+        this._syncTabTreeSelection(container);
+        this._applyTabTreePositions(container);
+        this._syncTabGroupHeaderAlerts(container, groupProjection);
+      }
     } else {
       // Full rebuild needed (sessions added/removed)
       this._fullRenderSessionTabs();
@@ -5859,7 +5868,10 @@ class CodemanApp {
     container.innerHTML = parts.join('');
     container.classList.toggle('session-tabs--grouped', !!groupProjection);
     this._applyTabListRole(container, !!groupProjection);
-    if (groupProjection) this._applyTabTreeSemantics(container, { identity: focusIdentity, refocus: focusWasInside });
+    if (groupProjection) {
+      this._applyTabTreeSemantics(container, { identity: focusIdentity, refocus: focusWasInside });
+      this._syncTabGroupHeaderAlerts(container, groupProjection);
+    }
 
     // Put the strip back where the user left it, then reveal the active tab
     // only when it CHANGED (or on the first paint). Restoring unconditionally
@@ -6065,21 +6077,7 @@ class CodemanApp {
       }
     }
     for (const header of container.querySelectorAll('[data-tab-group-header]')) header.setAttribute('aria-level', '1');
-    // Position within each level: the level-1 run (headers, ungrouped rows, a
-    // collapsed group's kept row) and each group's own rows.
-    const items = this._tabTreeItems(container);
-    const sets = new Map();
-    for (const item of items) {
-      const owner = item.getAttribute('aria-level') === '2' ? item.closest('[role="group"]') : container;
-      if (!sets.has(owner)) sets.set(owner, []);
-      sets.get(owner).push(item);
-    }
-    for (const members of sets.values()) {
-      members.forEach((item, index) => {
-        item.setAttribute('aria-setsize', String(members.length));
-        item.setAttribute('aria-posinset', String(index + 1));
-      });
-    }
+    const items = this._applyTabTreePositions(container);
 
     const byIdentity = (id) => (id ? items.find((item) => this._tabTreeIdentity(item) === id) : null);
     // A focused row that a collapse just hid hands focus to its group header.
@@ -6092,6 +6090,47 @@ class CodemanApp {
     if (!target) return;
     this._setTabTreeStop(container, target);
     if (refocus && document.activeElement !== target) target.focus();
+  }
+
+  /**
+   * aria-posinset / aria-setsize within each level, in PAINTED order: the
+   * level-1 run (headers, ungrouped rows, a collapsed group's kept row) and each
+   * group's own rows. Runs after every full render AND after an incremental pass,
+   * because the activity-sorted rail re-sorts rows in place. Returns the items.
+   */
+  _applyTabTreePositions(container) {
+    const items = this._tabTreeItems(container);
+    const sets = new Map();
+    for (const item of items) {
+      const owner = item.getAttribute('aria-level') === '2' ? item.closest('[role="group"]') : container;
+      if (!sets.has(owner)) sets.set(owner, []);
+      sets.get(owner).push(item);
+    }
+    for (const members of sets.values()) {
+      members.forEach((item, index) => {
+        const setsize = String(members.length);
+        const posinset = String(index + 1);
+        if (item.getAttribute('aria-setsize') !== setsize) item.setAttribute('aria-setsize', setsize);
+        if (item.getAttribute('aria-posinset') !== posinset) item.setAttribute('aria-posinset', posinset);
+      });
+    }
+    return items;
+  }
+
+  /**
+   * A collapsed group hides its rows, including ones that need the user. Its
+   * header takes the most urgent hidden alert in the tab alert language
+   * (`tab-alert-action` red, `tab-alert-idle` yellow), so a permission prompt
+   * behind a collapse is never invisible. Patched in place on both render paths:
+   * alerts change without a rebuild.
+   */
+  _syncTabGroupHeaderAlerts(container, projection) {
+    const alerts = window.CodemanTabLayout?.hiddenGroupAlerts(projection, (id) => this.tabAlerts?.get(id)) || {};
+    for (const header of container.querySelectorAll('[data-tab-group-header]')) {
+      const alert = alerts[header.dataset.tabGroupHeader];
+      header.classList.toggle('tab-alert-action', alert === 'action');
+      header.classList.toggle('tab-alert-idle', alert === 'idle');
+    }
   }
 
   /** Keep aria-selected on the grouped tree in step with the .active class. */
@@ -6112,10 +6151,17 @@ class CodemanApp {
     if (e.target?.closest?.('input, textarea, select, [contenteditable="true"]')) return;
     const items = this._tabTreeItems(container);
     const current = e.target?.closest?.('[role="treeitem"]');
+    // A key pressed on a control INSIDE a row (its close or overflow button,
+    // focused by a click or handed focus back by the action menu) belongs to
+    // that control: Enter there must reopen the menu, not re-select the row.
+    // Same contract as the flat list, which acts only on a focused row.
+    if (!current || current !== e.target) return;
     const index = items.indexOf(current);
     if (index < 0) return;
     const groupId = current.dataset.tabGroupHeader || null;
     const expanded = current.getAttribute('aria-expanded') === 'true';
+    // A group with no open rows is a leaf (no aria-expanded): nothing to open.
+    const expandable = current.hasAttribute('aria-expanded');
     const focusAt = (next) => {
       if (!next) return;
       this._setTabTreeStop(container, next);
@@ -6141,7 +6187,7 @@ class CodemanApp {
         focusAt(items[items.length - 1]);
         break;
       case 'ArrowRight':
-        if (!groupId) return;
+        if (!groupId || !expandable) return;
         if (!expanded) toggle(false);
         else {
           const child = items.find((item) => item.closest('[role="group"]')?.id === current.getAttribute('aria-owns'));
@@ -6151,7 +6197,7 @@ class CodemanApp {
         break;
       case 'ArrowLeft':
         if (groupId) {
-          if (!expanded) return;
+          if (!expandable || !expanded) return;
           toggle(true);
         } else {
           const group = current.closest('[role="group"]');
@@ -6287,7 +6333,13 @@ class CodemanApp {
       },
       applyLayout: (layout) => this._applyTabLayout(layout),
       applyFallback: () => this._applyTabLayout(null),
-      scheduleRetry: (retry) => setTimeout(retry, 5000),
+      // 5 s, 10 s, 20 s, 40 s, then stop until the next SSE init or
+      // tab:layoutChanged asks again: an unreachable server must not cost a
+      // fetch every 5 s for as long as the page stays open.
+      retryDelayMs: 5000,
+      maxRetryDelayMs: 60000,
+      maxRetries: 4,
+      scheduleRetry: (retry, delayMs) => setTimeout(retry, delayMs),
       cancelRetry: (timer) => clearTimeout(timer),
     });
     return this._tabLayoutCoordinator;
@@ -6327,7 +6379,11 @@ class CodemanApp {
       : { ids: [], ok: !next };
     if (!collapsed.ok) this._tabCollapseStorageFailed = true;
     this.collapsedTabGroupIds = new Set(collapsed.ids);
-    this._fullRenderSessionTabs();
+    // The server announces a layout change on every session create/close, web
+    // tab create/delete and order PUT, and most of those move nothing on this
+    // rail (always so on the flat rail, which is every owner without groups).
+    // Rebuild only when what the rail would draw actually changed.
+    if (this._isTabGroupStructureStale()) this._fullRenderSessionTabs();
   }
 
   /** localStorage, or null once it has failed (collapse then stays all-expanded). */
@@ -6495,10 +6551,26 @@ class CodemanApp {
     });
   }
 
+  /**
+   * Grouped rail: Ctrl+Shift+{ / } may only swap the active session with a
+   * neighbour in its OWN section. Across a group boundary the server re-ranks
+   * each group on its own (`putLegacyOrder`), so nothing moves there, no
+   * session:orderChanged comes back, and this client would keep a swapped
+   * sessionOrder (and Alt+N targets) that no other device shares. Same reason
+   * drag is off in the grouped rail. Any other layout: always allowed.
+   */
+  _canSwapActiveTabWith(neighbourId) {
+    const projection = this._projectTabGroups();
+    if (!projection) return true;
+    const sectionOf = (id) => projection.sectionByRef[`session:${id}`];
+    return sectionOf(this.activeSessionId) === sectionOf(neighbourId);
+  }
+
   moveActiveTabLeft() {
     if (!this.activeSessionId) return;
     const idx = this.sessionOrder.indexOf(this.activeSessionId);
     if (idx <= 0) return;
+    if (!this._canSwapActiveTabWith(this.sessionOrder[idx - 1])) return;
     [this.sessionOrder[idx - 1], this.sessionOrder[idx]] = [this.sessionOrder[idx], this.sessionOrder[idx - 1]];
     this.saveSessionOrder();
     this._fullRenderSessionTabs();
@@ -6508,6 +6580,7 @@ class CodemanApp {
     if (!this.activeSessionId) return;
     const idx = this.sessionOrder.indexOf(this.activeSessionId);
     if (idx === -1 || idx >= this.sessionOrder.length - 1) return;
+    if (!this._canSwapActiveTabWith(this.sessionOrder[idx + 1])) return;
     [this.sessionOrder[idx], this.sessionOrder[idx + 1]] = [this.sessionOrder[idx + 1], this.sessionOrder[idx]];
     this.saveSessionOrder();
     this._fullRenderSessionTabs();
