@@ -169,6 +169,17 @@ Object.assign(CodemanApp.prototype, {
     return valid.includes(effort) ? effort : undefined;
   },
 
+  /**
+   * Resolve the advisor model for new Claude sessions from global settings.
+   * Returns 'fable' | 'opus' | 'sonnet', or undefined (= leave it to the CLI's own
+   * /advisor choice). Sent as the `advisorModel` payload field; the backend merges it
+   * into the launch's `claude --settings` JSON, so /advisor still switches it in-session.
+   */
+  getAdvisorSetting(globalSettings) {
+    const advisor = globalSettings?.claudeAdvisorModel;
+    return ['fable', 'opus', 'sonnet'].includes(advisor) ? advisor : undefined;
+  },
+
   // ═══════════════════════════════════════════════════════════════
   // Quick Start
   // ═══════════════════════════════════════════════════════════════
@@ -1965,6 +1976,7 @@ Object.assign(CodemanApp.prototype, {
       const envOverrides = this.buildEnvOverrides(caseSettings, globalSettings);
       const hasEnvOverrides = Object.keys(envOverrides).length > 0;
       const effort = this.getEffortSetting(globalSettings);
+      const advisorModel = this.getAdvisorSetting(globalSettings);
       // Explicit Claude Model choice (App Settings) wins over the legacy 1M Opus
       // toggles; both flow as `modelOverride` → the case's .claude/settings.local.json
       const useOpus1m = caseSettings.opusContext1m || globalSettings.opusContext1mEnabled;
@@ -1980,6 +1992,7 @@ Object.assign(CodemanApp.prototype, {
             workingDir, name,
             ...(hasEnvOverrides ? { envOverrides } : {}),
             ...(effort ? { effort } : {}),
+            ...(advisorModel ? { advisorModel } : {}),
             ...(modelOverride !== undefined ? { modelOverride } : {}),
           })
         }).then(r => r.json())

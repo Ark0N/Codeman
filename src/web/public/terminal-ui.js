@@ -3158,6 +3158,7 @@ Object.assign(CodemanApp.prototype, {
       const globalSettings = this.loadAppSettingsFromStorage();
       const envOverrides = this.buildEnvOverrides(this.getCaseSettings(caseName), globalSettings);
       const effort = this.getEffortSetting(globalSettings);
+      const advisorModel = this.getAdvisorSetting(globalSettings);
       // `resumeSessionId` is a Claude conversation UUID (server reads it from
       // ~/.claude/projects); an external-CLI row has no such thing, so sending
       // it there gets silently ignored while the OMITTED `mode` field defaults
@@ -3207,6 +3208,8 @@ Object.assign(CodemanApp.prototype, {
           ...modeConfig,
           ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
           ...(effort ? { effort } : {}),
+          // The advisor is a claude-only feature; other CLIs would carry it inertly.
+          ...(advisorModel && effectiveMode === 'claude' ? { advisorModel } : {}),
         }),
       });
       const createData = await createRes.json();

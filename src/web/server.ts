@@ -3521,6 +3521,7 @@ export class WebServer extends EventEmitter {
               envOverrides: savedEnvOverrides,
               effort: savedState?.effort,
               model: savedState?.model,
+              advisorModel: savedState?.advisorModel,
               attachmentHistory: savedAttachmentHistory,
               // The pane's last Enter. Without it the response viewer would show
               // the launch conversation until the user types again, even though

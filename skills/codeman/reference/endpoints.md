@@ -345,6 +345,13 @@ ESC=$(printf '\033')
 `.data.{sessionId, caseName, casePath}`. Creates the case directory (a real directory
 on the user's disk) if missing, do not retry it in a loop, and remember the name.
 
+A claude worker also takes `"advisorModel":"opus"` (`fable`, `opus`, `sonnet` or a full
+model id): Claude Code's advisor tool, a stronger model the worker consults before
+committing to an approach, on a recurring error and before declaring the task done. It is
+a soft default the worker can change with `/advisor`. Remote and docker cases refuse it
+(400), as they refuse `effort`. `spawn_worker` and `spawn_workers` send it for you when
+`CODEMAN_WORKER_ADVISOR` is set.
+
 ⚠️ A `mode` whose CLI is **not installed on the server** fails the spawn with
 `OPERATION_FAILED`; it never falls back to claude. Probe first whenever you did not pick
 the mode yourself: `GET /api/v1/claude/status`, `GET /api/v1/opencode/status`,
@@ -384,7 +391,7 @@ every claude create path installs them, so a linked case and a raw path both get
 
 **The two-step alternative, `POST /api/v1/sessions`.** Use it when you need a session in
 a directory that is not a case (body takes `workingDir`, `mode`, `name`, `effort`,
-`envOverrides`, and for claude a per-session `model` passed as `--model`). Three
+`advisorModel`, `envOverrides`, and for claude a per-session `model` passed as `--model`). Three
 differences that break copied code:
 
 - The id is at **`.data.session.id`**, not quick-start's `.data.sessionId`

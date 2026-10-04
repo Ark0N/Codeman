@@ -196,6 +196,7 @@ export function registerRebootRestoreRoutes(app: FastifyInstance, ctx: RebootRes
             ),
             effort: saved.effort,
             model: saved.model,
+            advisorModel: saved.advisorModel,
             attachmentHistory:
               (saved as { __attachmentHistory?: SessionAttachmentHistoryItem[] }).__attachmentHistory ??
               saved.attachmentHistory,

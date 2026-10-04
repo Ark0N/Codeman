@@ -21,7 +21,7 @@ by sourcing the preamble file the §0 bootstrap wrote, and checking its version 
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null
-[ "${CODEMAN_PREAMBLE:-}" = 1.30.1 ] || { echo "preamble missing or stale; re-run the §0 bootstrap"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.33.4 ] || { echo "preamble missing or stale; re-run the §0 bootstrap"; exit 1; }
 ```
 
 Do **not** re-paste the preamble body into each call. Sourcing it is what retires the

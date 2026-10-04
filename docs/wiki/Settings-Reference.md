@@ -87,13 +87,22 @@ every session or only the active tab.
 
 ### Models
 
-Claude model cards, the 1M context window switch, and the thinking effort segment. The cards
-and the switch compose into one model choice, so there is no separate "which one wins"
-question.
+Claude model cards, the 1M context window switch, the thinking effort segment and the
+advisor segment. The cards and the switch compose into one model choice, so there is no
+separate "which one wins" question.
 
-Model and effort are both **soft defaults**: the model is written into the case's
-`.claude/settings.local.json` and effort is passed at start, so `/model` and `/effort`
-inside a session override them at any time.
+Model, effort and advisor are all **soft defaults**: the model is written into the case's
+`.claude/settings.local.json` and effort and advisor are passed at start, so `/model`,
+`/effort` and `/advisor` inside a session override them at any time.
+
+**Advisor** gives new Claude sessions Claude Code's
+[advisor tool](https://code.claude.com/docs/en/advisor): a second, stronger model that Claude
+consults before committing to an approach, when an error keeps coming back, and before it
+calls a task done. A common pairing is a Sonnet main model with an Opus or Fable advisor,
+which costs less than running the stronger model all the time. **Default** leaves it to
+whatever you picked with `/advisor` yourself. The advisor needs the Anthropic API (not
+Bedrock or Vertex), and an advisor that ranks below the session's model is simply not
+attached.
 
 **Custom model endpoints** (off by default) adds a saved-endpoint list plus a matching
 section to the Run dropdown, for pointing a harness at your own OpenAI-compatible server
