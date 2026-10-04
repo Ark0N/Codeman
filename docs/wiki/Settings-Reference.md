@@ -50,6 +50,7 @@ supervised by systemd or launchd; npm installs report as non-updatable. See
 | Normal / Bold font weight     | xterm defaults       | Per device, each slot from 100 to 900. The bundled JetBrains Mono renders every step, so a lighter normal weight makes Claude's bold headings stand out. Applies live to the terminal, both echo overlays and open team panes. |
 | WebGL Renderer                | On                   | With a GPU-stall watchdog that falls back to DOM rendering.            |
 | Gesture Control               | Off                  | Camera hand tracking. Also needs `CODEMAN_GESTURE=1` on the server.    |
+| Key tester                    | n/a                  | A diagnostic that stores nothing. Click the box and press keys to see what this browser reports (key, code, modifiers) for keydown, keypress and keyup, for when a chord such as Shift+Enter behaves differently on one device. Keys pressed there reach no session and trigger no shortcut. |
 
 ### Header & Panels
 

@@ -89,8 +89,29 @@ describe('Key tester in a real browser', () => {
   });
 
   it('keeps only the last 14 lines and never types into the field', async () => {
-    for (let i = 0; i < 8; i++) await page.keyboard.press('a');
-    expect((await log()).split('\n').length).toBeLessThanOrEqual(14);
+    // The test above blurred the field, so focus it again: without this the presses land on
+    // <body>, the log keeps whatever the earlier tests left, and the cap is never exercised.
+    await page.focus('#keyTesterInput');
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('keyTesterInput');
+    await page.evaluate(() => (document.getElementById('keyTesterLog')!.textContent = ''));
+    const lines = async () => (await log()).split('\n');
+
+    // A printable key fires keydown, keypress and keyup, so 2 presses are 6 lines: under the cap
+    // the log accumulates rather than showing only the latest event.
+    for (let i = 0; i < 2; i++) await page.keyboard.press('a');
+    expect(await lines()).toHaveLength(6);
+
+    // A different key, so eviction is visible: 4 x 3 = 12 more lines makes 18, capped to 14. The
+    // oldest 4 go (all of the first 'a' press and the second one's keydown), the newest stay in order.
+    for (let i = 0; i < 4; i++) await page.keyboard.press('b');
+    const capped = await lines();
+    expect(capped).toHaveLength(14);
+    expect(capped.filter((l) => l.includes('key="a"'))).toHaveLength(2);
+    expect(capped.filter((l) => l.includes('key="b"'))).toHaveLength(12);
+    expect(capped[0]).toMatch(/^keypress\s+key="a" code=KeyA mods=none charCode=97$/);
+    expect(capped[13]).toMatch(/^keyup\s+key="b" code=KeyB mods=none$/);
+
+    // Readonly: none of those presses typed anything into the field itself.
     expect(await page.inputValue('#keyTesterInput')).toBe('');
   });
 });
