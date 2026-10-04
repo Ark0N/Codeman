@@ -447,8 +447,11 @@ Object.assign(CodemanApp.prototype, {
       // xterm.js sends plain \r for all Enter variants, so Claude Code (Ink) can't
       // distinguish them. We use tmux send-keys -H to send a line feed byte (0x0a)
       // which the inner application recognizes as "insert newline" vs carriage return.
-      if (ev.key === 'Enter' && (ev.shiftKey || ev.ctrlKey) && ev.type === 'keydown') {
-        if (this.activeSessionId) {
+      // This handler also runs for keypress/keyup: xterm drops a keypress carrying Ctrl/Alt
+      // but NOT one carrying only Shift, so unless every event type is swallowed here,
+      // Shift+Enter's keypress sends a bare \r (submit) after the newline. Only keydown sends.
+      if (ev.key === 'Enter' && (ev.shiftKey || ev.ctrlKey)) {
+        if (ev.type === 'keydown' && this.activeSessionId) {
           if (this._localEchoEnabled) {
             const text = this._localEchoOverlay?.pendingText || '';
             this._localEchoOverlay?.clear();
