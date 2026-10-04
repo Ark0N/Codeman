@@ -552,6 +552,8 @@
       <div class="file-browser-header">
         <span class="file-browser-title">Files</span>
         <div class="file-browser-actions">
+          <input type="file" id="fileBrowserUploadInput" hidden onchange="app.uploadFileFromBrowser(this.files)">
+          <button class="btn-icon-sm" onclick="app.chooseFileForBrowserUpload()" title="Upload to current folder/temp" aria-label="Upload file">&#x2B06;</button>
           <button class="btn-icon-sm btn-file-browser-hidden" onclick="app.toggleFileBrowserHidden()" title="Show hidden files and folders" aria-label="Show hidden files and folders" aria-pressed="false" id="fileBrowserHiddenBtn">.*</button>
           <button class="btn-icon-sm" onclick="app.refreshFileBrowser()" title="Refresh">&#x21BB;</button>
           <button class="btn-icon-sm" onclick="app.toggleFileBrowserExpand()" title="Expand/Collapse All" id="fileBrowserExpandBtn">&#x229E;</button>

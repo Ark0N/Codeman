@@ -59,7 +59,7 @@ import {
   remoteReadFile,
   type RemoteProbe,
 } from '../../remote-files.js';
-import { downloadTooLargeMessage, exceedsDownloadLimit } from '../../config/buffer-limits.js';
+import { downloadTooLargeMessage, exceedsDownloadLimit, MAX_PASTE_IMAGE_BYTES } from '../../config/buffer-limits.js';
 import { parseByteRange } from '../http-range.js';
 import { isSensitivePath } from '../sensitive-path.js';
 import { SseEvent } from '../sse-events.js';
@@ -1625,6 +1625,139 @@ export function registerFileRoutes(app: FastifyInstance, ctx: SessionPort & Even
         truncated,
       },
     };
+  });
+
+  // Upload one file from the browser/Android system picker into the active
+  // session's temp folder. Remote SSH sessions are intentionally rejected: a
+  // local multipart upload cannot safely pretend to be an SFTP transfer.
+  app.post('/api/sessions/:id/files/upload', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const session = findSessionOrFail(ctx, id, req);
+    if (session.remote) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Uploading is not supported for remote (SSH) sessions');
+    }
+    if (!req.isMultipart()) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Expected multipart/form-data');
+    }
+
+    let part: import('@fastify/multipart').MultipartFile | undefined;
+    try {
+      part = await req.file();
+    } catch (err: unknown) {
+      reply.code(413);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, getErrorMessage(err) || 'Invalid multipart payload');
+    }
+    if (!part || part.fieldname !== 'file') {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Expected one file field named "file"');
+    }
+
+    let bytes: Buffer;
+    try {
+      bytes = await part.toBuffer();
+    } catch (err: unknown) {
+      reply.code(413);
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        getErrorMessage(err) || `File too large (max ${Math.round(MAX_PASTE_IMAGE_BYTES / 1024 / 1024)}MB)`
+      );
+    }
+    if (bytes.length === 0) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Empty file');
+    }
+
+    const tempDir = join(session.workingDir, 'temp');
+    try {
+      const dirStat = await fs.lstat(tempDir).catch((err: unknown) => {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw err;
+      });
+      if (dirStat?.isSymbolicLink() || (dirStat && !dirStat.isDirectory())) {
+        reply.code(403);
+        return createErrorResponse(ApiErrorCode.FORBIDDEN, 'The session temp path is not a regular directory');
+      }
+      if (!dirStat) await fs.mkdir(tempDir);
+    } catch (err: unknown) {
+      reply.code(500);
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        `Failed to create temp directory: ${getErrorMessage(err)}`
+      );
+    }
+
+    const originalName = pathBasename(part.filename || 'upload');
+    const safeName =
+      originalName
+        .replace(/[\/\\]/g, '_')
+        .replace(/[^\x20-\x7e]/g, '_')
+        .trim() || 'upload';
+    const filename = `${Date.now()}-${randomBytes(4).toString('hex')}-${safeName}`;
+    const relativePath = `temp/${filename}`;
+    const target = join(tempDir, filename);
+    try {
+      const handle = await fs.open(
+        target,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
+        0o600
+      );
+      try {
+        await handle.writeFile(bytes);
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    } catch (err: unknown) {
+      await fs.unlink(target).catch(() => {});
+      reply.code(500);
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `Failed to save upload: ${getErrorMessage(err)}`);
+    }
+
+    return { success: true, data: { path: relativePath, name: safeName, size: bytes.length } };
+  });
+
+  // Delete a regular file from the current session workspace. The same
+  // confinement and sensitive-path checks used by previews apply here.
+  app.delete('/api/sessions/:id/files', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { path: filePath } = req.query as { path?: string };
+    const session = findSessionOrFail(ctx, id, req);
+    if (session.remote) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Deleting is not supported for remote (SSH) sessions');
+    }
+    if (!filePath) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Missing path parameter');
+    }
+    const validated = validateSessionFilePath(session.workingDir, filePath);
+    if (!validated) {
+      reply.code(404);
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found');
+    }
+    const { resolvedPath, relativePath } = validated;
+    const guard = await loadAttachmentGuardConfig();
+    if (
+      isSensitivePath(resolvedPath) ||
+      isBlockedAttachmentPath(resolvedPath, guard.blockedTrees) ||
+      isDeniedEditRelativePath(relativePath)
+    ) {
+      reply.code(403);
+      return createErrorResponse(ApiErrorCode.FORBIDDEN, 'Deleting this file is blocked');
+    }
+    const stat = await fs.lstat(resolvedPath).catch(() => undefined);
+    if (!stat) {
+      reply.code(404);
+      return createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found');
+    }
+    if (!stat.isFile()) {
+      reply.code(400);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Only regular files can be deleted');
+    }
+    await fs.unlink(resolvedPath);
+    return { success: true, data: { path: filePath } };
   });
 
   // Get file content for preview (File Browser)
