@@ -179,8 +179,15 @@
    * `escapeHtml` is the caller's escaper. Group names are user content, so they
    * are escaped and marked `data-i18n-skip`.
    *
-   * The group header is a real <button> carrying `aria-expanded`; its accessible
-   * name is the group name plus count, so no per-state label string is needed.
+   * The caller makes the list itself the `tree` and marks rows up as treeitems
+   * (app.js `_applyTabTreeSemantics`); this markup supplies the structure:
+   *  - a named group's header is a level-1 `treeitem` carrying `aria-expanded`.
+   *    Its rows are a sibling `group`, so the header OWNS it via `aria-owns`
+   *    (the rows sit below the header visually, not inside it).
+   *  - a COLLAPSED group owns nothing: the one row it still shows (the
+   *    selection) is a level-1 sibling, never the child of a closed node.
+   *  - Ungrouped rows are level-1 items. Their "Ungrouped" heading is a visual
+   *    divider only, hidden from assistive tech, and its rows are not a group.
    */
   function renderProjection(projection, renderRef, escapeHtml) {
     const sections = projection && Array.isArray(projection.sections) ? projection.sections : [];
@@ -190,19 +197,21 @@
         if (section.id === null) {
           return (
             '<section class="tab-layout-group tab-layout-ungrouped" role="presentation" data-tab-group-id="">' +
-            `<div class="tab-layout-group-header tab-layout-ungrouped-header"><span class="tab-layout-group-name">Ungrouped</span><span class="tab-layout-group-count">${section.count}</span></div>` +
+            `<div class="tab-layout-group-header tab-layout-ungrouped-header" aria-hidden="true"><span class="tab-layout-group-name">Ungrouped</span><span class="tab-layout-group-count">${section.count}</span></div>` +
             `<div class="tab-layout-group-refs" role="presentation">${rows}</div></section>`
           );
         }
         const id = escapeHtml(section.id);
         const refsId = `tab-layout-group-refs-${index}`;
+        const nameId = `tab-layout-group-name-${index}`;
+        const expanded = !section.collapsed;
         return (
           `<section class="tab-layout-group${section.collapsed ? ' tab-layout-group--collapsed' : ''}" role="presentation" data-tab-group-id="${id}">` +
-          `<button type="button" class="tab-layout-group-header tab-layout-group-toggle" data-tab-group-header="${id}" aria-expanded="${section.collapsed ? 'false' : 'true'}" aria-controls="${refsId}" onclick="app.toggleTabGroupCollapsed(this.dataset.tabGroupHeader)">` +
+          `<div class="tab-layout-group-header tab-layout-group-toggle" role="treeitem" tabindex="-1" data-tab-group-header="${id}" aria-expanded="${expanded ? 'true' : 'false'}"${expanded ? ` aria-owns="${refsId}"` : ''} onclick="app.toggleTabGroupCollapsed(this.dataset.tabGroupHeader)">` +
           '<span class="tab-layout-group-chevron" aria-hidden="true"></span>' +
-          `<span class="tab-layout-group-name" data-i18n-skip>${escapeHtml(section.name)}</span>` +
-          `<span class="tab-layout-group-count">${section.count}</span></button>` +
-          `<div class="tab-layout-group-refs" id="${refsId}" role="presentation">${rows}</div></section>`
+          `<span class="tab-layout-group-name" id="${nameId}" data-i18n-skip>${escapeHtml(section.name)}</span>` +
+          `<span class="tab-layout-group-count">${section.count}</span></div>` +
+          `<div class="tab-layout-group-refs" id="${refsId}" ${expanded ? `role="group" aria-labelledby="${nameId}"` : 'role="presentation"'}>${rows}</div></section>`
         );
       })
       .join('');

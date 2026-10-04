@@ -671,6 +671,7 @@ html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header {
 
 html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-toggle {
   cursor: pointer;
+  user-select: none;
 }
 
 html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-toggle:hover {
@@ -1779,7 +1780,9 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-prefix {
   line-height: 1;
   color: var(--text-muted);
   overflow: hidden;
-  cursor: default;
+  /* A control, like its gear/detach siblings: the pointer must not read as
+     "nothing here" over the one button that closes the session. */
+  cursor: pointer;
   border-radius: 3px;
   /* Performance: use transform for GPU acceleration */
   transition: opacity 0.05s ease-out, width 0.05s ease-out, padding 0.05s ease-out;

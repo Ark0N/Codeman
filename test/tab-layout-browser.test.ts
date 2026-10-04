@@ -169,7 +169,7 @@ describe('per-device collapse storage', () => {
 });
 
 describe('grouped markup', () => {
-  it('renders escaped group sections with real toggle buttons around caller-rendered rows', () => {
+  it('renders escaped group sections as a tree skeleton around caller-rendered rows', () => {
     const h = loadHelper();
     const projection = h.project(layout(), {
       liveSessionIds: ['s1', 's2', 's3', 's4'],
@@ -189,15 +189,35 @@ describe('grouped markup', () => {
     ]);
     expect(doc.querySelectorAll('.tab-layout-group-name *')).toHaveLength(0);
     expect(doc.querySelector('.tab-layout-group-name')?.hasAttribute('data-i18n-skip')).toBe(true);
+    // Sections are layout only; the caller's container is the tree.
+    expect([...doc.querySelectorAll('section')].every((el) => el.getAttribute('role') === 'presentation')).toBe(true);
 
+    // A named header is a level-1 treeitem that toggles and OWNS its rows' group.
     const g1 = doc.querySelector<HTMLElement>('[data-tab-group-header="g1"]')!;
-    const g2 = doc.querySelector<HTMLElement>('[data-tab-group-header="g2"]')!;
-    expect(g1.tagName).toBe('BUTTON');
+    expect(g1.getAttribute('role')).toBe('treeitem');
+    expect(g1.getAttribute('tabindex')).toBe('-1');
     expect(g1.getAttribute('aria-expanded')).toBe('true');
+    expect(g1.getAttribute('onclick')).toBe('app.toggleTabGroupCollapsed(this.dataset.tabGroupHeader)');
+    const owned = doc.getElementById(g1.getAttribute('aria-owns')!)!;
+    expect(owned.getAttribute('role')).toBe('group');
+    expect(doc.getElementById(owned.getAttribute('aria-labelledby')!)?.textContent).toBe('<Core & Ops>');
+    expect(owned.querySelectorAll('.row')).toHaveLength(3);
+    // No interactive element nested inside a treeitem.
+    expect(g1.querySelectorAll('button, [tabindex]')).toHaveLength(0);
+
+    // A collapsed header owns nothing, so its kept row cannot read as the child of a closed node.
+    const g2 = doc.querySelector<HTMLElement>('[data-tab-group-header="g2"]')!;
     expect(g2.getAttribute('aria-expanded')).toBe('false');
-    expect(doc.getElementById(g1.getAttribute('aria-controls')!)?.querySelectorAll('.row')).toHaveLength(3);
-    // The ungrouped header is a label, not a control: there is nothing to collapse.
-    expect(doc.querySelector('.tab-layout-ungrouped-header')?.tagName).toBe('DIV');
+    expect(g2.hasAttribute('aria-owns')).toBe(false);
+    expect(g2.closest('section')!.querySelector('.tab-layout-group-refs')!.getAttribute('role')).toBe('presentation');
+
+    // The ungrouped heading is a visual divider: nothing to collapse, nothing to announce.
+    const ungrouped = doc.querySelector('.tab-layout-ungrouped-header')!;
+    expect(ungrouped.getAttribute('aria-hidden')).toBe('true');
+    expect(ungrouped.hasAttribute('role')).toBe(false);
+    expect(ungrouped.closest('section')!.querySelector('.tab-layout-group-refs')!.getAttribute('role')).toBe(
+      'presentation'
+    );
     expect([...doc.querySelectorAll<HTMLElement>('.row')].map((el) => el.dataset.ref)).toEqual(
       ids(projection.visibleRefs)
     );
