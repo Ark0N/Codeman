@@ -20,7 +20,7 @@
 import type { CliEntry } from './config/cli-registry/types.js';
 import { renderLaunch, type EngineValues, type ParamValues } from './config/cli-registry/argv.js';
 import { matchesPattern } from './config/cli-registry/patterns.js';
-import { buildEffortCliArgs, sanitizeCliSessionName } from './session-cli-builder.js';
+import { buildAdvisorSettings, buildEffortCliArgs, sanitizeCliSessionName } from './session-cli-builder.js';
 import { compareVersions } from './utils/dependency-checker.js';
 import { getClaudeCliVersion } from './utils/claude-cli-resolver.js';
 import { launcherDefaultTarget } from './utils/cli-launcher.js';
@@ -54,6 +54,8 @@ export interface SpawnBridgeOptions {
   ompConfig?: OmpConfig;
   resumeSessionId?: string;
   effort?: EffortLevel;
+  /** Claude advisor model; rides the same `--settings` JSON as ultracode (see buildAdvisorSettings). */
+  advisorModel?: string;
   sessionName?: string;
   claudeCliVersion?: string | null;
   /**
@@ -198,14 +200,20 @@ export function buildSpawnCommandFromRegistry(entry: CliEntry, options: SpawnBri
     engineValues.effortLevel = effortValue;
   }
 
-  // Fold the ephemeral plan-usage statusLine exporter (see resolveStatusLineCliCommand in
-  // hooks-config.ts) into the SAME `--settings` JSON object as ultracode/ effort, since Claude
-  // Code accepts only one `--settings` flag per invocation — rendering them as two independent
-  // params would let the second one silently win. Claude-only in practice (statusLineCommand
-  // is resolved claude-mode-only upstream), but this merge is mode-agnostic.
-  if ((effortFlag === '--settings' && effortValue) || options.statusLineCommand) {
-    const settingsObj: Record<string, unknown> =
-      effortFlag === '--settings' && effortValue ? JSON.parse(effortValue) : {};
+  // Fold the advisor model and the ephemeral plan-usage statusLine exporter (see
+  // resolveStatusLineCliCommand in hooks-config.ts) into the SAME `--settings` JSON object as
+  // ultracode/ effort, since Claude Code accepts only one `--settings` flag per invocation:
+  // rendering them as independent params would let the last one silently win. Claude-only in
+  // practice: only claude's launch template renders this engine value, so another CLI's
+  // session carrying an advisorModel launches exactly as before.
+  // Key order (ultracode, advisorModel, statusLine) keeps a launch without an advisor
+  // byte-identical to one from before the advisor existed.
+  const advisorSettings = buildAdvisorSettings(options.advisorModel);
+  if ((effortFlag === '--settings' && effortValue) || advisorSettings.advisorModel || options.statusLineCommand) {
+    const settingsObj: Record<string, unknown> = {
+      ...(effortFlag === '--settings' && effortValue ? JSON.parse(effortValue) : {}),
+      ...advisorSettings,
+    };
     if (options.statusLineCommand) {
       settingsObj.statusLine = { type: 'command', command: options.statusLineCommand };
     }

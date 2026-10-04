@@ -527,6 +527,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsOpusContext1m').checked = settings.opusContext1mEnabled ?? false;
     document.getElementById('appSettingsRemoteAutoReconnect').checked = settings.remoteAutoReconnect ?? true;
     document.getElementById('appSettingsThinkingEffort').value = settings.thinkingEffort ?? '';
+    document.getElementById('appSettingsClaudeAdvisor').value = settings.claudeAdvisorModel ?? '';
     // CPU Priority settings
     const niceSettings = settings.nice || {};
     document.getElementById('appSettingsNiceEnabled').checked = niceSettings.enabled ?? false;
@@ -627,6 +628,7 @@ Object.assign(CodemanApp.prototype, {
     this._syncSettingsChips();
     this._syncModelCards();
     this._syncEffortSegment();
+    this._syncAdvisorSegment();
     // Back to the top of the document (one scroll, not a tab reset). Updates is
     // first now: the version this install is running, and whether a newer one is
     // waiting, are the two things worth seeing before any preference. The rest of
@@ -718,6 +720,7 @@ Object.assign(CodemanApp.prototype, {
     if (!modal || !doc || typeof modal.querySelectorAll !== 'function') return;
     this._buildModelCards();
     this._buildEffortSegment();
+    this._buildAdvisorSegment();
     // Rebuilt on every open: admin-ui.js appends its Users entry to the rail
     // after the first open, and the menu must not drift from the rail.
     this._buildSettingsJumpMenu();
@@ -993,8 +996,28 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _buildEffortSegment() {
-    const select = document.getElementById('appSettingsThinkingEffort');
-    const seg = document.getElementById('appSettingsEffortSegment');
+    this._buildSelectSegment('appSettingsThinkingEffort', 'appSettingsEffortSegment');
+  },
+
+  _syncEffortSegment() {
+    this._syncSelectSegment('appSettingsThinkingEffort', 'appSettingsEffortSegment');
+  },
+
+  _buildAdvisorSegment() {
+    this._buildSelectSegment('appSettingsClaudeAdvisor', 'appSettingsAdvisorSegment');
+  },
+
+  _syncAdvisorSegment() {
+    this._syncSelectSegment('appSettingsClaudeAdvisor', 'appSettingsAdvisorSegment');
+  },
+
+  /**
+   * Build a radio segment as a view over a hidden <select>, which stays the single
+   * source of truth for load/save (the same contract as the model cards).
+   */
+  _buildSelectSegment(selectId, segId) {
+    const select = document.getElementById(selectId);
+    const seg = document.getElementById(segId);
     if (!select || !seg || seg.dataset.built === '1' || !select.options) return;
     seg.innerHTML = '';
     [...select.options].forEach(opt => {
@@ -1005,16 +1028,16 @@ Object.assign(CodemanApp.prototype, {
       btn.textContent = opt.textContent;
       btn.addEventListener('click', () => {
         select.value = opt.value;
-        this._syncEffortSegment();
+        this._syncSelectSegment(selectId, segId);
       });
       seg.appendChild(btn);
     });
     seg.dataset.built = '1';
   },
 
-  _syncEffortSegment() {
-    const select = document.getElementById('appSettingsThinkingEffort');
-    const seg = document.getElementById('appSettingsEffortSegment');
+  _syncSelectSegment(selectId, segId) {
+    const select = document.getElementById(selectId);
+    const seg = document.getElementById(segId);
     if (!select || !seg) return;
     seg.querySelectorAll('button').forEach(btn => {
       const on = btn.dataset.value === (select.value || '');
@@ -2214,6 +2237,7 @@ Object.assign(CodemanApp.prototype, {
       opusContext1mEnabled: document.getElementById('appSettingsOpusContext1m').checked,
       remoteAutoReconnect: document.getElementById('appSettingsRemoteAutoReconnect').checked,
       thinkingEffort: document.getElementById('appSettingsThinkingEffort').value,
+      claudeAdvisorModel: document.getElementById('appSettingsClaudeAdvisor').value,
       // CPU Priority settings
       nice: {
         enabled: document.getElementById('appSettingsNiceEnabled').checked,

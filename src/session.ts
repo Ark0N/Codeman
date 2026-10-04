@@ -42,6 +42,7 @@ import {
   NiceConfig,
   DEFAULT_NICE_CONFIG,
   getErrorMessage,
+  isAdvisorModel,
   isEffortLevel,
   type ClaudeMode,
   type SessionMode,
@@ -658,6 +659,11 @@ export class Session extends EventEmitter {
   // the CLAUDE_CODE_EFFORT_LEVEL env var, which would hard-lock the session.
   private _effort: EffortLevel | undefined;
 
+  // Claude advisor model (code.claude.com/docs/en/advisor), merged into the same launch
+  // `--settings` JSON as ultracode, never the `--advisor` flag (which exits on a refused
+  // pairing). A soft default: /advisor still switches or disables it in-session.
+  private _advisorModel: string | undefined;
+
   // Custom Model Endpoint Profiles (docs/custom-model-endpoints-plan.md). `envKeys`,
   // `configDir` and `launchModel` are internal bookkeeping ONLY (never surfaced via
   // toState()/the customModel getter): they are what setCustomModel() needs to undo a
@@ -774,6 +780,8 @@ export class Session extends EventEmitter {
       envOverrides?: Record<string, string>;
       /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
       effort?: EffortLevel;
+      /** Claude advisor model (soft default via --settings, switchable in-session via /advisor) */
+      advisorModel?: string;
       /** tmux history-limit (scrollback lines) allocated when this session's pane is created. */
       tmuxHistoryLimit?: number;
       /** Restored per-session attachment history. May include server-private external paths. */
@@ -933,6 +941,9 @@ export class Session extends EventEmitter {
     }
     if (config.effort && isEffortLevel(config.effort)) {
       this._effort = config.effort;
+    }
+    if (isAdvisorModel(config.advisorModel)) {
+      this._advisorModel = config.advisorModel;
     }
     this._tmuxHistoryLimit = config.tmuxHistoryLimit ?? DEFAULT_TMUX_HISTORY_LIMIT;
     this._remote = config.remote;
@@ -1827,6 +1838,7 @@ export class Session extends EventEmitter {
       ompConfig: this._ompConfig,
       resumeSessionId: this._resumeSessionId,
       effort: this._effort,
+      advisorModel: this._advisorModel,
       customModel: this.customModel,
       // COD-118: runtime-only — surfaced so the frontend can require explicit user
       // intent before restarting a crash-looped session. Deliberately NOT restored
@@ -2205,6 +2217,7 @@ export class Session extends EventEmitter {
       envOverrides: this._envOverrides,
       unsetEnvKeys: this._pendingEnvUnsets.size > 0 ? [...this._pendingEnvUnsets] : undefined,
       effort: this._effort,
+      advisorModel: this._advisorModel,
       historyLimit: this._tmuxHistoryLimit,
       remote: this._remote,
       docker: this._docker,
@@ -2667,6 +2680,7 @@ export class Session extends EventEmitter {
             resumeSessionId: this._resumeSessionId,
             envOverrides: this._envOverrides,
             effort: this._effort,
+            advisorModel: this._advisorModel,
             historyLimit: this._tmuxHistoryLimit,
             remote: this._remote,
             docker: this._docker,
@@ -2791,7 +2805,8 @@ export class Session extends EventEmitter {
           this._allowedTools,
           this._effort,
           this.cliPinnedName,
-          getClaudeCliVersion()
+          getClaudeCliVersion(),
+          this._advisorModel
         );
         this.ptyProcess = spawnPtyWithHelperRepair(() =>
           pty.spawn(getClaudeBinaryPath(), args, {

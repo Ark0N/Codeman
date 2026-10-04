@@ -293,6 +293,7 @@ export function registerRalphRoutes(
       planItems,
       envOverrides,
       effort,
+      advisorModel,
     } = parseBody(RalphLoopStartSchema, req.body);
 
     // Multi-user: cases live in the requesting user's space.
@@ -343,6 +344,7 @@ export function registerRalphRoutes(
       allowedTools: rlClaudeModeConfig.allowedTools,
       envOverrides,
       effort,
+      advisorModel,
       owner: rlOwner,
     });
 

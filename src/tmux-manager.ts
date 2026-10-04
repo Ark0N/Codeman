@@ -882,6 +882,8 @@ export function buildSpawnCommand(options: {
   ompConfig?: OmpConfig;
   resumeSessionId?: string;
   effort?: EffortLevel;
+  /** Claude advisor model, merged into the launch's one `--settings` JSON (see buildAdvisorSettings). */
+  advisorModel?: string;
   /** Resolved by resolveStatusLineCliCommand (hooks-config.ts) — undefined skips the exporter. Claude only. */
   statusLineCommand?: string;
   /** Name pinned on claude as `--name` (version-gated, sanitized; local spawns only). Only a user-chosen name: see `Session.cliPinnedName`. */
@@ -2083,6 +2085,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       resumeSessionId,
       envOverrides,
       effort,
+      advisorModel,
       historyLimit = DEFAULT_TMUX_HISTORY_LIMIT,
       remote,
       docker,
@@ -2170,6 +2173,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       ompConfig,
       resumeSessionId,
       effort,
+      advisorModel,
       statusLineCommand,
       sessionName: cliName,
     });
@@ -2397,6 +2401,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       envOverrides,
       unsetEnvKeys,
       effort,
+      advisorModel,
       remote,
       docker,
       cliName,
@@ -2435,6 +2440,7 @@ export class TmuxManager extends EventEmitter implements TerminalMultiplexer {
       ompConfig,
       resumeSessionId,
       effort,
+      advisorModel,
       statusLineCommand,
       sessionName: cliName,
     });

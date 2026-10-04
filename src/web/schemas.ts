@@ -23,6 +23,7 @@ import { MAX_WAKE_MACS } from '../config/remote-wake-limits.js';
 import { MAX_INPUT_LENGTH } from '../config/terminal-limits.js';
 import { enabledCliIds, enabledClis } from '../config/cli-registry/registry.js';
 import type { SessionMode } from '../types.js';
+import { isAdvisorModel } from '../types/session.js';
 
 // ========== Path Validation ==========
 
@@ -250,6 +251,20 @@ const safeEnvOverridesSchema = z
  * block in-session `/effort` switching). `ultracode` enables dynamic workflow orchestration.
  */
 const effortLevelSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']).optional();
+
+/**
+ * Claude advisor model for new sessions: `fable`/`opus`/`sonnet` or a full model id in one of
+ * those families (isAdvisorModel). Merged into the launch `--settings` JSON as `advisorModel`,
+ * a soft default that /advisor still switches in-session. The allowlist is also the injection
+ * guard for the single-quoted `--settings` argument.
+ */
+const advisorModelSchema = z
+  .string()
+  .max(64)
+  .refine((value) => isAdvisorModel(value), {
+    message: 'advisorModel must be fable, opus, sonnet or a full claude-fable/opus/sonnet model id',
+  })
+  .optional();
 
 // ========== Session Routes ==========
 
@@ -524,6 +539,8 @@ export const CreateSessionSchema = z.object({
   envOverrides: safeEnvOverridesSchema,
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort: effortLevelSchema,
+  /** Claude advisor model (soft default via --settings, switchable in-session via /advisor) */
+  advisorModel: advisorModelSchema,
   /** Model override to write to .claude/settings.local.json (e.g., "opus[1m]"). Empty string clears. */
   modelOverride: z.string().max(50).optional(),
   openCodeConfig: OpenCodeConfigSchema,
@@ -1055,6 +1072,8 @@ export const QuickStartSchema = z.object({
   envOverrides: safeEnvOverridesSchema,
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort: effortLevelSchema,
+  /** Claude advisor model (soft default via --settings, switchable in-session via /advisor) */
+  advisorModel: advisorModelSchema,
   /**
    * Who is spawning this worker (`codeman-skill` from the packaged agent skill), or,
    * equivalently, the `X-Codeman-Agent-Origin` header; the body wins when both are
@@ -1374,6 +1393,12 @@ export const SettingsUpdateSchema = z
     // auto-reattached.
     remoteAutoReconnect: z.boolean().optional(),
     thinkingEffort: z.string().max(20).optional(),
+    /** Advisor model for new Claude sessions ('' = leave it to the CLI's own /advisor choice). */
+    claudeAdvisorModel: z
+      .string()
+      .max(64)
+      .refine((value) => value === '' || isAdvisorModel(value), { message: 'Invalid advisor model' })
+      .optional(),
     // UI visibility
     showFontControls: z.boolean().optional(),
     showSystemStats: z.boolean().optional(),
@@ -1862,6 +1887,8 @@ export const RalphLoopStartSchema = z.object({
   envOverrides: safeEnvOverridesSchema,
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort: effortLevelSchema,
+  /** Claude advisor model (soft default via --settings, switchable in-session via /advisor) */
+  advisorModel: advisorModelSchema,
   planItems: z
     .array(
       z.object({

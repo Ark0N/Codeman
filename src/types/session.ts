@@ -377,6 +377,26 @@ export function isEffortLevel(value: string | undefined): value is EffortLevel {
   return value !== undefined && (EFFORT_LEVELS as readonly string[]).includes(value);
 }
 
+/**
+ * Model aliases Claude Code accepts for its advisor tool (a stronger model the session's
+ * main model consults at decision points; code.claude.com/docs/en/advisor). Haiku is left
+ * out on purpose: it can call an advisor but never act as one.
+ */
+export const ADVISOR_MODEL_ALIASES = ['fable', 'opus', 'sonnet'] as const;
+
+/** A full model id in one of the advisor-capable families, e.g. `claude-opus-5-5`. */
+const ADVISOR_MODEL_ID_PATTERN = /^claude-(?:fable|opus|sonnet)-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Type guard: is the value an advisor model Codeman will pass to claude? An alias from
+ * ADVISOR_MODEL_ALIASES or a full fable/opus/sonnet model id. ⚠️ This allowlist is also the
+ * injection guard: the value is rendered inside the single-quoted `--settings` JSON argument.
+ */
+export function isAdvisorModel(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 64) return false;
+  return (ADVISOR_MODEL_ALIASES as readonly string[]).includes(value) || ADVISOR_MODEL_ID_PATTERN.test(value);
+}
+
 /** OpenCode session configuration */
 export interface OpenCodeConfig {
   /** Model identifier (e.g., "anthropic/claude-sonnet-4-5", "openai/gpt-5.2", "ollama/codellama") */
@@ -795,6 +815,8 @@ export interface SessionState {
   resumeSessionId?: string;
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort?: EffortLevel;
+  /** Claude advisor model (`advisorModel` in the launch `--settings`, switchable in-session via /advisor) */
+  advisorModel?: string;
   /**
    * Custom Model Endpoint Profiles (docs/custom-model-endpoints-plan.md): the custom
    * OpenAI-compatible endpoint (local or cloud) this session's CLI is currently pointed

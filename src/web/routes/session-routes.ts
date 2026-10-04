@@ -1130,6 +1130,7 @@ export function registerSessionRoutes(
       resumeSessionId: validatedResumeId,
       envOverrides: await clampEnvOverridesForOwner(owner, body.envOverrides),
       effort: body.effort,
+      advisorModel: body.advisorModel,
       tmuxHistoryLimit: terminalHistoryConfig.tmuxHistoryLimit,
       remote,
       owner,
@@ -3393,6 +3394,7 @@ export function registerSessionRoutes(
       ompConfig,
       envOverrides,
       effort,
+      advisorModel,
       parentSessionId,
       agentOrigin,
       customModel,
@@ -3440,6 +3442,7 @@ export function registerSessionRoutes(
       if (
         (envOverrides && Object.keys(envOverrides).length > 0) ||
         effort ||
+        advisorModel ||
         modelOverride !== undefined ||
         codexConfig ||
         geminiConfig ||
@@ -3453,7 +3456,7 @@ export function registerSessionRoutes(
       ) {
         return createErrorResponse(
           ApiErrorCode.INVALID_INPUT,
-          'envOverrides, effort, modelOverride, per-CLI config, and custom model endpoints are not supported for remote cases (they do not cross ssh). Configure the remote command via the host command override instead.'
+          'envOverrides, effort, advisorModel, modelOverride, per-CLI config, and custom model endpoints are not supported for remote cases (they do not cross ssh). Configure the remote command via the host command override instead.'
         );
       }
 
@@ -3510,6 +3513,7 @@ export function registerSessionRoutes(
       if (
         (envOverrides && Object.keys(envOverrides).length > 0) ||
         effort ||
+        advisorModel ||
         codexConfig ||
         geminiConfig ||
         antigravityConfig ||
@@ -3522,7 +3526,7 @@ export function registerSessionRoutes(
       ) {
         return createErrorResponse(
           ApiErrorCode.INVALID_INPUT,
-          'envOverrides, effort, per-CLI config, and custom model endpoints are not supported for docker cases (they do not cross into the container). Configure the container via the docker host command override instead.'
+          'envOverrides, effort, advisorModel, per-CLI config, and custom model endpoints are not supported for docker cases (they do not cross into the container). Configure the container via the docker host command override instead.'
         );
       }
 
@@ -3977,6 +3981,7 @@ export function registerSessionRoutes(
       ompConfig: qsResolvedOmpConfig,
       envOverrides: qsCustomModelEnvOverrides,
       effort,
+      advisorModel,
       remote,
       docker,
       resumeSessionId: dockerResumeId,

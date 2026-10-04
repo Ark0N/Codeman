@@ -55,6 +55,7 @@ function makeApp() {
     getCaseSettings: () => ({}),
     buildEnvOverrides: () => ({}),
     getEffortSetting: () => undefined,
+    getAdvisorSetting: () => undefined,
     selectSession: vi.fn(async () => {}),
   };
 }
