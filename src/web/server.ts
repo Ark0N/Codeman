@@ -3520,6 +3520,7 @@ export class WebServer extends EventEmitter {
               ompConfig: muxSession.mode === 'omp' ? savedState?.ompConfig : undefined,
               envOverrides: savedEnvOverrides,
               effort: savedState?.effort,
+              model: savedState?.model,
               attachmentHistory: savedAttachmentHistory,
               // The pane's last Enter. Without it the response viewer would show
               // the launch conversation until the user types again, even though
