@@ -93,6 +93,9 @@ export interface CliVariant {
 /** The newline chord a CLI's composer reads as "insert a line break" (see `CliCapabilities.newline`). */
 export type NewlineSequence = 'line-feed' | 'esc-enter';
 
+/** The MCP config dialects `src/mcp-sync.ts` has an adapter for. */
+export type McpConfigFormat = 'claude-json' | 'gemini-json' | 'codex-toml' | 'opencode-json' | 'antigravity-json';
+
 export interface CliLaunch {
   params: Record<string, ParamSpec>;
   /**
@@ -522,6 +525,13 @@ export interface CliCapabilities {
    * Data, not a branch on the CLI id, so supporting another CLI's quirk is one line here.
    */
   newline?: NewlineSequence;
+  /**
+   * Where this CLI keeps its user-level MCP server list, for MCP sync (`src/mcp-sync.ts`).
+   * `path` is relative to the home directory. `format` names the file dialect the sync
+   * adapter reads and writes. Absent = no known/verified MCP config file, so the CLI is
+   * skipped by sync rather than guessed at.
+   */
+  mcpConfig?: { path: string; format: McpConfigFormat };
   /**
    * How this CLI is pointed at a user-supplied custom OpenAI-compatible
    * endpoint (local, e.g. llama.cpp, or cloud, e.g. Azure AI Foundry) — the

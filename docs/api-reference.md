@@ -713,6 +713,26 @@ Read and write the CLI registry (`docs/cli-registry.md`). Every **write** route 
 | `PUT`    | `/api/clis/custom/:id`        | `{ label, shortBadge, binaries, argv, enabled? }`       | Replace an existing custom entry. An absent `enabled` keeps the entry's current state. `400` for a stock id, `404` for an unknown one. |
 | `DELETE` | `/api/clis/:id`               | none                                                    | Delete a custom entry. `400` for a stock id, `404` for an unknown one.                                  |
 
+## MCP server sync
+
+Copies MCP servers between the agent CLIs' own user-level config files (`docs/cli-registry.md`, "MCP server sync"). **Opt-in:** both routes answer `403 FORBIDDEN` while the synced `mcpSyncEnabled` setting is off (the default), and for a non-admin in multi-user mode, because the routes write files in the server user's home. A second `POST` while one is running answers `409 CONFLICT`.
+
+| Method | Path            | Body | Notes                                                                                                                   |
+| ------ | --------------- | ---- | ----------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/api/mcp-sync` | none | Dry run. Same result shape as `POST`, with `applied: false`; nothing is written.                                        |
+| `POST` | `/api/mcp-sync` | none | Adds each server a CLI is missing to that CLI's config file. Never edits or removes a server. `500` on an unexpected error. |
+
+Result (`data`):
+
+- `applied` — `false` for the dry run.
+- `targets[]` — one per enabled CLI that declares an MCP config: `id`, `label`, `file`, `status`, `error?`, `servers` (names it already has), `added` (names added, or that would be), `skipped` (names its dialect cannot express, e.g. SSE for Codex and Antigravity).
+  - `status`: `ok`; `absent` (not installed and no config file, so not read or created); `unreadable` (the file exists but cannot be parsed safely, so it is not written); `failed` (a read or write error, the file may be unchanged).
+- `conflicts[]` — names defined differently by different CLIs. Existing definitions are kept; the first CLI's is copied where the name is missing.
+- `disabled[]` — names left out because every definition is switched off in its own CLI (codex `enabled = false`, opencode `enabled: false`, antigravity `disabled: true`).
+- `unsupported[]` — labels of enabled agent CLIs with no known MCP config file (nothing is guessed).
+
+The result carries server **names** only, never `env` values or `headers`. Each changed file keeps its previous content as `<file>.codeman-bak` (overwritten by each sync); a file that receives servers carrying `env` or `headers` is left mode `0600`.
+
 ## Voice dictation
 
 Browser dictation transcribed through this server's Claude Code login, i.e. the

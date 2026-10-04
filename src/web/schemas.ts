@@ -1328,6 +1328,13 @@ export const SettingsUpdateSchema = z
      */
     cliManagementEnabled: z.boolean().optional(),
     /**
+     * MCP server sync (src/mcp-sync.ts): copies each enabled CLI's user-level MCP servers into
+     * the other CLIs' own config files. SYNCED, default OFF: it writes other tools' config in
+     * the server user's home (including any env values and headers on the servers), so it is
+     * opt-in. While OFF, GET/POST /api/mcp-sync answer 403 and the Settings controls are hidden.
+     */
+    mcpSyncEnabled: z.boolean().optional(),
+    /**
      * Read My Mind predictor model override. Empty/absent = the AI-checker
      * default (opus: prediction quality is the product and it runs only on an
      * explicit press). Shell-safety is validated again at spawn time.

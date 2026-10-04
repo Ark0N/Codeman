@@ -144,6 +144,8 @@ curl -s "$API/api/sessions" | jq '.data[].name'    # live sessions
 curl -s "$API/api/sessions/unified" | jq           # live + historical, deduped
 curl -s "$API/api/subagents" | jq                  # background agents
 curl -s "$API/api/search?q=deploy" | jq            # cross-session search
+curl -s "$API/api/mcp-sync" | jq                    # preview MCP server sync (opt-in: 403 until mcpSyncEnabled is on)
+curl -s -X POST "$API/api/mcp-sync" | jq             # apply it: add missing servers to each CLI config, never edit/remove
 
 # with ID set to a session id:
 curl -s "$API/api/sessions/$ID/last-response" | jq -r '.data.text'   # last answer, from the transcript (claude, codex, deepseek)
