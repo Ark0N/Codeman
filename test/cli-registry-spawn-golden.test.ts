@@ -56,9 +56,10 @@ describe('claude', () => {
   });
 
   it('renders a model as the quoted value of --model, even one that opens with a dash', () => {
-    // POST /api/sessions admits a leading '-' in `model`. It still lands as the option's
-    // value: quoted here, and Claude's option parser takes the word after `--model` as its
-    // value whatever it starts with, so it can never become a flag of its own.
+    // POST /api/sessions refuses a leading '-' in `model`, but the registry's `model-claude`
+    // pattern still admits one, so the builder must stay safe on its own: the value lands
+    // quoted, and Claude's option parser takes the word after `--model` as its value whatever
+    // it starts with, so it can never become a flag of its own.
     expect(claude({ model: 'claude-fable-5-1' })).toBe(
       'claude --dangerously-skip-permissions --session-id "0f9c2b14-1111-2222-3333-444455556666" --model "claude-fable-5-1"'
     );

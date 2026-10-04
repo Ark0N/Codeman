@@ -548,15 +548,17 @@ export const CreateSessionSchema = z.object({
   modelOverride: z.string().max(50).optional(),
   /**
    * Claude model for THIS session only, passed as `claude --model <id>`; nothing is written to
-   * disk. Wins over the app-wide default model. Same character set as the registry's
-   * `model-claude` pattern, so a value accepted here is never rejected at launch. An empty
-   * string means no per-session model, as it does for `modelOverride`. Claude only: the route
-   * refuses it for any other CLI.
+   * disk. Wins over the app-wide default model. A subset of the registry's `model-claude`
+   * pattern, so a value accepted here is never rejected at launch. The first character must be
+   * a letter or digit: the value lands in argv, and no model id opens with `-`, so a
+   * flag-shaped value is refused here rather than left to the launch quoting. An empty string
+   * means no per-session model, as it does for `modelOverride`. Claude only: the route refuses
+   * it for any other CLI and on a remote attach.
    */
   model: z
     .string()
     .max(100)
-    .regex(/^[a-zA-Z0-9._\-[\]]+$/)
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9._\-[\]]*$/)
     .or(z.literal(''))
     .optional(),
   openCodeConfig: OpenCodeConfigSchema,

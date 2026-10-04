@@ -30,7 +30,13 @@ import {
   type OmpConfig,
   type RemoteHost,
 } from '../../types.js';
-import { Session, isAltScreenStripMode, isExternalCliMode, isMuxAltScreenOnlyStripMode } from '../../session.js';
+import {
+  Session,
+  cliTakesSessionModel,
+  isAltScreenStripMode,
+  isExternalCliMode,
+  isMuxAltScreenOnlyStripMode,
+} from '../../session.js';
 import type { PaneCaptureOptions } from '../../mux-interface.js';
 import { SseEvent } from '../sse-events.js';
 import { webviewCapabilities } from '../../webview-capabilities.js';
@@ -892,10 +898,20 @@ export function registerSessionRoutes(
     // The top-level `model` is Claude's per-session `--model`. Every other CLI takes its model
     // in its own config object (`codexConfig.model` and so on), so a `model` here would be
     // dropped without a word; refuse it before anything is written for the session.
-    if (body.model && getCli(body.mode ?? 'claude')?.capabilities.model.source !== 'claude-settings-file') {
+    if (body.model && !cliTakesSessionModel(body.mode ?? 'claude')) {
       return createErrorResponse(
         ApiErrorCode.INVALID_INPUT,
         'model applies to claude sessions only; other CLIs take their model in their own config object, such as codexConfig.model'
+      );
+    }
+    // An attach launches nothing (the remote agent is already running), so a launch model
+    // or advisor would be dropped the same way, so both are refused, as they have been since
+    // they were added. The older launch fields (effort, envOverrides) predate this and keep
+    // their silent ignore here, since refusing them now would break existing callers.
+    if (body.attachRemoteSession && (body.model || body.advisorModel)) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'model and advisorModel shape a new launch, and attachRemoteSession launches nothing; leave them out when attaching'
       );
     }
     let workingDir = body.workingDir || process.cwd();

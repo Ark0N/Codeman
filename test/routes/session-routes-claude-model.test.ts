@@ -109,4 +109,54 @@ describe('POST /api/sessions model', () => {
     });
     expect(res.statusCode).toBe(400);
   });
+
+  it('rejects a flag-shaped model, since the value lands in argv', async () => {
+    for (const model of ['--dangerously-skip-permissions', '-p', '.hidden', '[1m]']) {
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/sessions',
+        payload: { workingDir, mode: 'claude', model },
+      });
+      expect(res.statusCode, model).toBe(400);
+    }
+    expect(harness.ctx.sessions.size).toBe(1); // only the session the mock context starts with
+  });
+
+  it('still accepts real model ids, aliases and the [1m] suffix', async () => {
+    for (const model of ['claude-fable-5-1', 'opus', 'opus[1m]', 'claude-opus-5-5[1m]']) {
+      expect(await launchedModel({ mode: 'claude', model })).toBe(model);
+    }
+  });
+
+  it.each([
+    ['model', { model: 'opus' }],
+    ['advisorModel', { advisorModel: 'opus' }],
+  ])('refuses %s on a remote attach, which launches nothing', async (_field, extra) => {
+    // Refused before the host is looked up, so no remote host needs to exist.
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: {
+        mode: 'claude',
+        attachRemoteSession: { hostId: 'h1', remoteSessionName: 'codeman-ssh-abc123' },
+        ...extra,
+      },
+    });
+    const parsed = JSON.parse(res.body);
+    expect(parsed.success).toBe(false);
+    expect(parsed.errorCode).toBe('INVALID_INPUT');
+    expect(harness.ctx.sessions.size).toBe(1);
+  });
+
+  it('publishes the launch model on the created claude session', async () => {
+    const res = await harness.app.inject({
+      method: 'POST',
+      url: '/api/sessions',
+      payload: { workingDir, mode: 'claude', model: 'claude-fable-5-1', advisorModel: 'opus' },
+    });
+    const parsed = JSON.parse(res.body);
+    const session = parsed.data?.session ?? parsed.session;
+    expect(session.model).toBe('claude-fable-5-1');
+    expect(session.advisorModel).toBe('opus');
+  });
 });

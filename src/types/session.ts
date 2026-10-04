@@ -12,7 +12,7 @@
  * - ClaudeMode — CLI permission mode ('dangerously-skip-permissions' | 'auto' | 'normal' | 'allowedTools')
  * - SessionColor — visual differentiation color
  * - OpenCodeConfig — OpenCode-specific settings (model, autoAllowTools, continueSession)
- * - CodexConfig — Codex (OpenAI CLI)-specific settings (model, resumeSessionId)
+ * - CodexConfig — Codex (OpenAI CLI)-specific settings (model, reasoningEffort, resumeSessionId, bypass, animations, renderMode)
  * - GeminiConfig — Gemini CLI-specific settings (model, approvalMode, resumeSession)
  * - AntigravityConfig — Antigravity CLI (agy) settings (model, dangerouslySkipPermissions, resumeConversationId)
  * - PiConfig — Pi CLI (pi.dev) settings (model, provider, thinking, resume/continue, project trust)
@@ -833,7 +833,9 @@ export interface SessionState {
    * The model the session was LAUNCHED with (`--model`): the caller's per-session `model`, or
    * the app-wide default when there was none. Persisted so a recovered session relaunches on
    * the same model rather than whatever the default is by then. Not `cliModel`, which is what
-   * the CLI's banner reports.
+   * the CLI's banner reports. Claude sessions only (`cliTakesSessionModel()`): every other CLI
+   * keeps its model in its own config object (`codexConfig.model` and so on), and this is
+   * absent for them.
    */
   model?: string;
   /**

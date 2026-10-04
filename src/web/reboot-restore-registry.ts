@@ -18,7 +18,8 @@
  *   session record involved. A dropped plan therefore returns the user to
  *   resuming by hand, one at a time, which is where they are without this
  *   feature. What the plan held that a transcript does not is the owner, the
- *   name, the env overrides, the effort, the advisor model and the lineage.
+ *   name, the env overrides, the effort, the model, the advisor model and the
+ *   lineage.
  * - Module-level singleton in the style of `web/approval-inbox.ts`: no `Session`
  *   import and no IO, which keeps it unit-testable and cycle-free.
  * - Spending is take-then-build: `take()` removes entries synchronously, before

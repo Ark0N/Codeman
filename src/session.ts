@@ -213,6 +213,21 @@ export function isExternalCliMode(mode: SessionMode): boolean {
   return getCli(mode)?.capabilities.external ?? true;
 }
 
+/**
+ * Does this CLI take the top-level session `model` (claude's per-session `--model`)?
+ *
+ * Read off the registry's model-source capability: only a `claude-settings-file` CLI
+ * (claude) launches on that field. Every other CLI takes its model in its own config object
+ * (`codexConfig.model` and so on), so for them the field is inert, and cron hands the
+ * app-wide default (always a Claude id) to any CLI that has a model at all. `toState()`
+ * publishes and persists the field only where this holds, so a codex cron session never
+ * reports a Claude model it did not run on, and `POST /api/sessions` refuses a `model` for
+ * any CLI where it does not.
+ */
+export function cliTakesSessionModel(mode: SessionMode): boolean {
+  return getCli(mode)?.capabilities.model.source === 'claude-settings-file';
+}
+
 /** Display name for a run mode. Falls back to the raw id for an unregistered one. */
 function getModeLabel(mode: SessionMode): string {
   return getCli(mode)?.label ?? mode;
@@ -1838,7 +1853,9 @@ export class Session extends EventEmitter {
       ompConfig: this._ompConfig,
       resumeSessionId: this._resumeSessionId,
       effort: this._effort,
-      model: this._model,
+      // Claude only: for any other CLI `_model` is inert (its model lives in its own config
+      // object) and may be the app-wide Claude default cron handed it.
+      model: cliTakesSessionModel(this.mode) ? this._model : undefined,
       advisorModel: this._advisorModel,
       customModel: this.customModel,
       // COD-118: runtime-only — surfaced so the frontend can require explicit user

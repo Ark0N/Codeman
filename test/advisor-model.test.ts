@@ -12,7 +12,7 @@
  * assertions see exactly what a spawned pane would.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { buildAdvisorSettings, buildInteractiveArgs } from '../src/session-cli-builder.js';
 import { buildSpawnCommand } from '../src/tmux-manager.js';
@@ -26,6 +26,23 @@ import {
 } from '../src/web/schemas.js';
 
 const EXPORTER_CMD = 'curl -sfk -X POST "$CODEMAN_API_URL/api/status-telemetry" --data @- 2>/dev/null || true';
+
+/**
+ * What the direct-PTY fallback hands `pty.spawn`. The file and argv are recorded, then a
+ * harmless stand-in runs instead: the real `claude` must never start from a test, and the
+ * stand-in is a real process so `Session.stop()` has a real pid to signal.
+ */
+const ptySpawns = vi.hoisted(() => [] as Array<{ file: string; args: string[] }>);
+vi.mock('node-pty', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node-pty')>();
+  return {
+    ...real,
+    spawn: (file: string, args: string[] | string, options: import('node-pty').IPtyForkOptions) => {
+      ptySpawns.push({ file, args: Array.isArray(args) ? args : [args] });
+      return real.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], options);
+    },
+  };
+});
 
 function extractSettingsJson(cmd: string): unknown {
   const idx = cmd.indexOf('--settings ');
@@ -161,6 +178,96 @@ describe('buildInteractiveArgs advisorModel (direct-PTY fallback)', () => {
     expect(buildInteractiveArgs('sid', 'normal', undefined, undefined, 'high', undefined, null, undefined)).toEqual(
       buildInteractiveArgs('sid', 'normal', undefined, undefined, 'high', undefined, null)
     );
+  });
+});
+
+/**
+ * #514 (per-session `model` → `--model`) and #530 landed together. A claude session carrying
+ * both must launch with `--model <id>` AND the advisor folded into the one `--settings` JSON,
+ * whatever the effort, on the tmux template and on the direct-PTY fallback alike. Recovery of
+ * the same pair is pinned in test/session-model-recovery.test.ts.
+ */
+describe('a per-session model together with an advisor', () => {
+  const MODEL = 'claude-fable-5-1';
+  const cases = [
+    ['ultracode', { ultracode: true, advisorModel: 'opus' }],
+    ['high', { advisorModel: 'opus' }],
+    [undefined, { advisorModel: 'opus' }],
+  ] as const;
+
+  it.each(cases)('tmux template carries --model and the merged --settings, effort %s', (effort, settings) => {
+    for (const resumeSessionId of [undefined, '11111111-2222-3333-4444-555555555555']) {
+      const cmd = buildSpawnCommand({
+        mode: 'claude',
+        sessionId: 'sid-1',
+        model: MODEL,
+        effort,
+        advisorModel: 'opus',
+        resumeSessionId,
+        claudeCliVersion: null,
+      });
+      // The resume variant renders `resume || new`, so the model appears once per branch.
+      expect(cmd).toContain(`--model "${MODEL}"`);
+      expect(cmd).not.toContain('--advisor ');
+      const settingsFlags = cmd.match(/--settings /g) ?? [];
+      expect(settingsFlags.length).toBe(resumeSessionId ? 2 : 1);
+      expect(extractSettingsJson(cmd)).toEqual(settings);
+      if (effort === 'high') expect(cmd).toContain("--effort 'high'");
+    }
+  });
+
+  it('keeps the statusLine exporter in the same object beside the model', () => {
+    const cmd = buildSpawnCommand({
+      mode: 'claude',
+      sessionId: 'sid-1',
+      model: MODEL,
+      effort: 'ultracode',
+      advisorModel: 'fable',
+      statusLineCommand: EXPORTER_CMD,
+      claudeCliVersion: null,
+    });
+    expect(cmd).toContain(`--model "${MODEL}"`);
+    expect(cmd.match(/--settings /g)).toHaveLength(1);
+    expect(extractSettingsJson(cmd)).toEqual({
+      ultracode: true,
+      advisorModel: 'fable',
+      statusLine: { type: 'command', command: EXPORTER_CMD },
+    });
+  });
+
+  it.each(cases)('direct-PTY args carry --model and the merged --settings, effort %s', (effort, settings) => {
+    const args = buildInteractiveArgs('sid', 'normal', MODEL, undefined, effort, undefined, null, 'opus');
+    expect(args[args.indexOf('--model') + 1]).toBe(MODEL);
+    expect(args.filter((a) => a === '--settings')).toHaveLength(1);
+    expect(JSON.parse(args[args.indexOf('--settings') + 1])).toEqual(settings);
+    if (effort === 'high') expect(args).toEqual(expect.arrayContaining(['--effort', 'high']));
+  });
+
+  describe('a real Session on the direct-PTY fallback', () => {
+    const live: Session[] = [];
+    afterEach(async () => {
+      for (const s of live.splice(0)) await s.stop();
+      ptySpawns.length = 0;
+    });
+
+    it.each(cases)('hands pty.spawn both, effort %s', async (effort, settings) => {
+      const session = new Session({
+        workingDir: '/tmp',
+        mode: 'claude',
+        useMux: false,
+        model: MODEL,
+        advisorModel: 'opus',
+        effort,
+      });
+      live.push(session);
+      await session.startInteractive();
+
+      expect(ptySpawns).toHaveLength(1);
+      const { args } = ptySpawns[0];
+      expect(args[args.indexOf('--model') + 1]).toBe(MODEL);
+      expect(args.filter((a) => a === '--settings')).toHaveLength(1);
+      expect(JSON.parse(args[args.indexOf('--settings') + 1])).toEqual(settings);
+    });
   });
 });
 
