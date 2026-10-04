@@ -460,6 +460,31 @@ textarea:focus-visible {
   font-size: 16px !important; /* prevent iOS auto-zoom on focus */
 }
 
+.xterm-helpers .codeman-ime-preview {
+  position: absolute;
+  left: var(--xterm-helper-left, 0px);
+  top: var(--xterm-helper-top, 0px);
+  z-index: 6;
+  pointer-events: none;
+  white-space: pre;
+  color: var(--terminal-foreground, var(--text, #fff));
+  font-family: var(--font-mono, monospace);
+  font-size: 14px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.2;
+  height: 1.2em;
+}
+
+.xterm-helpers .codeman-ime-preview[data-phase='provisional'] {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
+.touch-device .xterm-helpers.codeman-ime-preview-owned .composition-view.active {
+  display: none;
+}
+
 /* Session tab focus */
 .session-tab:focus-visible {
   outline: 2px solid var(--accent);

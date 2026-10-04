@@ -37,6 +37,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/webhook-settings.browser.test.ts',
   'test/split-pane-orchestration.browser.test.ts',
   'test/split-pane-auto-collapse.browser.test.ts',
+  'test/mobile-ime-preview.browser.test.ts',
 ];
 
 /**
