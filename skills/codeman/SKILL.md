@@ -47,7 +47,7 @@ later call opens with, and your first REAL call performs them anyway:
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null
-[ "${CODEMAN_PREAMBLE:-}" = 1.30.1 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.33.4 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 ```
 
 ⚠️ **Never spend a Bash call on this check alone.** §1's block opens with this same
@@ -75,8 +75,8 @@ PRE="${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh"
 mkdir -p "$(dirname "$PRE")"
 # Rewrite unless the file already ends with THIS version's stamp, so a stale or a
 # half-written file self-heals here instead of costing you a round trip to rm it.
-grep -qs '^CODEMAN_PREAMBLE=1.30.1$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
-# ---- Codeman agent preamble 1.30.1 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
+grep -qs '^CODEMAN_PREAMBLE=1.33.4$' "$PRE" || (umask 077; cat > "$PRE" <<'PREAMBLE'
+# ---- Codeman agent preamble 1.33.4 (seeded by Codeman at session spawn; the SKILL.md §0 bootstrap rewrites it when missing or stale) ----
 API="${CODEMAN_API_URL:?CODEMAN_API_URL not set; refusing to guess}"
 SELF="${CODEMAN_SESSION_ID:?CODEMAN_SESSION_ID not set}"
 # Credentials, cheapest first. Your session has usually INHERITED the server's
@@ -196,6 +196,11 @@ _accept_trust() {  # <sid> -> 0 once it has answered the dialog, 1 if it could n
 # rather than handed back, because a worker that never drew its composer would eat the
 # task prompt with its trust dialog. There is deliberately no pid poll: wait-output
 # already blocks until the composer draws, and pid!=null proved startup, never readiness.
+# CODEMAN_WORKER_ADVISOR=opus (or fable / sonnet) gives every CLAUDE worker spawned while
+# it is set Claude Code's advisor tool: a stronger model the worker consults before
+# committing to an approach, on a recurring error and before declaring the task done.
+# Other modes ignore it. A value the server refuses fails the spawn (INVALID_INPUT); an
+# advisor that ranks below the worker's model is accepted but never attached by claude.
 spawn_worker() {
   local name="${1:?spawn_worker needs a case name}" mode="${2:-claude}" q sid cp r
   # parentSessionId doubles the CURL header, so a spawn_worker copied off the shared
@@ -207,12 +212,19 @@ spawn_worker() {
   # server clamps this back to `workspace-write` for an owner without the grant.
   # Spawn by hand (§5.1) when you want a worker that asks.
   q=$("${CURL[@]}" -X POST "$API/api/v1/quick-start" -H 'Content-Type: application/json' \
-      -d "$(jq -nc --arg n "$name" --arg m "$mode" --arg p "$SELF" \
+      -d "$(jq -nc --arg n "$name" --arg m "$mode" --arg p "$SELF" --arg a "${CODEMAN_WORKER_ADVISOR:-}" \
         '{caseName:$n,mode:$m,parentSessionId:$p}
-         + (if $m == "deepseek" then {deepSeekConfig:{permissionMode:"danger-full-access"}} else {} end)')")
+         + (if $m == "deepseek" then {deepSeekConfig:{permissionMode:"danger-full-access"}} else {} end)
+         + (if $m == "claude" and $a != "" then {advisorModel:$a} else {} end)')")
   sid=$(jq -r 'if .success then .data.sessionId else empty end' <<<"$q")
   # NOT retryable in a loop: every quick-start failure code is terminal (§5.1).
   [ -n "$sid" ] || { jq -c '{error,errorCode}' <<<"$q" >&2; return 1; }
+  # A server without advisor support DROPS the field instead of refusing it, so read it
+  # back: a worker silently missing the advisor it was asked for is worth one line.
+  if [ "$mode" = claude ] && [ -n "${CODEMAN_WORKER_ADVISOR:-}" ] &&
+     [ "$("${CURL[@]}" "$API/api/v1/sessions/$sid" | jq -r '.data.advisorModel // empty')" != "$CODEMAN_WORKER_ADVISOR" ]; then
+    echo "worker $sid: this Codeman server ignored CODEMAN_WORKER_ADVISOR (no advisor support); it runs without one" >&2
+  fi
   if [ "$mode" = deepseek ]; then
     # The one non-claude mode with REAL end-of-turn signals: its TUI reports
     # idle/working/blocked to Codeman, so sendwait, until=stop and the Approvals
@@ -372,10 +384,10 @@ last_text() {
 # The stamp is the LAST line on purpose (a truncated write leaves it unset) and is kept
 # bare on purpose: the write condition above anchors on it with $, so an inline comment
 # here would fail that match and rewrite this file on every single bootstrap.
-CODEMAN_PREAMBLE=1.30.1
+CODEMAN_PREAMBLE=1.33.4
 PREAMBLE
 )
-. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.30.1 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
+. "$PRE"; [ "${CODEMAN_PREAMBLE:-}" = 1.33.4 ] || { echo "preamble at $PRE is stale or truncated: rm it and re-run this block"; exit 1; }
 ```
 
 Every later Bash call that touches the API starts with the same two loader lines from
@@ -426,7 +438,7 @@ and no per-call body to hand-build.
 
 ```bash
 . "${XDG_CACHE_HOME:-$HOME/.cache}/codeman-agent-$CODEMAN_SESSION_ID.sh" 2>/dev/null   # §0 loader
-[ "${CODEMAN_PREAMBLE:-}" = 1.30.1 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
+[ "${CODEMAN_PREAMBLE:-}" = 1.33.4 ] || { echo "preamble missing or stale; run the full §0 block"; exit 1; }
 N=(alpha beta)                    # INVENT one fresh case name per worker; never list cases first
                                   # (a name may carry a mode: `beta:deepseek`, see below)
 T=('reply with one line: the absolute path of your working directory'
@@ -493,6 +505,12 @@ Four things this block leans on, each one link away, no detour needed to run it:
   `sendwait` reads the composer and keeps pressing Enter until the prompt has left it.
   All three are reasons to let `sendwait` build the call rather than hand-rolling it.
 - Each `sendwait` costs that worker one billed turn, as does every prompt you send it.
+- For long or high-stakes worker tasks, `CODEMAN_WORKER_ADVISOR=opus spawn_workers "${N[@]}"`
+  (`fable`, `opus` or `sonnet`) gives each claude worker Claude Code's advisor tool: a
+  stronger model it consults before committing to an approach, on a recurring error and
+  before declaring the task done. Advisor calls bill extra tokens, and an advisor ranked
+  below the worker's own model is never attached (on an Opus worker only `opus` and
+  `fable` do anything).
 - Deleting the sessions does **not** remove the case directories. They are marked as
   agent-created, so `GET /api/v1/cases/agent-created` lists them for cleanup: §5.14.
 
