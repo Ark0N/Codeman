@@ -4125,8 +4125,8 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   transform: translateY(-1px);
 }
 
-/* Antigravity: cyan identity, matching .btn-toolbar.btn-run.mode-antigravity and
-   .run-mode-dot.antigravity so the welcome action reads as the same backend. */
+/* Antigravity: cyan identity, matching .btn-toolbar.btn-run.mode-antigravity so
+   the welcome action reads as the same backend. */
 .welcome-btn-antigravity {
   background: linear-gradient(135deg, #0b2b33 0%, #0e7490 55%, #0891b2 100%);
   border-color: rgba(34, 211, 238, 0.4);
@@ -4142,8 +4142,8 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   transform: translateY(-1px);
 }
 
-/* Pi (pi.dev): rose identity, matching .btn-toolbar.btn-run.mode-pi and
-   .run-mode-dot.pi so the welcome action reads as the same backend. */
+/* Pi (pi.dev): rose identity, matching .btn-toolbar.btn-run.mode-pi so the
+   welcome action reads as the same backend. */
 .welcome-btn-pi {
   background: linear-gradient(135deg, #33121f 0%, #9d174d 55%, #be185d 100%);
   border-color: rgba(244, 114, 182, 0.4);
@@ -4158,8 +4158,8 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   color: #fff1f7;
   transform: translateY(-1px);
 }
-/* OMP: indigo identity, matching .btn-toolbar.btn-run.mode-omp and
-   .run-mode-dot.omp so the welcome action reads as the same backend. */
+/* OMP: indigo identity, matching .btn-toolbar.btn-run.mode-omp so the welcome
+   action reads as the same backend. */
 .welcome-btn-omp {
   background: linear-gradient(135deg, #1e1b4b 0%, #4f46e5 55%, #6366f1 100%);
   border-color: rgba(129, 140, 248, 0.4);
@@ -4176,7 +4176,7 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
 }
 
 /* Grok (xAI): monochrome charcoal identity, matching .btn-toolbar.btn-run.mode-grok
-   and .run-mode-dot.grok so the welcome action reads as the same backend. */
+   so the welcome action reads as the same backend. */
 .welcome-btn-grok {
   background: linear-gradient(135deg, #131316 0%, #27272a 55%, #3f3f46 100%);
   border-color: rgba(212, 212, 216, 0.4);
@@ -4193,8 +4193,8 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
 }
 
 /* DeepSeek Harness: the #4d6bfe blue identity, matching
-   .btn-toolbar.btn-run.mode-deepseek and .run-mode-dot.deepseek so the welcome
-   action reads as the same backend. */
+   .btn-toolbar.btn-run.mode-deepseek so the welcome action reads as the same
+   backend. */
 .welcome-btn-deepseek {
   background: linear-gradient(135deg, #101a4d 0%, #2740c4 55%, #4d6bfe 100%);
   border-color: rgba(124, 147, 255, 0.4);
@@ -5413,17 +5413,62 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
+  background: var(--text-dim);
 }
-.run-mode-dot.claude { background: #3b82f6; }
-.run-mode-dot.opencode { background: #10b981; }
-.run-mode-dot.codex { background: #a855f7; }
-.run-mode-dot.gemini { background: #8ab4f8; }
-.run-mode-dot.antigravity { background: #22d3ee; }
-.run-mode-dot.pi { background: #f472b6; }
-.run-mode-dot.grok { background: #a1a1aa; }
-.run-mode-dot.deepseek { background: #4d6bfe; }
-.run-mode-dot.omp { background: #818cf8; }
-.run-mode-dot.shell { background: #94a3b8; }
+/* Every backend the Run menus know draws its own logo in this slot instead of a
+   colour dot. The toolbar menu, the phone overview picker, the Custom Endpoint
+   rows and the model picker all render `.run-mode-dot <id>`, so they pick this
+   up with no markup change. An id with no rule here (a CLI added through
+   ~/.codeman/clis.json, say) keeps the plain 8px dot.
+   Logos: @lobehub/icons-static-svg 1.95.1 (MIT, (c) LobeHub); the OMP mark is
+   the one omp.sh draws in its own header (oh-my-pi, MIT). The marks are their
+   owners' trademarks, shown only to name the CLI a row launches. */
+.run-mode-dot.claude,
+.run-mode-dot.gemini,
+.run-mode-dot.antigravity,
+.run-mode-dot.deepseek,
+.run-mode-dot.omp,
+.run-mode-dot.codex,
+.run-mode-dot.opencode,
+.run-mode-dot.pi,
+.run-mode-dot.grok,
+.run-mode-dot.shell,
+.run-mode-dot.web {
+  width: 1.15em;
+  height: 1.15em;
+  border-radius: 0;
+}
+/* Brand-coloured marks read on dark and light skins alike, so they paint as is. */
+.run-mode-dot.claude,
+.run-mode-dot.gemini,
+.run-mode-dot.antigravity,
+.run-mode-dot.deepseek,
+.run-mode-dot.omp {
+  background: var(--run-mode-logo) center / contain no-repeat;
+}
+/* Monochrome marks are masks over the row's own text colour, so they follow
+   every skin (light ones included) the way the label next to them does. */
+.run-mode-dot.codex,
+.run-mode-dot.opencode,
+.run-mode-dot.pi,
+.run-mode-dot.grok,
+.run-mode-dot.shell,
+.run-mode-dot.web {
+  background-color: currentColor;
+  -webkit-mask: var(--run-mode-logo) center / contain no-repeat;
+  mask: var(--run-mode-logo) center / contain no-repeat;
+}
+.run-mode-dot.claude { --run-mode-logo: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z' fill='%23D97757' fill-rule='nonzero'/%3E%3C/svg%3E"); }
+.run-mode-dot.gemini { --run-mode-logo: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z' fill='%233186FF'/%3E%3Cpath d='M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z' fill='url(%23gemini0)'/%3E%3Cpath d='M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z' fill='url(%23gemini1)'/%3E%3Cpath d='M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z' fill='url(%23gemini2)'/%3E%3Cdefs%3E%3ClinearGradient gradientUnits='userSpaceOnUse' id='gemini0' x1='7' x2='11' y1='15.5' y2='12'%3E%3Cstop stop-color='%2308B962'/%3E%3Cstop offset='1' stop-color='%2308B962' stop-opacity='0'/%3E%3C/linearGradient%3E%3ClinearGradient gradientUnits='userSpaceOnUse' id='gemini1' x1='8' x2='11.5' y1='5.5' y2='11'%3E%3Cstop stop-color='%23F94543'/%3E%3Cstop offset='1' stop-color='%23F94543' stop-opacity='0'/%3E%3C/linearGradient%3E%3ClinearGradient gradientUnits='userSpaceOnUse' id='gemini2' x1='3.5' x2='17.5' y1='13.5' y2='12'%3E%3Cstop stop-color='%23FABC12'/%3E%3Cstop offset='.46' stop-color='%23FABC12' stop-opacity='0'/%3E%3C/linearGradient%3E%3C/defs%3E%3C/svg%3E"); }
+.run-mode-dot.antigravity { --run-mode-logo: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cmask height='23' id='antigravity0' maskUnits='userSpaceOnUse' width='24' x='0' y='1'%3E%3Cpath d='M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z' fill='%23fff'/%3E%3C/mask%3E%3Cg mask='url(%23antigravity0)'%3E%3Cg filter='url(%23antigravity1)'%3E%3Cpath d='M-1.018-3.992c-.408 3.591 2.686 6.89 6.91 7.37 4.225.48 7.98-2.043 8.387-5.633.408-3.59-2.686-6.89-6.91-7.37-4.225-.479-7.98 2.043-8.387 5.633z' fill='%23FFE432'/%3E%3C/g%3E%3Cg filter='url(%23antigravity2)'%3E%3Cpath d='M15.269 7.747c1.058 4.557 5.691 7.374 10.348 6.293 4.657-1.082 7.575-5.653 6.516-10.21-1.058-4.556-5.691-7.374-10.348-6.292-4.657 1.082-7.575 5.653-6.516 10.21z' fill='%23FC413D'/%3E%3C/g%3E%3Cg filter='url(%23antigravity3)'%3E%3Cpath d='M-12.443 10.804c1.338 4.703 7.36 7.11 13.453 5.378 6.092-1.733 9.947-6.95 8.61-11.652C8.282-.173 2.26-2.58-3.833-.848-9.925.884-13.78 6.1-12.443 10.804z' fill='%2300B95C'/%3E%3C/g%3E%3Cg filter='url(%23antigravity4)'%3E%3Cpath d='M-12.443 10.804c1.338 4.703 7.36 7.11 13.453 5.378 6.092-1.733 9.947-6.95 8.61-11.652C8.282-.173 2.26-2.58-3.833-.848-9.925.884-13.78 6.1-12.443 10.804z' fill='%2300B95C'/%3E%3C/g%3E%3Cg filter='url(%23antigravity5)'%3E%3Cpath d='M-7.608 14.703c3.352 3.424 9.126 3.208 12.896-.483 3.77-3.69 4.108-9.459.756-12.883C2.69-2.087-3.083-1.871-6.853 1.82c-3.77 3.69-4.108 9.458-.755 12.883z' fill='%2300B95C'/%3E%3C/g%3E%3Cg filter='url(%23antigravity6)'%3E%3Cpath d='M9.932 27.617c1.04 4.482 5.384 7.303 9.7 6.3 4.316-1.002 6.971-5.448 5.93-9.93-1.04-4.483-5.384-7.304-9.7-6.301-4.316 1.002-6.971 5.448-5.93 9.93z' fill='%233186FF'/%3E%3C/g%3E%3Cg filter='url(%23antigravity7)'%3E%3Cpath d='M2.572-8.185C.392-3.329 2.778 2.472 7.9 4.771c5.122 2.3 11.042.227 13.222-4.63 2.18-4.855-.205-10.656-5.327-12.955-5.122-2.3-11.042-.227-13.222 4.63z' fill='%23FBBC04'/%3E%3C/g%3E%3Cg filter='url(%23antigravity8)'%3E%3Cpath d='M-3.267 38.686c-5.277-2.072 3.742-19.117 5.984-24.83 2.243-5.712 8.34-8.664 13.616-6.592 5.278 2.071 11.533 13.482 9.29 19.195-2.242 5.713-23.613 14.298-28.89 12.227z' fill='%233186FF'/%3E%3C/g%3E%3Cg filter='url(%23antigravity9)'%3E%3Cpath d='M28.71 17.471c-1.413 1.649-5.1.808-8.236-1.878-3.135-2.687-4.531-6.201-3.118-7.85 1.412-1.649 5.1-.808 8.235 1.878s4.532 6.2 3.119 7.85z' fill='%23749BFF'/%3E%3C/g%3E%3Cg filter='url(%23antigravity10)'%3E%3Cpath d='M18.163 9.077c5.81 3.93 12.502 4.19 14.946.577 2.443-3.612-.287-9.727-6.098-13.658-5.81-3.931-12.502-4.19-14.946-.577-2.443 3.612.287 9.727 6.098 13.658z' fill='%23FC413D'/%3E%3C/g%3E%3Cg filter='url(%23antigravity11)'%3E%3Cpath d='M-.915 2.684c-1.44 3.473-.97 6.967 1.05 7.804 2.02.837 4.824-1.3 6.264-4.772 1.44-3.473.97-6.967-1.05-7.804-2.02-.837-4.824 1.3-6.264 4.772z' fill='%23FFEE48'/%3E%3C/g%3E%3C/g%3E%3Cdefs%3E%3Cfilter color-interpolation-filters='sRGB' filterUnits='userSpaceOnUse' height='17.587' id='antigravity1' width='19.838' x='-3.288' y='-11.917'%3E%3CfeFlood flood-opacity='0' result='BackgroundImageFix'/%3E%3CfeBlend in='SourceGraphic' in2='BackgroundImageFix' result='shape'/%3E%3CfeGaussianBlur result='effect1_foregroundBlur_977_115' stdDeviation='1.117'/%3E%3C/filter%3E%3Cfilter color-interpolation-filters='sRGB' filterUnits='userSpaceOnUse' height='38.565' id='antigravity2' width='38.9' x='4.251' y='-13.493'%3E%3CfeFlood flood-opacity='0' result='BackgroundImageFix'/%3E%3CfeBlend in='SourceGraphic' in2='BackgroundImageFix' result='shape'/%3E%3CfeGaussianBlur result='effect1_foregroundBlur_977_115' stdDeviation='5.4'/%3E%3C/filter%3E%3Cfilter color-interpolation-filters='sRGB' filterUnits='userSpaceOnUse' height='36.517' id='antigravity3' width='40.955' x='-21.889' y='-10.592'%3E%3CfeFlood flood-opacity='0' result='BackgroundImageFix'/%3E%3CfeBlend in='SourceGraphic' in2='BackgroundImageFix' result='shape'/%3E%3CfeGaussianBlur result='effect1_foregroundBlur_977_115' stdDeviation='4.591'/%3E%3C/filter%3E%3Cfilter color-interpolation-filters='sRGB' filterUnits='userSpaceOnUse' height='36.517' id='antigravity4' width='40.955' x='-21.889' y='-10.592'%3E%3CfeFlood flood-opacity='0' result='BackgroundImageFix'/%3E%3CfeBlend in='SourceGraphic' in2='BackgroundImageFix' result='shape'/%3E%3CfeGaussianBlur result='effect1_foregroundBlur_977_115' stdDeviation='4.591'/%3E%3C/filter%3E%3Cfilter color-interpolation-filters='sRGB' filterUnits='userSpaceOnUse' height='36.595' id='antigravity5' width='36.632' x='-19.099' y='-10.278'%3E%3CfeFlood flood-opacity='0' result='BackgroundImageFix'/%3E%3CfeBlend in='SourceGraphic' in2='BackgroundImageFix' result='shape'/%3E%3CfeGaussianBlur result='effect1_foregroundBlur_977_115' stdDeviation='4.591'/%3E%3C/filter%3E%3Cfilter color-interpolation-filters='sRGB' filterUnits='userSpaceOnUse' height='34.087' id='antigravity6' width='33.533' x='.981' y='8.758'%3E%3CfeFlood flood-opacity='0' result='BackgroundImageFix'/%3E%3CfeBlend in='SourceGraphic' in2='BackgroundImageFix' result='shape'/%3E%3CfeGaussianBlur result='effect1_foregroundBlur_977_115' stdDeviation='4.363'/%3E%3C/filter%3E%3Cfilter color-interpolation-filters='sRGB' filterUnits='userSpaceOnUse' height='35.276' id='antigravity7' width='35.978' x='-6.143' y='-21.659'%3E%3CfeFlood flood-opacity='0' result='BackgroundImageFix'/%3E%3CfeBlend in='SourceGraphic' in2='BackgroundImageFix' result='shape'/%3E%3CfeGaussianBlur result='effect1_foregroundBlur_977_115' stdDeviation='3.954'/%3E%3C/filter%3E%3Cfilter color-interpolation-filters='sRGB' filterUnits='userSpaceOnUse' height='46.523' id='antigravity8' width='45.114' x='-11.96' y='-.46'%3E%3CfeFlood flood-opacity='0' result='BackgroundImageFix'/%3E%3CfeBlend in='SourceGraphic' in2='BackgroundImageFix' result='shape'/%3E%3CfeGaussianBlur result='effect1_foregroundBlur_977_115' stdDeviation='3.531'/%3E%3C/filter%3E%3Cfilter color-interpolation-filters='sRGB' filterUnits='userSpaceOnUse' height='24.054' id='antigravity9' width='25.094' x='10.485' y='.58'%3E%3CfeFlood flood-opacity='0' result='BackgroundImageFix'/%3E%3CfeBlend in='SourceGraphic' in2='BackgroundImageFix' result='shape'/%3E%3CfeGaussianBlur result='effect1_foregroundBlur_977_115' stdDeviation='3.159'/%3E%3C/filter%3E%3Cfilter color-interpolation-filters='sRGB' filterUnits='userSpaceOnUse' height='30.007' id='antigravity10' width='33.508' x='5.833' y='-12.467'%3E%3CfeFlood flood-opacity='0' result='BackgroundImageFix'/%3E%3CfeBlend in='SourceGraphic' in2='BackgroundImageFix' result='shape'/%3E%3CfeGaussianBlur result='effect1_foregroundBlur_977_115' stdDeviation='2.669'/%3E%3C/filter%3E%3Cfilter color-interpolation-filters='sRGB' filterUnits='userSpaceOnUse' height='26.151' id='antigravity11' width='22.194' x='-8.355' y='-8.876'%3E%3CfeFlood flood-opacity='0' result='BackgroundImageFix'/%3E%3CfeBlend in='SourceGraphic' in2='BackgroundImageFix' result='shape'/%3E%3CfeGaussianBlur result='effect1_foregroundBlur_977_115' stdDeviation='3.303'/%3E%3C/filter%3E%3C/defs%3E%3C/svg%3E"); }
+.run-mode-dot.deepseek { --run-mode-logo: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M23.748 4.482c-.254-.124-.364.113-.512.234-.051.039-.094.09-.137.136-.372.397-.806.657-1.373.626-.829-.046-1.537.214-2.163.848-.133-.782-.575-1.248-1.247-1.548-.352-.156-.708-.311-.955-.65-.172-.241-.219-.51-.305-.774-.055-.16-.11-.323-.293-.35-.2-.031-.278.136-.356.276-.313.572-.434 1.202-.422 1.84.027 1.436.633 2.58 1.838 3.393.137.093.172.187.129.323-.082.28-.18.552-.266.833-.055.179-.137.217-.329.14a5.526 5.526 0 01-1.736-1.18c-.857-.828-1.631-1.742-2.597-2.458a11.365 11.365 0 00-.689-.471c-.985-.957.13-1.743.388-1.836.27-.098.093-.432-.779-.428-.872.004-1.67.295-2.687.684a3.055 3.055 0 01-.465.137 9.597 9.597 0 00-2.883-.102c-1.885.21-3.39 1.102-4.497 2.623C.082 8.606-.231 10.684.152 12.85c.403 2.284 1.569 4.175 3.36 5.653 1.858 1.533 3.997 2.284 6.438 2.14 1.482-.085 3.133-.284 4.994-1.86.47.234.962.327 1.78.397.63.059 1.236-.03 1.705-.128.735-.156.684-.837.419-.961-2.155-1.004-1.682-.595-2.113-.926 1.096-1.296 2.746-2.642 3.392-7.003.05-.347.007-.565 0-.845-.004-.17.035-.237.23-.256a4.173 4.173 0 001.545-.475c1.396-.763 1.96-2.015 2.093-3.517.02-.23-.004-.467-.247-.588zM11.581 18c-2.089-1.642-3.102-2.183-3.52-2.16-.392.024-.321.471-.235.763.09.288.207.486.371.739.114.167.192.416-.113.603-.673.416-1.842-.14-1.897-.167-1.361-.802-2.5-1.86-3.301-3.307-.774-1.393-1.224-2.887-1.298-4.482-.02-.386.093-.522.477-.592a4.696 4.696 0 011.529-.039c2.132.312 3.946 1.265 5.468 2.774.868.86 1.525 1.887 2.202 2.891.72 1.066 1.494 2.082 2.48 2.914.348.292.625.514.891.677-.802.09-2.14.11-3.054-.614zm1-6.44a.306.306 0 01.415-.287.302.302 0 01.2.288.306.306 0 01-.31.307.303.303 0 01-.304-.308zm3.11 1.596c-.2.081-.399.151-.59.16a1.245 1.245 0 01-.798-.254c-.274-.23-.47-.358-.552-.758a1.73 1.73 0 01.016-.588c.07-.327-.008-.537-.239-.727-.187-.156-.426-.199-.688-.199a.559.559 0 01-.254-.078c-.11-.054-.2-.19-.114-.358.028-.054.16-.186.192-.21.356-.202.767-.136 1.146.016.352.144.618.408 1.001.782.391.451.462.576.685.914.176.265.336.537.445.848.067.195-.019.354-.25.452z' fill='%234D6BFE'/%3E%3C/svg%3E"); }
+.run-mode-dot.omp { --run-mode-logo: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='8 11 48 48'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23ed4abf'/%3E%3Cstop offset='.5' stop-color='%239b4dff'/%3E%3Cstop offset='1' stop-color='%235ad8e6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath fill='url(%23g)' d='M10 14h44v9H43v33h-9V23h-9v22h-9V23H10z'/%3E%3C/svg%3E"); }
+.run-mode-dot.codex { --run-mode-logo: url("data:image/svg+xml,%3Csvg fill-rule='evenodd' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath clip-rule='evenodd' d='M8.086.457a6.105 6.105 0 013.046-.415c1.333.153 2.521.72 3.564 1.7a.117.117 0 00.107.029c1.408-.346 2.762-.224 4.061.366l.063.03.154.076c1.357.703 2.33 1.77 2.918 3.198.278.679.418 1.388.421 2.126a5.655 5.655 0 01-.18 1.631.167.167 0 00.04.155 5.982 5.982 0 011.578 2.891c.385 1.901-.01 3.615-1.183 5.14l-.182.22a6.063 6.063 0 01-2.934 1.851.162.162 0 00-.108.102c-.255.736-.511 1.364-.987 1.992-1.199 1.582-2.962 2.462-4.948 2.451-1.583-.008-2.986-.587-4.21-1.736a.145.145 0 00-.14-.032c-.518.167-1.04.191-1.604.185a5.924 5.924 0 01-2.595-.622 6.058 6.058 0 01-2.146-1.781c-.203-.269-.404-.522-.551-.821a7.74 7.74 0 01-.495-1.283 6.11 6.11 0 01-.017-3.064.166.166 0 00.008-.074.115.115 0 00-.037-.064 5.958 5.958 0 01-1.38-2.202 5.196 5.196 0 01-.333-1.589 6.915 6.915 0 01.188-2.132c.45-1.484 1.309-2.648 2.577-3.493.282-.188.55-.334.802-.438.286-.12.573-.22.861-.304a.129.129 0 00.087-.087A6.016 6.016 0 015.635 2.31C6.315 1.464 7.132.846 8.086.457zm-.804 7.85a.848.848 0 00-1.473.842l1.694 2.965-1.688 2.848a.849.849 0 001.46.864l1.94-3.272a.849.849 0 00.007-.854l-1.94-3.393zm5.446 6.24a.849.849 0 000 1.695h4.848a.849.849 0 000-1.696h-4.848z'/%3E%3C/svg%3E"); }
+.run-mode-dot.opencode { --run-mode-logo: url("data:image/svg+xml,%3Csvg fill-rule='evenodd' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M16 6H8v12h8V6zm4 16H4V2h16v20z'/%3E%3C/svg%3E"); }
+.run-mode-dot.pi { --run-mode-logo: url("data:image/svg+xml,%3Csvg fill-rule='evenodd' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath clip-rule='evenodd' d='M1 1h16.5v11H12v5.5H6.5V23H1V1zm5.5 5.5V12H12V6.5H6.5z'/%3E%3Cpath d='M17.5 12H23v11h-5.5V12z'/%3E%3C/svg%3E"); }
+.run-mode-dot.grok { --run-mode-logo: url("data:image/svg+xml,%3Csvg fill-rule='evenodd' viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815'/%3E%3C/svg%3E"); }
+.run-mode-dot.shell { --run-mode-logo: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2.5' y='3.5' width='19' height='17' rx='3'/%3E%3Cpath d='M7 9.5l3 2.5-3 2.5M12.5 15h4.5'/%3E%3C/svg%3E"); }
+.run-mode-dot.web { --run-mode-logo: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20'/%3E%3C/svg%3E"); }
 
 /* Phone-only Enter button (see index.html). Hidden by default at every width;
    mobile.css turns it on inside @media (max-width: 599px), where it takes over
@@ -15435,10 +15480,6 @@ html:not([data-skin="og"]) {
   color: var(--accent-ink);
 }
 .btn-toolbar.btn-run-gear:hover { background: var(--gear-hover); box-shadow: none; }
-.run-mode-dot.claude { background: var(--accent); }
-.run-mode-dot.opencode { background: var(--accent-soft); }
-.run-mode-dot.codex { background: var(--accent-grad-b); }
-.run-mode-dot.shell { background: var(--text-dim); }
 
 /* ---- Shell button: quiet neutral with a calm green tint ---- */
 .btn-toolbar.btn-shell {
@@ -15735,7 +15776,6 @@ html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
 .session-tab--web.active .tab-web-icon { color: var(--accent, #3ec8ee); }
 .session-tab--web.active { border-bottom-color: var(--accent, #3ec8ee); }
 
-.run-mode-dot.web { background: #38bdf8; }
 .run-mode-webviews { max-height: 180px; overflow-y: auto; }
 /* Custom Model Endpoint Profiles' generated entries: `.run-mode-menu.active`'s
    own `gap: 2px` only spaces its DIRECT children, and this container (like
