@@ -32,6 +32,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/codex-predictive-echo.test.ts', // also needs a real codex binary
   'test/split-pane-terminal.browser.test.ts',
   'test/shift-enter-keypress.browser.test.ts',
+  'test/key-tester.browser.test.ts',
   'test/split-pane-orchestration.browser.test.ts',
   'test/split-pane-auto-collapse.browser.test.ts',
 ];

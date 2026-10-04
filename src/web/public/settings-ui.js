@@ -1114,6 +1114,27 @@ Object.assign(CodemanApp.prototype, {
     this._updateCheck = null;
   },
 
+  /**
+   * Settings → Terminal & Input → Key tester: prints what the browser reports for each key event.
+   * Read-only and local; it never reaches a session. keypress is shown on purpose: that event is
+   * why a Shift-only Enter used to submit (xterm drops Ctrl/Alt keypresses, not Shift ones).
+   */
+  keyTesterEvent(ev) {
+    const log = document.getElementById('keyTesterLog');
+    if (!log) return;
+    // Never preventDefault on keydown: that suppresses the keypress this panel exists to show.
+    // The field is readonly, so nothing is typed into it either way.
+    const mods = ['ctrlKey', 'shiftKey', 'altKey', 'metaKey'].filter((m) => ev[m]).map((m) => m.replace('Key', ''));
+    const line =
+      `${ev.type.padEnd(8)} key=${JSON.stringify(ev.key)} code=${ev.code || '-'} ` +
+      `mods=${mods.join('+') || 'none'}` +
+      (ev.type === 'keypress' ? ` charCode=${ev.charCode}` : '') +
+      (ev.repeat ? ' (repeat)' : '');
+    const lines = (log.textContent ? log.textContent.split('\n') : []).concat(line);
+    log.textContent = lines.slice(-14).join('\n');
+    log.style.display = 'block';
+  },
+
   _setUpdateResult(html) {
     const el = this.$('updateResult');
     if (el) { el.style.display = 'block'; el.innerHTML = html; }

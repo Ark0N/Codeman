@@ -107,6 +107,7 @@ import { buildAgentCaseMarker, writeAgentCaseMarker } from '../../agent-case-mar
 import { canUsernameRunPrivilegedCommands, resolveClaudeModeForUsername } from '../../user-store.js';
 import { clampEnvOverridesForOwner } from '../../session-env-clamp.js';
 import { enabledClis, getCli } from '../../config/cli-registry/registry.js';
+import type { NewlineSequence } from '../../config/cli-registry/types.js';
 import { resolveCliLaunchError } from '../../utils/cli-launcher.js';
 import { legacyConfigForMode } from '../../session-cli-registry-bridge.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
@@ -2092,21 +2093,16 @@ export function registerSessionRoutes(
 
   // ========== Send Named Key (tmux send-keys -H) ==========
   // Sends raw hex bytes to tmux pane for keys like Shift+Enter / Ctrl+Enter.
-  // Uses send-keys -H (hex) to inject 0x0a (line feed) which Claude Code's
-  // Ink input recognizes as "insert newline" vs 0x0d (carriage return = submit).
+  // Uses send-keys -H (hex) to inject a newline chord: 0x0a (line feed) by default, or the CLI's
+  // own `capabilities.newline`. Claude Code's Ink input recognizes 0x0a as "insert newline" vs
+  // 0x0d (carriage return = submit).
 
   app.post('/api/sessions/:id/send-key', async (req) => {
     const { id } = req.params as { id: string };
     const body = req.body as Record<string, unknown>;
     const key = typeof body?.key === 'string' ? body.key : '';
 
-    // Map key names to hex byte sequences
-    const KEY_HEX_MAP: Record<string, string[]> = {
-      'S-Enter': ['0a'], // \n (line feed)
-      'C-Enter': ['0a'], // \n (line feed)
-    };
-    const hex = KEY_HEX_MAP[key];
-    if (!hex) {
+    if (key !== 'S-Enter' && key !== 'C-Enter') {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Key not allowed: ${key}`);
     }
 
@@ -2115,6 +2111,18 @@ export function registerSessionRoutes(
     if (!muxName) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'No tmux session');
     }
+
+    // Key names map to hex byte sequences. Ctrl+Enter is always a line feed; Shift+Enter is the
+    // CLI's own newline chord (`capabilities.newline`, default line feed), so a CLI that wants
+    // Esc+Enter declares it in the registry instead of being special-cased here.
+    const NEWLINE_HEX: Record<NewlineSequence, string[]> = {
+      'line-feed': ['0a'], // \n
+      'esc-enter': ['1b', '0d'], // ESC CR, the Alt/Option+Enter chord
+    };
+    const hex =
+      key === 'C-Enter'
+        ? NEWLINE_HEX['line-feed']
+        : NEWLINE_HEX[getCli(session.mode)?.capabilities.newline ?? 'line-feed'];
 
     try {
       // Route through the dedicated Codeman socket — bare `tmux` would target the

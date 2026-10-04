@@ -1822,6 +1822,22 @@
                   </div>
                 </div>
               </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Key tester</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-row has-field" data-search="key tester keyboard shift enter newline diagnose keydown keypress">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Key tester</span>
+                      <span class="set-row-desc">Click the box and press keys to see what this browser reports (key, code, modifiers) for keydown, keypress and keyup. Useful when a shortcut such as Shift+Enter behaves differently on one device. Nothing is sent to a session.</span>
+                    </div>
+                    <input type="text" id="keyTesterInput" class="set-input" data-raw-keys readonly autocomplete="off" spellcheck="false"
+                      placeholder="Click here, then press keys"
+                      onkeydown="app.keyTesterEvent(event)" onkeypress="app.keyTesterEvent(event)" onkeyup="app.keyTesterEvent(event)">
+                  </div>
+                  <pre id="keyTesterLog" class="set-note mono" style="display:none;white-space:pre-wrap" data-i18n-skip></pre>
+                </div>
+              </div>
             </section>
 
             <!-- ══ Header &amp; Panels ═══════════════════════════════════════ -->

@@ -1242,6 +1242,12 @@ class CodemanApp {
 
     // Use capture to handle before terminal
     document.addEventListener('keydown', (e) => {
+      // A field that exists to show what a key does (Settings → Key tester, `data-raw-keys`) must
+      // receive every chord untouched. Without this, probing Ctrl+W killed the active session,
+      // Ctrl+L cleared the terminal and Escape closed Settings: this listener runs in the capture
+      // phase, before the field's own handler. Must stay the first statement.
+      if (e.target?.closest?.('[data-raw-keys]')) return;
+
       // Don't intercept keys during CJK IME composition
       if (e.isComposing || e.keyCode === 229) return;
 
