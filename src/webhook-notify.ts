@@ -26,6 +26,16 @@ import { existsSync, mkdirSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { join } from 'node:path';
 import { blockedWebviewHostReason } from './web/webview-egress-policy.js';
+import { isEgressBlockedError } from './web/webview-egress.js';
+import {
+  WEBHOOK_KINDS,
+  WEBHOOK_SCOPES,
+  type WebhookConfig,
+  type WebhookKind,
+  type WebhookResult,
+  type WebhookScope,
+  type WebhookUrgency,
+} from './types/push.js';
 
 const WEBHOOK_FILE = 'webhook.json';
 const MAX_URL_LENGTH = 2048;
@@ -34,20 +44,6 @@ const MAX_BODY_CHARS = 500;
 /** Same event + session within this window is sent once: a flapping prompt must not flood a channel. */
 const DEDUPE_WINDOW_MS = 3000;
 const MAX_IN_FLIGHT = 5;
-
-export const WEBHOOK_KINDS = ['ntfy', 'slack', 'discord', 'generic'] as const;
-export type WebhookKind = (typeof WEBHOOK_KINDS)[number];
-/** `attention`: only events that need a human (critical / warning). `all`: also "response complete". */
-export const WEBHOOK_SCOPES = ['attention', 'all'] as const;
-export type WebhookScope = (typeof WEBHOOK_SCOPES)[number];
-export type WebhookUrgency = 'critical' | 'warning' | 'info';
-
-export interface WebhookConfig {
-  enabled: boolean;
-  kind: WebhookKind;
-  url: string;
-  scope: WebhookScope;
-}
 
 export const DEFAULT_WEBHOOK_CONFIG: WebhookConfig = { enabled: false, kind: 'ntfy', url: '', scope: 'attention' };
 
@@ -60,13 +56,6 @@ export interface WebhookMessage {
   sessionName?: string;
   /** The Codeman instance's window title, so several machines are told apart. */
   host?: string;
-}
-
-export interface WebhookResult {
-  ok: boolean;
-  status?: number;
-  error?: string;
-  at: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,13 +217,15 @@ export async function writeWebhookConfig(configDir: string, cfg: WebhookConfig):
 
 export type WebhookFetch = (target: URL, init: RequestInit) => Promise<Response>;
 
-/** What went wrong, without the URL: blocked / timed out / refused / an HTTP status. */
+/**
+ * What went wrong, without the URL: blocked / timed out / refused / an HTTP status. An egress
+ * refusal is recognised by its `CODEMAN_EGRESS_BLOCKED` code anywhere in the cause chain (undici
+ * wraps the lookup's error as `TypeError('fetch failed', { cause })`), never by message text.
+ */
 function describeError(err: unknown): string {
-  const e = err as { name?: string; message?: string; cause?: { code?: string; message?: string } };
+  const e = err as { name?: string; cause?: { code?: string } };
   if (e?.name === 'TimeoutError' || e?.name === 'AbortError') return 'Timed out';
-  const text = `${e?.message ?? ''} ${e?.cause?.message ?? ''}`;
-  if (/link-local|cloud-metadata|EGRESS/i.test(text))
-    return 'Refused: target is a link-local or cloud-metadata address';
+  if (isEgressBlockedError(err)) return 'Refused: target is a link-local or cloud-metadata address';
   if (e?.cause?.code === 'ENOTFOUND') return 'Host not found';
   if (e?.cause?.code === 'ECONNREFUSED') return 'Connection refused';
   return 'Network error';

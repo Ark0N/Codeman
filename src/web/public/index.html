@@ -2654,14 +2654,14 @@
                   </div>
                 </div>
               </div>
-            
+
               <div class="set-group" id="webhookGroup" style="display:none">
                 <div class="set-group-head"><h4>Webhook (ntfy, Slack, Discord)</h4><span class="set-scope">server</span></div>
                 <div class="set-group-body">
                   <div class="set-row" data-search="webhook ntfy slack discord notification phone headless">
                     <div class="set-row-text">
                       <span class="set-row-label">Send alerts to a webhook</span>
-                      <span class="set-row-desc">Posts the same events as push notifications (permission prompts, questions, errors, idle) to ntfy, Slack, Discord or any URL, so a server with no browser open can still reach your phone. The URL is a secret: it is stored on the server only and is never shown again once saved.</span>
+                      <span class="set-row-desc">Posts the same events as push notifications (permission prompts, questions, errors, idle) to ntfy, Slack, Discord or any URL, so a server with no browser open can still reach your phone. The URL is a secret: it is stored on the server only and is never shown again once saved. On public ntfy.sh anyone who guesses the topic can read it, so pick a long random one.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="webhookEnabled"><span class="slider"></span></label>
                   </div>
@@ -2679,7 +2679,7 @@
                       <span class="set-row-label">Webhook URL</span>
                       <span class="set-row-desc" id="webhookUrlHint">Nothing saved yet.</span>
                     </div>
-                    <input type="password" id="webhookUrl" class="set-select" autocomplete="off" spellcheck="false" placeholder="https://ntfy.sh/your-topic">
+                    <input type="password" id="webhookUrl" class="set-input" autocomplete="off" spellcheck="false" placeholder="https://ntfy.sh/your-topic">
                   </div>
                   <div class="set-row has-field">
                     <div class="set-row-text">
@@ -2692,10 +2692,14 @@
                     </select>
                   </div>
                   <div class="set-row">
-                    <div class="set-row-text"><span class="set-row-label">Save and test</span></div>
+                    <div class="set-row-text">
+                      <span class="set-row-label">Save and test</span>
+                      <span class="set-row-desc">The main Settings Save saves this group too. Send test saves pending edits first.</span>
+                    </div>
                     <span>
                       <button class="btn-toolbar btn-sm btn-primary" id="webhookSaveBtn" onclick="app.saveWebhook()">Save</button>
                       <button class="btn-toolbar btn-sm" id="webhookTestBtn" onclick="app.testWebhook()">Send test</button>
+                      <button class="btn-toolbar btn-sm" id="webhookClearBtn" onclick="app.clearWebhook()" style="display:none">Remove URL</button>
                     </span>
                   </div>
                   <div id="webhookResult" class="set-note" style="display:none" data-i18n-skip></div>

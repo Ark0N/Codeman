@@ -116,4 +116,50 @@ describe('Webhook settings in a real browser', () => {
     await page.waitForFunction(() => /Test sent/.test(document.getElementById('webhookResult')?.textContent ?? ''));
     expect(JSON.parse(got[0].body)).toMatchObject({ event: 'webhook:test', urgency: 'info' });
   });
+
+  const savedWebhook = () => page.evaluate(async () => (await (await fetch('/api/webhook')).json()).data);
+  const modalOpen = () =>
+    page.evaluate(() => document.getElementById('appSettingsModal')!.classList.contains('active'));
+
+  it('the main Settings Save also saves a pending webhook edit', async () => {
+    await page.selectOption('#webhookScope', 'all');
+    await page.click('#appSettingsModal .set-foot .btn-primary');
+    await page.waitForFunction(() => !document.getElementById('appSettingsModal')!.classList.contains('active'));
+    expect(await savedWebhook()).toMatchObject({ scope: 'all', kind: 'generic', enabled: true, hasUrl: true });
+    await page.evaluate(() => (window as any).app.openAppSettings());
+    await page.waitForFunction(() => (window as any).app._webhookLoaded?.scope === 'all');
+  });
+
+  it('a refused webhook keeps the modal open with the pasted URL, instead of a silent success', async () => {
+    await page.fill('#webhookUrl', 'http://169.254.169.254/latest');
+    await page.click('#appSettingsModal .set-foot .btn-primary');
+    await page.waitForFunction(() =>
+      /metadata|link-local/.test(document.getElementById('webhookResult')?.textContent ?? '')
+    );
+    expect(await modalOpen()).toBe(true);
+    expect(await page.inputValue('#webhookUrl')).toBe('http://169.254.169.254/latest');
+    expect((await savedWebhook()).urlMasked).toBe(`http://127.0.0.1:${receiverPort}/•••`);
+    await page.fill('#webhookUrl', '');
+  });
+
+  it('Send test saves a newly pasted URL first, so it never tests the old one', async () => {
+    got.length = 0;
+    await page.fill('#webhookUrl', `http://127.0.0.1:${receiverPort}/other-topic`);
+    await page.click('#webhookTestBtn');
+    await page.waitForFunction(() => /Test sent/.test(document.getElementById('webhookResult')?.textContent ?? ''));
+    expect(got).toHaveLength(1);
+    expect(got[0].url).toBe('/other-topic');
+    expect(await page.inputValue('#webhookUrl')).toBe('');
+  });
+
+  it('Remove URL deletes the saved secret and turns the channel off', async () => {
+    expect(await page.isVisible('#webhookClearBtn')).toBe(true);
+    page.once('dialog', (d) => void d.accept());
+    await page.click('#webhookClearBtn');
+    await page.waitForFunction(() => /removed/.test(document.getElementById('webhookResult')?.textContent ?? ''));
+    expect(await page.textContent('#webhookUrlHint')).toBe('Nothing saved yet.');
+    expect(await page.isChecked('#webhookEnabled')).toBe(false);
+    expect(await page.isVisible('#webhookClearBtn')).toBe(false);
+    expect(await savedWebhook()).toMatchObject({ hasUrl: false, enabled: false, urlMasked: '' });
+  });
 });

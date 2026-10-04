@@ -16,11 +16,11 @@ import {
   WebhookNotifier,
   webhookUrlProblem,
   writeWebhookConfig,
-  type WebhookConfig,
   type WebhookFetch,
   type WebhookMessage,
 } from '../src/webhook-notify.js';
-import { webviewFetch } from '../src/web/webview-egress.js';
+import type { WebhookConfig } from '../src/types/push.js';
+import { webviewFetch, WebviewEgressBlockedError } from '../src/web/webview-egress.js';
 
 const MSG: WebhookMessage = {
   event: 'hook:permission_prompt',
@@ -218,6 +218,24 @@ describe('sendWebhook', () => {
     const r = await sendWebhook({ ...CFG, url: 'http://169.254.169.254/latest' }, MSG, fetchImpl);
     expect(r.ok).toBe(false);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('recognises an egress refusal by its code anywhere in the cause chain, not by message text', async () => {
+    // A DNS name resolving into a blocked range is refused by the connect-time lookup, and undici
+    // hands that back wrapped (`fetch failed` -> connect error -> the refusal), so it can sit deep.
+    const blocked = new WebviewEgressBlockedError('cloud metadata');
+    const deep = new TypeError('fetch failed', { cause: new Error('connect failed', { cause: blocked }) });
+    for (const err of [blocked, deep]) {
+      const r = await sendWebhook(CFG, MSG, async () => {
+        throw err;
+      });
+      expect(r.error).toBe('Refused: target is a link-local or cloud-metadata address');
+    }
+    // Words alone (an upstream error that happens to mention them) are not a refusal.
+    const r = await sendWebhook(CFG, MSG, async () => {
+      throw new TypeError('fetch failed', { cause: new Error('link-local EGRESS hiccup') });
+    });
+    expect(r.error).toBe('Network error');
   });
 });
 

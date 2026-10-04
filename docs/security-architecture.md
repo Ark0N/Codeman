@@ -532,6 +532,16 @@ A saved dashboard URL renders as a tab, served through Codeman's own origin at `
 
 ---
 
+## 10c. Webhook notifications (outbound channel)
+
+Opt-in and off by default: the server POSTs the Web Push events (permission prompts, questions, idle, errors, respawn blocked, crash-loop breaker, Ralph completion) to one URL an admin configures, formatted for ntfy, Slack, Discord or generic JSON. Source: `src/webhook-notify.ts`, routes in `src/web/routes/webhook-routes.ts`. User guide: [`wiki/Notifications-And-Approvals.md`](wiki/Notifications-And-Approvals.md).
+
+- **A second server-side outbound channel through the web-tab egress guard (§10b).** Delivery goes through `webviewFetch`, so link-local and cloud-metadata targets are refused at save time and again on the RESOLVED address at connect time; redirects are not followed (`redirect: 'manual'`) and each send is bounded by a 5 s timeout. Loopback and RFC1918 stay allowed on purpose (a self-hosted ntfy is the point), so **Send test** works as a blind reachability probe (status, refused or timed out, never a response body) for whoever may call it. Web tabs already give that caller full LAN reach with bodies, so nothing new is exposed.
+- **The URL is a bearer secret** (anyone holding a Slack or Discord webhook URL can post as it). It lives in `~/.codeman/webhook.json` (0600, tmp+rename), is kept out of `settings.json` (which every logged-in user reads through `GET /api/settings`), is never returned (`GET /api/webhook` gives scheme + host only), and never appears in a log line, a delivery result or an error message.
+- **It carries session data to a third party.** Titles and bodies include session names, tool names and error text, all agent- or user-controlled, so Discord gets `allowed_mentions: { parse: [] }` and Slack's `& < >` are escaped: agent output cannot ping a channel. In multi-user mode all three routes are admin-only and the channel is instance-wide: it receives every user's session events, the same reach an admin's own Web Push has, which means non-admins' session details leave the box at the admin's choice.
+
+---
+
 ## 11. Quick reference
 
 | Env / flag | Effect |

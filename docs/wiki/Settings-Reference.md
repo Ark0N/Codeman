@@ -125,8 +125,9 @@ instead of its native cloud backend. See [Custom Model Endpoints](Custom-Model-E
 
 ### Notifications
 
-Master toggle, browser notifications, push subscription, audio alerts, and the idle
-threshold that decides when a quiet session counts as needing you. See
+Master toggle, browser notifications, push subscription, audio alerts, the idle
+threshold that decides when a quiet session counts as needing you, and the server-wide
+webhook (ntfy, Slack, Discord or generic JSON; admins only in multi-user mode). See
 [Notifications And Approvals](Notifications-And-Approvals).
 
 ### Voice

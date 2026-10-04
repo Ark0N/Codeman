@@ -11,7 +11,14 @@
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
+import {
+  ApiErrorCode,
+  createErrorResponse,
+  getErrorMessage,
+  type ApiResponse,
+  type WebhookResult,
+  type WebhookStatus,
+} from '../../types.js';
 import { isAdmin, parseBody } from '../route-helpers.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { WebhookUpdateSchema } from '../schemas.js';
@@ -20,21 +27,8 @@ import {
   readWebhookConfig,
   webhookUrlProblem,
   writeWebhookConfig,
-  type WebhookKind,
   type WebhookNotifier,
-  type WebhookResult,
-  type WebhookScope,
 } from '../../webhook-notify.js';
-
-export interface WebhookStatus {
-  enabled: boolean;
-  kind: WebhookKind;
-  scope: WebhookScope;
-  hasUrl: boolean;
-  /** Scheme + host only; the path and query are the secret. */
-  urlMasked: string;
-  lastResult: WebhookResult | null;
-}
 
 export interface WebhookRouteDeps {
   notifier: WebhookNotifier;
