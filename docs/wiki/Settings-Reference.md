@@ -61,6 +61,13 @@ Manager, Attachments, File Viewer, Multi-monitor, Split, Plan Usage, Lifecycle L
 Project Insights, File Browser, Subagents, Approvals Inbox, Read My Mind, Ultracode Agents,
 Ultracode Windows, Cron.
 
+**Bottom bar** (below the chips): **Git status** shows a small indicator at the right of the
+bottom bar, off by default and per device. It reads `● N` uncommitted files, `↑ N` commits not
+pushed, `⚠ N` merge conflicts, or `✓` when everything is committed and pushed. Click it for the
+Git window; see [Working With Files](Working-With-Files#git-changes). **Git status: group files
+by folder** (per device, on by default) shows changed files under collapsed folders in that
+window; off lists every file by its full path.
+
 Most default to off. The stock desktop header is system stats, File Viewer, and the gear.
 New header controls never appear on phones. Split is desktop-only regardless of this
 setting — the button and the feature both stay off below a ~1180px viewport, where two

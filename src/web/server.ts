@@ -183,6 +183,7 @@ import {
   registerApprovalRoutes,
   registerRebootRestoreRoutes,
   registerReadMyMindRoutes,
+  registerGitStatusRoutes,
   registerStatusTelemetryRoutes,
   registerSystemRoutes,
   registerCaseRoutes,
@@ -1122,6 +1123,7 @@ export class WebServer extends EventEmitter {
     registerApprovalRoutes(this.app, ctx);
     registerRebootRestoreRoutes(this.app, ctx);
     registerReadMyMindRoutes(this.app, ctx);
+    registerGitStatusRoutes(this.app, ctx);
     registerStatusTelemetryRoutes(this.app, ctx);
     registerSystemRoutes(this.app, ctx);
     registerCaseRoutes(this.app, ctx);

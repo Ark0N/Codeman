@@ -567,6 +567,19 @@
       <div class="file-browser-status" id="fileBrowserStatus"></div>
     </div>
 
+    <!-- Git status panel (git-status-ui.js): what the active session's repo has not committed or pushed. -->
+    <div class="git-status-panel" id="gitStatusPanel" role="dialog" aria-label="Git status">
+      <div class="git-status-header">
+        <span class="git-status-title">Git <span class="git-status-branch" id="gitStatusBranch" data-i18n-skip></span></span>
+        <div class="git-status-actions">
+          <button class="btn-icon-sm" onclick="app.refreshGitStatusNow()" title="Refresh" aria-label="Refresh git status">&#x21BB;</button>
+          <button class="btn-icon-sm" onclick="app.closeGitStatusPanel()" title="Close" aria-label="Close git status">&times;</button>
+        </div>
+      </div>
+      <div class="git-status-body" id="gitStatusBody" data-i18n-skip></div>
+      <div class="git-status-footer" id="gitStatusFooter" data-i18n-skip></div>
+    </div>
+
     <!-- File Preview Overlay -->
     <div class="file-preview-overlay" id="filePreviewOverlay">
       <div class="file-preview-window">
@@ -771,6 +784,13 @@
         <!-- Orchestrator button hidden until feature is ready -->
         <!-- <button class="btn-toolbar btn-sm" onclick="app.toggleOrchestratorPanel()" title="Orchestrator Loop">&#x2699; Orchestrator</button> -->
         <button class="btn-toolbar btn-sm btn-cron btn-cron--hidden" onclick="app.openCron()" title="Cron Jobs">&#x23F0; Cron</button>
+        <!-- Git status of the active session's repository (git-status-ui.js). Optional and per-device
+             (App Settings → Header & Panels → Bottom bar, default OFF), so it is hidden until that
+             setting is on AND the session is a local git repository. -->
+        <button type="button" class="btn-toolbar btn-sm btn-git-status" id="gitStatusBtn" hidden aria-expanded="false" aria-controls="gitStatusPanel" onclick="app.toggleGitStatusPanel()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7"/><path d="M18 10.5c0 4-6 3-11 6"/></svg>
+          <span class="git-status-label" data-i18n-skip></span>
+        </button>
         <span class="version-display" id="versionDisplay" title="Codeman version">v0.0.0</span>
       </div>
     </footer>
@@ -1931,6 +1951,26 @@
                 <div class="set-group-body">
                   <div class="set-chips" data-search="cron scheduled jobs toolbar">
                     <label class="set-chip" data-preview="toolbar" data-preview-order="1"><input type="checkbox" id="appSettingsShowCronButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg><span>Cron</span></label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Bottom bar</h4></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="git status uncommitted unpushed commit push indicator bottom bar toolbar">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Git status <span class="set-scope">device</span></span>
+                      <span class="set-row-desc">Shows, at the right of the bottom bar, when the active session's repository (or each repository inside its folder, up to two levels down) has uncommitted files or commits that are not pushed. Click it for the list. Read-only: Codeman never fetches or changes the repository. Not shown for Docker or remote sessions. Off by default.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsShowGitStatus"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="git status folders tree flat list collapsed expand files">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Git status: group files by folder <span class="set-scope">device</span></span>
+                      <span class="set-row-desc">In the Git window, show changed files under their folders, collapsed until you click a folder. Off lists every file by its full path. On by default.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsGitStatusTree" checked><span class="slider"></span></label>
                   </div>
                 </div>
               </div>
@@ -3896,6 +3936,7 @@
   <script defer src="webview-tabs.js"></script>
   <script defer src="mobile-overview.js"></script>
   <script defer src="home-sessions.js"></script>
+  <script defer src="git-status-ui.js"></script>
   <script defer src="entrance-animations.js"></script>
   <script defer src="ralph-wizard.js"></script>
   <script defer src="api-client.js"></script>
