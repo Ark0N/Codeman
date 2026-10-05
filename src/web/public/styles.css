@@ -1867,15 +1867,14 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-prefix {
   text-overflow: ellipsis;
 }
 
-/* The input always keeps room to type. `!important` beats the editor's inline
-   `min-width: 0`, which the header strip's fixed-width editor relies on. */
+/* The input takes the rest of the row. Its 4rem floor is the editor's own
+   inline min-width (startInlineRename picks it per layout). */
 :is(
   html[data-tab-orientation='vertical'] .tab-rail,
   html[data-session-list='sidebar'] .session-sidebar
 ) .tab-name-renaming .tab-rename-input {
   flex: 1 1 0;
   width: auto;
-  min-width: 4rem !important;
 }
 
 /* A compact rail row has no room for both the editor and its adornments, so

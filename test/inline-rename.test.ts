@@ -802,16 +802,133 @@ describe('Inline rename write ordering', () => {
     expect(await state('reopen')).toEqual({ bodies: ['First'], mapName: 'First', renameActive: false });
   });
 
-  it('re-sends the shown name when it is confirmed unchanged over a rename still in flight', async () => {
+  it('reopens the editor on the name still in flight, so confirming it unchanged keeps the rename', async () => {
     await mount('stale', 'Old');
     await commit('stale', 'First');
-    // The reopened editor still shows "Old" (the PUT has not answered), and
-    // Enter confirms that: the user's last word is "Old", not "First".
+    // The PUT for "First" has not answered, so app.sessions still says "Old".
+    // The reopened editor must show "First", the user's last word, and an
+    // untouched confirm must not queue "Old" behind it.
+    const reopenedValue = await page.evaluate(() => {
+      (window as unknown as { app: { startInlineRename: (id: string) => void } }).app.startInlineRename('stale');
+      return (document.querySelector('.tab-name[data-session-id="stale"] input.tab-rename-input') as HTMLInputElement)
+        .value;
+    });
+    expect(reopenedValue).toBe('First');
     await commit('stale', null);
     await answer(0, 'First');
-    await answer(1, 'Old');
     await restoreFetch();
-    expect(await state('stale')).toEqual({ bodies: ['First', 'Old'], mapName: 'Old', renameActive: false });
+    expect(await state('stale')).toEqual({ bodies: ['First'], mapName: 'First', renameActive: false });
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { app: { _inlineRenamePending?: Map<string, string> } }).app._inlineRenamePending?.has(
+            'stale'
+          ) ?? false
+      )
+    ).toBe(false);
+  });
+
+  it('reports a failed write even after its editor is gone', async () => {
+    await mount('fail-late', 'Old');
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        app: { showToast: (message: string, type?: string) => void };
+        __toasts: string[];
+        __origToast?: (message: string, type?: string) => void;
+      };
+      w.__toasts = [];
+      w.__origToast = w.app.showToast;
+      w.app.showToast = (message: string) => {
+        w.__toasts.push(message);
+      };
+    });
+    await commit('fail-late', 'First');
+    // Reopen and dismiss: the editor that made the write is gone.
+    await page.evaluate(() => {
+      const app = (
+        window as unknown as { app: { startInlineRename: (id: string) => void; _activeRename: { cancel: () => void } } }
+      ).app;
+      app.startInlineRename('fail-late');
+      app._activeRename.cancel();
+    });
+    await page.evaluate(async () => {
+      const w = window as unknown as { __pending: Pending[] };
+      w.__pending[0]?.resolve(
+        new Response(JSON.stringify({ success: false, error: 'boom' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      );
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    });
+    await restoreFetch();
+    const toasts = await page.evaluate(() => {
+      const w = window as unknown as {
+        app: { showToast: unknown };
+        __toasts: string[];
+        __origToast?: unknown;
+      };
+      w.app.showToast = w.__origToast;
+      return w.__toasts;
+    });
+    expect(toasts).toEqual(['Failed to rename']);
+    expect(await state('fail-late')).toEqual({ bodies: ['First'], mapName: 'Old', renameActive: false });
+  });
+
+  it('keeps sending a session renames after the work following a PUT throws', async () => {
+    await mount('throws', 'Old');
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        app: { updateSubagentParentNames?: (id: string) => void };
+        __origParentNames?: (id: string) => void;
+        __throwOnce: boolean;
+      };
+      w.__origParentNames = w.app.updateSubagentParentNames;
+      w.__throwOnce = true;
+      w.app.updateSubagentParentNames = (id: string) => {
+        if (w.__throwOnce) {
+          w.__throwOnce = false;
+          throw new Error('forced');
+        }
+        w.__origParentNames?.call(w.app, id);
+      };
+      window.addEventListener('unhandledrejection', (event) => event.preventDefault(), { once: true });
+    });
+    await commit('throws', 'First');
+    await answer(0, 'First');
+    await commit('throws', 'Second');
+    await answer(1, 'Second');
+    await restoreFetch();
+    const leftover = await page.evaluate(() => {
+      const w = window as unknown as {
+        app: { updateSubagentParentNames?: unknown; _inlineRenameWrites?: Map<string, unknown> };
+        __origParentNames?: unknown;
+      };
+      w.app.updateSubagentParentNames = w.__origParentNames;
+      return w.app._inlineRenameWrites?.has('throws') ?? false;
+    });
+    expect(await state('throws')).toEqual({ bodies: ['First', 'Second'], mapName: 'Second', renameActive: false });
+    expect(leftover).toBe(false);
+  });
+
+  it('lets the header strip editor shrink (inline min-width 0)', async () => {
+    await mount('header-width', 'Old');
+    const minWidth = await page.evaluate(() => {
+      const app = (
+        window as unknown as {
+          app: { startInlineRename: (id: string) => void; _activeRename: { cancel: () => void } | null };
+        }
+      ).app;
+      app.startInlineRename('header-width');
+      const input = document.querySelector(
+        '.tab-name[data-session-id="header-width"] input.tab-rename-input'
+      ) as HTMLInputElement;
+      const value = input.style.minWidth;
+      app._activeRename?.cancel();
+      return value;
+    });
+    await restoreFetch();
+    expect(minWidth).toBe('0px');
   });
 
   it('keeps a confirmed session rename when a group rename takes over the editor', async () => {
@@ -901,6 +1018,8 @@ describe('Vertical rail rename editor with a long prefix', () => {
     { variant: 'simple rows', settings: { tabOrientation: 'vertical', tabRailDetail: 'simple' }, compact: false },
     { variant: 'detailed rows', settings: { tabOrientation: 'vertical', tabRailDetail: 'rich' }, compact: false },
     { variant: 'compact rail', settings: { tabOrientation: 'vertical', tabRailWidth: 208 }, compact: true },
+    { variant: 'sidebar', settings: { sessionListLayout: 'sidebar' }, compact: false },
+    { variant: 'detailed sidebar', settings: { sessionListLayout: 'sidebar-rich' }, compact: false },
   ])('keeps the prefix and a usable input inside the row ($variant)', async ({ settings, compact }) => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
     try {
@@ -910,7 +1029,8 @@ describe('Vertical rail rename editor with a long prefix', () => {
       );
       const page = await context.newPage();
       await page.goto(`http://localhost:${port}`, { waitUntil: 'domcontentloaded' });
-      const row = page.locator(`#tabRail .session-tab[data-id="${sessionId}"]`);
+      // One #sessionTabs list, moved into the rail or the sidebar by the layout.
+      const row = page.locator(`#sessionTabs .session-tab[data-id="${sessionId}"]`);
       await row.waitFor({ state: 'visible', timeout: 15000 });
       expect(await page.evaluate(() => document.documentElement.classList.contains('tab-rail-compact'))).toBe(compact);
 
@@ -937,6 +1057,7 @@ describe('Vertical rail rename editor with a long prefix', () => {
           inputInsideRow: within(box(input), box(info)),
           prefixInsideRow: within(box(prefix), box(info)),
           prefixEllipsis: getComputedStyle(prefix).textOverflow,
+          inlineMinWidth: input.style.minWidth,
         };
       });
       expect(geometry.focused).toBe(true);
@@ -945,6 +1066,8 @@ describe('Vertical rail rename editor with a long prefix', () => {
       expect(geometry.inputInsideRow).toBe(true);
       expect(geometry.prefixInsideRow).toBe(true);
       expect(geometry.prefixEllipsis).toBe('ellipsis');
+      // The floor is the editor's own inline style, not a stylesheet override.
+      expect(geometry.inlineMinWidth).toBe('4rem');
 
       await input.press('Escape');
       expect(await row.locator('input.tab-rename-input').count()).toBe(0);
