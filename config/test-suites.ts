@@ -37,6 +37,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/key-tester.browser.test.ts',
   'test/webhook-settings.browser.test.ts',
   'test/case-custom-path.browser.test.ts',
+  'test/doctor-settings.browser.test.ts',
   'test/split-pane-orchestration.browser.test.ts',
   'test/split-pane-auto-collapse.browser.test.ts',
   'test/mobile-ime-preview.browser.test.ts',

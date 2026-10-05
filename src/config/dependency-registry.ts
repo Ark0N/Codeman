@@ -7,6 +7,8 @@
  * @module config/dependency-registry
  */
 
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { enabledClis } from './cli-registry/registry.js';
 import { compileVersionRegex } from './cli-registry/patterns.js';
 
@@ -30,6 +32,20 @@ export interface PathResolver {
    * there and a false "installed" contradicts the run mode's own resolver.
    */
   requireVersionMatch?: boolean;
+  /**
+   * Absolute directories to probe (`<dir>/<bin>`) when `which` misses. A service (systemd,
+   * launchd) runs with a minimal PATH, so a CLI installed under `~/.local/bin` or an npm/nvm
+   * prefix is invisible to `which` while the run mode, which falls back to the registry's
+   * `discovery.searchDirs`, still finds it. Carries those dirs so the doctor agrees.
+   */
+  searchDirs?: string[];
+}
+
+/** Expand a leading `~` (the only form registry `searchDirs` use). */
+function expandSearchDir(dir: string): string {
+  if (dir === '~') return homedir();
+  if (dir.startsWith('~/')) return join(homedir(), dir.slice(2));
+  return dir;
 }
 
 /** Resolve a Windows-installed app reachable from win32 or WSL. */
@@ -131,6 +147,7 @@ function cliDependencyEntries(): ToolDependency[] {
             // (pi, grok, dsh): a bare `which` hit there is not evidence of the right
             // program, so a version mismatch means MISSING rather than unknown-version.
             requireVersionMatch: version?.requireVersionMatch,
+            searchDirs: cli.discovery.searchDirs.map(expandSearchDir),
           },
         },
       ],

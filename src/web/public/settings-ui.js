@@ -422,6 +422,7 @@ Object.assign(CodemanApp.prototype, {
     this._mcpSyncSavedOn = settings.mcpSyncEnabled === true;
     document.getElementById('appSettingsMcpSync').checked = this._mcpSyncSavedOn;
     this.applyMcpSyncVisibility();
+    this._applyDoctorAdminGate();
     this.loadWebhook();
     // Read My Mind: synced, default OFF (opt-in; capture + prediction cost real tokens).
     document.getElementById('appSettingsReadMyMind').checked = settings.readMyMindEnabled === true;
@@ -1192,6 +1193,18 @@ Object.assign(CodemanApp.prototype, {
     group.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
   },
 
+  /**
+   * GET /api/doctor is admin-only in multi-user mode (it names install paths on the host), so a
+   * non-admin gets no Diagnostics group instead of a button that can only answer 403. Also
+   * wired to `codeman:me` for the same late-resolving role as the groups above.
+   */
+  _applyDoctorAdminGate() {
+    const group = document.getElementById('doctorGroup');
+    if (!group) return;
+    const me = window.__codemanUser || {};
+    group.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
+  },
+
   /** Preview (apply=false) or run (apply=true) the MCP server sync across enabled CLIs. */
   async mcpSync(apply) {
     const out = this.$('mcpSyncResult');
@@ -1359,6 +1372,67 @@ Object.assign(CodemanApp.prototype, {
       }
       const r = body.data;
       this._webhookSay(r.ok ? 'Test sent. Check your phone or channel.' : `Delivery failed: ${r.error}`, !r.ok);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  },
+
+  /**
+   * Settings → System → Diagnostics: run `codeman doctor` on the server (GET /api/doctor) and list
+   * each tool. Built with DOM nodes and textContent: paths and versions come from the host.
+   */
+  async runDoctor() {
+    const out = document.getElementById('doctorResult');
+    const btn = document.getElementById('doctorRunBtn');
+    if (!out) return;
+    const say = (text) => {
+      out.replaceChildren(document.createTextNode(text));
+      out.style.display = 'block';
+    };
+    if (btn) btn.disabled = true;
+    say('Checking…');
+    try {
+      const res = await this._api('/api/doctor');
+      let body = null;
+      try { body = res ? await res.json() : null; } catch { /* fall through */ }
+      if (!res || !res.ok || !body || body.success === false) {
+        say(body?.error || 'The check failed.');
+        return;
+      }
+      const { tools, summary, platform } = body.data;
+      const glyph = { ok: '✓', missing: '✗', outdated: '!', error: '!', skipped: '–' };
+      const list = document.createElement('ul');
+      list.style.margin = '0';
+      list.style.paddingLeft = '1.2em';
+      for (const t of tools) {
+        const li = document.createElement('li');
+        const strong = document.createElement('b');
+        strong.textContent = `${glyph[t.status] || '?'} ${t.label}`;
+        li.append(strong);
+        const bits = [t.status];
+        if (t.version) bits.push(t.version);
+        if (t.status !== 'ok' && t.status !== 'skipped') bits.push(t.required ? 'required' : 'optional');
+        if (t.reason) bits.push(t.reason);
+        li.append(document.createTextNode(` ${bits.join(' · ')}`));
+        if (t.path) {
+          const p = document.createElement('div');
+          p.className = 'mono';
+          p.textContent = t.path;
+          li.append(p);
+        }
+        if (t.status === 'missing' && t.installHint) {
+          const h = document.createElement('div');
+          h.textContent = `Install: ${t.installHint}`;
+          li.append(h);
+        }
+        list.append(li);
+      }
+      const head = document.createElement('p');
+      head.textContent =
+        `${summary.ok} ok · ${summary.requiredMissing} required missing · ${summary.optionalMissing} optional missing` +
+        ` (${platform.environment})`;
+      out.replaceChildren(head, list);
+      out.style.display = 'block';
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -4373,4 +4447,5 @@ document.addEventListener?.('codeman:me', () => {
   window.app?._applyCustomModelAdminGate?.();
   window.app?._applyCliManagementAdminGate?.();
   window.app?._applyMcpSyncAdminGate?.();
+  window.app?._applyDoctorAdminGate?.();
 });

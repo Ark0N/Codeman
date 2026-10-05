@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { dependencyRegistry } from '../src/config/dependency-registry.js';
 import {
   detectEnvironment,
@@ -256,6 +256,53 @@ describe('checkTool with requireVersionMatch (generic binary names)', () => {
   it('leaves tools without the flag reporting ok on an unparsable version (unchanged)', () => {
     const host = fakeHost('linux', { which: () => '/usr/bin/tmux', runVersion: () => 'no version here' });
     expect(checkTool(tmuxTool, host)).toMatchObject({ id: 'tmux', status: 'ok', version: undefined });
+  });
+});
+
+describe('checkTool with searchDirs (service PATH is minimal)', () => {
+  const claudeLike: ToolDependency = {
+    ...tmuxTool,
+    id: 'claude',
+    label: 'Claude CLI',
+    resolvers: [
+      {
+        match: ['linux'],
+        resolver: { kind: 'path', bins: ['claude'], searchDirs: ['/home/u/.local/bin', '/opt/npm/bin/'] },
+      },
+    ],
+  };
+
+  it('finds a CLI that only lives in a searchDirs entry and runs --version on the absolute path', () => {
+    const runVersion = vi.fn(() => 'claude 2.1.0');
+    const host = fakeHost('linux', { fileExists: (p) => p === '/opt/npm/bin/claude', runVersion });
+    expect(checkTool(claudeLike, host)).toMatchObject({
+      status: 'ok',
+      path: '/opt/npm/bin/claude',
+      version: '2.1.0',
+    });
+    expect(runVersion).toHaveBeenCalledWith('/opt/npm/bin/claude', ['--version']);
+  });
+
+  it('still reports missing when neither PATH nor any search dir has it', () => {
+    expect(checkTool(claudeLike, fakeHost('linux'))).toMatchObject({ status: 'missing' });
+  });
+
+  it('prefers the PATH hit over a search dir', () => {
+    const host = fakeHost('linux', {
+      which: () => '/usr/bin/claude',
+      fileExists: () => true,
+      runVersion: () => '1.0.0',
+    });
+    expect(checkTool(claudeLike, host)).toMatchObject({ path: '/usr/bin/claude' });
+  });
+
+  it('carries each enabled CLI’s expanded discovery.searchDirs onto its registry row', () => {
+    const rows = dependencyRegistry().flatMap((t) => t.resolvers.map((r) => r.resolver));
+    const withDirs = rows.filter((r) => r.kind === 'path' && r.searchDirs?.length);
+    expect(withDirs.length).toBeGreaterThan(0);
+    for (const r of withDirs) {
+      if (r.kind === 'path') for (const d of r.searchDirs ?? []) expect(d.startsWith('~')).toBe(false);
+    }
   });
 });
 

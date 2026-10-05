@@ -202,6 +202,7 @@ import {
   registerTabLayoutRoutes,
   registerMcpSyncRoutes,
   registerWebhookRoutes,
+  registerDoctorRoutes,
   registerCustomModelRoutes,
   refreshAllCustomModelHosts,
   readCustomModelEndpointsEnabled,
@@ -1143,6 +1144,7 @@ export class WebServer extends EventEmitter {
       configDir: getDataDir(),
       hostTitle: () => this.windowTitle,
     });
+    registerDoctorRoutes(this.app);
     registerCustomModelRoutes(this.app);
     registerCliRegistryRoutes(this.app);
 
