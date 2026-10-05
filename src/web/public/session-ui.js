@@ -2589,6 +2589,62 @@ Object.assign(CodemanApp.prototype, {
     return typeof confirmed === 'string' ? confirmed : name;
   },
 
+  /**
+   * Write an inline rename, one PUT per session at a time, in the order the
+   * user made them. The editor can be reopened (or cancelled, or replaced by a
+   * group rename) while a PUT is in flight, so the write lives here rather than
+   * in the editor: a confirmed name is applied locally even after its editor is
+   * gone, and the "already that name" check runs only once the earlier writes
+   * have landed, so confirming the name still on screen is a real write.
+   * Resolves { status: 'confirmed' | 'failed' | 'deleted' }; never rejects,
+   * and reports a failed write itself, since its editor may be gone by then.
+   * `_inlineRenamePending` holds the newest queued name per session, so an
+   * editor reopened over a write in flight starts from that name rather than
+   * the one the server has not replaced yet.
+   */
+  _queueInlineSessionName(sessionId, desiredName) {
+    this._inlineRenameWrites ??= new Map();
+    this._inlineRenamePending ??= new Map();
+    const writes = this._inlineRenameWrites;
+    const pending = this._inlineRenamePending;
+    pending.set(sessionId, desiredName);
+    // Chained from a settled promise, so one rejected write cannot stop the
+    // writes queued behind it.
+    const prev = (writes.get(sessionId) || Promise.resolve()).catch(() => {});
+    const task = prev.then(async () => {
+      const session = this.sessions.get(sessionId);
+      if (!session) return { status: 'deleted' };
+      if (session.name === desiredName) return { status: 'confirmed' };
+      let confirmed = null;
+      try {
+        confirmed = await this._putSessionName(sessionId, desiredName);
+      } catch {
+        // A failure is a value, so a later write in the chain still runs.
+      }
+      if (!this.sessions.has(sessionId)) return { status: 'deleted' };
+      if (confirmed === null) {
+        this.showToast('Failed to rename', 'error');
+        return { status: 'failed' };
+      }
+      try {
+        this._applyLocalSessionName(sessionId, confirmed);
+        this.renderSessionTabs();
+      } catch (err) {
+        // The server holds the name; a local repaint failing is not a failed write.
+        console.error('[rename] applying the confirmed name failed', err);
+      }
+      return { status: 'confirmed' };
+    });
+    writes.set(sessionId, task);
+    const cleanup = () => {
+      if (writes.get(sessionId) !== task) return;
+      writes.delete(sessionId);
+      pending.delete(sessionId);
+    };
+    task.then(cleanup, cleanup);
+    return task;
+  },
+
   async saveSessionName() {
     if (!this.editingSessionId) return;
     // Captured: the modal can be closed (or switched to another session) while
@@ -2877,7 +2933,11 @@ Object.assign(CodemanApp.prototype, {
     tabName.classList.add('tab-name-renaming');
 
     const currentName = this.getSessionName(session);
-    const parsed = parseSessionPrefix(session.name);
+    // A rename still in flight is the user's last word, not the name the
+    // server has yet to replace: start from it, and compare against it below.
+    const shownName = this._inlineRenamePending?.get(sessionId) ?? session.name;
+    const renameInFlight = shownName !== session.name;
+    const parsed = parseSessionPrefix(shownName);
     const originalContent = tabName.textContent;
     const originalChildren = [...tabName.childNodes].map((node) => node.cloneNode(true));
     const restoreOriginalChildren = () => {
@@ -2898,13 +2958,17 @@ Object.assign(CodemanApp.prototype, {
 
     const input = document.createElement('input');
     input.type = 'text';
-    input.value = parsed ? parsed.suffix : (session.name || '');
+    input.value = parsed ? parsed.suffix : (shownName || '');
     input.placeholder = parsed ? 'Add description...' : currentName;
     input.className = 'tab-rename-input';
     // 80px is tuned for the narrow header tab; a full-width sidebar row can and
-    // should give the whole line to the input.
-    const renameWidth = tabName.closest('.tab-rail') ? 'auto' : this.isSessionSidebarActive?.() ? '100%' : '80px';
-    input.style.cssText = `width: ${renameWidth}; min-width: 0; font-size: 0.75rem; padding: 2px 4px; background: var(--bg-input); border: 1px solid var(--accent); border-radius: 3px; color: var(--text); outline: none;`;
+    // should give the whole line to the input. The header editor may shrink to
+    // nothing, while a rail or sidebar row always keeps room to type.
+    const inRail = !!tabName.closest('.tab-rail');
+    const inSidebar = !inRail && !!this.isSessionSidebarActive?.();
+    const renameWidth = inRail ? 'auto' : inSidebar ? '100%' : '80px';
+    const renameMinWidth = inRail || inSidebar ? '4rem' : '0';
+    input.style.cssText = `width: ${renameWidth}; min-width: ${renameMinWidth}; font-size: 0.75rem; padding: 2px 4px; background: var(--bg-input); border: 1px solid var(--accent); border-radius: 3px; color: var(--text); outline: none;`;
 
     tabName.appendChild(input);
     input.focus();
@@ -2954,22 +3018,20 @@ Object.assign(CodemanApp.prototype, {
 
       const suffix = input.value.trim();
       const fullName = parsed ? parsed.prefix + (suffix ? ': ' + suffix : '') : suffix;
-      if (fullName === session.name) restoreOriginalChildren();
+      // An unchanged confirm puts the old label back, unless the editor opened
+      // over a rename in flight: that label was repainted from the server's
+      // older name, so show the in-flight name rather than make it look lost.
+      if (fullName === shownName && !renameInFlight) restoreOriginalChildren();
       else tabName.textContent = fullName || originalContent;
 
-      // Skip the API call if the session vanished between focus and blur.
-      const stillExists = this.sessions.has(sessionId);
-      if (stillExists && fullName !== session.name) {
-        const confirmed = await this._putSessionName(sessionId, fullName);
+      // Skip the API call if the session vanished between focus and blur. The
+      // queue applies the confirmed name to this.sessions before the re-render
+      // below repaints from it (see _applyLocalSessionName()).
+      if (this.sessions.has(sessionId)) {
+        const result = await this._queueInlineSessionName(sessionId, fullName);
         if (invalidated || this._activeRename !== renameHandle || !this.sessions.has(sessionId)) return;
-        if (confirmed === null) {
-          restoreOriginalChildren();
-          this.showToast('Failed to rename', 'error');
-        } else {
-          // The re-render below repaints from this.sessions, so the new name has
-          // to be in the map before it runs (see _applyLocalSessionName()).
-          this._applyLocalSessionName(sessionId, confirmed);
-        }
+        // The queue reports a failure itself; the editor only puts its label back.
+        if (result.status === 'failed') restoreOriginalChildren();
       }
       // Re-render tabs to restore full tab structure
       completeCurrentRename();
