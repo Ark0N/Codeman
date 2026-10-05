@@ -47,6 +47,9 @@ export const defaultDoctorRunner: DoctorRunner = (category) =>
       args,
       { timeout: DOCTOR_TIMEOUT_MS, maxBuffer: 1024 * 1024, env: process.env },
       (err, stdout) => {
+        if (err && (err as { killed?: boolean }).killed) {
+          return reject(new Error(`timed out after ${DOCTOR_TIMEOUT_MS / 1000} s`));
+        }
         try {
           const parsed: unknown = JSON.parse(stdout);
           if (isReport(parsed)) return resolve(parsed);
@@ -59,6 +62,18 @@ export const defaultDoctorRunner: DoctorRunner = (category) =>
   });
 
 export function registerDoctorRoutes(app: FastifyInstance, runner: DoctorRunner = defaultDoctorRunner): void {
+  // Each run forks a full Node process, so two tabs or a script must not stack them: callers
+  // asking for the same category while one is in flight share its promise.
+  const inFlight = new Map<string, Promise<DependencyReportJson>>();
+  const runShared = (category?: string): Promise<DependencyReportJson> => {
+    const key = category ?? '';
+    let running = inFlight.get(key);
+    if (!running) {
+      running = runner(category).finally(() => inFlight.delete(key));
+      inFlight.set(key, running);
+    }
+    return running;
+  };
   app.get(
     '/api/doctor',
     async (req: FastifyRequest, reply: FastifyReply): Promise<ApiResponse<DependencyReportJson>> => {
@@ -75,10 +90,10 @@ export function registerDoctorRoutes(app: FastifyInstance, runner: DoctorRunner 
         );
       }
       try {
-        return { success: true, data: await runner(category) };
+        return { success: true, data: await runShared(category) };
       } catch (err) {
         reply.code(500);
-        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, `doctor failed: ${getErrorMessage(err)}`);
+        return createErrorResponse(ApiErrorCode.INTERNAL_ERROR, `doctor failed: ${getErrorMessage(err)}`);
       }
     }
   );

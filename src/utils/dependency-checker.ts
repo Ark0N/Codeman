@@ -94,11 +94,23 @@ export function checkTool(tool: ToolDependency, host: ProbeHost): ToolResult {
   if (!spec) return { ...base, status: 'skipped', reason: `not applicable on ${host.environment}` };
 
   if (spec.resolver.kind === 'path') {
-    const { bins, versionArg, versionRegex, requireVersionMatch } = spec.resolver;
+    const { bins, versionArg, versionRegex, requireVersionMatch, searchDirs } = spec.resolver;
     for (const bin of bins) {
-      const resolved = host.which(bin);
+      // `which` first (the PATH), then the registry's search dirs: under a service the PATH is
+      // minimal and the run mode finds the CLI through those dirs, so the doctor must too.
+      let resolved = host.which(bin);
+      if (!resolved && searchDirs) {
+        for (const dir of searchDirs) {
+          const candidate = `${dir.replace(/\/+$/, '')}/${bin}`;
+          if (host.fileExists(candidate)) {
+            resolved = candidate;
+            break;
+          }
+        }
+      }
       if (resolved) {
-        const out = host.runVersion(bin, [versionArg ?? '--version']);
+        // Run the RESOLVED path: a bare name would miss the same binary `which` just missed.
+        const out = host.runVersion(resolved, [versionArg ?? '--version']);
         const version = out ? extractVersion(out, versionRegex) : undefined;
         // A generic binary name that prints the wrong thing is some OTHER program (see
         // PathResolver.requireVersionMatch). Keep looking, then report MISSING; the

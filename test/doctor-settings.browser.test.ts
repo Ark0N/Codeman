@@ -49,7 +49,9 @@ describe('Diagnostics panel in a real browser', () => {
     server = new WebServer(PORT, false, true);
     await server.start();
     browser = await chromium.launch({ headless: true });
-    page = await browser.newPage();
+    // A controlling service worker can swallow requests before page.route() sees them, letting the
+    // real /api/doctor (a forked Node process) answer instead; block it so the stub is reliable.
+    page = await (await browser.newContext({ serviceWorkers: 'block' })).newPage();
     await page.goto(`http://localhost:${PORT}`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
     await page.evaluate(() => (window as any).app.openAppSettings());

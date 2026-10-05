@@ -422,6 +422,7 @@ Object.assign(CodemanApp.prototype, {
     this._mcpSyncSavedOn = settings.mcpSyncEnabled === true;
     document.getElementById('appSettingsMcpSync').checked = this._mcpSyncSavedOn;
     this.applyMcpSyncVisibility();
+    this._applyDoctorAdminGate();
     this.loadWebhook();
     // Read My Mind: synced, default OFF (opt-in; capture + prediction cost real tokens).
     document.getElementById('appSettingsReadMyMind').checked = settings.readMyMindEnabled === true;
@@ -1187,6 +1188,18 @@ Object.assign(CodemanApp.prototype, {
    */
   _applyMcpSyncAdminGate() {
     const group = document.getElementById('mcpSyncGroup');
+    if (!group) return;
+    const me = window.__codemanUser || {};
+    group.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
+  },
+
+  /**
+   * GET /api/doctor is admin-only in multi-user mode (it names install paths on the host), so a
+   * non-admin gets no Diagnostics group instead of a button that can only answer 403. Also
+   * wired to `codeman:me` for the same late-resolving role as the groups above.
+   */
+  _applyDoctorAdminGate() {
+    const group = document.getElementById('doctorGroup');
     if (!group) return;
     const me = window.__codemanUser || {};
     group.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
@@ -4434,4 +4447,5 @@ document.addEventListener?.('codeman:me', () => {
   window.app?._applyCustomModelAdminGate?.();
   window.app?._applyCliManagementAdminGate?.();
   window.app?._applyMcpSyncAdminGate?.();
+  window.app?._applyDoctorAdminGate?.();
 });

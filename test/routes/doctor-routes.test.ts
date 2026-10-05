@@ -61,6 +61,26 @@ describe('GET /api/doctor', () => {
     const res = await app.inject({ method: 'GET', url: '/api/doctor' });
     expect(res.statusCode).toBe(500);
     expect(res.json().error).toContain('spawn blew up');
+    expect(res.json().errorCode).toBe('INTERNAL_ERROR');
+  });
+
+  it('single-flights: concurrent requests for a category share one run, and a later one runs again', async () => {
+    const releases: Array<(r: DependencyReportJson) => void> = [];
+    const runner = vi.fn<DoctorRunner>(() => new Promise<DependencyReportJson>((res) => releases.push(res)));
+    const { app } = await createRouteTestHarness((a) => registerDoctorRoutes(a, runner));
+    const first = app.inject({ method: 'GET', url: '/api/doctor' });
+    const second = app.inject({ method: 'GET', url: '/api/doctor' });
+    const other = app.inject({ method: 'GET', url: '/api/doctor?category=office' });
+    await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(2));
+    releases[0](REPORT);
+    expect((await first).statusCode).toBe(200);
+    expect((await second).statusCode).toBe(200);
+    expect(runner).toHaveBeenCalledTimes(2); // unfiltered (shared) + office
+    releases[1](REPORT);
+    await other;
+    runner.mockImplementation(async () => REPORT);
+    await app.inject({ method: 'GET', url: '/api/doctor' });
+    expect(runner).toHaveBeenCalledTimes(3);
   });
 
   it('multi-user: a non-admin is refused and nothing is probed', async () => {
@@ -110,6 +130,11 @@ describe('defaultDoctorRunner', () => {
   ])('rejects %s', async (_label, stdout) => {
     respond(null, stdout);
     await expect(defaultDoctorRunner()).rejects.toThrow();
+  });
+
+  it('reports a killed child (the 30 s timeout) as a timeout, not the raw command line', async () => {
+    respond(Object.assign(new Error('Command failed: node doctor --json'), { killed: true, signal: 'SIGTERM' }), '');
+    await expect(defaultDoctorRunner()).rejects.toThrow('timed out after 30 s');
   });
 
   it('passes the child’s own error through when there is no report at all', async () => {
