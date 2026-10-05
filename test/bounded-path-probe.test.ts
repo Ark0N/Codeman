@@ -37,7 +37,14 @@ vi.mock('node:fs', async (importOriginal) => {
 });
 
 import fs from 'node:fs/promises';
-import { boundedPathExists, isNearStalledPath, probePath, probePathKind } from '../src/utils/bounded-path-probe.js';
+import {
+  boundedPathExists,
+  describeUnknownPath,
+  isNearStalledPath,
+  probePath,
+  probePathKind,
+  unknownPathReason,
+} from '../src/utils/bounded-path-probe.js';
 import { MAX_STALLED_PATH_PROBES, PATH_PROBE_STALL_CEILING, PATH_PROBE_TIMEOUT_MS } from '../src/config/path-probe.js';
 
 const stat = vi.mocked(fs.stat);
@@ -100,6 +107,9 @@ describe('probePath', () => {
     expect(await boundedPathExists('/present')).toBe(true);
     expect(await boundedPathExists('/missing')).toBe(false);
     expect(await boundedPathExists('/eio')).toBe(false);
+    // An error answer is neither a stall nor a refusal.
+    expect(unknownPathReason('/eio')).toBe('unreadable');
+    expect(describeUnknownPath('Case folder', '/eio')).toBe('Case folder is not responding or not readable: /eio');
   });
 
   it('reports whether a present path is a directory', async () => {
@@ -291,6 +301,15 @@ describe('probePath', () => {
     expect(stat).not.toHaveBeenCalled();
     expect(await probePath('/healthy/explicit', { pastCap: true })).toBe('unknown');
     expect(stat).not.toHaveBeenCalled();
+    // ...and the message says the folder was never checked, rather than blaming it.
+    expect(unknownPathReason('/healthy/explicit', { pastCap: true })).toBe('refused');
+    expect(unknownPathReason(dead[0], { pastCap: true })).toBe('stalled');
+    expect(describeUnknownPath('workingDir', '/healthy/explicit', { pastCap: true })).toMatch(
+      /^workingDir was not checked: .*not answering.*: \/healthy\/explicit$/
+    );
+    expect(describeUnknownPath('workingDir', dead[0], { pastCap: true })).toBe(
+      `workingDir is not responding or not readable: ${dead[0]}`
+    );
 
     // Once one stalled stat settles, an explicit request is probed again.
     releases.get(dead[0])!();
@@ -298,8 +317,34 @@ describe('probePath', () => {
     expect(await probePath('/healthy/explicit', { pastCap: true })).toBe('present');
   });
 
-  it('keeps the bulk cap below the ceiling, so a pastCap probe has room', () => {
-    expect(MAX_STALLED_PATH_PROBES).toBeLessThan(PATH_PROBE_STALL_CEILING);
+  it('keeps the bulk cap below the ceiling, so a pastCap probe has room', async () => {
+    // Read under a controlled environment: the limits are computed at import from
+    // UV_THREADPOOL_SIZE and CODEMAN_PATH_PROBE_MAX_STALLED, which the test process
+    // could otherwise inherit.
+    const saved = { uv: process.env.UV_THREADPOOL_SIZE, max: process.env.CODEMAN_PATH_PROBE_MAX_STALLED };
+    const limitsUnder = async (uv: string | undefined, max: string | undefined) => {
+      if (uv === undefined) delete process.env.UV_THREADPOOL_SIZE;
+      else process.env.UV_THREADPOOL_SIZE = uv;
+      if (max === undefined) delete process.env.CODEMAN_PATH_PROBE_MAX_STALLED;
+      else process.env.CODEMAN_PATH_PROBE_MAX_STALLED = max;
+      vi.resetModules();
+      return import('../src/config/path-probe.js');
+    };
+    try {
+      const defaults = await limitsUnder(undefined, undefined);
+      expect([defaults.MAX_STALLED_PATH_PROBES, defaults.PATH_PROBE_STALL_CEILING]).toEqual([2, 3]);
+      const bigPool = await limitsUnder('8', undefined);
+      expect([bigPool.MAX_STALLED_PATH_PROBES, bigPool.PATH_PROBE_STALL_CEILING]).toEqual([6, 7]);
+      // An override may reach the ceiling but never pass it.
+      const overridden = await limitsUnder(undefined, '64');
+      expect(overridden.MAX_STALLED_PATH_PROBES).toBe(overridden.PATH_PROBE_STALL_CEILING);
+    } finally {
+      if (saved.uv === undefined) delete process.env.UV_THREADPOOL_SIZE;
+      else process.env.UV_THREADPOOL_SIZE = saved.uv;
+      if (saved.max === undefined) delete process.env.CODEMAN_PATH_PROBE_MAX_STALLED;
+      else process.env.CODEMAN_PATH_PROBE_MAX_STALLED = saved.max;
+      vi.resetModules();
+    }
   });
 
   it('warns once when a path first stalls and once when the cap engages', async () => {

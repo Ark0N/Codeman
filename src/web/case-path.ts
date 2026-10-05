@@ -28,6 +28,7 @@
 import { promises as fs } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { isValidWorkingDir } from './schemas.js';
+import { describeUnknownPath, probePath } from '../utils/index.js';
 
 /** System trees nobody creates a project in; creating one here is a mistake or an attack. */
 const BLOCKED_SYSTEM_ROOTS = [
@@ -61,7 +62,7 @@ export interface NewCasePathContext {
 
 export type NewCasePathResult =
   | { ok: true; path: string; existedEmpty: boolean }
-  | { ok: false; code: 'INVALID' | 'BLOCKED' | 'NOT_FOUND' | 'EXISTS'; reason: string };
+  | { ok: false; code: 'INVALID' | 'BLOCKED' | 'NOT_FOUND' | 'EXISTS' | 'UNREACHABLE'; reason: string };
 
 const isWithin = (child: string, root: string): boolean =>
   child === root || child.startsWith(root.endsWith(sep) ? root : root + sep);
@@ -144,6 +145,21 @@ export async function prepareNewCasePath(raw: string, ctx: NewCasePathContext): 
   const target = resolve(expanded);
   const typedBlock = blockedReason(target, ctx);
   if (typedBlock) return { ok: false, code: 'BLOCKED', reason: typedBlock };
+
+  // Bounded first: the parent can sit on a network mount that stopped answering, where the
+  // realpath/stat/lstat/readdir below would each hold a threadpool worker until it returns.
+  // It is one folder the user named, so the probe may pass the bulk cap (never the ceiling).
+  const parentState = await probePath(dirname(target), { pastCap: true });
+  if (parentState === 'absent') {
+    return { ok: false, code: 'NOT_FOUND', reason: `The parent folder ${dirname(target)} does not exist` };
+  }
+  if (parentState === 'unknown') {
+    return {
+      ok: false,
+      code: 'UNREACHABLE',
+      reason: describeUnknownPath('The parent folder', dirname(target), { pastCap: true }),
+    };
+  }
 
   // Resolve the parent's symlinks, then judge again: a link into a blocked tree must not pass.
   let realParent: string;

@@ -51,7 +51,7 @@ import {
 import type { GitRemoteProbe, GitUrlParse } from '../../git-clone.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { prepareNewCasePath } from '../case-path.js';
-import { boundedPathExists, probePath } from '../../utils/index.js';
+import { boundedPathExists, describeUnknownPath, probePath } from '../../utils/index.js';
 import { readAgentCaseMarker, type AgentCaseMarker } from '../../agent-case-marker.js';
 import { settingsWriteBlocker, writeHooksConfig } from '../../hooks-config.js';
 import {
@@ -464,6 +464,12 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     const casesDirs = [...new Set([ownCasesDir, resolveCasesDir()])];
     const prepared = await prepareNewCasePath(customPath, { home: homedir(), dataDir: getDataDir(), casesDirs });
     if (!prepared.ok) {
+      // A parent that did not answer is not a bad request: OPERATION_FAILED (422), like
+      // POST /api/sessions for a workingDir on a dead mount.
+      if (prepared.code === 'UNREACHABLE') {
+        reply.code(422);
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, prepared.reason);
+      }
       const status = prepared.code === 'NOT_FOUND' ? 404 : prepared.code === 'EXISTS' ? 409 : 400;
       reply.code(status);
       const code =
@@ -1752,7 +1758,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       if (!linked) {
         return createErrorResponse(
           ApiErrorCode.OPERATION_FAILED,
-          `Case folder is not responding or not readable: ${casePath}`
+          describeUnknownPath('Case folder', casePath, { pastCap: true })
         );
       }
       return { name, path: casePath, hasClaudeMd: false, linked: true, unreachable: true };

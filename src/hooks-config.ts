@@ -60,16 +60,29 @@ async function pathExistsForWrite(path: string): Promise<boolean> {
 }
 
 /**
+ * Probe a path a per-spawn helper is about to touch. An "unknown" that is NOT near a
+ * stalled probe (the bulk cap refused it, or the stat failed with something other
+ * than ENOENT) gets ONE more bounded probe past the bulk cap, so a healthy path still
+ * answers while unrelated mounts are dead. Whatever is still "unknown" after that
+ * must be skipped by the caller, never touched with an unbounded `lstat`/`readFile`:
+ * on a dead mount those never settle, and each would hold a threadpool worker the
+ * probe's ceiling does not count.
+ */
+async function probeBeforeTouching(path: string) {
+  const state = await probePath(path);
+  if (state !== 'unknown' || isNearStalledPath(path)) return state;
+  return probePath(path, { pastCap: true });
+}
+
+/**
  * Whether a READ-side helper should leave `path` alone: it is definitely absent, or
- * it sits on a mount that is not answering (near a stalled probe). An "unknown"
- * that is NOT near a stalled probe (the probe was refused for capacity, or the stat
- * failed with something other than ENOENT) is not a reason to skip: the caller goes
- * on, and its own async read or write settles the question for that one path.
+ * it did not answer (a mount that is not responding, a refused probe, an unreadable
+ * path). See `probeBeforeTouching` for why "unknown" is a skip.
  */
 async function absentOrUnreachable(path: string): Promise<'absent' | 'unreachable' | false> {
-  const state = await probePath(path);
+  const state = await probeBeforeTouching(path);
   if (state === 'absent') return 'absent';
-  if (state === 'unknown' && isNearStalledPath(path)) return 'unreachable';
+  if (state === 'unknown') return 'unreachable';
   return false;
 }
 
@@ -852,19 +865,16 @@ export async function refreshStaleCodemanHooks(casePath: string): Promise<void> 
  */
 export async function applyWorkspaceHooks(workspace: string, install?: boolean): Promise<void> {
   try {
-    const state = await probePath(workspace);
+    // "absent" stays absent: the install below would mkdir -p a deleted repo back
+    // into being. "unknown" is skipped too, never asked again with an unbounded
+    // lstat (see probeBeforeTouching).
+    const state = await probeBeforeTouching(workspace);
     if (state === 'absent') return;
     if (state === 'unknown') {
-      if (isNearStalledPath(workspace)) {
-        console.warn(
-          `[hooks] ${workspace} is not responding (unreachable mount?); Codeman hooks not checked or installed`
-        );
-        return;
-      }
-      // Any other "unknown" (the stall cap refused the probe, or the stat failed
-      // with something other than ENOENT) proves nothing about existence, and the
-      // install below would mkdir -p a deleted repo back into being: ask directly.
-      if (!(await pathExistsForWrite(workspace))) return;
+      console.warn(
+        `[hooks] ${workspace} is not responding or not readable (unreachable mount?); Codeman hooks not checked or installed`
+      );
+      return;
     }
     const shouldInstall = install ?? (await readWorkspaceHooksEnabled());
     await (shouldInstall ? ensureCodemanHooks(workspace) : refreshStaleCodemanHooks(workspace));

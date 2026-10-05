@@ -174,7 +174,7 @@ import {
   toSessionDocker,
 } from '../../docker-hosts.js';
 import { LRUMap } from '../../utils/lru-map.js';
-import { probePathKind } from '../../utils/index.js';
+import { describeUnknownPath, probePathKind } from '../../utils/index.js';
 import { findLatestOmpSessionId } from '../../utils/omp-session-resolver.js';
 import { scanOmpSessionsHistory } from '../../omp-transcript.js';
 import { scanCodexSessionsHistory, codexThreadBySessionId } from '../../codex-transcript.js';
@@ -980,7 +980,7 @@ export function registerSessionRoutes(
       if (kind === 'unknown') {
         return createErrorResponse(
           ApiErrorCode.OPERATION_FAILED,
-          `workingDir is not responding or not readable: ${workingDir}`
+          describeUnknownPath('workingDir', workingDir, { pastCap: true })
         );
       }
       if (kind === 'absent') {
@@ -3710,7 +3710,7 @@ export function registerSessionRoutes(
     if (localCaseState === 'unknown') {
       return createErrorResponse(
         ApiErrorCode.OPERATION_FAILED,
-        `Case folder is not responding or not readable: ${resolvedCasePath}`
+        describeUnknownPath('Case folder', resolvedCasePath, { pastCap: true })
       );
     }
 

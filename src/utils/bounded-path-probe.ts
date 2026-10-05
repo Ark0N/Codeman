@@ -37,7 +37,9 @@
  *   probe is still bounded and still recorded as stalled if it hangs (so a dead
  *   path costs at most one worker however often it is retried), but it is not
  *   refused just because unrelated mounts are dead. Bulk scans (the case list)
- *   and per-spawn helpers keep the cap. `pastCap` still stops at
+ *   keep the cap; the per-spawn hook and statusLine helpers retry one refused
+ *   probe past it and then skip a path that still answers "unknown", rather than
+ *   touch it with an unbounded call. `pastCap` still stops at
  *   `PATH_PROBE_STALL_CEILING` (the threadpool size minus one), so explicit
  *   requests against several dead paths can never take the last worker.
  *
@@ -201,6 +203,31 @@ export async function probePathKind(path: string, options: PathProbeOptions = {}
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/**
+ * Why a probe of `path` answers "unknown" right now: its mount is not answering
+ * (`'stalled'`, it is near a stalled probe), new probes are refused because enough
+ * UNRELATED paths are stalled (`'refused'`; `pastCap` picks which limit applies), or
+ * neither, so the filesystem answered with an error such as EACCES or EIO
+ * (`'unreadable'`). For messages only: it reads the state now, not at probe time.
+ */
+export function unknownPathReason(path: string, options: PathProbeOptions = {}): 'stalled' | 'refused' | 'unreadable' {
+  if (isNearStalledPath(path)) return 'stalled';
+  if (stalled.size >= (options.pastCap ? PATH_PROBE_STALL_CEILING : MAX_STALLED_PATH_PROBES)) return 'refused';
+  return 'unreadable';
+}
+
+/**
+ * User-facing sentence for an "unknown" probe of `path` (`label` names it, e.g.
+ * "workingDir"). A refused probe says so, rather than blaming a folder that was never
+ * checked: at the ceiling every new folder reads "unknown" until a dead mount answers.
+ */
+export function describeUnknownPath(label: string, path: string, options: PathProbeOptions = {}): string {
+  return unknownPathReason(path, options) === 'refused'
+    ? `${label} was not checked: folders on other unreachable mounts are still not answering, ` +
+        `so Codeman is not checking new folders until one does (see the server log): ${path}`
+    : `${label} is not responding or not readable: ${path}`;
 }
 
 /** Tri-state probe of `path`; see the module comment for what "unknown" means. */

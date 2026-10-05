@@ -159,7 +159,9 @@ export interface CaseInfo {
   linked?: boolean;
   /**
    * The case folder did not answer (an unreachable network mount, or an error other
-   * than "no such file"), so whether it still exists is unknown. Absent = it answered.
+   * than "no such file"), or its probe was refused because folders on other unreachable
+   * mounts are still not answering, so whether it still exists is unknown. A refused
+   * probe can set this on a healthy linked case. Absent = it answered.
    */
   unreachable?: boolean;
   /**

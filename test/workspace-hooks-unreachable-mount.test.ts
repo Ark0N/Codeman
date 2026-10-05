@@ -22,18 +22,26 @@ const probe = vi.hoisted(() => {
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  const stat = ((path: string, ...rest: unknown[]) => {
-    for (const dead of probe.dead) {
-      if (String(path) === dead || String(path).startsWith(dead + '/')) {
-        return new Promise((resolve, reject) => {
-          probe.releases.push(() => reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })));
-          void resolve;
-        });
+  /** A call on a dead path never settles (a hard mount), until afterEach releases it. */
+  const hangOnDead = <F extends (...a: never[]) => unknown>(real: F): F =>
+    ((path: string, ...rest: unknown[]) => {
+      for (const dead of probe.dead) {
+        if (String(path) === dead || String(path).startsWith(dead + '/')) {
+          return new Promise((resolve, reject) => {
+            probe.releases.push(() => reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })));
+            void resolve;
+          });
+        }
       }
-    }
-    return (actual.stat as (...a: unknown[]) => unknown)(path, ...rest);
-  }) as typeof actual.stat;
-  return { ...actual, stat, default: { ...actual, stat } };
+      return (real as unknown as (...a: unknown[]) => unknown)(path, ...rest);
+    }) as unknown as F;
+  const hung = {
+    stat: hangOnDead(actual.stat),
+    lstat: hangOnDead(actual.lstat),
+    readFile: hangOnDead(actual.readFile),
+    realpath: hangOnDead(actual.realpath),
+  };
+  return { ...actual, ...hung, default: { ...actual, ...hung } };
 });
 
 import { applyWorkspaceHooks, resolveStatusLineCliCommand, stripCaseEnvKeys } from '../src/hooks-config.js';
@@ -147,6 +155,21 @@ describe('workspace helpers while other mounts are unreachable', () => {
     mkdirSync(workspace);
 
     expect(await resolveStatusLineCliCommand(workspace, true)).toMatch(/statusline-exporter\.sh$/);
+  });
+
+  it('skips, within the probe timeout, dead workspaces whose probes the bulk cap refused', async () => {
+    // Two unrelated stalls engage the bulk cap, so probes of these two paths are
+    // refused without a stat. Their lstat and readFile hang too: a helper that
+    // touched them directly would never return and would hold a threadpool worker.
+    await stallUnrelatedMounts(MAX_STALLED_PATH_PROBES);
+    probe.dead.add('/mnt/dead-nas-c');
+    probe.dead.add('/mnt/dead-nas-d');
+    const within = <T>(work: Promise<T>) =>
+      Promise.race([work, new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 2_000))]);
+
+    expect(await within(applyWorkspaceHooks('/mnt/dead-nas-c/project', true))).toBeUndefined();
+    expect(await within(resolveStatusLineCliCommand('/mnt/dead-nas-d/project', true))).toBeUndefined();
+    expect(existsSync('/mnt/dead-nas-c/project')).toBe(false);
   });
 
   it('does not inject the exporter into a workspace on the dead mount', async () => {
