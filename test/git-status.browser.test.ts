@@ -214,6 +214,60 @@ describe('Git status indicator in a real browser', () => {
     expect(after).toBeLessThan(before - 100);
   });
 
+  it('groups files under folders that start collapsed and expand on click; the setting turns it off', async () => {
+    mkdirSync(join(repo, 'deep/er/still'), { recursive: true });
+    mkdirSync(join(repo, 'docs'));
+    write('deep/er/still/one.txt');
+    write('docs/a.md');
+    write('docs/b.md');
+    // git reports an all-untracked folder as ONE `dir/` entry, so commit these first and then edit them.
+    git(repo, 'add', 'deep', 'docs');
+    git(repo, 'commit', '-q', '-m', 'add folders');
+    write('deep/er/still/one.txt', 'changed\n');
+    write('docs/a.md', 'changed\n');
+    write('docs/b.md', 'changed\n');
+    await refresh();
+    await page.waitForSelector('.git-tree-dir');
+    // `deep/er/still` is a chain of single-child folders: one row, not three.
+    const names = await page.locator('.git-tree-name').allTextContents();
+    expect(names).toContain('deep/er/still/');
+    expect(names).toContain('docs/');
+    expect(await page.locator('.git-tree-dir[open]').count()).toBe(0);
+    expect(await page.locator('.git-status-file:has-text("one.txt")').isVisible()).toBe(false);
+    expect(await page.locator('.git-tree-dir:has(.git-tree-name:text-is("docs/")) .git-tree-count').textContent()).toBe(
+      '2'
+    );
+    await page.click('.git-tree-summary:has-text("docs/")');
+    expect(await page.locator('.git-status-file:has-text("a.md")').isVisible()).toBe(true);
+    // The open folder survives the re-render a refresh causes.
+    await refresh();
+    await page.waitForSelector('.git-tree-dir[open]');
+    expect(await page.locator('.git-status-file:has-text("a.md")').isVisible()).toBe(true);
+    // A file in a folder still opens its diff, and shows only its own name.
+    await page.click('.git-status-file:has-text("a.md")');
+    await page.waitForSelector('#gitStatusBody .git-diff-path');
+    expect(await page.textContent('#gitStatusBody .git-diff-path')).toBe('docs/a.md');
+    await page.click('#gitStatusBody button:has-text("Back")');
+
+    // Setting off: the flat list, every file by its full path.
+    await page.evaluate(() => (window as any).app.openAppSettings());
+    await page.click('label.switch:has(#appSettingsGitStatusTree)');
+    await page.evaluate(() => (window as any).app.saveAppSettings());
+    await page.waitForTimeout(300);
+    await page.evaluate(() => (window as any).app.closeAppSettings());
+    await page.evaluate(() => (window as any).app._renderGitStatusPanel());
+    expect(await page.locator('.git-tree-dir').count()).toBe(0);
+    expect(await page.locator('.git-status-path', { hasText: 'docs/a.md' }).count()).toBe(1);
+    // Back on for the rest of the file.
+    await page.evaluate(() => (window as any).app.openAppSettings());
+    await page.click('label.switch:has(#appSettingsGitStatusTree)');
+    await page.evaluate(() => (window as any).app.saveAppSettings());
+    await page.waitForTimeout(300);
+    await page.evaluate(() => (window as any).app.closeAppSettings());
+    rmSync(join(repo, 'deep'), { recursive: true });
+    rmSync(join(repo, 'docs'), { recursive: true });
+  }, 30000);
+
   it('once everything is committed and pushed the button says so, and the panel agrees', async () => {
     rmSync(join(repo, '<img src=x onerror=window.__pwned=1>.txt'));
     git(repo, 'checkout', '-q', '--', '.');

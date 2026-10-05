@@ -451,6 +451,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowAwayDigestButton').checked = settings.showAwayDigestButton ?? defaults.showAwayDigestButton ?? false;
     document.getElementById('appSettingsShowCronButton').checked = settings.showCronButton ?? defaults.showCronButton ?? false;
     document.getElementById('appSettingsShowGitStatus').checked = settings.showGitStatus ?? defaults.showGitStatus ?? false;
+    document.getElementById('appSettingsGitStatusTree').checked = settings.gitStatusTree ?? defaults.gitStatusTree ?? true;
     // Gesture control lives in the Input section (alongside Local Echo / CJK Input)
     // but is only available when the instance runs with CODEMAN_GESTURE=1 (server sets
     // window.__codemanGestureAvailable). Hide just this item otherwise so the toggle
@@ -2424,6 +2425,7 @@ Object.assign(CodemanApp.prototype, {
       showAwayDigestButton: document.getElementById('appSettingsShowAwayDigestButton').checked,
       showCronButton: document.getElementById('appSettingsShowCronButton').checked,
       showGitStatus: document.getElementById('appSettingsShowGitStatus').checked,
+      gitStatusTree: document.getElementById('appSettingsGitStatusTree').checked,
       gestureControlEnabled: document.getElementById('appSettingsGestureControl').checked,
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
@@ -2678,6 +2680,7 @@ Object.assign(CodemanApp.prototype, {
       showCronButton: _crb,
       // Per-device bottom-bar indicator, absent from SettingsUpdateSchema (.strict()): it must not reach the PUT.
       showGitStatus: _sgs,
+      gitStatusTree: _gst,
       showTabDetachButton: _tdb,
       // Phone-only home surface, and absent from SettingsUpdateSchema (.strict()).
       mobileOverviewEnabled: _mov,
@@ -3969,7 +3972,7 @@ Object.assign(CodemanApp.prototype, {
           'language',
           'terminalWheelLocalScrollback',
           'autoCopySelection', 'copyStripMargin',
-          'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus',
+          'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus', 'gitStatusTree',
           'showTabDetachButton',
           'mobileOverviewEnabled',
           'sessionLineageLines',

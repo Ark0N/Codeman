@@ -19634,3 +19634,39 @@ html .toolbar .btn-git-status.git-status--conflict {
 .git-diff-line--meta {
   color: var(--text-muted);
 }
+
+/* Git status panel: files grouped under collapsible folders */
+.git-tree-dir > .git-tree-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.15rem 0.25rem;
+  border-radius: 4px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.git-tree-dir > .git-tree-summary:hover {
+  background: var(--bg-hover);
+}
+
+.git-tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+}
+
+.git-tree-count {
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+.git-tree-children {
+  margin-left: 0.7rem;
+  padding-left: 0.4rem;
+  border-left: 1px solid var(--border);
+}

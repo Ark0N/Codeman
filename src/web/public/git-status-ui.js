@@ -128,6 +128,13 @@ Object.assign(CodemanApp.prototype, {
     if (this._isGitStatusPanelOpen()) this._renderGitStatusPanel();
   },
 
+  /** Whether the Git window groups changed files under collapsible folders (default on). */
+  isGitStatusTree() {
+    const settings = this.loadAppSettingsFromStorage();
+    const defaults = this.getDefaultSettings();
+    return (settings.gitStatusTree ?? defaults.gitStatusTree ?? true) === true;
+  },
+
   /** The data for the session on screen, or null (not enabled, no session, not a repo, remote/docker, error). */
   _currentGitStatus() {
     const s = this._gitStatus;
@@ -408,7 +415,8 @@ Object.assign(CodemanApp.prototype, {
         if (!rows.length) continue;
         const group = el('div', `git-status-group git-status-group--${kind}`);
         group.append(el('div', 'git-status-group-title', `${label} (${data.counts[kind]})`));
-        for (const f of rows) group.append(this._gitFileRow(f, data));
+        if (this.isGitStatusTree()) group.append(...this._gitFileTree(rows, data, kind));
+        else for (const f of rows) group.append(this._gitFileRow(f, data));
         filesSection.append(group);
       }
       if (data.filesTruncated) {
@@ -450,7 +458,58 @@ Object.assign(CodemanApp.prototype, {
     body.append(pushSection);
   },
 
-  _gitFileRow(f, data) {
+  /**
+   * `rows` as folders (collapsed until clicked) holding their files. A folder with one child folder and
+   * nothing else is merged into it (`src/web/public` as one row) so a deep path is one click, not five.
+   * Which folders are open survives the 15 s re-render (`_gitTreeOpen`, keyed by repo, group and folder).
+   */
+  _gitFileTree(rows, data, kind) {
+    const root = { dirs: new Map(), files: [] };
+    for (const f of rows) {
+      const trailing = f.path.endsWith('/');
+      const parts = f.path.replace(/\/$/, '').split('/');
+      const leaf = parts.pop() + (trailing ? '/' : '');
+      let node = root;
+      for (const part of parts) {
+        if (!node.dirs.has(part)) node.dirs.set(part, { dirs: new Map(), files: [] });
+        node = node.dirs.get(part);
+      }
+      node.files.push({ f, leaf });
+    }
+    const open = (this._gitTreeOpen = this._gitTreeOpen || new Set());
+    const count = (n) => n.files.length + [...n.dirs.values()].reduce((sum, d) => sum + count(d), 0);
+    const build = (node, prefix) => {
+      const out = [];
+      for (const [name0, child0] of [...node.dirs].sort((a, b) => a[0].localeCompare(b[0]))) {
+        let name = name0;
+        let child = child0;
+        while (child.files.length === 0 && child.dirs.size === 1) {
+          const [n, c] = [...child.dirs][0];
+          name += `/${n}`;
+          child = c;
+        }
+        const key = `${data.repoRoot}|${kind}|${prefix}${name}`;
+        const dir = this._gitEl('details', 'git-tree-dir');
+        dir.open = open.has(key);
+        dir.addEventListener('toggle', () => (dir.open ? open.add(key) : open.delete(key)));
+        const summary = this._gitEl('summary', 'git-tree-summary');
+        summary.append(this._gitEl('span', 'git-tree-name', `${name}/`));
+        summary.append(this._gitEl('span', 'git-tree-count', String(count(child))));
+        dir.append(summary);
+        const inner = this._gitEl('div', 'git-tree-children');
+        inner.append(...build(child, `${prefix}${name}/`));
+        dir.append(inner);
+        out.push(dir);
+      }
+      for (const { f, leaf } of node.files.sort((a, b) => a.leaf.localeCompare(b.leaf))) {
+        out.push(this._gitFileRow(f, data, leaf));
+      }
+      return out;
+    };
+    return build(root, '');
+  },
+
+  _gitFileRow(f, data, displayName) {
     const el = (tag, cls, text) => this._gitEl(tag, cls, text);
     const row = el('div', 'git-status-file');
     // Untracked entries have `?`; staged ones show the index letter, the rest the working-tree letter.
@@ -459,7 +518,8 @@ Object.assign(CodemanApp.prototype, {
     const badge = el('span', `git-status-badge git-status-badge--${letter === '?' ? 'new' : letter}`, letter);
     badge.title = GIT_STATUS_BADGE_TITLE[letter] || letter;
     row.append(badge);
-    const name = el('span', 'git-status-path', f.path);
+    const name = el('span', 'git-status-path', displayName ?? f.path);
+    if (displayName) name.title = f.path;
     row.append(name);
     if (f.origPath) row.append(el('span', 'git-status-orig', `← ${f.origPath}`));
 
