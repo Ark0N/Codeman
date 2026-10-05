@@ -18,8 +18,10 @@ import { getDataDir } from '../../config/instance.js';
 import { findSessionOrFail } from '../route-helpers.js';
 import {
   emptyOverview,
+  findWorkspaceRepo,
   getGitFileDiff,
   getGitWorkspaceOverview,
+  getGitWorkspaceStatus,
   type GitFileDiff,
   type GitFileKind,
   type GitRunner,
@@ -55,7 +57,9 @@ export function registerGitStatusRoutes(
 
   // The diff of one file the panel lists. `repo` and `path` are matched against the CURRENT status
   // (a repository this session's folder holds, a path git reported in it) rather than trusted, so
-  // the route cannot be pointed at an arbitrary directory or file.
+  // the route cannot be pointed at an arbitrary directory or file. The repository is checked against
+  // the overview's own (cached) list with the Docker roots as they are now, and only that one
+  // repository's status is refreshed: a click must not re-read every repository in the folder.
   app.get('/api/sessions/:id/git-diff', async (req, reply): Promise<ApiResponse<GitFileDiff>> => {
     const { id } = req.params as { id: string };
     const { repo, path, kind } = req.query as { repo?: string; path?: string; kind?: string };
@@ -64,13 +68,14 @@ export function registerGitStatusRoutes(
       reply.code(400);
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Git is not available for remote or Docker sessions');
     }
-    const overview = await getGitWorkspaceOverview(session.workingDir, {
-      git,
-      fresh: true,
-      dockerWorkspaces: await dockerWorkspaces(),
-    });
-    const status = overview.repos.find((r) => r.status.repoRoot === repo)?.status;
-    const entry = status?.files.find((f) => f.path === path && f.kind === (kind as GitFileKind));
+    const repoRoot = repo
+      ? await findWorkspaceRepo(session.workingDir, repo, { git, dockerWorkspaces: await dockerWorkspaces() })
+      : null;
+    const status = repoRoot ? await getGitWorkspaceStatus(repoRoot, { git, fresh: true }) : null;
+    const entry =
+      status?.state === 'ok'
+        ? status.files.find((f) => f.path === path && f.kind === (kind as GitFileKind))
+        : undefined;
     if (!status?.repoRoot || !entry) {
       reply.code(404);
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'That file has no outstanding change any more');

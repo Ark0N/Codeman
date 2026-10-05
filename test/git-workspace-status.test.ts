@@ -10,6 +10,7 @@ import {
   MAX_FILES,
   parseCommitLog,
   parsePorcelainV2,
+  runGit,
   type GitRunner,
 } from '../src/git-workspace-status.js';
 
@@ -591,6 +592,23 @@ describe('getGitWorkspaceOverview', () => {
     expect(names(some)).toEqual(['real-project']);
   });
 
+  it('identifies an unrelated repository above the workspace before its status runs, so a failure there cannot hide the repositories below', async () => {
+    repoAt(home);
+    const ws = join(home, 'case');
+    repoAt(join(ws, 'proj'));
+    const calls: Array<[string, string]> = [];
+    const spy: GitRunner = async (cwd, args) => {
+      calls.push([cwd, args[0]]);
+      if (cwd === ws && args[0] === 'status') throw Object.assign(new Error('timed out'), { killed: true });
+      return runGit(cwd, args);
+    };
+    const o = await getGitWorkspaceOverview(ws, { home, git: spy });
+    expect(o.state).toBe('ok');
+    expect(names(o)).toEqual(['proj']);
+    // The dotfiles repository costs one rev-parse, never a full status.
+    expect(calls.filter(([cwd]) => cwd === ws).map(([, verb]) => verb)).toEqual(['rev-parse']);
+  });
+
   it('ignores a repository above the home folder (including a repo at the very top)', async () => {
     repoAt(top); // contains `home`, so it is above it
     const ws = join(home, 'case');
@@ -752,6 +770,30 @@ describe('getGitFileDiff', () => {
     expect(cut.diff.length).toBeLessThanOrEqual(MAX_DIFF_BYTES);
     expect(cut.diff.endsWith('x')).toBe(true);
   });
+
+  it('cuts a diff that overflowed the output bound instead of failing it', async () => {
+    const partial = ('+' + 'y'.repeat(99) + '\n').repeat(Math.ceil(MAX_DIFF_BYTES / 100) * 2);
+    const git = vi.fn(async () => {
+      throw Object.assign(new RangeError('stdout maxBuffer length exceeded'), {
+        code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER',
+        stdout: partial,
+      });
+    });
+    for (const kind of ['unstaged', 'untracked'] as const) {
+      const d = await getGitFileDiff('/r', { path: 'huge.txt', kind }, { git });
+      expect(d.truncated).toBe(true);
+      expect(d.diff.length).toBeLessThanOrEqual(MAX_DIFF_BYTES);
+      expect(d.diff.endsWith('y')).toBe(true);
+    }
+  });
+
+  it('a real untracked file past the output bound comes back cut short, not as an error', async () => {
+    writeFileSync(join(repo, 'huge.txt'), ('z'.repeat(99) + '\n').repeat(100_000)); // ~10 MB, over runGit's 8 MB
+    const d = await getGitFileDiff(repo, { path: 'huge.txt', kind: 'untracked' });
+    expect(d.truncated).toBe(true);
+    expect(d.diff.startsWith('diff --git')).toBe(true);
+    expect(d.diff.length).toBeLessThanOrEqual(MAX_DIFF_BYTES);
+  }, 30_000);
 });
 
 describe('Docker case workspaces are never inspected', () => {
@@ -810,6 +852,30 @@ describe('Docker case workspaces are never inspected', () => {
       expect(git).not.toHaveBeenCalled();
     }
     expect(existsSync(join(dock, 'RAN'))).toBe(false);
+  });
+
+  it('re-checks a cached list of repositories against the Docker workspaces as they are now', async () => {
+    let t = 1_000_000;
+    const ws = join(home, 'case');
+    repoAt(join(ws, 'a'));
+    repoAt(join(ws, 'b'));
+    const cwds: string[] = [];
+    const spy: GitRunner = (cwd, args) => {
+      cwds.push(cwd);
+      return runGit(cwd, args);
+    };
+    const first = await getGitWorkspaceOverview(ws, { home, git: spy, now: () => t });
+    expect(first.repos.map((r) => r.path)).toEqual(['a', 'b']);
+    t += 5000; // past the status cache, well inside the list's 30 s
+    cwds.length = 0;
+    const o = await getGitWorkspaceOverview(ws, {
+      home,
+      git: spy,
+      now: () => t,
+      dockerWorkspaces: [join(ws, 'a')],
+    });
+    expect(o.repos.map((r) => r.path)).toEqual(['b']);
+    expect(cwds).not.toContain(join(ws, 'a'));
   });
 
   it('sees through a symlink to the workspace', async () => {

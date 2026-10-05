@@ -175,8 +175,8 @@ Click it for a draggable window, in the style of the File Viewer:
 - **Uncommitted changes**, grouped as staged, not staged, untracked and conflicted, each with a
   status letter (`M` modified, `A` added, `D` deleted, `R` renamed, `?` new, `U` conflict).
 - **Not pushed**: the commits no remote has. A branch with no upstream says so, and so does one whose
-  upstream was deleted on the remote ("Upstream is gone"), which counts every commit on no remote
-  rather than showing a green tick.
+  upstream does not exist on the remote, because it was never pushed or was deleted there ("Upstream
+  not on remote"), which counts every commit on no remote rather than showing a green tick.
 - Files are grouped under their folders, collapsed until you click a folder (a chain of single-child
   folders is one row, and the folders you opened stay open when the list refreshes). Turn off
   **App Settings → Header & Panels → Bottom bar → Git status: group files by folder** for a flat

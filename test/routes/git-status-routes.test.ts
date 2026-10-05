@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerGitStatusRoutes } from '../../src/web/routes/git-status-routes.js';
-import { clearGitStatusCache, type GitRunner } from '../../src/git-workspace-status.js';
+import { clearGitStatusCache, runGit, type GitRunner } from '../../src/git-workspace-status.js';
 
 const ENV = {
   ...process.env,
@@ -101,14 +101,17 @@ describe('GET /api/sessions/:id/git-status', () => {
   });
 
   it('reuses a recent result for a poll, and recomputes for ?fresh=1', async () => {
-    const runner = vi.fn<GitRunner>(async () => '');
+    // The workspace is the root of its repository, as real git would say.
+    const runner = vi.fn<GitRunner>(async (cwd, args) => (args[0] === 'rev-parse' ? `${cwd}\n` : ''));
     const { app } = await setup({ git: runner });
-    const statusCalls = () => runner.mock.calls.filter(([, args]) => args[0] === 'status').length;
+    const calls = (verb: string) => runner.mock.calls.filter(([, args]) => args[0] === verb).length;
     await app.inject({ method: 'GET', url: '/api/sessions/test-session-1/git-status' });
+    const revParses = calls('rev-parse');
     await app.inject({ method: 'GET', url: '/api/sessions/test-session-1/git-status' });
-    expect(statusCalls()).toBe(1);
+    expect(calls('status')).toBe(1);
+    expect(calls('rev-parse')).toBe(revParses); // the enclosing repository is reused too
     await app.inject({ method: 'GET', url: '/api/sessions/test-session-1/git-status?fresh=1' });
-    expect(statusCalls()).toBe(2);
+    expect(calls('status')).toBe(2);
   });
 
   it('runs git in the session working directory', async () => {
@@ -268,5 +271,30 @@ describe('GET /api/sessions/:id/git-diff', () => {
     });
     expect(res.statusCode).toBe(404);
     expect(runner).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/sessions/:id/git-diff in a folder of several repositories', () => {
+  it('checks the repository against the listed ones and re-reads only that one', async () => {
+    for (const name of ['api', 'web']) {
+      const r = join(dir, name);
+      mkdirSync(r);
+      git(r, 'init', '-q', '-b', 'main');
+      writeFileSync(join(r, 'f.txt'), `${name}\n`);
+    }
+    const calls: Array<[string, string]> = [];
+    const runner: GitRunner = async (cwd, args) => {
+      calls.push([cwd, args[0]]);
+      return runGit(cwd, args);
+    };
+    const { app } = await setup({ git: runner });
+    const overview = (await app.inject({ method: 'GET', url: '/api/sessions/test-session-1/git-status' })).json().data;
+    const api = overview.repos.find((r: { name: string }) => r.name === 'api').status.repoRoot;
+    calls.length = 0;
+    const q = new URLSearchParams({ repo: api, path: 'f.txt', kind: 'untracked' });
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/test-session-1/git-diff?${q}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.diff).toContain('+api');
+    expect(calls.filter(([, verb]) => verb === 'status').map(([cwd]) => cwd)).toEqual([api]);
   });
 });

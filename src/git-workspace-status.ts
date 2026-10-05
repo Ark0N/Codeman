@@ -98,7 +98,10 @@ export interface GitWorkspaceStatus {
   branch: string | null;
   detached: boolean;
   upstream: string | null;
-  /** The configured upstream no longer exists on the remote (deleted and pruned): nothing is tracked. */
+  /**
+   * The configured upstream does not exist on the remote (deleted and pruned, or never pushed, as after
+   * cloning an empty repository and committing): nothing is tracked.
+   */
   upstreamGone: boolean;
   ahead: number;
   /** Behind the remote-tracking ref as of the LAST FETCH; this module never fetches. */
@@ -150,7 +153,7 @@ export interface ParsedStatus {
   branch: string | null;
   detached: boolean;
   upstream: string | null;
-  /** `# branch.upstream` was printed but `# branch.ab` was not: the remote branch is gone (deleted and pruned). */
+  /** `# branch.upstream` was printed but `# branch.ab` was not: no such remote branch (deleted and pruned, or never pushed). */
   upstreamGone: boolean;
   ahead: number;
   behind: number;
@@ -357,51 +360,85 @@ async function collect(cwd: string, git: GitRunner): Promise<GitWorkspaceStatus>
   };
 }
 
-interface CacheEntry {
+interface CacheEntry<T> {
   at: number;
-  value?: GitWorkspaceStatus;
-  inflight?: Promise<GitWorkspaceStatus>;
+  value?: T;
+  inflight?: Promise<T>;
 }
-const cache = new Map<string, CacheEntry>();
+const cache = new Map<string, CacheEntry<GitWorkspaceStatus>>();
 
 /** For tests. */
 export function clearGitStatusCache(): void {
   cache.clear();
+  toplevelCache.clear();
   discoveryCache.clear();
+}
+
+/**
+ * `compute()` for `key`, single-flight and briefly cached: concurrent callers share the computation in
+ * flight, and a result younger than `CACHE_TTL_MS` is reused. `fresh` skips the reuse (a person pressed
+ * Refresh and expects the truth) but still joins a computation that is already running, which is as
+ * current as a new one would be.
+ */
+async function singleFlight<T>(
+  map: Map<string, CacheEntry<T>>,
+  key: string,
+  opts: { now: () => number; fresh?: boolean },
+  compute: () => Promise<T>
+): Promise<T> {
+  const hit = map.get(key);
+  if (hit?.inflight) return hit.inflight;
+  if (!opts.fresh && hit?.value !== undefined && opts.now() - hit.at < CACHE_TTL_MS) return hit.value;
+
+  const inflight = compute();
+  map.set(key, { at: opts.now(), inflight });
+  try {
+    const value = await inflight;
+    map.set(key, { at: opts.now(), value });
+    if (map.size > CACHE_MAX_ENTRIES) {
+      for (const [k, v] of map) {
+        if (map.size <= CACHE_MAX_ENTRIES) break;
+        if (k !== key && !v.inflight) map.delete(k);
+      }
+    }
+    return value;
+  } catch (err) {
+    map.delete(key);
+    throw err;
+  }
 }
 
 /**
  * The git snapshot of `cwd`. Concurrent callers share one in-flight computation, and a result younger
  * than a few seconds is reused, so several tabs polling one repo cost one set of git processes.
- * `fresh` skips the reuse (a person pressed Refresh and expects the truth) but still joins a
- * computation that is already running, which is as current as a new one would be.
+ * `fresh` skips the reuse but still joins a computation already running (see `singleFlight`).
  */
 export async function getGitWorkspaceStatus(
   cwd: string,
   opts: { git?: GitRunner; now?: () => number; fresh?: boolean } = {}
 ): Promise<GitWorkspaceStatus> {
   const git = opts.git ?? runGit;
-  const now = opts.now ?? Date.now;
-  const hit = cache.get(cwd);
-  if (hit?.inflight) return hit.inflight;
-  if (!opts.fresh && hit?.value && now() - hit.at < CACHE_TTL_MS) return hit.value;
+  return singleFlight(cache, cwd, { now: opts.now ?? Date.now, fresh: opts.fresh }, () => collect(cwd, git));
+}
 
-  const inflight = collect(cwd, git);
-  cache.set(cwd, { at: now(), inflight });
-  try {
-    const value = await inflight;
-    cache.set(cwd, { at: now(), value });
-    if (cache.size > CACHE_MAX_ENTRIES) {
-      for (const [k, v] of cache) {
-        if (cache.size <= CACHE_MAX_ENTRIES) break;
-        if (k !== cwd && !v.inflight) cache.delete(k);
-      }
+type RepoToplevel = { state: 'ok'; root: string } | { state: 'not-a-repo' } | { state: 'error'; error: string };
+const toplevelCache = new Map<string, CacheEntry<RepoToplevel>>();
+
+/** The root of the repository enclosing `cwd` (git walks up), from one cheap `rev-parse`. Cached like the status. */
+function enclosingRepoRoot(
+  cwd: string,
+  opts: { git?: GitRunner; now?: () => number; fresh?: boolean }
+): Promise<RepoToplevel> {
+  const git = opts.git ?? runGit;
+  return singleFlight(toplevelCache, cwd, { now: opts.now ?? Date.now, fresh: opts.fresh }, async () => {
+    try {
+      const root = (await git(cwd, ['rev-parse', '--show-toplevel'])).trim();
+      return root ? { state: 'ok', root } : { state: 'not-a-repo' };
+    } catch (err) {
+      const f = describeFailure(err);
+      return f.notARepo ? { state: 'not-a-repo' } : { state: 'error', error: f.message };
     }
-    return value;
-  } catch (err) {
-    cache.delete(cwd);
-    throw err;
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -558,41 +595,41 @@ async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Prom
   return out;
 }
 
+export interface GitOverviewOptions {
+  git?: GitRunner;
+  now?: () => number;
+  fresh?: boolean;
+  home?: string;
+  /** Docker case workspaces (host paths): repositories at or inside these are never inspected. */
+  dockerWorkspaces?: string[];
+}
+
+type WorkspaceRepos =
+  | { kind: 'docker' }
+  | { kind: 'error'; error: string }
+  | { kind: 'enclosing'; root: string }
+  | { kind: 'children'; dirs: string[]; truncated: boolean };
+
 /**
- * Everything git knows about the session's workspace: the enclosing repository when there is one,
- * otherwise each repository found below the working directory. See the module header for the rules.
+ * WHICH repositories belong to the workspace (the module header has the rules), without a full
+ * status of any of them: one cached `rev-parse` for the enclosing repository, else the cached scan
+ * below the folder. The overview and the diff route both go through here, so they cannot disagree.
  */
-export async function getGitWorkspaceOverview(
-  cwd: string,
-  opts: {
-    git?: GitRunner;
-    now?: () => number;
-    fresh?: boolean;
-    home?: string;
-    /** Docker case workspaces (host paths): repositories at or inside these are never inspected. */
-    dockerWorkspaces?: string[];
-  } = {}
-): Promise<GitWorkspaceOverview> {
+async function resolveWorkspaceRepos(cwd: string, opts: GitOverviewOptions): Promise<WorkspaceRepos> {
   const now = opts.now ?? Date.now;
   const dockerRoots = await realAll(opts.dockerWorkspaces ?? []);
   // Checked BEFORE any git runs: git walks up from cwd, and a repository the container can write to
   // could carry config (a clean filter) that runs on the host.
-  if (await isInsideAny(cwd, dockerRoots)) return emptyOverview('unsupported', { reason: 'docker' });
-  const primary = await getGitWorkspaceStatus(cwd, opts);
-  if (primary.state === 'error') return emptyOverview('error', { error: primary.error });
-
-  const home = opts.home ?? homedir();
-  if (primary.repoRoot && (await isInsideAny(primary.repoRoot, dockerRoots))) {
-    return emptyOverview('unsupported', { reason: 'docker' });
-  }
-  if (primary.state === 'ok' && !(primary.repoRoot && (await isUnrelatedAncestor(primary.repoRoot, cwd, home)))) {
-    const root = primary.repoRoot ?? cwd;
-    return {
-      state: 'ok',
-      repos: [{ name: basename(root), path: relative(cwd, root) || '.', status: primary }],
-      reposTruncated: false,
-      checkedAt: primary.checkedAt,
-    };
+  if (await isInsideAny(cwd, dockerRoots)) return { kind: 'docker' };
+  // The enclosing repository is identified before its full status runs, so an unrelated one above the
+  // workspace (a dotfiles repo in $HOME) costs one rev-parse, and its status failing cannot hide the
+  // repositories below.
+  const top = await enclosingRepoRoot(cwd, opts);
+  if (top.state === 'error') return { kind: 'error', error: top.error };
+  if (top.state === 'ok') {
+    if (await isInsideAny(top.root, dockerRoots)) return { kind: 'docker' };
+    if (!(await isUnrelatedAncestor(top.root, cwd, opts.home ?? homedir())))
+      return { kind: 'enclosing', root: top.root };
   }
 
   // Not inside a repository of this workspace: look below for projects.
@@ -604,14 +641,61 @@ export async function getGitWorkspaceOverview(
     discoveryCache.set(cwd, { at: now(), value: found });
     if (discoveryCache.size > CACHE_MAX_ENTRIES) discoveryCache.delete(discoveryCache.keys().next().value as string);
   }
-  const statuses = await mapLimited(found.dirs, STATUS_CONCURRENCY, (dir) => getGitWorkspaceStatus(dir, opts));
+  // The cached list can predate a Docker case linked since: filter it against the roots as they are NOW.
+  const dirs: string[] = [];
+  for (const dir of found.dirs) if (!(await isInsideAny(dir, dockerRoots))) dirs.push(dir);
+  return { kind: 'children', dirs, truncated: found.truncated };
+}
+
+/**
+ * Everything git knows about the session's workspace: the enclosing repository when there is one,
+ * otherwise each repository found below the working directory. See the module header for the rules.
+ */
+export async function getGitWorkspaceOverview(
+  cwd: string,
+  opts: GitOverviewOptions = {}
+): Promise<GitWorkspaceOverview> {
+  const where = await resolveWorkspaceRepos(cwd, opts);
+  if (where.kind === 'docker') return emptyOverview('unsupported', { reason: 'docker' });
+  if (where.kind === 'error') return emptyOverview('error', { error: where.error });
+  if (where.kind === 'enclosing') {
+    const primary = await getGitWorkspaceStatus(cwd, opts);
+    if (primary.state === 'error') return emptyOverview('error', { error: primary.error });
+    if (primary.state !== 'ok') return emptyOverview('not-a-repo');
+    const root = primary.repoRoot ?? where.root;
+    return {
+      state: 'ok',
+      repos: [{ name: basename(root), path: relative(cwd, root) || '.', status: primary }],
+      reposTruncated: false,
+      checkedAt: primary.checkedAt,
+    };
+  }
+
+  const statuses = await mapLimited(where.dirs, STATUS_CONCURRENCY, (dir) => getGitWorkspaceStatus(dir, opts));
   const repos: GitRepoEntry[] = [];
-  found.dirs.forEach((dir, i) => {
+  where.dirs.forEach((dir, i) => {
     const status = statuses[i];
     if (status.state === 'ok') repos.push({ name: basename(dir), path: relative(cwd, dir), status });
   });
   if (!repos.length) return emptyOverview('not-a-repo');
-  return { state: 'ok', repos, reposTruncated: found.truncated, checkedAt: Date.now() };
+  return { state: 'ok', repos, reposTruncated: where.truncated, checkedAt: Date.now() };
+}
+
+/**
+ * `repo` when it is the root of one of the repositories the overview reports for `cwd` (the same rules
+ * and caches, and the Docker roots as they are now), else null. The diff route checks a requested
+ * repository with this rather than recomputing every repository's status.
+ */
+export async function findWorkspaceRepo(
+  cwd: string,
+  repo: string,
+  opts: GitOverviewOptions = {}
+): Promise<string | null> {
+  const where = await resolveWorkspaceRepos(cwd, opts);
+  const roots = where.kind === 'enclosing' ? [where.root] : where.kind === 'children' ? where.dirs : [];
+  // git reports a repository root with symlinks resolved; a discovered folder may be reached through one.
+  for (const root of roots) if (root === repo || (await realOr(root)) === repo) return repo;
+  return null;
 }
 
 // ── Per-file diff ──────────────────────────────────────────────────────────
@@ -656,16 +740,22 @@ export async function getGitFileDiff(
     args = file.kind === 'staged' ? [...base, '--cached', '-M', '--', ...paths] : [...base, '--', ...paths];
   }
   let out: string;
+  let cutShort = false;
   try {
     out = await git(repoRoot, args);
   } catch (err) {
+    const e = err as { code?: unknown; stdout?: unknown };
     // `--no-index` exits 1 when the files differ, which is the normal case for it.
-    const e = err as { code?: number; stdout?: unknown };
     if (file.kind === 'untracked' && e.code === 1 && typeof e.stdout === 'string') out = e.stdout;
-    else throw err;
+    // A diff past runGit's output bound: git was stopped, and what it printed so far is cut below like
+    // any oversized diff.
+    else if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' && typeof e.stdout === 'string') {
+      out = e.stdout;
+      cutShort = true;
+    } else throw err;
   }
   const binary = /^Binary files .* differ$/m.test(out) || /^GIT binary patch$/m.test(out);
-  if (out.length <= MAX_DIFF_BYTES) return { diff: out, truncated: false, binary };
+  if (out.length <= MAX_DIFF_BYTES) return { diff: out, truncated: cutShort, binary };
   const cut = out.lastIndexOf('\n', MAX_DIFF_BYTES);
   return { diff: out.slice(0, cut > 0 ? cut : MAX_DIFF_BYTES), truncated: true, binary };
 }

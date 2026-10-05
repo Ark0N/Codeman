@@ -389,7 +389,9 @@ describe('Git status indicator in a real browser', () => {
     await page.waitForFunction(() => !!(window as any).app._currentGitStatus());
     expect(await page.evaluate(() => (window as any).app._gitStatusInFlight)).toBe(false);
     page.setDefaultTimeout(30000);
-    await page.unroute('**/api/sessions/*/git-status*');
+    // The first read may still be asleep in the handler: wait for it to continue, or its late
+    // route.continue() lands after the route is gone and fails the run as an unhandled rejection.
+    await page.unrouteAll({ behavior: 'wait' });
     expect(await buttonVisible()).toBe(true);
     // Turning the setting off closed the panel; reopen it for the tests that follow.
     await page.click('#gitStatusBtn');

@@ -399,8 +399,9 @@ Object.assign(CodemanApp.prototype, {
     const line = el('div', 'git-status-branchline');
     if (data.upstream && data.upstreamGone) {
       line.append(el('span', 'git-status-chip', `${data.branch || 'HEAD'} → ${data.upstream}`));
-      const gone = el('span', 'git-status-chip git-status-chip--warn', 'Upstream is gone');
-      gone.title = 'The remote branch was deleted (and pruned), so the commits below are on no remote.';
+      const gone = el('span', 'git-status-chip git-status-chip--warn', 'Upstream not on remote');
+      gone.title =
+        'The upstream branch does not exist on the remote (never pushed, or deleted and pruned), so the commits below are on no remote.';
       line.append(gone);
     } else if (data.upstream) {
       line.append(el('span', 'git-status-chip', `${data.branch || 'HEAD'} → ${data.upstream}`));
@@ -473,7 +474,7 @@ Object.assign(CodemanApp.prototype, {
             'div',
             'git-status-note',
             data.upstreamGone
-              ? 'The upstream branch is gone from the remote, so these commits are on no remote.'
+              ? 'The upstream branch does not exist on the remote (never pushed, or deleted), so these commits are on no remote.'
               : 'This branch has no upstream, so these commits are on no remote yet.'
           )
         );

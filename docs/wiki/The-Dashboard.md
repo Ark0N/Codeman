@@ -119,11 +119,17 @@ The right side of the header. Almost all of these are off until you enable them 
 | Multi-monitor          | Off, macOS         | Opens a window spanning every display.                                            |
 | Split                  | Off, desktop only  | View a second session beside the active one, with a draggable divider.           |
 | Tunnel indicator       | When a tunnel runs | Cloudflare tunnel status.                                                        |
-| Git status (bottom bar) | Off               | Right of the bottom bar: uncommitted and unpushed work for the active session. Click it for the Git window. See [Working With Files](Working-With-Files#git-changes). |
 | Admin panel            | Multi-user only    | User administration.                                                              |
 
 New header controls never appear on phones. Phone layout is deliberately minimal and is
 covered in [Mobile Guide](Mobile-Guide).
+
+## Bottom bar
+
+**Git status** sits at the right of the bottom bar and shows the active session's uncommitted
+and unpushed work. It is off by default and per device: turn it on in **App Settings → Header &
+Panels → Bottom bar**. Click it for the Git window. See
+[Working With Files](Working-With-Files#git-changes).
 
 ## Connection state
 
