@@ -75,6 +75,9 @@ Object.assign(CodemanApp.prototype, {
     if (!on) {
       this._gitStatus = null;
       this._gitStatusEpoch = (this._gitStatusEpoch || 0) + 1; // an in-flight read must not repaint
+      // That read's `finally` no longer owns the flag (its epoch is stale), so release it here: left set,
+      // turning the setting back on would skip every refresh for this session until a reload.
+      this._gitStatusInFlight = false;
       this.closeGitStatusPanel();
     }
     this._renderGitStatusButton();
@@ -285,6 +288,10 @@ Object.assign(CodemanApp.prototype, {
     if (!body) return;
     const overview = this._currentGitStatus();
     const el = (tag, cls, text) => this._gitEl(tag, cls, text);
+    // The 15 s poll replaces every row: put keyboard focus back on the same file afterwards.
+    const focusKey = body.contains(document.activeElement)
+      ? document.activeElement.closest?.('[data-git-key]')?.dataset.gitKey
+      : null;
     const view = this._gitDiffView;
     if (view && view.sessionId === this.activeSessionId) {
       // A file's diff is on screen: the 15 s poll re-renders the panel, and must not throw it away.
@@ -316,7 +323,9 @@ Object.assign(CodemanApp.prototype, {
         overview.state === 'not-a-repo'
           ? 'No git repository here: this session’s folder is not one, and none was found inside it (up to two levels down).'
           : overview.state === 'unsupported'
-            ? `Git status is not available for ${overview.reason === 'docker' ? 'Docker' : 'remote (SSH)'} sessions.`
+            ? overview.reason === 'docker'
+              ? 'Git status is not available for Docker sessions, or for folders inside a Docker case workspace.'
+              : 'Git status is not available for remote (SSH) sessions.'
             : `Could not read the repository: ${overview.error || 'git failed'}`;
       body.append(el('div', 'git-status-empty', why));
       clearChrome();
@@ -341,6 +350,10 @@ Object.assign(CodemanApp.prototype, {
 
     if (foot) {
       foot.textContent = `Checked ${new Date(overview.checkedAt).toLocaleTimeString()}. Read-only: Codeman never fetches or changes the repository, so “behind” is as of your last fetch.`;
+    }
+    if (focusKey) {
+      const again = [...body.querySelectorAll('[data-git-key]')].find((n) => n.dataset.gitKey === focusKey);
+      again?.focus({ preventScroll: true });
     }
   },
 
@@ -384,7 +397,12 @@ Object.assign(CodemanApp.prototype, {
 
     // Branch / upstream line.
     const line = el('div', 'git-status-branchline');
-    if (data.upstream) {
+    if (data.upstream && data.upstreamGone) {
+      line.append(el('span', 'git-status-chip', `${data.branch || 'HEAD'} → ${data.upstream}`));
+      const gone = el('span', 'git-status-chip git-status-chip--warn', 'Upstream is gone');
+      gone.title = 'The remote branch was deleted (and pruned), so the commits below are on no remote.';
+      line.append(gone);
+    } else if (data.upstream) {
       line.append(el('span', 'git-status-chip', `${data.branch || 'HEAD'} → ${data.upstream}`));
       if (data.ahead) line.append(el('span', 'git-status-chip git-status-chip--warn', `↑ ${data.ahead} ahead`));
       if (data.behind) {
@@ -449,9 +467,15 @@ Object.assign(CodemanApp.prototype, {
         )
       );
     } else {
-      if (!data.upstream) {
+      if (!data.upstream || data.upstreamGone) {
         pushSection.append(
-          el('div', 'git-status-note', 'This branch has no upstream, so these commits are on no remote yet.')
+          el(
+            'div',
+            'git-status-note',
+            data.upstreamGone
+              ? 'The upstream branch is gone from the remote, so these commits are on no remote.'
+              : 'This branch has no upstream, so these commits are on no remote yet.'
+          )
         );
       }
       for (const c of data.unpushed) pushSection.append(this._gitCommitRow(c));
@@ -523,6 +547,7 @@ Object.assign(CodemanApp.prototype, {
       f.kind === 'untracked' ? '?' : f.kind === 'conflicted' ? 'U' : f.kind === 'staged' ? f.index : f.worktree;
     const badge = el('span', `git-status-badge git-status-badge--${letter === '?' ? 'new' : letter}`, letter);
     badge.title = GIT_STATUS_BADGE_TITLE[letter] || letter;
+    row.dataset.gitKey = `${f.kind}|${f.path}`;
     row.append(badge);
     const name = el('span', 'git-status-path', displayName ?? f.path);
     if (displayName) name.title = f.path;

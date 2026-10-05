@@ -5,13 +5,16 @@
  * projects (see `getGitWorkspaceOverview` for exactly which).
  *
  * Read-only and offline: it never fetches and never runs a git write command. A remote (SSH) or
- * Docker session is not inspected and answers `state: 'unsupported'`: a Docker workspace is writable
- * from inside the sandbox, and git here would run on the host. Ownership goes through
+ * Docker session is not inspected and answers `state: 'unsupported'`, and neither is any repository at or
+ * inside a Docker case workspace (a container can write there, and git here would run on the host). Ownership goes through
  * `findSessionOrFail`, like every session-scoped route.
  */
 
 import type { FastifyInstance } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
+import { redactGitCredentials } from '../../git-clone.js';
+import { readDockerCases } from '../../docker-hosts.js';
+import { getDataDir } from '../../config/instance.js';
 import { findSessionOrFail } from '../route-helpers.js';
 import {
   emptyOverview,
@@ -24,14 +27,30 @@ import {
 } from '../../git-workspace-status.js';
 import type { SessionPort } from '../ports/index.js';
 
-export function registerGitStatusRoutes(app: FastifyInstance, ctx: SessionPort, git?: GitRunner): void {
+/** Host paths of every Docker case workspace: repositories at or inside these are never inspected. */
+const defaultDockerWorkspaces = async (): Promise<string[]> =>
+  (await readDockerCases(getDataDir()).catch(() => [])).map((c) => c.hostWorkspacePath).filter(Boolean);
+
+export function registerGitStatusRoutes(
+  app: FastifyInstance,
+  ctx: SessionPort,
+  git?: GitRunner,
+  dockerWorkspaces: () => Promise<string[]> = defaultDockerWorkspaces
+): void {
   app.get('/api/sessions/:id/git-status', async (req): Promise<ApiResponse<GitWorkspaceOverview>> => {
     const { id } = req.params as { id: string };
     const { fresh } = req.query as { fresh?: string };
     const session = findSessionOrFail(ctx, id, req);
     if (session.remote) return { success: true, data: emptyOverview('unsupported', { reason: 'remote' }) };
     if (session.docker) return { success: true, data: emptyOverview('unsupported', { reason: 'docker' }) };
-    return { success: true, data: await getGitWorkspaceOverview(session.workingDir, { git, fresh: fresh === '1' }) };
+    return {
+      success: true,
+      data: await getGitWorkspaceOverview(session.workingDir, {
+        git,
+        fresh: fresh === '1',
+        dockerWorkspaces: await dockerWorkspaces(),
+      }),
+    };
   });
 
   // The diff of one file the panel lists. `repo` and `path` are matched against the CURRENT status
@@ -45,7 +64,11 @@ export function registerGitStatusRoutes(app: FastifyInstance, ctx: SessionPort, 
       reply.code(400);
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Git is not available for remote or Docker sessions');
     }
-    const overview = await getGitWorkspaceOverview(session.workingDir, { git, fresh: true });
+    const overview = await getGitWorkspaceOverview(session.workingDir, {
+      git,
+      fresh: true,
+      dockerWorkspaces: await dockerWorkspaces(),
+    });
     const status = overview.repos.find((r) => r.status.repoRoot === repo)?.status;
     const entry = status?.files.find((f) => f.path === path && f.kind === (kind as GitFileKind));
     if (!status?.repoRoot || !entry) {
@@ -56,7 +79,10 @@ export function registerGitStatusRoutes(app: FastifyInstance, ctx: SessionPort, 
       return { success: true, data: await getGitFileDiff(status.repoRoot, entry, { git }) };
     } catch (err) {
       reply.code(500);
-      return createErrorResponse(ApiErrorCode.INTERNAL_ERROR, `git diff failed: ${getErrorMessage(err)}`);
+      return createErrorResponse(
+        ApiErrorCode.INTERNAL_ERROR,
+        `git diff failed: ${redactGitCredentials(getErrorMessage(err))}`
+      );
     }
   });
 }

@@ -174,7 +174,9 @@ Click it for a draggable window, in the style of the File Viewer:
 
 - **Uncommitted changes**, grouped as staged, not staged, untracked and conflicted, each with a
   status letter (`M` modified, `A` added, `D` deleted, `R` renamed, `?` new, `U` conflict).
-- **Not pushed**: the commits no remote has. A branch with no upstream says so.
+- **Not pushed**: the commits no remote has. A branch with no upstream says so, and so does one whose
+  upstream was deleted on the remote ("Upstream is gone"), which counts every commit on no remote
+  rather than showing a green tick.
 - Files are grouped under their folders, collapsed until you click a folder (a chain of single-child
   folders is one row, and the folders you opened stay open when the list refreshes). Turn off
   **App Settings → Header & Panels → Bottom bar → Git status: group files by folder** for a flat
@@ -190,7 +192,9 @@ Click it for a draggable window, in the style of the File Viewer:
   in your home folder) is ignored.
 
 It is read-only and offline: Codeman never fetches, commits or changes the repository, so
-"behind" is as of your last fetch. It is not shown for Docker or remote (SSH) sessions. The
+"behind" is as of your last fetch. It is not shown for Docker or remote (SSH) sessions, and a repository at or inside a Docker case
+workspace is skipped even from a local session (a container can write there, and git would run
+that repository's own configuration on the host). The
 data comes from `GET /api/sessions/:id/git-status` and `GET /api/sessions/:id/git-diff`
 (see the [API reference](https://github.com/Ark0N/Codeman/blob/master/docs/api-reference.md)).
 

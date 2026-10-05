@@ -26,10 +26,15 @@ const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd,
 let dir: string;
 let session: Record<string, unknown>;
 
-async function setup(opts: { git?: GitRunner; authUser?: { username: string; role: 'admin' | 'user' } } = {}) {
-  const h = await createRouteTestHarness((app, ctx) => registerGitStatusRoutes(app, ctx, opts.git), {
-    authUser: opts.authUser,
-  });
+async function setup(
+  opts: { git?: GitRunner; authUser?: { username: string; role: 'admin' | 'user' }; dockerWorkspaces?: string[] } = {}
+) {
+  const h = await createRouteTestHarness(
+    (app, ctx) => registerGitStatusRoutes(app, ctx, opts.git, async () => opts.dockerWorkspaces ?? []),
+    {
+      authUser: opts.authUser,
+    }
+  );
   session = h.ctx._session as unknown as Record<string, unknown>;
   session.workingDir = dir;
   return h;
@@ -252,5 +257,16 @@ describe('GET /api/sessions/:id/git-diff', () => {
     const conflict = await app.inject({ method: 'GET', url: url({ repo: root, path: 'c.txt', kind: 'conflicted' }) });
     expect(conflict.statusCode).toBe(200);
     expect(conflict.json().data.diff).toMatch(/<<<<<<<|\+\+<<<<<<</);
+  });
+
+  it('404s a repository inside a Docker case workspace without running git in it', async () => {
+    const runner = vi.fn<GitRunner>(async () => '');
+    const { app } = await setup({ git: runner, dockerWorkspaces: [realpathSync(dir)] });
+    const res = await app.inject({
+      method: 'GET',
+      url: url({ repo: realpathSync(dir), path: 'a.txt', kind: 'unstaged' }),
+    });
+    expect(res.statusCode).toBe(404);
+    expect(runner).not.toHaveBeenCalled();
   });
 });

@@ -203,6 +203,23 @@ describe('Git status indicator in a real browser', () => {
     await page.click('#gitStatusBody button:has-text("Back")');
   });
 
+  it('keeps keyboard focus on the same file row across the 15 s re-render', async () => {
+    await page.focus('.git-status-file:has-text("a.txt")');
+    const key = () => page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset?.gitKey ?? null);
+    expect(await key()).toBe('unstaged|a.txt');
+    await refresh();
+    await page.waitForFunction(() => document.activeElement?.getAttribute('data-git-key') === 'unstaged|a.txt');
+    expect(await key()).toBe('unstaged|a.txt');
+  });
+
+  it('the panel never starts off-screen, even on a 650px-wide viewport', async () => {
+    const original = page.viewportSize()!;
+    await page.setViewportSize({ width: 650, height: original.height });
+    const left = await page.evaluate(() => document.getElementById('gitStatusPanel')!.getBoundingClientRect().left);
+    await page.setViewportSize(original);
+    expect(left).toBeGreaterThanOrEqual(0);
+  });
+
   it('drags by the header', async () => {
     const before = await page.evaluate(() => document.getElementById('gitStatusPanel')!.getBoundingClientRect().left);
     const box = (await page.locator('.git-status-header').boundingBox())!;
@@ -352,6 +369,33 @@ describe('Git status indicator in a real browser', () => {
     });
   });
 
+  it('turning the setting off while a read is in flight, then on again, does not leave polling dead', async () => {
+    let slow = true;
+    await page.route('**/api/sessions/*/git-status*', async (route) => {
+      if (slow) await new Promise((r) => setTimeout(r, 1500));
+      await route.continue();
+    });
+    page.setDefaultTimeout(6000);
+    // A background poll may be mid-read: let it finish so OUR read is the one the slow route holds.
+    await page.waitForFunction(() => (window as any).app._gitStatusInFlight === false);
+    await page.evaluate(() => void (window as any).app.refreshGitStatus({ fresh: true }));
+    await page.waitForFunction(() => (window as any).app._gitStatusInFlight === true);
+    await setSetting(false);
+    expect(await page.evaluate(() => (window as any).app._gitStatusInFlight)).toBe(false);
+    slow = false;
+    await setSetting(true);
+    // Re-enabling starts its own read. With the flag stuck true that read is skipped for this session
+    // and the indicator never comes back.
+    await page.waitForFunction(() => !!(window as any).app._currentGitStatus());
+    expect(await page.evaluate(() => (window as any).app._gitStatusInFlight)).toBe(false);
+    page.setDefaultTimeout(30000);
+    await page.unroute('**/api/sessions/*/git-status*');
+    expect(await buttonVisible()).toBe(true);
+    // Turning the setting off closed the panel; reopen it for the tests that follow.
+    await page.click('#gitStatusBtn');
+    await page.waitForSelector('#gitStatusPanel.visible');
+  }, 30000);
+
   it('closing the panel resets it; turning the setting off hides the button, closes the panel and stops polling', async () => {
     await page.click('.git-status-actions button[aria-label="Close git status"]');
     expect(await page.isVisible('#gitStatusPanel')).toBe(false);
@@ -364,5 +408,5 @@ describe('Git status indicator in a real browser', () => {
     const before = gitStatusRequests.length;
     await page.waitForTimeout(3000);
     expect(gitStatusRequests.length).toBe(before);
-  });
+  }, 30000);
 });

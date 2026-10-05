@@ -33,6 +33,18 @@ describe('parsePorcelainV2', () => {
     });
   });
 
+  it('flags an upstream whose remote branch is gone: branch.upstream without branch.ab', () => {
+    expect(
+      parsePorcelainV2(['# branch.oid x', '# branch.head feature', '# branch.upstream origin/feature'].join(NUL) + NUL)
+    ).toMatchObject({ upstream: 'origin/feature', upstreamGone: true });
+    expect(
+      parsePorcelainV2(
+        ['# branch.oid x', '# branch.head main', '# branch.upstream origin/main', '# branch.ab +0 -0'].join(NUL) + NUL
+      )
+    ).toMatchObject({ upstreamGone: false });
+    expect(parsePorcelainV2(['# branch.oid x', '# branch.head feature'].join(NUL) + NUL).upstreamGone).toBe(false);
+  });
+
   it('reads a detached HEAD and a branch with no upstream (no branch.ab line either)', () => {
     expect(parsePorcelainV2(['# branch.oid x', '# branch.head (detached)'].join(NUL) + NUL)).toMatchObject({
       branch: null,
@@ -311,6 +323,21 @@ describe('getGitWorkspaceStatus against a real repository', () => {
       commit('f2');
       const s = await getGitWorkspaceStatus(repo);
       expect(s).toMatchObject({ branch: 'feature', upstream: null, hasRemote: true, unpushedCount: 2 });
+      expect(s.unpushed.map((c) => c.subject)).toEqual(['f2', 'f1']);
+    });
+
+    it('a branch whose upstream was deleted and pruned is NOT reported as everything pushed', async () => {
+      git(repo, 'checkout', '-q', '-b', 'feature');
+      write('f1.txt');
+      commit('f1');
+      git(repo, 'push', '-q', '-u', 'origin', 'feature');
+      git(repo, 'push', '-q', 'origin', '--delete', 'feature');
+      git(repo, 'fetch', '-q', '--prune');
+      write('f2.txt');
+      commit('f2');
+      const s = await getGitWorkspaceStatus(repo);
+      expect(s).toMatchObject({ branch: 'feature', upstream: 'origin/feature', upstreamGone: true });
+      expect(s.unpushedCount).toBe(2);
       expect(s.unpushed.map((c) => c.subject)).toEqual(['f2', 'f1']);
     });
 
@@ -668,7 +695,8 @@ describe('isSafeRepoRelativePath', () => {
     ['a.txt', true],
     ['src/deep/x.ts', true],
     ['', false],
-    ['-rf', false],
+    ['-rf', true], // every operand follows `--`, so a leading dash is just a name
+    ['-', true],
     ['/etc/passwd', false],
     ['../x', false],
     ['a/../../x', false],
@@ -723,5 +751,82 @@ describe('getGitFileDiff', () => {
     expect(cut.truncated).toBe(true);
     expect(cut.diff.length).toBeLessThanOrEqual(MAX_DIFF_BYTES);
     expect(cut.diff.endsWith('x')).toBe(true);
+  });
+});
+
+describe('Docker case workspaces are never inspected', () => {
+  let top: string;
+  let home: string;
+  const repoAt = (p: string): string => {
+    mkdir(p, { recursive: true });
+    git(p, 'init', '-q', '-b', 'main');
+    writeFileSync(join(p, 'f.txt'), '1\n');
+    git(p, 'add', '-A');
+    git(p, 'commit', '-q', '-m', 'c');
+    return p;
+  };
+  /** A repository whose clean filter drops a marker file: proof that git ran on it. */
+  const booby = (p: string): string => {
+    repoAt(p);
+    git(p, 'config', 'filter.mark.clean', 'touch RAN; cat');
+    writeFileSync(join(p, '.gitattributes'), 'f.txt filter=mark\n');
+    // Same size as the committed '1\n', so git must read the content (running the filter) to see the change.
+    writeFileSync(join(p, 'f.txt'), 'x\n');
+    return p;
+  };
+
+  beforeEach(() => {
+    top = mkdtempSync(join(tmpdir(), 'git-docker-'));
+    home = join(top, 'home');
+    mkdir(home, { recursive: true });
+    clearGitStatusCache();
+  });
+  afterEach(() => rmSync(top, { recursive: true, force: true }));
+
+  it('control: without the exclusion git does run the repository’s clean filter', async () => {
+    const ws = join(home, 'case');
+    booby(join(ws, 'proj'));
+    await getGitWorkspaceOverview(ws, { home, git: undefined });
+    expect(existsSync(join(ws, 'proj', 'RAN'))).toBe(true);
+  });
+
+  it('drops a Docker workspace found below the folder, and runs nothing in it', async () => {
+    const ws = join(home, 'case');
+    booby(join(ws, 'sandbox'));
+    repoAt(join(ws, 'plain'));
+    const o = await getGitWorkspaceOverview(ws, { home, dockerWorkspaces: [join(ws, 'sandbox')] });
+    expect(o.repos.map((r) => r.path)).toEqual(['plain']);
+    expect(existsSync(join(ws, 'sandbox', 'RAN'))).toBe(false);
+  });
+
+  it('answers unsupported/docker for a folder at or inside a Docker workspace, before any git runs', async () => {
+    const dock = booby(join(home, 'dock'));
+    mkdir(join(dock, 'sub'));
+    for (const cwd of [dock, join(dock, 'sub')]) {
+      clearGitStatusCache();
+      const git = vi.fn(async () => '');
+      const o = await getGitWorkspaceOverview(cwd, { home, git, dockerWorkspaces: [dock] });
+      expect(o).toMatchObject({ state: 'unsupported', reason: 'docker', repos: [] });
+      expect(git).not.toHaveBeenCalled();
+    }
+    expect(existsSync(join(dock, 'RAN'))).toBe(false);
+  });
+
+  it('sees through a symlink to the workspace', async () => {
+    const dock = booby(join(home, 'dock'));
+    const ws = join(home, 'case');
+    mkdir(ws, { recursive: true });
+    symlink(dock, join(ws, 'link'));
+    const o = await getGitWorkspaceOverview(join(ws, 'link'), { home, dockerWorkspaces: [dock] });
+    expect(o.state).toBe('unsupported');
+    expect(existsSync(join(dock, 'RAN'))).toBe(false);
+  });
+
+  it('a folder next to the workspace, and one whose name merely starts the same, are not excluded', async () => {
+    const dock = join(home, 'dock');
+    const sibling = repoAt(join(home, 'dock-two'));
+    mkdir(dock, { recursive: true });
+    const o = await getGitWorkspaceOverview(sibling, { home, dockerWorkspaces: [dock] });
+    expect(o.state).toBe('ok');
   });
 });

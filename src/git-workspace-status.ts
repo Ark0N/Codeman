@@ -29,10 +29,14 @@
  *     shell: the working directory is the process `cwd`, and the only operand-like input is a fixed
  *     revision range.
  *   - Output is capped: the counts are exact, the lists are not (`filesTruncated`).
- *   - git can run helpers a repository configures (`core.fsmonitor`, clean filters). A LOCAL session
- *     already runs as this same OS user, so polling adds no privilege; `core.fsmonitor` is turned off
- *     anyway. Remote and Docker sessions are never inspected (the route answers `unsupported`):
- *     a Docker workspace is writable from inside a sandbox and git here would run on the host.
+ *   - git can run helpers a repository configures: a clean filter (`filter.<name>.clean`) still runs
+ *     during `git status` and `git diff`, as it does for any `git status`. A LOCAL session already
+ *     runs as this same OS user, so polling adds no privilege there. What is turned off: the
+ *     filesystem monitor (`core.fsmonitor`), external diff and textconv drivers, and the signature
+ *     program (`log.showSignature`). A repository a container can write to is NOT inspected: a
+ *     Docker session answers `unsupported`, and any repository whose root is, or is inside, a Docker
+ *     case workspace is dropped from the walk-up, the scan below a folder, and the diff route, because
+ *     the container could have planted that config and git here would run it on the host.
  *   - Remote URLs and git's stderr can embed `user:token@host`; anything that reaches a client goes
  *     through `redactGitCredentials`.
  *
@@ -94,6 +98,8 @@ export interface GitWorkspaceStatus {
   branch: string | null;
   detached: boolean;
   upstream: string | null;
+  /** The configured upstream no longer exists on the remote (deleted and pruned): nothing is tracked. */
+  upstreamGone: boolean;
   ahead: number;
   /** Behind the remote-tracking ref as of the LAST FETCH; this module never fetches. */
   behind: number;
@@ -120,6 +126,7 @@ const EMPTY: Omit<GitWorkspaceStatus, 'state' | 'checkedAt'> = {
   branch: null,
   detached: false,
   upstream: null,
+  upstreamGone: false,
   ahead: 0,
   behind: 0,
   hasRemote: false,
@@ -143,6 +150,8 @@ export interface ParsedStatus {
   branch: string | null;
   detached: boolean;
   upstream: string | null;
+  /** `# branch.upstream` was printed but `# branch.ab` was not: the remote branch is gone (deleted and pruned). */
+  upstreamGone: boolean;
   ahead: number;
   behind: number;
   files: GitFileEntry[];
@@ -154,7 +163,16 @@ export interface ParsedStatus {
  * one more NUL-terminated token holding the original path.
  */
 export function parsePorcelainV2(text: string): ParsedStatus {
-  const out: ParsedStatus = { branch: null, detached: false, upstream: null, ahead: 0, behind: 0, files: [] };
+  const out: ParsedStatus = {
+    branch: null,
+    detached: false,
+    upstream: null,
+    upstreamGone: false,
+    ahead: 0,
+    behind: 0,
+    files: [],
+  };
+  let sawAb = false;
   const tokens = text.split('\0');
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
@@ -168,6 +186,7 @@ export function parsePorcelainV2(text: string): ParsedStatus {
       } else if (key === 'branch.upstream') {
         out.upstream = value;
       } else if (key === 'branch.ab') {
+        sawAb = true;
         const m = /^\+(\d+) -(\d+)$/.exec(value);
         if (m) {
           out.ahead = Number(m[1]);
@@ -203,6 +222,7 @@ export function parsePorcelainV2(text: string): ParsedStatus {
     }
     // '!' (ignored) is not requested; anything unknown is skipped rather than guessed at.
   }
+  out.upstreamGone = out.upstream !== null && !sawAb;
   return out;
 }
 
@@ -241,8 +261,9 @@ export const runGit: GitRunner = async (cwd, args) => {
   const { stdout } = await execFileAsync(
     'git',
     // --no-optional-locks: never touch the index just to look. core.fsmonitor=false: do not start or
-    // consult a filesystem monitor on behalf of a poll.
-    ['--no-optional-locks', '-c', 'core.fsmonitor=false', ...args],
+    // consult a filesystem monitor on behalf of a poll. log.showSignature=false: `git log` must not run
+    // a configured gpg.program to verify signatures.
+    ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'log.showSignature=false', ...args],
     {
       cwd,
       timeout: GIT_TIMEOUT_MS,
@@ -289,9 +310,11 @@ async function collect(cwd: string, git: GitRunner): Promise<GitWorkspaceStatus>
     }
   };
 
-  const hasUpstream = parsed.upstream !== null;
-  // With an upstream: what is ahead of it. Without one (a branch never pushed, or a detached HEAD):
-  // what is on HEAD but on no remote-tracking ref at all.
+  // A configured upstream whose remote branch is gone has no `branch.ab`, and `@{upstream}` no longer
+  // resolves: treat it as no usable upstream rather than letting the failed rev-list read as 0.
+  const hasUpstream = parsed.upstream !== null && !parsed.upstreamGone;
+  // With an upstream: what is ahead of it. Without one (a branch never pushed, a detached HEAD, or an
+  // upstream that is gone): what is on HEAD but on no remote-tracking ref at all.
   const range = hasUpstream ? ['@{upstream}..HEAD'] : ['HEAD', '--not', '--remotes'];
   const [root, remotes, stash, countText, logText] = await Promise.all([
     safe(['rev-parse', '--show-toplevel']),
@@ -321,6 +344,7 @@ async function collect(cwd: string, git: GitRunner): Promise<GitWorkspaceStatus>
     branch: parsed.branch,
     detached: parsed.detached,
     upstream: parsed.upstream,
+    upstreamGone: parsed.upstreamGone,
     ahead: parsed.ahead,
     behind: parsed.behind,
     hasRemote,
@@ -386,7 +410,7 @@ export async function getGitWorkspaceStatus(
 
 /** How far below the working directory to look for repositories (`cwd/a/b` is found, `cwd/a/b/c` is not). */
 const DISCOVERY_MAX_DEPTH = 2;
-/** Directory entries inspected per folder, so a folder with thousands of children costs a bounded readdir. */
+/** Directory entries inspected per folder (after sorting), so a folder with thousands of children stays cheap. */
 const DISCOVERY_MAX_ENTRIES = 300;
 /** Repositories reported for one workspace. */
 export const MAX_REPOS = 12;
@@ -429,6 +453,21 @@ const realOr = async (p: string): Promise<string> => {
   }
 };
 
+/** Real paths of `dirs` (a Docker case workspace may be reached through a symlink). */
+const realAll = (dirs: string[]): Promise<string[]> => Promise.all(dirs.map(realOr));
+
+const isWithin = (child: string, root: string): boolean => child === root || child.startsWith(root + sep);
+
+/**
+ * True when `path` is, or is inside, any of the (already real) `roots`. Used for Docker case
+ * workspaces: a container can write there, so git must not run on its behalf on the host.
+ */
+export async function isInsideAny(path: string, realRoots: string[]): Promise<boolean> {
+  if (!realRoots.length) return false;
+  const real = await realOr(path);
+  return realRoots.some((r) => isWithin(real, r));
+}
+
 /**
  * True when `repoRoot` is a repository that merely contains the workspace and is the home folder or
  * above it (`$HOME` managed as a dotfiles repo, `/`, `/home`): its changes are not the session's work.
@@ -449,24 +488,51 @@ async function hasDotGit(dir: string): Promise<boolean> {
   }
 }
 
+/** Most directory entries READ from one folder before sorting and slicing, so the scan of a huge folder is bounded. */
+const DISCOVERY_MAX_SCAN = 5000;
+
+/** Up to `DISCOVERY_MAX_SCAN` entries of `dir` (null when unreadable). */
+async function readDirBounded(dir: string): Promise<import('node:fs').Dirent[] | null> {
+  let handle;
+  try {
+    handle = await fs.opendir(dir);
+  } catch {
+    return null;
+  }
+  const out: import('node:fs').Dirent[] = [];
+  try {
+    for await (const e of handle) {
+      out.push(e);
+      if (out.length >= DISCOVERY_MAX_SCAN) break;
+    }
+  } catch {
+    /* a folder that fails mid-read: use what was read */
+  } finally {
+    await handle.close().catch(() => {});
+  }
+  return out;
+}
+
 /** Repositories up to `DISCOVERY_MAX_DEPTH` levels below `cwd`, nearest and alphabetical first. Never follows symlinks. */
-export async function discoverChildRepos(cwd: string): Promise<{ dirs: string[]; truncated: boolean }> {
+export async function discoverChildRepos(
+  cwd: string,
+  excludeRealRoots: string[] = []
+): Promise<{ dirs: string[]; truncated: boolean }> {
   const found: string[] = [];
   let level = [cwd];
   for (let depth = 1; depth <= DISCOVERY_MAX_DEPTH && level.length > 0; depth++) {
     const next: string[] = [];
     for (const dir of level) {
-      let entries;
-      try {
-        entries = (await fs.readdir(dir, { withFileTypes: true })).slice(0, DISCOVERY_MAX_ENTRIES);
-      } catch {
-        continue;
-      }
+      const entries = await readDirBounded(dir);
+      if (!entries) continue;
       entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      entries.length = Math.min(entries.length, DISCOVERY_MAX_ENTRIES);
       for (const e of entries) {
         // isDirectory() is false for a symlink, which is how a link to elsewhere is never followed.
         if (!e.isDirectory() || e.name.startsWith('.') || DISCOVERY_SKIP.has(e.name)) continue;
         const child = join(dir, e.name);
+        // A Docker case workspace (or anything inside one) is never inspected, nor descended into.
+        if (await isInsideAny(child, excludeRealRoots)) continue;
         if (await hasDotGit(child)) found.push(child);
         else next.push(child);
       }
@@ -498,13 +564,27 @@ async function mapLimited<T, R>(items: T[], limit: number, fn: (item: T) => Prom
  */
 export async function getGitWorkspaceOverview(
   cwd: string,
-  opts: { git?: GitRunner; now?: () => number; fresh?: boolean; home?: string } = {}
+  opts: {
+    git?: GitRunner;
+    now?: () => number;
+    fresh?: boolean;
+    home?: string;
+    /** Docker case workspaces (host paths): repositories at or inside these are never inspected. */
+    dockerWorkspaces?: string[];
+  } = {}
 ): Promise<GitWorkspaceOverview> {
   const now = opts.now ?? Date.now;
+  const dockerRoots = await realAll(opts.dockerWorkspaces ?? []);
+  // Checked BEFORE any git runs: git walks up from cwd, and a repository the container can write to
+  // could carry config (a clean filter) that runs on the host.
+  if (await isInsideAny(cwd, dockerRoots)) return emptyOverview('unsupported', { reason: 'docker' });
   const primary = await getGitWorkspaceStatus(cwd, opts);
   if (primary.state === 'error') return emptyOverview('error', { error: primary.error });
 
   const home = opts.home ?? homedir();
+  if (primary.repoRoot && (await isInsideAny(primary.repoRoot, dockerRoots))) {
+    return emptyOverview('unsupported', { reason: 'docker' });
+  }
   if (primary.state === 'ok' && !(primary.repoRoot && (await isUnrelatedAncestor(primary.repoRoot, cwd, home)))) {
     const root = primary.repoRoot ?? cwd;
     return {
@@ -520,7 +600,7 @@ export async function getGitWorkspaceOverview(
   let found: { dirs: string[]; truncated: boolean };
   if (!opts.fresh && hit && now() - hit.at < DISCOVERY_TTL_MS) found = hit.value;
   else {
-    found = await discoverChildRepos(cwd);
+    found = await discoverChildRepos(cwd, dockerRoots);
     discoveryCache.set(cwd, { at: now(), value: found });
     if (discoveryCache.size > CACHE_MAX_ENTRIES) discoveryCache.delete(discoveryCache.keys().next().value as string);
   }
@@ -546,17 +626,18 @@ export interface GitFileDiff {
   binary: boolean;
 }
 
-/** A repo-relative path git reported, minus anything that could be read as an option or escape the repo. */
+/** A repo-relative path git reported, minus anything that could escape the repo. (A leading `-` is fine: every operand follows `--`.) */
 export function isSafeRepoRelativePath(p: string): boolean {
-  if (!p || p.length > 4096 || p.includes('\0') || p.startsWith('-') || p.startsWith('/')) return false;
+  if (!p || p.length > 4096 || p.includes('\0') || p.startsWith('/')) return false;
   return !p.split('/').includes('..');
 }
 
 /**
  * The diff of one changed file, as the panel's rows describe it: `staged` is index vs HEAD,
  * `unstaged`/`conflicted` is working tree vs index (a conflict shows git's combined diff), and
- * `untracked` is the whole file as additions. Read-only, and `--no-ext-diff --no-textconv` keep a
- * repository's own config from running programs on behalf of a click.
+ * `untracked` is the whole file as additions. Read-only. `--no-ext-diff --no-textconv` stop the external
+ * diff and textconv drivers a repository configures; a clean filter still runs, as it does for any
+ * `git diff`, which is why a container-writable repository never reaches this function.
  */
 export async function getGitFileDiff(
   repoRoot: string,

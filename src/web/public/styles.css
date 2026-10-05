@@ -19316,16 +19316,18 @@ html .toolbar .btn-git-status.git-status--conflict {
   border-color: rgba(229, 83, 75, 0.5);
 }
 
-.btn-git-status[aria-expanded='true'] {
-  background: rgba(255, 255, 255, 0.12);
+html .toolbar .btn-git-status[aria-expanded='true'] {
+  background: color-mix(in srgb, currentColor 16%, transparent);
 }
 
 /* Same look as the Files window. Default spot is just left of it so both can be open. */
 .git-status-panel {
   position: fixed;
   top: calc(var(--header-height) + 10px);
-  right: 320px;
+  /* Just left of the Files window; on a narrow viewport slide right so the left edge never leaves the screen. */
+  right: clamp(8px, calc(100vw - 388px), 320px);
   width: 380px;
+  max-width: calc(100vw - 16px);
   height: calc(100vh - var(--header-height) - var(--toolbar-height) - 40px);
   height: calc(100dvh - var(--header-height) - var(--toolbar-height) - 40px);
   max-height: 600px;
