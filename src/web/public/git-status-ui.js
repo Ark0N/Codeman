@@ -344,13 +344,19 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  /** One repository of several: a collapsible section, open when it has something outstanding. */
+  /**
+   * One repository of several: a collapsible section, collapsed by default (the summary line already
+   * shows what is outstanding). Which ones the user opened stay open across the 15 s re-render.
+   */
   _gitRepoSection(r) {
     const el = (tag, cls, text) => this._gitEl(tag, cls, text);
     const d = r.status;
     const section = el('details', 'git-status-repo');
     const outstanding = d.counts.uncommitted > 0 || d.unpushedCount > 0;
-    section.open = outstanding;
+    const openRepos = (this._gitTreeOpen = this._gitTreeOpen || new Set());
+    const repoKey = `repo|${d.repoRoot || r.path}`;
+    section.open = openRepos.has(repoKey);
+    section.addEventListener('toggle', () => (section.open ? openRepos.add(repoKey) : openRepos.delete(repoKey)));
     const summary = el('summary', 'git-status-repo-summary');
     summary.append(el('span', 'git-status-repo-name', r.name));
     if (r.path !== r.name) summary.append(el('span', 'git-status-repo-path', r.path));

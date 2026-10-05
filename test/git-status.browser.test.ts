@@ -330,7 +330,13 @@ describe('Git status indicator in a real browser', () => {
     expect(await page.getAttribute('#gitStatusBtn', 'title')).toMatch(/Git \(2 repositories\)/);
     const names = await page.$$eval('.git-status-repo-name', (els) => els.map((e) => e.textContent));
     expect(names).toEqual(['api', 'web']);
-    // The one with something outstanding is open; the clean one is collapsed.
+    // Every repository starts collapsed (the summary line shows what is outstanding); one the user
+    // opens stays open when a refresh re-renders the panel.
+    const allClosed = await page.$$eval('.git-status-repo', (els) => els.map((e) => (e as HTMLDetailsElement).open));
+    expect(allClosed).toEqual([false, false]);
+    await page.click('.git-status-repo:nth-of-type(1) > summary');
+    await refresh();
+    await page.waitForSelector('.git-status-repo[open]');
     const open = await page.$$eval('.git-status-repo', (els) => els.map((e) => (e as HTMLDetailsElement).open));
     expect(open).toEqual([true, false]);
     const apiBody = (await page.textContent('.git-status-repo:nth-of-type(1)')) ?? '';
