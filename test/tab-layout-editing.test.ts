@@ -136,17 +136,17 @@ describe('drop -> operation', () => {
       groupId: 'g1',
       index: 1,
     });
-    expect(h.dropOperation(base(), { type: 'ref', ref: w('web') }, { type: 'group', groupId: 'g1' }, {})).toMatchObject(
-      {
-        ref: w('web'),
-        groupId: 'g1',
-        index: 2,
-      }
-    );
-    expect(h.dropOperation(base(), { type: 'ref', ref: s('a') }, { type: 'ungrouped' }, {})).toMatchObject({
-      groupId: null,
-      index: 2,
-    });
+    // Onto a header or Ungrouped means "at the end": no index, so a replay onto
+    // a layout that gained rows meanwhile still lands it last.
+    const onHeader = h.dropOperation(base(), { type: 'ref', ref: w('web') }, { type: 'group', groupId: 'g1' }, {});
+    expect(onHeader).toMatchObject({ ref: w('web'), groupId: 'g1' });
+    expect(onHeader).not.toHaveProperty('index');
+    const onUngrouped = h.dropOperation(base(), { type: 'ref', ref: s('a') }, { type: 'ungrouped' }, {});
+    expect(onUngrouped).toMatchObject({ groupId: null });
+    expect(onUngrouped).not.toHaveProperty('index');
+    const crowded = { ...base(), groups: [{ ...base().groups[0], refs: [...base().groups[0].refs, s('late')] }, base().groups[1]] };
+    const replayed = h.applyOperation(crowded, onHeader);
+    expect(replayed.groups[0].refs.at(-1)).toEqual(w('web'));
   });
 
   it('maps a group dropped on another group (or a row in it) to a reorder', () => {
@@ -364,6 +364,26 @@ describe('edit coordinator', () => {
     expect(onFailure).toHaveBeenCalledTimes(1);
   });
 
+  it('reports a 400 that survives the re-read as a failed save, not as a race', async () => {
+    const { put, calls } = controlledPut();
+    const fetchLayout = vi.fn(async () => base(11));
+    const reportError = vi.fn();
+    const onFailure = vi.fn();
+    const { editor } = makeEditor(put, { fetchLayout, onFailure, reportError, maxAttempts: 3 });
+    editor.enqueue({ type: 'renameGroup', groupId: 'g1', name: 'Mine' });
+    await settle();
+    calls[0].resolve({ ok: false, status: 400, layout: null });
+    await settle();
+    await settle();
+    calls[1].resolve({ ok: false, status: 400, layout: null });
+    await settle();
+    expect(calls).toHaveLength(2);
+    expect(fetchLayout).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith('Could not save tab groups.');
+    expect(reportError).not.toHaveBeenCalledWith('Tab groups kept changing elsewhere; your edit was not saved.');
+    expect(onFailure).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses an external layout while writing, rebases pending edits onto one otherwise', async () => {
     const { put, calls } = controlledPut();
     const { editor, applied } = makeEditor(put);
@@ -523,6 +543,7 @@ beforeEach(() => {
   win.localStorage.clear();
   win.sessionStorage.clear();
   document.body.innerHTML = '';
+  win.__codemanUser = { username: 'admin', role: 'admin', multiUser: false };
 });
 
 afterEach(() => {
@@ -542,7 +563,7 @@ describe('row actions in the vertical rail', () => {
     expect(menuLabels()).toEqual([
       'Session options',
       'Move down',
-      'Move to Later',
+      'Move to "Later"',
       'Move to Ungrouped',
       'Move to new group',
       'Close session',
@@ -555,11 +576,34 @@ describe('row actions in the vertical rail', () => {
     expect(menuLabels()).toEqual(['Session options', 'Close session']);
   });
 
+  it('quotes group names, so a group called "New group" or "ungrouped" reads apart from the fixed entries', () => {
+    installFetch();
+    const app = makeApp({
+      ...serverLayout(),
+      groups: [
+        { id: 'gn', name: 'New group', refs: [s('s2')] },
+        { id: 'gu', name: 'ungrouped', refs: [] },
+      ],
+    });
+    app.openTabRailActionMenu({ preventDefault() {}, stopPropagation() {}, currentTarget: row('s2') }, 's2');
+    expect(menuLabels()).toEqual([
+      'Session options',
+      'Move to "ungrouped"',
+      'Move to Ungrouped',
+      'Move to new group',
+      'Close session',
+    ]);
+    app.closeTabRailActionMenu();
+    app.openTabRailActionMenu({ preventDefault() {}, stopPropagation() {}, currentTarget: row('s1') }, 's1');
+    expect(menuLabels()).toContain('Move to "New group"');
+    expect(menuLabels()).toContain('Move to new group');
+  });
+
   it('moves a row into another group with one PUT carrying the held version', async () => {
     const puts = installFetch();
     const app = makeApp();
     app.openTabRailActionMenu({ preventDefault() {}, stopPropagation() {}, currentTarget: row('s1') }, 's1');
-    clickMenu('Move to Later');
+    clickMenu('Move to "Later"');
     // Optimistic: the rail already shows it there.
     expect(row('s1').closest('.tab-layout-group')!.getAttribute('data-tab-group-id')).toBe('gy');
     await flush();
@@ -621,7 +665,7 @@ describe('web tab rows', () => {
     expect(menuLabels()).toEqual([
       'Web tab settings',
       'Move up',
-      'Move to Later',
+      'Move to "Later"',
       'Move to Ungrouped',
       'Move to new group',
     ]);
@@ -669,6 +713,35 @@ describe('group menu', () => {
     const last = puts.at(-1).layout;
     expect(last.groups.map((g: any) => g.id)).toEqual(['gy']);
     expect(keys(last.ungrouped)).toEqual(['session:s1', 'session:s3', 'session:s2', 'webview:w1']);
+  });
+
+  it('cancelling "Delete group" returns focus to the header, with no write', async () => {
+    const puts = installFetch();
+    const app = makeApp();
+    win.confirm = vi.fn(() => false);
+    header('gy').focus();
+    key(header('gy'), 'F10', { shiftKey: true });
+    clickMenu('Delete group');
+    expect(win.confirm).toHaveBeenCalledTimes(1);
+    await flush();
+    expect(puts).toHaveLength(0);
+    expect(document.activeElement).toBe(header('gy'));
+    expect(app.tabLayout.groups).toHaveLength(2);
+  });
+
+  it("closing the row menu (as session:deleted does) leaves an open group menu and its listeners alone", () => {
+    installFetch();
+    const app = makeApp();
+    header('gx').focus();
+    key(header('gx'), 'F10', { shiftKey: true });
+    const menu = document.querySelector('.tab-layout-group-action-menu');
+    expect(menu).not.toBeNull();
+    app.closeTabRailActionMenu();
+    expect(menu!.isConnected).toBe(true);
+    expect(app._tabGroupMenu).toBe(menu);
+    app.closeTabGroupMenu();
+    expect(menu!.isConnected).toBe(false);
+    expect(app._tabGroupMenuKeydown).toBeNull();
   });
 
   it('renames from F2 and cancels on Escape without a write', async () => {
@@ -809,6 +882,107 @@ describe('server echoes and reloads', () => {
     expect(gets).toHaveLength(1);
   });
 
+  it('a failed read during a write keeps the edit and its editor, and the 409 still rebases', async () => {
+    const pending: Array<{ body: any; resolve: (r: any) => void }> = [];
+    const gets: number[] = [];
+    win.fetch = vi.fn((_url: string, init: any) => {
+      if (init?.method === 'PUT') {
+        const body = JSON.parse(init.body);
+        return new Promise((resolve) => pending.push({ body, resolve }));
+      }
+      gets.push(1);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, data: { layout: app.tabLayout } }),
+      });
+    });
+    const app = makeApp();
+    app.editTabLayout({ type: 'renameGroup', groupId: 'gy', name: 'Mine' });
+    await flush();
+    expect(pending).toHaveLength(1);
+    const editor = app._tabLayoutEditor;
+    // The layout read failed (the load coordinator's fallback) while the PUT is out.
+    app._applyTabLayout(null);
+    expect(app._tabLayoutEditor).toBe(editor);
+    expect(app.tabLayout.groups[1].name).toBe('Mine');
+    expect(tabs().getAttribute('role')).toBe('tree');
+    // Someone else wrote first: the 409 is rebased and retried, not lost.
+    const theirs = { ...serverLayout(9), groups: [...serverLayout().groups, { id: 'gz', name: 'Z', refs: [] }] };
+    pending[0].resolve({ ok: false, status: 409, json: async () => ({ success: false, data: { layout: theirs } }) });
+    await flush();
+    expect(pending).toHaveLength(2);
+    expect(pending[1].body.baseVersion).toBe(9);
+    expect(pending[1].body.layout.groups.map((g: any) => g.name)).toEqual(['<Core & Ops>', 'Mine', 'Z']);
+    pending[1].resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({ success: true, data: { layout: { ...pending[1].body.layout, version: 10 } } }),
+    });
+    await flush();
+    expect(app.tabLayout.version).toBe(10);
+    expect(app.showToast).not.toHaveBeenCalled();
+    // The read the failure deferred runs once the write settles.
+    expect(gets).toHaveLength(1);
+  });
+
+  it('replays only its own owner\'s recent copy of unsaved edits', async () => {
+    const copy = (extra: Record<string, unknown>) =>
+      win.sessionStorage.setItem(
+        'codeman:tab-layout-pending',
+        JSON.stringify({
+          owner: '@single',
+          baseVersion: 8,
+          savedAt: Date.now(),
+          operations: [{ type: 'renameGroup', groupId: 'gy', name: 'Replayed' }],
+          ...extra,
+        })
+      );
+    const replays = async (extra: Record<string, unknown>) => {
+      copy(extra);
+      const puts = installFetch();
+      makeApp();
+      await flush();
+      expect(win.sessionStorage.getItem('codeman:tab-layout-pending')).toBeNull();
+      return puts.length;
+    };
+    expect(await replays({})).toBe(1);
+    expect(await replays({ owner: 'alice' })).toBe(0);
+    expect(await replays({ savedAt: Date.now() - 5 * 60_000 })).toBe(0);
+    expect(await replays({ savedAt: undefined })).toBe(0);
+    expect(await replays({ baseVersion: 30 })).toBe(0);
+
+    // Multi-user: the copy is keyed by the user name.
+    win.__codemanUser = { username: 'alice', role: 'user', multiUser: true };
+    expect(await replays({ owner: 'alice' })).toBe(1);
+    expect(await replays({ owner: '@single' })).toBe(0);
+
+    // Identity not known yet: hold the copy until /api/me answers.
+    win.__codemanUser = undefined;
+    copy({});
+    const late = installFetch();
+    makeApp();
+    await flush();
+    expect(late).toHaveLength(0);
+    expect(win.sessionStorage.getItem('codeman:tab-layout-pending')).not.toBeNull();
+    win.__codemanUser = { username: 'admin', role: 'admin', multiUser: false };
+    document.dispatchEvent(new win.CustomEvent('codeman:me'));
+    await flush();
+    expect(late).toHaveLength(1);
+    expect(late[0].layout.groups[1].name).toBe('Replayed');
+  });
+
+  it('says so when a read has to drop edits it could not rebase', () => {
+    installFetch();
+    const app = makeApp();
+    app.editTabLayout({ type: 'renameGroup', groupId: 'gy', name: 'Unsent' });
+    // Not yet flushed (no write in flight), and the rebase refuses the read.
+    app._tabLayoutEditor.adoptExternal = () => false;
+    app._applyTabLayout(serverLayout(9));
+    expect(app.showToast).toHaveBeenCalledWith('Your tab group edit was not saved.', 'error');
+    expect(app._tabLayoutEditor).toBeNull();
+  });
+
   it('keeps unsaved edits across a reload: keepalive PUT now, rebased replay after', async () => {
     const puts = installFetch();
     const app = makeApp();
@@ -822,9 +996,11 @@ describe('server echoes and reloads', () => {
     );
     expect(puts.at(-1).baseVersion).toBe(8);
     expect(puts.at(-1).layout.groups[1].name).toBe('Unsaved');
-    expect(JSON.parse(win.sessionStorage.getItem('codeman:tab-layout-pending')).operations).toEqual([
-      { type: 'renameGroup', groupId: 'gy', name: 'Unsaved' },
-    ]);
+    const stored = JSON.parse(win.sessionStorage.getItem('codeman:tab-layout-pending'));
+    expect(stored.operations).toEqual([{ type: 'renameGroup', groupId: 'gy', name: 'Unsaved' }]);
+    expect(stored.owner).toBe('@single');
+    expect(stored.baseVersion).toBe(8);
+    expect(Math.abs(Date.now() - stored.savedAt)).toBeLessThan(5000);
 
     // Next page: the keepalive lost a race; the layout moved on to version 12.
     const next = installFetch();
@@ -842,12 +1018,23 @@ describe('server echoes and reloads', () => {
     // And when the keepalive DID land, nothing is re-sent.
     win.sessionStorage.setItem(
       'codeman:tab-layout-pending',
-      JSON.stringify({ operations: [{ type: 'renameGroup', groupId: 'gy', name: 'Later' }] })
+      JSON.stringify({
+        owner: '@single',
+        baseVersion: 8,
+        savedAt: Date.now(),
+        operations: [{ type: 'renameGroup', groupId: 'gy', name: 'Later' }],
+      })
     );
     const none = installFetch();
     makeApp();
     await flush();
     expect(none).toHaveLength(0);
+  });
+
+  it('keeps the group menu glyph visible where there is no hover (touch tablets)', () => {
+    const css = read('styles.css');
+    const block = css.match(/@media \(hover: none\) \{\s*html\[data-tab-orientation='vertical'\] \.tab-rail \.tab-layout-group-menu \{([^}]*)\}/);
+    expect(block?.[1]).toMatch(/opacity:\s*1/);
   });
 
   it('leaves the flat rail byte-identical when the layout has no groups, and never edits off the rail', () => {

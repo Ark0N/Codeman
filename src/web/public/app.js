@@ -577,6 +577,13 @@ const SIDEBAR_RICH_CLOCK_MS = 20000;
  */
 const URL_SESSION_WAIT_MS = 30000;
 
+/**
+ * How old the sessionStorage copy of unsaved tab-group edits may be when the
+ * next page replays it (see _restorePendingTabLayoutEdits). A reload takes
+ * seconds; an older copy is from a tab that sat closed or a different visit.
+ */
+const TAB_LAYOUT_PENDING_MAX_AGE_MS = 60000;
+
 class CodemanApp {
   constructor() {
     this.sessions = new Map();
@@ -6335,7 +6342,7 @@ class CodemanApp {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // Owner tab layout: grouped vertical rail (read-only)
+  // Owner tab layout: grouped vertical rail (reading and drawing)
   // ═══════════════════════════════════════════════════════════════
   //
   // The server owns named tab groups (GET /api/tab-layout, tab-layout*.ts) and
@@ -6343,7 +6350,7 @@ class CodemanApp {
   // Ctrl+Tab and every other order consumer are untouched here. This layer only
   // decides how the VERTICAL rail draws rows: in sections, with per-device
   // collapse. With no groups (or any read failure) the rail is the flat list it
-  // has always been.
+  // has always been. Editing the groups is the next block.
 
   _ensureTabLayoutCoordinator() {
     if (this._tabLayoutCoordinator) return this._tabLayoutCoordinator;
@@ -6403,6 +6410,13 @@ class CodemanApp {
     if (next && this.tabLayout && next.version < this.tabLayout.version) return;
     const editor = this._tabLayoutEditor;
     if (editor) {
+      // A failed read says nothing about the layout, and dropping the editor now
+      // would lose the edit outright: a write in flight would never get its 409
+      // rebased. Keep the held layout and the editor; read again once it settles.
+      if (!next && editor.hasPending()) {
+        this._tabLayoutReloadPending = true;
+        return;
+      }
       if (next && editor.isWriting()) {
         // The write's own response decides; read again after it.
         this._tabLayoutReloadPending = true;
@@ -6411,6 +6425,7 @@ class CodemanApp {
       // Unsaved edits are rebased onto the read (adoptExternal repaints); with
       // none, the editor is simply rebuilt from the new layout on next use.
       if (next && editor.hasPending() && editor.adoptExternal(next)) return;
+      if (editor.hasPending()) this.showToast?.('Your tab group edit was not saved.', 'error');
       editor.dispose();
       this._tabLayoutEditor = null;
     }
@@ -6608,7 +6623,11 @@ class CodemanApp {
     const groups = this.tabLayout?.groups || [];
     const index = groups.findIndex((group) => group.id === groupId);
     if (index < 0) return false;
-    if (!window.confirm(`Delete group "${groups[index].name}"? Its tabs move to Ungrouped.`)) return false;
+    if (!window.confirm(`Delete group "${groups[index].name}"? Its tabs move to Ungrouped.`)) {
+      // The menu that asked is gone; put the keyboard back on the group.
+      this.$('sessionTabs')?.querySelector(`[data-tab-group-header="${CSS.escape(groupId)}"]`)?.focus();
+      return false;
+    }
     const neighbour = groups[index + 1] || groups[index - 1];
     return this.editTabLayout({ type: 'deleteGroup', groupId }, neighbour ? `group:${neighbour.id}` : null);
   }
@@ -6667,7 +6686,10 @@ class CodemanApp {
     }
     for (const group of this.tabLayout.groups) {
       if (group.id === location.groupId) continue;
-      actions.push({ label: `Move to ${group.name}`, run: () => this.moveTabRef(ref, group.id) });
+      // Quoted: a group may be NAMED "New group" or "ungrouped", which unquoted
+      // would read (and, case-insensitively, translate) exactly like the
+      // fixed "Move to new group" / "Move to Ungrouped" entries next to it.
+      actions.push({ label: `Move to "${group.name}"`, run: () => this.moveTabRef(ref, group.id) });
     }
     if (location.groupId !== null) actions.push({ label: 'Move to Ungrouped', run: () => this.moveTabRef(ref, null) });
     actions.push({ label: 'Move to new group', run: () => this.createTabGroup({ ref }) });
@@ -6842,7 +6864,10 @@ class CodemanApp {
 
     let settled = false;
     const handle = { groupId, cancel: () => settle(false) };
-    const settle = (commit) => {
+    // `fromBlur`: focus already moved somewhere the user chose (the terminal,
+    // another control). Pulling it back to the header from inside the blur
+    // handler wins over that move, so a blur commit never asks for refocus.
+    const settle = (commit, { fromBlur = false } = {}) => {
       if (settled) return;
       settled = true;
       const name = input.value.trim();
@@ -6851,11 +6876,14 @@ class CodemanApp {
       this._activeRename = null;
       this._inlineRenameActive = false;
       const current = this.tabLayout?.groups?.find((candidate) => candidate.id === groupId);
+      const focusIdentity = fromBlur ? null : `group:${groupId}`;
       if (commit && current && name && name !== current.name) {
-        if (this.editTabLayout({ type: 'renameGroup', groupId, name }, `group:${groupId}`)) return;
+        if (this.editTabLayout({ type: 'renameGroup', groupId, name }, focusIdentity)) return;
       }
-      this._tabFocusIdentity = `group:${groupId}`;
-      this._tabRefocusAfterEdit = true;
+      if (focusIdentity) {
+        this._tabFocusIdentity = focusIdentity;
+        this._tabRefocusAfterEdit = true;
+      }
       this._fullRenderSessionTabs();
     };
     this._activeRename = handle;
@@ -6870,7 +6898,7 @@ class CodemanApp {
         settle(false);
       }
     });
-    input.addEventListener('blur', () => settle(true));
+    input.addEventListener('blur', () => settle(true, { fromBlur: true }));
     input.focus();
     input.select();
     return true;
@@ -6896,6 +6924,11 @@ class CodemanApp {
   }
 
   _onTabLayoutPointerDown(e, container) {
+    // A press whose release never reached us (let go outside the rail, or
+    // outside the window) must not survive into this one: a stale pending
+    // press turned into a phantom drag on the next hover, and a replaced drag
+    // left its Escape listener behind for good.
+    if (this._tabLayoutDrag) this._cancelTabLayoutPointerDrag(container);
     if (e.button !== 0 || e.pointerType === 'touch' || !container.classList.contains('session-tabs--grouped')) return;
     if (this._inlineRenameActive || !this._tabLayoutEditable()) return;
     // Controls keep their own click; only the row body or the header drags.
@@ -6907,7 +6940,14 @@ class CodemanApp {
     else if (row?.dataset.webviewId) source = { type: 'ref', ref: { kind: 'webview', id: row.dataset.webviewId } };
     else if (row?.dataset.id) source = { type: 'ref', ref: { kind: 'session', id: row.dataset.id } };
     if (!source) return;
-    this._tabLayoutDrag = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, source, origin: header || row, active: false, target: null };
+    const drag = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, source, origin: header || row, active: false, target: null };
+    // Capture is only taken once the press becomes a drag, so until then the
+    // release can land outside the rail: hear it on window.
+    drag.windowUp = (upEvent) => this._finishTabLayoutPointerDrag(upEvent, container);
+    drag.windowCancel = () => this._cancelTabLayoutPointerDrag(container);
+    window.addEventListener('pointerup', drag.windowUp, true);
+    window.addEventListener('pointercancel', drag.windowCancel, true);
+    this._tabLayoutDrag = drag;
   }
 
   /** What a pointer at (x, y) would drop onto, from the rendered rail. */
@@ -6938,6 +6978,11 @@ class CodemanApp {
   _onTabLayoutPointerMove(e, container) {
     const drag = this._tabLayoutDrag;
     if (!drag || drag.pointerId !== e.pointerId) return;
+    // The primary button is up, so the release went somewhere we never heard.
+    if ((e.buttons & 1) === 0) {
+      this._cancelTabLayoutPointerDrag(container);
+      return;
+    }
     if (!drag.active) {
       if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
       drag.active = true;
@@ -6948,6 +6993,7 @@ class CodemanApp {
       try {
         container.setPointerCapture(e.pointerId);
       } catch {}
+      if (this._tabLayoutDragKeydown) document.removeEventListener('keydown', this._tabLayoutDragKeydown, true);
       this._tabLayoutDragKeydown = (keyEvent) => {
         if (keyEvent.key !== 'Escape') return;
         keyEvent.preventDefault();
@@ -6969,6 +7015,8 @@ class CodemanApp {
     const drag = this._tabLayoutDrag;
     if (!drag) return;
     this._tabLayoutDrag = null;
+    if (drag.windowUp) window.removeEventListener('pointerup', drag.windowUp, true);
+    if (drag.windowCancel) window.removeEventListener('pointercancel', drag.windowCancel, true);
     drag.origin?.classList.remove('tab-layout-dragging');
     container?.classList.remove('tab-layout-drag-active');
     if (container) this._clearTabLayoutDropMarks(container);
@@ -7010,7 +7058,10 @@ class CodemanApp {
     const operations = editor?.pendingOperations?.() || [];
     if (!operations.length) return false;
     try {
-      sessionStorage.setItem('codeman:tab-layout-pending', JSON.stringify({ operations }));
+      sessionStorage.setItem(
+        'codeman:tab-layout-pending',
+        JSON.stringify({ owner: this._tabLayoutOwnerKey(), baseVersion: editor.baseVersion(), savedAt: Date.now(), operations })
+      );
     } catch {}
     try {
       const layout = editor.getLayout();
@@ -7024,17 +7075,53 @@ class CodemanApp {
     return true;
   }
 
+  /** Whose layout this page edits, as the server keys it (`@single` without multi-user). */
+  _tabLayoutOwnerKey() {
+    const me = window.__codemanUser;
+    if (!me) return null;
+    return me.multiUser ? me.username : '@single';
+  }
+
+  /**
+   * Replay the previous page's unsaved edits, but only that page's: the copy is
+   * ignored when it belongs to another owner (a different login in this tab),
+   * is older than a reload could explain, or names a layout newer than the one
+   * just read (a different server behind the same origin).
+   */
   _restorePendingTabLayoutEdits() {
-    let operations;
+    let saved;
     try {
       const raw = sessionStorage.getItem('codeman:tab-layout-pending');
       if (!raw) return false;
-      sessionStorage.removeItem('codeman:tab-layout-pending');
-      operations = JSON.parse(raw)?.operations;
+      saved = JSON.parse(raw);
     } catch {
       return false;
     }
+    const owner = this._tabLayoutOwnerKey();
+    if (owner === null) {
+      // Who we are is not known yet (/api/me still loading): decide once it is.
+      if (!this._tabLayoutRestoreWaiting) {
+        this._tabLayoutRestoreWaiting = true;
+        document.addEventListener(
+          'codeman:me',
+          () => {
+            this._tabLayoutRestoreWaiting = false;
+            this._restorePendingTabLayoutEdits();
+          },
+          { once: true }
+        );
+      }
+      return false;
+    }
+    try {
+      sessionStorage.removeItem('codeman:tab-layout-pending');
+    } catch {}
+    const operations = saved?.operations;
     if (!Array.isArray(operations) || !operations.length || !this.tabLayout || !window.CodemanTabLayout) return false;
+    if (saved.owner !== owner) return false;
+    const age = Date.now() - saved.savedAt;
+    if (!Number.isFinite(age) || age < 0 || age > TAB_LAYOUT_PENDING_MAX_AGE_MS) return false;
+    if (!Number.isSafeInteger(saved.baseVersion) || saved.baseVersion > this.tabLayout.version) return false;
     return this._ensureTabLayoutEditor().restore(operations);
   }
 
@@ -7049,9 +7136,9 @@ class CodemanApp {
     // affordance instead of lying about it — `tabRailSort: 'manual'` is the way
     // back to drag-reordering, and Alt+N / Ctrl+Shift+{ } still walk the strip
     // order this list is no longer showing.
-    // The grouped rail is read-only for now: a flat-order drag cannot express
-    // "move into that group", and the server would re-rank it within its old
-    // group anyway. Grouped editing comes with its own drag model.
+    // The grouped rail opts out too: a flat-order drag cannot express "move
+    // into that group", and the server would re-rank it within its old group
+    // anyway. It has its own pointer drag (_bindTabLayoutPointerDrag).
     if (this.isTabRailSorted() || container.classList.contains('session-tabs--grouped')) {
       tabs.forEach((tab) => tab.setAttribute('draggable', 'false'));
       return;

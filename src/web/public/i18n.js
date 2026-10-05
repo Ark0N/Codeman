@@ -85,6 +85,7 @@
     'Tab groups changed elsewhere; part of your edit no longer applies.':
       '标签分组已在别处更改；你的部分编辑已不再适用。',
     'Tab groups kept changing elsewhere; your edit was not saved.': '标签分组在别处持续更改；你的编辑未保存。',
+    'Your tab group edit was not saved.': '你的标签分组编辑未保存。',
     'Open session manager': '打开会话管理器',
     Attachments: '附件',
     'Open attachment history': '打开附件历史',
@@ -952,7 +953,7 @@
       [/^Selected: (.+)$/, (_m, value) => `已选择：${value}`],
       [/^Failed to (.+)$/, (_m, action) => `操作失败：${action}`],
       // Group names are user text: they pass through untranslated.
-      [/^Move to (.+)$/, (_m, group) => `移到 ${group}`],
+      [/^Move to "(.+)"$/, (_m, group) => `移到“${group}”`],
       [
         /^Delete group "(.+)"\? Its tabs move to Ungrouped\.$/,
         (_m, group) => `删除分组“${group}”？其中的标签将移到未分组。`,

@@ -427,9 +427,11 @@
     const layout = normalizeLayout(layoutInput);
     const block = lineageBlock(layout, ref, parents);
     const remaining = containerRefs(layout, groupId).filter((candidate) => !block.has(refKey(candidate)));
-    if (!anchor) return { groupId, index: remaining.length };
+    // No anchor means "at the end", and an operation with no index keeps
+    // meaning that when it is replayed onto a layout that has changed since.
+    if (!anchor) return { groupId };
     const at = remaining.findIndex((candidate) => refKey(candidate) === refKey(anchor));
-    if (at < 0) return { groupId, index: remaining.length };
+    if (at < 0) return { groupId };
     return { groupId, index: placement === 'after' ? at + 1 : at };
   }
 
@@ -482,7 +484,7 @@
       type: 'moveRef',
       ref: { kind: source.ref.kind, id: source.ref.id },
       groupId: destination.groupId,
-      index: destination.index,
+      ...(destination.index === undefined ? {} : { index: destination.index }),
       parents: parents || {},
     };
     return contentKey(applyOperation(layout, operation)) === contentKey(layout) ? null : operation;
@@ -613,6 +615,7 @@
       pending = [];
       let failed = false;
       let reportedDrop = false;
+      let rereadFor400 = false;
       try {
         for (let attempt = 0; attempt < maxAttempts && inFlight.length; attempt++) {
           const desired = replayOperations(authoritative, inFlight);
@@ -633,7 +636,10 @@
             inFlight = [];
           } else if (response?.status === 409 && response.layout) {
             authoritative = normalizeLayout(response.layout);
-          } else if (response?.status === 400 && options.fetchLayout) {
+          } else if (response?.status === 400 && options.fetchLayout && !rereadFor400) {
+            // Maybe our base was stale in a way the server reports as invalid:
+            // re-read once. A 400 that survives that is a refusal, not a race.
+            rereadFor400 = true;
             authoritative = normalizeLayout(await options.fetchLayout());
             if (disposed) return;
           } else {

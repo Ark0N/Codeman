@@ -298,7 +298,9 @@ Object.assign(CodemanApp.prototype, {
   },
 
   closeTabRailActionMenu(options = {}) {
-    const menu = document.querySelector('.tab-rail-action-menu');
+    // The group menu borrows this class for its look but has its own owner
+    // (closeTabGroupMenu); removing its DOM here would strand its listeners.
+    const menu = document.querySelector('.tab-rail-action-menu:not(.tab-layout-group-action-menu)');
     const trigger = this._tabRailActionMenuTrigger;
     menu?.remove();
     if (this._tabRailActionMenuOutside) {

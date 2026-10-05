@@ -65,6 +65,7 @@ describe('grouped rail editing in Chromium', () => {
           <main class="main" style="width:100%;height:760px">
             <aside class="tab-rail" id="tabRail" aria-label="Session navigation" style="width:280px"></aside>
             <button id="elsewhere">elsewhere</button>
+            <textarea id="term" aria-label="stand-in for the terminal" style="position:absolute;left:700px;top:300px"></textarea>
           </main>
         </body>
       </html>`);
@@ -124,6 +125,11 @@ describe('grouped rail editing in Chromium', () => {
       };
       w.__setApp(app);
       w.__app = app;
+      // Escapes that reach the stand-in terminal (xterm listens on its textarea).
+      w.__termEscapes = 0;
+      document.getElementById('term')!.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') w.__termEscapes++;
+      });
     });
   });
 
@@ -151,6 +157,7 @@ describe('grouped rail editing in Chromium', () => {
       w.__app._applyTabLayout(layout);
       w.__activation = null;
       w.__panelsClosed = false;
+      w.__termEscapes = 0;
     }, LAYOUT);
     await page.mouse.move(1, 1);
   });
@@ -216,6 +223,104 @@ describe('grouped rail editing in Chromium', () => {
 
     await page.locator('.session-tab[data-id="two"] .tab-name').click();
     expect(await page.evaluate(() => (window as any).__activation)).toBe('session:two');
+  });
+
+  it('a press released outside the rail leaves nothing behind, and Escape still reaches the terminal', async () => {
+    const a = await box('.session-tab[data-id="one"]');
+    // Press on a row and flick out of the rail in ONE move, releasing out there:
+    // the rail never sees the move or the release.
+    await page.mouse.move(a.x + 20, a.y + a.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(760, 600);
+    await page.mouse.up();
+    // The release was heard on window: the press is gone before any hover.
+    expect(await page.evaluate(() => (window as any).__app._tabLayoutDrag)).toBeNull();
+    // Hovering back with no button down must not turn into a phantom drag.
+    const b = await box('[data-tab-group-header="gy"]');
+    await page.mouse.move(b.x + 30, b.y + b.height / 2, { steps: 6 });
+    expect(await page.locator('.tab-layout-dragging, .tab-layout-drop-into, .tab-layout-drag-active').count()).toBe(0);
+    expect(await page.evaluate(() => (window as any).__app._tabLayoutDrag)).toBeNull();
+
+    // A real drag after that, cancelled with Escape, then one more completed.
+    await page.mouse.move(a.x + 20, a.y + a.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + 30, b.y + b.height / 2, { steps: 6 });
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await drag('.session-tab[data-id="one"]', '[data-tab-group-header="gy"]');
+    await settled();
+    expect(puts).toHaveLength(1);
+
+    // No drag listener is left in document capture swallowing Escape.
+    await page.locator('#term').focus();
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    expect(await page.evaluate(() => (window as any).__termEscapes)).toBe(2);
+    expect(await page.evaluate(() => (window as any).__app._tabLayoutDragKeydown)).toBeNull();
+  });
+
+  it('each guard holds on its own: buttons-up move, a second press, no stacked Escape listener', async () => {
+    // Synthetic pointer events reach the cases a real mouse cannot isolate (a
+    // release outside the WINDOW never reaches any listener of ours).
+    const result = await page.evaluate(() => {
+      const w = window as any;
+      const rail = document.getElementById('sessionTabs')!;
+      const at = (el: Element) => {
+        const r = el.getBoundingClientRect();
+        return { clientX: r.left + 20, clientY: r.top + r.height / 2 };
+      };
+      const fire = (target: Element, type: string, init: PointerEventInit) =>
+        target.dispatchEvent(
+          new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 7, pointerType: 'mouse', ...init })
+        );
+      const one = rail.querySelector('.session-tab[data-id="one"] .tab-name')!;
+      const three = rail.querySelector('.session-tab[data-id="three"] .tab-name')!;
+      const out: Record<string, unknown> = {};
+
+      // 1. A pending press, then a move with no button down: cancelled, no drag.
+      fire(one, 'pointerdown', { button: 0, buttons: 1, ...at(one) });
+      fire(three, 'pointermove', { buttons: 0, ...at(three) });
+      out.afterButtonsUp = w.__app._tabLayoutDrag;
+      out.dragClass = rail.querySelectorAll('.tab-layout-dragging').length;
+
+      // 2. An active drag whose release never arrived, then a new press.
+      fire(one, 'pointerdown', { button: 0, buttons: 1, ...at(one) });
+      fire(three, 'pointermove', { buttons: 1, ...at(three) });
+      out.firstActive = w.__app._tabLayoutDrag?.active === true;
+      const firstListener = w.__app._tabLayoutDragKeydown;
+      fire(three, 'pointerdown', { button: 0, buttons: 1, ...at(three) });
+      out.staleOrigin = rail.querySelectorAll('.tab-layout-dragging').length;
+      out.firstListenerKept = w.__app._tabLayoutDragKeydown === firstListener;
+      fire(one, 'pointermove', { buttons: 1, ...at(one) });
+      fire(one, 'pointerup', { button: 0, buttons: 0, ...at(one) });
+      out.leftover = w.__app._tabLayoutDragKeydown;
+      return out;
+    });
+    expect(result.afterButtonsUp).toBeNull();
+    expect(result.dragClass).toBe(0);
+    expect(result.firstActive).toBe(true);
+    expect(result.staleOrigin).toBe(0);
+    expect(result.firstListenerKept).toBe(false);
+    expect(result.leftover).toBeNull();
+    await page.locator('#term').focus();
+    await page.keyboard.press('Escape');
+    expect(await page.evaluate(() => (window as any).__termEscapes)).toBe(1);
+    await settled();
+  });
+
+  it('committing a group rename by clicking elsewhere leaves focus where the click put it', async () => {
+    await page.evaluate(() => (window as any).__app.startTabGroupRename('gy'));
+    const input = page.locator('.tab-layout-group-rename-input');
+    await expect.poll(() => input.evaluate((el) => el === document.activeElement)).toBe(true);
+    await page.keyboard.press('Control+A');
+    await page.keyboard.type('Elsewhere');
+    await page.locator('#term').click();
+    await settled();
+    expect(puts.at(-1).layout.groups[1].name).toBe('Elsewhere');
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('term');
+    // So Enter goes to the terminal, not to the header (which would collapse it).
+    await page.keyboard.press('Enter');
+    expect(await page.evaluate(() => (window as any).__app.collapsedTabGroupIds.size)).toBe(0);
   });
 
   it('paints the inline group editor as you type, then saves the trimmed name', async () => {

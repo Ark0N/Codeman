@@ -752,6 +752,14 @@ html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header:focus-v
   opacity: 1;
 }
 
+/* No hover on a touch tablet, and a long press there is not a contextmenu
+   event: the glyph is the only way into the group menu, so keep it shown. */
+@media (hover: none) {
+  html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-menu {
+    opacity: 1;
+  }
+}
+
 html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-menu:hover {
   color: var(--text);
   background: var(--bg-tertiary, var(--bg-hover));
