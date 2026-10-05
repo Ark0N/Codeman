@@ -779,6 +779,8 @@ describe('case-routes', () => {
       expect(res.statusCode).toBe(200);
       expect(JSON.parse(res.body).data).toMatchObject({ name: 'healthy-local' });
       expect(JSON.parse(res.body).data.unreachable).toBeUndefined();
+      // Its CLAUDE.md is probed the same way as its folder, so it is not misreported missing.
+      expect(JSON.parse(res.body).data.hasClaudeMd).toBe(true);
     });
 
     it('answers a local case it cannot read with a non-NOT_FOUND error', async () => {

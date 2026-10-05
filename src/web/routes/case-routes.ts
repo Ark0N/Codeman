@@ -1665,7 +1665,8 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     return {
       name,
       path: casePath,
-      hasClaudeMd: await boundedPathExists(join(casePath, 'CLAUDE.md')),
+      // Probed like the folder above, or a healthy case reads as having no CLAUDE.md under the cap.
+      hasClaudeMd: (await probePath(join(casePath, 'CLAUDE.md'), { pastCap: true })) === 'present',
       ...(linked && { linked: true }),
     };
   });

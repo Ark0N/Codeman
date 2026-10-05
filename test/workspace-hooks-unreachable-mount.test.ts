@@ -79,8 +79,21 @@ describe('workspace helpers while other mounts are unreachable', () => {
     expect(readFileSync(settings, 'utf-8')).toContain('/api/hook-event');
   });
 
-  it('installs hooks in a healthy workspace while two unrelated paths are stalled', async () => {
-    await stallUnrelatedMounts(2);
+  it('keeps a deleted workspace deleted while the stall cap is engaged', async () => {
+    // The cap refuses the probe ("unknown" without a stat), which must not read as
+    // "go ahead": installing would mkdir -p the deleted repo back into existence.
+    await stallUnrelatedMounts(MAX_STALLED_PATH_PROBES);
+    const workspace = join(root, 'deleted-repo');
+    expect(await probePath(workspace)).toBe('unknown');
+
+    await applyWorkspaceHooks(workspace, true);
+    await applyWorkspaceHooks(workspace, false);
+
+    expect(existsSync(workspace)).toBe(false);
+  });
+
+  it('installs hooks in a healthy workspace while fewer unrelated paths are stalled than the cap', async () => {
+    await stallUnrelatedMounts(MAX_STALLED_PATH_PROBES - 1);
     const workspace = join(root, 'healthy-b');
     mkdirSync(workspace);
 

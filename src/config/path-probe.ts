@@ -10,8 +10,8 @@
  *
  * Both are env-overridable, in the same style as the other config modules. A slow
  * but healthy mount (an sshfs that needs a couple of seconds on first touch) may want
- * a longer timeout; a server started with a larger `UV_THREADPOOL_SIZE` can afford a
- * higher stall cap.
+ * a longer timeout. The stall limits follow `UV_THREADPOOL_SIZE` on their own, so a
+ * server started with a larger pool gets a higher ceiling without further setup.
  *
  * @module config/path-probe
  */
@@ -26,10 +26,23 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
 export const PATH_PROBE_TIMEOUT_MS = envInt('CODEMAN_PATH_PROBE_TIMEOUT_MS', 1_500, 100, 60_000);
 
 /**
- * Timed-out probes allowed to stay pending before new probes are refused (answered
- * "unknown" without a stat). This is a backstop, not the main defence: a stalled
- * path already takes its neighbours (same parent directory) out of probing, so the
- * cap only engages once three UNRELATED places have stopped answering. The default
- * leaves one of libuv's default four workers free for the rest of the process.
+ * Hard ceiling on timed-out probes left pending, for every caller, `pastCap` ones
+ * included: the threadpool size minus one, so a dead mount can never take the last
+ * worker. libuv sizes the pool from `UV_THREADPOOL_SIZE` (4 when unset). A pool of
+ * one cannot keep a worker free at all, so the ceiling never drops below one.
  */
-export const MAX_STALLED_PATH_PROBES = envInt('CODEMAN_PATH_PROBE_MAX_STALLED', 3, 1, 64);
+export const PATH_PROBE_STALL_CEILING = Math.max(1, (Number(process.env.UV_THREADPOOL_SIZE) || 4) - 1);
+
+/**
+ * Timed-out probes allowed to stay pending before new BULK probes are refused
+ * (answered "unknown" without a stat). This is a backstop, not the main defence: a
+ * stalled path on a network or FUSE mount already takes the rest of that mount out
+ * of probing (a stall anywhere else takes out only the stalled path), so the cap
+ * only engages once that many UNRELATED places have stopped answering. It defaults
+ * to one below {@link PATH_PROBE_STALL_CEILING} (2 with the default pool), leaving a
+ * slot a `pastCap` probe may still use, and is never allowed above the ceiling.
+ */
+export const MAX_STALLED_PATH_PROBES = Math.min(
+  PATH_PROBE_STALL_CEILING,
+  envInt('CODEMAN_PATH_PROBE_MAX_STALLED', Math.max(1, PATH_PROBE_STALL_CEILING - 1), 1, 64)
+);

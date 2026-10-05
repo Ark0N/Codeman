@@ -21,11 +21,14 @@
  * - a path whose probe timed out is "stalled" until that stat finally settles.
  *   Paths NEAR a stalled one are answered "unknown" without a new stat, so one
  *   dead mount costs one worker, not one per case and file on it. "Near" means on
- *   the same mount: under the deepest mount point holding the stalled path, read
- *   from `/proc/self/mounts` (procfs, which never waits on the dead filesystem).
- *   Where that table is unavailable (not Linux), or the deepest mount is `/`, it
- *   narrows to the stalled path and everything under it. Unrelated paths are
- *   probed normally;
+ *   the same mount when that mount is a network or FUSE filesystem (NFS, SMB,
+ *   sshfs and the like): under the deepest mount point holding the stalled path,
+ *   with its type, read from `/proc/self/mounts` (procfs, which never waits on the
+ *   dead filesystem). Otherwise it narrows to the stalled path and everything under
+ *   it: when the deepest mount is local (a path typed under a local `/home` can
+ *   reach a NAS through a symlink, and must not take the rest of `/home` with it),
+ *   is `/`, or the table is unavailable (not Linux). Unrelated paths are probed
+ *   normally;
  * - once `MAX_STALLED_PATH_PROBES` stalled stats are pending, new probes are
  *   refused process-wide (answered "unknown"), since each would risk another
  *   worker. Probes merely in flight do not count, so concurrent healthy probes
@@ -34,7 +37,9 @@
  *   probe is still bounded and still recorded as stalled if it hangs (so a dead
  *   path costs at most one worker however often it is retried), but it is not
  *   refused just because unrelated mounts are dead. Bulk scans (the case list)
- *   and per-spawn helpers keep the cap.
+ *   and per-spawn helpers keep the cap. `pastCap` still stops at
+ *   `PATH_PROBE_STALL_CEILING` (the threadpool size minus one), so explicit
+ *   requests against several dead paths can never take the last worker.
  *
  * Both events are logged once (`console.warn`): a path's first stall, and the
  * cap engaging, so "my case vanished" and "hooks stopped firing" leave a trace.
@@ -49,7 +54,7 @@
 import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
-import { MAX_STALLED_PATH_PROBES, PATH_PROBE_TIMEOUT_MS } from '../config/path-probe.js';
+import { MAX_STALLED_PATH_PROBES, PATH_PROBE_STALL_CEILING, PATH_PROBE_TIMEOUT_MS } from '../config/path-probe.js';
 
 /** What a probe could establish about a path. */
 export type PathProbeState = 'present' | 'absent' | 'unknown';
@@ -75,29 +80,53 @@ function isWithin(path: string, root: string): boolean {
   return path.startsWith(root.endsWith(sep) ? root : root + sep);
 }
 
-/** Deepest mount point holding `abs`, from the kernel's mount table; undefined when unreadable. */
-function mountPointOf(abs: string): string | undefined {
+/** Filesystem types whose stall means the whole mount is gone (network and FUSE). */
+const REMOTE_FS_TYPES = new Set([
+  'nfs',
+  'nfs4',
+  'cifs',
+  'smb3',
+  'smbfs',
+  '9p',
+  'ceph',
+  'glusterfs',
+  'afs',
+  'lustre',
+  'davfs',
+]);
+
+function isRemoteFsType(fsType: string): boolean {
+  return REMOTE_FS_TYPES.has(fsType) || fsType.startsWith('fuse.');
+}
+
+/** Deepest mount holding `abs`, from the kernel's mount table; undefined when unreadable. */
+function mountOf(abs: string): { mountPoint: string; fsType: string } | undefined {
   let table: string;
   try {
     table = readFileSync('/proc/self/mounts', 'utf-8');
   } catch {
     return undefined;
   }
-  let best: string | undefined;
+  let best: { mountPoint: string; fsType: string } | undefined;
   for (const line of table.split('\n')) {
-    const field = line.split(' ')[1];
-    if (!field) continue;
+    const [, field, fsType] = line.split(' ');
+    if (!field || !fsType) continue;
     // The table octal-escapes space, tab, newline and backslash in mount points.
     const mountPoint = field.replace(/\\([0-7]{3})/g, (_m, oct: string) => String.fromCharCode(parseInt(oct, 8)));
-    if (isWithin(abs, mountPoint) && (!best || mountPoint.length > best.length)) best = mountPoint;
+    if (isWithin(abs, mountPoint) && (!best || mountPoint.length > best.mountPoint.length)) {
+      best = { mountPoint, fsType };
+    }
   }
   return best;
 }
 
-/** The subtree a stalled path takes down with it: its mount, else just itself (see the module comment). */
+/**
+ * The subtree a stalled path takes down with it (see the module comment): its
+ * mount when that is a network or FUSE filesystem, else just the path itself.
+ */
 function stallScope(abs: string): string {
-  const mountPoint = mountPointOf(abs);
-  return mountPoint && mountPoint !== '/' ? mountPoint : abs;
+  const mount = mountOf(abs);
+  return mount && mount.mountPoint !== '/' && isRemoteFsType(mount.fsType) ? mount.mountPoint : abs;
 }
 
 /**
@@ -130,7 +159,8 @@ export async function probePathKind(path: string, options: PathProbeOptions = {}
 
   let probe = inFlight.get(abs);
   if (!probe) {
-    if (stalled.size >= MAX_STALLED_PATH_PROBES && !options.pastCap) {
+    // pastCap lifts the bulk cap, never the ceiling that keeps one worker free.
+    if (stalled.size >= (options.pastCap ? PATH_PROBE_STALL_CEILING : MAX_STALLED_PATH_PROBES)) {
       if (!capWarned) {
         capWarned = true;
         console.warn(

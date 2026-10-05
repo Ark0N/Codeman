@@ -38,7 +38,7 @@ vi.mock('node:fs', async (importOriginal) => {
 
 import fs from 'node:fs/promises';
 import { boundedPathExists, isNearStalledPath, probePath, probePathKind } from '../src/utils/bounded-path-probe.js';
-import { MAX_STALLED_PATH_PROBES, PATH_PROBE_TIMEOUT_MS } from '../src/config/path-probe.js';
+import { MAX_STALLED_PATH_PROBES, PATH_PROBE_STALL_CEILING, PATH_PROBE_TIMEOUT_MS } from '../src/config/path-probe.js';
 
 const stat = vi.mocked(fs.stat);
 const dirStats = { isDirectory: () => true } as never;
@@ -143,10 +143,11 @@ describe('probePath', () => {
     expect(results).toEqual([true, true, true, true, true]);
   });
 
-  it('still probes a healthy path as present while two unrelated paths are stalled', async () => {
+  it('still probes a healthy path as present while fewer unrelated paths are stalled than the cap', async () => {
     vi.useFakeTimers();
-    hangOn(['/mnt/nas-a/project', '/mnt/nas-b/project']);
-    await stall(['/mnt/nas-a/project', '/mnt/nas-b/project']);
+    const dead = Array.from({ length: MAX_STALLED_PATH_PROBES - 1 }, (_, i) => `/mnt/nas-${i}/project`);
+    hangOn(dead);
+    await stall(dead);
 
     expect(await probePath('/home/user/codeman-cases/healthy')).toBe('present');
     expect(await boundedPathExists('/home/user/codeman-cases/healthy/CLAUDE.md')).toBe(true);
@@ -187,6 +188,41 @@ describe('probePath', () => {
     expect(await probePath('/srv/projects/stuck/CLAUDE.md')).toBe('unknown');
     expect(await probePath('/srv/projects/other')).toBe('present');
     expect(await probePath('/home/user/codeman-cases/one')).toBe('present');
+  });
+
+  it('narrows a stall on a local mount to the stalled path, even when that mount is not /', async () => {
+    // /home is its own local filesystem; ~/nas is a symlink to a network mount, so
+    // the stalled path is typed under /home. Only network and FUSE mounts widen.
+    vi.useFakeTimers();
+    mounts.table = [mounts.default, '/dev/sdb1 /home ext4 rw,relatime 0 0', ''].join('\n');
+    hangOn(['/home/user/nas/project']);
+    await stall(['/home/user/nas/project']);
+    stat.mockClear();
+
+    expect(await probePath('/home/user/nas/project/CLAUDE.md')).toBe('unknown');
+    expect(isNearStalledPath('/home/user/codeman-cases/one')).toBe(false);
+    expect(await probePath('/home/user/codeman-cases/one')).toBe('present');
+    expect(await probePath('/home/user/nas/other')).toBe('present');
+    expect(stat).toHaveBeenCalledTimes(2);
+  });
+
+  it('widens a stall to the whole mount for network and FUSE filesystems', async () => {
+    vi.useFakeTimers();
+    mounts.table = [
+      mounts.default,
+      'nas:/four /srv/nas4 nfs4 rw,hard 0 0',
+      'user@host:/ /srv/sshfs fuse.sshfs rw 0 0',
+      '//nas/share /srv/smb cifs rw 0 0',
+      '',
+    ].join('\n');
+    const dead = ['/srv/nas4/one', '/srv/sshfs/one'];
+    hangOn(dead);
+    await stall(dead);
+
+    expect(isNearStalledPath('/srv/nas4/two')).toBe(true);
+    expect(isNearStalledPath('/srv/sshfs/two')).toBe(true);
+    expect(isNearStalledPath('/srv/smb/two')).toBe(false);
+    expect(isNearStalledPath('/srv/elsewhere')).toBe(false);
   });
 
   it('narrows a stall to the stalled path when there is no mount table', async () => {
@@ -233,6 +269,37 @@ describe('probePath', () => {
     // A retry is answered from the stall record, not with another stat.
     expect(await probePath('/mnt/another-dead/case', { pastCap: true })).toBe('unknown');
     expect(stat).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops pastCap probes at the threadpool ceiling, answering unknown without a stat', async () => {
+    vi.useFakeTimers();
+    // Fill the bulk cap, then let pastCap probes stall until the ceiling is reached.
+    const dead = Array.from({ length: PATH_PROBE_STALL_CEILING + 1 }, (_, i) => `/mnt/ceiling-${i}/case`);
+    hangOn(dead);
+    await stall(dead.slice(0, MAX_STALLED_PATH_PROBES));
+    for (const path of dead.slice(MAX_STALLED_PATH_PROBES, PATH_PROBE_STALL_CEILING)) {
+      const hung = probePath(path, { pastCap: true });
+      await vi.advanceTimersByTimeAsync(PATH_PROBE_TIMEOUT_MS);
+      expect(await hung).toBe('unknown');
+    }
+    stat.mockClear();
+
+    // One worker must stay free: no new stat, even for an explicit request.
+    const refused = probePath(dead[PATH_PROBE_STALL_CEILING], { pastCap: true });
+    await vi.advanceTimersByTimeAsync(PATH_PROBE_TIMEOUT_MS);
+    expect(await refused).toBe('unknown');
+    expect(stat).not.toHaveBeenCalled();
+    expect(await probePath('/healthy/explicit', { pastCap: true })).toBe('unknown');
+    expect(stat).not.toHaveBeenCalled();
+
+    // Once one stalled stat settles, an explicit request is probed again.
+    releases.get(dead[0])!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await probePath('/healthy/explicit', { pastCap: true })).toBe('present');
+  });
+
+  it('keeps the bulk cap below the ceiling, so a pastCap probe has room', () => {
+    expect(MAX_STALLED_PATH_PROBES).toBeLessThan(PATH_PROBE_STALL_CEILING);
   });
 
   it('warns once when a path first stalls and once when the cap engages', async () => {

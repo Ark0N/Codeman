@@ -852,13 +852,20 @@ export async function refreshStaleCodemanHooks(casePath: string): Promise<void> 
  */
 export async function applyWorkspaceHooks(workspace: string, install?: boolean): Promise<void> {
   try {
-    const skip = await absentOrUnreachable(workspace);
-    if (skip === 'unreachable') {
-      console.warn(
-        `[hooks] ${workspace} is not responding (unreachable mount?); Codeman hooks not checked or installed`
-      );
+    const state = await probePath(workspace);
+    if (state === 'absent') return;
+    if (state === 'unknown') {
+      if (isNearStalledPath(workspace)) {
+        console.warn(
+          `[hooks] ${workspace} is not responding (unreachable mount?); Codeman hooks not checked or installed`
+        );
+        return;
+      }
+      // Any other "unknown" (the stall cap refused the probe, or the stat failed
+      // with something other than ENOENT) proves nothing about existence, and the
+      // install below would mkdir -p a deleted repo back into being: ask directly.
+      if (!(await pathExistsForWrite(workspace))) return;
     }
-    if (skip) return;
     const shouldInstall = install ?? (await readWorkspaceHooksEnabled());
     await (shouldInstall ? ensureCodemanHooks(workspace) : refreshStaleCodemanHooks(workspace));
   } catch {
