@@ -265,7 +265,8 @@ function sendTile(message) {
     sheetId: String(message.sheetId),
     cells,
     merges,
-    warnings: Array.from(warnings),
+    // One counted entry for many unsupported number formats keeps the notice bar short.
+    warnings: core.foldWarnings(Array.from(warnings)),
   });
 }
 

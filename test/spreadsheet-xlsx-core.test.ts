@@ -26,6 +26,7 @@ type Core = {
   computeViewport(axis: unknown, offset: number, viewportSize: number, overscan?: number): [number, number];
   intersectingMerges(merges: string[], range: { r1: number; c1: number; r2: number; c2: number }): string[];
   formatCellValue(value: unknown, format: string, date1904?: boolean): { text: string; warning?: string };
+  foldWarnings(warnings: string[]): string[];
   DEFAULT_THEME_PALETTE: string[];
   INDEXED_PALETTE: string[];
   parseThemePalette(xml?: string): string[];
@@ -428,6 +429,25 @@ describe('spreadsheet XLSX core', () => {
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(emoji)).toBe(false);
   });
 
+  // An empty run adds no text, so stopping on the text length alone still
+  // visited every run, once per cell referencing the shared string, per tile.
+  it('visits at most maxCellTextChars + 1 rich-text runs, however many are empty', () => {
+    const bound = core.LIMITS.maxCellTextChars + 1;
+    const runs: Array<{ text: string }> = Array.from({ length: 5_000 }, () => ({ text: '' }));
+    runs[0] = { text: 'head' };
+    for (let index = bound; index < runs.length; index += 1) {
+      Object.defineProperty(runs, index, {
+        get() {
+          throw new Error(`rich-text run ${index} visited`);
+        },
+      });
+    }
+    expect(core.formatCellValue({ richText: runs }, 'General')).toEqual({ text: 'head' });
+    // A run inside the bound still contributes.
+    runs[bound - 1] = { text: 'tail' };
+    expect(core.formatCellValue({ richText: runs }, 'General').text).toBe('headtail');
+  });
+
   it('refuses an entry whose declared compressed size runs past the file', () => {
     const zip = workbookZip();
     const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
@@ -481,6 +501,38 @@ describe('spreadsheet XLSX core', () => {
     expect(core.formatCellValue(1.5, 'yyyy-mm-dd hh:mm').text).toBe('1900-01-01 12:00');
     expect(core.formatCellValue(7, '[Red][<0]0.0')).toMatchObject({ text: '7', warning: expect.any(String) });
     expect(core.formatCellValue({ formula: 'SUM(A1:A2)' }, 'General')).toMatchObject({ text: '=SUM(A1:A2)' });
+  });
+
+  // Excel displays at most 15 significant digits; String() printed the binary noise.
+  it('shows General and unsupported-format numbers at 15 significant digits, as Excel does', () => {
+    expect(core.formatCellValue(0.1 + 0.2, 'General').text).toBe('0.3');
+    expect(core.formatCellValue(10.1 * 3, 'General').text).toBe('30.3');
+    expect(core.formatCellValue({ formula: '0.1+0.2', result: 0.1 + 0.2 }, 'General').text).toBe('0.3');
+    expect(core.formatCellValue(0.1 + 0.2, '0.00E+00')).toEqual({
+      text: '0.3',
+      warning: 'Unsupported number format: 0.00E+00',
+    });
+    expect(core.formatCellValue(1234.5, 'General').text).toBe('1234.5');
+    expect(core.formatCellValue(-42, 'General').text).toBe('-42');
+  });
+
+  it('renders a time-only AM/PM format as a 12-hour time, not a date', () => {
+    expect(core.formatCellValue(14.5 / 24, 'h:mm AM/PM')).toEqual({ text: '2:30 PM' });
+    expect(core.formatCellValue(0, 'h:mm AM/PM').text).toBe('12:00 AM');
+    expect(core.formatCellValue(0.5, 'h:mm AM/PM').text).toBe('12:00 PM');
+    expect(core.formatCellValue(9.25 / 24, 'hh:mm:ss AM/PM').text).toBe('09:15:00 AM');
+    // ExcelJS loads a time-formatted cell as a Date on the 1899-12-31 epoch day.
+    expect(core.formatCellValue(new Date(Date.UTC(1899, 11, 31, 14, 30)), 'h:mm AM/PM')).toEqual({
+      text: '2:30 PM',
+    });
+  });
+
+  it('folds unsupported number format warnings into one counted entry', () => {
+    const many = Array.from({ length: 800 }, (_, index) => `Unsupported number format: 0.0${'0'.repeat(index)}E+0`);
+    const folded = core.foldWarnings(['charts', ...many, 'Formula has no cached result']);
+    expect(folded).toEqual(['charts', '800 unsupported number formats', 'Formula has no cached result']);
+    expect(core.foldWarnings(['Unsupported number format: 0.00E+00'])).toEqual(['Unsupported number format: 0.00E+00']);
+    expect(core.foldWarnings(['charts'])).toEqual(['charts']);
   });
 
   // toLocaleString throws a RangeError above 100 fraction digits; Excel caps at 30.

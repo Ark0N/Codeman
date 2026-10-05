@@ -569,7 +569,8 @@
   }
 
   const DATE_FORMAT = /^[ymd\-/ ]+$/i;
-  const TIME_FORMAT = /^[hms: ]+$/i;
+  // An optional trailing AM/PM (built-in format 18 is `h:mm AM/PM`).
+  const TIME_FORMAT = /^[hms: ]+(?:AM\/PM)?$/i;
   const DATE_TIME_FORMAT = /^[ymdhis\-/: ]+$/i;
 
   function isFormulaValue(value) {
@@ -588,14 +589,48 @@
   }
 
   // Joins rich-text runs only until the cap is passed, so a long run is never
-  // copied whole once per cell.
+  // copied whole once per cell. It also visits at most maxCellTextChars + 1
+  // runs: an empty run (`<r/>`, 4 bytes) adds no text, so a length check alone
+  // walked every run, for every cell sharing the string, on every tile. Any
+  // maxCellTextChars + 1 non-empty runs already pass the cap.
   function richTextPrefix(runs) {
     let text = '';
-    for (const run of runs) {
+    const visit = Math.min(runs.length, LIMITS.maxCellTextChars + 1);
+    for (let index = 0; index < visit; index += 1) {
       if (text.length > LIMITS.maxCellTextChars) break;
+      const run = runs[index];
       if (typeof run?.text === 'string') text += run.text.slice(0, LIMITS.maxCellTextChars + 1);
     }
     return text;
+  }
+
+  // Excel displays at most 15 significant digits, so `=0.1+0.2` shows 0.3,
+  // never the binary float's 0.30000000000000004.
+  function generalNumber(value) {
+    return Number.isFinite(value) ? String(Number(value.toPrecision(15))) : String(value);
+  }
+
+  const UNSUPPORTED_FORMAT_PREFIX = 'Unsupported number format: ';
+
+  /**
+   * Folds every unsupported number format warning into one counted entry when
+   * there is more than one, so a sheet with a code per cell cannot grow the
+   * notice bar without bound. A lone warning is kept as is; its code is at
+   * most 255 characters (admission refuses longer ones). Order is preserved.
+   */
+  function foldWarnings(warnings) {
+    const formats = warnings.filter((warning) => String(warning).startsWith(UNSUPPORTED_FORMAT_PREFIX));
+    if (formats.length < 2) return warnings.slice();
+    const folded = [];
+    let placed = false;
+    for (const warning of warnings) {
+      if (!String(warning).startsWith(UNSUPPORTED_FORMAT_PREFIX)) folded.push(warning);
+      else if (!placed) {
+        folded.push(`${formats.length} unsupported number formats`);
+        placed = true;
+      }
+    }
+    return folded;
   }
 
   /**
@@ -622,7 +657,7 @@
       const formatted = formatCellValueUncapped(serial, fallback, date1904);
       return /^General$/i.test(code)
         ? formatted
-        : { text: formatted.text, warning: `Unsupported number format: ${code}` };
+        : { text: formatted.text, warning: `${UNSUPPORTED_FORMAT_PREFIX}${code}` };
     }
     if (typeof value === 'object') {
       if (isFormulaValue(value)) {
@@ -642,7 +677,7 @@
     }
     const code = String(format || 'General');
     if (typeof value !== 'number') return { text: String(value) };
-    if (/^General$/i.test(code)) return { text: String(value) };
+    if (/^General$/i.test(code)) return { text: generalNumber(value) };
     if (DATE_FORMAT.test(code)) {
       const date = excelDate(value, Boolean(date1904));
       const yyyy = date.getUTCFullYear();
@@ -652,9 +687,16 @@
     }
     if (TIME_FORMAT.test(code)) {
       const seconds = Math.round((value - Math.floor(value)) * 86400) % 86400;
-      const hh = String(Math.floor(seconds / 3600)).padStart(2, '0');
+      const hours = Math.floor(seconds / 3600);
       const mm = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0');
       const ss = String(seconds % 60).padStart(2, '0');
+      if (/AM\/PM$/i.test(code)) {
+        const hour12 = String(hours % 12 || 12);
+        const hh = /hh/i.test(code) ? hour12.padStart(2, '0') : hour12;
+        const clock = /s/i.test(code) ? `${hh}:${mm}:${ss}` : `${hh}:${mm}`;
+        return { text: `${clock} ${hours < 12 ? 'AM' : 'PM'}` };
+      }
+      const hh = String(hours).padStart(2, '0');
       return { text: `${hh}:${mm}:${ss}` };
     }
     if (DATE_TIME_FORMAT.test(code)) {
@@ -685,7 +727,7 @@
           (percent ? '%' : ''),
       };
     }
-    return { text: String(value), warning: `Unsupported number format: ${code}` };
+    return { text: generalNumber(value), warning: `${UNSUPPORTED_FORMAT_PREFIX}${code}` };
   }
 
   // Colour resolution --------------------------------------------------------
@@ -923,6 +965,7 @@
     computeViewport,
     intersectingMerges,
     formatCellValue,
+    foldWarnings,
     DEFAULT_THEME_PALETTE,
     INDEXED_PALETTE,
     MIN_CONTRAST_RATIO,

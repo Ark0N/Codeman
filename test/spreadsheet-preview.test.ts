@@ -176,6 +176,15 @@ describe('spreadsheet preview renderer', () => {
     expect(document.body.textContent).toContain('Spreadsheet parser failed');
   });
 
+  // The bar sits above the grid in a flex column; unbounded, enough warnings
+  // pushed the grid out of view.
+  it('clamps the notice bar height and scrolls its overflow', () => {
+    const css = readFileSync(resolve(import.meta.dirname, '../src/web/public/styles.css'), 'utf8');
+    const rule = /\.spreadsheet-preview-notice\s*\{([^}]*)\}/.exec(css)?.[1] || '';
+    expect(rule).toMatch(/max-height:\s*\d/);
+    expect(rule).toMatch(/overflow-y:\s*auto/);
+  });
+
   it('shows an explicit empty-sheet state without dropping workbook warnings', async () => {
     const fetchMock = vi.fn(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }));
     const renderer = loadRenderer(fetchMock);

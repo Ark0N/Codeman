@@ -19318,6 +19318,10 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
 
 .spreadsheet-preview-notice {
   flex: 0 0 auto;
+  /* A long warning list scrolls inside the bar instead of pushing the grid out of view. */
+  max-height: 4.5em;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
   padding: 5px 10px;
   color: var(--warning, #f59e0b);
   font-size: 12px;

@@ -986,3 +986,25 @@ describe('spreadsheet preview worker: number formats ExcelJS would rescan', () =
     expect(tile.warnings).toEqual([`Unsupported number format: ${code}`]);
   }, 60_000);
 });
+
+describe('spreadsheet preview worker: the notice bar stays bounded', () => {
+  // Each distinct unsupported code was its own notice entry; a 40 x 20 sheet
+  // with a code per cell grew the bar to thousands of pixels.
+  it('folds many distinct unsupported number formats in one tile into one counted warning', async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Formats');
+    for (let row = 1; row <= 40; row += 1) {
+      for (let col = 1; col <= 20; col += 1) {
+        const cell = sheet.getCell(row, col);
+        cell.value = row * col + 0.5;
+        cell.numFmt = `"c${row}-${col}"0.00E+00`;
+      }
+    }
+    const harness = createHarness();
+    const metadata = await loadMetadata(harness, await writeWorkbook(workbook));
+    const tile = await requestTile(harness, metadata.sheets[0].id, { r1: 1, c1: 1, r2: 40, c2: 20 });
+    expect(tile.type, JSON.stringify(tile).slice(0, 200)).toBe('tile');
+    expect(tile.cells).toHaveLength(800);
+    expect(tile.warnings).toEqual(['800 unsupported number formats']);
+  }, 60_000);
+});
