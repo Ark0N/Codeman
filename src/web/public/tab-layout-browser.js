@@ -658,6 +658,11 @@
         writing = false;
         if (!disposed) {
           const rebased = replayOperations(authoritative, pending);
+          // Edits made while the write was in flight are rebased here, so one the
+          // conflict made inapplicable is dropped here too, and says so (once).
+          if (rebased.dropped && !failed && !reportedDrop) {
+            report('Tab groups changed elsewhere; part of your edit no longer applies.');
+          }
           pending = rebased.kept;
           optimistic = rebased.layout;
           publish({ authoritative: true });
@@ -740,5 +745,6 @@
     createLoadCoordinator,
     loadCollapsedGroupIds,
     saveCollapsedGroupIds,
+    MAX_GROUPS,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

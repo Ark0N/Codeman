@@ -330,6 +330,29 @@ describe('edit coordinator', () => {
     expect(editor.hasPending()).toBe(false);
   });
 
+  it('reports an edit queued during a save that the save conflict no longer supports', async () => {
+    const { put, calls } = controlledPut();
+    const reportError = vi.fn();
+    const { editor, applied } = makeEditor(put, { reportError });
+    editor.enqueue({ type: 'moveRef', ref: s('c'), groupId: 'g1', index: 2 });
+    await settle();
+    // Queued behind the write in flight, for a group someone else deletes meanwhile.
+    editor.enqueue({ type: 'renameGroup', groupId: 'g2', name: 'Mine' });
+    await settle();
+    expect(calls).toHaveLength(1);
+    const server: Layout = { ...base(9), groups: [base().groups[0]], ungrouped: [...base().ungrouped, w('web')] };
+    calls[0].resolve({ ok: false, status: 409, layout: server });
+    await settle();
+    expect(calls).toHaveLength(2);
+    calls[1].resolve({ ok: true, status: 200, layout: { ...plain(calls[1].request.layout), version: 10 } });
+    await settle();
+    await settle();
+    expect(calls).toHaveLength(2);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(applied.at(-1).layout.groups.map((g: any) => g.id)).toEqual(['g1']);
+    expect(editor.hasPending()).toBe(false);
+  });
+
   it('gives up after bounded conflicts and asks the caller to re-read', async () => {
     const { put, calls } = controlledPut();
     const onFailure = vi.fn();
@@ -688,6 +711,26 @@ describe('web tab rows', () => {
     clickMenu('Move down');
     await flush();
     expect(keys(puts[0].layout.groups[0].refs)).toEqual(['session:s3', 'session:s1', 'session:s2']);
+  });
+});
+
+describe('group cap', () => {
+  it('stops offering a new group once the server cap is reached', () => {
+    installFetch();
+    const groups = Array.from({ length: 32 }, (_, i) => ({
+      id: `g${i}`,
+      name: `G${i}`,
+      refs: i === 0 ? [s('s1'), s('s2'), s('s3')] : [],
+    }));
+    const app = makeApp({ ...serverLayout(), groups, ungrouped: [] });
+    app.openTabRailActionMenu({ preventDefault() {}, stopPropagation() {}, currentTarget: row('s2') }, 's2');
+    expect(menuLabels()).not.toContain('Move to new group');
+    expect(menuLabels()).toContain('Move to "G1"');
+    app.closeTabRailActionMenu();
+    header('g0').focus();
+    key(header('g0'), 'F10', { shiftKey: true });
+    expect(menuLabels()).toEqual(['Rename group', 'Move group down', 'Delete group']);
+    app.closeTabGroupMenu();
   });
 });
 

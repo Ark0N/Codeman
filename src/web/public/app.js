@@ -6694,7 +6694,8 @@ class CodemanApp {
       actions.push({ label: `Move to "${group.name}"`, run: () => this.moveTabRef(ref, group.id) });
     }
     if (location.groupId !== null) actions.push({ label: 'Move to Ungrouped', run: () => this.moveTabRef(ref, null) });
-    actions.push({ label: 'Move to new group', run: () => this.createTabGroup({ ref }) });
+    // At the server's group cap a new group can only fail, so it is not offered.
+    if (this._canCreateTabGroup()) actions.push({ label: 'Move to new group', run: () => this.createTabGroup({ ref }) });
     return actions;
   }
 
@@ -6728,13 +6729,18 @@ class CodemanApp {
     item?.focus();
   }
 
+  _canCreateTabGroup() {
+    const max = window.CodemanTabLayout?.MAX_GROUPS;
+    return !max || (this.tabLayout?.groups?.length || 0) < max;
+  }
+
   openTabGroupMenu(event, groupId) {
     const groups = this.tabLayout?.groups || [];
     const index = groups.findIndex((group) => group.id === groupId);
     if (index < 0) return false;
     return this._openTabLayoutMenu(event, `group:${groupId}`, 'Group actions', [
       { label: 'Rename group', run: () => this.startTabGroupRename(groupId) },
-      { label: 'New group', run: () => this.createTabGroup({ index: index + 1 }) },
+      ...(this._canCreateTabGroup() ? [{ label: 'New group', run: () => this.createTabGroup({ index: index + 1 }) }] : []),
       ...(index > 0 ? [{ label: 'Move group up', run: () => this.moveTabGroup(groupId, -1) }] : []),
       ...(index < groups.length - 1 ? [{ label: 'Move group down', run: () => this.moveTabGroup(groupId, 1) }] : []),
       { label: 'Delete group', className: 'danger', run: () => this.deleteTabGroup(groupId) },
