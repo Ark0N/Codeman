@@ -11,12 +11,22 @@
  * Run: npx vitest run test/opencode-resize.test.ts
  */
 
+import { execSync } from 'node:child_process';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
 
 const PORT = 3211;
 const BASE_URL = `http://localhost:${PORT}`;
+
+const HAS_OPENCODE = (() => {
+  try {
+    execSync('command -v opencode', { stdio: 'ignore', shell: '/bin/bash' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 let server: WebServer;
 let browser: Browser;
@@ -103,6 +113,19 @@ describe('OpenCode session initial resize', () => {
 
     // Intercept resize API calls to track when they happen
     const resizeCalls: Array<{ url: string; cols: number; rows: number }> = [];
+    // While the WebSocket is connected, resizes go out as {t:'z',c,r} frames
+    // instead of POST /resize, so record both transports.
+    page.on('websocket', (ws) => {
+      ws.on('framesent', (frame) => {
+        try {
+          const msg = JSON.parse(String(frame.payload));
+          if (msg.t === 'z') resizeCalls.push({ url: ws.url() + '#' + sessionIdForWs, cols: msg.c, rows: msg.r });
+        } catch {
+          /* not JSON */
+        }
+      });
+    });
+    let sessionIdForWs = '';
     await page.route('**/api/sessions/*/resize', async (route) => {
       const request = route.request();
       const body = request.postDataJSON();
@@ -128,6 +151,7 @@ describe('OpenCode session initial resize', () => {
     });
 
     expect(sessionId).toBeTruthy();
+    sessionIdForWs = sessionId;
 
     // Call selectSession (which is what runOpenCode does after fix)
     await page.evaluate(async (sid: string) => {
@@ -233,7 +257,23 @@ describe('OpenCode session initial resize', () => {
       await app.selectSession(sid);
     }, sessionId);
 
-    await page.waitForTimeout(300);
+    // The handler only resizes after it has replayed a NON-EMPTY terminal
+    // buffer, so give the session a real PTY with some output first.
+    await page.evaluate(async (sid: string) => {
+      await fetch(`/api/sessions/${sid}/shell`, { method: 'POST' });
+      const deadline = Date.now() + 5000;
+      for (;;) {
+        await fetch(`/api/sessions/${sid}/input`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input: 'echo needs-refresh-seed\r', useMux: false }),
+        });
+        await new Promise((r) => setTimeout(r, 400));
+        const res = await fetch(`/api/sessions/${sid}/terminal?full=1`);
+        if ((((await res.json())?.data?.terminalBuffer as string) ?? '').includes('needs-refresh-seed')) break;
+        if (Date.now() > deadline) throw new Error('seed output never appeared');
+      }
+    }, sessionId);
 
     // Intercept resize calls
     const resizeCalls: Array<{ url: string }> = [];
@@ -278,7 +318,7 @@ describe('OpenCode close modal text', () => {
     await context?.close();
   });
 
-  it('shows "Kill Tmux & OpenCode" for opencode sessions', async () => {
+  it.skipIf(!HAS_OPENCODE)('shows "Kill Tmux & OpenCode" for opencode sessions', async () => {
     ({ context, page } = await freshPage());
     await navigateAndWait(page);
 

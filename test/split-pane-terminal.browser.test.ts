@@ -113,18 +113,21 @@ describe('SplitTerminalPane in a real browser', () => {
       // own startup can race an early write and, on this box, a startup
       // script issues a `clear` that erases scrollback (modern ncurses
       // `clear` emits \x1b[3J) if the input lands before the shell is ready.
-      await fetch(`/api/sessions/${id}/input`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input: 'PRE_EXISTING_MARKER\r' }),
-      });
-      const deadline = Date.now() + 5000;
+      // Codeman itself writes `clear` into a NEW shell session ~100ms after
+      // creating it, which can erase an early marker, so re-send until the
+      // marker is present in the capture rather than writing once.
+      const deadline = Date.now() + 8000;
       for (;;) {
+        await fetch(`/api/sessions/${id}/input`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ input: 'PRE_EXISTING_MARKER\r', useMux: false }),
+        });
+        await new Promise((r) => setTimeout(r, 400));
         const res2 = await fetch(`/api/sessions/${id}/terminal?full=1`);
         const buffer = (await res2.json())?.data?.terminalBuffer ?? '';
         if (buffer.includes('PRE_EXISTING_MARKER')) break;
         if (Date.now() > deadline) throw new Error('marker never landed in ?full=1 capture: ' + JSON.stringify(buffer));
-        await new Promise((r) => setTimeout(r, 200));
       }
       return id;
     });
@@ -166,7 +169,7 @@ describe('SplitTerminalPane in a real browser', () => {
     await page.evaluate(async (id) => {
       await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
     }, sessionId);
-  });
+  }, 20000);
 
   it('gates app-level chords out of Pane B instead of forwarding their raw bytes', async () => {
     // Regression guard for PR #453's Ctrl+K/Alt+1/Alt+B leak: Pane B had no
