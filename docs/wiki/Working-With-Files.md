@@ -163,6 +163,37 @@ HEIC images from an iPhone are converted to JPEG on the way in.
 When an agent produces a file the UI can show (a chart, a diagram, a document), it can
 surface as an artifact attachment rather than a path you have to go and find.
 
+## Git changes
+
+Agents often leave work uncommitted or unpushed. Turn on **App Settings → Header & Panels →
+Bottom bar → Git status** (per device, off by default) and the right of the bottom bar shows
+the active session's repository: `● 3` uncommitted files, `↑ 2` commits not pushed, `⚠` merge
+conflicts, `✓` when everything is committed and pushed.
+
+Click it for a draggable window, in the style of the File Viewer:
+
+- **Uncommitted changes**, grouped as staged, not staged, untracked and conflicted, each with a
+  status letter (`M` modified, `A` added, `D` deleted, `R` renamed, `?` new, `U` conflict).
+- **Not pushed**: the commits no remote has. A branch with no upstream says so.
+- Files are grouped under their folders, collapsed until you click a folder (a chain of single-child
+  folders is one row, and the folders you opened stay open when the list refreshes). Turn off
+  **App Settings → Header & Panels → Bottom bar → Git status: group files by folder** for a flat
+  list of full paths instead.
+- **Click a file** to see what changed in it, as a unified diff with added and removed lines
+  coloured. Staged files show index versus last commit, not-staged files show working tree
+  versus index, untracked files show as all additions and deleted files as all removals.
+  **Open file** jumps to the File Viewer; **Back** returns to the list. A binary file shows a
+  note instead, and a diff over 400 KB is cut short.
+- A session folder that holds several projects gets one collapsible section per repository
+  found up to two levels down. They all start collapsed (each summary line shows its branch and
+  what is outstanding), and the ones you open stay open when the window refreshes; an unrelated repository above the workspace (a dotfiles repo
+  in your home folder) is ignored.
+
+It is read-only and offline: Codeman never fetches, commits or changes the repository, so
+"behind" is as of your last fetch. It is not shown for Docker or remote (SSH) sessions. The
+data comes from `GET /api/sessions/:id/git-status` and `GET /api/sessions/:id/git-diff`
+(see the [API reference](https://github.com/Ark0N/Codeman/blob/master/docs/api-reference.md)).
+
 ## Gotchas
 
 - **The viewer follows the active session's workspace.** Switching tabs changes what you are

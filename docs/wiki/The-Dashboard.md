@@ -119,6 +119,7 @@ The right side of the header. Almost all of these are off until you enable them 
 | Multi-monitor          | Off, macOS         | Opens a window spanning every display.                                            |
 | Split                  | Off, desktop only  | View a second session beside the active one, with a draggable divider.           |
 | Tunnel indicator       | When a tunnel runs | Cloudflare tunnel status.                                                        |
+| Git status (bottom bar) | Off               | Right of the bottom bar: uncommitted and unpushed work for the active session. Click it for the Git window. See [Working With Files](Working-With-Files#git-changes). |
 | Admin panel            | Multi-user only    | User administration.                                                              |
 
 New header controls never appear on phones. Phone layout is deliberately minimal and is
