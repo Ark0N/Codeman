@@ -93,4 +93,16 @@ describe('Diagnostics panel in a real browser', () => {
     await page.waitForFunction(() => /boom/.test(document.getElementById('doctorResult')?.textContent ?? ''));
     expect(await page.isDisabled('#doctorRunBtn')).toBe(false);
   });
+
+  it('hides the Diagnostics group from a non-admin in multi-user mode and shows it to an admin', async () => {
+    const visible = (user: Record<string, unknown>) =>
+      page.evaluate((u) => {
+        (window as any).__codemanUser = u;
+        document.dispatchEvent(new CustomEvent('codeman:me'));
+        return getComputedStyle(document.getElementById('doctorGroup')!).display !== 'none';
+      }, user);
+    expect(await visible({ multiUser: true, role: 'user' })).toBe(false);
+    expect(await visible({ multiUser: true, role: 'admin' })).toBe(true);
+    expect(await visible({ multiUser: false })).toBe(true);
+  });
 });
