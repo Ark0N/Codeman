@@ -828,6 +828,26 @@ describe('Inline rename write ordering', () => {
     ).toBe(false);
   });
 
+  it('shows the in-flight name when a reopened editor is confirmed unchanged, before the PUT lands', async () => {
+    await mount('shown', 'Old');
+    await commit('shown', 'First');
+    // Reopen while the PUT for "First" is held, then confirm it untouched. The
+    // label must read "First" now, not the "Old" the cancelled editor
+    // repainted from app.sessions.
+    await page.evaluate(() =>
+      (window as unknown as { app: { startInlineRename: (id: string) => void } }).app.startInlineRename('shown')
+    );
+    await commit('shown', null);
+    const label = await page.evaluate(
+      () => (document.querySelector('.tab-name[data-session-id="shown"]') as HTMLElement).textContent
+    );
+    expect((await state('shown')).bodies).toEqual(['First']);
+    expect(label).toBe('First');
+    await answer(0, 'First');
+    await restoreFetch();
+    expect(await state('shown')).toEqual({ bodies: ['First'], mapName: 'First', renameActive: false });
+  });
+
   it('reports a failed write even after its editor is gone', async () => {
     await mount('fail-late', 'Old');
     await page.evaluate(() => {

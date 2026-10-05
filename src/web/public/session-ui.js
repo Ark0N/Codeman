@@ -2936,6 +2936,7 @@ Object.assign(CodemanApp.prototype, {
     // A rename still in flight is the user's last word, not the name the
     // server has yet to replace: start from it, and compare against it below.
     const shownName = this._inlineRenamePending?.get(sessionId) ?? session.name;
+    const renameInFlight = shownName !== session.name;
     const parsed = parseSessionPrefix(shownName);
     const originalContent = tabName.textContent;
     const originalChildren = [...tabName.childNodes].map((node) => node.cloneNode(true));
@@ -3017,7 +3018,10 @@ Object.assign(CodemanApp.prototype, {
 
       const suffix = input.value.trim();
       const fullName = parsed ? parsed.prefix + (suffix ? ': ' + suffix : '') : suffix;
-      if (fullName === shownName) restoreOriginalChildren();
+      // An unchanged confirm puts the old label back, unless the editor opened
+      // over a rename in flight: that label was repainted from the server's
+      // older name, so show the in-flight name rather than make it look lost.
+      if (fullName === shownName && !renameInFlight) restoreOriginalChildren();
       else tabName.textContent = fullName || originalContent;
 
       // Skip the API call if the session vanished between focus and blur. The
