@@ -2972,15 +2972,27 @@
             <p class="set-section-blurb">A fresh workspace under ~/codeman-cases, scaffolded with its own CLAUDE.md.</p>
             <div class="form-row">
               <label>Case Name</label>
-              <input type="text" id="newCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false">
+              <input type="text" id="newCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="app.updateNewCasePathPreview()">
               <span class="form-hint">Letters, numbers, hyphens, underscores only. Created in ~/codeman-cases/</span>
             </div>
             <div class="form-row">
               <label>Description (optional)</label>
               <input type="text" id="newCaseDescription" placeholder="A brief description..." autocomplete="off">
             </div>
+            <div class="form-row" id="newCaseCustomPathToggleRow">
+              <label class="checkbox-row"><input type="checkbox" id="newCaseCustomPathToggle" onchange="app.toggleNewCaseCustomPath()"> 📁 Create in a custom folder</label>
+              <span class="form-hint">By default a new case is created under ~/codeman-cases. Choose another folder and the case is created there instead; it is listed like any other case.</span>
+            </div>
+            <div class="form-row" id="newCaseCustomPathRow" style="display:none">
+              <label>Parent Folder</label>
+              <div class="path-input-group">
+                <input type="text" id="newCasePath" placeholder="~/projects" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" oninput="app.updateNewCasePathPreview()">
+                <button type="button" class="btn path-input-browse" onclick="app.openNewCasePathPicker()">Browse&hellip;</button>
+              </div>
+              <span class="form-hint" id="newCasePathPreview">Pick the folder the new case folder should be created inside.</span>
+            </div>
             <div class="form-row docker-quick-row">
-              <label class="checkbox-row"><input type="checkbox" id="newCaseDocker"> 🐳 Run in an isolated Docker container</label>
+              <label class="checkbox-row"><input type="checkbox" id="newCaseDocker" onchange="app.toggleNewCaseCustomPath()"> 🐳 Run in an isolated Docker container</label>
               <span class="form-hint">Runs this case in a hardened, isolated container. The base image is built automatically on first use. Docker/Podman must be installed.</span>
               <span class="form-hint">Already have a container running? <button type="button" class="btn-inline-check" id="dockerAdoptJumpBtn">Attach to it instead</button> Codeman only runs docker exec into it and never touches its lifecycle.</span>
             </div>
