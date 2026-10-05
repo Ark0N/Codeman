@@ -215,4 +215,42 @@ describe('GET /api/sessions/:id/git-diff', () => {
     const res = await app.inject({ method: 'GET', url: url({ repo: root, path: 'a.txt', kind: 'unstaged' }) });
     expect(res.statusCode).toBe(404);
   });
+
+  it('diffs a staged rename against its old name, and a merge conflict as git’s combined diff (real git)', async () => {
+    // beforeEach left a.txt/b.txt modified; start this case from a clean tree.
+    git(dir, 'checkout', '-q', '--', '.');
+    git(dir, 'reset', '-q', '--hard');
+    git(dir, 'clean', '-fdq');
+    writeFileSync(join(dir, 'old.txt'), 'a\nb\nc\nd\ne\nf\ng\n');
+    git(dir, 'add', 'old.txt');
+    git(dir, 'commit', '-q', '-m', 'old');
+    // A real conflict on c.txt.
+    writeFileSync(join(dir, 'c.txt'), 'base\n');
+    git(dir, 'add', 'c.txt');
+    git(dir, 'commit', '-q', '-m', 'c');
+    git(dir, 'checkout', '-q', '-b', 'other');
+    writeFileSync(join(dir, 'c.txt'), 'theirs\n');
+    git(dir, 'commit', '-q', '-am', 'theirs');
+    git(dir, 'checkout', '-q', 'main');
+    writeFileSync(join(dir, 'c.txt'), 'ours\n');
+    git(dir, 'commit', '-q', '-am', 'ours');
+    try {
+      git(dir, 'merge', 'other');
+    } catch {
+      /* the conflict is the point */
+    }
+    // A staged rename, made once the merge has stopped on the conflict.
+    git(dir, 'mv', 'old.txt', 'new-name.txt');
+    writeFileSync(join(dir, 'new-name.txt'), 'a\nb\nc\nd\ne\nf\nCHANGED\n');
+    git(dir, 'add', 'new-name.txt');
+    const { app } = await setup();
+    const root = realpathSync(dir);
+    const rename = await app.inject({ method: 'GET', url: url({ repo: root, path: 'new-name.txt', kind: 'staged' }) });
+    expect(rename.statusCode).toBe(200);
+    expect(rename.json().data.diff).toContain('rename from old.txt');
+    expect(rename.json().data.diff).toContain('+CHANGED');
+    const conflict = await app.inject({ method: 'GET', url: url({ repo: root, path: 'c.txt', kind: 'conflicted' }) });
+    expect(conflict.statusCode).toBe(200);
+    expect(conflict.json().data.diff).toMatch(/<<<<<<<|\+\+<<<<<<</);
+  });
 });

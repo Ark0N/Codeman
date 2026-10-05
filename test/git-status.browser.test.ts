@@ -264,6 +264,10 @@ describe('Git status indicator in a real browser', () => {
     await page.evaluate(() => (window as any).app.saveAppSettings());
     await page.waitForTimeout(300);
     await page.evaluate(() => (window as any).app.closeAppSettings());
+    // gitStatusTree is per-device: it must never reach the strict PUT /api/settings (a 400 there is
+    // what an unstripped key looks like), and it must round-trip through the saved settings.
+    expect(settingsPutStatuses.every((st) => st === 200)).toBe(true);
+    expect(await page.evaluate(() => (window as any).app.isGitStatusTree())).toBe(true);
     rmSync(join(repo, 'deep'), { recursive: true });
     rmSync(join(repo, 'docs'), { recursive: true });
   }, 30000);
