@@ -856,3 +856,133 @@ describe('spreadsheet preview worker: rows and cells are indexed by their presen
     }
   }, 60_000);
 });
+
+/** Deterministic, poorly compressible text, so the ratio cap does not refuse it first. */
+function noisyText(length: number, seed = 1): string {
+  let state = seed;
+  let text = '';
+  for (let i = 0; i < length; i += 1) {
+    state = (state * 1103515245 + 12345) & 0x7fffffff;
+    text += String.fromCharCode(97 + (state % 26));
+  }
+  return text;
+}
+
+describe('spreadsheet preview worker: cell text reaching the page is bounded', () => {
+  // Every tile cell carried its whole string and structured clone copied it
+  // once per cell: one 1 MB shared string over a 60 x 20 block froze the page.
+  it('caps every tile cell text, shared string, rich text and hyperlink alike', async () => {
+    const long = noisyText(200_000);
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Long');
+    for (let row = 1; row <= 20; row += 1) {
+      for (let col = 1; col <= 10; col += 1) sheet.getCell(row, col).value = long;
+    }
+    sheet.getCell(21, 1).value = { richText: [{ text: long }, { font: { bold: true }, text: long }] };
+    sheet.getCell(21, 2).value = { text: long, hyperlink: 'https://example.invalid/' };
+    sheet.getCell(21, 3).value = 'short';
+    const bytes = await writeWorkbook(workbook);
+    const entries = fflate.unzipSync(new Uint8Array(bytes));
+    // One shared string (index 0), referenced by every cell of the block.
+    expect(fflate.strFromU8(entries['xl/sharedStrings.xml'])).toContain(`<si><t>${long}</t></si>`);
+    expect(
+      fflate.strFromU8(entries['xl/worksheets/sheet1.xml']).match(/t="s"><v>0<\/v>/g)?.length
+    ).toBeGreaterThanOrEqual(200);
+
+    const harness = createHarness();
+    const metadata = await loadMetadata(harness, bytes);
+    const tile = await requestTile(harness, metadata.sheets[0].id, { r1: 1, c1: 1, r2: 21, c2: 10 });
+    expect(tile.type).toBe('tile');
+    const cells = tile.cells as Array<{ row: number; col: number; text: string }>;
+    expect(cells).toHaveLength(203);
+    for (const cell of cells) expect(cell.text.length, `${cell.row}:${cell.col}`).toBeLessThanOrEqual(1000);
+    expect(cells.find((cell) => cell.row === 1 && cell.col === 1)?.text).toBe(`${long.slice(0, 999)}…`);
+    expect(cells.find((cell) => cell.row === 21 && cell.col === 1)?.text.length).toBe(1000);
+    expect(cells.find((cell) => cell.row === 21 && cell.col === 2)?.text.length).toBe(1000);
+    expect(cells.find((cell) => cell.row === 21 && cell.col === 3)?.text).toBe('short');
+  }, 60_000);
+});
+
+/** A workbook of `sheets` one-cell sheets, each carrying `mergesPerSheet` one-row merges. */
+async function mergeHeavyWorkbook(sheets: number, mergesPerSheet: number): Promise<ArrayBuffer> {
+  const workbook = new ExcelJS.Workbook();
+  for (let i = 1; i <= sheets; i += 1) workbook.addWorksheet(`S${i}`).getCell('A1').value = 'one';
+  const entries = fflate.unzipSync(new Uint8Array(await workbook.xlsx.writeBuffer()));
+  const merges = Array.from({ length: mergesPerSheet }, (_, i) => `<mergeCell ref="A${i + 2}:B${i + 2}"/>`).join('');
+  for (let i = 1; i <= sheets; i += 1) {
+    const name = `xl/worksheets/sheet${i}.xml`;
+    const sheet = fflate.strFromU8(entries[name]);
+    const patched = sheet.replace(
+      '</sheetData>',
+      `</sheetData><mergeCells count="${mergesPerSheet}">${merges}</mergeCells>`
+    );
+    expect(patched).not.toBe(sheet);
+    entries[name] = fflate.strToU8(patched);
+  }
+  return toArrayBuffer(fflate.zipSync(entries));
+}
+
+describe('spreadsheet preview worker: merges are bounded per sheet and workbook-wide', () => {
+  // ExcelJS checks each new merge against every earlier one on its sheet, so
+  // a sheet's load cost grows with the square of its merge count.
+  it('refuses one sheet over the per-sheet merge cap before ExcelJS loads', async () => {
+    const harness = createHarness();
+    await harness.send({ type: 'load', bytes: await mergeHeavyWorkbook(1, 2_001) });
+    expect(harness.messages.at(-1)).toMatchObject({ type: 'error', code: 'merge-limit' });
+    expect(harness.imports.some((url) => url.includes('exceljs'))).toBe(false);
+  }, 60_000);
+
+  it('refuses sheets each under the per-sheet cap once the workbook total passes 10,000', async () => {
+    const harness = createHarness();
+    await harness.send({ type: 'load', bytes: await mergeHeavyWorkbook(6, 2_000) });
+    expect(harness.messages.at(-1)).toMatchObject({ type: 'error', code: 'merge-limit' });
+    expect(harness.imports.some((url) => url.includes('exceljs'))).toBe(false);
+  }, 60_000);
+
+  it('still previews a sheet at the per-sheet merge cap', async () => {
+    const harness = createHarness();
+    const metadata = await loadMetadata(harness, await mergeHeavyWorkbook(1, 2_000));
+    expect(metadata.sheets[0].merges).toHaveLength(2_000);
+  }, 60_000);
+});
+
+/** A one-cell numeric workbook whose styles.xml declares `formatCode` for the cell. */
+async function numberFormatWorkbook(formatCode: string): Promise<ArrayBuffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Data');
+  sheet.getCell('A1').value = 1.5;
+  sheet.getCell('A1').numFmt = '0.000';
+  const entries = fflate.unzipSync(new Uint8Array(await workbook.xlsx.writeBuffer()));
+  const styles = fflate.strFromU8(entries['xl/styles.xml']);
+  const patched = styles.replace('formatCode="0.000"', `formatCode="${formatCode}"`);
+  expect(patched).not.toBe(styles);
+  entries['xl/styles.xml'] = fflate.strToU8(patched);
+  return toArrayBuffer(fflate.zipSync(entries));
+}
+
+describe('spreadsheet preview worker: number formats ExcelJS would rescan', () => {
+  // `isDateFmt` runs `/\[[^\]]*]/g` per numeric cell; a 60,000-character code of
+  // `[` cost 2.2 s a cell, and the code is echoed into the notice bar.
+  it.each([
+    ['an unclosed [', `0${'['.repeat(200)}`],
+    ['a code over 255 characters', `${'0'.repeat(300)}.00`],
+  ])(
+    'refuses %s before ExcelJS loads',
+    async (_label, code) => {
+      const harness = createHarness();
+      await harness.send({ type: 'load', bytes: await numberFormatWorkbook(code) });
+      expect(harness.messages.at(-1)).toMatchObject({ type: 'error', code: 'number-format' });
+      expect(harness.imports.some((url) => url.includes('exceljs'))).toBe(false);
+    },
+    60_000
+  );
+
+  it('previews a closed bracketed format and keeps its warning bounded', async () => {
+    const code = `[Red]${'0'.repeat(200)}`;
+    const harness = createHarness();
+    const metadata = await loadMetadata(harness, await numberFormatWorkbook(code));
+    const tile = await requestTile(harness, metadata.sheets[0].id, { r1: 1, c1: 1, r2: 1, c2: 1 });
+    expect(tile.cells).toEqual([expect.objectContaining({ row: 1, col: 1, text: '1.5' })]);
+    expect(tile.warnings).toEqual([`Unsupported number format: ${code}`]);
+  }, 60_000);
+});

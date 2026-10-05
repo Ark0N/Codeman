@@ -333,6 +333,101 @@ describe('spreadsheet XLSX core', () => {
     expect(() => counter.push(fflate.strToU8(xml), true)).toThrowError(/styles limit/i);
   });
 
+  // ExcelJS's `_mergeCellsInternal` checks every new merge against every earlier
+  // one on its sheet, so a sheet costs the SQUARE of its merge count: one sheet
+  // at the old 5,000 cap took 1.6 s, and 20 such sheets ran past the page timeout.
+  it('caps merges per sheet and across the workbook', () => {
+    expect(core.LIMITS.maxMergesPerSheet).toBe(2000);
+    expect(core.LIMITS.maxMerges).toBe(10000);
+    const merges = (n: number, row = 1) =>
+      Array.from({ length: n }, (_, i) => `<mergeCell ref="A${row + i * 2}:A${row + i * 2 + 1}"/>`).join('');
+    const sheetXml = (n: number) => `<worksheet><sheetData/><mergeCells>${merges(n)}</mergeCells></worksheet>`;
+    expect(() => core.admitXlsx(workbookZip(sheetXml(4)), fflate, { maxMergesPerSheet: 3 })).toThrowError(
+      /merged ranges limit/i
+    );
+    expect(() => core.admitXlsx(workbookZip(sheetXml(3)), fflate, { maxMergesPerSheet: 3 })).not.toThrow();
+    // Two sheets each under the per-sheet cap still trip the workbook-wide one.
+    const twoSheets = fflate.zipSync({
+      ...fflate.unzipSync(workbookZip(sheetXml(3))),
+      'xl/worksheets/sheet2.xml': fflate.strToU8(sheetXml(3)),
+    });
+    expect(() => core.admitXlsx(twoSheets, fflate, { maxMergesPerSheet: 3, maxMerges: 5 })).toThrowError(
+      /merged ranges limit/i
+    );
+    expect(() => core.admitXlsx(twoSheets, fflate, { maxMergesPerSheet: 3, maxMerges: 6 })).not.toThrow();
+    expect(() => core.admitXlsx(twoSheets, fflate, { maxMergesPerSheet: 3, maxMerges: 5 })).toThrowError(
+      expect.objectContaining({ code: 'merge-limit' })
+    );
+  });
+
+  // ExcelJS runs `isDateFmt` once per numeric cell, and its first step,
+  // `fmt.replace(/\[[^\]]*]/g, '')`, rescans to the end of the code for every
+  // `[` with no later `]`. The code is also echoed into the notice bar.
+  it('refuses a <numFmt> formatCode over 255 characters or with a [ after its last ]', () => {
+    const styles = (numFmts: string) => {
+      const counts = { cells: 0, merges: 0, styles: 0, rows: 0 };
+      const counter = core.createXmlCounter('xl/styles.xml', counts as never, core.LIMITS);
+      const xml = `<styleSheet><numFmts count="1">${numFmts}</numFmts><cellXfs count="1"><xf/></cellXfs></styleSheet>`;
+      return () => counter.push(fflate.strToU8(xml), true);
+    };
+    const fmt = (code: string) => `<numFmt numFmtId="164" formatCode="${code}"/>`;
+    expect(styles(fmt('0'.repeat(256)))).toThrowError(/longer than 255/i);
+    expect(styles(fmt('0'.repeat(255)))).not.toThrow();
+    for (const code of ['[', '0[', '[Red]0[', '[[[[', '[Red]0.00;[']) {
+      expect(styles(fmt(code)), code).toThrowError(/unclosed bracket/i);
+    }
+    for (const code of ['[Red]0.00', '[$-409]mmm d, yyyy', '[h]:mm:ss', '0.00', '#,##0;[Red]-#,##0', ']', '[[]']) {
+      expect(styles(fmt(code)), code).not.toThrow();
+    }
+    // The code is checked as ExcelJS decodes it: an entity cannot hide a `[`,
+    // and an entity-heavy code is measured by its decoded length.
+    expect(styles(fmt('0&#91;'))).toThrowError(/unclosed bracket/i);
+    expect(styles(fmt('0&#x5B;'))).toThrowError(/unclosed bracket/i);
+    expect(styles(fmt('&quot;x&quot;'.repeat(60)))).not.toThrow();
+    expect(styles(fmt('&amp;'.repeat(256)))).toThrowError(/longer than 255/i);
+    // Attributes are read in order, so a quoted fake formatCode cannot mask the real one.
+    expect(styles(`<numFmt x=' formatCode="0"' numFmtId="164" formatCode="0["/>`)).toThrowError(/unclosed bracket/i);
+    expect(styles('<numFmt numFmtId="164" formatCode="0" junk/>')).toThrowError(/do not parse/i);
+    // `<numFmts>` is the container, not a format.
+    expect(styles('')).not.toThrow();
+    // The refusal never echoes the code itself.
+    for (const code of ['QZJX[', `${'QZJX'.repeat(64)}0`]) {
+      expect(styles(fmt(code))).toThrowError(
+        expect.objectContaining({ code: 'number-format', message: expect.not.stringContaining('QZJX') })
+      );
+    }
+    // Every <numFmt> in the file is read, wherever it sits (dxfs carry them too).
+    const counts = { cells: 0, merges: 0, styles: 0, rows: 0 };
+    const counter = core.createXmlCounter('xl/styles.xml', counts as never, core.LIMITS);
+    const dxf = `<styleSheet><dxfs count="1"><dxf>${fmt('0[')}</dxf></dxfs></styleSheet>`;
+    expect(() => counter.push(fflate.strToU8(dxf), true)).toThrowError(/unclosed bracket/i);
+  });
+
+  it('caps cell display text at 1,000 characters for every value shape', () => {
+    const long = 'x'.repeat(50_000);
+    const shapes: Array<[string, unknown]> = [
+      ['string', long],
+      ['rich text', { richText: [{ text: long }, { text: long }] }],
+      ['hyperlink', { text: long, hyperlink: 'https://example.invalid/' }],
+      ['rich hyperlink', { text: { richText: [{ text: long }] }, hyperlink: 'https://example.invalid/' }],
+      ['formula source', { formula: long }],
+      ['formula result', { formula: 'A1', result: long }],
+      ['error', { error: long }],
+    ];
+    for (const [label, value] of shapes) {
+      const { text } = core.formatCellValue(value, 'General');
+      expect(text.length, label).toBeLessThanOrEqual(1000);
+      expect(text.endsWith('…'), label).toBe(true);
+    }
+    expect(core.formatCellValue('y'.repeat(1000), 'General').text).toBe('y'.repeat(1000));
+    expect(core.formatCellValue({ richText: [{ text: 'a' }, { text: 'b' }] }, 'General').text).toBe('ab');
+    // A cut never leaves half of a surrogate pair.
+    // 'aa' puts a high surrogate at index 998, exactly where a naive cut lands.
+    const emoji = core.formatCellValue('aa' + '😀'.repeat(600), 'General').text;
+    expect(emoji.length).toBeLessThanOrEqual(1000);
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(emoji)).toBe(false);
+  });
+
   it('refuses an entry whose declared compressed size runs past the file', () => {
     const zip = workbookZip();
     const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);

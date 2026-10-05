@@ -20,7 +20,7 @@
 (function initSpreadsheetPreview(global) {
   'use strict';
 
-  const SPREADSHEET_ASSET_VERSION = '6e843e269018';
+  const SPREADSHEET_ASSET_VERSION = 'd83f632d5c69';
   const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
   const DEFAULT_TIMEOUT_MS = 20000;
   const MAX_SCROLL_PX = 8000000;

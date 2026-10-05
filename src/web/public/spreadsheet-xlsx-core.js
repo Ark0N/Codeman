@@ -27,12 +27,24 @@
     maxCellsPerSheet: 100000,
     maxRows: 250000,
     maxRowsPerSheet: 100000,
-    maxMergesPerSheet: 5000,
+    // ExcelJS's `_mergeCellsInternal` checks each new merge against every
+    // earlier one on its sheet, so a sheet costs the SQUARE of its merge count
+    // (5,000 on one sheet took 1.6 s). Both caps keep the worst case near 1.3 s.
+    maxMergesPerSheet: 2000,
+    maxMerges: 10000,
     maxStyles: 5000,
     // ExcelJS stores each sheet at `_worksheets[sheetId]`, so the id is an array
     // length. Excel numbers sheets from 1 and never reuses an id, so real ids
     // stay small; 65535 leaves room for heavy editing at a negligible cost.
     maxSheetId: 65535,
+    // Excel's own limit on a number format. ExcelJS runs `isDateFmt` on the code
+    // once per numeric cell, and the code is echoed into the notice bar.
+    maxNumFmtChars: 255,
+    // Display text per cell. A cell is one `nowrap` line ending in an ellipsis,
+    // so nothing past the column width shows; uncapped, every tile cell carried
+    // its whole string to the page (a 1 MB shared string over a 60 x 20 block
+    // froze the page's main thread at 9.6 GB).
+    maxCellTextChars: 1000,
   });
   const MAX_ROW = 1048576;
   const MAX_COL = 16384;
@@ -240,6 +252,35 @@
     }
   }
 
+  // Attribute values as the XML parser inside ExcelJS (saxes) hands them over:
+  // the predefined entities and character references decoded. Checking the raw
+  // text would let `&#91;` hide a `[` and would overcount `&quot;`.
+  function decodeXmlAttribute(value) {
+    return value.replace(/&(?:#x([0-9a-fA-F]+)|#([0-9]+)|(amp|lt|gt|quot|apos));/g, (entity, hex, dec, name) => {
+      if (name) return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[name];
+      const code = hex ? Number.parseInt(hex, 16) : Number(dec);
+      return code <= 0x10ffff ? String.fromCodePoint(code) : entity;
+    });
+  }
+
+  // ExcelJS's `isDateFmt` strips `/\[[^\]]*]/g` from the code once per numeric
+  // cell, and that pattern rescans to the end of the code for every `[` with no
+  // later `]` (a 60,000-character code of `[` cost 2.2 s a cell; even 255
+  // characters added up at the cell cap). Once nothing follows the last `]`
+  // but text without `[`, each `[` stops at the next `]` and the scan is linear.
+  // The messages never echo the code.
+  function checkNumberFormat(attributes, limits) {
+    const raw = attributes.get('formatCode');
+    if (raw === undefined) return;
+    const code = decodeXmlAttribute(raw);
+    if (code.length > limits.maxNumFmtChars) {
+      fail('number-format', `Workbook has a number format longer than ${limits.maxNumFmtChars} characters`);
+    }
+    if (code.lastIndexOf('[') > code.lastIndexOf(']')) {
+      fail('number-format', 'Workbook has a number format with an unclosed bracket');
+    }
+  }
+
   function createXmlCounter(name, counts, limits) {
     let tail = '';
     const decoder = new TextDecoder();
@@ -286,8 +327,8 @@
             }
             sheetMerges += 1;
             counts.merges += 1;
-            if (sheetMerges > limits.maxMergesPerSheet)
-              fail('merge-limit', 'Worksheet exceeds the merged ranges limit');
+            if (sheetMerges > limits.maxMergesPerSheet || counts.merges > limits.maxMerges)
+              fail('merge-limit', 'Workbook exceeds the merged ranges limit');
             addCells(mergeArea(attributes));
           }
         }
@@ -304,6 +345,12 @@
           // sits in can be desynced by a closing tag inside an XML comment.
           counts.styles += (scan.match(/<xf(?=[\s/>])/g) || []).length;
           if (counts.styles > limits.maxStyles) fail('style-limit', 'Workbook exceeds the cell styles limit');
+          // Every <numFmt>, cellXfs' and dxfs' alike; the lookahead skips <numFmts>.
+          for (const match of scan.matchAll(/<numFmt(?=[\s/>])/g)) {
+            const attributes = readTagAttributes(scan, match.index + match[0].length);
+            if (!attributes) fail('malformed', 'Workbook has a <numFmt> whose attributes do not parse');
+            checkNumberFormat(attributes, limits);
+          }
         }
         tail = text.slice(safeEnd);
         if (tail.length > MAX_CARRIED_TAG) fail('malformed', 'Workbook XML has an oversized tag');
@@ -529,33 +576,68 @@
     return 'formula' in value || 'sharedFormula' in value;
   }
 
+  // Cut to LIMITS.maxCellTextChars, ending in an ellipsis, never between the
+  // halves of a surrogate pair.
+  function capCellText(text) {
+    const max = LIMITS.maxCellTextChars;
+    if (text.length <= max) return text;
+    let end = max - 1;
+    const last = text.charCodeAt(end - 1);
+    if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+    return `${text.slice(0, end)}…`;
+  }
+
+  // Joins rich-text runs only until the cap is passed, so a long run is never
+  // copied whole once per cell.
+  function richTextPrefix(runs) {
+    let text = '';
+    for (const run of runs) {
+      if (text.length > LIMITS.maxCellTextChars) break;
+      if (typeof run?.text === 'string') text += run.text.slice(0, LIMITS.maxCellTextChars + 1);
+    }
+    return text;
+  }
+
+  /**
+   * A cell's display text and any warning. The text is ALWAYS at most
+   * `LIMITS.maxCellTextChars` characters, whatever shape the value has.
+   */
+  function formatCellValue(value, format, date1904) {
+    const formatted = formatCellValueUncapped(value, format, date1904);
+    return formatted.text.length > LIMITS.maxCellTextChars
+      ? Object.assign({}, formatted, { text: capCellText(formatted.text) })
+      : formatted;
+  }
+
   // Every non-scalar shape ExcelJS loads a cell value as. Anything not handled
   // here would otherwise reach String() and render as "[object Object]".
-  function formatCellValue(value, format, date1904) {
+  function formatCellValueUncapped(value, format, date1904) {
     if (value === null || value === undefined) return { text: '' };
     if (isDateValue(value)) {
       const code = String(format || 'General');
       const known = DATE_FORMAT.test(code) || TIME_FORMAT.test(code) || DATE_TIME_FORMAT.test(code);
       const serial = dateToSerial(value, date1904);
-      if (known) return formatCellValue(serial, code, date1904);
+      if (known) return formatCellValueUncapped(serial, code, date1904);
       const fallback = serial % 1 === 0 ? 'yyyy-mm-dd' : 'yyyy-mm-dd hh:mm';
-      const formatted = formatCellValue(serial, fallback, date1904);
+      const formatted = formatCellValueUncapped(serial, fallback, date1904);
       return /^General$/i.test(code)
         ? formatted
         : { text: formatted.text, warning: `Unsupported number format: ${code}` };
     }
     if (typeof value === 'object') {
       if (isFormulaValue(value)) {
-        if (value.result !== undefined && value.result !== null) return formatCellValue(value.result, format, date1904);
+        if (value.result !== undefined && value.result !== null) {
+          return formatCellValueUncapped(value.result, format, date1904);
+        }
         const source = typeof value.formula === 'string' ? `=${value.formula}` : '';
         return { text: source, warning: 'Formula has no cached result' };
       }
       if (typeof value.error === 'string') return { text: value.error };
       if (Array.isArray(value.richText)) {
-        return { text: value.richText.map((run) => (typeof run?.text === 'string' ? run.text : '')).join('') };
+        return { text: richTextPrefix(value.richText) };
       }
       // Hyperlink: the display text, never the target. The text may be rich.
-      if ('text' in value) return formatCellValue(value.text, 'General', date1904);
+      if ('text' in value) return formatCellValueUncapped(value.text, 'General', date1904);
       return { text: '', warning: 'Unsupported cell value' };
     }
     const code = String(format || 'General');
