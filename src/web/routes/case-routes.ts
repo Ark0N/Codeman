@@ -51,6 +51,7 @@ import {
 import type { GitRemoteProbe, GitUrlParse } from '../../git-clone.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
 import { prepareNewCasePath } from '../case-path.js';
+import { boundedPathExists, probePath } from '../../utils/index.js';
 import { readAgentCaseMarker, type AgentCaseMarker } from '../../agent-case-marker.js';
 import { settingsWriteBlocker, writeHooksConfig } from '../../hooks-config.js';
 import {
@@ -164,6 +165,9 @@ function gitDiagnosticLine(stderr: string): string {
  * the clone response says so out loud instead of silently merging into them.
  */
 function repoShipsClaudeSettings(casePath: string): boolean {
+  // Deliberately NOT the bounded path probe: the tree was just cloned into the
+  // local case space (and lstat'ed synchronously moments ago), so a bound protects
+  // nothing here, while a probe answering "unknown" could silently drop this warning.
   return ['settings.json', 'settings.local.json'].some((file) => existsSync(join(casePath, '.claude', file)));
 }
 
@@ -267,7 +271,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
           cases.push({
             name: e.name,
             path: casePath,
-            hasClaudeMd: existsSync(join(casePath, 'CLAUDE.md')),
+            hasClaudeMd: await boundedPathExists(join(casePath, 'CLAUDE.md')),
             location: 'local',
             ...(marker ? { agentCreated: agentCreatedInfo(marker) } : {}),
           });
@@ -282,15 +286,19 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     const existingNames = new Set(cases.map((c) => c.name));
     if (admin) {
       for (const [name, path] of Object.entries(linkedCases)) {
-        if (!existingNames.has(name) && SAFE_CASE_NAME.test(name) && existsSync(path)) {
-          cases.push({
-            name,
-            path,
-            hasClaudeMd: existsSync(join(path, 'CLAUDE.md')),
-            linked: true,
-            location: 'linked-local',
-          });
-        }
+        if (existingNames.has(name) || !SAFE_CASE_NAME.test(name)) continue;
+        const state = await probePath(path);
+        if (state === 'absent') continue;
+        // An unreachable linked case (a dead network mount) stays listed and says
+        // so: dropping it would read as "deleted" and invite a same-name local case.
+        cases.push({
+          name,
+          path,
+          hasClaudeMd: state === 'present' && (await boundedPathExists(join(path, 'CLAUDE.md'))),
+          linked: true,
+          location: 'linked-local',
+          ...(state === 'unknown' ? { unreachable: true } : {}),
+        });
       }
     }
 
@@ -334,7 +342,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       const dockerCaseInfo: CaseInfo = {
         name: dockerCase.name,
         path: dockerDisplayPath({ container, path: dockerCase.hostWorkspacePath }),
-        hasClaudeMd: existsSync(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
+        hasClaudeMd: await boundedPathExists(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
         location: 'docker',
         docker: {
           hostId: host.id,
@@ -1709,7 +1717,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       return {
         name,
         path: dockerDisplayPath({ container, path: dockerCase.hostWorkspacePath }),
-        hasClaudeMd: existsSync(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
+        hasClaudeMd: await boundedPathExists(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
         location: 'docker',
         docker: {
           hostId: host.id,
@@ -1724,16 +1732,32 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     }
 
     const casePath = await resolveCasePath(name, getAuthUser(req));
+    const linked = casePath !== join(resolveCasesDir(getAuthUser(req)), name);
 
-    if (!existsSync(casePath)) {
+    // NOT_FOUND means DEFINITELY absent: the Run button creates a case on it, so
+    // a path that merely did not answer (a dead network mount) must never get it.
+    // One path, asked for explicitly: probe it even while unrelated mounts are dead.
+    const state = await probePath(casePath, { pastCap: true });
+    if (state === 'absent') {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Case not found');
     }
+    if (state === 'unknown') {
+      // The linked registry knows where the case lives, so say where, and that
+      // it is not answering. A local case has no such record to fall back on.
+      if (!linked) {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          `Case folder is not responding or not readable: ${casePath}`
+        );
+      }
+      return { name, path: casePath, hasClaudeMd: false, linked: true, unreachable: true };
+    }
 
-    const linked = casePath !== join(resolveCasesDir(getAuthUser(req)), name);
     return {
       name,
       path: casePath,
-      hasClaudeMd: existsSync(join(casePath, 'CLAUDE.md')),
+      // Probed like the folder above, or a healthy case reads as having no CLAUDE.md under the cap.
+      hasClaudeMd: (await probePath(join(casePath, 'CLAUDE.md'), { pastCap: true })) === 'present',
       ...(linked && { linked: true }),
     };
   });
@@ -1751,7 +1775,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
     const fixPlanPath = join(casePath, '@fix_plan.md');
 
-    if (!existsSync(fixPlanPath)) {
+    const fixPlanState = await probePath(fixPlanPath, { pastCap: true });
+    if (fixPlanState === 'unknown') {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Case folder is not responding or not readable');
+    }
+    if (fixPlanState === 'absent') {
       return { exists: false, content: null, todos: [] };
     }
 

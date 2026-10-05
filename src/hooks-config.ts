@@ -30,7 +30,6 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { readFile, writeFile, mkdir, lstat, readdir, realpath, rename, unlink, rmdir, chmod } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -40,6 +39,39 @@ import type { HookEventType } from './types.js';
 import { HOOK_TIMEOUT_SECONDS } from './config/auth-config.js';
 import { dataPath } from './config/instance.js';
 import { readJsonConfig, SETTINGS_PATH } from './web/route-helpers.js';
+import { isNearStalledPath, probePath } from './utils/index.js';
+
+/**
+ * Existence check for a WRITER. Unlike the bounded read-side probe (`probePath`),
+ * which gives up after a timeout and answers "unknown", this waits for the real
+ * answer: only ENOENT reads as absent, anything else throws, so a
+ * stalled or unreadable workspace can never be mistaken for an empty one and
+ * have its settings recreated over the top. It is async, so a dead mount ties
+ * up a threadpool worker rather than the event loop.
+ */
+async function pathExistsForWrite(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw err;
+  }
+}
+
+/**
+ * Whether a READ-side helper should leave `path` alone: it is definitely absent, or
+ * it sits on a mount that is not answering (near a stalled probe). An "unknown"
+ * that is NOT near a stalled probe (the probe was refused for capacity, or the stat
+ * failed with something other than ENOENT) is not a reason to skip: the caller goes
+ * on, and its own async read or write settles the question for that one path.
+ */
+async function absentOrUnreachable(path: string): Promise<'absent' | 'unreachable' | false> {
+  const state = await probePath(path);
+  if (state === 'absent') return 'absent';
+  if (state === 'unknown' && isNearStalledPath(path)) return 'unreachable';
+  return false;
+}
 
 /**
  * Serializes read-modify-write access to a `settings.local.json` path. Every
@@ -558,7 +590,7 @@ export async function stripCaseEnvKeys(casePath: string, keysToRemove: readonly 
   if (keysToRemove.length === 0) return;
 
   await withSafeSettingsWrite(casePath, 'env-key removal', async (_claudeDir, settingsPath) => {
-    if (!existsSync(settingsPath)) return;
+    if (!(await pathExistsForWrite(settingsPath))) return;
 
     let existing: Record<string, unknown>;
     try {
@@ -590,7 +622,7 @@ export async function stripCaseEnvKeys(casePath: string, keysToRemove: readonly 
  */
 export async function updateCaseEnvVars(casePath: string, envVars: Record<string, string>): Promise<void> {
   await withSafeSettingsWrite(casePath, 'env vars', async (claudeDir, settingsPath) => {
-    if (!existsSync(claudeDir)) {
+    if (!(await pathExistsForWrite(claudeDir))) {
       await mkdir(claudeDir, { recursive: true });
     }
 
@@ -621,7 +653,7 @@ export async function updateCaseEnvVars(casePath: string, envVars: Record<string
  */
 export async function updateCaseModel(casePath: string, model: string | null): Promise<void> {
   await withSafeSettingsWrite(casePath, 'model', async (claudeDir, settingsPath) => {
-    if (!existsSync(claudeDir)) {
+    if (!(await pathExistsForWrite(claudeDir))) {
       await mkdir(claudeDir, { recursive: true });
     }
 
@@ -650,7 +682,7 @@ export async function updateCaseModel(casePath: string, model: string | null): P
  */
 export async function writeHooksConfig(casePath: string): Promise<void> {
   await withSafeSettingsWrite(casePath, 'hooks', async (claudeDir, settingsPath) => {
-    if (!existsSync(claudeDir)) {
+    if (!(await pathExistsForWrite(claudeDir))) {
       await mkdir(claudeDir, { recursive: true });
     }
 
@@ -698,7 +730,7 @@ export async function writeHooksConfig(casePath: string): Promise<void> {
  */
 export async function ensureCodemanHooks(casePath: string): Promise<void> {
   await withSafeSettingsWrite(casePath, 'hooks (ensure)', async (claudeDir, settingsPath) => {
-    if (!existsSync(claudeDir)) {
+    if (!(await pathExistsForWrite(claudeDir))) {
       await mkdir(claudeDir, { recursive: true });
     }
 
@@ -738,7 +770,7 @@ export async function ensureCodemanHooks(casePath: string): Promise<void> {
  * when the hooks aren't ours, so it is cheap enough to call on every Claude spawn.
  */
 export async function refreshStaleCodemanHooks(casePath: string): Promise<void> {
-  if (!existsSync(join(casePath, '.claude', 'settings.local.json'))) return;
+  if (await absentOrUnreachable(join(casePath, '.claude', 'settings.local.json'))) return;
   await withSafeSettingsWrite(casePath, 'hooks (refresh)', async (_claudeDir, settingsPath) => {
     let existing: Record<string, unknown>;
     try {
@@ -820,7 +852,20 @@ export async function refreshStaleCodemanHooks(casePath: string): Promise<void> 
  */
 export async function applyWorkspaceHooks(workspace: string, install?: boolean): Promise<void> {
   try {
-    if (!existsSync(workspace)) return;
+    const state = await probePath(workspace);
+    if (state === 'absent') return;
+    if (state === 'unknown') {
+      if (isNearStalledPath(workspace)) {
+        console.warn(
+          `[hooks] ${workspace} is not responding (unreachable mount?); Codeman hooks not checked or installed`
+        );
+        return;
+      }
+      // Any other "unknown" (the stall cap refused the probe, or the stat failed
+      // with something other than ENOENT) proves nothing about existence, and the
+      // install below would mkdir -p a deleted repo back into being: ask directly.
+      if (!(await pathExistsForWrite(workspace))) return;
+    }
     const shouldInstall = install ?? (await readWorkspaceHooksEnabled());
     await (shouldInstall ? ensureCodemanHooks(workspace) : refreshStaleCodemanHooks(workspace));
   } catch {
@@ -883,7 +928,7 @@ export function generateStatusLineCommand(): string {
 export async function applyStatusLineConfig(casePath: string, enabled: boolean): Promise<void> {
   await withSafeSettingsWrite(casePath, 'statusLine', async (claudeDir, settingsPath) => {
     let existing: Record<string, unknown> = {};
-    if (existsSync(settingsPath)) {
+    if (await pathExistsForWrite(settingsPath)) {
       try {
         existing = JSON.parse(await readFile(settingsPath, 'utf-8'));
       } catch {
@@ -898,7 +943,7 @@ export async function applyStatusLineConfig(casePath: string, enabled: boolean):
       const desired = generateStatusLineCommand();
       if (isOurs && current?.command === desired) return; // already current — skip rewrite
       if (current && !isOurs) return; // user has their OWN statusLine — never clobber it
-      if (!existsSync(claudeDir)) await mkdir(claudeDir, { recursive: true });
+      if (!(await pathExistsForWrite(claudeDir))) await mkdir(claudeDir, { recursive: true });
       existing.statusLine = { type: 'command', command: desired }; // add, or update an out-of-date ours
     } else {
       if (!isOurs) return; // nothing of ours to remove (leave a user's own statusLine alone)
@@ -957,7 +1002,7 @@ function statusLineExporterScriptContent(): string {
 }
 
 async function readStatusLineCommandFromFile(settingsPath: string): Promise<string | undefined> {
-  if (!existsSync(settingsPath)) return undefined;
+  if (await absentOrUnreachable(settingsPath)) return undefined;
   try {
     const parsed = JSON.parse(await readFile(settingsPath, 'utf-8'));
     const current = parsed.statusLine as { command?: unknown } | undefined;
@@ -1103,9 +1148,21 @@ export async function resolveStatusLineCliCommand(
 ): Promise<string | undefined> {
   const settingsPath = join(casePath, '.claude', 'settings.local.json');
   let userHasOwnStatusLine = false;
-  if (existsSync(settingsPath)) {
+  const skip = await absentOrUnreachable(settingsPath);
+  // Unreachable: whether the user configured their own statusLine there cannot be
+  // told, and this must never override a real one, so inject nothing.
+  if (skip === 'unreachable') return undefined;
+  if (!skip) {
+    let raw: string;
     try {
-      const existing = JSON.parse(await readFile(settingsPath, 'utf-8'));
+      raw = await readFile(settingsPath, 'utf-8');
+    } catch (err) {
+      // Gone since the probe: nothing to respect. Unreadable: same reason as above.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return undefined;
+      raw = '';
+    }
+    try {
+      const existing = raw ? JSON.parse(raw) : {};
       const current = existing.statusLine as { command?: unknown } | undefined;
       if (current && typeof current.command === 'string') {
         if (current.command.includes(STATUSLINE_MARKER)) {

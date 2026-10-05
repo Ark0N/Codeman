@@ -68,3 +68,5 @@ export type { DeepSeekProfile, DeepSeekProfileKind } from './deepseek-cli-resolv
 export { compileFileQuery, matchFileQuery } from './file-query.js';
 export type { FileQueryMatcher } from './file-query.js';
 export { resolveOmpDir, isOmpAvailable, getOmpNotFoundMessage, getOmpCliVersion } from './omp-cli-resolver.js';
+export { boundedPathExists, probePath, probePathKind, isNearStalledPath } from './bounded-path-probe.js';
+export type { PathProbeState, PathProbeKind, PathProbeOptions } from './bounded-path-probe.js';
