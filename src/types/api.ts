@@ -158,6 +158,11 @@ export interface CaseInfo {
   /** Whether this is a linked local folder */
   linked?: boolean;
   /**
+   * The case folder did not answer (an unreachable network mount, or an error other
+   * than "no such file"), so whether it still exists is unknown. Absent = it answered.
+   */
+  unreachable?: boolean;
+  /**
    * Present when Codeman scaffolded this case directory for an AGENT-spawned session
    * (the packaged skill's workers, or any spawn naming a parent session), read back
    * from the case's own marker file — see `src/agent-case-marker.ts`. Absent for every

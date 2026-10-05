@@ -1874,10 +1874,14 @@ Object.assign(CodemanApp.prototype, {
     try {
       // Get case path first
       const caseRes = await fetch(`/api/cases/${caseName}`);
-      let caseData = (await caseRes.json())?.data ?? {};
+      const caseLookup = await caseRes.json();
+      let caseData = caseLookup?.data ?? {};
 
-      // Create the case if it doesn't exist
+      // Create the case only when the server says it does not exist. Any other
+      // failure (a linked folder on a mount that is not answering) must not
+      // scaffold a same-name local case that would then shadow the real one.
       if (!caseData.path) {
+        if (caseLookup?.errorCode !== 'NOT_FOUND') throw new Error(caseLookup?.error || 'Case lookup failed');
         const createCaseRes = await fetch('/api/cases', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2084,10 +2088,14 @@ Object.assign(CodemanApp.prototype, {
     try {
       // Get the case path
       const caseRes = await fetch(`/api/cases/${caseName}`);
-      let caseData = (await caseRes.json())?.data ?? {};
+      const caseLookup = await caseRes.json();
+      let caseData = caseLookup?.data ?? {};
 
-      // Create the case if it doesn't exist
+      // Create the case only when the server says it does not exist. Any other
+      // failure (a linked folder on a mount that is not answering) must not
+      // scaffold a same-name local case that would then shadow the real one.
       if (!caseData.path) {
+        if (caseLookup?.errorCode !== 'NOT_FOUND') throw new Error(caseLookup?.error || 'Case lookup failed');
         const createCaseRes = await fetch('/api/cases', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

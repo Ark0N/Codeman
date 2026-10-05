@@ -1227,4 +1227,66 @@ describe('Grok quick start', () => {
     expect(names).toEqual(['w1-grok-case', 'w2-grok-case', 'w3-grok-case']);
     expect(selected).toEqual(['sess-gk-0']);
   });
+
+  describe('case lookup before a local launch', () => {
+    function loadLaunchHarness(caseAnswer: Record<string, unknown>) {
+      const elements: Record<string, any> = {
+        quickStartCase: { value: 'nas-case' },
+        shellCount: { value: '1' },
+        tabCount: { value: '1' },
+      };
+      const requests: Array<{ url: string; method?: string }> = [];
+      const written: string[] = [];
+      const CodemanApp = function CodemanApp(this: any) {};
+      const context = vm.createContext({
+        CodemanApp,
+        localStorage: { getItem: () => null, setItem: () => {} },
+        document: { getElementById: (id: string) => elements[id] ?? null },
+        fetch: async (url: string, init?: { method?: string }) => {
+          requests.push({ url, method: init?.method });
+          if (url === '/api/cases/nas-case') return { json: async () => caseAnswer };
+          if (url === '/api/cases' && init?.method === 'POST') {
+            return {
+              json: async () => ({
+                success: true,
+                data: { case: { name: 'nas-case', path: '/home/u/codeman-cases/nas-case' } },
+              }),
+            };
+          }
+          // Anything past the case lookup is out of scope here: stop the launch.
+          throw new Error(`stop: ${url}`);
+        },
+        console,
+      });
+      const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+      vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+      const app = new (CodemanApp as any)();
+      app.terminal = { clear: () => {}, writeln: (line: string) => written.push(line), focus: () => {} };
+      app.sessions = new Map();
+      app.cases = [];
+      app.getTerminalDimensions = () => null;
+      app._readTabCount = () => 1;
+      app.loadAppSettingsFromStorage = () => ({});
+      app.getCaseSettings = () => ({});
+      return { app, requests, written };
+    }
+
+    const unreachable = { success: false, error: 'Case folder is not responding', errorCode: 'OPERATION_FAILED' };
+    const missing = { success: false, error: 'Case not found', errorCode: 'NOT_FOUND' };
+
+    for (const launcher of ['runClaude', 'runShell'] as const) {
+      it(`${launcher} never creates a case when the lookup could not tell whether it exists`, async () => {
+        const { app, requests, written } = loadLaunchHarness(unreachable);
+        await app[launcher]();
+        expect(requests.some((r) => r.url === '/api/cases' && r.method === 'POST')).toBe(false);
+        expect(written.join('\n')).toContain('Case folder is not responding');
+      });
+
+      it(`${launcher} creates the case when the lookup says it does not exist`, async () => {
+        const { app, requests } = loadLaunchHarness(missing);
+        await app[launcher]();
+        expect(requests.some((r) => r.url === '/api/cases' && r.method === 'POST')).toBe(true);
+      });
+    }
+  });
 });

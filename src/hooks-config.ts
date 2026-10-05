@@ -39,12 +39,12 @@ import type { HookEventType } from './types.js';
 import { HOOK_TIMEOUT_SECONDS } from './config/auth-config.js';
 import { dataPath } from './config/instance.js';
 import { readJsonConfig, SETTINGS_PATH } from './web/route-helpers.js';
-import { boundedPathExists } from './utils/bounded-path-probe.js';
+import { isNearStalledPath, probePath } from './utils/index.js';
 
 /**
- * Existence check for a WRITER. Unlike `boundedPathExists`, which answers
- * "absent" for a path it could not reach in time, this tells "missing" apart
- * from "unreachable": only ENOENT reads as absent, anything else throws, so a
+ * Existence check for a WRITER. Unlike the bounded read-side probe (`probePath`),
+ * which gives up after a timeout and answers "unknown", this waits for the real
+ * answer: only ENOENT reads as absent, anything else throws, so a
  * stalled or unreadable workspace can never be mistaken for an empty one and
  * have its settings recreated over the top. It is async, so a dead mount ties
  * up a threadpool worker rather than the event loop.
@@ -57,6 +57,20 @@ async function pathExistsForWrite(path: string): Promise<boolean> {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw err;
   }
+}
+
+/**
+ * Whether a READ-side helper should leave `path` alone: it is definitely absent, or
+ * it sits on a mount that is not answering (near a stalled probe). An "unknown"
+ * that is NOT near a stalled probe (the probe was refused for capacity, or the stat
+ * failed with something other than ENOENT) is not a reason to skip: the caller goes
+ * on, and its own async read or write settles the question for that one path.
+ */
+async function absentOrUnreachable(path: string): Promise<'absent' | 'unreachable' | false> {
+  const state = await probePath(path);
+  if (state === 'absent') return 'absent';
+  if (state === 'unknown' && isNearStalledPath(path)) return 'unreachable';
+  return false;
 }
 
 /**
@@ -576,7 +590,7 @@ export async function stripCaseEnvKeys(casePath: string, keysToRemove: readonly 
   if (keysToRemove.length === 0) return;
 
   await withSafeSettingsWrite(casePath, 'env-key removal', async (_claudeDir, settingsPath) => {
-    if (!(await boundedPathExists(settingsPath))) return;
+    if (!(await pathExistsForWrite(settingsPath))) return;
 
     let existing: Record<string, unknown>;
     try {
@@ -756,7 +770,7 @@ export async function ensureCodemanHooks(casePath: string): Promise<void> {
  * when the hooks aren't ours, so it is cheap enough to call on every Claude spawn.
  */
 export async function refreshStaleCodemanHooks(casePath: string): Promise<void> {
-  if (!(await boundedPathExists(join(casePath, '.claude', 'settings.local.json')))) return;
+  if (await absentOrUnreachable(join(casePath, '.claude', 'settings.local.json'))) return;
   await withSafeSettingsWrite(casePath, 'hooks (refresh)', async (_claudeDir, settingsPath) => {
     let existing: Record<string, unknown>;
     try {
@@ -838,7 +852,13 @@ export async function refreshStaleCodemanHooks(casePath: string): Promise<void> 
  */
 export async function applyWorkspaceHooks(workspace: string, install?: boolean): Promise<void> {
   try {
-    if (!(await boundedPathExists(workspace))) return;
+    const skip = await absentOrUnreachable(workspace);
+    if (skip === 'unreachable') {
+      console.warn(
+        `[hooks] ${workspace} is not responding (unreachable mount?); Codeman hooks not checked or installed`
+      );
+    }
+    if (skip) return;
     const shouldInstall = install ?? (await readWorkspaceHooksEnabled());
     await (shouldInstall ? ensureCodemanHooks(workspace) : refreshStaleCodemanHooks(workspace));
   } catch {
@@ -975,7 +995,7 @@ function statusLineExporterScriptContent(): string {
 }
 
 async function readStatusLineCommandFromFile(settingsPath: string): Promise<string | undefined> {
-  if (!(await boundedPathExists(settingsPath))) return undefined;
+  if (await absentOrUnreachable(settingsPath)) return undefined;
   try {
     const parsed = JSON.parse(await readFile(settingsPath, 'utf-8'));
     const current = parsed.statusLine as { command?: unknown } | undefined;
@@ -1121,9 +1141,21 @@ export async function resolveStatusLineCliCommand(
 ): Promise<string | undefined> {
   const settingsPath = join(casePath, '.claude', 'settings.local.json');
   let userHasOwnStatusLine = false;
-  if (await boundedPathExists(settingsPath)) {
+  const skip = await absentOrUnreachable(settingsPath);
+  // Unreachable: whether the user configured their own statusLine there cannot be
+  // told, and this must never override a real one, so inject nothing.
+  if (skip === 'unreachable') return undefined;
+  if (!skip) {
+    let raw: string;
     try {
-      const existing = JSON.parse(await readFile(settingsPath, 'utf-8'));
+      raw = await readFile(settingsPath, 'utf-8');
+    } catch (err) {
+      // Gone since the probe: nothing to respect. Unreadable: same reason as above.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return undefined;
+      raw = '';
+    }
+    try {
+      const existing = raw ? JSON.parse(raw) : {};
       const current = existing.statusLine as { command?: unknown } | undefined;
       if (current && typeof current.command === 'string') {
         if (current.command.includes(STATUSLINE_MARKER)) {
