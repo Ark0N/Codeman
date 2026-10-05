@@ -1038,6 +1038,7 @@ Object.assign(CodemanApp.prototype, {
       const ralphGlobalSettings = this.loadAppSettingsFromStorage();
       const envOverrides = this.buildEnvOverrides(this.getCaseSettings(config.caseName), ralphGlobalSettings);
       const effort = this.getEffortSetting(ralphGlobalSettings);
+      const advisorModel = this.getAdvisorSetting(ralphGlobalSettings);
       const res = await fetch('/api/ralph-loop/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1050,6 +1051,7 @@ Object.assign(CodemanApp.prototype, {
           planItems: enabledItems?.length ? enabledItems : undefined,
           ...(Object.keys(envOverrides).length > 0 ? { envOverrides } : {}),
           ...(effort ? { effort } : {}),
+          ...(advisorModel ? { advisorModel } : {}),
         }),
       });
       const data = await res.json();

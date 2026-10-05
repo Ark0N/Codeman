@@ -67,6 +67,7 @@
     'Open away digest': '打开离开期间摘要',
     'Session Manager': '会话管理器',
     'Session actions': '会话操作',
+    Ungrouped: '未分组',
     'Open session manager': '打开会话管理器',
     Attachments: '附件',
     'Open attachment history': '打开附件历史',

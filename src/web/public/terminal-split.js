@@ -77,11 +77,14 @@
       this._bufferLoading = false;
       this._bufferRefreshPending = false;
       // Scroll-to-top history pull (shell panes only), see _maybeLoadMoreHistory().
-      // `_liveQueue` is non-null exactly while a pull is replaying: live frames
-      // are held there with their arrival time instead of written under it.
+      // `_liveQueue` is non-null from the pull's response until its finally
+      // block: live frames are held there with their arrival time instead of
+      // written under the replay. `_markerOwed` is the "disconnected" marker a
+      // load still has to write (see _onSocketClosed()/_stampMarkerIfOwed()).
       this._historyPullAt = 0;
       this._historyPullUseless = false;
       this._liveQueue = null;
+      this._markerOwed = false;
       this._onWheel = null;
     }
 
@@ -169,14 +172,17 @@
         // session (this.sessionId), never the primary pane's
         // activeSessionId, and has no local-echo overlay of its own to flush
         // first (Pane B is deliberately plainer — see the fileoverview).
-        if (ev.key === 'Enter' && (ev.shiftKey || ev.ctrlKey) && ev.type === 'keydown') {
-          fetch(`/api/sessions/${this.sessionId}/send-key`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: ev.ctrlKey ? 'C-Enter' : 'S-Enter' }),
-          }).catch(() => {
-            /* Best-effort, matching this pane's tolerance elsewhere. */
-          });
+        // Swallow keypress/keyup too (xterm would send \r for a Shift-only keypress); only keydown sends.
+        if (ev.key === 'Enter' && (ev.shiftKey || ev.ctrlKey)) {
+          if (ev.type === 'keydown') {
+            fetch(`/api/sessions/${this.sessionId}/send-key`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ key: ev.ctrlKey ? 'C-Enter' : 'S-Enter' }),
+            }).catch(() => {
+              /* Best-effort, matching this pane's tolerance elsewhere. */
+            });
+          }
           return false;
         }
         // Smart copy (mirrors terminal-ui.js's Ctrl+C gate, #211): with a
@@ -301,18 +307,37 @@
     }
 
     // The socket's close, split out of connect() so the tests can drive it.
-    // While a history pull is running the marker waits for the pull's finally
-    // block: written now, it would sit above the output the pull is still
-    // holding (flushed after it on a skip, a downgrade or a failed fetch) or
-    // land in the middle of a chunked replay.
+    // While any load runs (a history pull or a `{t:'r'}` refresh) the marker is
+    // only owed, and that load's finally block settles it (_stampMarkerIfOwed()):
+    // written now, it would sit above the output a pull is still holding (flushed
+    // after it on a skip, a downgrade or a failed fetch), above a refresh's
+    // replay, or in the middle of a chunked replay. A pull still waiting for its
+    // response holds the marker too, for as long as the request takes (up to its
+    // budget, see _pullHistory()).
     _onSocketClosed() {
       this._wsReady = false;
       this._wsClosed = true;
-      if (!this._liveQueue) this._writeDisconnectedMarker();
+      if (this._bufferLoading) this._markerOwed = true;
+      else this._writeDisconnectedMarker();
     }
 
-    // Extracted so both _onSocketClosed() and a history pull that ends on a
-    // closed socket can write it (see _pullHistory()'s finally block).
+    // Settles a marker the pane owes: set when a close lands during a load (the
+    // replay would otherwise sit below it) or when a load wipes the terminal on
+    // a closed socket. Called from each load's own finally, just before
+    // _endBufferLoad() starts any trailing refresh.
+    _stampMarkerIfOwed() {
+      // A trailing refresh is about to clear() synchronously, while xterm parses
+      // a write() on a later tick: a marker written here would land in the
+      // freshly cleared buffer ABOVE that refresh's replay, a second, stale copy.
+      // The refresh re-owes the marker on a closed socket and stamps it itself.
+      if (this._bufferRefreshPending && !this._destroyed) return;
+      const owed = this._markerOwed;
+      this._markerOwed = false;
+      if (owed && this._wsClosed && !this._destroyed) this._writeDisconnectedMarker();
+    }
+
+    // Extracted so both _onSocketClosed() and a load that ends owing it on a
+    // closed socket can write it (see _stampMarkerIfOwed()).
     _writeDisconnectedMarker() {
       this.terminal?.write('\r\n\x1b[2m[Pane B disconnected — close and reopen the split to reconnect]\x1b[0m\r\n');
     }
@@ -351,6 +376,7 @@
       } catch {
         /* Best-effort — live output still arrives once the socket connects. */
       } finally {
+        this._stampMarkerIfOwed();
         this._endBufferLoad();
       }
     }
@@ -430,27 +456,44 @@
     // main thread) and replays it under the reader's current place. Holds the
     // single-flight flag across the fetch AND the replay, like _loadBuffer().
     async _pullHistory() {
-      // A close before the pull already wrote its marker; one during it did not.
-      const closedBefore = this._wsClosed;
       this._bufferLoading = true;
-      this._liveQueue = [];
       let replayed = false;
       let capturedAt = 0;
+      // Two budgets on one signal. The request itself gets the primary pane's
+      // (CodemanFetchDeadline, constants.js): live output is not held while it
+      // runs, but the single-flight flag is, so a coalesced `{t:'r'}` refresh and
+      // the marker owed by a close (_onSocketClosed()) both wait for it, at worst
+      // for that whole budget. Once the headers land live output IS held, so the
+      // body read gets the short one instead: a body that hangs would otherwise
+      // freeze the pane for the long budget. Aborting lands in the catch below,
+      // which releases the flag and the queue. AbortSignal.timeout() alone cannot
+      // be re-armed, hence the controller; without AbortController the pull
+      // simply has no deadline.
+      const controller = global.AbortController ? new global.AbortController() : null;
+      let abortTimer = null;
+      const armDeadline = (ms) => {
+        if (!controller) return;
+        clearTimeout(abortTimer);
+        abortTimer = setTimeout(() => controller.abort(), ms);
+      };
       try {
-        // A deadline, because live output is held for as long as this runs: a
-        // request that hangs would otherwise freeze the whole pane. Aborting
-        // lands in the catch below, which releases the flag and the queue. It
-        // covers the body read too, not just the headers.
+        armDeadline(global.CodemanFetchDeadline?.terminalFetchDeadlineMs?.({ full: true }) ?? HISTORY_PULL_TIMEOUT_MS);
         const res = await fetch(`/api/sessions/${this.sessionId}/terminal?full=1&tail=${TERMINAL_TAIL_SIZE}`, {
-          signal: global.AbortSignal?.timeout?.(HISTORY_PULL_TIMEOUT_MS),
+          signal: controller?.signal,
         });
+        armDeadline(HISTORY_PULL_TIMEOUT_MS);
         // The cutoff below is the response's arrival, the same `since` rule the
         // primary pane uses (_finishBufferLoad). It is a client clock standing in
         // for the instant tmux took the capture, which lies somewhere in the
         // round trip, so a frame in that window can be lost or doubled. Bounded
         // by one round trip and not closable without a server-side capture time.
         capturedAt = performance.now();
+        // Opened only now: a frame from before the response is either replaced by
+        // the capture or written unchanged, so holding it for the round trip
+        // bought nothing and froze the pane for as long as the fetch took.
+        this._liveQueue = [];
         const payload = (await res.json())?.data;
+        clearTimeout(abortTimer);
         const buffer = payload?.terminalBuffer;
         const term = this.terminal;
         if (!buffer || !term || this._destroyed) return;
@@ -476,6 +519,7 @@
         this._historyPullUseless = false;
         term.write('\x1bc');
         replayed = true;
+        if (this._wsClosed) this._markerOwed = true;
         await writeChunked(term, buffer, () => this._destroyed);
         if (this._destroyed || !this.terminal) return;
         // xterm parses asynchronously: an empty write's callback fires only
@@ -490,6 +534,7 @@
       } catch {
         /* Best-effort — live output keeps arriving whatever happens here. */
       } finally {
+        clearTimeout(abortTimer);
         const queued = this._liveQueue ?? [];
         this._liveQueue = null;
         // After a replay, only frames that arrived after the capture are news;
@@ -500,15 +545,14 @@
           if (entry.clear) this.terminal?.clear();
           else this.terminal?.write(entry.data);
         }
-        // A replay's own `\x1bc` wipes a marker written before the pull,
-        // painting a fresh, current-looking history while onData keeps
-        // silently dropping every keystroke on the dead socket, so re-stamp it
-        // after a replay. A close DURING the pull wrote no marker at all
-        // (_onSocketClosed() defers it while the queue is live), so write it
-        // whether or not this pull replayed. Checked after the queue flush so
-        // it is the last thing on screen, matching what the close would have
-        // left had the pull never run.
-        if (this._wsClosed && (replayed || !closedBefore)) this._writeDisconnectedMarker();
+        // Settled after the queue flush so the marker is the last thing on
+        // screen: a close during the pull wrote nothing (_onSocketClosed() defers
+        // it while a load runs), and a replay's own `\x1bc` (flagged above) wipes
+        // one written before it, which would paint a fresh, current-looking
+        // history while onData keeps silently dropping every keystroke on the
+        // dead socket. With a trailing refresh pending (_endBufferLoad) the marker
+        // is left to that refresh, which writes it below its own replay.
+        this._stampMarkerIfOwed();
         this._endBufferLoad();
       }
     }
@@ -525,6 +569,10 @@
         return;
       }
       this.terminal?.clear();
+      // The clear wipes a "disconnected" marker (a `{t:'r'}` frame can queue a
+      // trailing refresh behind a pull that the socket's close then interrupts),
+      // so a refresh on a closed socket owes it back once its replay is written.
+      if (this._wsClosed) this._markerOwed = true;
       void this._loadBuffer();
     }
 

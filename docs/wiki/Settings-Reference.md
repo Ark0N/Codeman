@@ -50,6 +50,7 @@ supervised by systemd or launchd; npm installs report as non-updatable. See
 | Normal / Bold font weight     | xterm defaults       | Per device, each slot from 100 to 900. The bundled JetBrains Mono renders every step, so a lighter normal weight makes Claude's bold headings stand out. Applies live to the terminal, both echo overlays and open team panes. |
 | WebGL Renderer                | On                   | With a GPU-stall watchdog that falls back to DOM rendering.            |
 | Gesture Control               | Off                  | Camera hand tracking. Also needs `CODEMAN_GESTURE=1` on the server.    |
+| Key tester                    | n/a                  | A diagnostic that stores nothing. Click the box and press keys to see what this browser reports (key, code, modifiers) for keydown, keypress and keyup, for when a chord such as Shift+Enter behaves differently on one device. Keys pressed there reach no session and trigger no shortcut. |
 
 ### Header & Panels
 
@@ -87,13 +88,22 @@ every session or only the active tab.
 
 ### Models
 
-Claude model cards, the 1M context window switch, and the thinking effort segment. The cards
-and the switch compose into one model choice, so there is no separate "which one wins"
-question.
+Claude model cards, the 1M context window switch, the thinking effort segment and the
+advisor segment. The cards and the switch compose into one model choice, so there is no
+separate "which one wins" question.
 
-Model and effort are both **soft defaults**: the model is written into the case's
-`.claude/settings.local.json` and effort is passed at start, so `/model` and `/effort`
-inside a session override them at any time.
+Model, effort and advisor are all **soft defaults**: the model is written into the case's
+`.claude/settings.local.json` and effort and advisor are passed at start, so `/model`,
+`/effort` and `/advisor` inside a session override them at any time.
+
+**Advisor** gives new Claude sessions Claude Code's
+[advisor tool](https://code.claude.com/docs/en/advisor): a second, stronger model that Claude
+consults before committing to an approach, when an error keeps coming back, and before it
+calls a task done. A common pairing is a Sonnet main model with an Opus or Fable advisor,
+which costs less than running the stronger model all the time. **Default** leaves it to
+whatever you picked with `/advisor` yourself. The advisor needs the Anthropic API (not
+Bedrock or Vertex), and an advisor that ranks below the session's model is simply not
+attached.
 
 **Custom model endpoints** (off by default) adds a saved-endpoint list plus a matching
 section to the Run dropdown, for pointing a harness at your own OpenAI-compatible server
@@ -112,11 +122,13 @@ instead of its native cloud backend. See [Custom Model Endpoints](Custom-Model-E
 | Nice priority / value            | Runs agent processes at a lower CPU priority.                                                  |
 | Bypass approvals and sandbox     | Pi's project trust. Read [Agent CLIs](Agent-CLIs) before enabling.                             |
 | Animated status effects          | Cosmetic.                                                                                      |
+| MCP server sync                  | Copies the MCP servers each installed, enabled CLI (Claude, Codex, Gemini, OpenCode, Antigravity) has into the others' own config files. Synced, off by default, admin only in multi-user mode. Turn it on and save, then **Preview** shows what would change and **Sync now** applies it. It only adds missing servers, keeps the previous file as `.codeman-bak`, and leaves a file that receives env values or headers readable by you only. A config dir moved by `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME` or `GEMINI_CLI_HOME` in Codeman's own environment is followed. |
 
 ### Notifications
 
-Master toggle, browser notifications, push subscription, audio alerts, and the idle
-threshold that decides when a quiet session counts as needing you. See
+Master toggle, browser notifications, push subscription, audio alerts, the idle
+threshold that decides when a quiet session counts as needing you, and the server-wide
+webhook (ntfy, Slack, Discord or generic JSON; admins only in multi-user mode). See
 [Notifications And Approvals](Notifications-And-Approvals).
 
 ### Voice

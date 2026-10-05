@@ -6,15 +6,16 @@ opening the session.
 
 ## The signals, cheapest first
 
-| Surface                | Reaches you                                       | Default |
-| ---------------------- | ------------------------------------------------- | ------- |
-| Tab alert              | While the dashboard is open                        | On      |
-| Browser title flash    | Another tab in the same browser                    | On      |
-| Desktop notification   | Another window on the same machine                 | Opt-in  |
-| Push notification      | Anywhere, even with no tab open                    | Opt-in  |
-| Approvals Inbox        | One queue across every session                     | Opt-in  |
-| Phone overview         | Phone home screen, NEEDS YOU section               | On      |
-| Away Digest            | Afterwards, as a summary                           | Opt-in  |
+| Surface                        | Reaches you                                      | Default |
+| ------------------------------ | ------------------------------------------------ | ------- |
+| Tab alert                      | While the dashboard is open                      | On      |
+| Browser title flash            | Another tab in the same browser                  | On      |
+| Desktop notification           | Another window on the same machine               | Opt-in  |
+| Push notification              | Anywhere, even with no tab open                  | Opt-in  |
+| Webhook (ntfy, Slack, Discord) | Anywhere, with no browser or subscription at all | Opt-in  |
+| Approvals Inbox                | One queue across every session                   | Opt-in  |
+| Phone overview                 | Phone home screen, NEEDS YOU section             | On      |
+| Away Digest                    | Afterwards, as a summary                         | Opt-in  |
 
 ## Tab alerts
 
@@ -59,6 +60,51 @@ Setup:
    installed web apps, not to tabs.
 
 Once subscribed, a blocking prompt reaches your phone even from a locked screen.
+
+## Webhooks: ntfy, Slack, Discord
+
+**Opt-in, off by default. One channel for the whole server.**
+
+Push needs a browser that subscribed once. A webhook needs nothing on the client side: the
+server itself posts each alert to an ntfy topic, a Slack or Discord incoming webhook, or any
+URL as plain JSON. That makes it the option for a headless box nobody has opened in a browser,
+and for a team channel.
+
+It carries the same events as push: permission prompts, questions, idle sessions, session
+errors, blocked respawns, a stopped crash loop and Ralph task completion. "Response complete"
+is included only when **Which events** is set to **Everything**; the default, **Needs
+attention**, skips it. A session that is watching its own work stays quiet here too.
+
+Setup, in **App Settings → Notifications → Webhook**:
+
+1. Pick the **Service**. ntfy gets a title, a priority and a tag per urgency; Slack and
+   Discord get a bold title line; **Generic JSON** posts `{ event, title, body, urgency,
+   sessionId, sessionName, host, at }`.
+2. Paste the **Webhook URL** and turn on **Send alerts to a webhook**.
+3. Press **Save**, either the group's own button or the main Settings Save, then **Send test**.
+   Send test saves anything you changed first, so it always tests what is on screen.
+
+The status line under the group shows the last delivery: when it worked, or why it did not
+(an HTTP status, a timeout, a refused connection).
+
+Behaviour worth knowing:
+
+- **The URL is a secret.** Anyone holding a Slack or Discord webhook URL can post as it, and
+  anyone who knows an ntfy topic can read it. Codeman keeps it in its own file,
+  `~/.codeman/webhook.json` (readable by its owner only), never in the shared settings, and
+  never shows it again: once saved, the box is empty and the hint shows only the scheme and
+  host. Paste a new URL to replace it, or press **Remove URL** to delete it from the server
+  (which also turns the channel off).
+- **On public ntfy.sh, pick a long random topic.** Topics there are not private; the name is
+  the only thing keeping strangers out.
+- **Local targets work.** A self-hosted ntfy on your LAN or on the same machine is fine.
+  Link-local and cloud-metadata addresses are refused, both when you save and when the
+  message is sent, and redirects are not followed.
+- **Repeats are folded.** The same event for the same session within three seconds is sent
+  once, so a flapping prompt cannot flood a channel.
+- **Multi-user mode: admins only, and it sees everything.** Only an admin can see or change
+  the webhook, and it receives every user's session events (session names, tool names, error
+  text). Point it somewhere every user would be comfortable with.
 
 ## The Approvals Inbox
 
@@ -152,7 +198,8 @@ It is the morning-after view for an overnight run. Enable its header button in
 ## Recommended setup for unattended runs
 
 1. HTTPS access, ideally Tailscale. See [Remote Access](Remote-Access).
-2. Push notifications subscribed, with Codeman installed to the home screen on iOS.
+2. Push notifications subscribed, with Codeman installed to the home screen on iOS, or a
+   webhook to ntfy if no browser will ever be open.
 3. Approvals Inbox on.
 4. Auto-resume on usage limit on, for each session you leave running. See
    [Keeping Agents Running](Keeping-Agents-Running).
@@ -162,7 +209,8 @@ from the lock screen.
 
 ## Gotchas
 
-- **No push over plain HTTP.** It is a browser requirement, not a Codeman one.
+- **No push over plain HTTP.** It is a browser requirement, not a Codeman one. A webhook
+  has no such requirement, since the server sends it.
 - **iOS needs the home screen install.** A Safari tab will never receive push.
 - **The bell is invisible at zero.** That is deliberate, not a broken setting.
 - **Approvals need real signals.** They are built on hook events, which Claude emits and

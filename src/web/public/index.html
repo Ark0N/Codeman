@@ -1822,6 +1822,22 @@
                   </div>
                 </div>
               </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Key tester</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-row has-field" data-search="key tester keyboard shift enter newline diagnose keydown keypress">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Key tester</span>
+                      <span class="set-row-desc">Click the box and press keys to see what this browser reports (key, code, modifiers) for keydown, keypress and keyup. Useful when a shortcut such as Shift+Enter behaves differently on one device. Nothing is sent to a session.</span>
+                    </div>
+                    <input type="text" id="keyTesterInput" class="set-input" data-raw-keys readonly autocomplete="off" spellcheck="false"
+                      placeholder="Click here, then press keys"
+                      onkeydown="app.keyTesterEvent(event)" onkeypress="app.keyTesterEvent(event)" onkeyup="app.keyTesterEvent(event)">
+                  </div>
+                  <pre id="keyTesterLog" class="set-note mono" style="display:none;white-space:pre-wrap" data-i18n-skip></pre>
+                </div>
+              </div>
             </section>
 
             <!-- ══ Header &amp; Panels ═══════════════════════════════════════ -->
@@ -2172,6 +2188,19 @@
                       <option value="ultracode">Ultracode</option>
                     </select>
                   </div>
+                  <div class="set-row set-row-block" data-search="advisor fable opus sonnet second opinion review consult">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Advisor</span>
+                      <span class="set-row-desc">A stronger model Claude consults before big decisions, on repeated errors and before calling a task done. Uses extra tokens. Switchable in-session with /advisor.</span>
+                    </div>
+                    <div class="set-segment" id="appSettingsAdvisorSegment" role="radiogroup" aria-label="Advisor"></div>
+                    <select id="appSettingsClaudeAdvisor" class="set-select set-field-hidden" aria-hidden="true" tabindex="-1">
+                      <option value="">Default</option>
+                      <option value="sonnet">Sonnet</option>
+                      <option value="opus">Opus</option>
+                      <option value="fable">Fable</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -2474,6 +2503,30 @@
                   </div>
                 </div>
               </div>
+
+              <div class="set-group" id="mcpSyncGroup">
+                <div class="set-group-head"><h4>MCP servers</h4><span class="set-scope">synced</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="mcp server sync enable claude codex gemini opencode antigravity">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Enable MCP server sync</span>
+                      <span class="set-row-desc">Adds a control that copies MCP servers between your enabled CLIs by writing their own config files. Off by default: this changes other tools' configuration, not just Codeman's.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsMcpSync" onchange="app.applyMcpSyncVisibility()"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" id="mcpSyncActionRow" style="display:none" data-search="mcp server sync preview">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Sync MCP servers across CLIs</span>
+                      <span class="set-row-desc">Copies each installed, enabled CLI's MCP servers into the others. Only adds missing servers; never edits, removes or copies a server you switched off. Env values and headers are copied too, so a file that receives them is left readable by you only. The previous file is kept as <code>.codeman-bak</code> (overwritten by each sync). A config dir moved by the CLI's own env var (<code>CODEX_HOME</code>, <code>CLAUDE_CONFIG_DIR</code>, <code>XDG_CONFIG_HOME</code>, <code>GEMINI_CLI_HOME</code>) is followed as Codeman's server sees it; a per-session override is not.</span>
+                    </div>
+                    <span>
+                      <button class="btn-toolbar btn-sm" id="mcpSyncPreviewBtn" onclick="app.mcpSync(false)">Preview</button>
+                      <button class="btn-toolbar btn-sm btn-primary" id="mcpSyncApplyBtn" onclick="app.mcpSync(true)">Sync now</button>
+                    </span>
+                  </div>
+                  <div id="mcpSyncResult" class="set-note" style="display:none"></div>
+                </div>
+              </div>
             </section>
 
             <!-- ══ Notifications ════════════════════════════════════════════ -->
@@ -2599,6 +2652,57 @@
                     <input type="checkbox" id="eventSubagentPush">
                     <input type="checkbox" id="eventSubagentAudio">
                   </div>
+                </div>
+              </div>
+
+              <div class="set-group" id="webhookGroup" style="display:none">
+                <div class="set-group-head"><h4>Webhook (ntfy, Slack, Discord)</h4><span class="set-scope">server</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="webhook ntfy slack discord notification phone headless">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Send alerts to a webhook</span>
+                      <span class="set-row-desc">Posts the same events as push notifications (permission prompts, questions, errors, idle) to ntfy, Slack, Discord or any URL, so a server with no browser open can still reach your phone. The URL is a secret: it is stored on the server only and is never shown again once saved. On public ntfy.sh anyone who guesses the topic can read it, so pick a long random one.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="webhookEnabled"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text"><span class="set-row-label">Service</span></div>
+                    <select id="webhookKind" class="set-select">
+                      <option value="ntfy">ntfy</option>
+                      <option value="slack">Slack</option>
+                      <option value="discord">Discord</option>
+                      <option value="generic">Generic JSON</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Webhook URL</span>
+                      <span class="set-row-desc" id="webhookUrlHint">Nothing saved yet.</span>
+                    </div>
+                    <input type="password" id="webhookUrl" class="set-input" autocomplete="off" spellcheck="false" placeholder="https://ntfy.sh/your-topic">
+                  </div>
+                  <div class="set-row has-field">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Which events</span>
+                      <span class="set-row-desc">"Needs attention" skips the routine "response complete" message.</span>
+                    </div>
+                    <select id="webhookScope" class="set-select">
+                      <option value="attention">Needs attention</option>
+                      <option value="all">Everything</option>
+                    </select>
+                  </div>
+                  <div class="set-row">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Save and test</span>
+                      <span class="set-row-desc">The main Settings Save saves this group too. Send test saves pending edits first.</span>
+                    </div>
+                    <span>
+                      <button class="btn-toolbar btn-sm btn-primary" id="webhookSaveBtn" onclick="app.saveWebhook()">Save</button>
+                      <button class="btn-toolbar btn-sm" id="webhookTestBtn" onclick="app.testWebhook()">Send test</button>
+                      <button class="btn-toolbar btn-sm" id="webhookClearBtn" onclick="app.clearWebhook()" style="display:none">Remove URL</button>
+                    </span>
+                  </div>
+                  <div id="webhookResult" class="set-note" style="display:none" data-i18n-skip></div>
                 </div>
               </div>
             </section>
@@ -3738,10 +3842,14 @@
   <script defer src="notification-manager.js"></script>
   <script defer src="keyboard-accessory.js"></script>
   <script defer src="input-cjk.js"></script>
+  <!-- Shows iOS Safari IME composition text inside the terminal. Must precede terminal-ui.js. -->
+  <script defer src="mobile-ime-preview.js"></script>
   <!-- Forwards committed input events that xterm drops on Android/GBoard soft keyboards. Must precede terminal-ui.js. -->
   <script defer src="terminal-keycode229-recovery.js"></script>
   <!-- Hardened markdown HTML sanitizer (wires DOMPurify). Must precede app.js. -->
   <script defer src="sanitize-html.js"></script>
+  <!-- Owner tab layout projection (grouped vertical rail); pure, read by app.js. -->
+  <script defer src="tab-layout-browser.js"></script>
   <script defer src="app.js"></script>
   <script defer src="tab-rail-resize.js"></script>
   <script defer src="terminal-ui.js"></script>

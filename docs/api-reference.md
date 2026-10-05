@@ -713,6 +713,41 @@ Read and write the CLI registry (`docs/cli-registry.md`). Every **write** route 
 | `PUT`    | `/api/clis/custom/:id`        | `{ label, shortBadge, binaries, argv, enabled? }`       | Replace an existing custom entry. An absent `enabled` keeps the entry's current state. `400` for a stock id, `404` for an unknown one. |
 | `DELETE` | `/api/clis/:id`               | none                                                    | Delete a custom entry. `400` for a stock id, `404` for an unknown one.                                  |
 
+## MCP server sync
+
+Copies MCP servers between the agent CLIs' own user-level config files (`docs/cli-registry.md`, "MCP server sync"). **Opt-in:** both routes answer `403 FORBIDDEN` while the synced `mcpSyncEnabled` setting is off (the default), and for a non-admin in multi-user mode, because the routes write files in the server user's home. A second `POST` while one is running answers `409 CONFLICT`.
+
+| Method | Path            | Body | Notes                                                                                                                   |
+| ------ | --------------- | ---- | ----------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/api/mcp-sync` | none | Dry run. Same result shape as `POST`, with `applied: false`; nothing is written.                                        |
+| `POST` | `/api/mcp-sync` | none | Adds each server a CLI is missing to that CLI's config file. Never edits or removes a server. `500` on an unexpected error. |
+
+Result (`data`):
+
+- `applied` — `false` for the dry run.
+- `targets[]` — one per enabled CLI that declares an MCP config: `id`, `label`, `file`, `status`, `error?`, `servers` (names it already has), `added` (names added, or that would be), `skipped` (names its dialect cannot express, e.g. SSE for Codex and Antigravity).
+  - `status`: `ok`; `absent` (not installed and no config file, so not read or created); `skipped` (the CLI's relocation env var, e.g. `CODEX_HOME`, is set to a relative path in the server's environment, so its file cannot be located safely and is neither read nor written); `unreadable` (the file exists but cannot be parsed safely, so it is not written); `failed` (a read or write error, the file may be unchanged).
+  - `error` says why a target is not `ok`. A parse failure is reported by position only (`not valid TOML (line 3, column 21)`, `not valid JSON`), never with text from the file.
+  - `file` honours each CLI's own relocation env var as the server process sees it (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `XDG_CONFIG_HOME`, `GEMINI_CLI_HOME`); see `docs/cli-registry.md`.
+- `conflicts[]` — names defined differently by different CLIs. Existing definitions are kept; the first CLI's is copied where the name is missing.
+- `disabled[]` — names left out because every definition is switched off in its own CLI (codex `enabled = false`, opencode `enabled: false`, antigravity `disabled: true`).
+- `unsupported[]` — labels of enabled agent CLIs with no known MCP config file (nothing is guessed).
+  - Only installed CLIs are listed: one that is not installed is left out, as a supported CLI that is not installed reads `absent`.
+
+The result carries server **names** only, never `env` values, `headers` or file content. Each changed file keeps its previous content as `<file>.codeman-bak` (overwritten by each sync); a file that receives servers carrying `env` or `headers` is left mode `0600`.
+
+## Webhook notifications
+
+Posts the Web Push events to ntfy, Slack, Discord or a generic JSON URL (Settings → Notifications). Off by default. The webhook URL is a bearer secret (anyone holding a Slack/Discord URL can post as it), so it lives in `~/.codeman/webhook.json` (0600), is **never returned**, and is kept out of `settings.json`. All three routes answer `403` for a non-admin in multi-user mode.
+
+| Method | Path                 | Body                                         | Notes |
+| ------ | -------------------- | -------------------------------------------- | ----- |
+| `GET`  | `/api/webhook`       | none                                         | `{ enabled, kind, scope, hasUrl, urlMasked, lastResult }`. `urlMasked` is scheme + host only. `lastResult` is the last delivery (`ok`, `status?`, `error?`, `at`) or `null`. |
+| `PUT`  | `/api/webhook`       | `{ enabled?, kind?, scope?, url? }` (strict) | `kind`: `ntfy` \| `slack` \| `discord` \| `generic`. `scope`: `attention` (skip "response complete") \| `all`. An absent `url` keeps the saved one; `""` clears it. `400` for a non-http(s) URL, `user:pass@`, a link-local or cloud-metadata target, or enabling with no URL. |
+| `POST` | `/api/webhook/test`  | none                                         | Sends one message with the saved config, even while disabled. `200` with `data.ok` telling whether the webhook accepted it; `400` if no URL is saved. |
+
+Delivery goes through the same egress guard as web tabs (refused on the resolved address too), does not follow redirects, times out after 5 s, sends the same event for the same session at most once per 3 s, and has at most 5 requests in flight. Error text never contains the URL.
+
 ## Voice dictation
 
 Browser dictation transcribed through this server's Claude Code login, i.e. the

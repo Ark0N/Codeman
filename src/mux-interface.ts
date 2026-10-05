@@ -115,6 +115,8 @@ export interface CreateSessionOptions {
   envOverrides?: Record<string, string>;
   /** Claude CLI effort level, injected as a `--settings` soft default (overridable via /effort in-session) */
   effort?: EffortLevel;
+  /** Claude advisor model, merged into the same `--settings` JSON (overridable via /advisor in-session) */
+  advisorModel?: string;
   /** tmux history-limit (scrollback lines) allocated when this session is created. */
   historyLimit?: number;
   /** Remote execution metadata for local tmux sessions wrapping SSH */
@@ -164,6 +166,8 @@ export interface RespawnPaneOptions {
   unsetEnvKeys?: string[];
   /** Claude CLI effort level (preserved across respawns, injected via `--settings`) */
   effort?: EffortLevel;
+  /** Claude advisor model (preserved across respawns, merged into the same `--settings` JSON) */
+  advisorModel?: string;
   /** Original tmux history-limit retained for config parity; respawn cannot resize the existing pane. */
   historyLimit?: number;
   /** Remote execution metadata for local tmux sessions wrapping SSH */

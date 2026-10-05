@@ -90,6 +90,12 @@ export interface CliVariant {
   args: ArgSpec[];
 }
 
+/** The newline chord a CLI's composer reads as "insert a line break" (see `CliCapabilities.newline`). */
+export type NewlineSequence = 'line-feed' | 'esc-enter';
+
+/** The MCP config dialects `src/mcp-sync.ts` has an adapter for. */
+export type McpConfigFormat = 'claude-json' | 'gemini-json' | 'codex-toml' | 'opencode-json' | 'antigravity-json';
+
 export interface CliLaunch {
   params: Record<string, ParamSpec>;
   /**
@@ -511,6 +517,28 @@ export interface CliCapabilities {
   gates: Record<string, { minVersion: string; failClosed: boolean }>;
   /** Cap on a single terminal frame, when this CLI needs a tighter one than the default. */
   maxFrameBytes?: number;
+  /**
+   * The bytes the web UI types into this CLI's pane for Shift+Enter (the `send-key` route).
+   * `line-feed` (`0x0a`, also what Ctrl+Enter sends) is what Claude Code's Ink input and most TUIs
+   * read as "insert a newline"; `esc-enter` (`ESC` `CR`, the same chord as Option/Alt+Enter and
+   * the mobile ⌥Enter key) is for a TUI that ignores a bare line feed. Absent = `line-feed`.
+   * Data, not a branch on the CLI id, so supporting another CLI's quirk is one line here.
+   */
+  newline?: NewlineSequence;
+  /**
+   * Where this CLI keeps its user-level MCP server list, for MCP sync (`src/mcp-sync.ts`).
+   * `path` is relative to the home directory. `format` names the file dialect the sync
+   * adapter reads and writes. Absent = no known/verified MCP config file, so the CLI is
+   * skipped by sync rather than guessed at.
+   *
+   * `relocation` names the env var the CLI itself reads to move that file (codex's
+   * `CODEX_HOME`, claude's `CLAUDE_CONFIG_DIR`, opencode's `XDG_CONFIG_HOME`). When the SERVER
+   * process env (what the CLIs Codeman spawns inherit) sets it to an absolute directory, the
+   * file is `<that dir>/<relocation.path>` instead; set to anything else, the target is
+   * reported `skipped` rather than written somewhere the CLI never reads. Absent = the file
+   * only follows `$HOME`.
+   */
+  mcpConfig?: { path: string; format: McpConfigFormat; relocation?: { envVar: string; path: string } };
   /**
    * How this CLI is pointed at a user-supplied custom OpenAI-compatible
    * endpoint (local, e.g. llama.cpp, or cloud, e.g. Azure AI Foundry) — the

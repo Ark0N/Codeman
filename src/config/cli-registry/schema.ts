@@ -15,6 +15,7 @@
 import { z } from 'zod';
 import { compileVersionRegex, TOKEN_PATTERNS } from './patterns.js';
 import { isKnownLauncherProfile, isKnownSetenvProfile } from './profiles.js';
+import type { McpConfigFormat } from './types.js';
 
 /** A bare CLI id: lowercase, starts with a letter, at most 24 chars. Also used as a CSS/URL token. */
 const cliId = z
@@ -26,6 +27,14 @@ const envName = z
   .string()
   .regex(/^[A-Z_][A-Z0-9_]*$/, 'env var name must be UPPER_SNAKE_CASE')
   .max(64);
+
+/** A relative file path with no traversal or odd characters (MCP sync writes to it). */
+const mcpRelativePath = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/)
+  .refine((v) => !v.split('/').includes('..'), 'must not contain ..');
 
 /**
  * A shell-safe bare word: no space, quote, backtick, `$`, `;`, `&`, `|`, `<`, `>`, parens,
@@ -377,6 +386,26 @@ const capabilitiesSchema = z
     privilegedEnvKeys: z.array(envName).max(8),
     gates: z.record(z.string(), z.object({ minVersion: z.string().max(20), failClosed: z.boolean() }).strict()),
     maxFrameBytes: z.number().int().positive().optional(),
+    newline: z.enum(['line-feed', 'esc-enter']).optional(),
+    mcpConfig: z
+      .object({
+        // Home-relative, no traversal: sync writes to this path.
+        path: mcpRelativePath,
+        // Every value must be a known McpConfigFormat (types.ts); mcp-sync.ts's dialect table is
+        // keyed by the same type, so an adapter-less format fails to compile there.
+        format: z.enum([
+          'claude-json',
+          'gemini-json',
+          'codex-toml',
+          'opencode-json',
+          'antigravity-json',
+        ] as const satisfies readonly McpConfigFormat[]),
+        // The env var the CLI reads to move the file, and the path under it (same no-traversal
+        // rule: sync writes there too). Resolved from the server env at call time, never here.
+        relocation: z.object({ envVar: envName, path: mcpRelativePath }).strict().optional(),
+      })
+      .strict()
+      .optional(),
     customModelInjection: z.discriminatedUnion('kind', [
       z
         .object({

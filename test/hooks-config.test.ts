@@ -5,7 +5,7 @@
  * hook definitions for desktop notifications.
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import {
   chmodSync,
   closeSync,
@@ -26,6 +26,7 @@ import { spawn } from 'node:child_process';
 import {
   applyStatusLineConfig,
   ensureCodemanHooks,
+  ensureStatusLineExporterScript,
   findEffectiveUserStatusLineCommand,
   generateBackgroundWakeScript,
   generateHooksConfig,
@@ -1412,6 +1413,26 @@ describe('resolveStatusLineCliCommand', () => {
 
     const again = await resolveStatusLineCliCommand(testDir, true);
     expect(again).toBe(scriptPath);
+    expect(readFileSync(scriptPath, 'utf-8')).not.toContain('echo stale');
+    expect(statSync(scriptPath).mode & 0o111).not.toBe(0);
+    const siblings = readdirSync(join(scriptPath, '..')).filter((f) => f.startsWith('statusline-exporter.sh.'));
+    expect(siblings).toEqual([]);
+  });
+
+  it('survives concurrent refreshes in the same millisecond (sessions created at once)', async () => {
+    const scriptPath = (await resolveStatusLineCliCommand(testDir, true))!;
+    writeFileSync(scriptPath, '#!/bin/sh\n# CODEMAN_STATUSLINE_EXPORTER_V0\necho stale\n');
+    // A frozen clock makes every writer agree on the timestamp, which is what two
+    // session creates in one millisecond do. A temp name built from pid + Date.now()
+    // is then shared: the first rename consumes it, every later rename fails ENOENT,
+    // and that session's tmux create fell back to a direct PTY.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    try {
+      const paths = await Promise.all(Array.from({ length: 8 }, () => ensureStatusLineExporterScript()));
+      expect(new Set(paths)).toEqual(new Set([scriptPath]));
+    } finally {
+      clock.mockRestore();
+    }
     expect(readFileSync(scriptPath, 'utf-8')).not.toContain('echo stale');
     expect(statSync(scriptPath).mode & 0o111).not.toBe(0);
     const siblings = readdirSync(join(scriptPath, '..')).filter((f) => f.startsWith('statusline-exporter.sh.'));

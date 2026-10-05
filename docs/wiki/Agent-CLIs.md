@@ -76,7 +76,7 @@ output. The other CLIs expose no equivalent.
 | Read My Mind                                      | Yes    | No                                                   |
 | Ralph loop and its task tracker                   | Yes    | No                                                   |
 | Subagent and team windows                         | Yes    | No                                                   |
-| Model, effort, and ultracode controls             | Yes    | No                                                   |
+| Model, effort, advisor, and ultracode controls    | Yes    | No                                                   |
 | `stop` and `blocked` wait signals                 | Yes    | DeepSeek yes; elsewhere 400 if you ask for them explicitly |
 | The bundled agent skill                           | Yes    | No                                                   |
 
@@ -96,6 +96,9 @@ The defaults you will care about, all under **App Settings**:
 - **Effort** (`low` through `max`) or **ultracode** for dynamic multi-agent workflows. Also
   a soft default: `/effort` overrides it any time. Effort is deliberately not passed as an
   environment variable, because that would hard-lock it and block in-session switching.
+- **Advisor** (Sonnet, Opus or Fable): a stronger model Claude consults at decision points,
+  via Claude Code's [advisor tool](https://code.claude.com/docs/en/advisor). Also a soft
+  default: `/advisor` switches it or turns it off inside the session.
 - **Startup permission mode** (Agents & CLIs section). The default is
   `--dangerously-skip-permissions`, which is why the security model matters. You can switch
   new sessions to Anthropic's classifier-guarded `auto` mode, normal prompting, or an

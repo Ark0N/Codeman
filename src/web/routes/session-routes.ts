@@ -30,7 +30,13 @@ import {
   type OmpConfig,
   type RemoteHost,
 } from '../../types.js';
-import { Session, isAltScreenStripMode, isExternalCliMode, isMuxAltScreenOnlyStripMode } from '../../session.js';
+import {
+  Session,
+  cliTakesSessionModel,
+  isAltScreenStripMode,
+  isExternalCliMode,
+  isMuxAltScreenOnlyStripMode,
+} from '../../session.js';
 import type { PaneCaptureOptions } from '../../mux-interface.js';
 import { SseEvent } from '../sse-events.js';
 import { webviewCapabilities } from '../../webview-capabilities.js';
@@ -107,6 +113,7 @@ import { buildAgentCaseMarker, writeAgentCaseMarker } from '../../agent-case-mar
 import { canUsernameRunPrivilegedCommands, resolveClaudeModeForUsername } from '../../user-store.js';
 import { clampEnvOverridesForOwner } from '../../session-env-clamp.js';
 import { enabledClis, getCli } from '../../config/cli-registry/registry.js';
+import type { NewlineSequence } from '../../config/cli-registry/types.js';
 import { resolveCliLaunchError } from '../../utils/cli-launcher.js';
 import { legacyConfigForMode } from '../../session-cli-registry-bridge.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
@@ -888,6 +895,25 @@ export function registerSessionRoutes(
     if (capMsg) return createErrorResponse(ApiErrorCode.OPERATION_FAILED, capMsg);
 
     const body = parseBody(CreateSessionSchema, req.body);
+    // The top-level `model` is Claude's per-session `--model`. Every other CLI takes its model
+    // in its own config object (`codexConfig.model` and so on), so a `model` here would be
+    // dropped without a word; refuse it before anything is written for the session.
+    if (body.model && !cliTakesSessionModel(body.mode ?? 'claude')) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'model applies to claude sessions only; other CLIs take their model in their own config object, such as codexConfig.model'
+      );
+    }
+    // An attach launches nothing (the remote agent is already running), so a launch model
+    // or advisor would be dropped the same way, so both are refused, as they have been since
+    // they were added. The older launch fields (effort, envOverrides) predate this and keep
+    // their silent ignore here, since refusing them now would break existing callers.
+    if (body.attachRemoteSession && (body.model || body.advisorModel)) {
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'model and advisorModel shape a new launch, and attachRemoteSession launches nothing; leave them out when attaching'
+      );
+    }
     let workingDir = body.workingDir || process.cwd();
     let remote = undefined;
 
@@ -1073,9 +1099,10 @@ export function registerSessionRoutes(
     // genuinely different mechanisms:
     //   'flag'                 — the CLI takes --model, so read the value the caller sent
     //                            in that CLI's own config object.
-    //   'claude-settings-file' — claude alone, whose model is written to
-    //                            <case>/.claude/settings.local.json rather than passed as
-    //                            a flag, so the app-wide default applies here.
+    //   'claude-settings-file' — claude alone, whose persistent model is written to
+    //                            <case>/.claude/settings.local.json (`modelOverride`). A
+    //                            per-session `model` from the caller goes out as --model and
+    //                            wins; without one, the app-wide default applies.
     //   'none'                 — shell has no model; deepseek's is a composition entry in
     //                            the profile's config tree, not a session field
     //                            (docs/deepseek-integration.md). Both get nothing.
@@ -1086,7 +1113,7 @@ export function registerSessionRoutes(
             | string
             | undefined)
         : modelSource?.source === 'claude-settings-file'
-          ? modelConfig?.defaultModel || undefined
+          ? body.model || modelConfig?.defaultModel || undefined
           : undefined;
     const claudeModeConfig = await ctx.getClaudeModeConfig();
     // Section 6.3: force non-granted users to a classifier-guarded mode.
@@ -1130,6 +1157,7 @@ export function registerSessionRoutes(
       resumeSessionId: validatedResumeId,
       envOverrides: await clampEnvOverridesForOwner(owner, body.envOverrides),
       effort: body.effort,
+      advisorModel: body.advisorModel,
       tmuxHistoryLimit: terminalHistoryConfig.tmuxHistoryLimit,
       remote,
       owner,
@@ -2092,21 +2120,16 @@ export function registerSessionRoutes(
 
   // ========== Send Named Key (tmux send-keys -H) ==========
   // Sends raw hex bytes to tmux pane for keys like Shift+Enter / Ctrl+Enter.
-  // Uses send-keys -H (hex) to inject 0x0a (line feed) which Claude Code's
-  // Ink input recognizes as "insert newline" vs 0x0d (carriage return = submit).
+  // Uses send-keys -H (hex) to inject a newline chord: 0x0a (line feed) by default, or the CLI's
+  // own `capabilities.newline`. Claude Code's Ink input recognizes 0x0a as "insert newline" vs
+  // 0x0d (carriage return = submit).
 
   app.post('/api/sessions/:id/send-key', async (req) => {
     const { id } = req.params as { id: string };
     const body = req.body as Record<string, unknown>;
     const key = typeof body?.key === 'string' ? body.key : '';
 
-    // Map key names to hex byte sequences
-    const KEY_HEX_MAP: Record<string, string[]> = {
-      'S-Enter': ['0a'], // \n (line feed)
-      'C-Enter': ['0a'], // \n (line feed)
-    };
-    const hex = KEY_HEX_MAP[key];
-    if (!hex) {
+    if (key !== 'S-Enter' && key !== 'C-Enter') {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Key not allowed: ${key}`);
     }
 
@@ -2115,6 +2138,18 @@ export function registerSessionRoutes(
     if (!muxName) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'No tmux session');
     }
+
+    // Key names map to hex byte sequences. Ctrl+Enter is always a line feed; Shift+Enter is the
+    // CLI's own newline chord (`capabilities.newline`, default line feed), so a CLI that wants
+    // Esc+Enter declares it in the registry instead of being special-cased here.
+    const NEWLINE_HEX: Record<NewlineSequence, string[]> = {
+      'line-feed': ['0a'], // \n
+      'esc-enter': ['1b', '0d'], // ESC CR, the Alt/Option+Enter chord
+    };
+    const hex =
+      key === 'C-Enter'
+        ? NEWLINE_HEX['line-feed']
+        : NEWLINE_HEX[getCli(session.mode)?.capabilities.newline ?? 'line-feed'];
 
     try {
       // Route through the dedicated Codeman socket — bare `tmux` would target the
@@ -3393,6 +3428,7 @@ export function registerSessionRoutes(
       ompConfig,
       envOverrides,
       effort,
+      advisorModel,
       parentSessionId,
       agentOrigin,
       customModel,
@@ -3440,6 +3476,7 @@ export function registerSessionRoutes(
       if (
         (envOverrides && Object.keys(envOverrides).length > 0) ||
         effort ||
+        advisorModel ||
         modelOverride !== undefined ||
         codexConfig ||
         geminiConfig ||
@@ -3453,7 +3490,7 @@ export function registerSessionRoutes(
       ) {
         return createErrorResponse(
           ApiErrorCode.INVALID_INPUT,
-          'envOverrides, effort, modelOverride, per-CLI config, and custom model endpoints are not supported for remote cases (they do not cross ssh). Configure the remote command via the host command override instead.'
+          'envOverrides, effort, advisorModel, modelOverride, per-CLI config, and custom model endpoints are not supported for remote cases (they do not cross ssh). Configure the remote command via the host command override instead.'
         );
       }
 
@@ -3510,6 +3547,7 @@ export function registerSessionRoutes(
       if (
         (envOverrides && Object.keys(envOverrides).length > 0) ||
         effort ||
+        advisorModel ||
         codexConfig ||
         geminiConfig ||
         antigravityConfig ||
@@ -3522,7 +3560,7 @@ export function registerSessionRoutes(
       ) {
         return createErrorResponse(
           ApiErrorCode.INVALID_INPUT,
-          'envOverrides, effort, per-CLI config, and custom model endpoints are not supported for docker cases (they do not cross into the container). Configure the container via the docker host command override instead.'
+          'envOverrides, effort, advisorModel, per-CLI config, and custom model endpoints are not supported for docker cases (they do not cross into the container). Configure the container via the docker host command override instead.'
         );
       }
 
@@ -3977,6 +4015,7 @@ export function registerSessionRoutes(
       ompConfig: qsResolvedOmpConfig,
       envOverrides: qsCustomModelEnvOverrides,
       effort,
+      advisorModel,
       remote,
       docker,
       resumeSessionId: dockerResumeId,

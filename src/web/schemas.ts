@@ -18,11 +18,14 @@ import {
   MIN_TERMINAL_SCROLLBACK_LINES,
 } from '../config/terminal-history.js';
 import { MAX_EDITABLE_BYTES } from '../config/file-editing.js';
+import { CODEX_REASONING_EFFORTS } from '../types/session.js';
+import { WEBHOOK_KINDS, WEBHOOK_SCOPES } from '../types/push.js';
 import { MIN_MATCH_LENGTH, MAX_MATCH_LENGTH } from '../config/agent-wait.js';
 import { MAX_WAKE_MACS } from '../config/remote-wake-limits.js';
 import { MAX_INPUT_LENGTH } from '../config/terminal-limits.js';
 import { enabledCliIds, enabledClis } from '../config/cli-registry/registry.js';
 import type { SessionMode } from '../types.js';
+import { isAdvisorModel } from '../types/session.js';
 
 // ========== Path Validation ==========
 
@@ -251,6 +254,20 @@ const safeEnvOverridesSchema = z
  */
 const effortLevelSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']).optional();
 
+/**
+ * Claude advisor model for new sessions: `fable`/`opus`/`sonnet` or a full model id in one of
+ * those families (isAdvisorModel). Merged into the launch `--settings` JSON as `advisorModel`,
+ * a soft default that /advisor still switches in-session. The allowlist is also the injection
+ * guard for the single-quoted `--settings` argument.
+ */
+const advisorModelSchema = z
+  .string()
+  .max(64)
+  .refine((value) => isAdvisorModel(value), {
+    message: 'advisorModel must be fable, opus, sonnet or a full claude-fable/opus/sonnet model id',
+  })
+  .optional();
+
 // ========== Session Routes ==========
 
 /**
@@ -298,6 +315,7 @@ const CodexConfigSchema = z
       .max(100)
       .regex(/^[a-zA-Z0-9._\-/]+$/)
       .optional(),
+    reasoningEffort: z.enum(CODEX_REASONING_EFFORTS).optional(),
     resumeSessionId: z
       .string()
       .max(100)
@@ -524,8 +542,25 @@ export const CreateSessionSchema = z.object({
   envOverrides: safeEnvOverridesSchema,
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort: effortLevelSchema,
+  /** Claude advisor model (soft default via --settings, switchable in-session via /advisor) */
+  advisorModel: advisorModelSchema,
   /** Model override to write to .claude/settings.local.json (e.g., "opus[1m]"). Empty string clears. */
   modelOverride: z.string().max(50).optional(),
+  /**
+   * Claude model for THIS session only, passed as `claude --model <id>`; nothing is written to
+   * disk. Wins over the app-wide default model. A subset of the registry's `model-claude`
+   * pattern, so a value accepted here is never rejected at launch. The first character must be
+   * a letter or digit: the value lands in argv, and no model id opens with `-`, so a
+   * flag-shaped value is refused here rather than left to the launch quoting. An empty string
+   * means no per-session model, as it does for `modelOverride`. Claude only: the route refuses
+   * it for any other CLI and on a remote attach.
+   */
+  model: z
+    .string()
+    .max(100)
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9._\-[\]]*$/)
+    .or(z.literal(''))
+    .optional(),
   openCodeConfig: OpenCodeConfigSchema,
   codexConfig: CodexConfigSchema,
   geminiConfig: GeminiConfigSchema,
@@ -1055,6 +1090,8 @@ export const QuickStartSchema = z.object({
   envOverrides: safeEnvOverridesSchema,
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort: effortLevelSchema,
+  /** Claude advisor model (soft default via --settings, switchable in-session via /advisor) */
+  advisorModel: advisorModelSchema,
   /**
    * Who is spawning this worker (`codeman-skill` from the packaged agent skill), or,
    * equivalently, the `X-Codeman-Agent-Origin` header; the body wins when both are
@@ -1328,6 +1365,13 @@ export const SettingsUpdateSchema = z
      */
     cliManagementEnabled: z.boolean().optional(),
     /**
+     * MCP server sync (src/mcp-sync.ts): copies each enabled CLI's user-level MCP servers into
+     * the other CLIs' own config files. SYNCED, default OFF: it writes other tools' config in
+     * the server user's home (including any env values and headers on the servers), so it is
+     * opt-in. While OFF, GET/POST /api/mcp-sync answer 403 and the Settings controls are hidden.
+     */
+    mcpSyncEnabled: z.boolean().optional(),
+    /**
      * Read My Mind predictor model override. Empty/absent = the AI-checker
      * default (opus: prediction quality is the product and it runs only on an
      * explicit press). Shell-safety is validated again at spawn time.
@@ -1374,6 +1418,12 @@ export const SettingsUpdateSchema = z
     // auto-reattached.
     remoteAutoReconnect: z.boolean().optional(),
     thinkingEffort: z.string().max(20).optional(),
+    /** Advisor model for new Claude sessions ('' = leave it to the CLI's own /advisor choice). */
+    claudeAdvisorModel: z
+      .string()
+      .max(64)
+      .refine((value) => value === '' || isAdvisorModel(value), { message: 'Invalid advisor model' })
+      .optional(),
     // UI visibility
     showFontControls: z.boolean().optional(),
     showSystemStats: z.boolean().optional(),
@@ -1846,6 +1896,20 @@ export const PushPreferencesUpdateSchema = z.object({
   pushPreferences: z.record(z.string(), z.boolean()),
 });
 
+/**
+ * PUT /api/webhook. `.strict()` like every settings-shaped schema; `url` is optional so a change of
+ * kind or scope never needs the secret re-sent, and an empty string clears it. The kind and scope
+ * lists are the store's own, so the schema can never accept a value the store would coerce away.
+ */
+export const WebhookUpdateSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    kind: z.enum(WEBHOOK_KINDS).optional(),
+    scope: z.enum(WEBHOOK_SCOPES).optional(),
+    url: z.string().max(2048).optional(),
+  })
+  .strict();
+
 // ========== Ralph Loop ==========
 
 /** POST /api/ralph-loop/start */
@@ -1862,6 +1926,8 @@ export const RalphLoopStartSchema = z.object({
   envOverrides: safeEnvOverridesSchema,
   /** Claude CLI effort level (soft default via --settings, switchable in-session via /effort) */
   effort: effortLevelSchema,
+  /** Claude advisor model (soft default via --settings, switchable in-session via /advisor) */
+  advisorModel: advisorModelSchema,
   planItems: z
     .array(
       z.object({

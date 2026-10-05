@@ -416,6 +416,13 @@ Object.assign(CodemanApp.prototype, {
     // .checked fires no onchange, so the list's visibility (and lazy load)
     // needs an explicit sync on every open, not just a save.
     this.applyCliManagementVisibility();
+    // MCP server sync: synced, default OFF; same explicit-sync reasoning as above.
+    // The routes read the SAVED setting, so remember what it was on open: switching it on
+    // here does nothing server-side until Save (see mcpSync()).
+    this._mcpSyncSavedOn = settings.mcpSyncEnabled === true;
+    document.getElementById('appSettingsMcpSync').checked = this._mcpSyncSavedOn;
+    this.applyMcpSyncVisibility();
+    this.loadWebhook();
     // Read My Mind: synced, default OFF (opt-in; capture + prediction cost real tokens).
     document.getElementById('appSettingsReadMyMind').checked = settings.readMyMindEnabled === true;
     document.getElementById('appSettingsUltracodeFloatingWindows').checked =
@@ -527,6 +534,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsOpusContext1m').checked = settings.opusContext1mEnabled ?? false;
     document.getElementById('appSettingsRemoteAutoReconnect').checked = settings.remoteAutoReconnect ?? true;
     document.getElementById('appSettingsThinkingEffort').value = settings.thinkingEffort ?? '';
+    document.getElementById('appSettingsClaudeAdvisor').value = settings.claudeAdvisorModel ?? '';
     // CPU Priority settings
     const niceSettings = settings.nice || {};
     document.getElementById('appSettingsNiceEnabled').checked = niceSettings.enabled ?? false;
@@ -627,6 +635,7 @@ Object.assign(CodemanApp.prototype, {
     this._syncSettingsChips();
     this._syncModelCards();
     this._syncEffortSegment();
+    this._syncAdvisorSegment();
     // Back to the top of the document (one scroll, not a tab reset). Updates is
     // first now: the version this install is running, and whether a newer one is
     // waiting, are the two things worth seeing before any preference. The rest of
@@ -718,6 +727,7 @@ Object.assign(CodemanApp.prototype, {
     if (!modal || !doc || typeof modal.querySelectorAll !== 'function') return;
     this._buildModelCards();
     this._buildEffortSegment();
+    this._buildAdvisorSegment();
     // Rebuilt on every open: admin-ui.js appends its Users entry to the rail
     // after the first open, and the menu must not drift from the rail.
     this._buildSettingsJumpMenu();
@@ -993,8 +1003,28 @@ Object.assign(CodemanApp.prototype, {
   },
 
   _buildEffortSegment() {
-    const select = document.getElementById('appSettingsThinkingEffort');
-    const seg = document.getElementById('appSettingsEffortSegment');
+    this._buildSelectSegment('appSettingsThinkingEffort', 'appSettingsEffortSegment');
+  },
+
+  _syncEffortSegment() {
+    this._syncSelectSegment('appSettingsThinkingEffort', 'appSettingsEffortSegment');
+  },
+
+  _buildAdvisorSegment() {
+    this._buildSelectSegment('appSettingsClaudeAdvisor', 'appSettingsAdvisorSegment');
+  },
+
+  _syncAdvisorSegment() {
+    this._syncSelectSegment('appSettingsClaudeAdvisor', 'appSettingsAdvisorSegment');
+  },
+
+  /**
+   * Build a radio segment as a view over a hidden <select>, which stays the single
+   * source of truth for load/save (the same contract as the model cards).
+   */
+  _buildSelectSegment(selectId, segId) {
+    const select = document.getElementById(selectId);
+    const seg = document.getElementById(segId);
     if (!select || !seg || seg.dataset.built === '1' || !select.options) return;
     seg.innerHTML = '';
     [...select.options].forEach(opt => {
@@ -1005,16 +1035,16 @@ Object.assign(CodemanApp.prototype, {
       btn.textContent = opt.textContent;
       btn.addEventListener('click', () => {
         select.value = opt.value;
-        this._syncEffortSegment();
+        this._syncSelectSegment(selectId, segId);
       });
       seg.appendChild(btn);
     });
     seg.dataset.built = '1';
   },
 
-  _syncEffortSegment() {
-    const select = document.getElementById('appSettingsThinkingEffort');
-    const seg = document.getElementById('appSettingsEffortSegment');
+  _syncSelectSegment(selectId, segId) {
+    const select = document.getElementById(selectId);
+    const seg = document.getElementById(segId);
     if (!select || !seg) return;
     seg.querySelectorAll('button').forEach(btn => {
       const on = btn.dataset.value === (select.value || '');
@@ -1112,6 +1142,226 @@ Object.assign(CodemanApp.prototype, {
       if (el) el.style.display = 'none';
     }
     this._updateCheck = null;
+  },
+
+  /**
+   * Settings → Terminal & Input → Key tester: prints what the browser reports for each key event.
+   * Read-only and local; it never reaches a session. keypress is shown on purpose: that event is
+   * why a Shift-only Enter used to submit (xterm drops Ctrl/Alt keypresses, not Shift ones).
+   */
+  keyTesterEvent(ev) {
+    const log = document.getElementById('keyTesterLog');
+    if (!log) return;
+    // Never preventDefault on keydown: that suppresses the keypress this panel exists to show.
+    // The field is readonly, so nothing is typed into it either way.
+    const mods = ['ctrlKey', 'shiftKey', 'altKey', 'metaKey'].filter((m) => ev[m]).map((m) => m.replace('Key', ''));
+    const line =
+      `${ev.type.padEnd(8)} key=${JSON.stringify(ev.key)} code=${ev.code || '-'} ` +
+      `mods=${mods.join('+') || 'none'}` +
+      (ev.type === 'keypress' ? ` charCode=${ev.charCode}` : '') +
+      (ev.repeat ? ' (repeat)' : '');
+    const lines = (log.textContent ? log.textContent.split('\n') : []).concat(line);
+    log.textContent = lines.slice(-14).join('\n');
+    log.style.display = 'block';
+  },
+
+  /**
+   * MCP sync is opt-in (`mcpSyncEnabled`): with the flag off the action row is hidden rather than
+   * shown disabled, because both endpoints would only answer 403. Called on open and from the
+   * checkbox's own onchange (assigning .checked fires no change event).
+   */
+  applyMcpSyncVisibility() {
+    const on = document.getElementById('appSettingsMcpSync')?.checked ?? false;
+    const row = document.getElementById('mcpSyncActionRow');
+    if (row) row.style.display = on ? '' : 'none';
+    const out = this.$('mcpSyncResult');
+    if (!on && out) { out.style.display = 'none'; out.innerHTML = ''; }
+    this._applyMcpSyncAdminGate();
+  },
+
+  /**
+   * Both /api/mcp-sync verbs are admin-only in multi-user mode (they write files in the server
+   * user's home), so a non-admin gets no MCP group at all, switch included, the same way
+   * _applyCliManagementAdminGate hides the CLI list. Also wired to `codeman:me`, because
+   * `window.__codemanUser`'s real role can resolve after settings were opened once.
+   */
+  _applyMcpSyncAdminGate() {
+    const group = document.getElementById('mcpSyncGroup');
+    if (!group) return;
+    const me = window.__codemanUser || {};
+    group.style.display = me.multiUser && me.role !== 'admin' ? 'none' : '';
+  },
+
+  /** Preview (apply=false) or run (apply=true) the MCP server sync across enabled CLIs. */
+  async mcpSync(apply) {
+    const out = this.$('mcpSyncResult');
+    const show = (html) => {
+      if (out) { out.style.display = 'block'; out.innerHTML = html; }
+    };
+    // Switched on in this modal but not saved yet: the routes would only answer "disabled".
+    if (!this._mcpSyncSavedOn) {
+      show('Save settings to turn MCP sync on first, then reopen Settings to preview or sync.');
+      return;
+    }
+    if (apply && !confirm('Add missing MCP servers to every installed, enabled CLI\'s config file? Env values and headers on those servers are copied too.')) return;
+    show('Working…');
+    const res = apply ? await this._apiPost('/api/mcp-sync', {}) : await this._api('/api/mcp-sync');
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    if (!res || !res.ok || !body || body.success === false) {
+      show(escapeHtml(body?.error || 'MCP sync failed.'));
+      return;
+    }
+    const data = body.data;
+    const rows = data.targets.map((t) => {
+      if (t.status === 'absent') return `<li><b>${escapeHtml(t.label)}</b>: not installed, skipped</li>`;
+      if (t.status === 'skipped') return `<li><b>${escapeHtml(t.label)}</b>: not touched (${escapeHtml(t.error || 'config location unknown')})</li>`;
+      if (t.status === 'unreadable') return `<li><b>${escapeHtml(t.label)}</b>: not touched, file can't be read safely (${escapeHtml(t.error || 'unreadable')})</li>`;
+      if (t.status === 'failed') return `<li><b>${escapeHtml(t.label)}</b>: failed (${escapeHtml(t.error || 'error')}); the file may be unchanged</li>`;
+      const verb = data.applied ? 'added' : 'would add';
+      const parts = [t.added.length ? `${verb} ${t.added.map(escapeHtml).join(', ')}` : 'up to date'];
+      if (t.skipped.length) parts.push(`can't express ${t.skipped.map(escapeHtml).join(', ')}`);
+      const count = `${t.servers.length} server${t.servers.length === 1 ? '' : 's'}`;
+      return `<li><b>${escapeHtml(t.label)}</b> (${count}): ${parts.join('; ')}</li>`;
+    });
+    const conflicts = data.conflicts.length
+      ? `<p>Defined differently across CLIs (each existing definition is kept; the first CLI's is copied where the name is missing): ${data.conflicts.map(escapeHtml).join(', ')}</p>`
+      : '';
+    const disabled = data.disabled?.length
+      ? `<p>Switched off in their own CLI, so not copied: ${data.disabled.map(escapeHtml).join(', ')}</p>`
+      : '';
+    const unsupported = data.unsupported?.length
+      ? `<p>No MCP config support for: ${data.unsupported.map(escapeHtml).join(', ')}</p>`
+      : '';
+    show(`<ul>${rows.join('')}</ul>${conflicts}${disabled}${unsupported}`);
+  },
+
+  /**
+   * Webhook notifications (Settings → Notifications). Server-side config behind /api/webhook, not a
+   * settings-payload field: the URL is a secret, so it never round-trips through settings.json or
+   * this page. The URL box is write-only; the status line shows scheme + host only.
+   *
+   * Three ways to save, one PUT: the group's own Save, Send test (saves pending edits first, so it
+   * never tests the old URL while the box shows a new one), and the modal's main Save, which calls
+   * saveWebhook() beside the settings PUT the same way it saves the model config
+   * (saveModelConfigFromSettings). `_webhookLoaded` is what loadWebhook() put on screen, so
+   * `_webhookPending()` can tell an edited group from an untouched one.
+   */
+  _webhookSay(text, bad = false) {
+    const out = document.getElementById('webhookResult');
+    if (!out) return;
+    out.textContent = text;
+    out.style.display = text ? 'block' : 'none';
+    out.style.color = bad ? 'var(--danger, #e5534b)' : '';
+  },
+
+  async loadWebhook() {
+    const group = document.getElementById('webhookGroup');
+    if (!group) return;
+    const res = await this._api('/api/webhook');
+    if (!res || !res.ok) {
+      this._webhookLoaded = null;
+      group.style.display = 'none'; // not an admin in multi-user mode, or the server predates the route
+      return;
+    }
+    let body = null;
+    try { body = await res.json(); } catch { /* leave hidden */ }
+    if (!body || body.success === false) { this._webhookLoaded = null; group.style.display = 'none'; return; }
+    const d = body.data;
+    group.style.display = '';
+    document.getElementById('webhookEnabled').checked = d.enabled === true;
+    document.getElementById('webhookKind').value = d.kind;
+    document.getElementById('webhookScope').value = d.scope;
+    const url = document.getElementById('webhookUrl');
+    url.value = '';
+    url.placeholder = d.hasUrl ? 'Saved. Paste a new URL to replace it' : 'https://ntfy.sh/your-topic';
+    document.getElementById('webhookUrlHint').textContent = d.hasUrl ? `Saved: ${d.urlMasked}` : 'Nothing saved yet.';
+    const clearBtn = document.getElementById('webhookClearBtn');
+    if (clearBtn) clearBtn.style.display = d.hasUrl ? '' : 'none';
+    // Read back from the controls, so a value the <select> does not offer compares as what is shown.
+    this._webhookLoaded = {
+      enabled: document.getElementById('webhookEnabled').checked,
+      kind: document.getElementById('webhookKind').value,
+      scope: document.getElementById('webhookScope').value,
+    };
+    if (d.lastResult) {
+      const when = new Date(d.lastResult.at).toLocaleString();
+      this._webhookSay(
+        d.lastResult.ok ? `Last delivery succeeded (${when}).` : `Last delivery failed (${when}): ${d.lastResult.error}`,
+        !d.lastResult.ok
+      );
+    } else {
+      this._webhookSay('');
+    }
+  },
+
+  /** True when the visible webhook group differs from what loadWebhook() last showed. */
+  _webhookPending() {
+    const group = document.getElementById('webhookGroup');
+    const loaded = this._webhookLoaded;
+    if (!group || group.style.display === 'none' || !loaded) return false;
+    return (
+      document.getElementById('webhookUrl').value.trim() !== '' ||
+      document.getElementById('webhookEnabled').checked !== loaded.enabled ||
+      document.getElementById('webhookKind').value !== loaded.kind ||
+      document.getElementById('webhookScope').value !== loaded.scope
+    );
+  },
+
+  /** PUT the group's state. Resolves to '' on success, else the error (also shown in the group). */
+  async saveWebhook() {
+    const payload = {
+      enabled: document.getElementById('webhookEnabled').checked,
+      kind: document.getElementById('webhookKind').value,
+      scope: document.getElementById('webhookScope').value,
+    };
+    const url = document.getElementById('webhookUrl').value.trim();
+    if (url) payload.url = url; // blank = keep the saved one (Remove URL is the way to clear it)
+    const res = await this._api('/api/webhook', { method: 'PUT', body: payload });
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    if (!res || !res.ok || !body || body.success === false) {
+      const error = body?.error || 'Could not save the webhook.';
+      this._webhookSay(error, true);
+      return error;
+    }
+    await this.loadWebhook();
+    this._webhookSay('Saved.');
+    return '';
+  },
+
+  /** Delete the saved URL from the server (the API clears on `url: ""`), which also turns the channel off. */
+  async clearWebhook() {
+    if (!confirm('Remove the saved webhook URL from the server? Webhook alerts stop until you save a new one.')) return;
+    const res = await this._api('/api/webhook', { method: 'PUT', body: { url: '', enabled: false } });
+    let body = null;
+    try { body = res ? await res.json() : null; } catch { /* fall through */ }
+    if (!res || !res.ok || !body || body.success === false) {
+      this._webhookSay(body?.error || 'Could not remove the webhook URL.', true);
+      return;
+    }
+    await this.loadWebhook();
+    this._webhookSay('Webhook URL removed.');
+  },
+
+  async testWebhook() {
+    const btn = document.getElementById('webhookTestBtn');
+    if (btn) btn.disabled = true;
+    try {
+      if (this._webhookPending() && (await this.saveWebhook())) return; // the save's error is already shown
+      this._webhookSay('Sending…');
+      const res = await this._apiPost('/api/webhook/test', {});
+      let body = null;
+      try { body = res ? await res.json() : null; } catch { /* fall through */ }
+      if (!res || !res.ok || !body || body.success === false) {
+        this._webhookSay(body?.error || 'Could not send the test.', true);
+        return;
+      }
+      const r = body.data;
+      this._webhookSay(r.ok ? 'Test sent. Check your phone or channel.' : `Delivery failed: ${r.error}`, !r.ok);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
   },
 
   _setUpdateResult(html) {
@@ -2159,6 +2409,7 @@ Object.assign(CodemanApp.prototype, {
       approvalsInboxEnabled: document.getElementById('appSettingsApprovalsInbox').checked,
       customModelEndpointsEnabled: document.getElementById('appSettingsCustomModelEndpoints').checked,
       cliManagementEnabled: document.getElementById('appSettingsCliManagement').checked,
+      mcpSyncEnabled: document.getElementById('appSettingsMcpSync').checked,
       readMyMindEnabled: document.getElementById('appSettingsReadMyMind').checked,
       ultracodeFloatingWindows: document.getElementById('appSettingsUltracodeFloatingWindows').checked,
       showMultiMonitorButton: document.getElementById('appSettingsShowMultiMonitorButton').checked,
@@ -2214,6 +2465,7 @@ Object.assign(CodemanApp.prototype, {
       opusContext1mEnabled: document.getElementById('appSettingsOpusContext1m').checked,
       remoteAutoReconnect: document.getElementById('appSettingsRemoteAutoReconnect').checked,
       thinkingEffort: document.getElementById('appSettingsThinkingEffort').value,
+      claudeAdvisorModel: document.getElementById('appSettingsClaudeAdvisor').value,
       // CPU Priority settings
       nice: {
         enabled: document.getElementById('appSettingsNiceEnabled').checked,
@@ -2431,6 +2683,7 @@ Object.assign(CodemanApp.prototype, {
       sessionLineageLines: _sll,
       ...serverSettings
     } = settings;
+    let webhookError = '';
     try {
       const res = await this._apiPut('/api/settings', {
         ...serverSettings,
@@ -2455,7 +2708,16 @@ Object.assign(CodemanApp.prototype, {
       // Save model configuration separately
       await this.saveModelConfigFromSettings();
 
-      this.showToast('Settings saved', 'success');
+      // The webhook is server state in its own 0600 file (its URL is a secret, kept out of
+      // settings.json), so like the model config above it is saved beside the settings PUT, not in
+      // it. Only when the group was edited: an untouched group must not re-PUT. A refusal (bad URL,
+      // enabled with no URL) keeps the modal open below, with the pasted URL still in the box.
+      webhookError = this._webhookPending() ? await this.saveWebhook() : '';
+      if (webhookError) {
+        this.showToast(`Settings saved, but not the webhook: ${webhookError}`, 'warning');
+      } else {
+        this.showToast('Settings saved', 'success');
+      }
 
       // Show tunnel-specific feedback if toggled on
       if (settings.tunnelEnabled) {
@@ -2466,7 +2728,11 @@ Object.assign(CodemanApp.prototype, {
       this.showToast('Settings saved locally', 'warning');
     }
 
-    this.closeAppSettings();
+    if (webhookError) {
+      document.getElementById('webhookGroup')?.scrollIntoView({ block: 'center' });
+    } else {
+      this.closeAppSettings();
+    }
 
     // Voice availability is a server-side answer, so re-probe after a save:
     // otherwise the mic keeps using the pre-save provider until the next reload.
@@ -4106,4 +4372,5 @@ Object.assign(CodemanApp.prototype, {
 document.addEventListener?.('codeman:me', () => {
   window.app?._applyCustomModelAdminGate?.();
   window.app?._applyCliManagementAdminGate?.();
+  window.app?._applyMcpSyncAdminGate?.();
 });

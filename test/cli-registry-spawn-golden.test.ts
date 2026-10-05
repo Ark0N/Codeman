@@ -24,6 +24,7 @@
 import { describe, it, expect } from 'vitest';
 import { getCli } from '../src/config/cli-registry/registry.js';
 import { buildSpawnCommandFromRegistry, type SpawnBridgeOptions } from '../src/session-cli-registry-bridge.js';
+import { CODEX_REASONING_EFFORTS } from '../src/types/session.js';
 
 /** A fixed session id, so `--session-id` is stable across runs. */
 const SID = '0f9c2b14-1111-2222-3333-444455556666';
@@ -51,6 +52,20 @@ describe('claude', () => {
     expect(claude({ claudeMode: 'normal' })).toBe('claude --session-id "0f9c2b14-1111-2222-3333-444455556666"');
     expect(claude({ claudeMode: 'allowedTools', allowedTools: 'Bash(git:*), Read' })).toBe(
       'claude --allowedTools "Bash(git:*), Read" --session-id "0f9c2b14-1111-2222-3333-444455556666"'
+    );
+  });
+
+  it('renders a model as the quoted value of --model, even one that opens with a dash', () => {
+    // POST /api/sessions refuses a leading '-' in `model`, but the registry's `model-claude`
+    // pattern still admits one, so the builder must stay safe on its own: the value lands
+    // quoted, and Claude's option parser takes the word after `--model` as its value whatever
+    // it starts with, so it can never become a flag of its own.
+    expect(claude({ model: 'claude-fable-5-1' })).toBe(
+      'claude --dangerously-skip-permissions --session-id "0f9c2b14-1111-2222-3333-444455556666" --model "claude-fable-5-1"'
+    );
+    expect(claude({ model: '--dangerously-skip-permissions' })).toBe(
+      'claude --dangerously-skip-permissions --session-id "0f9c2b14-1111-2222-3333-444455556666" ' +
+        '--model "--dangerously-skip-permissions"'
     );
   });
 
@@ -130,6 +145,18 @@ describe('codex', () => {
 
   it('resumes with a POSITIONAL subcommand, not a flag', () => {
     expect(cx({ model: 'gpt-5', resumeSessionId: 'roll_42' })).toBe('codex --model gpt-5 resume roll_42');
+  });
+
+  it('sends reasoning effort as one model_reasoning_effort config value, for every level', () => {
+    for (const level of CODEX_REASONING_EFFORTS) {
+      expect(cx({ reasoningEffort: level })).toBe(`codex --config model_reasoning_effort=${level}`);
+    }
+  });
+
+  it('keeps reasoning effort ahead of the resume subcommand', () => {
+    expect(cx({ model: 'gpt-5', reasoningEffort: 'high', resumeSessionId: 'roll_42' })).toBe(
+      'codex --model gpt-5 --config model_reasoning_effort=high resume roll_42'
+    );
   });
 });
 

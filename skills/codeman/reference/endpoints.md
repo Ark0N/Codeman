@@ -345,6 +345,13 @@ ESC=$(printf '\033')
 `.data.{sessionId, caseName, casePath}`. Creates the case directory (a real directory
 on the user's disk) if missing, do not retry it in a loop, and remember the name.
 
+A claude worker also takes `"advisorModel":"opus"` (`fable`, `opus`, `sonnet` or a full
+model id): Claude Code's advisor tool, a stronger model the worker consults before
+committing to an approach, on a recurring error and before declaring the task done. It is
+a soft default the worker can change with `/advisor`. Remote and docker cases refuse it
+(400), as they refuse `effort`. `spawn_worker` and `spawn_workers` send it for you when
+`CODEMAN_WORKER_ADVISOR` is set.
+
 ⚠️ A `mode` whose CLI is **not installed on the server** fails the spawn with
 `OPERATION_FAILED`; it never falls back to claude. Probe first whenever you did not pick
 the mode yourself: `GET /api/v1/claude/status`, `GET /api/v1/opencode/status`,
@@ -384,17 +391,18 @@ every claude create path installs them, so a linked case and a raw path both get
 
 **The two-step alternative, `POST /api/v1/sessions`.** Use it when you need a session in
 a directory that is not a case (body takes `workingDir`, `mode`, `name`, `effort`,
-`envOverrides`). Three differences that break copied code:
+`advisorModel`, `envOverrides`, and for claude a per-session `model` passed as `--model`). Three
+differences that break copied code:
 
 - The id is at **`.data.session.id`**, not quick-start's `.data.sessionId`
-  (`session-routes.ts:878` returns `{ session: lightState }`).
+  (the `POST /api/sessions` handler in `session-routes.ts` returns `{ session: lightState }`).
 - **It spawns no PTY.** The session exists with `pid:null` and nothing running, so
   `wait?until=exit` answers `exit` immediately. Follow it with
   `POST /api/v1/sessions/:id/interactive` (claude and the other agent CLIs) or
   `POST /api/v1/sessions/:id/shell` (shell mode) to actually start the worker.
 - Its capacity failure is **`OPERATION_FAILED` (422)**, not quick-start's
   `SESSION_BUSY` (409), from the same global-50 / per-user-25 caps
-  (`session-routes.ts:648`).
+  (`sessionCapacityMessage()` in `route-helpers.ts`).
 
 ⚠️ `POST .../interactive` accepts `{"clearBreaker":true}`, which resets the **PTY-exit
 circuit breaker**. That breaker exists to stop a session that keeps crashing on spawn
