@@ -19575,3 +19575,62 @@ html .toolbar .btn-git-status.git-status--conflict {
 .git-status-repo-body {
   padding: 0.5rem 0.6rem;
 }
+
+/* Git status panel: per-file diff view */
+.git-diff-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.4rem;
+  min-width: 0;
+}
+
+.git-diff-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+}
+
+.git-diff-kind {
+  font-size: 0.64rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.git-diff {
+  margin: 0;
+  padding: 0.3rem 0;
+  overflow-x: auto;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.git-diff-line {
+  display: block;
+  padding: 0 0.5rem;
+  white-space: pre;
+}
+
+.git-diff-line--add {
+  background: color-mix(in srgb, var(--green) 18%, transparent);
+}
+
+.git-diff-line--del {
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+}
+
+.git-diff-line--hunk {
+  color: var(--text-muted);
+  background: var(--bg-hover);
+}
+
+.git-diff-line--meta {
+  color: var(--text-muted);
+}

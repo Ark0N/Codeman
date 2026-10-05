@@ -533,3 +533,58 @@ export async function getGitWorkspaceOverview(
   if (!repos.length) return emptyOverview('not-a-repo');
   return { state: 'ok', repos, reposTruncated: found.truncated, checkedAt: Date.now() };
 }
+
+// ── Per-file diff ──────────────────────────────────────────────────────────
+
+/** Longest diff handed to the browser; beyond this it is cut at a line boundary and flagged. */
+export const MAX_DIFF_BYTES = 400 * 1024;
+
+export interface GitFileDiff {
+  /** Unified diff text (empty when git reports no textual change, e.g. a mode-only edit shows its header). */
+  diff: string;
+  truncated: boolean;
+  binary: boolean;
+}
+
+/** A repo-relative path git reported, minus anything that could be read as an option or escape the repo. */
+export function isSafeRepoRelativePath(p: string): boolean {
+  if (!p || p.length > 4096 || p.includes('\0') || p.startsWith('-') || p.startsWith('/')) return false;
+  return !p.split('/').includes('..');
+}
+
+/**
+ * The diff of one changed file, as the panel's rows describe it: `staged` is index vs HEAD,
+ * `unstaged`/`conflicted` is working tree vs index (a conflict shows git's combined diff), and
+ * `untracked` is the whole file as additions. Read-only, and `--no-ext-diff --no-textconv` keep a
+ * repository's own config from running programs on behalf of a click.
+ */
+export async function getGitFileDiff(
+  repoRoot: string,
+  file: { path: string; origPath?: string; kind: GitFileKind },
+  opts: { git?: GitRunner } = {}
+): Promise<GitFileDiff> {
+  if (!isSafeRepoRelativePath(file.path) || (file.origPath && !isSafeRepoRelativePath(file.origPath))) {
+    throw new Error('Invalid path');
+  }
+  const git = opts.git ?? runGit;
+  const base = ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-U3'];
+  let args: string[];
+  if (file.kind === 'untracked') args = [...base, '--no-index', '--', '/dev/null', file.path];
+  else {
+    const paths = file.origPath ? [file.origPath, file.path] : [file.path];
+    args = file.kind === 'staged' ? [...base, '--cached', '-M', '--', ...paths] : [...base, '--', ...paths];
+  }
+  let out: string;
+  try {
+    out = await git(repoRoot, args);
+  } catch (err) {
+    // `--no-index` exits 1 when the files differ, which is the normal case for it.
+    const e = err as { code?: number; stdout?: unknown };
+    if (file.kind === 'untracked' && e.code === 1 && typeof e.stdout === 'string') out = e.stdout;
+    else throw err;
+  }
+  const binary = /^Binary files .* differ$/m.test(out) || /^GIT binary patch$/m.test(out);
+  if (out.length <= MAX_DIFF_BYTES) return { diff: out, truncated: false, binary };
+  const cut = out.lastIndexOf('\n', MAX_DIFF_BYTES);
+  return { diff: out.slice(0, cut > 0 ? cut : MAX_DIFF_BYTES), truncated: true, binary };
+}

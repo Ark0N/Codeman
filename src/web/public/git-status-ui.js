@@ -214,6 +214,7 @@ Object.assign(CodemanApp.prototype, {
   },
 
   closeGitStatusPanel() {
+    this._gitDiffView = null;
     const panel = this.$('gitStatusPanel');
     if (panel) {
       panel.classList.remove('visible');
@@ -277,6 +278,15 @@ Object.assign(CodemanApp.prototype, {
     if (!body) return;
     const overview = this._currentGitStatus();
     const el = (tag, cls, text) => this._gitEl(tag, cls, text);
+    const view = this._gitDiffView;
+    if (view && view.sessionId === this.activeSessionId) {
+      // A file's diff is on screen: the 15 s poll re-renders the panel, and must not throw it away.
+      this._renderGitDiffView(body, view);
+      if (head) head.textContent = '';
+      if (foot) foot.textContent = '';
+      return;
+    }
+    this._gitDiffView = null;
     body.replaceChildren();
     const clearChrome = () => {
       if (head) head.textContent = '';
@@ -453,13 +463,13 @@ Object.assign(CodemanApp.prototype, {
     row.append(name);
     if (f.origPath) row.append(el('span', 'git-status-orig', `← ${f.origPath}`));
 
-    // Deleted files and untracked folders have nothing to preview.
-    const previewable = letter !== 'D' && !f.path.endsWith('/') && data.repoRoot;
-    if (previewable) {
+    // An untracked folder has no single diff; every other row opens its changes.
+    if (!f.path.endsWith('/') && data.repoRoot) {
       row.classList.add('git-status-file--clickable');
       row.tabIndex = 0;
       row.setAttribute('role', 'button');
-      const open = () => this.openFilePreview?.(`${data.repoRoot}/${f.path}`, this.activeSessionId);
+      row.title = 'Show what changed';
+      const open = () => this.openGitDiff(data.repoRoot, f, letter);
       row.addEventListener('click', open);
       row.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -469,6 +479,94 @@ Object.assign(CodemanApp.prototype, {
       });
     }
     return row;
+  },
+
+  // ── Diff view ───────────────────────────────────────────────────────────
+
+  /** Show `file`'s changes in the panel (a Back button returns to the list). */
+  async openGitDiff(repoRoot, file, letter) {
+    const sessionId = this.activeSessionId;
+    if (!sessionId) return;
+    const view = { sessionId, repoRoot, file, letter, state: 'loading' };
+    this._gitDiffView = view;
+    this._renderGitStatusPanel();
+    const qs = new URLSearchParams({ repo: repoRoot, path: file.path, kind: file.kind });
+    const res = await this._api(`/api/sessions/${encodeURIComponent(sessionId)}/git-diff?${qs}`);
+    // Back, another file or another session while this was in flight: drop the answer.
+    if (this._gitDiffView !== view) return;
+    let body = null;
+    try {
+      body = res ? await res.json() : null;
+    } catch {
+      /* fall through */
+    }
+    if (this._gitDiffView !== view) return;
+    if (res && res.ok && body?.success) {
+      view.state = 'ok';
+      view.result = body.data;
+    } else {
+      view.state = 'error';
+      view.error = body?.error || 'Could not read the diff.';
+    }
+    this._renderGitStatusPanel();
+  },
+
+  closeGitDiff() {
+    this._gitDiffView = null;
+    this._renderGitStatusPanel();
+  },
+
+  _renderGitDiffView(body, view) {
+    const el = (tag, cls, text) => this._gitEl(tag, cls, text);
+    body.replaceChildren();
+    const bar = el('div', 'git-diff-bar');
+    const back = el('button', 'btn-toolbar btn-sm', '← Back');
+    back.type = 'button';
+    back.addEventListener('click', () => this.closeGitDiff());
+    bar.append(back);
+    bar.append(el('span', 'git-diff-path', view.file.path));
+    const kindLabel = { staged: 'staged', unstaged: 'not staged', untracked: 'new file', conflicted: 'conflict' };
+    bar.append(el('span', 'git-diff-kind', kindLabel[view.file.kind] || ''));
+    if (view.letter !== 'D') {
+      const open = el('button', 'btn-toolbar btn-sm', 'Open file');
+      open.type = 'button';
+      open.addEventListener('click', () =>
+        this.openFilePreview?.(`${view.repoRoot}/${view.file.path}`, this.activeSessionId)
+      );
+      bar.append(open);
+    }
+    body.append(bar);
+
+    if (view.state === 'loading') {
+      body.append(el('div', 'git-status-empty', 'Reading the diff…'));
+      return;
+    }
+    if (view.state === 'error') {
+      body.append(el('div', 'git-status-empty', view.error));
+      return;
+    }
+    const { diff, truncated, binary } = view.result;
+    if (binary) body.append(el('div', 'git-status-note', 'This is a binary file; there is no text diff to show.'));
+    if (!diff.trim()) {
+      if (!binary) body.append(el('div', 'git-status-empty', 'No textual changes (the file may differ only in mode).'));
+      return;
+    }
+    const pre = el('pre', 'git-diff');
+    const frag = document.createDocumentFragment();
+    for (const line of diff.split('\n')) {
+      let cls = 'git-diff-line';
+      if (line.startsWith('@@')) cls += ' git-diff-line--hunk';
+      else if (
+        /^(diff --git|index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode)/.test(line)
+      )
+        cls += ' git-diff-line--meta';
+      else if (line.startsWith('+')) cls += ' git-diff-line--add';
+      else if (line.startsWith('-')) cls += ' git-diff-line--del';
+      frag.append(el('span', cls, line + '\n'));
+    }
+    pre.append(frag);
+    body.append(pre);
+    if (truncated) body.append(el('div', 'git-status-more', 'Diff cut short: it is larger than the viewer shows.'));
   },
 
   _gitCommitRow(c) {

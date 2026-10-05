@@ -704,6 +704,8 @@ normal `caseName`/`mode`/etc. body)
 
 `GET /api/sessions/:id/git-status` is what the bottom-bar Git indicator and its panel read (Settings → Header & Panels → Bottom bar, per-device, default off). It reports what the session's workspace has not committed or pushed. **Read-only and offline:** it never fetches, pulls, commits or writes (it runs `git status` with `--no-optional-locks`, so it does not even refresh the index), which is why `behind` is as of the last `git fetch`. The session is resolved like every session route (ownership via `findSessionOrFail`; another user's session is `404`).
 
+`GET /api/sessions/:id/git-diff?repo=<repoRoot>&path=<path>&kind=staged|unstaged|untracked|conflicted` returns the unified diff of one file the panel lists (`{ diff, truncated, binary }`; staged is index vs HEAD, unstaged is working tree vs index, untracked is the whole file as additions). It is what opens when you click a file in the Git panel. `repo` and `path` are matched against the current status rather than trusted, so anything the status does not list is `404`. Read-only (`--no-ext-diff --no-textconv`, so repository config never runs a program), capped at 400 KB, and refused (`400`) for remote and Docker sessions.
+
 **Which repositories.** git finds a repository by walking *up* from the session's working directory, so:
 
 - Inside a repository (or at its root): that one repository, whole (a subfolder reports its enclosing repo, `path` says where it is, e.g. `../..`). A nested repo below it is just an untracked folder to the outer one and is not scanned; start the session inside it to see it.

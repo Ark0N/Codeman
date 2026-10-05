@@ -660,3 +660,68 @@ describe('getGitWorkspaceOverview', () => {
     expect(await isUnrelatedAncestor(home, home, home)).toBe(false);
   });
 });
+
+import { MAX_DIFF_BYTES, getGitFileDiff, isSafeRepoRelativePath } from '../src/git-workspace-status.js';
+
+describe('isSafeRepoRelativePath', () => {
+  it.each([
+    ['a.txt', true],
+    ['src/deep/x.ts', true],
+    ['', false],
+    ['-rf', false],
+    ['/etc/passwd', false],
+    ['../x', false],
+    ['a/../../x', false],
+    ['a\0b', false],
+  ])('%j -> %s', (p, ok) => expect(isSafeRepoRelativePath(p)).toBe(ok));
+});
+
+describe('getGitFileDiff', () => {
+  it('refuses an unsafe path without running git', async () => {
+    const git = vi.fn(async () => '');
+    await expect(getGitFileDiff('/r', { path: '../x', kind: 'unstaged' }, { git })).rejects.toThrow('Invalid path');
+    expect(git).not.toHaveBeenCalled();
+  });
+
+  it('builds read-only, option-injection-safe commands per kind', async () => {
+    const git = vi.fn(async (_cwd: string, _args: string[]) => '');
+    await getGitFileDiff('/r', { path: 'a.txt', kind: 'unstaged' }, { git });
+    await getGitFileDiff('/r', { path: 'b.txt', origPath: 'old.txt', kind: 'staged' }, { git });
+    const [unstaged, staged] = git.mock.calls.map((c) => c[1]);
+    for (const args of [unstaged, staged]) {
+      expect(args).toContain('--no-ext-diff');
+      expect(args).toContain('--no-textconv');
+      expect(args.indexOf('--')).toBeGreaterThan(0);
+    }
+    expect(unstaged.slice(-2)).toEqual(['--', 'a.txt']);
+    expect(staged).toContain('--cached');
+    expect(staged.slice(-3)).toEqual(['--', 'old.txt', 'b.txt']);
+  });
+
+  it('treats --no-index exit 1 as the normal untracked result', async () => {
+    const git = vi.fn(async () => {
+      throw Object.assign(new Error('exit 1'), { code: 1, stdout: '+hello\n' });
+    });
+    await expect(getGitFileDiff('/r', { path: 'n.txt', kind: 'untracked' }, { git })).resolves.toMatchObject({
+      diff: '+hello\n',
+    });
+    const boom = vi.fn(async () => {
+      throw Object.assign(new Error('exit 128'), { code: 128, stdout: '' });
+    });
+    await expect(getGitFileDiff('/r', { path: 'n.txt', kind: 'untracked' }, { git: boom })).rejects.toThrow();
+  });
+
+  it('flags binary output and cuts an oversized diff at a line boundary', async () => {
+    const bin = await getGitFileDiff(
+      '/r',
+      { path: 'x.png', kind: 'unstaged' },
+      { git: async () => 'Binary files a/x.png and b/x.png differ\n' }
+    );
+    expect(bin.binary).toBe(true);
+    const big = ('+' + 'x'.repeat(99) + '\n').repeat(Math.ceil(MAX_DIFF_BYTES / 100) + 50);
+    const cut = await getGitFileDiff('/r', { path: 'big', kind: 'unstaged' }, { git: async () => big });
+    expect(cut.truncated).toBe(true);
+    expect(cut.diff.length).toBeLessThanOrEqual(MAX_DIFF_BYTES);
+    expect(cut.diff.endsWith('x')).toBe(true);
+  });
+});

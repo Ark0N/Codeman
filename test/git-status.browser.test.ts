@@ -168,21 +168,39 @@ describe('Git status indicator in a real browser', () => {
     expect(await page.evaluate(() => (window as any).__pwned)).toBeUndefined();
   });
 
-  it('clicking a file previews it by its absolute path; a deleted file is not clickable', async () => {
+  it('clicking a file shows its diff in the panel; Back returns to the list; Open file previews it', async () => {
     await page.evaluate(() => {
       (window as any).__previewed = [];
       (window as any).app.openFilePreview = (p: string) => (window as any).__previewed.push(p);
     });
     await page.click('.git-status-file:has-text("a.txt")');
+    await page.waitForSelector('#gitStatusBody .git-diff');
+    expect(await page.textContent('#gitStatusBody .git-diff-path')).toBe('a.txt');
+    expect(await page.textContent('#gitStatusBody .git-diff-line--del')).toBe('-1\n');
+    expect(await page.textContent('#gitStatusBody .git-diff-line--add')).toBe('+2\n');
+    // The 15 s poll re-renders the panel; the diff must survive it.
+    await refresh();
+    expect(await page.$('#gitStatusBody .git-diff')).not.toBeNull();
+    await page.click('#gitStatusBody button:has-text("Open file")');
     expect(await page.evaluate(() => (window as any).__previewed)).toEqual([join(repo, 'a.txt')]);
+    await page.click('#gitStatusBody button:has-text("Back")');
+    await page.waitForSelector('.git-status-file:has-text("a.txt")');
+    expect(await page.$('#gitStatusBody .git-diff')).toBeNull();
+  });
+
+  it('an untracked file diffs as all additions, and a deleted file as all removals (with no Open file)', async () => {
+    await page.click('.git-status-file:has-text("new file.txt")');
+    await page.waitForSelector('#gitStatusBody .git-diff-line--add');
+    expect(await page.locator('#gitStatusBody .git-diff-line--del').count()).toBe(0);
+    await page.click('#gitStatusBody button:has-text("Back")');
     rmSync(join(repo, 'b.txt'));
     await refresh();
-    await page.waitForFunction(() =>
-      /Deleted|b\.txt/.test(document.getElementById('gitStatusBody')!.textContent ?? '')
-    );
-    const deleted = page.locator('.git-status-file:has(.git-status-badge--D)');
-    expect(await deleted.count()).toBe(1);
-    expect(await deleted.first().getAttribute('role')).toBeNull();
+    await page.waitForSelector('.git-status-file:has(.git-status-badge--D)');
+    await page.click('.git-status-file:has(.git-status-badge--D)');
+    await page.waitForSelector('#gitStatusBody .git-diff-line--del');
+    expect(await page.locator('#gitStatusBody .git-diff-line--add').count()).toBe(0);
+    expect(await page.locator('#gitStatusBody button:has-text("Open file")').count()).toBe(0);
+    await page.click('#gitStatusBody button:has-text("Back")');
   });
 
   it('drags by the header', async () => {

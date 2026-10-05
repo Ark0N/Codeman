@@ -4,7 +4,7 @@
  * all (remote and Docker sessions). Port: N/A (app.inject()).
  */
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -151,5 +151,68 @@ describe('GET /api/sessions/:id/git-status', () => {
         200
       );
     }
+  });
+});
+
+describe('GET /api/sessions/:id/git-diff', () => {
+  const url = (q: Record<string, string>) => `/api/sessions/test-session-1/git-diff?${new URLSearchParams(q)}`;
+  let root: string;
+
+  beforeEach(() => {
+    git(dir, 'init', '-q', '-b', 'main');
+    writeFileSync(join(dir, 'a.txt'), 'one\n');
+    writeFileSync(join(dir, 'b.txt'), 'bee\n');
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', 'base');
+    writeFileSync(join(dir, 'a.txt'), 'two\n');
+    writeFileSync(join(dir, 'b.txt'), 'staged\n');
+    git(dir, 'add', 'b.txt');
+    writeFileSync(join(dir, 'new.txt'), 'fresh\n');
+    root = realpathSync(dir);
+  });
+
+  it.each([
+    ['unstaged', 'a.txt', ['-one', '+two']],
+    ['staged', 'b.txt', ['-bee', '+staged']],
+    ['untracked', 'new.txt', ['+fresh']],
+  ])('returns the %s diff of %s', async (kind, path, lines) => {
+    const { app } = await setup();
+    const res = await app.inject({ method: 'GET', url: url({ repo: root, path, kind }) });
+    expect(res.statusCode).toBe(200);
+    const { diff, truncated, binary } = res.json().data;
+    for (const l of lines) expect(diff).toContain(l);
+    expect(truncated).toBe(false);
+    expect(binary).toBe(false);
+  });
+
+  it('answers 404 for a path or repo the status does not list, running no diff', async () => {
+    const runner = vi.fn<GitRunner>(async () => '');
+    const { app } = await setup({ git: runner });
+    for (const q of [
+      { repo: root, path: '../../etc/passwd', kind: 'unstaged' },
+      { repo: '/etc', path: 'a.txt', kind: 'unstaged' },
+      { repo: root, path: 'a.txt', kind: 'staged' },
+    ]) {
+      const res = await app.inject({ method: 'GET', url: url(q) });
+      expect(res.statusCode).toBe(404);
+    }
+    expect(runner.mock.calls.some(([, args]) => args[0] === 'diff')).toBe(false);
+  });
+
+  it('does not run git for remote and Docker sessions', async () => {
+    const runner = vi.fn<GitRunner>(async () => '');
+    const { app } = await setup({ git: runner });
+    session.remote = { host: 'h' };
+    const res = await app.inject({ method: 'GET', url: url({ repo: root, path: 'a.txt', kind: 'unstaged' }) });
+    expect(res.statusCode).toBe(400);
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it('multi-user: another user’s session is not found', async () => {
+    process.env.CODEMAN_MULTIUSER = '1';
+    const { app } = await setup({ authUser: { username: 'bob', role: 'user' } });
+    session.owner = 'alice';
+    const res = await app.inject({ method: 'GET', url: url({ repo: root, path: 'a.txt', kind: 'unstaged' }) });
+    expect(res.statusCode).toBe(404);
   });
 });
