@@ -788,6 +788,22 @@
       '现有项目文件夹的绝对路径，例如 /home/you/my-project',
     'Letters, numbers, hyphens, underscores only. Created in ~/codeman-cases/':
       '仅允许字母、数字、连字符和下划线；将在 ~/codeman-cases/ 中创建。',
+    'Letters, numbers, hyphens, underscores only. Created inside the parent folder below.':
+      '仅允许字母、数字、连字符和下划线；将在下方的父文件夹中创建。',
+    'A fresh workspace under ~/codeman-cases, scaffolded with its own CLAUDE.md.':
+      '在 ~/codeman-cases 下新建工作区，并生成独立的 CLAUDE.md。',
+    'A fresh workspace in a folder you choose, scaffolded with its own CLAUDE.md.':
+      '在你选择的文件夹中新建工作区，并生成独立的 CLAUDE.md。',
+    'Create in a custom folder': '在自定义文件夹中创建',
+    '📁 Create in a custom folder': '📁 在自定义文件夹中创建',
+    'By default a new case is created under ~/codeman-cases. Choose another folder and the case is created there instead; it is listed like any other case.':
+      '新案例默认创建在 ~/codeman-cases 下。选择其他文件夹后，案例会改为创建在那里，并像其他案例一样列出。',
+    'Parent Folder': '父文件夹',
+    'Pick the folder the new case folder should be created inside.': '选择要在其中创建新案例文件夹的文件夹。',
+    'Choose the folder to create the case in': '选择要在其中创建案例的文件夹',
+    'Not available for a Docker case': 'Docker 案例不可用',
+    'Not available with a custom folder': '使用自定义文件夹时不可用',
+    'Browse…': '浏览…',
     'Docker exports': 'Docker 导出',
     'No exports yet. Export a docker case from its tab.': '暂无导出；请从 Docker 案例标签页导出。',
     'Runs inside an isolated container. Multiple sessions can share the same container.':
@@ -952,6 +968,7 @@
       [/^Update available: v(.+)$/, (_m, version) => `有可用更新：v${version}`],
       [/^Selected: (.+)$/, (_m, value) => `已选择：${value}`],
       [/^Failed to (.+)$/, (_m, action) => `操作失败：${action}`],
+      [/^Will create: (.+)$/, (_m, path) => `将创建：${path}`],
       // Group names are user text: they pass through untranslated.
       [/^Move to "(.+)"$/, (_m, group) => `移到“${group}”`],
       [

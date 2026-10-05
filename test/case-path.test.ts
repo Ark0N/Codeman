@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -10,7 +10,8 @@ let home: string;
 let ctx: NewCasePathContext;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'case-path-'));
+  // Resolved: prepareNewCasePath answers with symlink-resolved paths (macOS temp is under /private).
+  root = realpathSync(mkdtempSync(join(tmpdir(), 'case-path-')));
   home = join(root, 'home');
   mkdirSync(join(home, 'code'), { recursive: true });
   ctx = { home, dataDir: join(home, '.codeman') };
@@ -51,6 +52,19 @@ describe('blockedReason', () => {
   it('does not treat /etcetera or /usrlocal as the system directories', () => {
     expect(blockedReason('/etcetera/x', c)).toBeNull();
     expect(blockedReason('/usrlocal', c)).toBeNull();
+  });
+
+  it('refuses a cases directory and anything inside it, when given', () => {
+    const withCases = { ...c, casesDirs: ['/home/u/codeman-cases'] };
+    expect(blockedReason('/home/u/codeman-cases', withCases)).toMatch(/plain Create New/);
+    expect(blockedReason('/home/u/codeman-cases/foo', withCases)).toMatch(/plain Create New/);
+    expect(blockedReason('/home/u/codeman-cases-old/foo', withCases)).toBeNull();
+    expect(blockedReason('/home/u/codeman-cases/foo', c)).toBeNull();
+  });
+
+  it('judges against the system roots it is given', () => {
+    expect(blockedReason('/private/etc/x', c)).toBeNull();
+    expect(blockedReason('/private/etc/x', c, ['/private/etc'])).toMatch(/system directory/);
   });
 });
 
@@ -109,6 +123,37 @@ describe('prepareNewCasePath', () => {
       ok: false,
       code: 'BLOCKED',
     });
+  });
+
+  it('judges the resolved path against the resolved home too, when home is reached through a symlink', async () => {
+    const realHome = join(root, 'realhome');
+    mkdirSync(join(realHome, '.ssh'), { recursive: true });
+    mkdirSync(join(realHome, 'code'));
+    const linkHome = join(root, 'linkhome');
+    symlinkSync(realHome, linkHome);
+    // Typed, this reads as <link home>/code/innocent/x; resolved, it is <real home>/.ssh/x.
+    symlinkSync(join(realHome, '.ssh'), join(realHome, 'code', 'innocent'));
+    const viaLink = { home: linkHome, dataDir: join(linkHome, '.codeman') };
+    expect(await prepareNewCasePath(join(linkHome, 'code', 'innocent', 'x'), viaLink)).toMatchObject({
+      ok: false,
+      code: 'BLOCKED',
+    });
+    // The same for Codeman's data dir given through the link.
+    mkdirSync(join(realHome, '.codeman'));
+    symlinkSync(join(realHome, '.codeman'), join(realHome, 'code', 'state'));
+    expect(await prepareNewCasePath(join(linkHome, 'code', 'state', 'x'), viaLink)).toMatchObject({
+      ok: false,
+      code: 'BLOCKED',
+    });
+  });
+
+  it('refuses a link into a cases directory, judged on its resolved form', async () => {
+    const cases = join(home, 'codeman-cases');
+    mkdirSync(cases);
+    symlinkSync(cases, join(home, 'code', 'shortcut'));
+    const r = await prepareNewCasePath(join(home, 'code', 'shortcut', 'app'), { ...ctx, casesDirs: [cases] });
+    expect(r).toMatchObject({ ok: false, code: 'BLOCKED' });
+    if (!r.ok) expect(r.reason).toMatch(/plain Create New/);
   });
 
   it('reports a missing parent as NOT_FOUND and never makes a chain of folders', async () => {

@@ -3356,6 +3356,19 @@ Object.assign(CodemanApp.prototype, {
     const row = document.getElementById('newCaseCustomPathRow');
     if (!custom || !row) return;
     row.style.display = custom.checked ? '' : 'none';
+    // The "under ~/codeman-cases" wording is wrong while a custom folder is picked.
+    const blurb = document.getElementById('newCaseBlurb');
+    if (blurb) {
+      blurb.textContent = custom.checked
+        ? 'A fresh workspace in a folder you choose, scaffolded with its own CLAUDE.md.'
+        : 'A fresh workspace under ~/codeman-cases, scaffolded with its own CLAUDE.md.';
+    }
+    const nameHint = document.getElementById('newCaseNameHint');
+    if (nameHint) {
+      nameHint.textContent = custom.checked
+        ? 'Letters, numbers, hyphens, underscores only. Created inside the parent folder below.'
+        : 'Letters, numbers, hyphens, underscores only. Created in ~/codeman-cases/';
+    }
     custom.disabled = !!docker?.checked;
     custom.title = docker?.checked ? 'Not available for a Docker case' : '';
     if (docker) {
@@ -3367,9 +3380,12 @@ Object.assign(CodemanApp.prototype, {
 
   /** The folder the case would be created in: the parent field plus the case name. */
   _newCaseTargetPath() {
-    const parent = (document.getElementById('newCasePath')?.value || '').trim().replace(/\/+$/, '');
+    const rawParent = (document.getElementById('newCasePath')?.value || '').trim();
     const name = (document.getElementById('newCaseName')?.value || '').trim();
-    return parent && name ? `${parent}/${name}` : '';
+    if (!rawParent || !name) return '';
+    // Trailing slashes off, but `/` stays the root rather than becoming an empty path.
+    const parent = rawParent.replace(/\/+$/, '');
+    return `${parent}/${name}`;
   },
 
   updateNewCasePathPreview() {
@@ -3443,7 +3459,9 @@ Object.assign(CodemanApp.prototype, {
           // Start a session INSIDE the container (routes through quick-start).
           await this.runClaude();
         } else {
-          this.showToast(customFolder ? `Case "${name}" created in ${payload.path}` : `Case "${name}" created`, 'success');
+          // The server's path is the folder actually created (~ expanded, symlinks resolved).
+          const createdIn = data.data?.case?.path || payload.path;
+          this.showToast(customFolder ? `Case "${name}" created in ${createdIn}` : `Case "${name}" created`, 'success');
         }
       } else {
         this.showToast(data.error || 'Failed to create case', 'error');

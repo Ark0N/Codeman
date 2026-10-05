@@ -3023,11 +3023,11 @@
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg>
               <h2>Create New</h2>
             </div>
-            <p class="set-section-blurb">A fresh workspace under ~/codeman-cases, scaffolded with its own CLAUDE.md.</p>
+            <p class="set-section-blurb" id="newCaseBlurb">A fresh workspace under ~/codeman-cases, scaffolded with its own CLAUDE.md.</p>
             <div class="form-row">
               <label>Case Name</label>
               <input type="text" id="newCaseName" placeholder="my-project" pattern="[a-zA-Z0-9_-]+" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="app.updateNewCasePathPreview()">
-              <span class="form-hint">Letters, numbers, hyphens, underscores only. Created in ~/codeman-cases/</span>
+              <span class="form-hint" id="newCaseNameHint">Letters, numbers, hyphens, underscores only. Created in ~/codeman-cases/</span>
             </div>
             <div class="form-row">
               <label>Description (optional)</label>

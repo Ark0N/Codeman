@@ -446,7 +446,8 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     req: FastifyRequest,
     reply: { code: (n: number) => unknown }
   ): Promise<ApiResponse<{ case: { name: string; path: string } }>> {
-    if (existsSync(join(resolveCasesDir(getAuthUser(req)), name))) {
+    const ownCasesDir = resolveCasesDir(getAuthUser(req));
+    if (existsSync(join(ownCasesDir, name))) {
       reply.code(409);
       return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'A case with this name already exists in codeman-cases.');
     }
@@ -459,7 +460,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       );
     }
 
-    const prepared = await prepareNewCasePath(customPath, { home: homedir(), dataDir: getDataDir() });
+    // The caller's own cases dir and the shared one (the same folder outside multi-user mode).
+    const casesDirs = [...new Set([ownCasesDir, resolveCasesDir()])];
+    const prepared = await prepareNewCasePath(customPath, { home: homedir(), dataDir: getDataDir(), casesDirs });
     if (!prepared.ok) {
       const status = prepared.code === 'NOT_FOUND' ? 404 : prepared.code === 'EXISTS' ? 409 : 400;
       reply.code(status);
@@ -494,7 +497,9 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
       const codemanDir = getDataDir();
       if (!existsSync(codemanDir)) mkdirSync(codemanDir, { recursive: true });
-      // Re-read right before writing: another request may have linked a case since the check above.
+      // Re-read right before writing, so a case linked since the check above is not dropped. This only
+      // narrows the window: like POST /api/cases/link, the registry write is not serialized, and two
+      // requests that both read before either writes can still lose one entry.
       const fresh = await readLinkedCases();
       if (fresh[name]) throw Object.assign(new Error(`Case "${name}" was just linked`), { conflict: true });
       fresh[name] = casePath;

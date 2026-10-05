@@ -9,7 +9,11 @@
  *     a case this accepts is one a session can actually start in;
  *   - it must not be a system directory, the home directory itself, Codeman's own data directory, or
  *     a credential/config tree (`~/.ssh`, `~/.aws`, `~/.claude`, ...). Judged on the path as typed AND on
- *     its symlink-resolved form, so a link into `/etc` is not a way around it;
+ *     its symlink-resolved form, against both the given and the symlink-resolved roots (a home reached
+ *     through a link, macOS's `/etc` -> `/private/etc`), so a link into a blocked tree is not a way
+ *     around it;
+ *   - it must not be, or be inside, a cases directory: a case there is a plain Create New, and the same
+ *     folder listed both as a local case and as a linked one would make deleting it remove files;
  *   - its parent must already exist (one folder is created, never a whole chain), and the folder
  *     itself must not exist or must be an EMPTY directory (a folder with contents is Link Existing's
  *     job, and silently scaffolding into someone's project is the one thing this must never do);
@@ -48,6 +52,11 @@ export interface NewCasePathContext {
   home: string;
   /** Codeman's own state directory (`getDataDir()`), which must never become a case. */
   dataDir: string;
+  /**
+   * The cases directories (the caller's own and the shared one). A folder in one of them is already
+   * listed as a local case, so it must not be registered as a linked one too.
+   */
+  casesDirs?: readonly string[];
 }
 
 export type NewCasePathResult =
@@ -64,10 +73,17 @@ export function expandHome(raw: string, home: string): string {
   return raw;
 }
 
-/** Why a case may not live at this (already absolute and normalised) path, or null. */
-export function blockedReason(absPath: string, ctx: NewCasePathContext): string | null {
+/**
+ * Why a case may not live at this (already absolute and normalised) path, or null. `systemRoots`
+ * defaults to the system trees as spelled; pass their symlink-resolved forms to judge a resolved path.
+ */
+export function blockedReason(
+  absPath: string,
+  ctx: NewCasePathContext,
+  systemRoots: readonly string[] = BLOCKED_SYSTEM_ROOTS
+): string | null {
   if (absPath === sep) return 'The filesystem root cannot be a case';
-  for (const root of BLOCKED_SYSTEM_ROOTS) {
+  for (const root of systemRoots) {
     if (isWithin(absPath, root)) return `${root} is a system directory`;
   }
   if (absPath === ctx.home) return 'The home folder itself cannot be a case; pick a folder inside it';
@@ -81,7 +97,32 @@ export function blockedReason(absPath: string, ctx: NewCasePathContext): string 
     const firstSegment = absPath.slice(ctx.home.length + 1).split(sep)[0];
     if (/^\.codeman/.test(firstSegment)) return "Codeman's own data folder cannot be a case";
   }
+  for (const dir of ctx.casesDirs ?? []) {
+    if (isWithin(absPath, dir)) {
+      return 'That folder is inside the cases folder; create a case there with plain Create New (no custom folder)';
+    }
+  }
   return null;
+}
+
+/** `p` with its symlinks resolved, or `p` itself when it does not exist (or cannot be read). */
+async function realpathOr(p: string): Promise<string> {
+  try {
+    return await fs.realpath(p);
+  } catch {
+    return p;
+  }
+}
+
+/** The context and system roots with their symlinks resolved, for judging a resolved path. */
+async function resolvedPolicy(ctx: NewCasePathContext): Promise<[NewCasePathContext, string[]]> {
+  const [home, dataDir, casesDirs, systemRoots] = await Promise.all([
+    realpathOr(ctx.home),
+    realpathOr(ctx.dataDir),
+    Promise.all((ctx.casesDirs ?? []).map(realpathOr)),
+    Promise.all(BLOCKED_SYSTEM_ROOTS.map(realpathOr)),
+  ]);
+  return [{ home, dataDir, casesDirs }, systemRoots];
 }
 
 /**
@@ -115,7 +156,10 @@ export async function prepareNewCasePath(raw: string, ctx: NewCasePathContext): 
     return { ok: false, code: 'NOT_FOUND', reason: `The parent folder ${dirname(target)} does not exist` };
   }
   const real = join(realParent, basename(target));
-  const realBlock = blockedReason(real, ctx);
+  // The resolved path against the roots as given AND as resolved: with home reached through a link, a
+  // link to <real home>/.ssh is only caught by the resolved home; on macOS /etc is /private/etc.
+  const [resolvedCtx, resolvedSystemRoots] = await resolvedPolicy(ctx);
+  const realBlock = blockedReason(real, ctx) ?? blockedReason(real, resolvedCtx, resolvedSystemRoots);
   if (realBlock) return { ok: false, code: 'BLOCKED', reason: realBlock };
 
   try {

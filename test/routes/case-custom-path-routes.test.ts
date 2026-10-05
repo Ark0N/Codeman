@@ -2,30 +2,54 @@
  * @fileoverview POST /api/cases with a `path`: create a new case in a custom folder. Real
  * filesystem under test/setup.ts's temp HOME (the path policy itself is in test/case-path.test.ts).
  * Port: N/A (app.inject()).
+ *
+ * This suite deletes and rewrites the linked-cases registry. Under test/setup.ts that file lives in a
+ * throwaway HOME; a raw `npx vitest` (no setup) would reach the real ~/.codeman, so every test refuses
+ * to start there. Each test's folders sit in a fresh mkdtemp dir, and everything is removed through
+ * safeRmHomeTree, so a run can only ever delete what it created.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import { registerCaseRoutes } from '../../src/web/routes/case-routes.js';
 import { dataPath } from '../../src/config/instance.js';
+import { safeRmHomeTree } from '../mocks/index.js';
 
 const LINKED = () => dataPath('linked-cases.json');
-const work = () => join(homedir(), 'projects');
+const CASES_DIR = () => join(homedir(), 'codeman-cases');
+/** test/setup.ts's temp HOME (its prefix is pinned by test/test-env-isolation.test.ts). */
+const sandboxed = () => basename(homedir()).startsWith('codeman-vitest-');
+let workDir = '';
+const work = () => workDir;
 const linked = (): Record<string, string> => (existsSync(LINKED()) ? JSON.parse(readFileSync(LINKED(), 'utf8')) : {});
 const create = (app: Awaited<ReturnType<typeof createRouteTestHarness>>['app'], payload: Record<string, unknown>) =>
   app.inject({ method: 'POST', url: '/api/cases', payload });
 
 beforeEach(() => {
-  rmSync(work(), { recursive: true, force: true });
-  rmSync(LINKED(), { recursive: true, force: true });
-  mkdirSync(work(), { recursive: true });
+  if (!sandboxed()) {
+    throw new Error('case-custom-path-routes.test.ts deletes the linked-cases registry: run it via npm test');
+  }
+  // Recursive: the rollback tests turn the registry into a directory.
+  safeRmHomeTree(LINKED());
+  // Resolved, because the server answers with the symlink-resolved folder (macOS temp is under /private).
+  workDir = realpathSync(mkdtempSync(join(homedir(), 'case-custom-path-')));
 });
 afterEach(() => {
   delete process.env.CODEMAN_MULTIUSER;
-  rmSync(work(), { recursive: true, force: true });
-  rmSync(LINKED(), { recursive: true, force: true });
+  if (workDir) safeRmHomeTree(workDir);
+  workDir = '';
+  if (sandboxed()) safeRmHomeTree(LINKED());
 });
 
 describe('POST /api/cases with a custom path', () => {
@@ -53,7 +77,7 @@ describe('POST /api/cases with a custom path', () => {
   it('expands ~ and fills an existing EMPTY folder', async () => {
     const { app } = await createRouteTestHarness(registerCaseRoutes);
     mkdirSync(join(work(), 'empty-one'));
-    const res = await create(app, { name: 'empty-one', path: '~/projects/empty-one' });
+    const res = await create(app, { name: 'empty-one', path: `~/${basename(work())}/empty-one` });
     expect(res.statusCode).toBe(200);
     expect(existsSync(join(work(), 'empty-one', 'CLAUDE.md'))).toBe(true);
   });
@@ -132,7 +156,31 @@ describe('POST /api/cases with a custom path', () => {
     expect(res.statusCode).toBe(200);
     expect(existsSync(join(homedir(), 'codeman-cases', 'plain-case', 'CLAUDE.md'))).toBe(true);
     expect(linked()).toEqual({});
-    rmSync(join(homedir(), 'codeman-cases', 'plain-case'), { recursive: true, force: true });
+    safeRmHomeTree(join(CASES_DIR(), 'plain-case'));
+  });
+
+  it('refuses a target in the cases directory (400): a case there is a plain create, never a linked one', async () => {
+    const { app } = await createRouteTestHarness(registerCaseRoutes);
+    mkdirSync(join(CASES_DIR(), 'existing-empty'), { recursive: true });
+    // A link from the custom parent into the cases dir is judged on its resolved form too.
+    symlinkSync(CASES_DIR(), join(work(), 'into-cases'));
+    try {
+      for (const path of [
+        join(CASES_DIR(), 'bar'),
+        join(CASES_DIR(), 'existing-empty'),
+        join(work(), 'into-cases', 'via-link'),
+      ]) {
+        const res = await create(app, { name: 'bar', path });
+        expect(res.statusCode, path).toBe(400);
+        expect(res.json().error, path).toMatch(/plain Create New/);
+      }
+      expect(existsSync(join(CASES_DIR(), 'bar'))).toBe(false);
+      expect(existsSync(join(CASES_DIR(), 'via-link'))).toBe(false);
+      expect(readdirSync(join(CASES_DIR(), 'existing-empty'))).toEqual([]);
+      expect(linked()).toEqual({});
+    } finally {
+      safeRmHomeTree(join(CASES_DIR(), 'existing-empty'));
+    }
   });
 
   it('multi-user: a non-admin is refused (403) and nothing is created; an admin is allowed', async () => {

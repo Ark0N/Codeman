@@ -1,7 +1,7 @@
 /** @fileoverview Add Case → Create New → "Create in a custom folder", end to end: real server, real Chromium, real folders. */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
@@ -125,6 +125,40 @@ describe('Create a case in a custom folder', () => {
     );
     expect(readFileSync(join(busy, 'keep.txt'), 'utf8')).toBe('mine');
     expect(existsSync(join(busy, 'CLAUDE.md'))).toBe(false);
+  });
+
+  it('rewords the "under ~/codeman-cases" hints while a custom folder is picked', async () => {
+    await open();
+    expect(await page.textContent('#newCaseNameHint')).toMatch(/Created in ~\/codeman-cases/);
+    await page.click('label.checkbox-row:has(#newCaseCustomPathToggle)');
+    expect(await page.textContent('#newCaseNameHint')).toMatch(/parent folder below/);
+    expect(await page.textContent('#newCaseBlurb')).toMatch(/a folder you choose/);
+    await page.click('label.checkbox-row:has(#newCaseCustomPathToggle)');
+    expect(await page.textContent('#newCaseNameHint')).toMatch(/Created in ~\/codeman-cases/);
+    expect(await page.textContent('#newCaseBlurb')).toMatch(/under ~\/codeman-cases/);
+  });
+
+  it('keeps / as the root parent instead of sending an empty path', async () => {
+    await open();
+    await page.click('label.checkbox-row:has(#newCaseCustomPathToggle)');
+    await page.fill('#newCaseName', 'at-root');
+    await page.fill('#newCasePath', '/');
+    expect(await page.textContent('#newCasePathPreview')).toBe('Will create: /at-root');
+    expect(await page.evaluate(() => (window as any).app._newCaseTargetPath())).toBe('/at-root');
+  });
+
+  it('names the folder the server created in the success toast (~ expanded)', async () => {
+    await open();
+    await page.click('label.checkbox-row:has(#newCaseCustomPathToggle)');
+    await page.fill('#newCaseName', 'via-tilde');
+    await page.fill('#newCasePath', `~/${basename(parent)}`);
+    await page.evaluate(() => (window as any).app.submitCaseModal());
+    const target = join(realpathSync(parent), 'via-tilde');
+    await page.waitForFunction(
+      (t) => [...document.querySelectorAll('.toast')].some((el) => el.textContent?.includes(t)),
+      target
+    );
+    expect(await toastText()).not.toMatch(/created in ~\//);
   });
 
   it('starts unticked every time the modal opens', async () => {
