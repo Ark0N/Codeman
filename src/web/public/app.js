@@ -590,8 +590,10 @@ class CodemanApp {
     this._shortIdCache = new Map(); // Cache session ID .slice(0, 8) results
     this.sessionOrder = []; // Track tab order for drag-and-drop reordering
     this.draggedTabId = null; // Currently dragged tab session ID
-    // Owner tab layout (GET /api/tab-layout), read-only here: it only changes how
-    // the vertical rail GROUPS rows. sessionOrder above stays the tab order.
+    // Owner tab layout: read via GET /api/tab-layout and edited from the vertical
+    // rail via PUT /api/tab-layout (editTabLayout). It decides how the rail GROUPS
+    // rows; the server projects it onto the session order, so sessionOrder above
+    // stays the tab order.
     this.tabLayout = null;
     this.collapsedTabGroupIds = new Set(); // per-device, localStorage-backed
     this._hiddenTabGroupByRef = new Map(); // 'session:<id>' -> collapsed group id
