@@ -736,6 +736,86 @@ html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-toggle:focus-v
   content: '\25B8';
 }
 
+/* Group editing: the header's menu glyph, the inline rename editor, and the
+   pointer-drag marks. All of it lives inside the grouped rail only. */
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-menu {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0;
+  letter-spacing: 0;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header:hover .tab-layout-group-menu,
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header:focus-visible .tab-layout-group-menu {
+  opacity: 1;
+}
+
+/* No hover on a touch tablet, and a long press there is not a contextmenu
+   event: the glyph is the only way into the group menu, so keep it shown. */
+@media (hover: none) {
+  html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-menu {
+    opacity: 1;
+  }
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-menu:hover {
+  color: var(--text);
+  background: var(--bg-tertiary, var(--bg-hover));
+}
+
+/* The label is a nowrap ellipsis box; while it holds the editor it becomes a
+   plain flex slot so the input gets the whole width and repaints as you type. */
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-name--renaming {
+  display: flex;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-rename-input {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  padding: 1px 4px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  outline: none;
+  color: var(--text);
+  background: var(--bg-input);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: normal;
+  user-select: text;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .session-tabs--grouped .session-tab,
+html[data-tab-orientation='vertical'] .tab-rail .session-tabs--grouped .tab-layout-group-header {
+  user-select: none;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-drag-active {
+  cursor: grabbing;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-dragging {
+  opacity: 0.45;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-drop-into {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 html[data-tab-orientation='vertical'] .header-right {
   margin-left: auto;
 }
