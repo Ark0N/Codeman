@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { dependencyRegistry } from '../src/config/dependency-registry.js';
 import {
   detectEnvironment,
@@ -129,6 +132,7 @@ function fakeHost(env: ProbeEnvironment, over: Partial<ProbeHost> = {}): ProbeHo
     environment: env,
     which: () => null,
     fileExists: () => false,
+    isExecutableFile: () => false,
     runVersion: () => null,
     windowsProgramRoots: () => [],
     windowsFileVersion: () => null,
@@ -274,7 +278,7 @@ describe('checkTool with searchDirs (service PATH is minimal)', () => {
 
   it('finds a CLI that only lives in a searchDirs entry and runs --version on the absolute path', () => {
     const runVersion = vi.fn(() => 'claude 2.1.0');
-    const host = fakeHost('linux', { fileExists: (p) => p === '/opt/npm/bin/claude', runVersion });
+    const host = fakeHost('linux', { isExecutableFile: (p) => p === '/opt/npm/bin/claude', runVersion });
     expect(checkTool(claudeLike, host)).toMatchObject({
       status: 'ok',
       path: '/opt/npm/bin/claude',
@@ -290,10 +294,78 @@ describe('checkTool with searchDirs (service PATH is minimal)', () => {
   it('prefers the PATH hit over a search dir', () => {
     const host = fakeHost('linux', {
       which: () => '/usr/bin/claude',
-      fileExists: () => true,
+      isExecutableFile: () => true,
       runVersion: () => '1.0.0',
     });
     expect(checkTool(claudeLike, host)).toMatchObject({ path: '/usr/bin/claude' });
+  });
+
+  // The run mode's resolver (createCliExecutableResolver) accepts a search-dir candidate only
+  // as an absolute path to an executable regular file. A file that merely exists is not one.
+  it('skips a search-dir file that exists but is not executable', () => {
+    const runVersion = vi.fn(() => 'claude 2.1.0');
+    const host = fakeHost('linux', { fileExists: () => true, isExecutableFile: () => false, runVersion });
+    expect(checkTool(claudeLike, host)).toMatchObject({ status: 'missing' });
+    expect(runVersion).not.toHaveBeenCalled();
+  });
+
+  it('ignores a relative search dir (a custom clis.json entry) as the resolver does', () => {
+    const relative: ToolDependency = {
+      ...claudeLike,
+      resolvers: [{ match: ['linux'], resolver: { kind: 'path', bins: ['claude'], searchDirs: ['tools/bin'] } }],
+    };
+    const runVersion = vi.fn(() => 'claude 2.1.0');
+    const host = fakeHost('linux', { fileExists: () => true, isExecutableFile: () => true, runVersion });
+    expect(checkTool(relative, host)).toMatchObject({ status: 'missing' });
+    expect(runVersion).not.toHaveBeenCalled();
+  });
+
+  // The grok case: an npm squatter answers on the PATH while the real CLI sits in ~/.grok/bin.
+  // The Run menu's resolver rejects the squatter and moves on to the search dirs; the doctor
+  // used to stop at the PATH hit and report MISSING.
+  const squatted: ToolDependency = {
+    ...claudeLike,
+    id: 'pi',
+    label: 'Pi CLI',
+    resolvers: [
+      {
+        match: ['linux'],
+        resolver: {
+          kind: 'path',
+          bins: ['pi'],
+          versionRegex: PI_VERSION_REGEX,
+          requireVersionMatch: true,
+          searchDirs: ['/home/u/.local/bin', '/home/u/.npm-global/bin'],
+        },
+      },
+    ],
+  };
+
+  it('finds the right binary in a search dir when a wrong one is on the PATH', () => {
+    const host = fakeHost('linux', {
+      which: () => '/usr/bin/pi',
+      isExecutableFile: (p) => p === '/home/u/.npm-global/bin/pi',
+      runVersion: (bin) => (bin === '/usr/bin/pi' ? 'Raspberry Pi utility\n' : '0.84.3\n'),
+    });
+    expect(checkTool(squatted, host)).toMatchObject({
+      status: 'ok',
+      path: '/home/u/.npm-global/bin/pi',
+      version: '0.84.3',
+    });
+  });
+
+  it('version-checks each search-dir candidate and moves past one that fails', () => {
+    const runVersion = vi.fn((bin: string) => (bin === '/home/u/.local/bin/pi' ? 'something else\n' : '0.84.3\n'));
+    const host = fakeHost('linux', { isExecutableFile: () => true, runVersion });
+    expect(checkTool(squatted, host)).toMatchObject({ status: 'ok', path: '/home/u/.npm-global/bin/pi' });
+    expect(runVersion.mock.calls.map(([bin]) => bin)).toEqual(['/home/u/.local/bin/pi', '/home/u/.npm-global/bin/pi']);
+  });
+
+  it('probes a search dir that is also on the PATH only once', () => {
+    const runVersion = vi.fn(() => 'Raspberry Pi utility\n');
+    const host = fakeHost('linux', { which: () => '/home/u/.local/bin/pi', isExecutableFile: () => true, runVersion });
+    expect(checkTool(squatted, host)).toMatchObject({ status: 'missing' });
+    expect(runVersion.mock.calls.map(([bin]) => bin)).toEqual(['/home/u/.local/bin/pi', '/home/u/.npm-global/bin/pi']);
   });
 
   it('carries each enabled CLI’s expanded discovery.searchDirs onto its registry row', () => {
@@ -319,5 +391,21 @@ describe('createRealHost', () => {
     expect(['linux', 'darwin', 'win32', 'wsl']).toContain(host.environment);
     expect(typeof host.which).toBe('function');
     expect(Array.isArray(host.windowsProgramRoots())).toBe(true);
+  });
+
+  it('counts only an executable regular file as a search-dir candidate', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'doctor-exec-'));
+    try {
+      const file = join(dir, 'tool');
+      writeFileSync(file, '#!/bin/sh\necho 1.0.0\n', { mode: 0o644 });
+      const host = createRealHost();
+      expect(host.isExecutableFile(file)).toBe(false);
+      chmodSync(file, 0o755);
+      expect(host.isExecutableFile(file)).toBe(true);
+      expect(host.isExecutableFile(dir)).toBe(false);
+      expect(host.isExecutableFile(join(dir, 'absent'))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

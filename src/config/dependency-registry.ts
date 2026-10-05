@@ -41,7 +41,11 @@ export interface PathResolver {
   searchDirs?: string[];
 }
 
-/** Expand a leading `~` (the only form registry `searchDirs` use). */
+/**
+ * Expand a leading `~` (the only form registry `searchDirs` use). Twin of `expandHome()` in
+ * src/utils/cli-resolver.ts, copied rather than imported because importing it from config/
+ * would pull in the whole resolver chain; keep the two in step.
+ */
 function expandSearchDir(dir: string): string {
   if (dir === '~') return homedir();
   if (dir.startsWith('~/')) return join(homedir(), dir.slice(2));

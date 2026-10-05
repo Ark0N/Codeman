@@ -73,6 +73,8 @@ describe('Diagnostics panel in a real browser', () => {
     expect(text).toContain('✓ Node.js ok · 22.1.0');
     expect(text).toContain('/usr/bin/node');
     expect(text).toContain('✗ tmux missing · required');
+    // A missing OPTIONAL tool is not an error: ○, as the terminal doctor marks it.
+    expect(text).toContain('○ <img src=x onerror=window.__pwned=1> missing · optional');
     expect(text).toContain('Install: apt install tmux');
     expect(text).toContain('<img src=x onerror=window.__pwned=1>'); // shown literally
     expect(await page.evaluate(() => (window as any).__pwned)).toBeUndefined();

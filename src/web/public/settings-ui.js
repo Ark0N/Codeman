@@ -1409,7 +1409,9 @@ Object.assign(CodemanApp.prototype, {
       for (const t of tools) {
         const li = document.createElement('li');
         const strong = document.createElement('b');
-        strong.textContent = `${glyph[t.status] || '?'} ${t.label}`;
+        // As the terminal doctor marks it: a missing OPTIONAL tool is ○, only a required one ✗.
+        const mark = t.status === 'missing' && !t.required ? '○' : glyph[t.status] || '?';
+        strong.textContent = `${mark} ${t.label}`;
         li.append(strong);
         const bits = [t.status];
         if (t.version) bits.push(t.version);
