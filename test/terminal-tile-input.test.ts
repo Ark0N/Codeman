@@ -91,6 +91,18 @@ class FakeTerminal {
     this.dataCb = cb;
   }
   keyHandler: ((ev: Record<string, unknown>) => boolean) | null = null;
+  focusListeners: Array<() => void> = [];
+  textarea = {
+    addEventListener: (type: string, fn: () => void) => {
+      if (type === 'focus') this.focusListeners.push(fn);
+    },
+    removeEventListener: (type: string, fn: () => void) => {
+      if (type === 'focus') this.focusListeners = this.focusListeners.filter((f) => f !== fn);
+    },
+  };
+  focusTextarea() {
+    for (const fn of this.focusListeners) fn();
+  }
   attachCustomKeyEventHandler(fn: (ev: Record<string, unknown>) => boolean) {
     this.keyHandler = fn;
   }
@@ -199,6 +211,13 @@ type Tile = {
 };
 const TerminalTile = windowStub.TerminalTile as new (id: string, mount: unknown, opts?: object) => Tile;
 
+/**
+ * Every tile a test creates, destroyed after it. A tile closed with real timers
+ * schedules a real reconnect, and one firing during a LATER test opens a socket
+ * there (FakeSocket.instances is shared), which flaked under full-suite load.
+ */
+const liveTiles: Tile[] = [];
+
 async function connectTile(app: App, opts: Record<string, unknown> = {}) {
   windowStub.app = app;
   const tile = new TerminalTile(
@@ -206,12 +225,14 @@ async function connectTile(app: App, opts: Record<string, unknown> = {}) {
     { addEventListener: vi.fn(), removeEventListener: vi.fn() },
     { mode: 'claude', ...opts }
   );
+  liveTiles.push(tile);
   await tile.connect();
   const ws = FakeSocket.instances.at(-1)!;
   return { tile, ws, term: FakeTerminal.last! };
 }
 
 afterEach(() => {
+  for (const tile of liveTiles.splice(0)) tile.destroy();
   vi.useRealTimers();
 });
 
@@ -638,5 +659,20 @@ describe('TerminalTile links and paste follow THIS pane', () => {
     term.keyHandler!({ type: 'keydown', key: 'V', ctrlKey: true, shiftKey: true, code: 'KeyV' });
 
     expect(paste).not.toHaveBeenCalled();
+  });
+});
+
+describe('TerminalTile claims the keyboard for the app-level shortcuts', () => {
+  it('focusing its terminal makes it the focused pane; destroy() hands the keyboard back', async () => {
+    const app = makeApp();
+    const { tile, term } = await connectTile(app);
+    expect(app._focusedTile ?? null).toBeNull();
+
+    term.focusTextarea();
+    expect(app._focusedTile).toBe(tile);
+
+    tile.destroy();
+    expect(app._focusedTile).toBeNull();
+    expect(term.focusListeners).toEqual([]);
   });
 });

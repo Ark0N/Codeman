@@ -544,6 +544,9 @@ Object.assign(CodemanApp.prototype, {
     this._installMobileTapMouseGuard();
     this._installShiftDragSelection();
     this._installTouchSelectionFocusGuard();
+    // Focus coming back to the primary terminal ends a second pane's claim on
+    // the keyboard (see _focusedPane).
+    this.terminal.textarea?.addEventListener('focus', () => this._noteFocusedTile(null));
 
     // Let xterm's CompositionHelper own IME key events. In particular, a
     // non-composing keyCode 229 is how an active IME commits numbers and
@@ -4498,15 +4501,27 @@ Object.assign(CodemanApp.prototype, {
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * The terminal the keyboard is in, as `{ terminal, sessionId, isPrimary }`.
+   * The terminal the keyboard is in, as `{ terminal, sessionId, isPrimary, tile }`.
    *
    * The ONE place a shortcut, voice or paste should ask "which pane?", rather
    * than reading `this.terminal` / `this.activeSessionId`, which always mean the
-   * primary pane. Today it always answers with the primary pane; the split
-   * pane's second terminal plugs in here once it tracks its own focus.
+   * primary pane. It answers with the pane whose terminal was focused LAST, not
+   * with `document.activeElement`: clicking the mic or a header button moves
+   * DOM focus to that button, and the dictation it starts still belongs to the
+   * pane the user was typing in. A second pane (the split pane's Pane B) claims
+   * it from its own terminal's focus; the primary terminal's focus gives it back.
    */
   _focusedPane() {
-    return { terminal: this.terminal, sessionId: this.activeSessionId, isPrimary: true };
+    const tile = this._focusedTile;
+    if (tile && !tile._destroyed && tile.terminal) {
+      return { terminal: tile.terminal, sessionId: tile.sessionId, isPrimary: false, tile };
+    }
+    return { terminal: this.terminal, sessionId: this.activeSessionId, isPrimary: true, tile: null };
+  },
+
+  /** Record which second pane holds the keyboard (null: the primary terminal). */
+  _noteFocusedTile(tile) {
+    this._focusedTile = tile || null;
   },
 
   /**
@@ -4519,8 +4534,11 @@ Object.assign(CodemanApp.prototype, {
     if (this._splitPane?.terminal) fn(this._splitPane);
   },
 
+  // Clears the pane the keyboard is in. The chord itself also reaches that
+  // pane's xterm (the capture handler only preventDefault()s), so the ^L lands
+  // in the same pane whose display is cleared, never a different one.
   clearTerminal() {
-    this.terminal.clear();
+    this._focusedPane().terminal?.clear();
   },
 
   /** Insert editable text at the active prompt without pressing Enter. */
@@ -4584,6 +4602,14 @@ Object.assign(CodemanApp.prototype, {
    * Ctrl+L is NOT sent here (Claude Code 2.x treats it as "clear conversation").
    */
   async restoreTerminalSize() {
+    // A second pane owns its own geometry: refit it and force its PTY to the
+    // size it renders at (TerminalTile.fit), whatever another device set.
+    const pane = this._focusedPane();
+    if (!pane.isPrimary) {
+      pane.tile.fit({ force: true });
+      this.showToast(`Terminal restored to ${pane.terminal.cols}x${pane.terminal.rows}`, 'success');
+      return;
+    }
     if (!this.activeSessionId) {
       this.showToast('No active session', 'warning');
       return;

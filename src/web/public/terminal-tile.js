@@ -115,6 +115,7 @@
       // Whether the pointer is over a link in THIS pane (the primary pane's own
       // flag, app._linkHovered, belongs to its terminal alone).
       this._linkHovered = false;
+      this._onFocusIn = null;
     }
 
     async connect() {
@@ -150,6 +151,11 @@
       });
 
       this._installWheelListener();
+
+      // Focusing this terminal makes it the pane the keyboard is in, so the
+      // app-level shortcuts, voice and paste act on it (app._focusedPane).
+      this._onFocusIn = () => global.app?._noteFocusedTile?.(this);
+      this.terminal.textarea?.addEventListener('focus', this._onFocusIn);
 
       this.terminal.onData((data) => this._onTerminalData(data));
 
@@ -850,6 +856,13 @@
         this._onWheel = null;
       }
       this._detachSocket();
+      if (this._onFocusIn) {
+        this.terminal?.textarea?.removeEventListener('focus', this._onFocusIn);
+        this._onFocusIn = null;
+      }
+      // A destroyed pane cannot hold the keyboard: shortcuts fall back to the
+      // primary terminal (_focusedPane also skips a destroyed tile on its own).
+      if (global.app?._focusedTile === this) global.app._noteFocusedTile?.(null);
       if (this.terminal) {
         this.terminal.dispose();
         this.terminal = null;
