@@ -1633,6 +1633,173 @@ function buildSplitPickerSessions(sessions, sessionOrder, excludeId, detachedIds
   return result;
 }
 
+// ── Tile grid (tile-grid.js) ───────────────────────────────────────────────
+//
+// Pure layout and state helpers for the tile grid (docs/tile-grid-plan.md):
+// 1 to 9 live sessions side by side, each in its own TerminalTile. Desktop
+// only, behind the same 1180px gate as the split pane.
+
+/** Hard cap on tiles in one grid. */
+const TILE_GRID_MAX = 9;
+// The smallest tile worth showing: about 60 columns and a dozen rows at the
+// default tile font. Bounds how many tiles a window can hold.
+const TILE_MIN_W = 480;
+const TILE_MIN_H = 240;
+// Three tiles go side by side (3x1) only when each still gets ~600px;
+// otherwise they take three cells of a 2x2.
+const TILE_GRID_WIDE_3X1 = 1800;
+// A tile's xterm keeps this many lines, not DEFAULT_SCROLLBACK: nine DOM
+// renderers at 50k lines each is a real memory cost, and a tile's load is a
+// bounded 1 MiB window anyway, so more scrollback only fills with live output.
+const TILE_SCROLLBACK = 10000;
+// Tiles have their own per-device font size (a tile is a fraction of the screen).
+const TILE_FONT_SIZE_DEFAULT = 13;
+
+/**
+ * Columns and rows for `count` tiles, by count (the spec's table), and whether
+ * that layout gives every cell at least the minimum tile size in a grid area
+ * of `width` x `height` px.
+ *
+ * @param {{count: number, width?: number, height?: number, minTileW?: number, minTileH?: number}} p
+ * @returns {{cols: number, rows: number, fits: boolean}}
+ */
+function computeTileLayout({ count, width = Infinity, height = Infinity, minTileW = TILE_MIN_W, minTileH = TILE_MIN_H }) {
+  const n = Math.min(Math.max(0, Math.floor(Number(count) || 0)), TILE_GRID_MAX);
+  let cols;
+  let rows;
+  if (n === 0) return { cols: 0, rows: 0, fits: true };
+  if (n === 1) { cols = 1; rows = 1; }
+  else if (n === 2) { cols = 2; rows = 1; }
+  else if (n === 3) {
+    if (width >= TILE_GRID_WIDE_3X1) { cols = 3; rows = 1; }
+    else { cols = 2; rows = 2; }
+  }
+  else if (n === 4) { cols = 2; rows = 2; }
+  else if (n <= 6) { cols = 3; rows = 2; }
+  else { cols = 3; rows = 3; }
+  const fits = width / cols >= minTileW && height / rows >= minTileH;
+  return { cols, rows, fits };
+}
+
+/**
+ * How many tiles a grid area can hold: the largest count up to TILE_GRID_MAX
+ * whose layout, and every smaller count's layout, fits. 0 when not even one
+ * tile fits.
+ *
+ * @param {{width: number, height: number, minTileW?: number, minTileH?: number}} p
+ * @returns {number}
+ */
+function tileGridCapacity({ width, height, minTileW = TILE_MIN_W, minTileH = TILE_MIN_H }) {
+  let capacity = 0;
+  for (let n = 1; n <= TILE_GRID_MAX; n++) {
+    if (!computeTileLayout({ count: n, width, height, minTileW, minTileH }).fits) break;
+    capacity = n;
+  }
+  return capacity;
+}
+
+/**
+ * The stored grid (`codeman:tile-grid`, ids only) made safe to apply: unknown,
+ * deleted, detached and duplicate ids are dropped, the list is capped at
+ * TILE_GRID_MAX, `focused` / `zoomed` must name a kept id, and track fractions
+ * must be 1 to 3 finite positive numbers. Anything that is not a v1 object
+ * (or its JSON) gives null.
+ *
+ * @param {unknown} raw - the parsed value, or the stored JSON string
+ * @param {{has(id: string): boolean}|Iterable<string>} liveSessions - ids that exist now
+ * @param {{has(id: string): boolean}} [detachedIds] - sessions popped out to their own window
+ * @returns {{v: 1, open: boolean, ids: string[], focused: string|null, zoomed: string|null,
+ *   colFr: number[]|null, rowFr: number[]|null}|null}
+ */
+function sanitizeTileGridState(raw, liveSessions, detachedIds) {
+  let value = raw;
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch { return null; }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.v !== 1) return null;
+  const live = liveSessions && typeof liveSessions.has === 'function' ? liveSessions : new Set(liveSessions || []);
+  const ids = [];
+  for (const id of Array.isArray(value.ids) ? value.ids : []) {
+    if (typeof id !== 'string' || !id || ids.includes(id)) continue;
+    if (!live.has(id)) continue;
+    if (detachedIds?.has?.(id)) continue;
+    ids.push(id);
+    if (ids.length === TILE_GRID_MAX) break;
+  }
+  const fractions = (fr) => {
+    if (!Array.isArray(fr) || fr.length < 1 || fr.length > 3) return null;
+    return fr.every((x) => typeof x === 'number' && Number.isFinite(x) && x > 0) ? fr.slice() : null;
+  };
+  return {
+    v: 1,
+    open: value.open === true && ids.length > 0,
+    ids,
+    focused: ids.includes(value.focused) ? value.focused : (ids[0] ?? null),
+    zoomed: ids.includes(value.zoomed) ? value.zoomed : null,
+    colFr: fractions(value.colFr),
+    rowFr: fractions(value.rowFr),
+  };
+}
+
+/**
+ * Which tile takes focus when `id` leaves the grid: the next one in grid
+ * order, else the previous one, else null.
+ *
+ * @param {string[]} ids - the grid's tiles, in reading order
+ * @param {string} id - the tile that is leaving
+ * @returns {string|null}
+ */
+function tileNeighbor(ids, id) {
+  const i = ids.indexOf(id);
+  if (i === -1) return ids[0] ?? null;
+  return ids[i + 1] ?? ids[i - 1] ?? null;
+}
+
+/**
+ * The tile a directional focus chord moves to, in a row-major grid of `cols`
+ * columns. Left and right stay within the row; up and down move a whole row,
+ * and moving down onto a short last row lands on its last tile. Null when
+ * there is nothing in that direction.
+ *
+ * @param {string[]} ids - the grid's tiles, in reading order
+ * @param {string} focusedId - the tile the keyboard is in
+ * @param {'left'|'right'|'up'|'down'} direction
+ * @param {number} cols - the layout's column count
+ * @returns {string|null}
+ */
+function tileInDirection(ids, focusedId, direction, cols) {
+  const n = ids.length;
+  const i = ids.indexOf(focusedId);
+  if (i === -1 || n === 0 || !(cols >= 1)) return null;
+  const col = i % cols;
+  let j = -1;
+  if (direction === 'left') j = col > 0 ? i - 1 : -1;
+  else if (direction === 'right') j = col < cols - 1 && i + 1 < n ? i + 1 : -1;
+  else if (direction === 'up') j = i - cols;
+  else if (direction === 'down') {
+    j = i + cols;
+    const lastRow = Math.floor((n - 1) / cols);
+    if (j >= n && Math.floor(i / cols) < lastRow) j = n - 1;
+  }
+  return j >= 0 && j < n && j !== i ? ids[j] : null;
+}
+
+/**
+ * The tile Ctrl+Tab / Alt+] (delta 1) or Alt+[ (delta -1) moves to while the
+ * grid is open: tiles cycle in reading order and wrap.
+ *
+ * @param {string[]} ids
+ * @param {string} focusedId
+ * @param {number} delta - +1 or -1
+ * @returns {string|null}
+ */
+function cycleTile(ids, focusedId, delta) {
+  if (ids.length === 0) return null;
+  const i = ids.indexOf(focusedId);
+  if (i === -1) return ids[0];
+  return ids[(i + delta + ids.length) % ids.length];
+}
+
 // ── Renderer liveness ──────────────────────────────────────────────────────
 //
 // iOS DISCARDS scheduled requestAnimationFrame callbacks when a PWA goes to
@@ -1878,6 +2045,19 @@ if (typeof window !== 'undefined') {
     clampDividerPercent,
     buildSplitPickerSessions,
     SPLIT_PANE_MIN_WIDTH,
+  };
+  window.CodemanTileGrid = {
+    computeTileLayout,
+    tileGridCapacity,
+    sanitizeTileGridState,
+    tileNeighbor,
+    tileInDirection,
+    cycleTile,
+    TILE_GRID_MAX,
+    TILE_MIN_W,
+    TILE_MIN_H,
+    TILE_SCROLLBACK,
+    TILE_FONT_SIZE_DEFAULT,
   };
   window.CodemanRenderLiveness = { shouldKickRenderer, RENDER_STALL_MS, RENDER_LIVENESS_POLL_MS };
   window.CodemanFetchDeadline = {
