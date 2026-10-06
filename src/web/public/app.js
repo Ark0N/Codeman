@@ -867,6 +867,11 @@ class CodemanApp {
     // writes when the freshly computed descriptor is identical (COD-136).
     this._lastIndicatorDescriptor = null;
     this._postDraining = new Set(); // sessionIds with an in-flight POST drainer
+    // Terminal sockets OTHER than the primary one (`this._ws`), keyed by the
+    // session they are bound to: the split pane's second terminal registers its
+    // socket here so its input rides the same exactly-once queue. Values are
+    // `{ ws, lastRecvAt }` handles owned by that terminal (see _inputSocketFor).
+    this._extraInputSockets = new Map();
     this._persistReliableTimer = null;
     this._reliableAckTimeoutMs = 4000; // unacked WS frame older than this ⇒ socket likely dead
     this._reliableMaxBytes = 256 * 1024; // cap on the persisted backlog
@@ -3397,7 +3402,7 @@ class CodemanApp {
         } else if (msg.t === 'ia') {
           // Input ACK — the server applied (or deduped) this seq; drop it from
           // the durable queue so it can never be re-delivered/lost.
-          this._onWsInputAck(msg.seq, msg);
+          this._onWsInputAck(msg.seq, msg, sessionId);
         } else if (msg.t === 'zc') {
           // Resize confirm — the geometry the PTY actually holds, which is not
           // always the one this client asked for (issue #464).
@@ -3580,6 +3585,49 @@ class CodemanApp {
   }
 
   /**
+   * The OPEN terminal socket bound to `sessionId`, or null: the primary socket
+   * first, then one registered by a second terminal (the split pane). The
+   * delivery layer below asks this instead of reading `this._ws` directly, so a
+   * second terminal's input gets the same exactly-once queue, ACKs and
+   * half-open detection as the primary's.
+   *
+   * Returns `{ ws, lastRecvAt }`: `lastRecvAt` is the socket's last received
+   * frame, which `_redeliverSweep` reads to tell a dead socket from a slow ACK.
+   */
+  _inputSocketFor(sessionId) {
+    if (!sessionId) return null;
+    if (this._ws && this._ws.readyState === WebSocket.OPEN && this._wsSessionId === sessionId) {
+      return { ws: this._ws, lastRecvAt: this._wsLastRecvAt };
+    }
+    const handle = this._extraInputSockets?.get(sessionId);
+    if (handle && handle.ws && handle.ws.readyState === WebSocket.OPEN) return handle;
+    return null;
+  }
+
+  /**
+   * Register a second terminal's socket for `sessionId` (call from its onopen).
+   * `handle` is `{ ws, lastRecvAt }`, owned by the caller, which must bump
+   * `handle.lastRecvAt` on every received frame. Stamped here so a socket that
+   * just opened does not look silent to the redelivery sweep, which would
+   * otherwise force-close it as half-open on the first stale record.
+   */
+  _registerInputSocket(sessionId, handle) {
+    if (!sessionId || !handle) return;
+    handle.lastRecvAt = Date.now();
+    if (!this._extraInputSockets) this._extraInputSockets = new Map();
+    this._extraInputSockets.set(sessionId, handle);
+  }
+
+  /**
+   * Drop a registration, but only the one `handle` made: a replacement socket
+   * registers its own handle before the old one's close lands, and that late
+   * close must not unregister the socket that replaced it.
+   */
+  _unregisterInputSocket(sessionId, handle) {
+    if (this._extraInputSockets?.get(sessionId) === handle) this._extraInputSockets.delete(sessionId);
+  }
+
+  /**
    * Fire-and-forget input for EPHEMERAL, loss-tolerant streams (e.g. wheel-scroll
    * reports). Unlike _sendInputAsync, this never enters the durable seq/ACK queue,
    * so it isn't persisted, retried, or counted in the pending-bytes connection
@@ -3590,9 +3638,10 @@ class CodemanApp {
    */
   _sendInputEphemeral(sessionId, input) {
     if (!sessionId || !input) return;
-    if (this._ws && this._ws.readyState === WebSocket.OPEN && this._wsSessionId === sessionId) {
+    const sock = this._inputSocketFor(sessionId);
+    if (sock) {
       try {
-        this._ws.send(JSON.stringify({ t: 'i', d: input }));
+        sock.ws.send(JSON.stringify({ t: 'i', d: input }));
         return;
       } catch {
         // socket died mid-send — fall through to a best-effort POST
@@ -3646,11 +3695,12 @@ class CodemanApp {
     // over the single ordered stream. They stay pending until the server ACKs
     // them ({t:'ia'}); a frame swallowed by a half-open socket is re-sent after
     // the sweep force-reconnects (which resets sentAt=0 in _onWsReady).
-    if (this._ws && this._ws.readyState === WebSocket.OPEN && this._wsSessionId === sessionId) {
+    const sock = this._inputSocketFor(sessionId);
+    if (sock) {
       for (const rec of list) {
         if (rec.sentAt !== 0) continue;
         try {
-          this._ws.send(JSON.stringify({ t: 'i', d: rec.data, seq: rec.seq, cid: this._clientId }));
+          sock.ws.send(JSON.stringify({ t: 'i', d: rec.data, seq: rec.seq, cid: this._clientId }));
           rec.sentAt = Date.now();
           rec.tries++;
         } catch {
@@ -3671,7 +3721,7 @@ class CodemanApp {
           if (!cur || cur.length === 0) break;
           // If the WebSocket came back mid-drain, yield to it (the acked stream)
           // so we don't redundantly re-POST what onopen is already re-sending.
-          if (this._ws && this._ws.readyState === WebSocket.OPEN && this._wsSessionId === sessionId) {
+          if (this._inputSocketFor(sessionId)) {
             break;
           }
           const rec = cur[0];
@@ -3759,8 +3809,10 @@ class CodemanApp {
    * called a duplicate is the mechanism working as designed — the original did
    * land — and re-sending it would type the same thing twice.
    */
-  _onWsInputAck(seq, msg) {
-    const sessionId = this._wsSessionId;
+  _onWsInputAck(seq, msg, sessionId = this._wsSessionId) {
+    // `sessionId` is the session of the socket the ACK arrived on: `{t:'ia'}`
+    // frames carry none, and with a second terminal's socket in play
+    // `this._wsSessionId` is no longer the only candidate.
     if (!sessionId || !Number.isInteger(seq)) return;
     if (msg && msg.err) {
       // Refused for good (e.g. over the size limit): retrying cannot help.
@@ -3805,19 +3857,20 @@ class CodemanApp {
     for (const sessionId of [...this._pendingDeliveries.keys()]) {
       const list = this._pendingDeliveries.get(sessionId);
       if (!list || list.length === 0) continue;
-      const isActiveWs =
-        this._ws && this._ws.readyState === WebSocket.OPEN && this._wsSessionId === sessionId;
-      if (isActiveWs) {
+      const sock = this._inputSocketFor(sessionId);
+      if (sock) {
         const oldest = list[0];
         // Only tear the socket down when the oldest unacked frame is stale AND the
         // socket has been silent for the timeout: a connection still delivering
         // output/ACKs is alive (the ACK is just behind), so force-closing it would
         // cause needless WS↔HTTP flapping. A truly half-open socket goes quiet.
+        // Silence is measured on THIS socket: the primary's last frame says
+        // nothing about a second terminal's connection, and the reverse.
         const stale = oldest && oldest.sentAt && Date.now() - oldest.sentAt > this._reliableAckTimeoutMs;
-        const silent = Date.now() - this._wsLastRecvAt > this._reliableAckTimeoutMs;
+        const silent = Date.now() - (sock.lastRecvAt || 0) > this._reliableAckTimeoutMs;
         if (stale && silent) {
           try {
-            this._ws.close(); // half-open: never recovers on its own — force reconnect
+            sock.ws.close(); // half-open: never recovers on its own — force reconnect
           } catch {
             /* ignore */
           }

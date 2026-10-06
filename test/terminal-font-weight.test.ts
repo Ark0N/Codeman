@@ -63,7 +63,13 @@ function fakeTerminal(options: Record<string, unknown> = {}) {
   return { options: { fontFamily: '"JetBrains Mono"', fontSize: 14, ...options } };
 }
 
-function makeApp(opts: { teammates?: number; terminal?: ReturnType<typeof fakeTerminal> | null } = {}) {
+function makeApp(
+  opts: {
+    teammates?: number;
+    terminal?: ReturnType<typeof fakeTerminal> | null;
+    splitPane?: { terminal: ReturnType<typeof fakeTerminal>; localFit: () => void } | null;
+  } = {}
+) {
   const fit = vi.fn();
   const teammateFits: ReturnType<typeof vi.fn>[] = [];
   const teammateTerminals = new Map<string, { terminal: ReturnType<typeof fakeTerminal>; fitAddon: unknown }>();
@@ -74,6 +80,10 @@ function makeApp(opts: { teammates?: number; terminal?: ReturnType<typeof fakeTe
   }
   const app = {
     applyTerminalFontWeights: mixin.applyTerminalFontWeights,
+    // Secondary panes (the split pane's second terminal) are reached through
+    // this helper, so it is wired for real like the geometry chain below.
+    _forEachTile: mixin._forEachTile,
+    _splitPane: opts.splitPane ?? null,
     // The REAL geometry chain, not stubs. A font change moves the cell size, so
     // it moves cols/rows, and `applyTerminalFontWeights` now routes its refit
     // through the one function that floors the result and reports it (#464).
@@ -98,6 +108,21 @@ function makeApp(opts: { teammates?: number; terminal?: ReturnType<typeof fakeTe
 }
 
 describe('applyTerminalFontWeights', () => {
+  it('reaches an open split pane: same weights, refit in place', () => {
+    const splitTerminal = fakeTerminal();
+    const localFit = vi.fn();
+    const { app } = makeApp({ splitPane: { terminal: splitTerminal, localFit } });
+
+    (app as unknown as { applyTerminalFontWeights: (s: unknown) => void }).applyTerminalFontWeights({
+      terminalFontWeight: '300',
+      terminalFontWeightBold: '700',
+    });
+
+    expect(splitTerminal.options.fontWeight).toBe(300);
+    expect(splitTerminal.options.fontWeightBold).toBe(700);
+    expect(localFit).toHaveBeenCalledTimes(1);
+  });
+
   it('writes both slots to the live terminal', () => {
     const { app, fit } = makeApp();
 
