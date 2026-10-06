@@ -53,6 +53,13 @@ describe('help modal shortcuts', () => {
     expectShortcut(helpModal, ['Escape'], 'Close Panels');
   });
 
+  it('documents the tile grid chords', () => {
+    expectShortcut(helpModal, ['Ctrl', 'Shift', 'G'], 'Toggle Tile Grid');
+    expectShortcut(helpModal, ['Alt/Option', 'Shift', 'Arrows'], 'Focus Tile Left / Right / Up / Down');
+    expectShortcut(helpModal, ['Alt/Option', 'Shift', 'Enter'], 'Zoom Focused Tile');
+    expectShortcut(helpModal, ['Ctrl/Cmd', 'Click'], 'Add the Session to the Tile Grid');
+  });
+
   it('documents terminal input shortcuts without advertising stale run shortcuts', () => {
     expectShortcut(helpModal, ['Ctrl', 'C'], 'Copy Selection');
     expectShortcut(helpModal, ['Ctrl', 'Shift', 'C'], 'Copy Selection');

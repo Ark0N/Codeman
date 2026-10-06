@@ -11,6 +11,7 @@
 **Using it**
 
 - [The Dashboard](The-Dashboard)
+- [Tile Grid](Tile-Grid)
 - [Agent CLIs](Agent-CLIs)
 - [Custom Model Endpoints](Custom-Model-Endpoints)
 - [Working With Files](Working-With-Files)

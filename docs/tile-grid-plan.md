@@ -1,9 +1,36 @@
 # Tile Grid: Design Spec
 
-**Status**: PR 1 (tile foundation) implemented on `feat/terminal-tile`, local only; PR 2 (the grid) proposed. Builds on `docs/split-pane-sessions-plan.md`; the split pane stays.
+**Status**: PR 1 (tile foundation) implemented on `feat/terminal-tile`; PR 2 (the grid) implemented on `feat/tile-grid`, both local only. Builds on `docs/split-pane-sessions-plan.md`; the split pane stays.
 **Author**: Claude (planning session with the maintainer), 2026-10-06
-**Branches**: PR 1 `feat/terminal-tile`, PR 2 `feat/tile-grid` stacked on it (worktree `claudeman-tiles`)
+**Branches**: PR 1 `feat/terminal-tile`, PR 2 `feat/tile-grid` stacked on it (worktrees `claudeman-tiles`, `claudeman-tilegrid`)
 **Scope**: v1 is fully designed here; follow-ups are named at the end and explicitly deferred.
+
+## As built: where PR 2 differs from this spec
+
+The design below stands; these are the places the built grid deliberately went another way,
+or settled a question the spec left open. The invariants as built are in
+`docs/architecture-invariants.md#tile-grid`.
+
+- **An agent that exited in a live pane (`paneExit`) gets no Attach button.** Both attach
+  routes (`/interactive`, `/shell`) refuse while the pane's tmux client still runs ("Session
+  already has a running process") and report that in the envelope of a 200, so the
+  edge-case row below cannot work without a server change. The tile shows the exit and
+  points at Close session. A session with no PTY (`pid === null`) and a socket closed with
+  4009 do get Attach. Restarting an exited agent in place is a follow-up.
+- **`Ctrl+Shift+G` follows `showTileGridButton`** (the applied default while the owner's
+  answer is pending): with the setting off the toggle chord is inert. A grid opened another
+  way (Ctrl/Cmd+click, a dropped tab, "Open group as tiles") keeps all its chords.
+- **Dividers are grid tracks.** Each gap between columns and rows is its own 6px track (the
+  grid gap is 0) and tiles are placed explicitly in reading order, which is also what the
+  empty-slot drop targets need. Fractions reset when the column or row count changes.
+- **Zoom follows tmux.** Moving focus to another tile restores the grid; an automatic zoom
+  (window too small for the minimum tile) follows focus instead.
+- **Tile loads are bounded** (`boundedLoad`), carry a fetch deadline covering the body (Pane
+  B too), and a refresh clears the screen at its turn in the queue, so a waiting tile keeps
+  its last frame.
+- **4009 lands on the Attach overlay**, and 4003/4004/4010 remove the tile.
+- **"+ / New session in this case"** runs the normal Run for that case and joins through
+  the same auto-join as any Run from this tab.
 
 ## Problem
 
