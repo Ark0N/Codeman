@@ -23,9 +23,9 @@ button in the header, beside Split, and enables `Ctrl+Shift+G`.
   tab order, starting with the tiles you have (or had), greying out the rest once the grid
   is full. **Open tiles** shows them, replacing what the grid showed.
 - **`Ctrl+Shift+G`**: exactly what a click on the Tiles button does.
-- **`Ctrl`+click (or `Cmd`+click) a tab**: adds that session to the grid and focuses it,
-  opening the grid if it was closed. On macOS use `Cmd`: `Ctrl`+click there opens the tab's
-  rename instead.
+- **`Ctrl`+click (or `Cmd`+click) a tab**: adds that session to the grid and focuses it. With
+  the grid closed it opens what the Tiles button would show, plus that session. On macOS use
+  `Cmd`: `Ctrl`+click there opens the tab's rename instead.
 - **Drag a tab onto a tile** to replace that tile with it (the replaced session keeps
   running), or onto an empty slot to add it. Dragging a session that is already tiled onto
   another tile swaps the two.
