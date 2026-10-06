@@ -163,19 +163,19 @@
         </div>
         <div class="header-system-stats" id="headerSystemStats" title="System resource usage">
           <div class="stat-item">
+            <span class="stat-ring" id="statCpuRing" aria-hidden="true"></span>
             <span class="stat-label">CPU</span>
             <div class="stat-bar">
               <div class="stat-bar-fill stat-bar-cpu" id="statCpuBar"></div>
             </div>
-            <span class="stat-spark" id="statCpuSpark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
             <span class="stat-value" id="statCpu">--%</span>
           </div>
           <div class="stat-item">
+            <span class="stat-ring" id="statMemRing" aria-hidden="true"></span>
             <span class="stat-label">MEM</span>
             <div class="stat-bar">
               <div class="stat-bar-fill stat-bar-mem" id="statMemBar"></div>
             </div>
-            <span class="stat-spark" id="statMemSpark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
             <span class="stat-value" id="statMem">--</span>
           </div>
         </div>
@@ -1921,10 +1921,10 @@
                     <label class="set-chip" data-preview="header" data-preview-order="13" data-preview-text="42%"><input type="checkbox" id="appSettingsShowPlanUsageLimits"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4.5-5"/></svg><span>Plan Usage</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="14"><input type="checkbox" id="appSettingsShowLifecycleLog"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span>Lifecycle Log</span></label>
                   </div>
-                  <div class="set-row has-field" data-search="header stats style system cpu mem ws plan usage tiles compact rings sparkline">
+                  <div class="set-row has-field" data-search="header stats style system cpu mem ws plan usage tiles compact rings">
                     <div class="set-row-text">
                       <span class="set-row-label">Header Stats Style <span class="set-tag">desktop</span></span>
-                      <span class="set-row-desc">How WS, CPU, MEM and the plan-usage windows are drawn. Compact is one system pill with sparklines plus usage rings; Tiles put each label over its value with a bar underneath.</span>
+                      <span class="set-row-desc">How WS, CPU, MEM and the plan-usage windows are drawn. Compact puts a ring beside each value in two pills; Tiles put each label over its value with a bar underneath.</span>
                     </div>
                     <select id="appSettingsHeaderStatsStyle" class="set-select">
                       <option value="classic">As before (bars)</option>

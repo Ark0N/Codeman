@@ -70,8 +70,7 @@ window; off lists every file by its full path.
 
 Most default to off. The stock desktop header is system stats, File Viewer, and the gear.
 **Header Stats Style** picks how the system stats and plan usage are drawn: *Tiles*
-(default; label over value with a bar underneath), *Compact* (one pill with sparklines plus
-plan-usage rings) or *As before* (the bars and the `5H · 7D` chip). Desktop only, per device.
+(default; label over value with a bar underneath), *Compact* (two pills with a ring beside every value) or *As before* (the bars and the `5H · 7D` chip). Desktop only, per device.
 New header controls never appear on phones. Split is desktop-only regardless of this
 setting — the button and the feature both stay off below a ~1180px viewport, where two
 resizable panes plus their divider have nowhere to go.

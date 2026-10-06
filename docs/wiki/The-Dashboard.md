@@ -163,7 +163,7 @@ The connection readout, CPU, MEM and the plan usage windows can be drawn three w
 | Style          | Look                                                                                   |
 | -------------- | -------------------------------------------------------------------------------------- |
 | **Tiles**      | The default. One small tile each (`WS live`, `CPU 22%`, `MEM 14.4G`, `5H 28%`, `7D 35%`): label over value, a thin bar underneath, no icons. |
-| **Compact**    | One pill with `WS · CPU · MEM` and a tiny sparkline of the last few samples, then a pill with a ring per plan window. Hands the tabs back the most room. |
+| **Compact**    | Two slim pills, `WS · CPU · MEM` and the plan windows, with a small ring beside every value. Hands the tabs back the most room. |
 | **As before**  | The bars and the `5H · 7D` chip, exactly as they were.                                 |
 
 Hiding System Stats or Plan Usage still hides them in every style.

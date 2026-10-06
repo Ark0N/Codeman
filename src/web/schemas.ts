@@ -1457,7 +1457,7 @@ export const SettingsUpdateSchema = z
      * How the header draws its WS / CPU / MEM / plan-usage cluster. Display key
      * (per-device), desktop only (the cluster is hidden below 768px).
      * 'classic' = the bars and the 5H · 7D chip, as before
-     * 'compact' = one system pill with sparklines plus a plan-usage ring pill
+     * 'compact' = two pills (WS/CPU/MEM, the plan windows), a ring beside every value
      * 'tiles'   = label over value with a bar underneath, no icons. The default.
      */
     headerStatsStyle: z.enum(['classic', 'compact', 'tiles']).optional(),

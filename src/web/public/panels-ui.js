@@ -6028,10 +6028,10 @@ Object.assign(CodemanApp.prototype, {
       }
     }
 
-    // Sparklines for the Compact header style. Always recorded (four numbers a
-    // poll), so switching styles shows history at once instead of empty bars.
-    this._pushStatSpark('cpu', stats.cpu);
-    this._pushStatSpark('mem', stats.memory?.percent);
+    // Rings for the Compact header style, kept current in every style (two
+    // style writes a poll) so switching styles never shows an empty ring.
+    this._setStatRing('statCpuRing', stats.cpu);
+    this._setStatRing('statMemRing', stats.memory?.percent);
 
     if (memEl && memBar) {
       const memGB = (stats.memory.usedMB / 1024).toFixed(1);
@@ -6051,24 +6051,17 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Record one percentage sample and redraw that stat's sparkline: one bar per
-   * sample, newest on the right, as many samples as the template has bars.
-   * Bars stay 10% tall at minimum so an idle machine still draws a baseline.
+   * Fill one stat ring (Compact header style) to `percent`, clamped to 0-100,
+   * and flag it `high` above 80%, the same threshold at which the value next
+   * to it turns red.
    */
-  _pushStatSpark(key, percent) {
-    const history = (this._statSparkHistory ||= { cpu: [], mem: [] })[key];
-    if (!history) return;
-    const el = this.$(key === 'cpu' ? 'statCpuSpark' : 'statMemSpark');
-    const size = el?.children.length || 4;
+  _setStatRing(id, percent) {
+    const ring = this.$(id);
+    if (!ring) return;
     const value = Number(percent);
-    history.push(Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0);
-    while (history.length > size) history.shift();
-    if (!el) return;
-    const offset = size - history.length;
-    for (let i = 0; i < el.children.length; i++) {
-      const sample = history[i - offset];
-      el.children[i].style.height = sample === undefined ? '' : `${Math.max(10, Math.round(sample))}%`;
-    }
+    const fill = Number.isFinite(value) ? Math.round(Math.min(100, Math.max(0, value))) : 0;
+    ring.style.setProperty('--pu', String(fill));
+    ring.classList.toggle('high', fill > 80);
   },
 
   // ─── Clipboard ──────────────────────────────────────────────────────────────

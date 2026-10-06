@@ -1,6 +1,6 @@
 /**
  * @fileoverview The header-stats styles (`headerStatsStyle`, Discussion #426
- * option G): 'classic' (as before), 'compact' (one system pill with sparklines
+ * option G): 'classic' (as before), 'compact' (one system pill with rings
  * plus a plan-ring pill) and 'tiles' (label over value, bar underneath; the
  * default).
  *
@@ -11,7 +11,7 @@
  *    from index.html, and 'classic' puts both back exactly where the template
  *    had them.
  *  - The WS readout never disappears with a hidden System Stats pill.
- *  - The parts only the new styles draw (sparklines, rings, meters, tile words)
+ *  - The parts only the new styles draw (stat rings, plan rings, meters, tile words)
  *    are rendered with sane values and hidden by default in CSS, which is what
  *    keeps 'classic' looking exactly as before.
  *
@@ -182,17 +182,20 @@ describe('the parts the new styles draw', () => {
     expect(document.getElementById('connectionTileValue')!.className).toBe('connection-tile-value connected');
   });
 
-  it('draws the sparkline newest-right, with a 10% floor and only real samples', () => {
+  it('fills the CPU and MEM rings from the stats poll, clamped, red past 80%', () => {
     const app = makeApp();
-    const bars = () =>
-      [...document.querySelectorAll<HTMLElement>('#statCpuSpark > i')].map((bar) => bar.style.height);
-    app._pushStatSpark('cpu', 40);
-    expect(bars()).toEqual(['', '', '', '40%']);
-    app._pushStatSpark('cpu', 2);
-    app._pushStatSpark('cpu', 250);
-    app._pushStatSpark('cpu', 60);
-    app._pushStatSpark('cpu', 70);
-    expect(bars()).toEqual(['10%', '100%', '60%', '70%']);
+    const ring = (id: string) => {
+      const el = document.getElementById(id)!;
+      return [el.style.getPropertyValue('--pu'), el.classList.contains('high')];
+    };
+    app.updateSystemStatsDisplay({ cpu: 22, memory: { usedMB: 14.4 * 1024, percent: 45.6 } });
+    expect(ring('statCpuRing')).toEqual(['22', false]);
+    expect(ring('statMemRing')).toEqual(['46', false]);
+    app.updateSystemStatsDisplay({ cpu: 140, memory: { usedMB: 30 * 1024, percent: 81 } });
+    expect(ring('statCpuRing')).toEqual(['100', true]);
+    expect(ring('statMemRing')).toEqual(['81', true]);
+    // A ring comes first in its stat, before the label, like the plan rings.
+    expect(document.getElementById('statCpuRing')!.nextElementSibling!.className).toBe('stat-label');
   });
 });
 
@@ -201,7 +204,7 @@ describe('header stats wiring (static)', () => {
 
   it('hides the new-style parts by default, so classic looks exactly as before', () => {
     expect(css).toMatch(
-      /\.stat-spark,\s*\.connection-tile,\s*\.header-plan-usage \.pu-ring,\s*\.header-plan-usage \.pu-meter \{\s*display: none;/
+      /\.stat-ring,\s*\.connection-tile,\s*\.header-plan-usage \.pu-ring,\s*\.header-plan-usage \.pu-meter \{\s*display: none;/
     );
   });
 

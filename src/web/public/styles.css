@@ -20107,25 +20107,35 @@ html[data-session-list='sidebar'][data-sidebar='collapsed'] .session-sidebar .ta
    it, so the cluster is contiguous. */
 
 /* Parts only the two new styles draw. */
-.stat-spark,
+.stat-ring,
 .connection-tile,
 .header-plan-usage .pu-ring,
 .header-plan-usage .pu-meter {
   display: none;
 }
 
-/* --- Compact: one system pill with sparklines, one plan-ring pill ------- */
-html[data-header-stats='compact'] .header-system-stats {
+/* --- Compact: two pills, a ring beside every value ------------------------ */
+/* One system pill (WS, CPU, MEM) and one plan pill (5h, 7d). Every reading is
+   the same shape, ring then label then value, so the two pills read as one
+   set; CPU and MEM rings are the accent colour (red past 80%, like their
+   value), the plan rings green, yellow or red by how much is used. */
+html[data-header-stats='compact'] .header-system-stats,
+html[data-header-stats='compact'] .header-plan-usage {
   align-items: center;
-  gap: 0;
   height: 24px;
-  padding: 0 10px;
+  min-height: 24px;
+  padding: 0 11px;
   box-sizing: border-box;
   border-radius: 12px;
   background: var(--control-bg);
   border: 1px solid var(--control-border);
+  font-family: 'JetBrains Mono', var(--font-mono, monospace);
   font-size: 0.68rem;
   color: var(--text);
+}
+
+html[data-header-stats='compact'] .header-system-stats {
+  gap: 13px;
 }
 
 html[data-header-stats='compact'] .header-system-stats > .connection-indicator {
@@ -20138,66 +20148,46 @@ html[data-header-stats='compact'] .header-system-stats > .connection-indicator >
   height: 7px;
 }
 
-/* Same bundled face as Tiles, so the pills read the same on every machine. */
-html[data-header-stats='compact'] .header-system-stats,
-html[data-header-stats='compact'] .header-plan-usage {
-  font-family: 'JetBrains Mono', var(--font-mono, monospace);
-}
-
-html[data-header-stats='compact'] .header-system-stats > .connection-indicator::after,
-html[data-header-stats='compact'] .header-system-stats > .stat-item + .stat-item::before {
-  content: '·';
-  margin: 0 8px;
-  color: var(--text-muted);
-}
-
-html[data-header-stats='compact'] .header-system-stats .stat-label {
-  min-width: 0;
-  font-size: 0.62rem;
-  color: var(--text-muted);
+html[data-header-stats='compact'] .header-system-stats .stat-item {
+  gap: 5px;
 }
 
 html[data-header-stats='compact'] .header-system-stats .stat-bar {
   display: none;
 }
 
-html[data-header-stats='compact'] .header-system-stats .stat-value {
+/* One label style and one value style across both pills. */
+html[data-header-stats='compact'] .header-system-stats .stat-label,
+html[data-header-stats='compact'] .header-plan-usage .pu-label {
+  min-width: 0;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+html[data-header-stats='compact'] .header-system-stats .stat-value,
+html[data-header-stats='compact'] .header-plan-usage .pu-val {
   min-width: 0;
   text-align: left;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-header-stats='compact'] .header-system-stats .stat-value:not(.high) {
   color: var(--text);
-}
-
-html[data-header-stats='compact'] .stat-spark {
-  display: inline-flex;
-  align-items: flex-end;
-  gap: 1px;
-  height: 10px;
-}
-
-html[data-header-stats='compact'] .stat-spark i {
-  width: 3px;
-  height: 10%;
-  border-radius: 1px;
-  background: var(--accent);
-  transition: height 0.3s ease;
 }
 
 html[data-header-stats='compact'] .header-plan-usage {
   flex-direction: row;
-  align-items: center;
-  gap: 12px;
-  height: 24px;
-  min-height: 24px;
-  padding: 0 10px;
-  box-sizing: border-box;
-  border-radius: 12px;
-  background: var(--control-bg);
-  border-color: var(--control-border);
+  gap: 13px;
 }
 
 html[data-header-stats='compact'] .header-plan-usage .pu-row {
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 html[data-header-stats='compact'] .header-plan-usage .pu-provider {
@@ -20207,7 +20197,7 @@ html[data-header-stats='compact'] .header-plan-usage .pu-provider {
 
 html[data-header-stats='compact'] .header-plan-usage .pu-windows {
   align-items: center;
-  gap: 10px;
+  gap: 13px;
 }
 
 html[data-header-stats='compact'] .header-plan-usage .pu-sep {
@@ -20216,25 +20206,30 @@ html[data-header-stats='compact'] .header-plan-usage .pu-sep {
 
 html[data-header-stats='compact'] .header-plan-usage .pu-win {
   align-items: center;
+  gap: 5px;
 }
 
-html[data-header-stats='compact'] .header-plan-usage .pu-label {
-  font-weight: 500;
-  text-transform: none;
-  color: var(--text-dim);
-}
-
-/* A ring per window: a conic fill masked down to a 2px stroke, coloured like
-   the value next to it (the pu-green/-yellow/-red class sits on both). */
+/* A ring: a conic fill masked down to a 2px stroke. Its colour is currentColor,
+   so a plan ring takes the pu-green/-yellow/-red class it shares with its
+   value, and a stat ring the accent (red when .high). */
+html[data-header-stats='compact'] .stat-ring,
 html[data-header-stats='compact'] .header-plan-usage .pu-ring {
   display: inline-block;
   width: 12px;
   height: 12px;
   flex: none;
   border-radius: 50%;
-  background: conic-gradient(currentColor calc(var(--pu, 0) * 1%), var(--control-border) 0);
+  background: conic-gradient(currentColor calc(var(--pu, 0) * 1%), var(--control-border-hover, var(--control-border)) 0);
   -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
   mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+}
+
+html[data-header-stats='compact'] .stat-ring {
+  color: var(--accent);
+}
+
+html[data-header-stats='compact'] .stat-ring.high {
+  color: var(--red);
 }
 
 /* --- Tiles: label over value, a bar underneath, no icons ----------------- */
