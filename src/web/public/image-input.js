@@ -185,8 +185,12 @@ Object.assign(CodemanApp.prototype, {
 
     const paths = results.filter(Boolean);
     if (paths.length > 0 && options.insert !== false) {
-      // Insert all paths in one shot, space-separated, in selection order.
-      await this.sendInput(paths.join(' '));
+      // Insert all paths in one shot, space-separated, in selection order, into
+      // the session the batch was uploaded TO. Not sendInput(): it re-reads
+      // activeSessionId, and after the awaits above that is whatever tab the
+      // user switched to mid-upload, so the paths landed in the wrong session.
+      // Same delivery sendInput() uses (durable queue, useMux for the POST path).
+      this._sendInputAsync(sessionId, paths.join(' '), { useMux: true });
     }
 
     // Final status: successes, plus any failures / cap so nothing is silent.

@@ -143,6 +143,7 @@ function loadImageInputApp() {
   app.activeSessionId = 'session-1';
   app.showToast = vi.fn();
   app.sendInput = vi.fn(async () => {});
+  app._sendInputAsync = vi.fn();
   app._normalizeImageForUpload = vi.fn(async (file) => file);
   app._uploadPasteImage = vi.fn(async (_sessionId, file: { path: string }) => file.path);
   return app as Record<string, any>;
@@ -199,6 +200,7 @@ describe('image upload insertion policy', () => {
 
     expect(Array.from(paths)).toEqual(['/tmp/first.png', '/tmp/second.png']);
     expect(app.sendInput).not.toHaveBeenCalled();
+    expect(app._sendInputAsync).not.toHaveBeenCalled();
   });
 
   it('preserves terminal insertion by default', async () => {
@@ -207,6 +209,33 @@ describe('image upload insertion policy', () => {
     const paths = await app._uploadAndInsertImages([{ path: '/tmp/legacy.png' }]);
 
     expect(Array.from(paths)).toEqual(['/tmp/legacy.png']);
-    expect(app.sendInput).toHaveBeenCalledWith('/tmp/legacy.png');
+    // The same delivery sendInput() uses (durable queue, useMux for the POST
+    // fallback), but addressed to the session the batch was uploaded to.
+    expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '/tmp/legacy.png', { useMux: true });
+  });
+
+  it('inserts into the session the upload started in, even after a tab switch mid-upload', async () => {
+    const app = loadImageInputApp();
+    // The user switches tabs while the upload is in flight. sendInput() re-read
+    // activeSessionId after the awaits, so the paths used to land in session-2.
+    app._uploadPasteImage = vi.fn(async (_sessionId, file: { path: string }) => {
+      app.activeSessionId = 'session-2';
+      return file.path;
+    });
+
+    await app._uploadAndInsertImages([{ path: '/tmp/shot.png' }]);
+
+    expect(app._uploadPasteImage).toHaveBeenCalledWith('session-1', { path: '/tmp/shot.png' });
+    expect(app._sendInputAsync).toHaveBeenCalledWith('session-1', '/tmp/shot.png', { useMux: true });
+    expect(app.sendInput).not.toHaveBeenCalled();
+  });
+
+  it('uploads to and inserts into an explicitly named session', async () => {
+    const app = loadImageInputApp();
+
+    await app._uploadAndInsertImages([{ path: '/tmp/pane-b.png' }], { sessionId: 'session-b' });
+
+    expect(app._uploadPasteImage).toHaveBeenCalledWith('session-b', { path: '/tmp/pane-b.png' });
+    expect(app._sendInputAsync).toHaveBeenCalledWith('session-b', '/tmp/pane-b.png', { useMux: true });
   });
 });
