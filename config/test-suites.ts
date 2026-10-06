@@ -42,6 +42,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/split-pane-orchestration.browser.test.ts',
   'test/split-pane-auto-collapse.browser.test.ts',
   'test/mobile-ime-preview.browser.test.ts',
+  'test/run-mode-menu-scroll.browser.test.ts',
 ];
 
 /**
