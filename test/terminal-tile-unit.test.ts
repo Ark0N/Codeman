@@ -221,7 +221,8 @@ describe('TerminalTile server-refresh single-flight', () => {
     await settle();
 
     expect(pane.terminal.clear).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith('/api/sessions/s1/terminal?full=1');
+    // The second argument carries the load's deadline (an AbortSignal).
+    expect(fetchMock).toHaveBeenCalledWith('/api/sessions/s1/terminal?full=1', expect.anything());
     expect(pane.terminal.write).toHaveBeenCalledWith('one');
     expect(pane._bufferLoading).toBe(false);
   });
@@ -233,7 +234,7 @@ describe('TerminalTile server-refresh single-flight', () => {
     pane._refreshBuffer();
     await settle();
 
-    expect(fetchMock).toHaveBeenCalledWith(`/api/sessions/s1/terminal?tail=${1024 * 1024}`);
+    expect(fetchMock).toHaveBeenCalledWith(`/api/sessions/s1/terminal?tail=${1024 * 1024}`, expect.anything());
   });
 
   it('refreshes arriving mid-fetch neither clear nor fetch again, and run ONCE after the replay lands', async () => {

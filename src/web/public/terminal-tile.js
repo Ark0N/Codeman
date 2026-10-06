@@ -4,8 +4,10 @@
  * @fileoverview TerminalTile: one independent live terminal pane bound to one
  * session, with its own xterm instance and its own
  * `/ws/sessions/:id/terminal` WebSocket. The split pane (terminal-split.js)
- * uses one as its second pane ("Pane B"); the tile grid planned in
- * docs/tile-grid-plan.md reuses the same class for every tile.
+ * uses one as its second pane ("Pane B"); the tile grid (tile-grid.js,
+ * docs/tile-grid-plan.md) uses one per tile, and feeds every capture they
+ * fetch through ONE TileLoadQueue (below), because each capture is a
+ * synchronous tmux call that blocks the server's event loop.
  *
  * Deliberately plainer than the primary pane (this.terminal/this._ws in
  * terminal-ui.js): no local-echo overlay, no CJK IME, no touch/mobile
@@ -13,7 +15,7 @@
  * docs/split-pane-sessions-plan.md.
  *
  * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js
- * @dependency constants.js (window.CodemanTerminalFont, DEFAULT_SCROLLBACK, TERMINAL_TAIL_SIZE, TERMINAL_CHUNK_SIZE)
+ * @dependency constants.js (window.CodemanTerminalFont, window.CodemanFetchDeadline, DEFAULT_SCROLLBACK, TERMINAL_TAIL_SIZE, TERMINAL_CHUNK_SIZE)
  * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight)
  * @loadorder 7.4 of 16, loaded after terminal-ui.js and before terminal-split.js
  */
@@ -72,6 +74,20 @@
       // seen by _sendResize() below, or it re-creates the exact PTY-size
       // fight the split picker already refuses to open at pick time.
       this.detachedSessions = opts.detachedSessions;
+      // Lines of scrollback this pane's xterm keeps (the grid passes its smaller
+      // TILE_SCROLLBACK) and its font size (the grid's own tile font); absent,
+      // the primary pane's values.
+      this.scrollback = Number.isFinite(opts.scrollback) ? opts.scrollback : null;
+      this.fontSize = Number.isFinite(opts.fontSize) ? opts.fontSize : null;
+      // `scheduleLoad(tile, kind, run)` runs every capture this pane fetches
+      // (`kind`: 'initial', 'refresh' or 'history') when its owner says so, and
+      // resolves once `run` has finished or was dropped. The grid passes its one
+      // queue so N tiles never fetch at once; absent, a load runs straight away.
+      this._scheduleLoad = typeof opts.scheduleLoad === 'function' ? opts.scheduleLoad : null;
+      // Loads a BOUNDED window (`full=1&tail=` for a TUI, `tail=` for a shell)
+      // instead of a TUI's whole history. Grid tiles do; full history is one
+      // "leave the grid" away in the primary pane.
+      this.boundedLoad = opts.boundedLoad === true;
       this.terminal = null;
       this.fitAddon = null;
       this.ws = null;
@@ -81,6 +97,12 @@
       // Single-flight state for _loadBuffer()/_refreshBuffer() below.
       this._bufferLoading = false;
       this._bufferRefreshPending = false;
+      // True only while a load's work runs, not while it waits in the owner's
+      // queue (see _runLoad): a close during the wait writes its marker at once.
+      this._loadRunning = false;
+      // Aborts the running load's fetch; destroy() uses it so a removed tile
+      // does not hold the owner's queue for a whole deadline.
+      this._loadAbort = null;
       // Scroll-to-top history pull (shell panes only), see _maybeLoadMoreHistory().
       // `_liveQueue` is non-null from the pull's response until its finally
       // block: live frames are held there with their arrival time instead of
@@ -119,7 +141,7 @@
     }
 
     async connect() {
-      const savedFontSize = parseInt(localStorage.getItem('codeman-font-size'), 10);
+      const savedFontSize = this.fontSize ?? parseInt(localStorage.getItem('codeman-font-size'), 10);
       this.terminal = new Terminal({
         theme: { ...global.codemanCurrentXtermTheme() },
         fontFamily: global.CodemanTerminalFont.resolve(this.fontSettings.terminalFontFamily),
@@ -129,7 +151,7 @@
         cursorBlink: false,
         cursorStyle: 'block',
         minimumContrastRatio: global.codemanCurrentSkinIsLight() ? 4.5 : 1,
-        scrollback: DEFAULT_SCROLLBACK,
+        scrollback: this.scrollback ?? DEFAULT_SCROLLBACK,
         allowTransparency: true,
         allowProposedApi: true,
       });
@@ -453,7 +475,7 @@
       const code = event?.code;
       const permanent = TerminalTile.STOP_MARKERS[code];
       this._markerText = permanent || TerminalTile.MARKER_RECONNECTING;
-      if (this._bufferLoading) this._markerOwed = true;
+      if (this._loadRunning) this._markerOwed = true;
       else this._writeDisconnectedMarker();
       if (this._destroyed) return;
       if (permanent) {
@@ -571,21 +593,82 @@
     // interleave their chunks into one terminal. A second call while one is
     // in flight is dropped here; _refreshBuffer() is the caller that queues
     // a trailing re-run instead.
-    async _loadBuffer() {
+    async _loadBuffer({ refresh = false } = {}) {
       if (this._bufferLoading) return;
       this._bufferLoading = true;
-      try {
-        const query = this.sessionMode === 'shell' ? `tail=${TERMINAL_TAIL_SIZE}` : 'full=1';
-        const res = await fetch(`/api/sessions/${this.sessionId}/terminal?${query}`);
-        const payload = (await res.json())?.data ?? {};
-        if (payload.terminalBuffer && this.terminal) {
-          await writeChunked(this.terminal, payload.terminalBuffer, () => this._destroyed);
+      await this._runLoad(refresh ? 'refresh' : 'initial', async () => {
+        this._loadRunning = true;
+        try {
+          if (this._destroyed) return;
+          if (refresh) {
+            // Cleared at the load's turn, not when it was asked for: a grid tile
+            // waiting in the queue keeps its last frame instead of sitting blank.
+            this.terminal?.clear();
+            // The clear wipes a "disconnected" marker (a `{t:'r'}` frame can queue
+            // a trailing refresh behind a pull that the socket's close then
+            // interrupts), so a refresh on a closed socket owes it back once its
+            // replay is written.
+            if (this._wsClosed) this._markerOwed = true;
+          }
+          const shell = this.sessionMode === 'shell';
+          let query = shell ? `tail=${TERMINAL_TAIL_SIZE}` : 'full=1';
+          if (this.boundedLoad && !shell) query = `full=1&tail=${TERMINAL_TAIL_SIZE}`;
+          // A deadline covering the body as well as the headers (the primary
+          // pane's budgets, CodemanFetchDeadline): a capture that never answers
+          // would otherwise hold this pane's single-flight flag, and in the grid
+          // the one load queue every tile waits behind, forever.
+          const controller = global.AbortController ? new global.AbortController() : null;
+          this._loadAbort = controller;
+          const budget = global.CodemanFetchDeadline?.terminalFetchDeadlineMs?.({ full: !shell }) ?? 45000;
+          const timer = controller ? setTimeout(() => controller.abort(), budget) : null;
+          let payload;
+          try {
+            const res = await fetch(
+              `/api/sessions/${this.sessionId}/terminal?${query}`,
+              controller ? { signal: controller.signal } : undefined
+            );
+            payload = (await res.json())?.data ?? {};
+          } finally {
+            clearTimeout(timer);
+            this._loadAbort = null;
+          }
+          if (payload.terminalBuffer && this.terminal) {
+            await writeChunked(this.terminal, payload.terminalBuffer, () => this._destroyed);
+          }
+        } catch {
+          /* Best-effort: live output still arrives once the socket connects. */
+        } finally {
+          this._loadRunning = false;
+          this._stampMarkerIfOwed();
+          this._endBufferLoad();
         }
+      });
+    }
+
+    // Runs a load's work now, or when the owner's queue gives this pane its turn
+    // (`scheduleLoad`). The single-flight flag is already set by the caller, so a
+    // load waiting in the queue still coalesces refreshes and blocks a second
+    // pull; the work itself sets `_loadRunning`. A load the queue drops (this
+    // pane was destroyed while it waited) never runs, so its flags are released
+    // here.
+    async _runLoad(kind, work) {
+      let ran = false;
+      const run = () => {
+        ran = true;
+        return work();
+      };
+      if (!this._scheduleLoad) {
+        await run();
+        return;
+      }
+      try {
+        await this._scheduleLoad(this, kind, run);
       } catch {
-        /* Best-effort — live output still arrives once the socket connects. */
-      } finally {
-        this._stampMarkerIfOwed();
-        this._endBufferLoad();
+        /* The queue never rejects; a load that failed already settled itself. */
+      }
+      if (!ran) {
+        this._bufferLoading = false;
+        this._bufferRefreshPending = false;
       }
     }
 
@@ -656,7 +739,8 @@
       const now = Date.now();
       if (now - this._historyPullAt < cooldown) return;
       this._historyPullAt = now;
-      void this._pullHistory();
+      this._bufferLoading = true;
+      void this._runLoad('history', () => this._pullHistory());
     }
 
     // Pulls a BOUNDED window of tmux's full history (the same TERMINAL_TAIL_SIZE
@@ -665,6 +749,11 @@
     // single-flight flag across the fetch AND the replay, like _loadBuffer().
     async _pullHistory() {
       this._bufferLoading = true;
+      if (this._destroyed) {
+        this._endBufferLoad();
+        return;
+      }
+      this._loadRunning = true;
       let replayed = false;
       let capturedAt = 0;
       // Two budgets on one signal. The request itself gets the primary pane's
@@ -678,6 +767,7 @@
       // be re-armed, hence the controller; without AbortController the pull
       // simply has no deadline.
       const controller = global.AbortController ? new global.AbortController() : null;
+      this._loadAbort = controller;
       let abortTimer = null;
       const armDeadline = (ms) => {
         if (!controller) return;
@@ -743,6 +833,8 @@
         /* Best-effort — live output keeps arriving whatever happens here. */
       } finally {
         clearTimeout(abortTimer);
+        this._loadAbort = null;
+        this._loadRunning = false;
         const queued = this._liveQueue ?? [];
         this._liveQueue = null;
         // After a replay, only frames that arrived after the capture are news;
@@ -776,12 +868,7 @@
         this._bufferRefreshPending = true;
         return;
       }
-      this.terminal?.clear();
-      // The clear wipes a "disconnected" marker (a `{t:'r'}` frame can queue a
-      // trailing refresh behind a pull that the socket's close then interrupts),
-      // so a refresh on a closed socket owes it back once its replay is written.
-      if (this._wsClosed) this._markerOwed = true;
-      void this._loadBuffer();
+      void this._loadBuffer({ refresh: true });
     }
 
     // Local reflow only — no PTY resize frame. Split out so a divider drag
@@ -851,6 +938,14 @@
       // keystroke loses nothing.
       clearTimeout(this._reconnectTimer);
       this._reconnectTimer = null;
+      // A load still fetching would otherwise hold the owner's queue (and the
+      // server's attention) for a pane nobody can see any more.
+      try {
+        this._loadAbort?.abort();
+      } catch {
+        /* Already settled. */
+      }
+      this._loadAbort = null;
       if (this._onWheel) {
         this.mountEl?.removeEventListener('wheel', this._onWheel, { capture: true });
         this._onWheel = null;
@@ -883,5 +978,111 @@
     4010: '[disconnected: another connection took over this pane]',
   };
 
+  /**
+   * ONE queue for every capture a set of tiles fetches (`GET
+   * /api/sessions/:id/terminal`): the initial load, the refresh after a
+   * reconnect, a server `{t:'r'}` refresh and the shell history pull. Each
+   * capture runs synchronous tmux calls on the server, so N of them at once do
+   * not run in parallel, they stall every WebSocket and SSE stream on it back to
+   * back. After a deploy restart all N tiles reopen within the same second; this
+   * drains their refreshes one at a time.
+   *
+   * Concurrency 1. Next up is a history pull (the user is waiting on it), then
+   * the lowest `rank(tile)` (the grid ranks the focused tile first, then reading
+   * order), then arrival order. A destroyed tile's entries are dropped, never run.
+   * DOM-free, so the grid owns the policy and tests drive it directly.
+   */
+  class TileLoadQueue {
+    /**
+     * @param {{rank?: (tile: object) => number, onChange?: (tile: object, state: 'queued'|'running'|'idle') => void}} [opts]
+     */
+    constructor(opts = {}) {
+      this._rank = typeof opts.rank === 'function' ? opts.rank : () => 0;
+      this._onChange = typeof opts.onChange === 'function' ? opts.onChange : null;
+      this._pending = [];
+      this._active = null;
+      this._seq = 0;
+    }
+
+    /** The `scheduleLoad` a TerminalTile takes. Resolves once `run` finished or was dropped; never rejects. */
+    schedule(tile, kind, run) {
+      return new Promise((resolve) => {
+        this._pending.push({ tile, kind, run, resolve, seq: this._seq++ });
+        this._notify(tile, 'queued');
+        this._pump();
+      });
+    }
+
+    /** Drops every load still waiting for `tile` (the running one, if any, finishes on its own). */
+    drop(tile) {
+      const keep = [];
+      for (const entry of this._pending) {
+        if (entry.tile === tile) entry.resolve();
+        else keep.push(entry);
+      }
+      this._pending = keep;
+      if (this._active?.tile !== tile) this._notify(tile, 'idle');
+    }
+
+    /** How many loads are waiting (not counting the running one). */
+    get size() {
+      return this._pending.length;
+    }
+
+    /** The tile whose load is running, or null. */
+    get activeTile() {
+      return this._active?.tile ?? null;
+    }
+
+    _notify(tile, state) {
+      try {
+        this._onChange?.(tile, state);
+      } catch {
+        /* A display callback never stops the queue. */
+      }
+    }
+
+    _takeNext() {
+      let best = -1;
+      let bestKey = null;
+      for (let i = 0; i < this._pending.length; i++) {
+        const entry = this._pending[i];
+        if (entry.tile?._destroyed) continue;
+        const key = [entry.kind === 'history' ? 0 : 1, this._rank(entry.tile), entry.seq];
+        const order = bestKey ? key[0] - bestKey[0] || key[1] - bestKey[1] || key[2] - bestKey[2] : -1;
+        if (order < 0) {
+          best = i;
+          bestKey = key;
+        }
+      }
+      // Destroyed tiles' entries go now, resolved but never run.
+      const dropped = this._pending.filter((entry) => entry.tile?._destroyed);
+      const next = best === -1 ? null : this._pending[best];
+      this._pending = this._pending.filter((entry) => entry !== next && !entry.tile?._destroyed);
+      for (const entry of dropped) entry.resolve();
+      return next;
+    }
+
+    async _pump() {
+      if (this._active) return;
+      const entry = this._takeNext();
+      if (!entry) return;
+      this._active = entry;
+      this._notify(entry.tile, 'running');
+      try {
+        await entry.run();
+      } catch {
+        /* A load settles its own failure; the queue only moves on. */
+      } finally {
+        this._active = null;
+        const stillQueued = this._pending.some((e) => e.tile === entry.tile);
+        this._notify(entry.tile, stillQueued ? 'queued' : 'idle');
+        entry.resolve();
+        void this._pump();
+      }
+    }
+  }
+
   global.TerminalTile = TerminalTile;
+  global.TileLoadQueue = TileLoadQueue;
 })(window);
