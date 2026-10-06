@@ -91,6 +91,10 @@
       this._liveQueue = null;
       this._markerOwed = false;
       this._onWheel = null;
+      // `{ ws, lastRecvAt }`, registered with the app's input-socket map while
+      // this pane's socket is open, so the exactly-once input queue delivers this
+      // session's keystrokes over it (app.js _inputSocketFor). Null otherwise.
+      this._inputHandle = null;
     }
 
     async connect() {
@@ -116,11 +120,7 @@
 
       this._installWheelListener();
 
-      this.terminal.onData((data) => {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-          this.ws.send(JSON.stringify({ t: 'i', d: data }));
-        }
-      });
+      this.terminal.onData((data) => this._onTerminalData(data));
 
       // Pane B has no gates of its own by default, so every app-level chord
       // that the document capture-phase handler (app.js) only preventDefault()s
@@ -266,15 +266,25 @@
       if (this._destroyed) return;
 
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const url = `${proto}//${location.host}${window.CodemanBase.base}/ws/sessions/${this.sessionId}/terminal`;
+      // The tab's own connection identity plus a `:tile` suffix. The server
+      // supersedes a socket that reuses a cid on the same session (4010), so a
+      // pane must never share the primary pane's exact cid: were both ever on
+      // one session they would evict each other in a loop. Input frames still
+      // carry the BARE clientId, which is what the server dedups on.
+      const app = global.app;
+      const cid = app?._clientId ? `${app._clientId}:${app._wsTabNonce}:tile` : '';
+      const cidQuery = cid ? `?cid=${encodeURIComponent(cid)}` : '';
+      const url = `${proto}//${location.host}${window.CodemanBase.base}/ws/sessions/${this.sessionId}/terminal${cidQuery}`;
       this.ws = new WebSocket(url);
 
       this.ws.onopen = () => {
         this._wsReady = true;
+        this._registerInputSocket();
         this._sendResize();
       };
 
       this.ws.onmessage = (event) => {
+        if (this._inputHandle) this._inputHandle.lastRecvAt = Date.now();
         try {
           const msg = JSON.parse(event.data);
           if (msg.t === 'o') {
@@ -287,6 +297,9 @@
             // _onSessionNeedsRefresh (app.js:2990) — Pane B has its own
             // buffer loader for the same reason connect() does.
             this._refreshBuffer();
+          } else if (msg.t === 'ia') {
+            // Input ACK. The frame names no session, so it is this pane's.
+            global.app?._onWsInputAck?.(msg.seq, msg, this.sessionId);
           }
         } catch {
           /* Malformed frame — ignore, matches primary pane's tolerance. */
@@ -322,8 +335,49 @@
     _onSocketClosed() {
       this._wsReady = false;
       this._wsClosed = true;
+      this._unregisterInputSocket();
       if (this._bufferLoading) this._markerOwed = true;
       else this._writeDisconnectedMarker();
+    }
+
+    // Keystrokes and pastes go through the app's exactly-once input queue (seq,
+    // ACK, persisted until delivered, redelivered after a drop), over this
+    // pane's own socket while it is open and the HTTP fallback while it is not.
+    // What xterm GENERATES must not be queued: a query reply (DA/CPR/OSC) is
+    // dropped, as the primary pane drops it, because forwarding it types
+    // "0;276;0c" into the CLI, and replaying one after a reload would do so
+    // again into a later screen. A focus or mouse report is real input the
+    // program asked for, but nobody typed it: it goes out once, never
+    // persisted. Same predicates as the primary pane (terminal-ui.js onData).
+    _onTerminalData(data) {
+      const input = global.CodemanTerminalInput;
+      if (input?.shouldSuppressTerminalQueryResponse?.(data)) return;
+      const app = global.app;
+      if (input?.isTerminalFocusOrMouseReport?.(data)) {
+        app?._sendInputEphemeral?.(this.sessionId, data);
+        return;
+      }
+      app?._sendInputAsync?.(this.sessionId, data);
+    }
+
+    // Joins the app's input-socket map for this session and flushes anything
+    // already queued for it (typed while the socket was down, or left over from
+    // a reload) over the fresh socket. Called from onopen.
+    _registerInputSocket() {
+      const app = global.app;
+      if (!this.ws || !app?._registerInputSocket) return;
+      this._unregisterInputSocket();
+      this._inputHandle = { ws: this.ws, lastRecvAt: 0 };
+      app._registerInputSocket(this.sessionId, this._inputHandle);
+      app._onWsReady?.(this.sessionId);
+    }
+
+    // Leaves the map; only this pane's own handle is removed (a replacement
+    // socket's registration survives a late close of the old one).
+    _unregisterInputSocket() {
+      if (!this._inputHandle) return;
+      global.app?._unregisterInputSocket?.(this.sessionId, this._inputHandle);
+      this._inputHandle = null;
     }
 
     // Settles a marker the pane owes: set when a close lands during a load (the
@@ -615,6 +669,10 @@
 
     destroy() {
       this._destroyed = true;
+      // Anything still queued for this session stays in the app's queue and is
+      // delivered over HTTP by the redelivery sweep, so closing the pane mid-
+      // keystroke loses nothing.
+      this._unregisterInputSocket();
       if (this._onWheel) {
         this.mountEl?.removeEventListener('wheel', this._onWheel, { capture: true });
         this._onWheel = null;
