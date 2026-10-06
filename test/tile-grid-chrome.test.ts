@@ -138,6 +138,29 @@ describe('header buttons', () => {
   });
 });
 
+describe('header button size (owner feedback: the 12px glyphs read as tiny)', () => {
+  const css = readFileSync(resolve(import.meta.dirname, '../src/web/public/styles.css'), 'utf8');
+  const rule = (selector: string) => {
+    const at = css.indexOf(`${selector} {`);
+    return at === -1 ? '' : css.slice(at, css.indexOf('}', at));
+  };
+
+  it("buttons are the app header's icon size: 26px targets, a 16px glyph, never the header's inherited 12px", () => {
+    const btn = rule('.tile-btn');
+    expect(btn).toContain('min-width: 26px;');
+    expect(btn).toContain('height: 26px;');
+    expect(btn).toContain('font-size: 16px;');
+    expect(btn).not.toMatch(/\bfont: inherit;/);
+  });
+
+  it('the thin glyphs (ellipsis, cross) get a step more, and the header holds the buttons', () => {
+    expect(rule('.tile-btn.tile-menu,\n.tile-btn.tile-remove')).toContain('font-size: 19px;');
+    const header = rule('.tile-header');
+    expect(header).toContain('flex: 0 0 28px;');
+    expect(header).toContain('height: 28px;');
+  });
+});
+
 describe('rename', () => {
   function startRename(app: GridApp, id: string) {
     headerOf(id).children[1].dispatch('dblclick', { stopPropagation: vi.fn() });

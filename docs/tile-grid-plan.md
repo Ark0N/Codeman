@@ -29,6 +29,9 @@ or settled a question the spec left open. The invariants as built are in
   B too), and a refresh clears the screen at its turn in the queue, so a waiting tile keeps
   its last frame.
 - **4009 lands on the Attach overlay**, and 4003/4004/4010 remove the tile.
+- **Tile header buttons are 26px targets with 16 to 19px glyphs** (owner feedback: the
+  first build's 12px glyphs read as tiny next to the name), the size of the app header's own
+  icon buttons; the header grew from 24 to 28px to hold them.
 - **The Tiles button opens the grid at once** (owner decision 8): a click (and
   `Ctrl+Shift+G`, the same `toggleTileGrid`) opens `tileGridOpenSet` (constants.js): the
   grid this tab last had, else an open split's two sessions, else the open sessions in tab

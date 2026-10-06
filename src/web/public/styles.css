@@ -19441,8 +19441,9 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
    holds the xterm, so a header that grew (a wrapped name, the rename input)
    would shrink the body with nothing refitting the xterm or its PTY. */
 .tile-header {
-  flex: 0 0 24px;
-  height: 24px;
+  /* Just tall enough for the 26px buttons below (and its 1px border). */
+  flex: 0 0 28px;
+  height: 28px;
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -19466,20 +19467,36 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
 .tile-actions {
   display: flex;
   flex: 0 0 auto;
-  gap: 1px;
+  gap: 2px;
 }
 
+/* The click target and glyph size of the app header's own icon buttons
+   (.btn-icon-header: 26px square, 16px glyph). Inheriting the header's 12px
+   made the glyphs read as tiny next to the session name. */
 .tile-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 4px;
   border: none;
   background: none;
   color: inherit;
-  font: inherit;
-  line-height: 18px;
-  height: 20px;
-  padding: 0 6px;
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1;
   border-radius: 3px;
   cursor: pointer;
-  opacity: 0.65;
+  opacity: 0.7;
+}
+
+/* The ellipsis and the cross are thin glyphs: a step up so all four read at
+   the same visual size as the arrow and the plus. */
+.tile-btn.tile-menu,
+.tile-btn.tile-remove {
+  font-size: 19px;
 }
 
 .tile-btn:hover,
@@ -19492,7 +19509,7 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
 .tile-rename-input {
   flex: 1 1 auto;
   min-width: 0;
-  height: 18px;
+  height: 22px;
   box-sizing: border-box;
   padding: 0 4px;
   font: inherit;
