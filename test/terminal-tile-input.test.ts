@@ -90,7 +90,10 @@ class FakeTerminal {
   onData(cb: (data: string) => void) {
     this.dataCb = cb;
   }
-  attachCustomKeyEventHandler() {}
+  keyHandler: ((ev: Record<string, unknown>) => boolean) | null = null;
+  attachCustomKeyEventHandler(fn: (ev: Record<string, unknown>) => boolean) {
+    this.keyHandler = fn;
+  }
   registerLinkProvider() {}
   writes: string[] = [];
   write(data: string, cb?: () => void) {
@@ -177,6 +180,8 @@ function makeApp(): App {
   app._updateConnectionIndicator = vi.fn();
   app.markIdleAlertSeen = vi.fn();
   app.showToast = vi.fn();
+  // The key handler's chord gates read the shortcut registry, which reads these.
+  app.loadAppSettingsFromStorage = () => ({});
   app._ws = null;
   app._wsSessionId = null;
   app._estimateReplayRows = (text: string) => text.split('\n').length;
@@ -595,5 +600,43 @@ describe('TerminalTile geometry (#464: the pane and its PTY never disagree)', ()
     ws.receive({ t: 'zc', c: 80, r: 60 });
 
     expect(term.resizes.length).toBe(before);
+  });
+});
+
+describe('TerminalTile links and paste follow THIS pane', () => {
+  it('registers the shared link provider on its own terminal, resolving its own session', async () => {
+    const app = makeApp();
+    const register = vi.fn();
+    app.registerFilePathLinkProvider = register;
+
+    const { term } = await connectTile(app);
+
+    expect(register).toHaveBeenCalledTimes(1);
+    const target = register.mock.calls[0][0] as { terminal: unknown; getSessionId: () => string };
+    expect(target.terminal).toBe(term);
+    expect(target.getSessionId()).toBe('s-tile');
+  });
+
+  it("routes Ctrl+V into the paste trap with this pane's terminal and session", async () => {
+    const app = makeApp();
+    const paste = vi.fn();
+    app._handleImagePaste = paste;
+    const { term } = await connectTile(app);
+
+    const handled = term.keyHandler!({ type: 'keydown', key: 'v', ctrlKey: true, code: 'KeyV' });
+
+    expect(handled).toBe(false);
+    expect(paste).toHaveBeenCalledWith({ terminal: term, sessionId: 's-tile' });
+  });
+
+  it('leaves Ctrl+Shift+V (voice input) out of the paste trap', async () => {
+    const app = makeApp();
+    const paste = vi.fn();
+    app._handleImagePaste = paste;
+    const { term } = await connectTile(app);
+
+    term.keyHandler!({ type: 'keydown', key: 'V', ctrlKey: true, shiftKey: true, code: 'KeyV' });
+
+    expect(paste).not.toHaveBeenCalled();
   });
 });

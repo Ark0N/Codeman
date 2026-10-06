@@ -112,6 +112,9 @@
       // Cleared on every open: a fresh socket must announce its size, which is
       // also what registers it as a desktop viewer server-side.
       this._lastSentDims = null;
+      // Whether the pointer is over a link in THIS pane (the primary pane's own
+      // flag, app._linkHovered, belongs to its terminal alone).
+      this._linkHovered = false;
     }
 
     async connect() {
@@ -135,6 +138,17 @@
       this.terminal.open(this.mountEl);
       this.fitAddon.fit();
 
+      // File paths and URLs printed here are clickable, through the SAME
+      // provider as the primary pane (registerFilePathLinkProvider,
+      // terminal-ui.js), and open against THIS pane's session.
+      global.app?.registerFilePathLinkProvider?.({
+        terminal: this.terminal,
+        getSessionId: () => this.sessionId,
+        setHovered: (hovered) => {
+          this._linkHovered = hovered;
+        },
+      });
+
       this._installWheelListener();
 
       this.terminal.onData((data) => this._onTerminalData(data));
@@ -148,9 +162,8 @@
       // Alt+1-9/[/] tab nav, Alt+B sidebar toggle, Ctrl+Z suspend, Shift/Ctrl+Enter
       // newline, and smart-copy Ctrl+C/Ctrl+Shift+C). Routed through the same
       // registry-aware predicates so a rebind or a disable restores plain
-      // terminal behavior here too. Ctrl+V is deliberately left on xterm's own
-      // default (plain-text paste): Pane B has no image-paste trap to route it
-      // to, so intercepting it here would only break paste.
+      // terminal behavior here too. Ctrl+V goes through the primary pane's
+      // paste trap (image-input.js), aimed at this pane (below).
       this.terminal.attachCustomKeyEventHandler((ev) => {
         if (ev.isComposing || ev.key === 'Process' || ev.keyCode === 229) return true;
         if (
@@ -165,6 +178,15 @@
           return false;
         }
         if (ev.type === 'keydown' && global.app?.shouldToggleSessionSidebarFromShortcut?.(ev)) {
+          return false;
+        }
+        // Ctrl+V / Cmd+V: the primary pane's paste trap, aimed at THIS pane, so
+        // a pasted image uploads to this pane's session and its path is typed
+        // here, and pasted text goes into this xterm with its bracketed-paste
+        // markers intact. Mirrors terminal-ui.js's own Ctrl+V gate; without it
+        // xterm's default only ever pasted text.
+        if ((ev.ctrlKey || ev.metaKey) && ev.key === 'v' && ev.type === 'keydown') {
+          global.app?._handleImagePaste?.({ terminal: this.terminal, sessionId: this.sessionId });
           return false;
         }
         // Ctrl+Z (SIGTSTP/job-control suspend): mirrors terminal-ui.js's own
