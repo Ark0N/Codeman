@@ -1,6 +1,6 @@
 # Tile Grid: Design Spec
 
-**Status**: Proposed, not implemented. Builds on `docs/split-pane-sessions-plan.md`; the split pane stays.
+**Status**: PR 1 (tile foundation) implemented on `feat/terminal-tile`, local only; PR 2 (the grid) proposed. Builds on `docs/split-pane-sessions-plan.md`; the split pane stays.
 **Author**: Claude (planning session with the maintainer), 2026-10-06
 **Branches**: PR 1 `feat/terminal-tile`, PR 2 `feat/tile-grid` stacked on it (worktree `claudeman-tiles`)
 **Scope**: v1 is fully designed here; follow-ups are named at the end and explicitly deferred.
@@ -239,8 +239,9 @@ behavior listed under "Current architecture". The split orchestration stays in
 `terminal-split.js` and constructs a `TerminalTile` for Pane B; the grid (PR 2)
 constructs one per tile. New in the class:
 
-**Reconnect.** Backoff 0.5 s, 1 s, 2 s, 4 s, 8 s, capped at 15 s, reset on a
-successful open. A reconnect is also kicked when SSE `handleInit` reports the
+**Reconnect.** The primary pane's backoff ladder (`CodemanWsReconnect`,
+constants.js: 0, 250 ms, 500 ms, ... capped at 10 s) plus up to 250 ms of
+jitter, the attempt count reset only by a successful open. A reconnect is also kicked when SSE `handleInit` reports the
 server is back. After every reopen the tile runs a bounded refresh (the same
 in-stream `\x1bc` clear plus replay as `_refreshBuffer`), because output
 frames carry no sequence number and a gap cannot be replayed otherwise. That
@@ -252,7 +253,7 @@ prevent. Close codes that must NOT reconnect:
 | Code | Meaning | Tile does | Owner decides (via `onExit`) |
 |---|---|---|---|
 | 4009 | Session exited | Stops reconnecting, reports the code | PR 1 split: an "exited" marker in Pane B (the split's existing delete path collapses it if the session is removed). PR 2 grid: the Attach overlay |
-| 4003 / 4004 | Forbidden / session gone | Stops reconnecting, reports the code | PR 1 split: a "stopped" marker. PR 2 grid: removes the tile |
+| 4003 / 4004 | Forbidden / session gone | Stops reconnecting, reports the code (4003 is stopped by the tile itself: `CodemanWsReconnect` classes it as transient) | PR 1 split: a marker saying why. PR 2 grid: removes the tile |
 | 4010 | Superseded by a socket with the same cid | Stops, but only for the CURRENT socket (see below) | Same marker as 4003 |
 
 The class never decides what happens to its container; it reports the close
@@ -268,8 +269,11 @@ opening a replacement the tile detaches the old socket's handlers (as
 `close()`), and every handler checks `event.target === this.ws` and ignores
 events from any socket that is no longer current.
 
-The marker text becomes `[disconnected, reconnecting…]` and keeps its
-"last thing on screen" rule.
+The marker text becomes `[disconnected, reconnecting…]` (a stop writes
+`[disconnected: <why>]`, `TerminalTile.STOP_MARKERS`) and keeps its "last
+thing on screen" rule. On reopen the closed state is cleared BEFORE the gap
+refresh, or the refresh re-owes the marker and stamps it under a healthy
+pane. `reconnectNow()` skips the backoff and never replaces an open socket.
 
 **Client id on the upgrade URL.** `cid=${clientId}:${tabNonce}:tile`. The
 connection registry supersedes by cid PER SESSION, so a distinct suffix means a
@@ -317,9 +321,9 @@ to a 1 MiB window, so a larger buffer only fills with live output over time.
 The shell history pull's "pane full" check reads `term.options.scrollback`, so
 it adapts to the lower cap unchanged.
 
-**Key handler.** Pane B's `attachCustomKeyEventHandler` body is extracted into
-a shared factory, `createPaneKeyHandler({ terminal, getSessionId, getMode })`,
-used by every tile, plus:
+**Key handler.** Pane B's `attachCustomKeyEventHandler` stays in
+`TerminalTile` (every tile IS a `TerminalTile`, so no separate factory is
+needed), plus:
 
 - Ctrl+V routes into the image-paste trap with this tile's terminal and session;
 - the new tile chords are swallowed (return false) so they never reach the PTY.
@@ -508,7 +512,7 @@ run back to back on the event loop and stall every WS and SSE stream on the
 server for seconds.
 
 So EVERY tile load goes through ONE grid-level client queue (PR 2, plugged in
-through the `scheduleLoad` option `TerminalTile` gets in PR 1): the initial load,
+through a `scheduleLoad` option PR 2 adds to `TerminalTile`): the initial load,
 the refresh after a reconnect, a server `{t:'r'}` refresh, and the shell
 history pull. No tile calls `fetch('/terminal…')` on its own. The tile's
 single-flight flag stays (it is what keeps one tile's replays from
@@ -638,11 +642,9 @@ Commits:
    `TerminalTile` for Pane B. New in the class: reconnect with race-free socket
    replacement and the close-code table, the `:tile` cid suffix, reliable input
    through the socket map, `zc` handling with one geometry method, the
-   file-path link provider, image paste, and the shared key handler factory.
-   Constructor options make it reusable by PR 2 without changes:
-   `scrollback` (the split passes `DEFAULT_SCROLLBACK`), `scheduleLoad`
-   (default: run the load directly; PR 2 injects the grid queue), `onFocus`
-   and `onExit` callbacks.
+   file-path link provider and image paste, and an `onExit` callback. The
+   `scrollback` and `scheduleLoad` options were deferred to PR 2, which
+   introduces them together with the grid's load queue, their first user.
 3. **Split pane follows focus.** `_focusedPane()` returns Pane B while its
    xterm has focus, so Ctrl+L, Ctrl+Shift+R, voice and image paste act on the
    pane you are typing in. This removes most of the asymmetry the split-pane
@@ -672,8 +674,8 @@ PR 1 tests (gate):
   (single-flight, marker-last including the async-parse fake, history pull),
   plus: reconnect backoff and each close code, a late `onclose` (4010) from a
   replaced socket is ignored and the tile keeps running, `zc` columns-only
-  adoption, the cid suffix, input routed through `_sendInputAsync`, loads routed
-  through an injected `scheduleLoad`.
+  adoption, the cid suffix, input routed through `_sendInputAsync` (as built:
+  `test/terminal-tile-input.test.ts`, which runs `connect()` for real).
 - `test/input-socket-map.test.ts`: acks routed to the right session's queue,
   redelivery per socket, POST fallback when no socket is registered.
 - `test/focused-pane-shortcuts.test.ts`: with Pane B focused, Ctrl+L clears
@@ -689,9 +691,12 @@ PR 1 tests (gate):
 - Every existing `split-pane-*` test keeps passing (class name updated where it
   is referenced).
 
-PR 1 browser tests: the existing `split-pane-*.browser.test.ts` files, plus
-Pane B reconnecting after a server restart and a click on a printed path in
-Pane B opening the file preview for Pane B's session.
+PR 1 browser tests: the existing `split-pane-*.browser.test.ts` files (they
+match master, one pre-existing environmental failure in both). Pane B
+reconnecting after a server restart and a click on a printed path opening
+Pane B's file preview are covered by unit tests and checked live on the beta
+instance rather than as browser tests (the harness cannot restart its own
+server).
 
 PR 1 verification: a split with two real Claude sessions on the beta instance;
 restart the server mid-typing in Pane B (reconnect, refresh, no lost or doubled
@@ -708,7 +713,8 @@ Commits:
    observer), the `selectSession` tile branch with the `auto` rule, the
    grid-aware `closeSession` fallback, focus rules, tile chords in the shortcut
    registry, the single grid-level load queue that every tile load goes
-   through (injected as each tile's `scheduleLoad`), coexistence with the split.
+   through (a new `scheduleLoad` option on `TerminalTile`, plus a `scrollback`
+   option for `TILE_SCROLLBACK`), coexistence with the split.
 2. **Tile chrome and entry points.** Header (dot, name, menu, zoom, add,
    remove), the Attach overlay, picker, dividers, drag-a-tab, Ctrl/Cmd+click,
    "Open group as tiles".
