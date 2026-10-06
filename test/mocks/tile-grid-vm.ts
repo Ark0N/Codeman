@@ -101,6 +101,7 @@ export class FakeTile {
   connect = vi.fn(async () => {});
   reconnectNow = vi.fn();
   fit = vi.fn();
+  localFit = vi.fn();
   destroy = vi.fn(() => {
     this._destroyed = true;
   });
@@ -132,6 +133,14 @@ export const body = new FakeEl();
 /** `document.addEventListener`, so a test can find a listener the app installed. */
 export const documentAddEventListener = vi.fn();
 export const localStore = new Map<string, string>();
+/** The clock behind `performance.now` inside the context; tests move it with advanceClock(). */
+let clock = 100_000;
+export function advanceClock(ms: number) {
+  clock += ms;
+}
+export const clockNow = () => clock;
+/** Every callback the code under test handed a PerformanceObserver, newest last. */
+export const perfObserverCallbacks: Array<(list: { getEntries(): unknown[] }) => void> = [];
 /** What the code under test deferred with requestIdleCallback; a test runs them. */
 export const idleCallbacks: Array<() => void> = [];
 export const windowStub: Record<string, unknown> = {
@@ -145,7 +154,14 @@ export const windowStub: Record<string, unknown> = {
 const read = (f: string) => readFileSync(resolve(import.meta.dirname, `../../src/web/public/${f}`), 'utf8');
 const context = vm.createContext({
   console: { ...console, log: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  performance: { now: () => 100_000 },
+  performance: { now: () => clock },
+  PerformanceObserver: class {
+    constructor(cb: (list: { getEntries(): unknown[] }) => void) {
+      perfObserverCallbacks.push(cb);
+    }
+    observe() {}
+    disconnect() {}
+  },
   setInterval: vi.fn(),
   clearInterval: vi.fn(),
   setTimeout: (fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms),

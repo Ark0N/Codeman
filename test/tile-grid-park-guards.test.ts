@@ -25,217 +25,41 @@
  * tile destroyed, `_lastResizeDims` reset, the main terminal's cached content
  * for EVERY tiled id invalidated, and the focused session replayed fresh.
  *
- * Real code: constants.js + app.js + terminal-ui.js + tile-grid.js in one `vm`
- * context, with a small fake DOM and a fake TerminalTile. Port: N/A.
+ * Real code: constants.js + app.js + terminal-ui.js + terminal-split.js +
+ * tile-grid.js in one `vm` context, with the shared fake DOM and fake
+ * TerminalTile (test/mocks/tile-grid-vm.ts). Port: N/A.
  */
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import vm from 'node:vm';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  FakeTile,
+  advanceClock,
+  clockNow,
+  localStore,
+  main,
+  makeGridApp,
+  perfObserverCallbacks,
+  resetGridHarness,
+  windowStub,
+  type GridApp,
+} from './mocks/tile-grid-vm.js';
 
-/** Just enough DOM for tile-grid.js: elements with classes, children, styles and listeners. */
-class FakeEl {
-  id = '';
-  className = '';
-  dataset: Record<string, string> = {};
-  style: Record<string, string> = {};
-  children: FakeEl[] = [];
-  parentElement: FakeEl | null = null;
-  attrs: Record<string, string> = {};
-  listeners: Record<string, Array<(ev: unknown) => void>> = {};
-  classList = {
-    add: (...names: string[]) => names.forEach((n) => this._setClass(n, true)),
-    remove: (...names: string[]) => names.forEach((n) => this._setClass(n, false)),
-    toggle: (n: string, on?: boolean) => this._setClass(n, on ?? !this.classList.contains(n)),
-    contains: (n: string) => this.className.split(/\s+/).includes(n),
-  };
-  _setClass(name: string, on: boolean) {
-    const set = new Set(this.className.split(/\s+/).filter(Boolean));
-    if (on) set.add(name);
-    else set.delete(name);
-    this.className = [...set].join(' ');
-    return on;
-  }
-  appendChild(child: FakeEl) {
-    child.remove();
-    child.parentElement = this;
-    this.children.push(child);
-    return child;
-  }
-  insertBefore(child: FakeEl, ref: FakeEl | null) {
-    child.remove();
-    child.parentElement = this;
-    const i = ref ? this.children.indexOf(ref) : -1;
-    if (i === -1) this.children.push(child);
-    else this.children.splice(i, 0, child);
-    return child;
-  }
-  get nextSibling() {
-    const siblings = this.parentElement?.children ?? [];
-    return siblings[siblings.indexOf(this) + 1] ?? null;
-  }
-  remove() {
-    if (!this.parentElement) return;
-    const siblings = this.parentElement.children;
-    siblings.splice(siblings.indexOf(this), 1);
-    this.parentElement = null;
-  }
-  setAttribute(k: string, v: string) {
-    this.attrs[k] = v;
-  }
-  addEventListener(type: string, fn: (ev: unknown) => void) {
-    (this.listeners[type] ||= []).push(fn);
-  }
-  removeEventListener() {}
-  getBoundingClientRect() {
-    return { width: 2400, height: 1200 };
-  }
-  querySelector() {
-    return null;
-  }
-}
-
-const main = new FakeEl();
-main.className = 'main';
-const wrap = new FakeEl();
-wrap.className = 'terminal-wrap';
-main.appendChild(wrap);
-const section = new FakeEl();
-section.id = 'tileGrid';
-section.className = 'tile-grid';
-main.appendChild(section);
-
-const documentStub = {
-  addEventListener: vi.fn(),
-  documentElement: { dataset: {} },
-  createElement: () => new FakeEl(),
-  getElementById: (id: string) => (id === 'tileGrid' ? section : null),
-  querySelector: (sel: string) => (sel === '.main' ? main : sel === '.terminal-wrap' ? wrap : null),
-  querySelectorAll: () => [],
-};
-
-/** A TerminalTile stand-in: records what the grid asks of it. */
-class FakeTile {
-  static all: FakeTile[] = [];
-  _wsReady = false;
-  _stoppedCode: number | null = null;
-  _destroyed = false;
-  fontSize: number | null;
-  terminal = { focus: vi.fn(), options: { fontSize: 0 } as Record<string, unknown> };
-  connect = vi.fn(async () => {});
-  reconnectNow = vi.fn();
-  fit = vi.fn();
-  destroy = vi.fn(() => {
-    this._destroyed = true;
-  });
-  constructor(
-    public sessionId: string,
-    public mountEl: FakeEl,
-    public opts: Record<string, unknown>
-  ) {
-    this.fontSize = (opts.fontSize as number) ?? null;
-    FakeTile.all.push(this);
-  }
-}
-
-let observerCallback: ((list: { getEntries(): unknown[] }) => void) | null = null;
-let clock = 100_000;
-const localStore = new Map<string, string>();
-
-const read = (f: string) => readFileSync(resolve(import.meta.dirname, `../src/web/public/${f}`), 'utf8');
-const windowStub: Record<string, unknown> = {
-  addEventListener: vi.fn(),
-  removeEventListener: vi.fn(),
-  CodemanBase: { base: '' },
-  innerWidth: 2400,
-  innerHeight: 1200,
-};
-const context = vm.createContext({
-  console: { ...console, log: vi.fn(), debug: vi.fn(), warn: vi.fn() },
-  performance: { now: () => clock },
-  setInterval: vi.fn(),
-  clearInterval: vi.fn(),
-  setTimeout: (fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms),
-  clearTimeout: (id: ReturnType<typeof setTimeout>) => globalThis.clearTimeout(id),
-  requestAnimationFrame: vi.fn(),
-  requestIdleCallback: vi.fn(),
-  HTMLCanvasElement: class HTMLCanvasElement {},
-  WebSocket: { OPEN: 1 },
-  PerformanceObserver: class {
-    constructor(cb: (list: { getEntries(): unknown[] }) => void) {
-      observerCallback = cb;
-    }
-    observe() {}
-    disconnect() {}
-  },
-  fetch: vi.fn(),
-  navigator: { onLine: true },
-  location: { protocol: 'http:', host: 'codeman.test', pathname: '/', search: '', hash: '' },
-  document: documentStub,
-  localStorage: {
-    getItem: (k: string) => localStore.get(k) ?? null,
-    setItem: (k: string, v: string) => localStore.set(k, String(v)),
-    removeItem: (k: string) => localStore.delete(k),
-  },
-  window: windowStub,
-  VoiceInput: { cleanup: vi.fn() },
-  MobileDetection: { isTouchDevice: () => false, isHandheldDevice: () => false, getDeviceType: () => 'desktop' },
-});
-vm.runInContext(
-  `${read('constants.js')}\n${read('app.js')}\n${read('terminal-ui.js')}\n${read('tile-grid.js')}\n` +
-    'globalThis.__CodemanApp = CodemanApp;',
-  context
-);
-windowStub.TerminalTile = FakeTile;
-windowStub.TileLoadQueue = class {
-  schedule(_t: unknown, _k: string, run: () => Promise<void>) {
-    return run();
-  }
-  drop() {}
-};
-const CodemanApp = (context as unknown as { __CodemanApp: { prototype: object } }).__CodemanApp;
-
-type App = Record<string, any>;
+type App = GridApp;
 
 const IDS = ['s-a', 's-b', 's-c'];
 
+/**
+ * The shared app plus what these guards exercise: the REAL sendResize (the
+ * harness stubs it), and spies on the main terminal's own paths.
+ */
 function makeApp(): App {
-  const app = Object.create(CodemanApp.prototype) as App;
-  app.sessions = new Map(
-    [...IDS, 's-other'].map((id) => [id, { id, name: id, mode: 'claude', pid: 1, workingDir: '/w' }])
-  );
-  app.sessionOrder = ['s-other', ...IDS];
-  app.detachedSessions = new Set();
-  app.isSoloWindow = false;
-  app.activeSessionId = 's-a';
-  app._selectGeneration = 0;
+  const app = makeGridApp(IDS);
+  delete app.sendResize;
   app._initGeneration = 1;
-  app._xtermSnapshots = new Map();
-  app.terminalBufferCache = new Map();
-  app._pendingDeliveries = new Map();
-  app._closingSessions = new Set();
-  app.pendingHooks = new Map();
   app.isOnline = true;
   app._connectionStatus = 'connected';
   app._wsState = 'disconnected';
   app._lastResizeDims = { cols: 100, rows: 30 };
-  app.terminal = { writeln: vi.fn(), clear: vi.fn(), focus: vi.fn(), options: { fontSize: 14 } };
-  // Everything around the grid that is not under test here.
   for (const name of [
-    '_cleanupPreviousSession',
-    'hideWelcome',
-    'showWelcome',
-    'markIdleAlertSeen',
-    'renderSessionTabs',
-    '_updateActiveTabImmediate',
-    '_refreshSessionPanels',
-    '_updateSseSubscription',
-    '_updateConnectionIndicator',
-    '_activateFileBrowserSession',
-    '_hideWebviewLayer',
-    'closeSessionSidebarOnHandheld',
-    'updateAttachmentHistoryBadge',
-    'refreshHostWakeBanner',
     'selectSession',
     'batchTerminalWrite',
     '_connectWs',
@@ -248,16 +72,11 @@ function makeApp(): App {
     app[name] = vi.fn();
   }
   app._fetchTerminalCapture = vi.fn(async () => ({ json: { data: {} }, headersAt: 0 }));
-  app.loadAppSettingsFromStorage = () => ({});
   return app;
 }
 
 beforeEach(() => {
-  FakeTile.all = [];
-  localStore.clear();
-  windowStub.innerWidth = 2400;
-  section.children = [];
-  main.className = 'main';
+  resetGridHarness();
 });
 
 describe('parking the main terminal', () => {
@@ -441,9 +260,9 @@ describe('guards: each stands aside while tiles own the terminal, and acts other
       app._disableWebGLSticky = vi.fn();
       app._scheduleTerminalRepaint = vi.fn();
       app._installWebGLLongTaskGuard();
-      clock += 60_000; // past the install grace period
-      const longTasks = [0, 1, 2].map((i) => ({ duration: 400, startTime: clock - 100 * i }));
-      observerCallback?.({ getEntries: () => longTasks });
+      advanceClock(60_000); // past the install grace period
+      const longTasks = [0, 1, 2].map((i) => ({ duration: 400, startTime: clockNow() - 100 * i }));
+      perfObserverCallbacks.at(-1)?.({ getEntries: () => longTasks });
       expect(app._disableWebGLSticky).toHaveBeenCalledTimes(open ? 0 : 1);
     }
   );
