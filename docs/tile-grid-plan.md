@@ -29,6 +29,10 @@ or settled a question the spec left open. The invariants as built are in
   B too), and a refresh clears the screen at its turn in the queue, so a waiting tile keeps
   its last frame.
 - **4009 lands on the Attach overlay**, and 4003/4004/4010 remove the tile.
+- **The grid holds at most 6 tiles** (owner decision 7). `TILE_GRID_MAX` in constants.js is
+  the one cap every limit reads; the layout table keeps 7 to 9 (`TILE_LAYOUT_MAX`), unreachable,
+  so going back to nine is that one line. A stored grid with more ids comes back as its first
+  six. Where this spec says nine, read six.
 - **"+ / New session in this case"** runs the normal Run for that case and joins through
   the same auto-join as any Run from this tab.
 - **A tile that joins before its pane exists resends its size when the pid appears**
@@ -869,6 +873,12 @@ exits green. Use the browser runner for those files and read the file count.
    chord is inert while `showTileGridButton` is off (it passes through like any
    unbound key) and toggles the grid while it is on, so one setting governs both
    the button and the chord.
+7. **The tile cap.** Decided by the owner: at most 6 tiles for now. Six was
+   tested and is smooth on the owner's desktop; nine missed the headless frame
+   bar (p95 33 ms at 6 and 9 tiles under load, 16.8 ms at 4) and is untested on
+   real hardware. The cap is one constant (`TILE_GRID_MAX`), the layout table
+   keeps 7 to 9 working but unreachable, and the user-facing texts say "at most
+   6 tiles" when the cap, not the window, is what limits the grid.
 
 ## Code anchors
 

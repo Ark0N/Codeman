@@ -1,6 +1,6 @@
 # Tile Grid
 
-Watch and drive up to nine sessions at once, side by side in one window. Each tile is a
+Watch and drive up to six sessions at once, side by side in one window. Each tile is a
 full live terminal: it reads, it takes your keystrokes, and it shows at a glance whether
 its agent is working, idle, or waiting on you.
 
@@ -32,7 +32,8 @@ button in the header, beside Split, and enables `Ctrl+Shift+G`.
   joins it. Sessions started elsewhere (an agent, another device, a cron job) do not.
 
 The layout follows the tile count: 1x1, 2x1, three side by side on a wide screen (else a
-2x2 with one empty slot), 2x2, 3x2, 3x3.
+2x2 with one empty slot), 2x2, 3x2. The grid holds at most six tiles, fewer when the
+window is too small for six; the picker and a tile's + say which limit applies.
 
 ## A tile
 

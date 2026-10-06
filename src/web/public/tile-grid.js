@@ -339,6 +339,25 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
+   * How many tiles the grid takes here and now: what the window fits, at most
+   * the cap (TILE_GRID_MAX), never less than one. The texts say which of the
+   * two binds, so a large monitor never reads "this window fits 6".
+   */
+  _tileGridLimit() {
+    const max = window.CodemanTileGrid.TILE_GRID_MAX;
+    const fits = this._tileGridCapacityNow();
+    const capacity = Math.max(1, Math.min(fits, max));
+    const byCap = fits >= max;
+    return {
+      capacity,
+      hint: byCap ? `Up to ${max} tiles` : `This window fits ${capacity} tile${capacity === 1 ? '' : 's'}`,
+      full: byCap
+        ? `The grid holds at most ${max} tiles`
+        : `The grid already holds what this window fits (${capacity})`,
+    };
+  },
+
+  /**
    * The Tiles button: with the grid open it closes it (back to the single view
    * of the focused session); otherwise it opens a picker with a checkbox per
    * open session, in tab order, preselected with the grid this tab last left
@@ -359,7 +378,8 @@ Object.assign(CodemanApp.prototype, {
     }
     if (!this.canOpenTileGrid()) return;
     const T = window.CodemanTileGrid;
-    const capacity = Math.max(1, Math.min(this._tileGridCapacityNow(), T.TILE_GRID_MAX));
+    const limit = this._tileGridLimit();
+    const capacity = limit.capacity;
     const candidates = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions);
     const remembered = (this._readStoredTileGrid()?.ids || []).filter((id) => candidates.some((c) => c.id === id));
     const seed = remembered.length
@@ -394,7 +414,7 @@ Object.assign(CodemanApp.prototype, {
     footer.className = 'tile-picker-footer';
     const hint = document.createElement('span');
     hint.className = 'tile-picker-hint';
-    hint.textContent = `This window fits ${capacity} tile${capacity === 1 ? '' : 's'}`;
+    hint.textContent = limit.hint;
     const open = document.createElement('button');
     open.type = 'button';
     open.className = 'tile-picker-open';
@@ -413,7 +433,7 @@ Object.assign(CodemanApp.prototype, {
       const count = boxes.filter((b) => b.checked).length;
       for (const b of boxes) {
         b.disabled = !b.checked && count >= capacity;
-        b.title = b.disabled ? `This window fits ${capacity} tiles` : '';
+        b.title = b.disabled ? limit.full : '';
       }
       open.disabled = count === 0;
     };
@@ -477,8 +497,8 @@ Object.assign(CodemanApp.prototype, {
     }
     this.closeTileAddMenu();
     const T = window.CodemanTileGrid;
-    const capacity = Math.min(this._tileGridCapacityNow(), T.TILE_GRID_MAX);
-    const full = grid.ids.length >= Math.max(capacity, 1);
+    const limit = this._tileGridLimit();
+    const full = grid.ids.length >= limit.capacity;
     const candidates = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions, grid.tiles);
     const menu = document.createElement('div');
     menu.className = 'tab-rail-action-menu tile-add-menu';
@@ -497,7 +517,7 @@ Object.assign(CodemanApp.prototype, {
       item.setAttribute('data-i18n-skip', '');
       item.textContent = c.label;
       item.disabled = full;
-      if (full) item.title = `The grid already holds what this window fits (${capacity})`;
+      if (full) item.title = limit.full;
       item.addEventListener('click', () => {
         this.closeTileAddMenu();
         if (this.addTile(c.id)) this.selectSession(c.id);
@@ -515,7 +535,7 @@ Object.assign(CodemanApp.prototype, {
     create.textContent = 'New session in this case';
     create.disabled = full || !theCase;
     if (!theCase) create.title = 'This session is not in a case';
-    else if (full) create.title = `The grid already holds what this window fits (${capacity})`;
+    else if (full) create.title = limit.full;
     create.addEventListener('click', () => {
       this.closeTileAddMenu();
       if (theCase) void this.runInCaseForTiles(theCase.name);
@@ -570,10 +590,9 @@ Object.assign(CodemanApp.prototype, {
   _joinTileGridFromRun(sessionId) {
     const grid = this._tileGrid;
     if (!grid?.open || grid.tiles.has(sessionId) || !this.sessions.has(sessionId)) return false;
-    const T = window.CodemanTileGrid;
-    const capacity = Math.max(1, Math.min(this._tileGridCapacityNow(), T.TILE_GRID_MAX));
-    if (grid.ids.length >= capacity) {
-      this.showToast?.(`The grid holds what this window fits (${capacity}): the new session opens on its own`, 'info');
+    const limit = this._tileGridLimit();
+    if (grid.ids.length >= limit.capacity) {
+      this.showToast?.(`${limit.full}: the new session opens on its own`, 'info');
       return false;
     }
     // Run starts the session right after creating it: no Attach overlay
@@ -899,13 +918,13 @@ Object.assign(CodemanApp.prototype, {
     if (!this.canOpenTileGrid() || !this.sessions.has(sessionId) || this.detachedSessions?.has(sessionId)) {
       return false;
     }
-    const T = window.CodemanTileGrid;
-    const capacity = Math.max(1, Math.min(this._tileGridCapacityNow(), T.TILE_GRID_MAX));
+    const limit = this._tileGridLimit();
+    const capacity = limit.capacity;
     const grid = this._tileGrid;
     if (grid?.open) {
       if (!grid.tiles.has(sessionId)) {
         if (grid.ids.length >= capacity) {
-          this.showToast?.(`The grid already holds what this window fits (${capacity})`, 'info');
+          this.showToast?.(limit.full, 'info');
           return true;
         }
         this.addTile(sessionId);
@@ -929,8 +948,7 @@ Object.assign(CodemanApp.prototype, {
   openGroupAsTiles(groupId) {
     const group = (this.tabLayout?.groups || []).find((g) => g.id === groupId);
     if (!group || !this.canOpenTileGrid()) return false;
-    const T = window.CodemanTileGrid;
-    const capacity = Math.max(1, Math.min(this._tileGridCapacityNow(), T.TILE_GRID_MAX));
+    const capacity = this._tileGridLimit().capacity;
     const ids = (group.refs || [])
       .filter((ref) => ref.kind === 'session')
       .map((ref) => ref.id)

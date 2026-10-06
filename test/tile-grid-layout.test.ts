@@ -26,6 +26,7 @@ type TileGrid = {
   tileInDirection(ids: string[], focused: string, dir: string, cols: number): string | null;
   cycleTile(ids: string[], focused: string, delta: number): string | null;
   TILE_GRID_MAX: number;
+  TILE_LAYOUT_MAX: number;
   TILE_MIN_W: number;
   TILE_MIN_H: number;
   TILE_SCROLLBACK: number;
@@ -61,7 +62,8 @@ describe('computeTileLayout', () => {
     expect(T.computeTileLayout({ count: 3, width: 1799, height: 900 })).toMatchObject({ cols: 2, rows: 2 });
   });
 
-  it('caps the count at 9 and treats nothing as an empty grid', () => {
+  it('lays out up to 9 (past the cap, unreachable but kept) and treats nothing as an empty grid', () => {
+    expect(T.TILE_LAYOUT_MAX).toBe(9);
     expect(T.computeTileLayout({ count: 12, ...BIG })).toMatchObject({ cols: 3, rows: 3 });
     expect(T.computeTileLayout({ count: 0, ...BIG })).toMatchObject({ cols: 0, rows: 0 });
   });
@@ -75,8 +77,10 @@ describe('computeTileLayout', () => {
 });
 
 describe('tileGridCapacity', () => {
-  it('holds all nine on a large monitor', () => {
-    expect(T.tileGridCapacity(BIG)).toBe(T.TILE_GRID_MAX);
+  it('never holds more than the cap of 6 (owner decision 7), even where nine would fit', () => {
+    expect(T.TILE_GRID_MAX).toBe(6);
+    expect(T.computeTileLayout({ count: 9, ...BIG }).fits).toBe(true);
+    expect(T.tileGridCapacity(BIG)).toBe(6);
   });
 
   it('stops at the first count whose layout does not fit', () => {
@@ -137,10 +141,18 @@ describe('sanitizeTileGridState', () => {
     expect(out).toMatchObject({ open: false, ids: [], focused: null });
   });
 
-  it('caps the list at nine tiles', () => {
+  it('caps the list at the cap (6): the extras are dropped', () => {
     const many = Array.from({ length: 12 }, (_, i) => `s${i}`);
     const out = T.sanitizeTileGridState({ v: 1, open: true, ids: many }, many);
-    expect(out?.ids).toEqual(many.slice(0, 9));
+    expect(out?.ids).toEqual(many.slice(0, 6));
+  });
+
+  it('a stored 3x3 keeps its focus if it survives the cap, and loses a zoom that did not', () => {
+    const nine = Array.from({ length: 9 }, (_, i) => `s${i}`);
+    const kept = T.sanitizeTileGridState({ v: 1, open: true, ids: nine, focused: 's4', zoomed: 's7' }, nine);
+    expect(kept).toMatchObject({ ids: nine.slice(0, 6), focused: 's4', zoomed: null });
+    const lost = T.sanitizeTileGridState({ v: 1, open: true, ids: nine, focused: 's8', zoomed: 's2' }, nine);
+    expect(lost).toMatchObject({ focused: 's0', zoomed: 's2' });
   });
 
   it('drops malformed track fractions', () => {

@@ -152,6 +152,20 @@ describe('page load with a stored open grid', () => {
     expect(app.activeSessionId).toBe('s-b');
   });
 
+  it('a stored 3x3 (before the cap of 6) comes back as its first six, focus kept, a dropped zoom cleared', () => {
+    const nine = Array.from({ length: 9 }, (_, i) => `n-${i + 1}`);
+    storeGrid({ ids: nine, focused: 'n-5', zoomed: 'n-8', colFr: [2, 1, 1], rowFr: [1, 1, 1] });
+    const app = pageLoad(nine);
+    expect(app._tileGrid.ids).toEqual(nine.slice(0, 6));
+    expect(FakeTile.all.filter((t) => !t._destroyed)).toHaveLength(6);
+    expect(app.activeSessionId).toBe('n-5');
+    expect(app._tileGrid.zoomedId).toBeNull();
+    // 3x2 now: the columns still match, the three stored rows do not.
+    expect(app._tileGrid.colFr).toEqual([2, 1, 1]);
+    expect(app._tileGrid.rowFr).toEqual([1, 1]);
+    expect(stored().ids).toEqual(nine.slice(0, 6));
+  });
+
   it('a stored closed grid leaves the single view, and the Tiles toggle brings it back', () => {
     localStore.set(KEY, JSON.stringify({ v: 1, open: false, ids: ['s-b', 's-c'], focused: 's-c' }));
     const app = pageLoad(IDS, (a) => localStore.set('codeman-active-session', 's-a'));

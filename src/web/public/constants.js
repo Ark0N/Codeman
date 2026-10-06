@@ -1636,11 +1636,19 @@ function buildSplitPickerSessions(sessions, sessionOrder, excludeId, detachedIds
 // ── Tile grid (tile-grid.js) ───────────────────────────────────────────────
 //
 // Pure layout and state helpers for the tile grid (docs/tile-grid-plan.md):
-// 1 to 9 live sessions side by side, each in its own TerminalTile. Desktop
-// only, behind the same 1180px gate as the split pane.
+// 1 to TILE_GRID_MAX live sessions side by side, each in its own TerminalTile.
+// Desktop only, behind the same 1180px gate as the split pane.
 
-/** Hard cap on tiles in one grid. */
-const TILE_GRID_MAX = 9;
+/**
+ * Hard cap on tiles in one grid: the ONE place it is set (owner decision 7 in
+ * docs/tile-grid-plan.md). Six was tested smooth on a real desktop; nine missed
+ * the headless frame bar and is untested on hardware. Everything that limits
+ * the grid reads this, and the layout table still covers up to TILE_LAYOUT_MAX,
+ * so raising the cap is this one line.
+ */
+const TILE_GRID_MAX = 6;
+/** The largest count the layout table covers (3x3). Never a cap by itself. */
+const TILE_LAYOUT_MAX = 9;
 // The smallest tile worth showing: about 60 columns and a dozen rows at the
 // default tile font. Bounds how many tiles a window can hold.
 const TILE_MIN_W = 480;
@@ -1648,7 +1656,7 @@ const TILE_MIN_H = 240;
 // Three tiles go side by side (3x1) only when each still gets ~600px;
 // otherwise they take three cells of a 2x2.
 const TILE_GRID_WIDE_3X1 = 1800;
-// A tile's xterm keeps this many lines, not DEFAULT_SCROLLBACK: nine DOM
+// A tile's xterm keeps this many lines, not DEFAULT_SCROLLBACK: a grid of DOM
 // renderers at 50k lines each is a real memory cost, and a tile's load is a
 // bounded 1 MiB window anyway, so more scrollback only fills with live output.
 const TILE_SCROLLBACK = 10000;
@@ -1664,7 +1672,7 @@ const TILE_FONT_SIZE_DEFAULT = 13;
  * @returns {{cols: number, rows: number, fits: boolean}}
  */
 function computeTileLayout({ count, width = Infinity, height = Infinity, minTileW = TILE_MIN_W, minTileH = TILE_MIN_H }) {
-  const n = Math.min(Math.max(0, Math.floor(Number(count) || 0)), TILE_GRID_MAX);
+  const n = Math.min(Math.max(0, Math.floor(Number(count) || 0)), TILE_LAYOUT_MAX);
   let cols;
   let rows;
   if (n === 0) return { cols: 0, rows: 0, fits: true };
@@ -2109,6 +2117,7 @@ if (typeof window !== 'undefined') {
     tileInDirection,
     cycleTile,
     TILE_GRID_MAX,
+    TILE_LAYOUT_MAX,
     TILE_MIN_W,
     TILE_MIN_H,
     TILE_SCROLLBACK,
