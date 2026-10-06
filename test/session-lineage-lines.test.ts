@@ -1,9 +1,14 @@
 /**
- * Geometry policy for the session lineage lines (tab → tab it spawned).
+ * Session lineage lines (tab → tab it spawned).
  *
- * The renderer in session-lineage.js measures and appends; every decision about
- * WHAT to draw (and whether to draw at all) lives in computeLineagePath, so it can
- * be pinned here without a browser.
+ * Geometry: every decision about WHERE a route runs lives in computeLineageTree
+ * (constants.js), so it is pinned here without a browser. The rules that matter:
+ * a route never crosses a tab, siblings share one trunk, rows are joined through a
+ * spine left of every tab, and families drawn together sit in separate lanes.
+ *
+ * Rendering: session-lineage.js is loaded for real in a vm sandbox with a tiny fake
+ * DOM, to pin the focus rule (only the SELECTED tab's family is drawn), the
+ * per-parent colours, and the reserved routing room.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -11,376 +16,648 @@ import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
 type Rect = { left: number; top: number; width: number; height: number };
-type LineagePath = { d: string; endX: number; endY: number; sameRow: boolean } | null;
-type Orientation = 'horizontal' | 'vertical';
-
-const lineageJs = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-lineage.js'), 'utf8');
-const stylesCss = readFileSync(resolve(import.meta.dirname, '../src/web/public/styles.css'), 'utf8');
-
-function loadLineageHelper() {
-  const context = vm.createContext({ window: {}, globalThis: {} });
-  const source = readFileSync(resolve(import.meta.dirname, '../src/web/public/constants.js'), 'utf8');
-  vm.runInContext(source, context, { filename: 'constants.js' });
-  return (
-    context.window as {
-      CodemanLineage: {
-        computePath: (input: {
-          parent: Rect | null;
-          child: Rect | null;
-          strip?: Rect;
-          depth?: number;
-          orientation?: Orientation;
-        }) => LineagePath;
-        DIP_MIN_PX: number;
-        DIP_MAX_PX: number;
-        SIBLING_STEP_PX: number;
-        COLORS: string[];
-      };
-    }
-  ).CodemanLineage;
-}
-
-/** The vm sandbox session-lineage.js was evaluated in, plus an app instance from it. */
-type LineageApp = Record<string, Function> & {
-  sessions: Map<string, { parentSessionId: string | null; status: string }>;
-  sessionOrder: string[];
+type Point = [number, number];
+type Route = { id: string; points: Point[]; d: string; endX: number; endY: number };
+type TreeInput = {
+  parent: Rect | null;
+  children: Array<{ id: string; rect: Rect | null }>;
+  strip?: Rect;
+  tabs?: Rect[];
+  orientation?: 'horizontal' | 'vertical';
+  lane?: number;
+  laneCount?: number;
+  radius?: number;
 };
-type LineageSandbox = { document: Record<string, Function>; CSS?: { escape: (v: string) => string } };
+type LineageHelper = {
+  computeTree: (input: TreeInput) => { routes: Route[] } | null;
+  computeRows: (rects: Rect[]) => Array<{ top: number; bottom: number }>;
+  CORNER_RADIUS_PX: number;
+  LANE_STEP_PX: number;
+  SPINE_INSET_PX: number;
+  VERTICAL_TRACK_INSET_PX: number;
+  COLORS: string[];
+};
+
+const PUBLIC = resolve(import.meta.dirname, '../src/web/public');
+const read = (file: string) => readFileSync(resolve(PUBLIC, file), 'utf8');
+const lineageJs = read('session-lineage.js');
+const stylesCss = read('styles.css');
+const appJs = read('app.js');
+
+function loadLineageHelper(): LineageHelper {
+  const context = vm.createContext({ window: {}, globalThis: {} });
+  vm.runInContext(read('constants.js'), context, { filename: 'constants.js' });
+  return (context.window as { CodemanLineage: LineageHelper }).CodemanLineage;
+}
+
+const tab = (left: number, top = 4, width = 120, height = 30): Rect => ({ left, top, width, height });
 
 /**
- * Load session-lineage.js for real, with the globals it declares. The colour memo is
- * plain state on the app instance, so nothing here needs a browser.
+ * A wrapped strip shaped like the owner's 2026-10-06 report: five rows, 12px row gap,
+ * the 20px spine channel reserved on the left, 14px of bottom padding.
  */
-function loadLineageApp(): { app: LineageApp; sandbox: LineageSandbox } {
-  function CodemanApp(this: unknown) {}
-  const sandbox: Record<string, unknown> = {
-    window: {},
-    globalThis: {},
-    CodemanApp,
-    MobileDetection: { getDeviceType: () => 'desktop' },
-    document: {
-      documentElement: { getAttribute: () => 'horizontal' },
-      getElementById: () => null,
-      createElementNS: () => null,
-    },
-  };
-  const context = vm.createContext(sandbox);
-  for (const file of ['constants.js', 'session-lineage.js']) {
-    const source = readFileSync(resolve(import.meta.dirname, `../src/web/public/${file}`), 'utf8');
-    vm.runInContext(source, context, { filename: file });
+function wrappedStrip() {
+  const strip: Rect = { left: 100, top: 0, width: 1000, height: 0 };
+  const widths = [
+    [150, 120, 190, 140, 150, 170],
+    [140, 140, 140, 140, 140, 90, 90],
+    [130, 110, 100, 100, 110, 120, 140],
+    [180, 140, 80, 140, 170, 120, 100],
+    [150, 120, 110, 90, 110, 100, 120],
+  ];
+  const rows: Rect[][] = [];
+  let top = 4;
+  for (const row of widths) {
+    let left = strip.left + 20;
+    const cells: Rect[] = [];
+    for (const w of row) {
+      cells.push(tab(left, top, w));
+      left += w + 2;
+    }
+    rows.push(cells);
+    top += 30 + 12;
   }
-  const app = new (CodemanApp as unknown as new () => LineageApp)();
-  app.sessions = new Map();
-  app.sessionOrder = [];
-  return { app, sandbox: sandbox as unknown as LineageSandbox };
+  strip.height = top - 12 + 14;
+  return { strip, rows, all: rows.flat() };
 }
 
-/**
- * Drive the real `_appendLineageConnectionLines()` and report the inline
- * `--lineage-color` each arc ended up with, keyed by child.
- *
- * The colour function alone cannot prove this: passing the CHILD id there would still
- * return a stable colour per child and every direct test would pass, which is exactly
- * the regression these tests exist to catch.
- */
-function renderLineageColors(sessions: Record<string, string | null>): Record<string, string> {
-  const { app, sandbox } = loadLineageApp();
-  app.sessions = new Map(
-    Object.entries(sessions).map(([id, parentSessionId]) => [id, { parentSessionId, status: 'idle' }])
-  );
-  app.sessionOrder = Object.keys(sessions);
-  app._lineageLinesEnabled = () => true;
-  app.isSessionSidebarActive = () => false;
-
-  type Node = { attrs: Record<string, string>; style: Record<string, string> & { setProperty: Function } };
-  const made: Node[] = [];
-  const ids = Object.keys(sessions);
-  const rect = (left: number) => ({ left, top: 4, width: 120, height: 30, right: left + 120, bottom: 34 });
-  const strip = {
-    getBoundingClientRect: () => ({ left: 0, top: 0, width: 2000, height: 40, right: 2000, bottom: 40 }),
-    querySelector: (sel: string) => {
-      const id = /data-id="([^"]+)"/.exec(sel)?.[1];
-      const i = id ? ids.indexOf(id) : -1;
-      return i < 0 ? null : { getBoundingClientRect: () => rect(i * 140) };
-    },
-  };
-  sandbox.document.getElementById = (id: string) => (id === 'sessionTabs' ? strip : null);
-  sandbox.document.createElementNS = () => {
-    const style = {} as Record<string, string> & { setProperty: Function };
-    style.setProperty = (k: string, v: string) => void (style[k] = v);
-    const node: Node = { attrs: {}, style };
-    (node as unknown as { setAttribute: Function }).setAttribute = (k: string, v: string) => void (node.attrs[k] = v);
-    made.push(node);
-    return node;
-  };
-  sandbox.CSS = { escape: (v: string) => v };
-
-  app._appendLineageConnectionLines({ appendChild: () => {} }, new Map());
-
-  const out: Record<string, string> = {};
-  for (const node of made) {
-    // Both the path and its end dot carry the child id; they must agree on the colour.
-    const child = node.attrs['data-child-tab'];
-    if (child) out[child] = node.style['--lineage-color'] ?? '';
-  }
-  return out;
+/** Does an axis-aligned segment pass through the INSIDE of a rect (touching an edge is fine)? */
+function crossesRect([x1, y1]: Point, [x2, y2]: Point, r: Rect): boolean {
+  const eps = 0.5;
+  const left = r.left + eps;
+  const right = r.left + r.width - eps;
+  const top = r.top + eps;
+  const bottom = r.top + r.height - eps;
+  if (x1 === x2) return x1 > left && x1 < right && Math.max(y1, y2) > top && Math.min(y1, y2) < bottom;
+  return y1 > top && y1 < bottom && Math.max(x1, x2) > left && Math.min(x1, x2) < right;
 }
 
-// A strip wide enough that nothing is clipped unless a test says so.
-const STRIP: Rect = { left: 0, top: 0, width: 1200, height: 40 };
-const tab = (left: number, top = 4): Rect => ({ left, top, width: 120, height: 30 });
+const center = (r: Rect) => r.left + r.width / 2;
+const bottom = (r: Rect) => r.top + r.height;
 
-/** Pull the control-point Y values out of `M x y C x y, x y, x y`. */
-function controlYs(d: string): number[] {
-  const nums = d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
-  // M x0 y0 C x1 y1, x2 y2, x3 y3  →  indices 3 and 5 are the control Ys
-  return [nums[3], nums[5]];
-}
-
-describe('lineage line geometry', () => {
-  it('bridges two same-row tabs with an arc that hangs BELOW the strip', () => {
+describe('lineage tree geometry: header strip', () => {
+  it('routes each child from the parent bottom-center to the child bottom-center', () => {
     const helper = loadLineageHelper();
-    const geom = helper.computePath({ parent: tab(0), child: tab(400), strip: STRIP });
+    const strip: Rect = { left: 0, top: 0, width: 1200, height: 50 };
+    const parent = tab(0);
+    const geom = helper.computeTree({
+      parent,
+      children: [
+        { id: 'a', rect: tab(400) },
+        { id: 'b', rect: tab(800) },
+      ],
+      strip,
+    })!;
 
-    expect(geom).not.toBeNull();
-    expect(geom!.sameRow).toBe(true);
-    // Starts at the parent's bottom-center, ends at the child's bottom-center.
-    expect(geom!.d.startsWith('M 60 34')).toBe(true);
-    expect(geom!.endX).toBe(460);
-    expect(geom!.endY).toBe(34);
-    // Both control points dip below the tab bottoms — that is what makes it a
-    // bracket under the strip rather than a line drawn across the tabs.
-    for (const y of controlYs(geom!.d)) expect(y).toBeGreaterThan(34);
+    expect(geom.routes.map((r) => r.id)).toEqual(['a', 'b']);
+    for (const route of geom.routes) {
+      expect(route.points[0]).toEqual([60, 34]);
+      expect(route.d.startsWith('M 60 34')).toBe(true);
+      expect(route.d).not.toContain('NaN');
+    }
+    expect([geom.routes[0].endX, geom.routes[0].endY]).toEqual([460, 34]);
+    expect([geom.routes[1].endX, geom.routes[1].endY]).toEqual([860, 34]);
   });
 
-  it('deepens the dip with distance, but keeps it inside the clamp', () => {
+  it('keeps a one-row family in the gap under the row, never over the terminal', () => {
     const helper = loadLineageHelper();
-    const near = helper.computePath({ parent: tab(0), child: tab(140), strip: STRIP })!;
-    const far = helper.computePath({ parent: tab(0), child: tab(1000), strip: STRIP })!;
+    // Tabs end at 34, the strip (with its reserved bottom padding) at 50.
+    const strip: Rect = { left: 0, top: 0, width: 1200, height: 50 };
+    const geom = helper.computeTree({ parent: tab(0), children: [{ id: 'a', rect: tab(400) }], strip })!;
+    const [route] = geom.routes;
 
-    // The dip hangs from the STRIP's bottom edge (40), not the tab bottoms.
-    const nearDip = controlYs(near.d)[0] - 40;
-    const farDip = controlYs(far.d)[0] - 40;
-    expect(farDip).toBeGreaterThan(nearDip);
-    expect(nearDip).toBeGreaterThanOrEqual(helper.DIP_MIN_PX);
-    expect(farDip).toBeLessThanOrEqual(helper.DIP_MAX_PX);
-  });
-
-  it('nests siblings by depth so two children of one parent do not overprint', () => {
-    const helper = loadLineageHelper();
-    const first = helper.computePath({ parent: tab(0), child: tab(400), strip: STRIP, depth: 0 })!;
-    const second = helper.computePath({ parent: tab(0), child: tab(400), strip: STRIP, depth: 1 })!;
-
-    expect(controlYs(second.d)[0] - controlYs(first.d)[0]).toBe(helper.SIBLING_STEP_PX);
-    expect(first.d).not.toBe(second.d);
-  });
-
-  it('keeps bending at strip-wide spans instead of flattening into a straight line', () => {
-    const helper = loadLineageHelper();
-    // A worker the agent skill starts is appended to the END of the strip, so this
-    // is the span the feature is actually used at. The corridor has failed in BOTH
-    // directions: the first 44px clamp read as a flat thread here (#285), and the
-    // 104px clamp that replaced it bowed deep into the terminal (2026-08-15), so this
-    // pins the cap exactly rather than just a floor.
-    const wide = helper.computePath({ parent: tab(0), child: tab(1300), strip: { ...STRIP, width: 1500 } })!;
-    const near = helper.computePath({ parent: tab(0), child: tab(140), strip: STRIP })!;
-
-    const wideDip = controlYs(wide.d)[0] - 40; // from the strip's bottom edge
-    const nearDip = controlYs(near.d)[0] - 40;
-    expect(wideDip).toBeGreaterThan(nearDip * 2);
-    expect(wideDip).toBe(helper.DIP_MAX_PX);
-    expect(helper.DIP_MAX_PX).toBe(64);
-  });
-
-  it('hangs the dip from the STRIP bottom, so no per-row offset ever stacks on it', () => {
-    const helper = loadLineageHelper();
-    const twoRowStrip = { left: 0, top: 0, width: 1200, height: 84 }; // rows at y 4-34 and 48-78
-    // A wrapped pair (row 1 → row 2) and a same-row pair on ROW 1 of the same strip.
-    const wrapped = helper.computePath({ parent: tab(0), child: tab(400, 48), strip: twoRowStrip })!;
-    const row1Pair = helper.computePath({ parent: tab(0), child: tab(400), strip: twoRowStrip })!;
-
-    // Both brackets clear the ENTIRE strip: the wrapped one does not add the row
-    // offset on top (the 2026-08-15 over-bow), and the row-1 pair does not draw
-    // through row 2's tab labels (the retune's own first-draft regression).
-    for (const geom of [wrapped, row1Pair]) {
-      for (const y of controlYs(geom.d)) {
-        expect(y).toBeGreaterThanOrEqual(84 + helper.DIP_MIN_PX);
-        expect(y).toBeLessThanOrEqual(84 + helper.DIP_MAX_PX + helper.SIBLING_STEP_PX);
-      }
+    expect(route.points).toEqual([
+      [60, 34],
+      [60, 42],
+      [460, 42],
+      [460, 34],
+    ]);
+    for (const [, y] of route.points) {
+      expect(y).toBeGreaterThanOrEqual(34);
+      expect(y).toBeLessThanOrEqual(50);
     }
   });
 
-  it('exposes a colour palette whose first entry defers to the skin blue', () => {
+  it('never crosses a tab in a wrapped strip, wherever parent and children sit', () => {
+    // The reported bug: a parent on row 3 with children on rows 3-5 drew curves
+    // straight through every lower row's labels and into the terminal.
     const helper = loadLineageHelper();
-    const colors = helper.COLORS;
-    expect(Array.isArray(colors)).toBe(true);
-    // '' = no override: session-lineage.js sets no inline --lineage-color and the
-    // CSS falls back to the skin-tuned --session-blue, so a lone arc stays blue.
-    expect(colors[0]).toBe('');
-    expect(colors.length).toBeGreaterThanOrEqual(6);
-    expect(new Set(colors).size).toBe(colors.length);
-    for (const c of colors.slice(1)) expect(c).toMatch(/^#[0-9a-f]{6}$/i);
+    const { strip, rows, all } = wrappedStrip();
+    const parent = rows[2][1];
+    const children = [rows[0][3], rows[2][2], rows[2][5], rows[3][0], rows[3][6], rows[4][1], rows[4][6]].map(
+      (rect, i) => ({ id: `c${i}`, rect })
+    );
+    const geom = helper.computeTree({ parent, children, strip, tabs: all })!;
+
+    expect(geom.routes).toHaveLength(children.length);
+    for (const route of geom.routes) {
+      for (let i = 1; i < route.points.length; i++) {
+        for (const r of all) {
+          expect(crossesRect(route.points[i - 1], route.points[i], r), `${route.id} segment ${i} vs tab`).toBe(false);
+        }
+      }
+      // Nothing hangs below the strip into the terminal.
+      for (const [, y] of route.points) expect(y).toBeLessThanOrEqual(strip.top + strip.height);
+    }
   });
 
-  it('brackets a wrapped pair BELOW the lower row rather than inside the row gap', () => {
+  it('joins rows through one spine, left of every tab and inside the strip', () => {
     const helper = loadLineageHelper();
-    // The reported bug: with the desktop strip wrapped, a parent on row 1 (bottom 34)
-    // and its child on row 2 (top 48) are 14px apart, and a parent-bottom → child-TOP
-    // bezier had 14px to bend in, so it drew a flat line hidden in the gap, three
-    // siblings overprinting each other. Both ends now anchor on the tab BOTTOM and the
-    // curve hangs below the LOWER row, the same bracket the flat strip gets.
-    const strip: Rect = { left: 0, top: 0, width: 1200, height: 90 };
-    const geom = helper.computePath({ parent: tab(0, 4), child: tab(200, 48), strip })!;
+    const { strip, rows, all } = wrappedStrip();
+    const geom = helper.computeTree({
+      parent: rows[2][1],
+      children: [
+        { id: 'below', rect: rows[4][3] },
+        { id: 'above', rect: rows[0][2] },
+      ],
+      strip,
+      tabs: all,
+    })!;
+    const minTabLeft = Math.min(...all.map((r) => r.left));
 
-    expect(geom.sameRow).toBe(false);
-    expect(geom.d.startsWith('M 60 34')).toBe(true); // parent BOTTOM
-    expect(geom.endY).toBe(78); // child BOTTOM, not its top
-    // Every control point clears the lower row by at least the minimum dip.
-    for (const y of controlYs(geom.d)) expect(y).toBeGreaterThanOrEqual(78 + helper.DIP_MIN_PX);
+    const spines = geom.routes.map((r) => r.points[2][0]);
+    expect(new Set(spines).size).toBe(1);
+    expect(spines[0]).toBeGreaterThan(strip.left);
+    expect(spines[0]).toBeLessThan(minTabLeft);
+    expect(spines[0]).toBe(strip.left + helper.SPINE_INSET_PX);
   });
 
-  it('draws the same bracket when the child sits on the row ABOVE its parent', () => {
+  it('shares one trunk: sibling routes start identically and branch at their own row', () => {
     const helper = loadLineageHelper();
-    const strip: Rect = { left: 0, top: 0, width: 1200, height: 90 };
-    const geom = helper.computePath({ parent: tab(0, 48), child: tab(200, 4), strip })!;
+    const { strip, rows, all } = wrappedStrip();
+    const geom = helper.computeTree({
+      parent: rows[1][2],
+      children: [
+        { id: 'r3a', rect: rows[3][1] },
+        { id: 'r3b', rect: rows[3][4] },
+        { id: 'r4', rect: rows[4][2] },
+      ],
+      strip,
+      tabs: all,
+    })!;
+    const [a, b, c] = geom.routes;
 
-    expect(geom.sameRow).toBe(false);
-    expect(geom.d.startsWith('M 60 78')).toBe(true); // parent BOTTOM
-    expect(geom.endY).toBe(34); // child BOTTOM
-    // The parent's row is the lower one here, so that is what the curve clears.
-    for (const y of controlYs(geom.d)) expect(y).toBeGreaterThanOrEqual(78 + helper.DIP_MIN_PX);
+    // Parent stem, the run along the parent's gap, and the spine are common to all.
+    expect(a.points.slice(0, 3)).toEqual(b.points.slice(0, 3));
+    expect(a.points.slice(0, 3)).toEqual(c.points.slice(0, 3));
+    // The two row-3 children also share that row's gap line until they branch.
+    expect(a.points[3]).toEqual(b.points[3]);
+    expect(a.points[4][1]).toBe(b.points[4][1]);
+    expect(c.points[3][1]).toBeGreaterThan(a.points[3][1]);
   });
 
-  it('skips an edge whose tab is scrolled out of the strip', () => {
+  it("hangs a row's gap under its TALLEST tab, so siblings in one row share a bus", () => {
     const helper = loadLineageHelper();
-    // `.session-tabs` is overflow-x:auto, so a scrolled-out tab still HAS a rect —
-    // one lying over the logo or the header buttons. It must not be drawn to.
-    const strip: Rect = { left: 200, top: 0, width: 600, height: 40 };
+    const strip: Rect = { left: 0, top: 0, width: 1200, height: 52 };
+    // The active tab is 2px taller than its neighbours.
+    const tabs = [tab(0), tab(140, 4, 120, 32), tab(280), tab(420)];
+    const rows = helper.computeRows(tabs);
+    expect(rows).toEqual([{ top: 4, bottom: 36 }]);
 
-    expect(helper.computePath({ parent: tab(-300), child: tab(400), strip })).toBeNull();
-    expect(helper.computePath({ parent: tab(400), child: tab(1400), strip })).toBeNull();
-    expect(helper.computePath({ parent: tab(300), child: tab(600), strip })).not.toBeNull();
+    const geom = helper.computeTree({
+      parent: tabs[0],
+      children: [
+        { id: 'tall', rect: tabs[1] },
+        { id: 'short', rect: tabs[3] },
+      ],
+      strip,
+      tabs,
+    })!;
+    expect(geom.routes[0].points[2][1]).toBe(geom.routes[1].points[2][1]);
+    expect(geom.routes[0].points[2][1]).toBe(44);
   });
 
-  it('returns null for a missing or degenerate rect instead of emitting NaN', () => {
+  it('puts two families drawn together in separate lanes', () => {
     const helper = loadLineageHelper();
+    const { strip, rows, all } = wrappedStrip();
+    const input = { parent: rows[2][1], children: [{ id: 'x', rect: rows[3][2] }], strip, tabs: all, laneCount: 2 };
+    const first = helper.computeTree({ ...input, lane: 0 })!.routes[0];
+    const second = helper.computeTree({ ...input, lane: 1 })!.routes[0];
 
-    expect(helper.computePath({ parent: null, child: tab(0), strip: STRIP })).toBeNull();
-    expect(helper.computePath({ parent: tab(0), child: null, strip: STRIP })).toBeNull();
-    expect(
-      helper.computePath({ parent: { left: 0, top: 0, width: 0, height: 0 }, child: tab(0), strip: STRIP })
-    ).toBeNull();
-  });
-
-  it('routes vertical tabs through the empty left gutter instead of their shared centerline', () => {
-    const helper = loadLineageHelper();
-    const strip: Rect = { left: 100, top: 20, width: 320, height: 320 };
-    const parent: Rect = { left: 132, top: 40, width: 260, height: 40 };
-    const child: Rect = { left: 132, top: 200, width: 260, height: 40 };
-    const geom = helper.computePath({ parent, child, strip, orientation: 'vertical' })!;
-    const nums = geom.d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
-
-    expect(geom).not.toBeNull();
-    expect(nums).toHaveLength(5);
-    expect(nums[0]).toBe(parent.left);
-    expect(nums[1]).toBe(parent.top + parent.height / 2);
-    expect(nums[2]).toBeGreaterThan(strip.left);
-    expect(nums[2]).toBeLessThan(parent.left);
-    expect(nums[3]).toBe(child.top + child.height / 2);
-    expect(nums[4]).toBe(child.left);
-    expect(geom.endX).toBe(child.left);
-    expect(geom.endY).toBe(child.top + child.height / 2);
-  });
-
-  it('offsets vertical sibling tracks without moving either tab endpoint', () => {
-    const helper = loadLineageHelper();
-    const strip: Rect = { left: 100, top: 20, width: 320, height: 320 };
-    const parent: Rect = { left: 132, top: 40, width: 260, height: 40 };
-    const child: Rect = { left: 132, top: 200, width: 260, height: 40 };
-    const first = helper.computePath({ parent, child, strip, orientation: 'vertical', depth: 0 })!;
-    const second = helper.computePath({ parent, child, strip, orientation: 'vertical', depth: 1 })!;
-    const numbers = (d: string) => d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
-
-    expect(numbers(second.d)[2]).toBeGreaterThan(numbers(first.d)[2]);
+    expect(second.points[1][1] - first.points[1][1]).toBeCloseTo(helper.LANE_STEP_PX, 1);
+    expect(second.points[2][0]).toBeGreaterThan(first.points[2][0]);
     expect([second.endX, second.endY]).toEqual([first.endX, first.endY]);
   });
 
-  it('keeps the same gutter shape when the child sits above its parent', () => {
+  it('rounds corners, and draws them square with radius 0', () => {
     const helper = loadLineageHelper();
-    const strip: Rect = { left: 100, top: 20, width: 320, height: 320 };
-    const parent: Rect = { left: 132, top: 220, width: 260, height: 40 };
-    const child: Rect = { left: 132, top: 60, width: 260, height: 40 };
-    const geom = helper.computePath({ parent, child, strip, orientation: 'vertical' })!;
-    const nums = geom.d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
+    const { strip, rows, all } = wrappedStrip();
+    const input = { parent: rows[2][1], children: [{ id: 'x', rect: rows[4][4] }], strip, tabs: all };
 
-    expect(nums).toEqual([parent.left, 240, expect.any(Number), 80, child.left]);
-    expect(nums[2]).toBeGreaterThan(strip.left);
-    expect(nums[2]).toBeLessThan(parent.left);
-    expect([geom.endX, geom.endY]).toEqual([child.left, 80]);
+    expect(helper.computeTree(input)!.routes[0].d).toContain(' Q ');
+    expect(helper.computeTree({ ...input, radius: 0 })!.routes[0].d).not.toContain(' Q ');
+    expect(helper.CORNER_RADIUS_PX).toBeGreaterThan(0);
   });
 
-  it('clips vertical lineage by the visible Y range after rail scrolling', () => {
+  it('leaves out a child scrolled out of the strip, and draws nothing for a scrolled-out parent', () => {
     const helper = loadLineageHelper();
-    const strip: Rect = { left: 100, top: 100, width: 320, height: 300 };
+    // `.session-tabs` scrolls, so a scrolled-out tab still HAS a rect, one lying
+    // over the logo or the header buttons. It must not be drawn to.
+    const strip: Rect = { left: 200, top: 0, width: 600, height: 50 };
+
+    const partial = helper.computeTree({
+      parent: tab(300),
+      children: [
+        { id: 'in', rect: tab(600) },
+        { id: 'out', rect: tab(1400) },
+      ],
+      strip,
+    })!;
+    expect(partial.routes.map((r) => r.id)).toEqual(['in']);
+    expect(helper.computeTree({ parent: tab(-300), children: [{ id: 'a', rect: tab(400) }], strip })).toBeNull();
+  });
+
+  it('returns null for a missing or degenerate parent, and drops a degenerate child', () => {
+    const helper = loadLineageHelper();
+    const strip: Rect = { left: 0, top: 0, width: 1200, height: 50 };
+
+    expect(helper.computeTree({ parent: null, children: [{ id: 'a', rect: tab(0) }], strip })).toBeNull();
+    expect(helper.computeTree({ parent: { left: 0, top: 0, width: 0, height: 0 }, children: [], strip })).toBeNull();
+    const geom = helper.computeTree({
+      parent: tab(0),
+      children: [
+        { id: 'zero', rect: { left: 400, top: 4, width: 0, height: 30 } },
+        { id: 'none', rect: null },
+        { id: 'ok', rect: tab(400) },
+      ],
+      strip,
+    })!;
+    expect(geom.routes.map((r) => r.id)).toEqual(['ok']);
+  });
+
+  it('still draws when no strip rect is supplied (clipping is opt-in)', () => {
+    const helper = loadLineageHelper();
+    const geom = helper.computeTree({ parent: tab(0), children: [{ id: 'far', rect: tab(9000, 46) }] })!;
+
+    expect(geom.routes).toHaveLength(1);
+    expect(geom.routes[0].d).not.toContain('NaN');
+  });
+});
+
+describe('lineage tree geometry: vertical rail', () => {
+  const strip: Rect = { left: 100, top: 20, width: 320, height: 320 };
+  const parent: Rect = { left: 132, top: 40, width: 260, height: 40 };
+
+  it('routes every sibling down ONE track in the empty left gutter', () => {
+    const helper = loadLineageHelper();
+    const geom = helper.computeTree({
+      parent,
+      children: [
+        { id: 'a', rect: { ...parent, top: 120 } },
+        { id: 'b', rect: { ...parent, top: 200 } },
+      ],
+      strip,
+      orientation: 'vertical',
+    })!;
+
+    const tracks = geom.routes.map((r) => r.points[1][0]);
+    expect(new Set(tracks).size).toBe(1);
+    expect(tracks[0]).toBe(strip.left + helper.VERTICAL_TRACK_INSET_PX);
+    expect(tracks[0]).toBeLessThan(parent.left);
+    for (const route of geom.routes) {
+      expect(route.points[0]).toEqual([parent.left, 60]);
+      expect(route.endX).toBe(parent.left);
+    }
+    expect(geom.routes.map((r) => r.endY)).toEqual([140, 220]);
+  });
+
+  it('keeps the same shape when the child sits above its parent', () => {
+    const helper = loadLineageHelper();
+    const low = { ...parent, top: 220 };
+    const geom = helper.computeTree({
+      parent: low,
+      children: [{ id: 'up', rect: { ...parent, top: 60 } }],
+      strip,
+      orientation: 'vertical',
+    })!;
+    const [route] = geom.routes;
+
+    expect(route.points[0]).toEqual([low.left, 240]);
+    expect([route.endX, route.endY]).toEqual([low.left, 80]);
+  });
+
+  it('clips by the visible Y range after the rail scrolls', () => {
+    const helper = loadLineageHelper();
+    const scrolled: Rect = { left: 100, top: 100, width: 320, height: 300 };
     const visible: Rect = { left: 132, top: 160, width: 260, height: 40 };
     const above: Rect = { left: 132, top: 20, width: 260, height: 40 };
     const below: Rect = { left: 132, top: 460, width: 260, height: 40 };
 
-    expect(helper.computePath({ parent: above, child: visible, strip, orientation: 'vertical' })).toBeNull();
-    expect(helper.computePath({ parent: visible, child: below, strip, orientation: 'vertical' })).toBeNull();
     expect(
-      helper.computePath({ parent: visible, child: { ...visible, top: 300 }, strip, orientation: 'vertical' })
-    ).not.toBeNull();
+      helper.computeTree({
+        parent: above,
+        children: [{ id: 'v', rect: visible }],
+        strip: scrolled,
+        orientation: 'vertical',
+      })
+    ).toBeNull();
+    expect(
+      helper.computeTree({
+        parent: visible,
+        children: [{ id: 'b', rect: below }],
+        strip: scrolled,
+        orientation: 'vertical',
+      })!.routes
+    ).toEqual([]);
   });
+});
 
+describe('lineage wiring', () => {
   it('passes the resolved DOM orientation into geometry and reserves a vertical gutter', () => {
     expect(lineageJs).toContain("getAttribute('data-tab-orientation')");
-    expect(lineageJs).toMatch(/compute\(\{[\s\S]{0,180}orientation/);
+    expect(lineageJs).toMatch(/computeTree\(\{[\s\S]{0,260}orientation/);
     const selector = "html[data-tab-orientation='vertical'] .tab-rail .session-tabs {";
     const verticalRailBlock = stylesCss.slice(stylesCss.indexOf(selector), stylesCss.indexOf(selector) + 600);
     expect(verticalRailBlock).toContain('--lineage-vertical-gutter');
     expect(verticalRailBlock).toContain('padding-left');
   });
 
-  it('still draws when no strip rect is supplied (clipping is opt-in)', () => {
-    const helper = loadLineageHelper();
-    const geom = helper.computePath({ parent: tab(0), child: tab(9000) });
+  it('reserves the header strip routing room in CSS', () => {
+    const block = (selector: string) => {
+      const start = stylesCss.indexOf(selector);
+      expect(start, `${selector} not found`).toBeGreaterThan(-1);
+      return stylesCss.slice(start, stylesCss.indexOf('}', start));
+    };
+    expect(block('.session-tabs.lineage-tree {')).toContain('padding-bottom');
+    const wrapped = block('.session-tabs.lineage-tree.tabs-auto-wrap {');
+    expect(wrapped).toContain('row-gap');
+    expect(wrapped).toContain('padding-left');
+  });
 
-    expect(geom).not.toBeNull();
-    expect(geom!.d).not.toContain('NaN');
+  it('syncs the routing room before the wrap is measured, and redraws on selection', () => {
+    const overflow = appJs.slice(appJs.indexOf('  updateTabOverflowMode() {'));
+    expect(overflow.indexOf('_syncLineageGutter')).toBeGreaterThan(-1);
+    expect(overflow.indexOf('_syncLineageGutter')).toBeLessThan(overflow.indexOf('shouldAutoWrapTabs'));
+    const activeTab = appJs.slice(
+      appJs.indexOf('  _updateActiveTabImmediate(sessionId) {'),
+      appJs.indexOf('  _scrollActiveTabIntoView(sessionId')
+    );
+    expect(activeTab).toMatch(/_lineageTotalEdges > 0\) this\.updateConnectionLines\(\)/);
+  });
+
+  it('exposes a colour palette whose first entry defers to the skin blue', () => {
+    const colors = loadLineageHelper().COLORS;
+    // '' = no override: session-lineage.js sets no inline --lineage-color and the
+    // CSS falls back to the skin-tuned --session-blue, so a lone family stays blue.
+    expect(colors[0]).toBe('');
+    expect(colors.length).toBeGreaterThanOrEqual(6);
+    expect(new Set(colors).size).toBe(colors.length);
+    for (const c of colors.slice(1)) expect(c).toMatch(/^#[0-9a-f]{6}$/i);
   });
 });
 
-describe('lineage line colours', () => {
-  it('gives every arc out of one tab the same colour, however many it spawns', () => {
-    const { app } = loadLineageApp();
-    // The renderer calls this with the edge's PARENT id, so ten children of w1 all
-    // resolve through the same key.
-    const forW1 = Array.from({ length: 10 }, () => app._lineageColorFor('w1'));
-    expect(new Set(forW1).size).toBe(1);
+// ─── Rendering through the real session-lineage.js ────────────────────────────
+
+type FakeNode = {
+  tag: string;
+  attrs: Record<string, string>;
+  style: Record<string, string> & { setProperty: (k: string, v: string) => void };
+  children: FakeNode[];
+  setAttribute: (k: string, v: string) => void;
+  appendChild: (n: FakeNode) => void;
+};
+type LineageApp = Record<string, Function> & {
+  sessions: Map<string, { parentSessionId: string | null; status: string }>;
+  sessionOrder: string[];
+  activeSessionId: string | null;
+  activeWebviewId: string | null;
+  _lineageEdgeCount: number;
+  _lineageTotalEdges: number;
+};
+
+function fakeNode(tag: string): FakeNode {
+  const style = {} as FakeNode['style'];
+  style.setProperty = (k, v) => void (style[k] = v);
+  const node: FakeNode = {
+    tag,
+    attrs: {},
+    style,
+    children: [],
+    setAttribute: (k, v) => void (node.attrs[k] = v),
+    appendChild: (n) => void node.children.push(n),
+  };
+  return node;
+}
+
+/**
+ * Load session-lineage.js for real, on a one-row strip where every session is a
+ * 120px tab, 140px apart. The colour memo is plain state on the app instance.
+ */
+function loadLineageApp(sessions: Record<string, string | null>, status: Record<string, string> = {}) {
+  function CodemanApp(this: unknown) {}
+  const ids = Object.keys(sessions);
+  const rect = (i: number) => ({ left: i * 140, top: 4, width: 120, height: 30, right: i * 140 + 120, bottom: 34 });
+  const stripClasses = new Set<string>();
+  const listeners: Record<string, (e: { propertyName: string }) => void> = {};
+  const strip = {
+    addEventListener: (type: string, fn: (e: { propertyName: string }) => void) => void (listeners[type] = fn),
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 4000, height: 50, right: 4000, bottom: 50 }),
+    querySelector: (sel: string) => {
+      const id = /data-id="([^"]+)"/.exec(sel)?.[1];
+      const i = id ? ids.indexOf(id) : -1;
+      return i < 0 ? null : { getBoundingClientRect: () => rect(i) };
+    },
+    querySelectorAll: () => ids.map((id, i) => ({ getAttribute: () => id, getBoundingClientRect: () => rect(i) })),
+    classList: {
+      contains: (c: string) => stripClasses.has(c),
+      toggle: (c: string, on: boolean) => void (on ? stripClasses.add(c) : stripClasses.delete(c)),
+    },
+  };
+  const sandbox: Record<string, unknown> = {
+    window: {},
+    globalThis: {},
+    CodemanApp,
+    MobileDetection: { getDeviceType: () => 'desktop' },
+    CSS: { escape: (v: string) => v },
+    document: {
+      documentElement: { getAttribute: () => 'horizontal' },
+      getElementById: (id: string) => (id === 'sessionTabs' ? strip : null),
+      createElementNS: (_ns: string, tag: string) => fakeNode(tag),
+    },
+  };
+  const context = vm.createContext(sandbox);
+  for (const file of ['constants.js', 'session-lineage.js']) {
+    vm.runInContext(read(file), context, { filename: file });
+  }
+  const app = new (CodemanApp as unknown as new () => LineageApp)();
+  app.sessions = new Map(ids.map((id) => [id, { parentSessionId: sessions[id], status: status[id] ?? 'idle' }]));
+  app.sessionOrder = ids;
+  app.activeSessionId = null;
+  app.activeWebviewId = null;
+  app._lineageLinesEnabled = () => true;
+  app.isSessionSidebarActive = () => false;
+  app._isVerticalTabList = () => false;
+  return { app, stripClasses, listeners };
+}
+
+/** Draw with `active` selected; report each family group and its routes. */
+function draw(app: LineageApp, active: string | null) {
+  app.activeSessionId = active;
+  const svg = fakeNode('svg');
+  app._appendLineageConnectionLines(svg, new Map());
+  return svg.children.map((group) => ({
+    parent: group.attrs['data-parent-tab'],
+    paths: group.children.filter((n) => n.tag === 'path'),
+    dots: group.children.filter((n) => n.tag === 'circle'),
+  }));
+}
+
+const childIds = (families: ReturnType<typeof draw>) =>
+  families.flatMap((f) => f.paths.map((p) => p.attrs['data-child-tab']));
+
+describe('lineage focus: only the selected tab family is drawn', () => {
+  const fleet = { w1: null, a: 'w1', b: 'w1', w2: null, c: 'w2', w3: null };
+
+  it("draws the selected parent's own family and nothing else", () => {
+    const { app } = loadLineageApp(fleet);
+    const families = draw(app, 'w1');
+
+    expect(families.map((f) => f.parent)).toEqual(['w1']);
+    expect(childIds(families)).toEqual(['a', 'b']);
+    expect(app._lineageEdgeCount).toBe(2);
+    // Every edge still counts toward "is there lineage at all", which is what
+    // decides the reserved routing room and the redraw on selection.
+    expect(app._lineageTotalEdges).toBe(3);
   });
 
-  it('gives a different spawning tab a different colour', () => {
-    const { app } = loadLineageApp();
-    expect(app._lineageColorFor('w1')).not.toBe(app._lineageColorFor('w2'));
-    expect(app._lineageColorFor('w2')).not.toBe(app._lineageColorFor('w3'));
+  it('shows a selected child its parent and its siblings', () => {
+    const { app } = loadLineageApp(fleet);
+    expect(childIds(draw(app, 'a'))).toEqual(['a', 'b']);
+    expect(childIds(draw(app, 'c'))).toEqual(['c']);
   });
 
-  it('lets the first spawning tab keep the skin-aware blue', () => {
-    // '' = no inline override, so styles.css falls back to --session-blue.
-    expect(loadLineageApp().app._lineageColorFor('w1')).toBe('');
+  it('shows both families of a tab that is a child AND a parent', () => {
+    const { app } = loadLineageApp({ w1: null, a: 'w1', x: 'a', y: 'a' });
+    const families = draw(app, 'a');
+
+    expect(families.map((f) => f.parent)).toEqual(['w1', 'a']);
+    expect(childIds(families)).toEqual(['a', 'x', 'y']);
   });
 
-  it('changes colour down a chain, since each generation spawns in its own right', () => {
-    // w1 -> w2 -> w3: the arc w1->w2 is w1's colour, the arc w2->w3 is w2's.
-    const { app } = loadLineageApp();
-    expect(app._lineageColorFor('w1')).not.toBe(app._lineageColorFor('w2'));
+  it('draws nothing for a tab with no lineage, or while a web tab holds the stage', () => {
+    const { app } = loadLineageApp(fleet);
+    expect(draw(app, 'w3')).toEqual([]);
+    app.activeWebviewId = 'dash';
+    expect(draw(app, 'w1')).toEqual([]);
+    expect(app._lineageEdgeCount).toBe(0);
+  });
+
+  it('keeps the data-agent-id the entrance animation looks for, and a dot per child', () => {
+    const { app } = loadLineageApp(fleet);
+    const [family] = draw(app, 'w1');
+
+    expect(family.paths.map((p) => p.attrs['data-agent-id'])).toEqual(['lineage:a', 'lineage:b']);
+    expect(family.dots.map((d) => d.attrs['data-child-tab'])).toEqual(['a', 'b']);
+  });
+
+  it('puts working routes first, so an idle sibling draws the shared trunk solid', () => {
+    const { app } = loadLineageApp(fleet, { b: 'working' });
+    const [family] = draw(app, 'w1');
+
+    expect(family.paths.map((p) => p.attrs['data-child-tab'])).toEqual(['b', 'a']);
+    expect(family.paths[0].attrs.class).toContain('lineage-line--working');
+    expect(family.paths[1].attrs.class).not.toContain('lineage-line--working');
+  });
+});
+
+describe('lineage routing room', () => {
+  it('is reserved while any family exists, whatever is selected', () => {
+    const { app, stripClasses } = loadLineageApp({ w1: null, a: 'w1', w2: null });
+    app.activeSessionId = 'w2';
+    app._syncLineageGutter();
+    expect(stripClasses.has('lineage-tree')).toBe(true);
+    expect(app._lineageTotalEdges).toBe(1);
+  });
+
+  it('is released with no lineage, with the setting off, and in a vertical list', () => {
+    const none = loadLineageApp({ w1: null, w2: null });
+    none.app._syncLineageGutter();
+    expect(none.stripClasses.has('lineage-tree')).toBe(false);
+
+    const off = loadLineageApp({ w1: null, a: 'w1' });
+    off.app._syncLineageGutter();
+    expect(off.stripClasses.has('lineage-tree')).toBe(true);
+    off.app._lineageLinesEnabled = () => false;
+    off.app._syncLineageGutter();
+    expect(off.stripClasses.has('lineage-tree')).toBe(false);
+    expect(off.app._lineageTotalEdges).toBe(0);
+
+    const rail = loadLineageApp({ w1: null, a: 'w1' });
+    rail.app._isVerticalTabList = () => true;
+    rail.app._syncLineageGutter();
+    expect(rail.stripClasses.has('lineage-tree')).toBe(false);
+  });
+});
+
+describe('lineage redraw after a selection resizes tabs', () => {
+  it('redraws when a size transition in the strip ends, and only for size properties', () => {
+    // The active tab reveals its icons by transitioning padding, so it keeps
+    // widening after the selection redraw; without this the trunk hung under the
+    // tab's old position.
+    const { app, listeners } = loadLineageApp({ w1: null, a: 'w1' });
+    let redraws = 0;
+    app.updateConnectionLines = () => void redraws++;
+    app._lineageTotalEdges = 1;
+    app._installLineageStripScrollListener();
+
+    listeners.transitionend({ propertyName: 'padding-left' });
+    listeners.transitionend({ propertyName: 'width' });
+    expect(redraws).toBe(2);
+    listeners.transitionend({ propertyName: 'opacity' });
+    listeners.transitionend({ propertyName: 'transform' });
+    expect(redraws).toBe(2);
+    app._lineageTotalEdges = 0;
+    listeners.transitionend({ propertyName: 'padding-left' });
+    expect(redraws).toBe(2);
+  });
+});
+
+describe('lineage colours', () => {
+  /** Colour of each drawn child's path, after selecting each tab in `selections` in turn. */
+  function colorsAfter(sessions: Record<string, string | null>, selections: string[]) {
+    const { app } = loadLineageApp(sessions);
+    const out: Record<string, string> = {};
+    for (const active of selections) {
+      for (const family of draw(app, active)) {
+        for (const path of family.paths) {
+          // The path and its end dot carry the child id; they must agree on the colour.
+          const child = path.attrs['data-child-tab'];
+          const dot = family.dots.find((d) => d.attrs['data-child-tab'] === child)!;
+          expect(dot.style['--lineage-color'] ?? '').toBe(path.style['--lineage-color'] ?? '');
+          out[child] = path.style['--lineage-color'] ?? '';
+        }
+      }
+    }
+    return { app, colors: out };
+  }
+
+  it('paints every line out of one tab the same colour', () => {
+    const { colors } = colorsAfter({ w1: null, a: 'w1', b: 'w1', c: 'w1' }, ['w1']);
+    expect(Object.keys(colors).sort()).toEqual(['a', 'b', 'c']);
+    expect(new Set(Object.values(colors)).size).toBe(1);
+  });
+
+  it('paints two spawning tabs in different colours', () => {
+    const { colors } = colorsAfter({ w1: null, w2: null, a: 'w1', b: 'w1', c: 'w2', d: 'w2' }, ['w1', 'w2']);
+    expect(colors.a).toBe(colors.b);
+    expect(colors.c).toBe(colors.d);
+    expect(colors.a).not.toBe(colors.c);
+  });
+
+  it('assigns colours in strip order, not in the order families get selected', () => {
+    // Selecting w2's family first must not hand w2 the first (blue) colour.
+    const { colors } = colorsAfter({ w1: null, a: 'w1', w2: null, c: 'w2' }, ['c', 'a']);
+    expect(colors.a).toBe('');
+    expect(colors.c).not.toBe('');
+  });
+
+  it('changes colour at each generation of a chain', () => {
+    const { colors } = colorsAfter({ w1: null, w2: 'w1', w3: 'w2' }, ['w2']);
+    expect(colors.w2).not.toBe(colors.w3);
   });
 
   it('keeps a tab on its colour across re-renders and interleaved siblings', () => {
-    // The SVG is wiped and rebuilt constantly, so the colour must come from a memo
-    // rather than draw order.
-    const { app } = loadLineageApp();
+    const { app } = loadLineageApp({});
     const first = app._lineageColorFor('w1');
     app._lineageColorFor('w2');
     app._lineageColorFor('w3');
@@ -388,32 +665,10 @@ describe('lineage line colours', () => {
   });
 
   it('cycles the palette once every tab in it has spawned', () => {
-    const { app } = loadLineageApp();
+    const { app } = loadLineageApp({});
     const palette = loadLineageHelper().COLORS;
     const seen = Array.from({ length: palette.length }, (_, i) => app._lineageColorFor(`p${i}`));
     expect(new Set(seen).size).toBe(palette.length);
     expect(app._lineageColorFor(`p${palette.length}`)).toBe(seen[0]);
-  });
-});
-
-describe('lineage colours, as actually rendered', () => {
-  it('paints every arc out of one tab the same colour', () => {
-    // w1 spawns three workers; all three arcs must match.
-    const colors = renderLineageColors({ w1: null, a: 'w1', b: 'w1', c: 'w1' });
-    expect(Object.keys(colors).sort()).toEqual(['a', 'b', 'c']);
-    expect(new Set(Object.values(colors)).size).toBe(1);
-  });
-
-  it('paints two spawning tabs in different colours', () => {
-    const colors = renderLineageColors({ w1: null, w2: null, a: 'w1', b: 'w1', c: 'w2', d: 'w2' });
-    expect(colors.a).toBe(colors.b);
-    expect(colors.c).toBe(colors.d);
-    expect(colors.a).not.toBe(colors.c);
-  });
-
-  it('changes colour at each generation of a chain', () => {
-    // w1 -> w2 -> w3. Each arc takes the colour of the tab it leaves.
-    const colors = renderLineageColors({ w1: null, w2: 'w1', w3: 'w2' });
-    expect(colors.w2).not.toBe(colors.w3);
   });
 });

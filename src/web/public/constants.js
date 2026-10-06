@@ -296,139 +296,248 @@ function computeTabScrollLeft(input) {
   return Math.min(Math.max(Math.round(target), 0), maxScroll);
 }
 
-// Session lineage lines — geometry for the arc drawn between a tab and a tab it
+// Session lineage lines: geometry for the lines joining a tab to the tabs it
 // spawned (a worker started through the codeman agent skill, which passes its own
 // id as parentSessionId). Pure: the caller measures and appends, this decides.
 //
-// ONE shape, because both endpoints live in the same horizontal strip and the subagent
-// shape (tab-bottom → window-top) has nothing to aim at: a U-bridge HANGING BELOW the
-// strip, from the parent's bottom edge to the child's bottom edge, so it reads as a
-// bracket joining two tabs rather than as a line crossing them. The dip grows with
-// horizontal distance and with `depth` (the child's index among its siblings), so
-// several children of one parent nest instead of overprinting.
+// ONE TREE PER SPAWNING TAB, and only the selected tab's family is drawn (that
+// filter lives in session-lineage.js). Every route starts at the PARENT and ends
+// at one child, so a parent's routes share their first stretch exactly: overlaid,
+// they read as one trunk with a branch per child, and a dashed (working) route
+// stays in phase with its siblings along the shared part.
 //
-// ⚠ A WRAPPED STRIP USED TO GET ITS OWN SHAPE, AND THAT SHAPE WAS THE BUG. When the
-// desktop strip wraps (`tabs-two-rows` / `tabs-auto-wrap`) a parent on row 1 and its
-// child on row 2 are ~4px apart vertically, so the old parent-bottom → child-TOP bezier
-// had a 4px span to work with and drew a flat horizontal line inside the row gap
-// (reported as "they connect already, but the lines are straight and not easy visible"),
-// and three siblings drew three of them on top of each other. Aiming BOTH ends at the
-// tab BOTTOMS and putting the control points below the LOWER row gives the wrapped case
-// the same bracket as the flat case: it leaves the parent downward, crosses the lower
-// row once, and comes back up under the child. Same formula, no branch.
+// ⚠ ROUTES RUN IN THE GAPS, NEVER THROUGH A TAB. This replaced one bezier per
+// child hanging below the strip, which in a wrapped strip crossed every lower
+// row's labels and the terminal text (owner screenshot 2026-10-06: a parent on
+// row 3 with ten children, "too confusing"). A route now moves horizontally only
+// inside a row gap, and vertically only along a tab's own stem (its bottom edge to
+// the gap right under it) or along the SPINE, a channel left of every row that
+// joins the gaps of different rows. styles.css reserves that room
+// (`.session-tabs.lineage-tree`: a wider row gap, bottom padding for the last
+// row's gap, and the spine channel on the left of a wrapped strip).
 //
-// Returns null when the edge must not be drawn: a missing/degenerate rect, or an
-// endpoint scrolled outside the strip. `.session-tabs` is `overflow-x: auto`, so a
-// scrolled-out tab still HAS a rect — one lying over the logo or the header
-// buttons. Skipping is honest; clamping would point at a tab that isn't there.
-// ⚠ THE DIP IS WHAT MAKES THE ARC AN ARC, and it has now been mis-tuned in BOTH
-// directions, so treat these numbers as a corridor rather than a dial to crank:
-// - Too shallow (the first ship, 44px cap): a skill worker is appended to the END of
-//   the strip, so a lead-to-worker span is 800-1500px, and a 44px cap over 1300px is
-//   a 33px sag, a line that reads as STRAIGHT across the terminal (#285).
-// - Too deep (the 104px cap that replaced it): in the wrapped-strip case the cap and
-//   the FULL row offset stacked, bowing the bracket ~106px into the terminal text
-//   (owner screenshot 2026-08-15, "die Linien machen einen grossen Bogen nach unten").
-// The dip is measured from the STRIP'S BOTTOM EDGE (falling back to the lower tab
-// bottom when the strip rect is missing or shorter than its tabs), which buys two
-// things at once: the bow needs no per-row offsets stacked on top, and a same-row
-// arc between ROW-1 tabs of a wrapped strip clears row 2's labels instead of being
-// drawn through them (the retune's own first draft had exactly that regression).
-const LINEAGE_DIP_BASE_PX = 14;
-const LINEAGE_DIP_PER_PX = 0.06;
-const LINEAGE_DIP_MIN_PX = 22;
-const LINEAGE_DIP_MAX_PX = 64;
-// Siblings nest by this much. Widened with the stroke: at 2.5px plus its glow, arcs 6px
-// apart bled into one thick band instead of reading as three separate lines.
-const LINEAGE_SIBLING_STEP_PX = 8;
+// Rows come from computeLineageRows() over EVERY tab in the strip, not only the
+// endpoints: a row's gap sits under its TALLEST tab (the active tab is 2px
+// taller), or siblings in one row would hang their bus at different heights.
+//
+// computeLineageTree() returns null when the parent cannot be drawn (missing or
+// degenerate rect, scrolled out of the strip); a child that cannot be drawn is
+// left out of `routes`. `.session-tabs` scrolls, so a scrolled-out tab still HAS a
+// rect, lying over the logo or the header buttons. Skipping is honest; clamping
+// would point at a tab that is not there.
+const LINEAGE_CORNER_RADIUS_PX = 10;
+// Families drawn together (the selected tab is both a child and a parent) take
+// separate lanes: gap lines this far apart, spines LINEAGE_SPINE_STEP_PX apart.
+const LINEAGE_LANE_STEP_PX = 3.5;
+const LINEAGE_SPINE_INSET_PX = 6;
+const LINEAGE_SPINE_STEP_PX = 4;
+// The last row has no row below it; with no strip rect to measure, its gap is
+// taken to be this deep.
+const LINEAGE_LAST_GAP_PX = 12;
+const LINEAGE_ROW_TOLERANCE_PX = 6;
 const LINEAGE_STRIP_TOLERANCE_PX = 4;
-// How far the vertical bracket sits in from the rail's left edge. It has to
-// clear the VIEWPORT edge, not just the tabs: the line carries an 11px outer
-// glow, so a track at 6px had half of that glow clipped away and the arc read
-// as a thin thread pinned to the window frame. The rail reserves the channel
-// itself (`--lineage-vertical-gutter` on the rail's .session-tabs), and
-// computeLineagePath still clamps the track to stay left of both tabs.
+// How far the vertical rail's track sits in from the rail's left edge. It has to
+// clear the VIEWPORT edge, not just the tabs, or the line reads as a thread pinned
+// to the window frame. The rail reserves the channel itself
+// (`--lineage-vertical-gutter` on the rail's .session-tabs), and the track is
+// still clamped to stay left of every endpoint.
 const LINEAGE_VERTICAL_TRACK_INSET_PX = 10;
-const LINEAGE_VERTICAL_SIBLING_STEP_PX = 3;
+const LINEAGE_VERTICAL_LANE_STEP_PX = 4;
 const LINEAGE_VERTICAL_ANCHOR_CLEARANCE_PX = 4;
 // Lineage palette, assigned per SPAWNING TAB in first-seen order and cycled
-// (session-lineage.js). Every arc leaving one tab shares its colour however many
-// workers it spawns; a child that spawns in turn gets its own for the arcs below it.
+// (session-lineage.js). Every line leaving one tab shares its colour however many
+// workers it spawns; a child that spawns in turn gets its own for the lines below it.
 // The empty FIRST entry means "no override": the CSS then falls back to --session-blue,
-// which every skin block tunes for its own background, so a lone arc keeps the
+// which every skin block tunes for its own background, so a lone family keeps the
 // skin-aware blue that shipped in 1.18.2. The fixed entries are deliberately vivid
-// (owner call 2026-08-15: matrix green, pinkish, violet, red, turquoise "and so on");
-// they ride the same double glow as the blue, which is what keeps them legible over
-// terminal text on every skin.
+// (owner call 2026-08-15: matrix green, pinkish, violet, red, turquoise "and so on").
 const LINEAGE_COLORS = ['', '#00ff66', '#ff5ea8', '#a78bfa', '#ff5252', '#2dd4bf', '#ffa940'];
 
-function computeLineagePath(input) {
-  const parent = input?.parent;
-  const child = input?.child;
-  if (!parent || !child) return null;
+/** A rect normalized to numbers with its edges and center, or null if unusable. */
+function lineageRect(rect) {
+  if (!rect) return null;
+  const left = Number(rect.left);
+  const top = Number(rect.top);
+  const width = Number(rect.width);
+  const height = Number(rect.height);
+  if (![left, top, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+  return {
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+    cx: left + width / 2,
+    cy: top + height / 2,
+  };
+}
 
-  const pw = Number(parent.width) || 0;
-  const ph = Number(parent.height) || 0;
-  const cw = Number(child.width) || 0;
-  const ch = Number(child.height) || 0;
-  if (pw <= 0 || ph <= 0 || cw <= 0 || ch <= 0) return null;
+/**
+ * Group tab rects into the strip's visual rows, top to bottom. A row spans from its
+ * highest top to its LOWEST bottom, so a taller tab (the active one) sets the row's
+ * gap for everyone in it.
+ */
+function computeLineageRows(rects) {
+  const rows = [];
+  for (const raw of rects || []) {
+    const r = lineageRect(raw);
+    if (!r) continue;
+    const row = rows.find((candidate) => Math.abs(candidate.top - r.top) <= LINEAGE_ROW_TOLERANCE_PX);
+    if (row) {
+      row.top = Math.min(row.top, r.top);
+      row.bottom = Math.max(row.bottom, r.bottom);
+    } else {
+      rows.push({ top: r.top, bottom: r.bottom });
+    }
+  }
+  return rows.sort((a, b) => a.top - b.top);
+}
 
+/**
+ * An orthogonal polyline as an SVG path, each corner rounded by up to `radius`
+ * (never more than half of either segment, so short stems stay short). Repeated and
+ * collinear points are dropped first, so a degenerate corner draws nothing odd.
+ */
+function lineagePolylinePath(points, radius) {
+  const pts = [];
+  for (const p of points) {
+    const prev = pts[pts.length - 1];
+    if (prev && Math.abs(prev[0] - p[0]) < 0.5 && Math.abs(prev[1] - p[1]) < 0.5) continue;
+    const before = pts[pts.length - 2];
+    if (before && prev) {
+      const cross = (prev[0] - before[0]) * (p[1] - prev[1]) - (prev[1] - before[1]) * (p[0] - prev[0]);
+      if (Math.abs(cross) < 0.01) pts.pop();
+    }
+    pts.push(p);
+  }
+  if (pts.length < 2) return null;
+  let d = `M ${r1(pts[0][0])} ${r1(pts[0][1])}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [x0, y0] = pts[i - 1];
+    const [x1, y1] = pts[i];
+    const [x2, y2] = pts[i + 1];
+    const lenIn = Math.hypot(x1 - x0, y1 - y0);
+    const lenOut = Math.hypot(x2 - x1, y2 - y1);
+    const r = Math.min(radius, lenIn / 2, lenOut / 2);
+    if (!(r > 0.5)) {
+      d += ` L ${r1(x1)} ${r1(y1)}`;
+      continue;
+    }
+    const ax = x1 - ((x1 - x0) / lenIn) * r;
+    const ay = y1 - ((y1 - y0) / lenIn) * r;
+    const bx = x1 + ((x2 - x1) / lenOut) * r;
+    const by = y1 + ((y2 - y1) / lenOut) * r;
+    d += ` L ${r1(ax)} ${r1(ay)} Q ${r1(x1)} ${r1(y1)} ${r1(bx)} ${r1(by)}`;
+  }
+  const last = pts[pts.length - 1];
+  return d + ` L ${r1(last[0])} ${r1(last[1])}`;
+}
+
+/**
+ * Routes from one parent tab to each of its children.
+ *
+ * input: { parent, children: [{ id, rect }], strip?, tabs?, orientation?, lane?,
+ *          laneCount?, radius? }. `tabs` is every tab rect in the strip (rows are
+ *          derived from it); `lane`/`laneCount` separate families drawn together.
+ * Returns { routes: [{ id, points, d, endX, endY }] } or null.
+ */
+function computeLineageTree(input) {
+  const parent = lineageRect(input?.parent);
+  if (!parent) return null;
+  const strip = lineageRect(input?.strip);
   const orientation = input?.orientation === 'vertical' ? 'vertical' : 'horizontal';
-  const strip = input?.strip;
-  const depth = Math.max(0, Math.min(6, Number(input?.depth) || 0));
-  const pLeft = Number(parent.left);
-  const cLeft = Number(child.left);
-  const pTop = Number(parent.top);
-  const cTop = Number(child.top);
-  if (![pLeft, cLeft, pTop, cTop].every(Number.isFinite)) return null;
+  const laneCount = Math.max(1, Math.floor(Number(input?.laneCount)) || 1);
+  const lane = Math.max(0, Math.min(laneCount - 1, Math.floor(Number(input?.lane)) || 0));
+  const radius = Number.isFinite(Number(input?.radius)) ? Math.max(0, Number(input.radius)) : LINEAGE_CORNER_RADIUS_PX;
+  const children = [];
+  for (const child of input?.children || []) {
+    const rect = lineageRect(child?.rect);
+    if (rect) children.push({ id: child.id, rect });
+  }
+
+  const tol = LINEAGE_STRIP_TOLERANCE_PX;
+  const inStripY = (r) => !strip || (r.cy >= strip.top - tol && r.cy <= strip.bottom + tol);
+  const inStripX = (r) => !strip || (r.cx >= strip.left - tol && r.cx <= strip.right + tol);
+  const routes = [];
 
   if (orientation === 'vertical') {
-    const py = pTop + ph / 2;
-    const cy = cTop + ch / 2;
-    if (strip && Number(strip.height) > 0) {
-      const min = Number(strip.top) - LINEAGE_STRIP_TOLERANCE_PX;
-      const max = Number(strip.top) + Number(strip.height) + LINEAGE_STRIP_TOLERANCE_PX;
-      if (py < min || py > max || cy < min || cy > max) return null;
+    // The rail: one track down the empty left gutter, shared by every sibling.
+    if (!inStripY(parent)) return null;
+    const visible = children.filter((c) => inStripY(c.rect));
+    if (visible.length === 0) return { routes };
+    const minLeft = Math.min(parent.left, ...visible.map((c) => c.rect.left));
+    const base = strip ? strip.left : minLeft - LINEAGE_VERTICAL_TRACK_INSET_PX * 2;
+    const trackX = Math.min(
+      base + LINEAGE_VERTICAL_TRACK_INSET_PX + lane * LINEAGE_VERTICAL_LANE_STEP_PX,
+      minLeft - LINEAGE_VERTICAL_ANCHOR_CLEARANCE_PX
+    );
+    for (const { id, rect } of visible) {
+      const points = [
+        [parent.left, parent.cy],
+        [trackX, parent.cy],
+        [trackX, rect.cy],
+        [rect.left, rect.cy],
+      ];
+      const d = lineagePolylinePath(points, radius);
+      if (d) routes.push({ id, points: roundPoints(points), d, endX: r1(rect.left), endY: r1(rect.cy) });
     }
-
-    const stripLeft =
-      strip && Number.isFinite(Number(strip.left))
-        ? Number(strip.left)
-        : Math.min(pLeft, cLeft) - LINEAGE_VERTICAL_TRACK_INSET_PX * 2;
-    const requestedTrack =
-      stripLeft + LINEAGE_VERTICAL_TRACK_INSET_PX + depth * LINEAGE_VERTICAL_SIBLING_STEP_PX;
-    const trackX = Math.min(requestedTrack, Math.min(pLeft, cLeft) - LINEAGE_VERTICAL_ANCHOR_CLEARANCE_PX);
-    const d = `M ${r1(pLeft)} ${r1(py)} H ${r1(trackX)} V ${r1(cy)} H ${r1(cLeft)}`;
-    return { d, endX: cLeft, endY: cy, sameRow: false };
+    return { routes };
   }
 
-  const px = pLeft + pw / 2;
-  const cx = cLeft + cw / 2;
-  if (strip && Number(strip.width) > 0) {
-    const min = Number(strip.left) - LINEAGE_STRIP_TOLERANCE_PX;
-    const max = Number(strip.left) + Number(strip.width) + LINEAGE_STRIP_TOLERANCE_PX;
-    if (px < min || px > max || cx < min || cx > max) return null;
+  if (!inStripX(parent) || !inStripY(parent)) return null;
+  const visible = children.filter((c) => inStripX(c.rect) && inStripY(c.rect));
+  if (visible.length === 0) return { routes };
+
+  const rows = computeLineageRows([...(input?.tabs || []), parent, ...visible.map((c) => c.rect)]);
+  const rowOf = (r) => rows.findIndex((row) => r.cy >= row.top - tol && r.cy <= row.bottom + tol);
+  const laneOffset = (lane - (laneCount - 1) / 2) * LINEAGE_LANE_STEP_PX;
+  // Y of the gap under row i, this family's lane. The offset is clamped so a busy
+  // gap never pushes a lane into the tabs on either side of it.
+  const gapUnder = (i) => {
+    const row = rows[i];
+    const next = rows[i + 1];
+    let bottom;
+    if (next) bottom = next.top;
+    else if (strip && strip.bottom > row.bottom + 1) bottom = strip.bottom;
+    else bottom = row.bottom + LINEAGE_LAST_GAP_PX;
+    const half = Math.max(0, (bottom - row.bottom) / 2 - 1);
+    return (row.bottom + bottom) / 2 + Math.max(-half, Math.min(half, laneOffset));
+  };
+  const pRow = rowOf(parent);
+  const gp = gapUnder(pRow);
+  const tabLefts = (input?.tabs || []).map(lineageRect).filter(Boolean).map((r) => r.left);
+  const minLeft = Math.min(parent.left, ...visible.map((c) => c.rect.left), ...tabLefts);
+  const spineBase = strip ? strip.left : minLeft - LINEAGE_SPINE_INSET_PX * 2;
+  const spineX = Math.min(spineBase + LINEAGE_SPINE_INSET_PX + lane * LINEAGE_SPINE_STEP_PX, minLeft - 2);
+
+  for (const { id, rect } of visible) {
+    const cRow = rowOf(rect);
+    const gc = gapUnder(cRow);
+    const points =
+      cRow === pRow
+        ? [
+            [parent.cx, parent.bottom],
+            [parent.cx, gp],
+            [rect.cx, gp],
+            [rect.cx, rect.bottom],
+          ]
+        : [
+            [parent.cx, parent.bottom],
+            [parent.cx, gp],
+            [spineX, gp],
+            [spineX, gc],
+            [rect.cx, gc],
+            [rect.cx, rect.bottom],
+          ];
+    const d = lineagePolylinePath(points, radius);
+    if (d) routes.push({ id, points: roundPoints(points), d, endX: r1(rect.cx), endY: r1(rect.bottom) });
   }
+  return { routes };
+}
 
-  const pBottom = pTop + ph;
-  const cBottom = cTop + ch;
-  const sameRow = Math.abs(pTop + ph / 2 - (cTop + ch / 2)) <= Math.min(ph, ch) / 2;
-
-  // Both ends anchor on the tab BOTTOM, and the control points hang below the WHOLE
-  // strip, so one formula covers a flat strip, a wrapped pair, and a same-row pair
-  // sitting above further rows (see the corridor note above the constants).
-  const span = Math.abs(cx - px);
-  const stripBottom =
-    strip && Number(strip.height) > 0 && Number.isFinite(Number(strip.top))
-      ? Number(strip.top) + Number(strip.height)
-      : Number.NEGATIVE_INFINITY;
-  const baseline = Math.max(pBottom, cBottom, stripBottom);
-  const dip =
-    Math.min(LINEAGE_DIP_MAX_PX, Math.max(LINEAGE_DIP_MIN_PX, LINEAGE_DIP_BASE_PX + span * LINEAGE_DIP_PER_PX)) +
-    depth * LINEAGE_SIBLING_STEP_PX;
-  const yc = baseline + dip;
-  const d = `M ${r1(px)} ${r1(pBottom)} C ${r1(px)} ${r1(yc)}, ${r1(cx)} ${r1(yc)}, ${r1(cx)} ${r1(cBottom)}`;
-  return { d, endX: cx, endY: cBottom, sameRow };
+function roundPoints(points) {
+  return points.map(([x, y]) => [r1(x), r1(y)]);
 }
 
 // One decimal is plenty for a screen-space path and keeps the `d` string short.
@@ -961,12 +1070,12 @@ if (typeof window !== 'undefined') {
     plan: planWsReconnect,
   };
   window.CodemanLineage = {
-    computePath: computeLineagePath,
-    DIP_MIN_PX: LINEAGE_DIP_MIN_PX,
-    DIP_MAX_PX: LINEAGE_DIP_MAX_PX,
-    SIBLING_STEP_PX: LINEAGE_SIBLING_STEP_PX,
+    computeTree: computeLineageTree,
+    computeRows: computeLineageRows,
+    CORNER_RADIUS_PX: LINEAGE_CORNER_RADIUS_PX,
+    LANE_STEP_PX: LINEAGE_LANE_STEP_PX,
+    SPINE_INSET_PX: LINEAGE_SPINE_INSET_PX,
     VERTICAL_TRACK_INSET_PX: LINEAGE_VERTICAL_TRACK_INSET_PX,
-    VERTICAL_SIBLING_STEP_PX: LINEAGE_VERTICAL_SIBLING_STEP_PX,
     COLORS: LINEAGE_COLORS,
   };
   window.CodemanConnectionLoss = {

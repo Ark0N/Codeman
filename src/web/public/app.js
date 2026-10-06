@@ -5241,6 +5241,9 @@ class CodemanApp {
     // strip scrolls horizontally, so a tab selected from the palette, a swipe,
     // Alt+N or a push notification could stay parked off-screen.
     this._scrollActiveTabIntoView(sessionId);
+    // Lineage lines draw only the SELECTED tab's family (session-lineage.js), so a
+    // selection change is a redraw whenever any lineage exists at all.
+    if (this._lineageTotalEdges > 0) this.updateConnectionLines();
   }
 
   /**
@@ -5633,13 +5636,15 @@ class CodemanApp {
     this._refreshHomeSessionsIfVisible?.();
     // The full-render path already redraws the connection SVG; this incremental
     // one does not, and a badge appearing widens a tab and shifts every tab after
-    // it, sliding the lineage arcs off their anchors. Only pay for it when there
-    // is something anchored to tab rects: lineage arcs, or — in a VERTICAL list
-    // (sidebar, where lineage is skipped and the edge count stays 0, or the
-    // rail, which can show connectors with zero lineage edges too) — the
-    // subagent/ultracode connectors, whose rows a badge changes the HEIGHT of.
-    // Same widening as the strip-scroll listener in session-lineage.js.
-    if (this._lineageEdgeCount > 0 || this._isVerticalTabList()) this.updateConnectionLines();
+    // it, sliding the lineage lines off their anchors. Only pay for it when there
+    // is something anchored to tab rects: any lineage at all (not just what is
+    // drawn now: a parentSessionId or a child's working state can arrive on this
+    // path and change the selected family's tree), or, in a VERTICAL list (the
+    // sidebar, where lineage is skipped, or the rail, which can show connectors
+    // with zero lineage edges too), the subagent/ultracode connectors, whose
+    // rows a badge changes the HEIGHT of. updateTabOverflowMode() above has just
+    // refreshed _lineageTotalEdges.
+    if (this._lineageTotalEdges > 0 || this._isVerticalTabList()) this.updateConnectionLines();
 
     this.applySidebarFilter(this._sidebarFilter);
   }
@@ -5650,6 +5655,10 @@ class CodemanApp {
   updateTabOverflowMode() {
     const container = this.$('sessionTabs');
     if (!container) return;
+
+    // Lineage routing room (session-lineage.js) changes the strip's padding and
+    // row gap, so it is decided before the wrap is measured below.
+    this._syncLineageGutter?.();
 
     // The sidebar list is a single vertical column with its own scroller —
     // there is no row to overflow, and measuring it would fight the CSS.
