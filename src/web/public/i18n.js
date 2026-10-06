@@ -96,6 +96,56 @@
     'Split: close the second session': '分屏：关闭第二个会话',
     'Close split': '关闭分屏',
     'No other sessions to split with': '没有其他可用于分屏的会话',
+    // Tile grid (tile-grid.js, docs/tile-grid-plan.md). 平铺 is the feature (the
+    // button, the setting, the grid), 窗格 one tile in it. Key names stay as
+    // they are; Click / Right-click are mouse actions, Arrows the arrow keys.
+    // Counts, exit codes and durations are patterns in translateDynamic.
+    Tiles: '平铺',
+    Split: '分屏',
+    'Tiled sessions': '平铺的会话',
+    'Tiles: show several sessions side by side (right-click to choose which)':
+      '平铺：并排显示多个会话（右键单击可选择会话）',
+    'Tiles: back to a single session (right-click to choose which sessions)':
+      '平铺：返回单个会话（右键单击可选择会话）',
+    'Split: unavailable while tiles are open': '分屏：平铺打开时不可用',
+    'Toggle Tile Grid': '切换平铺网格',
+    'Focus Tile Left': '聚焦左侧窗格',
+    'Focus Tile Right': '聚焦右侧窗格',
+    'Focus Tile Up': '聚焦上方窗格',
+    'Focus Tile Down': '聚焦下方窗格',
+    'Focus Tile Left / Right / Up / Down': '聚焦左侧 / 右侧 / 上方 / 下方窗格',
+    'Zoom Focused Tile': '放大聚焦的窗格',
+    'Remove Focused Tile': '移除聚焦的窗格',
+    'Add the Session to the Tile Grid': '将该会话加入平铺网格',
+    'Choose Which Sessions to Tile': '选择要平铺的会话',
+    'a tab': '标签页',
+    'the Tiles button': '平铺按钮',
+    Click: '单击',
+    'Right-click': '右键单击',
+    Arrows: '方向键',
+    'not bound': '未绑定',
+    'Open group as tiles': '以平铺方式打开分组',
+    'Show sessions as tiles': '以平铺方式显示会话',
+    'Open tiles': '打开平铺',
+    'No sessions to show as tiles': '没有可平铺显示的会话',
+    'This group has no session to show as tiles': '此分组没有可平铺显示的会话',
+    'Add a session to the grid': '向平铺网格添加会话',
+    'Every open session is already tiled': '所有打开的会话都已平铺',
+    'New session in this case': '在此案例中新建会话',
+    'This session is not in a case': '此会话不属于任何案例',
+    'Zoom this tile': '放大此窗格',
+    'Restore the grid': '恢复平铺网格',
+    'Remove tile (the session keeps running)': '移除窗格（会话继续运行）',
+    'Drop a tab here': '将标签页拖放到此处',
+    'Resize tile columns': '调整窗格列宽',
+    'Resize tile rows': '调整窗格行高',
+    Attach: '附加',
+    'Attaching…': '正在附加…',
+    'Not attached': '未附加',
+    'The session ended': '会话已结束',
+    'The agent exited': '智能体已退出',
+    'It cannot be restarted in place: close it from ⋯ (Close session).': '无法原地重启：请通过 ⋯（关闭会话）关闭它。',
+    'Could not attach the session': '无法附加会话',
     'Ultracode / Workflow agents': 'Ultracode / Workflow 智能体',
     'Open ultracode workflow agents': '打开 Ultracode 工作流智能体',
     Notifications: '通知',
@@ -974,6 +1024,41 @@
       [
         /^Delete group "(.+)"\? Its tabs move to Ungrouped\.$/,
         (_m, group) => `删除分组“${group}”？其中的标签将移到未分组。`,
+      ],
+      // Tile grid: counts, exit codes and durations pass through.
+      [/^Up to (\d+) tiles$/, (_m, n) => `最多 ${n} 个窗格`],
+      [/^This window fits (\d+) tiles?$/, (_m, n) => `此窗口可容纳 ${n} 个窗格`],
+      [/^The grid holds at most (\d+) tiles$/, (_m, n) => `平铺网格最多容纳 ${n} 个窗格`],
+      [
+        /^The grid already holds what this window fits \((\d+)\)$/,
+        (_m, n) => `平铺网格已达到此窗口可容纳的数量（${n}）`,
+      ],
+      [
+        /^The grid holds at most (\d+) tiles: the new session opens on its own$/,
+        (_m, n) => `平铺网格最多容纳 ${n} 个窗格：新会话将单独打开`,
+      ],
+      [
+        /^The grid already holds what this window fits \((\d+)\): the new session opens on its own$/,
+        (_m, n) => `平铺网格已达到此窗口可容纳的数量（${n}）：新会话将单独打开`,
+      ],
+      [
+        /^The window is too small for (\d+) tiles: showing the focused one$/,
+        (_m, n) => `窗口太小，容纳不下 ${n} 个窗格：只显示聚焦的窗格`,
+      ],
+      [/^The agent exited \((-?\d+)\)$/, (_m, code) => `智能体已退出（${code}）`],
+      [/^The agent exited \(signal (\d+)\)$/, (_m, signal) => `智能体已退出（信号 ${signal}）`],
+      // A session name is user text: it passes through untranslated.
+      [
+        /^(.+) was stopped after crashing repeatedly\. Restart it\?$/,
+        (_m, name) => `${name} 因反复崩溃已被停止。要重启吗？`,
+      ],
+      // A tile header's tooltip: a state and how long ("idle 3m"). The duration
+      // is required: bare state words stay out of the table, they collide with
+      // state strings on other surfaces (see mobile-overview.js).
+      [
+        /^(needs you|error|waiting|working|idle|done|exited) (<1m|\d+[dhm](?: \d+[hm])?)$/,
+        (_m, state, duration) =>
+          `${{ 'needs you': '需要你', error: '错误', waiting: '等待中', working: '工作中', idle: '空闲', done: '已完成', exited: '已退出' }[state]} ${duration}`,
       ],
     ];
     for (const [pattern, replacement] of patterns) {

@@ -32,6 +32,10 @@ or settled a question the spec left open. The invariants as built are in
 - **Tile header buttons are 26px targets with 16 to 19px glyphs** (owner feedback: the
   first build's 12px glyphs read as tiny next to the name), the size of the app header's own
   icon buttons; the header grew from 24 to 28px to hold them.
+- **The grid is translated for 简体中文 (zh-CN)** (owner request): 平铺 for the feature, 窗格 for
+  one tile, key names untranslated, mouse actions in the Help modal's key column (`Click`,
+  `Right-click`) and `Arrows` translated. Every string has its own entry or pattern; refreshes
+  compare with the last English value, not the translated DOM.
 - **The Tiles button opens the grid at once** (owner decision 8): a click (and
   `Ctrl+Shift+G`, the same `toggleTileGrid`) opens `tileGridOpenSet` (constants.js): the
   grid this tab last had, else an open split's two sessions, else the open sessions in tab
