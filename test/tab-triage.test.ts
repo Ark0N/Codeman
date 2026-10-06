@@ -283,6 +283,17 @@ describe('tab grouping in the render paths (app.js)', () => {
     ]);
   });
 
+  it('marks the first row heading as the lead, in either state order', () => {
+    const app = makeApp();
+    app._fullRenderSessionTabs();
+    const lead = () =>
+      [...container().querySelectorAll<HTMLElement>(':scope > .tab-triage-head--lead')].map((h) => h.dataset.triageGroup);
+    expect(lead()).toEqual(['needs']);
+    document.documentElement.dataset.tabStateOrder = 'urgent-last';
+    app._renderSessionTabsImmediate();
+    expect(lead()).toEqual(['idle']);
+  });
+
   it('keeps the DOM, and with it the Alt+N badges, in tab order', () => {
     makeApp()._fullRenderSessionTabs();
     const domOrder = [...container().querySelectorAll<HTMLElement>('.session-tab[data-id]')].map((t) => t.dataset.id);
@@ -428,6 +439,16 @@ describe('tab grouping wiring (static)', () => {
     expect(css).toMatch(/\.tab-triage-break \{\s*display: none;/);
     expect(css).toContain(
       '.session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) > .tab-triage-break'
+    );
+  });
+
+  it('lets the rows after the first start under the brand, labels left-aligned', () => {
+    expect(css).toMatch(
+      /\.header:has\(> \.session-tabs-host > \.session-tabs\.tabs-triage:is\(\.tabs-auto-wrap, \.tabs-two-rows\)\) > \.header-brand \{\s*position: absolute;/
+    );
+    expect(css).toMatch(/> \.tab-triage-head \{\s*justify-content: flex-start;/);
+    expect(css).toMatch(
+      /> \.tab-triage-head--lead \{\s*width: auto;\s*margin-left: calc\(var\(--tab-triage-brand, 100px\) - var\(--tab-triage-gutter, 92px\)\);/
     );
   });
 

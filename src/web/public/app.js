@@ -4890,6 +4890,9 @@ class CodemanApp {
       }
       const count = String(group.count);
       if (head.lastElementChild.textContent !== count) head.lastElementChild.textContent = count;
+      // The first row's heading is the one that starts beside the brand in the
+      // header strip (styles.css); every later row starts under it.
+      head.classList.toggle('tab-triage-head--lead', group === triage.groups[0]);
       const headOrder = String(group.headOrder);
       if (head.style.order !== headOrder) head.style.order = headOrder;
       const brk = ensure('tab-triage-break', group.key);
@@ -4905,19 +4908,33 @@ class CodemanApp {
   }
 
   /**
-   * Size the header strip's label column to the widest label on screen, so no
-   * row carries a fixed gutter's worth of empty space before its tabs (labels
-   * are right-aligned in it, styles.css). Measured only when the label text
-   * changes (a group appears, goes, or its count gains a digit), and once more
-   * when the web fonts finish loading, since that changes every width. The
-   * vertical lists do not use the gutter, so they are never measured.
+   * Size the header strip's two measured lengths (styles.css, "Header strip,
+   * wrapping"): `--tab-triage-gutter`, the label column, as wide as the widest
+   * label on screen so a row never carries a fixed gutter's worth of empty
+   * space; and `--tab-triage-brand`, the brand's width, because the brand sits
+   * over the strip's top-left corner and only the FIRST row starts beside it,
+   * every later row starting under it.
+   *
+   * The labels are measured only when their text changes (a group appears,
+   * goes, or its count gains a digit) and once more when the web fonts finish
+   * loading. The brand is watched by a ResizeObserver (a display-name change,
+   * the sidebar toggle appearing), so a render pass never forces a layout read
+   * for it. The vertical lists use neither length and are never measured.
    */
   _sizeTabTriageGutter(container, triage) {
     const inHeader = !!container.parentElement?.classList.contains('session-tabs-host');
     if (!triage || !inHeader) {
       if (container.style.getPropertyValue('--tab-triage-gutter')) container.style.removeProperty('--tab-triage-gutter');
+      if (container.style.getPropertyValue('--tab-triage-brand')) container.style.removeProperty('--tab-triage-brand');
       this._tabTriageGutterKey = null;
       return;
+    }
+    this._watchTabTriageBrand(container);
+    if (Number.isFinite(this._tabTriageBrandWidth)) {
+      const brand = `${this._tabTriageBrandWidth}px`;
+      if (container.style.getPropertyValue('--tab-triage-brand') !== brand) {
+        container.style.setProperty('--tab-triage-brand', brand);
+      }
     }
     const key = triage.groups.map((g) => `${g.key}:${g.count}`).join('|');
     if (key === this._tabTriageGutterKey) return;
@@ -4938,6 +4955,30 @@ class CodemanApp {
         this._sizeTabTriageGutter(this.$('sessionTabs'), this._lastTabTriage);
       });
     }
+  }
+
+  /**
+   * Keep `_tabTriageBrandWidth` (the header brand plus the gap after it) in
+   * step with the brand, once per page. The first observation arrives right
+   * after `observe()`, so the width is known from the first frame on.
+   */
+  _watchTabTriageBrand(container) {
+    if (this._tabTriageBrandObserver !== undefined) return;
+    const brand = container.closest('.header')?.querySelector(':scope > .header-brand');
+    if (!brand || typeof ResizeObserver !== 'function') {
+      this._tabTriageBrandObserver = null;
+      return;
+    }
+    const gap = 8;
+    this._tabTriageBrandWidth = Math.ceil(brand.getBoundingClientRect().width + gap);
+    this._tabTriageBrandObserver = new ResizeObserver((entries) => {
+      const box = entries[0]?.borderBoxSize?.[0];
+      const width = Math.ceil((box ? box.inlineSize : brand.getBoundingClientRect().width) + gap);
+      if (width === this._tabTriageBrandWidth) return;
+      this._tabTriageBrandWidth = width;
+      this._sizeTabTriageGutter(this.$('sessionTabs'), this._lastTabTriage);
+    });
+    this._tabTriageBrandObserver.observe(brand);
   }
 
   /**

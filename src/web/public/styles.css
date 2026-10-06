@@ -19848,19 +19848,38 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
 /* Header strip, wrapping (desktop): one row per state. Each heading sits in a
    left gutter, so a group too long for one line continues under its own tabs
    rather than under its heading, and each row ends with a full-width break. */
-/* The gutter is as wide as the widest label on screen (app.js measures it into
-   --tab-triage-gutter whenever the labels change; 92px is only the first-paint
-   fallback), and every label is right-aligned in it, so each one sits right
-   next to its own tabs while the rows still start on one line. */
+/* The label column is as wide as the widest label on screen (app.js measures
+   it into --tab-triage-gutter whenever the labels change; 92px is only the
+   first-paint fallback) and the labels are left-aligned in it.
+
+   The brand leaves the flow and sits over the strip's top-left corner, so the
+   strip starts at the header's left edge: the first row's heading (the lead)
+   is pushed past the brand by --tab-triage-brand, and every later row starts
+   at the edge, under "Codeman", instead of leaving that corner empty. The
+   rows under the first one line up with each other in the label column. */
+.header:has(> .session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows)) > .header-brand {
+  position: absolute;
+  top: 0.35rem;
+  left: 0.75rem;
+  z-index: 1;
+}
+
 .session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) {
-  padding-left: calc(0.25rem + var(--tab-triage-gutter, 92px));
+  padding-left: var(--tab-triage-gutter, 92px);
 }
 
 .session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) > .tab-triage-head {
-  justify-content: flex-end;
+  justify-content: flex-start;
   width: var(--tab-triage-gutter, 92px);
   margin-left: calc(-1 * var(--tab-triage-gutter, 92px));
   padding: 0 8px 0 0;
+}
+
+/* The first row starts beside the brand and lines up with nothing else, so its
+   label takes its own width and its tabs follow it directly. */
+.session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) > .tab-triage-head--lead {
+  width: auto;
+  margin-left: calc(var(--tab-triage-brand, 100px) - var(--tab-triage-gutter, 92px));
 }
 
 .session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) > .tab-triage-break {
