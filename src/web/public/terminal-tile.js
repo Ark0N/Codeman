@@ -921,6 +921,17 @@
       this.ws.send(JSON.stringify({ t: 'z', c: cols, r: rows, v: 'desktop' }));
     }
 
+    // The session's PTY is new: a tile can connect before its session has a
+    // pane (one Run started while the grid is open joins first), and the
+    // server drops a resize that arrives with no PTY, then spawns at its own
+    // default size. Forget what was sent, so the size goes out now, or with
+    // the next fit() when this tile is hidden right now (a zoomed neighbour):
+    // _sendResize() returns before recording anything it did not send.
+    paneStarted() {
+      this._lastSentDims = null;
+      this._sendResize();
+    }
+
     // The geometry the PTY actually holds (`{t:'zc'}`, the server's answer to
     // every resize). A PTY and a terminal that disagree on WIDTH render
     // garbled, so a different column count is adopted; rows stay local, as in

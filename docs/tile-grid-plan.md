@@ -31,6 +31,10 @@ or settled a question the spec left open. The invariants as built are in
 - **4009 lands on the Attach overlay**, and 4003/4004/4010 remove the tile.
 - **"+ / New session in this case"** runs the normal Run for that case and joins through
   the same auto-join as any Run from this tab.
+- **A tile that joins before its pane exists resends its size when the pid appears**
+  (`TerminalTile.paneStarted()`): the server drops a resize for a session with no PTY and
+  spawns at 120x40, and Run's own resize measures the parked main terminal. Applying a
+  pre-spawn resize at spawn time on the server would make this unnecessary (follow-up).
 
 ## Problem
 

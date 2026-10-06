@@ -583,6 +583,39 @@ describe('TerminalTile geometry (#464: the pane and its PTY never disagree)', ()
     expect(resizeFrames(ws).at(-1)).toEqual({ t: 'z', c: 28, r: 30, v: 'desktop' });
   });
 
+  it('paneStarted() resends an unchanged size: the first one went out before there was a PTY', async () => {
+    const { tile, ws } = await connectTile(makeApp());
+    ws.open();
+    tile.paneStarted();
+    expect(resizeFrames(ws)).toEqual([
+      { t: 'z', c: 80, r: 24, v: 'desktop' },
+      { t: 'z', c: 80, r: 24, v: 'desktop' },
+    ]);
+    // Only once: the size is recorded again, so a plain fit does not repeat it.
+    tile.fit();
+    expect(resizeFrames(ws)).toHaveLength(2);
+  });
+
+  it('paneStarted() on a hidden tile sends nothing, and its next fit sends the size', async () => {
+    const { tile, ws } = await connectTile(makeApp());
+    ws.open();
+    FakeFit.proposed = { cols: NaN, rows: NaN };
+    tile.paneStarted();
+    expect(resizeFrames(ws)).toHaveLength(1);
+    // Shown again (a zoom ends) at the same size it had: still sent.
+    FakeFit.proposed = { cols: 80, rows: 24 };
+    tile.fit();
+    expect(resizeFrames(ws)).toHaveLength(2);
+  });
+
+  it('paneStarted() before the socket opens sends nothing; the open sends the size once', async () => {
+    const { tile, ws } = await connectTile(makeApp());
+    tile.paneStarted();
+    expect(resizeFrames(ws)).toHaveLength(0);
+    ws.open();
+    expect(resizeFrames(ws)).toEqual([{ t: 'z', c: 80, r: 24, v: 'desktop' }]);
+  });
+
   it('reports nothing while hidden (the fit addon measures NaN)', async () => {
     const { tile, ws, term } = await connectTile(makeApp());
     ws.open();

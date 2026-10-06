@@ -9,6 +9,9 @@
  * `session:created` and never join. A grid already holding what the window
  * fits does not take it: Run's selection then shows it alone, with a hint.
  *
+ * A tile that joined before its pane existed resends its size once the pid
+ * appears (the server spawned the pane at its own default size).
+ *
  * A tile's + also offers "New session in this case": the normal Run for the
  * case the tile's session belongs to, the toolbar's case put back afterwards.
  *
@@ -20,6 +23,7 @@ import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   FakeEl,
+  FakeTile,
   body,
   bySelector,
   makeGridApp,
@@ -92,6 +96,45 @@ describe('Run from this tab', () => {
     app._onSessionCreated({ id: 's-agent', name: 's-agent', mode: 'claude', pid: 1, workingDir: '/w' });
     expect(app.sessions.has('s-agent')).toBe(true);
     expect(app._tileGrid.ids).toEqual(IDS);
+  });
+});
+
+describe('a pane that starts after its tile connected (#464)', () => {
+  // The tile sent its size before there was a PTY; the server dropped it and
+  // spawned the pane at its default size, so the size must go out again.
+  const tileOf = (id: string) => FakeTile.all.filter((t) => t.sessionId === id).at(-1)!;
+  const setPid = (app: GridApp, id: string, pid: number | null) =>
+    app.sessions.set(id, { ...app.sessions.get(id), pid });
+
+  it('resends the size once when the pid appears, and again only for a new PTY', () => {
+    const app = makeGridApp(IDS);
+    app.openTileGrid(IDS);
+    addSession(app, 's-new');
+    app._joinTileGridFromRun('s-new');
+    const tile = tileOf('s-new');
+    app._renderTileChrome();
+    expect(tile.paneStarted).not.toHaveBeenCalled();
+
+    setPid(app, 's-new', 4242);
+    app._renderTileChrome();
+    expect(tile.paneStarted).toHaveBeenCalledTimes(1);
+    app._renderTileChrome();
+    expect(tile.paneStarted).toHaveBeenCalledTimes(1);
+
+    // The pane went away and a new one started (an Attach, a respawned pane).
+    setPid(app, 's-new', null);
+    app._renderTileChrome();
+    setPid(app, 's-new', 4343);
+    app._renderTileChrome();
+    expect(tile.paneStarted).toHaveBeenCalledTimes(2);
+  });
+
+  it('a tile made for a session that already runs never asks', () => {
+    const app = makeGridApp(IDS);
+    app.openTileGrid(IDS);
+    app._renderTileChrome();
+    app._renderTileChrome();
+    for (const id of IDS) expect(tileOf(id).paneStarted).not.toHaveBeenCalled();
   });
 });
 

@@ -791,6 +791,8 @@ Object.assign(CodemanApp.prototype, {
       name: header.name,
       zoomBtn: header.zoomBtn,
       renaming: false,
+      // The pid this tile last saw, so a pane that starts later is noticed.
+      pid: this.sessions.get(sessionId)?.pid ?? null,
     });
     grid.ids.push(sessionId);
     this._renderTileHeader(sessionId);
@@ -1187,7 +1189,19 @@ Object.assign(CodemanApp.prototype, {
   _renderTileChrome() {
     const grid = this._tileGrid;
     if (!grid?.open) return;
-    for (const id of grid.tiles.keys()) this._renderTileHeader(id);
+    for (const [id, entry] of grid.tiles) {
+      this._renderTileHeader(id);
+      // A pane that started after the tile connected (a session Run made
+      // while the grid is open, an Attach from elsewhere) was spawned at the
+      // server's default size: the tile's own resize went out before there
+      // was a PTY to take it, and Run's resize measures the parked main
+      // terminal (nothing). Keyed on the sessions map, so a handleInit after
+      // an SSE drop is seen too; a render skipped during an inline tab rename
+      // is caught up by the rename's own render.
+      const pid = this.sessions.get(id)?.pid ?? null;
+      if (pid !== null && pid !== entry.pid) entry.tile.paneStarted?.();
+      entry.pid = pid;
+    }
   },
 
   /**

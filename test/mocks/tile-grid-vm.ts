@@ -134,6 +134,7 @@ export class FakeTile {
   reconnectNow = vi.fn();
   fit = vi.fn();
   localFit = vi.fn();
+  paneStarted = vi.fn();
   destroy = vi.fn(() => {
     this._destroyed = true;
   });
