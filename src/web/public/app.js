@@ -4581,6 +4581,10 @@ class CodemanApp {
         // a give-up) nothing else would re-establish it from here.
         if (this._wsSessionId !== restoreId) this._connectWs(restoreId);
         void this._onSessionNeedsRefresh({ id: restoreId });
+        // The split pane's second terminal reconnects on its own backoff (up to
+        // 10 s between tries); the server is back now, so skip the wait. A no-op
+        // while its socket is open, stopped for good, or destroyed.
+        this._splitPane?.reconnectNow?.();
       } else {
         this.activeSessionId = null;
         // `auto`: the app is restoring a session on load, not a human opening

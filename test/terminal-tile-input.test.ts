@@ -676,3 +676,16 @@ describe('TerminalTile claims the keyboard for the app-level shortcuts', () => {
     expect(term.focusListeners).toEqual([]);
   });
 });
+
+describe('the server coming back kicks Pane B', () => {
+  it("handleInit's reconnect branch asks the split pane's tile to reconnect without waiting out its backoff", () => {
+    // handleInit needs a whole app to run, so the wiring is pinned by source;
+    // reconnectNow() itself is exercised above.
+    const appSource = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
+    const start = appSource.indexOf('if (keepTerminal && restoreId === previousActiveId');
+    const branch = appSource.slice(start, appSource.indexOf('} else {', start));
+
+    expect(start).toBeGreaterThan(-1);
+    expect(branch).toContain('this._splitPane?.reconnectNow?.();');
+  });
+});
