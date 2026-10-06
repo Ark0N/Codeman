@@ -684,11 +684,14 @@ function sortSessionsByActivity(rows) {
 // after those and the line break that ends the header row at the very end.
 //
 // Pure: no DOM, no `this`. Unit-tested in test/tab-triage.test.ts.
+// `quiet` groups keep their heading element (it anchors the row and holds the
+// row's place beside the brand) but draw no text: everything quiet is the
+// default state of a tab, so naming it only adds noise.
 const TAB_TRIAGE_GROUPS = [
   { key: 'needs', label: 'Needs you' },
   { key: 'waiting', label: 'Waiting' },
   { key: 'working', label: 'Working' },
-  { key: 'idle', label: 'Idle' },
+  { key: 'idle', label: 'Idle', quiet: true },
 ];
 
 const TAB_TRIAGE_GROUP_OF_STATE = {
@@ -729,7 +732,7 @@ function tabTriageGroupFor(state, exited) {
  * @returns {{
  *   order: Map<string, number>,
  *   webOrder: Map<string, number>,
- *   groups: Array<{key: string, label: string, count: number, headOrder: number, breakOrder: number}>
+ *   groups: Array<{key: string, label: string, quiet: boolean, count: number, headOrder: number, breakOrder: number}>
  * }} `groups` lists only the non-empty groups, in display order (most urgent
  *   first, or last with `reverse`).
  */
@@ -772,6 +775,7 @@ function computeTabTriageLayout(rows, webviewIds, options) {
   const groups = sequence.filter((group) => counts[group.key] > 0).map((group) => ({
     key: group.key,
     label: group.label,
+    quiet: !!group.quiet,
     count: counts[group.key],
     headOrder: baseOf[group.key],
     breakOrder: baseOf[group.key] + TAB_TRIAGE_STRIDE - 1,

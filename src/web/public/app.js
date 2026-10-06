@@ -4880,7 +4880,10 @@ class CodemanApp {
     };
     for (const group of wanted.values()) {
       const head = ensure('tab-triage-head', group.key);
-      if (!head.firstElementChild) {
+      // A quiet group (idle) keeps its heading as the row's anchor but draws
+      // no label or count.
+      head.classList.toggle('tab-triage-head--quiet', !!group.quiet);
+      if (!group.quiet && !head.firstElementChild) {
         const label = document.createElement('span');
         label.className = 'tab-triage-label';
         label.textContent = group.label;
@@ -4889,7 +4892,7 @@ class CodemanApp {
         head.append(label, count);
       }
       const count = String(group.count);
-      if (head.lastElementChild.textContent !== count) head.lastElementChild.textContent = count;
+      if (!group.quiet && head.lastElementChild.textContent !== count) head.lastElementChild.textContent = count;
       // The first row's heading is the one that starts beside the brand in the
       // header strip (styles.css); every later row starts under it.
       head.classList.toggle('tab-triage-head--lead', group === triage.groups[0]);

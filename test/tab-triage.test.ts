@@ -55,6 +55,8 @@ describe('CodemanTabTriage (pure)', () => {
   it('has four groups, most urgent first', () => {
     expect(triage.GROUPS.map((g) => g.key)).toEqual(['needs', 'waiting', 'working', 'idle']);
     expect(triage.GROUPS.map((g) => g.label)).toEqual(['Needs you', 'Waiting', 'Working', 'Idle']);
+    // Only idle is quiet: it keeps a heading element but draws no label.
+    expect(triage.GROUPS.filter((g) => (g as { quiet?: boolean }).quiet).map((g) => g.key)).toEqual(['idle']);
   });
 
   it('folds the six home-screen states into the four groups', () => {
@@ -237,7 +239,11 @@ describe('tab grouping in the render paths (app.js)', () => {
   const heads = () =>
     [...container().querySelectorAll<HTMLElement>(':scope > .tab-triage-head')]
       .sort((a, b) => orderOf(a) - orderOf(b))
-      .map((h) => `${h.querySelector('.tab-triage-label')!.textContent}:${h.querySelector('.tab-triage-count')!.textContent}`);
+      .map((h) =>
+        h.classList.contains('tab-triage-head--quiet')
+          ? `${h.dataset.triageGroup}:quiet`
+          : `${h.querySelector('.tab-triage-label')!.textContent}:${h.querySelector('.tab-triage-count')!.textContent}`
+      );
 
   beforeEach(() => {
     document.body.innerHTML = '';
@@ -246,7 +252,9 @@ describe('tab grouping in the render paths (app.js)', () => {
   it('draws a heading per non-empty state and places every tab in its group', () => {
     makeApp()._fullRenderSessionTabs();
     expect(container().classList.contains('tabs-triage')).toBe(true);
-    expect(heads()).toEqual(['Needs you:1', 'Waiting:1', 'Working:2', 'Idle:1']);
+    expect(heads()).toEqual(['Needs you:1', 'Waiting:1', 'Working:2', 'idle:quiet']);
+    // The idle row keeps its heading as an anchor, with nothing drawn in it.
+    expect(container().querySelector('.tab-triage-head[data-triage-group="idle"]')!.textContent).toBe('');
     expect(visual()).toEqual([
       'head:needs',
       's3',
@@ -269,7 +277,7 @@ describe('tab grouping in the render paths (app.js)', () => {
     const app = makeApp();
     document.documentElement.dataset.tabStateOrder = 'urgent-last';
     app._fullRenderSessionTabs();
-    expect(heads()).toEqual(['Idle:1', 'Working:2', 'Waiting:1', 'Needs you:1']);
+    expect(heads()).toEqual(['idle:quiet', 'Working:2', 'Waiting:1', 'Needs you:1']);
     expect(visual()).toEqual([
       'head:idle',
       'web:w1',
@@ -312,7 +320,7 @@ describe('tab grouping in the render paths (app.js)', () => {
     app._renderSessionTabsImmediate();
     expect(fullRender).not.toHaveBeenCalled();
     expect(tab('s2')).toBe(s2);
-    expect(heads()).toEqual(['Waiting:1', 'Working:1', 'Idle:3']);
+    expect(heads()).toEqual(['Waiting:1', 'Working:1', 'idle:quiet']);
     expect(container().querySelector('.tab-triage-head[data-triage-group="needs"]')).toBeNull();
     expect(container().querySelector('.tab-triage-break[data-triage-group="needs"]')).toBeNull();
     expect(visual()).toEqual(['head:waiting', 's1', 'head:working', 's4', 'head:idle', 's2', 's3', 'web:w1']);

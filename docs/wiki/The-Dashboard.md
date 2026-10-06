@@ -55,8 +55,9 @@ per device, so a sidebar on your desktop does not force one onto your phone.
 | **Working**   | A turn is running.                                                                  |
 | **Idle**      | Everything quiet, including ended sessions, agents that exited inside their pane, and web tabs. |
 
-In the header each group is a row with its name and count on the left; a group with more
-tabs than fit on one line continues under its own tabs. **State Order → Needs you at the
+In the header each group is a row with its name and count on the left (Idle, the quiet
+default, carries no label); a group with more tabs than fit on one line continues on the
+next line. **State Order → Needs you at the
 bottom** turns the rows the other way up, so the needs-you row sits right above the
 terminal. Empty groups are not shown. These are the same states the phone overview and the
 desktop home rail use, and tabs move between groups on their own as their state changes.
