@@ -45,6 +45,7 @@ export const BROWSER_TEST_GLOBS = [
   'test/spreadsheet-preview.browser.test.ts',
   'test/mobile-ime-preview.browser.test.ts',
   'test/run-mode-menu-scroll.browser.test.ts',
+  'test/markdown-anchor-links.browser.test.ts',
 ];
 
 /**

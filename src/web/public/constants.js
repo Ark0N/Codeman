@@ -1298,6 +1298,63 @@ function cleanCopiedSelection(text, options) {
   return lines.join('\n');
 }
 
+// ── Markdown heading anchors ────────────────────────────────────────────────
+// marked emits no `id` on headings, so a rendered document's own `[Install](#installation)` links had
+// nothing to jump to. And with `<base href="/">` a bare `#installation` href points at the dashboard's
+// root, not at the page, so letting the browser follow it navigates the app away. The click delegate
+// (`_bindResponseViewerInteractions`) therefore resolves in-document links itself, with the helpers
+// below. Anchors are `data-md-anchor` attributes, NOT `id`s: a heading titled "Settings" must not claim
+// the id of an element in the app's own DOM, and the lookup is scoped to the rendered document.
+
+/**
+ * GitHub's heading slug: lower-cased, anything that is not a letter, mark, number, `_`, `-` or space
+ * dropped, each space a hyphen (`Why `codeman`? → `why-codeman`, `Über uns` → `über-uns`).
+ */
+function markdownHeadingSlug(text) {
+  return String(text ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}_\- ]/gu, '')
+    .replace(/ /g, '-');
+}
+
+/** Give every h1..h6 under `root` its slug in `data-md-anchor`; a repeat gets `-1`, `-2`, ... as on GitHub. Idempotent. */
+function assignMarkdownHeadingAnchors(root) {
+  const used = new Set();
+  for (const heading of root.querySelectorAll('h1, h2, h3, h4, h5, h6')) {
+    const base = markdownHeadingSlug(heading.textContent);
+    let slug = base;
+    for (let n = 1; used.has(slug); n += 1) slug = `${base}-${n}`;
+    used.add(slug);
+    heading.dataset.mdAnchor = slug;
+  }
+}
+
+/**
+ * The element inside `root` that an in-document link (`#installation`, `#Installation`, `#my%20title`)
+ * points at, or null. An empty fragment (`#`) means the top of the document. Headings are matched by
+ * slug, then a heading the author wrote an explicit `<a id="...">`/`id` for, looked up INSIDE `root`
+ * only (never `document.getElementById`, which could find an app element of the same name).
+ */
+function findMarkdownAnchorTarget(root, href) {
+  let fragment = String(href ?? '').replace(/^#/, '');
+  try {
+    fragment = decodeURIComponent(fragment);
+  } catch {
+    /* a malformed escape: use it as written */
+  }
+  if (!fragment) return root;
+  assignMarkdownHeadingAnchors(root);
+  const wanted = [fragment.toLowerCase(), markdownHeadingSlug(fragment)];
+  for (const heading of root.querySelectorAll('[data-md-anchor]')) {
+    if (wanted.includes(heading.dataset.mdAnchor)) return heading;
+  }
+  for (const el of root.querySelectorAll('[id]')) {
+    if (el.id === fragment) return el;
+  }
+  return null;
+}
+
 if (typeof window !== 'undefined') {
   window.WEBGL_FALLBACK = WEBGL_FALLBACK;
   window.evaluateWebGLLongTaskTrip = evaluateWebGLLongTaskTrip;
@@ -1366,6 +1423,11 @@ if (typeof window !== 'undefined') {
   };
   window.CodemanCopySelection = {
     clean: cleanCopiedSelection,
+  };
+  window.CodemanMarkdownAnchors = {
+    slug: markdownHeadingSlug,
+    assign: assignMarkdownHeadingAnchors,
+    find: findMarkdownAnchorTarget,
   };
   window.CodemanTerminalFont = {
     DEFAULT_STACK: TERMINAL_FONT_DEFAULT_STACK,
