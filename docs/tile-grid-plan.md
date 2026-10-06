@@ -17,8 +17,8 @@ or settled a question the spec left open. The invariants as built are in
   edge-case row below cannot work without a server change. The tile shows the exit and
   points at Close session. A session with no PTY (`pid === null`) and a socket closed with
   4009 do get Attach. Restarting an exited agent in place is a follow-up.
-- **`Ctrl+Shift+G` follows `showTileGridButton`** (the applied default while the owner's
-  answer is pending): with the setting off the toggle chord is inert. A grid opened another
+- **`Ctrl+Shift+G` follows `showTileGridButton`** (decided by the owner, decision 6): with
+  the setting off the toggle chord is inert. A grid opened another
   way (Ctrl/Cmd+click, a dropped tab, "Open group as tiles") keeps all its chords.
 - **Dividers are grid tracks.** Each gap between columns and rows is its own 6px track (the
   grid gap is 0) and tiles are placed explicitly in reading order, which is also what the
@@ -258,6 +258,9 @@ against the live list without rebuilding tiles that are still alive.
   keeps the stored grid.
 - Hidden in solo windows (`body.solo-mode`).
 - `test/mobile-header-buttons-policy.test.ts` keeps it off phones.
+- The toggle chord follows the setting (decision 6): with `showTileGridButton`
+  off, `Ctrl+Shift+G` is inert and reaches the terminal like any unbound key; on,
+  it toggles the grid. A grid opened another way keeps all its chords.
 
 ## Components
 
@@ -862,6 +865,10 @@ exits green. Use the browser runner for those files and read the file count.
    default key (Ctrl+W is delete-word in every shell and agent CLI, and it
    killed sessions with no confirm); it stays bindable in App Settings →
    Shortcuts.
+6. **`Ctrl+Shift+G` with the Tiles setting off.** Decided by the owner: the
+   chord is inert while `showTileGridButton` is off (it passes through like any
+   unbound key) and toggles the grid while it is on, so one setting governs both
+   the button and the chord.
 
 ## Code anchors
 
