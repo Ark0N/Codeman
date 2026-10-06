@@ -8513,78 +8513,7 @@ class CodemanApp {
       // Defer secondary panel updates so they don't block the main thread
       // after terminal content is already visible.
       const idleCb = typeof requestIdleCallback === 'function' ? requestIdleCallback : (cb) => setTimeout(cb, 16);
-      idleCb(() => {
-        // Guard against stale generation — user may have switched tabs again
-        if (selectGen !== this._selectGeneration) return;
-
-        // Update respawn banner
-        if (this.respawnStatus[sessionId]) {
-          this.showRespawnBanner();
-          this.updateRespawnBanner(this.respawnStatus[sessionId].state);
-          document.getElementById('respawnCycleCount').textContent = this.respawnStatus[sessionId].cycleCount || 0;
-          this.updateCountdownTimerDisplay();
-          this.updateActionLogDisplay();
-          if (Object.keys(this.respawnCountdownTimers[sessionId] || {}).length > 0) {
-            this.startCountdownInterval();
-          }
-        } else {
-          this.hideRespawnBanner();
-          this.stopCountdownInterval();
-        }
-
-        // Update task panel if open
-        const taskPanel = document.getElementById('taskPanel');
-        if (taskPanel && taskPanel.classList.contains('open')) {
-          this.renderTaskPanel();
-        }
-
-        // Update ralph state panel for this session
-        const curSession = this.sessions.get(sessionId);
-        if (curSession && (curSession.ralphLoop || curSession.ralphTodos)) {
-          this.updateRalphState(sessionId, {
-            loop: curSession.ralphLoop,
-            todos: curSession.ralphTodos
-          });
-        }
-        this.renderRalphStatePanel();
-
-        // Update CLI info bar (mobile - shows Claude version/model)
-        this.updateCliInfoDisplay();
-
-        // Update project insights panel for this session
-        this.renderProjectInsightsPanel();
-
-        // Update subagent window visibility for active session
-        this.updateSubagentWindowVisibility();
-
-        // Load file browser if enabled
-        const settings = this.loadAppSettingsFromStorage();
-        if (settings.showFileBrowser) {
-          const fileBrowserPanel = this.$('fileBrowserPanel');
-          if (fileBrowserPanel) {
-            fileBrowserPanel.classList.add('visible');
-            this.loadFileBrowser(sessionId);
-            // Attach drag listeners if not already attached
-            if (!this.fileBrowserDragListeners) {
-              const header = fileBrowserPanel.querySelector('.file-browser-header');
-              if (header) {
-                const onFirstDrag = () => {
-                  if (!fileBrowserPanel.style.left) {
-                    const rect = fileBrowserPanel.getBoundingClientRect();
-                    fileBrowserPanel.style.left = `${rect.left}px`;
-                    fileBrowserPanel.style.top = `${rect.top}px`;
-                    fileBrowserPanel.style.right = 'auto';
-                  }
-                };
-                header.addEventListener('mousedown', onFirstDrag);
-                header.addEventListener('touchstart', onFirstDrag, { passive: true });
-                this.fileBrowserDragListeners = this.makeWindowDraggable(fileBrowserPanel, header);
-                this.fileBrowserDragListeners._onFirstDrag = onFirstDrag;
-              }
-            }
-          }
-        }
-      });
+      idleCb(() => this._refreshSessionPanels(sessionId, selectGen));
 
       // Open WebSocket for low-latency terminal I/O (after buffer load completes)
       this._connectWs(sessionId);
@@ -8704,6 +8633,90 @@ class CodemanApp {
       // `aria-busy="true"` forever, telling every reader and every screen reader
       // that a load was still running when it had already given up.
       this._clearTerminalLoadState(sessionId, selectGen);
+    }
+  }
+
+  /**
+   * The panels that follow the active session (respawn banner and countdown,
+   * action log, task panel, Ralph state, CLI info, project insights, subagent
+   * window visibility, file browser). Run deferred, after the terminal content
+   * is on screen, by selectSession and by the tile grid's focus change
+   * (tile-grid.js _selectTiledSession), so both share one copy.
+   *
+   * @param {string} sessionId - the session that just became active
+   * @param {number} selectGen - the `_selectGeneration` of that selection; a
+   *   newer one (the user switched again) makes this a no-op
+   */
+  _refreshSessionPanels(sessionId, selectGen) {
+    // A newer selection won: the user switched tabs again.
+    if (selectGen !== this._selectGeneration) return;
+
+    // Update respawn banner
+    if (this.respawnStatus[sessionId]) {
+      this.showRespawnBanner();
+      this.updateRespawnBanner(this.respawnStatus[sessionId].state);
+      document.getElementById('respawnCycleCount').textContent = this.respawnStatus[sessionId].cycleCount || 0;
+      this.updateCountdownTimerDisplay();
+      this.updateActionLogDisplay();
+      if (Object.keys(this.respawnCountdownTimers[sessionId] || {}).length > 0) {
+        this.startCountdownInterval();
+      }
+    } else {
+      this.hideRespawnBanner();
+      this.stopCountdownInterval();
+    }
+
+    // Update task panel if open
+    const taskPanel = document.getElementById('taskPanel');
+    if (taskPanel && taskPanel.classList.contains('open')) {
+      this.renderTaskPanel();
+    }
+
+    // Update ralph state panel for this session
+    const curSession = this.sessions.get(sessionId);
+    if (curSession && (curSession.ralphLoop || curSession.ralphTodos)) {
+      this.updateRalphState(sessionId, {
+        loop: curSession.ralphLoop,
+        todos: curSession.ralphTodos
+      });
+    }
+    this.renderRalphStatePanel();
+
+    // Update CLI info bar (mobile - shows Claude version/model)
+    this.updateCliInfoDisplay();
+
+    // Update project insights panel for this session
+    this.renderProjectInsightsPanel();
+
+    // Update subagent window visibility for active session
+    this.updateSubagentWindowVisibility();
+
+    // Load file browser if enabled
+    const settings = this.loadAppSettingsFromStorage();
+    if (settings.showFileBrowser) {
+      const fileBrowserPanel = this.$('fileBrowserPanel');
+      if (fileBrowserPanel) {
+        fileBrowserPanel.classList.add('visible');
+        this.loadFileBrowser(sessionId);
+        // Attach drag listeners if not already attached
+        if (!this.fileBrowserDragListeners) {
+          const header = fileBrowserPanel.querySelector('.file-browser-header');
+          if (header) {
+            const onFirstDrag = () => {
+              if (!fileBrowserPanel.style.left) {
+                const rect = fileBrowserPanel.getBoundingClientRect();
+                fileBrowserPanel.style.left = `${rect.left}px`;
+                fileBrowserPanel.style.top = `${rect.top}px`;
+                fileBrowserPanel.style.right = 'auto';
+              }
+            };
+            header.addEventListener('mousedown', onFirstDrag);
+            header.addEventListener('touchstart', onFirstDrag, { passive: true });
+            this.fileBrowserDragListeners = this.makeWindowDraggable(fileBrowserPanel, header);
+            this.fileBrowserDragListeners._onFirstDrag = onFirstDrag;
+          }
+        }
+      }
     }
   }
 
