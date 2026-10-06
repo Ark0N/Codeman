@@ -5735,7 +5735,7 @@ Object.assign(CodemanApp.prototype, {
     this._predictiveEcho?.refreshFont();
     this._forEachTile?.((tile) => {
       tile.terminal.options.fontSize = size;
-      tile.localFit();
+      tile.fit(); // a font change is a size change: tell its PTY too (#464)
     });
   },
 
@@ -5764,7 +5764,7 @@ Object.assign(CodemanApp.prototype, {
     this._predictiveEcho?.refreshFont();
     this._forEachTile?.((tile) => {
       tile.terminal.options.fontFamily = resolved;
-      tile.localFit();
+      tile.fit(); // a font change is a size change: tell its PTY too (#464)
     });
   },
 
@@ -5820,7 +5820,7 @@ Object.assign(CodemanApp.prototype, {
     this._forEachTile?.((tile) => {
       tile.terminal.options.fontWeight = fontWeight;
       tile.terminal.options.fontWeightBold = fontWeightBold;
-      tile.localFit();
+      tile.fit(); // a font change is a size change: tell its PTY too (#464)
     });
   },
 

@@ -58,6 +58,20 @@ class FakeSocket {
   }
 }
 
+/** The fit addon: proposes `FakeFit.proposed` and, like the real one, resizes to it (NaN = hidden pane). */
+class FakeFit {
+  static proposed = { cols: 80, rows: 24 };
+  term: FakeTerminal | null = null;
+  fit() {
+    const { cols, rows } = FakeFit.proposed;
+    if (!Number.isFinite(cols) || !Number.isFinite(rows)) return;
+    this.term?.resize(cols, rows);
+  }
+  proposeDimensions() {
+    return { ...FakeFit.proposed };
+  }
+}
+
 class FakeTerminal {
   static last: FakeTerminal | null = null;
   options: Record<string, unknown>;
@@ -69,7 +83,9 @@ class FakeTerminal {
     this.options = { ...options };
     FakeTerminal.last = this;
   }
-  loadAddon() {}
+  loadAddon(addon: FakeFit) {
+    addon.term = this;
+  }
   open() {}
   onData(cb: (data: string) => void) {
     this.dataCb = cb;
@@ -84,7 +100,9 @@ class FakeTerminal {
   clear() {
     this.writes.push('<CLEAR>');
   }
+  resizes: Array<[number, number]> = [];
   resize(cols: number, rows: number) {
+    this.resizes.push([cols, rows]);
     this.cols = cols;
     this.rows = rows;
   }
@@ -116,14 +134,7 @@ function loadContext() {
     HTMLCanvasElement: class HTMLCanvasElement {},
     WebSocket: FakeSocket,
     Terminal: FakeTerminal,
-    FitAddon: {
-      FitAddon: class {
-        fit() {}
-        proposeDimensions() {
-          return { cols: 80, rows: 24 };
-        }
-      },
-    },
+    FitAddon: { FitAddon: FakeFit },
     fetch: (...args: unknown[]) => fetchMock(...args),
     location: { protocol: 'http:', host: 'codeman.test' },
     document: { addEventListener: vi.fn(), documentElement: { dataset: {} } },
@@ -176,6 +187,8 @@ type Tile = {
   connect(): Promise<void>;
   destroy(): void;
   reconnectNow(): void;
+  fit(opts?: { force?: boolean }): void;
+  detachedSessions?: Set<string>;
   ws: FakeSocket | null;
   _reconnectAttempts: number;
 };
@@ -198,6 +211,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  FakeFit.proposed = { cols: 80, rows: 24 };
   FakeSocket.instances = [];
   fetchMock.mockReset();
   fetchMock.mockImplementation(async () => ({
@@ -491,5 +505,95 @@ describe('TerminalTile destroy()', () => {
 
     expect(FakeSocket.instances).toHaveLength(1);
     expect(onExit).not.toHaveBeenCalled();
+  });
+});
+
+describe('TerminalTile geometry (#464: the pane and its PTY never disagree)', () => {
+  const resizeFrames = (ws: FakeSocket) => ws.sent.filter((f) => f.t === 'z');
+
+  it('announces its size as a desktop viewer when the socket opens', async () => {
+    const { ws } = await connectTile(makeApp());
+    ws.open();
+
+    expect(resizeFrames(ws)).toEqual([{ t: 'z', c: 80, r: 24, v: 'desktop' }]);
+  });
+
+  it('does not resend an unchanged size, sends a changed one, and force resends', async () => {
+    const { tile, ws } = await connectTile(makeApp());
+    ws.open();
+
+    tile.fit();
+    expect(resizeFrames(ws)).toHaveLength(1);
+
+    FakeFit.proposed = { cols: 100, rows: 30 };
+    tile.fit();
+    expect(resizeFrames(ws).at(-1)).toEqual({ t: 'z', c: 100, r: 30, v: 'desktop' });
+
+    tile.fit({ force: true });
+    expect(resizeFrames(ws)).toHaveLength(3);
+  });
+
+  it('re-announces an unchanged size on a reconnected socket', async () => {
+    vi.useFakeTimers();
+    const { ws } = await connectTile(makeApp());
+    ws.open();
+    ws.onclose?.({ code: 1006 });
+    await vi.advanceTimersByTimeAsync(300);
+    const ws2 = FakeSocket.instances[1];
+
+    ws2.open();
+
+    expect(resizeFrames(ws2)).toEqual([{ t: 'z', c: 80, r: 24, v: 'desktop' }]);
+  });
+
+  it('applies no 40-column floor: a pane at the divider clamp gets its real width on both sides', async () => {
+    const { tile, ws, term } = await connectTile(makeApp());
+    ws.open();
+
+    FakeFit.proposed = { cols: 28, rows: 30 };
+    tile.fit();
+
+    expect(term.cols).toBe(28);
+    expect(resizeFrames(ws).at(-1)).toEqual({ t: 'z', c: 28, r: 30, v: 'desktop' });
+  });
+
+  it('reports nothing while hidden (the fit addon measures NaN)', async () => {
+    const { tile, ws, term } = await connectTile(makeApp());
+    ws.open();
+
+    FakeFit.proposed = { cols: NaN, rows: NaN };
+    tile.fit();
+
+    expect(resizeFrames(ws)).toHaveLength(1);
+    expect([term.cols, term.rows]).toEqual([80, 24]);
+  });
+
+  it('stands aside for a session detached into its own window', async () => {
+    const { tile, ws } = await connectTile(makeApp(), { detachedSessions: new Set(['s-tile']) });
+    ws.open();
+    FakeFit.proposed = { cols: 120, rows: 40 };
+
+    tile.fit();
+
+    expect(resizeFrames(ws)).toEqual([]);
+  });
+
+  it('adopts the column count the PTY reports, keeping its own rows', async () => {
+    const { ws, term } = await connectTile(makeApp());
+    ws.open();
+
+    ws.receive({ t: 'zc', c: 132, r: 50 });
+
+    expect([term.cols, term.rows]).toEqual([132, 24]);
+  });
+
+  it('leaves the pane alone when the PTY agrees on width', async () => {
+    const { ws, term } = await connectTile(makeApp());
+    ws.open();
+    const before = term.resizes.length;
+
+    ws.receive({ t: 'zc', c: 80, r: 60 });
+
+    expect(term.resizes.length).toBe(before);
   });
 });

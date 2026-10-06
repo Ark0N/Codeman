@@ -107,6 +107,11 @@
       this._stoppedCode = null;
       this._markerText = TerminalTile.MARKER_RECONNECTING;
       this.onExit = typeof opts.onExit === 'function' ? opts.onExit : null;
+      // The `{ cols, rows }` last sent in a `{t:'z'}` frame, so an unchanged size
+      // is not resent (each one costs a `tmux resize-window` and a SIGWINCH).
+      // Cleared on every open: a fresh socket must announce its size, which is
+      // also what registers it as a desktop viewer server-side.
+      this._lastSentDims = null;
     }
 
     async connect() {
@@ -325,6 +330,8 @@
           } else if (msg.t === 'ia') {
             // Input ACK. The frame names no session, so it is this pane's.
             global.app?._onWsInputAck?.(msg.seq, msg, this.sessionId);
+          } else if (msg.t === 'zc') {
+            this._onPtyGeometryReport(msg.c, msg.r);
           }
         } catch {
           /* Malformed frame — ignore, matches primary pane's tolerance. */
@@ -377,6 +384,7 @@
       this._wsClosed = false;
       this._markerOwed = false;
       this._reconnectAttempts = 0;
+      this._lastSentDims = null;
       this._registerInputSocket();
       this._sendResize();
       if (reconnected) this._refreshBuffer();
@@ -757,27 +765,55 @@
       this.fitAddon.fit();
     }
 
-    fit() {
+    // Reflow to the container and tell the PTY, as one step: the xterm and the
+    // PTY must never disagree about size (#464), and a font change is a size
+    // change too, so the font setters call this rather than localFit().
+    // `force` resends an unchanged size.
+    fit({ force = false } = {}) {
       this.localFit();
-      this._sendResize();
+      this._sendResize({ force });
     }
 
-    _sendResize() {
-      if (!this._wsReady || !this.fitAddon) return;
+    _sendResize({ force = false } = {}) {
+      if (!this._wsReady || !this.fitAddon || !this.terminal) return;
       // One PTY cannot hold two sizes (mirrors sendResize's own
       // detachedElsewhere yield in terminal-ui.js): the session got detached
       // to its own window AFTER this split was opened, so its own window now
       // owns the PTY's size and Pane B must stand aside.
       if (this.detachedSessions?.has(this.sessionId)) return;
+      // A hidden pane (a web tab over it, a zoomed neighbour) measures NaN, and
+      // fit() then leaves the xterm alone: there is no size worth reporting.
       const dims = this.fitAddon.proposeDimensions();
-      if (!dims) return;
-      // Send the real proposed dimensions unclamped, matching the primary
-      // pane's convention (terminal-ui.js's getTerminalDimensions()) — the
-      // server enforces its own valid range ([1,500]/[1,200] in ws-routes.ts).
-      // A 40/10 floor here misreported Pane B's real width to the PTY at the
-      // divider's own reachable 20% floor position, causing real
-      // output-wrapping bugs.
-      this.ws.send(JSON.stringify({ t: 'z', c: dims.cols, r: dims.rows, v: 'desktop' }));
+      if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
+      // Report what the xterm actually holds, so the PTY gets exactly the size
+      // the pane renders at. Unclamped, unlike the primary pane's 40x10 floor:
+      // a floor here misreported Pane B's width at the divider's reachable 20%
+      // position (about 28 columns), causing real output-wrapping bugs, and a
+      // floored xterm would be wider than its container. The server enforces
+      // its own valid range ([1,500]/[1,200] in ws-routes.ts).
+      const cols = this.terminal.cols;
+      const rows = this.terminal.rows;
+      const last = this._lastSentDims;
+      if (!force && last && last.cols === cols && last.rows === rows) return;
+      this._lastSentDims = { cols, rows };
+      this.ws.send(JSON.stringify({ t: 'z', c: cols, r: rows, v: 'desktop' }));
+    }
+
+    // The geometry the PTY actually holds (`{t:'zc'}`, the server's answer to
+    // every resize). A PTY and a terminal that disagree on WIDTH render
+    // garbled, so a different column count is adopted; rows stay local, as in
+    // the primary pane (_onPtyGeometryReport in terminal-ui.js, #464). The
+    // pure verdict is the primary's too (reconcilePtyGeometry, constants.js).
+    _onPtyGeometryReport(cols, rows) {
+      const terminal = this.terminal;
+      if (!terminal) return;
+      const verdict = global.CodemanTerminalGeometry?.reconcilePtyGeometry?.(
+        { cols: terminal.cols, rows: terminal.rows },
+        { cols, rows }
+      );
+      if (!verdict?.adopt) return;
+      terminal.resize(verdict.cols, terminal.rows);
+      this._lastSentDims = { cols: verdict.cols, rows: terminal.rows };
     }
 
     destroy() {

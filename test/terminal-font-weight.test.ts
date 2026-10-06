@@ -67,7 +67,7 @@ function makeApp(
   opts: {
     teammates?: number;
     terminal?: ReturnType<typeof fakeTerminal> | null;
-    splitPane?: { terminal: ReturnType<typeof fakeTerminal>; localFit: () => void } | null;
+    splitPane?: { terminal: ReturnType<typeof fakeTerminal>; fit: () => void } | null;
   } = {}
 ) {
   const fit = vi.fn();
@@ -108,10 +108,12 @@ function makeApp(
 }
 
 describe('applyTerminalFontWeights', () => {
-  it('reaches an open split pane: same weights, refit in place', () => {
+  it('reaches an open split pane: same weights, refit AND reported to its PTY', () => {
     const splitTerminal = fakeTerminal();
-    const localFit = vi.fn();
-    const { app } = makeApp({ splitPane: { terminal: splitTerminal, localFit } });
+    // fit(), not localFit(): a weight change can move the cell size, and the
+    // split pane's PTY must hear about the new geometry like the primary's does.
+    const fit = vi.fn();
+    const { app } = makeApp({ splitPane: { terminal: splitTerminal, fit } });
 
     (app as unknown as { applyTerminalFontWeights: (s: unknown) => void }).applyTerminalFontWeights({
       terminalFontWeight: '300',
@@ -120,7 +122,7 @@ describe('applyTerminalFontWeights', () => {
 
     expect(splitTerminal.options.fontWeight).toBe(300);
     expect(splitTerminal.options.fontWeightBold).toBe(700);
-    expect(localFit).toHaveBeenCalledTimes(1);
+    expect(fit).toHaveBeenCalledTimes(1);
   });
 
   it('writes both slots to the live terminal', () => {
