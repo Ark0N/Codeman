@@ -86,10 +86,11 @@ scrolled into view. It is not reordered to the front, so the `Alt+N` numbering s
 
 ### Lineage lines
 
-When one session spawns another (an agent starting a worker through the API), selecting
-either tab draws its family: lines from the parent to each child, in the parent's colour,
-routed through the gaps between tab rows so they never cover a tab or the terminal. A dashed
-branch means that child is working. It is how a fan-out of eight workers stays readable.
+When one session spawns another (an agent starting a worker through the API), Codeman draws
+lines from the parent to each child, in the parent's colour, routed through the gaps between
+tab rows so they never cover a tab or the terminal. Every family is always shown; selecting
+a tab draws its own family thicker and brighter. A dashed branch means that child is
+working. It is how a fan-out of eight workers stays readable.
 
 While any tab has spawned another, the strip keeps a little extra room between rows for the
 lines, so switching tabs never changes the header height.

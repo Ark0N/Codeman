@@ -300,11 +300,11 @@ function computeTabScrollLeft(input) {
 // spawned (a worker started through the codeman agent skill, which passes its own
 // id as parentSessionId). Pure: the caller measures and appends, this decides.
 //
-// ONE TREE PER SPAWNING TAB, and only the selected tab's family is drawn (that
-// filter lives in session-lineage.js). Every route starts at the PARENT and ends
-// at one child, so a parent's routes share their first stretch exactly: overlaid,
-// they read as one trunk with a branch per child, and a dashed (working) route
-// stays in phase with its siblings along the shared part.
+// ONE TREE PER SPAWNING TAB. Every family is drawn, the selected tab's emphasized
+// (session-lineage.js). Every route starts at the PARENT and ends at one child, so
+// a parent's routes share their first stretch exactly: overlaid, they read as one
+// trunk with a branch per child, and a dashed (working) route stays in phase with
+// its siblings along the shared part.
 //
 // ⚠ ROUTES RUN IN THE GAPS, NEVER THROUGH A TAB. This replaced one bezier per
 // child hanging below the strip, which in a wrapped strip crossed every lower
@@ -326,9 +326,12 @@ function computeTabScrollLeft(input) {
 // rect, lying over the logo or the header buttons. Skipping is honest; clamping
 // would point at a tab that is not there.
 const LINEAGE_CORNER_RADIUS_PX = 10;
-// Families drawn together (the selected tab is both a child and a parent) take
-// separate lanes: gap lines this far apart, spines LINEAGE_SPINE_STEP_PX apart.
+// Families drawn together take separate lanes: gap lines this far apart, spines
+// LINEAGE_SPINE_STEP_PX apart.
 const LINEAGE_LANE_STEP_PX = 3.5;
+// Every family is drawn at once, and a 12px row gap only fits this many lanes at
+// LINEAGE_LANE_STEP_PX; session-lineage.js cycles families through them.
+const LINEAGE_MAX_LANES = 3;
 const LINEAGE_SPINE_INSET_PX = 6;
 const LINEAGE_SPINE_STEP_PX = 4;
 // The last row has no row below it; with no strip rect to measure, its gap is
@@ -1074,6 +1077,7 @@ if (typeof window !== 'undefined') {
     computeRows: computeLineageRows,
     CORNER_RADIUS_PX: LINEAGE_CORNER_RADIUS_PX,
     LANE_STEP_PX: LINEAGE_LANE_STEP_PX,
+    MAX_LANES: LINEAGE_MAX_LANES,
     SPINE_INSET_PX: LINEAGE_SPINE_INSET_PX,
     VERTICAL_TRACK_INSET_PX: LINEAGE_VERTICAL_TRACK_INSET_PX,
     COLORS: LINEAGE_COLORS,

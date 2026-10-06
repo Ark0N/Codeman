@@ -89,7 +89,7 @@ every session or only the active tab.
 | Vertical Rail Order    | *By activity* (default) sorts the rail the way the home screens are sorted; *Manual* keeps your tab order and drag-reordering. |
 | Tall Tabs              | Taller tab strip.                                                                          |
 | Pop-out Button on Tabs | Adds the detach control to tabs, with a per-tab override.                                  |
-| Spawn Lineage Lines    | Lines from the selected tab to the sessions it spawned, and to the one that spawned it. Desktop only, on by default. |
+| Spawn Lineage Lines    | Lines from each tab to the sessions it spawned; the selected tab's family is drawn thicker. Desktop only, on by default. |
 | Auto-name Sessions     | Titles a new tab after its first prompt, keeping the case prefix (`w3-myapp: fix the login redirect`). Synced, off by default. See [The Dashboard](The-Dashboard#automatic-session-names). |
 | Overview Home Screen   | The phone home screen. On by default.                                                      |
 

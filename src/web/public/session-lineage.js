@@ -7,11 +7,13 @@
  * spawning tab, routed through the gaps between tab rows so it never crosses a label or
  * the terminal (geometry: `CodemanLineage.computeTree` in constants.js).
  *
- * ONLY THE SELECTED TAB'S FAMILY IS DRAWN: the family the active tab spawned, and the
- * family it belongs to as a child. Drawing every family at once is what the owner
- * called "too confusing" (2026-10-06: one parent with ten children across five wrapped
- * rows). Selection therefore has to redraw, which `_updateActiveTabImmediate()` does
- * whenever any lineage exists (`_lineageTotalEdges`).
+ * EVERY FAMILY IS ALWAYS DRAWN, AND THE SELECTED TAB'S IS EMPHASIZED: the family the
+ * active tab spawned, and the family it belongs to as a child, get the
+ * `lineage-family--focus` group (thicker, full opacity, drawn last so nothing covers
+ * it). Drawing ONLY the selected family was tried first and rejected by the owner
+ * (2026-10-07: "I wanna see all the connections always"). Selection still has to
+ * redraw to move the emphasis, which `_updateActiveTabImmediate()` does whenever any
+ * lineage exists (`_lineageTotalEdges`).
  *
  * It is an ADDITIONAL LAYER on the existing SVG pass, not a second pass: the core
  * `_updateConnectionLinesImmediate()` (subagent-windows.js) calls
@@ -123,26 +125,29 @@ Object.assign(CodemanApp.prototype, {
     return edges;
   },
 
-  /**
-   * The families worth drawing for the current selection, each as
-   * `{ parentId, edges }` in strip order: the family the selected tab spawned, and
-   * the family it was spawned into (its parent plus its siblings). Empty when a web
-   * tab holds the stage, or the selected tab has no lineage at all.
-   */
-  _focusedLineageFamilies(edges) {
-    const focus = this.activeWebviewId ? null : this.activeSessionId;
-    if (!focus) return [];
-    const parents = new Set();
-    for (const edge of edges) {
-      if (edge.parentId === focus || edge.childId === focus) parents.add(edge.parentId);
-    }
+  /** Every family as `{ parentId, edges }`, in strip order of first appearance. */
+  _lineageFamilies(edges) {
     const families = new Map();
     for (const edge of edges) {
-      if (!parents.has(edge.parentId)) continue;
       if (!families.has(edge.parentId)) families.set(edge.parentId, []);
       families.get(edge.parentId).push(edge);
     }
     return [...families].map(([parentId, familyEdges]) => ({ parentId, edges: familyEdges }));
+  },
+
+  /**
+   * Parent ids of the families the selection emphasizes: the family the selected tab
+   * spawned, and the family it was spawned into (its parent plus its siblings). Empty
+   * when a web tab holds the stage, or the selected tab has no lineage at all.
+   */
+  _lineageFocusParents(edges) {
+    const parents = new Set();
+    const focus = this.activeWebviewId ? null : this.activeSessionId;
+    if (!focus) return parents;
+    for (const edge of edges) {
+      if (edge.parentId === focus || edge.childId === focus) parents.add(edge.parentId);
+    }
+    return parents;
   },
 
   /**
@@ -159,9 +164,9 @@ Object.assign(CodemanApp.prototype, {
    * Assigned in FIRST-SEEN order and remembered per parent id. First-seen rather than
    * draw-index keeps a colour stable across re-renders, tab reorders and sibling
    * closes (the SVG is wiped and rebuilt constantly, so an index-based colour would
-   * flicker). The draw pass claims a colour for EVERY family in strip order, drawn or
-   * not, so which family happens to be selected first never decides who gets which
-   * colour. An empty string means "no override": the CSS falls back to
+   * flicker). The draw pass claims a colour for EVERY family in strip order before it
+   * draws anything, so neither the draw order (the selected family goes last) nor
+   * which family was selected first ever decides who gets which colour. An empty string means "no override": the CSS falls back to
    * --session-blue, so the first spawning tab keeps the skin-aware blue.
    */
   _lineageColorFor(parentId) {
@@ -207,10 +212,10 @@ Object.assign(CodemanApp.prototype, {
     const edges = this._collectLineageEdges();
     this._lineageTotalEdges = edges.length;
     if (edges.length === 0) return;
-    // Claim colours in strip order for every family, drawn or not (_lineageColorFor).
+    // Claim colours in strip order for every family before drawing (_lineageColorFor).
     for (const edge of edges) this._lineageColorFor(edge.parentId);
-    const families = this._focusedLineageFamilies(edges);
-    if (families.length === 0) return;
+    const families = this._lineageFamilies(edges);
+    const focusParents = this._lineageFocusParents(edges);
     if (!rects) rects = new Map();
 
     // PHASE 1 — reads.
@@ -269,7 +274,19 @@ Object.assign(CodemanApp.prototype, {
     }
 
     // PHASE 2 — writes, from the cache only.
-    resolvedFamilies.forEach(({ family, parentEndpoint, parentRect, children }, lane) => {
+    // Lanes follow STRIP order, so a family keeps its lane when the selection moves;
+    // only the DRAW order changes (the emphasized families last, on top). A row gap
+    // fits a few lanes, so they cycle: families that share one are told apart by colour.
+    const laneLimit = Math.max(1, (window.CodemanLineage && window.CodemanLineage.MAX_LANES) || 3);
+    const laneCount = Math.min(laneLimit, resolvedFamilies.length);
+    const drawOrder = resolvedFamilies
+      .map((resolved, index) => ({
+        ...resolved,
+        lane: index % laneCount,
+        focus: focusParents.has(resolved.family.parentId),
+      }))
+      .sort((a, b) => a.focus - b.focus);
+    for (const { family, parentEndpoint, parentRect, children, lane, focus } of drawOrder) {
       const geom = computeTree({
         parent: parentRect,
         children: children.map((c) => ({ id: c.edge.childId, rect: c.rect })),
@@ -277,15 +294,16 @@ Object.assign(CodemanApp.prototype, {
         tabs: tabRects,
         orientation,
         lane,
-        laneCount: resolvedFamilies.length,
+        laneCount,
       });
-      if (!geom || geom.routes.length === 0) return;
+      if (!geom || geom.routes.length === 0) continue;
       const byId = new Map(children.map((c) => [c.edge.childId, c]));
       const color = this._lineageColorFor(family.parentId);
       // One group per family: it carries the translucency, so the stretches its
-      // routes share (the trunk) do not stack into a brighter line than the branches.
+      // routes share (the trunk) do not stack into a brighter line than the branches,
+      // and the emphasis for the selected tab's families (styles.css).
       const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      group.setAttribute('class', 'lineage-family');
+      group.setAttribute('class', 'lineage-family' + (focus ? ' lineage-family--focus' : ''));
       group.setAttribute('data-parent-tab', family.parentId);
       // Working routes go in FIRST, so an idle sibling's solid stroke covers the
       // shared trunk and only the working child's own branch shows its dashes.
@@ -320,8 +338,8 @@ Object.assign(CodemanApp.prototype, {
         const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
         dot.setAttribute('cx', String(route.endX));
         dot.setAttribute('cy', String(route.endY));
-        // Resting radius; `lineage-dot-pulse` breathes it 2.5 → 3.3 while the child
-        // works, so the two have to be changed together.
+        // Fallback radius only: styles.css sizes the dot through `--lineage-dot-r`
+        // (larger in an emphasized family), and `lineage-dot-pulse` breathes from it.
         dot.setAttribute('r', '2.5');
         dot.setAttribute('class', 'lineage-line-dot' + working + (proxied ? ' lineage-line-dot--proxied' : ''));
         dot.setAttribute('data-child-tab', child.edge.childId);
@@ -330,7 +348,7 @@ Object.assign(CodemanApp.prototype, {
       }
       svg.appendChild(group);
       this._lineageEdgeCount += routes.length;
-    });
+    }
   },
 
   /**

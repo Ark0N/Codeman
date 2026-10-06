@@ -10682,9 +10682,12 @@ kbd {
 }
 
 /* ===== Session lineage lines (tab → tab it spawned, session-lineage.js) =====
-   One quiet orthogonal tree per spawning tab, drawn only for the SELECTED tab's
-   family and routed through the gaps between tab rows (computeLineageTree in
-   constants.js). The routing room itself is reserved on the strip by
+   One quiet orthogonal tree per spawning tab, every family always drawn and
+   routed through the gaps between tab rows (computeLineageTree in constants.js).
+   The SELECTED tab's families (what it spawned, and the family it was spawned
+   into) are emphasized by `.lineage-family--focus`: thicker, full opacity, a
+   larger end dot, drawn last (owner call 2026-10-07: see every connection always,
+   thicker when selected). The routing room itself is reserved on the strip by
    `.session-tabs.lineage-tree` near the top of this file.
 
    ⚠ QUIET ON PURPOSE (owner call 2026-10-06, "B2"): 1.5px, solid, rounded
@@ -10706,7 +10709,11 @@ kbd {
    parent's routes overlap exactly along the trunk, and translucent paths would
    stack there into a brighter line than the branches. */
 .lineage-family {
-  opacity: 0.85;
+  opacity: 0.75;
+}
+
+.lineage-family--focus {
+  opacity: 1;
 }
 
 .connection-line.lineage-line {
@@ -10720,6 +10727,11 @@ kbd {
   filter: var(--line-glow);
 }
 
+/* The selected tab's families: thicker (the group above makes them opaque). */
+.lineage-family--focus .connection-line.lineage-line {
+  stroke-width: 2.5;
+}
+
 /* A working child's route is dashed even with motion turned off; the march
    below is the extra. Routes start at the PARENT, so dashes on the shared trunk
    stay in phase between working siblings. */
@@ -10727,9 +10739,17 @@ kbd {
   stroke-dasharray: 4 3;
 }
 
+/* The radius rides a variable so the pulse below can breathe from whichever size
+   the dot rests at; the `r` attribute session-lineage.js sets is only a fallback. */
 .lineage-line-dot {
+  --lineage-dot-r: 2.5px;
+  r: var(--lineage-dot-r);
   fill: var(--lineage-color, var(--session-blue, #2b8fd9));
   filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.9));
+}
+
+.lineage-family--focus .lineage-line-dot {
+  --lineage-dot-r: 3.5px;
 }
 
 /* A line re-anchored to a collapsed group's header (its row is hidden): quieter
@@ -10768,15 +10788,15 @@ kbd {
   }
 }
 
-/* Tied to the resting r="2.5" session-lineage.js sets on the dot. */
+/* Breathes from the dot's own resting radius (`--lineage-dot-r`). */
 @keyframes lineage-dot-pulse {
   0%, 100% {
     opacity: 0.75;
-    r: 2.5;
+    r: var(--lineage-dot-r);
   }
   50% {
     opacity: 1;
-    r: 3.3;
+    r: calc(var(--lineage-dot-r) + 0.8px);
   }
 }
 

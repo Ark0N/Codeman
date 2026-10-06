@@ -24,13 +24,14 @@ eight workers looks like a stalled terminal for several minutes.
 
 ## Session lineage lines
 
-Select a tab and the tab strip draws lines from it to every tab it spawned, and to the tab
-that spawned it (with its siblings). That covers the other direction of fan-out: not
-subagents inside one session, but whole sessions started by an agent through the API.
+The tab strip draws lines from every tab to the tabs it spawned. That covers the other
+direction of fan-out: not subagents inside one session, but whole sessions started by an
+agent through the API.
 
 The lines form one tree per spawning tab, in that tab's colour, and run only through the
-gaps between tab rows, so they never cover a tab name or the terminal. A dashed branch
-means that child is working. Tabs with no lineage draw nothing.
+gaps between tab rows, so they never cover a tab name or the terminal. Select a tab and its
+family (the tabs it spawned, or its parent and siblings) is drawn thicker and brighter. A
+dashed branch means that child is working.
 
 Desktop only, on by default, and toggled in **App Settings → Appearance**. Lines are skipped
 for tabs scrolled out of view.

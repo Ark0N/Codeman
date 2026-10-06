@@ -497,66 +497,91 @@ function draw(app: LineageApp, active: string | null) {
   app._appendLineageConnectionLines(svg, new Map());
   return svg.children.map((group) => ({
     parent: group.attrs['data-parent-tab'],
+    focus: group.attrs.class.split(' ').includes('lineage-family--focus'),
     paths: group.children.filter((n) => n.tag === 'path'),
     dots: group.children.filter((n) => n.tag === 'circle'),
   }));
 }
 
+const family = (families: ReturnType<typeof draw>, parent: string) => families.find((f) => f.parent === parent)!;
+
 const childIds = (families: ReturnType<typeof draw>) =>
   families.flatMap((f) => f.paths.map((p) => p.attrs['data-child-tab']));
 
-describe('lineage focus: only the selected tab family is drawn', () => {
+describe('lineage focus: every family is drawn, the selected one emphasized', () => {
   const fleet = { w1: null, a: 'w1', b: 'w1', w2: null, c: 'w2', w3: null };
+  const focused = (families: ReturnType<typeof draw>) => families.filter((f) => f.focus).map((f) => f.parent);
 
-  it("draws the selected parent's own family and nothing else", () => {
+  it('draws every family whichever tab is selected, the selected one last and emphasized', () => {
     const { app } = loadLineageApp(fleet);
     const families = draw(app, 'w1');
 
-    expect(families.map((f) => f.parent)).toEqual(['w1']);
-    expect(childIds(families)).toEqual(['a', 'b']);
-    expect(app._lineageEdgeCount).toBe(2);
-    // Every edge still counts toward "is there lineage at all", which is what
-    // decides the reserved routing room and the redraw on selection.
+    // Drawn last, so no other family's line covers it.
+    expect(families.map((f) => f.parent)).toEqual(['w2', 'w1']);
+    expect(focused(families)).toEqual(['w1']);
+    expect(childIds(families).sort()).toEqual(['a', 'b', 'c']);
+    expect(app._lineageEdgeCount).toBe(3);
     expect(app._lineageTotalEdges).toBe(3);
   });
 
-  it('shows a selected child its parent and its siblings', () => {
+  it('emphasizes the parent and siblings of a selected child', () => {
     const { app } = loadLineageApp(fleet);
-    expect(childIds(draw(app, 'a'))).toEqual(['a', 'b']);
-    expect(childIds(draw(app, 'c'))).toEqual(['c']);
+    expect(focused(draw(app, 'a'))).toEqual(['w1']);
+    expect(focused(draw(app, 'c'))).toEqual(['w2']);
   });
 
-  it('shows both families of a tab that is a child AND a parent', () => {
-    const { app } = loadLineageApp({ w1: null, a: 'w1', x: 'a', y: 'a' });
+  it('emphasizes both families of a tab that is a child AND a parent', () => {
+    const { app } = loadLineageApp({ w1: null, a: 'w1', x: 'a', y: 'a', w2: null, c: 'w2' });
     const families = draw(app, 'a');
 
-    expect(families.map((f) => f.parent)).toEqual(['w1', 'a']);
-    expect(childIds(families)).toEqual(['a', 'x', 'y']);
+    expect(focused(families)).toEqual(['w1', 'a']);
+    expect(families.map((f) => f.parent)).toEqual(['w2', 'w1', 'a']);
   });
 
-  it('draws nothing for a tab with no lineage, or while a web tab holds the stage', () => {
+  it('still draws everything, emphasizing nothing, for a tab without lineage or a web tab', () => {
     const { app } = loadLineageApp(fleet);
-    expect(draw(app, 'w3')).toEqual([]);
+    const plain = draw(app, 'w3');
+    expect(plain.map((f) => f.parent)).toEqual(['w1', 'w2']);
+    expect(focused(plain)).toEqual([]);
     app.activeWebviewId = 'dash';
-    expect(draw(app, 'w1')).toEqual([]);
-    expect(app._lineageEdgeCount).toBe(0);
+    const web = draw(app, 'w1');
+    expect(web).toHaveLength(2);
+    expect(focused(web)).toEqual([]);
+  });
+
+  it('keeps every family in its lane when the selection moves', () => {
+    // Lanes follow strip order, so selecting another tab changes only the emphasis
+    // and the draw order, never where a family's lines run.
+    const { app } = loadLineageApp(fleet);
+    const before = family(draw(app, 'w1'), 'w2').paths.map((p) => p.attrs.d);
+    const after = family(draw(app, 'w2'), 'w2').paths.map((p) => p.attrs.d);
+    expect(after).toEqual(before);
   });
 
   it('keeps the data-agent-id the entrance animation looks for, and a dot per child', () => {
     const { app } = loadLineageApp(fleet);
-    const [family] = draw(app, 'w1');
+    const w1 = family(draw(app, 'w1'), 'w1');
 
-    expect(family.paths.map((p) => p.attrs['data-agent-id'])).toEqual(['lineage:a', 'lineage:b']);
-    expect(family.dots.map((d) => d.attrs['data-child-tab'])).toEqual(['a', 'b']);
+    expect(w1.paths.map((p) => p.attrs['data-agent-id'])).toEqual(['lineage:a', 'lineage:b']);
+    expect(w1.dots.map((d) => d.attrs['data-child-tab'])).toEqual(['a', 'b']);
   });
 
   it('puts working routes first, so an idle sibling draws the shared trunk solid', () => {
     const { app } = loadLineageApp(fleet, { b: 'working' });
-    const [family] = draw(app, 'w1');
+    const w1 = family(draw(app, 'w1'), 'w1');
 
-    expect(family.paths.map((p) => p.attrs['data-child-tab'])).toEqual(['b', 'a']);
-    expect(family.paths[0].attrs.class).toContain('lineage-line--working');
-    expect(family.paths[1].attrs.class).not.toContain('lineage-line--working');
+    expect(w1.paths.map((p) => p.attrs['data-child-tab'])).toEqual(['b', 'a']);
+    expect(w1.paths[0].attrs.class).toContain('lineage-line--working');
+    expect(w1.paths[1].attrs.class).not.toContain('lineage-line--working');
+  });
+
+  it('makes the emphasized family thicker in CSS, after the base rule', () => {
+    const base = stylesCss.indexOf('.connection-line.lineage-line {');
+    const focus = stylesCss.indexOf('.lineage-family--focus .connection-line.lineage-line {');
+    expect(base).toBeGreaterThan(-1);
+    expect(focus).toBeGreaterThan(base);
+    const width = (at: number) => Number(/stroke-width:\s*([\d.]+)/.exec(stylesCss.slice(at))![1]);
+    expect(width(focus)).toBeGreaterThan(width(base));
   });
 });
 
