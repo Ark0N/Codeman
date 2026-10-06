@@ -916,21 +916,27 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * What the tile's body should say instead of a terminal, or '' for none: a
-   * session with no PTY attached (pid null), an agent that exited in a live
-   * pane (paneExit), or a socket the server closed because the session exited
-   * (4009). Attach was just pressed: nothing, while the server catches up.
+   * What the tile's body should say instead of a terminal, or null for none: a
+   * session with no PTY attached (pid null) or a socket the server closed
+   * because the session exited (4009), both of which Attach can start again;
+   * or an agent that exited in a live pane (paneExit), which it cannot: the
+   * attach and shell routes refuse while the pane's tmux client still runs
+   * ("already has a running process"), and the single view has no restart for
+   * it either, so the tile says so and points at Close session instead. Attach
+   * was just pressed: nothing, while the server catches up.
+   *
+   * @returns {{text: string, attachable: boolean}|null}
    */
   _tileAttachReason(sessionId, tile) {
     const session = this.sessions.get(sessionId);
-    if (!session) return '';
+    if (!session) return null;
     const pending = this._tileAttachPending?.get(sessionId);
-    if (pending && Date.now() - pending < 15000) return '';
+    if (pending && Date.now() - pending < 15000) return null;
     const exited = typeof paneExitLabel === 'function' ? paneExitLabel(session.paneExit) : '';
-    if (exited) return `The agent ${exited}`;
-    if (session.pid === null) return 'Not attached';
-    if (tile?._stoppedCode === 4009) return 'The session ended';
-    return '';
+    if (exited) return { text: `The agent ${exited}`, attachable: false };
+    if (session.pid === null) return { text: 'Not attached', attachable: true };
+    if (tile?._stoppedCode === 4009) return { text: 'The session ended', attachable: true };
+    return null;
   },
 
   /**
@@ -961,15 +967,22 @@ Object.assign(CodemanApp.prototype, {
         e.stopPropagation();
         void this.attachTileSession(sessionId);
       });
-      overlay.append(text, btn);
+      const hint = document.createElement('span');
+      hint.className = 'tile-attach-hint';
+      hint.textContent = 'It cannot be restarted in place: close it from \u22EF (Close session).';
+      overlay.append(text, btn, hint);
       entry.body.appendChild(overlay);
       entry.overlay = overlay;
       entry.overlayText = text;
       entry.overlayBtn = btn;
+      entry.overlayHint = hint;
     }
     entry.overlay.hidden = false;
-    const text = busy ? 'Attaching\u2026' : reason;
+    const text = busy ? 'Attaching\u2026' : reason.text;
     if (entry.overlayText.textContent !== text) entry.overlayText.textContent = text;
+    const attachable = busy || reason.attachable;
+    entry.overlayBtn.hidden = !attachable;
+    entry.overlayHint.hidden = attachable;
     entry.overlayBtn.disabled = busy;
   },
 
@@ -984,6 +997,8 @@ Object.assign(CodemanApp.prototype, {
   async attachTileSession(sessionId) {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
+    // An agent that exited in a live pane cannot be started again in place.
+    if (this._tileAttachReason(sessionId, this._tileFor(sessionId))?.attachable === false) return false;
     this._tileAttachInFlight ||= new Set();
     if (this._tileAttachInFlight.has(sessionId)) return false;
     let url = `/api/sessions/${sessionId}/${session.mode === 'shell' ? 'shell' : 'interactive'}`;
@@ -1003,7 +1018,9 @@ Object.assign(CodemanApp.prototype, {
     let ok = false;
     try {
       const res = await fetch(url, init);
-      ok = !!res?.ok;
+      // The routes report a refusal in the envelope of a 200.
+      const body = await res?.json?.().catch(() => null);
+      ok = !!res?.ok && body?.success !== false;
     } catch {
       ok = false;
     } finally {

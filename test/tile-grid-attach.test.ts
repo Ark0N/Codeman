@@ -63,10 +63,20 @@ describe('when the overlay shows', () => {
     expect(visible('s-a')).toBe(false);
   });
 
-  it('an agent that exited in a live pane', () => {
-    gridWith((app) => (app.sessions.get('s-c').paneExit = { status: 2 }));
+  it('an agent that exited in a live pane: the reason, and no Attach (the server cannot restart it in place)', async () => {
+    const app = gridWith((a) => (a.sessions.get('s-c').paneExit = { status: 2 }));
     expect(visible('s-c')).toBe(true);
     expect(textOf('s-c')).toBe('The agent exited (2)');
+    expect(attachButton('s-c').hidden).toBe(true);
+    expect(overlayOf('s-c')!.children[2].hidden).toBe(false);
+    expect(await app.attachTileSession('s-c')).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('a session with no PTY gets the button, not the close hint', () => {
+    gridWith((app) => (app.sessions.get('s-b').pid = null));
+    expect(attachButton('s-b').hidden).toBe(false);
+    expect(overlayOf('s-b')!.children[2].hidden).toBe(true);
   });
 
   it('a socket closed because the session exited (4009) keeps the tile and shows it', () => {
@@ -131,6 +141,15 @@ describe('Attach', () => {
     expect(attachButton('s-b').disabled).toBe(true);
     release({ ok: true });
     await first;
+  });
+
+  it('a refusal in the envelope of a 200 is a failure, not a success', async () => {
+    const app = gridWith((a) => (a.sessions.get('s-b').pid = null));
+    fetchSpy.mockImplementation(async () => ({ ok: true, json: async () => ({ success: false, error: 'busy' }) }));
+    expect(await app.attachTileSession('s-b')).toBe(false);
+    expect(app.showToast).toHaveBeenCalledWith('Could not attach the session', 'error');
+    expect(tilesFor('s-b')).toHaveLength(1);
+    expect(visible('s-b')).toBe(true);
   });
 
   it('a failed attach keeps the overlay and says so', async () => {

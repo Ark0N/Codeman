@@ -19645,8 +19645,15 @@ body.tile-grid-resizing--row * {
   color: var(--text-muted);
 }
 
-.tile-attach[hidden] {
+.tile-attach[hidden],
+.tile-attach [hidden] {
   display: none;
+}
+
+.tile-attach-hint {
+  max-width: 80%;
+  font-size: 12px;
+  text-align: center;
 }
 
 .tile-attach-btn {
