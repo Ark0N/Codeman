@@ -97,8 +97,11 @@ export class FakeEl {
   getAttribute(k: string) {
     return this.attrs[k] ?? null;
   }
-  addEventListener(type: string, fn: (ev: unknown) => void) {
+  /** Per event type, whether each listener was registered for the capture phase. */
+  captureFlags: Record<string, boolean[]> = {};
+  addEventListener(type: string, fn: (ev: unknown) => void, opts?: boolean | { capture?: boolean }) {
     (this.listeners[type] ||= []).push(fn);
+    (this.captureFlags[type] ||= []).push(opts === true || (typeof opts === 'object' && !!opts?.capture));
   }
   dispatch(type: string, ev: unknown = {}) {
     for (const fn of this.listeners[type] ?? []) fn(ev);

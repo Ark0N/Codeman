@@ -19561,6 +19561,32 @@ body.tile-grid-resizing--row * {
   cursor: row-resize !important;
 }
 
+/* An empty cell of a grid that is not full: a drop target for a tab. */
+.tile-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  border: 1px dashed color-mix(in srgb, var(--text-muted, #888) 35%, transparent);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.tile-grid.tile-grid--zoomed .tile-slot {
+  display: none;
+}
+
+/* A tab dragged over a tile (replace it) or an empty slot (add it). */
+.tile.tile--drop-target,
+.tile-slot.tile--drop-target {
+  border-color: var(--accent, #4a9eff);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent, #4a9eff) 45%, transparent);
+  opacity: 1;
+}
+
 /* Zoom (tmux-style): one tile fills the grid; the others stay connected but
    hidden, so they measure nothing and send no resize. */
 .tile-grid.tile-grid--zoomed .tile:not(.tile--zoomed) {

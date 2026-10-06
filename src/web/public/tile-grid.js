@@ -256,6 +256,8 @@ Object.assign(CodemanApp.prototype, {
     grid.tiles.clear();
     for (const el of grid.dividers.values()) el.remove();
     grid.dividers.clear();
+    for (const slot of grid.slots || []) slot.remove();
+    grid.slots = [];
     grid.colFr = [];
     grid.rowFr = [];
     grid.ids = [];
@@ -709,6 +711,7 @@ Object.assign(CodemanApp.prototype, {
     el.addEventListener('pointerdown', () => {
       if (this._tileGrid?.has(sessionId)) this.selectSession(sessionId);
     });
+    this._acceptTabDrops(el, (draggedId) => this.dropSessionOnTile(draggedId, sessionId));
     this._tileGridSection().appendChild(el);
     const tile = this._newTerminalTile(sessionId, body);
     grid.tiles.set(sessionId, {
@@ -725,6 +728,159 @@ Object.assign(CodemanApp.prototype, {
     grid.ids.push(sessionId);
     this._renderTileHeader(sessionId);
     return true;
+  },
+
+  /**
+   * Makes `el` a drop target for a session tab dragged from the strip (the
+   * strip's own drag sets `draggedTabId`). Capture phase, with the event
+   * stopped: the drag carries the session id as text, and xterm's helper
+   * textarea would otherwise accept that drop and type the id into a PTY. Any
+   * other drag (a file) is left alone.
+   */
+  _acceptTabDrops(el, onDrop) {
+    el.addEventListener(
+      'dragover',
+      (e) => {
+        if (!this.draggedTabId || !this._tileGrid?.open) return;
+        e.preventDefault?.();
+        e.stopPropagation?.();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        el.classList.add('tile--drop-target');
+      },
+      true
+    );
+    el.addEventListener('dragleave', (e) => {
+      if (!el.contains?.(e.relatedTarget)) el.classList.remove('tile--drop-target');
+    });
+    el.addEventListener(
+      'drop',
+      (e) => {
+        el.classList.remove('tile--drop-target');
+        if (!this.draggedTabId || !this._tileGrid?.open) return;
+        e.preventDefault?.();
+        e.stopPropagation?.();
+        onDrop(this.draggedTabId);
+      },
+      true
+    );
+  },
+
+  /**
+   * A tab dropped on a tile: a session not yet tiled REPLACES that tile (same
+   * place; the replaced session keeps running); one already tiled swaps places
+   * with it. Either way the dropped session takes focus (a human selection).
+   */
+  dropSessionOnTile(draggedId, targetId) {
+    const grid = this._tileGrid;
+    if (!grid?.open || draggedId === targetId || !grid.tiles.has(targetId)) return;
+    if (!this.sessions.has(draggedId) || this.detachedSessions?.has(draggedId)) return;
+    if (grid.tiles.has(draggedId)) {
+      const a = grid.ids.indexOf(draggedId);
+      const b = grid.ids.indexOf(targetId);
+      grid.ids[a] = targetId;
+      grid.ids[b] = draggedId;
+      this._applyTileLayout();
+      this._scheduleTileGridRefit();
+    } else {
+      this._tileDividerDragTeardown?.();
+      const index = grid.ids.indexOf(targetId);
+      if (!this._mountTile(draggedId)) return;
+      // _mountTile appended it; it takes the replaced tile's place instead.
+      grid.ids.pop();
+      grid.ids.splice(index, 1, draggedId);
+      const old = grid.tiles.get(targetId);
+      grid.queue?.drop(old.tile);
+      old.tile.destroy();
+      old.el.remove();
+      grid.tiles.delete(targetId);
+      if (grid.zoomedId === targetId) grid.zoomedId = grid.autoZoom ? draggedId : null;
+      if (grid.focusedId === targetId) grid.focusedId = null;
+      this._applyTileLayout();
+      this._connectTile(draggedId);
+      this._scheduleTileGridRefit();
+      this.renderSessionTabs?.();
+    }
+    this.selectSession(draggedId);
+  },
+
+  /** A tab dropped on an empty slot joins the grid there (an already tiled one moves there). */
+  dropSessionOnSlot(draggedId) {
+    const grid = this._tileGrid;
+    if (!grid?.open || !this.sessions.has(draggedId) || this.detachedSessions?.has(draggedId)) return;
+    if (grid.tiles.has(draggedId)) {
+      // Empty slots are always the last cells in reading order.
+      grid.ids.splice(grid.ids.indexOf(draggedId), 1);
+      grid.ids.push(draggedId);
+      this._applyTileLayout();
+      this._scheduleTileGridRefit();
+    } else if (!this.addTile(draggedId)) {
+      return;
+    }
+    this.selectSession(draggedId);
+  },
+
+  /**
+   * Ctrl/Cmd+click on a tab: that session joins the grid and takes focus (a
+   * human selection: the user clicked its tab). With the grid closed it opens
+   * on what the Tiles toggle would bring back, plus this session. Returns false
+   * when the grid cannot open here (narrow or solo window), so the click is an
+   * ordinary one.
+   */
+  addSessionToTiles(sessionId) {
+    if (!this.canOpenTileGrid() || !this.sessions.has(sessionId) || this.detachedSessions?.has(sessionId)) {
+      return false;
+    }
+    const T = window.CodemanTileGrid;
+    const capacity = Math.max(1, Math.min(this._tileGridCapacityNow(), T.TILE_GRID_MAX));
+    const grid = this._tileGrid;
+    if (grid?.open) {
+      if (!grid.tiles.has(sessionId)) {
+        if (grid.ids.length >= capacity) {
+          this.showToast?.(`The grid already holds what this window fits (${capacity})`, 'info');
+          return true;
+        }
+        this.addTile(sessionId);
+      }
+      this.selectSession(sessionId);
+      return true;
+    }
+    const remembered = (this._tileGridRemembered?.ids || []).filter(
+      (id) => this.sessions.has(id) && !this.detachedSessions?.has(id)
+    );
+    const base = remembered.length ? remembered : [this.activeSessionId].filter(Boolean);
+    const ids = [...base.filter((id) => id !== sessionId).slice(0, capacity - 1), sessionId];
+    this.openTileGrid(ids, { focusedId: sessionId, auto: false });
+    return true;
+  },
+
+  /**
+   * "Open group as tiles" (the tab-group menu of the grouped rail): the
+   * group's live sessions, as many as the window fits, become the grid,
+   * replacing whatever it showed. Opening the grid is the app's choice of
+   * focus, so no idle alert is spent.
+   */
+  openGroupAsTiles(groupId) {
+    const group = (this.tabLayout?.groups || []).find((g) => g.id === groupId);
+    if (!group || !this.canOpenTileGrid()) return false;
+    const T = window.CodemanTileGrid;
+    const capacity = Math.max(1, Math.min(this._tileGridCapacityNow(), T.TILE_GRID_MAX));
+    const ids = (group.refs || [])
+      .filter((ref) => ref.kind === 'session')
+      .map((ref) => ref.id)
+      .filter((id) => this.sessions.has(id) && !this.detachedSessions?.has(id))
+      .slice(0, capacity);
+    if (ids.length === 0) {
+      this.showToast?.('This group has no session to show as tiles', 'info');
+      return false;
+    }
+    if (this._tilesOwnTerminal()) {
+      this.closeTileGrid({ keepStored: false, reselect: false });
+      // As selectSession's tile branch: the parked terminal still holds what it
+      // showed before the grid, and re-parking must not snapshot it.
+      this.activeSessionId = null;
+    }
+    const focus = ids.includes(this.activeSessionId) ? this.activeSessionId : ids[0];
+    return this.openTileGrid(ids, { focusedId: focus });
   },
 
   /** A grid tile's TerminalTile: the grid's one load queue, the tile scrollback, font and bounded load. */
@@ -1076,6 +1232,28 @@ Object.assign(CodemanApp.prototype, {
       el.style.gridRow = id === zoomed ? '1' : String(2 * Math.floor(k / cols) + 1);
     });
     this._syncTileDividers(zoomed ? 0 : cols, zoomed ? 0 : rows);
+    this._syncTileSlots(zoomed ? 0 : cols * rows - grid.ids.length, cols);
+  },
+
+  // The empty cells of a layout that is not full (3 tiles in a 2x2, 5 in a
+  // 3x2): drop targets for a tab, after the tiles in reading order.
+  _syncTileSlots(count, cols) {
+    const grid = this._tileGrid;
+    grid.slots ||= [];
+    while (grid.slots.length > count) grid.slots.pop().remove();
+    while (grid.slots.length < count) {
+      const slot = document.createElement('div');
+      slot.className = 'tile-slot';
+      slot.textContent = 'Drop a tab here';
+      this._acceptTabDrops(slot, (draggedId) => this.dropSessionOnSlot(draggedId));
+      this._tileGridSection().appendChild(slot);
+      grid.slots.push(slot);
+    }
+    grid.slots.forEach((slot, i) => {
+      const k = grid.ids.length + i;
+      slot.style.gridColumn = String(2 * (k % cols) + 1);
+      slot.style.gridRow = String(2 * Math.floor(k / cols) + 1);
+    });
   },
 
   // One divider per gap between columns and between rows, created and dropped

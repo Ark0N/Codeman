@@ -6438,6 +6438,10 @@ class CodemanApp {
 
   handleSessionTabClick(event, sessionId) {
     event?.preventDefault?.();
+    // Ctrl/Cmd+click puts the session in the tile grid (opening it if needed)
+    // instead of switching to it; on a window too narrow for the grid it is an
+    // ordinary click.
+    if ((event?.ctrlKey || event?.metaKey) && this.addSessionToTiles?.(sessionId)) return;
     // On touch with the keyboard hidden, blur the tapped tab so switching
     // sessions doesn't pop the on-screen keyboard. Focus policy itself lives
     // in selectSession via _shouldFocusTerminalForTabSwitch().
@@ -6914,6 +6918,7 @@ class CodemanApp {
     const index = groups.findIndex((group) => group.id === groupId);
     if (index < 0) return false;
     return this._openTabLayoutMenu(event, `group:${groupId}`, 'Group actions', [
+      ...(this.canOpenTileGrid?.() ? [{ label: 'Open group as tiles', run: () => this.openGroupAsTiles(groupId) }] : []),
       { label: 'Rename group', run: () => this.startTabGroupRename(groupId) },
       ...(this._canCreateTabGroup() ? [{ label: 'New group', run: () => this.createTabGroup({ index: index + 1 }) }] : []),
       ...(index > 0 ? [{ label: 'Move group up', run: () => this.moveTabGroup(groupId, -1) }] : []),
