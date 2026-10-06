@@ -47,6 +47,7 @@ Anything you copy is cleaned on the way to the clipboard: each line loses the pa
 | `Alt+Shift+Arrows`          | Focus the tile to the left, right, above or below.            |
 | `Alt+Shift+Enter`           | Zoom the focused tile, or restore the grid.                   |
 | `Ctrl`+click / `Cmd`+click a tab | Add that session to the grid.                            |
+| Right-click the Tiles button | Choose which sessions to show as tiles.                  |
 
 While the grid is open, `Ctrl+Tab` and `Alt+[` / `Alt+]` cycle through the tiles, and the
 terminal shortcuts above act on the focused tile. **Remove Focused Tile** has no key by

@@ -1803,6 +1803,40 @@ function buildTilePickerSessions(sessions, sessionOrder, detachedIds, exclude) {
 }
 
 /**
+ * What the Tiles button and Ctrl+Shift+G open, at once and without asking
+ * (owner decision 8). In order:
+ *   a. the grid this tab last had (`stored`, already sanitized: live, not
+ *      detached, at most the cap), if any of its sessions survive;
+ *   b. else an open split's two sessions, Pane A focused;
+ *   c. else the open sessions in tab order, the picker's list (no detached
+ *      ones), up to `limit`, the active session always among them and focused
+ *      (when it sits past the limit, the first `limit - 1` others come with it).
+ * Null when there is nothing to open.
+ *
+ * @param {{stored?: {ids: string[], focused: string|null, zoomed: string|null}|null,
+ *   split?: string[]|null, sessions: Map<string, object>, sessionOrder: string[],
+ *   detachedIds?: {has(id: string): boolean}, activeId?: string|null, limit: number}} p
+ * @returns {{source: 'stored'|'split'|'tabs', ids: string[], focusedId: string|null}|null}
+ */
+function tileGridOpenSet({ stored = null, split = null, sessions, sessionOrder, detachedIds, activeId = null, limit }) {
+  if (stored?.ids?.length) {
+    const focus = stored.zoomed || stored.focused;
+    return { source: 'stored', ids: stored.ids.slice(), focusedId: stored.ids.includes(focus) ? focus : stored.ids[0] };
+  }
+  const usable = (id) => typeof id === 'string' && sessions.has(id) && !detachedIds?.has?.(id);
+  const pair = (split || []).filter(usable);
+  if (split && pair.length) return { source: 'split', ids: [...new Set(pair)], focusedId: pair[0] };
+  const max = Math.max(1, Math.min(Math.floor(Number(limit) || 0), TILE_GRID_MAX));
+  const all = buildTilePickerSessions(sessions, sessionOrder, detachedIds).map((c) => c.id);
+  if (all.length === 0) return null;
+  let ids = all.slice(0, max);
+  if (all.includes(activeId) && !ids.includes(activeId)) {
+    ids = [...all.filter((id) => id !== activeId).slice(0, max - 1), activeId];
+  }
+  return { source: 'tabs', ids, focusedId: ids.includes(activeId) ? activeId : ids[0] };
+}
+
+/**
  * Which tile takes focus when `id` leaves the grid: the next one in grid
  * order, else the previous one, else null.
  *
@@ -2116,6 +2150,7 @@ if (typeof window !== 'undefined') {
     tileNeighbor,
     tileInDirection,
     cycleTile,
+    tileGridOpenSet,
     TILE_GRID_MAX,
     TILE_LAYOUT_MAX,
     TILE_MIN_W,

@@ -65,6 +65,22 @@ describe('opening the grid over an open split', () => {
     expect(app.sendResize).toHaveBeenCalledTimes(1); // the split's own opening resize only
   });
 
+  it('a remembered grid wins over an open split: exactly its tiles, the split closed and not merged', () => {
+    const app = makeGridApp(IDS);
+    app.selectSession = vi.fn();
+    app.openTileGrid(['s-c']);
+    app.closeTileGrid({ reselect: false });
+    app.activeSessionId = 's-a';
+    const paneB = openSplit(app);
+
+    app.toggleTileGrid();
+
+    expect(paneB.destroy).toHaveBeenCalledTimes(1);
+    expect(app._splitPane).toBeNull();
+    expect(app._tileGrid.ids).toEqual(['s-c']);
+    expect(app.activeSessionId).toBe('s-c');
+  });
+
   it('an explicit open over a split keeps both split sessions first', () => {
     const app = makeGridApp(IDS);
     openSplit(app);

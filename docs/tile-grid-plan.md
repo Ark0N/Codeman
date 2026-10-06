@@ -29,6 +29,14 @@ or settled a question the spec left open. The invariants as built are in
   B too), and a refresh clears the screen at its turn in the queue, so a waiting tile keeps
   its last frame.
 - **4009 lands on the Attach overlay**, and 4003/4004/4010 remove the tile.
+- **The Tiles button opens the grid at once** (owner decision 8): a click (and
+  `Ctrl+Shift+G`, the same `toggleTileGrid`) opens `tileGridOpenSet` (constants.js): the
+  grid this tab last had, else an open split's two sessions, else the open sessions in tab
+  order up to what the grid takes here (the cap, or fewer when the window fits fewer), the
+  active one always included and focused. A remembered grid wins over an open split: the
+  split closes and its sessions do not join (the owner's order, read literally). Right-click
+  opens the picker; with the grid open it shows the current tiles and Open replaces them.
+  Ctrl/Cmd+click on a tab with the grid closed opens the same set plus that session.
 - **The grid holds at most 6 tiles** (owner decision 7). `TILE_GRID_MAX` in constants.js is
   the one cap every limit reads; the layout table keeps 7 to 9 (`TILE_LAYOUT_MAX`), unreachable,
   so going back to nine is that one line. A stored grid with more ids comes back as its first
@@ -143,9 +151,10 @@ work also fixes gaps the split pane has today.
 
 ### Entry points
 
-- **Header Tiles button** (its own button, beside Split). Opens a picker with
-  checkboxes over open sessions, ordered like the tab strip. When the grid is
-  open, the button toggles it closed.
+- **Header Tiles button** (its own button, beside Split). As built (decision 8)
+  a click opens the grid at once, the same as the toggle shortcut; the picker
+  with checkboxes over open sessions, ordered like the tab strip, is on
+  right-click. When the grid is open, a click closes it.
 - **Ctrl/Cmd+click a tab**: add that session to the grid (opens the grid if
   closed).
 - **Drag a tab** from the strip onto a tile to replace it, or onto an empty
@@ -879,6 +888,13 @@ exits green. Use the browser runner for those files and read the file count.
    real hardware. The cap is one constant (`TILE_GRID_MAX`), the layout table
    keeps 7 to 9 working but unreachable, and the user-facing texts say "at most
    6 tiles" when the cap, not the window, is what limits the grid.
+8. **The Tiles button opens the grid directly.** Decided by the owner ("when I
+   hit the tiles button, open the tiles already!"): a click opens the grid with
+   no picker in the way, choosing the grid this tab last had, else an open
+   split's two sessions, else the open sessions in tab order up to the cap with
+   the active one focused; `Ctrl+Shift+G` runs the same function. The picker
+   is on right-click of the button (its title says so, as do the wiki and the
+   Help modal).
 
 ## Code anchors
 

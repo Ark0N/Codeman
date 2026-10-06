@@ -125,11 +125,12 @@ describe('dragging a tab onto an empty slot', () => {
 describe('Ctrl/Cmd+click on a tab', () => {
   const click = (mods: Record<string, boolean>) => ({ preventDefault: vi.fn(), ...mods });
 
-  it('with the grid closed: opens it with the active session and the clicked one, focusing it', () => {
+  it('with the grid closed: opens what the Tiles toggle would, plus the clicked one, focusing it', () => {
     const app = makeGridApp(IDS);
     app.activeSessionId = 's-a';
+    // Nothing remembered, no split: the open sessions in tab order (the clicked one last).
     app.handleSessionTabClick(click({ ctrlKey: true }), 's-c');
-    expect(app._tileGrid.ids).toEqual(['s-a', 's-c']);
+    expect(app._tileGrid.ids).toEqual(['s-other', 's-a', 's-b', 's-c']);
     expect(app.activeSessionId).toBe('s-c');
     expect(app.markIdleAlertSeen).toHaveBeenCalledWith('s-c');
   });

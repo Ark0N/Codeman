@@ -161,14 +161,16 @@ Object.assign(CodemanApp.prototype, {
    * Opens the grid on `ids` (unknown, detached and duplicate ids are skipped;
    * at most TILE_GRID_MAX), focusing `focusedId` or the first. Already open, it
    * adds what is missing and moves focus. `auto: false` makes the focus a human
-   * selection (it acknowledges that session's idle alert).
+   * selection (it acknowledges that session's idle alert). An open split
+   * closes (the two are never open together); `mergeSplit` (default) makes its
+   * two sessions the first tiles, false opens exactly `ids` (a stored grid).
    *
    * Parks the main terminal first: `_cleanupPreviousSession()` runs ONCE, while
    * its snapshot of the session it shows is still right, and closes its socket.
    *
    * @returns {boolean} whether the grid is open afterwards
    */
-  openTileGrid(ids, { focusedId = null, auto = true } = {}) {
+  openTileGrid(ids, { focusedId = null, auto = true, mergeSplit = true } = {}) {
     if (!this.canOpenTileGrid()) return false;
     const grid = (this._tileGrid ||= new TileGridModel());
     const max = window.CodemanTileGrid.TILE_GRID_MAX;
@@ -179,8 +181,10 @@ Object.assign(CodemanApp.prototype, {
     if (this._splitPane) {
       const seed = [this.activeSessionId, this._splitSessionId].filter(Boolean);
       this.closeSplitPane({ skipPrimaryResize: true });
-      requested = [...seed, ...requested];
-      if (!requested.includes(focusedId)) focusedId = seed[0] ?? null;
+      if (mergeSplit) {
+        requested = [...seed, ...requested];
+        if (!requested.includes(focusedId)) focusedId = seed[0] ?? null;
+      }
     }
     const wanted = [];
     for (const id of requested) {
@@ -323,7 +327,9 @@ Object.assign(CodemanApp.prototype, {
     const open = this._tilesOwnTerminal();
     btn.classList.toggle('tiles-open', open);
     btn.setAttribute('aria-pressed', open ? 'true' : 'false');
-    const title = open ? 'Tiles: back to a single session' : 'Tiles: show several sessions side by side';
+    const title = open
+      ? 'Tiles: back to a single session (right-click to choose which sessions)'
+      : 'Tiles: show several sessions side by side (right-click to choose which)';
     btn.title = title;
     btn.setAttribute('aria-label', title);
   },
@@ -358,20 +364,18 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * The Tiles button: with the grid open it closes it (back to the single view
-   * of the focused session); otherwise it opens a picker with a checkbox per
-   * open session, in tab order, preselected with the grid this tab last left
+   * Right-click on the Tiles button (its click opens the grid at once, see
+   * toggleTileGrid): a picker with a checkbox per open session, in tab order,
+   * preselected with the tiles shown now, else the grid this tab last left
    * (else the active session and an open split's two), and an Open button.
-   * Boxes past what the window can fit are disabled.
+   * Boxes past what the grid takes are disabled. With the grid open, Open
+   * replaces its set.
    */
   openTilePicker(event) {
-    // As the split picker: the opening click must not reach the outside-click
+    // As the split picker: the opening event must not reach the outside-click
     // listener this call installs.
+    event?.preventDefault?.();
     event?.stopPropagation?.();
-    if (this._tilesOwnTerminal()) {
-      this.closeTileGrid({ keepStored: true, reselect: true });
-      return;
-    }
     if (this._tilePicker) {
       this.closeTilePicker();
       return;
@@ -381,7 +385,10 @@ Object.assign(CodemanApp.prototype, {
     const limit = this._tileGridLimit();
     const capacity = limit.capacity;
     const candidates = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions);
-    const remembered = (this._readStoredTileGrid()?.ids || []).filter((id) => candidates.some((c) => c.id === id));
+    const gridOpen = this._tilesOwnTerminal();
+    const remembered = (gridOpen ? this._tileGrid.ids : this._readStoredTileGrid()?.ids || []).filter((id) =>
+      candidates.some((c) => c.id === id)
+    );
     const seed = remembered.length
       ? remembered
       : [this.activeSessionId, this._splitPane ? this._splitSessionId : null].filter(Boolean);
@@ -443,7 +450,15 @@ Object.assign(CodemanApp.prototype, {
       const ids = boxes.filter((b) => b.checked).map((b) => b.value);
       this.closeTilePicker();
       if (ids.length === 0) return;
-      this.openTileGrid(ids, { focusedId: ids.includes(this.activeSessionId) ? this.activeSessionId : ids[0] });
+      const focus = ids.includes(this.activeSessionId) ? this.activeSessionId : ids[0];
+      if (this._tilesOwnTerminal()) {
+        // A new set for the open grid, as "Open group as tiles" does it: the
+        // parked terminal still holds what it showed before the grid, and
+        // re-parking must not snapshot it.
+        this.closeTileGrid({ keepStored: false, reselect: false });
+        this.activeSessionId = null;
+      }
+      this.openTileGrid(ids, { focusedId: focus });
     });
 
     document.body.appendChild(menu);
@@ -666,23 +681,41 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Opens the grid, or closes it to the single view of the focused session.
-   * Opening brings back the grid this tab last left (decision 1: one step back
-   * after a selection outside it), else an open split as two tiles, else the
-   * active session as one tile.
+   * The Tiles button's click and Ctrl+Shift+G, one function so the two never
+   * drift (owner decision 8): opens the grid at once, no picker in the way, or
+   * closes it to the single view of the focused session. What opens is
+   * `tileGridOpenSet` (constants.js): the grid this tab last had, else an open
+   * split's two sessions, else the open sessions in tab order up to what the
+   * grid takes here, the active one focused. The picker is a right-click away.
    */
   toggleTileGrid() {
+    this.closeTilePicker();
     if (this._tilesOwnTerminal()) {
       this.closeTileGrid({ keepStored: true, reselect: true });
       return;
     }
     if (!this.canOpenTileGrid()) return;
-    const remembered = this._readStoredTileGrid();
-    if (remembered?.ids.length) {
-      this._openStoredTileGrid(remembered);
+    const stored = this._readStoredTileGrid();
+    const set = this._tileGridOpenSet(stored);
+    if (!set) {
+      this.showToast?.('No sessions to show as tiles', 'info');
       return;
     }
-    if (this.activeSessionId) this.openTileGrid([this.activeSessionId], { focusedId: this.activeSessionId });
+    if (set.source === 'stored') this._openStoredTileGrid(stored);
+    else this.openTileGrid(set.ids, { focusedId: set.focusedId });
+  },
+
+  /** What the toggle would open now (see toggleTileGrid); `stored` saves a second read. */
+  _tileGridOpenSet(stored = this._readStoredTileGrid()) {
+    return window.CodemanTileGrid.tileGridOpenSet({
+      stored,
+      split: this._splitPane ? [this.activeSessionId, this._splitSessionId] : null,
+      sessions: this.sessions,
+      sessionOrder: this.sessionOrder,
+      detachedIds: this.detachedSessions,
+      activeId: this.activeSessionId,
+      limit: this._tileGridLimit().capacity,
+    });
   },
 
   /** Alt+Shift+Arrows: a human selection of the tile in that direction. */
@@ -932,8 +965,7 @@ Object.assign(CodemanApp.prototype, {
       this.selectSession(sessionId);
       return true;
     }
-    const remembered = this._readStoredTileGrid()?.ids || [];
-    const base = remembered.length ? remembered : [this.activeSessionId].filter(Boolean);
+    const base = this._tileGridOpenSet()?.ids || [];
     const ids = [...base.filter((id) => id !== sessionId).slice(0, capacity - 1), sessionId];
     this.openTileGrid(ids, { focusedId: sessionId, auto: false });
     return true;
@@ -1672,7 +1704,8 @@ Object.assign(CodemanApp.prototype, {
    */
   _openStoredTileGrid(stored) {
     const focus = stored.zoomed || stored.focused;
-    if (!this.openTileGrid(stored.ids, { focusedId: focus, auto: true })) return false;
+    // Exactly the stored set: an open split closes without joining it (decision 8, case a).
+    if (!this.openTileGrid(stored.ids, { focusedId: focus, auto: true, mergeSplit: false })) return false;
     const grid = this._tileGrid;
     // openTileGrid laid the grid out with equal tracks. The stored ones go back
     // on; _applyTileLayout drops them again if they do not match the column or

@@ -99,7 +99,7 @@ describe('the Tiles button', () => {
     app.openTileGrid(IDS);
     expect(btn.getAttribute('aria-pressed')).toBe('true');
     expect(btn.classList.contains('tiles-open')).toBe(true);
-    app.openTilePicker({ stopPropagation: vi.fn() });
+    app.toggleTileGrid();
     expect(app._tilesOwnTerminal()).toBe(false);
     expect(btn.getAttribute('aria-pressed')).toBe('false');
     expect(picker()).toBeNull();

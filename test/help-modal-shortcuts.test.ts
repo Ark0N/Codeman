@@ -58,6 +58,7 @@ describe('help modal shortcuts', () => {
     expectShortcut(helpModal, ['Alt/Option', 'Shift', 'Arrows'], 'Focus Tile Left / Right / Up / Down');
     expectShortcut(helpModal, ['Alt/Option', 'Shift', 'Enter'], 'Zoom Focused Tile');
     expectShortcut(helpModal, ['Ctrl/Cmd', 'Click'], 'Add the Session to the Tile Grid');
+    expectShortcut(helpModal, ['Right-click'], 'Choose Which Sessions to Tile');
   });
 
   it('documents terminal input shortcuts without advertising stale run shortcuts', () => {

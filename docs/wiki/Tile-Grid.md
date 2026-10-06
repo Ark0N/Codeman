@@ -15,12 +15,14 @@ button in the header, beside Split, and enables `Ctrl+Shift+G`.
 
 ## Opening a grid
 
-- **Tiles button**: with the grid closed it opens a picker, a checkbox per open session in
-  tab order. It starts with the grid you last had (or the session you are on), says how many
-  tiles this window fits, and greys out the rest. **Open tiles** shows them. With the grid
-  open, the same button closes it.
-- **`Ctrl+Shift+G`**: toggles the grid. Opening brings back the grid you last had, else an
-  open split as two tiles, else the session you are on.
+- **Tiles button**: one click shows the tiles straight away. You get the grid you last
+  had; if there is none, an open split as two tiles; otherwise your open sessions in tab
+  order, up to six (fewer if the window is too small), with the session you are on
+  focused. With the grid open, the same button closes it.
+- **Right-click the Tiles button** to choose which sessions: a checkbox per open session in
+  tab order, starting with the tiles you have (or had), greying out the rest once the grid
+  is full. **Open tiles** shows them, replacing what the grid showed.
+- **`Ctrl+Shift+G`**: exactly what a click on the Tiles button does.
 - **`Ctrl`+click (or `Cmd`+click) a tab**: adds that session to the grid and focuses it,
   opening the grid if it was closed. On macOS use `Cmd`: `Ctrl`+click there opens the tab's
   rename instead.

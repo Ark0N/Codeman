@@ -157,14 +157,15 @@ describe('the capture-phase handler', () => {
     expect(app._tilesOwnTerminal()).toBe(false);
   });
 
-  it('Ctrl+Shift+G opens the grid on the active session, then closes it, overriding the browser', () => {
+  it('Ctrl+Shift+G opens the grid on the open sessions (the active one focused), then closes it, overriding the browser', () => {
     const app = withTilesSetting(makeGridApp(IDS));
     app.selectSession = vi.fn();
     const onKeydown = handlerFor(app);
     const open = chord(TOGGLE);
     onKeydown(open);
     expect(open.preventDefault).toHaveBeenCalled();
-    expect(app._tileGrid.ids).toEqual(['s-a']);
+    expect(app._tileGrid.ids).toEqual(['s-other', ...IDS]);
+    expect(app.activeSessionId).toBe('s-a');
 
     onKeydown(chord(TOGGLE));
     expect(app._tilesOwnTerminal()).toBe(false);
@@ -215,7 +216,7 @@ describe('the actions', () => {
     expect(app._tileGrid.ids).toEqual(['s-a', 's-c']);
   });
 
-  it('with every remembered session gone, it opens on the active session instead', () => {
+  it('with every remembered session gone, it opens on the open sessions in tab order instead', () => {
     const app = makeGridApp(IDS);
     app.openTileGrid(['s-b', 's-c']);
     app.closeTileGrid({ reselect: false });
@@ -223,7 +224,8 @@ describe('the actions', () => {
     app.sessions.delete('s-c');
     app.activeSessionId = 's-a';
     app.toggleTileGrid();
-    expect(app._tileGrid.ids).toEqual(['s-a']);
+    expect(app._tileGrid.ids).toEqual(['s-other', 's-a']);
+    expect(app.activeSessionId).toBe('s-a');
   });
 
   it('Remove Focused Tile removes it (the session keeps running) and a neighbour takes focus', () => {
