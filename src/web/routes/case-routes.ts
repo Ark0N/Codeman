@@ -50,6 +50,8 @@ import {
 } from '../../git-clone.js';
 import type { GitRemoteProbe, GitUrlParse } from '../../git-clone.js';
 import { generateClaudeMd } from '../../templates/claude-md.js';
+import { prepareNewCasePath } from '../case-path.js';
+import { boundedPathExists, describeUnknownPath, probePath } from '../../utils/index.js';
 import { readAgentCaseMarker, type AgentCaseMarker } from '../../agent-case-marker.js';
 import { settingsWriteBlocker, writeHooksConfig } from '../../hooks-config.js';
 import {
@@ -163,6 +165,9 @@ function gitDiagnosticLine(stderr: string): string {
  * the clone response says so out loud instead of silently merging into them.
  */
 function repoShipsClaudeSettings(casePath: string): boolean {
+  // Deliberately NOT the bounded path probe: the tree was just cloned into the
+  // local case space (and lstat'ed synchronously moments ago), so a bound protects
+  // nothing here, while a probe answering "unknown" could silently drop this warning.
   return ['settings.json', 'settings.local.json'].some((file) => existsSync(join(casePath, '.claude', file)));
 }
 
@@ -266,7 +271,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
           cases.push({
             name: e.name,
             path: casePath,
-            hasClaudeMd: existsSync(join(casePath, 'CLAUDE.md')),
+            hasClaudeMd: await boundedPathExists(join(casePath, 'CLAUDE.md')),
             location: 'local',
             ...(marker ? { agentCreated: agentCreatedInfo(marker) } : {}),
           });
@@ -281,15 +286,19 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     const existingNames = new Set(cases.map((c) => c.name));
     if (admin) {
       for (const [name, path] of Object.entries(linkedCases)) {
-        if (!existingNames.has(name) && SAFE_CASE_NAME.test(name) && existsSync(path)) {
-          cases.push({
-            name,
-            path,
-            hasClaudeMd: existsSync(join(path, 'CLAUDE.md')),
-            linked: true,
-            location: 'linked-local',
-          });
-        }
+        if (existingNames.has(name) || !SAFE_CASE_NAME.test(name)) continue;
+        const state = await probePath(path);
+        if (state === 'absent') continue;
+        // An unreachable linked case (a dead network mount) stays listed and says
+        // so: dropping it would read as "deleted" and invite a same-name local case.
+        cases.push({
+          name,
+          path,
+          hasClaudeMd: state === 'present' && (await boundedPathExists(join(path, 'CLAUDE.md'))),
+          linked: true,
+          location: 'linked-local',
+          ...(state === 'unknown' ? { unreachable: true } : {}),
+        });
       }
     }
 
@@ -333,7 +342,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       const dockerCaseInfo: CaseInfo = {
         name: dockerCase.name,
         path: dockerDisplayPath({ container, path: dockerCase.hostWorkspacePath }),
-        hasClaudeMd: existsSync(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
+        hasClaudeMd: await boundedPathExists(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
         location: 'docker',
         docker: {
           hostId: host.id,
@@ -424,8 +433,109 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     return { success: true, data: { cases: summaries } };
   });
 
-  app.post('/api/cases', async (req): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
-    const { name, description } = parseBody(CreateCaseSchema, req.body);
+  /**
+   * `POST /api/cases` with a `path`: create the folder (or fill an EMPTY existing one), scaffold it
+   * exactly like a normal case, and register it in the linked-cases registry so it lists, resolves
+   * and deletes (unlinks, never removes files) like any linked case. Everything is judged before
+   * anything is written; a failure after the first write undoes what this call created.
+   */
+  async function createCaseInCustomFolder(
+    name: string,
+    description: string | undefined,
+    customPath: string,
+    req: FastifyRequest,
+    reply: { code: (n: number) => unknown }
+  ): Promise<ApiResponse<{ case: { name: string; path: string } }>> {
+    const ownCasesDir = resolveCasesDir(getAuthUser(req));
+    if (existsSync(join(ownCasesDir, name))) {
+      reply.code(409);
+      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, 'A case with this name already exists in codeman-cases.');
+    }
+    const linkedCases = await readLinkedCases();
+    if (linkedCases[name]) {
+      reply.code(409);
+      return createErrorResponse(
+        ApiErrorCode.ALREADY_EXISTS,
+        `Case "${name}" is already linked to ${linkedCases[name]}`
+      );
+    }
+
+    // The caller's own cases dir and the shared one (the same folder outside multi-user mode).
+    const casesDirs = [...new Set([ownCasesDir, resolveCasesDir()])];
+    const prepared = await prepareNewCasePath(customPath, { home: homedir(), dataDir: getDataDir(), casesDirs });
+    if (!prepared.ok) {
+      // A parent that did not answer is not a bad request: OPERATION_FAILED (422), like
+      // POST /api/sessions for a workingDir on a dead mount.
+      if (prepared.code === 'UNREACHABLE') {
+        reply.code(422);
+        return createErrorResponse(ApiErrorCode.OPERATION_FAILED, prepared.reason);
+      }
+      const status = prepared.code === 'NOT_FOUND' ? 404 : prepared.code === 'EXISTS' ? 409 : 400;
+      reply.code(status);
+      const code =
+        prepared.code === 'NOT_FOUND'
+          ? ApiErrorCode.NOT_FOUND
+          : prepared.code === 'EXISTS'
+            ? ApiErrorCode.ALREADY_EXISTS
+            : ApiErrorCode.INVALID_INPUT;
+      return createErrorResponse(code, prepared.reason);
+    }
+    const casePath = prepared.path;
+    const alreadyAs = Object.entries(linkedCases).find(([, p]) => p === casePath)?.[0];
+    if (alreadyAs) {
+      reply.code(409);
+      return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, `That folder is already the case "${alreadyAs}"`);
+    }
+
+    const made: string[] = [];
+    try {
+      if (!prepared.existedEmpty) {
+        mkdirSync(casePath);
+        made.push(casePath);
+      }
+      mkdirSync(join(casePath, 'src'));
+      made.push(join(casePath, 'src'));
+      const templatePath = await ctx.getDefaultClaudeMdPath();
+      writeFileSync(join(casePath, 'CLAUDE.md'), generateClaudeMd(name, description || '', templatePath));
+      made.push(join(casePath, 'CLAUDE.md'));
+      made.push(join(casePath, '.claude')); // before the write, so a half-written one is undone too
+      await writeHooksConfig(casePath);
+
+      const codemanDir = getDataDir();
+      if (!existsSync(codemanDir)) mkdirSync(codemanDir, { recursive: true });
+      // Re-read right before writing, so a case linked since the check above is not dropped. This only
+      // narrows the window: like POST /api/cases/link, the registry write is not serialized, and two
+      // requests that both read before either writes can still lose one entry.
+      const fresh = await readLinkedCases();
+      if (fresh[name]) throw Object.assign(new Error(`Case "${name}" was just linked`), { conflict: true });
+      fresh[name] = casePath;
+      await fs.writeFile(LINKED_CASES_FILE, JSON.stringify(fresh, null, 2));
+
+      ctx.broadcast(SseEvent.CaseCreated, { name, path: casePath });
+      return { success: true, data: { case: { name, path: casePath } } };
+    } catch (err) {
+      // Undo only what this call made. The whole folder if we created it, otherwise the scaffold
+      // entries inside the empty folder the user picked; never anything else.
+      for (const p of made.reverse()) await fs.rm(p, { recursive: true, force: true }).catch(() => undefined);
+      if ((err as { conflict?: boolean }).conflict) {
+        reply.code(409);
+        return createErrorResponse(ApiErrorCode.ALREADY_EXISTS, getErrorMessage(err));
+      }
+      reply.code(500);
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, getErrorMessage(err));
+    }
+  }
+
+  app.post('/api/cases', async (req, reply): Promise<ApiResponse<{ case: { name: string; path: string } }>> => {
+    const { name, description, path: customPath } = parseBody(CreateCaseSchema, req.body);
+
+    // A custom folder writes outside the cases directory and registers the path in the shared,
+    // ownerless linked-cases registry, so it carries the same bar as POST /api/cases/link.
+    if (customPath !== undefined) {
+      const denied = adminOnly(req, reply);
+      if (denied) return denied;
+      return createCaseInCustomFolder(name, description, customPath, req, reply);
+    }
 
     const casePath = validatePathWithinBase(name, resolveCasesDir(getAuthUser(req)));
     if (!casePath) {
@@ -1618,7 +1728,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
       return {
         name,
         path: dockerDisplayPath({ container, path: dockerCase.hostWorkspacePath }),
-        hasClaudeMd: existsSync(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
+        hasClaudeMd: await boundedPathExists(join(dockerCase.hostWorkspacePath, 'CLAUDE.md')),
         location: 'docker',
         docker: {
           hostId: host.id,
@@ -1633,16 +1743,32 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     }
 
     const casePath = await resolveCasePath(name, getAuthUser(req));
+    const linked = casePath !== join(resolveCasesDir(getAuthUser(req)), name);
 
-    if (!existsSync(casePath)) {
+    // NOT_FOUND means DEFINITELY absent: the Run button creates a case on it, so
+    // a path that merely did not answer (a dead network mount) must never get it.
+    // One path, asked for explicitly: probe it even while unrelated mounts are dead.
+    const state = await probePath(casePath, { pastCap: true });
+    if (state === 'absent') {
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'Case not found');
     }
+    if (state === 'unknown') {
+      // The linked registry knows where the case lives, so say where, and that
+      // it is not answering. A local case has no such record to fall back on.
+      if (!linked) {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          describeUnknownPath('Case folder', casePath, { pastCap: true })
+        );
+      }
+      return { name, path: casePath, hasClaudeMd: false, linked: true, unreachable: true };
+    }
 
-    const linked = casePath !== join(resolveCasesDir(getAuthUser(req)), name);
     return {
       name,
       path: casePath,
-      hasClaudeMd: existsSync(join(casePath, 'CLAUDE.md')),
+      // Probed like the folder above, or a healthy case reads as having no CLAUDE.md under the cap.
+      hasClaudeMd: (await probePath(join(casePath, 'CLAUDE.md'), { pastCap: true })) === 'present',
       ...(linked && { linked: true }),
     };
   });
@@ -1660,7 +1786,11 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
 
     const fixPlanPath = join(casePath, '@fix_plan.md');
 
-    if (!existsSync(fixPlanPath)) {
+    const fixPlanState = await probePath(fixPlanPath, { pastCap: true });
+    if (fixPlanState === 'unknown') {
+      return createErrorResponse(ApiErrorCode.OPERATION_FAILED, 'Case folder is not responding or not readable');
+    }
+    if (fixPlanState === 'absent') {
       return { exists: false, content: null, todos: [] };
     }
 

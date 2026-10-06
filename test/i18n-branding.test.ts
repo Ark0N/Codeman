@@ -91,6 +91,18 @@ describe('custom display name and browser localization', () => {
     dom.window.close();
   });
 
+  it('keeps a quoted group name apart from the fixed "Move to" entries in zh-CN', () => {
+    const dom = makeDom('');
+    const api = dom.window.CodemanI18n;
+    api.configure({ language: 'zh-CN' });
+    const labels = ['Move to "New group"', 'Move to new group', 'Move to "ungrouped"', 'Move to Ungrouped'].map((label) =>
+      api.t(label)
+    );
+    expect(labels).toEqual(['移到“New group”', '移到新分组', '移到“ungrouped”', '移到未分组']);
+    expect(new Set(labels).size).toBe(4);
+    dom.window.close();
+  });
+
   it('renders hostile-looking names as text rather than HTML', () => {
     const dom = makeDom('<span class="logo">Codeman</span>');
     const api = dom.window.CodemanI18n;

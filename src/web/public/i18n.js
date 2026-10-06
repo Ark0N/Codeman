@@ -68,6 +68,24 @@
     'Session Manager': '会话管理器',
     'Session actions': '会话操作',
     Ungrouped: '未分组',
+    'Group actions': '分组操作',
+    'Group name': '分组名称',
+    'Web tab actions': '网页标签操作',
+    'Web tab settings': '网页标签设置',
+    'New group': '新建分组',
+    'Rename group': '重命名分组',
+    'Move group up': '上移分组',
+    'Move group down': '下移分组',
+    'Delete group': '删除分组',
+    'Move up': '上移',
+    'Move down': '下移',
+    'Move to Ungrouped': '移到未分组',
+    'Move to new group': '移到新分组',
+    'Could not save tab groups.': '无法保存标签分组。',
+    'Tab groups changed elsewhere; part of your edit no longer applies.':
+      '标签分组已在别处更改；你的部分编辑已不再适用。',
+    'Tab groups kept changing elsewhere; your edit was not saved.': '标签分组在别处持续更改；你的编辑未保存。',
+    'Your tab group edit was not saved.': '你的标签分组编辑未保存。',
     'Open session manager': '打开会话管理器',
     Attachments: '附件',
     'Open attachment history': '打开附件历史',
@@ -770,6 +788,22 @@
       '现有项目文件夹的绝对路径，例如 /home/you/my-project',
     'Letters, numbers, hyphens, underscores only. Created in ~/codeman-cases/':
       '仅允许字母、数字、连字符和下划线；将在 ~/codeman-cases/ 中创建。',
+    'Letters, numbers, hyphens, underscores only. Created inside the parent folder below.':
+      '仅允许字母、数字、连字符和下划线；将在下方的父文件夹中创建。',
+    'A fresh workspace under ~/codeman-cases, scaffolded with its own CLAUDE.md.':
+      '在 ~/codeman-cases 下新建工作区，并生成独立的 CLAUDE.md。',
+    'A fresh workspace in a folder you choose, scaffolded with its own CLAUDE.md.':
+      '在你选择的文件夹中新建工作区，并生成独立的 CLAUDE.md。',
+    'Create in a custom folder': '在自定义文件夹中创建',
+    '📁 Create in a custom folder': '📁 在自定义文件夹中创建',
+    'By default a new case is created under ~/codeman-cases. Choose another folder and the case is created there instead; it is listed like any other case.':
+      '新案例默认创建在 ~/codeman-cases 下。选择其他文件夹后，案例会改为创建在那里，并像其他案例一样列出。',
+    'Parent Folder': '父文件夹',
+    'Pick the folder the new case folder should be created inside.': '选择要在其中创建新案例文件夹的文件夹。',
+    'Choose the folder to create the case in': '选择要在其中创建案例的文件夹',
+    'Not available for a Docker case': 'Docker 案例不可用',
+    'Not available with a custom folder': '使用自定义文件夹时不可用',
+    'Browse…': '浏览…',
     'Docker exports': 'Docker 导出',
     'No exports yet. Export a docker case from its tab.': '暂无导出；请从 Docker 案例标签页导出。',
     'Runs inside an isolated container. Multiple sessions can share the same container.':
@@ -934,6 +968,13 @@
       [/^Update available: v(.+)$/, (_m, version) => `有可用更新：v${version}`],
       [/^Selected: (.+)$/, (_m, value) => `已选择：${value}`],
       [/^Failed to (.+)$/, (_m, action) => `操作失败：${action}`],
+      [/^Will create: (.+)$/, (_m, path) => `将创建：${path}`],
+      // Group names are user text: they pass through untranslated.
+      [/^Move to "(.+)"$/, (_m, group) => `移到“${group}”`],
+      [
+        /^Delete group "(.+)"\? Its tabs move to Ungrouped\.$/,
+        (_m, group) => `删除分组“${group}”？其中的标签将移到未分组。`,
+      ],
     ];
     for (const [pattern, replacement] of patterns) {
       const match = source.match(pattern);

@@ -174,6 +174,7 @@ import {
   toSessionDocker,
 } from '../../docker-hosts.js';
 import { LRUMap } from '../../utils/lru-map.js';
+import { describeUnknownPath, probePathKind } from '../../utils/index.js';
 import { findLatestOmpSessionId } from '../../utils/omp-session-resolver.js';
 import { scanOmpSessionsHistory } from '../../omp-transcript.js';
 import { scanCodexSessionsHistory, codexThreadBySessionId } from '../../codex-transcript.js';
@@ -971,15 +972,22 @@ export function registerSessionRoutes(
       return createErrorResponse(ApiErrorCode.FORBIDDEN, 'workingDir is outside your workspace');
     }
 
-    // Validate workingDir exists and is a directory
+    // Validate workingDir exists and is a directory. Bounded: a workingDir on a
+    // network mount that stopped answering must not freeze the event loop, and
+    // "did not answer" is reported as such, never as "does not exist".
     if (body.workingDir) {
-      try {
-        const stat = statSync(workingDir);
-        if (!stat.isDirectory()) {
-          return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir is not a directory');
-        }
-      } catch {
+      const kind = await probePathKind(workingDir, { pastCap: true });
+      if (kind === 'unknown') {
+        return createErrorResponse(
+          ApiErrorCode.OPERATION_FAILED,
+          describeUnknownPath('workingDir', workingDir, { pastCap: true })
+        );
+      }
+      if (kind === 'absent') {
         return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir does not exist');
+      }
+      if (kind !== 'directory') {
+        return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'workingDir is not a directory');
       }
     }
 
@@ -3694,9 +3702,21 @@ export function registerSessionRoutes(
       return createErrorResponse(ApiErrorCode.FORBIDDEN, 'case path is outside your workspace');
     }
 
+    // Bounded probe of a local case folder: a linked case can sit on a network mount
+    // that stopped answering, and a synchronous check there froze the whole server.
+    // Only a DEFINITE absence may scaffold a new case; "did not answer" must not
+    // create one over the top of where the real case is mounted.
+    const localCaseState = remote || docker ? undefined : await probePathKind(resolvedCasePath, { pastCap: true });
+    if (localCaseState === 'unknown') {
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        describeUnknownPath('Case folder', resolvedCasePath, { pastCap: true })
+      );
+    }
+
     // Create case folder and CLAUDE.md if it doesn't exist (only for non-linked, non-remote,
     // non-docker cases — docker workspaces are scaffolded in their own block below)
-    if (!remote && !docker && !existsSync(resolvedCasePath)) {
+    if (localCaseState === 'absent') {
       try {
         mkdirSync(resolvedCasePath, { recursive: true });
         mkdirSync(join(resolvedCasePath, 'src'), { recursive: true });

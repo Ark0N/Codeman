@@ -668,6 +668,13 @@ export const CreateCaseSchema = z.object({
     .string()
     .regex(/^[a-zA-Z0-9_-]+$/, 'Invalid case name format. Use only letters, numbers, hyphens, underscores.'),
   description: z.string().max(1000).optional(),
+  /**
+   * Create the case in this folder instead of under the cases directory. Absolute, or starting with
+   * `~`. Only length-bounded here: what makes it acceptable (shape, blocked trees, symlinks, an
+   * existing folder with contents) is judged by `prepareNewCasePath()` in web/case-path.ts, which
+   * also produces the user-facing reason.
+   */
+  path: z.string().min(1).max(1000).optional(),
 });
 
 /**

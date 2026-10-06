@@ -700,6 +700,44 @@ normal `caseName`/`mode`/etc. body)
   jarring than a full relaunch, and folding it into the one-shot path is
   separate work — see `docs/custom-model-endpoints-plan.md`).
 
+## Creating a case in a custom folder
+
+`POST /api/cases` takes `{ name, description?, path? }`. Without `path` it creates `<cases dir>/<name>` as always. With `path` (absolute, or starting with `~`) the case folder is created at that exact path instead, scaffolded the same way (`CLAUDE.md`, `src/`, `.claude/settings.local.json`), and registered in the linked-cases registry, so it lists, resolves and deletes like a linked case (deleting unlinks; it never removes files). Response: `{ case: { name, path } }`, where `path` is the symlink-resolved folder.
+
+The target is judged before anything is written:
+
+- It must be absolute with no `..` and none of the shell metacharacters a session working directory is rejected for (spaces are fine). `400 INVALID_INPUT` otherwise.
+- It must not be a system directory (`/etc`, `/usr`, `/proc`, ...), the home folder itself, Codeman's own data folder, or a credential/config tree (`~/.ssh`, `~/.aws`, `~/.claude`, ...). Judged on the path as typed and on its symlink-resolved form, against both the given and the symlink-resolved roots. `400`.
+- It must not be, or be inside, the cases directory (the caller's own and the shared one): a case there is a plain create without `path`. `400`.
+- Its parent must already exist (one folder is created, never a chain): `404 NOT_FOUND`. A parent that does not answer (an unreachable network mount) or cannot be read is `422 OPERATION_FAILED`, checked through the bounded path probe before anything else touches it.
+- The folder must not exist, or must be an **empty** directory; a folder with contents is Link Existing's job: `409 ALREADY_EXISTS`. A symlink or a plain file at the target is `400`.
+- `409 ALREADY_EXISTS` also for a case name already in use (in the cases dir or the registry) and for a folder that is already a case.
+
+Admin only in multi-user mode (`403`), like `POST /api/cases/link`: it writes outside the cases directory and into the shared, ownerless registry. If anything fails after the first write, what this call created is removed (the whole folder if it created it, otherwise only the scaffold inside the empty folder you picked) and the response is `500`.
+
+## Git status
+
+`GET /api/sessions/:id/git-status` is what the bottom-bar Git indicator and its panel read (Settings → Header & Panels → Bottom bar, per-device, default off). It reports what the session's workspace has not committed or pushed. **Read-only and offline:** it never fetches, pulls, commits or writes (it runs `git status` with `--no-optional-locks`, so it does not even refresh the index), which is why `behind` is as of the last `git fetch`. The session is resolved like every session route (ownership via `findSessionOrFail`; another user's session is `404`). A repository whose root is, or is inside, a Docker case workspace is dropped (from the walk-up, the scan below a folder, and the diff route): a container can write there, and a repository's own clean filter or signature program would run on the host. When a branch's upstream does not exist on the remote (deleted and pruned, or never pushed, as after cloning an empty repository and committing), `upstreamGone` is `true` and the unpushed list falls back to commits on no remote-tracking ref at all.
+
+`GET /api/sessions/:id/git-diff?repo=<repoRoot>&path=<path>&kind=staged|unstaged|untracked|conflicted` returns the unified diff of one file the panel lists (`{ diff, truncated, binary }`; staged is index vs HEAD, unstaged is working tree vs index, untracked is the whole file as additions). It is what opens when you click a file in the Git panel. `repo` and `path` are matched against the current status rather than trusted, so anything the status does not list is `404`. Read-only: it passes `--no-ext-diff --no-textconv` (no external diff or textconv driver runs), but a repository's clean filters still run, as they do for any `git diff`, which is why a repository a container can write to is never inspected (below). Capped at 400 KB, and refused (`400`) for remote and Docker sessions; a repository at or inside a Docker case workspace is not in the status, so it is `404` here.
+
+**Which repositories.** git finds a repository by walking *up* from the session's working directory, so:
+
+- Inside a repository (or at its root): that one repository, whole (a subfolder reports its enclosing repo, `path` says where it is, e.g. `../..`). A nested repo below it is just an untracked folder to the outer one and is not scanned; start the session inside it to see it.
+- **Not** inside one (a folder that holds several projects): every repository found up to **two levels down**, nearest and alphabetical first, at most 12 (`reposTruncated` says when there were more). Dot-folders, `node_modules`, `dist`, `build`, `target`, `vendor`, `venv` and `__pycache__` are skipped, symlinks are never followed, and a repository's own contents are not searched. The list of repositories is re-scanned at most every 30 s; each repository's status is cached for 4 s.
+- A repository that merely sits **above** the workspace and is the home folder or higher (a dotfiles repo in `$HOME`, or `/`) is ignored: its dirty files are not this session's work. A workspace that *is* that repository's root is not ignored.
+- A worktree (whose `.git` is a file) counts as a repository. A submodule's own uncommitted files are not reported, only a changed submodule pointer.
+
+`data` is `{ state, repos, reposTruncated, checkedAt }`:
+
+- `state: 'ok'`: `repos[]`, each `{ name, path, status }` where `name` is the repository folder's name, `path` its root relative to the working directory, and `status` is:
+  `branch` (null when `detached`), `upstream`, `ahead`, `behind`, `hasRemote`, `counts` (`staged`, `unstaged`, `untracked`, `conflicted`, `uncommitted` = distinct paths, `stashes`), `files[]` (`path` relative to `repoRoot`, `origPath` for a rename, `index` and `worktree` status letters, `kind`: `staged` \| `unstaged` \| `untracked` \| `conflicted`; a file that is staged *and* modified again appears once per kind), `filesTruncated`, `unpushedCount` (exact) and `unpushed[]` (newest first: `hash`, `author`, `time` in epoch seconds, `subject`), `repoRoot`, `checkedAt`.
+- `state: 'not-a-repo'`: no repository here, above (that counts) or within two levels below.
+- `state: 'unsupported'` with `reason: 'remote' | 'docker'`: those sessions are never inspected (a Docker workspace is writable from inside its sandbox, and git here would run on the host).
+- `state: 'error'` with a short `error` (git missing, timed out, or git's first stderr line with any `user:token@` credentials redacted).
+
+Lists are capped (300 files and 50 commits per repository) while the counts stay exact. A branch with no upstream reports the commits no remote has (`HEAD --not --remotes`); a repository with no remote reports `unpushedCount: 0`, since there is nothing to push to. Concurrent polls of one folder share a single git invocation; `?fresh=1` (what the panel's Refresh button and opening the panel send) skips the short-lived caches, though it still joins a computation already running.
+
 ## CLI management
 
 Read and write the CLI registry (`docs/cli-registry.md`). Every **write** route answers `403 FORBIDDEN` while `cliManagementEnabled` is off (the default), and for a non-admin in multi-user mode. A write that would overwrite a `clis.json` which does not parse, or which has group/world permission bits, is refused with `409 CONFLICT` and a message naming the fix; the file is left untouched.
@@ -747,6 +785,10 @@ Posts the Web Push events to ntfy, Slack, Discord or a generic JSON URL (Setting
 | `POST` | `/api/webhook/test`  | none                                         | Sends one message with the saved config, even while disabled. `200` with `data.ok` telling whether the webhook accepted it; `400` if no URL is saved. |
 
 Delivery goes through the same egress guard as web tabs (refused on the resolved address too), does not follow redirects, times out after 5 s, sends the same event for the same session at most once per 3 s, and has at most 5 requests in flight. Error text never contains the URL.
+
+## Diagnostics
+
+`GET /api/doctor[?category=core|office|other]` returns the `codeman doctor --json` report (`platform`, `summary`, `tools[]` with `status` `ok` \| `missing` \| `outdated` \| `skipped` \| `error`, `version`, `path`, `installHint`). The probe engine is synchronous, so it runs in a child process of the same entry script, never on the server's event loop (30 s timeout). It names install paths and versions, so it is admin only in multi-user mode (`403`). `400` for an unknown category, `500` if the child produces no report.
 
 ## Voice dictation
 

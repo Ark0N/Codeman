@@ -21,6 +21,7 @@
 export const BROWSER_TEST_GLOBS = [
   'test/tab-rail-resize.browser.test.ts',
   'test/tab-activation.browser.test.ts',
+  'test/tab-layout-editing.browser.test.ts',
   'test/session-sidebar-ux.browser.test.ts',
   'test/session-options-responsive.browser.test.ts',
   'test/inline-rename.test.ts',
@@ -35,6 +36,9 @@ export const BROWSER_TEST_GLOBS = [
   'test/shift-enter-keypress.browser.test.ts',
   'test/key-tester.browser.test.ts',
   'test/webhook-settings.browser.test.ts',
+  'test/case-custom-path.browser.test.ts',
+  'test/doctor-settings.browser.test.ts',
+  'test/git-status.browser.test.ts',
   'test/split-pane-orchestration.browser.test.ts',
   'test/split-pane-auto-collapse.browser.test.ts',
   'test/spreadsheet-preview.browser.test.ts',
