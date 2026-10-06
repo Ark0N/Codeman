@@ -4667,6 +4667,9 @@ class CodemanApp {
 
     // A `#session=<id>` link wins over restoring the last active tab.
     if (this._urlSessionId && this.sessions.has(this._urlSessionId)) {
+      // And over a tile grid stored open: it stays remembered, closed, rather
+      // than reappearing unexplained on the next reload.
+      if (!tilesOpen) this._closeStoredTileGrid?.();
       this.activeSessionId = null;
       this._selectUrlSession();
       return;
@@ -4702,6 +4705,11 @@ class CodemanApp {
         this._splitPane?.reconnectNow?.();
       } else {
         this.activeSessionId = null;
+        // A tile grid stored open on this device (tile-grid.js) comes back IN
+        // PLACE of the single-view restore below, so the main terminal never
+        // loads (its first select would pull a whole-history capture only to
+        // be parked a moment later).
+        if (this._restoreTileGrid?.()) return;
         // `auto`: the app is restoring a session on load, not a human opening
         // one, so a pending idle alert on that tab stays armed until it is
         // actually tapped (see the userInitiated note in selectSession).

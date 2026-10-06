@@ -23,6 +23,10 @@
 
 // Per-device tile font size (a tile is a fraction of the screen).
 const TILE_GRID_FONT_KEY = 'codeman-tile-font-size';
+// The grid this device last had, ids only (sanitizeTileGridState, constants.js):
+// `{ v: 1, open, ids, focused, zoomed, colFr, rowFr }`. `open: false` keeps it
+// remembered for one-click return; restored on reload inside handleInit.
+const TILE_GRID_STORAGE_KEY = 'codeman:tile-grid';
 // Trailing debounce for refitting tiles after the grid area changes size, so a
 // window drag sends each tile's PTY one resize, not one per frame.
 const TILE_GRID_REFIT_MS = 150;
@@ -238,7 +242,9 @@ Object.assign(CodemanApp.prototype, {
     if (!grid?.open) return;
     const focusedId = grid.focusedId;
     const ids = grid.ids.slice();
-    this._tileGridRemembered = keepStored ? { ids, focusedId } : null;
+    // Remembered (closed) for one-click return, or forgotten.
+    if (keepStored) this._persistTileGrid({ open: false });
+    else this._forgetStoredTileGrid();
     // A divider drag in progress ends with the grid.
     this._tileDividerDragTeardown?.();
     // Closed BEFORE the tiles go: each destroy() updates the header's connection
@@ -355,7 +361,7 @@ Object.assign(CodemanApp.prototype, {
     const T = window.CodemanTileGrid;
     const capacity = Math.max(1, Math.min(this._tileGridCapacityNow(), T.TILE_GRID_MAX));
     const candidates = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions);
-    const remembered = (this._tileGridRemembered?.ids || []).filter((id) => candidates.some((c) => c.id === id));
+    const remembered = (this._readStoredTileGrid()?.ids || []).filter((id) => candidates.some((c) => c.id === id));
     const seed = remembered.length
       ? remembered
       : [this.activeSessionId, this._splitPane ? this._splitSessionId : null].filter(Boolean);
@@ -590,10 +596,9 @@ Object.assign(CodemanApp.prototype, {
       return;
     }
     if (!this.canOpenTileGrid()) return;
-    const remembered = this._tileGridRemembered;
-    const ids = (remembered?.ids || []).filter((id) => this.sessions.has(id) && !this.detachedSessions?.has(id));
-    if (ids.length > 0) {
-      this.openTileGrid(ids, { focusedId: remembered.focusedId, auto: true });
+    const remembered = this._readStoredTileGrid();
+    if (remembered?.ids.length) {
+      this._openStoredTileGrid(remembered);
       return;
     }
     if (this.activeSessionId) this.openTileGrid([this.activeSessionId], { focusedId: this.activeSessionId });
@@ -844,9 +849,7 @@ Object.assign(CodemanApp.prototype, {
       this.selectSession(sessionId);
       return true;
     }
-    const remembered = (this._tileGridRemembered?.ids || []).filter(
-      (id) => this.sessions.has(id) && !this.detachedSessions?.has(id)
-    );
+    const remembered = this._readStoredTileGrid()?.ids || [];
     const base = remembered.length ? remembered : [this.activeSessionId].filter(Boolean);
     const ids = [...base.filter((id) => id !== sessionId).slice(0, capacity - 1), sessionId];
     this.openTileGrid(ids, { focusedId: sessionId, auto: false });
@@ -1250,6 +1253,7 @@ Object.assign(CodemanApp.prototype, {
     });
     this._syncTileDividers(zoomed ? 0 : cols, zoomed ? 0 : rows);
     this._syncTileSlots(zoomed ? 0 : cols * rows - grid.ids.length, cols);
+    this._persistTileGrid();
   },
 
   // The empty cells of a layout that is not full (3 tiles in a 2x2, 5 in a
@@ -1387,6 +1391,7 @@ Object.assign(CodemanApp.prototype, {
       for (const tile of affected) {
         if (!tile._destroyed) tile.fit();
       }
+      this._persistTileGrid();
     };
     divider.classList.add('dragging');
     document.body.classList.add('tile-grid-resizing', `tile-grid-resizing--${axis}`);
@@ -1514,6 +1519,108 @@ Object.assign(CodemanApp.prototype, {
     // The keyboard follows focus: shortcuts, voice and paste act on this tile.
     this._noteFocusedTile(entry.tile);
     if (options.focus !== false) entry.tile.terminal?.focus();
+    this._persistTileGrid();
+  },
+
+  // ── Persistence (codeman:tile-grid, per device, ids only) ────────────────
+
+  /**
+   * Writes the open grid: ids, focus, a zoom the user chose (an automatic one
+   * is worked out again from the window) and the divider fractions. Never
+   * content. `open: false` is the closed-but-remembered state. Never in a solo
+   * window; a storage failure only costs the convenience.
+   */
+  _persistTileGrid({ open = true } = {}) {
+    const grid = this._tileGrid;
+    if (this.isSoloWindow || !grid || grid.ids.length === 0) return;
+    if (open && !grid.open) return;
+    const state = {
+      v: 1,
+      open,
+      ids: grid.ids.slice(),
+      focused: grid.focusedId,
+      zoomed: grid.autoZoom ? null : grid.zoomedId,
+      colFr: grid.colFr.slice(),
+      rowFr: grid.rowFr.slice(),
+    };
+    try {
+      localStorage.setItem(TILE_GRID_STORAGE_KEY, JSON.stringify(state));
+    } catch {
+      /* Per-device convenience only. */
+    }
+  },
+
+  _forgetStoredTileGrid() {
+    try {
+      localStorage.removeItem(TILE_GRID_STORAGE_KEY);
+    } catch {
+      /* Nothing stored. */
+    }
+  },
+
+  /** The stored grid, sanitized against the sessions this page knows now, or null. */
+  _readStoredTileGrid() {
+    if (this.isSoloWindow) return null;
+    let raw = null;
+    try {
+      raw = localStorage.getItem(TILE_GRID_STORAGE_KEY);
+    } catch {
+      return null;
+    }
+    if (!raw) return null;
+    return window.CodemanTileGrid.sanitizeTileGridState(raw, this.sessions, this.detachedSessions);
+  },
+
+  /**
+   * Opens a stored grid: its tiles and focus, then the fractions it had (only
+   * if they still match the layout) and a zoom the user chose. `auto`: the app
+   * is putting it back, so no idle alert is spent.
+   */
+  _openStoredTileGrid(stored) {
+    const focus = stored.zoomed || stored.focused;
+    if (!this.openTileGrid(stored.ids, { focusedId: focus, auto: true })) return false;
+    const grid = this._tileGrid;
+    // openTileGrid laid the grid out with equal tracks. The stored ones go back
+    // on; _applyTileLayout drops them again if they do not match the column or
+    // row count (the window may have changed the layout since).
+    if (stored.colFr) grid.colFr = stored.colFr.slice();
+    if (stored.rowFr) grid.rowFr = stored.rowFr.slice();
+    if (stored.zoomed && grid.tiles.has(stored.zoomed)) {
+      grid.zoomedId = stored.zoomed;
+      grid.autoZoom = false;
+    }
+    this._applyTileLayout();
+    this._scheduleTileGridRefit();
+    return true;
+  },
+
+  /**
+   * Page load (handleInit, in place of selecting the session to restore): a
+   * grid stored OPEN on this device comes back, ids sanitized against the
+   * session list (deleted, detached and duplicate ids dropped). The main
+   * terminal then never loads on this page load, so no `full=1` capture is
+   * paid for a terminal about to be parked. Not in a solo window (nothing is
+   * read there), nor on a window too narrow for the grid (openTileGrid
+   * refuses; the stored grid waits for a wide one).
+   *
+   * @returns {boolean} whether the grid was restored
+   */
+  _restoreTileGrid() {
+    if (this._tilesOwnTerminal()) return false;
+    const stored = this._readStoredTileGrid();
+    if (!stored?.open || stored.ids.length === 0) return false;
+    return this._openStoredTileGrid(stored);
+  },
+
+  /** A followed `#session=` link took the screen on load: the stored grid stays remembered, closed. */
+  _closeStoredTileGrid() {
+    const stored = this._readStoredTileGrid();
+    if (!stored?.open) return;
+    try {
+      localStorage.setItem(TILE_GRID_STORAGE_KEY, JSON.stringify({ ...stored, open: false }));
+    } catch {
+      /* Per-device convenience only. */
+    }
   },
 
   /** Header connection state while tiles own the terminal: every live tile socket open, or not. */
