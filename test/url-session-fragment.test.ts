@@ -136,7 +136,7 @@ describe('dashboard handling of a #session=<id> link', () => {
     const app = make(['a']);
     app._urlSessionId = 'a';
     expect(app._selectUrlSession()).toBe(true);
-    expect(app.selectSession).toHaveBeenCalledWith('a', { auto: true });
+    expect(app.selectSession).toHaveBeenCalledWith('a', { auto: true, leaveTiles: true });
     expect(app._urlSessionId).toBeNull();
   });
 
@@ -149,7 +149,7 @@ describe('dashboard handling of a #session=<id> link', () => {
     app._onSessionCreated({ id: 'other', name: 'other' });
     expect(app.selectSession).not.toHaveBeenCalled();
     app._onSessionCreated({ id: 'new', name: 'new' });
-    expect(app.selectSession).toHaveBeenCalledWith('new', { auto: true });
+    expect(app.selectSession).toHaveBeenCalledWith('new', { auto: true, leaveTiles: true });
     expect(app._urlSessionId).toBeNull();
   });
 
@@ -234,7 +234,7 @@ describe('a #session=<id> link that is still waiting', () => {
     app._selectUrlSession();
     vi.advanceTimersByTime(waitMs - 1);
     app._onSessionCreated({ id: 'new', name: 'new' });
-    expect(app.selectSession).toHaveBeenCalledWith('new', { auto: true });
+    expect(app.selectSession).toHaveBeenCalledWith('new', { auto: true, leaveTiles: true });
     expect(app._urlSessionWaitTimer).toBeNull();
     vi.advanceTimersByTime(waitMs);
     expect(app.showToast).not.toHaveBeenCalled();

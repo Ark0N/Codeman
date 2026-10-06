@@ -309,6 +309,15 @@ Object.assign(CodemanApp.prototype, {
     const body = document.createElement('div');
     body.className = 'tile-body';
     el.appendChild(body);
+    // Pressing a tile is a human selection: it focuses the tile and
+    // acknowledges its idle alert (the already-focused tile hits
+    // selectSession's early return, which acknowledges too). pointerdown, not
+    // click, so focus moves before the press reaches xterm, and never
+    // preventDefault: xterm's own mousedown focuses its textarea and starts
+    // selections.
+    el.addEventListener('pointerdown', () => {
+      if (this._tileGrid?.has(sessionId)) this.selectSession(sessionId);
+    });
     this._tileGridSection().appendChild(el);
     const tile = new window.TerminalTile(sessionId, body, {
       mode: session.mode,
@@ -479,3 +488,24 @@ Object.assign(CodemanApp.prototype, {
     return true;
   },
 });
+
+// A tiled session deleted (here or elsewhere) loses its tile; if it held focus,
+// the neighbouring tile takes it (`auto`: the app chose, so no idle alert is
+// spent). Done BEFORE the original handler, so activeSessionId no longer names
+// the deleted id and its welcome-screen handoff stays out of it. The last tile
+// closes the grid without a reselect, and the original handler then shows the
+// welcome screen as in the single view. A close started from this tab
+// (closeSession, in _closingSessions) owns its own follow-up: only the tile goes.
+const _tileGridOriginalOnSessionDeleted = CodemanApp.prototype._onSessionDeleted;
+CodemanApp.prototype._onSessionDeleted = function (data) {
+  const grid = this._tileGrid;
+  if (grid?.has(data.id)) {
+    const wasFocused = grid.focusedId === data.id;
+    const neighbor = window.CodemanTileGrid.tileNeighbor(grid.ids, data.id);
+    this.removeTile(data.id, { refocus: false });
+    if (wasFocused && grid.open && neighbor && !this._closingSessions?.has(data.id)) {
+      this._selectTiledSession(neighbor, { auto: true });
+    }
+  }
+  return _tileGridOriginalOnSessionDeleted.call(this, data);
+};

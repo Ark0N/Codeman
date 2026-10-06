@@ -1471,7 +1471,9 @@ class CodemanApp {
       return false;
     }
     this._retireUrlSession();
-    this.selectSession(id, { auto: true });
+    // Following a link is navigation: a tiled id focuses its tile, any other
+    // leaves the tile grid for the single view (the grid is remembered).
+    this.selectSession(id, { auto: true, leaveTiles: true });
     return true;
   }
 
@@ -1610,6 +1612,9 @@ class CodemanApp {
    *  Full re-renders re-apply the class from this.detachedSessions. */
   _markDetached(id, on) {
     if (on) this.detachedSessions.add(id); else this.detachedSessions.delete(id);
+    // A popped-out session's window owns its PTY size now, so it leaves the
+    // tile grid (one place per session in this browser tab).
+    if (on && this._tileGrid?.has(id)) this.removeTile(id, { refocus: true, auto: true });
     const container = this.$('sessionTabs');
     const tab = container && container.querySelector(`.session-tab[data-id="${id}"]`);
     if (tab) tab.classList.toggle('detached', on);
@@ -7973,6 +7978,20 @@ class CodemanApp {
       if (userInitiated) this.markIdleAlertSeen(sessionId);
       return;
     }
+    // Tile grid open (tile-grid.js): a tiled session is FOCUSED in its tile and
+    // never loaded into the parked main terminal. Decision 1: only a USER-
+    // initiated pick of a session that is not tiled (or an explicit
+    // `leaveTiles`, a followed link) leaves the grid for the single view, the
+    // grid remembered for one-click return. An app-driven pick (`auto`) never
+    // collapses it.
+    if (this._tileGrid?.open) {
+      if (this._tileGrid.has(sessionId)) return this._selectTiledSession(sessionId, options);
+      if (options?.auto === true && !options?.leaveTiles) return;
+      this.closeTileGrid({ keepStored: true, reselect: false });
+      // The parked terminal still holds what it showed before the grid opened;
+      // with no active id, the switch below snapshots none of it.
+      this.activeSessionId = null;
+    }
     if (this.activeSessionId === sessionId && forceReload) {
       this.terminalBufferCache?.delete(sessionId);
       this._xtermSnapshots?.delete(sessionId);
@@ -8828,12 +8847,24 @@ class CodemanApp {
     // next session or dumped you on the home screen, depending on which path
     // won the race (both outcomes measured on one build, 2026-08-17).
     const wasActive = this.activeSessionId === sessionId;
+    // Tile grid open: the fallback is the NEIGHBOURING TILE, never the first
+    // sessionOrder entry (often not tiled, which would collapse the grid).
+    // Captured here for the same reason as wasActive: the SSE delete can remove
+    // the tile while the request is still in flight.
+    const grid = this._tileGrid;
+    const tileNeighborId = grid?.has(sessionId) ? window.CodemanTileGrid.tileNeighbor(grid.ids, sessionId) : null;
     this._closingSessions.add(sessionId);
     try {
       await this._apiDelete(`/api/sessions/${sessionId}?killMux=${killMux}`);
       this._cleanupSessionData(sessionId);
+      // The last tile leaving closes the grid (no reselect): the pick below runs.
+      if (grid?.has(sessionId)) this.removeTile(sessionId, { refocus: false });
 
-      if (wasActive) {
+      if (wasActive && grid?.open) {
+        // `auto`: the app chose this tile because the previous one went away.
+        const target = grid.has(tileNeighborId) ? tileNeighborId : grid.ids[0];
+        this._selectTiledSession(target, { auto: true });
+      } else if (wasActive) {
         this.activeSessionId = null;
         try { localStorage.removeItem('codeman-active-session'); } catch {}
         // Next tab in the user's own order, skipping ids the cleanup has not
@@ -8918,6 +8949,12 @@ class CodemanApp {
   }
 
   nextSession() {
+    // With the tile grid open, Ctrl+Tab and Alt+] cycle through the tiles.
+    if (this._tileGrid?.open) {
+      const id = window.CodemanTileGrid.cycleTile(this._tileGrid.ids, this.activeSessionId, 1);
+      if (id) this.selectSession(id);
+      return;
+    }
     if (this.sessionOrder.length <= 1) return;
 
     const currentIndex = this.sessionOrder.indexOf(this.activeSessionId);
@@ -8926,6 +8963,11 @@ class CodemanApp {
   }
 
   prevSession() {
+    if (this._tileGrid?.open) {
+      const id = window.CodemanTileGrid.cycleTile(this._tileGrid.ids, this.activeSessionId, -1);
+      if (id) this.selectSession(id);
+      return;
+    }
     if (this.sessionOrder.length <= 1) return;
 
     const currentIndex = this.sessionOrder.indexOf(this.activeSessionId);
@@ -8941,6 +8983,8 @@ class CodemanApp {
     // Going Home is choosing something else, so a `#session=<id>` link still
     // waiting for its session must not take the screen later.
     this._retireUrlSession();
+    // Home is a choice to leave the grid too; it is remembered for Tiles.
+    this.closeTileGrid?.({ keepStored: true, reselect: false });
     // Deselect active session and show welcome screen
     this.activeSessionId = null;
     try { localStorage.removeItem('codeman-active-session'); } catch {}
@@ -8991,6 +9035,8 @@ class CodemanApp {
 
     try {
       await this._apiDelete('/api/sessions');
+      // Every tiled session is gone: nothing left to remember or reselect.
+      this.closeTileGrid?.({ keepStored: false, reselect: false });
       this.sessions.clear();
       this.terminalBuffers.clear();
       this.terminalBufferCache.clear();
