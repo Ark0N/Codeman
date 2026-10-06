@@ -541,6 +541,8 @@
       this._inputHandle = { ws: this.ws, lastRecvAt: 0 };
       app._registerInputSocket(this.sessionId, this._inputHandle);
       app._onWsReady?.(this.sessionId);
+      // The header's connection dot reads tile sockets while the grid is open.
+      app._updateConnectionIndicator?.();
     }
 
     // Leaves the map; only this pane's own handle is removed (a replacement
@@ -549,6 +551,7 @@
       if (!this._inputHandle) return;
       global.app?._unregisterInputSocket?.(this.sessionId, this._inputHandle);
       this._inputHandle = null;
+      global.app?._updateConnectionIndicator?.();
     }
 
     // Settles a marker the pane owes: set when a close lands during a load (the

@@ -1,0 +1,481 @@
+// src/web/public/tile-grid.js
+
+/**
+ * @fileoverview The tile grid: 1 to 9 live sessions side by side in one
+ * window, each in its own TerminalTile (terminal-tile.js), laid out by count
+ * (window.CodemanTileGrid, constants.js). Desktop only; see
+ * docs/tile-grid-plan.md.
+ *
+ * While the grid is open the main terminal (terminal-ui.js) is PARKED: hidden,
+ * its socket closed, and every path that would write to it, fetch for it or
+ * reconnect it stands aside (`_tilesOwnTerminal()`). `activeSessionId` always
+ * names the FOCUSED tile's session, so everything keyed on it (files panel,
+ * respawn and Ralph panels, subagent windows, voice, image paste, the tab
+ * highlight) follows focus without knowing tiles exist.
+ *
+ * Every capture a tile fetches goes through the grid's one TileLoadQueue,
+ * because each is a synchronous tmux call on the server.
+ *
+ * @dependency terminal-tile.js (window.TerminalTile, window.TileLoadQueue)
+ * @dependency constants.js (window.CodemanTileGrid, SPLIT_PANE_MIN_WIDTH)
+ * @loadorder 7.6 of 16, loaded after terminal-split.js and before respawn-ui.js
+ */
+
+// Per-device tile font size (a tile is a fraction of the screen).
+const TILE_GRID_FONT_KEY = 'codeman-tile-font-size';
+// Trailing debounce for refitting tiles after the grid area changes size, so a
+// window drag sends each tile's PTY one resize, not one per frame.
+const TILE_GRID_REFIT_MS = 150;
+
+/** The grid's state. `has(id)` answers only while it is open. */
+class TileGridModel {
+  constructor() {
+    this.open = false;
+    // Session ids in reading order (row-major).
+    this.ids = [];
+    // id -> { tile: TerminalTile, el: HTMLElement }
+    this.tiles = new Map();
+    this.focusedId = null;
+    this.cols = 0;
+    this.rows = 0;
+    this.queue = null;
+    this.resizeObserver = null;
+    this.refitTimer = null;
+  }
+
+  has(id) {
+    return this.open && this.tiles.has(id);
+  }
+}
+
+Object.assign(CodemanApp.prototype, {
+  /**
+   * True while the grid owns the terminal area and the main terminal is parked.
+   * Every main-terminal path that would write, fetch, resize or reconnect checks
+   * this and stands aside.
+   */
+  _tilesOwnTerminal() {
+    return !!this._tileGrid?.open;
+  },
+
+  /** The open grid's TerminalTile for a session, or null. */
+  _tileFor(sessionId) {
+    return this._tileGrid?.open ? (this._tileGrid.tiles.get(sessionId)?.tile ?? null) : null;
+  },
+
+  /** Desktop only, never in a solo (popped-out) window; same gate as the split. */
+  canOpenTileGrid() {
+    return !this.isSoloWindow && window.innerWidth >= SPLIT_PANE_MIN_WIDTH;
+  },
+
+  _tileGridFontSize() {
+    let saved = NaN;
+    try {
+      saved = parseInt(localStorage.getItem(TILE_GRID_FONT_KEY), 10);
+    } catch {
+      /* Storage unavailable: the default below. */
+    }
+    return saved >= 10 && saved <= 24 ? saved : window.CodemanTileGrid.TILE_FONT_SIZE_DEFAULT;
+  },
+
+  /** Ctrl +/- while the grid is open: every tile, then each tile's PTY (a font change is a size change, #464). */
+  setTileFontSize(size) {
+    try {
+      localStorage.setItem(TILE_GRID_FONT_KEY, String(size));
+    } catch {
+      /* Per-device convenience only. */
+    }
+    for (const { tile } of this._tileGrid?.tiles.values() || []) {
+      tile.fontSize = size;
+      if (!tile.terminal) continue;
+      tile.terminal.options.fontSize = size;
+      tile.fit();
+    }
+  },
+
+  _tileLoadQueue() {
+    const grid = this._tileGrid;
+    if (!grid.queue) {
+      grid.queue = new window.TileLoadQueue({
+        // The focused tile first, then reading order.
+        rank: (tile) => (tile.sessionId === grid.focusedId ? -1 : grid.ids.indexOf(tile.sessionId)),
+        // A quiet "loading" state on a tile until its capture has landed.
+        onChange: (tile, state) => {
+          const entry = grid.tiles.get(tile.sessionId);
+          if (entry?.tile === tile) entry.el.classList.toggle('tile--loading', state !== 'idle');
+        },
+      });
+    }
+    return grid.queue;
+  },
+
+  _tileGridSection() {
+    let section = document.getElementById('tileGrid');
+    if (!section) {
+      section = document.createElement('section');
+      section.id = 'tileGrid';
+      section.className = 'tile-grid';
+      section.setAttribute('aria-label', 'Tiled sessions');
+      const wrap = document.querySelector('.terminal-wrap');
+      wrap?.parentElement?.insertBefore(section, wrap.nextSibling);
+    }
+    return section;
+  },
+
+  /**
+   * Opens the grid on `ids` (unknown, detached and duplicate ids are skipped;
+   * at most TILE_GRID_MAX), focusing `focusedId` or the first. Already open, it
+   * adds what is missing and moves focus. `auto: false` makes the focus a human
+   * selection (it acknowledges that session's idle alert).
+   *
+   * Parks the main terminal first: `_cleanupPreviousSession()` runs ONCE, while
+   * its snapshot of the session it shows is still right, and closes its socket.
+   *
+   * @returns {boolean} whether the grid is open afterwards
+   */
+  openTileGrid(ids, { focusedId = null, auto = true } = {}) {
+    if (!this.canOpenTileGrid()) return false;
+    const grid = (this._tileGrid ||= new TileGridModel());
+    const max = window.CodemanTileGrid.TILE_GRID_MAX;
+    const wanted = [];
+    for (const id of ids || []) {
+      if (typeof id !== 'string' || wanted.includes(id)) continue;
+      if (!this.sessions.has(id) || this.detachedSessions?.has(id)) continue;
+      wanted.push(id);
+      if (wanted.length === max) break;
+    }
+    if (wanted.length === 0) return grid.open;
+    const focus = wanted.includes(focusedId) ? focusedId : wanted[0];
+
+    if (grid.open) {
+      for (const id of wanted) this.addTile(id);
+      if (grid.has(focus)) this._selectTiledSession(focus, { auto });
+      return true;
+    }
+
+    this._cleanupPreviousSession(focus);
+    grid.open = true;
+    grid.ids = [];
+    grid.focusedId = focus;
+    document.querySelector('.main')?.classList.add('tiles-active');
+    const section = this._tileGridSection();
+    this.hideWelcome();
+    // Mount every tile and lay the grid out BEFORE any tile connects, so each
+    // first fit measures its real cell; the focused tile connects first, so
+    // its capture is the one the queue starts with.
+    for (const id of wanted) this._mountTile(id);
+    this._applyTileLayout();
+    for (const id of [focus, ...wanted.filter((id) => id !== focus)]) this._connectTile(id);
+    if (!grid.resizeObserver && typeof ResizeObserver !== 'undefined') {
+      // The main terminal's observer watches a node that is now hidden; this one
+      // catches window resizes, sidebar toggles and rail drags for the grid.
+      grid.resizeObserver = new ResizeObserver(() => this._scheduleTileGridRefit());
+      grid.resizeObserver.observe(section);
+    }
+    this._installTileGridWidthGate();
+    this._selectTiledSession(focus, { auto });
+    this._updateConnectionIndicator?.();
+    return true;
+  },
+
+  /**
+   * Leaves the grid: every tile destroyed (sockets closed, xterms disposed,
+   * queued loads dropped), the main terminal unparked.
+   *
+   * `keepStored` remembers the grid for one-click return (toggleTileGrid).
+   * `reselect` shows the focused session in the single view through a forced
+   * reload; pass false when the caller selects something itself.
+   *
+   * The main terminal's cached content for EVERY tiled id is invalidated: it was
+   * written before the grid opened, possibly hours ago, and selectSession paints
+   * a snapshot as its first frame.
+   */
+  closeTileGrid({ keepStored = true, reselect = true } = {}) {
+    const grid = this._tileGrid;
+    if (!grid?.open) return;
+    const focusedId = grid.focusedId;
+    const ids = grid.ids.slice();
+    this._tileGridRemembered = keepStored ? { ids, focusedId } : null;
+    // Closed BEFORE the tiles go: each destroy() updates the header's connection
+    // state, which must read the main terminal again, not half-destroyed tiles.
+    grid.open = false;
+    clearTimeout(grid.refitTimer);
+    grid.refitTimer = null;
+    grid.resizeObserver?.disconnect();
+    grid.resizeObserver = null;
+    for (const { tile, el } of grid.tiles.values()) {
+      grid.queue?.drop(tile);
+      tile.destroy();
+      el.remove();
+    }
+    grid.tiles.clear();
+    grid.ids = [];
+    grid.focusedId = null;
+    document.querySelector('.main')?.classList.remove('tiles-active');
+    const section = document.getElementById('tileGrid');
+    if (section) {
+      section.style.gridTemplateColumns = '';
+      section.style.gridTemplateRows = '';
+    }
+    // As _redock does: the tiles sized these PTYs, so the main terminal's
+    // record of the last size it sent no longer describes them.
+    this._lastResizeDims = null;
+    for (const id of ids) {
+      this._xtermSnapshots?.delete(id);
+      try {
+        localStorage.removeItem(`codeman-xs-${id}`);
+      } catch {
+        /* Nothing stored. */
+      }
+      this.terminalBufferCache?.delete(id);
+    }
+    this._updateConnectionIndicator?.();
+    if (reselect) this._selectAfterTileGrid(focusedId);
+  },
+
+  // The single view after the grid closes: the session the grid was focused on,
+  // replayed fresh (forceReload drops the stale snapshot and nulls
+  // activeSessionId BEFORE _cleanupPreviousSession, so nothing wrong is saved),
+  // or, if that session is gone, the same fallback as closing the active tab.
+  _selectAfterTileGrid(sessionId) {
+    if (sessionId && this.sessions.has(sessionId)) {
+      this.selectSession(sessionId, { forceReload: true, auto: true });
+      return;
+    }
+    this.activeSessionId = null;
+    try {
+      localStorage.removeItem('codeman-active-session');
+    } catch {
+      /* Nothing stored. */
+    }
+    const next = this.sessionOrder.find((id) => this.sessions.has(id));
+    if (next) {
+      this.selectSession(next, { auto: true });
+    } else {
+      this.terminal?.clear();
+      this.showWelcome();
+    }
+  },
+
+  /** Adds one session as a tile (open grid only). Returns whether it was added. */
+  addTile(sessionId) {
+    const grid = this._tileGrid;
+    if (!grid?.open || grid.tiles.has(sessionId)) return false;
+    if (grid.ids.length >= window.CodemanTileGrid.TILE_GRID_MAX) return false;
+    if (!this._mountTile(sessionId)) return false;
+    this._applyTileLayout();
+    this._connectTile(sessionId);
+    this._scheduleTileGridRefit();
+    return true;
+  },
+
+  /**
+   * Removes one tile; the session keeps running. When it held focus, `refocus`
+   * moves focus to the neighbouring tile (next in grid order, else previous).
+   * The last tile leaving closes the grid: with `refocus` the single view then
+   * shows that session, without it the caller decides what comes next.
+   */
+  removeTile(sessionId, { refocus = true, auto = true } = {}) {
+    const grid = this._tileGrid;
+    const entry = grid?.open ? grid.tiles.get(sessionId) : null;
+    if (!entry) return false;
+    if (grid.ids.length === 1) {
+      this.closeTileGrid({ keepStored: false, reselect: refocus });
+      return true;
+    }
+    const wasFocused = grid.focusedId === sessionId;
+    const neighbor = window.CodemanTileGrid.tileNeighbor(grid.ids, sessionId);
+    grid.queue?.drop(entry.tile);
+    entry.tile.destroy();
+    entry.el.remove();
+    grid.tiles.delete(sessionId);
+    grid.ids.splice(grid.ids.indexOf(sessionId), 1);
+    this._applyTileLayout();
+    this._scheduleTileGridRefit();
+    if (wasFocused) {
+      grid.focusedId = null;
+      if (refocus && neighbor) this._selectTiledSession(neighbor, { auto });
+    }
+    return true;
+  },
+
+  _mountTile(sessionId) {
+    const grid = this._tileGrid;
+    const session = this.sessions.get(sessionId);
+    if (!session || this.detachedSessions?.has(sessionId)) return false;
+    const el = document.createElement('div');
+    el.className = 'tile';
+    el.dataset.sessionId = sessionId;
+    const body = document.createElement('div');
+    body.className = 'tile-body';
+    el.appendChild(body);
+    this._tileGridSection().appendChild(el);
+    const tile = new window.TerminalTile(sessionId, body, {
+      mode: session.mode,
+      fontSettings: this.loadAppSettingsFromStorage?.() || {},
+      detachedSessions: this.detachedSessions,
+      scheduleLoad: (t, kind, run) => this._tileLoadQueue().schedule(t, kind, run),
+      scrollback: window.CodemanTileGrid.TILE_SCROLLBACK,
+      fontSize: this._tileGridFontSize(),
+      boundedLoad: true,
+      onExit: (code) => this._onTileExit(sessionId, tile, code),
+    });
+    grid.tiles.set(sessionId, { tile, el });
+    grid.ids.push(sessionId);
+    return true;
+  },
+
+  _connectTile(sessionId) {
+    this._tileGrid?.tiles
+      .get(sessionId)
+      ?.tile.connect()
+      .catch(() => {
+        /* Best-effort, as the split's Pane B: live output arrives once the socket opens. */
+      });
+  },
+
+  /**
+   * A tile's socket stopped for good. 4009 (the session exited) keeps the tile
+   * with its "session ended" marker; 4003 (refused), 4004 (session gone) and
+   * 4010 (another socket took over) remove it.
+   */
+  _onTileExit(sessionId, tile, code) {
+    if (this._tileGrid?.tiles.get(sessionId)?.tile !== tile) return;
+    if (code === 4009) return;
+    this.removeTile(sessionId, { refocus: true, auto: true });
+  },
+
+  /** Columns x rows for the current tile count, applied to the grid section. */
+  _applyTileLayout() {
+    const grid = this._tileGrid;
+    const section = this._tileGridSection();
+    const rect = section.getBoundingClientRect?.() || { width: 0, height: 0 };
+    const { cols, rows } = window.CodemanTileGrid.computeTileLayout({
+      count: grid.ids.length,
+      width: rect.width || window.innerWidth,
+      height: rect.height || window.innerHeight,
+    });
+    grid.cols = cols;
+    grid.rows = rows;
+    section.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+    section.style.gridTemplateRows = `repeat(${rows}, minmax(0, 1fr))`;
+  },
+
+  // Refits every tile once the grid area has settled: one xterm resize and one
+  // PTY resize together per tile (#464), on the trailing edge.
+  _scheduleTileGridRefit() {
+    const grid = this._tileGrid;
+    if (!grid?.open) return;
+    clearTimeout(grid.refitTimer);
+    grid.refitTimer = setTimeout(() => {
+      grid.refitTimer = null;
+      if (!grid.open) return;
+      // The 3-tile layout depends on the width (3x1 or 2x2).
+      this._applyTileLayout();
+      for (const { tile } of grid.tiles.values()) tile.fit();
+    }, TILE_GRID_REFIT_MS);
+  },
+
+  // Narrowing the window past the desktop gate returns to the single view of the
+  // focused session; the grid is remembered.
+  _installTileGridWidthGate() {
+    if (this._tileGridWidthGateInstalled || !window.matchMedia) return;
+    this._tileGridWidthGateInstalled = true;
+    const mq = window.matchMedia(`(min-width: ${SPLIT_PANE_MIN_WIDTH}px)`);
+    mq.addEventListener('change', (e) => {
+      if (!e.matches && this._tileGrid?.open) this.closeTileGrid({ keepStored: true, reselect: true });
+    });
+  },
+
+  _paintTileFocus() {
+    const grid = this._tileGrid;
+    for (const [id, { el }] of grid?.tiles || []) el.classList.toggle('focused', id === grid.focusedId);
+  },
+
+  /**
+   * Focuses a tiled session: the tile branch of selectSession. Moving focus is
+   * an `activeSessionId` change plus `xterm.focus()`: no fetch, no replay. It
+   * runs the panel refresh a normal switch runs and skips everything bound to
+   * the main terminal (cleanup, replay, resize, its socket, local echo). Only a
+   * USER-initiated selection (`auto` not true) acknowledges the idle alert.
+   *
+   * @param {string} sessionId
+   * @param {{auto?: boolean, focus?: boolean}} [options] - `focus: false` leaves
+   *   DOM focus where it is (an app-driven reconcile must not steal it)
+   */
+  _selectTiledSession(sessionId, options = {}) {
+    const grid = this._tileGrid;
+    const entry = grid?.open ? grid.tiles.get(sessionId) : null;
+    if (!entry) return;
+    const userInitiated = options.auto !== true;
+    // Aborts any in-flight normal select at its next _isStaleSelect check.
+    const selectGen = ++this._selectGeneration;
+    this._hideWebviewLayer?.();
+    this.activeSessionId = sessionId;
+    grid.focusedId = sessionId;
+    this._activateFileBrowserSession?.(sessionId);
+    try {
+      localStorage.setItem('codeman-active-session', sessionId);
+    } catch {
+      /* Per-device convenience only. */
+    }
+    // The SSE subscription follows the focused session as in the single view;
+    // its terminal frames are dropped by the parking guards.
+    this._updateSseSubscription?.(sessionId);
+    this.hideWelcome();
+    if (userInitiated) this.markIdleAlertSeen(sessionId);
+    this._paintTileFocus();
+    this._updateActiveTabImmediate?.(sessionId);
+    this.closeSessionSidebarOnHandheld?.();
+    this.renderSessionTabs?.();
+    const activeTab = document.querySelector(`.session-tab.active[data-id="${sessionId}"]`);
+    if (activeTab) {
+      activeTab.classList.add('tab-glow');
+      activeTab.addEventListener('animationend', () => activeTab.classList.remove('tab-glow'), { once: true });
+    }
+    this.updateAttachmentHistoryBadge?.();
+    if (this.attachmentHistoryDrawerOpen) this.loadAttachmentHistory?.(sessionId);
+    if (typeof KeyboardAccessoryBar !== 'undefined') KeyboardAccessoryBar.refreshForActiveSession();
+    this.refreshHostWakeBanner?.(sessionId);
+    this.currentSessionWorkingDir = this.sessions.get(sessionId)?.workingDir || null;
+    const idleCb = typeof requestIdleCallback === 'function' ? requestIdleCallback : (cb) => setTimeout(cb, 16);
+    idleCb(() => this._refreshSessionPanels(sessionId, selectGen));
+    // The keyboard follows focus: shortcuts, voice and paste act on this tile.
+    this._noteFocusedTile(entry.tile);
+    if (options.focus !== false) entry.tile.terminal?.focus();
+  },
+
+  /** Header connection state while tiles own the terminal: every live tile socket open, or not. */
+  _tileGridSocketState() {
+    for (const { tile } of this._tileGrid?.tiles.values() || []) {
+      // A tile stopped for good (its session exited) has nothing to reconnect.
+      if (tile._stoppedCode !== null && tile._stoppedCode !== undefined) continue;
+      if (!tile._wsReady) return 'reconnecting';
+    }
+    return 'connected';
+  },
+
+  /**
+   * handleInit (page state reloaded, or SSE back after a server restart) with
+   * the grid open: tiles whose sessions are gone or popped out are removed, the
+   * rest are KEPT (never rebuilt) and told to reconnect now instead of waiting
+   * out their backoff, and focus stays on a live tile.
+   *
+   * @returns {boolean} whether the grid is still open (handleInit then skips
+   *   restoring the main terminal)
+   */
+  _reconcileTileGrid() {
+    const grid = this._tileGrid;
+    if (!grid?.open) return false;
+    for (const id of grid.ids.slice()) {
+      if (!this.sessions.has(id) || this.detachedSessions?.has(id)) this.removeTile(id, { refocus: false });
+    }
+    if (!grid.open) return false;
+    // Only a focus that is gone moves: re-selecting the same tile would hide an
+    // active web tab on every SSE blip (_selectTiledSession hides the web layer),
+    // which the single view's reconnect never does.
+    if (!grid.has(grid.focusedId)) this._selectTiledSession(grid.ids[0], { auto: true });
+    for (const { tile } of grid.tiles.values()) tile.reconnectNow();
+    return true;
+  },
+});

@@ -19347,6 +19347,78 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   min-height: 0;
 }
 
+/* ── Tile grid (tile-grid.js, docs/tile-grid-plan.md) ──────────────────────
+   1 to 9 sessions side by side, each a TerminalTile. The section is a SIBLING of
+   .terminal-wrap; .main.tiles-active swaps one for the other (the main terminal
+   is parked while the grid is open). Columns and rows are set inline by
+   _applyTileLayout() from the tile count. */
+.tile-grid {
+  display: none;
+}
+
+.main.tiles-active .terminal-wrap {
+  display: none;
+}
+
+.main.tiles-active .tile-grid {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-dark);
+}
+
+/* A web tab takes the stage from the grid exactly as from the single view: the
+   tiles stay connected, and a hidden tile measures nothing and sends no
+   resize. AFTER the rule above, which has the same specificity. */
+.main.webview-active .tile-grid {
+  display: none;
+}
+
+.tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  background: var(--term-bg, #161b23);
+}
+
+/* The focused tile has the keyboard and is the active session. */
+.tile.focused {
+  border-color: var(--accent-color, #4a9eff);
+}
+
+.tile-body {
+  flex: 1 1 auto;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tile-body .xterm {
+  width: 100%;
+  height: 100%;
+}
+
+/* Quiet "loading" state while the tile's capture waits in the grid's one load
+   queue (or runs). */
+.tile.tile--loading .tile-body::after {
+  content: 'Loading\2026';
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  font-size: 11px;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
 /* Split-picker menu: a small popover listing sessions to split with, appended
    to document.body and positioned `fixed` by openSplitPicker() (JS sets
    top/right against the Split header button's own rect). z-index above the

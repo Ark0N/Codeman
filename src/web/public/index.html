@@ -435,6 +435,12 @@
           autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
       </div>
 
+      <!-- Tile grid (tile-grid.js): 1 to 9 sessions side by side, each a
+           TerminalTile. A SIBLING of .terminal-wrap, never a parent: while
+           .main.tiles-active is set the main terminal is parked (hidden) and
+           this section takes its place. -->
+      <section class="tile-grid" id="tileGrid" aria-label="Tiled sessions"></section>
+
       <!-- Web tab layer: one iframe per open dashboard, shown in place of the
            terminal while a web tab is active. Frames stay mounted while hidden so
            switching tabs does not reload (and re-authenticate) a dashboard. -->
@@ -3920,6 +3926,7 @@
   <script defer src="terminal-ui.js"></script>
   <script defer src="terminal-tile.js"></script>
   <script defer src="terminal-split.js"></script>
+  <script defer src="tile-grid.js"></script>
   <script defer src="respawn-ui.js"></script>
   <script defer src="ralph-panel.js"></script>
   <script defer src="orchestrator-panel.js"></script>

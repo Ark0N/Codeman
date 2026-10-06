@@ -1197,6 +1197,11 @@ class CodemanApp {
     try {
       this._webglLongTaskObserver = new PerformanceObserver((list) => {
         if (!this._webglAddon) return;
+        // ⚠️ The observer sees EVERY long task on the page. While the tile grid
+        // owns the terminal the main terminal is parked and draws nothing; the
+        // long tasks are tile renders and replays (DOM renderers), and counting
+        // them would write the sticky 7-day WebGL disable for no WebGL reason.
+        if (this._tilesOwnTerminal?.()) return;
         const now = performance.now();
         if (now - installedAt < WEBGL_FALLBACK.GRACE_MS) return;
         if (evaluateWebGLLongTaskTrip(recent, list.getEntries(), now)) {
@@ -2202,6 +2207,10 @@ class CodemanApp {
   }
 
   _onSessionTerminal(data) {
+    // Tile grid open: the main terminal is parked and its socket closed, so the
+    // SSE fallback would write the focused tile's output into a hidden xterm.
+    // The tiles carry their own output over their own sockets.
+    if (this._tilesOwnTerminal?.()) return;
     if (data.id === this.activeSessionId) {
       if (data.data.length > 32768) _crashDiag.log(`TERMINAL: ${(data.data.length/1024).toFixed(0)}KB`);
 
@@ -2251,6 +2260,8 @@ class CodemanApp {
    */
   _scheduleDroppedOutputRecovery(sessionId, attempt = 0, queuedBytes) {
     if (!sessionId || this._clientDropRecoveryTimer) return;
+    // Nothing of the main terminal's to recover while the tile grid owns it.
+    if (this._tilesOwnTerminal?.()) return;
     // Behind the debounce guard: one line per window, not per dropped frame.
     if (Number.isFinite(queuedBytes)) _crashDiag.log(`TERMINAL DROP: ${(queuedBytes / 1024).toFixed(0)}KB queued`);
     this._clientDropRecoveryTimer = setTimeout(async () => {
@@ -2928,6 +2939,10 @@ class CodemanApp {
   async _onSessionNeedsRefresh(event = {}) {
     // Server sends this after SSE backpressure clears — terminal data was dropped,
     // so reload the buffer to recover from any display corruption.
+    // Tile grid open: the main terminal is parked, so this would fetch a capture
+    // for a hidden xterm. Each tile refreshes itself through the grid's queue.
+    // `false`, never undefined: the drop recovery reads the result.
+    if (this._tilesOwnTerminal?.()) return false;
     const sessionId = this.activeSessionId;
     if (event?.id && event.id !== sessionId) return false;
     if (!sessionId || !this.terminal) return false;
@@ -3030,6 +3045,8 @@ class CodemanApp {
   }
 
   async _onSessionClearTerminal(data) {
+    // The tiles get the clear over their own sockets; the parked main terminal must not refetch.
+    if (this._tilesOwnTerminal?.()) return;
     if (data.id === this.activeSessionId) {
       // Skip if selectSession is already loading the buffer — clearTerminal arriving
       // during buffer load would clear the terminal mid-write, causing visible flicker
@@ -3075,14 +3092,15 @@ class CodemanApp {
   _onSessionCompletion(data) {
     this.totalCost += data.cost || 0;
     this.updateCost();
-    if (data.id === this.activeSessionId) {
+    // Not into the parked main terminal while the tile grid owns the screen.
+    if (data.id === this.activeSessionId && !this._tilesOwnTerminal?.()) {
       this.terminal.writeln('');
       this.terminal.writeln(`\x1b[1;32m Done (Cost: $${(data.cost || 0).toFixed(4)})\x1b[0m`);
     }
   }
 
   _onSessionError(data) {
-    if (data.id === this.activeSessionId) {
+    if (data.id === this.activeSessionId && !this._tilesOwnTerminal?.()) {
       this.terminal.writeln(`\x1b[1;31m Error: ${data.error}\x1b[0m`);
     }
     this._notifySession(data.id, 'critical', 'session-error', 'Session Error', data.error || 'Unknown error');
@@ -4034,9 +4052,12 @@ class CodemanApp {
     }
 
     // With an active terminal, show its transport (WebSocket vs HTTP fallback).
+    // While the tile grid owns the terminal the main socket is parked on
+    // purpose, so the state comes from the tiles' sockets: all open is
+    // connected, any still coming back is reconnecting.
     if (this.activeSessionId) {
       let cls, label, detail;
-      switch (this._wsState) {
+      switch (this._tilesOwnTerminal?.() ? this._tileGridSocketState() : this._wsState) {
         case 'connected':
           cls = 'connected'; label = 'WS'; detail = 'Terminal connected over WebSocket';
           break;
@@ -4217,8 +4238,11 @@ class CodemanApp {
     this._updateConnectionLossUi();
     this.connectSSE();
     // The terminal socket does not always come back on its own (planWsReconnect
-    // 'give-up'), so the same button re-arms it.
-    if (this.activeSessionId && this._wsState !== 'connected') {
+    // 'give-up'), so the same button re-arms it. With the tile grid open the
+    // main socket is parked on purpose: re-arm the tiles' sockets instead.
+    if (this._tilesOwnTerminal?.()) {
+      for (const { tile } of this._tileGrid.tiles.values()) tile.reconnectNow();
+    } else if (this.activeSessionId && this._wsState !== 'connected') {
       this._wsReconnectAttempts = 0;
       this._connectWs(this.activeSessionId);
     }
@@ -4561,6 +4585,11 @@ class CodemanApp {
       return;
     }
 
+    // Tile grid open (tile-grid.js): tiles whose sessions are gone are removed,
+    // the live ones are kept as they are and reconnect now, and the main
+    // terminal stays parked. Before the link below, which may leave the grid.
+    const tilesOpen = this._reconcileTileGrid?.() === true;
+
     // A `#session=<id>` link wins over restoring the last active tab.
     if (this._urlSessionId && this.sessions.has(this._urlSessionId)) {
       this.activeSessionId = null;
@@ -4570,6 +4599,10 @@ class CodemanApp {
     // Not listed yet: its wait starts now that the list has loaded, and the
     // last active tab is restored meanwhile.
     if (this._urlSessionId) this._armUrlSessionWait(this._urlSessionId);
+    // The grid holds the focused session: nothing below may reconnect or reload
+    // the parked main terminal (its keepTerminal branch would reopen the main
+    // socket onto a session a tile already shows).
+    if (tilesOpen) return;
 
     const previousActiveId = this.activeSessionId;
     if (this.sessionOrder.length === 0) {
@@ -7665,6 +7698,8 @@ class CodemanApp {
     const sessionId = this.activeSessionId;
     if (!sessionId || this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
     if (this.detachedSessions?.has(sessionId)) return;
+    // The parked main terminal has no history to pull while tiles own the screen.
+    if (this._tilesOwnTerminal?.()) return;
     const session = this.sessions.get(sessionId);
     // A shell's full capture can be many megabytes, and replaying all of it from
     // an ordinary scroll gesture blocks xterm's main thread. So a shell scroll
