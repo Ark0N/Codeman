@@ -89,6 +89,9 @@
     let keydownSnapshot = 0;
     let composing = false;
     const pending = [];
+    // Applies any edit-sync diff still waiting on its timer. Assigned by installEditSync() below; a
+    // no-op when xterm's internals are not available.
+    let settleEdit = () => {};
 
     /**
      * Resolve every candidate still pending, right now, instead of waiting for
@@ -171,6 +174,13 @@
       // reach the PTY — see flushPending(). This runs from xterm's custom key
       // handler, i.e. before xterm processes the key, so a recovered character
       // is always ordered ahead of the bytes this keydown produces.
+      // ORDER MATTERS. Settle the edit-sync diff first: it bumps `canonicalCount` for the
+      // keystroke it belongs to, so flushPending() then stands that keystroke's orphan candidate
+      // down. Swapped, the candidate would resolve first and the character would be sent twice.
+      // It also has to happen BEFORE xterm handles THIS key: for Enter, xterm clears the textarea
+      // in its own keydown, and a timer left pending would then diff the whole line against ''
+      // and send one DEL per character ahead of the submitted line.
+      settleEdit();
       flushPending();
       keydownSnapshot = canonicalCount;
     }
@@ -219,37 +229,58 @@
       if (typeof original !== 'function' || typeof coreService?.triggerDataEvent !== 'function') return null;
 
       let synced = textarea.value;
-      let outstanding = 0;
+      const waiting = new Set();
+
+      /** Send what changed since `synced`, once, and remember it. */
+      function applyEdit() {
+        if (destroyed || helper._isComposing) return; // xterm's composition path owns this one
+        const current = textarea.value;
+        if (current === synced) return;
+        const { deleted, inserted } = editBetween(synced, current);
+        synced = current;
+        try {
+          // One DEL per character, like repeated backspace presses: the local-echo composer and
+          // the PTY both treat each as a single edit.
+          for (let i = 0; i < deleted; i += 1) coreService.triggerDataEvent('\x7f', true);
+          if (inserted) {
+            helper._dataAlreadySent = inserted;
+            coreService.triggerDataEvent(inserted, true);
+          }
+        } catch {
+          // Delivery is best effort; never throw into the browser's timer queue.
+        }
+      }
 
       helper._handleAnyTextareaChanges = function handleAnyTextareaChanges() {
         if (destroyed) return original.call(this);
         // No edit in flight and the value is not what we last sent: something outside the IME
         // changed it (xterm clears it after Enter, a composition committed). Nothing to send;
         // resynchronise.
-        if (outstanding === 0 && synced !== textarea.value) synced = textarea.value;
-        outstanding += 1;
-        setTimer(() => {
-          outstanding -= 1;
-          if (destroyed || helper._isComposing) return; // xterm's composition path owns this one
-          const current = textarea.value;
-          if (current === synced) return;
-          const { deleted, inserted } = editBetween(synced, current);
-          synced = current;
-          try {
-            // One DEL per character, like repeated backspace presses: the local-echo composer and
-            // the PTY both treat each as a single edit.
-            for (let i = 0; i < deleted; i += 1) coreService.triggerDataEvent('\x7f', true);
-            if (inserted) {
-              helper._dataAlreadySent = inserted;
-              coreService.triggerDataEvent(inserted, true);
-            }
-          } catch {
-            // Delivery is best effort; never throw into the browser's timer queue.
-          }
+        if (waiting.size === 0 && synced !== textarea.value) synced = textarea.value;
+        const entry = { id: null };
+        waiting.add(entry);
+        entry.id = setTimer(() => {
+          waiting.delete(entry);
+          applyEdit();
         }, 0);
       };
 
+      // Apply the pending edit NOW instead of on its timer (see handleKeyEvent).
+      settleEdit = () => {
+        if (waiting.size === 0) return;
+        for (const entry of waiting) {
+          try {
+            clearTimer(entry.id);
+          } catch {
+            // A broken timer host must not break input handling.
+          }
+        }
+        waiting.clear();
+        applyEdit();
+      };
+
       return () => {
+        settleEdit = () => {};
         if (helper._handleAnyTextareaChanges !== original) helper._handleAnyTextareaChanges = original;
       };
     }

@@ -520,6 +520,57 @@ describe('edit-based sync of the helper textarea (autocorrect replacements)', ()
     h.flush();
   };
 
+  // The batched Android shape (#441): the last character's keydown and `insertText` arrive in the
+  // SAME page task as Enter's keydown. xterm's own Enter handling clears the textarea before the
+  // edit's timer runs, so a timer left pending would diff the whole line against '' and send one
+  // DEL per character AHEAD of the submitted line. The edit is therefore settled at the next
+  // keydown, before xterm sees that key.
+  it('settles a pending edit at the next keydown, so Enter in the same task cannot erase the line', () => {
+    const h = editSyncHarness();
+    const controller = h.create(true);
+    typeKeys(h, 'hell');
+    h.keydown();
+    h.edit('hello');
+    controller.handleKeyEvent({ type: 'keydown', key: 'Enter', keyCode: 13 });
+    h.textarea.value = ''; // xterm's CR handling, which runs after the custom key handler
+    h.flush();
+    expect(h.sent.join('')).toBe('hello');
+    expect(h.sent).not.toContain('\x7f');
+  });
+
+  it('autocorrect and Enter in one task submits the corrected line, not a run of DELs', () => {
+    const h = editSyncHarness();
+    const controller = h.create(true);
+    typeKeys(h, 'testing the peompt');
+    h.keydown();
+    h.edit('testing the p');
+    h.keydown();
+    h.edit('testing the prompt ');
+    controller.handleKeyEvent({ type: 'keydown', key: 'Enter', keyCode: 13 });
+    h.textarea.value = '';
+    h.flush();
+    expect(h.line()).toBe('testing the prompt ');
+    expect(h.sent.filter((c) => c === '\x7f')).toHaveLength(5); // the five deleted characters, nothing more
+  });
+
+  it('settling first stands the same keystroke’s orphan candidate down (no double send)', () => {
+    const h = editSyncHarness();
+    const controller = h.create(true);
+    // xterm's canonical-data hook, as terminal-ui.js wires it.
+    const origTrigger = h.helper._coreService.triggerDataEvent;
+    h.helper._coreService.triggerDataEvent = (data: string) => {
+      origTrigger(data);
+      controller.notifyCanonicalData();
+    };
+    controller.handleKeyEvent({ type: 'keydown', key: 'Unidentified', keyCode: 229 });
+    h.keydown();
+    h.edit('o');
+    h.textarea.fire('input', inputEvent('o'));
+    controller.handleKeyEvent({ type: 'keydown', key: 'Enter', keyCode: 13 });
+    h.flush();
+    expect(h.sent.join('')).toBe('o');
+  });
+
   it('control: xterm alone duplicates the line when the keyboard autocorrects', () => {
     const h = editSyncHarness();
     h.create(false);
