@@ -647,8 +647,8 @@ Object.assign(CodemanApp.prototype, {
    * The tile chord `e` asks for, if it applies right now, else null. The
    * toggle applies while the grid is open, or where one could open AND the
    * per-device `showTileGridButton` setting is on: with it off (the default)
-   * the chord is inert and reaches the terminal like any unbound key. (The
-   * applied default pending the owner's answer; one line to change.) The focus,
+   * the chord is inert and reaches the terminal like any unbound key (owner
+   * decision 6 in docs/tile-grid-plan.md). The focus,
    * zoom and remove chords apply only while the grid is open, however it was
    * opened. Registry-aware (rebinds and disables in App Settings, Shortcuts).
    * The capture handler (app.js) dispatches it; every xterm key handler returns
@@ -1096,7 +1096,13 @@ Object.assign(CodemanApp.prototype, {
     }
     entry.overlay.hidden = false;
     const text = busy ? 'Attaching\u2026' : reason.text;
-    if (entry.overlayText.textContent !== text) entry.overlayText.textContent = text;
+    // Compared with the last English text set, never the DOM: with the zh-CN
+    // translator on, the DOM holds the translation and would never match, so
+    // every refresh would rewrite English for it to translate again.
+    if (entry.overlayLabel !== text) {
+      entry.overlayLabel = text;
+      entry.overlayText.textContent = text;
+    }
     const attachable = busy || reason.attachable;
     entry.overlayBtn.hidden = !attachable;
     entry.overlayHint.hidden = attachable;
@@ -1223,7 +1229,11 @@ Object.assign(CodemanApp.prototype, {
     if (entry.dot.className !== dotClass) entry.dot.className = dotClass;
     const since = row?.since?.at ? this._mobileOverviewStampText?.(row.since.at, 'for') : '';
     const label = row ? [row.pill, since].filter(Boolean).join(' ') : '';
-    if (entry.header.title !== label) entry.header.title = label;
+    // Against the last English label, never the DOM (translated in zh-CN; see _renderTileOverlay).
+    if (entry.headerLabel !== label) {
+      entry.headerLabel = label;
+      entry.header.title = label;
+    }
     // The input of a rename in progress has taken the name's place in the
     // header, so updating the detached name never touches what is being typed.
     // A rename still in flight shows as already done, as on the tab.
@@ -1359,7 +1369,9 @@ Object.assign(CodemanApp.prototype, {
         const on = id === zoomed;
         const label = on ? 'Restore the grid' : 'Zoom this tile';
         zoomBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
-        if (zoomBtn.title !== label) {
+        // Against the last English label, never the DOM (translated in zh-CN).
+        if (entry.zoomLabel !== label) {
+          entry.zoomLabel = label;
           zoomBtn.title = label;
           zoomBtn.setAttribute('aria-label', label);
         }

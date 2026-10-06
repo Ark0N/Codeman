@@ -161,6 +161,44 @@ describe('header button size (owner feedback: the 12px glyphs read as tiny)', ()
   });
 });
 
+describe('a translated label survives a refresh (zh-CN)', () => {
+  // The i18n observer writes the translation into the DOM. Comparing the DOM
+  // with the English source would never match again, so each refresh would
+  // rewrite English for the observer to translate again. The guards compare
+  // with the last English value set instead.
+  it('the header tooltip, the Attach overlay text and the zoom title stay translated until they change', () => {
+    const app = makeGridApp(['s-a', 's-b']);
+    let pill = 'idle';
+    app._sidebarRichRow = () => ({ state: pill, pill, since: { at: 1 } });
+    app._mobileOverviewStampText = () => '3m';
+    app.sessions.get('s-b').pid = null;
+    app.openTileGrid(['s-a', 's-b']);
+    const a = app._tileGrid.tiles.get('s-a');
+    const b = app._tileGrid.tiles.get('s-b');
+    expect(a.header.title).toBe('idle 3m');
+    expect(b.overlayText.textContent).toBe('Not attached');
+    app.zoomTile('s-a');
+    expect(a.zoomBtn.title).toBe('Restore the grid');
+
+    // What the translator does to them.
+    a.header.title = '空闲 3m';
+    b.overlayText.textContent = '未附加';
+    a.zoomBtn.title = '恢复平铺网格';
+    app._renderTileChrome();
+    app._applyTileLayout();
+    expect(a.header.title).toBe('空闲 3m');
+    expect(b.overlayText.textContent).toBe('未附加');
+    expect(a.zoomBtn.title).toBe('恢复平铺网格');
+
+    // A real change still writes the new English, for the translator to take.
+    pill = 'working';
+    app._renderTileChrome();
+    expect(a.header.title).toBe('working 3m');
+    app.zoomTile('s-a');
+    expect(a.zoomBtn.title).toBe('Zoom this tile');
+  });
+});
+
 describe('rename', () => {
   function startRename(app: GridApp, id: string) {
     headerOf(id).children[1].dispatch('dblclick', { stopPropagation: vi.fn() });
