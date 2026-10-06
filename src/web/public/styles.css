@@ -19486,6 +19486,17 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   outline: none;
 }
 
+/* Zoom (tmux-style): one tile fills the grid; the others stay connected but
+   hidden, so they measure nothing and send no resize. */
+.tile-grid.tile-grid--zoomed .tile:not(.tile--zoomed) {
+  display: none;
+}
+
+.tile-btn.tile-zoom[aria-pressed='true'] {
+  opacity: 1;
+  color: var(--accent, #4a9eff);
+}
+
 /* A permission prompt or question, visible across the room. Only the border
    colour and a box-shadow animate: anything that moves layout would resize
    the tile's PTY every frame. */

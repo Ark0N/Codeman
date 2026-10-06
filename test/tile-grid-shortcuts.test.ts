@@ -323,6 +323,13 @@ describe('xterm key handlers swallow a chord that applies', () => {
       expect(handler(chord(RIGHT))).toBe(true);
     });
 
+    it('Alt+Shift+Enter (zoom) never becomes a Shift+Enter newline in the tile session', async () => {
+      const handler = await tileHandler(true);
+      fetchMock.mockClear();
+      expect(handler(chord({ key: 'Enter', code: 'Enter', altKey: true, shiftKey: true }))).toBe(false);
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/send-key'))).toBe(false);
+    });
+
     it('returns false for the toggle chord', async () => {
       const handler = await tileHandler(true);
       expect(handler(chord(TOGGLE))).toBe(false);

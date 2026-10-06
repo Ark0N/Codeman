@@ -35,6 +35,7 @@ const TILE_SHORTCUTS = {
   'focus-tile-up': { needsOpen: true, direction: 'up' },
   'focus-tile-down': { needsOpen: true, direction: 'down' },
   'remove-tile': { needsOpen: true },
+  'zoom-tile': { needsOpen: true },
 };
 
 /** The grid's state. `has(id)` answers only while it is open. */
@@ -46,6 +47,11 @@ class TileGridModel {
     // id -> { tile: TerminalTile, el: HTMLElement }
     this.tiles = new Map();
     this.focusedId = null;
+    // The tile filling the grid (tmux zoom), or null. `autoZoom`: zoomed by the
+    // grid itself because the window cannot fit the tiles; it follows focus and
+    // lifts once the window fits again.
+    this.zoomedId = null;
+    this.autoZoom = false;
     this.cols = 0;
     this.rows = 0;
     this.queue = null;
@@ -232,11 +238,14 @@ Object.assign(CodemanApp.prototype, {
     grid.tiles.clear();
     grid.ids = [];
     grid.focusedId = null;
+    grid.zoomedId = null;
+    grid.autoZoom = false;
     document.querySelector('.main')?.classList.remove('tiles-active');
     const section = document.getElementById('tileGrid');
     if (section) {
       section.style.gridTemplateColumns = '';
       section.style.gridTemplateRows = '';
+      section.classList.remove('tile-grid--zoomed');
     }
     // As _redock does: the tiles sized these PTYs, so the main terminal's
     // record of the last size it sent no longer describes them.
@@ -303,6 +312,7 @@ Object.assign(CodemanApp.prototype, {
     if (!spec) return;
     if (id === 'toggle-tile-grid') this.toggleTileGrid();
     else if (id === 'remove-tile') this.removeFocusedTile();
+    else if (id === 'zoom-tile') this.zoomTile(this._tileGrid?.focusedId);
     else if (spec.direction) this.focusTileInDirection(spec.direction);
   },
 
@@ -372,6 +382,8 @@ Object.assign(CodemanApp.prototype, {
     if (!grid?.open || grid.tiles.has(sessionId)) return false;
     if (grid.ids.length >= window.CodemanTileGrid.TILE_GRID_MAX) return false;
     if (!this._mountTile(sessionId)) return false;
+    // A tile added while one is zoomed by hand is meant to be seen.
+    if (grid.zoomedId && !grid.autoZoom) grid.zoomedId = null;
     this._applyTileLayout();
     this._connectTile(sessionId);
     this._scheduleTileGridRefit();
@@ -395,18 +407,20 @@ Object.assign(CodemanApp.prototype, {
     }
     const wasFocused = grid.focusedId === sessionId;
     const neighbor = window.CodemanTileGrid.tileNeighbor(grid.ids, sessionId);
+    // The zoomed tile leaving restores the grid (an automatic zoom moves to
+    // the neighbour with focus, below).
+    if (grid.zoomedId === sessionId) grid.zoomedId = grid.autoZoom && refocus ? neighbor : null;
     grid.queue?.drop(entry.tile);
     entry.tile.destroy();
     entry.el.remove();
     grid.tiles.delete(sessionId);
     grid.ids.splice(grid.ids.indexOf(sessionId), 1);
+    // Before the layout, which may zoom the focused tile on a small window.
+    if (wasFocused) grid.focusedId = null;
     this._applyTileLayout();
     this._scheduleTileGridRefit();
     this.renderSessionTabs?.();
-    if (wasFocused) {
-      grid.focusedId = null;
-      if (refocus && neighbor) this._selectTiledSession(neighbor, { auto });
-    }
+    if (wasFocused && refocus && neighbor) this._selectTiledSession(neighbor, { auto });
     return true;
   },
 
@@ -444,7 +458,15 @@ Object.assign(CodemanApp.prototype, {
       boundedLoad: true,
       onExit: (code) => this._onTileExit(sessionId, tile, code),
     });
-    grid.tiles.set(sessionId, { tile, el, header: header.el, dot: header.dot, name: header.name, renaming: false });
+    grid.tiles.set(sessionId, {
+      tile,
+      el,
+      header: header.el,
+      dot: header.dot,
+      name: header.name,
+      zoomBtn: header.zoomBtn,
+      renaming: false,
+    });
     grid.ids.push(sessionId);
     this._renderTileHeader(sessionId);
     return true;
@@ -487,8 +509,11 @@ Object.assign(CodemanApp.prototype, {
       });
       return b;
     };
+    const zoomBtn = button('tile-zoom', 'Zoom this tile', '\u2922', () => this.zoomTile(sessionId));
+    zoomBtn.setAttribute('aria-pressed', 'false');
     actions.append(
       button('tile-menu', 'Session actions', '\u22EF', (e) => this.openTabRailActionMenu?.(e, sessionId)),
+      zoomBtn,
       // Removes the tile ONLY: the session keeps running. Killing it stays
       // behind the menu's Close session and its confirm.
       button('tile-remove', 'Remove tile (the session keeps running)', '\u00D7', () =>
@@ -496,7 +521,7 @@ Object.assign(CodemanApp.prototype, {
       )
     );
     el.append(dot, name, actions);
-    return { el, dot, name };
+    return { el, dot, name, zoomBtn };
   },
 
   /**
@@ -604,15 +629,64 @@ Object.assign(CodemanApp.prototype, {
     const grid = this._tileGrid;
     const section = this._tileGridSection();
     const rect = section.getBoundingClientRect?.() || { width: 0, height: 0 };
-    const { cols, rows } = window.CodemanTileGrid.computeTileLayout({
+    const { cols, rows, fits } = window.CodemanTileGrid.computeTileLayout({
       count: grid.ids.length,
       width: rect.width || window.innerWidth,
       height: rect.height || window.innerHeight,
     });
     grid.cols = cols;
     grid.rows = rows;
-    section.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
-    section.style.gridTemplateRows = `repeat(${rows}, minmax(0, 1fr))`;
+    // A window too small for the tiles' minimum size shows the focused tile
+    // alone, with a hint; once it fits again the grid comes back. A zoom the
+    // user chose is theirs: it stays until they lift it.
+    if (!fits && !grid.zoomedId && grid.focusedId) {
+      grid.zoomedId = grid.focusedId;
+      grid.autoZoom = true;
+      this.showToast?.(`The window is too small for ${grid.ids.length} tiles: showing the focused one`, 'info');
+    } else if (fits && grid.autoZoom) {
+      grid.zoomedId = null;
+      grid.autoZoom = false;
+    }
+    const zoomed = grid.zoomedId && grid.tiles.has(grid.zoomedId) ? grid.zoomedId : null;
+    section.classList.toggle('tile-grid--zoomed', !!zoomed);
+    for (const [id, entry] of grid.tiles) {
+      entry.el.classList.toggle('tile--zoomed', id === zoomed);
+      const zoomBtn = entry.zoomBtn;
+      if (zoomBtn) {
+        const on = id === zoomed;
+        const label = on ? 'Restore the grid' : 'Zoom this tile';
+        zoomBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        if (zoomBtn.title !== label) {
+          zoomBtn.title = label;
+          zoomBtn.setAttribute('aria-label', label);
+        }
+      }
+    }
+    // Zoomed: one cell; the other tiles stay connected but hidden (CSS), so
+    // they measure nothing and send no resize.
+    section.style.gridTemplateColumns = zoomed ? 'minmax(0, 1fr)' : `repeat(${cols}, minmax(0, 1fr))`;
+    section.style.gridTemplateRows = zoomed ? 'minmax(0, 1fr)' : `repeat(${rows}, minmax(0, 1fr))`;
+  },
+
+  /**
+   * Zooms a tile to fill the grid, like tmux zoom, or restores the grid when it
+   * is the one zoomed. A tile that is not focused is focused first (a human
+   * selection: the user asked to look at it). Every tile is refitted after, the
+   * shown ones to their new size and the zoomed one to the whole grid.
+   */
+  zoomTile(sessionId) {
+    const grid = this._tileGrid;
+    if (!grid?.open || !grid.tiles.has(sessionId)) return;
+    if (grid.zoomedId === sessionId) {
+      grid.zoomedId = null;
+      grid.autoZoom = false;
+    } else {
+      if (grid.focusedId !== sessionId) this.selectSession(sessionId);
+      grid.zoomedId = sessionId;
+      grid.autoZoom = false;
+    }
+    this._applyTileLayout();
+    this._scheduleTileGridRefit();
   },
 
   // Refits every tile once the grid area has settled: one xterm resize and one
@@ -667,6 +741,14 @@ Object.assign(CodemanApp.prototype, {
     this._hideWebviewLayer?.();
     this.activeSessionId = sessionId;
     grid.focusedId = sessionId;
+    // Moving focus off a zoomed tile restores the grid, as selecting another
+    // pane does in tmux. An automatic zoom (the window cannot fit the tiles)
+    // follows focus instead: there is no grid to restore.
+    if (grid.zoomedId && grid.zoomedId !== sessionId) {
+      grid.zoomedId = grid.autoZoom ? sessionId : null;
+      this._applyTileLayout();
+      this._scheduleTileGridRefit();
+    }
     this._activateFileBrowserSession?.(sessionId);
     try {
       localStorage.setItem('codeman-active-session', sessionId);

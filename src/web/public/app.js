@@ -568,6 +568,15 @@ const DEFAULT_SHORTCUTS = [
     action: 'focusTileDown',
   },
   {
+    id: 'zoom-tile',
+    group: 'Tiles',
+    label: 'Zoom Focused Tile',
+    // Toggles. Alt+Shift+Enter would otherwise reach the CLI as ESC CR (Alt+Enter
+    // is a newline in Claude Code); it is swallowed only while the grid is open.
+    bindings: [{ modifiers: ['alt', 'shift'], key: 'Enter' }],
+    action: 'zoomTile',
+  },
+  {
     id: 'remove-tile',
     group: 'Tiles',
     label: 'Remove Focused Tile',
