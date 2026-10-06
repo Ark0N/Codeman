@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
+import { JSDOM } from 'jsdom';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(HERE, '../src/web/public');
@@ -49,6 +50,37 @@ describe('showTileGridButton stays per-device: display key, stripped from the PU
       "showTileGridButton: document.getElementById('appSettingsShowTileGridButton').checked,"
     );
     expect(settingsUi).toContain('this._applyTileGridButtonVisibility?.(showTileGridButton);');
+  });
+});
+
+describe('App Settings search finds Split and Tiles', () => {
+  // The real filter (settings-ui.js) over the real markup: it matches each chip
+  // by its own data-search and its text, so the chips carry their own keywords.
+  const html = read('index.html');
+  const settingsSrc = read('settings-ui.js');
+  const start = settingsSrc.indexOf('  _filterSettings(query) {');
+  const end = settingsSrc.indexOf('\n  },', start);
+  const dom = new JSDOM(html);
+  const doc = dom.window.document;
+  const filter = new Function('document', `return ({${settingsSrc.slice(start, end + 4)}});`)(doc) as {
+    _filterSettings(q: string): void;
+  };
+  const shown = (id: string) => !doc.getElementById(id)!.closest('.set-chip')!.classList.contains('set-hit-hidden');
+
+  it.each([
+    ['tiles', true, false],
+    ['tile grid', true, false],
+    ['side by side', true, true],
+    ['split', false, true],
+    ['split pane', false, true],
+  ])('"%s": Tiles shown %s, Split shown %s', (query, tiles, split) => {
+    filter._filterSettings(query);
+    expect(shown('appSettingsShowTileGridButton')).toBe(tiles);
+    expect(shown('appSettingsShowSplitButton')).toBe(split);
+  });
+
+  it('the Header buttons group names both in its keywords', () => {
+    expect(html).toMatch(/data-search="header buttons [^"]*\bsplit tiles\b[^"]*"/);
   });
 });
 
