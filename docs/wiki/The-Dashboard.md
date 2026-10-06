@@ -27,7 +27,7 @@ Session List Layout** can move it into a vertical sidebar on the left instead, a
 
 | Layout               | Behaviour                                                                       |
 | -------------------- | --------------------------------------------------------------------------------- |
-| **Header tab strip** | The default. On desktop it is one row per state (see [Tab grouping by state](#tab-grouping-by-state)); it scrolls sideways on a phone. |
+| **Header tab strip** | The default. On desktop it is one row per state by default (see [Tab layouts](#tab-layouts)); it scrolls sideways on a phone. |
 | **Left sidebar**     | A vertical list with a filter box and a live session count. `Alt+B` collapses it to a narrow rail that keeps the status dots and task badges visible. On a phone it is an off-canvas drawer rather than a docked rail. A detailed variant adds the home screen's per-session line (`created 3d ago · working 12m`) and a status pill. |
 | **Vertical rail**    | The strip turned vertical beside the terminal, resizable, with detailed rows by default. **Vertical Rail Order** sorts it by activity (blocked on you first, then longest running, then most recently quiet), the same order as the home screens; pick *Manual* to get your own order and drag-reordering back. **Tab groups:** pick *Move to new group* from a row's ⋯ menu (or Shift+F10 on it) to make the first one; a group header's menu (right-click, Shift+F10 or its ⋯ glyph) renames it (also F2), reorders or deletes it, rows move between groups from their own menu or by dragging with a mouse or pen, and a collapsed group stays collapsed on that device. Desktop and tablet only. |
 
@@ -35,9 +35,18 @@ It is the same list either way, just re-hosted: tab order, drag-to-reorder, the 
 to `Alt+9` numbers and every status colour below behave identically in both. The setting is
 per device, so a sidebar on your desktop does not force one onto your phone.
 
-## Tab grouping by state
+## Tab layouts
 
-By default the tabs are grouped by what each session needs from you, most urgent on top:
+**App Settings → Appearance → Tabs → Tab Layout** picks how the tabs are arranged. Per device.
+
+| Layout                 | What it does                                                                         |
+| ---------------------- | ------------------------------------------------------------------------------------ |
+| **By state** (default) | Groups the tabs by what each session needs from you (below).                         |
+| **By case**            | One box per case, labelled with the case and its tab count. Inside a box, `w75-api-gateway` reads just `w75`. A case with one tab gets a box with a colour swatch. |
+| **Ledger**             | The same list on an aligned column grid: equal cells, monospace names, a coloured bar on the left of each cell instead of the dot (yellow waiting, red needs you). Desktop header only. |
+| **Classic**            | The single list in tab order, as before.                                             |
+
+**By state** groups the tabs like this, most urgent on top:
 
 | Group         | Who is in it                                                                        |
 | ------------- | ----------------------------------------------------------------------------------- |
@@ -47,18 +56,17 @@ By default the tabs are grouped by what each session needs from you, most urgent
 | **Idle**      | Everything quiet, including ended sessions, agents that exited inside their pane, and web tabs. |
 
 In the header each group is a row with its name and count on the left; a group with more
-tabs than fit on one line continues under its own tabs. The vertical rail and the left
-sidebar show the same groups as sections. Empty groups are not shown. These are the same
-states the phone overview and the desktop home rail use.
+tabs than fit on one line continues under its own tabs. **State Order → Needs you at the
+bottom** turns the rows the other way up, so the needs-you row sits right above the
+terminal. Empty groups are not shown. These are the same states the phone overview and the
+desktop home rail use, and tabs move between groups on their own as their state changes.
 
-Tabs move between groups on their own as their state changes. Inside a group they keep your
-tab order (on a rail sorted *By activity*, the activity order), and the `Alt+1` to `Alt+9`
-numbers never change. Dragging reorders tabs within a group. On a phone the strip stays a
-single scrolling row: the tabs come in group order, without the headings. If you have named
-tab groups in the vertical rail, those take precedence there.
-
-Turn it off with **App Settings → Appearance → Tabs → Tab Grouping → None** to get one list
-in tab order. Per device.
+Both groupings also apply to the vertical rail and the left sidebar, as labelled sections.
+Inside a group or a box tabs keep your tab order (on a rail sorted *By activity*, the
+activity order), and the `Alt+1` to `Alt+9` numbers never change. Dragging reorders tabs
+within a group or box. On a phone the strip stays a single scrolling row in group order,
+without labels or boxes. If you have named tab groups in the vertical rail, those take
+precedence there.
 
 ## Session tabs
 

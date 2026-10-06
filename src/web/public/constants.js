@@ -658,7 +658,7 @@ function sortSessionsByActivity(rows) {
   return (Array.isArray(rows) ? rows.slice() : []).sort(compareSessionActivity);
 }
 
-// Tab grouping by state (`tabGrouping: 'state'`, Discussion #426 option C).
+// Tab grouping by state (`tabArrangement: 'state'`, Discussion #426 option C).
 //
 // The tab list answers "who wants me?" the way the home screens do: a row (the
 // header strip) or a section (the flat side rail, the sidebar) per state, most
@@ -723,18 +723,23 @@ function tabTriageGroupFor(state, exited) {
  *   strip, the activity sort's position on a sorted rail). Rows without one keep
  *   the order they were passed in.
  * @param {Array<string>} webviewIds open web tabs, in their own tab order
+ * @param {{reverse?: boolean}} [options] `reverse` puts the groups the other
+ *   way up (`tabStateOrder: 'urgent-last'`): idle first, needs you last, for a
+ *   strip read from the bottom. Rows inside a group keep their order.
  * @returns {{
  *   order: Map<string, number>,
  *   webOrder: Map<string, number>,
  *   groups: Array<{key: string, label: string, count: number, headOrder: number, breakOrder: number}>
- * }} `groups` lists only the non-empty groups, most urgent first.
+ * }} `groups` lists only the non-empty groups, in display order (most urgent
+ *   first, or last with `reverse`).
  */
-function computeTabTriageLayout(rows, webviewIds) {
+function computeTabTriageLayout(rows, webviewIds, options) {
   const list = Array.isArray(rows) ? rows : [];
   const webs = Array.isArray(webviewIds) ? webviewIds : [];
+  const sequence = options && options.reverse ? TAB_TRIAGE_GROUPS.slice().reverse() : TAB_TRIAGE_GROUPS;
   const baseOf = {};
   const counts = {};
-  TAB_TRIAGE_GROUPS.forEach((group, i) => {
+  sequence.forEach((group, i) => {
     baseOf[group.key] = (i + 1) * TAB_TRIAGE_STRIDE;
     counts[group.key] = 0;
   });
@@ -764,7 +769,7 @@ function computeTabTriageLayout(rows, webviewIds) {
   });
   counts.idle += webOrder.size;
 
-  const groups = TAB_TRIAGE_GROUPS.filter((group) => counts[group.key] > 0).map((group) => ({
+  const groups = sequence.filter((group) => counts[group.key] > 0).map((group) => ({
     key: group.key,
     label: group.label,
     count: counts[group.key],
@@ -773,6 +778,68 @@ function computeTabTriageLayout(rows, webviewIds) {
   }));
 
   return { order, webOrder, groups };
+}
+
+// Tab clusters by case (`tabArrangement: 'case'`, Discussion #426 option A).
+//
+// One cluster per case, in the order the case first appears in the tab order,
+// so the strip keeps the user's arrangement at the case level. Inside a cluster
+// with two or more tabs the `-<case>` part of a generated `w<n>-<case>` name is
+// redundant and is hidden (`tabClusterNameSplit()`), which is what lets 18 tabs
+// read as 7 things. A case with one tab is still its own (unlabelled) box.
+//
+// Cluster colours come from the session palette (`--session-<colour>`) by a
+// stable hash of the case key, so a case keeps its colour across reloads and
+// devices without anything being stored.
+//
+// Pure: no DOM, no `this`. Unit-tested in test/tab-clusters.test.ts.
+const TAB_CLUSTER_COLORS = ['blue', 'green', 'purple', 'orange', 'pink', 'yellow', 'red'];
+
+/** Palette colour for a cluster key: a djb2 hash, so the same key always gets the same colour. */
+function tabClusterColorFor(key) {
+  const text = String(key || '');
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
+  return TAB_CLUSTER_COLORS[Math.abs(hash) % TAB_CLUSTER_COLORS.length];
+}
+
+/**
+ * Group tabs by case.
+ * @param {Array<{id: string, key: string, label: string}>} rows live sessions in
+ *   tab order; `key` identifies the case (its path), `label` names it
+ * @returns {Array<{key: string, label: string, color: string, ids: string[]}>}
+ *   clusters in first-appearance order, members in tab order
+ */
+function computeTabClusters(rows) {
+  const clusters = [];
+  const byKey = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || typeof row.id !== 'string') continue;
+    const key = typeof row.key === 'string' && row.key ? row.key : `session:${row.id}`;
+    let cluster = byKey.get(key);
+    if (!cluster) {
+      cluster = { key, label: typeof row.label === 'string' ? row.label : '', color: tabClusterColorFor(key), ids: [] };
+      byKey.set(key, cluster);
+      clusters.push(cluster);
+    }
+    cluster.ids.push(row.id);
+  }
+  return clusters;
+}
+
+/**
+ * Split a generated `w<n>-<case>` / `s<n>-<case>` name into the part a cluster
+ * shows and the case suffix it hides, or null when the name is anything else
+ * (a custom name, a described `w3-x: fix login`, another case's name). Case is
+ * compared case-insensitively; the hidden part keeps its original spelling so
+ * the full name is still in the DOM.
+ * @returns {{shown: string, hidden: string}|null}
+ */
+function tabClusterNameSplit(name, label) {
+  if (typeof name !== 'string' || typeof label !== 'string' || !label) return null;
+  const match = name.match(/^([ws]\d+)(-.+)$/);
+  if (!match) return null;
+  return match[2].slice(1).toLowerCase() === label.toLowerCase() ? { shown: match[1], hidden: match[2] } : null;
 }
 
 // Terminal font stack — the single source for every xterm surface (the main
@@ -1099,6 +1166,12 @@ if (typeof window !== 'undefined') {
     anchor: sessionActivityAnchor,
     compare: compareSessionActivity,
     sort: sortSessionsByActivity,
+  };
+  window.CodemanTabClusters = {
+    COLORS: TAB_CLUSTER_COLORS,
+    colorFor: tabClusterColorFor,
+    compute: computeTabClusters,
+    nameSplit: tabClusterNameSplit,
   };
   window.CodemanTabTriage = {
     GROUPS: TAB_TRIAGE_GROUPS,

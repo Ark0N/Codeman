@@ -501,8 +501,8 @@ Object.assign(CodemanApp.prototype, {
       settings.tabRailDetail ?? defaults.tabRailDetail ?? 'rich';
     document.getElementById('appSettingsTabRailSort').value =
       settings.tabRailSort ?? defaults.tabRailSort ?? 'activity';
-    document.getElementById('appSettingsTabGrouping').value =
-      (settings.tabGrouping ?? defaults.tabGrouping ?? 'state') === 'none' ? 'none' : 'state';
+    document.getElementById('appSettingsTabArrangement').value = this.resolveTabArrangement(settings);
+    document.getElementById('appSettingsTabStateOrder').value = this.resolveTabStateOrder(settings);
     document.getElementById('appSettingsShowTabDetachButton').checked = settings.showTabDetachButton ?? defaults.showTabDetachButton ?? false;
     document.getElementById('appSettingsSessionListLayout').value =
       settings.sessionListLayout ?? defaults.sessionListLayout ?? 'header';
@@ -2528,7 +2528,8 @@ Object.assign(CodemanApp.prototype, {
       tabRailWidth: this.readTabRailWidthSetting?.() ?? 256,
       tabRailDetail: document.getElementById('appSettingsTabRailDetail').value,
       tabRailSort: document.getElementById('appSettingsTabRailSort').value,
-      tabGrouping: document.getElementById('appSettingsTabGrouping').value,
+      tabArrangement: document.getElementById('appSettingsTabArrangement').value,
+      tabStateOrder: document.getElementById('appSettingsTabStateOrder').value,
       showTabDetachButton: document.getElementById('appSettingsShowTabDetachButton').checked,
       sessionListLayout: document.getElementById('appSettingsSessionListLayout').value,
       sessionSidebarFontSize: this.resolveSessionSidebarFontSize(
@@ -3453,7 +3454,8 @@ Object.assign(CodemanApp.prototype, {
         tabRailWidth: 256,
         tabRailDetail: 'rich',
         tabRailSort: 'activity',
-        tabGrouping: 'state',
+        tabArrangement: 'state',
+        tabStateOrder: 'urgent-first',
         sessionListLayout: 'header',
         sessionSidebarFontSize: 12,
         cjkInputEnabled: false,
@@ -3553,6 +3555,22 @@ Object.assign(CodemanApp.prototype, {
   planUsageCollectionFlip(prevSettings, now) {
     const before = this.planUsageChipEnabled(prevSettings ?? {});
     return now === before ? undefined : now;
+  },
+
+  /**
+   * The stored tab layout, or the default. Anything but the four known values
+   * (an absent key, a value from a newer build) reads as 'state', the default
+   * (Discussion #426, option C).
+   */
+  resolveTabArrangement(settings) {
+    const value = settings?.tabArrangement ?? this.getDefaultSettings().tabArrangement;
+    return value === 'case' || value === 'ledger' || value === 'classic' ? value : 'state';
+  },
+
+  /** The stored state-group order: 'urgent-last' only when chosen, else 'urgent-first'. */
+  resolveTabStateOrder(settings) {
+    const value = settings?.tabStateOrder ?? this.getDefaultSettings().tabStateOrder;
+    return value === 'urgent-last' ? 'urgent-last' : 'urgent-first';
   },
 
   /**
@@ -3815,14 +3833,18 @@ Object.assign(CodemanApp.prototype, {
     const sort = (settings.tabRailSort ?? defaults.tabRailSort ?? 'activity') === 'manual' ? 'manual' : 'activity';
     root.dataset.tabRailSort = sort;
 
-    // Grouping rides on a fourth attribute, for the same reason: it is applied
-    // as inline `order` plus heading elements the render paths emit, so a flip
-    // has to re-render, and `isTabTriage()` (app.js) reads one attribute per
-    // pass instead of re-parsing localStorage. Anything but an explicit 'none'
-    // is 'state', the default (Discussion #426, option C).
-    const previousGrouping = root.dataset.tabGrouping || 'state';
-    const grouping = (settings.tabGrouping ?? defaults.tabGrouping ?? 'state') === 'none' ? 'none' : 'state';
-    root.dataset.tabGrouping = grouping;
+    // The tab layout rides on a fourth attribute, for the same reason: it is
+    // applied by the render paths (inline `order` plus headings, or cluster
+    // boxes), so a flip has to re-render, and the gates in app.js
+    // (`isTabTriage()`, `isTabClusters()`, `isTabLedger()`) read one attribute
+    // per pass instead of re-parsing localStorage.
+    const previousArrangement = root.dataset.tabArrangement || 'state';
+    const arrangement = this.resolveTabArrangement(settings);
+    root.dataset.tabArrangement = arrangement;
+    // Which end the state groups start from; read by _tabTriageLayout().
+    const previousStateOrder = root.dataset.tabStateOrder || 'urgent-first';
+    const stateOrder = this.resolveTabStateOrder(settings);
+    root.dataset.tabStateOrder = stateOrder;
 
     const tabsEl = document.getElementById('sessionTabs');
     const rail = document.getElementById('tabRail');
@@ -3847,7 +3869,7 @@ Object.assign(CodemanApp.prototype, {
     // the row template, not toggled by CSS — same reasoning as the sidebar's
     // detail half in applySessionListLayout(). Taller rows also move every
     // connector anchored to a tab rect.
-    const changed = orientationChanged || previousDetail !== detail || previousSort !== sort || previousGrouping !== grouping;
+    const changed = orientationChanged || previousDetail !== detail || previousSort !== sort || previousArrangement !== arrangement || previousStateOrder !== stateOrder;
     if (orientationChanged) {
       this.updateTabOverflowMode?.();
       if (!settleRailWidth) this.syncTerminalGeometry?.();
@@ -4120,7 +4142,7 @@ Object.assign(CodemanApp.prototype, {
           'showFontControls', 'showSystemStats', 'headerStatsStyle', 'showTokenCount', 'showCost',
           'showLifecycleLog', 'showResponseViewer', 'showRedrawButton',
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
-          'subagentActiveTabOnly', 'tabTwoRows', 'tabOrientation', 'tabRailWidth', 'tabRailDetail', 'tabRailSort', 'tabGrouping', 'sessionListLayout', 'sessionSidebarFontSize', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
+          'subagentActiveTabOnly', 'tabTwoRows', 'tabOrientation', 'tabRailWidth', 'tabRailDetail', 'tabRailSort', 'tabArrangement', 'tabStateOrder', 'sessionListLayout', 'sessionSidebarFontSize', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
           'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'showFileViewerButton', 'webglRendererEnabled',
           'terminalFontFamily', 'terminalFontWeight', 'terminalFontWeightBold',
           'language',

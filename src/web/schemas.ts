@@ -1404,13 +1404,24 @@ export const SettingsUpdateSchema = z
      */
     tabRailSort: z.enum(['activity', 'manual']).optional(),
     /**
-     * Tab grouping. Display key (per-device).
-     * 'state' = the strip is split into state rows (needs you, waiting,
-     *           working, idle; Discussion #426 option C), and the flat side
-     *           rail and the sidebar get the same sections. The default.
-     * 'none'  = one flat list in tab order, as before.
+     * Tab layout, the arrangement of the tab list (Discussion #426). Display key
+     * (per-device).
+     * 'state'   = a row per state in the header strip (needs you, waiting,
+     *             working, idle; option C), sections in the flat side rail and
+     *             the sidebar. The default.
+     * 'case'    = one cluster per case (option A): a labelled box in the strip,
+     *             a section in the side rail and the sidebar.
+     * 'ledger'  = the flat list on an aligned column grid with a status bar
+     *             per cell (option B). Header strip on desktop only.
+     * 'classic' = one flat list in tab order, as before.
      */
-    tabGrouping: z.enum(['state', 'none']).optional(),
+    tabArrangement: z.enum(['state', 'case', 'ledger', 'classic']).optional(),
+    /**
+     * Which end the state groups start from when `tabArrangement` is 'state'.
+     * Display key (per-device). 'urgent-first' = needs you on top (the
+     * default); 'urgent-last' = the other way up, needs you in the bottom row.
+     */
+    tabStateOrder: z.enum(['urgent-first', 'urgent-last']).optional(),
     /**
      * Session list layout. Display key (per-device).
      * 'header'       = horizontal tab strip

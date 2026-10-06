@@ -201,7 +201,7 @@ describe('header stats wiring (static)', () => {
 
   it('hides the new-style parts by default, so classic looks exactly as before', () => {
     expect(css).toMatch(
-      /\.stat-spark,\s*\.connection-tile-label,\s*\.connection-tile-value,\s*\.header-plan-usage \.pu-ring,\s*\.header-plan-usage \.pu-meter \{\s*display: none;/
+      /\.stat-spark,\s*\.connection-tile,\s*\.header-plan-usage \.pu-ring,\s*\.header-plan-usage \.pu-meter \{\s*display: none;/
     );
   });
 

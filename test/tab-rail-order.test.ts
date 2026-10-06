@@ -281,9 +281,9 @@ describe('vertical tab rail sort setting', () => {
     expect(settingsUi).toContain('root.dataset.tabRailSort = sort;');
     // A sort flip leaves orientation on 'vertical' both times, so it has to
     // count as a change of its own or nothing re-renders. The same holds for a
-    // grouping flip (tabGrouping, test/tab-triage.test.ts).
+    // tab layout or state order flip (test/tab-triage.test.ts).
     expect(settingsUi).toContain(
-      'const changed = orientationChanged || previousDetail !== detail || previousSort !== sort || previousGrouping !== grouping;'
+      'const changed = orientationChanged || previousDetail !== detail || previousSort !== sort || previousArrangement !== arrangement || previousStateOrder !== stateOrder;'
     );
   });
 });

@@ -1,5 +1,5 @@
 /**
- * @fileoverview Tab grouping by state (`tabGrouping: 'state'`, Discussion #426
+ * @fileoverview Tab grouping by state (`tabArrangement: 'state'`, Discussion #426
  * option C): the pure layout in constants.js and the render paths in app.js.
  *
  * What is pinned, and why it matters:
@@ -12,7 +12,7 @@
  *  - A state change is an INCREMENTAL pass: the tab element survives, only its
  *    `order` and the heading counts move, and a group that empties loses its
  *    heading.
- *  - `tabGrouping: 'none'` leaves no trace (no headings, no inline order, no
+ *  - `tabArrangement: 'classic'` leaves no trace (no headings, no inline order, no
  *    class), and named groups in the vertical rail win over it.
  *
  * The real modules run INSIDE a JSDOM window (runScripts: 'outside-only'), so
@@ -116,6 +116,24 @@ describe('CodemanTabTriage (pure)', () => {
     expect(out.webOrder.get('w2')).toBeLessThan(out.groups[0].breakOrder);
   });
 
+  it('turns the groups the other way up with reverse, rows unchanged inside them', () => {
+    const rows = [
+      { id: 'a', state: 'idle', pos: 0 },
+      { id: 'b', state: 'needs', pos: 1 },
+      { id: 'c', state: 'working', pos: 2 },
+      { id: 'd', state: 'working', pos: 3 },
+    ];
+    const out = triage.layout(rows, ['w1'], { reverse: true });
+    expect(out.groups.map((g) => g.key)).toEqual(['idle', 'working', 'needs']);
+    const sorted = [...out.order.entries()].sort((p, q) => p[1] - q[1]).map(([id]) => id);
+    expect(sorted).toEqual(['a', 'c', 'd', 'b']);
+    // Web tabs still close the idle group, which now comes first.
+    expect(out.webOrder.get('w1')).toBeLessThan(out.order.get('c')!);
+    for (let i = 1; i < out.groups.length; i++) {
+      expect(out.groups[i].headOrder).toBeGreaterThan(out.groups[i - 1].breakOrder);
+    }
+  });
+
   it('shows the idle group for web tabs alone, and nothing for nothing', () => {
     expect(triage.layout([], ['w1']).groups.map((g) => g.key)).toEqual(['idle']);
     expect(triage.layout([], []).groups).toEqual([]);
@@ -158,12 +176,13 @@ describe('tab grouping in the render paths (app.js)', () => {
     CodemanApp = window.__TriageCodemanApp;
   });
 
-  function makeApp(grouping: 'state' | 'none' = 'state') {
+  function makeApp(arrangement: 'state' | 'case' | 'ledger' | 'classic' = 'state') {
     const app = Object.create(CodemanApp.prototype) as Record<string, any>;
     const root = document.documentElement;
     root.setAttribute('data-tab-orientation', 'horizontal');
     root.dataset.tabRailSort = 'activity';
-    root.dataset.tabGrouping = grouping;
+    root.dataset.tabArrangement = arrangement;
+    delete root.dataset.tabStateOrder;
     document.body.innerHTML = '<div class="session-tabs-host"><div id="sessionTabs" class="session-tabs"></div></div>';
     app.$ = (id: string) => document.getElementById(id);
     app.sessions = new Map([
@@ -246,6 +265,24 @@ describe('tab grouping in the render paths (app.js)', () => {
     }
   });
 
+  it("puts needs you in the bottom row with tabStateOrder 'urgent-last'", () => {
+    const app = makeApp();
+    document.documentElement.dataset.tabStateOrder = 'urgent-last';
+    app._fullRenderSessionTabs();
+    expect(heads()).toEqual(['Idle:1', 'Working:2', 'Waiting:1', 'Needs you:1']);
+    expect(visual()).toEqual([
+      'head:idle',
+      'web:w1',
+      'head:working',
+      's2',
+      's4',
+      'head:waiting',
+      's1',
+      'head:needs',
+      's3',
+    ]);
+  });
+
   it('keeps the DOM, and with it the Alt+N badges, in tab order', () => {
     makeApp()._fullRenderSessionTabs();
     const domOrder = [...container().querySelectorAll<HTMLElement>('.session-tab[data-id]')].map((t) => t.dataset.id);
@@ -289,8 +326,8 @@ describe('tab grouping in the render paths (app.js)', () => {
     expect(visual()).toEqual(['head:needs', 's1', 'head:working', 's4', 'head:idle', 's2', 's3', 'web:w1']);
   });
 
-  it("leaves no trace with tabGrouping 'none'", () => {
-    makeApp('none')._fullRenderSessionTabs();
+  it("leaves no trace with tabArrangement 'classic'", () => {
+    makeApp('classic')._fullRenderSessionTabs();
     expect(container().classList.contains('tabs-triage')).toBe(false);
     expect(container().querySelector('.tab-triage-head, .tab-triage-break')).toBeNull();
     expect(container().innerHTML).not.toContain('order:');
@@ -300,7 +337,7 @@ describe('tab grouping in the render paths (app.js)', () => {
   it('switching off removes the headings and every inline order it wrote', () => {
     const app = makeApp();
     app._fullRenderSessionTabs();
-    document.documentElement.dataset.tabGrouping = 'none';
+    document.documentElement.dataset.tabArrangement = 'classic';
     app._renderSessionTabsImmediate();
     expect(container().querySelector('.tab-triage-head, .tab-triage-break')).toBeNull();
     for (const el of container().querySelectorAll<HTMLElement>('.session-tab')) expect(el.style.order).toBe('');
@@ -345,12 +382,12 @@ describe('tab grouping in the render paths (app.js)', () => {
     const app = makeApp();
     app._fullRenderSessionTabs();
     app.draggedTabId = 's2';
-    expect(app._isTabDropAcrossTriageGroups(tab('s4'))).toBe(false);
-    expect(app._isTabDropAcrossTriageGroups(tab('s1'))).toBe(true);
-    expect(app._isTabDropAcrossTriageGroups(tab('s3'))).toBe(true);
-    document.documentElement.dataset.tabGrouping = 'none';
+    expect(app._isTabDropAcrossGroups(tab('s4'))).toBe(false);
+    expect(app._isTabDropAcrossGroups(tab('s1'))).toBe(true);
+    expect(app._isTabDropAcrossGroups(tab('s3'))).toBe(true);
+    document.documentElement.dataset.tabArrangement = 'classic';
     app._fullRenderSessionTabs();
-    expect(app._isTabDropAcrossTriageGroups(tab('s1'))).toBe(false);
+    expect(app._isTabDropAcrossGroups(tab('s1'))).toBe(false);
   });
 
   it('degrades to the flat strip when mobile-overview.js is stale or missing', () => {
@@ -367,14 +404,24 @@ describe('tab grouping wiring (static)', () => {
   const css = read('styles.css');
   const mobileCss = read('mobile.css');
 
-  it('stamps data-tab-grouping before first paint, defaulting to state', () => {
-    expect(html).toContain("dataset.tabGrouping=(A.tabGrouping==='none')?'none':'state'");
-    // The catch branch (localStorage threw) must set it too.
-    expect(html).toContain("document.documentElement.dataset.tabGrouping='state';");
+  it('stamps data-tab-arrangement and data-tab-state-order before first paint', () => {
+    expect(html).toContain(
+      "dataset.tabArrangement=(T==='case'||T==='ledger'||T==='classic')?T:'state'"
+    );
+    expect(html).toContain("dataset.tabStateOrder=(A.tabStateOrder==='urgent-last')?'urgent-last':'urgent-first'");
+    // The catch branch (localStorage threw) must set both too.
+    expect(html).toContain(
+      "document.documentElement.dataset.tabArrangement='state';document.documentElement.dataset.tabStateOrder='urgent-first';"
+    );
   });
 
-  it('offers the setting with "By state" as the default', () => {
-    expect(html).toMatch(/<select id="appSettingsTabGrouping"[^>]*>\s*<option value="state">By state \(default\)<\/option>\s*<option value="none">/);
+  it('offers the four layouts with "By state" as the default, and the state order', () => {
+    expect(html).toMatch(
+      /<select id="appSettingsTabArrangement"[^>]*>\s*<option value="state">By state \(default\)<\/option>\s*<option value="case">[^<]+<\/option>\s*<option value="ledger">[^<]+<\/option>\s*<option value="classic">Classic \(as before\)<\/option>/
+    );
+    expect(html).toMatch(
+      /<select id="appSettingsTabStateOrder"[^>]*>\s*<option value="urgent-first">Needs you on top \(default\)<\/option>\s*<option value="urgent-last">/
+    );
   });
 
   it('only shows row breaks in a wrapping header strip', () => {

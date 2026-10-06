@@ -89,8 +89,9 @@ every session or only the active tab.
 | Interface Language     | English or Simplified Chinese. Per device.                                                 |
 | Session List Layout    | Header tab strip (default), a collapsible left sidebar, or the sidebar with detailed rows. See [The Dashboard](The-Dashboard#session-list-layout). |
 | Tab Orientation        | Keeps the header list but turns the strip vertical beside the terminal, resizable, with detailed rows by default. Desktop and tablet only. |
-| Tab Grouping           | *By state* (default) splits the tabs into needs you, waiting, working and idle: rows in the header, sections in the rail and sidebar. *None* keeps one list in tab order. See [The Dashboard](The-Dashboard#tab-grouping-by-state). |
-| Vertical Rail Order    | *By activity* (default) sorts the rail the way the home screens are sorted; *Manual* keeps your tab order and drag-reordering. With grouping by state it orders the rows inside each section. |
+| Tab Layout             | *By state* (default): a row each for needs you, waiting, working and idle, sections in the rail and sidebar. *By case*: one box per case. *Ledger*: an aligned column grid. *Classic*: the single list as before. See [The Dashboard](The-Dashboard#tab-layouts). |
+| State Order            | For *By state*: needs you on top (default) or at the bottom, right above the terminal. |
+| Vertical Rail Order    | *By activity* (default) sorts the rail the way the home screens are sorted; *Manual* keeps your tab order and drag-reordering. With *By state* or *By case* it orders the rows inside each section. |
 | Tall Tabs              | Taller tab strip.                                                                          |
 | Pop-out Button on Tabs | Adds the detach control to tabs, with a per-tab override.                                  |
 | Spawn Lineage Lines    | Arcs from a parent tab to sessions it spawned. Desktop only, on by default.                |

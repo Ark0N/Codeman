@@ -755,11 +755,22 @@ html.mobile-init .file-browser-panel {
     font-weight: 500;
   }
 
-  /* Grouped by state (tabGrouping), the phone strip keeps its one scrolling
+  /* Grouped by state (tabArrangement 'state'), the phone strip keeps its one scrolling
      row: the tabs still come in state order, most urgent first, but the
      headings would cost chips and the dots already say which state is which.
      The phone overview is where the labelled sections live. */
   :where(.header) .tab-triage-head {
+    display: none;
+  }
+
+  /* Clustered by case, the same holds: the boxes dissolve into the one chip
+     row (in cluster order) and the labels go, since every chip still names
+     its session. */
+  :where(.header) .session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster {
+    display: contents;
+  }
+
+  :where(.header) .tab-cluster-label {
     display: none;
   }
 
