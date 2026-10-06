@@ -49,6 +49,8 @@ export class FakeEl {
     this.parentElement = null;
   }
   title = '';
+  hidden = false;
+  disabled = false;
   textContent = '';
   value = '';
   type = '';
@@ -148,6 +150,8 @@ main.appendChild(section);
 /** Extra elements `document.querySelector` finds, by exact selector (e.g. '.btn-split'). */
 export const bySelector = new Map<string, FakeEl>();
 export const body = new FakeEl();
+/** The context's `fetch`; a test sets what it answers. */
+export const fetchSpy = vi.fn(async (..._args: unknown[]) => ({ ok: true, json: async () => ({}) }));
 /** `document.addEventListener`, so a test can find a listener the app installed. */
 export const documentAddEventListener = vi.fn();
 export const localStore = new Map<string, string>();
@@ -188,7 +192,7 @@ const context = vm.createContext({
   requestIdleCallback: (cb: () => void) => idleCallbacks.push(cb),
   HTMLCanvasElement: class HTMLCanvasElement {},
   WebSocket: { OPEN: 1 },
-  fetch: vi.fn(),
+  fetch: (...args: unknown[]) => fetchSpy(...args),
   navigator: { onLine: true },
   location: { protocol: 'http:', host: 'codeman.test', pathname: '/', search: '', hash: '' },
   history: { replaceState: vi.fn(), state: null },

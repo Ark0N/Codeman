@@ -448,19 +448,12 @@ Object.assign(CodemanApp.prototype, {
       if (this._tileGrid?.has(sessionId)) this.selectSession(sessionId);
     });
     this._tileGridSection().appendChild(el);
-    const tile = new window.TerminalTile(sessionId, body, {
-      mode: session.mode,
-      fontSettings: this.loadAppSettingsFromStorage?.() || {},
-      detachedSessions: this.detachedSessions,
-      scheduleLoad: (t, kind, run) => this._tileLoadQueue().schedule(t, kind, run),
-      scrollback: window.CodemanTileGrid.TILE_SCROLLBACK,
-      fontSize: this._tileGridFontSize(),
-      boundedLoad: true,
-      onExit: (code) => this._onTileExit(sessionId, tile, code),
-    });
+    const tile = this._newTerminalTile(sessionId, body);
     grid.tiles.set(sessionId, {
       tile,
       el,
+      body,
+      overlay: null,
       header: header.el,
       dot: header.dot,
       name: header.name,
@@ -470,6 +463,144 @@ Object.assign(CodemanApp.prototype, {
     grid.ids.push(sessionId);
     this._renderTileHeader(sessionId);
     return true;
+  },
+
+  /** A grid tile's TerminalTile: the grid's one load queue, the tile scrollback, font and bounded load. */
+  _newTerminalTile(sessionId, body) {
+    const session = this.sessions.get(sessionId);
+    const tile = new window.TerminalTile(sessionId, body, {
+      mode: session?.mode,
+      fontSettings: this.loadAppSettingsFromStorage?.() || {},
+      detachedSessions: this.detachedSessions,
+      scheduleLoad: (t, kind, run) => this._tileLoadQueue().schedule(t, kind, run),
+      scrollback: window.CodemanTileGrid.TILE_SCROLLBACK,
+      fontSize: this._tileGridFontSize(),
+      boundedLoad: true,
+      onExit: (code) => this._onTileExit(sessionId, tile, code),
+    });
+    return tile;
+  },
+
+  /**
+   * Replaces a tile's TerminalTile with a fresh one in the same place (after
+   * Attach: a tile whose socket stopped for good cannot reconnect, and a fresh
+   * one loads the new pane from scratch). Keeps the keyboard if it had it.
+   */
+  _remountTile(sessionId) {
+    const entry = this._tileGrid?.open ? this._tileGrid.tiles.get(sessionId) : null;
+    if (!entry) return;
+    const hadKeyboard = this._focusedTile === entry.tile;
+    this._tileGrid.queue?.drop(entry.tile);
+    entry.tile.destroy();
+    entry.tile = this._newTerminalTile(sessionId, entry.body);
+    this._connectTile(sessionId);
+    if (hadKeyboard) this._noteFocusedTile(entry.tile);
+  },
+
+  /**
+   * What the tile's body should say instead of a terminal, or '' for none: a
+   * session with no PTY attached (pid null), an agent that exited in a live
+   * pane (paneExit), or a socket the server closed because the session exited
+   * (4009). Attach was just pressed: nothing, while the server catches up.
+   */
+  _tileAttachReason(sessionId, tile) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return '';
+    const pending = this._tileAttachPending?.get(sessionId);
+    if (pending && Date.now() - pending < 15000) return '';
+    const exited = typeof paneExitLabel === 'function' ? paneExitLabel(session.paneExit) : '';
+    if (exited) return `The agent ${exited}`;
+    if (session.pid === null) return 'Not attached';
+    if (tile?._stoppedCode === 4009) return 'The session ended';
+    return '';
+  },
+
+  /**
+   * The Attach overlay over a tile's body (absolute, so the body and its xterm
+   * keep their size): why there is no terminal, and an Attach button.
+   */
+  _renderTileOverlay(sessionId) {
+    const entry = this._tileGrid?.tiles.get(sessionId);
+    if (!entry?.body) return;
+    const session = this.sessions.get(sessionId);
+    if (session && session.pid !== null && !session.paneExit) this._tileAttachPending?.delete(sessionId);
+    const reason = this._tileAttachReason(sessionId, entry.tile);
+    const busy = !!this._tileAttachInFlight?.has(sessionId);
+    if (!reason && !busy) {
+      if (entry.overlay) entry.overlay.hidden = true;
+      return;
+    }
+    if (!entry.overlay) {
+      const overlay = document.createElement('div');
+      overlay.className = 'tile-attach';
+      const text = document.createElement('span');
+      text.className = 'tile-attach-text';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tile-attach-btn';
+      btn.textContent = 'Attach';
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void this.attachTileSession(sessionId);
+      });
+      overlay.append(text, btn);
+      entry.body.appendChild(overlay);
+      entry.overlay = overlay;
+      entry.overlayText = text;
+      entry.overlayBtn = btn;
+    }
+    entry.overlay.hidden = false;
+    const text = busy ? 'Attaching\u2026' : reason;
+    if (entry.overlayText.textContent !== text) entry.overlayText.textContent = text;
+    entry.overlayBtn.disabled = busy;
+  },
+
+  /**
+   * Attach: starts the session's CLI in its pane, exactly as the single view's
+   * automatic re-attach does: `POST /interactive` (or `/shell` for a shell)
+   * with NO body, at most one in flight per session (the route has no guard of
+   * its own). A session whose PTY-exit breaker tripped goes through the same
+   * confirm the single view asks before `clearBreaker: true`; nothing automatic
+   * ever sends that. On success the tile is remounted onto the new pane.
+   */
+  async attachTileSession(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    this._tileAttachInFlight ||= new Set();
+    if (this._tileAttachInFlight.has(sessionId)) return false;
+    let url = `/api/sessions/${sessionId}/${session.mode === 'shell' ? 'shell' : 'interactive'}`;
+    let init = { method: 'POST' };
+    if (session.respawnBlocked) {
+      const label = session.name || 'Session';
+      if (!window.confirm(`${label} was stopped after crashing repeatedly. Restart it?`)) return false;
+      url = `/api/sessions/${sessionId}/interactive`;
+      init = {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clearBreaker: true }),
+      };
+    }
+    this._tileAttachInFlight.add(sessionId);
+    this._renderTileOverlay(sessionId);
+    let ok = false;
+    try {
+      const res = await fetch(url, init);
+      ok = !!res?.ok;
+    } catch {
+      ok = false;
+    } finally {
+      this._tileAttachInFlight.delete(sessionId);
+    }
+    if (ok) {
+      if (init.body) session.respawnBlocked = false;
+      session.status = 'busy';
+      (this._tileAttachPending ||= new Map()).set(sessionId, Date.now());
+      this._remountTile(sessionId);
+    } else {
+      this.showToast?.('Could not attach the session', 'error');
+    }
+    this._renderTileOverlay(sessionId);
+    return ok;
   },
 
   /**
@@ -548,6 +679,7 @@ Object.assign(CodemanApp.prototype, {
     if (entry.name.textContent !== name) entry.name.textContent = name;
     // A permission prompt is visible across the room.
     entry.el.classList.toggle('tile--needs', state === 'needs');
+    this._renderTileOverlay(sessionId);
   },
 
   /** Every tile's header (after a tab render, i.e. any session change). */
@@ -620,7 +752,11 @@ Object.assign(CodemanApp.prototype, {
    */
   _onTileExit(sessionId, tile, code) {
     if (this._tileGrid?.tiles.get(sessionId)?.tile !== tile) return;
-    if (code === 4009) return;
+    // The session exited: the tile stays, with the Attach overlay over it.
+    if (code === 4009) {
+      this._renderTileOverlay(sessionId);
+      return;
+    }
     this.removeTile(sessionId, { refocus: true, auto: true });
   },
 
