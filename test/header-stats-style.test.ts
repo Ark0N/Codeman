@@ -205,6 +205,23 @@ describe('header stats wiring (static)', () => {
     );
   });
 
+  it('lays a tile out as three rows, so its height never depends on the font', () => {
+    // A bar laid over the bottom of a fixed-height tile is what let a taller
+    // system mono (SF Mono) push the value into it.
+    expect(css).toMatch(/grid-template-rows: 9px 14px 2px;\s*row-gap: 2px;/);
+    const tiles = css.slice(css.indexOf('/* --- Tiles: label over value'));
+    const bar = tiles.slice(tiles.indexOf("html[data-header-stats='tiles'] .header-system-stats .stat-bar,"));
+    expect(bar.slice(0, bar.indexOf('}'))).not.toContain('position: absolute');
+    expect(bar.slice(0, bar.indexOf('}'))).toContain('grid-row: 3;');
+  });
+
+  it('gives the header buttons the tile box beside the tiles', () => {
+    expect(css).toMatch(
+      /html\[data-header-stats='tiles'\] \.header-right > \.btn-icon-header \{\s*width: 36px;\s*height: 36px;/
+    );
+    expect(css).toMatch(/html\[data-header-stats='tiles'\] \.header-right > \.btn-icon-header > svg \{\s*width: 18px;/);
+  });
+
   it('stamps data-header-stats before first paint, tiles by default and classic on narrow screens', () => {
     expect(INDEX).toContain(
       "dataset.headerStats=(window.innerWidth<768||solo)?'classic':(H==='classic'||H==='compact')?H:'tiles'"

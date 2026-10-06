@@ -287,6 +287,15 @@ describe('tab layouts by case and ledger (static)', () => {
     expect(before).not.toContain('.tabs-ledger');
   });
 
+  it('keeps every ledger row one height and makes the active cell stand out', () => {
+    const ledger = css.slice(css.indexOf('@media (min-width: 768px) {\n  .session-tabs-host > .session-tabs.tabs-ledger {'));
+    expect(ledger).toContain('align-items: stretch;');
+    expect(ledger).toContain('min-height: 30px;');
+    expect(ledger).toMatch(
+      /\.tabs-ledger > \.session-tab\.active \{[^}]*box-shadow: inset 0 0 0 1px var\(--accent\), inset 4px 0 0 var\(--accent\) !important;/
+    );
+  });
+
   it('dissolves the boxes into the one chip row on phones', () => {
     expect(mobileCss).toMatch(
       /:where\(\.header\) \.session-tabs-host > \.session-tabs\.tabs-clusters > \.tab-cluster \{\s*display: contents;/
