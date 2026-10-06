@@ -465,7 +465,7 @@ Object.assign(CodemanApp.prototype, {
    * adds it to the grid and focuses it (a human selection). Disabled once the
    * grid holds what the window can fit.
    */
-  openTileAddMenu(event) {
+  openTileAddMenu(event, fromSessionId = null) {
     event?.preventDefault?.();
     event?.stopPropagation?.();
     const grid = this._tileGrid;
@@ -504,6 +504,23 @@ Object.assign(CodemanApp.prototype, {
       });
       menu.appendChild(item);
     }
+    // A new session in the case this tile's session belongs to: the normal Run
+    // for that case, which then joins the grid like any Run from this tab.
+    const fromSession = fromSessionId ? this.sessions.get(fromSessionId) : null;
+    const theCase = fromSession ? this._mobileOverviewCaseFor?.(fromSession.workingDir, this.cases || []) : null;
+    const create = document.createElement('button');
+    create.type = 'button';
+    create.className = 'tile-add-new';
+    create.setAttribute('role', 'menuitem');
+    create.textContent = 'New session in this case';
+    create.disabled = full || !theCase;
+    if (!theCase) create.title = 'This session is not in a case';
+    else if (full) create.title = `The grid already holds what this window fits (${capacity})`;
+    create.addEventListener('click', () => {
+      this.closeTileAddMenu();
+      if (theCase) void this.runInCaseForTiles(theCase.name);
+    });
+    menu.appendChild(create);
     document.body.appendChild(menu);
     if (trigger?.getBoundingClientRect) {
       const rect = trigger.getBoundingClientRect();
@@ -522,6 +539,47 @@ Object.assign(CodemanApp.prototype, {
     document.addEventListener('pointerdown', onOutside, true);
     document.addEventListener('keydown', onKey);
     menu.querySelector?.('button:not([disabled])')?.focus?.();
+  },
+
+  /**
+   * Runs the normal Run (current run mode) in `caseName`, then puts the
+   * toolbar's case back as it was. The session it creates joins the grid
+   * through _joinTileGridFromRun.
+   */
+  async runInCaseForTiles(caseName) {
+    const select = document.getElementById('quickStartCase');
+    const previous = select?.value;
+    const swap = !!select && !!caseName && previous !== caseName;
+    if (swap) this.selectQuickStartCase?.(caseName, { save: false });
+    try {
+      await this.run?.();
+    } finally {
+      if (swap && previous) this.selectQuickStartCase?.(previous, { save: false });
+    }
+  },
+
+  /**
+   * A session THIS tab's Run just created (session-ui.js
+   * _ensureCreatedSessionVisible, reached only from the Run paths): with the
+   * grid open it joins the next free slot, and Run's own selectSession then
+   * focuses it through the tile branch. Sessions created elsewhere (agents,
+   * other devices, cron) arrive only by session:created and never join. A grid
+   * already holding what the window fits does not take it; Run's selection
+   * then shows it in the single view (decision 1), and a hint says why.
+   */
+  _joinTileGridFromRun(sessionId) {
+    const grid = this._tileGrid;
+    if (!grid?.open || grid.tiles.has(sessionId) || !this.sessions.has(sessionId)) return false;
+    const T = window.CodemanTileGrid;
+    const capacity = Math.max(1, Math.min(this._tileGridCapacityNow(), T.TILE_GRID_MAX));
+    if (grid.ids.length >= capacity) {
+      this.showToast?.(`The grid holds what this window fits (${capacity}): the new session opens on its own`, 'info');
+      return false;
+    }
+    // Run starts the session right after creating it: no Attach overlay
+    // meanwhile for a pane that is about to exist.
+    (this._tileAttachPending ||= new Map()).set(sessionId, Date.now());
+    return this.addTile(sessionId);
   },
 
   /** Idempotent, like closeTilePicker. */
@@ -1087,7 +1145,7 @@ Object.assign(CodemanApp.prototype, {
     actions.append(
       button('tile-menu', 'Session actions', '\u22EF', (e) => this.openTabRailActionMenu?.(e, sessionId)),
       zoomBtn,
-      button('tile-add', 'Add a session to the grid', '+', (e) => this.openTileAddMenu(e)),
+      button('tile-add', 'Add a session to the grid', '+', (e) => this.openTileAddMenu(e, sessionId)),
       // Removes the tile ONLY: the session keeps running. Killing it stays
       // behind the menu's Close session and its confirm.
       button('tile-remove', 'Remove tile (the session keeps running)', '\u00D7', () =>

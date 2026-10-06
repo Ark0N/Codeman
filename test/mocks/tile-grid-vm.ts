@@ -219,7 +219,7 @@ const context = vm.createContext({
     removeEventListener: documentRemoveEventListener,
     documentElement: { dataset: {} },
     createElement: () => new FakeEl(),
-    getElementById: (id: string) => (id === 'tileGrid' ? section : null),
+    getElementById: (id: string) => (id === 'tileGrid' ? section : (bySelector.get(`#${id}`) ?? null)),
     body,
     querySelector: (sel: string) =>
       bySelector.get(sel) ?? (sel === '.main' ? main : sel === '.terminal-wrap' ? wrap : null),
