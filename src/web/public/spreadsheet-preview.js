@@ -20,7 +20,7 @@
 (function initSpreadsheetPreview(global) {
   'use strict';
 
-  const SPREADSHEET_ASSET_VERSION = '4d543b11c25c';
+  const SPREADSHEET_ASSET_VERSION = '911680fac09d';
   const MAX_PREVIEW_BYTES = 10 * 1024 * 1024;
   const DEFAULT_TIMEOUT_MS = 20000;
   const MAX_SCROLL_PX = 8000000;
@@ -62,9 +62,8 @@
     let headingsLayer = null;
     let emptySheetState = null;
     let resizeObserver = null;
-    let scaleX = 1;
-    let scaleY = 1;
     let latestRange = null;
+    let latestAxes = null;
     let scrollFrame = null;
 
     const current = () => !disposed && isCurrent();
@@ -126,17 +125,37 @@
       return low;
     }
 
+    // Past MAX_SCROLL_PX the spacer is shorter than the sheet, so only the
+    // scroll POSITION is scaled (the scroll range maps onto the sheet's whole
+    // range, so the last row stays reachable) and the tile is laid out at real
+    // sizes from there. `shift` is the logical offset minus the scroll offset,
+    // 0 when the sheet fits; `end` is the bottom (or right) of the spacer.
+    function scrollAxis(logical, scroll, viewport, heading) {
+      const shown = Math.min(MAX_SCROLL_PX, logical);
+      const scrollRange = Math.max(0, heading + shown - viewport);
+      const logicalRange = Math.max(0, heading + logical - viewport);
+      const virtual =
+        logical > shown && scrollRange > 0 ? Math.min(logicalRange, (scroll / scrollRange) * logicalRange) : scroll;
+      return { virtual, shift: virtual - scroll, end: heading + shown };
+    }
+
     function requestTile() {
       if (!current() || !worker || !grid) return;
       const sheet = sheetMetadata();
       if (!sheet || sheet.rows === 0 || sheet.cols === 0) return;
-      scaleY = Math.max(
-        1,
-        axisOffset(sheet.rows, sheet.defaultRowHeight, sheet.rowOverrides, sheet.rows + 1) / MAX_SCROLL_PX
+      const viewHeight = grid.clientHeight || 500;
+      const viewWidth = grid.clientWidth || 800;
+      const y = scrollAxis(
+        axisOffset(sheet.rows, sheet.defaultRowHeight, sheet.rowOverrides, sheet.rows + 1),
+        grid.scrollTop,
+        viewHeight,
+        COLUMN_HEADING_HEIGHT
       );
-      scaleX = Math.max(
-        1,
-        axisOffset(sheet.cols, sheet.defaultColumnWidth, sheet.columnOverrides, sheet.cols + 1) / MAX_SCROLL_PX
+      const x = scrollAxis(
+        axisOffset(sheet.cols, sheet.defaultColumnWidth, sheet.columnOverrides, sheet.cols + 1),
+        grid.scrollLeft,
+        viewWidth,
+        ROW_HEADING_WIDTH
       );
       const r1 = Math.max(
         1,
@@ -144,7 +163,7 @@
           sheet.rows,
           sheet.defaultRowHeight,
           sheet.rowOverrides,
-          Math.max(0, grid.scrollTop - COLUMN_HEADING_HEIGHT) * scaleY
+          Math.max(0, y.virtual - COLUMN_HEADING_HEIGHT)
         ) - 2
       );
       const c1 = Math.max(
@@ -153,7 +172,7 @@
           sheet.cols,
           sheet.defaultColumnWidth,
           sheet.columnOverrides,
-          Math.max(0, grid.scrollLeft - ROW_HEADING_WIDTH) * scaleX
+          Math.max(0, x.virtual - ROW_HEADING_WIDTH)
         ) - 2
       );
       const r2 = Math.min(
@@ -162,7 +181,7 @@
           sheet.rows,
           sheet.defaultRowHeight,
           sheet.rowOverrides,
-          Math.max(0, grid.scrollTop - COLUMN_HEADING_HEIGHT + (grid.clientHeight || 500)) * scaleY
+          Math.max(0, y.virtual - COLUMN_HEADING_HEIGHT + viewHeight)
         ) + 2
       );
       const c2 = Math.min(
@@ -171,11 +190,12 @@
           sheet.cols,
           sheet.defaultColumnWidth,
           sheet.columnOverrides,
-          Math.max(0, grid.scrollLeft - ROW_HEADING_WIDTH + (grid.clientWidth || 800)) * scaleX
+          Math.max(0, x.virtual - ROW_HEADING_WIDTH + viewWidth)
         ) + 2
       );
       latestRequestId += 1;
       latestRange = { r1, c1, r2, c2 };
+      latestAxes = { y, x };
       worker.postMessage({
         type: 'tile',
         requestId: latestRequestId,
@@ -207,7 +227,16 @@
     function renderTile(tile) {
       if (!current() || tile.requestId !== latestRequestId || String(tile.sheetId) !== String(activeSheetId)) return;
       const sheet = sheetMetadata();
-      if (!sheet || !cellsLayer || !headingsLayer || !latestRange) return;
+      if (!sheet || !cellsLayer || !headingsLayer || !latestRange || !latestAxes) return;
+      const { y, x } = latestAxes;
+      // Sizes are real; a span (a tall merge) is clipped at the spacer's edge so
+      // it never grows the scroll area.
+      const rowTop = (row) =>
+        COLUMN_HEADING_HEIGHT + axisOffset(sheet.rows, sheet.defaultRowHeight, sheet.rowOverrides, row) - y.shift;
+      const colLeft = (col) =>
+        ROW_HEADING_WIDTH + axisOffset(sheet.cols, sheet.defaultColumnWidth, sheet.columnOverrides, col) - x.shift;
+      const rowSpan = (from, to) => Math.max(0, Math.min(rowTop(to + 1), y.end) - rowTop(from));
+      const colSpan = (from, to) => Math.max(0, Math.min(colLeft(to + 1), x.end) - colLeft(from));
       cellsLayer.textContent = '';
       headingsLayer.textContent = '';
       const mergeByAnchor = new Map();
@@ -227,13 +256,11 @@
         element.dataset.row = String(cell.row);
         element.dataset.col = String(cell.col);
         element.textContent = String(cell.text ?? '');
-        element.style.top = `${COLUMN_HEADING_HEIGHT + axisOffset(sheet.rows, sheet.defaultRowHeight, sheet.rowOverrides, cell.row) / scaleY}px`;
-        element.style.left = `${ROW_HEADING_WIDTH + axisOffset(sheet.cols, sheet.defaultColumnWidth, sheet.columnOverrides, cell.col) / scaleX}px`;
+        element.style.top = `${rowTop(cell.row)}px`;
+        element.style.left = `${colLeft(cell.col)}px`;
         const merge = mergeByAnchor.get(`${cell.row}:${cell.col}`);
-        const finalRow = merge?.r2 || cell.row;
-        const finalCol = merge?.c2 || cell.col;
-        element.style.height = `${Math.max(0, (axisOffset(sheet.rows, sheet.defaultRowHeight, sheet.rowOverrides, finalRow + 1) - axisOffset(sheet.rows, sheet.defaultRowHeight, sheet.rowOverrides, cell.row)) / scaleY)}px`;
-        element.style.width = `${Math.max(0, (axisOffset(sheet.cols, sheet.defaultColumnWidth, sheet.columnOverrides, finalCol + 1) - axisOffset(sheet.cols, sheet.defaultColumnWidth, sheet.columnOverrides, cell.col)) / scaleX)}px`;
+        element.style.height = `${rowSpan(cell.row, merge?.r2 || cell.row)}px`;
+        element.style.width = `${colSpan(cell.col, merge?.c2 || cell.col)}px`;
         cellsLayer.appendChild(element);
       }
       // Headings take their size from the same axis math as the cells, so custom
@@ -241,23 +268,20 @@
       // do not count against the heading caps.
       let rowHeadings = 0;
       for (let row = latestRange.r1; row <= latestRange.r2 && rowHeadings < 200; row += 1) {
-        const top = axisOffset(sheet.rows, sheet.defaultRowHeight, sheet.rowOverrides, row);
-        const height = (axisOffset(sheet.rows, sheet.defaultRowHeight, sheet.rowOverrides, row + 1) - top) / scaleY;
+        const height = rowSpan(row, row);
         if (height <= 0) continue;
         rowHeadings += 1;
         const heading = document.createElement('div');
         heading.className = 'spreadsheet-row-heading';
         heading.textContent = String(row);
-        heading.style.top = `${COLUMN_HEADING_HEIGHT + top / scaleY}px`;
+        heading.style.top = `${rowTop(row)}px`;
         heading.style.height = `${height}px`;
         heading.style.left = `${grid.scrollLeft}px`;
         headingsLayer.appendChild(heading);
       }
       let columnHeadings = 0;
       for (let col = latestRange.c1; col <= latestRange.c2 && columnHeadings < 100; col += 1) {
-        const left = axisOffset(sheet.cols, sheet.defaultColumnWidth, sheet.columnOverrides, col);
-        const width =
-          (axisOffset(sheet.cols, sheet.defaultColumnWidth, sheet.columnOverrides, col + 1) - left) / scaleX;
+        const width = colSpan(col, col);
         if (width <= 0) continue;
         columnHeadings += 1;
         const heading = document.createElement('div');
@@ -266,7 +290,7 @@
         for (let value = col; value > 0; value = Math.floor((value - 1) / 26))
           label = String.fromCharCode(65 + ((value - 1) % 26)) + label;
         heading.textContent = label;
-        heading.style.left = `${ROW_HEADING_WIDTH + left / scaleX}px`;
+        heading.style.left = `${colLeft(col)}px`;
         heading.style.width = `${width}px`;
         heading.style.top = `${grid.scrollTop}px`;
         headingsLayer.appendChild(heading);
@@ -279,6 +303,7 @@
       activeSheetId = String(sheetId);
       latestRequestId += 1;
       latestRange = null;
+      latestAxes = null;
       if (cellsLayer) cellsLayer.textContent = '';
       if (headingsLayer) headingsLayer.textContent = '';
       container.querySelectorAll('[role="tab"]').forEach((tab) => {
@@ -294,8 +319,6 @@
       if (sheet && spacer) {
         const logicalHeight = axisOffset(sheet.rows, sheet.defaultRowHeight, sheet.rowOverrides, sheet.rows + 1);
         const logicalWidth = axisOffset(sheet.cols, sheet.defaultColumnWidth, sheet.columnOverrides, sheet.cols + 1);
-        scaleY = Math.max(1, logicalHeight / MAX_SCROLL_PX);
-        scaleX = Math.max(1, logicalWidth / MAX_SCROLL_PX);
         spacer.style.height = `${COLUMN_HEADING_HEIGHT + Math.min(MAX_SCROLL_PX, logicalHeight)}px`;
         spacer.style.width = `${ROW_HEADING_WIDTH + Math.min(MAX_SCROLL_PX, logicalWidth)}px`;
       }

@@ -45,6 +45,12 @@
     // its whole string to the page (a 1 MB shared string over a 60 x 20 block
     // froze the page's main thread at 9.6 GB).
     maxCellTextChars: 1000,
+    // Start tags across every part ExcelJS parses (all but xl/media). ExcelJS
+    // builds an object per element, and outside worksheets nothing else bounded
+    // them: one shared string of 8.3M empty `<r/>` runs (a 375 KB file, padded
+    // past the ratio cap with empty stored blocks) cost 570 MB of heap. A
+    // three-sheet 249k-cell workbook with rich text has about 589k.
+    maxElements: 2000000,
   });
   const MAX_ROW = 1048576;
   const MAX_COL = 16384;
@@ -281,6 +287,19 @@
     }
   }
 
+  // Exactly the names ExcelJS hands to `_processMediaEntry` and to no parser:
+  // its other patterns are unanchored, so `xl/media/xl/drawings/a.xml` is still
+  // parsed as a drawing, and only a single `<name>.<ext>` segment is pure bytes.
+  const EXCELJS_MEDIA = /^xl\/media\/[a-zA-Z0-9]+[.][a-zA-Z0-9]{3,4}$/;
+  const START_TAG = /<[A-Za-z_]/g;
+
+  function countStartTags(text) {
+    let count = 0;
+    START_TAG.lastIndex = 0;
+    while (START_TAG.exec(text)) count += 1;
+    return count;
+  }
+
   function createXmlCounter(name, counts, limits) {
     let tail = '';
     const decoder = new TextDecoder();
@@ -291,6 +310,9 @@
     const worksheet = isWorksheetName(excelJsName);
     const styles = excelJsName === 'xl/styles.xml';
     const workbook = excelJsName === 'xl/workbook.xml';
+    const media = EXCELJS_MEDIA.test(excelJsName);
+    // Only these parts read tag attributes, so only they carry a whole tag.
+    const readsTags = worksheet || styles || workbook;
     const addCells = (cells) => {
       sheetCells += cells;
       counts.cells += cells;
@@ -299,13 +321,19 @@
     };
     return {
       push(chunk, final) {
-        if (!worksheet && !styles && !workbook) return;
+        if (media) return;
         const text = tail + decoder.decode(chunk, { stream: !final });
         // `<` can never appear inside an attribute value, so every tag before the
         // last `<` is complete. Carry everything from that `<` into the next scan
-        // so a tag cut by a chunk edge is always read in one piece.
-        const safeEnd = final ? text.length : Math.max(0, text.lastIndexOf('<'));
+        // so a tag cut by a chunk edge is always read in one piece. Any other part
+        // only needs its start tags counted, so it carries at most a trailing `<`
+        // (a long text node or a binary part is never mistaken for a huge tag).
+        let safeEnd = text.length;
+        if (!final && readsTags) safeEnd = Math.max(0, text.lastIndexOf('<'));
+        else if (!final && text.endsWith('<')) safeEnd = text.length - 1;
         const scan = text.slice(0, safeEnd);
+        counts.elements += countStartTags(scan);
+        if (counts.elements > limits.maxElements) fail('element-limit', 'Workbook exceeds the XML elements limit');
         if (worksheet) {
           addCells((scan.match(/<c(?:\s|>)/g) || []).length);
           // ExcelJS keeps a Row object for every <row>, with or without cells.
@@ -366,7 +394,7 @@
     for (const entry of directory.entries) expectedEntries.set(entry.name, (expectedEntries.get(entry.name) || 0) + 1);
     const streamedEntries = new Map();
     const inflatedEntries = Object.create(null);
-    const counts = { worksheets: 0, cells: 0, rows: 0, merges: 0, styles: 0 };
+    const counts = { worksheets: 0, cells: 0, rows: 0, merges: 0, styles: 0, elements: 0 };
     const features = new Set();
     let totalInflated = 0;
     let seenEntries = 0;

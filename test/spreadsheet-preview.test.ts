@@ -291,6 +291,81 @@ describe('spreadsheet preview renderer', () => {
     expect(heading('.spreadsheet-row-heading', '3')).toBeUndefined();
   });
 
+  // Past MAX_SCROLL_PX only the scroll position may be scaled: dividing every
+  // cell and heading by the scale drew a 1,048,576-row sheet 7.6 px a row.
+  it('lays rows out at their real height on a sheet taller than the scroll cap', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }));
+    const renderer = loadRenderer(fetchMock);
+    renderer.open({ container: document.querySelector('#preview'), url: '/book.xlsx', size: 8 });
+    const worker = WorkerMock.instances[0];
+    worker.emit({ type: 'ready' });
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    const sheet = { id: '1', name: 'Tall', rows: 1_048_576, cols: 1, defaultRowHeight: 20, defaultColumnWidth: 64 };
+    worker.emit({ type: 'metadata', styles: [], sheets: [{ ...sheet, rowOverrides: [], columnOverrides: [] }] });
+    const cellAt = (row: number) => document.querySelector(`.spreadsheet-cell[data-row="${row}"]`) as HTMLElement;
+    const rowHeading = (row: number) =>
+      [...document.querySelectorAll('.spreadsheet-row-heading')].find(
+        (element) => element.textContent === String(row)
+      ) as HTMLElement;
+    const px = (value: string) => Number.parseFloat(value);
+
+    const first = worker.postMessage.mock.calls.at(-1)?.[0];
+    expect(first.range.r1).toBe(1);
+    const cell = (row: number) => ({ row, col: 1, text: `A${row}`, styleId: 0 });
+    worker.emit({ type: 'tile', requestId: first.requestId, sheetId: '1', cells: [cell(1), cell(2)], warnings: [] });
+    expect(cellAt(1).style.top).toBe('20px');
+    expect(cellAt(1).style.height).toBe('20px');
+    expect(px(cellAt(2).style.top) - px(cellAt(1).style.top)).toBe(20);
+    expect(rowHeading(2).style.height).toBe('20px');
+    // At scale 1 the first tile asks for about a viewport of rows, not a scaled one.
+    expect(first.range.r2).toBeLessThan(40);
+
+    // Scrolled to the end, the last row is requested, drawn at its real height,
+    // and ends exactly at the bottom of the scroll area.
+    const grid = document.querySelector('.spreadsheet-grid') as HTMLElement;
+    const spacerHeight = px((document.querySelector('.spreadsheet-grid-spacer') as HTMLElement).style.height);
+    grid.scrollTop = spacerHeight - 500;
+    grid.dispatchEvent(new window.Event('scroll'));
+    await vi.waitFor(() =>
+      expect(worker.postMessage.mock.calls.at(-1)?.[0].requestId).toBeGreaterThan(first.requestId)
+    );
+    const last = worker.postMessage.mock.calls.at(-1)?.[0];
+    expect(last.range.r2).toBe(1_048_576);
+    expect(last.range.r2 - last.range.r1).toBeLessThan(40);
+    worker.emit({ type: 'tile', requestId: last.requestId, sheetId: '1', cells: [cell(1_048_576)], warnings: [] });
+    expect(cellAt(1_048_576).style.height).toBe('20px');
+    expect(rowHeading(1_048_576).style.height).toBe('20px');
+    expect(px(cellAt(1_048_576).style.top) + 20).toBeCloseTo(spacerHeight, 6);
+    expect(px(rowHeading(1_048_575).style.top)).toBeCloseTo(px(cellAt(1_048_576).style.top) - 20, 6);
+  });
+
+  it('keeps a merge spanning a too-tall sheet inside the scroll area', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }));
+    const renderer = loadRenderer(fetchMock);
+    renderer.open({ container: document.querySelector('#preview'), url: '/book.xlsx', size: 8 });
+    const worker = WorkerMock.instances[0];
+    worker.emit({ type: 'ready' });
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    const sheet = { id: '1', name: 'Tall', rows: 1_048_576, cols: 1, defaultRowHeight: 20, defaultColumnWidth: 64 };
+    worker.emit({ type: 'metadata', styles: [], sheets: [{ ...sheet, rowOverrides: [], columnOverrides: [] }] });
+    const request = worker.postMessage.mock.calls.at(-1)?.[0];
+    worker.emit({
+      type: 'tile',
+      requestId: request.requestId,
+      sheetId: '1',
+      cells: [{ row: 1, col: 1, text: 'whole column', styleId: 0 }],
+      merges: ['A1:A1048576'],
+      warnings: [],
+    });
+    const merged = document.querySelector('.spreadsheet-cell') as HTMLElement;
+    const spacerHeight = Number.parseFloat(
+      (document.querySelector('.spreadsheet-grid-spacer') as HTMLElement).style.height
+    );
+    expect(Number.parseFloat(merged.style.top) + Number.parseFloat(merged.style.height)).toBeLessThanOrEqual(
+      spacerHeight
+    );
+  });
+
   it('emits colour and background together or not at all', async () => {
     const fetchMock = vi.fn(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }));
     const renderer = loadRenderer(fetchMock);

@@ -1008,3 +1008,65 @@ describe('spreadsheet preview worker: the notice bar stays bounded', () => {
     expect(tile.warnings).toEqual(['800 unsupported number formats']);
   }, 60_000);
 });
+
+/**
+ * A one-cell workbook plus an `xl/sharedStrings.xml` whose one string holds
+ * `runs` empty `<r/>` runs. Its deflate stream is prefixed with empty stored
+ * blocks (5 bytes each, inflating to nothing) until the compressed size clears
+ * the 100:1 ratio cap, so only an element budget can refuse it.
+ */
+async function emptyRunsWorkbook(runs: number): Promise<Uint8Array> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.addWorksheet('Data').getCell('A1').value = 1;
+  const entries = fflate.unzipSync(new Uint8Array(await workbook.xlsx.writeBuffer()));
+  delete entries['xl/sharedStrings.xml'];
+  const strings = fflate.strToU8(`<sst count="1" uniqueCount="1"><si>${'<r/>'.repeat(runs)}</si></sst>`);
+  const deflated = fflate.deflateSync(strings, { level: 9 });
+  const emptyStoredBlock = Uint8Array.from([0x00, 0x00, 0x00, 0xff, 0xff]);
+  const blocks = Math.ceil((strings.length / 50 - deflated.length) / emptyStoredBlock.length);
+  const padded = concatBytes([...Array.from({ length: blocks }, () => emptyStoredBlock), deflated]);
+  expect(fflate.inflateSync(padded)).toEqual(strings);
+  const parts = Object.keys(entries).map((name) => zipPart(name, entries[name], 8));
+  parts.push({
+    name: 'xl/sharedStrings.xml',
+    data: padded,
+    method: 8,
+    size: strings.length,
+    crc: crc32(strings) >>> 0,
+  });
+  const locals: Uint8Array[] = [];
+  const central: Uint8Array[] = [];
+  let offset = 0;
+  for (const part of parts) {
+    central.push(centralHeader(part, offset));
+    const chunk = concatBytes([localHeader(part), part.data]);
+    locals.push(chunk);
+    offset += chunk.length;
+  }
+  const directory = concatBytes(central);
+  const eocd = new Uint8Array(22);
+  const view = new DataView(eocd.buffer);
+  view.setUint32(0, 0x06054b50, true);
+  view.setUint16(8, central.length, true);
+  view.setUint16(10, central.length, true);
+  view.setUint32(12, directory.length, true);
+  view.setUint32(16, offset, true);
+  return concatBytes([...locals, directory, eocd]);
+}
+
+describe('spreadsheet preview worker: element budget', () => {
+  // ExcelJS builds one object per <r> run in sharedStrings.xml, which no
+  // worksheet counter sees; 8.3M empty runs took 570 MB of heap to load.
+  it('refuses a shared string of 2,000,001 empty runs before ExcelJS loads', async () => {
+    const crafted = await emptyRunsWorkbook(2_000_001);
+    const harness = createHarness();
+    const core = harness.self.CodemanSpreadsheetXlsxCore as {
+      admitXlsx(bytes: Uint8Array, zip: typeof fflate, overrides?: Record<string, number>): unknown;
+    };
+    // Every other cap admits it: only the element budget is in the way.
+    expect(() => core.admitXlsx(crafted, fflate, { maxElements: Infinity })).not.toThrow();
+    await harness.send({ type: 'load', bytes: toArrayBuffer(crafted) });
+    expect(harness.messages.at(-1)).toMatchObject({ type: 'error', code: 'element-limit' });
+    expect(harness.imports.some((url) => url.includes('exceljs'))).toBe(false);
+  }, 60_000);
+});

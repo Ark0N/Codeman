@@ -115,7 +115,8 @@ describe('spreadsheet XLSX core', () => {
       features: string[];
     };
     // The 2x2 merge costs its four covered cells on top of the one real cell.
-    expect(result.counts).toEqual({ worksheets: 1, cells: 5, rows: 0, merges: 1, styles: 1 });
+    // `elements` is every start tag across all six parts: 1 + 3 + 3 + 4 + 1 + 1.
+    expect(result.counts).toEqual({ worksheets: 1, cells: 5, rows: 0, merges: 1, styles: 1, elements: 13 });
     expect(result.features).toEqual(expect.arrayContaining(['charts', 'externalLinks']));
   });
 
@@ -325,6 +326,91 @@ describe('spreadsheet XLSX core', () => {
     const counts = { cells: 0, merges: 0, styles: 0, rows: 0 };
     const other = core.createXmlCounter('xl/other.xml', counts as never, core.LIMITS);
     expect(() => other.push(fflate.strToU8(one('30000000')), true)).not.toThrow();
+  });
+
+  // ExcelJS builds an object per element in every part it parses, not only
+  // worksheets: each <r> run and <si> in sharedStrings.xml, each <font>, <fill>
+  // and <border> in styles, comments, drawings, VML and tables.
+  it('budgets every start tag outside xl/media, whatever part it sits in', () => {
+    expect(core.LIMITS.maxElements).toBe(2_000_000);
+    const withPart = (name: string, xml: string) =>
+      fflate.zipSync({ ...fflate.unzipSync(workbookZip()), [name]: fflate.strToU8(xml) });
+    const elementsOf = (zip: Uint8Array) =>
+      (core.admitXlsx(zip, fflate) as { counts: { elements: number } }).counts.elements;
+    const base = elementsOf(workbookZip());
+    const runs = '<sst><si>' + '<r/>'.repeat(50) + '</si></sst>';
+    const fonts = '<styleSheet><fonts>' + '<font/>'.repeat(50) + '</fonts></styleSheet>';
+    const cases: Array<[string, string, number]> = [
+      ['xl/sharedStrings.xml', runs, 52],
+      ['xl/comments1.xml', '<comments>' + '<comment/>'.repeat(50) + '</comments>', 51],
+      ['xl/drawings/vmlDrawing1.vml', '<xml>' + '<v:shape/>'.repeat(50) + '</xml>', 51],
+      // The name ExcelJS sees, so `/xl/./` cannot slip a part past the budget.
+      ['/xl/./sharedStrings.xml', runs, 52],
+    ];
+    for (const [name, xml, added] of cases) {
+      expect(elementsOf(withPart(name, xml)), name).toBe(base + added);
+      let thrown: unknown;
+      try {
+        core.admitXlsx(withPart(name, xml), fflate, { maxElements: base + added - 1 });
+      } catch (error) {
+        thrown = error;
+      }
+      expect((thrown as { code?: string })?.code, name).toBe('element-limit');
+    }
+    // styles.xml is counted on top of its own <xf>/<numFmt> checks.
+    const styled = fflate.unzipSync(workbookZip());
+    styled['xl/styles.xml'] = fflate.strToU8(fonts);
+    expect(() => core.admitXlsx(fflate.zipSync(styled), fflate, { maxElements: 50 })).toThrowError(/element/i);
+    // Processing instructions, comments and end tags are not elements; a tag
+    // INSIDE a comment is still counted, which errs toward refusing.
+    expect(elementsOf(withPart('xl/other.xml', '<?xml version="1.0"?><!-- c --><a></a><_b/>'))).toBe(base + 2);
+    expect(elementsOf(withPart('xl/other.xml', '<!-- <a> --><a/>'))).toBe(base + 2);
+  });
+
+  it('never budgets an xl/media part, which ExcelJS keeps as bytes', () => {
+    // Stored, so the compression-ratio cap stays out of the way.
+    const tags = fflate.strToU8('<r/>'.repeat(500));
+    for (const name of ['xl/media/image1.png', '/xl/./media/image1.jpeg']) {
+      const zip = fflate.zipSync({ ...fflate.unzipSync(workbookZip()), [name]: [tags, { level: 0 }] });
+      expect(() => core.admitXlsx(zip, fflate, { maxElements: 100 }), name).not.toThrow();
+    }
+    // A name under xl/media/ that ExcelJS parses as XML (its patterns are
+    // unanchored) is budgeted like any other part.
+    for (const name of ['xl/media/xl/drawings/drawing1.xml', 'xl/media/xl/worksheets/sheet2.xml']) {
+      const zip = fflate.zipSync({ ...fflate.unzipSync(workbookZip()), [name]: [tags, { level: 0 }] });
+      expect(() => core.admitXlsx(zip, fflate, { maxElements: 100 }), name).toThrowError(/element/i);
+    }
+  });
+
+  it('counts start tags exactly when a chunk boundary cuts through one', () => {
+    const xml = '<sst><si>' + '<r/><t>x</t>'.repeat(20) + '</si></sst>';
+    const bytes = fflate.strToU8(xml);
+    for (const name of ['xl/sharedStrings.xml', 'xl/worksheets/sheet1.xml', 'xl/styles.xml']) {
+      for (let cut = 1; cut < bytes.length; cut += 1) {
+        const counts = { worksheets: 0, cells: 0, rows: 0, merges: 0, styles: 0, elements: 0 };
+        const counter = core.createXmlCounter(name, counts as never, core.LIMITS);
+        counter.push(bytes.subarray(0, cut), false);
+        counter.push(bytes.subarray(cut), true);
+        expect(counts.elements, `${name} cut at ${cut}`).toBe(42);
+      }
+    }
+  });
+
+  it('does not carry long text or binary in a non-worksheet part as an oversized tag', () => {
+    const counts = { worksheets: 0, cells: 0, rows: 0, merges: 0, styles: 0, elements: 0 };
+    const text = fflate.strToU8('<sst><si><t>' + 'x'.repeat(600_000) + '</t></si></sst>');
+    const strings = core.createXmlCounter('xl/sharedStrings.xml', counts as never, core.LIMITS);
+    const binary = core.createXmlCounter('xl/embeddings/oleObject1.bin', counts as never, core.LIMITS);
+    const zeros = new Uint8Array(600_000);
+    expect(() => {
+      for (let at = 0; at < text.length; at += 65_536) {
+        strings.push(text.subarray(at, at + 65_536), at + 65_536 >= text.length);
+      }
+      for (let at = 0; at < zeros.length; at += 65_536) {
+        binary.push(zeros.subarray(at, at + 65_536), at + 65_536 >= zeros.length);
+      }
+    }).not.toThrow();
+    expect(counts.elements).toBe(3);
   });
 
   it('counts every <xf> in styles.xml, so a </cellXfs> inside a comment cannot hide styles', () => {
