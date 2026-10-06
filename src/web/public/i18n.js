@@ -1128,6 +1128,13 @@
     observer = new MutationObserver((mutations) => {
       if (applying) return;
       for (const mutation of mutations) {
+        // A change inside a skipped surface cannot need translating: every
+        // node it adds or edits sits under the same skip ancestor, so both
+        // translators would return on their own closest() check anyway. One
+        // check per record instead of one per text node and attribute matters
+        // for xterm's DOM renderer, which replaces rows every frame (the split
+        // pane, every tile of the grid).
+        if (shouldSkip(mutation.target)) continue;
         if (mutation.type === 'characterData') translateNode(mutation.target);
         if (mutation.type === 'attributes') translateAttributes(mutation.target);
         for (const added of mutation.addedNodes) translateNode(added);
