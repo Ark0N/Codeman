@@ -1742,6 +1742,36 @@ function sanitizeTileGridState(raw, liveSessions, detachedIds) {
 }
 
 /**
+ * New track fractions after a divider drag (grid-template `fr` values): the two
+ * tracks either side of divider `index` trade `deltaPx` of size, each kept at
+ * least `minPx` (or half the pair, if the pair cannot give both the minimum).
+ * Every other track keeps its size. Computed from the fractions the drag
+ * STARTED with and the pointer's total travel, so a drag never drifts.
+ *
+ * @param {number[]} fr - the fractions when the drag started
+ * @param {number} index - the divider: between track `index` and `index + 1`
+ * @param {number} deltaPx - pointer travel since the drag started
+ * @param {number} totalPx - the size the tracks share (dividers and padding excluded)
+ * @param {number} minPx - the smallest a track may get
+ * @returns {number[]} new fractions, same length
+ */
+function dragTrackFractions(fr, index, deltaPx, totalPx, minPx) {
+  const out = fr.slice();
+  if (index < 0 || index + 1 >= fr.length || !(totalPx > 0)) return out;
+  const sum = fr.reduce((a, b) => a + b, 0);
+  if (!(sum > 0)) return out;
+  const a = (fr[index] / sum) * totalPx;
+  const b = (fr[index + 1] / sum) * totalPx;
+  const pair = a + b;
+  const lo = Math.min(minPx, pair / 2);
+  const hi = pair - lo;
+  const nextA = Math.min(Math.max(a + (Number(deltaPx) || 0), lo), hi);
+  out[index] = (nextA / totalPx) * sum;
+  out[index + 1] = ((pair - nextA) / totalPx) * sum;
+  return out;
+}
+
+/**
  * The sessions the Tiles picker (and a tile's + menu) offers, in tab order:
  * live ones only, never a session popped out to its own window (that window
  * owns its PTY size). A session with no PTY attached IS offered: its tile shows
@@ -2074,6 +2104,7 @@ if (typeof window !== 'undefined') {
     tileGridCapacity,
     sanitizeTileGridState,
     buildTilePickerSessions,
+    dragTrackFractions,
     tileNeighbor,
     tileInDirection,
     cycleTile,

@@ -19386,7 +19386,9 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   flex: 1;
   min-width: 0;
   min-height: 0;
-  gap: 4px;
+  /* No gap: the divider tracks between columns and rows are the spacing
+     (tile-grid.js TILE_DIVIDER_PX; the padding is TILE_GRID_PADDING_PX). */
+  gap: 0;
   padding: 4px;
   background: var(--bg-dark);
 }
@@ -19499,6 +19501,64 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   border: 1px solid var(--accent);
   border-radius: 3px;
   outline: none;
+}
+
+/* Column and row dividers: their own grid tracks, dragged to trade size
+   between neighbours. The line only shows on hover or while dragging. */
+.tile-divider {
+  position: relative;
+  z-index: 1;
+  touch-action: none;
+}
+
+.tile-divider--col {
+  cursor: col-resize;
+}
+
+.tile-divider--row {
+  cursor: row-resize;
+}
+
+.tile-divider::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  background: transparent;
+}
+
+.tile-divider--col::after {
+  width: 2px;
+}
+
+.tile-divider--row::after {
+  height: 2px;
+}
+
+.tile-divider:hover::after,
+.tile-divider.dragging::after {
+  background: var(--accent, #4a9eff);
+}
+
+.tile-grid.tile-grid--zoomed .tile-divider {
+  display: none;
+}
+
+/* While a divider drags: the resize cursor everywhere and no text selection
+   (mirrors body.split-pane-resizing). */
+body.tile-grid-resizing,
+body.tile-grid-resizing * {
+  user-select: none !important;
+}
+
+body.tile-grid-resizing--col,
+body.tile-grid-resizing--col * {
+  cursor: col-resize !important;
+}
+
+body.tile-grid-resizing--row,
+body.tile-grid-resizing--row * {
+  cursor: row-resize !important;
 }
 
 /* Zoom (tmux-style): one tile fills the grid; the others stay connected but

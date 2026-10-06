@@ -26,6 +26,15 @@ const TILE_GRID_FONT_KEY = 'codeman-tile-font-size';
 // Trailing debounce for refitting tiles after the grid area changes size, so a
 // window drag sends each tile's PTY one resize, not one per frame.
 const TILE_GRID_REFIT_MS = 150;
+// Width of the draggable column and row dividers (their own grid tracks), and
+// the grid section's padding (styles.css .tile-grid), for the drag math.
+const TILE_DIVIDER_PX = 6;
+const TILE_GRID_PADDING_PX = 4;
+
+/** `minmax(0, 1fr) 6px minmax(0, 2fr) ...`: tracks with a divider track between each. */
+function tileGridTracks(fr) {
+  return fr.map((f) => `minmax(0, ${Math.round(f * 1000) / 1000}fr)`).join(` ${TILE_DIVIDER_PX}px `);
+}
 // Registry ids of the tile chords (DEFAULT_SHORTCUTS, app.js), and whether each
 // needs the grid open. The toggle applies wherever a grid could open.
 const TILE_SHORTCUTS = {
@@ -52,6 +61,12 @@ class TileGridModel {
     // lifts once the window fits again.
     this.zoomedId = null;
     this.autoZoom = false;
+    // Track fractions (grid-template fr values) set by the dividers; equal
+    // again whenever the column or row count changes.
+    this.colFr = [];
+    this.rowFr = [];
+    // 'col-<i>' / 'row-<i>' -> the divider element between track i and i+1.
+    this.dividers = new Map();
     this.cols = 0;
     this.rows = 0;
     this.queue = null;
@@ -224,6 +239,8 @@ Object.assign(CodemanApp.prototype, {
     const focusedId = grid.focusedId;
     const ids = grid.ids.slice();
     this._tileGridRemembered = keepStored ? { ids, focusedId } : null;
+    // A divider drag in progress ends with the grid.
+    this._tileDividerDragTeardown?.();
     // Closed BEFORE the tiles go: each destroy() updates the header's connection
     // state, which must read the main terminal again, not half-destroyed tiles.
     grid.open = false;
@@ -237,6 +254,10 @@ Object.assign(CodemanApp.prototype, {
       el.remove();
     }
     grid.tiles.clear();
+    for (const el of grid.dividers.values()) el.remove();
+    grid.dividers.clear();
+    grid.colFr = [];
+    grid.rowFr = [];
     grid.ids = [];
     grid.focusedId = null;
     grid.zoomedId = null;
@@ -646,6 +667,8 @@ Object.assign(CodemanApp.prototype, {
     }
     const wasFocused = grid.focusedId === sessionId;
     const neighbor = window.CodemanTileGrid.tileNeighbor(grid.ids, sessionId);
+    // A divider drag in progress was measured against this tile.
+    this._tileDividerDragTeardown?.();
     // The zoomed tile leaving restores the grid (an automatic zoom moves to
     // the neighbour with focus, below).
     if (grid.zoomedId === sessionId) grid.zoomedId = grid.autoZoom && refocus ? neighbor : null;
@@ -1010,6 +1033,8 @@ Object.assign(CodemanApp.prototype, {
       width: rect.width || window.innerWidth,
       height: rect.height || window.innerHeight,
     });
+    if (grid.colFr.length !== cols) grid.colFr = new Array(cols).fill(1);
+    if (grid.rowFr.length !== rows) grid.rowFr = new Array(rows).fill(1);
     grid.cols = cols;
     grid.rows = rows;
     // A window too small for the tiles' minimum size shows the focused tile
@@ -1039,9 +1064,148 @@ Object.assign(CodemanApp.prototype, {
       }
     }
     // Zoomed: one cell; the other tiles stay connected but hidden (CSS), so
-    // they measure nothing and send no resize.
-    section.style.gridTemplateColumns = zoomed ? 'minmax(0, 1fr)' : `repeat(${cols}, minmax(0, 1fr))`;
-    section.style.gridTemplateRows = zoomed ? 'minmax(0, 1fr)' : `repeat(${rows}, minmax(0, 1fr))`;
+    // they measure nothing and send no resize. Otherwise every tile is placed
+    // explicitly in reading order, with a divider track between columns and
+    // between rows.
+    section.style.gridTemplateColumns = zoomed ? 'minmax(0, 1fr)' : tileGridTracks(grid.colFr);
+    section.style.gridTemplateRows = zoomed ? 'minmax(0, 1fr)' : tileGridTracks(grid.rowFr);
+    grid.ids.forEach((id, k) => {
+      const el = grid.tiles.get(id)?.el;
+      if (!el) return;
+      el.style.gridColumn = id === zoomed ? '1' : String(2 * (k % cols) + 1);
+      el.style.gridRow = id === zoomed ? '1' : String(2 * Math.floor(k / cols) + 1);
+    });
+    this._syncTileDividers(zoomed ? 0 : cols, zoomed ? 0 : rows);
+  },
+
+  // One divider per gap between columns and between rows, created and dropped
+  // as the counts change (never rebuilt while they stay, so a drag in progress
+  // keeps its element).
+  _syncTileDividers(cols, rows) {
+    const grid = this._tileGrid;
+    const section = this._tileGridSection();
+    const wanted = new Set();
+    for (let i = 0; i < cols - 1; i++) wanted.add(`col-${i}`);
+    for (let i = 0; i < rows - 1; i++) wanted.add(`row-${i}`);
+    for (const [key, el] of grid.dividers) {
+      if (wanted.has(key)) continue;
+      if (this._tileDividerDrag?.key === key) this._tileDividerDragTeardown?.();
+      el.remove();
+      grid.dividers.delete(key);
+    }
+    for (const key of wanted) {
+      let el = grid.dividers.get(key);
+      const [axis, n] = key.split('-');
+      const index = Number(n);
+      if (!el) {
+        el = document.createElement('div');
+        el.className = `tile-divider tile-divider--${axis}`;
+        el.setAttribute('role', 'separator');
+        el.setAttribute('aria-orientation', axis === 'col' ? 'vertical' : 'horizontal');
+        el.setAttribute('aria-label', axis === 'col' ? 'Resize tile columns' : 'Resize tile rows');
+        el.addEventListener('pointerdown', (e) => this._startTileDividerDrag(e, axis, index, el, key));
+        section.appendChild(el);
+        grid.dividers.set(key, el);
+      }
+      el.style.gridColumn = axis === 'col' ? String(2 * index + 2) : '1 / -1';
+      el.style.gridRow = axis === 'col' ? '1 / -1' : String(2 * index + 2);
+    }
+  },
+
+  /**
+   * Drags a column or row divider: the two tracks either side trade size, each
+   * kept at the minimum tile size (dragTrackFractions, constants.js). The
+   * affected tiles reflow locally once per animation frame; their PTYs hear
+   * ONE resize each, at pointer-up, never per move (each one is a tmux resize
+   * and a SIGWINCH). Pointer capture keeps the drag on the divider whatever is
+   * under the pointer; closing the grid or removing a tile mid-drag tears it
+   * down through _tileDividerDragTeardown.
+   */
+  _startTileDividerDrag(e, axis, index, divider, key) {
+    if (e.button !== undefined && e.button !== 0) return;
+    const grid = this._tileGrid;
+    if (!grid?.open) return;
+    e.preventDefault?.();
+    e.stopPropagation?.();
+    this._tileDividerDragTeardown?.();
+    const T = window.CodemanTileGrid;
+    const section = this._tileGridSection();
+    const rect = section.getBoundingClientRect();
+    const isCol = axis === 'col';
+    const count = isCol ? grid.cols : grid.rows;
+    const total = (isCol ? rect.width : rect.height) - 2 * TILE_GRID_PADDING_PX - TILE_DIVIDER_PX * (count - 1);
+    const startFr = (isCol ? grid.colFr : grid.rowFr).slice();
+    const start = isCol ? e.clientX : e.clientY;
+    const minPx = isCol ? T.TILE_MIN_W : T.TILE_MIN_H;
+    const affected = [];
+    grid.ids.forEach((id, k) => {
+      const track = isCol ? k % grid.cols : Math.floor(k / grid.cols);
+      if (track === index || track === index + 1) affected.push(grid.tiles.get(id).tile);
+    });
+    let raf = null;
+    let pending = start;
+    let capturedPointerId = null;
+    const apply = (pos) => {
+      if (!grid.open) return;
+      const fr = T.dragTrackFractions(startFr, index, pos - start, total, minPx);
+      if (isCol) grid.colFr = fr;
+      else grid.rowFr = fr;
+      section.style[isCol ? 'gridTemplateColumns' : 'gridTemplateRows'] = tileGridTracks(fr);
+      for (const tile of affected) tile.localFit();
+    };
+    const onMove = (ev) => {
+      pending = isCol ? ev.clientX : ev.clientY;
+      if (raf !== null) return;
+      raf = requestAnimationFrame(() => {
+        raf = null;
+        apply(pending);
+      });
+    };
+    const endDrag = () => {
+      divider.classList.remove('dragging');
+      document.body.classList.remove('tile-grid-resizing', `tile-grid-resizing--${axis}`);
+      if (capturedPointerId !== null) {
+        try {
+          divider.releasePointerCapture?.(capturedPointerId);
+        } catch {
+          /* Already released. */
+        }
+        capturedPointerId = null;
+      }
+      divider.removeEventListener('pointermove', onMove);
+      divider.removeEventListener('pointerup', onUp);
+      divider.removeEventListener('pointercancel', onUp);
+      if (raf !== null) {
+        cancelAnimationFrame(raf);
+        raf = null;
+      }
+      if (this._tileDividerDragTeardown === endDrag) {
+        this._tileDividerDragTeardown = null;
+        this._tileDividerDrag = null;
+      }
+    };
+    const onUp = () => {
+      // The last queued frame carries the final pointer position.
+      const queued = raf !== null;
+      endDrag();
+      if (queued) apply(pending);
+      for (const tile of affected) {
+        if (!tile._destroyed) tile.fit();
+      }
+    };
+    divider.classList.add('dragging');
+    document.body.classList.add('tile-grid-resizing', `tile-grid-resizing--${axis}`);
+    try {
+      divider.setPointerCapture?.(e.pointerId);
+      capturedPointerId = e.pointerId ?? null;
+    } catch {
+      /* The drag still works through the listeners below. */
+    }
+    divider.addEventListener('pointermove', onMove);
+    divider.addEventListener('pointerup', onUp);
+    divider.addEventListener('pointercancel', onUp);
+    this._tileDividerDragTeardown = endDrag;
+    this._tileDividerDrag = { key };
   },
 
   /**

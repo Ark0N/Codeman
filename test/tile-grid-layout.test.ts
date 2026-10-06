@@ -144,10 +144,7 @@ describe('sanitizeTileGridState', () => {
   });
 
   it('drops malformed track fractions', () => {
-    const out = T.sanitizeTileGridState(
-      { v: 1, open: true, ids: ['a'], colFr: [1, -1], rowFr: [1, 1, 1, 1] },
-      live
-    );
+    const out = T.sanitizeTileGridState({ v: 1, open: true, ids: ['a'], colFr: [1, -1], rowFr: [1, 1, 1, 1] }, live);
     expect(out?.colFr).toBeNull();
     expect(out?.rowFr).toBeNull();
   });
@@ -185,6 +182,37 @@ describe('focus helpers', () => {
     expect(T.cycleTile(['a', 'b', 'c'], 'c', 1)).toBe('a');
     expect(T.cycleTile(['a', 'b', 'c'], 'a', -1)).toBe('c');
     expect(T.cycleTile([], 'a', 1)).toBeNull();
+  });
+});
+
+describe('dragTrackFractions (divider drags)', () => {
+  const drag = (fr: number[], i: number, d: number, total = 1200, min = 300) =>
+    (T as unknown as { dragTrackFractions: (...a: unknown[]) => number[] }).dragTrackFractions(fr, i, d, total, min);
+  const px = (fr: number[], total = 1200) => fr.map((f) => Math.round((f / fr.reduce((a, b) => a + b, 0)) * total));
+
+  it('moves size from one neighbour to the other, the rest untouched', () => {
+    // 3 equal tracks of 400px; divider 0 moves 100px right.
+    expect(px(drag([1, 1, 1], 0, 100))).toEqual([500, 300, 400]);
+    expect(px(drag([1, 1, 1], 1, -50))).toEqual([400, 350, 450]);
+  });
+
+  it('clamps both neighbours to the minimum size', () => {
+    expect(px(drag([1, 1, 1], 0, 300))).toEqual([500, 300, 400]);
+    expect(px(drag([1, 1, 1], 0, -300))).toEqual([300, 500, 400]);
+  });
+
+  it('a pair too small for two minimums splits evenly instead of inverting', () => {
+    expect(px(drag([1, 1], 0, 200, 500, 300), 500)).toEqual([250, 250]);
+  });
+
+  it('works from the fractions the drag started with (no drift)', () => {
+    const start = [2, 1];
+    expect(px(drag(start, 0, 0))).toEqual([800, 400]);
+    expect(start).toEqual([2, 1]);
+  });
+
+  it('ignores a divider that is not between two tracks', () => {
+    expect(drag([1, 1], 1, 100)).toEqual([1, 1]);
   });
 });
 

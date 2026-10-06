@@ -71,7 +71,7 @@ describe('zoom and restore', () => {
 
     expect(app._tileGrid.zoomedId).toBeNull();
     expect(section.classList.contains('tile-grid--zoomed')).toBe(false);
-    expect(section.style.gridTemplateColumns).toBe('repeat(2, minmax(0, 1fr))');
+    expect(section.style.gridTemplateColumns).toBe('minmax(0, 1fr) 6px minmax(0, 1fr)');
     expect(FakeTile.all.every((t) => t.fit.mock.calls.length === 1)).toBe(true);
     expect(zoomButton('s-a').getAttribute('aria-pressed')).toBe('false');
   });

@@ -61,6 +61,11 @@ export class FakeEl {
   type = '';
   focus = vi.fn();
   select = vi.fn();
+  setPointerCapture = vi.fn();
+  releasePointerCapture = vi.fn();
+  removeEventListener(type: string, fn: (ev: unknown) => void) {
+    this.listeners[type] = (this.listeners[type] ?? []).filter((f) => f !== fn);
+  }
   appendChild(child: FakeEl) {
     child.remove();
     child.parentElement = this;
@@ -95,7 +100,6 @@ export class FakeEl {
   addEventListener(type: string, fn: (ev: unknown) => void) {
     (this.listeners[type] ||= []).push(fn);
   }
-  removeEventListener() {}
   dispatch(type: string, ev: unknown = {}) {
     for (const fn of this.listeners[type] ?? []) fn(ev);
   }
@@ -169,6 +173,8 @@ export function advanceClock(ms: number) {
 export const clockNow = () => clock;
 /** Every callback the code under test handed a PerformanceObserver, newest last. */
 export const perfObserverCallbacks: Array<(list: { getEntries(): unknown[] }) => void> = [];
+/** Animation-frame callbacks the code under test queued (id = index + 1); a test runs them. */
+export const rafCallbacks: Array<() => void> = [];
 /** What the code under test deferred with requestIdleCallback; a test runs them. */
 export const idleCallbacks: Array<() => void> = [];
 export const windowStub: Record<string, unknown> = {
@@ -194,7 +200,10 @@ const context = vm.createContext({
   clearInterval: vi.fn(),
   setTimeout: (fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms),
   clearTimeout: (id: ReturnType<typeof setTimeout>) => globalThis.clearTimeout(id),
-  requestAnimationFrame: vi.fn(),
+  requestAnimationFrame: (cb: () => void) => rafCallbacks.push(cb),
+  cancelAnimationFrame: (id: number) => {
+    if (id > 0) rafCallbacks[id - 1] = () => {};
+  },
   requestIdleCallback: (cb: () => void) => idleCallbacks.push(cb),
   HTMLCanvasElement: class HTMLCanvasElement {},
   WebSocket: { OPEN: 1 },
@@ -295,6 +304,7 @@ export function makeGridApp(ids: string[] = ['s-a', 's-b', 's-c']): GridApp {
 export function resetGridHarness() {
   FakeTile.all = [];
   idleCallbacks.length = 0;
+  rafCallbacks.length = 0;
   localStore.clear();
   windowStub.innerWidth = 2400;
   section.children = [];
