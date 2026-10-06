@@ -552,11 +552,14 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * The tile chord `e` asks for, if it applies right now, else null: the toggle
-   * wherever a grid could open (or is open), the focus and remove chords only
-   * while it is open, so outside the grid they reach the terminal untouched.
-   * Registry-aware (rebinds and disables in App Settings, Shortcuts). The
-   * capture handler (app.js) dispatches it; every xterm key handler returns
+   * The tile chord `e` asks for, if it applies right now, else null. The
+   * toggle applies while the grid is open, or where one could open AND the
+   * per-device `showTileGridButton` setting is on: with it off (the default)
+   * the chord is inert and reaches the terminal like any unbound key. (The
+   * applied default pending the owner's answer; one line to change.) The focus,
+   * zoom and remove chords apply only while the grid is open, however it was
+   * opened. Registry-aware (rebinds and disables in App Settings, Shortcuts).
+   * The capture handler (app.js) dispatches it; every xterm key handler returns
    * false for it, so a chord that applies never reaches a PTY.
    *
    * @returns {string|null} the registry id
@@ -568,8 +571,9 @@ Object.assign(CodemanApp.prototype, {
     for (const shortcut of this.getShortcutRegistry()) {
       const spec = TILE_SHORTCUTS[shortcut.id];
       if (!spec || shortcut.disabled || !this.matchesShortcutEvent(e, shortcut)) continue;
-      if (spec.needsOpen ? open : open || this.canOpenTileGrid()) return shortcut.id;
-      return null;
+      if (spec.needsOpen) return open ? shortcut.id : null;
+      const enabled = this.loadAppSettingsFromStorage?.()?.showTileGridButton === true;
+      return open || (enabled && this.canOpenTileGrid()) ? shortcut.id : null;
     }
     return null;
   },

@@ -46,6 +46,11 @@ const chord = (overrides: Record<string, unknown>) => ({
   ...overrides,
 });
 const TOGGLE = { key: 'G', code: 'KeyG', ctrlKey: true, shiftKey: true };
+/** The per-device Tiles setting on (it enables the Tiles button and the toggle chord). */
+const withTilesSetting = (app: GridApp) => {
+  app.loadAppSettingsFromStorage = () => ({ showTileGridButton: true });
+  return app;
+};
 const RIGHT = { key: 'ArrowRight', code: 'ArrowRight', altKey: true, shiftKey: true };
 
 beforeEach(() => {
@@ -71,15 +76,27 @@ describe('registry', () => {
 });
 
 describe('when a chord applies', () => {
-  it('the toggle applies wherever a grid could open, and while one is open', () => {
-    const app = makeGridApp(IDS);
+  it('with the Tiles setting on, the toggle applies wherever a grid could open, and while one is open', () => {
+    const app = withTilesSetting(makeGridApp(IDS));
     expect(app.tileShortcutFor(chord(TOGGLE))).toBe('toggle-tile-grid');
     app.openTileGrid(IDS);
     expect(app.tileShortcutFor(chord(TOGGLE))).toBe('toggle-tile-grid');
   });
 
-  it('the toggle does not apply in a narrow window or a solo window', () => {
+  it('with the Tiles setting off (the default) the toggle is inert, like an unbound key', () => {
     const app = makeGridApp(IDS);
+    expect(app.tileShortcutFor(chord(TOGGLE))).toBeNull();
+  });
+
+  it('with the setting off, a grid opened another way (Ctrl+click, a drop) still has its chords, toggle included', () => {
+    const app = makeGridApp(IDS);
+    app.openTileGrid(IDS);
+    expect(app.tileShortcutFor(chord(RIGHT))).toBe('focus-tile-right');
+    expect(app.tileShortcutFor(chord(TOGGLE))).toBe('toggle-tile-grid');
+  });
+
+  it('the toggle does not apply in a narrow window or a solo window', () => {
+    const app = withTilesSetting(makeGridApp(IDS));
     gridWindow.innerWidth = 1000;
     expect(app.tileShortcutFor(chord(TOGGLE))).toBeNull();
     gridWindow.innerWidth = 2400;
@@ -131,8 +148,17 @@ describe('the capture-phase handler', () => {
     return keydown[1];
   }
 
-  it('Ctrl+Shift+G opens the grid on the active session, then closes it, overriding the browser', () => {
+  it('setting off: Ctrl+Shift+G is left alone (no preventDefault), the grid stays closed', () => {
     const app = makeGridApp(IDS);
+    const onKeydown = handlerFor(app);
+    const e = chord(TOGGLE);
+    onKeydown(e);
+    expect(e.preventDefault).not.toHaveBeenCalled();
+    expect(app._tilesOwnTerminal()).toBe(false);
+  });
+
+  it('Ctrl+Shift+G opens the grid on the active session, then closes it, overriding the browser', () => {
+    const app = withTilesSetting(makeGridApp(IDS));
     app.selectSession = vi.fn();
     const onKeydown = handlerFor(app);
     const open = chord(TOGGLE);
