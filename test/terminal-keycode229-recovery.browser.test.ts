@@ -231,4 +231,81 @@ describe('orphaned terminal input recovery wiring', () => {
     const { sent } = await keystroke({ data: 'q', dispatchInput: false, keyCode: 65 });
     expect(sent).toEqual([]);
   });
+
+  /**
+   * The sequence a real Android device logged (SwiftKey in Edge) when autocorrect fired on
+   * space: every key is a keyCode-229 keydown plus a plain `insertText`, then ONE keydown that
+   * deletes five characters and a second that inserts `rompt `. Trusted events through the real
+   * textarea and the real xterm, so `execCommand` produces the same `beforeinput`/`input`
+   * pairs the keyboard does. The byte stream is replayed (DEL erases a character) to get the
+   * line the shell ends up with.
+   */
+  async function autocorrectOnSpace() {
+    return page.evaluate(async () => {
+      const app = (window as any).app;
+      const textarea = document.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement;
+      const originalSessionId = app.activeSessionId;
+      const originalLocalEcho = app._localEchoEnabled;
+      const originalSendInput = app._sendInputAsync;
+      const originalPendingInput = app._pendingInput;
+      const originalLastKeystrokeTime = app._lastKeystrokeTime;
+      const sent: string[] = [];
+      const key229 = () => {
+        const down = new KeyboardEvent('keydown', { key: 'Unidentified', bubbles: true, cancelable: true });
+        Object.defineProperties(down, { keyCode: { value: 229 }, which: { value: 229 } });
+        textarea.dispatchEvent(down);
+      };
+      const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
+      try {
+        app.activeSessionId = 'cod388-browser-autocorrect';
+        app._localEchoEnabled = false;
+        app._pendingInput = '';
+        app._lastKeystrokeTime = 0;
+        app._sendInputAsync = (_sessionId: string, chunk: string) => sent.push(chunk);
+        textarea.value = '';
+        textarea.focus();
+
+        for (const ch of 'testing the peompt') {
+          key229();
+          document.execCommand('insertText', false, ch);
+          await tick();
+        }
+        // SwiftKey's autocorrect: both edits in one task, before any timer runs.
+        key229();
+        textarea.setSelectionRange(textarea.value.length - 5, textarea.value.length);
+        document.execCommand('delete');
+        key229();
+        document.execCommand('insertText', false, 'rompt ');
+        await new Promise((resolve) => setTimeout(resolve, 80));
+
+        const line: string[] = [];
+        for (const ch of sent.join('')) {
+          if (ch === '\x7f') line.pop();
+          else line.push(ch);
+        }
+        return { raw: sent.join(''), line: line.join(''), textarea: textarea.value };
+      } finally {
+        app.activeSessionId = originalSessionId;
+        app._localEchoEnabled = originalLocalEcho;
+        app._sendInputAsync = originalSendInput;
+        app._pendingInput = originalPendingInput;
+        app._lastKeystrokeTime = originalLastKeystrokeTime;
+        textarea.value = '';
+      }
+    });
+  }
+
+  it('an autocorrect that deletes a word and retypes it reaches the shell once, not duplicated', async () => {
+    const { line, textarea } = await autocorrectOnSpace();
+    expect(textarea).toBe('testing the prompt ');
+    expect(line).toBe('testing the prompt ');
+  });
+
+  it('control: without the edit sync, xterm alone reproduces the duplicated line', async () => {
+    // destroy() puts xterm's own handler back. Keep this LAST: it leaves the controller off.
+    await page.evaluate(() => (window as any).app._keyCode229Recovery.destroy());
+    const { line } = await autocorrectOnSpace();
+    // Byte for byte what the phone sent in the device log.
+    expect(line).toBe('testing the peompttesting the prompt rompt ');
+  });
 });

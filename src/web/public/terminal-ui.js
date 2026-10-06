@@ -1793,6 +1793,7 @@ Object.assign(CodemanApp.prototype, {
       this._keyCode229Recovery = window.CodemanKeyCode229Recovery?.create?.({
         textarea: this.terminal.textarea,
         emitRecovered: (data) => handleTerminalData(data),
+        getCompositionHelper: () => this.terminal?._core?._compositionHelper,
         isScreenReaderMode: () => this.terminal?.options?.screenReaderMode === true,
       });
     } catch {
