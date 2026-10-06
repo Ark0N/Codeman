@@ -453,6 +453,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowCronButton').checked = settings.showCronButton ?? defaults.showCronButton ?? false;
     document.getElementById('appSettingsShowGitStatus').checked = settings.showGitStatus ?? defaults.showGitStatus ?? false;
     document.getElementById('appSettingsGitStatusTree').checked = settings.gitStatusTree ?? defaults.gitStatusTree ?? true;
+    document.getElementById('appSettingsGitStatusMaxRepos').value = settings.gitStatusMaxRepos ?? defaults.gitStatusMaxRepos ?? 12;
+    document.getElementById('appSettingsGitStatusTimeout').value = settings.gitStatusTimeoutSeconds ?? defaults.gitStatusTimeoutSeconds ?? 30;
     // Gesture control lives in the Input section (alongside Local Echo / CJK Input)
     // but is only available when the instance runs with CODEMAN_GESTURE=1 (server sets
     // window.__codemanGestureAvailable). Hide just this item otherwise so the toggle
@@ -2502,6 +2504,9 @@ Object.assign(CodemanApp.prototype, {
       showCronButton: document.getElementById('appSettingsShowCronButton').checked,
       showGitStatus: document.getElementById('appSettingsShowGitStatus').checked,
       gitStatusTree: document.getElementById('appSettingsGitStatusTree').checked,
+      // Clamped here and again on the server; an empty or odd value falls back to the default.
+      gitStatusMaxRepos: Math.min(50, Math.max(1, parseInt(document.getElementById('appSettingsGitStatusMaxRepos').value, 10) || 12)),
+      gitStatusTimeoutSeconds: Math.min(120, Math.max(5, parseInt(document.getElementById('appSettingsGitStatusTimeout').value, 10) || 30)),
       gestureControlEnabled: document.getElementById('appSettingsGestureControl').checked,
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
@@ -2757,6 +2762,8 @@ Object.assign(CodemanApp.prototype, {
       // Per-device bottom-bar indicator, absent from SettingsUpdateSchema (.strict()): it must not reach the PUT.
       showGitStatus: _sgs,
       gitStatusTree: _gst,
+      gitStatusMaxRepos: _gsm,
+      gitStatusTimeoutSeconds: _gst2,
       showTabDetachButton: _tdb,
       // Phone-only home surface, and absent from SettingsUpdateSchema (.strict()).
       mobileOverviewEnabled: _mov,
@@ -4048,7 +4055,7 @@ Object.assign(CodemanApp.prototype, {
           'language',
           'terminalWheelLocalScrollback',
           'autoCopySelection', 'copyStripMargin',
-          'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus', 'gitStatusTree',
+          'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus', 'gitStatusTree', 'gitStatusMaxRepos', 'gitStatusTimeoutSeconds',
           'showTabDetachButton',
           'mobileOverviewEnabled',
           'sessionLineageLines',

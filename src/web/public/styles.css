@@ -19788,3 +19788,19 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
   padding-left: 0.4rem;
   border-left: 1px solid var(--border);
 }
+
+/* Git status panel: a repository git could not read stays in the list, with the reason */
+.git-status-repo--error {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.35rem 0.5rem;
+  background: var(--bg-input);
+  min-width: 0;
+}
+
+.git-status-repo-unreadable {
+  color: #e0a030;
+  font-size: 0.68rem;
+}

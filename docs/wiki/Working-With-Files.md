@@ -187,7 +187,10 @@ Click it for a draggable window, in the style of the File Viewer:
   **Open file** jumps to the File Viewer; **Back** returns to the list. A binary file shows a
   note instead, and a diff over 400 KB is cut short.
 - A session folder that holds several projects gets one collapsible section per repository
-  found up to two levels down. They all start collapsed (each summary line shows its branch and
+  found up to two levels down (up to **Git status: max repositories**, 12 by default; the window says
+  when there are more). A repository git could not read, typically a timeout on a slow network
+  share, is listed with the reason and counted as `? N` in the bottom-bar indicator, never silently
+  left out; the **git timeout** setting raises how long it waits. They all start collapsed (each summary line shows its branch and
   what is outstanding), and the ones you open stay open when the window refreshes; an unrelated repository above the workspace (a dotfiles repo
   in your home folder) is ignored.
 

@@ -52,7 +52,10 @@ import { gitNonInteractiveEnv, redactGitCredentials } from './git-clone.js';
 
 const execFileAsync = promisify(execFile);
 
-const GIT_TIMEOUT_MS = 10_000;
+/** How long one git command may run, unless the caller passes `timeoutMs` (a slow network share needs more). */
+export const DEFAULT_GIT_TIMEOUT_MS = 30_000;
+export const MIN_GIT_TIMEOUT_MS = 5_000;
+export const MAX_GIT_TIMEOUT_MS = 120_000;
 /** `git status` on a huge tree can print a lot; a bound on what we will hold. */
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 /** Max file rows returned. The counts stay exact. */
@@ -258,9 +261,9 @@ export function parseCommitLog(text: string): GitCommitEntry[] {
 // ---------------------------------------------------------------------------
 
 /** Runs `git <args>` in `cwd` and returns stdout. Injected so the cache and error paths test without git. */
-export type GitRunner = (cwd: string, args: string[]) => Promise<string>;
+export type GitRunner = (cwd: string, args: string[], opts?: { timeoutMs?: number }) => Promise<string>;
 
-export const runGit: GitRunner = async (cwd, args) => {
+export const runGit: GitRunner = async (cwd, args, opts) => {
   const { stdout } = await execFileAsync(
     'git',
     // --no-optional-locks: never touch the index just to look. core.fsmonitor=false: do not start or
@@ -269,7 +272,7 @@ export const runGit: GitRunner = async (cwd, args) => {
     ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'log.showSignature=false', ...args],
     {
       cwd,
-      timeout: GIT_TIMEOUT_MS,
+      timeout: opts?.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
       maxBuffer: MAX_OUTPUT_BYTES,
       env: { ...gitNonInteractiveEnv(), LC_ALL: 'C', LANG: 'C', GIT_OPTIONAL_LOCKS: '0' },
     }
@@ -288,17 +291,14 @@ function describeFailure(err: unknown): { notARepo: boolean; message: string } {
   return { notARepo: false, message: redactGitCredentials(text).slice(0, 300) };
 }
 
-async function collect(cwd: string, git: GitRunner): Promise<GitWorkspaceStatus> {
+async function collect(cwd: string, git: GitRunner, timeoutMs?: number): Promise<GitWorkspaceStatus> {
   let statusText: string;
   try {
-    statusText = await git(cwd, [
-      'status',
-      '--porcelain=v2',
-      '--branch',
-      '-z',
-      '--untracked-files=normal',
-      '--ignore-submodules=dirty',
-    ]);
+    statusText = await git(
+      cwd,
+      ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=normal', '--ignore-submodules=dirty'],
+      { timeoutMs }
+    );
   } catch (err) {
     const f = describeFailure(err);
     return f.notARepo ? emptyStatus('not-a-repo') : emptyStatus('error', { error: f.message });
@@ -307,7 +307,7 @@ async function collect(cwd: string, git: GitRunner): Promise<GitWorkspaceStatus>
 
   const safe = async (args: string[]): Promise<string> => {
     try {
-      return await git(cwd, args);
+      return await git(cwd, args, { timeoutMs });
     } catch {
       return '';
     }
@@ -415,10 +415,12 @@ async function singleFlight<T>(
  */
 export async function getGitWorkspaceStatus(
   cwd: string,
-  opts: { git?: GitRunner; now?: () => number; fresh?: boolean } = {}
+  opts: { git?: GitRunner; now?: () => number; fresh?: boolean; timeoutMs?: number } = {}
 ): Promise<GitWorkspaceStatus> {
   const git = opts.git ?? runGit;
-  return singleFlight(cache, cwd, { now: opts.now ?? Date.now, fresh: opts.fresh }, () => collect(cwd, git));
+  return singleFlight(cache, cwd, { now: opts.now ?? Date.now, fresh: opts.fresh }, () =>
+    collect(cwd, git, opts.timeoutMs)
+  );
 }
 
 type RepoToplevel = { state: 'ok'; root: string } | { state: 'not-a-repo' } | { state: 'error'; error: string };
@@ -427,12 +429,12 @@ const toplevelCache = new Map<string, CacheEntry<RepoToplevel>>();
 /** The root of the repository enclosing `cwd` (git walks up), from one cheap `rev-parse`. Cached like the status. */
 function enclosingRepoRoot(
   cwd: string,
-  opts: { git?: GitRunner; now?: () => number; fresh?: boolean }
+  opts: { git?: GitRunner; now?: () => number; fresh?: boolean; timeoutMs?: number }
 ): Promise<RepoToplevel> {
   const git = opts.git ?? runGit;
   return singleFlight(toplevelCache, cwd, { now: opts.now ?? Date.now, fresh: opts.fresh }, async () => {
     try {
-      const root = (await git(cwd, ['rev-parse', '--show-toplevel'])).trim();
+      const root = (await git(cwd, ['rev-parse', '--show-toplevel'], { timeoutMs: opts.timeoutMs })).trim();
       return root ? { state: 'ok', root } : { state: 'not-a-repo' };
     } catch (err) {
       const f = describeFailure(err);
@@ -451,6 +453,16 @@ const DISCOVERY_MAX_DEPTH = 2;
 const DISCOVERY_MAX_ENTRIES = 300;
 /** Repositories reported for one workspace. */
 export const MAX_REPOS = 12;
+/** The most repositories a caller may ask for: each one costs several git processes per poll. */
+export const MAX_REPOS_LIMIT = 50;
+
+/** `value` as a whole number within [min, max], else `fallback`. For options that arrive as untrusted query strings. */
+export function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  // An empty string is "not given", not 0 (Number('') is 0, which would clamp to the minimum).
+  const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+}
 /** The list of repositories under a folder changes rarely, so it is re-scanned far less often than status. */
 const DISCOVERY_TTL_MS = 30_000;
 /** Folders that are never worth descending into when looking for projects. */
@@ -472,8 +484,10 @@ export interface GitWorkspaceOverview {
   reason?: 'remote' | 'docker';
   error?: string;
   repos: GitRepoEntry[];
-  /** More than `MAX_REPOS` repositories were found; only the first are reported. */
+  /** More than `repoLimit` repositories were found; only the first are reported. */
   reposTruncated: boolean;
+  /** The most repositories this overview would list (the caller's setting, or `MAX_REPOS`). */
+  repoLimit?: number;
   checkedAt: number;
 }
 
@@ -553,7 +567,8 @@ async function readDirBounded(dir: string): Promise<import('node:fs').Dirent[] |
 /** Repositories up to `DISCOVERY_MAX_DEPTH` levels below `cwd`, nearest and alphabetical first. Never follows symlinks. */
 export async function discoverChildRepos(
   cwd: string,
-  excludeRealRoots: string[] = []
+  excludeRealRoots: string[] = [],
+  maxRepos: number = MAX_REPOS
 ): Promise<{ dirs: string[]; truncated: boolean }> {
   const found: string[] = [];
   let level = [cwd];
@@ -576,7 +591,7 @@ export async function discoverChildRepos(
     }
     level = next;
   }
-  return { dirs: found.slice(0, MAX_REPOS), truncated: found.length > MAX_REPOS };
+  return { dirs: found.slice(0, maxRepos), truncated: found.length > maxRepos };
 }
 
 const discoveryCache = new Map<string, { at: number; value: { dirs: string[]; truncated: boolean } }>();
@@ -602,13 +617,28 @@ export interface GitOverviewOptions {
   home?: string;
   /** Docker case workspaces (host paths): repositories at or inside these are never inspected. */
   dockerWorkspaces?: string[];
+  /** How many repositories to report below a folder that is not itself a repository (1 to `MAX_REPOS_LIMIT`, default `MAX_REPOS`). */
+  maxRepos?: number;
+  /** How long one git command may run, in ms (`MIN_GIT_TIMEOUT_MS` to `MAX_GIT_TIMEOUT_MS`, default `DEFAULT_GIT_TIMEOUT_MS`). */
+  timeoutMs?: number;
+}
+
+/** The repository limit and git timeout an overview was computed with, from untrusted options. */
+export function resolveOverviewLimits(opts: { maxRepos?: unknown; timeoutMs?: unknown }): {
+  maxRepos: number;
+  timeoutMs: number;
+} {
+  return {
+    maxRepos: clampInt(opts.maxRepos, 1, MAX_REPOS_LIMIT, MAX_REPOS),
+    timeoutMs: clampInt(opts.timeoutMs, MIN_GIT_TIMEOUT_MS, MAX_GIT_TIMEOUT_MS, DEFAULT_GIT_TIMEOUT_MS),
+  };
 }
 
 type WorkspaceRepos =
   | { kind: 'docker' }
   | { kind: 'error'; error: string }
   | { kind: 'enclosing'; root: string }
-  | { kind: 'children'; dirs: string[]; truncated: boolean };
+  | { kind: 'children'; dirs: string[]; truncated: boolean; limit: number };
 
 /**
  * WHICH repositories belong to the workspace (the module header has the rules), without a full
@@ -617,6 +647,7 @@ type WorkspaceRepos =
  */
 async function resolveWorkspaceRepos(cwd: string, opts: GitOverviewOptions): Promise<WorkspaceRepos> {
   const now = opts.now ?? Date.now;
+  const { maxRepos, timeoutMs } = resolveOverviewLimits(opts);
   const dockerRoots = await realAll(opts.dockerWorkspaces ?? []);
   // Checked BEFORE any git runs: git walks up from cwd, and a repository the container can write to
   // could carry config (a clean filter) that runs on the host.
@@ -624,7 +655,7 @@ async function resolveWorkspaceRepos(cwd: string, opts: GitOverviewOptions): Pro
   // The enclosing repository is identified before its full status runs, so an unrelated one above the
   // workspace (a dotfiles repo in $HOME) costs one rev-parse, and its status failing cannot hide the
   // repositories below.
-  const top = await enclosingRepoRoot(cwd, opts);
+  const top = await enclosingRepoRoot(cwd, { ...opts, timeoutMs });
   if (top.state === 'error') return { kind: 'error', error: top.error };
   if (top.state === 'ok') {
     if (await isInsideAny(top.root, dockerRoots)) return { kind: 'docker' };
@@ -633,18 +664,20 @@ async function resolveWorkspaceRepos(cwd: string, opts: GitOverviewOptions): Pro
   }
 
   // Not inside a repository of this workspace: look below for projects.
-  const hit = discoveryCache.get(cwd);
+  // Keyed by the limit too: a list cut at 12 must not answer a request for 30.
+  const discoveryKey = `${cwd}\0${maxRepos}`;
+  const hit = discoveryCache.get(discoveryKey);
   let found: { dirs: string[]; truncated: boolean };
   if (!opts.fresh && hit && now() - hit.at < DISCOVERY_TTL_MS) found = hit.value;
   else {
-    found = await discoverChildRepos(cwd, dockerRoots);
-    discoveryCache.set(cwd, { at: now(), value: found });
+    found = await discoverChildRepos(cwd, dockerRoots, maxRepos);
+    discoveryCache.set(discoveryKey, { at: now(), value: found });
     if (discoveryCache.size > CACHE_MAX_ENTRIES) discoveryCache.delete(discoveryCache.keys().next().value as string);
   }
   // The cached list can predate a Docker case linked since: filter it against the roots as they are NOW.
   const dirs: string[] = [];
   for (const dir of found.dirs) if (!(await isInsideAny(dir, dockerRoots))) dirs.push(dir);
-  return { kind: 'children', dirs, truncated: found.truncated };
+  return { kind: 'children', dirs, truncated: found.truncated, limit: maxRepos };
 }
 
 /**
@@ -659,7 +692,7 @@ export async function getGitWorkspaceOverview(
   if (where.kind === 'docker') return emptyOverview('unsupported', { reason: 'docker' });
   if (where.kind === 'error') return emptyOverview('error', { error: where.error });
   if (where.kind === 'enclosing') {
-    const primary = await getGitWorkspaceStatus(cwd, opts);
+    const primary = await getGitWorkspaceStatus(cwd, { ...opts, timeoutMs: resolveOverviewLimits(opts).timeoutMs });
     if (primary.state === 'error') return emptyOverview('error', { error: primary.error });
     if (primary.state !== 'ok') return emptyOverview('not-a-repo');
     const root = primary.repoRoot ?? where.root;
@@ -671,14 +704,21 @@ export async function getGitWorkspaceOverview(
     };
   }
 
-  const statuses = await mapLimited(where.dirs, STATUS_CONCURRENCY, (dir) => getGitWorkspaceStatus(dir, opts));
+  const timeoutMs = resolveOverviewLimits(opts).timeoutMs;
+  const statuses = await mapLimited(where.dirs, STATUS_CONCURRENCY, (dir) =>
+    getGitWorkspaceStatus(dir, { ...opts, timeoutMs })
+  );
   const repos: GitRepoEntry[] = [];
   where.dirs.forEach((dir, i) => {
     const status = statuses[i];
-    if (status.state === 'ok') repos.push({ name: basename(dir), path: relative(cwd, dir), status });
+    // A repository git could not read (a timeout on a slow share, a broken worktree) stays in the
+    // list with its error, so it is visible that something is not being reported; only a folder
+    // that turned out not to be a repository after all is left out.
+    if (status.state === 'ok' || status.state === 'error')
+      repos.push({ name: basename(dir), path: relative(cwd, dir), status });
   });
   if (!repos.length) return emptyOverview('not-a-repo');
-  return { state: 'ok', repos, reposTruncated: where.truncated, checkedAt: Date.now() };
+  return { state: 'ok', repos, reposTruncated: where.truncated, repoLimit: where.limit, checkedAt: Date.now() };
 }
 
 /**
@@ -726,7 +766,7 @@ export function isSafeRepoRelativePath(p: string): boolean {
 export async function getGitFileDiff(
   repoRoot: string,
   file: { path: string; origPath?: string; kind: GitFileKind },
-  opts: { git?: GitRunner } = {}
+  opts: { git?: GitRunner; timeoutMs?: number } = {}
 ): Promise<GitFileDiff> {
   if (!isSafeRepoRelativePath(file.path) || (file.origPath && !isSafeRepoRelativePath(file.origPath))) {
     throw new Error('Invalid path');
@@ -742,7 +782,7 @@ export async function getGitFileDiff(
   let out: string;
   let cutShort = false;
   try {
-    out = await git(repoRoot, args);
+    out = await git(repoRoot, args, { timeoutMs: opts.timeoutMs });
   } catch (err) {
     const e = err as { code?: unknown; stdout?: unknown };
     // `--no-index` exits 1 when the files differ, which is the normal case for it.
