@@ -529,8 +529,12 @@ Object.assign(CodemanApp.prototype, {
       const item = document.createElement('button');
       item.type = 'button';
       item.setAttribute('role', 'menuitem');
-      item.setAttribute('data-i18n-skip', '');
-      item.textContent = c.label;
+      // Only the name is user text: skipping the whole button would keep its
+      // title (why it is disabled) out of the translator too.
+      const name = document.createElement('span');
+      name.setAttribute('data-i18n-skip', '');
+      name.textContent = c.label;
+      item.appendChild(name);
       item.disabled = full;
       if (full) item.title = limit.full;
       item.addEventListener('click', () => {

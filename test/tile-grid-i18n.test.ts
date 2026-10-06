@@ -72,13 +72,20 @@ const leftover = (text: string) => text.replace(ALLOWED, '').match(/[A-Za-z]+/g)
 const seen = new Map<string, string>();
 /** Text in a data-i18n-skip subtree (user text): must never be translated. */
 const userText = new Set<string>();
+/**
+ * A title or accessible name inside a skipped subtree: the translator skips
+ * the element's attributes along with its text, so a UI label there stays
+ * English. Only the user text itself may be skipped.
+ */
+const labelsInSkip: string[] = [];
 
 function harvest(root: FakeEl | null | undefined, where: string) {
   const walk = (el: FakeEl, inSkip: boolean) => {
     const skip = inSkip || 'data-i18n-skip' in el.attrs;
     const add = (value: unknown, kind: string) => {
       if (typeof value !== 'string' || !/[A-Za-z]/.test(value)) return;
-      if (skip) userText.add(value.trim());
+      if (skip && kind === 'text') userText.add(value.trim());
+      else if (skip) labelsInSkip.push(`${where} (${kind}): ${value}`);
       else if (!seen.has(value.trim())) seen.set(value.trim(), `${where} (${kind})`);
     };
     add(el.textContent, 'text');
@@ -296,6 +303,10 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
       if (text === source || words.length) bad.push(`${where}: "${source}" -> "${text}"`);
     }
     expect(bad).toEqual([]);
+  });
+
+  it('no UI label sits inside a skipped subtree (where the translator cannot reach it)', () => {
+    expect(labelsInSkip).toEqual([]);
   });
 
   it('each one reads exactly as before in English', () => {

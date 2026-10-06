@@ -212,7 +212,7 @@ describe("a tile's + menu", () => {
     app.markIdleAlertSeen.mockClear();
     addButtonOf('s-a').dispatch('click', { stopPropagation: vi.fn(), currentTarget: null });
     const items = addMenu()!.children.filter((i) => i.className !== 'tile-add-new');
-    expect(items.map((i) => i.textContent)).toEqual(['s-other', 's-c']);
+    expect(items.map((i) => i.children[0].textContent)).toEqual(['s-other', 's-c']);
     items[1].dispatch('click');
     expect(app._tileGrid.ids).toEqual(['s-a', 's-b', 's-c']);
     expect(app.activeSessionId).toBe('s-c');

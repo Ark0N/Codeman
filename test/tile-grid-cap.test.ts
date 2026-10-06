@@ -67,7 +67,7 @@ describe('every way in stops at the cap', () => {
     const app = fullGrid();
     app.openTileAddMenu({ stopPropagation: vi.fn(), preventDefault: vi.fn(), currentTarget: null }, 's-1');
     const menu = body.children.find((c) => c.className.includes('tile-add-menu'))!;
-    const items = menu.children.filter((c) => c.textContent === 's-7' || c.textContent === 's-8');
+    const items = menu.children.filter((c) => ['s-7', 's-8'].includes(c.children[0]?.textContent ?? ''));
     expect(items).toHaveLength(2);
     for (const item of items) {
       expect(item.disabled).toBe(true);
