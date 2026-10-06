@@ -176,7 +176,8 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-const isMarker = (data: unknown) => typeof data === 'string' && data.includes('Pane B disconnected');
+// Every marker variant (reconnecting, session ended, refused, taken over) starts the same way.
+const isMarker = (data: unknown) => typeof data === 'string' && data.includes('[disconnected');
 
 /** Lets every microtask the vm-side promise chain queued run. */
 const settle = () => new Promise((r) => setTimeout(r, 0));
@@ -722,8 +723,11 @@ describe('TerminalTile scroll-to-top history pull', () => {
     expect(connect).toContain('this._installWheelListener();');
     expect(connect).toContain('this._onLiveClear();');
     expect(connect).not.toContain('this.terminal.clear();');
-    // The tests below drive the close through _onSocketClosed() directly.
-    expect(connect).toContain('this.ws.onclose = () => this._onSocketClosed();');
+    // The tests below drive the close through _onSocketClosed() directly; the
+    // socket's own handler forwards the close event (and its code) there, and
+    // only for the current socket (_openSocket).
+    expect(connect).toContain('this._onSocketClosed(event);');
+    expect(connect).toMatch(/ws\.onclose = \(event\) => \{\s*if \(ws !== this\.ws\) return;/);
   });
 
   it('a close with no pull running writes the marker straight away', () => {
@@ -747,9 +751,9 @@ describe('TerminalTile scroll-to-top history pull', () => {
     void pane._pullHistory();
     await settle();
 
-    const marker = expect.stringContaining('Pane B disconnected');
+    const marker = expect.stringContaining('[disconnected');
     const writes = pane.terminal.write.mock.calls.map((c) => c[0]);
-    expect(writes.at(-1)).toEqual(expect.stringMatching(/Pane B disconnected/));
+    expect(writes.at(-1)).toEqual(expect.stringMatching(/\[disconnected/));
     expect(pane.terminal.write).toHaveBeenCalledWith(marker);
   });
 
@@ -1004,7 +1008,7 @@ describe('TerminalTile scroll-to-top history pull', () => {
     await settle();
 
     for (const call of pane.terminal.write.mock.calls) {
-      expect(call[0]).toEqual(expect.not.stringMatching(/Pane B disconnected/));
+      expect(call[0]).toEqual(expect.not.stringMatching(/\[disconnected/));
     }
   });
 

@@ -95,6 +95,18 @@
       // this pane's socket is open, so the exactly-once input queue delivers this
       // session's keystrokes over it (app.js _inputSocketFor). Null otherwise.
       this._inputHandle = null;
+      // Reconnect state. `_socketUrl` is set once connect() opens the first
+      // socket: a pane that never connected has nothing to reconnect to.
+      // `_reconnectAttempts` counts consecutive failed opens and is reset ONLY by
+      // a successful open (resetting it per attempt is the tight-loop bug the
+      // primary pane's _disconnectWs documents). `_stoppedCode` is the close code
+      // that ended the pane for good; `onExit(code)` tells the owner once.
+      this._socketUrl = null;
+      this._reconnectAttempts = 0;
+      this._reconnectTimer = null;
+      this._stoppedCode = null;
+      this._markerText = TerminalTile.MARKER_RECONNECTING;
+      this.onExit = typeof opts.onExit === 'function' ? opts.onExit : null;
     }
 
     async connect() {
@@ -274,16 +286,29 @@
       const app = global.app;
       const cid = app?._clientId ? `${app._clientId}:${app._wsTabNonce}:tile` : '';
       const cidQuery = cid ? `?cid=${encodeURIComponent(cid)}` : '';
-      const url = `${proto}//${location.host}${window.CodemanBase.base}/ws/sessions/${this.sessionId}/terminal${cidQuery}`;
-      this.ws = new WebSocket(url);
+      this._socketUrl = `${proto}//${location.host}${window.CodemanBase.base}/ws/sessions/${this.sessionId}/terminal${cidQuery}`;
+      this._openSocket();
+    }
 
-      this.ws.onopen = () => {
-        this._wsReady = true;
-        this._registerInputSocket();
-        this._sendResize();
+    // Opens a socket and makes it THE socket. A previous one is detached first
+    // (handlers nulled, then closed), and every handler below checks it still
+    // belongs to the current socket: a replacement opened while the old socket
+    // still looked alive (a half-open connection whose close has not landed)
+    // makes the server supersede the old one with a 4010, and that late close
+    // must not stop a pane that is already running on its successor.
+    _openSocket() {
+      if (this._destroyed || !this._socketUrl) return;
+      this._detachSocket();
+      const ws = new WebSocket(this._socketUrl);
+      this.ws = ws;
+
+      ws.onopen = () => {
+        if (ws !== this.ws) return;
+        this._onSocketOpen();
       };
 
-      this.ws.onmessage = (event) => {
+      ws.onmessage = (event) => {
+        if (ws !== this.ws) return;
         if (this._inputHandle) this._inputHandle.lastRecvAt = Date.now();
         try {
           const msg = JSON.parse(event.data);
@@ -294,7 +319,7 @@
           } else if (msg.t === 'r') {
             // Server-triggered refresh (SSE backpressure cleared, terminal
             // data was dropped). The primary pane routes this to
-            // _onSessionNeedsRefresh (app.js:2990) — Pane B has its own
+            // _onSessionNeedsRefresh (app.js) — Pane B has its own
             // buffer loader for the same reason connect() does.
             this._refreshBuffer();
           } else if (msg.t === 'ia') {
@@ -306,22 +331,66 @@
         }
       };
 
-      // Mirror app.js's onclose/onerror pattern (app.js:2905-2964): _wsReady
-      // must go false on a drop or fit()/_sendResize() silently no-ops on a
-      // closed socket per the WebSocket spec (no exception, no log). No
-      // reconnect logic here — Pane B is deliberately plainer than the
-      // primary pane (see the fileoverview above); a drop just stops
-      // resizing until the parent recreates the pane. But onData already
-      // silently drops keystrokes while _wsReady is false (below), so
-      // without a visible marker a dropped socket left Pane B looking
-      // normal while it quietly ate everything typed into it. v1 scope is
-      // "say so", not reconnect — collapsing the split would lose the
-      // user's place in Pane B's scrollback for a transient blip.
-      this.ws.onclose = () => this._onSocketClosed();
+      // _wsReady must go false on a drop or fit()/_sendResize() silently
+      // no-op on a closed socket per the WebSocket spec (no exception, no log).
+      // Input is not lost meanwhile: it waits in the app's durable queue and
+      // goes out over HTTP or the next socket. The "disconnected" marker says
+      // so on screen, and a transient close reconnects (_onSocketClosed).
+      ws.onclose = (event) => {
+        if (ws !== this.ws) return;
+        this._onSocketClosed(event);
+      };
 
-      this.ws.onerror = () => {
+      ws.onerror = () => {
         // onclose fires after onerror — cleanup happens there.
       };
+    }
+
+    // Lets go of the current socket without running its close handling.
+    _detachSocket() {
+      const ws = this.ws;
+      if (!ws) return;
+      ws.onopen = null;
+      ws.onmessage = null;
+      // onclose fires asynchronously AFTER close(); without this it ran its
+      // "disconnected" write against a pane already torn down or replaced.
+      ws.onclose = null;
+      ws.onerror = null;
+      try {
+        ws.close();
+      } catch {
+        /* Already closed. */
+      }
+      this.ws = null;
+      this._wsReady = false;
+      this._unregisterInputSocket();
+    }
+
+    // A socket came up. After a drop this is a reconnect: the gap left nothing
+    // to replay (output frames carry no sequence number), so the buffer is
+    // refreshed. The closed state is reset FIRST, or the refresh would re-owe
+    // the "disconnected" marker (_refreshBuffer does on a closed socket) and
+    // stamp it under a healthy pane.
+    _onSocketOpen() {
+      const reconnected = this._wsClosed;
+      this._wsReady = true;
+      this._wsClosed = false;
+      this._markerOwed = false;
+      this._reconnectAttempts = 0;
+      this._registerInputSocket();
+      this._sendResize();
+      if (reconnected) this._refreshBuffer();
+    }
+
+    // Opens a replacement socket now instead of waiting out the backoff (for an
+    // owner that just learned the server is back). No-op while the current
+    // socket is open, after a permanent stop, or once destroyed.
+    reconnectNow() {
+      if (this._destroyed || this._stoppedCode !== null || !this._socketUrl) return;
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+      this._openSocket();
     }
 
     // The socket's close, split out of connect() so the tests can drive it.
@@ -332,12 +401,56 @@
     // replay, or in the middle of a chunked replay. A pull still waiting for its
     // response holds the marker too, for as long as the request takes (up to its
     // budget, see _pullHistory()).
-    _onSocketClosed() {
+    //
+    // Then decides what comes next. Codes that cannot get better stop the pane
+    // for good and report once through `onExit(code)`: 4004/4009 (the session
+    // is gone), 4003 (refused: Host/Origin/owner, a retry gets the same answer)
+    // and 4010 (another socket with this pane's cid took over; only ever
+    // reaches here for the CURRENT socket, see _openSocket). Everything else,
+    // including the redelivery sweep force-closing a silent socket (1005), is
+    // transient and reconnects on the primary pane's backoff ladder
+    // (CodemanWsReconnect, constants.js) plus jitter.
+    _onSocketClosed(event) {
       this._wsReady = false;
       this._wsClosed = true;
       this._unregisterInputSocket();
+      const code = event?.code;
+      const permanent = TerminalTile.STOP_MARKERS[code];
+      this._markerText = permanent || TerminalTile.MARKER_RECONNECTING;
       if (this._bufferLoading) this._markerOwed = true;
       else this._writeDisconnectedMarker();
+      if (this._destroyed) return;
+      if (permanent) {
+        this._stop(code);
+        return;
+      }
+      this._scheduleReconnect(code);
+    }
+
+    _scheduleReconnect(code) {
+      if (this._destroyed || !this._socketUrl || this._reconnectTimer) return;
+      const plan = global.CodemanWsReconnect?.plan?.(code ?? 1006, this._reconnectAttempts) || {
+        action: 'reconnect',
+        delayMs: 1000,
+      };
+      if (plan.action === 'give-up') {
+        this._stop(code);
+        return;
+      }
+      this._reconnectAttempts++;
+      const delay = plan.delayMs + Math.floor(Math.random() * 250); // jitter: tiles must not reconnect in lockstep
+      this._reconnectTimer = setTimeout(() => {
+        this._reconnectTimer = null;
+        this._openSocket();
+      }, delay);
+    }
+
+    _stop(code) {
+      if (this._stoppedCode !== null) return;
+      this._stoppedCode = code ?? null;
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+      if (!this._destroyed) this.onExit?.(code);
     }
 
     // Keystrokes and pastes go through the app's exactly-once input queue (seq,
@@ -398,7 +511,7 @@
     // Extracted so both _onSocketClosed() and a load that ends owing it on a
     // closed socket can write it (see _stampMarkerIfOwed()).
     _writeDisconnectedMarker() {
-      this.terminal?.write('\r\n\x1b[2m[Pane B disconnected — close and reopen the split to reconnect]\x1b[0m\r\n');
+      this.terminal?.write(`\r\n\x1b[2m${this._markerText}\x1b[0m\r\n`);
     }
 
     // Fetches and writes the session's current scrollback. Used both by
@@ -672,21 +785,13 @@
       // Anything still queued for this session stays in the app's queue and is
       // delivered over HTTP by the redelivery sweep, so closing the pane mid-
       // keystroke loses nothing.
-      this._unregisterInputSocket();
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
       if (this._onWheel) {
         this.mountEl?.removeEventListener('wheel', this._onWheel, { capture: true });
         this._onWheel = null;
       }
-      if (this.ws) {
-        this.ws.onopen = null;
-        this.ws.onmessage = null;
-        // onclose fires asynchronously AFTER close(); without this it ran
-        // its "disconnected" write against a pane already torn down.
-        this.ws.onclose = null;
-        this.ws.onerror = null;
-        this.ws.close();
-        this.ws = null;
-      }
+      this._detachSocket();
       if (this.terminal) {
         this.terminal.dispose();
         this.terminal = null;
@@ -694,6 +799,18 @@
       this.fitAddon = null;
     }
   }
+
+  // The marker a pane writes when its socket drops: a transient drop says it is
+  // reconnecting; a permanent stop says why, keyed by close code. All start
+  // with `[disconnected` so a reader (and a test) can tell any of them apart
+  // from session output.
+  TerminalTile.MARKER_RECONNECTING = '[disconnected, reconnecting…]';
+  TerminalTile.STOP_MARKERS = {
+    4003: '[disconnected: the server refused this connection]',
+    4004: '[disconnected: the session ended]',
+    4009: '[disconnected: the session ended]',
+    4010: '[disconnected: another connection took over this pane]',
+  };
 
   global.TerminalTile = TerminalTile;
 })(window);

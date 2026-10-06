@@ -10,6 +10,12 @@
  * its own: a query reply (DA/CPR/OSC) is dropped, exactly as the primary pane
  * drops it, and a focus or mouse report goes out once, ephemeral.
  *
+ * The socket's lifecycle is pinned here too: a transient drop reconnects on the
+ * primary pane's backoff and refreshes the buffer without leaving a stale
+ * "disconnected" marker under a healthy pane; codes that cannot get better stop
+ * the pane once (`onExit`); a late close from a REPLACED socket is ignored; and
+ * destroy() cancels a pending reconnect.
+ *
  * Real code under test: constants.js + app.js (the queue) + terminal-ui.js (the
  * shared input predicates) + terminal-tile.js, in one `vm` context. xterm, the
  * fit addon and WebSocket are fakes; `connect()` runs for real.
@@ -18,7 +24,7 @@ import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type Frame = { t: string; d?: string; seq?: number; cid?: string; c?: number; r?: number };
 
@@ -70,10 +76,14 @@ class FakeTerminal {
   }
   attachCustomKeyEventHandler() {}
   registerLinkProvider() {}
-  write(_data: string, cb?: () => void) {
+  writes: string[] = [];
+  write(data: string, cb?: () => void) {
+    this.writes.push(data);
     cb?.();
   }
-  clear() {}
+  clear() {
+    this.writes.push('<CLEAR>');
+  }
   resize(cols: number, rows: number) {
     this.cols = cols;
     this.rows = rows;
@@ -98,8 +108,10 @@ function loadContext() {
     performance,
     setInterval: vi.fn(),
     clearInterval: vi.fn(),
-    setTimeout,
-    clearTimeout,
+    // Late-bound, so vi.useFakeTimers() (which swaps the globals) reaches code
+    // running inside this context.
+    setTimeout: (fn: () => void, ms?: number) => globalThis.setTimeout(fn, ms),
+    clearTimeout: (id: ReturnType<typeof setTimeout>) => globalThis.clearTimeout(id),
     requestAnimationFrame: vi.fn(),
     HTMLCanvasElement: class HTMLCanvasElement {},
     WebSocket: FakeSocket,
@@ -163,17 +175,27 @@ function makeApp(): App {
 type Tile = {
   connect(): Promise<void>;
   destroy(): void;
+  reconnectNow(): void;
   ws: FakeSocket | null;
+  _reconnectAttempts: number;
 };
 const TerminalTile = windowStub.TerminalTile as new (id: string, mount: unknown, opts?: object) => Tile;
 
-async function connectTile(app: App) {
+async function connectTile(app: App, opts: Record<string, unknown> = {}) {
   windowStub.app = app;
-  const tile = new TerminalTile('s-tile', { addEventListener: vi.fn(), removeEventListener: vi.fn() }, { mode: 'claude' });
+  const tile = new TerminalTile(
+    's-tile',
+    { addEventListener: vi.fn(), removeEventListener: vi.fn() },
+    { mode: 'claude', ...opts }
+  );
   await tile.connect();
   const ws = FakeSocket.instances.at(-1)!;
   return { tile, ws, term: FakeTerminal.last! };
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(() => {
   FakeSocket.instances = [];
@@ -317,5 +339,157 @@ describe('TerminalTile leaves the input-socket map', () => {
 
     expect((app._extraInputSockets as Map<string, unknown>).has('s-tile')).toBe(false);
     expect(app._pendingDeliveries.get('s-tile')?.map((r) => r.data)).toEqual(['q']);
+  });
+});
+
+const isMarker = (data: string) => data.includes('[disconnected');
+
+/**
+ * Lets the async buffer refresh settle: the fetch, the body read, the chunked
+ * write AND the load's finally block, which is where a stale marker would be
+ * stamped. Too few turns here and that assertion passes vacuously.
+ */
+async function settle() {
+  for (let i = 0; i < 50; i++) await Promise.resolve();
+}
+
+describe('TerminalTile reconnects after a transient drop', () => {
+  it('reopens on the backoff, refreshes the buffer, and leaves no stale marker', async () => {
+    vi.useFakeTimers();
+    const app = makeApp();
+    const { tile, ws, term } = await connectTile(app);
+    ws.open();
+    fetchMock.mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { terminalBuffer: 'fresh screen' } }),
+    }));
+
+    ws.readyState = 3;
+    ws.onclose?.({ code: 1006 });
+    expect(term.writes.filter(isMarker)).toEqual([expect.stringContaining('[disconnected, reconnecting')]);
+    expect(FakeSocket.instances).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(300);
+    expect(FakeSocket.instances).toHaveLength(2);
+    const ws2 = FakeSocket.instances[1];
+    expect(ws2.url).toBe(ws.url);
+
+    ws2.open();
+    await settle();
+
+    // The refresh cleared the pane and replayed the current screen, and nothing
+    // after that clear is a marker: the pane is healthy again.
+    const lastClear = term.writes.lastIndexOf('<CLEAR>');
+    expect(lastClear).toBeGreaterThan(-1);
+    expect(term.writes.slice(lastClear)).toContain('fresh screen');
+    expect(term.writes.slice(lastClear).some(isMarker)).toBe(false);
+    expect(tile._reconnectAttempts).toBe(0);
+    expect(tile.ws).toBe(ws2);
+  });
+
+  it('counts failed attempts and resets the count only on a successful open', async () => {
+    vi.useFakeTimers();
+    const { tile, ws } = await connectTile(makeApp());
+    ws.open();
+
+    ws.onclose?.({ code: 1006 });
+    await vi.advanceTimersByTimeAsync(300);
+    FakeSocket.instances[1].onclose?.({ code: 1006 }); // the retry fails too
+    expect(tile._reconnectAttempts).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    FakeSocket.instances[2].open();
+    expect(tile._reconnectAttempts).toBe(0);
+  });
+
+  it('reconnects after the redelivery sweep force-closes a silent socket (1005)', async () => {
+    vi.useFakeTimers();
+    const { ws } = await connectTile(makeApp());
+    ws.open();
+
+    ws.onclose?.({ code: 1005 });
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(FakeSocket.instances).toHaveLength(2);
+  });
+
+  it('reconnectNow() skips the backoff, but never replaces an open socket', async () => {
+    vi.useFakeTimers();
+    const { tile, ws } = await connectTile(makeApp());
+    ws.open();
+
+    tile.reconnectNow();
+    expect(FakeSocket.instances).toHaveLength(1);
+
+    ws.readyState = 3;
+    ws.onclose?.({ code: 1006 });
+    tile.reconnectNow();
+    expect(FakeSocket.instances).toHaveLength(2);
+    // The backoff timer it pre-empted must not open a third socket later.
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(FakeSocket.instances).toHaveLength(2);
+  });
+});
+
+describe('TerminalTile stops for good on codes that cannot get better', () => {
+  it.each([
+    [4004, 'the session ended'],
+    [4009, 'the session ended'],
+    [4003, 'the server refused this connection'],
+    [4010, 'another connection took over this pane'],
+  ])('close %i: no reconnect, onExit once, marker says why', async (code, reason) => {
+    vi.useFakeTimers();
+    const onExit = vi.fn();
+    const { tile, ws, term } = await connectTile(makeApp(), { onExit });
+    ws.open();
+
+    ws.onclose?.({ code });
+    await vi.advanceTimersByTimeAsync(30_000);
+    tile.reconnectNow();
+
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(onExit).toHaveBeenCalledWith(code);
+    expect(term.writes.filter(isMarker)).toEqual([expect.stringContaining(reason)]);
+  });
+});
+
+describe('TerminalTile ignores a socket it already replaced', () => {
+  it('a late close (4010) from the old socket neither stops the pane nor unregisters its successor', async () => {
+    vi.useFakeTimers();
+    const onExit = vi.fn();
+    const app = makeApp();
+    const { ws, term } = await connectTile(app, { onExit });
+    ws.open();
+    const lateClose = ws.onclose!;
+
+    ws.onclose?.({ code: 1006 });
+    await vi.advanceTimersByTimeAsync(300);
+    const ws2 = FakeSocket.instances[1];
+    ws2.open();
+
+    // The server supersedes the old socket by cid; its close arrives late.
+    lateClose({ code: 4010 });
+
+    expect(onExit).not.toHaveBeenCalled();
+    term.type('still typing');
+    expect(ws2.inputFrames().map((f) => f.d)).toEqual(['still typing']);
+  });
+});
+
+describe('TerminalTile destroy()', () => {
+  it('cancels a pending reconnect and never reports an exit afterwards', async () => {
+    vi.useFakeTimers();
+    const onExit = vi.fn();
+    const { tile, ws } = await connectTile(makeApp(), { onExit });
+    ws.open();
+
+    ws.onclose?.({ code: 1006 });
+    tile.destroy();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(onExit).not.toHaveBeenCalled();
   });
 });
