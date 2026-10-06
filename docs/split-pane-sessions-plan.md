@@ -8,7 +8,8 @@
 > (`terminal-tile.js`) and is no longer as plain as this spec describes: it
 > reconnects after a drop, delivers input exactly once, has clickable paths
 > and image paste, sizes its PTY without a floor and adopts `zc` columns, and
-> the app-level terminal shortcuts follow the focused pane (Ctrl+W excepted).
+> the app-level terminal shortcuts follow the focused pane. Ctrl+W no longer
+> closes anything (Close Session has no default key).
 > See `docs/tile-grid-plan.md` and `architecture-invariants#split-pane-sessions`.
 
 ## Problem

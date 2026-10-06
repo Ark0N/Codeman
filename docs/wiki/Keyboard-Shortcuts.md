@@ -9,12 +9,15 @@ Press `Ctrl+?` in the app for the same list in a floating overlay.
 | Shortcut                        | Action                                                          |
 | ------------------------------- | --------------------------------------------------------------- |
 | `Ctrl+K` (also `Cmd+K`, `Alt+K`)| Find an open session or start a new one.                         |
-| `Ctrl+W`                        | Kill the active session.                                         |
 | `Ctrl+Tab`                      | Next session.                                                    |
 | `Alt+[` / `Alt+]`               | Previous / next tab.                                             |
 | `Alt+1` to `Alt+9`              | Switch to tab N. Physical keys, so macOS Option layouts work.    |
 | `Ctrl+Shift+{` / `Ctrl+Shift+}` | Move the active tab left / right.                                |
 | `Alt+B`                         | Collapse / expand the session sidebar, when that layout is on.    |
+
+`Ctrl+W` is not a Codeman shortcut: it goes to the terminal, where shells and agent CLIs
+use it to delete the previous word. **Close Session** has no key by default; close a session
+from its tab, or bind a key to it in App Settings → Shortcuts.
 
 ## Terminal
 

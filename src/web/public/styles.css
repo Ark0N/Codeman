@@ -8520,6 +8520,12 @@ kbd {
   color: var(--text-dim);
 }
 
+/* An action with no key bound (Close Session by default): say so, quietly. */
+.shortcut-overlay-unbound {
+  font-size: 0.75rem;
+  font-style: italic;
+}
+
 .shortcut-overlay-footer {
   margin-top: 0.75rem;
   padding-top: 0.75rem;

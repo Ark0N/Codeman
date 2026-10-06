@@ -8,9 +8,9 @@
  * now answers with the pane whose terminal was focused last, and the actions
  * that are about a TERMINAL (clear, restore size) go through it.
  *
- * Ctrl+W deliberately does NOT follow focus yet: it kills a session outright,
- * with no confirm, so moving it changes which agent a muscle-memory press kills
- * (docs/tile-grid-plan.md, decision 5). It stays on the active session.
+ * Close Session is not one of them: it has no default key any more (Ctrl+W is
+ * left to the terminal as delete-word, see ctrl-w-never-closes.test.ts), and a
+ * key a user binds to it closes the active session, as it always did.
  *
  * Real code under test: constants.js + terminal-ui.js in a `vm` context.
  */
@@ -136,7 +136,7 @@ describe('terminal shortcuts follow the focused pane', () => {
   });
 });
 
-describe('Ctrl+W stays on the active session (decision 5)', () => {
+describe('Close Session (user-bound key only) stays on the active session', () => {
   it('killActiveSession closes activeSessionId and never consults the focused pane', () => {
     const appSource = read('app.js');
     const body = appSource.slice(

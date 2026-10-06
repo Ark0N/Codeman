@@ -131,7 +131,7 @@ the tmux server or rebooting the machine.
 | To do this                | Do that                                                             |
 | ------------------------- | ------------------------------------------------------------------- |
 | Interrupt the current turn | `Ctrl+C` with nothing selected, or the **Stop** button.            |
-| Close one session          | `Ctrl+W`, or the tab's close control.                              |
+| Close one session          | The tab's close control (`Ctrl+W` is delete-word in the terminal). |
 | Stop the server, keep agents | `codeman web --stop`. The tmux sessions stay alive.              |
 | Stop everything            | `tmux -L codeman kill-server`.                                     |
 

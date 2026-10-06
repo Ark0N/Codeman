@@ -38,7 +38,9 @@ describe('help modal shortcuts', () => {
   const helpModal = normalizedHtml(extractElementById(INDEX_HTML, 'helpModal'));
 
   it('documents implemented global and tab shortcuts', () => {
-    expectShortcut(helpModal, ['Ctrl', 'W'], 'Close Session');
+    // Ctrl+W is NOT an app shortcut: it is delete-word in the terminal, and as
+    // Close Session it killed sessions with no confirm (ctrl-w-never-closes.test.ts).
+    expect(helpModal).not.toMatch(/<kbd>Ctrl<\/kbd>\s*\+\s*<kbd>W<\/kbd>/i);
     expectShortcut(helpModal, ['Ctrl', 'Tab'], 'Next Session');
     expectShortcut(helpModal, ['Alt/Option', '['], 'Previous / Next Session');
     expectShortcut(helpModal, ['Alt/Option', ']'], 'Previous / Next Session');

@@ -26,7 +26,7 @@ small header: status dot, session name, a `⋯` menu, maximize, `+` and `×`.
 - Every tile is equal: same terminal class, same features, same header. One
   tile is **focused** and receives the keyboard.
 - The rest of the app follows the focused tile: files panel, git status,
-  respawn and Ralph panels, subagent windows, voice, image paste, Ctrl+W.
+  respawn and Ralph panels, subagent windows, voice, image paste.
 - Tiles survive a Codeman restart (reconnect) and a page reload (per-device
   persistence).
 - The split pane stays as it is for now (decided). The grid is a separate
@@ -190,9 +190,8 @@ animation frame, and sends one resize per affected tile at pointer-up.
   in the normal single view; the grid is remembered and one click on Tiles
   brings it back (decision 1). An app-driven selection (`auto: true`)
   never collapses the grid; see "Selections while the grid is open".
-- Ctrl+L clears the focused tile; Ctrl+W closes the focused session (killing
-  it without a confirm, exactly as in the single view, where the focused tile
-  is the active session); Ctrl +/-
+- Ctrl+L clears the focused tile; Ctrl+W is delete-word in the focused tile
+  (it is not an app shortcut, decision 5); Ctrl +/-
   changes the tile font size; Ctrl+Shift+R restores the focused tile's size.
 
 ### Persistence
@@ -461,7 +460,7 @@ the grid. Each one gets an explicit grid-aware behavior:
 
 | Path | Today | With the grid open |
 |---|---|---|
-| Ctrl+W / Close session on the focused tile (`closeSession`) | Reads `wasActive` before its `await`, adds the id to `_closingSessions`, then selects the first remaining `sessionOrder` entry with `auto: true`, which is often NOT tiled | A grid-aware fallback picker: remove the tile, then focus the neighboring tile (next in grid order, else previous). Only with no tiles left does it fall back to the `sessionOrder` pick, which closes the grid. Note the split's `_onSessionDeleted` wrapper deliberately skips selection for ids in `_closingSessions`, so the fallback MUST live in `closeSession` itself, not in the delete wrapper. |
+| Close session on the focused tile (`closeSession`, from its menu or a user-bound key) | Reads `wasActive` before its `await`, adds the id to `_closingSessions`, then selects the first remaining `sessionOrder` entry with `auto: true`, which is often NOT tiled | A grid-aware fallback picker: remove the tile, then focus the neighboring tile (next in grid order, else previous). Only with no tiles left does it fall back to the `sessionOrder` pick, which closes the grid. Note the split's `_onSessionDeleted` wrapper deliberately skips selection for ids in `_closingSessions`, so the fallback MUST live in `closeSession` itself, not in the delete wrapper. |
 | Session deleted elsewhere (`_onSessionDeleted`) | The handoff selects the first remaining `sessionOrder` entry | If it was tiled: remove the tile and focus a neighbor with `auto: true`. If it was not tiled it was not active, so there is no handoff. |
 | Boot restore (`handleInit`) | `selectSession(restoreId, { auto: true })` | Replaced by the grid restore when a stored grid is open (see "Persistence") |
 | URL `#session=<id>` link | `selectSession(id, { auto: true })` | Following a link is navigation, so this path passes `leaveTiles: true`: a tiled id focuses its tile, a non-tiled id opens the single view (grid kept in storage) |
@@ -493,7 +492,7 @@ sound/title/desktop notification, so nothing is silently swallowed.
 | Copy | `copyTerminalSelection` / `cleanedTerminalSelection` read `this.terminal`; Pane B re-implements them | Both take `(terminal, sessionId)`; Pane B's copy is deleted |
 | Image paste | `_handleImagePaste()` uses the main terminal; `_uploadAndInsertImages` inserts with `sendInput()`, which re-reads `activeSessionId` AFTER the upload (an existing bug: switch tabs mid-upload and the paths land in the wrong session) | `_handleImagePaste({ terminal, sessionId })`; insert with `_sendInputAsync(sessionId, paths, { useMux: true })` |
 | Voice | `_insertText` re-reads `app.activeSessionId` at insert time and appends to the main local-echo overlay | Capture the target in `start()`; send with `_sendInputAsync(target, …)`; skip the overlay when the target is not the main terminal |
-| Shortcuts | Ctrl+L (`clearTerminal`) and Ctrl+Shift+R (`restoreTerminalSize`) act on `this.terminal` | Resolve through `_focusedPane()` returning `{ terminal, sessionId, isPrimary }`; Ctrl+W already takes an id |
+| Shortcuts | Ctrl+L (`clearTerminal`) and Ctrl+Shift+R (`restoreTerminalSize`) act on `this.terminal` | Resolve through `_focusedPane()` returning `{ terminal, sessionId, isPrimary }`; Close Session (no default key) already takes an id |
 | Font, family, weight, skin | `setFontSize` / `setFontFamily` / `setFontWeight` / `applyTerminalSkin` special-case `this._splitPane` | Loop over all tiles |
 
 ### 7. Fonts
@@ -551,7 +550,7 @@ and share one tile class:
 | Situation | Behavior |
 |---|---|
 | A tiled session is deleted (here or elsewhere) | Tile removed; a neighbor gets focus with `auto: true`; the last tile gone falls through to the normal handoff |
-| Ctrl+W on the focused tile | The grid stays open and the neighboring tile takes focus (grid-aware fallback in `closeSession`, see "Selections while the grid is open") |
+| Closing the focused tile's session | The grid stays open and the neighboring tile takes focus (grid-aware fallback in `closeSession`, see "Selections while the grid is open") |
 | A tiled session is popped out to its own window | Tile removed: that window now owns the PTY size |
 | Session exited or not attached (`pid === null`, `paneExit`) | The tile body shows "Not attached" with an Attach button: `POST /interactive` (or `/shell` for shell mode) with NO body, at most one in flight per session (the route has no in-flight guard of its own). A tripped PTY-exit breaker goes through the existing confirm before `clearBreaker: true`; no automatic path ever sends it |
 | A web tab is opened | Grid hidden by CSS; sockets stay up; hidden tiles send no resizes. Selecting a tiled session's tab brings the grid back |
@@ -651,11 +650,8 @@ Commits:
    spec documented and accepted for its v1 ("Ctrl+L or Ctrl+W typed while Pane
    B has focus clears or closes Pane A"). Typing into Pane B now clears its
    idle alert through `_ackDelivery`, which it never did.
-   **Ctrl+W is deliberately NOT retargeted in PR 1** (open decision 5):
-   `killActiveSession` calls `closeSession(id)` with `killMux = true` and no
-   confirm dialog, so moving it to Pane B changes which agent a muscle-memory
-   Ctrl+W kills outright. It keeps closing Pane A's session unless the
-   decision says otherwise.
+   **Ctrl+W no longer closes anything** (decision 5): Close Session has no
+   default key, so Ctrl+W reaches the focused pane as delete-word.
 4. **Docs.** Update the split-pane paragraph in CLAUDE.md and
    `docs/architecture-invariants.md#split-pane-sessions` (Pane B now
    reconnects, delivers input exactly once, has links and image paste, and
@@ -680,7 +676,9 @@ PR 1 tests (gate):
   redelivery per socket, POST fallback when no socket is registered.
 - `test/focused-pane-shortcuts.test.ts`: with Pane B focused, Ctrl+L clears
   Pane B, Ctrl+Shift+R restores Pane B's size, voice and image paste target
-  Pane B's session, and Ctrl+W still targets Pane A's session (decision 5);
+  Pane B's session, and a user-bound Close Session still targets the active
+  session; `test/ctrl-w-never-closes.test.ts` pins that no default shortcut
+  answers Ctrl+W;
   with Pane A focused nothing changes.
 - Geometry: with the split divider at its 20% clamp, Pane B's xterm and the
   size it sends are both under 40 columns and equal (no floor regression).
@@ -737,7 +735,7 @@ Commits:
   `_cleanupPreviousSession`; acknowledgement only when user-initiated; an
   `auto: true` selection of a non-tiled session leaves the grid open; a
   user-initiated one closes it; `leaveTiles: true` closes it.
-- `test/tile-grid-close-fallback.test.ts`: Ctrl+W (`closeSession`) on the
+- `test/tile-grid-close-fallback.test.ts`: closing (`closeSession`) the
   focused tile keeps the grid open and focuses the neighboring tile, even when
   the first `sessionOrder` entry is not tiled; closing the last tile falls back
   to the normal pick.
@@ -829,11 +827,10 @@ exits green. Use the browser runner for those files and read the file count.
 3. **Persistence.** Decided: per device, restored on reload.
 4. **PR shape.** Decided: two PRs. PR 1 is the tile foundation (the split
    improves on its own), PR 2 is the grid.
-5. **Ctrl+W in the split while Pane B has focus.** Open, default applied:
-   keep it closing Pane A's session (today's behavior), because Ctrl+W kills
-   without a confirm. Alternative: retarget it to the focused pane like the
-   other shortcuts. In the grid it always follows focus, since the focused tile
-   IS the active session there.
+5. **Ctrl+W.** Decided: it never closes a session. Close Session has no
+   default key (Ctrl+W is delete-word in every shell and agent CLI, and it
+   killed sessions with no confirm); it stays bindable in App Settings →
+   Shortcuts.
 
 ## Code anchors
 

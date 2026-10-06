@@ -419,7 +419,14 @@ const DEFAULT_SHORTCUTS = [
     id: 'close-session',
     group: 'Session',
     label: 'Close Session',
-    bindings: [{ modifiers: ['ctrl'], key: 'w' }],
+    // ⚠️ No default key. This used to be Ctrl+W, which is "delete the previous
+    // word" in every shell, readline prompt and agent CLI, so muscle memory
+    // killed the session (tmux and the CLI, with no confirm) mid-sentence, and
+    // with the split open it was not even the pane being typed in. Ctrl+W now
+    // reaches the terminal like any other key. Closing stays on the tab's close
+    // control and menu (with their confirm), and anyone who wants a key binds
+    // one in App Settings → Shortcuts.
+    bindings: [],
     action: 'killActiveSession',
   },
   {
@@ -9134,6 +9141,9 @@ class CodemanApp {
     const fmtBindings = (s) => {
       if (s.displayBindings) return s.displayBindings.map((b) => `<kbd>${escapeHtml(b)}</kbd>`).join(' / ');
       if (!s.bindings) return '';
+      // An action with no key (Close Session by default) is still listed, so the
+      // overlay says so instead of showing an empty key column.
+      if (s.bindings.length === 0) return '<span class="shortcut-overlay-unbound">not bound</span>';
       return s.bindings.map((b) => {
         const parts = [...(b.modifiers || []).map((m) => m.charAt(0).toUpperCase() + m.slice(1)), b.key || b.code || ''];
         return `<kbd>${escapeHtml(parts.join('+'))}</kbd>`;
