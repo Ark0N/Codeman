@@ -2510,6 +2510,19 @@ html[data-tab-orientation='vertical'].tab-rail-compact
   display: none !important;
 }
 
+/* Tile grid header button: hidden by default (opt-in, `showTileGridButton`),
+   and hard-gated to desktop widths like Split (the backstop below). */
+.btn-tile-grid--hidden {
+  display: none !important;
+}
+
+/* While the grid is open the button's click closes it (aria-pressed too). */
+.btn-icon-header.btn-tile-grid.tiles-open,
+.btn-icon-header.btn-tile-grid.tiles-open:hover {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
 /* The tile grid is open (tile-grid.js): the split cannot open beside it. */
 .btn-split.btn-split--blocked {
   opacity: 0.4;
@@ -2537,7 +2550,8 @@ html[data-tab-orientation='vertical'].tab-rail-compact
    HOME_SESSIONS_MIN_WIDTH (home-sessions.js) / SPLIT_PANE_MIN_WIDTH
    (constants.js) — keep the three in sync. */
 @media (max-width: 1179px) {
-  .btn-icon-header.btn-split {
+  .btn-icon-header.btn-split,
+  .btn-icon-header.btn-tile-grid {
     display: none !important;
   }
 }
@@ -2853,6 +2867,7 @@ body.solo-mode .header-tokens,
 body.solo-mode .btn-notifications,
 body.solo-mode .btn-multimonitor,
 body.solo-mode .btn-split,
+body.solo-mode .btn-tile-grid,
 body.solo-mode .header-plan-usage,
 /* A solo window shows ONE session and has no tab strip to put restored ones in,
    so offering to rebuild a list of them there is an offer it cannot show the
@@ -19573,6 +19588,85 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   font-size: 11px;
   opacity: 0.6;
   pointer-events: none;
+}
+
+/* Tiles picker (tile-grid.js openTilePicker): a checkbox per open session,
+   positioned `fixed` under the Tiles button; same layer as the split picker. */
+.tile-picker-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 240px;
+  max-width: 340px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  background: var(--bg-secondary, #1a1a1a);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+}
+
+.tile-picker-list {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.tile-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.tile-picker-item:hover {
+  background: color-mix(in srgb, var(--text-muted, #888) 14%, transparent);
+}
+
+.tile-picker-item span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tile-picker-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 4px 2px;
+  border-top: 1px solid var(--border-color, #333);
+  margin-top: 4px;
+}
+
+.tile-picker-hint,
+.tile-picker-empty,
+.tile-add-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.tile-picker-empty,
+.tile-add-empty {
+  padding: 6px 8px;
+}
+
+.tile-picker-open {
+  padding: 4px 12px;
+  font: inherit;
+  color: var(--accent-ink, #fff);
+  background: var(--accent, #4a9eff);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.tile-picker-open:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* Split-picker menu: a small popover listing sessions to split with, appended

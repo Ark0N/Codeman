@@ -1742,6 +1742,29 @@ function sanitizeTileGridState(raw, liveSessions, detachedIds) {
 }
 
 /**
+ * The sessions the Tiles picker (and a tile's + menu) offers, in tab order:
+ * live ones only, never a session popped out to its own window (that window
+ * owns its PTY size). A session with no PTY attached IS offered: its tile shows
+ * the Attach overlay.
+ *
+ * @param {Map<string, {name?: string}>} sessions
+ * @param {string[]} sessionOrder
+ * @param {{has(id: string): boolean}} [detachedIds]
+ * @param {{has(id: string): boolean}} [exclude] - ids not to offer (already tiled)
+ * @returns {Array<{id: string, label: string}>}
+ */
+function buildTilePickerSessions(sessions, sessionOrder, detachedIds, exclude) {
+  const result = [];
+  for (const id of sessionOrder) {
+    if (detachedIds?.has?.(id) || exclude?.has?.(id)) continue;
+    const session = sessions.get(id);
+    if (!session) continue;
+    result.push({ id, label: session.name || 'Session' });
+  }
+  return result;
+}
+
+/**
  * Which tile takes focus when `id` leaves the grid: the next one in grid
  * order, else the previous one, else null.
  *
@@ -2050,6 +2073,7 @@ if (typeof window !== 'undefined') {
     computeTileLayout,
     tileGridCapacity,
     sanitizeTileGridState,
+    buildTilePickerSessions,
     tileNeighbor,
     tileInDirection,
     cycleTile,

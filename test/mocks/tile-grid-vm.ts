@@ -51,6 +51,11 @@ export class FakeEl {
   title = '';
   hidden = false;
   disabled = false;
+  checked = false;
+  contains(other: FakeEl | null): boolean {
+    for (let n: FakeEl | null = other; n; n = n.parentElement) if (n === this) return true;
+    return false;
+  }
   textContent = '';
   value = '';
   type = '';
@@ -154,6 +159,7 @@ export const body = new FakeEl();
 export const fetchSpy = vi.fn(async (..._args: unknown[]) => ({ ok: true, json: async () => ({}) }));
 /** `document.addEventListener`, so a test can find a listener the app installed. */
 export const documentAddEventListener = vi.fn();
+export const documentRemoveEventListener = vi.fn();
 export const localStore = new Map<string, string>();
 /** The clock behind `performance.now` inside the context; tests move it with advanceClock(). */
 let clock = 100_000;
@@ -198,12 +204,13 @@ const context = vm.createContext({
   history: { replaceState: vi.fn(), state: null },
   document: {
     addEventListener: documentAddEventListener,
+    removeEventListener: documentRemoveEventListener,
     documentElement: { dataset: {} },
     createElement: () => new FakeEl(),
     getElementById: (id: string) => (id === 'tileGrid' ? section : null),
     body,
     querySelector: (sel: string) =>
-      sel === '.main' ? main : sel === '.terminal-wrap' ? wrap : (bySelector.get(sel) ?? null),
+      bySelector.get(sel) ?? (sel === '.main' ? main : sel === '.terminal-wrap' ? wrap : null),
     querySelectorAll: () => [],
   },
   localStorage: {

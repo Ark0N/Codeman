@@ -3632,6 +3632,10 @@ Object.assign(CodemanApp.prototype, {
     const showSplitButton = settings.showSplitButton ?? defaults.showSplitButton ?? false;
     this._applySplitButtonVisibility?.(showSplitButton);
 
+    // Tiles button: same gate and backstop as Split (tile-grid.js).
+    const showTileGridButton = settings.showTileGridButton ?? defaults.showTileGridButton ?? false;
+    this._applyTileGridButtonVisibility?.(showTileGridButton);
+
     // Ultracode/Workflow agents launcher — hidden by default; reveal when enabled.
     // Marker class only (base is display:inline-flex !important) so it's auto-excluded
     // from the mobile-header-buttons-policy guard.

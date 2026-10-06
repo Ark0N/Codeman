@@ -202,6 +202,7 @@ Object.assign(CodemanApp.prototype, {
     this._selectTiledSession(focus, { auto });
     this._updateConnectionIndicator?.();
     this._updateSplitButtonForTiles();
+    this._updateTileGridButtonState();
     return true;
   },
 
@@ -261,9 +262,247 @@ Object.assign(CodemanApp.prototype, {
     }
     this._updateConnectionIndicator?.();
     this._updateSplitButtonForTiles();
+    this._updateTileGridButtonState();
+    this.closeTileAddMenu();
     // The tabs drop their .in-tiles marker.
     this.renderSessionTabs?.();
     if (reselect) this._selectAfterTileGrid(focusedId);
+  },
+
+  /**
+   * The header Tiles button: shown when its per-device setting is on AND the
+   * window is desktop-wide (a JS check plus a live media listener, the same
+   * pair as the Split button; the CSS `@media (max-width: 1179px)` rule is the
+   * backstop that hides it even if this never runs).
+   */
+  _applyTileGridButtonVisibility(enabled) {
+    this._tileGridButtonSettingEnabled = !!enabled;
+    const btn = document.querySelector('.btn-tile-grid');
+    const wide = window.innerWidth >= SPLIT_PANE_MIN_WIDTH;
+    btn?.classList.toggle('btn-tile-grid--hidden', !enabled || !wide || !!this.isSoloWindow);
+    if (!this._tileGridButtonWidthListener && window.matchMedia) {
+      this._tileGridButtonWidthListener = true;
+      const mq = window.matchMedia(`(min-width: ${SPLIT_PANE_MIN_WIDTH}px)`);
+      mq.addEventListener('change', () => this._applyTileGridButtonVisibility(this._tileGridButtonSettingEnabled));
+    }
+  },
+
+  // Open grid: the button's click closes it, and says so.
+  _updateTileGridButtonState() {
+    const btn = document.querySelector('.btn-tile-grid');
+    if (!btn) return;
+    const open = this._tilesOwnTerminal();
+    btn.classList.toggle('tiles-open', open);
+    btn.setAttribute('aria-pressed', open ? 'true' : 'false');
+    const title = open ? 'Tiles: back to a single session' : 'Tiles: show several sessions side by side';
+    btn.title = title;
+    btn.setAttribute('aria-label', title);
+  },
+
+  /** How many tiles the terminal area can hold right now (the grid section, or the single view it would replace). */
+  _tileGridCapacityNow() {
+    const el = this._tilesOwnTerminal() ? this._tileGridSection() : document.querySelector('.terminal-wrap');
+    const rect = el?.getBoundingClientRect?.() || { width: 0, height: 0 };
+    return window.CodemanTileGrid.tileGridCapacity({
+      width: rect.width || window.innerWidth,
+      height: rect.height || window.innerHeight,
+    });
+  },
+
+  /**
+   * The Tiles button: with the grid open it closes it (back to the single view
+   * of the focused session); otherwise it opens a picker with a checkbox per
+   * open session, in tab order, preselected with the grid this tab last left
+   * (else the active session and an open split's two), and an Open button.
+   * Boxes past what the window can fit are disabled.
+   */
+  openTilePicker(event) {
+    // As the split picker: the opening click must not reach the outside-click
+    // listener this call installs.
+    event?.stopPropagation?.();
+    if (this._tilesOwnTerminal()) {
+      this.closeTileGrid({ keepStored: true, reselect: true });
+      return;
+    }
+    if (this._tilePicker) {
+      this.closeTilePicker();
+      return;
+    }
+    if (!this.canOpenTileGrid()) return;
+    const T = window.CodemanTileGrid;
+    const capacity = Math.max(1, Math.min(this._tileGridCapacityNow(), T.TILE_GRID_MAX));
+    const candidates = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions);
+    const remembered = (this._tileGridRemembered?.ids || []).filter((id) => candidates.some((c) => c.id === id));
+    const seed = remembered.length
+      ? remembered
+      : [this.activeSessionId, this._splitPane ? this._splitSessionId : null].filter(Boolean);
+    const checked = new Set(seed.slice(0, capacity));
+
+    const menu = document.createElement('div');
+    menu.id = 'tilePickerMenu';
+    menu.className = 'tile-picker-menu';
+    menu.setAttribute('role', 'dialog');
+    menu.setAttribute('aria-label', 'Show sessions as tiles');
+    const list = document.createElement('div');
+    list.className = 'tile-picker-list';
+    const boxes = [];
+    for (const c of candidates) {
+      const row = document.createElement('label');
+      row.className = 'tile-picker-item';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.value = c.id;
+      box.checked = checked.has(c.id);
+      const name = document.createElement('span');
+      // A session literally named like a UI string must not be translated.
+      name.setAttribute('data-i18n-skip', '');
+      name.textContent = c.label;
+      row.append(box, name);
+      list.appendChild(row);
+      boxes.push(box);
+    }
+    const footer = document.createElement('div');
+    footer.className = 'tile-picker-footer';
+    const hint = document.createElement('span');
+    hint.className = 'tile-picker-hint';
+    hint.textContent = `This window fits ${capacity} tile${capacity === 1 ? '' : 's'}`;
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'tile-picker-open';
+    open.textContent = 'Open tiles';
+    footer.append(hint, open);
+    if (candidates.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'tile-picker-empty';
+      empty.textContent = 'No sessions to show as tiles';
+      menu.appendChild(empty);
+    } else {
+      menu.append(list, footer);
+    }
+
+    const sync = () => {
+      const count = boxes.filter((b) => b.checked).length;
+      for (const b of boxes) {
+        b.disabled = !b.checked && count >= capacity;
+        b.title = b.disabled ? `This window fits ${capacity} tiles` : '';
+      }
+      open.disabled = count === 0;
+    };
+    for (const b of boxes) b.addEventListener('change', sync);
+    sync();
+    open.addEventListener('click', () => {
+      const ids = boxes.filter((b) => b.checked).map((b) => b.value);
+      this.closeTilePicker();
+      if (ids.length === 0) return;
+      this.openTileGrid(ids, { focusedId: ids.includes(this.activeSessionId) ? this.activeSessionId : ids[0] });
+    });
+
+    document.body.appendChild(menu);
+    const btn = document.querySelector('.btn-tile-grid');
+    if (btn?.getBoundingClientRect) {
+      const rect = btn.getBoundingClientRect();
+      menu.style.position = 'fixed';
+      menu.style.top = `${rect.bottom + 4}px`;
+      menu.style.right = `${window.innerWidth - rect.right}px`;
+    }
+    const onOutside = (e) => {
+      if (menu.contains?.(e.target) || e.target?.closest?.('.btn-tile-grid')) return;
+      this.closeTilePicker();
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') this.closeTilePicker();
+    };
+    this._tilePicker = { menu, onOutside, onKey };
+    // Deferred a tick so the opening click (still bubbling) does not close it.
+    setTimeout(() => {
+      if (this._tilePicker?.menu === menu) document.addEventListener('click', onOutside);
+    }, 0);
+    document.addEventListener('keydown', onKey);
+    (boxes.find((b) => !b.disabled) || open).focus?.();
+  },
+
+  /** Idempotent: the global Escape handler calls it whether or not the picker is open. */
+  closeTilePicker() {
+    const picker = this._tilePicker;
+    if (!picker) return;
+    this._tilePicker = null;
+    document.removeEventListener('click', picker.onOutside);
+    document.removeEventListener('keydown', picker.onKey);
+    picker.menu.remove();
+  },
+
+  /**
+   * A tile's +: the open sessions not yet tiled, in tab order; picking one
+   * adds it to the grid and focuses it (a human selection). Disabled once the
+   * grid holds what the window can fit.
+   */
+  openTileAddMenu(event) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    const grid = this._tileGrid;
+    if (!grid?.open) return;
+    const trigger = event?.currentTarget || null;
+    if (this._tileAddMenu && this._tileAddMenu.trigger === trigger) {
+      this.closeTileAddMenu();
+      return;
+    }
+    this.closeTileAddMenu();
+    const T = window.CodemanTileGrid;
+    const capacity = Math.min(this._tileGridCapacityNow(), T.TILE_GRID_MAX);
+    const full = grid.ids.length >= Math.max(capacity, 1);
+    const candidates = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions, grid.tiles);
+    const menu = document.createElement('div');
+    menu.className = 'tab-rail-action-menu tile-add-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', 'Add a session to the grid');
+    if (candidates.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'tile-add-empty';
+      empty.textContent = 'Every open session is already tiled';
+      menu.appendChild(empty);
+    }
+    for (const c of candidates) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.setAttribute('role', 'menuitem');
+      item.setAttribute('data-i18n-skip', '');
+      item.textContent = c.label;
+      item.disabled = full;
+      if (full) item.title = `The grid already holds what this window fits (${capacity})`;
+      item.addEventListener('click', () => {
+        this.closeTileAddMenu();
+        if (this.addTile(c.id)) this.selectSession(c.id);
+      });
+      menu.appendChild(item);
+    }
+    document.body.appendChild(menu);
+    if (trigger?.getBoundingClientRect) {
+      const rect = trigger.getBoundingClientRect();
+      menu.style.position = 'fixed';
+      menu.style.top = `${rect.bottom + 4}px`;
+      menu.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+    }
+    const onOutside = (e) => {
+      if (menu.contains?.(e.target) || (trigger && trigger.contains?.(e.target))) return;
+      this.closeTileAddMenu();
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') this.closeTileAddMenu();
+    };
+    this._tileAddMenu = { menu, trigger, onOutside, onKey };
+    document.addEventListener('pointerdown', onOutside, true);
+    document.addEventListener('keydown', onKey);
+    menu.querySelector?.('button:not([disabled])')?.focus?.();
+  },
+
+  /** Idempotent, like closeTilePicker. */
+  closeTileAddMenu() {
+    const m = this._tileAddMenu;
+    if (!m) return;
+    this._tileAddMenu = null;
+    document.removeEventListener('pointerdown', m.onOutside, true);
+    document.removeEventListener('keydown', m.onKey);
+    m.menu.remove();
   },
 
   // The Split button cannot act while the grid is open (openSplitPicker and
@@ -645,6 +884,7 @@ Object.assign(CodemanApp.prototype, {
     actions.append(
       button('tile-menu', 'Session actions', '\u22EF', (e) => this.openTabRailActionMenu?.(e, sessionId)),
       zoomBtn,
+      button('tile-add', 'Add a session to the grid', '+', (e) => this.openTileAddMenu(e)),
       // Removes the tile ONLY: the session keeps running. Killing it stays
       // behind the menu's Close session and its confirm.
       button('tile-remove', 'Remove tile (the session keeps running)', '\u00D7', () =>
