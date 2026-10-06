@@ -172,14 +172,15 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
   it('answers the first event of a gesture at once and owes the travel back', () => {
     const { app, sent } = hollowApp();
 
-    // A trackpad flick is far less than half a screen (18 rows here). It used to
-    // send nothing at all, so a session that always lands here looked dead.
-    expect(app._maybePageCliTranscript({ shiftKey: false }, -10)).toBe(true);
+    // A trackpad flick opens with a small delta and stays far short of half a
+    // screen (18 rows here). It used to send nothing at all, so a session that
+    // always lands here looked dead.
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -1)).toBe(true);
     app._flushWheelSgrQueue();
     expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~' }]);
 
     // The pre-paid page is owed back: the rest of this page's travel sends nothing…
-    app._maybePageCliTranscript({ shiftKey: false }, -8);
+    app._maybePageCliTranscript({ shiftKey: false }, -17);
     app._flushWheelSgrQueue();
     expect(sent).toHaveLength(1);
 
@@ -200,13 +201,77 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
     let now = 1_000;
     clock.now = () => now;
 
-    app._maybePageCliTranscript({ shiftKey: false }, -2); // first event: one PageUp
-    app._maybePageCliTranscript({ shiftKey: false }, 2); // reversal: one PageDown at once
+    app._maybePageCliTranscript({ shiftKey: false }, -1); // first event: one PageUp
+    app._maybePageCliTranscript({ shiftKey: false }, 1); // reversal: one PageDown at once
     now += 1_000;
-    app._maybePageCliTranscript({ shiftKey: false }, 2); // after a pause: another at once
+    app._maybePageCliTranscript({ shiftKey: false }, 1); // after a pause: another at once
     app._maybePageCliTranscript({ shiftKey: false }, 0.05); // sub-row jitter in the same gesture: nothing
     app._flushWheelSgrQueue();
     expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~\x1b[6~\x1b[6~' }]);
+  });
+
+  it('lets wheel notches accumulate instead of paging a full screen on each one', () => {
+    // A 100 px notch is 4 rows. Only a trackpad-sized opening event (under 2 rows)
+    // pages at once; a notch adds up toward half a screen as it always did, so
+    // slow notches (each one its own gesture by the 150 ms gap) still page once
+    // per 18 rows here, not once per notch.
+    for (const gapMs of [250, 40]) {
+      const { app, sent, clock } = hollowApp();
+      let now = 1_000;
+      clock.now = () => now;
+      for (let i = 0; i < 5; i++) {
+        expect(app._maybePageCliTranscript({ shiftKey: false, deltaY: -100 }, -4)).toBe(true);
+        now += gapMs;
+      }
+      app._flushWheelSgrQueue();
+      expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~' }]);
+    }
+  });
+
+  it('consumes a mostly horizontal swipe without paging', () => {
+    const { app, sent } = hollowApp();
+
+    // A sideways trackpad swipe carries a little vertical drift (3 px is 0.12 rows,
+    // above the jitter floor). It must not page the transcript.
+    for (let i = 0; i < 6; i++) {
+      expect(app._maybePageCliTranscript({ shiftKey: false, deltaX: 60, deltaY: 3 }, 0.12)).toBe(true);
+    }
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([]);
+
+    // A mostly vertical swipe with some sideways drift still pages.
+    app._maybePageCliTranscript({ shiftKey: false, deltaX: 3, deltaY: -25 }, -1);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~' }]);
+  });
+
+  it('consumes a trackpad pinch without paging', () => {
+    const { app, sent } = hollowApp();
+
+    // Chrome reports a pinch as wheel events with ctrlKey set.
+    for (let i = 0; i < 4; i++) {
+      expect(app._maybePageCliTranscript({ shiftKey: false, ctrlKey: true, deltaY: 4 }, 0.16)).toBe(true);
+    }
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([]);
+  });
+
+  it('does not page while the session is showing a dialog', () => {
+    const { app, sent } = hollowApp();
+    // 'action' is set while a permission_prompt or elicitation_dialog is pending
+    // (updateTabAlertFromHooks in app.js). Page keys must not reach that selector.
+    app.tabAlerts = new Map([['sess-1', 'action']]);
+
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -1)).toBe(true);
+    expect(app._maybePageCliTranscript({ shiftKey: false }, -40)).toBe(true);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([]);
+
+    // Once the dialog is answered (an idle alert, or none) paging resumes.
+    app.tabAlerts.set('sess-1', 'idle');
+    app._maybePageCliTranscript({ shiftKey: false }, 1);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[6~' }]);
   });
 
   it('does not page on sub-row jitter that opens a gesture', () => {

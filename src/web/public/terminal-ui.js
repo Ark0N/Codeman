@@ -96,8 +96,12 @@
   // starts a NEW gesture, and the first event of a gesture pages at once rather
   // than waiting for half a screen of travel (a trackpad flick never got there).
   const PAGE_KEY_GESTURE_GAP_MS = 150;
-  // ...but not for sub-row jitter (0.1 row, ~2px).
+  // ...but not for sub-row jitter (0.1 row, ~2px)...
   const PAGE_KEY_MIN_START_ROWS = 0.1;
+  // ...and only for a trackpad-sized opening event. A mouse-wheel notch (100px,
+  // 4 rows) accumulates toward half a screen as before; paging at once on it made
+  // slow notches, each its own gesture past the gap, page a full screen apiece.
+  const PAGE_KEY_IMMEDIATE_MAX_ROWS = 2;
 
   // Wheel delta → scroll lines (fractional), for a terminal `rows` tall. The
   // body of the primary pane's _wheelScrollLinesFloat (see its comment for the
@@ -269,6 +273,7 @@
     pageKeysForTravel,
     PAGE_KEY_GESTURE_GAP_MS,
     PAGE_KEY_MIN_START_ROWS,
+    PAGE_KEY_IMMEDIATE_MAX_ROWS,
     TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
     MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR,
     MOBILE_KEYBOARD_DISMISS_TAP_SLOP,
@@ -5736,12 +5741,21 @@ Object.assign(CodemanApp.prototype, {
    * scrollback is never touched. Shift is excluded on purpose: it is the explicit
    * "give me local scrollback" gesture and must keep that meaning.
    *
-   * The FIRST event of a gesture pages at once. Waiting for half a screen of
+   * The FIRST event of a trackpad-sized gesture (opening under
+   * PAGE_KEY_IMMEDIATE_MAX_ROWS) pages at once. Waiting for half a screen of
    * travel (19 rows, ~475px on a 38-row pane) meant an ordinary trackpad flick
    * never sent a key at all. That page is pre-paid: the travel it skipped is
    * owed back by the rest of the gesture, so the rate stays one page per
    * `perPage` rows. A pause (PAGE_KEY_GESTURE_GAP_MS), a direction change or a
-   * tab switch starts a new gesture.
+   * tab switch starts a new gesture. A larger opening event is a wheel notch and
+   * accumulates as before, so slow notches still page once per `perPage` rows.
+   *
+   * Consumed WITHOUT paging: a pinch (`ctrlKey`, how Chrome reports a trackpad
+   * pinch), a mostly horizontal swipe (both deltas present, |deltaX| > |deltaY|;
+   * the touch path locks its own axis before it gets here), and any gesture while
+   * the session has an open dialog (tab alert 'action', set by a pending
+   * permission_prompt or elicitation_dialog), so a page key never reaches its
+   * selector.
    *
    * @returns true when the gesture was consumed here (the caller must not also
    *          scroll locally).
@@ -5755,11 +5769,17 @@ Object.assign(CodemanApp.prototype, {
   _maybePageCliTranscript(ev, lines) {
     if (!lines || ev?.shiftKey || !this.activeSessionId) return false;
     if (!this._localScrollbackIsHollow()) return false;
+    if (ev?.ctrlKey) return true; // pinch
+    const dx = Math.abs(ev?.deltaX || 0);
+    const dy = Math.abs(ev?.deltaY || 0);
+    if (dx && dy && dx > dy) return true; // mostly horizontal swipe
+    if (this.tabAlerts?.get(this.activeSessionId) === 'action') return true; // dialog up
     // Leftover travel belongs to the tab it was made on.
     if (this._pageKeySession !== this.activeSessionId) {
       this._pageKeySession = this.activeSessionId;
       this._pageKeyPending = 0;
       this._pageKeyLastAt = undefined;
+      this._pageKeyPrepaid = false;
     }
     const tuning = window.CodemanTerminalInput;
     const perPage = Math.max(2, Math.round((this.terminal?.rows || 24) * tuning.PAGE_KEY_SCREEN_FRACTION));
@@ -5772,9 +5792,14 @@ Object.assign(CodemanApp.prototype, {
     this._pageKeyLastAt = now;
     this._pageKeyDir = dir;
     if (gestureStart) {
-      this._pageKeyPending = 0;
-      if (Math.abs(lines) >= tuning.PAGE_KEY_MIN_START_ROWS && Math.abs(lines) < perPage) {
+      // A debt left by an earlier pre-paid page dies with its gesture; plain
+      // wheel travel keeps accumulating across notches.
+      if (this._pageKeyPrepaid) this._pageKeyPending = 0;
+      this._pageKeyPrepaid = false;
+      const size = Math.abs(lines);
+      if (size >= tuning.PAGE_KEY_MIN_START_ROWS && size < Math.min(perPage, tuning.PAGE_KEY_IMMEDIATE_MAX_ROWS)) {
         // Pre-pay one page; the skipped travel is owed back (pending carries the opposite sign).
+        this._pageKeyPrepaid = true;
         this._pageKeyPending = lines - dir * perPage;
         this._queueScrollBytes(dir < 0 ? tuning.KEY_PAGE_UP : tuning.KEY_PAGE_DOWN);
         this._logScrollRouting('page-keys');
