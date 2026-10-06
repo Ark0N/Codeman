@@ -36,6 +36,24 @@ export class FakeEl {
     this.className = [...set].join(' ');
     return on;
   }
+  append(...children: FakeEl[]) {
+    for (const child of children) this.appendChild(child);
+  }
+  replaceWith(other: FakeEl) {
+    const parent = this.parentElement;
+    if (!parent) return;
+    other.remove();
+    const i = parent.children.indexOf(this);
+    parent.children.splice(i, 1, other);
+    other.parentElement = parent;
+    this.parentElement = null;
+  }
+  title = '';
+  textContent = '';
+  value = '';
+  type = '';
+  focus = vi.fn();
+  select = vi.fn();
   appendChild(child: FakeEl) {
     child.remove();
     child.parentElement = this;

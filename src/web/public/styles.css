@@ -19420,6 +19420,102 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   background: transparent !important;
 }
 
+/* Tile header: `● name ......... ⋯ ×`. FIXED height (#464): the body below
+   holds the xterm, so a header that grew (a wrapped name, the rename input)
+   would shrink the body with nothing refitting the xterm or its PTY. */
+.tile-header {
+  flex: 0 0 24px;
+  height: 24px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px 0 8px;
+  overflow: hidden;
+  font-size: 12px;
+  background: var(--bg-secondary, #1a1a1a);
+  border-bottom: 1px solid var(--border-color, #333);
+  user-select: none;
+}
+
+.tile-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tile-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 1px;
+}
+
+.tile-btn {
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: 18px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0.65;
+}
+
+.tile-btn:hover,
+.tile-btn:focus-visible {
+  opacity: 1;
+  background: color-mix(in srgb, var(--text-muted, #888) 18%, transparent);
+}
+
+/* Sized to sit inside the fixed header (see .tile-header). */
+.tile-rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 18px;
+  box-sizing: border-box;
+  padding: 0 4px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  outline: none;
+}
+
+/* A permission prompt or question, visible across the room. Only the border
+   colour and a box-shadow animate: anything that moves layout would resize
+   the tile's PTY every frame. */
+.tile.tile--needs {
+  border-color: var(--red, #ef4444);
+  animation: tile-needs-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes tile-needs-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--red, #ef4444) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 10px 2px color-mix(in srgb, var(--red, #ef4444) 55%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile.tile--needs {
+    animation: none;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--red, #ef4444) 55%, transparent);
+  }
+}
+
+/* The tab of a tiled session (the focused tile's tab is .active as usual). */
+.session-tab.in-tiles:not(.active) {
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent, #4a9eff) 60%, transparent);
+}
+
 /* Quiet "loading" state while the tile's capture waits in the grid's one load
    queue (or runs). */
 .tile.tile--loading .tile-body::after {

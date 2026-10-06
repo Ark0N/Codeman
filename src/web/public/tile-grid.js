@@ -252,6 +252,8 @@ Object.assign(CodemanApp.prototype, {
     }
     this._updateConnectionIndicator?.();
     this._updateSplitButtonForTiles();
+    // The tabs drop their .in-tiles marker.
+    this.renderSessionTabs?.();
     if (reselect) this._selectAfterTileGrid(focusedId);
   },
 
@@ -373,6 +375,7 @@ Object.assign(CodemanApp.prototype, {
     this._applyTileLayout();
     this._connectTile(sessionId);
     this._scheduleTileGridRefit();
+    this.renderSessionTabs?.();
     return true;
   },
 
@@ -399,6 +402,7 @@ Object.assign(CodemanApp.prototype, {
     grid.ids.splice(grid.ids.indexOf(sessionId), 1);
     this._applyTileLayout();
     this._scheduleTileGridRefit();
+    this.renderSessionTabs?.();
     if (wasFocused) {
       grid.focusedId = null;
       if (refocus && neighbor) this._selectTiledSession(neighbor, { auto });
@@ -413,9 +417,13 @@ Object.assign(CodemanApp.prototype, {
     const el = document.createElement('div');
     el.className = 'tile';
     el.dataset.sessionId = sessionId;
+    // Header and body are siblings: the chrome is refreshed in place
+    // (_renderTileHeader), never by rewriting the tile, which would take the
+    // xterm in the body with it.
+    const header = this._buildTileHeader(sessionId);
     const body = document.createElement('div');
     body.className = 'tile-body';
-    el.appendChild(body);
+    el.append(header.el, body);
     // Pressing a tile is a human selection: it focuses the tile and
     // acknowledges its idle alert (the already-focused tile hits
     // selectSession's early return, which acknowledges too). pointerdown, not
@@ -436,9 +444,139 @@ Object.assign(CodemanApp.prototype, {
       boundedLoad: true,
       onExit: (code) => this._onTileExit(sessionId, tile, code),
     });
-    grid.tiles.set(sessionId, { tile, el });
+    grid.tiles.set(sessionId, { tile, el, header: header.el, dot: header.dot, name: header.name, renaming: false });
     grid.ids.push(sessionId);
+    this._renderTileHeader(sessionId);
     return true;
+  },
+
+  /**
+   * `● name ......... ⋯ ×`: the status dot (the six-state classifier the tab
+   * rows and both home screens share), the session name (double-click
+   * renames), the session menu (the tab rail's own) and remove-tile. Its
+   * buttons stop pointerdown, so acting on a tile that is not focused does not
+   * also focus it (and spend its idle alert).
+   */
+  _buildTileHeader(sessionId) {
+    const el = document.createElement('div');
+    el.className = 'tile-header';
+    const dot = document.createElement('span');
+    dot.className = 'tile-dot home-sessions-dot home-sessions-dot--idle';
+    dot.setAttribute('aria-hidden', 'true');
+    const name = document.createElement('span');
+    name.className = 'tile-name';
+    // A session literally named like a UI string ("Sessions") must not be translated.
+    name.setAttribute('data-i18n-skip', '');
+    name.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      this.startTileRename(sessionId);
+    });
+    const actions = document.createElement('span');
+    actions.className = 'tile-actions';
+    const button = (cls, label, glyph, onClick) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = `tile-btn ${cls}`;
+      b.title = label;
+      b.setAttribute('aria-label', label);
+      b.textContent = glyph;
+      b.addEventListener('pointerdown', (e) => e.stopPropagation());
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        onClick(e);
+      });
+      return b;
+    };
+    actions.append(
+      button('tile-menu', 'Session actions', '\u22EF', (e) => this.openTabRailActionMenu?.(e, sessionId)),
+      // Removes the tile ONLY: the session keeps running. Killing it stays
+      // behind the menu's Close session and its confirm.
+      button('tile-remove', 'Remove tile (the session keeps running)', '\u00D7', () =>
+        this.removeTile(sessionId, { refocus: true, auto: true })
+      )
+    );
+    el.append(dot, name, actions);
+    return { el, dot, name };
+  },
+
+  /**
+   * Refreshes one tile's header from the session: dot state, name, the hover
+   * label ("working 3m") and the `needs` border. Diffs on existing nodes only,
+   * and cheap: it runs on every tab render (every status change).
+   */
+  _renderTileHeader(sessionId) {
+    const entry = this._tileGrid?.tiles.get(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (!entry?.header || !session) return;
+    const row = this._sidebarRichRow?.(sessionId, session) || null;
+    const state = row?.state || 'idle';
+    const dotClass = `tile-dot home-sessions-dot home-sessions-dot--${row?.exited ? 'done' : state}`;
+    if (entry.dot.className !== dotClass) entry.dot.className = dotClass;
+    const since = row?.since?.at ? this._mobileOverviewStampText?.(row.since.at, 'for') : '';
+    const label = row ? [row.pill, since].filter(Boolean).join(' ') : '';
+    if (entry.header.title !== label) entry.header.title = label;
+    // The input of a rename in progress has taken the name's place in the
+    // header, so updating the detached name never touches what is being typed.
+    // A rename still in flight shows as already done, as on the tab.
+    const name =
+      this._inlineRenamePending?.get(sessionId) || this.getSessionName?.(session) || session.name || 'Session';
+    if (entry.name.textContent !== name) entry.name.textContent = name;
+    // A permission prompt is visible across the room.
+    entry.el.classList.toggle('tile--needs', state === 'needs');
+  },
+
+  /** Every tile's header (after a tab render, i.e. any session change). */
+  _renderTileChrome() {
+    const grid = this._tileGrid;
+    if (!grid?.open) return;
+    for (const id of grid.tiles.keys()) this._renderTileHeader(id);
+  },
+
+  /**
+   * Double-click on a tile's name: an input in its place, Enter or leaving it
+   * renames through the tab rename's own write queue, Escape cancels. The
+   * header refresh leaves the name alone meanwhile.
+   */
+  startTileRename(sessionId) {
+    const entry = this._tileGrid?.tiles.get(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (!entry || !session || entry.renaming) return;
+    entry.renaming = true;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'tile-rename-input';
+    input.setAttribute('aria-label', 'Session name');
+    // A rename still in flight is the user's last word.
+    input.value = this._inlineRenamePending?.get(sessionId) ?? session.name ?? '';
+    let settled = false;
+    const finish = (commit) => {
+      if (settled) return;
+      settled = true;
+      input.replaceWith(entry.name);
+      entry.renaming = false;
+      const value = input.value.trim();
+      if (commit && value && value !== session.name && this.sessions.has(sessionId)) {
+        entry.name.textContent = value;
+        void this._queueInlineSessionName?.(sessionId, value);
+      }
+      this._renderTileHeader(sessionId);
+    };
+    input.addEventListener('pointerdown', (e) => e.stopPropagation());
+    input.addEventListener('keydown', (e) => {
+      // Enter and Escape during an IME composition belong to the IME.
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        finish(true);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        finish(false);
+      }
+    });
+    input.addEventListener('blur', () => finish(true));
+    entry.name.replaceWith(input);
+    input.focus();
+    input.select?.();
   },
 
   _connectTile(sessionId) {
@@ -615,4 +753,14 @@ CodemanApp.prototype._onSessionDeleted = function (data) {
     }
   }
   return _tileGridOriginalOnSessionDeleted.call(this, data);
+};
+
+// Every tab render (any session change: status, hooks, name) refreshes the
+// tile headers too, so a tile's dot, name and needs border follow the same
+// state the tab shows.
+const _tileGridOriginalRenderSessionTabsImmediate = CodemanApp.prototype._renderSessionTabsImmediate;
+CodemanApp.prototype._renderSessionTabsImmediate = function (...args) {
+  const result = _tileGridOriginalRenderSessionTabsImmediate.apply(this, args);
+  this._renderTileChrome?.();
+  return result;
 };
