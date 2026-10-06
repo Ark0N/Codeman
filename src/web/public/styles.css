@@ -2510,6 +2510,12 @@ html[data-tab-orientation='vertical'].tab-rail-compact
   display: none !important;
 }
 
+/* The tile grid is open (tile-grid.js): the split cannot open beside it. */
+.btn-split.btn-split--blocked {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* While a split is open, the button's own click closes it instead of opening
    the picker — the accent fill is what tells the user which of its two
    behaviours the next click will get (aria-pressed carries the same state

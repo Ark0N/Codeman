@@ -525,6 +525,56 @@ const DEFAULT_SHORTCUTS = [
     bindings: [{ modifiers: ['alt'], key: 'b', code: 'KeyB' }],
     action: 'toggleSessionSidebar',
   },
+  // Tile grid (tile-grid.js). Dispatched by tileShortcutFor()/runTileShortcut()
+  // and deliberately absent from SHORTCUT_ACTIONS: each applies only in some
+  // states (the focus chords only while the grid is open), and outside them the
+  // chord must reach the terminal untouched. Every xterm key handler swallows a
+  // chord that applies, so it never reaches a PTY. Defaults: Ctrl+Shift+G makes
+  // xterm emit nothing (a shifted Ctrl letter) and overrides only the browser's
+  // find-previous; Alt+Shift+Arrows are bound by no CLI Codeman runs.
+  {
+    id: 'toggle-tile-grid',
+    group: 'Tiles',
+    label: 'Toggle Tile Grid',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: 'G', code: 'KeyG' }],
+    action: 'toggleTileGrid',
+  },
+  {
+    id: 'focus-tile-left',
+    group: 'Tiles',
+    label: 'Focus Tile Left',
+    bindings: [{ modifiers: ['alt', 'shift'], key: 'ArrowLeft' }],
+    action: 'focusTileLeft',
+  },
+  {
+    id: 'focus-tile-right',
+    group: 'Tiles',
+    label: 'Focus Tile Right',
+    bindings: [{ modifiers: ['alt', 'shift'], key: 'ArrowRight' }],
+    action: 'focusTileRight',
+  },
+  {
+    id: 'focus-tile-up',
+    group: 'Tiles',
+    label: 'Focus Tile Up',
+    bindings: [{ modifiers: ['alt', 'shift'], key: 'ArrowUp' }],
+    action: 'focusTileUp',
+  },
+  {
+    id: 'focus-tile-down',
+    group: 'Tiles',
+    label: 'Focus Tile Down',
+    bindings: [{ modifiers: ['alt', 'shift'], key: 'ArrowDown' }],
+    action: 'focusTileDown',
+  },
+  {
+    id: 'remove-tile',
+    group: 'Tiles',
+    label: 'Remove Focused Tile',
+    // Unbound by default; the session keeps running either way.
+    bindings: [],
+    action: 'removeTile',
+  },
   {
     id: 'previous-next-session',
     group: 'Session',
@@ -1360,6 +1410,15 @@ class CodemanApp {
           this.nextSession();
           return;
         }
+      }
+
+      // Tile grid chords: only where they apply (tile-grid.js tileShortcutFor),
+      // so outside the grid Alt+Shift+Arrows still reach the terminal.
+      const tileShortcut = this.tileShortcutFor?.(e);
+      if (tileShortcut) {
+        e.preventDefault();
+        this.runTileShortcut(tileShortcut);
+        return;
       }
 
       // Match against the shortcut registry so user rebinds and per-shortcut

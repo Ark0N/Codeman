@@ -1,7 +1,7 @@
 /**
  * @fileoverview A `vm` harness for the tile grid (tile-grid.js) with the real
- * app around it: constants.js + app.js + terminal-ui.js + tile-grid.js in one
- * context, a small fake DOM (just what the grid touches) and a fake
+ * app around it: constants.js + app.js + terminal-ui.js + terminal-split.js +
+ * tile-grid.js in one context, a small fake DOM (just what the grid touches) and a fake
  * TerminalTile that records what the grid asks of it.
  *
  * `makeGridApp()` returns an app instance with everything around the grid that
@@ -57,7 +57,8 @@ export class FakeEl {
   remove() {
     if (!this.parentElement) return;
     const siblings = this.parentElement.children;
-    siblings.splice(siblings.indexOf(this), 1);
+    const i = siblings.indexOf(this);
+    if (i !== -1) siblings.splice(i, 1);
     this.parentElement = null;
   }
   setAttribute(k: string, v: string) {
@@ -76,7 +77,15 @@ export class FakeEl {
   getBoundingClientRect() {
     return { width: 2400, height: 1200, top: 0, left: 0, right: 2400, bottom: 1200 };
   }
-  querySelector() {
+  /** `.class` selectors only: the first descendant carrying that class. */
+  querySelector(sel: string): FakeEl | null {
+    if (!sel.startsWith('.') || /[\s[>:]/.test(sel)) return null;
+    const cls = sel.slice(1);
+    for (const child of this.children) {
+      if (child.classList.contains(cls)) return child;
+      const deeper = child.querySelector(sel);
+      if (deeper) return deeper;
+    }
     return null;
   }
 }
@@ -117,6 +126,11 @@ section.id = 'tileGrid';
 section.className = 'tile-grid';
 main.appendChild(section);
 
+/** Extra elements `document.querySelector` finds, by exact selector (e.g. '.btn-split'). */
+export const bySelector = new Map<string, FakeEl>();
+export const body = new FakeEl();
+/** `document.addEventListener`, so a test can find a listener the app installed. */
+export const documentAddEventListener = vi.fn();
 export const localStore = new Map<string, string>();
 /** What the code under test deferred with requestIdleCallback; a test runs them. */
 export const idleCallbacks: Array<() => void> = [];
@@ -145,11 +159,13 @@ const context = vm.createContext({
   location: { protocol: 'http:', host: 'codeman.test', pathname: '/', search: '', hash: '' },
   history: { replaceState: vi.fn(), state: null },
   document: {
-    addEventListener: vi.fn(),
+    addEventListener: documentAddEventListener,
     documentElement: { dataset: {} },
     createElement: () => new FakeEl(),
     getElementById: (id: string) => (id === 'tileGrid' ? section : null),
-    querySelector: (sel: string) => (sel === '.main' ? main : sel === '.terminal-wrap' ? wrap : null),
+    body,
+    querySelector: (sel: string) =>
+      sel === '.main' ? main : sel === '.terminal-wrap' ? wrap : (bySelector.get(sel) ?? null),
     querySelectorAll: () => [],
   },
   localStorage: {
@@ -162,7 +178,8 @@ const context = vm.createContext({
   MobileDetection: { isTouchDevice: () => false, isHandheldDevice: () => false, getDeviceType: () => 'desktop' },
 });
 vm.runInContext(
-  `${read('constants.js')}\n${read('app.js')}\n${read('terminal-ui.js')}\n${read('tile-grid.js')}\n` +
+  `${read('constants.js')}\n${read('app.js')}\n${read('terminal-ui.js')}\n${read('terminal-split.js')}\n` +
+    `${read('tile-grid.js')}\n` +
     'globalThis.__CodemanApp = CodemanApp;',
   context
 );
@@ -237,4 +254,10 @@ export function resetGridHarness() {
   windowStub.innerWidth = 2400;
   section.children = [];
   main.className = 'main';
+  // A split a test left open moved .terminal-wrap into its container.
+  main.children = [];
+  main.appendChild(wrap);
+  main.appendChild(section);
+  bySelector.clear();
+  body.children = [];
 }

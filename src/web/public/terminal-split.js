@@ -46,6 +46,9 @@ Object.assign(CodemanApp.prototype, {
     // the old exact-node check below) bubbled straight through to
     // `document` and self-closed the menu it just opened.
     event?.stopPropagation();
+    // The tile grid and the split are never open together (tile-grid.js); the
+    // Split button shows as unavailable meanwhile.
+    if (this._tilesOwnTerminal?.()) return;
     if (this._splitPane) {
       this.closeSplitPane();
       return;
@@ -139,6 +142,8 @@ Object.assign(CodemanApp.prototype, {
     // see _applySplitButtonVisibility's comment for why both a JS check and
     // a CSS backstop exist.
     if (window.innerWidth < SPLIT_PANE_MIN_WIDTH) return;
+    // Never beside the tile grid: the main terminal is parked while it is open.
+    if (this._tilesOwnTerminal?.()) return;
     // No active session means there is no `.terminal-wrap` to split against
     // (the welcome overlay is showing) — without this, a split opened from
     // the home screen still created the container and connected Pane B, just

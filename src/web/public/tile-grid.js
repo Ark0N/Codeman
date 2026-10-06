@@ -26,6 +26,16 @@ const TILE_GRID_FONT_KEY = 'codeman-tile-font-size';
 // Trailing debounce for refitting tiles after the grid area changes size, so a
 // window drag sends each tile's PTY one resize, not one per frame.
 const TILE_GRID_REFIT_MS = 150;
+// Registry ids of the tile chords (DEFAULT_SHORTCUTS, app.js), and whether each
+// needs the grid open. The toggle applies wherever a grid could open.
+const TILE_SHORTCUTS = {
+  'toggle-tile-grid': { needsOpen: false },
+  'focus-tile-left': { needsOpen: true, direction: 'left' },
+  'focus-tile-right': { needsOpen: true, direction: 'right' },
+  'focus-tile-up': { needsOpen: true, direction: 'up' },
+  'focus-tile-down': { needsOpen: true, direction: 'down' },
+  'remove-tile': { needsOpen: true },
+};
 
 /** The grid's state. `has(id)` answers only while it is open. */
 class TileGridModel {
@@ -137,8 +147,18 @@ Object.assign(CodemanApp.prototype, {
     if (!this.canOpenTileGrid()) return false;
     const grid = (this._tileGrid ||= new TileGridModel());
     const max = window.CodemanTileGrid.TILE_GRID_MAX;
+    // The grid and the split are never open together. An open split becomes the
+    // grid's first two tiles (Pane A focused, Pane B beside it), so "split, then
+    // want more" is one step. No closing resize for Pane A: it is about to park.
+    let requested = ids || [];
+    if (this._splitPane) {
+      const seed = [this.activeSessionId, this._splitSessionId].filter(Boolean);
+      this.closeSplitPane({ skipPrimaryResize: true });
+      requested = [...seed, ...requested];
+      if (!requested.includes(focusedId)) focusedId = seed[0] ?? null;
+    }
     const wanted = [];
-    for (const id of ids || []) {
+    for (const id of requested) {
       if (typeof id !== 'string' || wanted.includes(id)) continue;
       if (!this.sessions.has(id) || this.detachedSessions?.has(id)) continue;
       wanted.push(id);
@@ -175,6 +195,7 @@ Object.assign(CodemanApp.prototype, {
     this._installTileGridWidthGate();
     this._selectTiledSession(focus, { auto });
     this._updateConnectionIndicator?.();
+    this._updateSplitButtonForTiles();
     return true;
   },
 
@@ -230,7 +251,93 @@ Object.assign(CodemanApp.prototype, {
       this.terminalBufferCache?.delete(id);
     }
     this._updateConnectionIndicator?.();
+    this._updateSplitButtonForTiles();
     if (reselect) this._selectAfterTileGrid(focusedId);
+  },
+
+  // The Split button cannot act while the grid is open (openSplitPicker and
+  // openSplitPane refuse), so it says so: aria-disabled plus a title, the same
+  // refusal the split already gives for web tabs and the welcome screen.
+  _updateSplitButtonForTiles() {
+    const btn = document.querySelector('.btn-split');
+    if (!btn) return;
+    const blocked = this._tilesOwnTerminal();
+    btn.classList.toggle('btn-split--blocked', blocked);
+    btn.setAttribute('aria-disabled', blocked ? 'true' : 'false');
+    if (blocked) {
+      btn.title = 'Split: unavailable while tiles are open';
+      btn.setAttribute('aria-label', btn.title);
+    } else {
+      this._updateSplitButtonState?.(!!this._splitPane);
+    }
+  },
+
+  /**
+   * The tile chord `e` asks for, if it applies right now, else null: the toggle
+   * wherever a grid could open (or is open), the focus and remove chords only
+   * while it is open, so outside the grid they reach the terminal untouched.
+   * Registry-aware (rebinds and disables in App Settings, Shortcuts). The
+   * capture handler (app.js) dispatches it; every xterm key handler returns
+   * false for it, so a chord that applies never reaches a PTY.
+   *
+   * @returns {string|null} the registry id
+   */
+  tileShortcutFor(e) {
+    if (!e || (!e.ctrlKey && !e.metaKey && !e.altKey)) return null;
+    if (typeof this.getShortcutRegistry !== 'function' || typeof this.matchesShortcutEvent !== 'function') return null;
+    const open = this._tilesOwnTerminal();
+    for (const shortcut of this.getShortcutRegistry()) {
+      const spec = TILE_SHORTCUTS[shortcut.id];
+      if (!spec || shortcut.disabled || !this.matchesShortcutEvent(e, shortcut)) continue;
+      if (spec.needsOpen ? open : open || this.canOpenTileGrid()) return shortcut.id;
+      return null;
+    }
+    return null;
+  },
+
+  /** Runs a chord tileShortcutFor() matched. */
+  runTileShortcut(id) {
+    const spec = TILE_SHORTCUTS[id];
+    if (!spec) return;
+    if (id === 'toggle-tile-grid') this.toggleTileGrid();
+    else if (id === 'remove-tile') this.removeFocusedTile();
+    else if (spec.direction) this.focusTileInDirection(spec.direction);
+  },
+
+  /**
+   * Opens the grid, or closes it to the single view of the focused session.
+   * Opening brings back the grid this tab last left (decision 1: one step back
+   * after a selection outside it), else an open split as two tiles, else the
+   * active session as one tile.
+   */
+  toggleTileGrid() {
+    if (this._tilesOwnTerminal()) {
+      this.closeTileGrid({ keepStored: true, reselect: true });
+      return;
+    }
+    if (!this.canOpenTileGrid()) return;
+    const remembered = this._tileGridRemembered;
+    const ids = (remembered?.ids || []).filter((id) => this.sessions.has(id) && !this.detachedSessions?.has(id));
+    if (ids.length > 0) {
+      this.openTileGrid(ids, { focusedId: remembered.focusedId, auto: true });
+      return;
+    }
+    if (this.activeSessionId) this.openTileGrid([this.activeSessionId], { focusedId: this.activeSessionId });
+  },
+
+  /** Alt+Shift+Arrows: a human selection of the tile in that direction. */
+  focusTileInDirection(direction) {
+    const grid = this._tileGrid;
+    if (!grid?.open) return;
+    const id = window.CodemanTileGrid.tileInDirection(grid.ids, grid.focusedId, direction, grid.cols);
+    if (id) this.selectSession(id);
+  },
+
+  /** Removes the focused tile (the session keeps running); a neighbour takes focus. */
+  removeFocusedTile() {
+    const grid = this._tileGrid;
+    if (!grid?.open || !grid.focusedId) return;
+    this.removeTile(grid.focusedId, { refocus: true, auto: true });
   },
 
   // The single view after the grid closes: the session the grid was focused on,

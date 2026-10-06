@@ -590,6 +590,11 @@ Object.assign(CodemanApp.prototype, {
         return false;
       }
 
+      // Tile grid chords (Ctrl+Shift+G, Alt+Shift+Arrows): the capture handler
+      // has already acted on one that applies, and its preventDefault() does not
+      // stop xterm. Every event type, and BEFORE the Shift+Enter branch below.
+      if (this.tileShortcutFor?.(ev)) return false;
+
       // Smart copy (#211): with a selection, Ctrl+C copies it instead of sending
       // ^C. With NO selection the branch must fall through (return true, and no
       // preventDefault) or the interrupt key is lost, which is the whole reason

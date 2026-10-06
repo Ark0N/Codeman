@@ -208,6 +208,10 @@
         if (ev.type === 'keydown' && global.app?.shouldToggleSessionSidebarFromShortcut?.(ev)) {
           return false;
         }
+        // Tile grid chords (focus, toggle): acted on by the capture handler, so
+        // they must never reach this tile's PTY. Every event type, and before
+        // the Shift+Enter branch below.
+        if (global.app?.tileShortcutFor?.(ev)) return false;
         // Ctrl+V / Cmd+V: the primary pane's paste trap, aimed at THIS pane, so
         // a pasted image uploads to this pane's session and its path is typed
         // here, and pasted text goes into this xterm with its bracketed-paste
