@@ -381,8 +381,17 @@ function applyPaneExitBadge(tab, paneExit) {
   tab.classList.toggle('tab-agent-exited', !!label);
   // The tab's aria-label overrides its contents for the accessible name, and the
   // badge is aria-hidden like its siblings, so the exit has to ride the label.
+  // Compared with the last English label set (data-aria-source, seeded by the
+  // full render too), never the attribute: in zh-CN the translator rewrites it,
+  // and writing English back on every pass would have it translate again.
   const name = tab.querySelector('.tab-name')?.dataset?.fullName;
-  if (name) tab.setAttribute('aria-label', paneExitAriaLabel(name, label));
+  if (name) {
+    const aria = paneExitAriaLabel(name, label);
+    if (tab.dataset.ariaSource !== aria) {
+      tab.dataset.ariaSource = aria;
+      tab.setAttribute('aria-label', aria);
+    }
+  }
   if (!label) {
     existing?.remove();
     return;
@@ -391,16 +400,19 @@ function applyPaneExitBadge(tab, paneExit) {
     const badge = document.createElement('span');
     badge.className = 'tab-exited-badge';
     badge.setAttribute('aria-hidden', 'true');
-    // Generated status text, like the status pills: it carries data-i18n-skip
-    // rather than a dictionary entry. Without it the translator would rewrite
-    // the badge and the next render pass would rewrite it back, because the
-    // comparison below is against the English string.
-    badge.setAttribute('data-i18n-skip', '');
+    // Translated like any other text (i18n.js has "exited" and its exit-code
+    // forms). The comparison below is with the last English label (data-label),
+    // never the DOM, which holds the translation in zh-CN: a DOM compare would
+    // write the English back on every pass for the translator to redo.
+    badge.dataset.label = label;
     badge.textContent = label;
     tab.querySelector('.tab-name')?.insertAdjacentElement('afterend', badge);
     return;
   }
-  if (existing.textContent !== label) existing.textContent = label;
+  if (existing.dataset.label !== label) {
+    existing.dataset.label = label;
+    existing.textContent = label;
+  }
 }
 
 const DEFAULT_SHORTCUTS = [
@@ -6022,7 +6034,7 @@ class CodemanApp {
       const inlineSessionActions = this.shouldInlineSessionActions();
       const tabActionsHtml = `<span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span><button type="button" class="tab-more" onclick="event.stopPropagation(); app.openTabRailActionMenu(event, ${escapeHtml(JSON.stringify(id))})" title="Session actions" aria-label="Session actions">&#x22EF;</button></span>`;
 
-      rowHtml.set(id, `<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${paneExitBadge ? ' tab-agent-exited' : ''}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}${this._tileGrid?.has(id) ? ' in-tiles' : ''}"${richData}${railOrderStyle} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
+      rowHtml.set(id, `<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${paneExitBadge ? ' tab-agent-exited' : ''}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}${this._tileGrid?.has(id) ? ' in-tiles' : ''}"${richData}${railOrderStyle} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" data-aria-source="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
           ${_tabIdx < 9 ? '<span class="tab-number">' + (_tabIdx + 1) + '</span>' : ''}
           ${loadState ? '<span class="tab-load-spinner" aria-hidden="true"></span>' : ''}
           <span class="tab-status ${status}" aria-hidden="true"></span>
@@ -6030,7 +6042,7 @@ class CodemanApp {
             <span class="tab-name-row">
               ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : mode === 'codex' ? '<span class="tab-mode codex" aria-hidden="true">cx</span>' : mode === 'gemini' ? '<span class="tab-mode gemini" aria-hidden="true">gm</span>' : mode === 'antigravity' ? '<span class="tab-mode antigravity" aria-hidden="true">ag</span>' : mode === 'pi' ? '<span class="tab-mode pi" aria-hidden="true">pi</span>' : mode === 'grok' ? '<span class="tab-mode grok" aria-hidden="true">gk</span>' : mode === 'deepseek' ? '<span class="tab-mode deepseek" aria-hidden="true">ds</span>' : mode === 'omp' ? '<span class="tab-mode omp" aria-hidden="true">om</span>' : ''}
               <span class="tab-name" data-session-id="${id}" data-full-name="${escapeHtml(name)}">${tabLabel}</span>
-              ${paneExitBadge ? `<span class="tab-exited-badge" data-i18n-skip aria-hidden="true">${escapeHtml(paneExitBadge)}</span>` : ''}
+              ${paneExitBadge ? `<span class="tab-exited-badge" data-label="${escapeHtml(paneExitBadge)}" aria-hidden="true">${escapeHtml(paneExitBadge)}</span>` : ''}
               ${inlineSessionActions ? tabActionsHtml : ''}
               <span class="tab-detached-badge" aria-hidden="true">detached</span>
             </span>

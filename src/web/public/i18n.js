@@ -146,6 +146,9 @@
     'The agent exited': '智能体已退出',
     'It cannot be restarted in place: close it from ⋯ (Close session).': '无法原地重启：请通过 ⋯（关闭会话）关闭它。',
     'Could not attach the session': '无法附加会话',
+    // The tab's exited-agent badge (app.js applyPaneExitBadge, Ark0N/Codeman#446);
+    // its exit-code forms and the tab's accessible name are patterns.
+    exited: '已退出',
     'Ultracode / Workflow agents': 'Ultracode / Workflow 智能体',
     'Open ultracode workflow agents': '打开 Ultracode 工作流智能体',
     Notifications: '通知',
@@ -1047,6 +1050,16 @@
       ],
       [/^The agent exited \((-?\d+)\)$/, (_m, code) => `智能体已退出（${code}）`],
       [/^The agent exited \(signal (\d+)\)$/, (_m, signal) => `智能体已退出（信号 ${signal}）`],
+      // The tab's exited-agent badge, and the tab's accessible name carrying it.
+      // The session name is user text: it passes through untranslated.
+      [/^exited \((-?\d+)\)$/, (_m, code) => `已退出（${code}）`],
+      [/^exited \(signal (\d+)\)$/, (_m, signal) => `已退出（信号 ${signal}）`],
+      [
+        /^(.+) session, agent exited \(signal (\d+)\)$/,
+        (_m, name, signal) => `${name} 会话，智能体已退出（信号 ${signal}）`,
+      ],
+      [/^(.+) session, agent exited \((-?\d+)\)$/, (_m, name, code) => `${name} 会话，智能体已退出（${code}）`],
+      [/^(.+) session, agent exited$/, (_m, name) => `${name} 会话，智能体已退出`],
       // A session name is user text: it passes through untranslated.
       [
         /^(.+) was stopped after crashing repeatedly\. Restart it\?$/,
