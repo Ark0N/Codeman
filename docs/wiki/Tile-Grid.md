@@ -62,20 +62,38 @@ one on its own until the window is big enough again.
 A tile whose session is not running shows **Not attached** with an **Attach** button. A tile
 whose agent exited inside its pane says so instead; close that session from `⋯`.
 
+## Moving tiles
+
+Drag a tile by its header (anywhere but its buttons) onto another tile and the two trade
+places. Drop it on an empty slot and it moves there, to the end of the grid. Press `Escape`
+or let go anywhere else and nothing moves. The dropped tile takes the focus.
+
+With the keyboard, `Ctrl+Shift+Arrows` moves the focused tile left, right, up or down: it
+trades places with the tile next to it (the one `Alt+Shift+Arrows` would focus) and keeps the
+focus.
+
+A moved tile takes the size of the place it lands in: column widths and row heights stay
+where you dragged the dividers. Tiles do not move while one is zoomed. The new order is
+saved with the grid.
+
 ## Keys
 
 | Shortcut                 | Action                                                     |
 | ------------------------ | ---------------------------------------------------------- |
 | `Ctrl+Shift+G`           | Open or close the grid.                                     |
 | `Alt+Shift+Arrows`       | Focus the tile to the left, right, above or below.          |
+| `Ctrl+Shift+Arrows`      | Move the focused tile left, right, up or down.              |
 | `Alt+Shift+Enter`        | Zoom the focused tile, or restore the grid.                 |
 | `Ctrl+Tab`, `Alt+[` `]`  | Cycle through the tiles.                                    |
 | `Ctrl+L`                 | Clear the focused tile.                                     |
 | `Ctrl` `+` / `Ctrl` `-`  | Tile font size (tiles have their own, smaller font).        |
 
 All of them can be rebound in App Settings → Shortcuts, where **Remove Focused Tile** can
-also get a key. Outside the grid, `Alt+Shift+Arrows` and `Alt+Shift+Enter` go to the
-terminal as usual. With the Tiles setting off, `Ctrl+Shift+G` does nothing.
+also get a key. Outside the grid, `Alt+Shift+Arrows`, `Ctrl+Shift+Arrows` and
+`Alt+Shift+Enter` go to the terminal as usual. While it is open, `Ctrl+Shift+Arrows` in a text
+field (renaming a tile, the file editor) still selects by word; inside a tile it moves the tile,
+so a terminal editor there (nano, micro, emacs) does not get it. With the Tiles setting off,
+`Ctrl+Shift+G` does nothing.
 
 ## Leaving the grid
 
