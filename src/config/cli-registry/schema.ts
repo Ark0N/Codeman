@@ -15,7 +15,7 @@
 import { z } from 'zod';
 import { compileVersionRegex, countCaptureGroups, TOKEN_PATTERNS } from './patterns.js';
 import { isKnownLauncherProfile, isKnownSetenvProfile } from './profiles.js';
-import type { McpConfigFormat } from './types.js';
+import type { McpConfigFormat, ModelConfigResolverName } from './types.js';
 
 /** A bare CLI id: lowercase, starts with a letter, at most 24 chars. Also used as a CSS/URL token. */
 const cliId = z
@@ -382,12 +382,24 @@ const capabilitiesSchema = z
           .refine(
             (src) => compileVersionRegex(src) !== null && countCaptureGroups(src) === 1,
             'screenLine must be a regex compileVersionRegex() accepts (at most 200 characters, no nested quantifiers) with exactly one capture group'
-          ),
+          )
+          .optional(),
         // Bounded hard, like watchingLines: every row it adds is one more row the agent
         // itself may be able to write.
         screenLines: z.number().int().min(1).max(4).optional(),
+        // A NAMED reader (src/model-config-resolvers.ts), never code in config.
+        configResolver: z.enum(['deepseek-route'] as const satisfies readonly ModelConfigResolverName[]).optional(),
       })
       .strict()
+      // Typos rather than configurations, refused at LOAD time like watchingLines.
+      .refine(
+        (v) => v.screenLine !== undefined || v.configResolver !== undefined,
+        'modelDetect declares nothing to read'
+      )
+      .refine(
+        (v) => v.screenLines === undefined || v.screenLine !== undefined,
+        'screenLines has nothing to bound without a screenLine'
+      )
       .optional(),
     privilegedParams: z
       .array(

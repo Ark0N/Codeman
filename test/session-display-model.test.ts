@@ -7,6 +7,9 @@
  * live panes on 2026-10-07: dsh-TUI 0.10.0-beta.1 on the owner's qwen route, and codex
  * 0.147.0. The codex 0.154.0 footer is the one `session-watching.test.ts` pins.
  */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Session } from '../src/session.js';
 import { getCli } from '../src/config/cli-registry/index.js';
@@ -89,6 +92,21 @@ describe('the registry patterns', () => {
     expect(withDetect({ screenLine: '^ {2}([a-z]+) (high) · ' })).toBe(false);
     expect(withDetect({ screenLine: '(a+)+$' })).toBe(false);
     expect(withDetect({ screenLine: '^(x)', screenLines: 9 })).toBe(false);
+  });
+
+  it('dsh also names a config reader for while its screen names no model', () => {
+    expect(detectOf('deepseek').configResolver).toBe('deepseek-route');
+    expect(detectOf('codex').configResolver).toBeUndefined();
+  });
+
+  it('the schema takes a known config reader alone, and refuses an empty or unknown one', () => {
+    const codex = getCli('codex')!;
+    const withDetect = (modelDetect: unknown) =>
+      CliEntrySchema.safeParse({ ...codex, capabilities: { ...codex.capabilities, modelDetect } }).success;
+    expect(withDetect({ configResolver: 'deepseek-route' })).toBe(true);
+    expect(withDetect({ configResolver: 'read-anything' })).toBe(false);
+    expect(withDetect({})).toBe(false);
+    expect(withDetect({ configResolver: 'deepseek-route', screenLines: 2 })).toBe(false);
   });
 
   it('countCaptureGroups counts named groups and ignores non-capturing ones', () => {
@@ -181,6 +199,16 @@ describe('resolveDisplayModel', () => {
     expect(resolveDisplayModel({ launchModel: 'opus' })).toEqual({ model: 'opus', source: 'launch' });
   });
 
+  it("the config ranks below the CLI's own report and above the launch model", () => {
+    expect(resolveDisplayModel({ reported, configModel: 'qwen3.8-27b', launchModel: 'opus' })).toEqual(reported);
+    expect(resolveDisplayModel({ configModel: 'qwen3.8-27b', launchModel: 'opus' })).toEqual({
+      model: 'qwen3.8-27b',
+      source: 'config',
+    });
+    expect(resolveDisplayModel({ customModelId: 'm', configModel: 'qwen3.8-27b' })?.source).toBe('custom-endpoint');
+    expect(resolveDisplayModel({ configModel: null, launchModel: 'opus' })?.source).toBe('launch');
+  });
+
   it('knows nothing when nothing is known: no placeholder', () => {
     expect(resolveDisplayModel({})).toBeUndefined();
     expect(resolveDisplayModel({ customModelId: ' ', reported: null, launchModel: '' })).toBeUndefined();
@@ -195,6 +223,7 @@ describe('restoredReportedModel', () => {
     });
     expect(restoredReportedModel({ model: 'Opus 4.8', source: 'statusline' })?.source).toBe('statusline');
     expect(restoredReportedModel({ model: 'opus', source: 'launch' })).toBeUndefined();
+    expect(restoredReportedModel({ model: 'qwen3.8-27b', source: 'config' })).toBeUndefined();
     expect(restoredReportedModel({ model: 'x', source: 'custom-endpoint' })).toBeUndefined();
     expect(restoredReportedModel({ model: '', source: 'screen' })).toBeUndefined();
     expect(restoredReportedModel('screen')).toBeUndefined();
@@ -324,5 +353,39 @@ describe('a session', () => {
     // A launch answer from the previous run is derived again, not restored.
     const claude = withFakePane('claude', () => null, { displayModel: { model: 'opus', source: 'launch' } });
     expect(claude.toState().displayModel).toBeUndefined();
+  });
+});
+
+describe('a dsh session over a fixture dsh home (end to end, no mocks)', () => {
+  it('names the route its profile pins until the screen names one, then the screen', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-e2e-'));
+    try {
+      const home = join(root, 'dsh');
+      mkdirSync(join(home, 'profiles', 'dsh-tui'), { recursive: true });
+      writeFileSync(
+        join(home, 'profiles', 'dsh-tui', 'package.json'),
+        JSON.stringify({ dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-harness-tui/dsh-tui'] } } })
+      );
+      writeFileSync(
+        join(home, 'profiles', 'dsh-tui', 'cordis.patch.yml'),
+        '- id: dsh-tui\n  config:\n    provider: qwen5090\n    model: qwen3.8-27b\n'
+      );
+      const session = new Session({
+        workingDir: '/tmp',
+        mode: 'deepseek',
+        deepSeekConfig: { profile: 'dsh-tui' },
+        envOverrides: { DSH_HOME: home },
+      } as ConstructorParameters<typeof Session>[0]);
+      await (session as unknown as { _withPaneLifecycle(op: () => Promise<void>): Promise<void> })._withPaneLifecycle(
+        async () => {}
+      );
+      await vi.waitFor(() =>
+        expect(session.toState().displayModel).toEqual({ model: 'qwen3.8-27b', source: 'config' })
+      );
+      session.noteReportedModel('screen', 'deepseek-v4-flash');
+      expect(session.toState().displayModel).toEqual({ model: 'deepseek-v4-flash', source: 'screen' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

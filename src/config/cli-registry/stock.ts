@@ -1243,6 +1243,9 @@ const DEEPSEEK: CliEntry = {
     modelDetect: {
       screenLine: String.raw`╰─+╯\n ?([A-Za-z0-9][\w.:/@+-]{0,79})(?= · |\n|$)`,
       screenLines: 3,
+      // With the status bar's model field off (or before it paints), the route the
+      // session's profile pins, read the way dsh-TUI resolves it: src/deepseek-route-config.ts.
+      configResolver: 'deepseek-route',
     },
     // Only-if-sent, like codex/antigravity/grok: an ABSENT permissionMode means the
     // launcher's own default, `workspace-write`, which already asks. Clamping to

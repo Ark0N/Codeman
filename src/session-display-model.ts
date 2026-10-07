@@ -13,7 +13,11 @@
  *    in-session `/model`); a CLI whose registry entry declares
  *    `capabilities.modelDetect` has its footer read off the pane capture the idle/working
  *    probe already takes.
- * 3. **launch**: the model the session was launched with (claude's `--model` or the
+ * 3. **config**: the model the CLI's own config pins for this session, read by the
+ *    reader its registry entry names (`capabilities.modelDetect.configResolver`, e.g. the
+ *    dsh-TUI route: src/deepseek-route-config.ts), for while the screen names none. Not
+ *    a report from the running CLI, so any report outranks it.
+ * 4. **launch**: the model the session was launched with (claude's `--model` or the
  *    app-wide default it was created with; another CLI's `<cli>Config.model`). What was
  *    asked for, not what was reported, so it only shows when nothing reported.
  *
@@ -130,17 +134,21 @@ export function restoredReportedModel(saved: unknown): ReportedModel | undefined
  *
  * @param input.customModelId the custom endpoint's model, when the session is pointed at one
  * @param input.reported the newest report from the CLI itself
+ * @param input.configModel the model the CLI's config pins for the session
  * @param input.launchModel the model the session was launched with
  */
 export function resolveDisplayModel(input: {
   customModelId?: string;
   reported?: ReportedModel | null;
+  configModel?: string | null;
   launchModel?: string;
 }): DisplayModel | undefined {
   const custom = sanitizeModelName(input.customModelId);
   if (custom) return { model: custom, source: 'custom-endpoint' };
   const reported = input.reported ? sanitizeModelName(input.reported.model) : undefined;
   if (reported && input.reported) return { model: reported, source: input.reported.source };
+  const config = sanitizeModelName(input.configModel);
+  if (config) return { model: config, source: 'config' };
   const launch = sanitizeModelName(input.launchModel);
   if (launch) return { model: launch, source: 'launch' };
   return undefined;

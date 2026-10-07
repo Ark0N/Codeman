@@ -138,6 +138,8 @@ import {
   upsertAttachmentHistory as upsertAttachmentHistoryList,
 } from './session-attachment-history.js';
 import type { SessionAttachmentHistoryItem, DisplayModel } from './types/session.js';
+import { resolveConfigModel } from './model-config-resolvers.js';
+import { legacyConfigForMode } from './session-cli-registry-bridge.js';
 import {
   launchModelFor,
   readScreenModel,
@@ -566,6 +568,14 @@ export class Session extends EventEmitter {
    * restart, so an idle session keeps naming its model until the next report.
    */
   private _reportedModel: ReportedModel | null = null;
+  /**
+   * The model the CLI's own config pins for this session (`modelDetect.configResolver`),
+   * read at each pane start, attach or relaunch; null when it pins none. Below any
+   * report from the running CLI in `displayModel`. Not persisted: the next start reads it.
+   */
+  private _configModel: string | null = null;
+  /** Bumped per config read, so a read that lands after a newer one is dropped. */
+  private _configModelGen = 0;
   /** Lazily compiled `capabilities.modelDetect.screenLine`. See _modelLinePattern(). */
   private _modelLineRe: RegExp | null | undefined = undefined;
   /** Resolved with the pattern above: how many rows at the foot of the screen it sees. */
@@ -1290,6 +1300,9 @@ export class Session extends EventEmitter {
     } finally {
       this._paneLifecycleOps--;
       this._paneStartedAt = Date.now();
+      // A start, attach or relaunch is when the CLI read its config, so it is when
+      // the model that config pins is read here too.
+      this._refreshConfigModel();
     }
   }
 
@@ -3187,7 +3200,7 @@ export class Session extends EventEmitter {
   private _modelLinePattern(): RegExp | null {
     if (this._modelLineRe === undefined) {
       const detect = getCli(this.mode)?.capabilities.modelDetect;
-      this._modelLineRe = detect ? compileVersionRegex(detect.screenLine) : null;
+      this._modelLineRe = detect?.screenLine ? compileVersionRegex(detect.screenLine) : null;
       this._modelLineRows = detect?.screenLines ?? 1;
     }
     return this._modelLineRe;
@@ -3219,22 +3232,61 @@ export class Session extends EventEmitter {
     return resolveDisplayModel({
       customModelId: this._customModel?.modelId,
       reported: this._reportedModel,
-      // The same option bag the spawn reads its launch params from: `model` at the top
-      // for claude (the `--model` or app-wide default it was created with; inert for
-      // every other CLI, which is why it is not handed over for them), each other CLI's
-      // own `<Mode>Config`. Where the model param lives is registry data.
-      launchModel: launchModelFor(this.mode, {
-        model: cliTakesSessionModel(this.mode) ? this._model : undefined,
-        openCodeConfig: this._openCodeConfig,
-        codexConfig: this._codexConfig,
-        geminiConfig: this._geminiConfig,
-        antigravityConfig: this._antigravityConfig,
-        piConfig: this._piConfig,
-        grokConfig: this._grokConfig,
-        deepSeekConfig: this._deepSeekConfig,
-        ompConfig: this._ompConfig,
-      }),
+      configModel: this._configModel,
+      launchModel: launchModelFor(this.mode, this._launchOptionBag()),
     });
+  }
+
+  /**
+   * The same option bag the spawn reads its launch params from: `model` at the top for
+   * claude (the `--model` or app-wide default it was created with; inert for every other
+   * CLI, which is why it is not handed over for them), each other CLI's own
+   * `<Mode>Config`. Where a param lives is registry data (`legacyConfigForMode`).
+   */
+  private _launchOptionBag(): Record<string, unknown> {
+    return {
+      model: cliTakesSessionModel(this.mode) ? this._model : undefined,
+      openCodeConfig: this._openCodeConfig,
+      codexConfig: this._codexConfig,
+      geminiConfig: this._geminiConfig,
+      antigravityConfig: this._antigravityConfig,
+      piConfig: this._piConfig,
+      grokConfig: this._grokConfig,
+      deepSeekConfig: this._deepSeekConfig,
+      ompConfig: this._ompConfig,
+    };
+  }
+
+  /**
+   * Read the model this session's CLI config pins, with the reader its registry entry
+   * names (`capabilities.modelDetect.configResolver`), and announce a change. Async and
+   * bounded (the reader probes before it reads); a read that lands after a newer one,
+   * or after the session stopped, is dropped. A remote or docker session's CLI reads its
+   * config on another machine or in its container, so nothing local is read for it.
+   */
+  private _refreshConfigModel(): void {
+    const name = getCli(this.mode)?.capabilities.modelDetect?.configResolver;
+    if (!name || this._remote || this._docker) return;
+    const gen = ++this._configModelGen;
+    const overrides = this._envOverrides;
+    resolveConfigModel(name, {
+      config: legacyConfigForMode(this.mode, this._launchOptionBag()),
+      // The session's own env first (already clamped for a non-granted owner), then the
+      // server's: what the pane's CLI inherits.
+      env: (key) => overrides?.[key] ?? process.env[key],
+    }).then(
+      (model) => {
+        if (gen !== this._configModelGen || this._isStopped) return;
+        // Sanitized where it is published (resolveDisplayModel), like every source.
+        const next = model || null;
+        if (next === this._configModel) return;
+        this._configModel = next;
+        this.emit('displayModelChanged');
+      },
+      () => {
+        /* A reader answers null on doubt and never throws; a throw changes nothing. */
+      }
+    );
   }
 
   /**

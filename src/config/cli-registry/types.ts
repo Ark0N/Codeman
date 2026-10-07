@@ -93,6 +93,9 @@ export interface CliVariant {
 /** The newline chord a CLI's composer reads as "insert a line break" (see `CliCapabilities.newline`). */
 export type NewlineSequence = 'line-feed' | 'esc-enter';
 
+/** The config readers `capabilities.modelDetect.configResolver` may name (src/model-config-resolvers.ts). */
+export type ModelConfigResolverName = 'deepseek-route';
+
 /** The MCP config dialects `src/mcp-sync.ts` has an adapter for. */
 export type McpConfigFormat = 'claude-json' | 'gemini-json' | 'codex-toml' | 'opencode-json' | 'antigravity-json';
 
@@ -477,8 +480,15 @@ export interface CliCapabilities {
    * own footer format), never on a shape the agent could print in its transcript. Measured
    * on a live pane per CLI; absent means the CLI's screen is never read for a model and
    * the session shows its launch model, if any.
+   *
+   * `configResolver` names a reader (src/model-config-resolvers.ts) that resolves the
+   * model the CLI's own config pins, the way that CLI resolves it for the session, for
+   * while the screen names none (its status line switched off, or not drawn yet). Read
+   * once per pane start, attach or relaunch, bounded and read-only; the screen still
+   * wins whenever it names a model. A NAMED reader, like a launcher profile, so the
+   * per-CLI behaviour stays data here and code in one module.
    */
-  modelDetect?: { screenLine: string; screenLines?: number };
+  modelDetect?: { screenLine?: string; screenLines?: number; configResolver?: ModelConfigResolverName };
   /**
    * Params a non-granted multi-user owner may not set freely, and what they are forced to.
    * Data-driven so a CUSTOM CLI's bypass flag is clampable exactly like codex's.
