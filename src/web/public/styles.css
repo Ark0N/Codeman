@@ -19671,12 +19671,30 @@ body.tile-grid-resizing--row * {
   opacity: 0.6;
 }
 
-/* A tab dragged over a tile (replace it) or an empty slot (add it). */
+/* A tab dragged over a tile (replace it) or an empty slot (add it), or a tile
+   dragged there by its header (swap, move). */
 .tile.tile--drop-target,
 .tile-slot.tile--drop-target {
   border-color: var(--accent, #4a9eff);
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent, #4a9eff) 45%, transparent);
   opacity: 1;
+}
+
+/* The header's free area moves its tile (tile-grid.js _installTileMoveDrag).
+   `draggable` is off while moving is (a zoomed grid, a single tile, a rename),
+   and the buttons keep their own pointer. */
+.tile-header[draggable='true'] {
+  cursor: grab;
+}
+
+.tile-header[draggable='true']:active {
+  cursor: grabbing;
+}
+
+/* The tile being dragged by its header. Opacity only: nothing that moves
+   layout, which would resize its PTY. */
+.tile.tile--dragging {
+  opacity: 0.45;
 }
 
 /* Zoom (tmux-style): one tile fills the grid; the others stay connected but

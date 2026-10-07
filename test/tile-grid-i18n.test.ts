@@ -285,8 +285,9 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
       'Session actions',
       'Remove tile (the session keeps running)',
       'idle 3m',
-      'needs you 3m',
-      'exited 3m',
+      'idle 3m\nDrag to move the tile',
+      'needs you 3m\nDrag to move the tile',
+      'exited 3m\nDrag to move the tile',
       'Not attached',
       'Attach',
       'Attaching…',
@@ -344,6 +345,16 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
       }
     }
     expect(bad).toEqual([]);
+  });
+
+  it('the header tooltip with the drag hint: every state, with and without a duration', () => {
+    // The harvest sees the hint under a state with a duration; a session the
+    // overview gives no time yet shows the bare state above it.
+    expect(zh.api.t('working 3m\nDrag to move the tile')).toBe('工作中 3m\n拖动可移动窗格');
+    expect(zh.api.t('needs you <1m\nDrag to move the tile')).toBe('需要你 <1m\n拖动可移动窗格');
+    expect(zh.api.t('idle\nDrag to move the tile')).toBe('空闲\n拖动可移动窗格');
+    expect(zh.api.t('Drag to move the tile')).toBe('拖动可移动窗格');
+    expect(en.api.t('idle\nDrag to move the tile')).toBe('idle\nDrag to move the tile');
   });
 
   it('no UI label sits inside a skipped subtree (where the translator cannot reach it)', () => {

@@ -133,6 +133,8 @@
     'Restore the grid': '恢复平铺网格',
     'Remove tile (the session keeps running)': '移除窗格（会话继续运行）',
     'Drop a tab here': '将标签页拖放到此处',
+    // A tile header's tooltip while tiles can move (with the state above it: a pattern below).
+    'Drag to move the tile': '拖动可移动窗格',
     'Resize tile columns': '调整窗格列宽',
     'Resize tile rows': '调整窗格行高',
     Attach: '附加',
@@ -1012,6 +1014,17 @@
     return value.replace(/\{([a-zA-Z][\w]*)\}/g, (_match, key) => String(variables[key] ?? ''));
   }
 
+  // The six-state words of a tile header's tooltip (tile-grid.js _paintTileHandle).
+  const TILE_STATE_ZH = {
+    'needs you': '需要你',
+    error: '错误',
+    waiting: '等待中',
+    working: '工作中',
+    idle: '空闲',
+    done: '已完成',
+    exited: '已退出',
+  };
+
   function translateDynamic(source) {
     const patterns = [
       [/^(\d+) tokens?$/, (_m, count) => `${count} 个 Token`],
@@ -1087,8 +1100,14 @@
       // state strings on other surfaces (see mobile-overview.js).
       [
         /^(needs you|error|waiting|working|idle|done|exited) (<1m|\d+[dhm](?: \d+[hm])?)$/,
+        (_m, state, duration) => `${TILE_STATE_ZH[state]} ${duration}`,
+      ],
+      // The same while tiles can move, with the drag hint on a second line.
+      // Anchored on the hint, so a bare state word is safe here.
+      [
+        /^(needs you|error|waiting|working|idle|done|exited)(?: (<1m|\d+[dhm](?: \d+[hm])?))?\nDrag to move the tile$/,
         (_m, state, duration) =>
-          `${{ 'needs you': '需要你', error: '错误', waiting: '等待中', working: '工作中', idle: '空闲', done: '已完成', exited: '已退出' }[state]} ${duration}`,
+          `${TILE_STATE_ZH[state]}${duration ? ` ${duration}` : ''}\n${ZH_CN['Drag to move the tile']}`,
       ],
     ];
     for (const [pattern, replacement] of patterns) {

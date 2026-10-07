@@ -99,7 +99,8 @@ describe('the header', () => {
     app.sessions.get('s-b').status = 'busy';
     app.sessions.get('s-b').lastActivityAt = Date.now() - 180_000;
     app._renderTileChrome();
-    expect(headerOf('s-b').title).toBe('working 3m');
+    // While tiles can move, a second line says the header drags.
+    expect(headerOf('s-b').title).toBe('working 3m\nDrag to move the tile');
   });
 
   it('every tab render refreshes the headers', () => {
@@ -353,10 +354,12 @@ describe('a translated label survives a refresh (zh-CN)', () => {
     app.openTileGrid(['s-a', 's-b']);
     const a = app._tileGrid.tiles.get('s-a');
     const b = app._tileGrid.tiles.get('s-b');
-    expect(a.header.title).toBe('idle 3m');
+    expect(a.header.title).toBe('idle 3m\nDrag to move the tile');
     expect(b.overlayText.textContent).toBe('Not attached');
     app.zoomTile('s-a');
     expect(a.zoomBtn.title).toBe('Restore the grid');
+    // Zoomed, nothing moves: the drag hint goes.
+    expect(a.header.title).toBe('idle 3m');
 
     // What the translator does to them.
     a.header.title = '空闲 3m';

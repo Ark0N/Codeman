@@ -253,8 +253,9 @@ Object.assign(CodemanApp.prototype, {
     // Remembered (closed) for one-click return, or forgotten.
     if (keepStored) this._persistTileGrid({ open: false });
     else this._forgetStoredTileGrid();
-    // A divider drag in progress ends with the grid.
+    // A divider drag or a header drag in progress ends with the grid.
     this._tileDividerDragTeardown?.();
+    this._endTileMoveDrag();
     // Closed BEFORE the tiles go: each destroy() updates the header's connection
     // state, which must read the main terminal again, not half-destroyed tiles.
     grid.open = false;
@@ -681,8 +682,10 @@ Object.assign(CodemanApp.prototype, {
     }
     const wasFocused = grid.focusedId === sessionId;
     const neighbor = window.CodemanTileGrid.tileNeighbor(grid.ids, sessionId);
-    // A divider drag in progress was measured against this tile.
+    // A divider drag in progress was measured against this tile; a header
+    // drag of this tile has nothing left to drop.
     this._tileDividerDragTeardown?.();
+    if (this._draggedTileId === sessionId) this._endTileMoveDrag();
     // The zoomed tile leaving restores the grid (an automatic zoom moves to
     // the neighbour with focus, below).
     if (grid.zoomedId === sessionId) grid.zoomedId = grid.autoZoom && refocus ? neighbor : null;
@@ -748,20 +751,26 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Makes `el` a drop target for a session tab dragged from the strip (the
-   * strip's own drag sets `draggedTabId`). Capture phase, with the event
-   * stopped: the drag carries the session id as text, and xterm's helper
-   * textarea would otherwise accept that drop and type the id into a PTY. Any
-   * other drag (a file) is left alone.
+   * strip's own drag sets `draggedTabId`) and for a tile dragged by its header
+   * (`_draggedTileId`, _installTileMoveDrag). Capture phase, with the event
+   * stopped: a tab drag carries the session id as text, and xterm's helper
+   * textarea would otherwise accept that drop and type the id into a PTY. Over
+   * the dragged session's own tile the drag is held there too, but refused
+   * (`dropEffect: 'none'`, so no drop follows). Any other drag (a file) is
+   * left alone.
    */
   _acceptTabDrops(el, onDrop) {
+    const dragged = () => (this._tileGrid?.open ? this.draggedTabId || this._draggedTileId || null : null);
     el.addEventListener(
       'dragover',
       (e) => {
-        if (!this.draggedTabId || !this._tileGrid?.open) return;
+        const id = dragged();
+        if (!id) return;
         e.preventDefault?.();
         e.stopPropagation?.();
-        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-        el.classList.add('tile--drop-target');
+        const own = id === el.dataset.sessionId;
+        if (e.dataTransfer) e.dataTransfer.dropEffect = own ? 'none' : 'move';
+        if (!own) el.classList.add('tile--drop-target');
       },
       true
     );
@@ -772,31 +781,76 @@ Object.assign(CodemanApp.prototype, {
       'drop',
       (e) => {
         el.classList.remove('tile--drop-target');
-        if (!this.draggedTabId || !this._tileGrid?.open) return;
+        const id = dragged();
+        if (!id) return;
         e.preventDefault?.();
         e.stopPropagation?.();
-        onDrop(this.draggedTabId);
+        onDrop(id);
       },
       true
     );
   },
 
+  /** Whether tiles can be moved now: more than one, and none zoomed (moving is off while one is). */
+  _tilesMovable() {
+    const grid = this._tileGrid;
+    return !!grid?.open && !grid.zoomedId && grid.ids.length > 1;
+  },
+
   /**
-   * A tab dropped on a tile: a session not yet tiled REPLACES that tile (same
-   * place; the replaced session keeps running); one already tiled swaps places
-   * with it. Either way the dropped session takes focus (a human selection).
+   * Puts the tiles in a new reading order (the same sessions): the one path
+   * every move takes, a header drag, a tab dragged onto a tile or a slot, and
+   * the Move Tile chords. Nothing is remounted, reconnected or reloaded, and
+   * no session joins or leaves. Divider sizes belong to the cells, so a moved
+   * tile takes its new cell's size: each tile whose cell size changed fits
+   * once (its xterm and one PTY resize together, #464), every other tile is
+   * left alone. Refused while a tile is zoomed (moving is off then).
+   *
+   * @param {string[]} ids - the new order
+   * @returns {boolean} false when refused, true otherwise (also when nothing moved)
+   */
+  _reorderTiles(ids) {
+    const grid = this._tileGrid;
+    if (!grid?.open || grid.zoomedId) return false;
+    if (ids.length !== grid.ids.length || ids.some((id) => !grid.tiles.has(id))) return false;
+    if (ids.every((id, k) => grid.ids[k] === id)) return true;
+    // A divider drag in progress measured the tiles at their old places.
+    this._tileDividerDragTeardown?.();
+    const cell = (k) => `${grid.colFr[k % grid.cols]}x${grid.rowFr[Math.floor(k / grid.cols)]}`;
+    const before = new Map(grid.ids.map((id, k) => [id, cell(k)]));
+    grid.ids = ids.slice();
+    this._applyTileLayout();
+    // Synchronous: the fit's measurement forces the new placement's layout.
+    grid.ids.forEach((id, k) => {
+      if (before.get(id) !== cell(k)) grid.tiles.get(id).tile.fit();
+    });
+    return true;
+  },
+
+  /** Two tiles trade places (_reorderTiles). */
+  _swapTiles(a, b) {
+    const ids = this._tileGrid.ids.slice();
+    const i = ids.indexOf(a);
+    const j = ids.indexOf(b);
+    if (i === -1 || j === -1) return false;
+    ids[i] = b;
+    ids[j] = a;
+    return this._reorderTiles(ids);
+  },
+
+  /**
+   * A tab dropped on a tile, or a tile dragged there by its header: a session
+   * not yet tiled REPLACES that tile (same place; the replaced session keeps
+   * running); one already tiled swaps places with it (_swapTiles, refused while
+   * a tile is zoomed). Either way the dropped session takes focus (a human
+   * selection).
    */
   dropSessionOnTile(draggedId, targetId) {
     const grid = this._tileGrid;
     if (!grid?.open || draggedId === targetId || !grid.tiles.has(targetId)) return;
     if (!this.sessions.has(draggedId) || this.detachedSessions?.has(draggedId)) return;
     if (grid.tiles.has(draggedId)) {
-      const a = grid.ids.indexOf(draggedId);
-      const b = grid.ids.indexOf(targetId);
-      grid.ids[a] = targetId;
-      grid.ids[b] = draggedId;
-      this._applyTileLayout();
-      this._scheduleTileGridRefit();
+      if (!this._swapTiles(draggedId, targetId)) return;
     } else {
       this._tileDividerDragTeardown?.();
       const index = grid.ids.indexOf(targetId);
@@ -818,16 +872,17 @@ Object.assign(CodemanApp.prototype, {
     this.selectSession(draggedId);
   },
 
-  /** A tab dropped on an empty slot joins the grid there (an already tiled one moves there). */
+  /**
+   * A tab dropped on an empty slot joins the grid there; a tiled session (its
+   * tab, or the tile dragged by its header) moves there (_reorderTiles).
+   */
   dropSessionOnSlot(draggedId) {
     const grid = this._tileGrid;
     if (!grid?.open || !this.sessions.has(draggedId) || this.detachedSessions?.has(draggedId)) return;
     if (grid.tiles.has(draggedId)) {
-      // Empty slots are always the last cells in reading order.
-      grid.ids.splice(grid.ids.indexOf(draggedId), 1);
-      grid.ids.push(draggedId);
-      this._applyTileLayout();
-      this._scheduleTileGridRefit();
+      // Empty slots are always the last cells in reading order: the tile goes
+      // last, the tiles after it close up.
+      if (!this._reorderTiles([...grid.ids.filter((id) => id !== draggedId), draggedId])) return;
     } else if (!this.addTile(draggedId)) {
       return;
     }
@@ -1083,7 +1138,8 @@ Object.assign(CodemanApp.prototype, {
    * session name (double-click renames), the model it runs when known, the
    * session menu (the tab rail's own), zoom and remove-tile. Its
    * buttons stop pointerdown, so acting on a tile that is not focused does not
-   * also focus it (and spend its idle alert).
+   * also focus it (and spend its idle alert). The rest of it is the handle that
+   * moves the tile (_installTileMoveDrag).
    */
   _buildTileHeader(sessionId) {
     const el = document.createElement('div');
@@ -1148,7 +1204,82 @@ Object.assign(CodemanApp.prototype, {
       button('tile-remove', 'Remove tile (the session keeps running)', '\u00D7', () => this.removeTile(sessionId))
     );
     el.append(dot, harness, title, actions);
+    this._installTileMoveDrag(sessionId, el, actions);
     return { el, dot, harness, name, model, modelName, zoomBtn };
+  },
+
+  /**
+   * The header moves its tile: dragged onto another tile the two trade places,
+   * onto an empty slot it moves there (dropSessionOnTile / dropSessionOnSlot,
+   * the path a dragged tab takes, through the same capture-phase drop targets,
+   * _acceptTabDrops). A native drag, so Escape and a drop anywhere else are the
+   * browser's own cancel: nothing moves, and dragend clears what the drag
+   * painted. The drag carries a type of its own and never text, so no text
+   * field or terminal, in this page or another application, can take it as
+   * typing; and it is not `draggedTabId`, so the tab strip ignores it.
+   *
+   * The handle is the header's free area: a press on a button or the rename
+   * input starts no drag. dragstart's target is the header whatever was
+   * pressed, so where the press landed is noted in the capture phase, ahead of
+   * the buttons' own stopPropagation. `draggable` is off while moving is
+   * (_paintTileHandle: a zoomed grid, a single tile, a rename in progress).
+   */
+  _installTileMoveDrag(sessionId, header, actions) {
+    let pressedOnControl = false;
+    header.addEventListener(
+      'pointerdown',
+      (e) => {
+        const target = e.target;
+        pressedOnControl = !!actions.contains?.(target) || /^(INPUT|BUTTON)$/i.test(target?.tagName || '');
+      },
+      true
+    );
+    header.addEventListener('dragstart', (e) => {
+      const entry = this._tileGrid?.open ? this._tileGrid.tiles.get(sessionId) : null;
+      if (!entry || pressedOnControl || entry.renaming || !this._tilesMovable()) {
+        e.preventDefault?.();
+        return;
+      }
+      this._draggedTileId = sessionId;
+      entry.el.classList.add('tile--dragging');
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        // Firefox starts no drag without data.
+        e.dataTransfer.setData('application/x-codeman-tile', sessionId);
+      }
+    });
+    header.addEventListener('dragend', () => this._endTileMoveDrag());
+  },
+
+  /**
+   * A header drag is over (dropped, cancelled with Escape, dropped outside),
+   * or its tile or the grid went mid-drag: forget it and clear what it
+   * painted. The drop targets' highlight too: a cancelled drag does not
+   * reliably send dragleave.
+   */
+  _endTileMoveDrag() {
+    this._draggedTileId = null;
+    const grid = this._tileGrid;
+    for (const { el } of grid?.tiles.values() || []) el.classList.remove('tile--dragging', 'tile--drop-target');
+    for (const slot of grid?.slots || []) slot.classList.remove('tile--drop-target');
+  },
+
+  /**
+   * The header as a handle: `draggable` while the tile can move (not while a
+   * tile is zoomed, alone, or being renamed), and its tooltip, the state and
+   * how long ("working 3m") plus, while it can move, that it drags. Diffs on
+   * the last English text, never the DOM (translated in zh-CN; see
+   * _renderTileOverlay).
+   */
+  _paintTileHandle(entry) {
+    const movable = this._tilesMovable();
+    const title = [entry.stateLabel, movable ? 'Drag to move the tile' : ''].filter(Boolean).join('\n');
+    if (entry.headerLabel !== title) {
+      entry.headerLabel = title;
+      entry.header.title = title;
+    }
+    const draggable = movable && !entry.renaming ? 'true' : 'false';
+    if (entry.header.getAttribute('draggable') !== draggable) entry.header.setAttribute('draggable', draggable);
   },
 
   /**
@@ -1165,12 +1296,8 @@ Object.assign(CodemanApp.prototype, {
     const dotClass = `tile-dot home-sessions-dot home-sessions-dot--${row?.exited ? 'done' : state}`;
     if (entry.dot.className !== dotClass) entry.dot.className = dotClass;
     const since = row?.since?.at ? this._mobileOverviewStampText?.(row.since.at, 'for') : '';
-    const label = row ? [row.pill, since].filter(Boolean).join(' ') : '';
-    // Against the last English label, never the DOM (translated in zh-CN; see _renderTileOverlay).
-    if (entry.headerLabel !== label) {
-      entry.headerLabel = label;
-      entry.header.title = label;
-    }
+    entry.stateLabel = row ? [row.pill, since].filter(Boolean).join(' ') : '';
+    this._paintTileHandle(entry);
     // The input of a rename in progress has taken the name's place in the
     // header, so updating the detached name never touches what is being typed.
     // A rename still in flight shows as already done, as on the tab.
@@ -1212,6 +1339,8 @@ Object.assign(CodemanApp.prototype, {
     const session = this.sessions.get(sessionId);
     if (!entry || !session || entry.renaming) return;
     entry.renaming = true;
+    // No drag from the header while its input is in it (_paintTileHandle).
+    this._paintTileHandle(entry);
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'tile-rename-input';
@@ -1301,6 +1430,8 @@ Object.assign(CodemanApp.prototype, {
     const zoomed = grid.zoomedId && grid.tiles.has(grid.zoomedId) ? grid.zoomedId : null;
     section.classList.toggle('tile-grid--zoomed', !!zoomed);
     this._syncTileZoom(zoomed);
+    // Moving is off while a tile is zoomed or alone: the headers say so.
+    for (const entry of grid.tiles.values()) this._paintTileHandle(entry);
     // Zoomed: one cell; the other tiles stay connected but hidden (CSS), so
     // they measure nothing and send no resize. Otherwise every tile is placed
     // explicitly in reading order, with a divider track between columns and
