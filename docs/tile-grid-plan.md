@@ -48,8 +48,11 @@ or settled a question the spec left open. The invariants as built are in
   the one cap every limit reads; the layout table keeps 7 to 9 (`TILE_LAYOUT_MAX`), unreachable,
   so going back to nine is that one line. A stored grid with more ids comes back as its first
   six. Where this spec says nine, read six.
-- **"+ / New session in this case"** runs the normal Run for that case and joins through
-  the same auto-join as any Run from this tab.
+- **No + in the tile header** (owner decision 9): the header is `● name ……… ⋯ ⤢ ×`. The
+  + menu and its "New session in this case" are gone; tiles are added from the Tiles
+  button (and its right-click picker), Ctrl/Cmd+click on a tab, a dragged tab, "Open group
+  as tiles" and Run joining the open grid. Where this spec describes a `+`, it no longer
+  exists.
 - **A tile that joins before its pane exists resends its size when the pid appears**
   (`TerminalTile.paneStarted()`): the server drops a resize for a session with no PTY and
   spawns at 120x40, and Run's own resize measures the parked main terminal. Applying a
@@ -67,7 +70,8 @@ closed and reopened.
 The goal is a dashboard of agents: four, six or nine live Claude sessions on
 one monitor, each readable and typeable, with its state visible at a glance.
 The target picture is a 3x2 grid of tiles, each tile a full terminal with a
-small header: status dot, session name, a `⋯` menu, maximize, `+` and `×`.
+small header: status dot, session name, a `⋯` menu, maximize, `+` and `×` (as built:
+no `+`, owner decision 9).
 
 ## Goal (v1)
 
@@ -197,7 +201,7 @@ animation frame, and sends one resize per affected tile at pointer-up.
 
 ### Tile header
 
-`● name ……… ⋯ ⤢ + ×`
+`● name ……… ⋯ ⤢ + ×` (as built: `● name ……… ⋯ ⤢ ×`, owner decision 9)
 
 - **●** status dot from the existing six-state classifier
   (`app._sidebarRichRow(id, session)`, built on `_mobileOverviewState`):
@@ -216,7 +220,8 @@ animation frame, and sends one resize per affected tile at pointer-up.
   it again (or the shortcut) restores the grid.
 - **+** adds a session: a picker of open sessions not yet tiled, plus "New
   session in this case", which runs the normal quick-start for the tile's case
-  and drops the result into the next slot.
+  and drops the result into the next slot. (Built, then removed by owner
+  decision 9.)
 - **×** removes the tile ONLY. The session keeps running. Killing stays behind
   `⋯ → Close session` and its existing confirm modal (`requestCloseSession`).
 
@@ -902,6 +907,11 @@ exits green. Use the browser runner for those files and read the file count.
    the active one focused; `Ctrl+Shift+G` runs the same function. The picker
    is on right-click of the button (its title says so, as do the wiki and the
    Help modal).
+9. **No + in the tile header.** Decided by the owner ("remove the + button from
+   these views"): the header is `● name ……… ⋯ ⤢ ×`. The + menu and its "New
+   session in this case" went with it. Tiles are added from the Tiles button
+   and its right-click picker, Ctrl/Cmd+click on a tab, a dragged tab, "Open
+   group as tiles" and Run joining the open grid.
 
 ## Code anchors
 

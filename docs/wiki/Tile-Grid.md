@@ -35,11 +35,11 @@ button in the header, beside Split, and enables `Ctrl+Shift+G`.
 
 The layout follows the tile count: 1x1, 2x1, three side by side on a wide screen (else a
 2x2 with one empty slot), 2x2, 3x2. The grid holds at most six tiles, fewer when the
-window is too small for six; the picker and a tile's + say which limit applies.
+window is too small for six; the picker says which limit applies.
 
 ## A tile
 
-Each tile has a small header: `● name ......... ⋯ ⤢ + ×`
+Each tile has a small header: `● name ......... ⋯ ⤢ ×`
 
 | Part   | What it does                                                                                     |
 | ------ | ------------------------------------------------------------------------------------------------ |
@@ -47,7 +47,6 @@ Each tile has a small header: `● name ......... ⋯ ⤢ + ×`
 | name   | Double-click to rename the session.                                                              |
 | `⋯`    | The session menu: options, open in a new window, close the session.                              |
 | `⤢`    | Zoom: the tile fills the grid; press it again (or `Alt+Shift+Enter`) to get the grid back.        |
-| `+`    | Add a session that is not tiled yet, or start a new session in this tile's case.                  |
 | `×`    | Remove the tile. The session keeps running; close it from `⋯` if you want it gone.                |
 
 Click a tile to focus it. The focused tile has the accent border, takes your keyboard, and
