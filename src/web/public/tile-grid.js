@@ -879,13 +879,15 @@ Object.assign(CodemanApp.prototype, {
       this.showToast?.('This group has no session to show as tiles', 'info');
       return false;
     }
+    // Before the open grid closes (which drops activeSessionId): the session in
+    // focus keeps it if the group holds it, as with the picker's Open.
+    const focus = ids.includes(this.activeSessionId) ? this.activeSessionId : ids[0];
     if (this._tilesOwnTerminal()) {
       this.closeTileGrid({ keepStored: false, reselect: false });
       // As selectSession's tile branch: the parked terminal still holds what it
       // showed before the grid, and re-parking must not snapshot it.
       this.activeSessionId = null;
     }
-    const focus = ids.includes(this.activeSessionId) ? this.activeSessionId : ids[0];
     return this.openTileGrid(ids, { focusedId: focus });
   },
 

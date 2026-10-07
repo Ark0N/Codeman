@@ -213,6 +213,28 @@ describe('"Open group as tiles"', () => {
     expect(app._tileGrid.ids).toEqual(['s-c', 's-a']);
   });
 
+  it('keeps the focused session focused when the group holds it, open grid or not', () => {
+    for (const gridOpen of [false, true]) {
+      resetGridHarness();
+      const app = makeGridApp(IDS);
+      withGroups(app);
+      if (gridOpen) app.openTileGrid(['s-b', 's-a'], { focusedId: 's-a' });
+      else app.activeSessionId = 's-a';
+      app.openGroupAsTiles('g1');
+      expect(app._tileGrid.ids).toEqual(['s-c', 's-a']);
+      expect(app._tileGrid.focusedId).toBe('s-a');
+      expect(app.activeSessionId).toBe('s-a');
+    }
+  });
+
+  it("focuses the group's first session when it does not hold the focused one", () => {
+    const app = makeGridApp(IDS);
+    withGroups(app);
+    app.openTileGrid(['s-b']);
+    app.openGroupAsTiles('g1');
+    expect(app._tileGrid.focusedId).toBe('s-c');
+  });
+
   it('is not offered where the grid cannot open', () => {
     const app = makeGridApp(IDS);
     const actions = withGroups(app);
