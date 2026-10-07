@@ -19414,7 +19414,7 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
 
 /* The focused tile has the keyboard and is the active session. */
 .tile.focused {
-  border-color: var(--accent-color, #4a9eff);
+  border-color: var(--accent, #4a9eff);
 }
 
 .tile-body {
@@ -19665,7 +19665,10 @@ body.tile-grid-resizing--row * {
   text-align: center;
 }
 
-.tile-attach-btn {
+/* The grid's accent buttons: the Attach overlay's, and the picker's Open
+   (which narrows the padding in its own block below). */
+.tile-attach-btn,
+.tile-picker-open {
   padding: 4px 14px;
   font: inherit;
   color: var(--accent-ink, #fff);
@@ -19675,8 +19678,14 @@ body.tile-grid-resizing--row * {
   cursor: pointer;
 }
 
-.tile-attach-btn:disabled {
+.tile-attach-btn:disabled,
+.tile-picker-open:disabled {
   opacity: 0.5;
+  cursor: default;
+}
+
+/* An attach in flight. */
+.tile-attach-btn:disabled {
   cursor: progress;
 }
 
@@ -19756,17 +19765,6 @@ body.tile-grid-resizing--row * {
 
 .tile-picker-open {
   padding: 4px 12px;
-  font: inherit;
-  color: var(--accent-ink, #fff);
-  background: var(--accent, #4a9eff);
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.tile-picker-open:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 
 /* Split-picker menu: a small popover listing sessions to split with, appended
