@@ -792,7 +792,13 @@ describe('TerminalTile scroll-to-top history pull', () => {
   it('connect() installs the wheel listener (static guard)', () => {
     // connect() needs a whole xterm to run, so its wiring is pinned by source
     // rather than executed; the listener's behaviour is exercised above.
-    const connect = SOURCE.slice(SOURCE.indexOf('async connect()'), SOURCE.indexOf('async _loadBuffer()'));
+    const start = SOURCE.indexOf('async connect()');
+    const end = SOURCE.indexOf('async _loadBuffer(');
+    // Both anchors must resolve, or the slice runs to the end of the file and
+    // every check below passes against code outside connect().
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const connect = SOURCE.slice(start, end);
     expect(connect).toContain('this._installWheelListener();');
     expect(connect).toContain('this._onLiveClear();');
     expect(connect).not.toContain('this.terminal.clear();');
