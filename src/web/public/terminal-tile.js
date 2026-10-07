@@ -280,57 +280,32 @@
           }
           return false;
         }
-        // Smart copy (mirrors terminal-ui.js's Ctrl+C gate, #211): with a
-        // selection, Ctrl+C copies THIS pane's own selection instead of
-        // sending ^C; with none, plain Ctrl+C must fall through unchanged or
-        // the interrupt key is lost. Ctrl+Shift+C is different: it is the
-        // explicit, never-falls-through copy chord, and the predicate above
-        // does not distinguish it from plain Ctrl+C — ev.shiftKey does, below.
-        // xterm's own evaluateKeyboardEvent routes a shifted ctrl-letter into
-        // a branch that assigns c.key only for a couple of special cases
-        // ("_"->US, "@"->NUL), neither of which is "c", so it emits NOTHING
-        // for Ctrl+Shift+C either way — this is not about an accidental
-        // interrupt byte reaching the PTY (verified live: it does not).
-        // Gating this whole block on hasSelection() (an earlier draft) meant
-        // that with no selection Ctrl+Shift+C skipped straight to `return
-        // true`, silently ceding the keystroke to the BROWSER's own handling
-        // (e.g. Chrome's Inspect-Element binding) with no feedback and no
-        // attempt to copy, unlike Pane A, which always intercepts it.
-        // Re-implemented against this.terminal rather than reusing
-        // app.copyTerminalSelection(), which reads app.terminal — Pane A's —
-        // and would copy the wrong pane's selection.
+        // Smart copy, the primary pane's rule (terminal-ui.js's Ctrl+C gate,
+        // #211) through the SAME helpers, aimed at THIS pane: the gutter width
+        // comes from this session's run mode, the partial first line from this
+        // terminal's selection, and the clear and refocus after the copy land
+        // here. With a selection worth copying, Ctrl+C copies instead of
+        // sending ^C; with none, plain Ctrl+C falls through unchanged or the
+        // interrupt key is lost. Ctrl+Shift+C is the explicit copy chord and
+        // never falls through (ev.shiftKey, below): with nothing to copy it
+        // would otherwise reach the browser's own binding for that chord.
+        // As in the primary gate, the CLEANED selection decides and the copy is
+        // handed the RAW one, because the margin strip is not idempotent.
         if (ev.type === 'keydown' && global.app?.shouldCopyTerminalSelectionFromShortcut?.(ev)) {
+          const app = global.app;
+          const target = { terminal: this.terminal, sessionId: this.sessionId };
           const raw = this.terminal?.getSelection?.() || '';
-          const isColumnSelection = this.terminal?._core?._selectionService?._activeSelectionMode === 3;
-          // Both clean options are read for THIS pane, never the primary one:
-          // the gutter width comes from this.sessionId's own run mode, and the
-          // partial-first-line flag from this terminal's own selection range.
-          // Passing neither left Pane B keeping a margin Pane A dropped, on the
-          // same split and the same keystroke.
-          const range = global.app?._normalisedSelectionRange?.(this.terminal);
-          const selection = isColumnSelection
-            ? raw
-            : (global.CodemanCopySelection?.clean?.(raw, {
-                margin: global.app?._cliGutterColumns?.(this.sessionId) ?? 0,
-                firstLinePartial: !!range && range.start.x > 0,
-              }) ?? raw);
-          if (selection.trim()) {
+          if (app.cleanedTerminalSelection?.(raw, target)?.trim()) {
             ev.preventDefault();
-            void global.app._copyText?.(selection).then((ok) => {
-              this.terminal?.clearSelection?.();
-              global.app.showToast?.(ok ? 'Copied to clipboard' : 'Failed to copy', ok ? 'success' : 'error');
-            });
+            void app.copyTerminalSelection(raw, target);
             return false;
           }
-          // Nothing worth copying — clear for feedback (a padding-only
-          // selection cleans to '' and this press still falls through to the
-          // PTY as 0x03, matching the primary pane's own rule).
+          // Nothing worth copying: cleared for feedback, and the press still
+          // reaches the PTY as 0x03, as in the primary pane.
           if (this.terminal?.hasSelection?.()) {
             this.terminal.clearSelection?.();
-            global.app.showToast?.('Nothing to copy', 'warning');
+            app.showToast?.('Nothing to copy', 'warning');
           }
-          // Ctrl+Shift+C never falls through, even with nothing to copy —
-          // matches terminal-ui.js's own ev.shiftKey branch.
           if (ev.shiftKey) {
             ev.preventDefault();
             return false;

@@ -125,6 +125,18 @@ class FakeTerminal {
   type(data: string) {
     this.dataCb?.(data);
   }
+  /** What a drag selected; '' is no selection. */
+  selection = '';
+  hasSelection() {
+    return this.selection !== '';
+  }
+  getSelection() {
+    return this.selection;
+  }
+  clearSelection = vi.fn(() => {
+    this.selection = '';
+  });
+  focus = vi.fn();
 }
 
 const fetchMock = vi.fn();
@@ -692,6 +704,67 @@ describe('TerminalTile links and paste follow THIS pane', () => {
     term.keyHandler!({ type: 'keydown', key: 'V', ctrlKey: true, shiftKey: true, code: 'KeyV' });
 
     expect(paste).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalTile Ctrl+C copies through the primary pane's copy helpers", () => {
+  const ctrlC = (extra: Record<string, unknown> = {}) => ({
+    type: 'keydown',
+    key: 'c',
+    code: 'KeyC',
+    ctrlKey: true,
+    preventDefault: vi.fn(),
+    ...extra,
+  });
+
+  it("copies THIS pane's selection; a failed write keeps it and focus returns to this pane", async () => {
+    const app = makeApp();
+    const copyText = vi.fn(async () => false);
+    app._copyText = copyText;
+    const { term } = await connectTile(app);
+    term.selection = 'npm run build';
+
+    const ev = ctrlC();
+    expect(term.keyHandler!(ev)).toBe(false);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(copyText).toHaveBeenCalledWith('npm run build');
+    expect(app.showToast).toHaveBeenCalledWith('Failed to copy', 'error');
+    // As in the primary pane: nothing was copied, so the selection stays for a retry.
+    expect(term.clearSelection).not.toHaveBeenCalled();
+    expect(term.selection).toBe('npm run build');
+    // The execCommand fallback focuses a temporary textarea; the keyboard comes back here.
+    expect(term.focus).toHaveBeenCalled();
+  });
+
+  it('a successful write clears the selection (a second Ctrl+C interrupts) and refocuses this pane', async () => {
+    const app = makeApp();
+    app._copyText = vi.fn(async () => true);
+    const { term } = await connectTile(app);
+    term.selection = 'npm run build';
+
+    expect(term.keyHandler!(ctrlC())).toBe(false);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(app.showToast).toHaveBeenCalledWith('Copied to clipboard', 'success');
+    expect(term.clearSelection).toHaveBeenCalled();
+    expect(term.focus).toHaveBeenCalled();
+  });
+
+  it('with nothing selected, Ctrl+C reaches the PTY and Ctrl+Shift+C does not', async () => {
+    const app = makeApp();
+    const copyText = vi.fn(async () => true);
+    app._copyText = copyText;
+    const { term } = await connectTile(app);
+
+    const plain = ctrlC();
+    expect(term.keyHandler!(plain)).toBe(true);
+    expect(plain.preventDefault).not.toHaveBeenCalled();
+    const shifted = ctrlC({ key: 'C', shiftKey: true });
+    expect(term.keyHandler!(shifted)).toBe(false);
+    expect(shifted.preventDefault).toHaveBeenCalled();
+    expect(copyText).not.toHaveBeenCalled();
   });
 });
 
