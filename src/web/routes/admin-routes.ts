@@ -36,6 +36,7 @@ import {
 } from '../../user-store.js';
 import { getAuthUser, requireAdmin, revokeUserSessions } from '../route-helpers.js';
 import { webviewCapabilities } from '../../webview-capabilities.js';
+import { htmlViewCapabilities } from '../../html-view-capabilities.js';
 import { appendAdminAudit } from '../admin-audit.js';
 import { SseEvent } from '../sse-events.js';
 import type { AuthPort } from '../ports/auth-port.js';
@@ -183,6 +184,7 @@ export function registerAdminRoutes(app: FastifyInstance, ctx: SessionPort & Aut
     // Web-tab proxy capabilities are a second credential the cookie purge does not
     // touch; a forced logout that left them alive would not be a logout.
     const revokedWebviews = webviewCapabilities.revokeOwner(normalizeUsername(username));
+    htmlViewCapabilities.revokeOwner(normalizeUsername(username));
     audit(req, 'user.logout', username, { revoked, revokedWebviews });
     return { success: true, data: { revoked } };
   });
@@ -206,6 +208,7 @@ export function registerAdminRoutes(app: FastifyInstance, ctx: SessionPort & Aut
       }
       revokeUserSessions(ctx.authSessions, username);
       webviewCapabilities.revokeOwner(normalizeUsername(username));
+      htmlViewCapabilities.revokeOwner(normalizeUsername(username));
       if (deleteSpace) await deleteUserSpace(username);
       audit(req, 'user.delete', username, { deleteSpace, killedSessions: owned.length });
       ctx.broadcast(SseEvent.AdminUsersChanged, {});

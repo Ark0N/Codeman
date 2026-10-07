@@ -4116,6 +4116,30 @@ Object.assign(CodemanApp.prototype, {
 
     const ext = (filePath.split('.').pop() || '').toLowerCase();
 
+    // HTML renders as a page: the server mints a sandboxed /html-view URL for the
+    // file's directory (html-view-routes.ts), so relative CSS, scripts and images
+    // resolve, and the page runs in an opaque origin that cannot reach Codeman.
+    // This branch comes first because the routes below serve HTML download-only.
+    if (!attachmentId && (ext === 'html' || ext === 'htm')) {
+      footerEl.textContent = 'HTML';
+      try {
+        const res = await fetch(`/api/sessions/${sessionId}/html-view`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: filePath }),
+        });
+        const result = await res.json().catch(() => ({}));
+        if (!res.ok || !result.success) throw new Error(result.error || 'Failed to open page');
+        const pageUrl = CodemanBase.url(result.data.url);
+        this.filePreviewDetachUrl = pageUrl;
+        if (detachBtn) detachBtn.hidden = false;
+        bodyEl.innerHTML = `<iframe src="${escapeHtml(pageUrl)}" title="${escapeHtml(filePath)}" sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"></iframe>`;
+      } catch (err) {
+        bodyEl.innerHTML = `<div class="binary-message">Error: ${escapeHtml(err.message)}</div>`;
+      }
+      return;
+    }
+
     // Out-of-workspace path: mint an attachment id up front. Every branch below
     // talks to a workspace-confined route, so without this the image/PDF ones
     // render a broken frame and the text one reports a bare "File not found"

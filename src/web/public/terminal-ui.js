@@ -1978,7 +1978,13 @@ Object.assign(CodemanApp.prototype, {
               // path clicked in the response viewer previewed fine. The preview
               // reads those through the guarded attachment routes, so external
               // paths route there and the two surfaces agree.
-              if (previewsInFileViewer(text) || self._isExternalPreviewPath(text, self.activeSessionId)) {
+              // An HTML file renders as a page in the preview, never as source
+              // in the log viewer.
+              if (
+                previewsInFileViewer(text) ||
+                /\.html?$/i.test(text) ||
+                self._isExternalPreviewPath(text, self.activeSessionId)
+              ) {
                 self.openFilePreview(text, self.activeSessionId);
                 return;
               }

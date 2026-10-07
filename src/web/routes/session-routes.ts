@@ -40,6 +40,7 @@ import {
 import type { PaneCaptureOptions } from '../../mux-interface.js';
 import { SseEvent } from '../sse-events.js';
 import { webviewCapabilities } from '../../webview-capabilities.js';
+import { htmlViewCapabilities } from '../../html-view-capabilities.js';
 import {
   CreateSessionSchema,
   SessionNameSchema,
@@ -849,6 +850,7 @@ export function registerSessionRoutes(
     // logout has to retire them too or every dashboard URL opened during this
     // login keeps relaying without one (WebviewCapabilityStore.revokeOwner).
     webviewCapabilities.revokeOwner(ownerFor(req));
+    htmlViewCapabilities.revokeOwner(ownerFor(req));
     reply.clearCookie(AUTH_COOKIE_NAME, { path: '/' });
     return {};
   });
