@@ -48,8 +48,10 @@
     'Default Codex model': 'Codex 默认模型',
     'Default Codex reasoning effort': 'Codex 默认思考强度',
     'Use Codex configuration': '使用 Codex 配置',
-    'Model ID for new Codex sessions. Leave empty to use Codex configuration.': '新 Codex 会话使用的模型 ID。留空时使用 Codex 配置。',
-    'Applies to new sessions; supported levels depend on the model and Codex version. Custom endpoints keep their own settings.': '应用于新会话；可用强度取决于模型和 Codex 版本。自定义端点保留自己的设置。',
+    'Model ID for new Codex sessions. Leave empty to use Codex configuration.':
+      '新 Codex 会话使用的模型 ID。留空时使用 Codex 配置。',
+    'Applies to new sessions; supported levels depend on the model and Codex version. Custom endpoints keep their own settings.':
+      '应用于新会话；可用强度取决于模型和 Codex 版本。自定义端点保留自己的设置。',
     'Skip to terminal': '跳转到终端',
     'Go to main page': '返回主页',
     'Session tabs': '会话标签页',
