@@ -488,7 +488,18 @@ export interface CliCapabilities {
    * wins whenever it names a model. A NAMED reader, like a launcher profile, so the
    * per-CLI behaviour stays data here and code in one module.
    */
-  modelDetect?: { screenLine?: string; screenLines?: number; configResolver?: ModelConfigResolverName };
+  modelDetect?: {
+    screenLine?: string;
+    screenLines?: number;
+    /**
+     * Words the `screenLine` field can show when it is NOT the model (a footer whose model
+     * field is switched off shows the next field there), compared lower-cased. A field
+     * equal to the session's own working-directory basename is never the model either,
+     * for every CLI; that rule is the shared reader's, not data.
+     */
+    rejectWords?: string[];
+    configResolver?: ModelConfigResolverName;
+  };
   /**
    * Params a non-granted multi-user owner may not set freely, and what they are forced to.
    * Data-driven so a CUSTOM CLI's bypass flag is clampable exactly like codex's.

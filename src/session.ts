@@ -29,6 +29,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { basename } from 'node:path';
 import { execSync, execFileSync } from 'node:child_process';
 import { v4 as uuidv4 } from 'uuid';
 import * as pty from 'node-pty';
@@ -580,6 +581,8 @@ export class Session extends EventEmitter {
   private _modelLineRe: RegExp | null | undefined = undefined;
   /** Resolved with the pattern above: how many rows at the foot of the screen it sees. */
   private _modelLineRows = 1;
+  /** Resolved with the pattern above: the fields it shows that are never the model. */
+  private _modelRejectWords: readonly string[] = [];
   private _trustDialogAccepted: boolean = false; // Stops the trust-dialog scan (answered, or given up)
   private _trustDialogAttempts = 0; // Keystrokes sent at the trust dialog
   private _lastTrustDialogScanAt = 0; // Throttle for the trust-dialog screen read
@@ -3188,7 +3191,12 @@ export class Session extends EventEmitter {
     if (paneText === null) return;
     const pattern = this._modelLinePattern();
     if (!pattern) return;
-    const model = readScreenModel(paneText, pattern, this._modelLineRows);
+    const model = readScreenModel(paneText, pattern, this._modelLineRows, {
+      rejectWords: this._modelRejectWords,
+      // A footer field equal to the folder this session runs in is the folder, never the
+      // model: the generic half of the rule, for every CLI.
+      cwdBasename: basename(this.workingDir),
+    });
     if (model) this.noteReportedModel('screen', model);
   }
 
@@ -3202,6 +3210,7 @@ export class Session extends EventEmitter {
       const detect = getCli(this.mode)?.capabilities.modelDetect;
       this._modelLineRe = detect?.screenLine ? compileVersionRegex(detect.screenLine) : null;
       this._modelLineRows = detect?.screenLines ?? 1;
+      this._modelRejectWords = detect?.rejectWords ?? [];
     }
     return this._modelLineRe;
   }

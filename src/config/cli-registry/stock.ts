@@ -1241,14 +1241,22 @@ const DEEPSEEK: CliEntry = {
     // The border anchors it: nothing the agent writes can sit below the composer, and a
     // suggestion popup there starts with `/` or `+`, never a model id.
     // ⚠ The first field is the model only while the status bar's model field is on (the
-    // default). Switched off, the first field is the next one: the reasoning effort
-    // (` medium · th-scratch`), else the mode, else the cwd's basename. So the field must
-    // carry a digit, which a model id does (a version) and an effort word, a mode name or
-    // most folder names do not. A model id without one (`deepseek-chat`) is not read,
-    // and the session falls back to its route config: silent, never wrong.
+    // default). Switched off, the first field is the next one (StatusLine.js): tokens per
+    // second (`12 t/s`) and the token count (`1.2k→3.4k`), which the pattern cannot match,
+    // then the reasoning effort (` medium · th-config`, measured live), then the session
+    // mode, then the cwd's basename. So `rejectWords` lists what those can be, from the
+    // dsh 0.1.1-rc.2 / dsh-TUI 0.10.0-beta.1 sources: every effort id (pi-ai's
+    // THINKING_LEVELS and the DeepSeek adapter's off/low/high/max), and the shipped mode
+    // ids. A mode's drawn label (`plan mode`, `full access`, CJK) never matches one token,
+    // and a field equal to the session's folder name is refused by the shared reader.
+    // Known gaps, all off by default: a custom mode id drawn raw, a git branch or a
+    // one-word session title as the first field; and the non-compact layout, whose
+    // left/right justification never ends a field with ` · `, so nothing is read there
+    // and the session shows its route config.
     modelDetect: {
-      screenLine: String.raw`╰─+╯\n ?((?=[\w.:/@+-]*\d)[A-Za-z0-9][\w.:/@+-]{0,79})(?= · |\n|$)`,
+      screenLine: String.raw`╰─+╯\n ?([A-Za-z0-9][\w.:/@+-]{0,79})(?= · |\n|$)`,
       screenLines: 3,
+      rejectWords: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'default', 'plan', 'full'],
       // With the status bar's model field off (or before it paints), the route the
       // session's profile pins, read the way dsh-TUI resolves it: src/deepseek-route-config.ts.
       configResolver: 'deepseek-route',

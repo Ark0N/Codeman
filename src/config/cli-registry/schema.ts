@@ -387,6 +387,8 @@ const capabilitiesSchema = z
         // Bounded hard, like watchingLines: every row it adds is one more row the agent
         // itself may be able to write.
         screenLines: z.number().int().min(1).max(4).optional(),
+        // Single tokens, bounded: each is compared against one captured field.
+        rejectWords: z.array(z.string().min(1).max(40).regex(/^\S+$/)).max(32).optional(),
         // A NAMED reader (src/model-config-resolvers.ts), never code in config.
         configResolver: z.enum(['deepseek-route'] as const satisfies readonly ModelConfigResolverName[]).optional(),
       })
@@ -399,6 +401,10 @@ const capabilitiesSchema = z
       .refine(
         (v) => v.screenLines === undefined || v.screenLine !== undefined,
         'screenLines has nothing to bound without a screenLine'
+      )
+      .refine(
+        (v) => v.rejectWords === undefined || v.screenLine !== undefined,
+        'rejectWords has nothing to filter without a screenLine'
       )
       .optional(),
     privilegedParams: z

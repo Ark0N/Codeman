@@ -28,6 +28,7 @@ import { IDLE_SILENCE_MS } from '../src/session-activity.js';
 const detectOf = (mode: string) => getCli(mode)!.capabilities.modelDetect!;
 const DSH = compileVersionRegex(detectOf('deepseek').screenLine)!;
 const DSH_ROWS = detectOf('deepseek').screenLines;
+const DSH_REJECT = detectOf('deepseek').rejectWords;
 const CODEX = compileVersionRegex(detectOf('codex').screenLine)!;
 const CODEX_ROWS = detectOf('codex').screenLines;
 
@@ -94,6 +95,25 @@ describe('the registry patterns', () => {
     expect(withDetect({ screenLine: '^(x)', screenLines: 9 })).toBe(false);
   });
 
+  it("dsh declares what its footer's first field can be when it is not the model", () => {
+    // Every effort id dsh's adapters offer, and the shipped mode ids.
+    expect(DSH_REJECT).toEqual(
+      expect.arrayContaining(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'default', 'plan', 'full'])
+    );
+    expect(detectOf('codex').rejectWords).toBeUndefined();
+  });
+
+  it('the schema takes single-token reject words with a screenLine only, and bounds them', () => {
+    const codex = getCli('codex')!;
+    const withDetect = (modelDetect: unknown) =>
+      CliEntrySchema.safeParse({ ...codex, capabilities: { ...codex.capabilities, modelDetect } }).success;
+    const screenLine = '^ {2}([a-z]+) · ';
+    expect(withDetect({ screenLine, rejectWords: ['medium'] })).toBe(true);
+    expect(withDetect({ configResolver: 'deepseek-route', rejectWords: ['medium'] })).toBe(false);
+    expect(withDetect({ screenLine, rejectWords: ['two words'] })).toBe(false);
+    expect(withDetect({ screenLine, rejectWords: Array.from({ length: 33 }, (_, i) => `w${i}`) })).toBe(false);
+  });
+
   it('dsh also names a config reader for while its screen names no model', () => {
     expect(detectOf('deepseek').configResolver).toBe('deepseek-route');
     expect(detectOf('codex').configResolver).toBeUndefined();
@@ -127,14 +147,33 @@ describe('readScreenModel', () => {
     );
   });
 
-  it("never reads the field after a switched-off model as the model (dsh's effort, mode, cwd)", () => {
-    // dsh-TUI with `statusBar.model: false`: the effort word comes first.
-    expect(readScreenModel(dshPane(' medium · th-scratch'), DSH, DSH_ROWS)).toBeUndefined();
-    expect(readScreenModel(dshPane(' xhigh · plan · th-scratch'), DSH, DSH_ROWS)).toBeUndefined();
-    expect(readScreenModel(dshPane(' th-scratch'), DSH, DSH_ROWS)).toBeUndefined();
-    // A model id carries a version digit; one that does not is left to the config.
-    expect(readScreenModel(dshPane(' deepseek-v4-flash · max · th-scratch'), DSH, DSH_ROWS)).toBe('deepseek-v4-flash');
-    expect(readScreenModel(dshPane(' deepseek-chat · max'), DSH, DSH_ROWS)).toBeUndefined();
+  it("never reads the field after a switched-off model as the model (dsh's effort, mode, folder)", () => {
+    // dsh-TUI with `statusBar.model: false` (live capture: ` medium · th-config`): the
+    // effort id comes first, then the mode, then the folder name.
+    const at = (cwdBasename: string) => ({ rejectWords: DSH_REJECT, cwdBasename });
+    for (const effort of ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']) {
+      expect(readScreenModel(dshPane(` ${effort} · x`), DSH, DSH_ROWS, at('x')), effort).toBeUndefined();
+    }
+    expect(readScreenModel(dshPane(' default · x'), DSH, DSH_ROWS, at('x'))).toBeUndefined();
+    // The words compare ignoring case (the banner capitalizes effort; the footer does not).
+    expect(readScreenModel(dshPane(' Medium · x'), DSH, DSH_ROWS, at('x'))).toBeUndefined();
+    // A mode's drawn label is two words: never one field the pattern takes.
+    expect(readScreenModel(dshPane(' plan mode · x'), DSH, DSH_ROWS, at('x'))).toBeUndefined();
+    // The session's own folder name first, with and without a digit.
+    expect(readScreenModel(dshPane(' th-config'), DSH, DSH_ROWS, at('th-config'))).toBeUndefined();
+    expect(readScreenModel(dshPane(' project2 · main'), DSH, DSH_ROWS, at('project2'))).toBeUndefined();
+    // A field that is none of those IS read: the same `project2` in another folder.
+    expect(readScreenModel(dshPane(' project2'), DSH, DSH_ROWS, at('elsewhere'))).toBe('project2');
+  });
+
+  it('reads the official DeepSeek ids, which carry no digit, with the model field on', () => {
+    const at = { rejectWords: DSH_REJECT, cwdBasename: 'th-config' };
+    expect(readScreenModel(dshPane(' deepseek-chat · max · th-config'), DSH, DSH_ROWS, at)).toBe('deepseek-chat');
+    expect(readScreenModel(dshPane(' deepseek-reasoner · high · th-config'), DSH, DSH_ROWS, at)).toBe(
+      'deepseek-reasoner'
+    );
+    // The live qwen footer still reads.
+    expect(readScreenModel(dshPane(' qwen3.8-27b · medium · th-scratch'), DSH, DSH_ROWS, at)).toBe('qwen3.8-27b');
   });
 
   it("reads codex's model off its status line (0.147.0 and 0.154.0 layouts)", () => {
@@ -311,6 +350,20 @@ describe('a session', () => {
     settle(session, '❯');
     expect(session.toState().displayModel).toEqual({ model: 'deepseek-v4-flash', source: 'screen' });
     expect(changed).toHaveBeenCalledTimes(2);
+  });
+
+  it("a footer field equal to the session's folder is not its model; the official ids are", () => {
+    vi.useFakeTimers();
+    let screen = dshPane(' th-config');
+    const session = withFakePane('deepseek', () => screen, { workingDir: '/w/th-config' });
+    settle(session, '❯');
+    expect(session.toState().displayModel).toBeUndefined();
+    screen = dshPane(' medium · th-config');
+    settle(session, '❯');
+    expect(session.toState().displayModel).toBeUndefined();
+    screen = dshPane(' deepseek-chat · max · th-config');
+    settle(session, '❯');
+    expect(session.toState().displayModel).toEqual({ model: 'deepseek-chat', source: 'screen' });
   });
 
   it('keeps the last model when the footer cannot be read', () => {

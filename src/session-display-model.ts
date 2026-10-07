@@ -66,6 +66,14 @@ export function sanitizeModelName(raw: unknown): string | undefined {
   return clean.slice(0, MAX_DISPLAY_MODEL_CHARS).trimEnd();
 }
 
+/** What a footer field can show that is never the model. */
+export interface ScreenModelRejects {
+  /** The CLI's declared non-model words (`capabilities.modelDetect.rejectWords`), lower-cased compare. */
+  rejectWords?: readonly string[];
+  /** The session's working-directory basename: a footer field equal to it is the folder, exact compare. */
+  cwdBasename?: string;
+}
+
 /**
  * The model a pane's own chrome shows, read with the CLI's `modelDetect` pattern.
  *
@@ -73,15 +81,23 @@ export function sanitizeModelName(raw: unknown): string | undefined {
  * can anchor on the row above), which keeps the search below the transcript: the
  * pattern itself must still anchor on chrome only that CLI draws.
  *
+ * A footer whose model field is switched off shows its NEXT field where the model
+ * was, so the captured field is not taken when it is one of the CLI's declared
+ * non-model words (an effort level, a mode) or the session's own folder name, which a
+ * footer field equal to is the folder, never the model, whatever the CLI. Anything
+ * else the pattern captures is read as the model.
+ *
  * @param paneText a plain `capture-pane -p` frame, or null when it could not be read
  * @param pattern compiled through `compileVersionRegex()`, capture group 1 = the model
  * @param tailRows how many non-blank rows from the bottom the pattern sees
+ * @param rejects fields that are never the model (see {@link ScreenModelRejects})
  * @returns the model, or undefined when the frame shows none
  */
 export function readScreenModel(
   paneText: string | null | undefined,
   pattern: RegExp,
-  tailRows: number = 1
+  tailRows: number = 1,
+  rejects: ScreenModelRejects = {}
 ): string | undefined {
   if (!paneText) return undefined;
   const rows = stripAnsi(paneText)
@@ -93,7 +109,11 @@ export function readScreenModel(
   // stale lastIndex would make the same frame match every other call.
   pattern.lastIndex = 0;
   const match = pattern.exec(window);
-  return match ? sanitizeModelName(match[1]) : undefined;
+  if (!match) return undefined;
+  const field = match[1] ?? '';
+  if (rejects.cwdBasename && field === rejects.cwdBasename) return undefined;
+  if (rejects.rejectWords?.some((word) => word.toLowerCase() === field.toLowerCase())) return undefined;
+  return sanitizeModelName(field);
 }
 
 /**
