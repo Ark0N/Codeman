@@ -1477,13 +1477,6 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * POST a live subscription update so the server filters terminal events
-   * to the given session(s) for this client. Fire-and-forget — failures
-   * are non-fatal because we'll still get every event we don't want
-   * (just at higher cost), and the next reconnect carries the filter via
-   * the SSE query string.
-   */
-  /**
    * The session id the SSE filter names for `sessionId`: itself, or while the
    * tile grid owns the terminal the grid's fixed filter (TILE_GRID_SSE_FILTER,
    * constants.js), which no session matches. Both places that set the filter
@@ -1495,6 +1488,13 @@ class CodemanApp {
     return sessionId;
   }
 
+  /**
+   * POST a live subscription update so the server filters terminal events
+   * to the given session(s) for this client. Fire-and-forget: failures
+   * are non-fatal because we'll still get every event we don't want
+   * (just at higher cost), and the next reconnect carries the filter via
+   * the SSE query string.
+   */
   _updateSseSubscription(sessionId) {
     try {
       const filterId = this._sseFilterSessionId(sessionId);
