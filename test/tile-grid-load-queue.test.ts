@@ -86,9 +86,13 @@ class FakeTerminal {
   attachCustomKeyEventHandler() {}
   registerLinkProvider() {}
   textarea = { addEventListener() {}, removeEventListener() {} };
+  /** Set by a test: write callbacks never run, as on a disposed xterm. */
+  holdParse = false;
   write(data: string, cb?: () => void) {
-    this.writes.push(data);
-    cb?.();
+    // An empty write puts nothing on screen; the replay queues one only to hear
+    // (its callback) that everything before it has been parsed.
+    if (data) this.writes.push(data);
+    if (!this.holdParse) cb?.();
   }
   clear() {
     this.writes.push('<CLEAR>');
@@ -409,6 +413,27 @@ describe('teardown', () => {
     expect(captures[0].aborted).toBe(true);
     expect(captures.map((c) => c.url.split('/')[3])).toEqual(['a', 'b']);
     await drain();
+    await Promise.all(connecting);
+  });
+
+  it('destroying a tile while xterm still parses its replay settles the load, and the queue moves on', async () => {
+    // The replay waits for xterm's write callback (writeChunked), which a
+    // disposed xterm never runs: unsettled, the tile's load would hold the
+    // grid's one queue, and every other tile behind it, forever.
+    const { tiles } = makeGrid(['a', 'b']);
+    const connecting = tiles.map((t) => t.connect());
+    await settle();
+    tiles[0].terminal!.holdParse = true;
+    captures[0].answer('replay of a');
+    await settle();
+    // a's replay is still parsing: b waits its turn.
+    expect(captures.map((c) => c.url.split('/')[3])).toEqual(['a']);
+
+    tiles[0].destroy();
+    await settle();
+    expect(captures.map((c) => c.url.split('/')[3])).toEqual(['a', 'b']);
+    captures[1].answer('b');
+    await settle();
     await Promise.all(connecting);
   });
 

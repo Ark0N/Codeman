@@ -24,42 +24,58 @@
   // How long a scroll-to-top history pull may hold Pane B's live output.
   const HISTORY_PULL_TIMEOUT_MS = 10000;
 
+  // How much of a replay is queued in xterm at once: a 1 MiB load goes in one
+  // window, and xterm's write queue throws past 50 MB, which an unbounded
+  // `full=1` capture (up to the server's 32 MB) would otherwise come near.
+  const REPLAY_WINDOW_BYTES = 1024 * 1024;
+
   /**
-   * Minimal chunked write for Pane B's own xterm instance — write() in
-   * TERMINAL_CHUNK_SIZE slices, yielding a frame between each, instead of one
-   * giant synchronous write that blocks the main thread while parsing a long
-   * scrollback. Deliberately NOT the primary pane's chunkedTerminalWrite
-   * (terminal-ui.js): that one is wired into session-switch generation
-   * counters and the live-output gate this simpler, independently
-   * created/destroyed pane has no equivalent of.
+   * Replays a capture into a pane's own xterm: TERMINAL_CHUNK_SIZE slices, all
+   * of a window queued at once. xterm 6 parses its write queue in 12 ms slices
+   * and yields between them, so a long scrollback never becomes a long task,
+   * and it is not held to one slice per animation frame either (that pacing
+   * took about a second per 1 MiB, with the grid's load queue waiting behind
+   * it). Queued up front, the capture also stays in one piece: live output
+   * written during the parse lands after it, not between two of its slices.
+   * Deliberately NOT the primary pane's chunkedTerminalWrite (terminal-ui.js):
+   * that one is wired into session-switch generation counters and the
+   * live-output gate this simpler, independently created/destroyed pane has no
+   * equivalent of.
+   *
+   * Resolves once xterm has parsed the last slice (a write's callback runs once
+   * everything queued before it is parsed), so _loadBuffer() below holds its
+   * single-flight flag across the whole replay. A disposed xterm never runs its
+   * callbacks, so `setCancel` hands the owner a function that settles the
+   * replay at once: destroy() calls it, or the pane's flag and the grid's load
+   * queue would wait forever.
    */
-  function writeChunked(terminal, buffer, isDestroyed) {
-    if (!buffer) return Promise.resolve();
-    if (buffer.length <= TERMINAL_CHUNK_SIZE) {
-      terminal.write(buffer);
-      return Promise.resolve();
-    }
-    // Resolves once the LAST chunk is written (or the pane was destroyed
-    // mid-replay), so _loadBuffer() below can hold its single-flight flag
-    // across the whole replay rather than just the fetch that precedes it.
+  function writeChunked(terminal, buffer, isDestroyed, setCancel) {
+    if (!buffer || !terminal) return Promise.resolve();
     return new Promise((resolve) => {
       let offset = 0;
-      const writeNext = () => {
-        if (isDestroyed() || !terminal) {
-          resolve();
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        setCancel?.(null);
+        resolve();
+      };
+      const writeWindow = () => {
+        if (settled) return;
+        if (isDestroyed()) {
+          settle();
           return;
         }
-        const chunk = buffer.slice(offset, offset + TERMINAL_CHUNK_SIZE);
-        offset += chunk.length;
-        terminal.write(chunk);
-        if (offset < buffer.length) {
-          if (typeof requestAnimationFrame === 'function') requestAnimationFrame(writeNext);
-          else setTimeout(writeNext, 16);
-        } else {
-          resolve();
+        const end = Math.min(buffer.length, offset + REPLAY_WINDOW_BYTES);
+        while (offset < end) {
+          const chunk = buffer.slice(offset, Math.min(end, offset + TERMINAL_CHUNK_SIZE));
+          offset += chunk.length;
+          terminal.write(chunk);
         }
+        terminal.write('', offset < buffer.length ? writeWindow : settle);
       };
-      writeNext();
+      setCancel?.(settle);
+      writeWindow();
     });
   }
 
@@ -103,6 +119,9 @@
       // Aborts the running load's fetch; destroy() uses it so a removed tile
       // does not hold the owner's queue for a whole deadline.
       this._loadAbort = null;
+      // Settles a replay xterm is still parsing (writeChunked): destroy() calls
+      // it, because a disposed xterm never runs the callback the replay awaits.
+      this._cancelReplay = null;
       // Scroll-to-top history pull (shell panes only), see _maybeLoadMoreHistory().
       // `_liveQueue` is non-null from the pull's response until its finally
       // block: live frames are held there with their arrival time instead of
@@ -640,7 +659,12 @@
             this._loadAbort = null;
           }
           if (payload.terminalBuffer && this.terminal) {
-            await writeChunked(this.terminal, payload.terminalBuffer, () => this._destroyed);
+            await writeChunked(
+              this.terminal,
+              payload.terminalBuffer,
+              () => this._destroyed,
+              (cancel) => (this._cancelReplay = cancel)
+            );
           }
         } catch {
           /* Best-effort: live output still arrives once the socket connects. */
@@ -825,7 +849,12 @@
         term.write('\x1bc');
         replayed = true;
         if (this._wsClosed) this._markerOwed = true;
-        await writeChunked(term, buffer, () => this._destroyed);
+        await writeChunked(
+          term,
+          buffer,
+          () => this._destroyed,
+          (cancel) => (this._cancelReplay = cancel)
+        );
         if (this._destroyed || !this.terminal) return;
         // xterm parses asynchronously: an empty write's callback fires only
         // after everything before it, so the row count below is the settled one.
@@ -964,6 +993,10 @@
         /* Already settled. */
       }
       this._loadAbort = null;
+      // Likewise a replay still parsing: the xterm is disposed below, so the
+      // write callback it waits for would never come.
+      this._cancelReplay?.();
+      this._cancelReplay = null;
       if (this._onWheel) {
         this.mountEl?.removeEventListener('wheel', this._onWheel, { capture: true });
         this._onWheel = null;
