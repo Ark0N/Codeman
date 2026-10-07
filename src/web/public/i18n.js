@@ -149,6 +149,18 @@
     // The tab's exited-agent badge (app.js applyPaneExitBadge, Ark0N/Codeman#446);
     // its exit-code forms and the tab's accessible name are patterns.
     exited: '已退出',
+    // The Run button family (session-ui.js _applyRunMode; "Run CC", "Run SH" ...
+    // are a pattern; mode codes and product names stay), and the toolbar beside it.
+    'Terminal / Shell': '终端 / Shell',
+    'Send Enter': '发送回车',
+    // The Help modal and the shortcut overlay. Key names stay; Wheel is a mouse
+    // input like Click (单击).
+    Tabs: '标签页',
+    'Toggle Session Sidebar': '切换会话侧边栏',
+    'Copy Selection': '复制选中内容',
+    'Copy Selection (interrupts when nothing is selected)': '复制选中内容（无选中内容时中断）',
+    'Focus Tabs': '聚焦标签页',
+    Wheel: '滚轮',
     'Ultracode / Workflow agents': 'Ultracode / Workflow 智能体',
     'Open ultracode workflow agents': '打开 Ultracode 工作流智能体',
     Notifications: '通知',
@@ -1050,6 +1062,9 @@
       ],
       [/^The agent exited \((-?\d+)\)$/, (_m, code) => `智能体已退出（${code}）`],
       [/^The agent exited \(signal (\d+)\)$/, (_m, signal) => `智能体已退出（信号 ${signal}）`],
+      // The Run button's mode codes ("Run CC", "Run SH", "Run OC" ...; a registry
+      // CLI's shortBadge too). Exact entries win first ("Run Shell", "Run OMP").
+      [/^Run ([A-Z][A-Z0-9]{1,5})$/, (_m, code) => `运行 ${code}`],
       // The tab's exited-agent badge, and the tab's accessible name carrying it.
       // The session name is user text: it passes through untranslated.
       [/^exited \((-?\d+)\)$/, (_m, code) => `已退出（${code}）`],

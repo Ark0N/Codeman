@@ -9331,14 +9331,16 @@ class CodemanApp {
       groups[g].push(shortcut);
     }
     const fmtBindings = (s) => {
-      if (s.displayBindings) return s.displayBindings.map((b) => `<kbd>${escapeHtml(b)}</kbd>`).join(' / ');
+      // Key names, never translated: "Home" is also a dictionary word (the Home
+      // button), so without the skip zh-CN showed the key as 主页.
+      if (s.displayBindings) return s.displayBindings.map((b) => `<kbd data-i18n-skip>${escapeHtml(b)}</kbd>`).join(' / ');
       if (!s.bindings) return '';
       // An action with no key (Close Session by default) is still listed, so the
       // overlay says so instead of showing an empty key column.
       if (s.bindings.length === 0) return '<span class="shortcut-overlay-unbound">not bound</span>';
       return s.bindings.map((b) => {
         const parts = [...(b.modifiers || []).map((m) => m.charAt(0).toUpperCase() + m.slice(1)), b.key || b.code || ''];
-        return `<kbd>${escapeHtml(parts.join('+'))}</kbd>`;
+        return `<kbd data-i18n-skip>${escapeHtml(parts.join('+'))}</kbd>`;
       }).join(' / ');
     };
     list.innerHTML = Object.entries(groups).map(([group, items]) =>
