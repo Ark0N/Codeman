@@ -13629,6 +13629,52 @@ kbd {
   letter-spacing: 0.05em;
 }
 
+.rv-link-address {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text);
+  min-width: 0;
+}
+
+.rv-link-address label {
+  display: block;
+  font-size: 12px;
+}
+
+.rv-link-address textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 6px 0;
+  padding: 8px;
+  color: var(--text);
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+  overflow-wrap: anywhere;
+  resize: vertical;
+}
+
+.rv-link-address-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.rv-link-address button {
+  padding: 8px 12px;
+  color: var(--text);
+  background: var(--bg-dark);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
 .rv-text code,
 .response-viewer-body > :not(pre) code {
   background: var(--bg-input);

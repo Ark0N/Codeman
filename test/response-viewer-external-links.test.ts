@@ -57,7 +57,13 @@ function loadShippingMarked(): { parse: (src: string, opts?: unknown) => string 
   return module.exports as { parse: (src: string, opts?: unknown) => string };
 }
 
-type RenderApp = { _renderMarkdown(text: string): string };
+type RenderApp = {
+  _renderMarkdown(text: string): string;
+  _bindResponseViewerInteractions(body: HTMLElement): void;
+  _copyText: (text: string) => Promise<boolean>;
+  openFilePreview: ReturnType<typeof vi.fn>;
+  openLinkThroughWebTabIfLoopback: ReturnType<typeof vi.fn>;
+};
 
 function loadCodemanAppClass(): { prototype: RenderApp } {
   const context = vm.createContext({
@@ -70,7 +76,14 @@ function loadCodemanAppClass(): { prototype: RenderApp } {
     requestAnimationFrame: vi.fn(),
     HTMLCanvasElement: class HTMLCanvasElement {},
     fetch: vi.fn(),
-    document,
+    document: new Proxy(document, {
+      get(target, key) {
+        // Load the class, not the dashboard's DOMContentLoaded bootstrap.
+        if (key === 'addEventListener') return vi.fn();
+        const value = Reflect.get(target, key, target) as unknown;
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }),
     NodeFilter,
     localStorage: { length: 0, key: vi.fn(), getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
     // The page wires the sanitizer onto window; _sanitizeHtml fails closed without it,
@@ -98,6 +111,115 @@ function render(markdown: string): HTMLElement {
 }
 
 const anchor = (root: HTMLElement, index = 0) => Array.from(root.querySelectorAll('a'))[index];
+
+function interactive(markdown: string) {
+  document.body.replaceChildren();
+  const app = Object.create(CodemanApp.prototype) as RenderApp;
+  app._copyText = vi.fn().mockResolvedValue(true);
+  app.openFilePreview = vi.fn();
+  app.openLinkThroughWebTabIfLoopback = vi.fn();
+  const body = render(markdown);
+  body.id = 'responseViewerBody';
+  document.body.appendChild(body);
+  app._bindResponseViewerInteractions(body);
+  return { app, body };
+}
+
+describe('response viewer destination inspection', () => {
+  it('shows Chinese UTF-8 paths on click without opening a tab or a file', async () => {
+    const { app, body } = interactive('[report](/mnt/d/%E4%B8%AD%E6%96%87/report%20one.md)');
+    const event = new dom.window.MouseEvent('click', { bubbles: true, cancelable: true });
+    anchor(body).dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(body.querySelector('textarea')?.value).toBe('/mnt/d/中文/report one.md');
+    expect(body.querySelectorAll('textarea')[1].value).toBe('/mnt/d/%E4%B8%AD%E6%96%87/report%20one.md');
+    expect(app.openFilePreview).not.toHaveBeenCalled();
+    expect(app.openLinkThroughWebTabIfLoopback).not.toHaveBeenCalled();
+    const buttons = body.querySelectorAll('button');
+    buttons[0].click();
+    await Promise.resolve();
+    expect(app._copyText).toHaveBeenLastCalledWith('/mnt/d/中文/report one.md');
+    buttons[1].click();
+    await Promise.resolve();
+    expect(app._copyText).toHaveBeenLastCalledWith('/mnt/d/%E4%B8%AD%E6%96%87/report%20one.md');
+  });
+
+  it.each([
+    ['https://localhost:3000/%E4%B8%AD?x=%26%23', 'https://localhost:3000/中?x=%26%23'],
+    ['../%E4%B8%AD.md', '../中.md'],
+    ['#section', '#section'],
+    ['mailto:a@example.com', 'mailto:a@example.com'],
+    ['https://example.com/%E4%B8%AD/%ZZ/%E4', 'https://example.com/中/%ZZ/%E4'],
+    ['https://example.com/%25E4%25B8%25AD', 'https://example.com/%E4%B8%AD'],
+    ['/report/%E4%B8%AD%E4.md', '/report/中%E4.md'],
+    ['https://example.com/%F0%9F%93%84%00', 'https://example.com/📄%00'],
+  ])('retains the destination %s without resolving it against the dashboard', (href, readable) => {
+    const { body } = interactive(`[link](${href})`);
+    anchor(body).click();
+    expect(body.querySelector('textarea')?.value).toBe(readable);
+  });
+
+  it('shows literal file paths, replaces the previous panel and restores focus on close', () => {
+    const { app, body } = interactive('[one](https://example.com)');
+    const file = document.createElement('a');
+    file.className = 'rv-path';
+    file.href = '#';
+    file.dataset.path = '/tmp/中文%20.txt';
+    file.textContent = 'file';
+    body.appendChild(file);
+    anchor(body).click();
+    file.click();
+    expect(body.querySelectorAll('.rv-link-address')).toHaveLength(1);
+    expect(body.querySelector('textarea')?.value).toBe('/tmp/中文%20.txt');
+    expect(app.openFilePreview).not.toHaveBeenCalled();
+    Array.from(body.querySelectorAll('button'))
+      .find((button) => button.textContent === 'Close')!
+      .click();
+    expect(body.querySelector('.rv-link-address')).toBeNull();
+    expect(document.activeElement).toBe(file);
+  });
+
+  it('keeps manual selection available when the clipboard fails', async () => {
+    const { app, body } = interactive('[link](https://example.com)');
+    app._copyText = vi.fn().mockResolvedValue(false);
+    anchor(body).click();
+    body.querySelector('button')!.click();
+    await vi.waitFor(() => expect(body.querySelector('button')!.textContent).toBe('Select address to copy'));
+    const input = body.querySelector('textarea')!;
+    expect(input.readOnly).toBe(true);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+  });
+
+  it('also inspects middle clicks instead of opening a new tab', () => {
+    const { body } = interactive('[site](https://example.com)');
+    const event = new dom.window.MouseEvent('auxclick', { button: 1, bubbles: true, cancelable: true });
+    anchor(body).dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(body.querySelector('textarea')?.value).toBe('https://example.com');
+  });
+
+  it('does not turn address text into executable markup', () => {
+    const { body } = interactive('[link](https://example.com/%3Cimg%20src=x%20onerror=alert%281%29%3E)');
+    anchor(body).click();
+    expect(body.querySelector('textarea')?.value).toContain('<img');
+    expect(body.querySelector('.rv-link-address img')).toBeNull();
+  });
+
+  it('retains File Viewer file navigation in the shared delegate', () => {
+    const { app, body } = interactive('document');
+    body.id = 'filePreviewBody';
+    const file = document.createElement('a');
+    file.className = 'rv-path';
+    file.href = '#';
+    file.dataset.path = '/tmp/other.md';
+    file.dataset.sessionId = 'document-session';
+    body.appendChild(file);
+    file.click();
+    expect(app.openFilePreview).toHaveBeenCalledWith('/tmp/other.md', 'document-session');
+    expect(body.querySelector('.rv-link-address')).toBeNull();
+  });
+});
 
 describe('response viewer external links', () => {
   it('opens a markdown link in a new tab, with rel set in the same pass', () => {

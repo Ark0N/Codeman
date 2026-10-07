@@ -45,6 +45,11 @@
   // Exact English-source translations. Technical names, command examples, model
   // names, keyboard chords, and user-authored content intentionally stay unchanged.
   const ZH_CN = Object.freeze({
+    'Link address': '链接地址',
+    'Original address': '原始地址',
+    'Copy address': '复制地址',
+    'Copy original address': '复制原始地址',
+    'Select address to copy': '请选中地址复制',
     'Skip to terminal': '跳转到终端',
     'Go to main page': '返回主页',
     'Session tabs': '会话标签页',
