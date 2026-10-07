@@ -53,6 +53,11 @@ or settled a question the spec left open. The invariants as built are in
   button (and its right-click picker), Ctrl/Cmd+click on a tab, a dragged tab, "Open group
   as tiles" and Run joining the open grid. Where this spec describes a `+`, it no longer
   exists.
+- **No SSE terminal stream while tiles own the terminal** (performance pass): the filter
+  names a fixed id no session takes (`TILE_GRID_SSE_FILTER`), not `[activeSessionId]` as
+  "Parking the main terminal" below says; the server's filter gates only terminal
+  batches, so lifecycle and hook events are unaffected, and leaving the grid
+  re-subscribes the shown session.
 - **A tile that joins before its pane exists resends its size when the pid appears**
   (`TerminalTile.paneStarted()`): the server drops a resize for a session with no PTY and
   spawns at 120x40, and Run's own resize measures the parked main terminal. Applying a
