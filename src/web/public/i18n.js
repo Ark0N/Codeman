@@ -1142,6 +1142,23 @@
     return !element || Boolean(element.closest(SKIP_SELECTOR));
   }
 
+  // xterm's DOM renderer rewrites its rows (`.xterm-rows > div`) on every frame
+  // a pane changes: thousands of mutation records a second with a grid of tiles,
+  // each paying a closest() over the whole skip list. All rows of one terminal
+  // share that parent, so its own shouldSkip() verdict is kept once it says
+  // skip; a skip verdict cannot lapse, since xterm keeps `.xterm-rows` inside
+  // its `.xterm`. A rows container that is not skipped is never kept: its rows
+  // go through the full check below like any other node.
+  const skippedRows = new WeakSet();
+  function isSkippedRow(node) {
+    const rows = node.parentNode;
+    if (!rows?.classList?.contains('xterm-rows')) return false;
+    if (skippedRows.has(rows)) return true;
+    if (!shouldSkip(rows)) return false;
+    skippedRows.add(rows);
+    return true;
+  }
+
   function shouldSkipText(node) {
     const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
     return shouldSkip(node) || Boolean(element?.closest(USER_TEXT_SELECTOR));
@@ -1243,7 +1260,7 @@
         // check per record instead of one per text node and attribute matters
         // for xterm's DOM renderer, which replaces rows every frame (the split
         // pane, every tile of the grid).
-        if (shouldSkip(mutation.target)) continue;
+        if (isSkippedRow(mutation.target) || shouldSkip(mutation.target)) continue;
         if (mutation.type === 'characterData') translateNode(mutation.target);
         if (mutation.type === 'attributes') translateAttributes(mutation.target);
         for (const added of mutation.addedNodes) translateNode(added);

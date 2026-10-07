@@ -132,6 +132,59 @@ describe('custom display name and browser localization', () => {
     dom.window.close();
   });
 
+  it('decides an xterm row by its rows container, with the verdict closest() gives', async () => {
+    // A terminal (rows inside .xterm) and a stray `.xterm-rows` outside any
+    // skipped surface, which the full check translates.
+    const dom = makeDom(
+      '<div class="xterm"><div class="xterm-screen"><div class="xterm-rows" id="rows"></div></div></div>' +
+        '<div class="xterm-rows" id="stray"></div>'
+    );
+    const { window } = dom;
+    const api = window.CodemanI18n;
+    api.start();
+    api.configure({ language: 'zh-CN' });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    const rowsOf = (id: string) =>
+      Array.from({ length: 20 }, () => {
+        const row = window.document.createElement('div');
+        window.document.getElementById(id)!.appendChild(row);
+        return row;
+      });
+    const rows = rowsOf('rows');
+    const stray = rowsOf('stray');
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    let closest = 0;
+    const original = window.Element.prototype.closest;
+    window.Element.prototype.closest = function (this: Element, selector: string) {
+      closest++;
+      return original.call(this, selector);
+    };
+
+    // What xterm's DOM renderer does every frame: replace each row's children.
+    const frames = (list: Element[]) => {
+      for (let frame = 0; frame < 3; frame++) {
+        for (const row of list) {
+          const span = window.document.createElement('span');
+          span.textContent = 'Settings saved';
+          row.replaceChildren(span);
+        }
+      }
+    };
+    frames(rows);
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    // 60 row records, ONE closest(): the container's own verdict, then kept.
+    expect(closest).toBe(1);
+    expect(rows.every((row) => row.textContent === 'Settings saved')).toBe(true);
+
+    // A rows container outside any skipped surface keeps the full check, and
+    // with it the verdict closest() gives: its rows are translated.
+    frames(stray);
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    window.Element.prototype.closest = original;
+    expect(stray.every((row) => row.textContent === '设置已保存')).toBe(true);
+    dom.window.close();
+  });
+
   it('keeps a quoted group name apart from the fixed "Move to" entries in zh-CN', () => {
     const dom = makeDom('');
     const api = dom.window.CodemanI18n;
