@@ -1708,7 +1708,7 @@ class CodemanApp {
     if (on) this.detachedSessions.add(id); else this.detachedSessions.delete(id);
     // A popped-out session's window owns its PTY size now, so it leaves the
     // tile grid (one place per session in this browser tab).
-    if (on && this._tileGrid?.has(id)) this.removeTile(id, { refocus: true, auto: true });
+    if (on && this._tileGrid?.has(id)) this.removeTile(id);
     const container = this.$('sessionTabs');
     const tab = container && container.querySelector(`.session-tab[data-id="${id}"]`);
     if (tab) tab.classList.toggle('detached', on);

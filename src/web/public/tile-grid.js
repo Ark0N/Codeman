@@ -622,7 +622,7 @@ Object.assign(CodemanApp.prototype, {
   removeFocusedTile() {
     const grid = this._tileGrid;
     if (!grid?.open || !grid.focusedId) return;
-    this.removeTile(grid.focusedId, { refocus: true, auto: true });
+    this.removeTile(grid.focusedId);
   },
 
   // The single view after the grid closes: the session the grid was focused on,
@@ -666,11 +666,11 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Removes one tile; the session keeps running. When it held focus, `refocus`
-   * moves focus to the neighbouring tile (next in grid order, else previous).
-   * The last tile leaving closes the grid: with `refocus` the single view then
+   * moves focus to the neighbouring tile (next in grid order, else previous),
+   * as the app's choice (`auto`: no idle alert is spent). The last tile leaving closes the grid: with `refocus` the single view then
    * shows that session, without it the caller decides what comes next.
    */
-  removeTile(sessionId, { refocus = true, auto = true } = {}) {
+  removeTile(sessionId, { refocus = true } = {}) {
     const grid = this._tileGrid;
     const entry = grid?.open ? grid.tiles.get(sessionId) : null;
     if (!entry) return false;
@@ -695,7 +695,7 @@ Object.assign(CodemanApp.prototype, {
     this._applyTileLayout();
     this._scheduleTileGridRefit();
     this.renderSessionTabs?.();
-    if (wasFocused && refocus && neighbor) this._selectTiledSession(neighbor, { auto });
+    if (wasFocused && refocus && neighbor) this._selectTiledSession(neighbor, { auto: true });
     return true;
   },
 
@@ -1099,9 +1099,7 @@ Object.assign(CodemanApp.prototype, {
       // picker, Ctrl/Cmd+click, a dragged tab, a tab group or Run.)
       // Removes the tile ONLY: the session keeps running. Killing it stays
       // behind the menu's Close session and its confirm.
-      button('tile-remove', 'Remove tile (the session keeps running)', '\u00D7', () =>
-        this.removeTile(sessionId, { refocus: true, auto: true })
-      )
+      button('tile-remove', 'Remove tile (the session keeps running)', '\u00D7', () => this.removeTile(sessionId))
     );
     el.append(dot, name, actions);
     return { el, dot, name, zoomBtn };
@@ -1225,7 +1223,7 @@ Object.assign(CodemanApp.prototype, {
       this._renderTileOverlay(sessionId);
       return;
     }
-    this.removeTile(sessionId, { refocus: true, auto: true });
+    this.removeTile(sessionId);
   },
 
   /** Columns x rows for the current tile count, applied to the grid section. */
