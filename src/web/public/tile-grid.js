@@ -336,24 +336,21 @@ Object.assign(CodemanApp.prototype, {
     btn.setAttribute('aria-label', title);
   },
 
-  /** How many tiles the terminal area can hold right now (the grid section, or the single view it would replace). */
-  _tileGridCapacityNow() {
+  /**
+   * How many tiles the grid takes here and now: what the terminal area fits
+   * (the grid section, or the single view it would replace), at most the cap
+   * (TILE_GRID_MAX), never less than one. The texts say which of the two
+   * binds, so a large monitor never reads "this window fits 6".
+   */
+  _tileGridLimit() {
+    const T = window.CodemanTileGrid;
+    const max = T.TILE_GRID_MAX;
     const el = this._tilesOwnTerminal() ? this._tileGridSection() : document.querySelector('.terminal-wrap');
     const rect = el?.getBoundingClientRect?.() || { width: 0, height: 0 };
-    return window.CodemanTileGrid.tileGridCapacity({
+    const fits = T.tileGridCapacity({
       width: rect.width || window.innerWidth,
       height: rect.height || window.innerHeight,
     });
-  },
-
-  /**
-   * How many tiles the grid takes here and now: what the window fits, at most
-   * the cap (TILE_GRID_MAX), never less than one. The texts say which of the
-   * two binds, so a large monitor never reads "this window fits 6".
-   */
-  _tileGridLimit() {
-    const max = window.CodemanTileGrid.TILE_GRID_MAX;
-    const fits = this._tileGridCapacityNow();
     const capacity = Math.max(1, Math.min(fits, max));
     const byCap = fits >= max;
     return {
