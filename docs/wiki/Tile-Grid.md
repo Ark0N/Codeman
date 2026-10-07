@@ -65,8 +65,10 @@ whose agent exited inside its pane says so instead; close that session from `⋯
 ## Moving tiles
 
 Drag a tile by its header (anywhere but its buttons) onto another tile and the two trade
-places. Drop it on an empty slot and it moves there, to the end of the grid. Press `Escape`
-or let go anywhere else and nothing moves. The dropped tile takes the focus.
+places; the dropped tile takes the focus. Empty slots are for adding sessions (drop a tab
+there), so a tile cannot be dropped on one. Press `Escape` or let go anywhere else and nothing
+changes, not even which tile has the focus: a header focuses its tile when you click it, not
+when you press it.
 
 With the keyboard, `Ctrl+Shift+Arrows` moves the focused tile left, right, up or down: it
 trades places with the tile next to it (the one `Alt+Shift+Arrows` would focus) and keeps the
@@ -90,10 +92,10 @@ saved with the grid.
 
 All of them can be rebound in App Settings → Shortcuts, where **Remove Focused Tile** can
 also get a key. Outside the grid, `Alt+Shift+Arrows`, `Ctrl+Shift+Arrows` and
-`Alt+Shift+Enter` go to the terminal as usual. While it is open, `Ctrl+Shift+Arrows` in a text
-field (renaming a tile, the file editor) still selects by word; inside a tile it moves the tile,
-so a terminal editor there (nano, micro, emacs) does not get it. With the Tiles setting off,
-`Ctrl+Shift+G` does nothing.
+`Alt+Shift+Enter` go to the terminal as usual. While it is open, `Alt+Shift+Arrows` and
+`Ctrl+Shift+Arrows` in a text field (renaming a tile, the file editor) still select text there;
+inside a tile they focus and move tiles, so a terminal editor there (nano, micro, emacs) does
+not get them. With the Tiles setting off, `Ctrl+Shift+G` does nothing.
 
 ## Leaving the grid
 

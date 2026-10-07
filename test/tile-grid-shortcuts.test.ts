@@ -116,6 +116,28 @@ describe('when a chord applies', () => {
     expect(app.tileShortcutFor(chord(RIGHT))).toBe('focus-tile-right');
   });
 
+  it('the focus chords leave a text field its keys (shifted arrows select there); a terminal still gets them', () => {
+    const app = makeGridApp(IDS);
+    app.openTileGrid(IDS);
+    for (const tagName of ['INPUT', 'TEXTAREA']) {
+      const target = { tagName, closest: () => null, classList: { contains: () => false } };
+      expect(app.tileShortcutFor(chord({ ...RIGHT, target }))).toBeNull();
+    }
+    expect(
+      app.tileShortcutFor(chord({ ...RIGHT, target: { isContentEditable: true, closest: () => null } }))
+    ).toBeNull();
+    // xterm's own input is a textarea too, and the chord is the grid's there.
+    const xterm = {
+      tagName: 'TEXTAREA',
+      closest: () => null,
+      classList: { contains: (c: string) => c === 'xterm-helper-textarea' },
+    };
+    expect(app.tileShortcutFor(chord({ ...RIGHT, target: xterm }))).toBe('focus-tile-right');
+    // Not an arrow chord: the toggle and zoom still apply from a field.
+    const input = { tagName: 'INPUT', closest: () => null, classList: { contains: () => false } };
+    expect(app.tileShortcutFor(chord({ ...TOGGLE, target: input }))).toBe('toggle-tile-grid');
+  });
+
   it('plain typing and unrelated chords never match', () => {
     const app = makeGridApp(IDS);
     app.openTileGrid(IDS);

@@ -46,7 +46,7 @@ Anything you copy is cleaned on the way to the clipboard: each line loses the pa
 | `Ctrl+Shift+G`              | Open or close the tile grid (needs the Tiles setting on).     |
 | `Alt+Shift+Arrows`          | Focus the tile to the left, right, above or below.            |
 | `Ctrl+Shift+Arrows`         | Move the focused tile: it trades places with that neighbour.  |
-| Drag a tile's header        | Move the tile: onto another tile they swap, onto an empty slot it moves there. |
+| Drag a tile's header        | Move the tile: dropped on another tile, the two swap.         |
 | `Alt+Shift+Enter`           | Zoom the focused tile, or restore the grid.                   |
 | `Ctrl`+click / `Cmd`+click a tab | Add that session to the grid.                            |
 | Right-click the Tiles button | Choose which sessions to show as tiles.                  |

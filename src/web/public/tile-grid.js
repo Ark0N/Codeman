@@ -40,8 +40,8 @@ function tileGridTracks(fr) {
   return fr.map((f) => `minmax(0, ${Math.round(f * 1000) / 1000}fr)`).join(` ${TILE_DIVIDER_PX}px `);
 }
 // Registry ids of the tile chords (DEFAULT_SHORTCUTS, app.js), and whether each
-// needs the grid open. The toggle applies wherever a grid could open. The move
-// chords leave a text field its keys (`move`: see tileShortcutFor).
+// needs the grid open. The toggle applies wherever a grid could open. The arrow
+// chords (`direction`, `move`) leave a text field its keys (tileShortcutFor).
 const TILE_SHORTCUTS = {
   'toggle-tile-grid': { needsOpen: false },
   'focus-tile-left': { needsOpen: true, direction: 'left' },
@@ -58,8 +58,9 @@ const TILE_SHORTCUTS = {
 
 /**
  * A text field other than a terminal's own input (xterm's helper textarea):
- * the rename input, the file editor, a settings field. Ctrl+Shift+Arrows
- * selects by word there, so the move chords leave it alone.
+ * the rename input, the file editor, a settings field. Shifted arrows select
+ * there (Ctrl+Shift by word; Option+Shift by word on macOS), so the arrow
+ * chords, focus and move, leave it alone (owner: best practice).
  */
 function isTextFieldTarget(target) {
   if (!target || target.classList?.contains?.('xterm-helper-textarea')) return false;
@@ -547,7 +548,8 @@ Object.assign(CodemanApp.prototype, {
    * decision 6 in docs/tile-grid-plan.md). The focus, move,
    * zoom and remove chords apply only while the grid is open, however it was
    * opened (a move chord also while a tile is zoomed, as a no-op, so its keys
-   * never reach the CLI; and never in a text field, whose keys they are).
+   * never reach the CLI). The arrow chords never apply in a text field, whose
+   * keys they are.
    * Registry-aware (rebinds and disables in App Settings, Shortcuts).
    * The capture handler (app.js) dispatches it; every xterm key handler returns
    * false for it, so a chord that applies never reaches a PTY.
@@ -561,7 +563,7 @@ Object.assign(CodemanApp.prototype, {
     for (const shortcut of this.getShortcutRegistry()) {
       const spec = TILE_SHORTCUTS[shortcut.id];
       if (!spec || shortcut.disabled || !this.matchesShortcutEvent(e, shortcut)) continue;
-      if (spec.move && isTextFieldTarget(e.target)) continue;
+      if ((spec.direction || spec.move) && isTextFieldTarget(e.target)) continue;
       if (spec.needsOpen) return open ? shortcut.id : null;
       const enabled = this.loadAppSettingsFromStorage?.()?.showTileGridButton === true;
       return open || (enabled && this.canOpenTileGrid()) ? shortcut.id : null;
@@ -738,14 +740,23 @@ Object.assign(CodemanApp.prototype, {
     el.append(header.el, body);
     // Pressing a tile is a human selection: it focuses the tile and
     // acknowledges its idle alert (the already-focused tile hits
-    // selectSession's early return, which acknowledges too). pointerdown, not
-    // click, so focus moves before the press reaches xterm, and never
-    // preventDefault: xterm's own mousedown focuses its textarea and starts
-    // selections.
-    el.addEventListener('pointerdown', () => {
+    // selectSession's early return, which acknowledges too). In the body on
+    // pointerdown, not click, so focus moves before the press reaches xterm,
+    // and never preventDefault: xterm's own mousedown focuses its textarea and
+    // starts selections. In the header on click instead (below): a press there
+    // may become a drag, and a drag that is cancelled changes nothing, focus
+    // included (owner: best practice). A drag never ends in a click.
+    el.addEventListener('pointerdown', (e) => {
+      if (header.el.contains?.(e?.target)) return;
       if (this._tileGrid?.has(sessionId)) this.selectSession(sessionId);
     });
-    this._acceptTabDrops(el, (draggedId) => this.dropSessionOnTile(draggedId, sessionId));
+    header.el.addEventListener('click', () => {
+      if (this._tileGrid?.has(sessionId)) this.selectSession(sessionId);
+    });
+    // A tile takes any session but its own (_acceptTabDrops).
+    this._acceptTabDrops(el, (draggedId) => this.dropSessionOnTile(draggedId, sessionId), {
+      accepts: (id) => id !== sessionId,
+    });
     this._tileGridSection().appendChild(el);
     const tile = this._newTerminalTile(sessionId, body);
     grid.tiles.set(sessionId, {
@@ -774,12 +785,13 @@ Object.assign(CodemanApp.prototype, {
    * strip's own drag sets `draggedTabId`) and for a tile dragged by its header
    * (`_draggedTileId`, _installTileMoveDrag). Capture phase, with the event
    * stopped: a tab drag carries the session id as text, and xterm's helper
-   * textarea would otherwise accept that drop and type the id into a PTY. Over
-   * the dragged session's own tile the drag is held there too, but refused
-   * (`dropEffect: 'none'`, so no drop follows). Any other drag (a file) is
-   * left alone.
+   * textarea would otherwise accept that drop and type the id into a PTY.
+   * `accepts(id)` is the target's own rule (a tile: any session but its own;
+   * an empty slot: only a session not tiled yet). A session it does not accept
+   * is held there too, but refused (`dropEffect: 'none'`, no highlight, so no
+   * drop follows). Any other drag (a file) is left alone.
    */
-  _acceptTabDrops(el, onDrop) {
+  _acceptTabDrops(el, onDrop, { accepts = () => true } = {}) {
     const dragged = () => (this._tileGrid?.open ? this.draggedTabId || this._draggedTileId || null : null);
     el.addEventListener(
       'dragover',
@@ -788,9 +800,9 @@ Object.assign(CodemanApp.prototype, {
         if (!id) return;
         e.preventDefault?.();
         e.stopPropagation?.();
-        const own = id === el.dataset.sessionId;
-        if (e.dataTransfer) e.dataTransfer.dropEffect = own ? 'none' : 'move';
-        if (!own) el.classList.add('tile--drop-target');
+        const ok = accepts(id);
+        if (e.dataTransfer) e.dataTransfer.dropEffect = ok ? 'move' : 'none';
+        if (ok) el.classList.add('tile--drop-target');
       },
       true
     );
@@ -805,7 +817,7 @@ Object.assign(CodemanApp.prototype, {
         if (!id) return;
         e.preventDefault?.();
         e.stopPropagation?.();
-        onDrop(id);
+        if (accepts(id)) onDrop(id);
       },
       true
     );
@@ -819,12 +831,13 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Puts the tiles in a new reading order (the same sessions): the one path
-   * every move takes, a header drag, a tab dragged onto a tile or a slot, and
-   * the Move Tile chords. Nothing is remounted, reconnected or reloaded, and
-   * no session joins or leaves. Divider sizes belong to the cells, so a moved
-   * tile takes its new cell's size: each tile whose cell size changed fits
-   * once (its xterm and one PTY resize together, #464), every other tile is
-   * left alone. Refused while a tile is zoomed (moving is off then).
+   * every move takes, a header drag, the tab of a tiled session dropped on a
+   * tile, and the Move Tile chords. Nothing is remounted, reconnected or
+   * reloaded, and no session joins or leaves. Divider sizes belong to the
+   * cells, so a moved tile takes its new cell's size: each tile whose cell
+   * size changed fits once (its xterm and one PTY resize together, #464),
+   * every other tile is left alone. Refused while a tile is zoomed (moving is
+   * off then).
    *
    * @param {string[]} ids - the new order
    * @returns {boolean} false when refused, true otherwise (also when nothing moved)
@@ -906,19 +919,13 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * A tab dropped on an empty slot joins the grid there; a tiled session (its
-   * tab, or the tile dragged by its header) moves there (_reorderTiles).
+   * A tab dropped on an empty slot joins the grid there. A session already
+   * tiled is not moved to a slot (the slot refuses it, see _syncTileSlots).
    */
   dropSessionOnSlot(draggedId) {
     const grid = this._tileGrid;
     if (!grid?.open || !this.sessions.has(draggedId) || this.detachedSessions?.has(draggedId)) return;
-    if (grid.tiles.has(draggedId)) {
-      // Empty slots are always the last cells in reading order: the tile goes
-      // last, the tiles after it close up.
-      if (!this._reorderTiles([...grid.ids.filter((id) => id !== draggedId), draggedId])) return;
-    } else if (!this.addTile(draggedId)) {
-      return;
-    }
+    if (grid.tiles.has(draggedId) || !this.addTile(draggedId)) return;
     this.selectSession(draggedId);
   },
 
@@ -1242,10 +1249,9 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * The header moves its tile: dragged onto another tile the two trade places,
-   * onto an empty slot it moves there (dropSessionOnTile / dropSessionOnSlot,
-   * the path a dragged tab takes, through the same capture-phase drop targets,
-   * _acceptTabDrops). A native drag, so Escape and a drop anywhere else are the
+   * The header moves its tile: dragged onto another tile the two trade places
+   * (dropSessionOnTile, the path a dragged tab takes, through the same
+   * capture-phase drop targets, _acceptTabDrops); an empty slot refuses it. A native drag, so Escape and a drop anywhere else are the
    * browser's own cancel: nothing moves, and dragend clears what the drag
    * painted. The drag carries a type of its own and never text, so no text
    * field or terminal, in this page or another application, can take it as
@@ -1394,6 +1400,9 @@ Object.assign(CodemanApp.prototype, {
       this._renderTileHeader(sessionId);
     };
     input.addEventListener('pointerdown', (e) => e.stopPropagation());
+    // A click in the input is not the header's click, which would focus the
+    // terminal away from it.
+    input.addEventListener('click', (e) => e.stopPropagation());
     input.addEventListener('keydown', (e) => {
       // Enter and Escape during an IME composition belong to the IME.
       if (e.isComposing || e.keyCode === 229) return;
@@ -1511,7 +1520,12 @@ Object.assign(CodemanApp.prototype, {
       const slot = document.createElement('div');
       slot.className = 'tile-slot';
       slot.textContent = 'Drop a tab here';
-      this._acceptTabDrops(slot, (draggedId) => this.dropSessionOnSlot(draggedId));
+      // Only a session not tiled yet: a tile is never moved to a slot (owner:
+      // "dont move the tile"; a slot is always last, so a move there shifted
+      // every tile after it).
+      this._acceptTabDrops(slot, (draggedId) => this.dropSessionOnSlot(draggedId), {
+        accepts: (id) => !this._tileGrid?.tiles.has(id),
+      });
       this._tileGridSection().appendChild(slot);
       grid.slots.push(slot);
     }

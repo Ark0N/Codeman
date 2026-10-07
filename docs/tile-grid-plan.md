@@ -68,21 +68,26 @@ or settled a question the spec left open. The invariants as built are in
   batches, so lifecycle and hook events are unaffected, and leaving the grid
   re-subscribes the shown session.
 - **Tiles move** (owner request: "give me the option to move the tiles around"; not a
-  numbered decision). A tile's header, its free area (not the buttons, not the rename input),
-  drags it: onto another tile the two trade places, onto an empty slot it moves there (the
-  last cell: empty slots are always last, so the tiles after it close up). It is a native drag
-  through the tab drop targets (capture phase, stopped before xterm), carrying a type of its
-  own and never text, and it is not `draggedTabId`, so neither a text field nor the tab strip
-  takes it; Escape or a drop anywhere else cancels with nothing changed. `Ctrl+Shift+Arrows`
-  (Move Tile Left/Right/Up/Down, registry, rebindable) swap the focused tile with the
-  neighbour the focus chords pick, and focus stays on it. Every move, a tiled tab's drop
-  included, goes through `_reorderTiles`: no remount, reconnect or reload; divider sizes
-  belong to the cells, so only a tile whose cell size changed fits (one PTY resize, #464).
-  Moving is off while a tile is zoomed (the chords still apply there, as a no-op, so their
-  keys never reach the CLI) and with a single tile, and the chords skip a text field, where
-  Ctrl+Shift+Arrows select by word. Default keys: every other two-modifier arrow chord is
-  taken (Ctrl+Alt switches workspaces, Ctrl+Alt+Shift moves a window to another workspace
-  in GNOME, Alt is back/forward, Alt+Shift focuses tiles); Ctrl+Shift+Arrows is unclaimed by
+  numbered decision). A tile's header, its free area (not the buttons, not the rename
+  input), drags it onto another tile and the two trade places. An empty slot refuses a tile,
+  its header drag and its tab alike (owner's answer, "dont move the tile": a slot is always
+  the last cell, so a move there shifted every tile after it); a session not tiled yet still
+  joins there. It is a native drag through the tab drop targets (capture phase, stopped
+  before xterm), carrying a type of its own and never text, and it is not `draggedTabId`, so
+  neither a text field nor the tab strip takes it; Escape or a drop anywhere else cancels
+  with nothing changed, focus included: the header focuses its tile on click, not on press
+  (owner's answer: best practice; the body keeps press-to-focus, so focus moves before a
+  press reaches xterm). `Ctrl+Shift+Arrows` (Move Tile Left/Right/Up/Down, registry,
+  rebindable) swap the focused tile with the neighbour the focus chords pick, and focus
+  stays on it. Every move, a tiled tab's drop included, goes through `_reorderTiles`: no
+  remount, reconnect or reload; divider sizes belong to the cells, so only a tile whose cell
+  size changed fits (one PTY resize, #464). Moving is off while a tile is zoomed (the chords
+  still apply there, as a no-op, so their keys never reach the CLI; a tiled tab dropped on
+  the zoomed tile is refused too, as the owner confirmed) and with a single tile. Both arrow
+  chord families, focus and move, skip a text field, where shifted arrows select (owner's
+  answer: best practice). Default keys: every other two-modifier arrow chord is taken
+  (Ctrl+Alt switches workspaces, Ctrl+Alt+Shift moves a window to another workspace in
+  GNOME, Alt is back/forward, Alt+Shift focuses tiles); Ctrl+Shift+Arrows is unclaimed by
   the browsers, GNOME, KDE, macOS and Claude Code, and costs only a terminal editor's word
   selection inside a tile while the grid is open.
 - **A tile that joins before its pane exists resends its size when the pid appears**

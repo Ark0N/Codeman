@@ -1,6 +1,6 @@
 /**
  * @fileoverview Moving tiles (owner request): a tile dragged by its header
- * onto another tile trades places with it, onto an empty slot it moves there.
+ * onto another tile trades places with it.
  *
  * - One path for every move (`_reorderTiles`): the header drag, a tab dragged
  *   onto a tile or a slot, the Move Tile chords. Nothing is remounted,
@@ -8,6 +8,12 @@
  *   no session joins or leaves, the grid stays open, the order is persisted.
  * - Divider sizes belong to the cells: a tile whose cell size changed fits
  *   once (one PTY resize, #464), every other tile is left alone.
+ * - An empty slot refuses a tile (its header drag or its tab): owner, "dont
+ *   move the tile" (a slot is always the last cell, so a move there shifted
+ *   every tile after it). A session not tiled yet still joins there.
+ * - The header focuses its tile on click, never on a press (the body keeps
+ *   press-to-focus), so a drag that is cancelled changes nothing, focus and
+ *   idle alert included (owner: best practice).
  * - The header drag is native: Escape or a drop anywhere else ends in a
  *   `dragend` with no drop, which moves nothing and clears what the drag
  *   painted. It carries a type of its own (never text) and is not
@@ -22,7 +28,8 @@
  *   against hand-written tables for every cell and direction of 2x1, 2x2, 3x2
  *   and the partial 2x2 and 3x2; focus stays on the moved tile. The chords
  *   apply (and are swallowed) only while the grid is open, zoomed included as a
- *   no-op, and never in a text field, where Ctrl+Shift+Arrows select by word.
+ *   no-op, and never in a text field, where Ctrl+Shift+Arrows select by word
+ *   (the focus chords skip text fields too: tile-grid-shortcuts.test.ts).
  *
  * Real code via the shared vm harness (test/mocks/tile-grid-vm.ts). Port: N/A.
  */
@@ -170,18 +177,51 @@ describe('dragging a tile by its header', () => {
       delete (section as unknown as Record<string, unknown>).getBoundingClientRect;
     });
 
-    it('it moves there, the last cell (the tiles after it close up); the slot count stays', () => {
-      const app = openGrid(['s-a', 's-b', 's-c']);
+    // Owner: "dont move the tile". A slot is always the last cell, so a move
+    // there shifted every tile after it; the slot refuses a tile instead.
+    it('the slot refuses it: held (never reaching anything below), no highlight, nothing moves', () => {
+      const app = openGrid(['s-a', 's-b', 's-c'], 's-b');
+      app.markIdleAlertSeen.mockClear();
+      localStore.delete('codeman:tile-grid');
       const costsNothing = snapshotCost();
+      clearFits();
       expect(slots()).toHaveLength(1);
-      dragTileOnto('s-a', slots()[0]);
-      expect(app._tileGrid.ids).toEqual(['s-b', 's-c', 's-a']);
-      expect([tileEl('s-a').style.gridColumn, tileEl('s-a').style.gridRow]).toEqual(['1', '3']);
-      expect(slots()).toHaveLength(1);
+      startDrag('s-a');
+      const o = over(slots()[0]);
+      expect(o.preventDefault).toHaveBeenCalled();
+      expect(o.stopPropagation).toHaveBeenCalled();
+      expect(o.dataTransfer.dropEffect).toBe('none');
       expect(slots()[0].classList.contains('tile--drop-target')).toBe(false);
-      expect(app.activeSessionId).toBe('s-a');
+      // A browser sends no drop on a refused target; one that did never reaches the slot's handler.
+      const toSlot = vi.spyOn(app, 'dropSessionOnSlot');
+      drop(slots()[0]);
+      expect(toSlot).not.toHaveBeenCalled();
+      toSlot.mockRestore();
+      end('s-a');
+      expect(app._tileGrid.ids).toEqual(['s-a', 's-b', 's-c']);
+      expect(app.activeSessionId).toBe('s-b');
+      expect(app.markIdleAlertSeen).not.toHaveBeenCalled();
+      expect(localStore.has('codeman:tile-grid')).toBe(false);
+      expect(FakeTile.all.every((t) => t.fit.mock.calls.length === 0)).toBe(true);
       costsNothing();
-      expect(stored().ids).toEqual(['s-b', 's-c', 's-a']);
+    });
+
+    it('so does the tab of a tiled session; a session not tiled yet still joins there', () => {
+      const app = openGrid(['s-a', 's-b', 's-c']);
+      app.draggedTabId = 's-a';
+      const o = over(slots()[0]);
+      expect(o.dataTransfer.dropEffect).toBe('none');
+      drop(slots()[0]);
+      expect(app._tileGrid.ids).toEqual(['s-a', 's-b', 's-c']);
+      // dropSessionOnSlot itself refuses a tiled session too.
+      app.dropSessionOnSlot('s-a');
+      expect(app._tileGrid.ids).toEqual(['s-a', 's-b', 's-c']);
+
+      app.draggedTabId = 's-other';
+      expect(over(slots()[0]).dataTransfer.dropEffect).toBe('move');
+      drop(slots()[0]);
+      expect(app._tileGrid.ids).toEqual(['s-a', 's-b', 's-c', 's-other']);
+      expect(app.activeSessionId).toBe('s-other');
     });
   });
 
@@ -257,6 +297,55 @@ describe('dragging a tile by its header', () => {
     app.selectSession = vi.fn();
     app.closeTileGrid();
     expect(app._draggedTileId).toBeNull();
+  });
+});
+
+describe('focus: the header focuses its tile on click, so a cancelled drag changes nothing', () => {
+  it('a press on the header does not focus the tile; a click does (a human selection)', () => {
+    const app = openGrid(FOUR, 's-a');
+    app.markIdleAlertSeen.mockClear();
+    tileEl('s-c').dispatch('pointerdown', { target: nameOf('s-c'), button: 0 });
+    tileEl('s-c').dispatch('pointerdown', { target: headerOf('s-c'), button: 0 });
+    expect(app.activeSessionId).toBe('s-a');
+    headerOf('s-c').dispatch('click', {});
+    expect(app.activeSessionId).toBe('s-c');
+    expect(app.markIdleAlertSeen).toHaveBeenCalledWith('s-c');
+  });
+
+  it('a press in the body still focuses at once (before the press reaches xterm)', () => {
+    const app = openGrid(FOUR, 's-a');
+    tileEl('s-c').dispatch('pointerdown', { target: tileEl('s-c').children[1], button: 0 });
+    expect(app.activeSessionId).toBe('s-c');
+  });
+
+  it('a drag of an unfocused tile that is cancelled leaves focus and its alert alone', () => {
+    const app = openGrid(FOUR, 's-a');
+    app.markIdleAlertSeen.mockClear();
+    tileEl('s-c').dispatch('pointerdown', { target: headerOf('s-c'), button: 0 });
+    startDrag('s-c');
+    over(tileEl('s-b'));
+    end('s-c');
+    expect(app._tileGrid.ids).toEqual(FOUR);
+    expect(app.activeSessionId).toBe('s-a');
+    expect(app._tileGrid.focusedId).toBe('s-a');
+    expect(app.markIdleAlertSeen).not.toHaveBeenCalled();
+  });
+
+  it('a double-click on the name leaves the keyboard in the rename input, and its clicks stay in it', () => {
+    const app = openGrid(FOUR, 's-a');
+    app._queueInlineSessionName = vi.fn();
+    // The browser's sequence: click, click, dblclick.
+    headerOf('s-c').dispatch('click', {});
+    headerOf('s-c').dispatch('click', {});
+    nameOf('s-c').dispatch('dblclick', { stopPropagation: vi.fn() });
+    const input = headerOf('s-c').children[2].children[0];
+    expect(input.className).toBe('tile-rename-input');
+    const terminalFocus = tile('s-c').terminal.focus.mock.invocationCallOrder;
+    expect(input.focus).toHaveBeenCalled();
+    expect(input.focus.mock.invocationCallOrder.at(-1)).toBeGreaterThan(terminalFocus.at(-1) ?? 0);
+    const click = { stopPropagation: vi.fn() };
+    input.dispatch('click', click);
+    expect(click.stopPropagation).toHaveBeenCalled();
   });
 });
 
@@ -383,19 +472,18 @@ describe('sizes belong to the cells: only a tile whose size changed fits, once',
     expect(FakeTile.all.every((t) => t.fit.mock.calls.length === 0)).toBe(true);
   });
 
-  it('a move to the slot: every tile whose cell size changed fits once, the others not', () => {
+  it('a swap across rows of different heights: the two moved tiles fit, the rest not', () => {
     section.getBoundingClientRect = () => ({ width: 1700, height: 1000, top: 0, left: 0, right: 1700, bottom: 1000 });
     try {
       const five = SIX.slice(0, 5);
       const app = openGrid(five);
-      app._tileGrid.colFr = [2, 1, 1];
+      app._tileGrid.rowFr = [3, 1];
       app._applyTileLayout();
       clearFits();
-      dragTileOnto('s-a', slots()[0]);
-      // [a b c / d e _] -> [b c d / e a _]: b (2 -> 1 wide), d (row 1 col 0 -> row 0 col 2: 2 -> 1),
-      // e (1 -> 2) and a (2 -> 1) changed size; c (1 -> 1) did not.
-      expect(app._tileGrid.ids).toEqual(['s-b', 's-c', 's-d', 's-e', 's-a']);
-      expect(fitCounts(five)).toEqual({ 's-a': 1, 's-b': 1, 's-c': 0, 's-d': 1, 's-e': 1 });
+      // [a b c / d e _]: a (row 0) and e (row 1) trade places and heights.
+      dragTileOnto('s-a', tileEl('s-e'));
+      expect(app._tileGrid.ids).toEqual(['s-e', 's-b', 's-c', 's-d', 's-a']);
+      expect(fitCounts(five)).toEqual({ 's-a': 1, 's-b': 0, 's-c': 0, 's-d': 0, 's-e': 1 });
     } finally {
       delete (section as unknown as Record<string, unknown>).getBoundingClientRect;
     }

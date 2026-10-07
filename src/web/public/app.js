@@ -543,7 +543,9 @@ const DEFAULT_SHORTCUTS = [
   // chord must reach the terminal untouched. Every xterm key handler swallows a
   // chord that applies, so it never reaches a PTY. Defaults: Ctrl+Shift+G makes
   // xterm emit nothing (a shifted Ctrl letter) and overrides only the browser's
-  // find-previous; Alt+Shift+Arrows are bound by no CLI Codeman runs.
+  // find-previous; Alt+Shift+Arrows are bound by no CLI Codeman runs. The
+  // arrow chords (focus, move) never apply in a text field, where shifted
+  // arrows select (tileShortcutFor).
   {
     id: 'toggle-tile-grid',
     group: 'Tiles',
