@@ -16974,6 +16974,12 @@ html[data-tab-orientation='vertical'] .home-sessions {
     transform 0.1s ease;
 }
 
+:is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-save.set-head-apply {
+  background: transparent;
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
 :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-head-save:hover {
   filter: brightness(1.08);
 }
