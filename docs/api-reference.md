@@ -500,13 +500,15 @@ session runs as far as the server knows it, for the web UI's session headers:
 | `custom-endpoint` | The session is pointed at a Custom Model Endpoint Profile; its `modelId` answers, whatever the CLI prints. |
 | `statusline`      | Claude's statusLine exporter reported it (`model.display_name`); follows an in-session `/model`.          |
 | `screen`          | Read off the CLI's own footer (`capabilities.modelDetect`, today dsh and codex); follows a switch.      |
+| `config`          | What the CLI's own config pins for the session (`capabilities.modelDetect.configResolver`, today dsh-TUI's route), while its screen names none. |
 | `launch`          | What the session was launched with (`--model`, the app-wide default, `<cli>Config.model`); nothing has reported since. |
 
 Between `statusline` and `screen` the newest report wins. The field is absent when no
 model is known (a shell, a CLI that reports none and was launched without one). `model`
 is display text from a pane or a CLI report: control characters are stripped and it is at
 most 64 characters, but treat it as untrusted text. A `statusline` or `screen` value is
-persisted and restored after a server restart until the next report replaces it.
+persisted and restored after a server restart until the next report replaces it; a
+`config` value is read again at every pane start, attach and relaunch instead.
 
 ## Approvals Inbox
 

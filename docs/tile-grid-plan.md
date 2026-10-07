@@ -52,7 +52,9 @@ or settled a question the spec left open. The invariants as built are in
   `● [logo] name · model ……… ⋯ ⤢ ×`. The logo is PR #532's `run-mode-dot <cliId>` slot
   (the id is data), the model the session's `displayModel` (custom endpoint, else what the
   CLI itself reports: claude's statusline, a footer read with `capabilities.modelDetect`
-  for dsh and codex; else the launch model; else nothing, the logo alone). Both split
+  for dsh and codex; else what the CLI's config pins, dsh-TUI's route (owner feedback 1:
+  a dsh session with its status bar's model field off shows `qwen3.8-27b (from config)`);
+  else the launch model; else nothing, the logo alone). Both split
   panes carry the same strip: Pane B's header, and Pane A's while the split is open. Pane
   B's close is a tile button (26px).
 - **No + in the tile header** (owner decision 9): the header is `● name ……… ⋯ ⤢ ×`. The
