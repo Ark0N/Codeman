@@ -263,8 +263,7 @@ Object.assign(CodemanApp.prototype, {
     grid.resizeObserver?.disconnect();
     grid.resizeObserver = null;
     for (const { tile, el } of grid.tiles.values()) {
-      grid.queue?.drop(tile);
-      tile.destroy();
+      this._destroyTerminalTile(tile);
       el.remove();
     }
     grid.tiles.clear();
@@ -685,8 +684,7 @@ Object.assign(CodemanApp.prototype, {
     // The zoomed tile leaving restores the grid (an automatic zoom moves to
     // the neighbour with focus, below).
     if (grid.zoomedId === sessionId) grid.zoomedId = grid.autoZoom && refocus ? neighbor : null;
-    grid.queue?.drop(entry.tile);
-    entry.tile.destroy();
+    this._destroyTerminalTile(entry.tile);
     entry.el.remove();
     grid.tiles.delete(sessionId);
     grid.ids.splice(grid.ids.indexOf(sessionId), 1);
@@ -802,8 +800,7 @@ Object.assign(CodemanApp.prototype, {
       grid.ids.pop();
       grid.ids.splice(index, 1, draggedId);
       const old = grid.tiles.get(targetId);
-      grid.queue?.drop(old.tile);
-      old.tile.destroy();
+      this._destroyTerminalTile(old.tile);
       old.el.remove();
       grid.tiles.delete(targetId);
       if (grid.zoomedId === targetId) grid.zoomedId = grid.autoZoom ? draggedId : null;
@@ -909,6 +906,17 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
+   * A grid tile's TerminalTile goes for good: its loads still waiting in the
+   * grid's queue are dropped first (resolved, never run, its loading state
+   * cleared), then the tile itself (socket, xterm, listeners). Its element is
+   * the caller's.
+   */
+  _destroyTerminalTile(tile) {
+    this._tileGrid.queue?.drop(tile);
+    tile.destroy();
+  },
+
+  /**
    * Replaces a tile's TerminalTile with a fresh one in the same place (after
    * Attach: a tile whose socket stopped for good cannot reconnect, and a fresh
    * one loads the new pane from scratch). Keeps the keyboard if it had it.
@@ -917,8 +925,7 @@ Object.assign(CodemanApp.prototype, {
     const entry = this._tileGrid?.open ? this._tileGrid.tiles.get(sessionId) : null;
     if (!entry) return;
     const hadKeyboard = this._focusedTile === entry.tile;
-    this._tileGrid.queue?.drop(entry.tile);
-    entry.tile.destroy();
+    this._destroyTerminalTile(entry.tile);
     entry.tile = this._newTerminalTile(sessionId, entry.body);
     this._connectTile(sessionId);
     if (hadKeyboard) this._noteFocusedTile(entry.tile);
