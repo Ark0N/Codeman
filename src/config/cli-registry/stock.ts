@@ -1240,8 +1240,14 @@ const DEEPSEEK: CliEntry = {
     // and, on the row right under its bottom border, ` qwen3.8-27b · medium · <cwd>`.
     // The border anchors it: nothing the agent writes can sit below the composer, and a
     // suggestion popup there starts with `/` or `+`, never a model id.
+    // ⚠ The first field is the model only while the status bar's model field is on (the
+    // default). Switched off, the first field is the next one: the reasoning effort
+    // (` medium · th-scratch`), else the mode, else the cwd's basename. So the field must
+    // carry a digit, which a model id does (a version) and an effort word, a mode name or
+    // most folder names do not. A model id without one (`deepseek-chat`) is not read,
+    // and the session falls back to its route config: silent, never wrong.
     modelDetect: {
-      screenLine: String.raw`╰─+╯\n ?([A-Za-z0-9][\w.:/@+-]{0,79})(?= · |\n|$)`,
+      screenLine: String.raw`╰─+╯\n ?((?=[\w.:/@+-]*\d)[A-Za-z0-9][\w.:/@+-]{0,79})(?= · |\n|$)`,
       screenLines: 3,
       // With the status bar's model field off (or before it paints), the route the
       // session's profile pins, read the way dsh-TUI resolves it: src/deepseek-route-config.ts.

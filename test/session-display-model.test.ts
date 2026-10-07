@@ -127,6 +127,16 @@ describe('readScreenModel', () => {
     );
   });
 
+  it("never reads the field after a switched-off model as the model (dsh's effort, mode, cwd)", () => {
+    // dsh-TUI with `statusBar.model: false`: the effort word comes first.
+    expect(readScreenModel(dshPane(' medium · th-scratch'), DSH, DSH_ROWS)).toBeUndefined();
+    expect(readScreenModel(dshPane(' xhigh · plan · th-scratch'), DSH, DSH_ROWS)).toBeUndefined();
+    expect(readScreenModel(dshPane(' th-scratch'), DSH, DSH_ROWS)).toBeUndefined();
+    // A model id carries a version digit; one that does not is left to the config.
+    expect(readScreenModel(dshPane(' deepseek-v4-flash · max · th-scratch'), DSH, DSH_ROWS)).toBe('deepseek-v4-flash');
+    expect(readScreenModel(dshPane(' deepseek-chat · max'), DSH, DSH_ROWS)).toBeUndefined();
+  });
+
   it("reads codex's model off its status line (0.147.0 and 0.154.0 layouts)", () => {
     expect(readScreenModel(CODEX_LIVE, CODEX, CODEX_ROWS)).toBe('gpt-5.6-terra');
     expect(readScreenModel(CODEX_154, CODEX, CODEX_ROWS)).toBe('gpt-5.6-sol');
