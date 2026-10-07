@@ -449,16 +449,7 @@ Object.assign(CodemanApp.prototype, {
     open.addEventListener('click', () => {
       const ids = boxes.filter((b) => b.checked).map((b) => b.value);
       this.closeTilePicker();
-      if (ids.length === 0) return;
-      const focus = ids.includes(this.activeSessionId) ? this.activeSessionId : ids[0];
-      if (this._tilesOwnTerminal()) {
-        // A new set for the open grid, as "Open group as tiles" does it: the
-        // parked terminal still holds what it showed before the grid, and
-        // re-parking must not snapshot it.
-        this.closeTileGrid({ keepStored: false, reselect: false });
-        this.activeSessionId = null;
-      }
-      this.openTileGrid(ids, { focusedId: focus });
+      if (ids.length > 0) this._replaceTileGrid(ids);
     });
 
     document.body.appendChild(menu);
@@ -879,13 +870,23 @@ Object.assign(CodemanApp.prototype, {
       this.showToast?.('This group has no session to show as tiles', 'info');
       return false;
     }
-    // Before the open grid closes (which drops activeSessionId): the session in
-    // focus keeps it if the group holds it, as with the picker's Open.
+    return this._replaceTileGrid(ids);
+  },
+
+  /**
+   * Opens the grid on `ids` in place of whatever it shows (the picker's Open,
+   * "Open group as tiles"): the session in focus keeps focus when `ids` holds
+   * it, otherwise the first one takes it. Chosen BEFORE an open grid closes,
+   * because the close drops activeSessionId: as in selectSession's tile
+   * branch, the parked terminal still holds what it showed before the grid,
+   * and re-parking must not snapshot it.
+   *
+   * @returns {boolean} whether the grid is open afterwards
+   */
+  _replaceTileGrid(ids) {
     const focus = ids.includes(this.activeSessionId) ? this.activeSessionId : ids[0];
     if (this._tilesOwnTerminal()) {
       this.closeTileGrid({ keepStored: false, reselect: false });
-      // As selectSession's tile branch: the parked terminal still holds what it
-      // showed before the grid, and re-parking must not snapshot it.
       this.activeSessionId = null;
     }
     return this.openTileGrid(ids, { focusedId: focus });
