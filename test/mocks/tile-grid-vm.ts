@@ -159,6 +159,8 @@ export const section = new FakeEl();
 section.id = 'tileGrid';
 section.className = 'tile-grid';
 main.appendChild(section);
+/** The grid's element for one tiled session (its `.tile`), found by its data-session-id. */
+export const tileEl = (id: string) => section.children.find((el) => el.dataset.sessionId === id) as FakeEl;
 
 /** Extra elements `document.querySelector` finds, by exact selector (e.g. '.btn-split'). */
 export const bySelector = new Map<string, FakeEl>();

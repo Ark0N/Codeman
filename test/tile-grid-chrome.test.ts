@@ -18,7 +18,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FakeEl, FakeTile, makeGridApp, resetGridHarness, section, type GridApp } from './mocks/tile-grid-vm.js';
+import { FakeEl, FakeTile, makeGridApp, resetGridHarness, type GridApp, tileEl } from './mocks/tile-grid-vm.js';
 
 const IDS = ['s-a', 's-b', 's-c'];
 
@@ -38,7 +38,6 @@ function openGrid(): GridApp {
   return app;
 }
 
-const tileEl = (id: string) => section.children.find((el) => el.dataset.sessionId === id) as FakeEl;
 const headerOf = (id: string) => tileEl(id).children[0];
 const buttonOf = (id: string, cls: string) =>
   headerOf(id).children[2].children.find((b) => b.className.includes(cls)) as FakeEl;
@@ -99,7 +98,7 @@ describe('the header', () => {
 describe('header buttons', () => {
   it('are ⋯ ⤢ × and nothing else: no + (owner decision 9)', () => {
     const app = openGrid();
-    const tile = section.children.find((el) => el.dataset.sessionId === 's-a') as FakeEl;
+    const tile = tileEl('s-a');
     const actions = tile.children[0].children.find((c) => c.className === 'tile-actions') as FakeEl;
     expect(actions.children.map((b) => b.className)).toEqual([
       'tile-btn tile-menu',

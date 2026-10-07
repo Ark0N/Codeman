@@ -26,8 +26,8 @@ import {
   localStore,
   makeGridApp,
   resetGridHarness,
-  section,
   type GridApp,
+  tileEl,
 } from './mocks/tile-grid-vm.js';
 
 const IDS = ['s-a', 's-b', 's-c'];
@@ -163,7 +163,7 @@ describe('moving focus between tiles', () => {
   it('pressing a tile is a human selection of its session', async () => {
     const app = openGrid();
     app.selectSession = vi.fn();
-    const tileB = section.children.find((el) => el.dataset.sessionId === 's-b');
+    const tileB = tileEl('s-b');
     tileB?.dispatch('pointerdown');
     expect(app.selectSession).toHaveBeenCalledWith('s-b');
   });

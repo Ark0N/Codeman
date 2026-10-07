@@ -22,10 +22,10 @@ import {
   resetGridHarness,
   section,
   type GridApp,
+  tileEl,
 } from './mocks/tile-grid-vm.js';
 
 const SIX = ['s-a', 's-b', 's-c', 's-d', 's-e', 's-f'];
-const tileEl = (id: string) => section.children.find((el) => el.dataset.sessionId === id) as FakeEl;
 const divider = (app: GridApp, key: string) => app._tileGrid.dividers.get(key) as FakeEl;
 const tile = (id: string) => FakeTile.all.find((t) => t.sessionId === id) as FakeTile;
 

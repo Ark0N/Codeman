@@ -24,10 +24,10 @@ import {
   section,
   windowStub,
   type GridApp,
+  tileEl,
 } from './mocks/tile-grid-vm.js';
 
 const IDS = ['s-a', 's-b', 's-c'];
-const tileEl = (id: string) => section.children.find((el) => el.dataset.sessionId === id) as FakeEl;
 const slots = () => section.children.filter((el) => el.className === 'tile-slot');
 const dragEvent = () => ({ preventDefault: vi.fn(), stopPropagation: vi.fn(), dataTransfer: { dropEffect: '' } });
 

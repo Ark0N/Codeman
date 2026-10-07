@@ -11,12 +11,11 @@
  *   (`toggleTileGrid`); right-click (contextmenu) opens the picker. With the
  *   grid open the picker shows the current tiles, and Open replaces them.
  *
- * Pure helper via `vm`, the app via the shared harness (test/mocks/tile-grid-vm.ts).
+ * The pure helper and the app both via the shared harness (test/mocks/tile-grid-vm.ts).
  * Port: N/A.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import vm from 'node:vm';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   FakeEl,
@@ -25,17 +24,14 @@ import {
   documentAddEventListener,
   makeGridApp,
   resetGridHarness,
+  windowStub,
 } from './mocks/tile-grid-vm.js';
 
 type OpenSet = { source: string; ids: string[]; focusedId: string | null } | null;
 type Helpers = { tileGridOpenSet(p: Record<string, unknown>): OpenSet; TILE_GRID_MAX: number };
 
-function loadHelpers(): Helpers {
-  const context = vm.createContext({ window: {}, globalThis: {} });
-  vm.runInContext(readFileSync(resolve(import.meta.dirname, '../src/web/public/constants.js'), 'utf8'), context);
-  return (context.window as { CodemanTileGrid: Helpers }).CodemanTileGrid;
-}
-const T = loadHelpers();
+// constants.js as the harness loaded it (window.CodemanTileGrid).
+const T = windowStub.CodemanTileGrid as Helpers;
 const INDEX_HTML = readFileSync(resolve(import.meta.dirname, '../src/web/public/index.html'), 'utf8');
 
 const order = Array.from({ length: 9 }, (_, i) => `t${i + 1}`);

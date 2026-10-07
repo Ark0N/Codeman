@@ -16,10 +16,17 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FakeEl, FakeTile, makeGridApp, resetGridHarness, section, type GridApp } from './mocks/tile-grid-vm.js';
+import {
+  FakeEl,
+  FakeTile,
+  makeGridApp,
+  resetGridHarness,
+  section,
+  type GridApp,
+  tileEl,
+} from './mocks/tile-grid-vm.js';
 
 const IDS = ['s-a', 's-b', 's-c', 's-d'];
-const tileEl = (id: string) => section.children.find((el) => el.dataset.sessionId === id) as FakeEl;
 const zoomButton = (id: string) =>
   tileEl(id).children[0].children[2].children.find((b) => b.className.includes('tile-zoom')) as FakeEl;
 

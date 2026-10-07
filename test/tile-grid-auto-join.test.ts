@@ -18,7 +18,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FakeEl, FakeTile, makeGridApp, resetGridHarness, section, type GridApp } from './mocks/tile-grid-vm.js';
+import { FakeTile, makeGridApp, resetGridHarness, section, type GridApp, tileEl } from './mocks/tile-grid-vm.js';
 
 const IDS = ['s-a', 's-b'];
 const addSession = (app: GridApp, id: string, workingDir = '/w') =>
@@ -52,7 +52,7 @@ describe('Run from this tab', () => {
     app.openTileGrid(IDS);
     addSession(app, 's-new');
     app._joinTileGridFromRun('s-new');
-    const tile = section.children.find((el) => el.dataset.sessionId === 's-new') as FakeEl;
+    const tile = tileEl('s-new');
     const overlay = tile.children[1].children.find((c) => c.className === 'tile-attach');
     expect(!overlay || overlay.hidden).toBe(true);
   });

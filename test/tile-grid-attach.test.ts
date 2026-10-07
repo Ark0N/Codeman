@@ -18,18 +18,16 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  FakeEl,
   FakeTile,
   fetchSpy,
   makeGridApp,
   resetGridHarness,
-  section,
   windowStub,
   type GridApp,
+  tileEl,
 } from './mocks/tile-grid-vm.js';
 
 const IDS = ['s-a', 's-b', 's-c'];
-const tileEl = (id: string) => section.children.find((el) => el.dataset.sessionId === id) as FakeEl;
 const overlayOf = (id: string) => tileEl(id).children[1].children.find((c) => c.className === 'tile-attach') ?? null;
 const visible = (id: string) => !!overlayOf(id) && !overlayOf(id)!.hidden;
 const textOf = (id: string) => overlayOf(id)!.children[0].textContent;
