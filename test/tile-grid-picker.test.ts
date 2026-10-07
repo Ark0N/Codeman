@@ -1,5 +1,5 @@
 /**
- * @fileoverview The header Tiles button, its picker, and a tile's + menu.
+ * @fileoverview The header Tiles button and its picker.
  *
  * - The button is opt-in (`showTileGridButton`, hidden by its `--hidden` marker
  *   class) and hard-gated to desktop widths like Split: a JS width check plus a
@@ -12,8 +12,8 @@
  *   opens the grid on the checked ones, focusing the active session if checked.
  * - Escape closes it, and its close method is idempotent (the global Escape
  *   handler calls every close method).
- * - A tile's + lists the open sessions not yet tiled; picking one adds and
- *   focuses it; a grid that holds what the window fits disables them.
+ * - A tile has no + (owner decision 9): tiles are added from this picker,
+ *   Ctrl/Cmd+click, a dragged tab, a tab group or Run.
  *
  * Real code via the shared vm harness (test/mocks/tile-grid-vm.ts). Port: N/A.
  */
@@ -26,7 +26,6 @@ import {
   bySelector,
   makeGridApp,
   resetGridHarness,
-  section,
   windowStub,
   type GridApp,
 } from './mocks/tile-grid-vm.js';
@@ -184,11 +183,10 @@ describe('the picker', () => {
     expect(() => app.closeTilePicker()).not.toThrow();
   });
 
-  it('the global Escape handler closes the picker and the + menu', () => {
+  it('the global Escape handler closes the picker', () => {
     const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/app.js'), 'utf8');
     const escape = src.slice(src.indexOf("if (e.key === 'Escape') {"), src.indexOf('Option/Alt session navigation'));
     expect(escape).toContain('this.closeTilePicker?.();');
-    expect(escape).toContain('this.closeTileAddMenu?.();');
   });
 
   it('refuses in a narrow window', () => {
@@ -196,46 +194,5 @@ describe('the picker', () => {
     windowStub.innerWidth = 1100;
     app.openTilePicker({ stopPropagation: vi.fn() });
     expect(picker()).toBeNull();
-  });
-});
-
-describe("a tile's + menu", () => {
-  const addMenu = () => body.children.find((c) => c.className.includes('tile-add-menu')) ?? null;
-  const addButtonOf = (id: string) =>
-    (section.children.find((el) => el.dataset.sessionId === id) as FakeEl).children[0].children[2].children.find((b) =>
-      b.className.includes('tile-add')
-    ) as FakeEl;
-
-  it('lists the open sessions not yet tiled; picking one adds and focuses it', () => {
-    const app = makeGridApp(IDS);
-    app.openTileGrid(['s-a', 's-b']);
-    app.markIdleAlertSeen.mockClear();
-    addButtonOf('s-a').dispatch('click', { stopPropagation: vi.fn(), currentTarget: null });
-    const items = addMenu()!.children.filter((i) => i.className !== 'tile-add-new');
-    expect(items.map((i) => i.children[0].textContent)).toEqual(['s-other', 's-c']);
-    items[1].dispatch('click');
-    expect(app._tileGrid.ids).toEqual(['s-a', 's-b', 's-c']);
-    expect(app.activeSessionId).toBe('s-c');
-    expect(app.markIdleAlertSeen).toHaveBeenCalledWith('s-c');
-    expect(addMenu()).toBeNull();
-  });
-
-  it('a grid holding what the window fits disables the entries', () => {
-    const app = makeGridApp(IDS);
-    app.openTileGrid(['s-a', 's-b']);
-    const sectionRect = section.getBoundingClientRect;
-    section.getBoundingClientRect = () => ({ width: 1000, height: 400, top: 0, left: 0, right: 1000, bottom: 400 });
-    app.openTileAddMenu({ stopPropagation: vi.fn(), preventDefault: vi.fn(), currentTarget: null });
-    expect(addMenu()!.children.every((i) => i.disabled)).toBe(true);
-    section.getBoundingClientRect = sectionRect;
-  });
-
-  it('closing the grid closes it', () => {
-    const app = makeGridApp(IDS);
-    app.selectSession = vi.fn();
-    app.openTileGrid(['s-a']);
-    app.openTileAddMenu({ stopPropagation: vi.fn(), preventDefault: vi.fn(), currentTarget: null });
-    app.closeTileGrid({ reselect: false });
-    expect(addMenu()).toBeNull();
   });
 });

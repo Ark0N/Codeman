@@ -1780,21 +1780,20 @@ function dragTrackFractions(fr, index, deltaPx, totalPx, minPx) {
 }
 
 /**
- * The sessions the Tiles picker (and a tile's + menu) offers, in tab order:
- * live ones only, never a session popped out to its own window (that window
- * owns its PTY size). A session with no PTY attached IS offered: its tile shows
- * the Attach overlay.
+ * The sessions the Tiles picker offers (and the Tiles button opens, case c of
+ * tileGridOpenSet), in tab order: live ones only, never a session popped out to
+ * its own window (that window owns its PTY size). A session with no PTY
+ * attached IS offered: its tile shows the Attach overlay.
  *
  * @param {Map<string, {name?: string}>} sessions
  * @param {string[]} sessionOrder
  * @param {{has(id: string): boolean}} [detachedIds]
- * @param {{has(id: string): boolean}} [exclude] - ids not to offer (already tiled)
  * @returns {Array<{id: string, label: string}>}
  */
-function buildTilePickerSessions(sessions, sessionOrder, detachedIds, exclude) {
+function buildTilePickerSessions(sessions, sessionOrder, detachedIds) {
   const result = [];
   for (const id of sessionOrder) {
-    if (detachedIds?.has?.(id) || exclude?.has?.(id)) continue;
+    if (detachedIds?.has?.(id)) continue;
     const session = sessions.get(id);
     if (!session) continue;
     result.push({ id, label: session.name || 'Session' });

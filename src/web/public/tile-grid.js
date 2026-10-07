@@ -296,7 +296,6 @@ Object.assign(CodemanApp.prototype, {
     this._updateConnectionIndicator?.();
     this._updateSplitButtonForTiles();
     this._updateTileGridButtonState();
-    this.closeTileAddMenu();
     // The tabs drop their .in-tiles marker.
     this.renderSessionTabs?.();
     if (reselect) this._selectAfterTileGrid(focusedId);
@@ -496,108 +495,6 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * A tile's +: the open sessions not yet tiled, in tab order; picking one
-   * adds it to the grid and focuses it (a human selection). Disabled once the
-   * grid holds what the window can fit.
-   */
-  openTileAddMenu(event, fromSessionId = null) {
-    event?.preventDefault?.();
-    event?.stopPropagation?.();
-    const grid = this._tileGrid;
-    if (!grid?.open) return;
-    const trigger = event?.currentTarget || null;
-    if (this._tileAddMenu && this._tileAddMenu.trigger === trigger) {
-      this.closeTileAddMenu();
-      return;
-    }
-    this.closeTileAddMenu();
-    const T = window.CodemanTileGrid;
-    const limit = this._tileGridLimit();
-    const full = grid.ids.length >= limit.capacity;
-    const candidates = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions, grid.tiles);
-    const menu = document.createElement('div');
-    menu.className = 'tab-rail-action-menu tile-add-menu';
-    menu.setAttribute('role', 'menu');
-    menu.setAttribute('aria-label', 'Add a session to the grid');
-    if (candidates.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'tile-add-empty';
-      empty.textContent = 'Every open session is already tiled';
-      menu.appendChild(empty);
-    }
-    for (const c of candidates) {
-      const item = document.createElement('button');
-      item.type = 'button';
-      item.setAttribute('role', 'menuitem');
-      // Only the name is user text: skipping the whole button would keep its
-      // title (why it is disabled) out of the translator too.
-      const name = document.createElement('span');
-      name.setAttribute('data-i18n-skip', '');
-      name.textContent = c.label;
-      item.appendChild(name);
-      item.disabled = full;
-      if (full) item.title = limit.full;
-      item.addEventListener('click', () => {
-        this.closeTileAddMenu();
-        if (this.addTile(c.id)) this.selectSession(c.id);
-      });
-      menu.appendChild(item);
-    }
-    // A new session in the case this tile's session belongs to: the normal Run
-    // for that case, which then joins the grid like any Run from this tab.
-    const fromSession = fromSessionId ? this.sessions.get(fromSessionId) : null;
-    const theCase = fromSession ? this._mobileOverviewCaseFor?.(fromSession.workingDir, this.cases || []) : null;
-    const create = document.createElement('button');
-    create.type = 'button';
-    create.className = 'tile-add-new';
-    create.setAttribute('role', 'menuitem');
-    create.textContent = 'New session in this case';
-    create.disabled = full || !theCase;
-    if (!theCase) create.title = 'This session is not in a case';
-    else if (full) create.title = limit.full;
-    create.addEventListener('click', () => {
-      this.closeTileAddMenu();
-      if (theCase) void this.runInCaseForTiles(theCase.name);
-    });
-    menu.appendChild(create);
-    document.body.appendChild(menu);
-    if (trigger?.getBoundingClientRect) {
-      const rect = trigger.getBoundingClientRect();
-      menu.style.position = 'fixed';
-      menu.style.top = `${rect.bottom + 4}px`;
-      menu.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
-    }
-    const onOutside = (e) => {
-      if (menu.contains?.(e.target) || (trigger && trigger.contains?.(e.target))) return;
-      this.closeTileAddMenu();
-    };
-    const onKey = (e) => {
-      if (e.key === 'Escape') this.closeTileAddMenu();
-    };
-    this._tileAddMenu = { menu, trigger, onOutside, onKey };
-    document.addEventListener('pointerdown', onOutside, true);
-    document.addEventListener('keydown', onKey);
-    menu.querySelector?.('button:not([disabled])')?.focus?.();
-  },
-
-  /**
-   * Runs the normal Run (current run mode) in `caseName`, then puts the
-   * toolbar's case back as it was. The session it creates joins the grid
-   * through _joinTileGridFromRun.
-   */
-  async runInCaseForTiles(caseName) {
-    const select = document.getElementById('quickStartCase');
-    const previous = select?.value;
-    const swap = !!select && !!caseName && previous !== caseName;
-    if (swap) this.selectQuickStartCase?.(caseName, { save: false });
-    try {
-      await this.run?.();
-    } finally {
-      if (swap && previous) this.selectQuickStartCase?.(previous, { save: false });
-    }
-  },
-
-  /**
    * A session THIS tab's Run just created (session-ui.js
    * _ensureCreatedSessionVisible, reached only from the Run paths): with the
    * grid open it joins the next free slot, and Run's own selectSession then
@@ -618,16 +515,6 @@ Object.assign(CodemanApp.prototype, {
     // meanwhile for a pane that is about to exist.
     (this._tileAttachPending ||= new Map()).set(sessionId, Date.now());
     return this.addTile(sessionId);
-  },
-
-  /** Idempotent, like closeTilePicker. */
-  closeTileAddMenu() {
-    const m = this._tileAddMenu;
-    if (!m) return;
-    this._tileAddMenu = null;
-    document.removeEventListener('pointerdown', m.onOutside, true);
-    document.removeEventListener('keydown', m.onKey);
-    m.menu.remove();
   },
 
   // The Split button cannot act while the grid is open (openSplitPicker and
@@ -1207,7 +1094,8 @@ Object.assign(CodemanApp.prototype, {
     actions.append(
       button('tile-menu', 'Session actions', '\u22EF', (e) => this.openTabRailActionMenu?.(e, sessionId)),
       zoomBtn,
-      button('tile-add', 'Add a session to the grid', '+', (e) => this.openTileAddMenu(e, sessionId)),
+      // (No + here, owner decision 9: tiles are added from the Tiles button's
+      // picker, Ctrl/Cmd+click, a dragged tab, a tab group or Run.)
       // Removes the tile ONLY: the session keeps running. Killing it stays
       // behind the menu's Close session and its confirm.
       button('tile-remove', 'Remove tile (the session keeps running)', '\u00D7', () =>

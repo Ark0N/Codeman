@@ -5,7 +5,7 @@
  *
  * - Runtime strings are HARVESTED from the real tile code (the shared vm
  *   harness, test/mocks/tile-grid-vm.ts) driven through every state that
- *   writes text: the picker (cap and window wording), a tile's +, the Attach
+ *   writes text: the picker (cap and window wording), the Attach
  *   overlay (not attached, attaching, exited, ended), zoom, the header
  *   tooltip, the dividers, the empty slot, every toast, the crash-restart
  *   confirm, the Tiles and Split button titles. Each must translate to text
@@ -14,7 +14,7 @@
  * - Static strings: the shortcut registry's tile entries (overlay and App
  *   Settings list), and index.html run through the real translator in JSDOM
  *   (the Tiles button, the App Settings chips, the Help modal's Tiles rows).
- * - User text stays as typed: session names (tile header, picker, + menu)
+ * - User text stays as typed: session names (tile header, picker)
  *   and group names carry data-i18n-skip, and a session name inside the
  *   confirm passes through the pattern untranslated.
  *
@@ -130,8 +130,6 @@ async function exercise() {
   let pill = 'idle';
   app._sidebarRichRow = () => ({ state: pill, pill, since: { at: 1 } });
   app._mobileOverviewStampText = () => '3m';
-  app.cases = [{ name: 'proj', path: '/w' }];
-  app._mobileOverviewCaseFor = (_dir: string, cases: Array<{ name: string }>) => cases[0] ?? null;
   app.sessions.get('s-2').pid = null;
   app.sessions.get('s-3').paneExit = { status: 3 };
   app.sessions.get('s-4').paneExit = { signal: 9 };
@@ -182,15 +180,6 @@ async function exercise() {
   app.zoomTile('s-1');
   harvestAll(app, 'zoomed');
   app.zoomTile('s-1');
-
-  // A tile's + on a full grid, from a session in a case and from one outside.
-  app.openTileAddMenu({ stopPropagation: vi.fn(), preventDefault: vi.fn(), currentTarget: null }, 's-1');
-  harvestAll(app, '+ menu, full');
-  app.closeTileAddMenu();
-  app._mobileOverviewCaseFor = () => null;
-  app.openTileAddMenu({ stopPropagation: vi.fn(), preventDefault: vi.fn(), currentTarget: null }, 's-1');
-  harvestAll(app, '+ menu, no case');
-  app.closeTileAddMenu();
 
   // The toasts of a full grid, by the cap and by the window.
   app._joinTileGridFromRun('s-7');
@@ -264,7 +253,6 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
       'Zoom this tile',
       'Restore the grid',
       'Session actions',
-      'Add a session to the grid',
       'Remove tile (the session keeps running)',
       'idle 3m',
       'needs you 3m',
@@ -276,8 +264,6 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
       'The agent exited (signal 9)',
       'The session ended',
       'It cannot be restarted in place: close it from ⋯ (Close session).',
-      'New session in this case',
-      'This session is not in a case',
       'The grid holds at most 6 tiles: the new session opens on its own',
       'The grid already holds what this window fits (4): the new session opens on its own',
       'The grid already holds what this window fits (4)',
@@ -375,12 +361,12 @@ describe('the static markup through the real translator (JSDOM, zh-CN)', () => {
 });
 
 describe('user text in the tile code', () => {
-  it('session names in a tile header, the picker and the + menu are marked data-i18n-skip', () => {
+  it('session names in a tile header and the picker are marked data-i18n-skip', () => {
     // The harvest saw them only inside skipped subtrees.
     expect(userText.has('Open tiles')).toBe(true);
     expect([...seen.keys()]).not.toContain('s-1');
     const src = read('tile-grid.js');
-    expect(src.match(/setAttribute\('data-i18n-skip', ''\)/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(src.match(/setAttribute\('data-i18n-skip', ''\)/g)?.length).toBeGreaterThanOrEqual(2);
   });
 
   it('the group names of the grouped rail are marked data-i18n-skip', () => {

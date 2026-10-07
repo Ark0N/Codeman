@@ -4,8 +4,8 @@
  * the headless frame bar. The layout table still covers 7 to 9 (unreachable).
  *
  * Every way into the grid stops at the cap even where the window would fit
- * nine (the harness window is 2400x1200): opening, adding, a tile's +, a
- * session Run makes, Ctrl/Cmd+click, the picker and "Open group as tiles".
+ * nine (the harness window is 2400x1200): opening, adding, a session Run
+ * makes, Ctrl/Cmd+click, the picker and "Open group as tiles".
  * The texts say which limit binds: "at most 6" for the cap, "what this window
  * fits" for a smaller window.
  *
@@ -63,19 +63,6 @@ describe('the cap', () => {
 });
 
 describe('every way in stops at the cap', () => {
-  it("a tile's + offers the rest, disabled, and says why", () => {
-    const app = fullGrid();
-    app.openTileAddMenu({ stopPropagation: vi.fn(), preventDefault: vi.fn(), currentTarget: null }, 's-1');
-    const menu = body.children.find((c) => c.className.includes('tile-add-menu'))!;
-    const items = menu.children.filter((c) => ['s-7', 's-8'].includes(c.children[0]?.textContent ?? ''));
-    expect(items).toHaveLength(2);
-    for (const item of items) {
-      expect(item.disabled).toBe(true);
-      expect(item.title).toBe(AT_MOST);
-    }
-    expect(menu.children.find((c) => c.className === 'tile-add-new')!.disabled).toBe(true);
-  });
-
   it('a session Run makes opens on its own, with a toast', () => {
     const app = fullGrid();
     expect(app._joinTileGridFromRun('s-7')).toBe(false);

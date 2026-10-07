@@ -1382,7 +1382,6 @@ class CodemanApp {
         this.closeSessionManager();
         this.closeCommandPalette?.();
         this.closeTilePicker?.();
-        this.closeTileAddMenu?.();
         this.closeShortcutOverlay?.();
         // Overlay layouts only: below 1024px the sidebar is a modal off-canvas
         // drawer over the terminal, so Escape must close it. The docked desktop

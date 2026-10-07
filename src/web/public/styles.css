@@ -19753,14 +19753,12 @@ body.tile-grid-resizing--row * {
 }
 
 .tile-picker-hint,
-.tile-picker-empty,
-.tile-add-empty {
+.tile-picker-empty {
   color: var(--text-muted);
   font-size: 12px;
 }
 
-.tile-picker-empty,
-.tile-add-empty {
+.tile-picker-empty {
   padding: 6px 8px;
 }
 

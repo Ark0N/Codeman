@@ -12,25 +12,13 @@
  * A tile that joined before its pane existed resends its size once the pid
  * appears (the server spawned the pane at its own default size).
  *
- * A tile's + also offers "New session in this case": the normal Run for the
- * case the tile's session belongs to, the toolbar's case put back afterwards.
- *
  * Real code via the shared vm harness (test/mocks/tile-grid-vm.ts); the Run
  * hook in session-ui.js is pinned at the source. Port: N/A.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  FakeEl,
-  FakeTile,
-  body,
-  bySelector,
-  makeGridApp,
-  resetGridHarness,
-  section,
-  type GridApp,
-} from './mocks/tile-grid-vm.js';
+import { FakeEl, FakeTile, makeGridApp, resetGridHarness, section, type GridApp } from './mocks/tile-grid-vm.js';
 
 const IDS = ['s-a', 's-b'];
 const addSession = (app: GridApp, id: string, workingDir = '/w') =>
@@ -135,44 +123,5 @@ describe('a pane that starts after its tile connected (#464)', () => {
     app._renderTileChrome();
     app._renderTileChrome();
     for (const id of IDS) expect(tileOf(id).paneStarted).not.toHaveBeenCalled();
-  });
-});
-
-describe('+ / New session in this case', () => {
-  function openMenu(app: GridApp, fromId: string) {
-    app.openTileAddMenu({ stopPropagation: vi.fn(), preventDefault: vi.fn(), currentTarget: null }, fromId);
-    const menu = body.children.find((c) => c.className.includes('tile-add-menu'))!;
-    return menu.children.find((c) => c.className === 'tile-add-new')!;
-  }
-
-  it('runs the normal Run in the tile session case, then puts the toolbar case back', async () => {
-    const app = makeGridApp(IDS);
-    app.cases = [{ name: 'proj', path: '/w' }];
-    app._mobileOverviewCaseFor = (dir: string, cases: Array<{ name: string; path: string }>) =>
-      cases.find((c) => dir.startsWith(c.path)) ?? null;
-    const select = new FakeEl();
-    select.value = 'other-case';
-    bySelector.set('#quickStartCase', select);
-    const calls: string[] = [];
-    app.selectQuickStartCase = vi.fn((name: string) => {
-      calls.push(`case:${name}`);
-      select.value = name;
-    });
-    app.run = vi.fn(async () => calls.push(`run in ${select.value}`));
-    app.openTileGrid(IDS);
-    const item = openMenu(app, 's-a');
-    expect(item.disabled).toBe(false);
-    item.dispatch('click');
-    await vi.waitFor(() => expect(calls).toHaveLength(3));
-    expect(calls).toEqual(['case:proj', 'run in proj', 'case:other-case']);
-    expect(app.selectQuickStartCase).toHaveBeenCalledWith('proj', { save: false });
-  });
-
-  it('is disabled for a session that is not in a case', () => {
-    const app = makeGridApp(IDS);
-    app.cases = [];
-    app._mobileOverviewCaseFor = () => null;
-    app.openTileGrid(IDS);
-    expect(openMenu(app, 's-a').disabled).toBe(true);
   });
 });

@@ -97,6 +97,22 @@ describe('the header', () => {
 });
 
 describe('header buttons', () => {
+  it('are ⋯ ⤢ × and nothing else: no + (owner decision 9)', () => {
+    const app = openGrid();
+    const tile = section.children.find((el) => el.dataset.sessionId === 's-a') as FakeEl;
+    const actions = tile.children[0].children.find((c) => c.className === 'tile-actions') as FakeEl;
+    expect(actions.children.map((b) => b.className)).toEqual([
+      'tile-btn tile-menu',
+      'tile-btn tile-zoom',
+      'tile-btn tile-remove',
+    ]);
+    expect(actions.children.map((b) => b.textContent)).toEqual(['\u22EF', '\u2922', '\u00D7']);
+    // The + menu and its "New session in this case" went with it.
+    for (const gone of ['openTileAddMenu', 'closeTileAddMenu', 'runInCaseForTiles']) {
+      expect(gone in app, gone).toBe(false);
+    }
+  });
+
   it('× removes the tile only: the session keeps running, a neighbour takes focus unacknowledged', () => {
     const app = openGrid();
     app._apiDelete = vi.fn();
