@@ -8,7 +8,7 @@ import type {
   FontStyle,
 } from './types.js';
 import { getCellDimensions } from './cell-dimensions.js';
-import { findPrompt, readTextAfterPrompt } from './prompt-finder.js';
+import { findPrompt, readTextAfterPrompt, promptRowInViewport } from './prompt-finder.js';
 import { renderOverlay, charCellWidth } from './overlay-renderer.js';
 
 const DEFAULT_PROMPT: PromptFinder = { type: 'character', char: '>', offset: 2 };
@@ -122,11 +122,10 @@ export class ZerolagInputAddon implements XtermAddon {
     // Cache font properties
     this._cacheFont();
 
-    // Scroll detection: hide overlay when scrolled away from bottom
+    // Scroll detection: hide the overlay while the cursor row is scrolled out of view
     this._scrollHandler = () => {
       try {
-        const buf = this._terminal!.buffer.active;
-        if (buf.viewportY !== buf.baseY) {
+        if (!promptRowInViewport(this._terminal!)) {
           this._overlay!.style.display = 'none';
           if (this._scrollTimer) {
             clearTimeout(this._scrollTimer);
@@ -565,8 +564,8 @@ export class ZerolagInputAddon implements XtermAddon {
     try {
       const buf = this._terminal.buffer.active;
 
-      // Hide overlay when scrolled up — prompt is at bottom, not in viewport
-      if (buf.viewportY !== buf.baseY) {
+      // Hide the overlay while the cursor row is scrolled out of view
+      if (!promptRowInViewport(this._terminal)) {
         this._overlay.style.display = 'none';
         return;
       }

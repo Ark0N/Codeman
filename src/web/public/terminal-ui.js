@@ -177,6 +177,18 @@
     }
   }
 
+  // Screen row of the cursor, for the local-echo prompt finders: xterm's cursorY is
+  // baseY-relative, so a viewport parked above the bottom shifts it. Null when off screen.
+  function cursorViewportRow(terminal) {
+    try {
+      const buf = terminal.buffer.active;
+      const row = buf.baseY + (buf.cursorY || 0) - buf.viewportY;
+      return row >= 0 && row < terminal.rows ? row : null;
+    } catch {
+      return null;
+    }
+  }
+
   function isTerminalQueryResponse(data) {
     return TERMINAL_QUERY_RESPONSE_PATTERN.test(data) || TERMINAL_OSC_RESPONSE_PATTERN.test(data);
   }
@@ -250,6 +262,7 @@
     isComposerNavKey,
     classifyPredictInput,
     isCodexComposerRow,
+    cursorViewportRow,
     CODEX_COMPOSER_ROW_RE,
     BRACKETED_PASTE_START,
     USER_SCROLL_STICKY_SUPPRESS_MS,
@@ -3991,14 +4004,15 @@ Object.assign(CodemanApp.prototype, {
       if (session.mode === 'opencode') {
         // OpenCode (Bubble Tea TUI): find the ┃ border on the cursor's row.
         // The input area is "┃  <text>" — the ┃ is the anchor, offset 3 skips "┃  ".
-        // We use the cursor row (cursorY) to find the right line, then scan for ┃.
+        // We use the cursor's screen row to find the right line, then scan for ┃.
         this._localEchoOverlay.setPrompt({
           type: 'custom',
           offset: 3,
           find: (terminal) => {
             try {
               const buf = terminal.buffer.active;
-              const row = buf.cursorY;
+              const row = window.CodemanTerminalInput.cursorViewportRow(terminal);
+              if (row === null) return null;
               const line = buf.getLine(buf.viewportY + row);
               if (!line) return null;
               const text = line.translateToString(true);
@@ -4028,23 +4042,25 @@ Object.assign(CodemanApp.prototype, {
         // the viewport, while xterm's cursor still marks the editable input
         // position. Fall back to cursor coordinates so phone typing appears at
         // the terminal cursor instead of disappearing into pending state.
+        // The glyph is looked for from the cursor's screen row up to the top of the
+        // live screen only: rows above that are parked scrollback with old composer glyphs.
         this._localEchoOverlay.setPrompt({
           type: 'custom',
           offset: 0,
           find: (terminal) => {
             try {
               const buf = terminal.buffer.active;
-              for (let row = terminal.rows - 1; row >= 0; row--) {
+              const cursorRow = window.CodemanTerminalInput.cursorViewportRow(terminal);
+              if (cursorRow === null) return null;
+              const lowest = Math.max(0, buf.baseY - buf.viewportY);
+              for (let row = cursorRow; row >= lowest; row--) {
                 const line = buf.getLine(buf.viewportY + row);
                 if (!line) continue;
                 const text = line.translateToString(true);
                 const idx = text.lastIndexOf('\u276f');
                 if (idx >= 0) return { row, col: idx + 2 };
               }
-              return {
-                row: Math.max(0, Math.min(terminal.rows - 1, buf.cursorY)),
-                col: Math.max(0, Math.min(terminal.cols - 1, buf.cursorX)),
-              };
+              return { row: cursorRow, col: Math.max(0, Math.min(terminal.cols - 1, buf.cursorX)) };
             } catch {
               return null;
             }
