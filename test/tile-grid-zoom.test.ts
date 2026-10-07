@@ -28,7 +28,9 @@ import {
 
 const IDS = ['s-a', 's-b', 's-c', 's-d'];
 const zoomButton = (id: string) =>
-  tileEl(id).children[0].children[2].children.find((b) => b.className.includes('tile-zoom')) as FakeEl;
+  tileEl(id)
+    .querySelector('.tile-actions')!
+    .children.find((b) => b.className.includes('tile-zoom')) as FakeEl;
 
 function openGrid(ids = IDS, focus = ids[0]): GridApp {
   const app = makeGridApp(ids);

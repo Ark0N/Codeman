@@ -2134,7 +2134,56 @@ function sessionIdFromFragment(hash) {
   return id && id.trim() ? id.trim() : null;
 }
 
+/** Longest model name a session header shows (the server caps it as well). */
+const SESSION_MODEL_MAX_CHARS = 64;
+/** A CLI registry id (src/config/cli-registry/schema.ts); anything else is not a class name. */
+const CLI_ID_PATTERN = /^[a-z][a-z0-9-]{0,23}$/;
+
+/**
+ * What a session's header says about its harness: the CLI id (the
+ * `run-mode-dot <id>` logo class), the registry's label for it, the model the
+ * session runs when the server knows it (`SessionState.displayModel`), and the
+ * tooltip naming both.
+ *
+ * The id is data: the label comes from the injected CLI catalog and falls back
+ * to the id, so a CLI added through clis.json still gets a name. The model is
+ * untrusted text (read off a pane, or a CLI's own report): control characters
+ * are dropped and the length capped here too, and callers render it with
+ * textContent. The tooltip says where a model that is not the CLI's own report
+ * came from, so it never claims more than the server knows: one the session
+ * was launched with may have been switched since, and a custom endpoint's
+ * model is the endpoint's, whatever the CLI calls it.
+ *
+ * @param {object} session - a session from app.sessions
+ * @param {Array<{id: string, label?: string}>} [catalog] - window.__codemanCliCatalog
+ * @returns {{id: string, label: string, model: string, title: string}}
+ */
+function describeSessionHarness(session, catalog) {
+  const id = typeof session?.mode === 'string' && CLI_ID_PATTERN.test(session.mode) ? session.mode : '';
+  const entry = id && Array.isArray(catalog) ? catalog.find((cli) => cli?.id === id) : null;
+  const label = (typeof entry?.label === 'string' && entry.label.trim()) || id;
+  const raw = session?.displayModel?.model;
+  const model =
+    typeof raw === 'string'
+      ? raw
+          .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+          .trim()
+          .slice(0, SESSION_MODEL_MAX_CHARS)
+      : '';
+  const source = session?.displayModel?.source;
+  const qualifier = !model
+    ? ''
+    : source === 'launch'
+      ? ' (set at launch)'
+      : source === 'custom-endpoint'
+        ? ' (custom endpoint)'
+        : '';
+  const title = [label, model].filter(Boolean).join(' \u00B7 ') + qualifier;
+  return { id, label, model, title };
+}
+
 if (typeof window !== 'undefined') {
+  window.CodemanSessionHarness = { describeSessionHarness, SESSION_MODEL_MAX_CHARS };
   window.CodemanHistoryFormat = { formatHistoryBytes, computeHistoryTruncationNotice, computeRewriteScrollLine };
   window.CodemanFilePaths = { absoluteFilePathPattern, previewsInFileViewer, FILE_PREVIEW_EXTENSIONS };
   window.CodemanTerminalLines = { terminalLogicalLine };

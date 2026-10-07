@@ -261,6 +261,39 @@ Object.assign(CodemanApp.prototype, {
   // nothing on the button said which. `.split-open` + aria-pressed give it
   // the same active-state language as the codebase's other toggle buttons
   // (keyboard-accessory's Ctrl key, the voice-input mic).
+  /**
+   * Paints a session header's harness logo and model: a grid tile's, and the
+   * split panes'. The logo is PR #532's `run-mode-dot <cliId>` slot (the id is
+   * data, never a branch), the model is text (describeSessionHarness,
+   * constants.js). Diffs against the values it last wrote, kept on `parts`,
+   * never against the DOM, which the translator may have rewritten: an
+   * unchanged session writes nothing, and this runs on every tab render.
+   *
+   * @param {{harness: HTMLElement, model: HTMLElement, modelName: HTMLElement}} parts - the
+   *   header's nodes (the model's box and the name inside it); the memo lives here too
+   * @param {object} session - the session the header shows
+   * @param {string} logoClass - the header's own class for its logo
+   */
+  _paintSessionHarness(parts, session, logoClass) {
+    const harness = window.CodemanSessionHarness.describeSessionHarness(session, window.__codemanCliCatalog);
+    const cls = `${logoClass} run-mode-dot${harness.id ? ` ${harness.id}` : ''}`;
+    if (parts.harnessClass !== cls) {
+      parts.harnessClass = cls;
+      parts.harness.className = cls;
+    }
+    if (parts.harnessTitle !== harness.title) {
+      parts.harnessTitle = harness.title;
+      parts.harness.title = harness.title;
+      parts.harness.setAttribute('aria-label', harness.title);
+      parts.model.title = harness.title;
+    }
+    if (parts.modelValue !== harness.model) {
+      parts.modelValue = harness.model;
+      parts.modelName.textContent = harness.model;
+      parts.model.hidden = !harness.model;
+    }
+  },
+
   _updateSplitButtonState(open) {
     const btn = document.querySelector('.btn-split');
     if (!btn) return;

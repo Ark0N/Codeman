@@ -732,7 +732,10 @@ Object.assign(CodemanApp.prototype, {
       overlay: null,
       header: header.el,
       dot: header.dot,
+      harness: header.harness,
       name: header.name,
+      model: header.model,
+      modelName: header.modelName,
       zoomBtn: header.zoomBtn,
       renaming: false,
       // The pid this tile last saw, so a pane that starts later is noticed.
@@ -1075,9 +1078,10 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * `● name ......... ⋯ ⤢ ×`: the status dot (the six-state classifier the tab
-   * rows and both home screens share), the session name (double-click
-   * renames), the session menu (the tab rail's own), zoom and remove-tile. Its
+   * `● [logo] name · model ..... ⋯ ⤢ ×`: the status dot (the six-state
+   * classifier the tab rows and both home screens share), the harness logo, the
+   * session name (double-click renames), the model it runs when known, the
+   * session menu (the tab rail's own), zoom and remove-tile. Its
    * buttons stop pointerdown, so acting on a tile that is not focused does not
    * also focus it (and spend its idle alert).
    */
@@ -1087,6 +1091,15 @@ Object.assign(CodemanApp.prototype, {
     const dot = document.createElement('span');
     dot.className = 'tile-dot home-sessions-dot home-sessions-dot--idle';
     dot.setAttribute('aria-hidden', 'true');
+    // The harness's logo: PR #532's `run-mode-dot <cliId>` slot, so the logos,
+    // the skins and the plain dot for an id without one stay in styles.css. Its
+    // tooltip and accessible name carry the harness and the model in full
+    // (_paintSessionHarness).
+    const harness = document.createElement('span');
+    harness.className = 'tile-harness run-mode-dot';
+    harness.setAttribute('role', 'img');
+    const title = document.createElement('span');
+    title.className = 'tile-title';
     const name = document.createElement('span');
     name.className = 'tile-name';
     // A session literally named like a UI string ("Sessions") must not be translated.
@@ -1095,6 +1108,18 @@ Object.assign(CodemanApp.prototype, {
       e.stopPropagation();
       this.startTileRename(sessionId);
     });
+    // The model the session runs, when the server knows it: the name itself is
+    // never translated (data-i18n-skip on the inner span), the tooltip on the
+    // outer one may be. Hidden from screen readers: the logo's accessible name
+    // already says it.
+    const model = document.createElement('span');
+    model.className = 'tile-model';
+    model.setAttribute('aria-hidden', 'true');
+    model.hidden = true;
+    const modelName = document.createElement('span');
+    modelName.setAttribute('data-i18n-skip', '');
+    model.appendChild(modelName);
+    title.append(name, model);
     const actions = document.createElement('span');
     actions.className = 'tile-actions';
     const button = (cls, label, glyph, onClick) => {
@@ -1122,13 +1147,13 @@ Object.assign(CodemanApp.prototype, {
       // behind the menu's Close session and its confirm.
       button('tile-remove', 'Remove tile (the session keeps running)', '\u00D7', () => this.removeTile(sessionId))
     );
-    el.append(dot, name, actions);
-    return { el, dot, name, zoomBtn };
+    el.append(dot, harness, title, actions);
+    return { el, dot, harness, name, model, modelName, zoomBtn };
   },
 
   /**
-   * Refreshes one tile's header from the session: dot state, name, the hover
-   * label ("working 3m") and the `needs` border. Diffs on existing nodes only,
+   * Refreshes one tile's header from the session: dot state, harness logo,
+   * name, model, the hover label ("working 3m") and the `needs` border. Diffs on existing nodes only,
    * and cheap: it runs on every tab render (every status change).
    */
   _renderTileHeader(sessionId) {
@@ -1152,6 +1177,7 @@ Object.assign(CodemanApp.prototype, {
     const name =
       this._inlineRenamePending?.get(sessionId) || this.getSessionName?.(session) || session.name || 'Session';
     if (entry.name.textContent !== name) entry.name.textContent = name;
+    this._paintSessionHarness(entry, session, 'tile-harness');
     // A permission prompt is visible across the room.
     entry.el.classList.toggle('tile--needs', state === 'needs');
     this._renderTileOverlay(sessionId);

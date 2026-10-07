@@ -1058,6 +1058,11 @@
       ],
       [/^The agent exited \((-?\d+)\)$/, (_m, code) => `智能体已退出（${code}）`],
       [/^The agent exited \(signal (\d+)\)$/, (_m, signal) => `智能体已退出（信号 ${signal}）`],
+      // A session header's harness logo (tile grid, split pane): "<harness> · <model>",
+      // and where the model came from when the CLI did not report it. The harness
+      // and model names pass through untranslated.
+      [/^(.+) \(set at launch\)$/, (_m, names) => `${names}（启动时设定）`],
+      [/^(.+) \(custom endpoint\)$/, (_m, names) => `${names}（自定义端点）`],
       // The Run button's mode codes ("Run CC", "Run SH", "Run OC" ...; a registry
       // CLI's shortBadge too). Exact entries win first ("Run Shell", "Run OMP").
       [/^Run ([A-Z][A-Z0-9]{1,5})$/, (_m, code) => `运行 ${code}`],

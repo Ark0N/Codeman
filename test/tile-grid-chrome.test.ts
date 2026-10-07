@@ -1,6 +1,11 @@
 /**
- * @fileoverview A tile's header: `● name ......... ⋯ ⤢ ×`, and the tab marker.
+ * @fileoverview A tile's header: `● [logo] name · model ..... ⋯ ⤢ ×`, and the tab marker.
  *
+ * - The logo is PR #532's `run-mode-dot <cliId>` slot (the id is data); the
+ *   logo's tooltip and accessible name carry the harness and the model, with
+ *   where the model came from when the CLI did not report it. The model is
+ *   text (never markup, never translated), and an unknown model shows nothing.
+ *   An unchanged session writes nothing on a refresh.
  * - The dot uses the six-state classifier the tab rows and both home screens
  *   share (`_sidebarRichRow`), with the existing `.home-sessions-dot--*`
  *   classes; a `needs` tile gets the pulsing red border; hovering shows the
@@ -18,7 +23,15 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FakeEl, FakeTile, makeGridApp, resetGridHarness, type GridApp, tileEl } from './mocks/tile-grid-vm.js';
+import {
+  FakeEl,
+  FakeTile,
+  makeGridApp,
+  resetGridHarness,
+  type GridApp,
+  tileEl,
+  windowStub,
+} from './mocks/tile-grid-vm.js';
 
 const IDS = ['s-a', 's-b', 's-c'];
 
@@ -39,8 +52,12 @@ function openGrid(): GridApp {
 }
 
 const headerOf = (id: string) => tileEl(id).children[0];
+/** A header part by its class, wherever the header nests it. */
+const partOf = (id: string, cls: string) => headerOf(id).querySelector(`.${cls}`) as FakeEl;
 const buttonOf = (id: string, cls: string) =>
-  headerOf(id).children[2].children.find((b) => b.className.includes(cls)) as FakeEl;
+  partOf(id, 'tile-actions').children.find((b) => b.className.includes(cls)) as FakeEl;
+/** Where the name sits: the name itself, or the rename input in its place. */
+const nameSlotOf = (id: string) => partOf(id, 'tile-title').children[0];
 
 beforeEach(() => {
   resetGridHarness();
@@ -51,7 +68,7 @@ describe('the header', () => {
     const app = makeGridApp(IDS);
     app.sessions.get('s-b').name = '<b>Sessions</b>';
     app.openTileGrid(IDS);
-    const name = headerOf('s-b').children[1];
+    const name = partOf('s-b', 'tile-name');
     expect(name.textContent).toBe('<b>Sessions</b>');
     expect(name.getAttribute('data-i18n-skip')).toBe('');
     expect(name.children).toHaveLength(0);
@@ -70,9 +87,9 @@ describe('the header', () => {
     app.pendingHooks.set('s-c', new Set(['permission_prompt']));
     app._renderTileChrome();
 
-    expect(headerOf('s-a').children[0].className).toContain('home-sessions-dot--idle');
-    expect(headerOf('s-b').children[0].className).toContain('home-sessions-dot--working');
-    expect(headerOf('s-c').children[0].className).toContain('home-sessions-dot--needs');
+    expect(partOf('s-a', 'tile-dot').className).toContain('home-sessions-dot--idle');
+    expect(partOf('s-b', 'tile-dot').className).toContain('home-sessions-dot--working');
+    expect(partOf('s-c', 'tile-dot').className).toContain('home-sessions-dot--needs');
     expect(tileEl('s-c').classList.contains('tile--needs')).toBe(true);
     expect(tileEl('s-b').classList.contains('tile--needs')).toBe(false);
   });
@@ -92,6 +109,148 @@ describe('the header', () => {
     app._inlineRenameActive = true;
     app._renderSessionTabsImmediate();
     expect(app._renderTileChrome).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the harness logo and the model', () => {
+  const CATALOG = [
+    { id: 'claude', label: 'Claude Code' },
+    { id: 'deepseek', label: 'DeepSeek' },
+    { id: 'shell', label: 'Shell' },
+  ];
+
+  /** s-a on dsh's route, s-b claude on its statusline's model, s-c a shell. */
+  function harnessGrid(): GridApp {
+    windowStub.__codemanCliCatalog = CATALOG;
+    const app = makeGridApp(IDS);
+    app.sessions.get('s-a').mode = 'deepseek';
+    app.sessions.get('s-a').displayModel = { model: 'qwen3.8-27b', source: 'screen' };
+    app.sessions.get('s-b').displayModel = { model: 'Haiku 4.5', source: 'statusline' };
+    app.sessions.get('s-c').mode = 'shell';
+    app.openTileGrid(IDS);
+    return app;
+  }
+  const logoOf = (id: string) => partOf(id, 'tile-harness');
+  const modelOf = (id: string) => partOf(id, 'tile-model');
+  const modelNameOf = (id: string) => modelOf(id).children[0];
+
+  it('sits between the dot and the name: `● [logo] name · model ... ⋯ ⤢ ×`', () => {
+    harnessGrid();
+    expect(headerOf('s-a').children.map((c) => c.className.split(' ')[0])).toEqual([
+      'tile-dot',
+      'tile-harness',
+      'tile-title',
+      'tile-actions',
+    ]);
+    expect(partOf('s-a', 'tile-title').children.map((c) => c.className)).toEqual(['tile-name', 'tile-model']);
+  });
+
+  it("draws the session's CLI as PR #532's logo slot, the id as data", () => {
+    harnessGrid();
+    expect(logoOf('s-a').className).toBe('tile-harness run-mode-dot deepseek');
+    expect(logoOf('s-b').className).toBe('tile-harness run-mode-dot claude');
+    expect(logoOf('s-c').className).toBe('tile-harness run-mode-dot shell');
+    expect(logoOf('s-a').getAttribute('role')).toBe('img');
+  });
+
+  it('names the harness and the model in the tooltip and the accessible name', () => {
+    harnessGrid();
+    expect(logoOf('s-a').title).toBe('DeepSeek \u00B7 qwen3.8-27b');
+    expect(logoOf('s-a').getAttribute('aria-label')).toBe('DeepSeek \u00B7 qwen3.8-27b');
+    expect(modelOf('s-a').title).toBe('DeepSeek \u00B7 qwen3.8-27b');
+    expect(modelNameOf('s-a').textContent).toBe('qwen3.8-27b');
+    expect(modelOf('s-a').hidden).toBe(false);
+    // Said once to a screen reader: the model's box is hidden from it.
+    expect(modelOf('s-a').getAttribute('aria-hidden')).toBe('true');
+    // The model name is never translated; its tooltip may be.
+    expect(modelNameOf('s-a').getAttribute('data-i18n-skip')).toBe('');
+    expect(modelOf('s-a').getAttribute('data-i18n-skip')).toBeNull();
+  });
+
+  it('an unknown model shows the logo alone: no text, no placeholder', () => {
+    harnessGrid();
+    expect(modelOf('s-c').hidden).toBe(true);
+    expect(modelNameOf('s-c').textContent).toBe('');
+    expect(logoOf('s-c').title).toBe('Shell');
+  });
+
+  it('says in the tooltip where a model came from when the CLI did not report it', () => {
+    const app = harnessGrid();
+    app.sessions.get('s-b').displayModel = { model: 'haiku', source: 'launch' };
+    app.sessions.get('s-c').mode = 'claude';
+    app.sessions.get('s-c').displayModel = { model: 'qwen3.8-27b', source: 'custom-endpoint' };
+    app._renderTileChrome();
+    expect(logoOf('s-b').title).toBe('Claude Code \u00B7 haiku (set at launch)');
+    expect(logoOf('s-c').title).toBe('Claude Code \u00B7 qwen3.8-27b (custom endpoint)');
+    expect(modelNameOf('s-b').textContent).toBe('haiku');
+  });
+
+  it('a model change (session:updated) updates the header', () => {
+    const app = harnessGrid();
+    app.sessions.set('s-b', {
+      ...app.sessions.get('s-b'),
+      displayModel: { model: 'Sonnet 4.6', source: 'statusline' },
+    });
+    app._renderTileChrome();
+    expect(modelNameOf('s-b').textContent).toBe('Sonnet 4.6');
+    expect(logoOf('s-b').title).toBe('Claude Code \u00B7 Sonnet 4.6');
+    // And the model going away takes the text with it.
+    delete app.sessions.get('s-b').displayModel;
+    app._renderTileChrome();
+    expect(modelOf('s-b').hidden).toBe(true);
+    expect(modelNameOf('s-b').textContent).toBe('');
+  });
+
+  it('a model with markup stays text', () => {
+    const app = harnessGrid();
+    app.sessions.get('s-b').displayModel = { model: '<img src=x onerror=alert(1)>', source: 'statusline' };
+    app._renderTileChrome();
+    expect(modelNameOf('s-b').textContent).toBe('<img src=x onerror=alert(1)>');
+    expect(modelNameOf('s-b').children).toHaveLength(0);
+    expect(modelOf('s-b').children).toHaveLength(1);
+  });
+
+  it('an unchanged session writes nothing on a refresh', () => {
+    const app = harnessGrid();
+    const writes: string[] = [];
+    for (const id of IDS) {
+      for (const [node, props] of [
+        [logoOf(id), ['className', 'title']],
+        [modelOf(id), ['title', 'hidden']],
+        [modelNameOf(id), ['textContent']],
+      ] as Array<[FakeEl, string[]]>) {
+        for (const prop of props) {
+          let value = (node as unknown as Record<string, unknown>)[prop];
+          Object.defineProperty(node, prop, {
+            get: () => value,
+            set: (v) => {
+              writes.push(`${id} ${prop}`);
+              value = v;
+            },
+          });
+        }
+        const setAttribute = node.setAttribute.bind(node);
+        node.setAttribute = (k: string, v: string) => {
+          writes.push(`${id} @${k}`);
+          setAttribute(k, v);
+        };
+      }
+    }
+    app._renderTileChrome();
+    app._renderTileChrome();
+    expect(writes).toEqual([]);
+  });
+
+  it('an id that is not a CLI id is not a class name; without a catalog the label is the id', () => {
+    const app = harnessGrid();
+    delete windowStub.__codemanCliCatalog;
+    app.sessions.get('s-a').mode = 'bad id" onclick';
+    app.sessions.get('s-b').mode = 'my-cli';
+    app._renderTileChrome();
+    expect(logoOf('s-a').className).toBe('tile-harness run-mode-dot');
+    expect(logoOf('s-a').title).toBe('qwen3.8-27b');
+    expect(logoOf('s-b').className).toBe('tile-harness run-mode-dot my-cli');
+    expect(logoOf('s-b').title).toBe('my-cli \u00B7 Haiku 4.5');
   });
 });
 
@@ -216,8 +375,8 @@ describe('a translated label survives a refresh (zh-CN)', () => {
 
 describe('rename', () => {
   function startRename(app: GridApp, id: string) {
-    headerOf(id).children[1].dispatch('dblclick', { stopPropagation: vi.fn() });
-    return headerOf(id).children[1];
+    nameSlotOf(id).dispatch('dblclick', { stopPropagation: vi.fn() });
+    return nameSlotOf(id);
   }
 
   it('double-click puts an input in place of the name; Enter renames through the write queue', () => {
@@ -235,8 +394,8 @@ describe('rename', () => {
     input.value = 'renamed';
     input.dispatch('keydown', { key: 'Enter', preventDefault: vi.fn() });
     expect(app._queueInlineSessionName).toHaveBeenCalledWith('s-b', 'renamed');
-    expect(headerOf('s-b').children[1].className).toBe('tile-name');
-    expect(headerOf('s-b').children[1].textContent).toBe('renamed');
+    expect(nameSlotOf('s-b').className).toBe('tile-name');
+    expect(nameSlotOf('s-b').textContent).toBe('renamed');
   });
 
   it('Escape cancels without a write', () => {
@@ -246,7 +405,7 @@ describe('rename', () => {
     input.value = 'nope';
     input.dispatch('keydown', { key: 'Escape', preventDefault: vi.fn() });
     expect(app._queueInlineSessionName).not.toHaveBeenCalled();
-    expect(headerOf('s-b').children[1].textContent).toBe('s-b');
+    expect(nameSlotOf('s-b').textContent).toBe('s-b');
   });
 
   it('a header refresh while renaming leaves the input alone', () => {
@@ -254,7 +413,7 @@ describe('rename', () => {
     const input = startRename(app, 's-b');
     input.value = 'half-typed';
     app._renderTileChrome();
-    expect(headerOf('s-b').children[1]).toBe(input);
+    expect(nameSlotOf('s-b')).toBe(input);
     expect(input.value).toBe('half-typed');
   });
 
@@ -265,7 +424,7 @@ describe('rename', () => {
     input.value = 'x';
     input.dispatch('keydown', { key: 'Enter', isComposing: true, preventDefault: vi.fn() });
     expect(app._queueInlineSessionName).not.toHaveBeenCalled();
-    expect(headerOf('s-b').children[1]).toBe(input);
+    expect(nameSlotOf('s-b')).toBe(input);
   });
 });
 

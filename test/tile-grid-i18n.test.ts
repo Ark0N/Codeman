@@ -73,6 +73,14 @@ const seen = new Map<string, string>();
 /** Text in a data-i18n-skip subtree (user text): must never be translated. */
 const userText = new Set<string>();
 /**
+ * The harness logo's tooltip and accessible name (and the model box's
+ * tooltip): harness and model NAMES, which stay as they are, plus at most a
+ * note on where the model came from, which translates.
+ */
+const harnessLabels = new Map<string, string>();
+/** The harness labels and models the exercise below gives its sessions. */
+const HARNESS_NAMES = ['Claude Code', 'DeepSeek', 'Codex', 'qwen3.8-27b', 'Haiku 4.5', 'haiku', 'gpt-5.6-terra'];
+/**
  * A title or accessible name inside a skipped subtree: the translator skips
  * the element's attributes along with its text, so a UI label there stays
  * English. Only the user text itself may be skipped.
@@ -82,9 +90,11 @@ const labelsInSkip: string[] = [];
 function harvest(root: FakeEl | null | undefined, where: string) {
   const walk = (el: FakeEl, inSkip: boolean) => {
     const skip = inSkip || 'data-i18n-skip' in el.attrs;
+    const names = /\b(run-mode-dot|tile-model)\b/.test(el.className);
     const add = (value: unknown, kind: string) => {
       if (typeof value !== 'string' || !/[A-Za-z]/.test(value)) return;
-      if (skip && kind === 'text') userText.add(value.trim());
+      if (names && !skip && kind !== 'text') harnessLabels.set(value.trim(), `${where} (${kind})`);
+      else if (skip && kind === 'text') userText.add(value.trim());
       else if (skip) labelsInSkip.push(`${where} (${kind}): ${value}`);
       else if (!seen.has(value.trim())) seen.set(value.trim(), `${where} (${kind})`);
     };
@@ -127,6 +137,22 @@ const EIGHT = Array.from({ length: 8 }, (_, i) => `s-${i + 1}`);
 async function exercise() {
   setUp();
   const app = makeGridApp(EIGHT);
+  // The harness logos: a CLI-reported model, a launch one, a custom endpoint's, none.
+  windowStub.__codemanCliCatalog = [
+    { id: 'claude', label: 'Claude Code' },
+    { id: 'deepseek', label: 'DeepSeek' },
+    { id: 'codex', label: 'Codex' },
+  ];
+  Object.assign(app.sessions.get('s-1'), {
+    mode: 'deepseek',
+    displayModel: { model: 'qwen3.8-27b', source: 'screen' },
+  });
+  app.sessions.get('s-2').displayModel = { model: 'haiku', source: 'launch' };
+  Object.assign(app.sessions.get('s-3'), {
+    mode: 'codex',
+    displayModel: { model: 'qwen3.8-27b', source: 'custom-endpoint' },
+  });
+  app.sessions.get('s-6').displayModel = { model: 'Haiku 4.5', source: 'statusline' };
   let pill = 'idle';
   app._sidebarRichRow = () => ({ state: pill, pill, since: { at: 1 } });
   app._mobileOverviewStampText = () => '3m';
@@ -287,6 +313,30 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
       // The session name inside the confirm is user text, allowed to stay.
       const words = leftover(text.replace('Open tiles', ''));
       if (text === source || words.length) bad.push(`${where}: "${source}" -> "${text}"`);
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it('the harness logo keeps harness and model names as they are and translates the rest', () => {
+    // Not vacuous: every form the logo's tooltip takes was seen.
+    expect([...harnessLabels.keys()]).toEqual(
+      expect.arrayContaining([
+        'DeepSeek \u00B7 qwen3.8-27b',
+        'Claude Code \u00B7 haiku (set at launch)',
+        'Codex \u00B7 qwen3.8-27b (custom endpoint)',
+        'Claude Code \u00B7 Haiku 4.5',
+        'Claude Code',
+      ])
+    );
+    const bad: string[] = [];
+    for (const [label, where] of harnessLabels) {
+      const text = zh.api.t(label);
+      const kept = HARNESS_NAMES.filter((n) => label.includes(n));
+      let rest = text;
+      for (const n of [...kept].sort((a, b) => b.length - a.length)) rest = rest.split(n).join('');
+      if (!kept.length || kept.some((n) => !text.includes(n)) || leftover(rest).length || en.api.t(label) !== label) {
+        bad.push(`${where}: "${label}" -> "${text}"`);
+      }
     }
     expect(bad).toEqual([]);
   });

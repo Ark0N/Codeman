@@ -19477,7 +19477,7 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   background: transparent !important;
 }
 
-/* Tile header: `● name ......... ⋯ ⤢ ×`. FIXED height (#464): the body below
+/* Tile header: `● [logo] name · model ..... ⋯ ⤢ ×`. FIXED height (#464): the body below
    holds the xterm, so a header that grew (a wrapped name, the rename input)
    would shrink the body with nothing refitting the xterm or its PTY. */
 .tile-header {
@@ -19496,12 +19496,49 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   user-select: none;
 }
 
-.tile-name {
+/* The harness logo: PR #532's run-mode-dot slot (1.15em of this 13px, the
+   size of the header's text), with the logos, the skins and the plain dot of an
+   id without one all coming from the run-mode-dot rules. */
+.tile-harness.run-mode-dot {
+  font-size: 13px;
+}
+
+/* Name and model. On a narrow header the model gives way first, then the name;
+   the logo and the buttons keep their size. The name does not shrink at all (a
+   shrink factor, however small, also takes a subpixel from a name that fits and
+   ellipsizes it) and is capped at this box's width instead. */
+.tile-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
+}
+
+.tile-name {
+  flex: 0 0 auto;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.tile-model {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted, #888);
+  font-size: 11px;
+}
+
+.tile-model::before {
+  content: '\00B7';
+  margin-right: 6px;
 }
 
 .tile-actions {

@@ -313,6 +313,8 @@ export function resetGridHarness() {
   rafCallbacks.length = 0;
   localStore.clear();
   windowStub.innerWidth = 2400;
+  // The CLI catalog the server injects (labels for the harness logos); a test sets its own.
+  delete windowStub.__codemanCliCatalog;
   section.children = [];
   main.className = 'main';
   // A split a test left open moved .terminal-wrap into its container.
