@@ -82,6 +82,35 @@ beforeEach(() => {
 });
 
 describe('parking the main terminal', () => {
+  it('opening takes no snapshot of a session that becomes a tile, and keeps it for one that does not', () => {
+    // Closing the grid drops the snapshot of every tiled id, so one taken of a
+    // tiled session at opening was always thrown away.
+    const tiled = makeApp();
+    tiled.openTileGrid(IDS);
+    expect(tiled._cleanupPreviousSession).toHaveBeenCalledWith('s-a', { skipSnapshot: true });
+
+    resetGridHarness();
+    const elsewhere = makeApp(); // s-a is active, the grid opens on the others
+    elsewhere.openTileGrid(['s-b', 's-c']);
+    expect(elsewhere._cleanupPreviousSession).toHaveBeenCalledWith('s-b', { skipSnapshot: false });
+  });
+
+  it('_cleanupPreviousSession skips the snapshot only when asked', () => {
+    const app = makeApp();
+    delete app._cleanupPreviousSession; // the real one
+    app._disconnectWs = vi.fn();
+    const serialize = vi.fn(() => 'snapshot of s-a\r\n'.repeat(4));
+    app._serializeAddon = { serialize };
+    app._isUsableXtermSnapshot = () => true;
+    app._persistXtermSnapshot = vi.fn();
+    app._cleanupPreviousSession('s-b', { skipSnapshot: true });
+    expect(serialize).not.toHaveBeenCalled();
+    expect(app._xtermSnapshots.has('s-a')).toBe(false);
+    app._cleanupPreviousSession('s-b');
+    expect(serialize).toHaveBeenCalledTimes(1);
+    expect(app._xtermSnapshots.has('s-a')).toBe(true);
+  });
+
   it('opening parks it ONCE and puts a tile per session in its place, focused tile active', () => {
     const app = makeApp();
     expect(app.openTileGrid(IDS, { focusedId: 's-b' })).toBe(true);

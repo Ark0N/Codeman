@@ -7587,7 +7587,9 @@ class CodemanApp {
     }
   }
 
-  _cleanupPreviousSession(newSessionId) {
+  // `skipSnapshot`: the tile grid opening on the session it parks
+  // (tile-grid.js openTileGrid), whose snapshot closing the grid discards.
+  _cleanupPreviousSession(newSessionId, { skipSnapshot = false } = {}) {
     // Snapshot the OUTGOING session's xterm rendered state (viewport + scrollback +
     // colors/attrs) before the terminal gets cleared/reset. Lets us restore the
     // exact view on switch-back rather than replaying codex's byte stream, which
@@ -7598,6 +7600,7 @@ class CodemanApp {
     // quota for them. Unknown/undefined mode still snapshots, matching restore.
     const outgoingSession = this.activeSessionId ? this.sessions?.get?.(this.activeSessionId) : null;
     if (
+      !skipSnapshot &&
       this.activeSessionId &&
       outgoingSession?.mode !== 'shell' &&
       this._serializeAddon &&

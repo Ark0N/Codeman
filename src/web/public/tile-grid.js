@@ -202,7 +202,11 @@ Object.assign(CodemanApp.prototype, {
       return true;
     }
 
-    this._cleanupPreviousSession(focus);
+    // No snapshot of a session that becomes a tile: closing the grid drops the
+    // main terminal's snapshot of every tiled id (stale by then), so taking one
+    // here (a 1000-line serialize and up to 256 KB of localStorage for a
+    // non-shell session) only ever produced a copy that was thrown away.
+    this._cleanupPreviousSession(focus, { skipSnapshot: wanted.includes(this.activeSessionId) });
     grid.open = true;
     grid.ids = [];
     grid.focusedId = focus;
