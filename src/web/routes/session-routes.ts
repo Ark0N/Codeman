@@ -1104,7 +1104,8 @@ export function registerSessionRoutes(
     const globalNice = await ctx.getGlobalNiceConfig();
     const modelConfig = await ctx.getModelConfig();
     const mode = body.mode || 'claude';
-    const launchCodexConfig = mode === 'codex' ? await resolveCodexLaunchDefaults(body.codexConfig) : body.codexConfig;
+    const launchCodexConfig =
+      mode === 'codex' && !remote ? await resolveCodexLaunchDefaults(body.codexConfig) : body.codexConfig;
     // Where a model override comes from is a capability, and the three answers are
     // genuinely different mechanisms:
     //   'flag'                 — the CLI takes --model, so read the value the caller sent
@@ -3835,7 +3836,9 @@ export function registerSessionRoutes(
     const niceConfig = await ctx.getGlobalNiceConfig();
     const qsModelConfig = await ctx.getModelConfig();
     const qsLaunchCodexConfig =
-      mode === 'codex' && !remote ? await resolveCodexLaunchDefaults(codexConfig, !!customModel) : codexConfig;
+      mode === 'codex' && !remote && !docker
+        ? await resolveCodexLaunchDefaults(codexConfig, !!customModel)
+        : codexConfig;
     // See the create path for why this is a capability rather than a mode ladder.
     const qsModelSource = getCli(mode)?.capabilities.model;
     const qsModel =

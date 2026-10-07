@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
@@ -10,6 +10,7 @@ import { resolveCodexLaunchDefaults } from '../../src/web/codex-launch-defaults.
 import { buildCodexCommand } from '../../src/tmux-manager.js';
 import { Session } from '../../src/session.js';
 import { safeRmHomeTree } from '../mocks/index.js';
+import { getDataDir } from '../../src/config/instance.js';
 
 vi.mock('../../src/utils/cli-launcher.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/utils/cli-launcher.js')>();
@@ -21,6 +22,9 @@ describe('Codex launch defaults', () => {
   const workingDir = join(homedir(), 'codex-default-test');
 
   beforeEach(async () => {
+    for (const name of ['docker-hosts.json', 'docker-cases.json', 'remote-hosts.json', 'remote-cases.json']) {
+      await rm(join(getDataDir(), name), { force: true });
+    }
     await mkdir(workingDir, { recursive: true });
     await mkdir(dirname(SETTINGS_PATH), { recursive: true });
     await writeFile(SETTINGS_PATH, JSON.stringify({ codexModel: 'gpt-6.1', codexReasoningEffort: 'high' }));
@@ -42,6 +46,7 @@ describe('Codex launch defaults', () => {
         : { caseName: 'codex-default-test', mode: 'codex', ...overrides };
     const res = await harness.app.inject({ method: 'POST', url, payload });
     expect(res.statusCode).toBe(200);
+    expect(res.json().success, res.body).not.toBe(false);
     const session = [...harness.ctx.sessions.values()].at(-1) as Session | undefined;
     expect(session).toBeDefined();
     return session!.codexConfig;
@@ -77,6 +82,60 @@ describe('Codex launch defaults', () => {
   it('keeps defaults out of custom endpoint launches', async () => {
     const config = { model: 'local-model', animations: false };
     expect(await resolveCodexLaunchDefaults(config, true)).toBe(config);
+  });
+
+  it('does not record unused defaults for a Docker quick-start', async () => {
+    await writeFile(
+      join(getDataDir(), 'docker-hosts.json'),
+      JSON.stringify([{ id: 'docker1', label: 'Docker', image: 'codeman/agent:base' }])
+    );
+    await writeFile(
+      join(getDataDir(), 'docker-cases.json'),
+      JSON.stringify([
+        {
+          name: 'codex-default-test',
+          type: 'docker',
+          hostId: 'docker1',
+          hostWorkspacePath: workingDir,
+          container: 'codeman-default-test',
+        },
+      ])
+    );
+    expect(await createdConfig('/api/quick-start')).toBeUndefined();
+    const session = [...harness.ctx.sessions.values()].at(-1) as Session;
+    expect(session.docker?.containerName).toBe('codeman-default-test');
+    expect(session.toState().model).toBeUndefined();
+  });
+
+  it('does not record unused defaults for a remote attach', async () => {
+    await writeFile(
+      join(getDataDir(), 'remote-hosts.json'),
+      JSON.stringify([{ id: 'remote1', label: 'Remote', host: '10.0.0.5', username: 'dev' }])
+    );
+    expect(
+      await createdConfig('/api/sessions', {
+        workingDir: undefined,
+        attachRemoteSession: { hostId: 'remote1', remoteSessionName: 'codeman-existing' },
+      })
+    ).toBeUndefined();
+    const session = [...harness.ctx.sessions.values()].at(-1) as Session;
+    expect(session.toState().remote?.hostId).toBe('remote1');
+    expect(session.toState().model).toBeUndefined();
+  });
+
+  it('does not record unused defaults for a remote quick-start', async () => {
+    await writeFile(
+      join(getDataDir(), 'remote-hosts.json'),
+      JSON.stringify([{ id: 'remote1', label: 'Remote', host: '10.0.0.5', username: 'dev' }])
+    );
+    await writeFile(
+      join(getDataDir(), 'remote-cases.json'),
+      JSON.stringify([{ name: 'codex-default-test', type: 'remote', hostId: 'remote1', remotePath: '/home/dev/work' }])
+    );
+    expect(await createdConfig('/api/quick-start')).toBeUndefined();
+    const session = [...harness.ctx.sessions.values()].at(-1) as Session;
+    expect(session.toState().remote?.hostId).toBe('remote1');
+    expect(session.toState().model).toBeUndefined();
   });
 
   it('accepts, persists, clears and validates synced settings via HTTP', async () => {

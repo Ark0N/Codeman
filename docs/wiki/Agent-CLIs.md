@@ -128,9 +128,9 @@ Integration detail: [`docs/opencode-integration.md`](https://github.com/Ark0N/Co
 App Settings has synced **Default Codex model** and **Default Codex reasoning effort**
 controls. Enter a model ID supported by your Codex provider; available reasoning levels
 depend on the model and CLI version. Empty defaults use Codex's own configuration.
-The defaults apply when creating local or Docker sessions, including HTTP API launches.
+The defaults apply when creating local sessions (including WSL), including HTTP API launches.
 Explicit `codexConfig.model` / `codexConfig.reasoningEffort` values take precedence.
-Custom model endpoints and remote host command overrides keep their own settings.
+Custom model endpoints, Docker containers and remote host command overrides keep their own settings.
 Changing a default affects new sessions and does not edit Codex configuration files.
 
 Two behaviours that are deliberate and worth knowing:
