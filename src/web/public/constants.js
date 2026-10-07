@@ -1612,21 +1612,18 @@ function buildSplitPickerSessions(sessions, sessionOrder, excludeId, detachedIds
   const result = [];
   for (const id of sessionOrder) {
     if (id === excludeId) continue;
-    // A detached (popped-out) session's own window already yields its PTY
-    // size (see sendResize's detachedElsewhere guard in terminal-ui.js) —
-    // Pane B's TerminalTile._sendResize() has no such check, so letting
-    // one into the picker put its detached window and Pane B in a fight over
-    // the same PTY's dimensions.
+    // A detached (popped-out) session's own window owns its PTY size (see
+    // sendResize's detachedElsewhere guard in terminal-ui.js;
+    // TerminalTile._sendResize() stands aside the same way), so Pane B could
+    // only show it at a size it cannot set.
     if (detachedIds?.has?.(id)) continue;
     const session = sessions.get(id);
     if (!session) continue;
     // A session with no PTY attached (exited CLI, a crash-looped session
     // whose breaker tripped, a restore that failed to re-attach) has nothing
-    // reading its tmux pane. TerminalTile never does selectSession()'s
-    // re-attach POST, so its socket would open onto a pane nothing feeds:
-    // no terminal events, and Session.write() silently drops every keystroke
-    // with no ack either way (Pane B sends no `seq`), so the loss is
-    // invisible — the healthy socket never trips the disconnect banner.
+    // reading its tmux pane, and the split never does selectSession()'s
+    // re-attach POST: Pane B would open a healthy-looking socket onto a pane
+    // that nothing feeds and nothing reads.
     if (session.pid === null) continue;
     result.push({ id, label: session.name || 'Session' });
   }

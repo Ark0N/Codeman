@@ -21,7 +21,7 @@
  */
 
 (function (global) {
-  // How long a scroll-to-top history pull may hold Pane B's live output.
+  // How long a scroll-to-top history pull may hold this pane's live output.
   const HISTORY_PULL_TIMEOUT_MS = 10000;
 
   // How much of a replay is queued in xterm at once: a 1 MiB load goes in one
@@ -85,10 +85,10 @@
       this.mountEl = mountEl;
       this.sessionMode = opts.mode;
       this.fontSettings = opts.fontSettings || {};
-      // Live reference (not a snapshot) to the app's detachedSessions Set —
-      // detaching this session AFTER the split is already open must still be
-      // seen by _sendResize() below, or it re-creates the exact PTY-size
-      // fight the split picker already refuses to open at pick time.
+      // Live reference (not a snapshot) to the app's detachedSessions Set:
+      // detaching this session AFTER the pane opened must still be seen by
+      // _sendResize() below, or this pane and the session's own window fight
+      // over the PTY's size (which the split picker refuses at pick time).
       this.detachedSessions = opts.detachedSessions;
       // Lines of scrollback this pane's xterm keeps (the grid passes its smaller
       // TILE_SCROLLBACK) and its font size (the grid's own tile font); absent,
@@ -200,17 +200,18 @@
 
       this.terminal.onData((data) => this._onTerminalData(data));
 
-      // Pane B has no gates of its own by default, so every app-level chord
-      // that the document capture-phase handler (app.js) only preventDefault()s
-      // — never stopPropagation()s — reaches xterm here too and writes its raw
-      // byte/escape sequence into THIS session's PTY on top of whatever the app
-      // action already did to Pane A (COD-153; mirrors the primary pane's own
-      // gates at terminal-ui.js's attachCustomKeyEventHandler: command palette,
-      // Alt+1-9/[/] tab nav, Alt+B sidebar toggle, Ctrl+Z suspend, Shift/Ctrl+Enter
-      // newline, and smart-copy Ctrl+C/Ctrl+Shift+C). Routed through the same
-      // registry-aware predicates so a rebind or a disable restores plain
-      // terminal behavior here too. Ctrl+V goes through the primary pane's
-      // paste trap (image-input.js), aimed at this pane (below).
+      // xterm has no gates of its own, so every app-level chord that the
+      // document capture-phase handler (app.js) only preventDefault()s (never
+      // stopPropagation()s) would reach this xterm too and write its raw byte
+      // or escape sequence into THIS session's PTY on top of whatever the app
+      // action did (COD-153). These are the primary pane's gates
+      // (terminal-ui.js attachCustomKeyEventHandler): command palette,
+      // Alt+1-9/[/] tab nav, Alt+B sidebar toggle, the tile grid's chords,
+      // Ctrl+Z suspend, Shift/Ctrl+Enter newline, and smart-copy
+      // Ctrl+C/Ctrl+Shift+C. Routed through the same registry-aware
+      // predicates so a rebind or a disable restores plain terminal behavior
+      // here too. Ctrl+V goes through the primary pane's paste trap
+      // (image-input.js), aimed at this pane (below).
       this.terminal.attachCustomKeyEventHandler((ev) => {
         if (ev.isComposing || ev.key === 'Process' || ev.keyCode === 229) return true;
         if (
@@ -240,13 +241,11 @@
           global.app?._handleImagePaste?.({ terminal: this.terminal, sessionId: this.sessionId });
           return false;
         }
-        // Ctrl+Z (SIGTSTP/job-control suspend): mirrors terminal-ui.js's own
-        // swallow — in a plain shell session this is the user's own
-        // job-control tool and must reach the PTY, but in every other mode
-        // (claude/omp/pi/codex/...) it silently stops an unattended agent
-        // loop dead. Pane B has its own PTY/session and must not send a
-        // suspend into a non-shell one just because the primary pane's own
-        // gate lives elsewhere.
+        // Ctrl+Z (SIGTSTP/job-control suspend), as terminal-ui.js swallows it:
+        // in a plain shell session this is the user's own job-control tool and
+        // must reach the PTY, but in every other mode (claude/omp/pi/codex/...)
+        // it silently stops an unattended agent loop dead. This pane has its
+        // own session and applies the same rule to it.
         if (
           ev.type === 'keydown' &&
           ev.key.toLowerCase() === 'z' &&
@@ -258,15 +257,14 @@
         ) {
           return false;
         }
-        // Shift+Enter / Ctrl+Enter: insert a newline instead of submitting.
-        // Mirrors terminal-ui.js's own handling — xterm sends plain \r for
-        // every Enter variant, so an Ink app (Claude Code) can't tell a
-        // newline from a submit. Without this gate, Pane B's onData would
-        // send that bare \r straight over the WS and submit an incomplete
-        // prompt instead of adding a line to it. Targets THIS pane's own
-        // session (this.sessionId), never the primary pane's
+        // Shift+Enter / Ctrl+Enter: insert a newline instead of submitting, as
+        // terminal-ui.js does. xterm sends plain \r for every Enter variant,
+        // so an Ink app (Claude Code) can't tell a newline from a submit, and
+        // without this gate this pane's onData would send that bare \r and
+        // submit an incomplete prompt instead of adding a line to it. Targets
+        // THIS pane's own session (this.sessionId), never the primary pane's
         // activeSessionId, and has no local-echo overlay of its own to flush
-        // first (Pane B is deliberately plainer — see the fileoverview).
+        // first (this pane is deliberately plainer, see the fileoverview).
         // Swallow keypress/keyup too (xterm would send \r for a Shift-only keypress); only keydown sends.
         if (ev.key === 'Enter' && (ev.shiftKey || ev.ctrlKey)) {
           if (ev.type === 'keydown') {
@@ -316,17 +314,13 @@
 
       // Load existing scrollback before going live. The WS below is
       // subscribe-only (ws-routes.ts sends nothing on connect, only future
-      // 'terminal' events), so without this Pane B stays blank until the
-      // target session happens to produce new output. It LOOKED
-      // intermittent rather than always-broken because _sendResize() below
-      // often nudges the shared session's real tmux window to a new size,
-      // and tmux repaints its current screen on resize — that repaint was
-      // getting captured and streamed here, incidentally populating the
-      // pane. When Pane B's computed dimensions happened to already match
-      // the session's last-known size, Session.resize() (session.ts) skips
-      // the resize as a no-op, no repaint fires, and the pane stayed blank.
-      // The await covers the whole chunked replay, not just the fetch, so a
-      // live frame from the socket below can never land in the middle of it.
+      // 'terminal' events), so without this the pane stays blank until the
+      // session happens to produce new output. The resize _sendResize() sends
+      // on open is no substitute: tmux repaints on a resize, but
+      // Session.resize() (session.ts) skips one that matches the session's
+      // last size, and then nothing repaints at all. The await covers the
+      // whole chunked replay, not just the fetch, so a live frame from the
+      // socket below can never land in the middle of it.
       await this._loadBuffer();
       if (this._destroyed) return;
 
@@ -372,8 +366,8 @@
           } else if (msg.t === 'r') {
             // Server-triggered refresh (SSE backpressure cleared, terminal
             // data was dropped). The primary pane routes this to
-            // _onSessionNeedsRefresh (app.js) — Pane B has its own
-            // buffer loader for the same reason connect() does.
+            // _onSessionNeedsRefresh (app.js); this pane has its own buffer
+            // loader for the same reason connect() does.
             this._refreshBuffer();
           } else if (msg.t === 'ia') {
             // Input ACK. The frame names no session, so it is this pane's.
@@ -382,7 +376,7 @@
             this._onPtyGeometryReport(msg.c, msg.r);
           }
         } catch {
-          /* Malformed frame — ignore, matches primary pane's tolerance. */
+          /* Malformed frame: ignored, as in the primary pane. */
         }
       };
 
@@ -397,7 +391,7 @@
       };
 
       ws.onerror = () => {
-        // onclose fires after onerror — cleanup happens there.
+        // onclose fires after onerror: cleanup happens there.
       };
     }
 
@@ -407,8 +401,8 @@
       if (!ws) return;
       ws.onopen = null;
       ws.onmessage = null;
-      // onclose fires asynchronously AFTER close(); without this it ran its
-      // "disconnected" write against a pane already torn down or replaced.
+      // onclose fires asynchronously AFTER close(); without this it would run
+      // its "disconnected" write against a pane already torn down or replaced.
       ws.onclose = null;
       ws.onerror = null;
       try {
@@ -575,7 +569,7 @@
 
     // Fetches and writes the session's current scrollback. Used both by
     // connect() (initial load) and by the `{t:'r'}` server-refresh frame
-    // (below) — the primary pane's own _onSessionNeedsRefresh (app.js) is
+    // (above). The primary pane's own _onSessionNeedsRefresh (app.js) is
     // scoped to `this.activeSessionId` and clears/rewrites the primary
     // terminal, neither of which applies to this independent pane, so this is
     // a standalone equivalent rather than a call into it.
@@ -584,10 +578,11 @@
     // _onSessionNeedsRefresh): a shell session can retain hundreds of
     // thousands of plain scrollback lines, so pulling `?full=1` there parses
     // an unbounded, server-capped (up to terminalBufferMaxBytes, 32MB) body
-    // into a 50000-line xterm on every load. Non-shell (TUI) sessions still
-    // get one full replay. `fetch` here goes through the global wrapper
-    // (constants.js), which already prefixes CodemanBase — unlike the raw
-    // WebSocket URL above, which does not.
+    // into this xterm on every load; a shell loads the `tail=` window. A
+    // non-shell (TUI) session gets one full replay, or the same bounded window
+    // with `boundedLoad` (grid tiles). `fetch` here goes through the global
+    // wrapper (constants.js), which already prefixes CodemanBase, unlike the
+    // raw WebSocket URL above, which does not.
     //
     // Single-flight: the flag is held across the fetch AND the chunked write
     // (writeChunked resolves after its last chunk), so two replays can never
@@ -721,20 +716,20 @@
     // Wheel-up at the top of a SHELL pane's scrollback. tmux repaints a burst of
     // output (`cat` of a file longer than the screen) instead of scrolling it,
     // so this pane's xterm ends up with about one screen of scrollback while
-    // tmux holds every line — and nothing here ever went back to ask, so the
-    // history was unreachable. The primary pane has the same pull
-    // (app.js _maybeRefetchFullHistory); Pane B is a separate xterm and needs its
-    // own. Shell only: a non-shell CLI's history is out of scope for this pull
-    // (its load already takes `full=1`; codex and Claude's inline renderer do
-    // grow tmux history, this just isn't how they recover it). The alternate-
-    // screen skip (nano, vim, less) only matters for a direct-PTY shell — under
-    // tmux the browser xterm never enters the alternate buffer.
+    // tmux holds every line, and without this pull the history is
+    // unreachable. The primary pane has the same pull
+    // (app.js _maybeRefetchFullHistory); a tile is a separate xterm and needs
+    // its own. Shell only: a non-shell CLI's history is out of scope for this
+    // pull (its load already takes `full=1`; codex and Claude's inline renderer
+    // do grow tmux history, this just isn't how they recover it). The
+    // alternate-screen skip (nano, vim, less) only matters for a direct-PTY
+    // shell: under tmux the browser xterm never enters the alternate buffer.
     _maybeLoadMoreHistory() {
       if (this.sessionMode !== 'shell' || this._destroyed || !this.terminal) return;
       if (this._bufferLoading) return;
       // Mirrors app.js _maybeRefetchFullHistory and this pane's own
       // _sendResize(): a detached session's own window already owns its PTY
-      // size and scrollback, so Pane B has nothing of its own to reconcile.
+      // size and scrollback, so this pane has nothing of its own to reconcile.
       if (this.detachedSessions?.has(this.sessionId)) return;
       const active = this.terminal.buffer.active;
       if (active.type !== 'normal' || active.viewportY !== 0) return;
@@ -795,7 +790,7 @@
         capturedAt = performance.now();
         // Opened only now: a frame from before the response is either replaced by
         // the capture or written unchanged, so holding it for the round trip
-        // bought nothing and froze the pane for as long as the fetch took.
+        // would buy nothing and freeze the pane for as long as the fetch took.
         this._liveQueue = [];
         const payload = (await res.json())?.data;
         clearTimeout(abortTimer);
@@ -842,7 +837,7 @@
         if (delta > 0) this.terminal.scrollToLine(delta);
         else this.terminal.scrollToTop();
       } catch {
-        /* Best-effort — live output keeps arriving whatever happens here. */
+        /* Best-effort: live output keeps arriving whatever happens here. */
       } finally {
         clearTimeout(abortTimer);
         this._loadAbort = null;
@@ -880,7 +875,7 @@
     }
 
     // The `{t:'r'}` server-refresh path: clear, then replay. Two refresh
-    // frames in a row used to start two concurrent replays, each clearing
+    // frames in a row must not start two concurrent replays, each clearing
     // the terminal under the other's chunked write. A refresh that arrives
     // mid-replay is COALESCED into one trailing re-run rather than ignored:
     // the in-flight fetch may predate the drop the new frame is reporting,
@@ -893,8 +888,8 @@
       void this._loadBuffer({ refresh: true });
     }
 
-    // Local reflow only — no PTY resize frame. Split out so a divider drag
-    // can reflow both panes at the browser's paint rate (rAF) while sending
+    // Local reflow only, no PTY resize frame. Split out so a divider drag
+    // can reflow the panes at the browser's paint rate (rAF) while sending
     // the actual `{t:'z'}` resize once, at drag end, matching the primary
     // pane's own convention (throttledResize in terminal-ui.js).
     localFit() {
@@ -915,8 +910,8 @@
       if (!this._wsReady || !this.fitAddon || !this.terminal) return;
       // One PTY cannot hold two sizes (mirrors sendResize's own
       // detachedElsewhere yield in terminal-ui.js): the session got detached
-      // to its own window AFTER this split was opened, so its own window now
-      // owns the PTY's size and Pane B must stand aside.
+      // to its own window AFTER this pane was opened, so its own window now
+      // owns the PTY's size and this pane must stand aside.
       if (this.detachedSessions?.has(this.sessionId)) return;
       // A hidden pane (a web tab over it, a zoomed neighbour) measures NaN, and
       // fit() then leaves the xterm alone: there is no size worth reporting.
@@ -924,9 +919,9 @@
       if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
       // Report what the xterm actually holds, so the PTY gets exactly the size
       // the pane renders at. Unclamped, unlike the primary pane's 40x10 floor:
-      // a floor here misreported Pane B's width at the divider's reachable 20%
-      // position (about 28 columns), causing real output-wrapping bugs, and a
-      // floored xterm would be wider than its container. The server enforces
+      // a floor would misreport the split's Pane B at its divider's reachable
+      // 20% position (about 28 columns) and wrap output wrongly, and a floored
+      // xterm would be wider than its container. The server enforces
       // its own valid range ([1,500]/[1,200] in ws-routes.ts).
       const cols = this.terminal.cols;
       const rows = this.terminal.rows;

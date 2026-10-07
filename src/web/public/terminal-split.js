@@ -8,7 +8,7 @@
  *
  * @dependency terminal-tile.js (window.TerminalTile)
  * @dependency constants.js (window.CodemanSplitPane, SPLIT_PANE_MIN_WIDTH)
- * @loadorder 7.5 of 16, loaded after terminal-tile.js and before respawn-ui.js
+ * @loadorder 7.5 of 16, loaded after terminal-tile.js and before tile-grid.js
  */
 
 Object.assign(CodemanApp.prototype, {
@@ -281,10 +281,9 @@ Object.assign(CodemanApp.prototype, {
     // frame). Coalesced to one call per animation frame below — a raw
     // mousemove stream fires far faster than the browser repaints, and
     // without the rAF gate each event did a full xterm reflow on BOTH
-    // panes AND sent Pane B a `{t:'z'}` resize frame (TerminalTile has
-    // no client-side "dims unchanged" skip), which fanned out into a
-    // `tmux resize-window` child plus a SIGWINCH per frame — roughly fifty
-    // of each dragging across half a wide viewport.
+    // panes AND sent Pane B a `{t:'z'}` resize frame, which fanned out
+    // into a `tmux resize-window` child plus a SIGWINCH per frame, roughly
+    // fifty of each dragging across half a wide viewport.
     const applyDragPercent = (clientX) => {
       const container = divider.parentElement;
       // The split can auto-collapse mid-drag (the other pane's session
