@@ -39,12 +39,14 @@ window is too small for six; the picker says which limit applies.
 
 ## A tile
 
-Each tile has a small header: `● name ......... ⋯ ⤢ ×`
+Each tile has a small header: `● [logo] name · model ......... ⋯ ⤢ ×`
 
 | Part   | What it does                                                                                     |
 | ------ | ------------------------------------------------------------------------------------------------ |
 | `●`    | The session's state: working, idle, waiting on you, needs you (red, and the tile's border pulses), error, ended. Hover the header for how long. |
+| logo   | Which agent runs in the tile (Claude Code, Codex, DeepSeek, Shell, ...). Hover it for the agent and the model by name. |
 | name   | Double-click to rename the session.                                                              |
+| model  | The model the session runs, when Codeman knows it: what the agent itself reports (it follows a `/model` switch), else the model it was started with. Nothing when unknown. |
 | `⋯`    | The session menu: options, open in a new window, close the session.                              |
 | `⤢`    | Zoom: the tile fills the grid; press it again (or `Alt+Shift+Enter`) to get the grid back.        |
 | `×`    | Remove the tile. The session keeps running; close it from `⋯` if you want it gone.                |
@@ -84,6 +86,8 @@ same. Narrowing the window below the desktop width also returns to the single vi
 
 The grid is saved on this device and comes back when you reload the page, with its focus,
 zoom and column widths. A session that was closed in the meantime is simply left out.
+
+Split shows the same logo, name and model above both of its panes.
 
 The grid and Split are never open together: opening the grid turns an open split into two
 tiles, and Split is unavailable while the grid is open.

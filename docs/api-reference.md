@@ -484,6 +484,30 @@ also pure decoration: it confers no permission, and a child is unaffected by its
 parent exiting. It appears on session state as `parentSessionId` (absent when
 unresolved) and survives a server restart.
 
+## Session model (`displayModel`)
+
+Session state (`GET /api/v1/sessions`, the `session:updated` event) carries the model a
+session runs as far as the server knows it, for the web UI's session headers:
+
+```json
+"displayModel": { "model": "qwen3.8-27b", "source": "screen" }
+```
+
+`source` is where it came from, strongest first:
+
+| `source`          | Meaning                                                                                               |
+| ----------------- | ----------------------------------------------------------------------------------------------------- |
+| `custom-endpoint` | The session is pointed at a Custom Model Endpoint Profile; its `modelId` answers, whatever the CLI prints. |
+| `statusline`      | Claude's statusLine exporter reported it (`model.display_name`); follows an in-session `/model`.          |
+| `screen`          | Read off the CLI's own footer (`capabilities.modelDetect`, today dsh and codex); follows a switch.      |
+| `launch`          | What the session was launched with (`--model`, the app-wide default, `<cli>Config.model`); nothing has reported since. |
+
+Between `statusline` and `screen` the newest report wins. The field is absent when no
+model is known (a shell, a CLI that reports none and was launched without one). `model`
+is display text from a pane or a CLI report: control characters are stripped and it is at
+most 64 characters, but treat it as untrusted text. A `statusline` or `screen` value is
+persisted and restored after a server restart until the next report replaces it.
+
 ## Approvals Inbox
 
 Cross-session queue of prompts waiting on a human (permission dialogs,

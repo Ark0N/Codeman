@@ -49,6 +49,8 @@ interface CliEntry {
   //   .workDetect?: { promptGlyph, workingLine, watchingLine?, watchingLines?, awaitingLine? }
   //   — how this CLI's pane shows work, work it started in the background, and a turn
   //   that ended waiting for workers it will resume from
+  //   .modelDetect?: { screenLine, screenLines? }
+  //   (where this CLI's own chrome names the model it runs: SessionState.displayModel)
   overlays: CliOverlays; // remote-SSH / Docker pane commands, credential store
 }
 ```
@@ -57,9 +59,11 @@ interface CliEntry {
 
 ### Regexes that come from config
 
-Four capability fields carry a regular expression an override file can set: `discovery.version.regex`, `capabilities.workDetect.workingLine`, `capabilities.workDetect.watchingLine` and `capabilities.workDetect.awaitingLine`. All four go through `compileVersionRegex()`, which caps the source at 200 characters, refuses the nested-quantifier shapes that cause catastrophic backtracking, and returns `null` rather than throwing so every caller degrades instead of crashing.
+Five capability fields carry a regular expression an override file can set: `discovery.version.regex`, `capabilities.workDetect.workingLine`, `capabilities.workDetect.watchingLine`, `capabilities.workDetect.awaitingLine` and `capabilities.modelDetect.screenLine`. All five go through `compileVersionRegex()`, which caps the source at 200 characters, refuses the nested-quantifier shapes that cause catastrophic backtracking, and returns `null` rather than throwing so every caller degrades instead of crashing.
 
 `workingLine` is the one that matters most, because it is compiled once per session and then run against every accumulated PTY chunk and every pane capture. A nested quantifier there is a ReDoS against the event loop for the whole server, not just that session. The guard therefore runs in two places, and neither is redundant: `schema.ts` rejects the entry at LOAD time so a bad pattern never reaches a session, and `_workingLinePattern()` in `session.ts` compiles through the same helper so the runtime cannot end up with a pattern the schema would have refused.
+
+`modelDetect.screenLine` names the model a session runs, for the tile grid's and the split pane's headers (`SessionState.displayModel`). It must have exactly ONE capture group, the model, which `schema.ts` checks at LOAD time, and it runs over the last `screenLines` (1 to 4, default 1) non-blank rows of the capture the idle/working probe already takes, joined with newlines so a pattern can anchor on the row above. Like `watchingLine`, the rows are pane text the agent writes most of, so a pattern must anchor on chrome only that CLI draws. The two stock ones, measured on live panes: dsh-TUI's status line on the row under its composer's rounded border (`╰─+╯\n ?(<model>)`, three rows), and codex's `  <model> <effort> · ` footer on its last row. A screen that does not match keeps the last model the session reported; a CLI without the field shows its launch model, if any. Claude needs none: its statusLine exporter reports `model.display_name` on every render.
 
 `watchingLine` reads a different row of the same screen. A CLI draws it while work the agent
 itself started is still running — Claude prints `⏵⏵ bypass permissions on · 1 monitor · ← for

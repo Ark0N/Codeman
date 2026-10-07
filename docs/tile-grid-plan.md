@@ -48,6 +48,13 @@ or settled a question the spec left open. The invariants as built are in
   the one cap every limit reads; the layout table keeps 7 to 9 (`TILE_LAYOUT_MAX`), unreachable,
   so going back to nine is that one line. A stored grid with more ids comes back as its first
   six. Where this spec says nine, read six.
+- **Each header names the harness and the model** (owner request): the tile header is
+  `● [logo] name · model ……… ⋯ ⤢ ×`. The logo is PR #532's `run-mode-dot <cliId>` slot
+  (the id is data), the model the session's `displayModel` (custom endpoint, else what the
+  CLI itself reports: claude's statusline, a footer read with `capabilities.modelDetect`
+  for dsh and codex; else the launch model; else nothing, the logo alone). Both split
+  panes carry the same strip: Pane B's header, and Pane A's while the split is open. Pane
+  B's close is a tile button (26px).
 - **No + in the tile header** (owner decision 9): the header is `● name ……… ⋯ ⤢ ×`. The
   + menu and its "New session in this case" are gone; tiles are added from the Tiles
   button (and its right-click picker), Ctrl/Cmd+click on a tab, a dragged tab, "Open group
@@ -206,7 +213,8 @@ animation frame, and sends one resize per affected tile at pointer-up.
 
 ### Tile header
 
-`● name ……… ⋯ ⤢ + ×` (as built: `● name ……… ⋯ ⤢ ×`, owner decision 9)
+`● name ……… ⋯ ⤢ + ×` (as built: `● [logo] name · model ……… ⋯ ⤢ ×`, owner decision 9 and
+the harness/model request; see "As built")
 
 - **●** status dot from the existing six-state classifier
   (`app._sidebarRichRow(id, session)`, built on `_mobileOverviewState`):
