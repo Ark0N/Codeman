@@ -452,8 +452,8 @@ Object.assign(CodemanApp.prototype, {
     document.body.appendChild(menu);
     const btn = document.querySelector('.btn-tile-grid');
     if (btn?.getBoundingClientRect) {
+      // Under the Tiles button (.tile-picker-menu is position: fixed).
       const rect = btn.getBoundingClientRect();
-      menu.style.position = 'fixed';
       menu.style.top = `${rect.bottom + 4}px`;
       menu.style.right = `${window.innerWidth - rect.right}px`;
     }
