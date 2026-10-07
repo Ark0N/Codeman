@@ -182,6 +182,10 @@ describe('the harness logo and the model', () => {
     app._renderTileChrome();
     expect(logoOf('s-b').title).toBe('Claude Code \u00B7 haiku (set at launch)');
     expect(logoOf('s-c').title).toBe('Claude Code \u00B7 qwen3.8-27b (custom endpoint)');
+    app.sessions.get('s-a').displayModel = { model: 'qwen3.8-27b', source: 'config' };
+    app._renderTileChrome();
+    expect(logoOf('s-a').title).toBe('DeepSeek \u00B7 qwen3.8-27b (from config)');
+    expect(modelNameOf('s-a').textContent).toBe('qwen3.8-27b');
     expect(modelNameOf('s-b').textContent).toBe('haiku');
   });
 

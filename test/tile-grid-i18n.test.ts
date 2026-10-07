@@ -153,6 +153,10 @@ async function exercise() {
     displayModel: { model: 'qwen3.8-27b', source: 'custom-endpoint' },
   });
   app.sessions.get('s-6').displayModel = { model: 'Haiku 4.5', source: 'statusline' };
+  Object.assign(app.sessions.get('s-4'), {
+    mode: 'deepseek',
+    displayModel: { model: 'qwen3.8-27b', source: 'config' },
+  });
   let pill = 'idle';
   app._sidebarRichRow = () => ({ state: pill, pill, since: { at: 1 } });
   app._mobileOverviewStampText = () => '3m';
@@ -324,6 +328,7 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
         'DeepSeek \u00B7 qwen3.8-27b',
         'Claude Code \u00B7 haiku (set at launch)',
         'Codex \u00B7 qwen3.8-27b (custom endpoint)',
+        'DeepSeek \u00B7 qwen3.8-27b (from config)',
         'Claude Code \u00B7 Haiku 4.5',
         'Claude Code',
       ])

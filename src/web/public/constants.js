@@ -2151,8 +2151,9 @@ const CLI_ID_PATTERN = /^[a-z][a-z0-9-]{0,23}$/;
  * are dropped and the length capped here too, and callers render it with
  * textContent. The tooltip says where a model that is not the CLI's own report
  * came from, so it never claims more than the server knows: one the session
- * was launched with may have been switched since, and a custom endpoint's
- * model is the endpoint's, whatever the CLI calls it.
+ * was launched with may have been switched since, one read from the CLI's
+ * config is what it is configured to run, and a custom endpoint's model is the
+ * endpoint's, whatever the CLI calls it.
  *
  * @param {object} session - a session from app.sessions
  * @param {Array<{id: string, label?: string}>} [catalog] - window.__codemanCliCatalog
@@ -2177,7 +2178,9 @@ function describeSessionHarness(session, catalog) {
       ? ' (set at launch)'
       : source === 'custom-endpoint'
         ? ' (custom endpoint)'
-        : '';
+        : source === 'config'
+          ? ' (from config)'
+          : '';
   const title = [label, model].filter(Boolean).join(' \u00B7 ') + qualifier;
   return { id, label, model, title };
 }

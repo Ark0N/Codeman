@@ -1063,6 +1063,7 @@
       // and model names pass through untranslated.
       [/^(.+) \(set at launch\)$/, (_m, names) => `${names}（启动时设定）`],
       [/^(.+) \(custom endpoint\)$/, (_m, names) => `${names}（自定义端点）`],
+      [/^(.+) \(from config\)$/, (_m, names) => `${names}（来自配置）`],
       // The Run button's mode codes ("Run CC", "Run SH", "Run OC" ...; a registry
       // CLI's shortBadge too). Exact entries win first ("Run Shell", "Run OMP").
       [/^Run ([A-Z][A-Z0-9]{1,5})$/, (_m, code) => `运行 ${code}`],
