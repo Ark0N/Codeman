@@ -1273,21 +1273,7 @@ Object.assign(CodemanApp.prototype, {
     }
     const zoomed = grid.zoomedId && grid.tiles.has(grid.zoomedId) ? grid.zoomedId : null;
     section.classList.toggle('tile-grid--zoomed', !!zoomed);
-    for (const [id, entry] of grid.tiles) {
-      entry.el.classList.toggle('tile--zoomed', id === zoomed);
-      const zoomBtn = entry.zoomBtn;
-      if (zoomBtn) {
-        const on = id === zoomed;
-        const label = on ? 'Restore the grid' : 'Zoom this tile';
-        zoomBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
-        // Against the last English label, never the DOM (translated in zh-CN).
-        if (entry.zoomLabel !== label) {
-          entry.zoomLabel = label;
-          zoomBtn.title = label;
-          zoomBtn.setAttribute('aria-label', label);
-        }
-      }
-    }
+    this._syncTileZoom(zoomed);
     // Zoomed: one cell; the other tiles stay connected but hidden (CSS), so
     // they measure nothing and send no resize. Otherwise every tile is placed
     // explicitly in reading order, with a divider track between columns and
@@ -1303,6 +1289,25 @@ Object.assign(CodemanApp.prototype, {
     this._syncTileDividers(zoomed ? 0 : cols, zoomed ? 0 : rows);
     this._syncTileSlots(zoomed ? 0 : cols * rows - grid.ids.length, cols);
     this._persistTileGrid();
+  },
+
+  // Each tile's zoom state: the zoomed one is shown alone (CSS), and every ⤢
+  // button says what pressing it does next.
+  _syncTileZoom(zoomed) {
+    for (const [id, entry] of this._tileGrid.tiles) {
+      const on = id === zoomed;
+      entry.el.classList.toggle('tile--zoomed', on);
+      const zoomBtn = entry.zoomBtn;
+      if (!zoomBtn) continue;
+      zoomBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      const label = on ? 'Restore the grid' : 'Zoom this tile';
+      // Against the last English label, never the DOM (translated in zh-CN).
+      if (entry.zoomLabel !== label) {
+        entry.zoomLabel = label;
+        zoomBtn.title = label;
+        zoomBtn.setAttribute('aria-label', label);
+      }
+    }
   },
 
   // The empty cells of a layout that is not full (3 tiles in a 2x2, 5 in a
