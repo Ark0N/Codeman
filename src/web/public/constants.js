@@ -1662,6 +1662,13 @@ const TILE_GRID_WIDE_3X1 = 1800;
 const TILE_SCROLLBACK = 10000;
 // Tiles have their own per-device font size (a tile is a fraction of the screen).
 const TILE_FONT_SIZE_DEFAULT = 13;
+// What the page's SSE filter names while tiles own the terminal: a value no
+// session id takes (ids are UUIDs), so the server, whose filter gates only
+// session:terminal batches, sends none. The tiles carry their own output over
+// their own sockets, and the parked main terminal only parsed those frames to
+// drop them (16 to 18 a second for one busy shell). Every other event still
+// arrives (test/sse-tile-grid-filter.test.ts pins the server's side of this).
+const TILE_GRID_SSE_FILTER = 'tile-grid';
 
 /**
  * Columns and rows for `count` tiles, by count (the spec's table), and whether
@@ -2156,6 +2163,7 @@ if (typeof window !== 'undefined') {
     TILE_MIN_H,
     TILE_SCROLLBACK,
     TILE_FONT_SIZE_DEFAULT,
+    TILE_GRID_SSE_FILTER,
   };
   window.CodemanRenderLiveness = { shouldKickRenderer, RENDER_STALL_MS, RENDER_LIVENESS_POLL_MS };
   window.CodemanFetchDeadline = {

@@ -1483,11 +1483,24 @@ class CodemanApp {
    * (just at higher cost), and the next reconnect carries the filter via
    * the SSE query string.
    */
+  /**
+   * The session id the SSE filter names for `sessionId`: itself, or while the
+   * tile grid owns the terminal the grid's fixed filter (TILE_GRID_SSE_FILTER,
+   * constants.js), which no session matches. Both places that set the filter
+   * ask here: the live re-subscribe below and the connect URL (connectSSE),
+   * which an SSE reconnect rebuilds with the grid still open.
+   */
+  _sseFilterSessionId(sessionId) {
+    if (this._tilesOwnTerminal?.()) return window.CodemanTileGrid?.TILE_GRID_SSE_FILTER || sessionId;
+    return sessionId;
+  }
+
   _updateSseSubscription(sessionId) {
     try {
+      const filterId = this._sseFilterSessionId(sessionId);
       const body = JSON.stringify({
         clientId: this._clientId,
-        sessions: sessionId ? [sessionId] : null,
+        sessions: filterId ? [filterId] : null,
       });
       fetch('/api/events/subscribe', {
         method: 'POST',
@@ -1883,7 +1896,8 @@ class CodemanApp {
     // session we're rendering. Lifecycle/metadata events are sent globally
     // regardless of filter (server side).
     const _sseParams = new URLSearchParams({ clientId: this._clientId });
-    if (this.activeSessionId) _sseParams.set('sessions', this.activeSessionId);
+    const _sseFilterId = this._sseFilterSessionId(this.activeSessionId);
+    if (_sseFilterId) _sseParams.set('sessions', _sseFilterId);
     this.eventSource = new EventSource(CodemanBase.url(`/api/events?${_sseParams.toString()}`));
 
     // Store all event listeners for cleanup on reconnect.
