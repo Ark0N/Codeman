@@ -667,8 +667,9 @@ Object.assign(CodemanApp.prototype, {
   /**
    * Removes one tile; the session keeps running. When it held focus, `refocus`
    * moves focus to the neighbouring tile (next in grid order, else previous),
-   * as the app's choice (`auto`: no idle alert is spent). The last tile leaving closes the grid: with `refocus` the single view then
-   * shows that session, without it the caller decides what comes next.
+   * as the app's choice (`auto`: no idle alert is spent). The last tile
+   * leaving closes the grid: with `refocus` the single view then shows that
+   * session, without it the caller decides what comes next.
    */
   removeTile(sessionId, { refocus = true } = {}) {
     const grid = this._tileGrid;
