@@ -579,6 +579,45 @@ const DEFAULT_SHORTCUTS = [
     bindings: [{ modifiers: ['alt', 'shift'], key: 'ArrowDown' }],
     action: 'focusTileDown',
   },
+  // Move the focused tile: it trades places with the neighbour the focus
+  // chords would pick. Ctrl+Shift+Arrows because every other two-modifier
+  // arrow chord is taken: Ctrl+Alt+Arrows switch workspaces (GNOME, Xfce, and
+  // rotate the screen on some Windows graphics drivers), Ctrl+Alt+Shift+Arrows
+  // move a window to another workspace (GNOME, Cinnamon, Xfce), Super chords
+  // belong to the desktop, Alt+Arrows are the browser's back and forward, and
+  // Alt+Shift+Arrows focus tiles. No browser, GNOME, KDE or macOS default and
+  // no Claude Code default uses Ctrl+Shift+Arrows (it parallels Ctrl+Shift+{ }
+  // for moving tabs); what it costs is word selection, so the chords skip a
+  // text field (tileShortcutFor) and give up only a terminal editor's
+  // word selection (nano, micro, emacs) inside a tile while the grid is open.
+  {
+    id: 'move-tile-left',
+    group: 'Tiles',
+    label: 'Move Tile Left',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: 'ArrowLeft' }],
+    action: 'moveTileLeft',
+  },
+  {
+    id: 'move-tile-right',
+    group: 'Tiles',
+    label: 'Move Tile Right',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: 'ArrowRight' }],
+    action: 'moveTileRight',
+  },
+  {
+    id: 'move-tile-up',
+    group: 'Tiles',
+    label: 'Move Tile Up',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: 'ArrowUp' }],
+    action: 'moveTileUp',
+  },
+  {
+    id: 'move-tile-down',
+    group: 'Tiles',
+    label: 'Move Tile Down',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: 'ArrowDown' }],
+    action: 'moveTileDown',
+  },
   {
     id: 'zoom-tile',
     group: 'Tiles',

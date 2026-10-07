@@ -17,6 +17,12 @@
  *   input starts no drag, and a double-click on the name still renames.
  * - Moving is off while a tile is zoomed (the header drag, a tab drag of a
  *   tiled session, the chords) and with a single tile.
+ * - Move Tile Left/Right/Up/Down (Ctrl+Shift+Arrows): the focused tile trades
+ *   places with the neighbour the Alt+Shift+Arrow focus chords pick, checked
+ *   against hand-written tables for every cell and direction of 2x1, 2x2, 3x2
+ *   and the partial 2x2 and 3x2; focus stays on the moved tile. The chords
+ *   apply (and are swallowed) only while the grid is open, zoomed included as a
+ *   no-op, and never in a text field, where Ctrl+Shift+Arrows select by word.
  *
  * Real code via the shared vm harness (test/mocks/tile-grid-vm.ts). Port: N/A.
  */
@@ -24,6 +30,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   FakeEl,
   FakeTile,
+  documentAddEventListener,
   fetchSpy,
   localStore,
   makeGridApp,
@@ -403,5 +410,215 @@ describe('sizes belong to the cells: only a tile whose size changed fits, once',
     // Past TILE_GRID_REFIT_MS (150ms): still only the two moved tiles.
     await new Promise((r) => setTimeout(r, 200));
     expect(fitCounts(SIX)).toEqual({ 's-a': 1, 's-b': 1, 's-c': 0, 's-d': 0, 's-e': 0, 's-f': 0 });
+  });
+});
+
+describe('Move Tile Left/Right/Up/Down (Ctrl+Shift+Arrows)', () => {
+  const ARROW = { left: 'ArrowLeft', right: 'ArrowRight', up: 'ArrowUp', down: 'ArrowDown' } as const;
+  type Dir = keyof typeof ARROW;
+  const chord = (dir: Dir, overrides: Record<string, unknown> = {}) => ({
+    type: 'keydown',
+    key: ARROW[dir],
+    code: ARROW[dir],
+    ctrlKey: true,
+    shiftKey: true,
+    altKey: false,
+    metaKey: false,
+    preventDefault: vi.fn(),
+    target: { closest: () => null, classList: { contains: (c: string) => c === 'xterm-helper-textarea' } },
+    ...overrides,
+  });
+
+  function handlerFor(app: GridApp) {
+    app.$ = () => null;
+    app.setupColorPicker = vi.fn();
+    const before = (documentAddEventListener.mock.calls as unknown[]).length;
+    app.setupEventListeners();
+    const added = (documentAddEventListener.mock.calls as Array<[string, (e: unknown) => void, boolean]>).slice(before);
+    const keydown = added.find(([type, , capture]) => type === 'keydown' && capture === true);
+    if (!keydown) throw new Error('no capture-phase keydown listener');
+    return keydown[1];
+  }
+
+  // The neighbour in each direction, by cell, written out by hand (null: an
+  // edge). A partial last row: down from a cell above an empty one goes to the
+  // last tile, the rule the focus chords follow.
+  const TABLES: Record<
+    string,
+    { ids: string[]; cols: number; width?: number; next: Array<Record<Dir, number | null>> }
+  > = {
+    '2x1': {
+      cols: 2,
+      ids: ['s-a', 's-b'],
+      next: [
+        { left: null, right: 1, up: null, down: null },
+        { left: 0, right: null, up: null, down: null },
+      ],
+    },
+    '2x2': {
+      cols: 2,
+      ids: FOUR,
+      next: [
+        { left: null, right: 1, up: null, down: 2 },
+        { left: 0, right: null, up: null, down: 3 },
+        { left: null, right: 3, up: 0, down: null },
+        { left: 2, right: null, up: 1, down: null },
+      ],
+    },
+    '3x2': {
+      cols: 3,
+      ids: SIX,
+      next: [
+        { left: null, right: 1, up: null, down: 3 },
+        { left: 0, right: 2, up: null, down: 4 },
+        { left: 1, right: null, up: null, down: 5 },
+        { left: null, right: 4, up: 0, down: null },
+        { left: 3, right: 5, up: 1, down: null },
+        { left: 4, right: null, up: 2, down: null },
+      ],
+    },
+    '2x2 with 3 tiles': {
+      cols: 2,
+      ids: ['s-a', 's-b', 's-c'],
+      width: 1700,
+      next: [
+        { left: null, right: 1, up: null, down: 2 },
+        { left: 0, right: null, up: null, down: 2 },
+        { left: null, right: null, up: 0, down: null },
+      ],
+    },
+    '3x2 with 5 tiles': {
+      cols: 3,
+      ids: SIX.slice(0, 5),
+      width: 1700,
+      next: [
+        { left: null, right: 1, up: null, down: 3 },
+        { left: 0, right: 2, up: null, down: 4 },
+        { left: 1, right: null, up: null, down: 4 },
+        { left: null, right: 4, up: 0, down: null },
+        { left: 3, right: null, up: 1, down: null },
+      ],
+    },
+  };
+
+  afterEach(() => {
+    delete (section as unknown as Record<string, unknown>).getBoundingClientRect;
+  });
+
+  for (const [layout, table] of Object.entries(TABLES)) {
+    it(`${layout}: every cell, every direction, swaps with the right neighbour (or nothing at an edge)`, () => {
+      const bad: string[] = [];
+      table.next.forEach((next, i) => {
+        for (const dir of Object.keys(ARROW) as Dir[]) {
+          resetGridHarness();
+          if (table.width) {
+            const w = table.width;
+            section.getBoundingClientRect = () => ({ width: w, height: 1000, top: 0, left: 0, right: w, bottom: 1000 });
+          }
+          const app = openGrid(table.ids, table.ids[i]);
+          expect(app._tileGrid.cols).toBe(table.cols);
+          const costsNothing = snapshotCost();
+          app.markIdleAlertSeen.mockClear();
+          const onKeydown = handlerFor(app);
+          const e = chord(dir);
+          onKeydown(e);
+          const expected = table.ids.slice();
+          const j = next[dir];
+          if (j !== null) [expected[i], expected[j]] = [expected[j], expected[i]];
+          const moved = table.ids[i];
+          const ok =
+            e.preventDefault.mock.calls.length === 1 &&
+            JSON.stringify(app._tileGrid.ids) === JSON.stringify(expected) &&
+            app.activeSessionId === moved &&
+            app._tileGrid.focusedId === moved &&
+            tileEl(moved).classList.contains('focused') &&
+            JSON.stringify(stored().ids) === JSON.stringify(expected) &&
+            stored().focused === moved;
+          if (!ok) bad.push(`cell ${i} ${dir}: got ${app._tileGrid.ids.join(',')} focus ${app.activeSessionId}`);
+          costsNothing();
+          // Equal cells: nothing changed size, so nothing fits.
+          expect(FakeTile.all.every((t) => t.fit.mock.calls.length === 0)).toBe(true);
+        }
+      });
+      expect(bad).toEqual([]);
+    });
+  }
+
+  it('focus stays on the moved tile through several moves, and the order is stored', () => {
+    const app = openGrid(SIX, 's-a');
+    const onKeydown = handlerFor(app);
+    for (const dir of ['right', 'right', 'down', 'left'] as Dir[]) onKeydown(chord(dir));
+    // a: 0 -> 1 -> 2 -> 5 -> 4
+    expect(app._tileGrid.ids.indexOf('s-a')).toBe(4);
+    expect(app.activeSessionId).toBe('s-a');
+    expect(stored().ids).toEqual(app._tileGrid.ids);
+    expect(stored().focused).toBe('s-a');
+  });
+
+  it('only a tile whose cell size changed fits, once', () => {
+    const app = openGrid(SIX, 's-a');
+    app._tileGrid.colFr = [2, 1, 1];
+    app._applyTileLayout();
+    clearFits();
+    handlerFor(app)(chord('right'));
+    expect(fitCounts(SIX)).toEqual({ 's-a': 1, 's-b': 1, 's-c': 0, 's-d': 0, 's-e': 0, 's-f': 0 });
+  });
+
+  describe('swallowed only while they apply', () => {
+    it('grid closed: not a tile chord, and the capture handler leaves it alone (it reaches the terminal)', () => {
+      const app = makeGridApp(FOUR);
+      // Even with the Tiles setting on (where the toggle chord would apply).
+      app.loadAppSettingsFromStorage = () => ({ showTileGridButton: true });
+      expect(app.tileShortcutFor(chord('right'))).toBeNull();
+      const e = chord('right');
+      handlerFor(app)(e);
+      expect(e.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it('grid open, from a terminal: applies and is swallowed', () => {
+      const app = openGrid(FOUR);
+      expect(app.tileShortcutFor(chord('right'))).toBe('move-tile-right');
+      expect(app.tileShortcutFor(chord('down'))).toBe('move-tile-down');
+    });
+
+    it('in a text field (the rename input, an editor) it is left to the field: word selection', () => {
+      const app = openGrid(FOUR);
+      const onKeydown = handlerFor(app);
+      for (const tagName of ['INPUT', 'TEXTAREA']) {
+        const e = chord('right', { target: { tagName, closest: () => null, classList: { contains: () => false } } });
+        expect(app.tileShortcutFor(e)).toBeNull();
+        onKeydown(e);
+        expect(e.preventDefault).not.toHaveBeenCalled();
+      }
+      const editable = chord('left', { target: { isContentEditable: true, closest: () => null } });
+      expect(app.tileShortcutFor(editable)).toBeNull();
+      expect(app._tileGrid.ids).toEqual(FOUR);
+    });
+
+    it('while a tile is zoomed it still applies (swallowed, never typed into the CLI) and moves nothing', () => {
+      const app = openGrid(FOUR);
+      app.zoomTile('s-a');
+      const e = chord('right');
+      expect(app.tileShortcutFor(e)).toBe('move-tile-right');
+      handlerFor(app)(e);
+      expect(e.preventDefault).toHaveBeenCalled();
+      expect(app._tileGrid.ids).toEqual(FOUR);
+      expect(app._tileGrid.zoomedId).toBe('s-a');
+    });
+
+    it('honours a disable and a rebind from App Settings', () => {
+      const app = openGrid(FOUR);
+      app.loadAppSettingsFromStorage = () => ({
+        shortcutOverrides: {
+          'move-tile-right': { disabled: true },
+          'move-tile-left': { bindings: [{ modifiers: ['ctrl', 'alt'], key: 'h', code: 'KeyH' }] },
+        },
+      });
+      expect(app.tileShortcutFor(chord('right'))).toBeNull();
+      expect(app.tileShortcutFor(chord('left'))).toBeNull();
+      expect(app.tileShortcutFor(chord('left', { key: 'h', code: 'KeyH', shiftKey: false, altKey: true }))).toBe(
+        'move-tile-left'
+      );
+    });
   });
 });

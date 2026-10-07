@@ -3,8 +3,8 @@
  * that a chord which applies never reaches a PTY.
  *
  * Defaults (all rebindable in App Settings, Shortcuts): Ctrl+Shift+G toggles
- * the grid, Alt+Shift+Arrows move focus between tiles, Remove Focused Tile is
- * unbound. The toggle applies wherever a grid could open; the focus and remove
+ * the grid, Alt+Shift+Arrows move focus between tiles, Ctrl+Shift+Arrows move
+ * the focused tile (tile-grid-move.test.ts), Remove Focused Tile is unbound. The toggle applies wherever a grid could open; the focus and remove
  * chords only while the grid is open, so outside it Alt+Shift+Arrows reach the
  * terminal untouched. The capture-phase handler (app.js) dispatches a chord
  * that applies; its preventDefault() does not stop xterm, so every xterm key
@@ -69,6 +69,11 @@ describe('registry', () => {
       expect(byId[`focus-tile-${dir.toLowerCase()}`].bindings).toEqual([
         { modifiers: ['alt', 'shift'], key: `Arrow${dir}` },
       ]);
+      // Moving the focused tile (tile-grid-move.test.ts).
+      expect(byId[`move-tile-${dir.toLowerCase()}`].bindings).toEqual([
+        { modifiers: ['ctrl', 'shift'], key: `Arrow${dir}` },
+      ]);
+      expect(byId[`move-tile-${dir.toLowerCase()}`].group).toBe('Tiles');
     }
     expect(byId['remove-tile'].bindings).toEqual([]);
     expect(byId['toggle-tile-grid'].group).toBe('Tiles');
@@ -349,6 +354,20 @@ describe('xterm key handlers swallow a chord that applies', () => {
     it('lets Alt+Shift+Right through to the PTY when no grid is open', async () => {
       const handler = await tileHandler(false);
       expect(handler(chord(RIGHT))).toBe(true);
+    });
+
+    const MOVE_RIGHT = { key: 'ArrowRight', code: 'ArrowRight', ctrlKey: true, shiftKey: true };
+    it.each(['keydown', 'keypress', 'keyup'])(
+      'returns false for Ctrl+Shift+Right, Move Tile Right (%s), while the grid is open',
+      async (type) => {
+        const handler = await tileHandler(true);
+        expect(handler({ ...chord(MOVE_RIGHT), type })).toBe(false);
+      }
+    );
+
+    it('lets Ctrl+Shift+Right through to the PTY when no grid is open', async () => {
+      const handler = await tileHandler(false);
+      expect(handler(chord(MOVE_RIGHT))).toBe(true);
     });
 
     it('Alt+Shift+Enter (zoom) never becomes a Shift+Enter newline in the tile session', async () => {

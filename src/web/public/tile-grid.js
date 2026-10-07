@@ -40,16 +40,32 @@ function tileGridTracks(fr) {
   return fr.map((f) => `minmax(0, ${Math.round(f * 1000) / 1000}fr)`).join(` ${TILE_DIVIDER_PX}px `);
 }
 // Registry ids of the tile chords (DEFAULT_SHORTCUTS, app.js), and whether each
-// needs the grid open. The toggle applies wherever a grid could open.
+// needs the grid open. The toggle applies wherever a grid could open. The move
+// chords leave a text field its keys (`move`: see tileShortcutFor).
 const TILE_SHORTCUTS = {
   'toggle-tile-grid': { needsOpen: false },
   'focus-tile-left': { needsOpen: true, direction: 'left' },
   'focus-tile-right': { needsOpen: true, direction: 'right' },
   'focus-tile-up': { needsOpen: true, direction: 'up' },
   'focus-tile-down': { needsOpen: true, direction: 'down' },
+  'move-tile-left': { needsOpen: true, move: 'left' },
+  'move-tile-right': { needsOpen: true, move: 'right' },
+  'move-tile-up': { needsOpen: true, move: 'up' },
+  'move-tile-down': { needsOpen: true, move: 'down' },
   'remove-tile': { needsOpen: true },
   'zoom-tile': { needsOpen: true },
 };
+
+/**
+ * A text field other than a terminal's own input (xterm's helper textarea):
+ * the rename input, the file editor, a settings field. Ctrl+Shift+Arrows
+ * selects by word there, so the move chords leave it alone.
+ */
+function isTextFieldTarget(target) {
+  if (!target || target.classList?.contains?.('xterm-helper-textarea')) return false;
+  const tag = String(target.tagName || '').toUpperCase();
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable === true;
+}
 
 /** The grid's state. `has(id)` answers only while it is open. */
 class TileGridModel {
@@ -528,9 +544,11 @@ Object.assign(CodemanApp.prototype, {
    * toggle applies while the grid is open, or where one could open AND the
    * per-device `showTileGridButton` setting is on: with it off (the default)
    * the chord is inert and reaches the terminal like any unbound key (owner
-   * decision 6 in docs/tile-grid-plan.md). The focus,
+   * decision 6 in docs/tile-grid-plan.md). The focus, move,
    * zoom and remove chords apply only while the grid is open, however it was
-   * opened. Registry-aware (rebinds and disables in App Settings, Shortcuts).
+   * opened (a move chord also while a tile is zoomed, as a no-op, so its keys
+   * never reach the CLI; and never in a text field, whose keys they are).
+   * Registry-aware (rebinds and disables in App Settings, Shortcuts).
    * The capture handler (app.js) dispatches it; every xterm key handler returns
    * false for it, so a chord that applies never reaches a PTY.
    *
@@ -543,6 +561,7 @@ Object.assign(CodemanApp.prototype, {
     for (const shortcut of this.getShortcutRegistry()) {
       const spec = TILE_SHORTCUTS[shortcut.id];
       if (!spec || shortcut.disabled || !this.matchesShortcutEvent(e, shortcut)) continue;
+      if (spec.move && isTextFieldTarget(e.target)) continue;
       if (spec.needsOpen) return open ? shortcut.id : null;
       const enabled = this.loadAppSettingsFromStorage?.()?.showTileGridButton === true;
       return open || (enabled && this.canOpenTileGrid()) ? shortcut.id : null;
@@ -558,6 +577,7 @@ Object.assign(CodemanApp.prototype, {
     else if (id === 'remove-tile') this.removeFocusedTile();
     else if (id === 'zoom-tile') this.zoomTile(this._tileGrid?.focusedId);
     else if (spec.direction) this.focusTileInDirection(spec.direction);
+    else if (spec.move) this.moveTileInDirection(spec.move);
   },
 
   /**
@@ -836,6 +856,19 @@ Object.assign(CodemanApp.prototype, {
     ids[i] = b;
     ids[j] = a;
     return this._reorderTiles(ids);
+  },
+
+  /**
+   * Move Tile Left/Right/Up/Down: the focused tile trades places with its
+   * neighbour in that direction, the neighbour the Alt+Shift+Arrow focus
+   * chords pick (tileInDirection). Focus stays on the moved tile. Nothing while
+   * a tile is zoomed, or at an edge.
+   */
+  moveTileInDirection(direction) {
+    const grid = this._tileGrid;
+    if (!grid?.open || grid.zoomedId || !grid.focusedId) return;
+    const neighbor = window.CodemanTileGrid.tileInDirection(grid.ids, grid.focusedId, direction, grid.cols);
+    if (neighbor) this._swapTiles(grid.focusedId, neighbor);
   },
 
   /**

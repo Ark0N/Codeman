@@ -369,7 +369,7 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
   it('the shortcut registry entries: the Tiles group, its labels, "not bound", the group menu item', () => {
     const app = read('app.js');
     const labels = [...app.matchAll(/group: 'Tiles',\s*label: '([^']+)'/g)].map((m) => m[1]);
-    expect(labels).toHaveLength(7);
+    expect(labels).toHaveLength(11);
     expect(app).toContain("label: 'Open group as tiles'");
     expect(app).toContain('not bound');
     const bad = ['Tiles', 'not bound', 'Open group as tiles', ...labels].filter((s) => {
@@ -417,6 +417,10 @@ describe('the static markup through the real translator (JSDOM, zh-CN)', () => {
     expect(leftover(tiles!.textContent!)).toEqual([]);
     expect(tiles!.textContent).toContain('切换平铺网格');
     expect(tiles!.textContent).toContain('右键单击');
+    // Moving tiles: the chords and the header drag.
+    expect(tiles!.textContent).toContain('向左 / 右 / 上 / 下移动窗格');
+    expect(tiles!.textContent).toContain('拖动');
+    expect(tiles!.textContent).toContain('窗格的标题栏');
   });
 
   it('user text stays as typed: a session name and a group name that are also UI words', () => {
