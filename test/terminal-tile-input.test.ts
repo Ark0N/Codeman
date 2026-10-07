@@ -18,126 +18,15 @@
  *
  * Real code under test: constants.js + app.js (the queue) + terminal-ui.js (the
  * shared input predicates) + terminal-tile.js, in one `vm` context. xterm, the
- * fit addon and WebSocket are fakes; `connect()` runs for real.
+ * fit addon and WebSocket are fakes (test/mocks/terminal-tile-fakes.ts);
+ * `connect()` runs for real.
  */
 import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-type Frame = { t: string; d?: string; seq?: number; cid?: string; c?: number; r?: number };
-
-class FakeSocket {
-  static OPEN = 1;
-  static instances: FakeSocket[] = [];
-  readyState = 0;
-  sent: Frame[] = [];
-  onopen: (() => void) | null = null;
-  onmessage: ((ev: { data: string }) => void) | null = null;
-  onclose: ((ev?: { code: number }) => void) | null = null;
-  onerror: (() => void) | null = null;
-  constructor(public url: string) {
-    FakeSocket.instances.push(this);
-  }
-  send(data: string) {
-    this.sent.push(JSON.parse(data) as Frame);
-  }
-  close = vi.fn(() => {
-    this.readyState = 3;
-  });
-  open() {
-    this.readyState = 1;
-    this.onopen?.();
-  }
-  receive(msg: object) {
-    this.onmessage?.({ data: JSON.stringify(msg) });
-  }
-  inputFrames() {
-    return this.sent.filter((f) => f.t === 'i');
-  }
-}
-
-/** The fit addon: proposes `FakeFit.proposed` and, like the real one, resizes to it (NaN = hidden pane). */
-class FakeFit {
-  static proposed = { cols: 80, rows: 24 };
-  term: FakeTerminal | null = null;
-  fit() {
-    const { cols, rows } = FakeFit.proposed;
-    if (!Number.isFinite(cols) || !Number.isFinite(rows)) return;
-    this.term?.resize(cols, rows);
-  }
-  proposeDimensions() {
-    return { ...FakeFit.proposed };
-  }
-}
-
-class FakeTerminal {
-  static last: FakeTerminal | null = null;
-  options: Record<string, unknown>;
-  cols = 80;
-  rows = 24;
-  dataCb: ((data: string) => void) | null = null;
-  buffer = { active: { type: 'normal', viewportY: 0, length: 24 } };
-  constructor(options: Record<string, unknown>) {
-    this.options = { ...options };
-    FakeTerminal.last = this;
-  }
-  loadAddon(addon: FakeFit) {
-    addon.term = this;
-  }
-  open() {}
-  onData(cb: (data: string) => void) {
-    this.dataCb = cb;
-  }
-  keyHandler: ((ev: Record<string, unknown>) => boolean) | null = null;
-  focusListeners: Array<() => void> = [];
-  textarea = {
-    addEventListener: (type: string, fn: () => void) => {
-      if (type === 'focus') this.focusListeners.push(fn);
-    },
-    removeEventListener: (type: string, fn: () => void) => {
-      if (type === 'focus') this.focusListeners = this.focusListeners.filter((f) => f !== fn);
-    },
-  };
-  focusTextarea() {
-    for (const fn of this.focusListeners) fn();
-  }
-  attachCustomKeyEventHandler(fn: (ev: Record<string, unknown>) => boolean) {
-    this.keyHandler = fn;
-  }
-  registerLinkProvider() {}
-  writes: string[] = [];
-  write(data: string, cb?: () => void) {
-    this.writes.push(data);
-    cb?.();
-  }
-  clear() {
-    this.writes.push('<CLEAR>');
-  }
-  resizes: Array<[number, number]> = [];
-  resize(cols: number, rows: number) {
-    this.resizes.push([cols, rows]);
-    this.cols = cols;
-    this.rows = rows;
-  }
-  dispose() {}
-  type(data: string) {
-    this.dataCb?.(data);
-  }
-  /** What a drag selected; '' is no selection. */
-  selection = '';
-  hasSelection() {
-    return this.selection !== '';
-  }
-  getSelection() {
-    return this.selection;
-  }
-  clearSelection = vi.fn(() => {
-    this.selection = '';
-  });
-  focus = vi.fn();
-}
+import { FakeFit, FakeSocket, FakeTerminal } from './mocks/terminal-tile-fakes.js';
 
 const fetchMock = vi.fn();
 
