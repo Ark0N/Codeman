@@ -2479,6 +2479,15 @@ class CodemanApp {
     if (!body || body.dataset.rvBound === '1') return;
     body.dataset.rvBound = '1';
     body.addEventListener('click', async (ev) => {
+      // Inspect destinations before navigating. File Viewer shares this delegate
+      // but keeps its document-navigation behavior.
+      const responseLink = ev.target.closest('a.rv-path, a[href]');
+      if (body.id === 'responseViewerBody' && responseLink) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this._showResponseViewerLinkAddress(body, responseLink);
+        return;
+      }
       // File path (_linkifyFilePaths): open it in the preview overlay, which
       // resolves workspace and out-of-workspace paths alike.
       const pathLink = ev.target.closest('a.rv-path');
@@ -2528,6 +2537,92 @@ class CodemanApp {
       const nowrap = pre.classList.toggle('rv-nowrap');
       wrap.classList.toggle('rv-wrap-nowrap', nowrap);
     });
+    body.addEventListener('auxclick', (ev) => {
+      if (body.id !== 'responseViewerBody' || ev.button !== 1) return;
+      const link = ev.target.closest('a.rv-path, a[href]');
+      if (!link) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      this._showResponseViewerLinkAddress(body, link);
+    });
+  }
+
+  _showResponseViewerLinkAddress(body, link) {
+    const t = (text) => window.CodemanI18n?.t(text) || text;
+    const address = link.dataset.path || link.getAttribute('href');
+    if (!address) return;
+    // Decode UTF-8 once for reading, retaining URI delimiters (%23, %26, etc.).
+    // A malformed escape must not hide an otherwise readable destination.
+    // Match one UTF-8 character at a time so a trailing invalid byte cannot
+    // prevent the preceding Chinese text from decoding.
+    const utf8Escape = /%(?:[0-7][\da-f]|[cd][\da-f]%[89ab][\da-f]|e[\da-f](?:%[89ab][\da-f]){2}|f[0-4](?:%[89ab][\da-f]){3})/gi;
+    const readable = link.dataset.path ? address : address.replace(utf8Escape, (part) => {
+      try {
+        const decoded = decodeURI(part);
+        return /[\x00-\x1f\x7f]/.test(decoded) ? part : decoded;
+      } catch { return part; }
+    });
+    body.querySelector('.rv-link-address')?.remove();
+    const panel = document.createElement('div');
+    panel.className = 'rv-link-address';
+    panel.setAttribute('role', 'group');
+    panel.setAttribute('aria-label', t('Link address'));
+    const addAddress = (label, value) => {
+      const field = document.createElement('label');
+      field.textContent = t(label);
+      const input = document.createElement('textarea');
+      input.readOnly = true;
+      input.rows = 3;
+      input.value = value;
+      input.setAttribute('aria-label', t(label));
+      input.setAttribute('data-i18n-skip', '');
+      field.appendChild(input);
+      panel.appendChild(field);
+      return input;
+    };
+    const input = addAddress('Link address', readable);
+    let originalInput;
+    if (readable !== address) {
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = t('Original address');
+      details.appendChild(summary);
+      const original = addAddress('Original address', address);
+      originalInput = original;
+      details.appendChild(original.parentElement);
+      panel.appendChild(details);
+    }
+    const actions = document.createElement('div');
+    actions.className = 'rv-link-address-actions';
+    const addButton = (label, action) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = t(label);
+      button.addEventListener('click', action);
+      actions.appendChild(button);
+      return button;
+    };
+    const copy = addButton('Copy address', async () => {
+      const ok = await this._copyText(readable);
+      copy.textContent = t(ok ? 'Copied' : 'Select address to copy');
+      if (!ok) { input.focus(); input.select(); }
+    });
+    if (readable !== address) {
+      const copyOriginal = addButton('Copy original address', async () => {
+        const ok = await this._copyText(address);
+        copyOriginal.textContent = t(ok ? 'Copied' : 'Select address to copy');
+        if (!ok) {
+          originalInput.closest('details').open = true;
+          originalInput.focus();
+          originalInput.select();
+        }
+      });
+    }
+    addButton('Close', () => { panel.remove(); link.focus(); });
+    panel.appendChild(actions);
+    (link.closest('.rv-message') || body).appendChild(panel);
+    input.focus({ preventScroll: true });
+    panel.scrollIntoView?.({ block: 'nearest' });
   }
 
   /**

@@ -11,14 +11,14 @@ default; if it is missing, re-enable it in **App Settings → Header & Panels**.
 
 It renders what it can:
 
-| Kind                     | Behaviour                                                                 |
-| ------------------------ | ------------------------------------------------------------------------- |
-| Text and code            | Plain preview with Lines (line numbers) and Wrap toggles in the header. Long files are truncated in plain preview. |
+| Kind                     | Behaviour                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Text and code            | Plain preview with Lines (line numbers) and Wrap toggles in the header. Long files are truncated in plain preview.                                                                                                                                                                                                                                                        |
 | Markdown                 | Rendered by default: headings, tables, code blocks with copy buttons, images and links relative to the file (root-relative ones resolve from the workspace root, as on GitHub). Opened from an attachment card, where the file's folder is unknown, relative images show their alt text and relative links show as plain text. The MD pill in the header flips to source. |
-| Images                   | Inline.                                                                    |
-| Audio and video          | Inline with a working scrub bar, because range requests are supported.     |
-| PDF and Office documents | Converted for preview when a converter is available.                       |
-| Anything else            | Download.                                                                  |
+| Images                   | Inline.                                                                                                                                                                                                                                                                                                                                                                   |
+| Audio and video          | Inline with a working scrub bar, because range requests are supported.                                                                                                                                                                                                                                                                                                    |
+| PDF and Office documents | Converted for preview when a converter is available.                                                                                                                                                                                                                                                                                                                      |
+| Anything else            | Download.                                                                                                                                                                                                                                                                                                                                                                 |
 
 Caps: 10 MB for text preview, 2 GB for raw and download (set `CODEMAN_MAX_DOWNLOAD_BYTES`
 to change it, `0` for no limit — these bodies are streamed, so a large file costs a read
@@ -85,7 +85,13 @@ File paths in a session are links. That works in two places:
 - **In the response viewer**, where paths are usually written as prose or in backticks. They
   render as underlined monospace links.
 
-Clicking one opens it in the preview: images and PDFs render, video and audio play with a
+In the response viewer, clicking a link first shows its destination in a selectable address
+field without navigating or fetching the file. UTF-8 escapes display as readable text, so
+Chinese paths remain readable. **Copy address** copies that displayed destination; when it
+differs from the encoded source, **Original address** and **Copy original address** retain
+the exact source too. This also works for web URLs, relative links and links to missing files.
+
+In the terminal, clicking a path opens it in the preview: images and PDFs render, video and audio play with a
 working scrub bar, documents convert, text shows inline and Markdown renders. The exception is
 a text or Markdown file inside the workspace clicked in the terminal: that opens in the tail
 viewer instead, which follows a file that is still being written.
