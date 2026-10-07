@@ -18,7 +18,14 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { FakeEl, body, bySelector, makeGridApp, resetGridHarness } from './mocks/tile-grid-vm.js';
+import {
+  FakeEl,
+  body,
+  bySelector,
+  documentAddEventListener,
+  makeGridApp,
+  resetGridHarness,
+} from './mocks/tile-grid-vm.js';
 
 type OpenSet = { source: string; ids: string[]; focusedId: string | null } | null;
 type Helpers = { tileGridOpenSet(p: Record<string, unknown>): OpenSet; TILE_GRID_MAX: number };
@@ -135,6 +142,18 @@ describe('opening at once, in the app', () => {
     app.toggleTileGrid();
     expect(picker()).toBeNull();
     expect(app._tilesOwnTerminal()).toBe(true);
+  });
+
+  it('a click elsewhere closes the picker; a click inside it does not', () => {
+    const app = makeGridApp(IDS);
+    const before = documentAddEventListener.mock.calls.length;
+    app.openTilePicker({ preventDefault: vi.fn() });
+    const calls = documentAddEventListener.mock.calls.slice(before) as Array<[string, (e: unknown) => void]>;
+    const onClick = calls.find(([type]) => type === 'click')![1];
+    onClick({ target: picker()!.children[0] });
+    expect(picker()).not.toBeNull();
+    onClick({ target: new FakeEl() });
+    expect(picker()).toBeNull();
   });
 
   it('a right-click opens the picker and keeps the browser menu away', () => {

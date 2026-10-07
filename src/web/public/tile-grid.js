@@ -375,10 +375,8 @@ Object.assign(CodemanApp.prototype, {
    * replaces its set.
    */
   openTilePicker(event) {
-    // As the split picker: the opening event must not reach the outside-click
-    // listener this call installs.
+    // The right-click: the browser's own context menu stays away.
     event?.preventDefault?.();
-    event?.stopPropagation?.();
     if (this._tilePicker) {
       this.closeTilePicker();
       return;
@@ -472,18 +470,17 @@ Object.assign(CodemanApp.prototype, {
       menu.style.top = `${rect.bottom + 4}px`;
       menu.style.right = `${window.innerWidth - rect.right}px`;
     }
+    // A click elsewhere or Escape closes it. A click on the Tiles button needs no
+    // exception: its own handler (toggleTileGrid) closes the picker first.
     const onOutside = (e) => {
-      if (menu.contains?.(e.target) || e.target?.closest?.('.btn-tile-grid')) return;
+      if (menu.contains?.(e.target)) return;
       this.closeTilePicker();
     };
     const onKey = (e) => {
       if (e.key === 'Escape') this.closeTilePicker();
     };
     this._tilePicker = { menu, onOutside, onKey };
-    // Deferred a tick so the opening click (still bubbling) does not close it.
-    setTimeout(() => {
-      if (this._tilePicker?.menu === menu) document.addEventListener('click', onOutside);
-    }, 0);
+    document.addEventListener('click', onOutside);
     document.addEventListener('keydown', onKey);
     (boxes.find((b) => !b.disabled) || open).focus?.();
   },
