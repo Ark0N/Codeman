@@ -1535,7 +1535,10 @@ Object.assign(CodemanApp.prototype, {
     this.closeSessionSidebarOnHandheld?.();
     this.renderSessionTabs?.();
     const activeTab = document.querySelector(`.session-tab.active[data-id="${sessionId}"]`);
-    if (activeTab) {
+    // Not while it still glows: on every skin but OG the glow is `animation:
+    // none`, so animationend never comes and each tile focus used to leave
+    // another listener behind on the tab (49 after 50 focus changes).
+    if (activeTab && !activeTab.classList.contains('tab-glow')) {
       activeTab.classList.add('tab-glow');
       activeTab.addEventListener('animationend', () => activeTab.classList.remove('tab-glow'), { once: true });
     }

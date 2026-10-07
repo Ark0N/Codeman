@@ -19,7 +19,9 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  FakeEl,
   FakeTile,
+  bySelector,
   idleCallbacks,
   localStore,
   makeGridApp,
@@ -61,6 +63,29 @@ describe('selectSession with the grid open', () => {
     expect(app.sendResize).not.toHaveBeenCalled();
     expect(FakeTile.all.find((t) => t.sessionId === 's-b')?.terminal.focus).toHaveBeenCalled();
     expect(app._focusedPane().sessionId).toBe('s-b');
+  });
+
+  it('focus changes leave at most one glow listener on a tab, and the glow runs again once it ended', async () => {
+    // On every skin but OG the glow is `animation: none`: animationend never
+    // fires, and every focus used to add one more once-listener to the tab.
+    const app = openGrid();
+    const tab = new FakeEl();
+    tab.className = 'session-tab active';
+    bySelector.set('.session-tab.active[data-id="s-b"]', tab);
+    for (let i = 0; i < 5; i++) {
+      await app.selectSession('s-b');
+      await app.selectSession('s-a');
+    }
+    expect(tab.classList.contains('tab-glow')).toBe(true);
+    expect(tab.listeners.animationend).toHaveLength(1);
+
+    // OG: the animation ends, the class goes, and the next focus glows again.
+    tab.dispatch('animationend');
+    tab.listeners.animationend = [];
+    expect(tab.classList.contains('tab-glow')).toBe(false);
+    await app.selectSession('s-b');
+    expect(tab.classList.contains('tab-glow')).toBe(true);
+    expect(tab.listeners.animationend).toHaveLength(1);
   });
 
   it('a user-initiated focus acknowledges the idle alert; an `auto` one does not', async () => {
