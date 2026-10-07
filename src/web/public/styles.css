@@ -19376,31 +19376,33 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   overflow: hidden;
 }
 
+/* A split pane's header strip, Pane B's always and Pane A's while the split is
+   open: harness logo, name, model, and Pane B's close (a tile button, see
+   .tile-btn). The tile header's size and layout, FIXED height like it (#464):
+   the terminal below is fitted to what is left. */
 .terminal-pane-b-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 4px 8px;
+  gap: 6px;
+  flex: 0 0 28px;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 0 2px 0 8px;
+  overflow: hidden;
   font-size: 12px;
   background: var(--bg-secondary, #1a1a1a);
   border-bottom: 1px solid var(--border-color, #333);
-  flex: 0 0 auto;
+  user-select: none;
 }
 
-.terminal-pane-b-close {
-  /* A native <button> now backs this (keyboard-reachable close), so reset its
-     default chrome back to the plain glyph this rule always drew. */
-  border: none;
-  background: none;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-  padding: 0 6px;
-  opacity: 0.7;
+/* The partial-history banner overlays the top of .terminal-wrap; while Pane A
+   has its header there, it starts below it. */
+.terminal-pane-a-header ~ .history-trunc-bar {
+  top: 28px;
 }
 
-.terminal-pane-b-close:hover {
-  opacity: 1;
+.split-harness.run-mode-dot {
+  font-size: 13px;
 }
 
 .terminal-pane-b-container {
@@ -19507,7 +19509,8 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
    the logo and the buttons keep their size. The name does not shrink at all (a
    shrink factor, however small, also takes a subpixel from a name that fits and
    ellipsizes it) and is capped at this box's width instead. */
-.tile-title {
+.tile-title,
+.split-title {
   display: flex;
   align-items: baseline;
   gap: 6px;
@@ -19517,7 +19520,8 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   white-space: nowrap;
 }
 
-.tile-name {
+.tile-name,
+.split-title > .session-name {
   flex: 0 0 auto;
   max-width: 100%;
   min-width: 0;
@@ -19526,7 +19530,8 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   text-overflow: ellipsis;
 }
 
-.tile-model {
+.tile-model,
+.split-model {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -19536,7 +19541,8 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   font-size: 11px;
 }
 
-.tile-model::before {
+.tile-model::before,
+.split-model::before {
   content: '\00B7';
   margin-right: 6px;
 }

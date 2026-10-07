@@ -80,6 +80,9 @@ export class FakeEl {
     else this.children.splice(i, 0, child);
     return child;
   }
+  get firstChild() {
+    return this.children[0] ?? null;
+  }
   get nextSibling() {
     const siblings = this.parentElement?.children ?? [];
     return siblings[siblings.indexOf(this) + 1] ?? null;
@@ -152,7 +155,8 @@ export class FakeTile {
 
 export const main = new FakeEl();
 main.className = 'main';
-const wrap = new FakeEl();
+/** The main terminal's `.terminal-wrap` (Pane A while a split is open). */
+export const wrap = new FakeEl();
 wrap.className = 'terminal-wrap';
 main.appendChild(wrap);
 export const section = new FakeEl();
@@ -317,8 +321,10 @@ export function resetGridHarness() {
   delete windowStub.__codemanCliCatalog;
   section.children = [];
   main.className = 'main';
-  // A split a test left open moved .terminal-wrap into its container.
+  // A split a test left open moved .terminal-wrap into its container, with
+  // Pane A's header strip in it.
   main.children = [];
+  wrap.children = [];
   main.appendChild(wrap);
   main.appendChild(section);
   bySelector.clear();

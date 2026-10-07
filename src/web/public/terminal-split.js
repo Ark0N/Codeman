@@ -184,22 +184,38 @@ Object.assign(CodemanApp.prototype, {
 
     const paneB = document.createElement('div');
     paneB.className = 'terminal-pane-b';
-    paneB.innerHTML = `
-      <div class="terminal-pane-b-header">
-        <span class="session-name">${escapeHtml(session?.name || 'Session')}</span>
-        <button type="button" class="terminal-pane-b-close" onclick="app.closeSplitPane()" aria-label="Close split">&times;</button>
-      </div>
-      <div class="terminal-pane-b-container"></div>
-    `;
+    // Pane B's header: the harness logo, the name and the model, as on a grid
+    // tile, and the close button at a tile button's size.
+    const headerB = this._buildSplitPaneHeader();
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'tile-btn tile-remove terminal-pane-b-close';
+    close.title = 'Close split';
+    close.setAttribute('aria-label', 'Close split');
+    close.textContent = '\u00D7';
+    close.addEventListener('click', () => this.closeSplitPane());
+    headerB.el.appendChild(close);
+    const bodyB = document.createElement('div');
+    bodyB.className = 'terminal-pane-b-container';
+    paneB.append(headerB.el, bodyB);
+    // Pane A is the main terminal, which has no header of its own: while the
+    // split is open it gets the same strip, so each session in the split view
+    // names its harness and model. It takes height from the main terminal,
+    // which the opening resize below fits through syncTerminalGeometry (#464);
+    // closeSplitPane gives it back.
+    const headerA = this._buildSplitPaneHeader();
+    headerA.el.classList.add('terminal-pane-a-header');
+    this._splitHeaders = { a: headerA, b: headerB };
 
     parent.insertBefore(container, wrap);
+    wrap.insertBefore(headerA.el, wrap.firstChild);
     container.appendChild(wrap);
     wrap.style.flexBasis = '50%';
     container.appendChild(divider);
     container.appendChild(paneB);
     paneB.style.flexBasis = '50%';
 
-    this._splitPane = new window.TerminalTile(sessionId, paneB.querySelector('.terminal-pane-b-container'), {
+    this._splitPane = new window.TerminalTile(sessionId, bodyB, {
       mode: session?.mode,
       fontSettings: this.loadAppSettingsFromStorage?.() || {},
       detachedSessions: this.detachedSessions,
@@ -209,6 +225,7 @@ Object.assign(CodemanApp.prototype, {
          initial load — live output still arrives once/if the socket connects. */
     });
     this._splitSessionId = sessionId;
+    this._renderSplitChrome();
 
     // Pane A just went from full width to 50%, but nothing has told its
     // session's PTY/tmux window about it yet — the passive ResizeObserver in
@@ -236,6 +253,9 @@ Object.assign(CodemanApp.prototype, {
     this._splitPane.destroy();
     this._splitPane = null;
     this._splitSessionId = null;
+    // Before the refit below, so the main terminal gets its full height back.
+    this._splitHeaders?.a.el.remove();
+    this._splitHeaders = null;
     this._updateSplitButtonState(false);
 
     const container = document.querySelector('.terminal-split-container');
@@ -246,14 +266,16 @@ Object.assign(CodemanApp.prototype, {
     parent.insertBefore(wrap, container);
     container.remove();
 
-    if (this.fitAddon) this.fitAddon.fit();
+    // Pane A takes the whole width back and, with its header strip gone, its
+    // whole height: through syncTerminalGeometry (#464), never a bare
+    // fitAddon.fit(). sendResize fits that way as its first step.
     // The Pane-A-ends branch of the _onSessionDeleted wrapper below collapses the split
     // while activeSessionId is still the id the server just removed, so a
     // resize from here would be aimed at a session that no longer exists;
-    // the promoted session gets its own resize from selectSession().
-    if (!options.skipPrimaryResize) {
-      this.sendResize?.(this.activeSessionId, { force: true })?.catch?.(() => {});
-    }
+    // the promoted session gets its own resize from selectSession(), and the
+    // terminal is only refitted here.
+    if (options.skipPrimaryResize) this.syncTerminalGeometry?.();
+    else this.sendResize?.(this.activeSessionId, { force: true })?.catch?.(() => {});
   },
 
   // A click on .btn-split does one of two things — open the picker, or
@@ -261,6 +283,59 @@ Object.assign(CodemanApp.prototype, {
   // nothing on the button said which. `.split-open` + aria-pressed give it
   // the same active-state language as the codebase's other toggle buttons
   // (keyboard-accessory's Ctrl key, the voice-input mic).
+  /**
+   * A split pane's header strip: the harness logo, the session name and the
+   * model, the three a grid tile's header shows. Built from nodes (the name
+   * and the model are untrusted text) and painted by _renderSplitChrome.
+   */
+  _buildSplitPaneHeader() {
+    const el = document.createElement('div');
+    el.className = 'terminal-pane-b-header';
+    const harness = document.createElement('span');
+    harness.className = 'split-harness run-mode-dot';
+    harness.setAttribute('role', 'img');
+    const title = document.createElement('span');
+    title.className = 'split-title';
+    const name = document.createElement('span');
+    // `.session-name` is one of the translator's skipped surfaces (user text).
+    name.className = 'session-name';
+    // As on a tile: the name inside is never translated, the tooltip may be,
+    // and screen readers hear the model once, in the logo's accessible name.
+    const model = document.createElement('span');
+    model.className = 'split-model';
+    model.setAttribute('aria-hidden', 'true');
+    model.hidden = true;
+    const modelName = document.createElement('span');
+    modelName.setAttribute('data-i18n-skip', '');
+    model.appendChild(modelName);
+    title.append(name, model);
+    el.append(harness, title);
+    return { el, harness, name, model, modelName };
+  },
+
+  /**
+   * Both split headers from their sessions: Pane A shows the active session,
+   * Pane B its own. Runs after every tab render, so a rename or a model
+   * change reaches them; unchanged values write nothing.
+   */
+  _renderSplitChrome() {
+    const headers = this._splitHeaders;
+    if (!headers || !this._splitPane) return;
+    for (const [parts, id] of [
+      [headers.a, this.activeSessionId],
+      [headers.b, this._splitSessionId],
+    ]) {
+      const session = id ? this.sessions.get(id) : null;
+      if (!session) continue;
+      const name = this.getSessionName?.(session) || session.name || 'Session';
+      if (parts.nameValue !== name) {
+        parts.nameValue = name;
+        parts.name.textContent = name;
+      }
+      this._paintSessionHarness(parts, session, 'split-harness');
+    }
+  },
+
   /**
    * Paints a session header's harness logo and model: a grid tile's, and the
    * split panes'. The logo is PR #532's `run-mode-dot <cliId>` slot (the id is
@@ -452,6 +527,15 @@ CodemanApp.prototype._onSessionDeleted = function (data) {
 // this, Pane A rebinds to a session that Pane B's independent WebSocket is
 // still attached to — two live WebSockets to one session, each claiming PTY
 // dimensions via its own `{t:'z',...}` resize frame.
+// Every tab render (any session change: a rename, a model switch) refreshes
+// the split headers too, the way tile-grid.js refreshes the tile headers.
+const _splitOriginalRenderSessionTabsImmediate = CodemanApp.prototype._renderSessionTabsImmediate;
+CodemanApp.prototype._renderSessionTabsImmediate = function (...args) {
+  const result = _splitOriginalRenderSessionTabsImmediate.apply(this, args);
+  this._renderSplitChrome?.();
+  return result;
+};
+
 const _originalSelectSession = CodemanApp.prototype.selectSession;
 CodemanApp.prototype.selectSession = function (sessionId, ...args) {
   if (this._splitPane && this._splitSessionId === sessionId) {
