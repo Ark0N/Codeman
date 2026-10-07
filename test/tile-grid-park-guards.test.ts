@@ -29,6 +29,8 @@
  * tile-grid.js in one `vm` context, with the shared fake DOM and fake
  * TerminalTile (test/mocks/tile-grid-vm.ts). Port: N/A.
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   FakeTile,
@@ -355,6 +357,22 @@ describe('panes and fonts while the grid is open', () => {
     const pane = app._focusedPane();
     expect(pane.isPrimary).toBe(false);
     expect(pane.sessionId).toBe('s-a');
+  });
+
+  it("the main terminal's window-resize timer leaves grid tiles to the grid's own observer", () => {
+    // A window resize fires both: the grid's ResizeObserver refits every tile
+    // (tile-grid.js _scheduleTileGridRefit) and the main terminal's trailing
+    // timer used to refit them again, twelve fit() calls for six tiles and
+    // nothing more sent (measured). The timer lives inside initTerminal(), so
+    // this reads its source; the split's Pane B is still refitted there.
+    const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/terminal-ui.js'), 'utf8');
+    const start = src.indexOf('const throttledResize = () => {');
+    const end = src.indexOf("window.addEventListener('resize', throttledResize)", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const calls = src.slice(start, end).match(/this\._forEachTile\?\.\([^;]*;/g) ?? [];
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('{ grid: false }');
   });
 
   it('_forEachTile reaches every grid tile; { grid: false } skips them', () => {

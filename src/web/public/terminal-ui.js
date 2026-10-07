@@ -1428,8 +1428,11 @@ Object.assign(CodemanApp.prototype, {
         // frame — this observer only ever measured Pane A's container, so
         // without this call Pane B never learned about a window resize, an
         // Alt+B sidebar toggle, or a tab-rail drag, and its PTY silently
-        // stayed at whatever size it was last dragged to.
-        this._forEachTile?.((tile) => tile.fit());
+        // stayed at whatever size it was last dragged to. Grid tiles are left
+        // out: the grid's own observer (tile-grid.js _scheduleTileGridRefit)
+        // refits every one of them on the same resize, and a second fit here
+        // only re-measured six panes to send nothing.
+        this._forEachTile?.((tile) => tile.fit(), { grid: false });
       }, 300); // Trailing-edge: only fire after 300ms of no resize events
     };
 
