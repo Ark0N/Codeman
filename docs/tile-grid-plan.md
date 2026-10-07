@@ -401,8 +401,9 @@ xterm. Nothing may outlive a removed tile (24-hour sessions rule).
 
 ### 2. `TileGrid` controller and layout helper
 
-- `computeTileLayout({ count, width, height, minTileW, minTileH })` and
-  `tileGridCapacity(...)`: pure, in `constants.js`, exported on
+- `computeTileLayout({ count, width, height })` and
+  `tileGridCapacity({ width, height })` (against the minimum tile size,
+  `TILE_MIN_W` x `TILE_MIN_H`): pure, in `constants.js`, exported on
   `window.CodemanTileGrid` beside the existing helper namespaces.
   `sanitizeTileGridState(raw, liveSessions, detachedIds)`: pure, same place.
 - The controller (in a new `src/web/public/tile-grid.js`, load order 7.6, as

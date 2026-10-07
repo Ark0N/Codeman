@@ -1672,13 +1672,13 @@ const TILE_GRID_SSE_FILTER = 'tile-grid';
 
 /**
  * Columns and rows for `count` tiles, by count (the spec's table), and whether
- * that layout gives every cell at least the minimum tile size in a grid area
- * of `width` x `height` px.
+ * that layout gives every cell at least the minimum tile size (TILE_MIN_W x
+ * TILE_MIN_H) in a grid area of `width` x `height` px.
  *
- * @param {{count: number, width?: number, height?: number, minTileW?: number, minTileH?: number}} p
+ * @param {{count: number, width?: number, height?: number}} p
  * @returns {{cols: number, rows: number, fits: boolean}}
  */
-function computeTileLayout({ count, width = Infinity, height = Infinity, minTileW = TILE_MIN_W, minTileH = TILE_MIN_H }) {
+function computeTileLayout({ count, width = Infinity, height = Infinity }) {
   const n = Math.min(Math.max(0, Math.floor(Number(count) || 0)), TILE_LAYOUT_MAX);
   let cols;
   let rows;
@@ -1692,7 +1692,7 @@ function computeTileLayout({ count, width = Infinity, height = Infinity, minTile
   else if (n === 4) { cols = 2; rows = 2; }
   else if (n <= 6) { cols = 3; rows = 2; }
   else { cols = 3; rows = 3; }
-  const fits = width / cols >= minTileW && height / rows >= minTileH;
+  const fits = width / cols >= TILE_MIN_W && height / rows >= TILE_MIN_H;
   return { cols, rows, fits };
 }
 
@@ -1701,13 +1701,13 @@ function computeTileLayout({ count, width = Infinity, height = Infinity, minTile
  * whose layout, and every smaller count's layout, fits. 0 when not even one
  * tile fits.
  *
- * @param {{width: number, height: number, minTileW?: number, minTileH?: number}} p
+ * @param {{width: number, height: number}} p
  * @returns {number}
  */
-function tileGridCapacity({ width, height, minTileW = TILE_MIN_W, minTileH = TILE_MIN_H }) {
+function tileGridCapacity({ width, height }) {
   let capacity = 0;
   for (let n = 1; n <= TILE_GRID_MAX; n++) {
-    if (!computeTileLayout({ count: n, width, height, minTileW, minTileH }).fits) break;
+    if (!computeTileLayout({ count: n, width, height }).fits) break;
     capacity = n;
   }
   return capacity;
