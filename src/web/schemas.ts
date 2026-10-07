@@ -1517,6 +1517,8 @@ export const SettingsUpdateSchema = z
         browserNotifications: z.boolean().optional(),
         audioAlerts: z.boolean().optional(),
         stuckThresholdMs: z.number().optional(),
+        toastDurationMs: z.number().optional(),
+        browserAutoCloseMs: z.number().optional(),
         muteCritical: z.boolean().optional(),
         muteWarning: z.boolean().optional(),
         muteInfo: z.boolean().optional(),

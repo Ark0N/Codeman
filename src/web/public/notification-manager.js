@@ -49,6 +49,10 @@ class NotificationManager {
     // Load preferences
     this.preferences = this.loadPreferences();
 
+    // Restore the history kept across reloads (newest first)
+    this.notifications = this.loadHistory();
+    this.unreadCount = this.notifications.filter((n) => !n.read).length;
+
     // Visibility tracking
     document.addEventListener('visibilitychange', () => {
       this.isTabVisible = !document.hidden;
@@ -93,6 +97,10 @@ class NotificationManager {
       browserNotifications: !isMobile,
       audioAlerts: false,
       stuckThresholdMs: STUCK_THRESHOLD_DEFAULT_MS,
+      // How long a corner toast stays on screen, and how long a browser notification
+      // stays up before Codeman closes it (ms; per-device like the rest of these)
+      toastDurationMs: DEFAULT_TOAST_DURATION_MS,
+      browserAutoCloseMs: AUTO_CLOSE_NOTIFICATION_MS,
       // Legacy urgency muting (keep for backwards compat)
       muteCritical: false,
       muteWarning: false,
@@ -167,9 +175,22 @@ class NotificationManager {
     return {
       ...defaults,
       ...prefs,
+      toastDurationMs: this.clampDuration(prefs.toastDurationMs, defaults.toastDurationMs),
+      browserAutoCloseMs: this.clampDuration(prefs.browserAutoCloseMs, defaults.browserAutoCloseMs),
       eventTypes: { ...defaults.eventTypes, ...prefs.eventTypes },
       _version: 5,
     };
+  }
+
+  /** A display time in ms kept within [1s, 5min]; anything unusable falls back to the default. */
+  clampDuration(value, fallback) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+    return Math.min(MAX_NOTIFICATION_DURATION_MS, Math.max(MIN_NOTIFICATION_DURATION_MS, Math.round(value)));
+  }
+
+  /** Display time for corner toasts that do not set their own `duration`. */
+  getToastDurationMs() {
+    return this.clampDuration(this.preferences?.toastDurationMs, DEFAULT_TOAST_DURATION_MS);
   }
 
   loadPreferences() {
@@ -194,6 +215,68 @@ class NotificationManager {
 
   savePreferences() {
     localStorage.setItem(this.getStorageKey(), JSON.stringify(this.preferences));
+  }
+
+  getHistoryKey() {
+    return this._usesMobilePreferences() ? 'codeman-notification-history-mobile' : 'codeman-notification-history';
+  }
+
+  loadHistory() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(this.getHistoryKey()) || '[]');
+      if (!Array.isArray(saved)) return [];
+      return saved
+        .filter((n) => n && typeof n === 'object' && typeof n.id === 'string' && typeof n.timestamp === 'number')
+        .slice(0, NOTIFICATION_LIST_CAP);
+    } catch (_e) {
+      return [];
+    }
+  }
+
+  /** Keep the drawer's history across reloads. Best effort: storage may be full or blocked. */
+  persistHistory() {
+    try {
+      localStorage.setItem(this.getHistoryKey(), JSON.stringify(this.notifications.slice(0, NOTIFICATION_LIST_CAP)));
+    } catch (_e) { /* ignore */ }
+  }
+
+  /**
+   * Record a corner toast in the drawer so it can be read after it fades. Drawer-only: a
+   * toast never raises a browser notification, sound or title flash. Errors and warnings
+   * count as unread; routine confirmations are stored already read.
+   */
+  logToast(message, type = 'info') {
+    if (typeof message !== 'string' || !message) return;
+    const urgency = type === 'error' ? 'critical' : type === 'warning' ? 'warning' : 'info';
+    const title = { error: 'Error', warning: 'Warning', success: 'Done' }[type] || 'Info';
+    const now = Date.now();
+
+    // The same toast repeating (a retry loop) collapses into a count instead of flooding the list
+    const top = this.notifications[0];
+    if (top && top.category === 'toast' && top.message === message && now - top.timestamp < TOAST_REPEAT_WINDOW_MS) {
+      top.count = (top.count || 1) + 1;
+      top.timestamp = now;
+      this.persistHistory();
+      this.scheduleRender();
+      return;
+    }
+
+    const unread = urgency !== 'info';
+    this.notifications.unshift({
+      id: now + '-' + Math.random().toString(36).slice(2, 7),
+      urgency,
+      category: 'toast',
+      title,
+      message,
+      timestamp: now,
+      read: !unread,
+      count: 1,
+    });
+    if (this.notifications.length > NOTIFICATION_LIST_CAP) this.notifications.pop();
+    if (unread) this.unreadCount++;
+    this.updateBadge();
+    this.persistHistory();
+    this.scheduleRender();
   }
 
   notify({ urgency, category, sessionId, sessionName, title, message }) {
@@ -281,6 +364,7 @@ class NotificationManager {
     // Update unread
     this.unreadCount++;
     this.updateBadge();
+    this.persistHistory();
     this.scheduleRender();
 
     // Layer 2: Tab title (when tab unfocused)
@@ -403,7 +487,7 @@ class NotificationManager {
     };
 
     // Auto-close
-    setTimeout(() => notif.close(), AUTO_CLOSE_NOTIFICATION_MS);
+    setTimeout(() => notif.close(), this.clampDuration(this.preferences.browserAutoCloseMs, AUTO_CLOSE_NOTIFICATION_MS));
   }
 
   async requestPermission() {
@@ -466,6 +550,7 @@ class NotificationManager {
       notif.read = true;
       this.unreadCount = Math.max(0, this.unreadCount - 1);
       this.updateBadge();
+      this.persistHistory();
     }
 
     // Switch to session if available
@@ -481,6 +566,7 @@ class NotificationManager {
     this.notifications.forEach(n => { n.read = true; });
     this.unreadCount = 0;
     this.updateBadge();
+    this.persistHistory();
     this.stopTitleFlash();
     this.scheduleRender();
   }
@@ -489,6 +575,7 @@ class NotificationManager {
     this.notifications = [];
     this.unreadCount = 0;
     this.updateBadge();
+    this.persistHistory();
     this.stopTitleFlash();
     this.scheduleRender();
   }

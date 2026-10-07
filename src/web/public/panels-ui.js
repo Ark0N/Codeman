@@ -5862,7 +5862,8 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * `duration` defaults to 3000ms for every toast type. A message worth
+   * `duration` defaults to the "Toast display time" preference (3000ms unless changed in
+   * Settings → Notifications) for every toast type. A message worth
    * reading rather than glancing at (e.g. "Session started on the native
    * backend — could not apply the custom endpoint: <the actual reason>")
    * passes an explicit `opts.duration: 0` at its own call site instead of
@@ -5874,7 +5875,9 @@ Object.assign(CodemanApp.prototype, {
    * regardless of duration.
    */
   showToast(message, type = 'info', opts = {}) {
-    const { duration = 3000, action } = opts;
+    const { duration = this.notificationManager?.getToastDurationMs?.() ?? 3000, action } = opts;
+    // Keep a readable record in the notification drawer (a toast fades, the drawer entry stays)
+    this.notificationManager?.logToast?.(message, type);
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
 
