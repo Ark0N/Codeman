@@ -1,5 +1,5 @@
 /**
- * @fileoverview A tile's header: `● name ......... ⋯ ×`, and the tab marker.
+ * @fileoverview A tile's header: `● name ......... ⋯ ⤢ ×`, and the tab marker.
  *
  * - The dot uses the six-state classifier the tab rows and both home screens
  *   share (`_sidebarRichRow`), with the existing `.home-sessions-dot--*`

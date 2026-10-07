@@ -19369,10 +19369,10 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
 }
 
 /* ── Tile grid (tile-grid.js, docs/tile-grid-plan.md) ──────────────────────
-   1 to 9 sessions side by side, each a TerminalTile. The section is a SIBLING of
-   .terminal-wrap; .main.tiles-active swaps one for the other (the main terminal
-   is parked while the grid is open). Columns and rows are set inline by
-   _applyTileLayout() from the tile count. */
+   1 to TILE_GRID_MAX (6) sessions side by side, each a TerminalTile. The
+   section is a SIBLING of .terminal-wrap; .main.tiles-active swaps one for the
+   other (the main terminal is parked while the grid is open). Columns and rows
+   are set inline by _applyTileLayout() from the tile count. */
 .tile-grid {
   display: none;
 }
@@ -19437,7 +19437,7 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   background: transparent !important;
 }
 
-/* Tile header: `● name ......... ⋯ ×`. FIXED height (#464): the body below
+/* Tile header: `● name ......... ⋯ ⤢ ×`. FIXED height (#464): the body below
    holds the xterm, so a header that grew (a wrapped name, the rename input)
    would shrink the body with nothing refitting the xterm or its PTY. */
 .tile-header {
@@ -19492,8 +19492,8 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   opacity: 0.7;
 }
 
-/* The ellipsis and the cross are thin glyphs: a step up so all four read at
-   the same visual size as the arrow and the plus. */
+/* The ellipsis and the cross are thin glyphs: a step up so they read at the
+   same visual size as the zoom arrow. */
 .tile-btn.tile-menu,
 .tile-btn.tile-remove {
   font-size: 19px;

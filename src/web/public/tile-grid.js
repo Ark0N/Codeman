@@ -1,9 +1,9 @@
 // src/web/public/tile-grid.js
 
 /**
- * @fileoverview The tile grid: 1 to 9 live sessions side by side in one
- * window, each in its own TerminalTile (terminal-tile.js), laid out by count
- * (window.CodemanTileGrid, constants.js). Desktop only; see
+ * @fileoverview The tile grid: 1 to TILE_GRID_MAX (6) live sessions side by
+ * side in one window, each in its own TerminalTile (terminal-tile.js), laid
+ * out by count (window.CodemanTileGrid, constants.js). Desktop only; see
  * docs/tile-grid-plan.md.
  *
  * While the grid is open the main terminal (terminal-ui.js) is PARKED: hidden,
@@ -1054,9 +1054,9 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * `● name ......... ⋯ ×`: the status dot (the six-state classifier the tab
+   * `● name ......... ⋯ ⤢ ×`: the status dot (the six-state classifier the tab
    * rows and both home screens share), the session name (double-click
-   * renames), the session menu (the tab rail's own) and remove-tile. Its
+   * renames), the session menu (the tab rail's own), zoom and remove-tile. Its
    * buttons stop pointerdown, so acting on a tile that is not focused does not
    * also focus it (and spend its idle alert).
    */
