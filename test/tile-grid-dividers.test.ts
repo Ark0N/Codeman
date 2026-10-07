@@ -12,8 +12,6 @@
  *
  * Real code via the shared vm harness (test/mocks/tile-grid-vm.ts). Port: N/A.
  */
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   FakeEl,
@@ -204,11 +202,13 @@ describe('fractions on fewer columns', () => {
 });
 
 describe('zoomed', () => {
-  it('shows no dividers', () => {
+  it('has no dividers while a tile fills the grid, and gets them back on restore', () => {
     const app = grid(['s-a', 's-b', 's-c', 's-d']);
+    const dividerEls = () => section.children.filter((el) => el.className.startsWith('tile-divider'));
     app.zoomTile('s-a');
     expect(app._tileGrid.dividers.size).toBe(0);
-    const css = readFileSync(resolve(import.meta.dirname, '../src/web/public/styles.css'), 'utf8');
-    expect(css).toMatch(/\.tile-grid\.tile-grid--zoomed \.tile-divider\s*\{\s*display: none;/);
+    expect(dividerEls()).toHaveLength(0);
+    app.zoomTile('s-a');
+    expect(dividerEls()).toHaveLength(2);
   });
 });

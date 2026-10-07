@@ -120,6 +120,15 @@ describe('dragging a tab onto an empty slot', () => {
     app.openTileGrid(['s-a', 's-b']);
     expect(slots()).toHaveLength(0);
   });
+
+  it('a zoomed grid has no slot; restoring the grid brings it back', () => {
+    const app = makeGridApp(IDS);
+    app.openTileGrid(IDS);
+    app.zoomTile('s-a');
+    expect(slots()).toHaveLength(0);
+    app.zoomTile('s-a');
+    expect(slots()).toHaveLength(1);
+  });
 });
 
 describe('Ctrl/Cmd+click on a tab', () => {

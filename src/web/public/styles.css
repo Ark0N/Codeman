@@ -19557,10 +19557,6 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   background: var(--accent, #4a9eff);
 }
 
-.tile-grid.tile-grid--zoomed .tile-divider {
-  display: none;
-}
-
 /* While a divider drags: the resize cursor everywhere and no text selection
    (mirrors body.split-pane-resizing). */
 body.tile-grid-resizing,
@@ -19590,10 +19586,6 @@ body.tile-grid-resizing--row * {
   color: var(--text-muted);
   font-size: 12px;
   opacity: 0.6;
-}
-
-.tile-grid.tile-grid--zoomed .tile-slot {
-  display: none;
 }
 
 /* A tab dragged over a tile (replace it) or an empty slot (add it). */
