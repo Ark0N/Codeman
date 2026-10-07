@@ -1457,6 +1457,12 @@ export const SettingsUpdateSchema = z
     claudeMode: z.string().max(50).optional(),
     allowedTools: z.string().max(2000).optional(),
     // Codex CLI settings
+    codexModel: z
+      .string()
+      .max(100)
+      .regex(/^[a-zA-Z0-9._\-/]*$/)
+      .optional(),
+    codexReasoningEffort: z.enum(['', ...CODEX_REASONING_EFFORTS]).optional(),
     codexDangerouslyBypassApprovals: z.boolean().optional(),
     codexAnimationsEnabled: z.boolean().optional(),
     // Terminal history and retention

@@ -115,6 +115,7 @@ import { clampEnvOverridesForOwner } from '../../session-env-clamp.js';
 import { enabledClis, getCli } from '../../config/cli-registry/registry.js';
 import type { NewlineSequence } from '../../config/cli-registry/types.js';
 import { resolveCliLaunchError } from '../../utils/cli-launcher.js';
+import { resolveCodexLaunchDefaults } from '../codex-launch-defaults.js';
 import { legacyConfigForMode } from '../../session-cli-registry-bridge.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
@@ -1103,6 +1104,7 @@ export function registerSessionRoutes(
     const globalNice = await ctx.getGlobalNiceConfig();
     const modelConfig = await ctx.getModelConfig();
     const mode = body.mode || 'claude';
+    const launchCodexConfig = mode === 'codex' ? await resolveCodexLaunchDefaults(body.codexConfig) : body.codexConfig;
     // Where a model override comes from is a capability, and the three answers are
     // genuinely different mechanisms:
     //   'flag'                 — the CLI takes --model, so read the value the caller sent
@@ -1117,9 +1119,10 @@ export function registerSessionRoutes(
     const modelSource = getCli(mode)?.capabilities.model;
     const model =
       modelSource?.source === 'flag'
-        ? (legacyConfigForMode(mode, body as unknown as Record<string, unknown>)?.[modelSource.param ?? 'model'] as
-            | string
-            | undefined)
+        ? (legacyConfigForMode(mode, { ...body, codexConfig: launchCodexConfig } as unknown as Record<
+            string,
+            unknown
+          >)?.[modelSource.param ?? 'model'] as string | undefined)
         : modelSource?.source === 'claude-settings-file'
           ? body.model || modelConfig?.defaultModel || undefined
           : undefined;
@@ -1136,7 +1139,7 @@ export function registerSessionRoutes(
       deepSeekConfig: gatedDeepSeekConfig,
     } = await _clampExternalCliBypassForOwner(
       owner,
-      body.codexConfig,
+      launchCodexConfig,
       body.geminiConfig,
       body.antigravityConfig,
       body.piConfig,
@@ -3831,13 +3834,15 @@ export function registerSessionRoutes(
     // Apply global Nice priority config and model config from settings
     const niceConfig = await ctx.getGlobalNiceConfig();
     const qsModelConfig = await ctx.getModelConfig();
+    const qsLaunchCodexConfig =
+      mode === 'codex' && !remote ? await resolveCodexLaunchDefaults(codexConfig, !!customModel) : codexConfig;
     // See the create path for why this is a capability rather than a mode ladder.
     const qsModelSource = getCli(mode)?.capabilities.model;
     const qsModel =
       qsModelSource?.source === 'flag'
         ? (legacyConfigForMode(mode, {
             openCodeConfig,
-            codexConfig,
+            codexConfig: qsLaunchCodexConfig,
             geminiConfig,
             antigravityConfig,
             piConfig,
@@ -3859,7 +3864,7 @@ export function registerSessionRoutes(
       deepSeekConfig: qsGatedDeepSeekConfig,
     } = await _clampExternalCliBypassForOwner(
       owner,
-      codexConfig,
+      qsLaunchCodexConfig,
       geminiConfig,
       antigravityConfig,
       piConfig,
