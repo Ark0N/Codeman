@@ -638,7 +638,7 @@
           }
           const shell = this.sessionMode === 'shell';
           let query = shell ? `tail=${TERMINAL_TAIL_SIZE}` : 'full=1';
-          if (this.boundedLoad && !shell) query = `full=1&tail=${TERMINAL_TAIL_SIZE}`;
+          if (this.boundedLoad && !shell) query = `full=1&tail=${TERMINAL_TAIL_SIZE}${this._historyLinesQuery()}`;
           // A deadline covering the body as well as the headers (the primary
           // pane's budgets, CodemanFetchDeadline): a capture that never answers
           // would otherwise hold this pane's single-flight flag, and in the grid
@@ -807,9 +807,10 @@
       };
       try {
         armDeadline(global.CodemanFetchDeadline?.terminalFetchDeadlineMs?.({ full: true }) ?? HISTORY_PULL_TIMEOUT_MS);
-        const res = await fetch(`/api/sessions/${this.sessionId}/terminal?full=1&tail=${TERMINAL_TAIL_SIZE}`, {
-          signal: controller?.signal,
-        });
+        const res = await fetch(
+          `/api/sessions/${this.sessionId}/terminal?full=1&tail=${TERMINAL_TAIL_SIZE}${this._historyLinesQuery()}`,
+          { signal: controller?.signal }
+        );
         armDeadline(HISTORY_PULL_TIMEOUT_MS);
         // The cutoff below is the response's arrival, the same `since` rule the
         // primary pane uses (_finishBufferLoad). It is a client clock standing in
@@ -891,6 +892,16 @@
         this._stampMarkerIfOwed();
         this._endBufferLoad();
       }
+    }
+
+    // A bounded load's `lines=` (grid tiles): tmux history beyond what this
+    // xterm keeps (its scrollback plus the screen) would only be captured to be
+    // thrown away, and a full capture is synchronous work on the server, about
+    // 0.7 s for a 30k-line history. Unbounded panes (the split's Pane B) ask
+    // for everything, as before.
+    _historyLinesQuery() {
+      if (!this.boundedLoad || !Number.isFinite(this.scrollback)) return '';
+      return `&lines=${this.scrollback + (this.terminal?.rows || 0)}`;
     }
 
     // The `{t:'r'}` server-refresh path: clear, then replay. Two refresh

@@ -445,6 +445,20 @@ count against the same 16, not 16 of each. An abandoned request no longer holds 
 slot, because the routes release the waiter when the client disconnects, but a
 client that opens many concurrent waits against one session will still hit the cap.
 
+## Terminal capture (`GET /api/v1/sessions/:id/terminal`)
+
+What a session's terminal shows, for a client to replay: `data.terminalBuffer`,
+with `source` (`mux-visible`, `mux-full-history` or `history`), `truncated`,
+`truncationReason`, `fullSize`, and `captureCols`/`captureRows` when the pane's
+geometry was read. The capture runs synchronous tmux calls on the server; the
+`Server-Timing` header reports `capture`, `prepare` and `total`.
+
+| Query | Meaning |
+|---|---|
+| `full=1` | tmux's scrollback, not only the visible frame (`source: 'mux-full-history'`), ending with a relative cursor move back to the pane's caret. |
+| `tail=<bytes>` | Keep the newest `<bytes>` of the result (`truncationReason: 'tail'` when it cut). |
+| `lines=<n>` | With `full=1` only: read at most `<n>` lines of tmux history above the visible frame. An integer of at least 1, clamped to the configured history limit; absent or malformed, the whole limit (100,000 lines by default), as before. `truncated` and `truncationReason` describe byte cuts only, not this bound. Without it a full capture reads all of that history before `tail` cuts it, so a client that keeps a fixed number of lines (the tile grid sends its xterm's scrollback plus its rows) should send it. |
+
 ## Session lineage (`parentSessionId`)
 
 A create request may name the session that spawned it, which the web UI draws as a

@@ -165,6 +165,9 @@ vm.runInContext(
 const CodemanApp = (context as unknown as { __CodemanApp: { prototype: object } }).__CodemanApp;
 const TileGrid = windowStub.CodemanTileGrid as { TILE_SCROLLBACK: number };
 const TAIL = 1024 * 1024;
+// A grid tile's full captures read no more tmux history than its xterm keeps:
+// TILE_SCROLLBACK plus the screen (the fake terminal has 24 rows).
+const LINES = `&lines=${TileGrid.TILE_SCROLLBACK + 24}`;
 
 type Tile = {
   sessionId: string;
@@ -292,7 +295,7 @@ describe('initial loads', () => {
     await drain();
     await Promise.all(connecting);
     expect(captures.map((c) => c.url)).toEqual([
-      `/api/sessions/tui/terminal?full=1&tail=${TAIL}`,
+      `/api/sessions/tui/terminal?full=1&tail=${TAIL}${LINES}`,
       `/api/sessions/sh/terminal?tail=${TAIL}`,
     ]);
   });
@@ -361,9 +364,9 @@ describe('refreshes', () => {
     expect(inFlight()).toBe(1);
     await drain();
     expect(captures.map((c) => c.url)).toEqual([
-      `/api/sessions/a/terminal?full=1&tail=${TAIL}`,
-      `/api/sessions/sh/terminal?full=1&tail=${TAIL}`,
-      `/api/sessions/b/terminal?full=1&tail=${TAIL}`,
+      `/api/sessions/a/terminal?full=1&tail=${TAIL}${LINES}`,
+      `/api/sessions/sh/terminal?full=1&tail=${TAIL}${LINES}`,
+      `/api/sessions/b/terminal?full=1&tail=${TAIL}${LINES}`,
     ]);
   });
 
