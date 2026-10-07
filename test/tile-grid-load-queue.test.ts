@@ -23,88 +23,14 @@
  *
  * Real code under test: constants.js + app.js + terminal-ui.js +
  * terminal-tile.js in one `vm` context; xterm, the fit addon and WebSocket are
- * fakes. Port: N/A.
+ * fakes (test/mocks/terminal-tile-fakes.ts). Port: N/A.
  */
 import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-class FakeSocket {
-  static instances: FakeSocket[] = [];
-  readyState = 0;
-  sent: Array<Record<string, unknown>> = [];
-  onopen: (() => void) | null = null;
-  onmessage: ((ev: { data: string }) => void) | null = null;
-  onclose: ((ev?: { code: number }) => void) | null = null;
-  onerror: (() => void) | null = null;
-  constructor(public url: string) {
-    FakeSocket.instances.push(this);
-  }
-  send(data: string) {
-    this.sent.push(JSON.parse(data));
-  }
-  close = vi.fn(() => {
-    this.readyState = 3;
-  });
-  open() {
-    this.readyState = 1;
-    this.onopen?.();
-  }
-  receive(msg: object) {
-    this.onmessage?.({ data: JSON.stringify(msg) });
-  }
-  drop(code = 1006) {
-    this.readyState = 3;
-    this.onclose?.({ code });
-  }
-}
-
-class FakeFit {
-  term: FakeTerminal | null = null;
-  fit() {}
-  proposeDimensions() {
-    return { cols: 80, rows: 24 };
-  }
-}
-
-class FakeTerminal {
-  options: Record<string, unknown>;
-  cols = 80;
-  rows = 24;
-  buffer = { active: { type: 'normal', viewportY: 0, length: 24 } };
-  writes: string[] = [];
-  constructor(options: Record<string, unknown>) {
-    this.options = { ...options };
-  }
-  loadAddon(addon: FakeFit) {
-    addon.term = this;
-  }
-  open() {}
-  onData() {}
-  attachCustomKeyEventHandler() {}
-  registerLinkProvider() {}
-  textarea = { addEventListener() {}, removeEventListener() {} };
-  /** Set by a test: write callbacks never run, as on a disposed xterm. */
-  holdParse = false;
-  write(data: string, cb?: () => void) {
-    // An empty write puts nothing on screen; the replay queues one only to hear
-    // (its callback) that everything before it has been parsed.
-    if (data) this.writes.push(data);
-    if (!this.holdParse) cb?.();
-  }
-  clear() {
-    this.writes.push('<CLEAR>');
-  }
-  resize(cols: number, rows: number) {
-    this.cols = cols;
-    this.rows = rows;
-  }
-  scrollToLine() {}
-  scrollToTop() {}
-  dispose() {}
-}
+import { FakeFit, FakeSocket, FakeTerminal } from './mocks/terminal-tile-fakes.js';
 
 /** One `/terminal` fetch the test answers (or lets hang) by hand. */
 type Capture = { url: string; settled: boolean; aborted: boolean; answer(body: string): void };

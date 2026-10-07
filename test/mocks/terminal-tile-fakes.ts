@@ -37,6 +37,11 @@ export class FakeSocket {
   inputFrames() {
     return this.sent.filter((f) => f.t === 'i');
   }
+  /** The connection drops: closed, and the tile hears `code`. */
+  drop(code = 1006) {
+    this.readyState = 3;
+    this.onclose?.({ code });
+  }
 }
 
 /** The fit addon: proposes `FakeFit.proposed` and, like the real one, resizes to it (NaN = hidden pane). */
@@ -90,9 +95,13 @@ export class FakeTerminal {
   }
   registerLinkProvider() {}
   writes: string[] = [];
+  /** Set by a test: write callbacks never run, as on a disposed xterm. */
+  holdParse = false;
   write(data: string, cb?: () => void) {
-    this.writes.push(data);
-    cb?.();
+    // An empty write puts nothing on screen; the replay queues one only to hear
+    // (its callback) that everything before it has been parsed.
+    if (data) this.writes.push(data);
+    if (!this.holdParse) cb?.();
   }
   clear() {
     this.writes.push('<CLEAR>');
@@ -103,6 +112,8 @@ export class FakeTerminal {
     this.cols = cols;
     this.rows = rows;
   }
+  scrollToLine() {}
+  scrollToTop() {}
   dispose() {}
   type(data: string) {
     this.dataCb?.(data);
