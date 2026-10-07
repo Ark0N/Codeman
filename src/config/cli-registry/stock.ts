@@ -622,6 +622,16 @@ const CODEX: CliEntry = {
       watchingLine: String.raw`^\s{0,4}(\d+ background terminals?) running · /ps to view · /stop to close$`,
       watchingLines: 3,
     },
+    // The footer under the composer, measured on a live 0.147.0 pane:
+    // `  gpt-5.6-terra default · ~/codeman-cases/th-scratch` (model, reasoning effort,
+    // cwd). It is the pane's LAST row, below the composer, so the transcript never
+    // reaches it, and the effort word right after the model is codex's own format: an
+    // open slash-command popup or a bare line of prose does not have that shape. A
+    // footer without an effort word (a model with no reasoning setting) is not read,
+    // and the session keeps its last known or launch model.
+    modelDetect: {
+      screenLine: String.raw`^ {2}([A-Za-z0-9][\w.:/@+-]{0,79}) (?:none|minimal|low|medium|high|xhigh|max|default) · `,
+    },
     // Two columns, like claude's, measured on a live 0.154.0 answer: the `•`/`›`/`⚠`
     // markers sit in the gutter, prose continuations sit at 2, and a nested YAML block
     // the model wrote rendered at 2/4/6/8 for its own 0/2/4/6. Replayed at 100, 120,
@@ -1222,6 +1232,18 @@ const DEEPSEEK: CliEntry = {
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
     // Model is NOT a session field for dsh — it is a profile composition entry.
     model: { source: 'none' },
+    // So the screen is where the model is known: dsh-TUI resolves the route itself
+    // (profile cordis.yml pin, else the persisted `/model` choice, else its default;
+    // lib/types/modelRoute.js) and its status line draws "the route requests actually
+    // take", model first (StatusLine.js; `statusBar.model` is on by default and forced
+    // on in minimal mode). Measured on dsh-TUI 0.10.0-beta.1: the composer's rounded box
+    // and, on the row right under its bottom border, ` qwen3.8-27b · medium · <cwd>`.
+    // The border anchors it: nothing the agent writes can sit below the composer, and a
+    // suggestion popup there starts with `/` or `+`, never a model id.
+    modelDetect: {
+      screenLine: String.raw`╰─+╯\n ?([A-Za-z0-9][\w.:/@+-]{0,79})(?= · |\n|$)`,
+      screenLines: 3,
+    },
     // Only-if-sent, like codex/antigravity/grok: an ABSENT permissionMode means the
     // launcher's own default, `workspace-write`, which already asks. Clamping to
     // `read-only` instead would break the workspace rather than protect it.

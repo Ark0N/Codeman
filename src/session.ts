@@ -137,7 +137,16 @@ import {
   sanitizeAttachmentHistory,
   upsertAttachmentHistory as upsertAttachmentHistoryList,
 } from './session-attachment-history.js';
-import type { SessionAttachmentHistoryItem } from './types/session.js';
+import type { SessionAttachmentHistoryItem, DisplayModel } from './types/session.js';
+import {
+  launchModelFor,
+  readScreenModel,
+  resolveDisplayModel,
+  restoredReportedModel,
+  sanitizeModelName,
+  type ReportedModel,
+  type ReportedModelSource,
+} from './session-display-model.js';
 
 export type { BackgroundTask } from './task-tracker.js';
 export type { RalphTrackerState, RalphTodoItem, ActiveBashTool } from './types.js';
@@ -550,6 +559,17 @@ export class Session extends EventEmitter {
   private _watchingWindow = WATCHING_TAIL_LINES;
   /** Lazily compiled `capabilities.workDetect.awaitingLine`. See _awaitingLinePattern(). */
   private _awaitingLineRe: RegExp | null | undefined = undefined;
+  /**
+   * The newest model the running CLI reported for itself (its statusline, or its own
+   * footer read off the probe's capture), or null when none has. Feeds `displayModel`
+   * (src/session-display-model.ts). Persisted through `toState()` and restored after a
+   * restart, so an idle session keeps naming its model until the next report.
+   */
+  private _reportedModel: ReportedModel | null = null;
+  /** Lazily compiled `capabilities.modelDetect.screenLine`. See _modelLinePattern(). */
+  private _modelLineRe: RegExp | null | undefined = undefined;
+  /** Resolved with the pattern above: how many rows at the foot of the screen it sees. */
+  private _modelLineRows = 1;
   private _trustDialogAccepted: boolean = false; // Stops the trust-dialog scan (answered, or given up)
   private _trustDialogAttempts = 0; // Keystrokes sent at the trust dialog
   private _lastTrustDialogScanAt = 0; // Throttle for the trust-dialog screen read
@@ -807,6 +827,8 @@ export class Session extends EventEmitter {
       claudeSessionChain?: string[];
       /** Restored agent-exit observation for this session's pane (see `paneExit`). */
       paneExit?: PaneExit;
+      /** The previous run's `displayModel`; a CLI-reported one is restored (see `displayModel`). */
+      displayModel?: DisplayModel;
       /** This session was rebuilt from the tmux socket, so its metadata is a guess. */
       discoveredMuxSession?: boolean;
       /** Restored wall-clock ms of the pane's last output (recovery only; see `_wireActivityAt`). */
@@ -974,6 +996,7 @@ export class Session extends EventEmitter {
     // replaces it with a first-hand reading. NOT the stats collector, which a
     // browser panel arms and disarms — see `startPaneExitWatcher`.
     this.setPaneExit(config.paneExit);
+    this._reportedModel = restoredReportedModel(config.displayModel) ?? null;
     // Never self-parent: a session pointing at itself would draw a zero-length
     // lineage arc under its own tab. Only reachable via the recovery path, where
     // both the id and the saved parent come from disk.
@@ -1858,6 +1881,7 @@ export class Session extends EventEmitter {
       model: cliTakesSessionModel(this.mode) ? this._model : undefined,
       advisorModel: this._advisorModel,
       customModel: this.customModel,
+      displayModel: this.displayModel,
       // COD-118: runtime-only — surfaced so the frontend can require explicit user
       // intent before restarting a crash-looped session. Deliberately NOT restored
       // by the constructor: a Codeman restart starts with a fresh breaker so boot
@@ -3134,7 +3158,83 @@ export class Session extends EventEmitter {
     this._lastPaneProbeWorking =
       text === null ? null : this._workingLinePattern().test(text) || this._paneAwaitsWorkers(text);
     this._readWatching(text);
+    this._readScreenModel(text);
     return this._lastPaneProbeWorking;
+  }
+
+  /**
+   * Read the model the CLI's own footer names off the same capture, for a CLI whose
+   * registry entry declares `capabilities.modelDetect`.
+   *
+   * Unlike `_readWatching`, a capture that could not be read, or a footer the pattern
+   * does not find (a popup covering it, a footer turned off), KEEPS the last model. The
+   * two are not symmetric: background work ends and its badge must go, while a model does
+   * not stop running because something was drawn over the row that names it.
+   */
+  private _readScreenModel(paneText: string | null): void {
+    if (paneText === null) return;
+    const pattern = this._modelLinePattern();
+    if (!pattern) return;
+    const model = readScreenModel(paneText, pattern, this._modelLineRows);
+    if (model) this.noteReportedModel('screen', model);
+  }
+
+  /**
+   * The regex reading this CLI's model off its footer, or null for a CLI that declares
+   * none. Compiled once per session through `compileVersionRegex()` (null, never a throw,
+   * for a pattern it refuses), like the working- and watching-line patterns.
+   */
+  private _modelLinePattern(): RegExp | null {
+    if (this._modelLineRe === undefined) {
+      const detect = getCli(this.mode)?.capabilities.modelDetect;
+      this._modelLineRe = detect ? compileVersionRegex(detect.screenLine) : null;
+      this._modelLineRows = detect?.screenLines ?? 1;
+    }
+    return this._modelLineRe;
+  }
+
+  /**
+   * Record a model the running CLI reported for itself: its statusline (claude's
+   * exporter, via `POST /api/status-telemetry`) or its own footer. The newest report
+   * wins whatever its source. An empty or unprintable report changes nothing.
+   *
+   * @returns true when the reported model changed (and `displayModelChanged` was emitted)
+   */
+  noteReportedModel(source: ReportedModelSource, raw: unknown): boolean {
+    const model = sanitizeModelName(raw);
+    if (!model) return false;
+    if (this._reportedModel?.model === model && this._reportedModel.source === source) return false;
+    this._reportedModel = { model, source };
+    // The status does not change with it, so it needs a broadcast (and a persist) of its own.
+    this.emit('displayModelChanged');
+    return true;
+  }
+
+  /**
+   * The model this session runs as far as the server knows, and where that came from:
+   * the custom endpoint's model, else the newest report from the CLI, else the launch
+   * model (src/session-display-model.ts). Undefined when none is known.
+   */
+  get displayModel(): DisplayModel | undefined {
+    return resolveDisplayModel({
+      customModelId: this._customModel?.modelId,
+      reported: this._reportedModel,
+      // The same option bag the spawn reads its launch params from: `model` at the top
+      // for claude (the `--model` or app-wide default it was created with; inert for
+      // every other CLI, which is why it is not handed over for them), each other CLI's
+      // own `<Mode>Config`. Where the model param lives is registry data.
+      launchModel: launchModelFor(this.mode, {
+        model: cliTakesSessionModel(this.mode) ? this._model : undefined,
+        openCodeConfig: this._openCodeConfig,
+        codexConfig: this._codexConfig,
+        geminiConfig: this._geminiConfig,
+        antigravityConfig: this._antigravityConfig,
+        piConfig: this._piConfig,
+        grokConfig: this._grokConfig,
+        deepSeekConfig: this._deepSeekConfig,
+        ompConfig: this._ompConfig,
+      }),
+    });
   }
 
   /**

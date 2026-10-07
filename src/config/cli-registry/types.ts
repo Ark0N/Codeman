@@ -463,6 +463,23 @@ export interface CliCapabilities {
   /** Where a model override is delivered. Claude uniquely writes settings.local.json. */
   model: { source: 'flag' | 'claude-settings-file' | 'none'; param?: string };
   /**
+   * Where this CLI draws the model it is running, so a session header can name it
+   * (`SessionState.displayModel`, src/session-display-model.ts).
+   *
+   * `screenLine` is the source of a regex with exactly ONE capture group, the model. It
+   * runs over the last `screenLines` non-blank rows of the pane capture the idle/working
+   * probe already takes (rows joined with `\n`, so a pattern may span them), which costs no
+   * extra tmux call and re-reads the footer at every turn transition, so an in-session
+   * `/model` switch is followed.
+   *
+   * ⚠ The rows are pane text and the agent writes most of a pane, so a pattern must anchor
+   * on chrome only this CLI draws (the row under its own composer, an effort word in its
+   * own footer format), never on a shape the agent could print in its transcript. Measured
+   * on a live pane per CLI; absent means the CLI's screen is never read for a model and
+   * the session shows its launch model, if any.
+   */
+  modelDetect?: { screenLine: string; screenLines?: number };
+  /**
    * Params a non-granted multi-user owner may not set freely, and what they are forced to.
    * Data-driven so a CUSTOM CLI's bypass flag is clampable exactly like codex's.
    *

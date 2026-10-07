@@ -13,7 +13,7 @@
  */
 
 import { z } from 'zod';
-import { compileVersionRegex, TOKEN_PATTERNS } from './patterns.js';
+import { compileVersionRegex, countCaptureGroups, TOKEN_PATTERNS } from './patterns.js';
 import { isKnownLauncherProfile, isKnownSetenvProfile } from './profiles.js';
 import type { McpConfigFormat } from './types.js';
 
@@ -370,6 +370,25 @@ const capabilitiesSchema = z
     model: z
       .object({ source: z.enum(['flag', 'claude-settings-file', 'none']), param: z.string().optional() })
       .strict(),
+    // Same guard as the workDetect patterns: ~/.codeman/clis.json can set it, and it runs
+    // over the foot of a pane capture every time a session settles. Exactly one capture
+    // group (the model), checked here so a pattern without one fails at LOAD time instead
+    // of silently never naming a model.
+    modelDetect: z
+      .object({
+        screenLine: z
+          .string()
+          .min(1)
+          .refine(
+            (src) => compileVersionRegex(src) !== null && countCaptureGroups(src) === 1,
+            'screenLine must be a regex compileVersionRegex() accepts (at most 200 characters, no nested quantifiers) with exactly one capture group'
+          ),
+        // Bounded hard, like watchingLines: every row it adds is one more row the agent
+        // itself may be able to write.
+        screenLines: z.number().int().min(1).max(4).optional(),
+      })
+      .strict()
+      .optional(),
     privilegedParams: z
       .array(
         z

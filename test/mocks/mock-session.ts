@@ -383,6 +383,14 @@ export class MockSession extends EventEmitter {
   );
   restartCli = vi.fn(async () => true);
   getCustomModelForPersist = vi.fn(() => this._mockCustomModel);
+  /** Mirrors Session.noteReportedModel: the statusline route records the CLI's model. */
+  reportedModel: { model: string; source: 'statusline' | 'screen' } | null = null;
+  noteReportedModel = vi.fn((source: 'statusline' | 'screen', raw: unknown): boolean => {
+    if (typeof raw !== 'string' || !raw.trim()) return false;
+    if (this.reportedModel?.model === raw && this.reportedModel.source === source) return false;
+    this.reportedModel = { model: raw, source };
+    return true;
+  });
 
   /** Stub for sendInput */
   sendInput = vi.fn();

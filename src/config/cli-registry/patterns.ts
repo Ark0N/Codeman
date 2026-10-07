@@ -119,3 +119,16 @@ export function compileVersionRegex(source: string): RegExp | null {
     return null;
   }
 }
+
+/**
+ * How many capture groups a regex source declares (named ones included), or -1 when it
+ * does not compile. Matching the empty string against `source|` always succeeds through
+ * the empty alternative, and the match array then has one slot per group.
+ */
+export function countCaptureGroups(source: string): number {
+  try {
+    return (new RegExp(`${source}|`).exec('') as RegExpExecArray).length - 1;
+  } catch {
+    return -1;
+  }
+}

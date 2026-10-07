@@ -7,6 +7,9 @@
  * the header "Plan Usage Limits" chip. Auth-exempt like `/api/hook-event`
  * (localhost-only; hook-secret-gated while a tunnel runs — see middleware/auth).
  *
+ * Also records the session's model (`model.display_name`) as its reported model, which
+ * `session:updated` publishes as `displayModel` for the session headers.
+ *
  * Returns a compact plain-text status string for the exporter to print as the
  * in-terminal footer (print-through) when it has no statusline of the user's
  * own to wrap. An unknown session gets an EMPTY body: the old brand-word
@@ -26,6 +29,7 @@ import {
 import { SessionStatusTelemetry } from '../sse-events.js';
 import { setLatestPlanUsage } from '../plan-usage-latest.js';
 import type { SessionPort, EventPort } from '../ports/index.js';
+import { getCli } from '../../config/cli-registry/index.js';
 
 export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: SessionPort & EventPort): void {
   // Last broadcast telemetry signature per session — the statusline fires on
@@ -45,6 +49,15 @@ export function registerStatusTelemetryRoutes(app: FastifyInstance, ctx: Session
     }
 
     const payload = data as RawStatuslinePayload | undefined;
+
+    // The model the CLI says it is running, for the session headers (displayModel). It
+    // rides every render, so it follows an in-session `/model`; the session dedupes and
+    // broadcasts only a change. Only a CLI that has a statusline exporter at all may
+    // report one here.
+    const session = ctx.sessions.get(sessionId);
+    if (session && getCli(session.mode)?.capabilities.statusLineTelemetry) {
+      session.noteReportedModel('statusline', payload?.model?.display_name);
+    }
 
     // Plan-usage limits (account-wide) → broadcast to the header chip, when
     // present and changed (the statusline fires on every assistant message).

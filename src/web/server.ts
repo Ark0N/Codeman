@@ -3542,6 +3542,10 @@ export class WebServer extends EventEmitter {
               // pane-exit watcher's own tick replaces it with a first-hand
               // reading (not the stats collector — see `startPaneExitWatcher`).
               paneExit: savedState?.paneExit,
+              // The model the CLI last reported (statusline or its own footer), so a
+              // tile header keeps naming it until the next report; an idle claude
+              // session re-renders its statusline only on its next turn.
+              displayModel: savedState?.displayModel,
               // A record rebuilt from the socket has no provenance, so its
               // apparent locality is a guess (see `MuxSession.discovered`).
               discoveredMuxSession: muxSession.discovered,
