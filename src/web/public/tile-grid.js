@@ -608,6 +608,19 @@ Object.assign(CodemanApp.prototype, {
     if (id) this.selectSession(id);
   },
 
+  /**
+   * Ctrl+Tab / Alt+] (delta 1) and Alt+[ (delta -1) while the grid is open: a
+   * human selection of the next tile in reading order, wrapping. Returns
+   * whether the grid took the chord (it is open), so the tab walk is skipped.
+   */
+  _cycleTileFocus(delta) {
+    const grid = this._tileGrid;
+    if (!grid?.open) return false;
+    const id = window.CodemanTileGrid.cycleTile(grid.ids, this.activeSessionId, delta);
+    if (id) this.selectSession(id);
+    return true;
+  },
+
   /** Removes the focused tile (the session keeps running); a neighbour takes focus. */
   removeFocusedTile() {
     const grid = this._tileGrid;

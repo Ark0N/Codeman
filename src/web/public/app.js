@@ -9063,12 +9063,8 @@ class CodemanApp {
   }
 
   nextSession() {
-    // With the tile grid open, Ctrl+Tab and Alt+] cycle through the tiles.
-    if (this._tileGrid?.open) {
-      const id = window.CodemanTileGrid.cycleTile(this._tileGrid.ids, this.activeSessionId, 1);
-      if (id) this.selectSession(id);
-      return;
-    }
+    // With the tile grid open, Ctrl+Tab and Alt+[ / Alt+] cycle through the tiles.
+    if (this._cycleTileFocus?.(1)) return;
     if (this.sessionOrder.length <= 1) return;
 
     const currentIndex = this.sessionOrder.indexOf(this.activeSessionId);
@@ -9077,11 +9073,7 @@ class CodemanApp {
   }
 
   prevSession() {
-    if (this._tileGrid?.open) {
-      const id = window.CodemanTileGrid.cycleTile(this._tileGrid.ids, this.activeSessionId, -1);
-      if (id) this.selectSession(id);
-      return;
-    }
+    if (this._cycleTileFocus?.(-1)) return;
     if (this.sessionOrder.length <= 1) return;
 
     const currentIndex = this.sessionOrder.indexOf(this.activeSessionId);
