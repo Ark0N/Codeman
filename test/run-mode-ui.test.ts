@@ -453,7 +453,15 @@ describe('Codex quick start settings', () => {
         const src = readFileSync(resolve(import.meta.dirname, `../src/web/public/${file}`), 'utf8');
         vm.runInContext(src, context, { filename: file });
       }
-      return { app: new (CodemanApp as any)(), welcomeCliActions, tunnelBtn, runModeCliOptions, modeBtns, menu };
+      return {
+        app: new (CodemanApp as any)(),
+        welcomeCliActions,
+        tunnelBtn,
+        runModeCliOptions,
+        modeBtns,
+        menu,
+        context,
+      };
     }
 
     const ALL_OFF = {
@@ -537,6 +545,15 @@ describe('Codex quick start settings', () => {
       const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
       expect(src).toContain('renderRegistryRunOptions()');
       expect(src).not.toContain('data-mode="codex"');
+    });
+
+    it('keeps Claude-only session options for claude even though it is a registry agent', () => {
+      const catalog = CATALOG.map((cli) => ({ ...cli, external: cli.id !== 'claude' && cli.id !== 'shell' }));
+      const { context } = loadUi(undefined, catalog);
+      expect(context.isExternalCliSession('claude')).toBe(false);
+      expect(context.isExternalCliSession('shell')).toBe(false);
+      expect(context.isExternalCliSession('codex')).toBe(true);
+      expect(context.isExternalCliSession('custom-agent')).toBe(true);
     });
 
     it('shows everything when the flags were never injected', () => {
