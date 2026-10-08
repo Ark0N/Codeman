@@ -1849,6 +1849,45 @@ function tileGridOpenSet({ stored = null, split = null, sessions, sessionOrder, 
 }
 
 /**
+ * The tile counts the Tiles button's right-click menu offers, and the count a
+ * click opens until one is picked (owner decision 10 in docs/tile-grid-plan.md).
+ */
+const TILE_GRID_COUNTS = [2, 4, 6];
+const TILE_GRID_COUNT_DEFAULT = 6;
+
+/** A remembered tile count made safe: one of TILE_GRID_COUNTS, else the default. */
+function sanitizeTileCount(raw) {
+  const n = Number(raw);
+  return TILE_GRID_COUNTS.includes(n) ? n : TILE_GRID_COUNT_DEFAULT;
+}
+
+/**
+ * `base` (what the grid would open, or what an open grid shows, in its order)
+ * trimmed or filled to `n` tiles: trimmed from the end, the session to focus
+ * (`keepId`) always kept (it takes the last place when it sat past `n`, as in
+ * tileGridOpenSet's case c); filled from `all` (the open sessions in tab order)
+ * with the ones not in it yet. Fewer sessions than `n` give fewer tiles.
+ *
+ * @param {string[]} base
+ * @param {string[]} all
+ * @param {number} n - at most TILE_GRID_MAX
+ * @param {string|null} [keepId]
+ * @returns {string[]}
+ */
+function tileGridSetForCount(base, all, n, keepId = null) {
+  const max = Math.max(1, Math.min(Math.floor(Number(n) || 0), TILE_GRID_MAX));
+  const ids = [];
+  for (const id of [...(base || []), ...(all || [])]) {
+    if (typeof id === 'string' && id && !ids.includes(id)) ids.push(id);
+  }
+  // Every `base` id comes before every filler, so a trim never drops a base id
+  // in favour of one.
+  let out = ids.slice(0, max);
+  if (keepId && ids.includes(keepId) && !out.includes(keepId)) out = [...out.slice(0, max - 1), keepId];
+  return out;
+}
+
+/**
  * Which tile takes focus when `id` leaves the grid: the next one in grid
  * order, else the previous one, else null.
  *
@@ -1959,6 +1998,54 @@ function fitTileCells(cells, oldCols, cols, rows) {
   cells.filter(Boolean).slice(0, size).forEach((id, k) => {
     out[k] = id;
   });
+  return out;
+}
+
+/**
+ * How many columns a grid of `length` cells was laid out with: stored cells
+ * carry no shape of their own, and the layout table gives each cell count one
+ * shape (computeTileLayout: 1x1, 2x1, 3x1, 2x2, 3x2, 3x3). 0 for any other
+ * length (fitTileCells then packs).
+ *
+ * @param {number} length
+ * @returns {number}
+ */
+function tileCellCols(length) {
+  // Every cell count is some count's shape on a wide grid area (2x2, the
+  // narrow 3-tile shape, is also the 4-tile one).
+  for (let n = 1; n <= TILE_LAYOUT_MAX; n++) {
+    const { cols, rows } = computeTileLayout({ count: n });
+    if (cols * rows === length) return cols;
+  }
+  return 0;
+}
+
+/**
+ * The cells of a grid re-formed to another set of tiles (a count picked in the
+ * Tiles menu, or the Tiles button bringing back a remembered grid with more or
+ * fewer tiles): the tiles in `keep` stay in their cells and every other cell
+ * empties, then the cell model's shape rule (fitTileCells: each tile keeps its
+ * row and column when all fit, else they pack in reading order), then the
+ * tiles in `add` fill the empty cells in reading order, holes first.
+ *
+ * @param {(string|null)[]} cells - the cells now, laid out `oldCols` wide
+ * @param {number} oldCols
+ * @param {string[]} keep - tiles that stay
+ * @param {string[]} add - tiles that join, in the order they fill
+ * @param {number} cols - the new shape
+ * @param {number} rows
+ * @returns {(string|null)[]}
+ */
+function reformTileCells(cells, oldCols, keep, add, cols, rows) {
+  const kept = (cells || []).map((id) => (id && keep.includes(id) ? id : null));
+  const out = fitTileCells(kept, oldCols, cols, rows);
+  for (const id of add) {
+    if (!id || out.includes(id)) continue;
+    const k = out.indexOf(null);
+    // Not for a shape made for the count; a full grid takes no more.
+    if (k === -1) break;
+    out[k] = id;
+  }
   return out;
 }
 
@@ -2288,6 +2375,12 @@ if (typeof window !== 'undefined') {
     fitTileCells,
     cycleTile,
     tileGridOpenSet,
+    sanitizeTileCount,
+    tileGridSetForCount,
+    tileCellCols,
+    reformTileCells,
+    TILE_GRID_COUNTS,
+    TILE_GRID_COUNT_DEFAULT,
     TILE_GRID_MAX,
     TILE_LAYOUT_MAX,
     TILE_MIN_W,
