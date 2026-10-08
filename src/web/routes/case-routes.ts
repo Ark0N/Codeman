@@ -1536,7 +1536,7 @@ export function registerCaseRoutes(app: FastifyInstance, ctx: EventPort & Config
     // admin-only in multi-user mode (mirrors host CRUD + the admin-only GET listing).
     const denied = adminOnly(req, reply);
     if (denied) return denied;
-    const { name, path: folderPath } = parseBody(LinkCaseSchema, req.body, 'Invalid request body');
+    const { name, path: folderPath } = parseBody(LinkCaseSchema, req.body);
 
     // Expand ~ to home directory
     const expandedPath = folderPath.startsWith('~') ? join(homedir(), folderPath.slice(1)) : folderPath;
