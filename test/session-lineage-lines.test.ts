@@ -23,6 +23,7 @@ type TreeInput = {
   children: Array<{ id: string; rect: Rect | null }>;
   strip?: Rect;
   tabs?: Rect[];
+  spineLeft?: number;
   orientation?: 'horizontal' | 'vertical';
   lane?: number;
   laneCount?: number;
@@ -79,6 +80,41 @@ function wrappedStrip() {
   }
   strip.height = top - 12 + 14;
   return { strip, rows, all: rows.flat() };
+}
+
+/**
+ * The header strip grouped by state (tabArrangement 'state', the default): a label
+ * column 85px wide at the strip's left edge, then the 20px spine channel, then the
+ * tabs; rows 42px apart. The first row starts beside the brand (83px) with its own
+ * label, so its first tab sits at `leadLeft` from the strip's edge.
+ */
+function stateRowsStrip({ leadLeft = 160 } = {}) {
+  const strip: Rect = { left: 12, top: 6, width: 1300, height: 0 };
+  const gutter = 85;
+  const channel = 20;
+  const labels: Rect[] = [];
+  const rows: Rect[][] = [];
+  let top = 8;
+  for (const [i, widths] of [
+    [120, 110, 130],
+    [150, 120, 140, 110],
+    [140, 120, 200],
+    [130, 120],
+  ].entries()) {
+    let left = i === 0 ? strip.left + leadLeft : strip.left + gutter + channel;
+    // A label is a line of text inside its row: lead after the brand, the rest in
+    // the column, each narrower than the column (its widest label + 10px).
+    labels.push({ left: i === 0 ? strip.left + 83 : strip.left, top: top + 10, width: i === 0 ? 70 : 60, height: 10 });
+    const cells: Rect[] = [];
+    for (const w of widths) {
+      cells.push(tab(left, top, w));
+      left += w + 2;
+    }
+    rows.push(cells);
+    top += 30 + 12;
+  }
+  strip.height = top - 6 + 2;
+  return { strip, gutter, channel, labels, rows, all: rows.flat() };
 }
 
 /** Does an axis-aligned segment pass through the INSIDE of a rect (touching an edge is fine)? */
@@ -285,6 +321,56 @@ describe('lineage tree geometry: header strip', () => {
     expect(geom.routes.map((r) => r.id)).toEqual(['ok']);
   });
 
+  it('runs the spine between the state labels and the tabs, never through a label', () => {
+    // tabArrangement 'state': a label column at the strip's left edge, the spine
+    // channel after it, the tabs after that. The first row starts beside the
+    // brand with a label of its own width. The spine used to sit at the strip's
+    // edge, which grouped by state is the label column.
+    const helper = loadLineageHelper();
+    const { strip, gutter, channel, labels, rows, all } = stateRowsStrip();
+    const parent = rows[2][2];
+    const children = [rows[0][1], rows[1][0], rows[1][2], rows[3][0], rows[3][1]].map((rect, i) => ({
+      id: `c${i}`,
+      rect,
+    }));
+    const geom = helper.computeTree({ parent, children, strip, tabs: all, spineLeft: strip.left + gutter })!;
+
+    expect(geom.routes).toHaveLength(children.length);
+    const spineX = geom.routes.find((r) => r.id === 'c3')!.points[2][0];
+    expect(spineX).toBe(strip.left + gutter + helper.SPINE_INSET_PX);
+    // Right of the label column (the first row's label, beside the brand, is never
+    // passed: the spine only runs beside the rows under it), left of the tabs.
+    expect(spineX).toBeGreaterThan(Math.max(...labels.slice(1).map((r) => r.left + r.width)));
+    expect(spineX).toBeLessThan(strip.left + gutter + channel);
+    for (const route of geom.routes) {
+      for (let i = 1; i < route.points.length; i++) {
+        for (const r of [...all, ...labels]) {
+          expect(crossesRect(route.points[i - 1], route.points[i], r), `${route.id} segment ${i}`).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('keeps the spine in its channel when the first row starts left of it', () => {
+    // A quiet first group (idle, no label) puts the first row's first tab just
+    // after the brand, left of the channel. The spine never runs beside the first
+    // row, so that tab must not drag it back over the label column.
+    const helper = loadLineageHelper();
+    const { strip, gutter, labels, rows, all } = stateRowsStrip({ leadLeft: 80 });
+    expect(rows[0][0].left).toBeLessThan(strip.left + gutter + helper.SPINE_INSET_PX);
+    const geom = helper.computeTree({
+      parent: rows[0][1],
+      children: [{ id: 'low', rect: rows[3][1] }],
+      strip,
+      tabs: all,
+      spineLeft: strip.left + gutter,
+    })!;
+    const spineX = geom.routes[0].points[2][0];
+
+    expect(spineX).toBe(strip.left + gutter + helper.SPINE_INSET_PX);
+    expect(spineX).toBeGreaterThan(Math.max(...labels.slice(1).map((r) => r.left + r.width)));
+  });
+
   it('still draws when no strip rect is supplied (clipping is opt-in)', () => {
     const helper = loadLineageHelper();
     const geom = helper.computeTree({ parent: tab(0), children: [{ id: 'far', rect: tab(9000, 46) }] })!;
@@ -465,10 +551,17 @@ function fakeNode(tag: string): FakeNode {
  * Load session-lineage.js for real, on a one-row strip where every session is a
  * 120px tab, 140px apart. The colour memo is plain state on the app instance.
  */
-function loadLineageApp(sessions: Record<string, string | null>, status: Record<string, string> = {}) {
+function loadLineageApp(
+  sessions: Record<string, string | null>,
+  status: Record<string, string> = {},
+  layout: { rect?: (i: number) => Rect; style?: Record<string, string> } = {}
+) {
   function CodemanApp(this: unknown) {}
   const ids = Object.keys(sessions);
-  const rect = (i: number) => ({ left: i * 140, top: 4, width: 120, height: 30, right: i * 140 + 120, bottom: 34 });
+  const rect = (i: number) => {
+    const r = layout.rect ? layout.rect(i) : { left: i * 140, top: 4, width: 120, height: 30 };
+    return { ...r, right: r.left + r.width, bottom: r.top + r.height };
+  };
   const stripClasses = new Set<string>();
   const listeners: Record<string, (e: { propertyName: string }) => void> = {};
   const strip = {
@@ -491,6 +584,15 @@ function loadLineageApp(sessions: Record<string, string | null>, status: Record<
     CodemanApp,
     MobileDetection: { getDeviceType: () => 'desktop' },
     CSS: { escape: (v: string) => v },
+    // The strip's computed style, when a test lays one out (the spine channel).
+    ...(layout.style
+      ? {
+          getComputedStyle: () => ({
+            ...layout.style,
+            getPropertyValue: (name: string) => layout.style![name] ?? '',
+          }),
+        }
+      : {}),
     document: {
       documentElement: { getAttribute: () => 'horizontal' },
       getElementById: (id: string) => (id === 'sessionTabs' ? strip : null),
@@ -633,6 +735,31 @@ describe('lineage routing room', () => {
     rail.app._isVerticalTabList = () => true;
     rail.app._syncLineageGutter();
     expect(rail.stripClasses.has('lineage-tree')).toBe(false);
+  });
+});
+
+describe('lineage spine channel, read back from the laid-out strip', () => {
+  // Two rows inside the fake 50px strip: w1 and a on the first, b on the second,
+  // so b's route takes the spine.
+  const rows = (i: number): Rect => (i < 2 ? tab(200 + i * 140, 2, 120, 14) : tab(125, 28, 120, 14));
+  const spineOf = (style?: Record<string, string>) => {
+    const { app } = loadLineageApp({ w1: null, a: 'w1', b: 'w1' }, {}, { rect: rows, style });
+    const families = draw(app, 'w1');
+    const d = family(families, 'w1').paths.find((p) => p.attrs['data-child-tab'] === 'b')!.attrs.d;
+    // The spine is the one x the route visits left of every tab.
+    return Math.min(...[...d.matchAll(/[MLQ] (-?[\d.]+)/g)].map((m) => Number(m[1])));
+  };
+
+  it('opens the channel just left of the content edge the CSS laid out', () => {
+    // Grouped by state: an 85px label column, then the 20px channel.
+    const spine = spineOf({ '--lineage-spine-channel': ' 20px', paddingLeft: '105px', borderLeftWidth: '0px' });
+    expect(spine).toBe(85 + 6);
+  });
+
+  it('keeps the strip edge when the channel is the padding itself, or not reserved', () => {
+    expect(spineOf({ '--lineage-spine-channel': '20px', paddingLeft: '20px', borderLeftWidth: '0px' })).toBe(6);
+    expect(spineOf({ '--lineage-spine-channel': '', paddingLeft: '4px', borderLeftWidth: '0px' })).toBe(6);
+    expect(spineOf()).toBe(6);
   });
 });
 

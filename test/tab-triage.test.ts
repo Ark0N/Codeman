@@ -468,6 +468,36 @@ describe('tab grouping wiring (static)', () => {
     );
   });
 
+  it('opens the lineage spine channel between the label column and the tabs', () => {
+    // The gutter padding used to replace the lineage channel, so the spine ran
+    // through every label. With lineage lines, the strip pads by both, every label
+    // keeps its column at the edge and gives the channel back after itself, and
+    // the first row's label still starts right after the brand.
+    const lineage = '.session-tabs-host > .session-tabs.tabs-triage.lineage-tree:is(.tabs-auto-wrap, .tabs-two-rows)';
+    const rule = (selector: string) => {
+      const start = css.indexOf(`${selector} {`);
+      expect(start, selector).toBeGreaterThan(-1);
+      return css.slice(start, css.indexOf('}', start));
+    };
+    expect(rule(lineage)).toContain(
+      'padding-left: calc(var(--tab-triage-gutter, 92px) + var(--lineage-spine-channel));'
+    );
+    const head = rule(`${lineage} > .tab-triage-head`);
+    expect(head).toContain('margin-left: calc(-1 * (var(--tab-triage-gutter, 92px) + var(--lineage-spine-channel)));');
+    expect(head).toContain('margin-right: var(--lineage-spine-channel);');
+    const lead = rule(`${lineage} > .tab-triage-head--lead`);
+    expect(lead).toContain(
+      'margin-left: calc(var(--tab-triage-brand, 100px) - var(--tab-triage-gutter, 92px) - var(--lineage-spine-channel));'
+    );
+    expect(lead).toContain('margin-right: 0;');
+    // The lead rule must come after the head rule it overrides (equal specificity).
+    expect(css.indexOf(`${lineage} > .tab-triage-head--lead {`)).toBeGreaterThan(
+      css.indexOf(`${lineage} > .tab-triage-head {`)
+    );
+    // session-lineage.js reads the channel's position back from that padding.
+    expect(read('session-lineage.js')).toContain("getPropertyValue('--lineage-spine-channel')");
+  });
+
   it('lets the rows after the first start under the brand, labels left-aligned', () => {
     expect(css).toMatch(
       /\.header:has\(> \.session-tabs-host > \.session-tabs\.tabs-triage:is\(\.tabs-auto-wrap, \.tabs-two-rows\)\) > \.header-brand \{\s*position: absolute;/

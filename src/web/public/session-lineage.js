@@ -260,7 +260,19 @@ Object.assign(CodemanApp.prototype, {
     // The header strip's rows come from EVERY tab in it (computeTree hangs a row's
     // gap under its tallest tab), web tabs included. The rail needs none.
     const tabRects = [];
+    let spineLeft;
     if (orientation === 'horizontal') {
+      // Where the spine channel is: the reserved --lineage-spine-channel just left
+      // of the strip's content edge. Usually that is the strip's own left edge,
+      // but grouped by state the label column comes first (styles.css), and a
+      // spine at the edge ran through every label. Read back from the padding
+      // the CSS laid out, so geometry and stylesheet cannot disagree.
+      const style = typeof getComputedStyle === 'function' ? getComputedStyle(strip) : null;
+      const channel = style ? parseFloat(style.getPropertyValue('--lineage-spine-channel')) : NaN;
+      if (Number.isFinite(channel)) {
+        const inset = (parseFloat(style.borderLeftWidth) || 0) + (parseFloat(style.paddingLeft) || 0);
+        spineLeft = stripRect.left + inset - channel;
+      }
       for (const tab of strip.querySelectorAll('.session-tab')) {
         const id = tab.getAttribute('data-id');
         const key = id ? 'tab:' + id : null;
@@ -292,6 +304,7 @@ Object.assign(CodemanApp.prototype, {
         children: children.map((c) => ({ id: c.edge.childId, rect: c.rect })),
         strip: stripRect,
         tabs: tabRects,
+        spineLeft,
         orientation,
         lane,
         laneCount,

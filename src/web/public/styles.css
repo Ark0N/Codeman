@@ -20734,7 +20734,7 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
    line's cross size is clamped at zero. A margin on the items spaces a group
    boundary and a group's own continuation line alike, and the break, which
    carries none, adds nothing. The last row's margin replaces the bottom
-   padding (with lineage, part of its room). The gap is --lineage-row-gap
+   padding (with lineage, part of its room, below). The gap is --lineage-row-gap
    while lineage lines are routed through it (`.session-tabs.lineage-tree`,
    near the top of this file). */
 .session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) {
@@ -20745,10 +20745,6 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
 
 .session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) > :not(.tab-triage-break) {
   margin-bottom: var(--lineage-row-gap, 4px);
-}
-
-.session-tabs-host > .session-tabs.tabs-triage.lineage-tree:is(.tabs-auto-wrap, .tabs-two-rows) {
-  padding-bottom: calc(var(--lineage-bottom-room) - var(--lineage-row-gap));
 }
 
 .session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) > .tab-triage-head {
@@ -20769,6 +20765,31 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
   display: block;
   flex: 0 0 100%;
   height: 0;
+}
+
+/* Lineage lines (session-lineage.js): the spine channel (the 20px the lineage
+   rule reserves on the left of a wrapped strip) opens BETWEEN the label column
+   and the tabs, not at the strip's edge. At the edge it was the label column
+   itself: the gutter padding replaced the channel and the spine ran through
+   every label it passed. session-lineage.js reads the channel's position back
+   from this padding (the content edge minus --lineage-spine-channel), so the
+   two cannot drift apart. Labels keep their column under the brand, and the
+   lead row, which the spine never runs alongside, still starts right after
+   the brand. */
+.session-tabs-host > .session-tabs.tabs-triage.lineage-tree:is(.tabs-auto-wrap, .tabs-two-rows) {
+  padding-left: calc(var(--tab-triage-gutter, 92px) + var(--lineage-spine-channel));
+  /* The last row's margin is part of the bottom routing room. */
+  padding-bottom: calc(var(--lineage-bottom-room) - var(--lineage-row-gap));
+}
+
+.session-tabs-host > .session-tabs.tabs-triage.lineage-tree:is(.tabs-auto-wrap, .tabs-two-rows) > .tab-triage-head {
+  margin-left: calc(-1 * (var(--tab-triage-gutter, 92px) + var(--lineage-spine-channel)));
+  margin-right: var(--lineage-spine-channel);
+}
+
+.session-tabs-host > .session-tabs.tabs-triage.lineage-tree:is(.tabs-auto-wrap, .tabs-two-rows) > .tab-triage-head--lead {
+  margin-left: calc(var(--tab-triage-brand, 100px) - var(--tab-triage-gutter, 92px) - var(--lineage-spine-channel));
+  margin-right: 0;
 }
 
 /* Side rail and sidebar: each heading is a section row above its rows. */

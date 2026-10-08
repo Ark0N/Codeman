@@ -316,6 +316,11 @@ function computeTabScrollLeft(input) {
 // (`.session-tabs.lineage-tree`: a wider row gap, bottom padding for the last
 // row's gap, and the spine channel on the left of a wrapped strip).
 //
+// The channel is at the strip's left edge, except where a tab arrangement puts
+// something there: grouped by state, the edge holds the label column and the
+// channel opens between the labels and the tabs. session-lineage.js measures it
+// and passes its left edge as `spineLeft`; without one it is the strip's edge.
+//
 // Rows come from computeLineageRows() over EVERY tab in the strip, not only the
 // endpoints: a row's gap sits under its TALLEST tab (the active tab is 2px
 // taller), or siblings in one row would hang their bus at different heights.
@@ -440,9 +445,11 @@ function lineagePolylinePath(points, radius) {
 /**
  * Routes from one parent tab to each of its children.
  *
- * input: { parent, children: [{ id, rect }], strip?, tabs?, orientation?, lane?,
- *          laneCount?, radius? }. `tabs` is every tab rect in the strip (rows are
- *          derived from it); `lane`/`laneCount` separate families drawn together.
+ * input: { parent, children: [{ id, rect }], strip?, tabs?, spineLeft?,
+ *          orientation?, lane?, laneCount?, radius? }. `tabs` is every tab rect in
+ *          the strip (rows are derived from it); `spineLeft` is the left edge of the
+ *          spine channel (default: the strip's left edge); `lane`/`laneCount`
+ *          separate families drawn together.
  * Returns { routes: [{ id, points, d, endX, endY }] } or null.
  */
 function computeLineageTree(input) {
@@ -509,9 +516,19 @@ function computeLineageTree(input) {
   };
   const pRow = rowOf(parent);
   const gp = gapUnder(pRow);
-  const tabLefts = (input?.tabs || []).map(lineageRect).filter(Boolean).map((r) => r.left);
-  const minLeft = Math.min(parent.left, ...visible.map((c) => c.rect.left), ...tabLefts);
-  const spineBase = strip ? strip.left : minLeft - LINEAGE_SPINE_INSET_PX * 2;
+  // The spine runs from one row's gap to another's, so it only ever passes BESIDE
+  // rows after the first, and only their tabs bound it. The first row may start
+  // left of the channel (grouped by state it starts after the brand and a label
+  // of its own width), and clamping to it would pull the spine back over the
+  // label column.
+  const lowerLefts = [parent, ...visible.map((c) => c.rect), ...(input?.tabs || []).map(lineageRect)]
+    .filter((r) => r && rowOf(r) > 0)
+    .map((r) => r.left);
+  const minLeft = lowerLefts.length ? Math.min(...lowerLefts) : Math.min(parent.left, ...visible.map((c) => c.rect.left));
+  const channelLeft = Number(input?.spineLeft);
+  const spineBase = strip
+    ? Math.max(strip.left, Number.isFinite(channelLeft) ? channelLeft : strip.left)
+    : minLeft - LINEAGE_SPINE_INSET_PX * 2;
   const spineX = Math.min(spineBase + LINEAGE_SPINE_INSET_PX + lane * LINEAGE_SPINE_STEP_PX, minLeft - 2);
 
   for (const { id, rect } of visible) {
