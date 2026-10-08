@@ -103,10 +103,10 @@
     Tiles: '平铺',
     Split: '分屏',
     'Tiled sessions': '平铺的会话',
-    'Tiles: show several sessions side by side (right-click to choose which)':
-      '平铺：并排显示多个会话（右键单击可选择会话）',
-    'Tiles: back to a single session (right-click to choose which sessions)':
-      '平铺：返回单个会话（右键单击可选择会话）',
+    'Tiles: show several sessions side by side (right-click for how many)':
+      '平铺：并排显示多个会话（右键单击可选择窗格数量）',
+    'Tiles: back to a single session (right-click for how many tiles)': '平铺：返回单个会话（右键单击可选择窗格数量）',
+    'How many tiles': '窗格数量',
     'Split: unavailable while tiles are open': '分屏：平铺打开时不可用',
     'Toggle Tile Grid': '切换平铺网格',
     'Focus Tile Left': '聚焦左侧窗格',
@@ -125,7 +125,7 @@
     'Zoom Focused Tile': '放大聚焦的窗格',
     'Remove Focused Tile': '移除聚焦的窗格',
     'Add the Session to the Tile Grid': '将该会话加入平铺网格',
-    'Choose Which Sessions to Tile': '选择要平铺的会话',
+    'Choose How Many Tiles (2, 4 or 6)': '选择窗格数量（2、4 或 6）',
     'a tab': '标签页',
     'the Tiles button': '平铺按钮',
     Click: '单击',
@@ -133,8 +133,6 @@
     Arrows: '方向键',
     'not bound': '未绑定',
     'Open group as tiles': '以平铺方式打开分组',
-    'Show sessions as tiles': '以平铺方式显示会话',
-    'Open tiles': '打开平铺',
     'No sessions to show as tiles': '没有可平铺显示的会话',
     'This group has no session to show as tiles': '此分组没有可平铺显示的会话',
     'Zoom this tile': '放大此窗格',
@@ -1058,7 +1056,7 @@
         (_m, group) => `删除分组“${group}”？其中的标签将移到未分组。`,
       ],
       // Tile grid: counts, exit codes and durations pass through.
-      [/^Up to (\d+) tiles$/, (_m, n) => `最多 ${n} 个窗格`],
+      [/^(\d+) tiles$/, (_m, n) => `${n} 个窗格`],
       [/^This window fits (\d+) tiles?$/, (_m, n) => `此窗口可容纳 ${n} 个窗格`],
       [/^The grid holds at most (\d+) tiles$/, (_m, n) => `平铺网格最多容纳 ${n} 个窗格`],
       [

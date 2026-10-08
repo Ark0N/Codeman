@@ -19766,10 +19766,8 @@ body.tile-grid-resizing--row * {
   text-align: center;
 }
 
-/* The grid's accent buttons: the Attach overlay's, and the picker's Open
-   (which narrows the padding in its own block below). */
-.tile-attach-btn,
-.tile-picker-open {
+/* The Attach overlay's accent button. */
+.tile-attach-btn {
   padding: 4px 14px;
   font: inherit;
   color: var(--accent-ink, #fff);
@@ -19779,8 +19777,7 @@ body.tile-grid-resizing--row * {
   cursor: pointer;
 }
 
-.tile-attach-btn:disabled,
-.tile-picker-open:disabled {
+.tile-attach-btn:disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -19802,70 +19799,95 @@ body.tile-grid-resizing--row * {
   pointer-events: none;
 }
 
-/* Tiles picker (tile-grid.js openTilePicker): a checkbox per open session,
-   positioned `fixed` under the Tiles button; same layer as the split picker. */
-.tile-picker-menu {
+/* The Tiles button's right-click menu (tile-grid.js openTileCountMenu): how
+   many tiles, 2, 4 or 6, each with its shape; positioned `fixed` under the
+   button, on the split picker's layer and in its floating style. */
+.tile-count-menu {
   position: fixed;
   z-index: 1000;
-  min-width: 240px;
-  max-width: 340px;
-  max-height: 60vh;
+  min-width: 168px;
   display: flex;
   flex-direction: column;
+  gap: 2px;
   padding: 6px;
-  background: var(--bg-secondary, #1a1a1a);
-  border: 1px solid var(--border-color, #333);
-  border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  background: var(--floating-bg, var(--bg-secondary, #1a1a1a));
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--control-border, var(--border-color, #333));
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.25);
   font-size: 13px;
 }
 
-.tile-picker-list {
-  overflow-y: auto;
-  min-height: 0;
+.tile-count-heading {
+  padding: 2px 8px 4px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted, #888);
 }
 
-.tile-picker-item {
+.tile-count-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 6px;
-  border-radius: 4px;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
 }
 
-.tile-picker-item:hover {
-  background: color-mix(in srgb, var(--text-muted, #888) 14%, transparent);
+.tile-count-item:hover:not(:disabled),
+.tile-count-item:focus {
+  outline: none;
+  background: color-mix(in srgb, var(--text-muted, #888) 16%, transparent);
 }
 
-.tile-picker-item span {
-  overflow: hidden;
+.tile-count-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* The shape: the grid's own layout for that count, as outlined cells; the
+   checked count's cells are filled with the accent. */
+.tile-count-glyph {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+  opacity: 0.75;
+}
+
+.tile-count-item[aria-checked='true'] .tile-count-glyph {
+  fill: color-mix(in srgb, var(--accent, #4a9eff) 35%, transparent);
+  stroke: var(--accent, #4a9eff);
+  opacity: 1;
+}
+
+.tile-count-label {
+  flex: 1 1 auto;
   white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
-.tile-picker-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 6px 4px 2px;
-  border-top: 1px solid var(--border-color, #333);
-  margin-top: 4px;
+.tile-count-check {
+  flex: 0 0 1em;
+  color: var(--accent, #4a9eff);
+  text-align: center;
 }
 
-.tile-picker-hint,
-.tile-picker-empty {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.tile-picker-empty {
-  padding: 6px 8px;
-}
-
-.tile-picker-open {
-  padding: 4px 12px;
+.tile-count-hint {
+  padding: 4px 8px 2px;
+  border-top: 1px solid var(--control-border, var(--border-color, #333));
+  margin-top: 2px;
+  color: var(--text-muted, #888);
+  font-size: 11px;
 }
 
 /* Split-picker menu: a small popover listing sessions to split with, appended

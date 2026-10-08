@@ -21,6 +21,7 @@ import {
   FakeTile,
   body,
   bySelector,
+  localStore,
   main,
   makeGridApp,
   resetGridHarness,
@@ -59,25 +60,36 @@ describe('opening the grid over an open split', () => {
 
     expect(paneB.destroy).toHaveBeenCalledTimes(1);
     expect(app._splitPane).toBeNull();
-    expect(app._tileGrid.ids).toEqual(['s-a', 's-b']);
+    // The split's two first, then tab order up to the count (default 6).
+    expect(app._tileGrid.ids).toEqual(['s-a', 's-b', 's-other', 's-c']);
     expect(app.activeSessionId).toBe('s-a');
     // Pane A is about to park: no closing resize for it.
     expect(app.sendResize).toHaveBeenCalledTimes(1); // the split's own opening resize only
   });
 
-  it('a remembered grid wins over an open split: exactly its tiles, the split closed and not merged', () => {
+  it("with a count of 2, exactly the split's two", () => {
+    const app = makeGridApp(IDS);
+    localStore.set('codeman:tile-count', '2');
+    openSplit(app);
+    app.toggleTileGrid();
+    expect(app._tileGrid.ids).toEqual(['s-a', 's-b']);
+  });
+
+  it('a remembered grid wins over an open split: its tiles first, the split closed and not merged', () => {
     const app = makeGridApp(IDS);
     app.selectSession = vi.fn();
     app.openTileGrid(['s-c']);
     app.closeTileGrid({ reselect: false });
     app.activeSessionId = 's-a';
+    localStore.set('codeman:tile-count', '2');
     const paneB = openSplit(app);
 
     app.toggleTileGrid();
 
     expect(paneB.destroy).toHaveBeenCalledTimes(1);
     expect(app._splitPane).toBeNull();
-    expect(app._tileGrid.ids).toEqual(['s-c']);
+    // Filled from tab order (s-other first), not seeded with the split's two.
+    expect(app._tileGrid.ids).toEqual(['s-c', 's-other']);
     expect(app.activeSessionId).toBe('s-c');
   });
 

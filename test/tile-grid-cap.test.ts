@@ -5,7 +5,7 @@
  *
  * Every way into the grid stops at the cap even where the window would fit
  * nine (the harness window is 2400x1200): opening, adding, a session Run
- * makes, Ctrl/Cmd+click, the picker and "Open group as tiles".
+ * makes, Ctrl/Cmd+click, the count menu and "Open group as tiles".
  * The texts say which limit binds: "at most 6" for the cap, "what this window
  * fits" for a smaller window.
  *
@@ -36,7 +36,7 @@ function fullGrid(): GridApp {
 describe('the cap', () => {
   it('is 6, worded as the cap where the window would fit more', () => {
     const app = makeGridApp(EIGHT);
-    expect(app._tileGridLimit()).toEqual({ capacity: 6, hint: 'Up to 6 tiles', full: AT_MOST });
+    expect(app._tileGridLimit()).toEqual({ capacity: 6, full: AT_MOST });
   });
 
   it('a smaller window is worded by the window', () => {
@@ -44,7 +44,6 @@ describe('the cap', () => {
     wrapRect = { width: 1200, height: 900 };
     expect(app._tileGridLimit()).toEqual({
       capacity: 4,
-      hint: 'This window fits 4 tiles',
       full: 'The grid already holds what this window fits (4)',
     });
   });
@@ -77,26 +76,18 @@ describe('every way in stops at the cap', () => {
     expect(app.showToast).toHaveBeenCalledWith(AT_MOST, 'info');
   });
 
-  it('the picker greys out the seventh box', () => {
+  it('the count menu offers nothing past the cap, and its 6 opens six of eight', () => {
     const app = makeGridApp(EIGHT);
-    app.openTilePicker({ stopPropagation: vi.fn() });
-    const picker = body.children.find((c) => c.id === 'tilePickerMenu')!;
-    const boxes = picker.children[0].children.map((row) => row.children[0]);
-    expect(picker.children[1].children[0].textContent).toBe('Up to 6 tiles');
-    for (const box of boxes) {
-      // A disabled box cannot be ticked (the browser ignores the click).
-      if (!EIGHT.includes(box.value) || box.checked || box.disabled) continue;
-      box.checked = true;
-      box.dispatch('change');
-    }
-    const checked = boxes.filter((b) => b.checked).map((b) => b.value);
-    expect(checked).toHaveLength(6);
-    const left = boxes.filter((b) => !b.checked);
-    expect(left.length).toBeGreaterThan(0);
-    for (const box of left) {
-      expect(box.disabled).toBe(true);
-      expect(box.title).toBe(AT_MOST);
-    }
+    app.openTileCountMenu({ preventDefault: vi.fn() });
+    const menu = body.children.find((c) => c.id === 'tileCountMenu')!;
+    const items = menu.children.filter((c) => c.attrs.role === 'menuitemradio');
+    expect(items.map((i) => Number(i.dataset.count))).toEqual([2, 4, 6]);
+    // The cap binds, not the window: nothing greyed out, no "fits" line.
+    expect(items.every((i) => !i.disabled)).toBe(true);
+    expect(menu.children.some((c) => c.className === 'tile-count-hint')).toBe(false);
+    items.at(-1)!.dispatch('click', { stopPropagation: vi.fn() });
+    expect(app._tileGrid.ids).toHaveLength(6);
+    expect(app._tileGrid.ids).toEqual(['s-other', ...EIGHT.slice(0, 5)]);
   });
 
   it('"Open group as tiles" shows the first six of a larger group', () => {

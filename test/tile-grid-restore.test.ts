@@ -168,6 +168,7 @@ describe('page load with a stored open grid', () => {
 
   it('a stored closed grid leaves the single view, and the Tiles toggle brings it back', () => {
     localStore.set(KEY, JSON.stringify({ v: 1, open: false, ids: ['s-b', 's-c'], focused: 's-c' }));
+    localStore.set('codeman:tile-count', '2');
     const app = pageLoad(IDS, (a) => localStore.set('codeman-active-session', 's-a'));
     expect(app._tilesOwnTerminal()).toBe(false);
     expect(app.selectSession).toHaveBeenCalledWith('s-a', { auto: true });
@@ -176,6 +177,35 @@ describe('page load with a stored open grid', () => {
     app.toggleTileGrid();
     expect(app._tileGrid.ids).toEqual(['s-b', 's-c']);
     expect(app.activeSessionId).toBe('s-c');
+  });
+
+  it('the toggle fills a stored grid to the remembered count: its tiles first, in their cells, then tab order', () => {
+    // Default 6 (owner answer 1, superseding decision 8's "exactly the stored set").
+    localStore.set(KEY, JSON.stringify({ v: 1, open: false, ids: ['s-b', 's-c'], focused: 's-c' }));
+    const app = pageLoad(IDS, (a) => localStore.set('codeman-active-session', 's-a'));
+    app.activeSessionId = 's-a';
+    app.toggleTileGrid();
+    // The two stay in the first row (2x1 to 2x2 keeps them), the rest join
+    // in tab order: every live session, fewer than the count.
+    expect(app._tileGrid.cells).toEqual(['s-b', 's-c', 's-a', 's-d']);
+    expect(app.activeSessionId).toBe('s-c');
+  });
+
+  it('a stored hole is filled first when the count needs more tiles', () => {
+    // A 2x2 of three with the hole first; the count asks for four.
+    localStore.set(KEY, JSON.stringify({ v: 1, open: false, ids: [null, 's-b', 's-c', 's-d'], focused: 's-b' }));
+    localStore.set('codeman:tile-count', '4');
+    const app = pageLoad(IDS, (a) => localStore.set('codeman-active-session', 's-a'));
+    app.toggleTileGrid();
+    // s-a joins in the hole (packing would have put it last).
+    expect(app._tileGrid.cells).toEqual(['s-a', 's-b', 's-c', 's-d']);
+  });
+
+  it('a reload brings back exactly the stored grid, whatever the count', () => {
+    localStore.set('codeman:tile-count', '6');
+    storeGrid({ ids: ['s-b', 's-c'], focused: 's-c' });
+    const app = pageLoad(IDS);
+    expect(app._tileGrid.ids).toEqual(['s-b', 's-c']);
   });
 
   it('a window too narrow for the grid keeps the single view (the stored grid waits)', () => {

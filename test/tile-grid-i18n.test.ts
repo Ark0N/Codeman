@@ -5,7 +5,7 @@
  *
  * - Runtime strings are HARVESTED from the real tile code (the shared vm
  *   harness, test/mocks/tile-grid-vm.ts) driven through every state that
- *   writes text: the picker (cap and window wording), the Attach
+ *   writes text: the count menu (cap and window wording), the Attach
  *   overlay (not attached, attaching, exited, ended), zoom, the header
  *   tooltip, the dividers, the empty slot, every toast, the crash-restart
  *   confirm, the Tiles and Split button titles. Each must translate to text
@@ -14,8 +14,8 @@
  * - Static strings: the shortcut registry's tile entries (overlay and App
  *   Settings list), and index.html run through the real translator in JSDOM
  *   (the Tiles button, the App Settings chips, the Help modal's Tiles rows).
- * - User text stays as typed: session names (tile header, picker)
- *   and group names carry data-i18n-skip, and a session name inside the
+ * - User text stays as typed: session names (tile header) and group names
+ *   carry data-i18n-skip, and a session name inside the
  *   confirm passes through the pattern untranslated.
  *
  * Port: N/A.
@@ -163,34 +163,22 @@ async function exercise() {
   app.sessions.get('s-2').pid = null;
   app.sessions.get('s-3').paneExit = { status: 3 };
   app.sessions.get('s-4').paneExit = { signal: 9 };
-  // A session named like a UI string: user text, never translated.
-  app.sessions.get('s-5').name = 'Open tiles';
+  // A session named like a UI string (a count menu label): user text, never translated.
+  app.sessions.get('s-5').name = '6 tiles';
 
-  // The picker, the cap wording, then the window wording.
-  app.openTilePicker({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
-  const boxes = () =>
-    body.children.find((c) => c.id === 'tilePickerMenu')!.children[0].children.map((r) => r.children[0]);
-  for (const b of boxes()) {
-    if (b.checked || b.disabled) continue;
-    b.checked = true;
-    b.dispatch('change');
-  }
-  harvestAll(app, 'picker, cap');
-  app.closeTilePicker();
+  // The count menu: the cap (nothing greyed), then the window wording.
+  app.openTileCountMenu({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
+  harvestAll(app, 'count menu, cap');
+  app.closeTileCountMenu();
   wrapRect = { width: 1200, height: 900 };
-  app.openTilePicker({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
-  for (const b of boxes()) {
-    if (b.checked || b.disabled) continue;
-    b.checked = true;
-    b.dispatch('change');
-  }
-  harvestAll(app, 'picker, window');
-  app.closeTilePicker();
+  app.openTileCountMenu({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
+  harvestAll(app, 'count menu, window');
+  app.closeTileCountMenu();
   // A window that fits one tile words it in the singular.
   wrapRect = { width: 700, height: 500 };
-  app.openTilePicker({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
-  harvestAll(app, 'picker, one tile');
-  app.closeTilePicker();
+  app.openTileCountMenu({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
+  harvestAll(app, 'count menu, one tile');
+  app.closeTileCountMenu();
   wrapRect = { width: 2400, height: 1200 };
 
   // The grid: five tiles first (an empty slot), then the sixth.
@@ -270,9 +258,11 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
     ({ confirmText } = await exercise());
     // ('Tiled sessions', the grid region's label, is markup: the JSDOM test below.)
     const expected = [
-      'Show sessions as tiles',
-      'Open tiles',
-      'Up to 6 tiles',
+      'How many tiles',
+      'Tiles',
+      '2 tiles',
+      '4 tiles',
+      '6 tiles',
       'The grid holds at most 6 tiles',
       'This window fits 4 tiles',
       'This window fits 1 tile',
@@ -303,9 +293,9 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
       'This group has no session to show as tiles',
       'No sessions to show as tiles',
       'Split: unavailable while tiles are open',
-      'Tiles: show several sessions side by side (right-click to choose which)',
-      'Tiles: back to a single session (right-click to choose which sessions)',
-      'Open tiles was stopped after crashing repeatedly. Restart it?',
+      'Tiles: show several sessions side by side (right-click for how many)',
+      'Tiles: back to a single session (right-click for how many tiles)',
+      '6 tiles was stopped after crashing repeatedly. Restart it?',
     ];
     const missing = expected.filter((s) => !seen.has(s));
     expect(missing).toEqual([]);
@@ -316,7 +306,7 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
     for (const [source, where] of seen) {
       const text = zh.api.t(source);
       // The session name inside the confirm is user text, allowed to stay.
-      const words = leftover(text.replace('Open tiles', ''));
+      const words = leftover(text.replace('6 tiles', ''));
       if (text === source || words.length) bad.push(`${where}: "${source}" -> "${text}"`);
     }
     expect(bad).toEqual([]);
@@ -386,7 +376,7 @@ describe('the static markup through the real translator (JSDOM, zh-CN)', () => {
   const doc = dom.window.document;
   const extra = doc.createElement('div');
   extra.innerHTML =
-    '<span id="u-session" data-i18n-skip>Open tiles</span>' +
+    '<span id="u-session" data-i18n-skip>6 tiles</span>' +
     '<span id="u-group" class="tab-layout-group-name" data-i18n-skip>Tiles</span>' +
     '<span id="control">Tiles</span>';
   doc.body.appendChild(extra);
@@ -417,6 +407,7 @@ describe('the static markup through the real translator (JSDOM, zh-CN)', () => {
     expect(leftover(tiles!.textContent!)).toEqual([]);
     expect(tiles!.textContent).toContain('切换平铺网格');
     expect(tiles!.textContent).toContain('右键单击');
+    expect(tiles!.textContent).toContain('选择窗格数量（2、4 或 6）');
     // Moving tiles: the chords and the header drag.
     expect(tiles!.textContent).toContain('向左 / 右 / 上 / 下移动窗格');
     expect(tiles!.textContent).toContain('拖动');
@@ -424,16 +415,16 @@ describe('the static markup through the real translator (JSDOM, zh-CN)', () => {
   });
 
   it('user text stays as typed: a session name and a group name that are also UI words', () => {
-    expect(doc.getElementById('u-session')!.textContent).toBe('Open tiles');
+    expect(doc.getElementById('u-session')!.textContent).toBe('6 tiles');
     expect(doc.getElementById('u-group')!.textContent).toBe('Tiles');
     expect(doc.getElementById('control')!.textContent).toBe('平铺');
   });
 });
 
 describe('user text in the tile code', () => {
-  it('session names in a tile header and the picker are marked data-i18n-skip', () => {
+  it('session names in a tile header are marked data-i18n-skip', () => {
     // The harvest saw them only inside skipped subtrees.
-    expect(userText.has('Open tiles')).toBe(true);
+    expect(userText.has('6 tiles')).toBe(true);
     expect([...seen.keys()]).not.toContain('s-1');
     const src = read('tile-grid.js');
     expect(src.match(/setAttribute\('data-i18n-skip', ''\)/g)?.length).toBeGreaterThanOrEqual(2);
@@ -444,7 +435,7 @@ describe('user text in the tile code', () => {
   });
 
   it('a session name inside the crash-restart confirm passes through the pattern untranslated', () => {
-    expect(confirmText).toEqual(['Open tiles was stopped after crashing repeatedly. Restart it?']);
-    expect(zh.api.t(confirmText[0])).toBe('Open tiles 因反复崩溃已被停止。要重启吗？');
+    expect(confirmText).toEqual(['6 tiles was stopped after crashing repeatedly. Restart it?']);
+    expect(zh.api.t(confirmText[0])).toBe('6 tiles 因反复崩溃已被停止。要重启吗？');
   });
 });

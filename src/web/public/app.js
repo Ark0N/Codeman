@@ -1417,12 +1417,17 @@ class CodemanApp {
           this._tabLayoutDragKeydown(e);
           return;
         }
+        // So does the Tiles count menu: it closes alone and gives the keyboard
+        // back to the Tiles button (tile-grid.js).
+        if (this._tileCountMenu) {
+          this.closeTileCountMenu({ refocus: true });
+          return;
+        }
         this.closeAllPanels();
         this.closeHelp();
         if (this.attachmentHistoryDrawerOpen) this.closeAttachmentHistory();
         this.closeSessionManager();
         this.closeCommandPalette?.();
-        this.closeTilePicker?.();
         this.closeShortcutOverlay?.();
         // Overlay layouts only: below 1024px the sidebar is a modal off-canvas
         // drawer over the terminal, so Escape must close it. The docked desktop

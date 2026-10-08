@@ -13,6 +13,10 @@ import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { vi } from 'vitest';
 
+/** What has the keyboard: the last FakeEl focused (document.activeElement). */
+let focusedEl: unknown = null;
+export const activeElement = () => focusedEl;
+
 /** Just enough DOM for tile-grid.js: elements with classes, children, styles and listeners. */
 export class FakeEl {
   id = '';
@@ -59,7 +63,10 @@ export class FakeEl {
   textContent = '';
   value = '';
   type = '';
-  focus = vi.fn();
+  /** Records itself as `document.activeElement` (see activeElement()). */
+  focus = vi.fn(() => {
+    focusedEl = this;
+  });
   select = vi.fn();
   setPointerCapture = vi.fn();
   releasePointerCapture = vi.fn();
@@ -226,6 +233,10 @@ const context = vm.createContext({
     removeEventListener: documentRemoveEventListener,
     documentElement: { dataset: {} },
     createElement: () => new FakeEl(),
+    createElementNS: () => new FakeEl(),
+    get activeElement() {
+      return focusedEl;
+    },
     getElementById: (id: string) => (id === 'tileGrid' ? section : (bySelector.get(`#${id}`) ?? null)),
     body,
     querySelector: (sel: string) =>
@@ -313,6 +324,7 @@ export function makeGridApp(ids: string[] = ['s-a', 's-b', 's-c']): GridApp {
 /** Resets the shared fake DOM and tile registry between tests. */
 export function resetGridHarness() {
   FakeTile.all = [];
+  focusedEl = null;
   idleCallbacks.length = 0;
   rafCallbacks.length = 0;
   localStore.clear();

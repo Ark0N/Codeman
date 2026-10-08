@@ -8,8 +8,8 @@
  *   focused. Detached sessions and ones that no longer exist are left out, as
  *   in the picker.
  * - The button's click and Ctrl+Shift+G are the same function
- *   (`toggleTileGrid`); right-click (contextmenu) opens the picker. With the
- *   grid open the picker shows the current tiles, and Open replaces them.
+ *   (`toggleTileGrid`); right-click (contextmenu) opens the count menu (owner
+ *   decision 10). With the grid open a pick re-forms it, the focused tile kept.
  *
  * The pure helper and the app both via the shared harness (test/mocks/tile-grid-vm.ts).
  * Port: N/A.
@@ -99,11 +99,11 @@ describe('the Tiles button and Ctrl+Shift+G', () => {
     return html;
   };
 
-  it('a click opens the grid at once (the toggle), a right-click opens the picker', () => {
+  it('a click opens the grid at once (the toggle), a right-click opens the count menu', () => {
     expect(button()).toContain('onclick="app.toggleTileGrid()"');
-    expect(button()).toContain('oncontextmenu="app.openTilePicker(event)"');
-    expect(button()).toContain('right-click to choose which');
-    expect(button()).not.toContain('onclick="app.openTilePicker');
+    expect(button()).toContain('oncontextmenu="app.openTileCountMenu(event)"');
+    expect(button()).toContain('right-click for how many');
+    expect(button()).not.toContain('onclick="app.openTileCountMenu');
   });
 
   it('Ctrl+Shift+G runs the same toggle', () => {
@@ -114,14 +114,18 @@ describe('the Tiles button and Ctrl+Shift+G', () => {
 
 describe('opening at once, in the app', () => {
   const IDS = ['s-a', 's-b', 's-c'];
-  const picker = () => body.children.find((c) => c.id === 'tilePickerMenu') ?? null;
+  const picker = () => body.children.find((c) => c.id === 'tileCountMenu') ?? null;
+  const pick = (n: number) =>
+    picker()!
+      .children.find((c) => c.dataset.count === String(n))!
+      .dispatch('click', { stopPropagation: vi.fn() });
   beforeEach(() => {
     resetGridHarness();
     const wrap = new FakeEl();
     bySelector.set('.terminal-wrap', wrap);
   });
 
-  it('a click with the grid closed shows the tiles, no picker', () => {
+  it('a click with the grid closed shows the tiles, no menu', () => {
     const app = makeGridApp(IDS);
     app.activeSessionId = 's-b';
     app.toggleTileGrid();
@@ -131,19 +135,19 @@ describe('opening at once, in the app', () => {
     expect(app.activeSessionId).toBe('s-b');
   });
 
-  it('a click closes a picker that a right-click left open', () => {
+  it('a click closes a menu that a right-click left open', () => {
     const app = makeGridApp(IDS);
-    app.openTilePicker({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
+    app.openTileCountMenu({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
     expect(picker()).not.toBeNull();
     app.toggleTileGrid();
     expect(picker()).toBeNull();
     expect(app._tilesOwnTerminal()).toBe(true);
   });
 
-  it('a click elsewhere closes the picker; a click inside it does not', () => {
+  it('a click elsewhere closes the menu; a click inside it does not', () => {
     const app = makeGridApp(IDS);
     const before = documentAddEventListener.mock.calls.length;
-    app.openTilePicker({ preventDefault: vi.fn() });
+    app.openTileCountMenu({ preventDefault: vi.fn() });
     const calls = documentAddEventListener.mock.calls.slice(before) as Array<[string, (e: unknown) => void]>;
     const onClick = calls.find(([type]) => type === 'click')![1];
     onClick({ target: picker()!.children[0] });
@@ -152,31 +156,27 @@ describe('opening at once, in the app', () => {
     expect(picker()).toBeNull();
   });
 
-  it('a right-click opens the picker and keeps the browser menu away', () => {
+  it('a right-click opens the count menu and keeps the browser menu away', () => {
     const app = makeGridApp(IDS);
     const ev = { preventDefault: vi.fn(), stopPropagation: vi.fn() };
-    app.openTilePicker(ev);
+    app.openTileCountMenu(ev);
     expect(ev.preventDefault).toHaveBeenCalled();
     expect(picker()).not.toBeNull();
     expect(app._tilesOwnTerminal()).toBe(false);
   });
 
-  it('a right-click with the grid open shows its tiles; Open replaces them', () => {
+  it('a right-click with the grid open re-forms it to the count picked, the focused tile kept', () => {
     const app = makeGridApp(IDS);
     app.openTileGrid(['s-a', 's-b'], { focusedId: 's-b' });
-    app.openTilePicker({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
+    app.openTileCountMenu({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
     expect(app._tilesOwnTerminal()).toBe(true);
-    const menu = picker()!;
-    const boxes = menu.children[0].children.map((row) => row.children[0]);
-    expect(boxes.filter((b) => b.checked).map((b) => b.value)).toEqual(['s-a', 's-b']);
-    const boxA = boxes.find((b) => b.value === 's-a')!;
-    boxA.checked = false;
-    boxA.dispatch('change');
-    const boxC = boxes.find((b) => b.value === 's-c')!;
-    boxC.checked = true;
-    boxC.dispatch('change');
-    menu.children[1].children[1].dispatch('click');
-    expect(app._tileGrid.ids).toEqual(['s-b', 's-c']);
+    pick(4);
+    // Its two first, then the open sessions in tab order.
+    expect(app._tileGrid.ids).toEqual(['s-a', 's-b', 's-other', 's-c']);
+    expect(app.activeSessionId).toBe('s-b');
+    app.openTileCountMenu({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
+    pick(2);
+    expect(app._tileGrid.ids).toEqual(['s-a', 's-b']);
     expect(app.activeSessionId).toBe('s-b');
   });
 });

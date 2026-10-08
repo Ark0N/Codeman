@@ -28,6 +28,10 @@ const TILE_GRID_FONT_KEY = 'codeman-tile-font-size';
 // in reading order with `null` for an empty one. `open: false` keeps it
 // remembered for one-click return; restored on reload inside handleInit.
 const TILE_GRID_STORAGE_KEY = 'codeman:tile-grid';
+// How many tiles a click on Tiles opens: the count last picked in its
+// right-click menu (2, 4 or 6; owner decision 10), per device. Its own key, so
+// the stored grid above stays ids only.
+const TILE_GRID_COUNT_KEY = 'codeman:tile-count';
 // Trailing debounce for refitting tiles after the grid area changes size, so a
 // window drag sends each tile's PTY one resize, not one per frame.
 const TILE_GRID_REFIT_MS = 150;
@@ -67,6 +71,34 @@ function isTextFieldTarget(target) {
   if (!target || target.classList?.contains?.('xterm-helper-textarea')) return false;
   const tag = String(target.tagName || '').toUpperCase();
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable === true;
+}
+
+/**
+ * The count menu's picture of `n` tiles: the grid's own layout for that count
+ * (2x1, 2x2, 3x2) as small rounded cells.
+ */
+function tileCountGlyph(n) {
+  const { cols, rows } = window.CodemanTileGrid.computeTileLayout({ count: n });
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('class', 'tile-count-glyph');
+  svg.setAttribute('viewBox', '0 0 30 20');
+  svg.setAttribute('aria-hidden', 'true');
+  const gap = 3;
+  const w = (30 - gap * (cols - 1)) / cols;
+  const h = (20 - gap * (rows - 1)) / rows;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const rect = document.createElementNS(NS, 'rect');
+      rect.setAttribute('x', String(c * (w + gap)));
+      rect.setAttribute('y', String(r * (h + gap)));
+      rect.setAttribute('width', String(w));
+      rect.setAttribute('height', String(h));
+      rect.setAttribute('rx', '1.5');
+      svg.appendChild(rect);
+    }
+  }
+  return svg;
 }
 
 /** The grid's state. `has(id)` answers only while it is open. */
@@ -362,8 +394,8 @@ Object.assign(CodemanApp.prototype, {
     btn.classList.toggle('tiles-open', open);
     btn.setAttribute('aria-pressed', open ? 'true' : 'false');
     const title = open
-      ? 'Tiles: back to a single session (right-click to choose which sessions)'
-      : 'Tiles: show several sessions side by side (right-click to choose which)';
+      ? 'Tiles: back to a single session (right-click for how many tiles)'
+      : 'Tiles: show several sessions side by side (right-click for how many)';
     btn.title = title;
     btn.setAttribute('aria-label', title);
   },
@@ -371,8 +403,8 @@ Object.assign(CodemanApp.prototype, {
   /**
    * How many tiles the grid takes here and now: what the terminal area fits
    * (the grid section, or the single view it would replace), at most the cap
-   * (TILE_GRID_MAX), never less than one. The texts say which of the two
-   * binds, so a large monitor never reads "this window fits 6".
+   * (TILE_GRID_MAX), never less than one. `full` says which of the two binds,
+   * so a large monitor never reads "this window fits 6".
    */
   _tileGridLimit() {
     const T = window.CodemanTileGrid;
@@ -387,131 +419,236 @@ Object.assign(CodemanApp.prototype, {
     const byCap = fits >= max;
     return {
       capacity,
-      hint: byCap ? `Up to ${max} tiles` : `This window fits ${capacity} tile${capacity === 1 ? '' : 's'}`,
       full: byCap
         ? `The grid holds at most ${max} tiles`
         : `The grid already holds what this window fits (${capacity})`,
     };
   },
 
+  /** The tile count a click on Tiles opens (the menu's last pick, per device), default 6. */
+  _tileGridCount() {
+    let raw = null;
+    try {
+      raw = localStorage.getItem(TILE_GRID_COUNT_KEY);
+    } catch {
+      /* Storage unavailable: the default. */
+    }
+    return window.CodemanTileGrid.sanitizeTileCount(raw);
+  },
+
+  _rememberTileGridCount(count) {
+    try {
+      localStorage.setItem(TILE_GRID_COUNT_KEY, String(window.CodemanTileGrid.sanitizeTileCount(count)));
+    } catch {
+      /* Per-device convenience only. */
+    }
+  },
+
   /**
-   * Right-click on the Tiles button (its click opens the grid at once, see
-   * toggleTileGrid): a picker with a checkbox per open session, in tab order,
-   * preselected with the tiles shown now, else the grid this tab last left
-   * (else the active session and an open split's two), and an Open button.
-   * Boxes past what the grid takes are disabled. With the grid open, Open
-   * replaces its set.
+   * Right-click on the Tiles button (or Shift+F10 / the Menu key on it, which
+   * fire the same contextmenu event; its click opens the grid at once, see
+   * toggleTileGrid): how many tiles, 2, 4 or 6 (owner decision 10), each with
+   * its shape, the remembered count checked. A count the window cannot fit is
+   * greyed out, and the menu says why; the keyboard then starts on the largest
+   * that fits (the count a click opens here). Picking one opens the grid with
+   * that many tiles, or re-forms the open grid to it, and remembers it for the
+   * click. Arrows move, Enter or Space picks, Escape closes and gives the
+   * keyboard back to the Tiles button, Tab closes.
    */
-  openTilePicker(event) {
+  openTileCountMenu(event) {
     // The right-click: the browser's own context menu stays away.
     event?.preventDefault?.();
-    if (this._tilePicker) {
-      this.closeTilePicker();
+    if (this._tileCountMenu) {
+      this.closeTileCountMenu();
       return;
     }
     if (!this.canOpenTileGrid()) return;
     const T = window.CodemanTileGrid;
-    const limit = this._tileGridLimit();
-    const capacity = limit.capacity;
-    const candidates = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions);
-    const gridOpen = this._tilesOwnTerminal();
-    const remembered = (gridOpen ? this._tileGrid.ids : this._readStoredTileGrid()?.ids || []).filter((id) =>
-      candidates.some((c) => c.id === id)
-    );
-    const seed = remembered.length
-      ? remembered
-      : [this.activeSessionId, this._splitPane ? this._splitSessionId : null].filter(Boolean);
-    const checked = new Set(seed.slice(0, capacity));
-
+    const capacity = this._tileGridLimit().capacity;
+    const fitsText = `This window fits ${capacity} tile${capacity === 1 ? '' : 's'}`;
+    const current = this._tileGridCount();
     const menu = document.createElement('div');
-    menu.id = 'tilePickerMenu';
-    menu.className = 'tile-picker-menu';
-    menu.setAttribute('role', 'dialog');
-    menu.setAttribute('aria-label', 'Show sessions as tiles');
-    const list = document.createElement('div');
-    list.className = 'tile-picker-list';
-    const boxes = [];
-    for (const c of candidates) {
-      const row = document.createElement('label');
-      row.className = 'tile-picker-item';
-      const box = document.createElement('input');
-      box.type = 'checkbox';
-      box.value = c.id;
-      box.checked = checked.has(c.id);
-      const name = document.createElement('span');
-      // A session literally named like a UI string must not be translated.
-      name.setAttribute('data-i18n-skip', '');
-      name.textContent = c.label;
-      row.append(box, name);
-      list.appendChild(row);
-      boxes.push(box);
-    }
-    const footer = document.createElement('div');
-    footer.className = 'tile-picker-footer';
-    const hint = document.createElement('span');
-    hint.className = 'tile-picker-hint';
-    hint.textContent = limit.hint;
-    const open = document.createElement('button');
-    open.type = 'button';
-    open.className = 'tile-picker-open';
-    open.textContent = 'Open tiles';
-    footer.append(hint, open);
-    if (candidates.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'tile-picker-empty';
-      empty.textContent = 'No sessions to show as tiles';
-      menu.appendChild(empty);
-    } else {
-      menu.append(list, footer);
-    }
-
-    const sync = () => {
-      const count = boxes.filter((b) => b.checked).length;
-      for (const b of boxes) {
-        b.disabled = !b.checked && count >= capacity;
-        b.title = b.disabled ? limit.full : '';
+    menu.id = 'tileCountMenu';
+    menu.className = 'tile-count-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', 'How many tiles');
+    const heading = document.createElement('div');
+    heading.className = 'tile-count-heading';
+    heading.setAttribute('aria-hidden', 'true');
+    heading.textContent = 'Tiles';
+    menu.appendChild(heading);
+    const items = [];
+    for (const n of T.TILE_GRID_COUNTS) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'tile-count-item';
+      item.setAttribute('role', 'menuitemradio');
+      item.setAttribute('aria-checked', n === current ? 'true' : 'false');
+      item.tabIndex = -1;
+      item.dataset.count = String(n);
+      if (n > capacity) {
+        item.disabled = true;
+        item.setAttribute('aria-disabled', 'true');
+        item.title = fitsText;
       }
-      open.disabled = count === 0;
-    };
-    for (const b of boxes) b.addEventListener('change', sync);
-    sync();
-    open.addEventListener('click', () => {
-      const ids = boxes.filter((b) => b.checked).map((b) => b.value);
-      this.closeTilePicker();
-      if (ids.length > 0) this._replaceTileGrid(ids);
-    });
+      const label = document.createElement('span');
+      label.className = 'tile-count-label';
+      label.textContent = `${n} tiles`;
+      const check = document.createElement('span');
+      check.className = 'tile-count-check';
+      check.setAttribute('aria-hidden', 'true');
+      check.textContent = n === current ? '\u2713' : '';
+      item.append(tileCountGlyph(n), label, check);
+      item.addEventListener('click', (e) => {
+        e.stopPropagation?.();
+        if (!item.disabled) this._pickTileCount(n);
+      });
+      item.addEventListener('pointerenter', () => {
+        if (!item.disabled) item.focus?.();
+      });
+      menu.appendChild(item);
+      items.push(item);
+    }
+    if (capacity < T.TILE_GRID_MAX) {
+      const hint = document.createElement('div');
+      hint.className = 'tile-count-hint';
+      hint.textContent = fitsText;
+      menu.appendChild(hint);
+    }
 
     document.body.appendChild(menu);
     const btn = document.querySelector('.btn-tile-grid');
     if (btn?.getBoundingClientRect) {
-      // Under the Tiles button (.tile-picker-menu is position: fixed).
+      // Under the Tiles button (.tile-count-menu is position: fixed).
       const rect = btn.getBoundingClientRect();
-      menu.style.top = `${rect.bottom + 4}px`;
-      menu.style.right = `${window.innerWidth - rect.right}px`;
+      menu.style.top = `${rect.bottom + 6}px`;
+      menu.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
     }
-    // A click elsewhere or Escape closes it. A click on the Tiles button needs no
-    // exception: its own handler (toggleTileGrid) closes the picker first.
+    const enabled = () => items.filter((i) => !i.disabled);
+    const move = (delta) => {
+      const list = enabled();
+      if (list.length === 0) return;
+      const at = list.indexOf(document.activeElement);
+      const next = at === -1 ? (delta > 0 ? 0 : list.length - 1) : (at + delta + list.length) % list.length;
+      list[next].focus?.();
+    };
+    // A click elsewhere closes it. A click on the Tiles button needs no
+    // exception: its own handler (toggleTileGrid) closes the menu first.
     const onOutside = (e) => {
       if (menu.contains?.(e.target)) return;
-      this.closeTilePicker();
+      this.closeTileCountMenu();
     };
+    // The menu's keys, in the capture phase while it is open. Escape normally
+    // reaches the app's global handler first, which closes the menu alone and
+    // gives the keyboard back (app.js); this one covers the rest.
     const onKey = (e) => {
-      if (e.key === 'Escape') this.closeTilePicker();
+      if (e.key === 'Escape') {
+        e.preventDefault?.();
+        this.closeTileCountMenu({ refocus: true });
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+        e.preventDefault?.();
+        move(1);
+      } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+        e.preventDefault?.();
+        move(-1);
+      } else if (e.key === 'Home' || e.key === 'End') {
+        e.preventDefault?.();
+        const list = enabled();
+        list[e.key === 'Home' ? 0 : list.length - 1]?.focus?.();
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        const item = items.find((i) => i === document.activeElement);
+        if (!item) return;
+        // Not the button's own activation too.
+        e.preventDefault?.();
+        if (!item.disabled) this._pickTileCount(Number(item.dataset.count));
+      } else if (e.key === 'Tab') {
+        this.closeTileCountMenu();
+      }
     };
-    this._tilePicker = { menu, onOutside, onKey };
+    this._tileCountMenu = { menu, onOutside, onKey };
     document.addEventListener('click', onOutside);
-    document.addEventListener('keydown', onKey);
-    (boxes.find((b) => !b.disabled) || open).focus?.();
+    document.addEventListener('keydown', onKey, true);
+    // The checked count, or when the window cannot fit it, the largest that fits.
+    const start = items.find((i) => !i.disabled && i.getAttribute('aria-checked') === 'true') || enabled().at(-1);
+    (start || menu).focus?.();
   },
 
-  /** Idempotent: the global Escape handler calls it whether or not the picker is open. */
-  closeTilePicker() {
-    const picker = this._tilePicker;
-    if (!picker) return;
-    this._tilePicker = null;
-    document.removeEventListener('click', picker.onOutside);
-    document.removeEventListener('keydown', picker.onKey);
-    picker.menu.remove();
+  /**
+   * Idempotent: the global Escape handler may call it whether or not the menu
+   * is open. The keyboard goes back to the Tiles button when it was in the
+   * menu (`refocus` unset), or when asked (Escape); a click elsewhere has
+   * already moved it, and a pick passes `refocus: false`.
+   */
+  closeTileCountMenu({ refocus } = {}) {
+    const menu = this._tileCountMenu;
+    if (!menu) return;
+    if (refocus === undefined) refocus = !!menu.menu.contains?.(document.activeElement);
+    this._tileCountMenu = null;
+    document.removeEventListener('click', menu.onOutside);
+    document.removeEventListener('keydown', menu.onKey, true);
+    menu.menu.remove();
+    if (refocus) document.querySelector('.btn-tile-grid')?.focus?.();
+  },
+
+  /**
+   * A count picked in the menu: remembered for the click, then the grid opens
+   * with that many tiles (what the click opens), or the open grid is re-formed
+   * to it (_reformTileGrid). Never more than the window fits; fewer open
+   * sessions than the count give fewer tiles.
+   */
+  _pickTileCount(count) {
+    this.closeTileCountMenu({ refocus: false });
+    this._rememberTileGridCount(count);
+    const grid = this._tileGrid;
+    if (!grid?.open) {
+      this.toggleTileGrid();
+      return;
+    }
+    const T = window.CodemanTileGrid;
+    const n = Math.min(T.sanitizeTileCount(count), this._tileGridLimit().capacity);
+    const all = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions).map((c) => c.id);
+    this._reformTileGrid(T.tileGridSetForCount(grid.ids, all, n, grid.focusedId));
+  },
+
+  /**
+   * The open grid re-formed to the tiles `target` (a count picked in the
+   * menu): a count change is a shape change, so the cell model's rule applies
+   * (reformTileCells: the tiles that stay keep their row and column when all
+   * fit, else they pack in reading order), and the tiles that join fill the
+   * empty cells in reading order, holes first. The focused tile is always
+   * among those that stay (tileGridSetForCount). Every tile that joins is
+   * mounted and the grid laid out ONCE before any of them connects (as in
+   * openTileGrid): a tile connected into an intermediate layout would fit that
+   * cell first and resize its PTY twice. A zoom the user chose ends: the grid
+   * they asked for is meant to be seen.
+   */
+  _reformTileGrid(target) {
+    const grid = this._tileGrid;
+    if (!grid?.open) return;
+    const T = window.CodemanTileGrid;
+    const leaving = grid.ids.filter((id) => !target.includes(id));
+    const joining = target.filter((id) => !grid.tiles.has(id));
+    if (leaving.length === 0 && joining.length === 0) return;
+    // A divider or header drag in progress measured the old grid.
+    this._tileDividerDragTeardown?.();
+    this._endTileMoveDrag();
+    for (const id of leaving) {
+      const entry = grid.tiles.get(id);
+      this._destroyTerminalTile(entry.tile);
+      entry.el.remove();
+      grid.tiles.delete(id);
+    }
+    if (grid.zoomedId && !grid.autoZoom) grid.zoomedId = null;
+    const staying = grid.ids.filter((id) => grid.tiles.has(id));
+    const mounted = joining.filter((id) => this._mountTile(id));
+    const { cols, rows } = this._tileShapeFor(grid.tiles.size);
+    grid.cells = T.reformTileCells(grid.cells, grid.cols, staying, mounted, cols, rows);
+    grid.cols = cols;
+    grid.rows = rows;
+    this._applyTileLayout();
+    for (const id of mounted) this._connectTile(id);
+    this._scheduleTileGridRefit();
+    this.renderSessionTabs?.();
   },
 
   /**
@@ -598,14 +735,18 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * The Tiles button's click and Ctrl+Shift+G, one function so the two never
-   * drift (owner decision 8): opens the grid at once, no picker in the way, or
-   * closes it to the single view of the focused session. What opens is
+   * drift (owner decision 8): opens the grid at once, no menu in the way, or
+   * closes it to the single view of the focused session. What opens is the
+   * remembered count of tiles (the right-click menu's last pick, default 6,
+   * at most what the window fits; owner decision 10), chosen by
    * `tileGridOpenSet` (constants.js): the grid this tab last had, else an open
-   * split's two sessions, else the open sessions in tab order up to what the
-   * grid takes here, the active one focused. The picker is a right-click away.
+   * split's two sessions, else the open sessions in tab order, the active one
+   * focused; then trimmed or filled to the count (the focused one kept). A
+   * remembered grid comes back with its tiles in their cells, the ones the
+   * count adds filling its empty cells first (_openStoredTileGrid).
    */
   toggleTileGrid() {
-    this.closeTilePicker();
+    this.closeTileCountMenu();
     if (this._tilesOwnTerminal()) {
       this.closeTileGrid({ keepStored: true, reselect: true });
       return;
@@ -617,21 +758,30 @@ Object.assign(CodemanApp.prototype, {
       this.showToast?.('No sessions to show as tiles', 'info');
       return;
     }
-    if (set.source === 'stored') this._openStoredTileGrid(stored);
+    if (set.source === 'stored') this._openStoredTileGrid(stored, set.ids);
     else this.openTileGrid(set.ids, { focusedId: set.focusedId });
   },
 
-  /** What the toggle would open now (see toggleTileGrid); `stored` saves a second read. */
-  _tileGridOpenSet(stored = this._readStoredTileGrid()) {
-    return window.CodemanTileGrid.tileGridOpenSet({
+  /**
+   * What the toggle would open now (see toggleTileGrid): `count` tiles (the
+   * remembered count), or as many as the window fits; `stored` saves a
+   * second read.
+   */
+  _tileGridOpenSet(stored = this._readStoredTileGrid(), count = this._tileGridCount()) {
+    const T = window.CodemanTileGrid;
+    const n = Math.max(1, Math.min(count, this._tileGridLimit().capacity));
+    const set = T.tileGridOpenSet({
       stored,
       split: this._splitPane ? [this.activeSessionId, this._splitSessionId] : null,
       sessions: this.sessions,
       sessionOrder: this.sessionOrder,
       detachedIds: this.detachedSessions,
       activeId: this.activeSessionId,
-      limit: this._tileGridLimit().capacity,
+      limit: n,
     });
+    if (!set) return null;
+    const all = T.buildTilePickerSessions(this.sessions, this.sessionOrder, this.detachedSessions).map((c) => c.id);
+    return { ...set, ids: T.tileGridSetForCount(set.ids, all, n, set.focusedId) };
   },
 
   /** Alt+Shift+Arrows: a human selection of the tile in that direction. */
@@ -1006,7 +1156,9 @@ Object.assign(CodemanApp.prototype, {
   /**
    * Ctrl/Cmd+click on a tab: that session joins the grid and takes focus (a
    * human selection: the user clicked its tab). With the grid closed it opens
-   * on what the Tiles toggle would bring back, plus this session. Returns false
+   * what the Tiles toggle would, with this session among the tiles and
+   * focused: the remembered count in total (owner answer to decision 10's
+   * questions), never one more. Returns false
    * when the grid cannot open here (narrow or solo window), so the click is an
    * ordinary one.
    */
@@ -1028,8 +1180,9 @@ Object.assign(CodemanApp.prototype, {
       this.selectSession(sessionId);
       return true;
     }
+    const n = Math.max(1, Math.min(this._tileGridCount(), capacity));
     const base = this._tileGridOpenSet()?.ids || [];
-    const ids = [...base.filter((id) => id !== sessionId).slice(0, capacity - 1), sessionId];
+    const ids = [...base.filter((id) => id !== sessionId).slice(0, n - 1), sessionId];
     this.openTileGrid(ids, { focusedId: sessionId, auto: false });
     return true;
   },
@@ -1057,8 +1210,8 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Opens the grid on `ids` in place of whatever it shows (the picker's Open,
-   * "Open group as tiles"): the session in focus keeps focus when `ids` holds
+   * Opens the grid on `ids` in place of whatever it shows ("Open group as
+   * tiles"): the session in focus keeps focus when `ids` holds
    * it, otherwise the first one takes it. Chosen BEFORE an open grid closes,
    * because the close drops activeSessionId: as in selectSession's tile
    * branch, the parked terminal still holds what it showed before the grid,
@@ -1311,8 +1464,8 @@ Object.assign(CodemanApp.prototype, {
     actions.append(
       button('tile-menu', 'Session actions', '\u22EF', (e) => this.openTabRailActionMenu?.(e, sessionId)),
       zoomBtn,
-      // (No + here, owner decision 9: tiles are added from the Tiles button's
-      // picker, Ctrl/Cmd+click, a dragged tab, a tab group or Run.)
+      // (No + here, owner decision 9: tiles are added from the Tiles button
+      // and its count menu, Ctrl/Cmd+click, a dragged tab, a tab group or Run.)
       // Removes the tile ONLY: the session keeps running. Killing it stays
       // behind the menu's Close session and its confirm.
       button('tile-remove', 'Remove tile (the session keeps running)', '\u00D7', () => this.removeTile(sessionId))
@@ -1919,18 +2072,36 @@ Object.assign(CodemanApp.prototype, {
   /**
    * Opens a stored grid: its tiles and focus, then the fractions it had (only
    * if they still match the layout) and a zoom the user chose. `auto`: the app
-   * is putting it back, so no idle alert is spent.
+   * is putting it back, so no idle alert is spent. `ids` is the set to open,
+   * the stored one by default (a reload); the Tiles button passes it trimmed
+   * or filled to the remembered count, a shape change the cell model's rule
+   * handles (reformTileCells).
    */
-  _openStoredTileGrid(stored) {
+  _openStoredTileGrid(stored, ids = stored.ids) {
     const focus = stored.zoomed || stored.focused;
-    // Exactly the stored set: an open split closes without joining it (decision 8, case a).
-    if (!this.openTileGrid(stored.ids, { focusedId: focus, auto: true, mergeSplit: false })) return false;
+    // The stored set (an open split closes without joining it, decision 8,
+    // case a), trimmed or filled to the count by the caller.
+    if (!this.openTileGrid(ids, { focusedId: focus, auto: true, mergeSplit: false })) return false;
     const grid = this._tileGrid;
-    // openTileGrid packed the tiles from the first cell. The stored holes come
-    // back where they were when the shape is the same as when they were stored
-    // (as many cells as this layout has); a session gone since leaves its cell
-    // empty then. Otherwise the tiles stay packed.
-    const cells = (stored.cells || []).map((id) => (id && grid.tiles.has(id) ? id : null));
+    const T = window.CodemanTileGrid;
+    // openTileGrid packed the tiles from the first cell. The stored tiles go
+    // back to their cells (a session gone since leaves its cell empty): as
+    // they were when this is the stored set in the shape it was stored with,
+    // otherwise by the cell model's rule, the tiles the count adds filling the
+    // empty cells in reading order, holes first.
+    const storedCells = (stored.cells || []).map((id) => (id && grid.tiles.has(id) ? id : null));
+    const kept = storedCells.filter(Boolean);
+    const sameSet = ids.length === stored.ids.length && ids.every((id) => stored.ids.includes(id));
+    const cells = sameSet
+      ? storedCells
+      : T.reformTileCells(
+          storedCells,
+          T.tileCellCols(storedCells.length),
+          kept,
+          grid.ids.filter((id) => !kept.includes(id)),
+          grid.cols,
+          grid.rows
+        );
     if (cells.length === grid.cols * grid.rows && cells.filter(Boolean).length === grid.tiles.size) {
       grid.cells = cells;
     }

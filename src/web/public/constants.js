@@ -1793,8 +1793,8 @@ function dragTrackFractions(fr, index, deltaPx, totalPx, minPx) {
 }
 
 /**
- * The sessions the Tiles picker offers (and the Tiles button opens, case c of
- * tileGridOpenSet), in tab order: live ones only, never a session popped out to
+ * The sessions the Tiles button can open (case c of tileGridOpenSet, and the
+ * ones a count fills a grid with), in tab order: live ones only, never a session popped out to
  * its own window (that window owns its PTY size). A session with no PTY
  * attached IS offered: its tile shows the Attach overlay.
  *
@@ -1820,8 +1820,8 @@ function buildTilePickerSessions(sessions, sessionOrder, detachedIds) {
  *   a. the grid this tab last had (`stored`, already sanitized: live, not
  *      detached, at most the cap), if any of its sessions survive;
  *   b. else an open split's two sessions, Pane A focused;
- *   c. else the open sessions in tab order, the picker's list (no detached
- *      ones), up to `limit`, the active session always among them and focused
+ *   c. else the open sessions in tab order (buildTilePickerSessions: no
+ *      detached ones), up to `limit`, the active session always among them and focused
  *      (when it sits past the limit, the first `limit - 1` others come with it).
  * Null when there is nothing to open.
  *
