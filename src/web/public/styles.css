@@ -2450,7 +2450,73 @@ html[data-tab-orientation='vertical'].tab-rail-compact
 .btn-icon-header:hover {
   background: rgba(255, 255, 255, 0.07);
   color: var(--text);
-  transform: rotate(45deg);
+}
+
+/* Hover motion moves the icon, never the button: turning the whole button used
+   to swing its hover background into a diamond on every header icon. Now only the
+   gear turns, the folder opens and the Tiles squares spread apart; every other
+   icon just takes the hover colour. Pointer devices only (a tap must not leave an
+   icon stuck mid-motion), and no motion at all under reduced motion. */
+.btn-icon-header.btn-settings svg,
+.btn-icon-header.btn-tile-grid svg rect,
+.btn-icon-header.btn-file-viewer svg .icon-folder-closed,
+.btn-icon-header.btn-file-viewer svg .icon-folder-open {
+  transition: transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1), opacity 160ms ease;
+}
+
+.btn-icon-header.btn-tile-grid svg rect {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.btn-icon-header.btn-file-viewer svg .icon-folder-open {
+  opacity: 0;
+  transform: translateY(1px);
+}
+
+@media (hover: hover) {
+  .btn-icon-header.btn-settings:hover svg {
+    transform: rotate(45deg);
+  }
+
+  .btn-icon-header.btn-tile-grid:hover svg rect:nth-of-type(1) {
+    transform: translate(-1.5px, -1.5px);
+  }
+
+  .btn-icon-header.btn-tile-grid:hover svg rect:nth-of-type(2) {
+    transform: translate(1.5px, -1.5px);
+  }
+
+  .btn-icon-header.btn-tile-grid:hover svg rect:nth-of-type(3) {
+    transform: translate(-1.5px, 1.5px);
+  }
+
+  .btn-icon-header.btn-tile-grid:hover svg rect:nth-of-type(4) {
+    transform: translate(1.5px, 1.5px);
+  }
+
+  .btn-icon-header.btn-file-viewer:hover svg .icon-folder-closed {
+    opacity: 0;
+  }
+
+  .btn-icon-header.btn-file-viewer:hover svg .icon-folder-open {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-icon-header.btn-settings svg,
+  .btn-icon-header.btn-tile-grid svg rect,
+  .btn-icon-header.btn-file-viewer svg .icon-folder-closed,
+  .btn-icon-header.btn-file-viewer svg .icon-folder-open {
+    transition: none;
+  }
+
+  .btn-icon-header.btn-settings:hover svg,
+  .btn-icon-header.btn-tile-grid:hover svg rect {
+    transform: none;
+  }
 }
 
 /* Admin Panel header button: only shown to admins in multi-user mode (marker
@@ -2567,10 +2633,6 @@ html[data-tab-orientation='vertical'].tab-rail-compact
   height: 20px;
   font-size: 0.7rem;
   font-weight: 600;
-}
-
-.btn-icon-header.btn-sm:hover {
-  transform: none;
 }
 
 .header-font-controls {
@@ -9193,10 +9255,6 @@ kbd {
   font-size: 1.1rem;
   margin-left: 0;
   margin-right: 2px;
-}
-
-.btn-icon-header.btn-notifications:hover {
-  transform: none;
 }
 
 .notification-badge {
@@ -19170,11 +19228,6 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .session-sidebar .ta
 /* --- Toggle button ----------------------------------------------------- */
 .btn-sidebar-toggle--hidden {
   display: none !important;
-}
-
-/* .btn-icon-header:hover rotates 45deg globally — a panel glyph must not spin. */
-.btn-sidebar-toggle:hover {
-  transform: none;
 }
 
 html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle svg {

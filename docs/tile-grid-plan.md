@@ -68,6 +68,15 @@ or settled a question the spec left open. The invariants as built are in
   every joining tile mounted and laid out before any connects (one fit, one PTY resize
   each), and a zoom the user chose ends. The other ways in (Ctrl/Cmd+click, a dragged tab,
   "Open group as tiles", Run) still add up to the cap of 6.
+- **Header icons move their icon on hover, never the button** (owner request: the Tiles
+  and folder buttons "weirdly turn" on hover; make a nicer hover). A global
+  `.btn-icon-header:hover { transform: rotate(45deg) }` (meant for the settings gear)
+  turned every header icon button, swinging its hover background into a diamond. Now
+  only the gear's ICON turns (45 degrees, one tooth), the Tiles button's four squares
+  spread apart, and the folder cross-fades to an open folder (`.icon-folder-closed` /
+  `.icon-folder-open` in its SVG); every other icon just takes the hover colour. Pointer
+  devices only (`@media (hover: hover)`), transitions off under reduced motion. Pinned by
+  `test/header-icon-hover.test.ts`.
 - **The grid opens and closes with a short animation, on by default** (owner request:
   "when clicking on the tile button first make this animation nicer"). It is the grid's
   own, not an `entrance-animations.js` theme (those are off by default). Opening, each tile
