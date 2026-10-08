@@ -21005,6 +21005,13 @@ html[data-session-list='sidebar'][data-sidebar='collapsed'] .session-sidebar .ta
     --ledger-bar: var(--text-muted);
   }
 
+  /* A tiled session's cell keeps the tile grid's underline (.in-tiles) beside
+     its status bar: both are inset shadows, and the bar's rule above would
+     otherwise replace the marker. */
+  .session-tabs-host > .session-tabs.tabs-ledger > .session-tab.in-tiles:not(.active) {
+    box-shadow: inset 3px 0 0 var(--ledger-bar), inset 0 -2px 0 color-mix(in srgb, var(--accent, #4a9eff) 60%, transparent);
+  }
+
   /* The active cell has to win against a grid of look-alike cells. The skin's
      active rule (1px accent border, no shadow, both !important) is too quiet
      here, so an inset second pixel doubles the border without resizing the

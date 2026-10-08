@@ -22,6 +22,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import postcss, { type AtRule } from 'postcss';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   FakeEl,
@@ -450,5 +451,47 @@ describe('the tab marker', () => {
   it('it has a style', () => {
     const css = readFileSync(resolve(import.meta.dirname, '../src/web/public/styles.css'), 'utf8');
     expect(css).toMatch(/\.session-tab\.in-tiles/);
+  });
+
+  it('every tab arrangement that draws its own cell shadow keeps the marker in it', () => {
+    // The marker is an inset box-shadow, so an arrangement that paints its
+    // cells with a box-shadow of its own (the ledger's status bar, #538)
+    // replaces it unless it restates the marker alongside its own shadow.
+    const css = readFileSync(resolve(import.meta.dirname, '../src/web/public/styles.css'), 'utf8');
+    type Found = { selector: string; shadow: string; media: string };
+    const shadows: Found[] = [];
+    postcss.parse(css).walkRules((rule) => {
+      let shadow = '';
+      rule.walkDecls('box-shadow', (d) => {
+        shadow = d.value;
+      });
+      if (!shadow) return;
+      const media: string[] = [];
+      for (let p = rule.parent; p && p.type !== 'root'; p = p.parent) {
+        if (p.type === 'atrule') media.push((p as AtRule).params);
+      }
+      for (const selector of rule.selectors) shadows.push({ selector, shadow, media: media.join(' ') });
+    });
+    const marker = shadows.find((r) => r.selector === '.session-tab.in-tiles:not(.active)');
+    expect(marker?.shadow).toMatch(/^inset 0 -2px 0 /);
+    // A whole tab cell at rest, scoped to an arrangement: not a pseudo-element,
+    // not a passing state (hover, press, drag) and not the active tab, which
+    // the marker skips anyway.
+    const cells = shadows.filter((r) => {
+      const last = r.selector.split(/\s*[\s>+~]\s*/).pop()!;
+      return (
+        /^\.session-tab(?![\w-])/.test(last) &&
+        r.selector !== last &&
+        !/::|:hover|:active|\.active(?![\w-])|drag-over|in-tiles/.test(last.replace(':not(.active)', ''))
+      );
+    });
+    expect(cells.map((r) => r.selector)).toContain('.session-tabs-host > .session-tabs.tabs-ledger > .session-tab');
+    const missing = cells.filter((cell) => {
+      const tiled = shadows.find(
+        (r) => r.selector === `${cell.selector}.in-tiles:not(.active)` && r.media === cell.media
+      );
+      return !tiled || !tiled.shadow.includes(cell.shadow) || !tiled.shadow.includes(marker!.shadow);
+    });
+    expect(missing.map((r) => r.selector)).toEqual([]);
   });
 });
