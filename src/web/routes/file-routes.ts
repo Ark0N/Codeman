@@ -241,7 +241,9 @@ async function serveRawFile(
   // would be stored XSS. SVG was always here; HTML/HTM join it now that the text
   // family is servable, so widening what can be READ never widened what can RUN.
   // The preview overlay reads these through `fetch()`, which ignores the
-  // disposition, so a clicked .html still shows its source.
+  // disposition, so the source view of a clicked .html still works. Rendering it
+  // as a page is html-view-routes.ts's job (sandboxed, opaque origin), never this
+  // route's.
   const markupOnly = extension === 'svg' || extension === 'html' || extension === 'htm';
   if (download || markupOnly) {
     reply.header(

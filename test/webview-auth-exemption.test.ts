@@ -14,6 +14,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { registerAuthMiddleware, registerHostGuard, registerSecurityHeaders } from '../src/web/middleware/auth.js';
 import { webviewCapabilities } from '../src/webview-capabilities.js';
+import { htmlViewCapabilities } from '../src/html-view-capabilities.js';
 import type { HostPolicy } from '../src/web/network-auth-policy.js';
 
 const POLICY: HostPolicy = { allowedHosts: [], allowLan: true };
@@ -21,6 +22,7 @@ const PASSWORD = 'test-password';
 
 let app: FastifyInstance;
 let capability: string;
+let htmlCapability: string;
 let savedPassword: string | undefined;
 
 beforeEach(async () => {
@@ -29,6 +31,7 @@ beforeEach(async () => {
   process.env.CODEMAN_PASSWORD = PASSWORD;
 
   capability = webviewCapabilities.mint('webview-under-test', undefined);
+  htmlCapability = htmlViewCapabilities.mint('/srv/report-under-test', undefined);
 
   app = Fastify({ logger: false });
   await app.register(fastifyCookie);
@@ -48,6 +51,8 @@ beforeEach(async () => {
   app.all('/q/:token', async () => ({ qr: true }));
   app.get('/', async () => 'app shell');
   app.get('/webviewfoo/bar', async () => 'lookalike');
+  app.all('/html-view/:cap/*', async () => ({ page: true }));
+  app.all('/html-viewx/*', async () => 'lookalike');
   // Stand-in for @fastify/static mounted at '/', which is what actually serves
   // /static/app.js in production. It matches EVERY path, so the fence must treat a
   // root catch-all as "no real route" or the Referer form could never apply at all.
@@ -58,6 +63,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await app.close();
   webviewCapabilities.revokeWebview('webview-under-test');
+  htmlViewCapabilities.revokeOwner(undefined);
   if (savedPassword === undefined) delete process.env.CODEMAN_PASSWORD;
   else process.env.CODEMAN_PASSWORD = savedPassword;
 });
@@ -317,5 +323,44 @@ describe('a lost web-tab frame', () => {
           .statusCode
       ).toBe(401);
     });
+  });
+});
+
+// The rendered-HTML route (/html-view/<cap>/...) has its own, narrower exemption:
+// read-only, capability in the path only, no Referer form.
+describe('the html-view exemption', () => {
+  it('lets an unauthenticated GET and HEAD through with a live capability', async () => {
+    for (const method of ['GET', 'HEAD'] as const) {
+      const res = await app.inject({ method, url: `/html-view/${htmlCapability}/index.html` });
+      expect(res.statusCode, method).toBe(200);
+    }
+  });
+
+  it('never exempts a write on the capability path', async () => {
+    for (const method of ['POST', 'PUT'] as const) {
+      const res = await app.inject({ method, url: `/html-view/${htmlCapability}/index.html`, payload: {} });
+      expect(res.statusCode, method).toBe(401);
+    }
+  });
+
+  it('rejects an unknown capability', async () => {
+    const res = await app.inject({ method: 'GET', url: '/html-view/AAAAAAAAAAAAAAAAAAAAAAAA/index.html' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('rejects a revoked capability immediately', async () => {
+    htmlViewCapabilities.revokeOwner(undefined);
+    const res = await app.inject({ method: 'GET', url: `/html-view/${htmlCapability}/index.html` });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('does not match a lookalike prefix', async () => {
+    const res = await app.inject({ method: 'GET', url: `/html-viewx/${htmlCapability}/index.html` });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('is not a web-tab capability, and a web-tab capability is not an html-view one', async () => {
+    expect((await app.inject({ method: 'GET', url: `/webview/${htmlCapability}/x` })).statusCode).toBe(401);
+    expect((await app.inject({ method: 'GET', url: `/html-view/${capability}/x.html` })).statusCode).toBe(401);
   });
 });

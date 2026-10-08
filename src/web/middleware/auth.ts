@@ -23,6 +23,7 @@ import { getHookSecret, HOOK_SECRET_HEADER } from '../../config/hook-secret.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { findUser, setPassword, touchLastLogin, verifyPassword } from '../../user-store.js';
 import { webviewCapabilities } from '../../webview-capabilities.js';
+import { capabilityFromHtmlViewPath, htmlViewCapabilities } from '../../html-view-capabilities.js';
 import {
   capabilityFromProxyPath,
   capabilityFromReferer,
@@ -149,6 +150,18 @@ function isPasswordChangeExempt(req: FastifyRequest): boolean {
  * match the prefix at all. The Host allowlist is NOT bypassed, so DNS-rebinding
  * protection still applies to these requests.
  */
+/**
+ * Whether a request is a GET for a rendered HTML file (`/html-view/<cap>/...`) with
+ * a live capability. Same reasoning as the web-tab proxy: the page is sandboxed into
+ * an opaque origin, so its asset requests carry no session cookie. Read-only by
+ * construction (safe methods only), and the Host allowlist still applies.
+ */
+function hasValidHtmlViewCapability(req: FastifyRequest): boolean {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  const cap = capabilityFromHtmlViewPath((req.url ?? '').split('?')[0]);
+  return !!cap && htmlViewCapabilities.resolve(cap) !== undefined;
+}
+
 function hasValidWebviewCapability(req: FastifyRequest, basePath = ''): boolean {
   // req.url is already base-stripped by the server's rewriteUrl, so the path form
   // needs no base; the Referer form below is browser-supplied and does.
@@ -368,6 +381,11 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean, bas
       done();
       return;
     }
+    // Rendered HTML file, likewise authenticated by its capability.
+    if (hasValidHtmlViewCapability(req)) {
+      done();
+      return;
+    }
     // A web-tab frame that lost its prefix: hand it back to its tab, no credentials involved.
     if (serveLostWebviewFrame(req, reply)) return;
 
@@ -507,6 +525,8 @@ function registerMultiUserAuthHook(
     // ownership against the identity BOUND TO THE CAPABILITY, which is stricter
     // than re-deriving it from a request that carries no credentials.
     if (hasValidWebviewCapability(req, basePath)) return;
+    // Rendered HTML file, likewise authenticated by its capability.
+    if (hasValidHtmlViewCapability(req)) return;
     // A web-tab frame that lost its prefix: hand it back to its tab, no credentials involved.
     if (serveLostWebviewFrame(req, reply)) return;
 

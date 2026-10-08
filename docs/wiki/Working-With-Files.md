@@ -100,8 +100,16 @@ Outside the workspace the allowlist is images, video, audio, PDF, Office documen
 files, where "text" is the same list the viewer will let you edit: code, config, logs, csv,
 markdown. The reasoning is that a session can already `cat` any of those, so the file suffix
 was never what kept anything secret; the path guard is. Types outside the list (`.svg`,
-`.bmp`) say so rather than failing silently, and `.html` previews as source rather than being
-rendered, so nothing served this way can execute in the page.
+`.bmp`) say so rather than failing silently.
+
+An `.html` file opens as a rendered page by default, with its relative CSS, scripts, images and
+data files. The page is served from a separate `/html-view/...` address in a sandbox with no
+origin of its own, so its scripts can never read Codeman's page, cookies or API. The **Page**
+pill in the viewer header switches to the source view (where **Edit** works as for any text
+file), and the viewer falls back to source on its own when a page cannot be rendered: a remote
+(SSH) case, an HTML file inside a hidden folder, or one sitting directly in a broad folder such
+as your home folder or `/tmp` (the page may read the files in its own folder tree, so move it
+into a folder of its own). The raw file routes still serve HTML as a download only.
 
 Text previews are capped at the first 500 lines, fetched as a partial read, so clicking a
 one-gigabyte log does not try to paint one.
