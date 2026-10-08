@@ -21,6 +21,8 @@ button in the header, beside Split, and enables `Ctrl+Shift+G`.
   sessions in tab order; if there is none, an open split's two first; otherwise your open
   sessions in tab order, with the session you are on focused. With the grid open, the same
   button closes it.
+- **Rest the pointer on the Tiles button** (or tab to it) for a short card that shows the
+  count it opens and what a click and a right-click do.
 - **Right-click the Tiles button** (or press `Shift+F10` on it) to choose how many tiles:
   **2**, **4** or **6**, each drawn as its layout. Your choice is remembered on this device
   and is what the next click opens. With the grid open, picking a count re-forms it: the

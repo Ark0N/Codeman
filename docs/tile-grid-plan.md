@@ -51,6 +51,16 @@ or settled a question the spec left open. The invariants as built are in
   seeded first. A page-load restore brings back exactly the stored grid, whatever the
   count. Ctrl/Cmd+click on a tab with the grid closed opens the count in total, that
   session among them and focused (owner answer: N, not N+1).
+- **A hover card on the Tiles button says it** (owner feedback: "give me the hover info
+  to right click over the tile button to adjust it"). It replaces the button's native title:
+  "Tiles · N" (the remembered count, live), what a click does (open or close the grid),
+  "Right-click: choose 2, 4 or 6 tiles", what opens when the count does not fit the window,
+  and Shift+F10 when the keyboard brought it. It shows 300 ms after a hovering pointer rests
+  on the button or after a `:focus-visible` focus, never for touch or a device without
+  hover, never with the count menu open; it hides on leave, blur, Escape, scroll, resize and
+  any press, click or right-click on the button (capture phase, so the menu never opens
+  beside it). The card always exists, hidden and current, as the button's
+  `aria-describedby`.
 - **Right-click on Tiles is a 2 / 4 / 6 count menu** (owner decision 10; the session
   picker is gone). Three counts with their shapes (the grid's own 2x1, 2x2, 3x2 drawn as
   cells), the remembered one checked. A count the window cannot fit is greyed out with the
