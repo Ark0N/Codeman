@@ -4570,11 +4570,15 @@ class CodemanApp {
       }
       this.notificationManager.groupingMap.clear();
     }
-    // Disconnect terminal resize observer (prevents memory leak on reconnect)
-    if (this.terminalResizeObserver) {
-      this.terminalResizeObserver.disconnect();
-      this.terminalResizeObserver = null;
-    }
+    // ⚠️ The terminal resize observer is NOT reset here. initTerminal() owns its
+    // lifecycle (it runs once per page and disconnects any previous observer
+    // before creating one), and this reset runs on EVERY SSE init, page load
+    // included. It used to disconnect the observer "to prevent a leak", which
+    // left the terminal with no observer from the first init on: only a WINDOW
+    // resize ever refit it, so anything that resized just the terminal box
+    // (state rows and lineage room appearing in the header, the tab strip
+    // wrapping) clipped xterm's bottom rows behind the toolbar until a tab
+    // switch or a window resize.
     // Clear any other orphaned timers
     if (this.planLoadingTimer) {
       clearInterval(this.planLoadingTimer);
