@@ -1404,6 +1404,25 @@ export const SettingsUpdateSchema = z
      */
     tabRailSort: z.enum(['activity', 'manual']).optional(),
     /**
+     * Tab layout, the arrangement of the tab list (Discussion #426). Display key
+     * (per-device).
+     * 'state'   = a row per state in the header strip (needs you, waiting,
+     *             working, idle; option C), sections in the flat side rail and
+     *             the sidebar. The default.
+     * 'case'    = one cluster per case (option A): a labelled box in the strip,
+     *             a section in the side rail and the sidebar.
+     * 'ledger'  = the flat list on an aligned column grid with a status bar
+     *             per cell (option B). Header strip on desktop only.
+     * 'classic' = one flat list in tab order, as before.
+     */
+    tabArrangement: z.enum(['state', 'case', 'ledger', 'classic']).optional(),
+    /**
+     * Which end the state groups start from when `tabArrangement` is 'state'.
+     * Display key (per-device). 'urgent-first' = needs you on top (the
+     * default); 'urgent-last' = the other way up, needs you in the bottom row.
+     */
+    tabStateOrder: z.enum(['urgent-first', 'urgent-last']).optional(),
+    /**
      * Session list layout. Display key (per-device).
      * 'header'       = horizontal tab strip
      * 'sidebar'      = collapsible left sidebar, one compact row per session
@@ -1434,6 +1453,14 @@ export const SettingsUpdateSchema = z
     // UI visibility
     showFontControls: z.boolean().optional(),
     showSystemStats: z.boolean().optional(),
+    /**
+     * How the header draws its WS / CPU / MEM / plan-usage cluster. Display key
+     * (per-device), desktop only (the cluster is hidden below 768px).
+     * 'classic' = the bars and the 5H · 7D chip, as before
+     * 'compact' = two pills (WS/CPU/MEM, the plan windows), a ring beside every value
+     * 'tiles'   = label over value with a bar underneath, no icons. The default.
+     */
+    headerStatsStyle: z.enum(['classic', 'compact', 'tiles']).optional(),
     showTokenCount: z.boolean().optional(),
     showCost: z.boolean().optional(),
     showLifecycleLog: z.boolean().optional(),

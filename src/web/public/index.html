@@ -65,7 +65,7 @@
        app.js, NOT the handheld storage-key test `m`. Use a different predicate
        here and boot will contradict this value, animating the drawer open by
        itself on every load between 768 and 1023px. -->
-  <script>try{var m=window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024);var k=m?'codeman-app-settings-mobile':'codeman-app-settings';var A=JSON.parse(localStorage.getItem(k)||'{}');var L=A.sessionListLayout;var F=Number(A.sessionSidebarFontSize);var solo=/^\/session\//.test(location.pathname);var C=localStorage.getItem('codeman-sidebar-collapsed');var S=(L==='sidebar'||L==='sidebar-rich')&&!solo;document.documentElement.dataset.sessionList=S?'sidebar':'header';document.documentElement.dataset.sidebarDetail=(S&&L==='sidebar-rich')?'rich':'simple';document.documentElement.dataset.sidebar=(C===null?window.innerWidth<1024:C==='1')?'collapsed':'expanded';var V=A.tabOrientation==='vertical'&&!S&&!solo&&window.innerWidth>=768;document.documentElement.dataset.tabOrientation=V?'vertical':'horizontal';document.documentElement.dataset.tabRailDetail=(A.tabRailDetail==='simple')?'simple':'rich';document.documentElement.dataset.tabRailSort=(A.tabRailSort==='manual')?'manual':'activity';var W=Number(A.tabRailWidth);if(V){if(Number.isInteger(W)&&W>=208&&W<=360)document.documentElement.style.setProperty('--tab-rail-width',W+'px');else if(document.documentElement.dataset.tabRailDetail!=='simple')document.documentElement.style.setProperty('--tab-rail-width','320px');}if(Number.isInteger(F)&&F>=11&&F<=18)document.documentElement.style.setProperty('--session-sidebar-name-font-size',F+'px');}catch(e){document.documentElement.dataset.sessionList='header';document.documentElement.dataset.sidebarDetail='simple';document.documentElement.dataset.sidebar='expanded';document.documentElement.dataset.tabOrientation='horizontal';document.documentElement.dataset.tabRailDetail='rich';document.documentElement.dataset.tabRailSort='activity';}</script>
+  <script>try{var m=window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024);var k=m?'codeman-app-settings-mobile':'codeman-app-settings';var A=JSON.parse(localStorage.getItem(k)||'{}');var L=A.sessionListLayout;var F=Number(A.sessionSidebarFontSize);var solo=/^\/session\//.test(location.pathname);var C=localStorage.getItem('codeman-sidebar-collapsed');var S=(L==='sidebar'||L==='sidebar-rich')&&!solo;document.documentElement.dataset.sessionList=S?'sidebar':'header';document.documentElement.dataset.sidebarDetail=(S&&L==='sidebar-rich')?'rich':'simple';document.documentElement.dataset.sidebar=(C===null?window.innerWidth<1024:C==='1')?'collapsed':'expanded';var V=A.tabOrientation==='vertical'&&!S&&!solo&&window.innerWidth>=768;document.documentElement.dataset.tabOrientation=V?'vertical':'horizontal';document.documentElement.dataset.tabRailDetail=(A.tabRailDetail==='simple')?'simple':'rich';document.documentElement.dataset.tabRailSort=(A.tabRailSort==='manual')?'manual':'activity';var T=A.tabArrangement;document.documentElement.dataset.tabArrangement=(T==='case'||T==='ledger'||T==='classic')?T:'state';document.documentElement.dataset.tabStateOrder=(A.tabStateOrder==='urgent-last')?'urgent-last':'urgent-first';var H=A.headerStatsStyle;document.documentElement.dataset.headerStats=(window.innerWidth<768||solo)?'classic':(H==='classic'||H==='compact')?H:'tiles';var W=Number(A.tabRailWidth);if(V){if(Number.isInteger(W)&&W>=208&&W<=360)document.documentElement.style.setProperty('--tab-rail-width',W+'px');else if(document.documentElement.dataset.tabRailDetail!=='simple')document.documentElement.style.setProperty('--tab-rail-width','320px');}if(Number.isInteger(F)&&F>=11&&F<=18)document.documentElement.style.setProperty('--session-sidebar-name-font-size',F+'px');}catch(e){document.documentElement.dataset.sessionList='header';document.documentElement.dataset.sidebarDetail='simple';document.documentElement.dataset.sidebar='expanded';document.documentElement.dataset.tabOrientation='horizontal';document.documentElement.dataset.tabRailDetail='rich';document.documentElement.dataset.tabRailSort='activity';document.documentElement.dataset.tabArrangement='state';document.documentElement.dataset.tabStateOrder='urgent-first';document.documentElement.dataset.headerStats='classic';}</script>
   <!-- Inline critical CSS for instant skeleton paint (before styles.css loads) -->
   <style>
     .loading-skeleton{display:flex;flex-direction:column;height:100vh;height:100dvh;background:var(--bg-dark,#11151c)}
@@ -154,6 +154,7 @@
         <div class="connection-indicator" id="connectionIndicator" style="display: none;">
           <span class="connection-dot" id="connectionDot"></span>
           <span class="connection-text" id="connectionText"></span>
+          <span class="connection-tile"><span class="connection-tile-label" id="connectionTileLabel"></span><span class="connection-tile-value" id="connectionTileValue"></span></span>
         </div>
         <div class="header-font-controls">
           <button class="btn-icon-header btn-sm" onclick="app.decreaseFontSize()" title="Decrease font (Ctrl+-)" aria-label="Decrease font size">A-</button>
@@ -162,6 +163,7 @@
         </div>
         <div class="header-system-stats" id="headerSystemStats" title="System resource usage">
           <div class="stat-item">
+            <span class="stat-ring" id="statCpuRing" aria-hidden="true"></span>
             <span class="stat-label">CPU</span>
             <div class="stat-bar">
               <div class="stat-bar-fill stat-bar-cpu" id="statCpuBar"></div>
@@ -169,6 +171,7 @@
             <span class="stat-value" id="statCpu">--%</span>
           </div>
           <div class="stat-item">
+            <span class="stat-ring" id="statMemRing" aria-hidden="true"></span>
             <span class="stat-label">MEM</span>
             <div class="stat-bar">
               <div class="stat-bar-fill stat-bar-mem" id="statMemBar"></div>
@@ -1937,6 +1940,17 @@
                     <label class="set-chip" data-preview="header" data-preview-order="13" data-preview-text="42%"><input type="checkbox" id="appSettingsShowPlanUsageLimits"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4.5-5"/></svg><span>Plan Usage</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="14"><input type="checkbox" id="appSettingsShowLifecycleLog"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span>Lifecycle Log</span></label>
                   </div>
+                  <div class="set-row has-field" data-search="header stats style system cpu mem ws plan usage tiles compact rings">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Header Stats Style <span class="set-tag">desktop</span></span>
+                      <span class="set-row-desc">How WS, CPU, MEM and the plan-usage windows are drawn. Compact puts a ring beside each value in two pills; Tiles put each label over its value with a bar underneath.</span>
+                    </div>
+                    <select id="appSettingsHeaderStatsStyle" class="set-select">
+                      <option value="classic">As before (bars)</option>
+                      <option value="compact">Compact (pill + rings)</option>
+                      <option value="tiles">Tiles (default)</option>
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -2089,6 +2103,28 @@
               <div class="set-group">
                 <div class="set-group-head"><h4>Tabs</h4><span class="set-scope">device</span></div>
                 <div class="set-group-body">
+                  <div class="set-row has-field" data-search="tab layout grouping group by state triage needs you waiting working idle case clusters ledger columns classic old new">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Tab Layout</span>
+                      <span class="set-row-desc">By state: a row each for needs you, waiting, working and idle. By case: one box per case. Ledger: an aligned column grid. Classic: the single list, as before. By state and By case group the side rail and sidebar too. Alt+1..9 keeps the tab order.</span>
+                    </div>
+                    <select id="appSettingsTabArrangement" class="set-select">
+                      <option value="state">By state (default)</option>
+                      <option value="case">By case (clusters)</option>
+                      <option value="ledger">Ledger (aligned columns)</option>
+                      <option value="classic">Classic (as before)</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field" data-search="state order reverse needs you bottom top rows sections">
+                    <div class="set-row-text">
+                      <span class="set-row-label">State Order</span>
+                      <span class="set-row-desc">For Tab Layout by state. At the bottom flips the rows, so needs you sits right above the terminal.</span>
+                    </div>
+                    <select id="appSettingsTabStateOrder" class="set-select">
+                      <option value="urgent-first">Needs you on top (default)</option>
+                      <option value="urgent-last">Needs you at the bottom</option>
+                    </select>
+                  </div>
                   <div class="set-row has-field" data-search="tab orientation horizontal vertical side rail">
                     <div class="set-row-text">
                       <span class="set-row-label">Tab Orientation</span>
@@ -2112,7 +2148,7 @@
                   <div class="set-row has-field" data-search="tab rail sort order activity manual drag reorder">
                     <div class="set-row-text">
                       <span class="set-row-label">Vertical Rail Order</span>
-                      <span class="set-row-desc">By activity uses the home screen's order: blocked on you first, then whatever has been running longest, then the most recently quiet. Manual keeps your tab order and is the only mode you can drag rows in. Alt+1..9 always follows the tab order either way.</span>
+                      <span class="set-row-desc">By activity uses the home screen's order: blocked on you first, then whatever has been running longest, then the most recently quiet. Manual keeps your tab order and is the only mode you can drag rows in. With Tab Layout by state or by case it orders the rows inside each section. Alt+1..9 always follows the tab order either way.</span>
                     </div>
                     <select id="appSettingsTabRailSort" class="set-select">
                       <option value="activity">By activity (home screen order)</option>

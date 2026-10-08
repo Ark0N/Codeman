@@ -3405,14 +3405,20 @@ class CodemanApp {
     // broken feature rather than as an idle window (reported 2026-09-01). A
     // missing CODEX bucket means the opposite — that plan has no such limit —
     // so those stay omitted rather than showing a dash forever.
+    // Every window also carries a ring (the Compact header style) and a meter
+    // (Tiles). styles.css hides both in the classic style, so the chip there
+    // reads exactly as before. `fill` is clamped for the two graphics only; the
+    // label keeps the real number.
     const seg = (label, p, idle) => {
       if (p === null) {
         if (!idle) return '';
-        return `<span class="pu-win pu-win-idle"><span class="pu-label">${label}</span><span class="pu-val">—</span></span>`;
+        return `<span class="pu-win pu-win-idle"><span class="pu-ring" style="--pu:0"></span><span class="pu-label">${label}</span><span class="pu-val">—</span><span class="pu-meter"><i style="width:0%"></i></span></span>`;
       }
       const n = Math.round(Number(p));
       if (!Number.isFinite(n)) return '';
-      return `<span class="pu-win"><span class="pu-label">${label}</span><span class="pu-val ${colorClass(n)}">${n}%</span></span>`;
+      const fill = Math.min(100, Math.max(0, n));
+      const cls = colorClass(n);
+      return `<span class="pu-win"><span class="pu-ring ${cls}" style="--pu:${fill}"></span><span class="pu-label">${label}</span><span class="pu-val ${cls}">${n}%</span><span class="pu-meter ${cls}"><i style="width:${fill}%"></i></span></span>`;
     };
     // The provider label only earns its space when there is more than one
     // provider to tell apart: a machine with Claude alone shows bare windows.
@@ -4248,6 +4254,36 @@ class CodemanApp {
     };
   }
 
+  /**
+   * The two words the Tiles header style shows for the connection indicator
+   * (label over value), derived from the descriptor rather than added to it,
+   * so the descriptor and its pinned strings stay exactly what they were. The
+   * classic text line (queued bytes and all) stays in the DOM and the full
+   * detail stays in the tooltip.
+   * @param {{dotClass: string, text: string}} desc
+   * @returns {{label: string, value: string, state: string}}
+   */
+  _connectionTileWords(desc) {
+    const state = (desc.dotClass || '').replace('connection-dot', '').trim();
+    const text = desc.text || '';
+    switch (state) {
+      case 'connected':
+        return { label: 'WS', value: 'live', state };
+      case 'fallback':
+        return { label: 'HTTP', value: 'fallback', state };
+      case 'offline':
+        return { label: 'NET', value: 'offline', state };
+      case 'draining':
+        return { label: 'SEND', value: 'queued', state };
+      case 'reconnecting':
+        // The same dot covers the terminal WebSocket and, with no session
+        // open, the SSE event stream; the classic text already tells them apart.
+        return { label: text.startsWith('WS') ? 'WS' : 'SSE', value: 'retry', state };
+      default:
+        return { label: '', value: '', state };
+    }
+  }
+
   _updateConnectionIndicator() {
     const indicator = this.$('connectionIndicator');
     const dot = this.$('connectionDot');
@@ -4275,6 +4311,14 @@ class CodemanApp {
       dot.className = next.dotClass;
       text.textContent = next.text;
       indicator.title = next.title;
+      const tileLabel = this.$('connectionTileLabel');
+      const tileValue = this.$('connectionTileValue');
+      if (tileLabel && tileValue) {
+        const words = this._connectionTileWords(next);
+        tileLabel.textContent = words.label;
+        tileValue.textContent = words.value;
+        tileValue.className = `connection-tile-value ${words.state}`.trim();
+      }
     }
   }
 
@@ -5004,6 +5048,333 @@ class CodemanApp {
   }
 
   /**
+   * True when the tab list groups by state (`tabArrangement: 'state'`, the default;
+   * Discussion #426 option C): a row per state in the header strip, a section
+   * per state in the flat side rail and the sidebar, most urgent on top.
+   *
+   * Read off <html> like the rail gates (applyTabOrientation() owns the
+   * attribute). Named groups in the vertical rail still win, because they are
+   * the user's own structure: `_tabTriageLayout()` returns null while the
+   * grouped projection is on, and the grouped tree renders as it always did.
+   */
+  isTabTriage() {
+    return document.documentElement.dataset.tabArrangement === 'state';
+  }
+
+  /**
+   * Order values and visible groups for one render pass, or null when the list
+   * is not grouped by state. The pure core is `CodemanTabTriage.layout()`
+   * (constants.js); this only feeds it the same classification both home
+   * screens and the sorted rail use.
+   *
+   * Inside a group a row keeps its tab order on the header strip, so the strip
+   * only moves a tab when its state changes. A sorted rail ranks rows inside
+   * each section the way it ranks the whole flat rail (`railSortOrder`).
+   *
+   * @param {Array<string>} ids live session ids, in tab order
+   * @param {object|null} groupProjection the grouped rail's projection, if any
+   * @param {Map<string, number>|null} railSortOrder `_tabRailSortOrder(ids)`
+   */
+  _tabTriageLayout(ids, groupProjection, railSortOrder) {
+    if (groupProjection || !this.isTabTriage()) return null;
+    if (!window.CodemanTabTriage || typeof this._mobileOverviewState !== 'function') return null;
+    const rows = [];
+    for (let i = 0; i < ids.length; i++) {
+      const session = this.sessions.get(ids[i]);
+      if (!session) continue;
+      const state = this._mobileOverviewState(session, this.pendingHooks?.get(ids[i]));
+      rows.push({
+        id: ids[i],
+        state,
+        exited: !!this._mobileOverviewExit?.(state, session),
+        pos: railSortOrder?.has(ids[i]) ? railSortOrder.get(ids[i]) : i,
+      });
+    }
+    const webviewIds = (this.webviewOrder || []).filter((wid) => this.webviews?.has(wid));
+    const reverse = document.documentElement.dataset.tabStateOrder === 'urgent-last';
+    return window.CodemanTabTriage.layout(rows, webviewIds, { reverse });
+  }
+
+  /**
+   * Keep the state headings, the row breaks and the web tabs' `order` in step
+   * with one pass's triage layout. Runs after BOTH render paths, because a
+   * session changing state is an incremental pass (no tab is added or removed)
+   * and can still empty a group or fill a new one.
+   *
+   * Headings and breaks are keyed by group and reconciled in place, never
+   * rebuilt, so an SSE tick that changes nothing writes nothing. They are
+   * direct children of #sessionTabs placed purely by `order`, so where they sit
+   * in the DOM does not matter, and `aria-hidden` keeps them out of the tablist,
+   * whose children must all be tabs. (A tab's state is not announced either way:
+   * its status dot is aria-hidden, as before.) With `triage` null this removes
+   * them all and clears the web tabs' inline order, which is what leaves the
+   * ungrouped strip exactly as it was.
+   */
+  _syncTabTriageChrome(container, triage) {
+    if (!container) return;
+    this._lastTabTriage = triage;
+    container.classList.toggle('tabs-triage', !!triage);
+    const wanted = new Map((triage?.groups || []).map((group) => [group.key, group]));
+    for (const el of [...container.querySelectorAll(':scope > .tab-triage-head, :scope > .tab-triage-break')]) {
+      if (!wanted.has(el.dataset.triageGroup)) el.remove();
+    }
+    const ensure = (className, key) => {
+      let el = container.querySelector(`:scope > .${className}[data-triage-group="${key}"]`);
+      if (!el) {
+        el = document.createElement('div');
+        el.className = className === 'tab-triage-head' ? `tab-triage-head tab-triage-head--${key}` : className;
+        el.dataset.triageGroup = key;
+        el.setAttribute('aria-hidden', 'true');
+        container.appendChild(el);
+      }
+      return el;
+    };
+    for (const group of wanted.values()) {
+      const head = ensure('tab-triage-head', group.key);
+      // A quiet group (idle) keeps its heading as the row's anchor but draws
+      // no label or count.
+      head.classList.toggle('tab-triage-head--quiet', !!group.quiet);
+      if (!group.quiet && !head.firstElementChild) {
+        const label = document.createElement('span');
+        label.className = 'tab-triage-label';
+        label.textContent = group.label;
+        const count = document.createElement('span');
+        count.className = 'tab-triage-count';
+        head.append(label, count);
+      }
+      const count = String(group.count);
+      if (!group.quiet && head.lastElementChild.textContent !== count) head.lastElementChild.textContent = count;
+      // The first row's heading is the one that starts beside the brand in the
+      // header strip (styles.css); every later row starts under it.
+      head.classList.toggle('tab-triage-head--lead', group === triage.groups[0]);
+      const headOrder = String(group.headOrder);
+      if (head.style.order !== headOrder) head.style.order = headOrder;
+      const brk = ensure('tab-triage-break', group.key);
+      const breakOrder = String(group.breakOrder);
+      if (brk.style.order !== breakOrder) brk.style.order = breakOrder;
+    }
+    for (const web of container.querySelectorAll(':scope > .session-tab[data-webview-id]')) {
+      const wid = web.dataset.webviewId;
+      const value = triage?.webOrder.has(wid) ? String(triage.webOrder.get(wid)) : '';
+      if (web.style.order !== value) web.style.order = value;
+    }
+    this._sizeTabTriageGutter(container, triage);
+  }
+
+  /**
+   * Size the header strip's two measured lengths (styles.css, "Header strip,
+   * wrapping"): `--tab-triage-gutter`, the label column, as wide as the widest
+   * label on screen so a row never carries a fixed gutter's worth of empty
+   * space; and `--tab-triage-brand`, the brand's width, because the brand sits
+   * over the strip's top-left corner and only the FIRST row starts beside it,
+   * every later row starting under it.
+   *
+   * The labels are measured only when their text changes (a group appears,
+   * goes, or its count gains a digit) and once more when the web fonts finish
+   * loading. The brand is watched by a ResizeObserver (a display-name change,
+   * the sidebar toggle appearing), so a render pass never forces a layout read
+   * for it. The vertical lists use neither length and are never measured.
+   */
+  _sizeTabTriageGutter(container, triage) {
+    const inHeader = !!container.parentElement?.classList.contains('session-tabs-host');
+    if (!triage || !inHeader) {
+      if (container.style.getPropertyValue('--tab-triage-gutter')) container.style.removeProperty('--tab-triage-gutter');
+      if (container.style.getPropertyValue('--tab-triage-brand')) container.style.removeProperty('--tab-triage-brand');
+      this._tabTriageGutterKey = null;
+      return;
+    }
+    this._watchTabTriageBrand(container);
+    if (Number.isFinite(this._tabTriageBrandWidth)) {
+      const brand = `${this._tabTriageBrandWidth}px`;
+      if (container.style.getPropertyValue('--tab-triage-brand') !== brand) {
+        container.style.setProperty('--tab-triage-brand', brand);
+      }
+    }
+    const key = triage.groups.map((g) => `${g.key}:${g.count}`).join('|');
+    if (key === this._tabTriageGutterKey) return;
+    let widest = 0;
+    for (const head of container.querySelectorAll(':scope > .tab-triage-head')) {
+      let width = 0;
+      for (const part of head.children) width += part.getBoundingClientRect().width;
+      widest = Math.max(widest, width + 5 * Math.max(0, head.children.length - 1));
+    }
+    // Hidden (display: none on phones, or a detached strip): nothing to size.
+    if (!widest) return;
+    this._tabTriageGutterKey = key;
+    container.style.setProperty('--tab-triage-gutter', `${Math.ceil(widest + 10)}px`);
+    if (!this._tabTriageFontsHooked && document.fonts?.ready) {
+      this._tabTriageFontsHooked = true;
+      document.fonts.ready.then(() => {
+        this._tabTriageGutterKey = null;
+        this._sizeTabTriageGutter(this.$('sessionTabs'), this._lastTabTriage);
+      });
+    }
+  }
+
+  /**
+   * Keep `_tabTriageBrandWidth` (the header brand plus the gap after it) in
+   * step with the brand, once per page. The first observation arrives right
+   * after `observe()`, so the width is known from the first frame on.
+   */
+  _watchTabTriageBrand(container) {
+    if (this._tabTriageBrandObserver !== undefined) return;
+    const brand = container.closest('.header')?.querySelector(':scope > .header-brand');
+    if (!brand || typeof ResizeObserver !== 'function') {
+      this._tabTriageBrandObserver = null;
+      return;
+    }
+    const gap = 8;
+    this._tabTriageBrandWidth = Math.ceil(brand.getBoundingClientRect().width + gap);
+    this._tabTriageBrandObserver = new ResizeObserver((entries) => {
+      const box = entries[0]?.borderBoxSize?.[0];
+      const width = Math.ceil((box ? box.inlineSize : brand.getBoundingClientRect().width) + gap);
+      if (width === this._tabTriageBrandWidth) return;
+      this._tabTriageBrandWidth = width;
+      this._sizeTabTriageGutter(this.$('sessionTabs'), this._lastTabTriage);
+    });
+    this._tabTriageBrandObserver.observe(brand);
+  }
+
+  /**
+   * A drag in a grouped strip (by state or by case) may only reorder WITHIN a
+   * group. Inside a group the rows sit in tab order, so a drop there moves the
+   * tab exactly where it was dropped; across groups the dragged tab would stay
+   * in its own group (its state or case did not change) and land somewhere the
+   * user did not put it. State groups are bands of `order` values, so comparing
+   * bands is enough; case clusters are boxes, so the box decides.
+   */
+  _isTabDropAcrossGroups(targetTab) {
+    const container = this.$('sessionTabs');
+    if (!container || !this.draggedTabId || !targetTab) return false;
+    const triage = container.classList.contains('tabs-triage');
+    const clusters = container.classList.contains('tabs-clusters');
+    if (!triage && !clusters) return false;
+    const dragged = container.querySelector(`.session-tab[data-id="${this.draggedTabId}"]`);
+    if (!dragged) return false;
+    // Clusters are real boxes: a drop belongs to the box it lands in.
+    if (clusters) return dragged.closest('.tab-cluster') !== targetTab.closest('.tab-cluster');
+    const stride = window.CodemanTabTriage?.STRIDE || 10000;
+    const band = (el) => Math.floor((Number(el.style.order) || 0) / stride);
+    return band(dragged) !== band(targetTab);
+  }
+
+  /** True when the tab list is clustered by case (`tabArrangement: 'case'`, Discussion #426 option A). */
+  isTabClusters() {
+    return document.documentElement.dataset.tabArrangement === 'case';
+  }
+
+  /**
+   * True when the header strip is drawn as a ledger (`tabArrangement: 'ledger'`,
+   * Discussion #426 option B): the flat list on an aligned column grid with a
+   * status bar per cell. Pure CSS on `.tabs-ledger`, scoped to the desktop
+   * header strip; the rail and the sidebar keep their flat list.
+   */
+  isTabLedger() {
+    return document.documentElement.dataset.tabArrangement === 'ledger';
+  }
+
+  /**
+   * Which case a session belongs to, for clustering: the case whose path is the
+   * longest prefix of its working directory (`_mobileOverviewCaseFor()`, the
+   * home screens' own match), else the directory itself, else the session alone.
+   */
+  _tabClusterIdentity(session, id) {
+    const dir = (session.workingDir || '').replace(/\/+$/, '');
+    const match =
+      dir && typeof this._mobileOverviewCaseFor === 'function' ? this._mobileOverviewCaseFor(dir, this.cases) : null;
+    if (match) return { key: match.path, label: match.name || '' };
+    if (dir) return { key: dir, label: dir.split('/').pop() || dir };
+    return { key: `session:${id}`, label: '' };
+  }
+
+  /**
+   * The cluster layout for one render pass, or null when the list is not
+   * clustered. Named groups in the vertical rail win, exactly as for the state
+   * grouping. `key` is the whole structure as a string: the incremental render
+   * path compares it with the last full render's and rebuilds when it differs,
+   * because a cluster is a real box and a patch in place cannot move a tab into
+   * another one. Membership only changes when sessions come and go (already a
+   * full rebuild) or when the case list arrives, so this rarely fires.
+   *
+   * @param {Array<string>} ids live session ids, in tab order
+   * @param {object|null} groupProjection the grouped rail's projection, if any
+   */
+  _tabClusterLayout(ids, groupProjection) {
+    if (groupProjection || !this.isTabClusters() || !window.CodemanTabClusters) return null;
+    const rows = [];
+    for (const id of ids) {
+      const session = this.sessions.get(id);
+      if (session) rows.push({ id, ...this._tabClusterIdentity(session, id) });
+    }
+    const clusters = window.CodemanTabClusters.compute(rows);
+    // Only a cluster with company drops the case from its tab names.
+    const labelFor = new Map();
+    for (const cluster of clusters) {
+      if (cluster.ids.length > 1) for (const id of cluster.ids) labelFor.set(id, cluster.label);
+    }
+    const webviewIds = (this.webviewOrder || []).filter((wid) => this.webviews?.has(wid));
+    const key = JSON.stringify([clusters.map((c) => [c.key, c.label, c.ids]), webviewIds]);
+    return { clusters, labelFor, webviewIds, key };
+  }
+
+  /**
+   * The cluster boxes for the full render: one box per case, labelled with its
+   * colour swatch, name and count, and a box per open web tab, which has no
+   * case. The header strip shows only the swatch for a case with one tab
+   * (styles.css); the rail and the sidebar label every case. Rows are the
+   * caller's own markup, so a tab is byte-identical to the flat strip's apart
+   * from its name split.
+   */
+  _renderTabClusters(layout, rowHtml, webviewSlotStart) {
+    const parts = [];
+    for (const cluster of layout.clusters) {
+      const rows = cluster.ids.map((id) => rowHtml.get(id) || '').join('');
+      const single = cluster.ids.length < 2;
+      const head =
+        '<span class="tab-cluster-label" aria-hidden="true"><span class="tab-cluster-swatch"></span>' +
+        `<span class="tab-cluster-name" data-i18n-skip>${escapeHtml(cluster.label)}</span>` +
+        `<span class="tab-cluster-count">${cluster.ids.length}</span></span>`;
+      parts.push(
+        `<div class="tab-cluster${single ? ' tab-cluster--single' : ''}" role="presentation" data-cluster-key="${escapeHtml(cluster.key)}" style="--cluster-color: var(--session-${cluster.color})">${head}${rows}</div>`
+      );
+    }
+    layout.webviewIds.forEach((wid, i) => {
+      const tab = this.renderWebviewTab?.(wid, webviewSlotStart + i) || '';
+      if (tab) parts.push(`<div class="tab-cluster tab-cluster--single tab-cluster--web" role="presentation">${tab}</div>`);
+    });
+    return parts.join('');
+  }
+
+  /**
+   * The tab label, as markup. #232: a described name (`w3-x: fix login`) shows
+   * just the description, the generated id kept in a hidden prefix span. Inside
+   * a case cluster a generated `w75-api-gateway` shows `w75`, the `-api-gateway`
+   * kept in a `.tab-name-case` span that only `.tabs-clusters` hides, so the full
+   * name stays in the DOM (copy, find-in-page, the rename editor).
+   */
+  _tabNameHtml(name, clusterLabel) {
+    const parsed = parseSessionPrefix(name);
+    if (parsed && parsed.suffix) {
+      return `<span class="tab-name-prefix">${escapeHtml(parsed.prefix)}: </span>${escapeHtml(parsed.suffix)}`;
+    }
+    const split = clusterLabel ? window.CodemanTabClusters?.nameSplit(name, clusterLabel) : null;
+    if (split) return `${escapeHtml(split.shown)}<span class="tab-name-case">${escapeHtml(split.hidden)}</span>`;
+    return escapeHtml(name);
+  }
+
+  /**
+   * The arrangement classes on #sessionTabs that are not owned by a sync of
+   * their own (`tabs-triage` is `_syncTabTriageChrome()`'s): `tabs-clusters`
+   * while case clusters are drawn, `tabs-ledger` while the ledger is on. The
+   * ledger never applies inside the grouped rail.
+   */
+  _syncTabArrangementClasses(container, { clusters, groupProjection }) {
+    if (!container) return;
+    container.classList.toggle('tabs-clusters', !!clusters);
+    container.classList.toggle('tabs-ledger', this.isTabLedger() && !groupProjection);
+  }
+
+  /**
    * True where the sidebar is a MODAL off-canvas drawer over the terminal
    * instead of a docked column.
    *
@@ -5255,6 +5626,9 @@ class CodemanApp {
     const reachable =
       this.isSessionSidebarActive() && document.documentElement.dataset.sidebar !== 'collapsed';
     const needle = reachable ? this._sidebarFilter : '';
+    // State headings count the whole group, so they step aside while a filter
+    // is narrowing the rows under them (styles.css, .tabs-filtering).
+    container.classList.toggle('tabs-filtering', !!needle);
     for (const tab of container.querySelectorAll('.session-tab')) {
       if (!needle) {
         tab.classList.remove('tab-filtered-out');
@@ -5666,10 +6040,16 @@ class CodemanApp {
     // The grouped rail's structure (sections, collapse, the shown exception) can
     // change while the id sets stay equal; the in-place patch below cannot move
     // or hide a row, so any structural change takes the full rebuild.
+    // Case clusters are boxes too: the same rule, keyed on their structure.
+    const clusterLayout = this._tabClusterLayout(
+      this.sessionOrder.filter((sid) => this.sessions.has(sid)),
+      groupProjection
+    );
     const canIncremental = existingIds.size === currentIds.size &&
       [...existingIds].every(id => currentIds.has(id)) &&
       webTabsUnchanged &&
-      !this._isTabGroupStructureStale(groupProjection);
+      !this._isTabGroupStructureStale(groupProjection) &&
+      (clusterLayout ? clusterLayout.key : null) === (this._lastTabClusterKey ?? null);
 
     if (canIncremental) {
       // Read once for the whole pass, like the full-rebuild path: this touches
@@ -5679,7 +6059,13 @@ class CodemanApp {
       // that sees one — a session going working→idle never adds or removes a
       // tab, so the full rebuild below is not reached. Recomputed per pass for
       // the same reason the rich meta line is: the order IS the state.
-      const railSortOrder = this._tabRailSortOrder(this.sessionOrder.filter((sid) => this.sessions.has(sid)));
+      const liveIds = this.sessionOrder.filter((sid) => this.sessions.has(sid));
+      const railSortOrder = this._tabRailSortOrder(liveIds);
+      // Grouped by state: same reasoning, a state change moves a tab between
+      // rows. Its order values replace the rail sort's (which it already folded
+      // in as the rank inside each section).
+      const triage = this._tabTriageLayout(liveIds, groupProjection, railSortOrder);
+      const listOrder = triage ? triage.order : railSortOrder;
       // Incremental update - only modify changed properties
       for (const [id, session] of this.sessions) {
         const tab = container.querySelector(`.session-tab[data-id="${id}"]`);
@@ -5687,7 +6073,7 @@ class CodemanApp {
 
         // An empty string clears the property, which is also what un-sorts the
         // rail when the setting (or the layout) flips without a full rebuild.
-        const railOrder = railSortOrder?.has(id) ? String(railSortOrder.get(id)) : '';
+        const railOrder = listOrder?.has(id) ? String(listOrder.get(id)) : '';
         if (tab.style.order !== railOrder) tab.style.order = railOrder;
 
         // A web tab owns the active state while one is open. activeSessionId stays
@@ -5789,11 +6175,17 @@ class CodemanApp {
           const _p = parseSessionPrefix(name);
           if (nameEl.dataset.fullName !== name) {
             nameEl.replaceChildren();
+            const _split = _p && _p.suffix ? null : window.CodemanTabClusters?.nameSplit(name, clusterLayout?.labelFor.get(id));
             if (_p && _p.suffix) {
               const prefix = document.createElement('span');
               prefix.className = 'tab-name-prefix';
               prefix.textContent = `${_p.prefix}: `;
               nameEl.append(prefix, document.createTextNode(_p.suffix));
+            } else if (_split) {
+              const caseSpan = document.createElement('span');
+              caseSpan.className = 'tab-name-case';
+              caseSpan.textContent = _split.hidden;
+              nameEl.append(document.createTextNode(_split.shown), caseSpan);
             } else {
               nameEl.textContent = name;
             }
@@ -5868,6 +6260,8 @@ class CodemanApp {
         this._applyTabTreePositions(container);
         this._syncTabGroupHeaderAlerts(container, groupProjection);
       }
+      this._syncTabTriageChrome(container, triage);
+      this._syncTabArrangementClasses(container, { clusters: !!clusterLayout, groupProjection });
     } else {
       // Full rebuild needed (sessions added/removed)
       this._fullRenderSessionTabs();
@@ -5939,6 +6333,16 @@ class CodemanApp {
 
     if (manualTwoRows || deviceType !== 'desktop') {
       container.classList.remove('tabs-auto-wrap');
+      return;
+    }
+
+    // Grouped by state, the header strip IS rows (one per state), so it always
+    // wraps: the row breaks only take effect in a wrapping flex line. The ledger
+    // is a grid of rows, so the same holds. Narrower screens keep the single
+    // scrolling row above, where state headings read as inline dividers and the
+    // ledger stays the plain strip.
+    if (container.classList.contains('tabs-triage') || container.classList.contains('tabs-ledger')) {
+      container.classList.add('tabs-auto-wrap');
       return;
     }
 
@@ -6034,7 +6438,17 @@ class CodemanApp {
     // below still counts the strip, not the sorted list. Null in every other
     // layout, and the tabs then carry no inline order at all — the header
     // strip's markup is byte-identical to before.
-    const railSortOrder = this._tabRailSortOrder(tabOrder.filter((id) => this.sessions.has(id)));
+    const liveIds = tabOrder.filter((id) => this.sessions.has(id));
+    const railSortOrder = this._tabRailSortOrder(liveIds);
+    // Grouped by state (tabArrangement 'state', the default): the same `order` mechanism,
+    // one band of values per state. Null in the grouped rail and with grouping
+    // off, and the rows then carry exactly the inline order they did before.
+    const groupProjection = this._projectTabGroups();
+    const triage = this._tabTriageLayout(liveIds, groupProjection, railSortOrder);
+    const listOrder = triage ? triage.order : railSortOrder;
+    // Clustered by case: rows are wrapped in one box per case below, and a tab
+    // in a cluster with company drops the `-<case>` from its name.
+    const clusterLayout = this._tabClusterLayout(liveIds, groupProjection);
     // One row per session, in tab order. The flat strip emits them as-is; the
     // grouped rail places the SAME markup into its sections, so a row never
     // differs between the two (badge = Alt+N slot in sessionOrder either way).
@@ -6043,7 +6457,7 @@ class CodemanApp {
     for (const id of tabOrder) {
       const session = this.sessions.get(id);
       if (!session) continue; // Skip if session was removed
-      const railOrderStyle = railSortOrder?.has(id) ? ` style="order:${railSortOrder.get(id)}"` : '';
+      const railOrderStyle = listOrder?.has(id) ? ` style="order:${listOrder.get(id)}"` : '';
 
       // See the note in the incremental path: a web tab owns the active highlight
       // while one is open, even though activeSessionId stays set.
@@ -6076,9 +6490,7 @@ class CodemanApp {
       // JUST the description on the tab; the generated w<n>-<case> id moves to the
       // tooltip and stays visible in the session settings modal.
       const parsedName = parseSessionPrefix(name);
-      const tabLabel = parsedName && parsedName.suffix
-        ? `<span class="tab-name-prefix">${escapeHtml(parsedName.prefix)}: </span>${escapeHtml(parsedName.suffix)}`
-        : escapeHtml(name);
+      const tabLabel = this._tabNameHtml(name, clusterLayout?.labelFor.get(id));
       const tabTooltip = parsedName && parsedName.suffix
         ? (session.workingDir ? `${parsedName.prefix} (${session.workingDir})` : parsedName.prefix)
         : (session.workingDir || '');
@@ -6125,8 +6537,12 @@ class CodemanApp {
       _tabIdx++;
     }
 
-    const groupProjection = this._projectTabGroups();
-    if (groupProjection) {
+    if (clusterLayout) {
+      // Clustered by case. Web tabs keep their flat-strip Alt+N slot (after
+      // every session), each in a box of its own.
+      parts.push(this._renderTabClusters(clusterLayout, rowHtml, _tabIdx));
+      this._hiddenTabGroupByRef = new Map();
+    } else if (groupProjection) {
       // Grouped vertical rail. Web tabs keep their flat-strip Alt+N slot (after
       // every session), wherever their group puts them.
       const webviewSlots = new Map(
@@ -6152,6 +6568,7 @@ class CodemanApp {
       this._hiddenTabGroupByRef = new Map();
     }
     this._lastTabGroupStructureKey = this._tabGroupStructureKey(groupProjection);
+    this._lastTabClusterKey = clusterLayout ? clusterLayout.key : null;
 
     container.innerHTML = parts.join('');
     container.classList.toggle('session-tabs--grouped', !!groupProjection);
@@ -6160,6 +6577,8 @@ class CodemanApp {
       this._applyTabTreeSemantics(container, { identity: focusIdentity, refocus: focusWasInside });
       this._syncTabGroupHeaderAlerts(container, groupProjection);
     }
+    this._syncTabTriageChrome(container, triage);
+    this._syncTabArrangementClasses(container, { clusters: !!clusterLayout, groupProjection });
 
     // Put the strip back where the user left it, then reveal the active tab
     // only when it CHANGED (or on the first paint). Restoring unconditionally
@@ -6234,9 +6653,13 @@ class CodemanApp {
       // the inline one, or web tabs (pinned past the cards by a CSS `order: 9999`
       // rather than an inline style) read as 0 and the walk starts on them. Array
       // sort is stable, so equal orders keep DOM order, which is the unsorted case.
-      if (this.isTabRailSorted()) {
+      if (this.isTabRailSorted() || container.classList.contains('tabs-triage')) {
         const orderOf = (el) => Number(getComputedStyle(el).order) || 0;
-        tabs.sort((a, b) => orderOf(a) - orderOf(b));
+        // Case clusters are boxes in DOM order and a sorted rail orders rows
+        // INSIDE each one, so the box goes first in the key.
+        const boxes = [...container.querySelectorAll(':scope > .tab-cluster')];
+        const boxOf = (el) => boxes.indexOf(el.closest('.tab-cluster'));
+        tabs.sort((a, b) => boxOf(a) - boxOf(b) || orderOf(a) - orderOf(b));
       }
       const currentIndex = tabs.indexOf(document.activeElement);
 
@@ -7440,6 +7863,9 @@ class CodemanApp {
       });
 
       tab.addEventListener('dragover', (e) => {
+        // Grouped by state: a tab in another group is not a drop target, and
+        // leaving the event alone (no preventDefault) is what shows "no drop".
+        if (this._isTabDropAcrossGroups(tab)) return;
         e.preventDefault();
         if (!this.draggedTabId || this.draggedTabId === tab.dataset.id) return;
 
@@ -7469,6 +7895,7 @@ class CodemanApp {
         tab.classList.remove('drag-over-left', 'drag-over-right');
 
         if (!this.draggedTabId || this.draggedTabId === tab.dataset.id) return;
+        if (this._isTabDropAcrossGroups(tab)) return;
 
         const targetId = tab.dataset.id;
         const draggedId = this.draggedTabId;

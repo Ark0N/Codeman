@@ -382,6 +382,7 @@ Object.assign(CodemanApp.prototype, {
     // Header visibility settings
     document.getElementById('appSettingsShowFontControls').checked = settings.showFontControls ?? defaults.showFontControls ?? false;
     document.getElementById('appSettingsShowSystemStats').checked = settings.showSystemStats ?? defaults.showSystemStats ?? true;
+    document.getElementById('appSettingsHeaderStatsStyle').value = this.resolveHeaderStatsStyle(settings);
     document.getElementById('appSettingsShowLifecycleLog').checked = settings.showLifecycleLog ?? defaults.showLifecycleLog ?? false;
     document.getElementById('appSettingsShowResponseViewer').checked = settings.showResponseViewer ?? defaults.showResponseViewer ?? false;
     document.getElementById('appSettingsShowFileViewerButton').checked = settings.showFileViewerButton ?? defaults.showFileViewerButton ?? true;
@@ -501,6 +502,8 @@ Object.assign(CodemanApp.prototype, {
       settings.tabRailDetail ?? defaults.tabRailDetail ?? 'rich';
     document.getElementById('appSettingsTabRailSort').value =
       settings.tabRailSort ?? defaults.tabRailSort ?? 'activity';
+    document.getElementById('appSettingsTabArrangement').value = this.resolveTabArrangement(settings);
+    document.getElementById('appSettingsTabStateOrder').value = this.resolveTabStateOrder(settings);
     document.getElementById('appSettingsShowTabDetachButton').checked = settings.showTabDetachButton ?? defaults.showTabDetachButton ?? false;
     document.getElementById('appSettingsSessionListLayout').value =
       settings.sessionListLayout ?? defaults.sessionListLayout ?? 'header';
@@ -2476,6 +2479,7 @@ Object.assign(CodemanApp.prototype, {
       // Header visibility settings
       showFontControls: document.getElementById('appSettingsShowFontControls').checked,
       showSystemStats: document.getElementById('appSettingsShowSystemStats').checked,
+      headerStatsStyle: document.getElementById('appSettingsHeaderStatsStyle').value,
       showLifecycleLog: document.getElementById('appSettingsShowLifecycleLog').checked,
       showResponseViewer: document.getElementById('appSettingsShowResponseViewer').checked,
       showFileViewerButton: document.getElementById('appSettingsShowFileViewerButton').checked,
@@ -2526,6 +2530,8 @@ Object.assign(CodemanApp.prototype, {
       tabRailWidth: this.readTabRailWidthSetting?.() ?? 256,
       tabRailDetail: document.getElementById('appSettingsTabRailDetail').value,
       tabRailSort: document.getElementById('appSettingsTabRailSort').value,
+      tabArrangement: document.getElementById('appSettingsTabArrangement').value,
+      tabStateOrder: document.getElementById('appSettingsTabStateOrder').value,
       showTabDetachButton: document.getElementById('appSettingsShowTabDetachButton').checked,
       sessionListLayout: document.getElementById('appSettingsSessionListLayout').value,
       sessionSidebarFontSize: this.resolveSessionSidebarFontSize(
@@ -3454,6 +3460,8 @@ Object.assign(CodemanApp.prototype, {
         tabRailWidth: 256,
         tabRailDetail: 'rich',
         tabRailSort: 'activity',
+        tabArrangement: 'state',
+        tabStateOrder: 'urgent-first',
         sessionListLayout: 'header',
         sessionSidebarFontSize: 12,
         cjkInputEnabled: false,
@@ -3555,6 +3563,79 @@ Object.assign(CodemanApp.prototype, {
     return now === before ? undefined : now;
   },
 
+  /**
+   * The stored tab layout, or the default. Anything but the four known values
+   * (an absent key, a value from a newer build) reads as 'state', the default
+   * (Discussion #426, option C).
+   */
+  resolveTabArrangement(settings) {
+    const value = settings?.tabArrangement ?? this.getDefaultSettings().tabArrangement;
+    return value === 'case' || value === 'ledger' || value === 'classic' ? value : 'state';
+  },
+
+  /** The stored state-group order: 'urgent-last' only when chosen, else 'urgent-first'. */
+  resolveTabStateOrder(settings) {
+    const value = settings?.tabStateOrder ?? this.getDefaultSettings().tabStateOrder;
+    return value === 'urgent-last' ? 'urgent-last' : 'urgent-first';
+  },
+
+  /**
+   * The stored header-stats style, or the default. Anything but the three
+   * known values (an absent key, a value from a newer build) reads as 'tiles',
+   * the default (the tile variant of Discussion #426's option G).
+   */
+  resolveHeaderStatsStyle(settings) {
+    const value = settings?.headerStatsStyle ?? this.getDefaultSettings().headerStatsStyle;
+    return value === 'classic' || value === 'compact' ? value : 'tiles';
+  },
+
+  /**
+   * Apply a header-stats style: the `data-header-stats` attribute every rule in
+   * the "Header stats styles" block of styles.css keys on, plus the two DOM
+   * moves the clustered styles need.
+   *
+   * The template keeps the classic order, where the connection indicator sits
+   * before the font controls and the plan-usage chip near the end of the header.
+   * Compact and Tiles draw them as ONE cluster (WS · CPU · MEM, then the plan
+   * windows), so the indicator moves into #headerSystemStats as its first child
+   * and the chip moves right after it. Comment anchors left at the template
+   * positions are what 'classic' moves them back to, so switching back restores
+   * the header exactly.
+   *
+   * ⚠️ The indicator only joins the pill while System Stats is shown: the pill
+   * is hidden with `display: none`, and the WS readout must not disappear with
+   * it. Both elements keep their ids, so every writer (setConnectionStatus,
+   * updatePlanUsageChip) finds them wherever they sit.
+   *
+   * @param {{style: 'classic'|'compact'|'tiles', showSystemStats: boolean}} opts
+   */
+  applyHeaderStatsStyle({ style, showSystemStats }) {
+    document.documentElement.dataset.headerStats = style;
+    const stats = document.getElementById('headerSystemStats');
+    const conn = document.getElementById('connectionIndicator');
+    const plan = document.getElementById('planUsageChip');
+    if (!stats || !conn || !plan) return;
+    if (!this._headerStatsAnchors) {
+      const connAnchor = document.createComment(' connection indicator (classic position) ');
+      const planAnchor = document.createComment(' plan usage chip (classic position) ');
+      conn.before(connAnchor);
+      plan.before(planAnchor);
+      this._headerStatsAnchors = { conn: connAnchor, plan: planAnchor };
+    }
+    const anchors = this._headerStatsAnchors;
+    const clustered = style !== 'classic';
+    if (clustered && showSystemStats) {
+      if (stats.firstElementChild !== conn) stats.prepend(conn);
+    } else if (anchors.conn.nextSibling !== conn) {
+      anchors.conn.after(conn);
+    }
+    if (clustered) {
+      if (stats.nextElementSibling !== plan) stats.after(plan);
+    } else if (anchors.plan.nextSibling !== plan) {
+      anchors.plan.after(plan);
+    }
+  },
+
   applyHeaderVisibilitySettings() {
     const settings = this.loadAppSettingsFromStorage();
     const defaults = this.getDefaultSettings();
@@ -3585,6 +3666,12 @@ Object.assign(CodemanApp.prototype, {
     if (tokenCountEl) {
       tokenCountEl.style.display = showTokenCount ? '' : 'none';
     }
+    // After the System Stats visibility above: whether WS joins the stats pill
+    // depends on the pill being shown.
+    this.applyHeaderStatsStyle({
+      style: compactHeader || this.isSoloWindow ? 'classic' : this.resolveHeaderStatsStyle(settings),
+      showSystemStats,
+    });
 
     // Hide lifecycle log button when setting is disabled
     // Default OFF: the lifecycle-log document icon is opt-in; the default header
@@ -3756,6 +3843,19 @@ Object.assign(CodemanApp.prototype, {
     const sort = (settings.tabRailSort ?? defaults.tabRailSort ?? 'activity') === 'manual' ? 'manual' : 'activity';
     root.dataset.tabRailSort = sort;
 
+    // The tab layout rides on a fourth attribute, for the same reason: it is
+    // applied by the render paths (inline `order` plus headings, or cluster
+    // boxes), so a flip has to re-render, and the gates in app.js
+    // (`isTabTriage()`, `isTabClusters()`, `isTabLedger()`) read one attribute
+    // per pass instead of re-parsing localStorage.
+    const previousArrangement = root.dataset.tabArrangement || 'state';
+    const arrangement = this.resolveTabArrangement(settings);
+    root.dataset.tabArrangement = arrangement;
+    // Which end the state groups start from; read by _tabTriageLayout().
+    const previousStateOrder = root.dataset.tabStateOrder || 'urgent-first';
+    const stateOrder = this.resolveTabStateOrder(settings);
+    root.dataset.tabStateOrder = stateOrder;
+
     const tabsEl = document.getElementById('sessionTabs');
     const rail = document.getElementById('tabRail');
     const headerHost = document.getElementById('sessionTabsHost');
@@ -3779,7 +3879,7 @@ Object.assign(CodemanApp.prototype, {
     // the row template, not toggled by CSS — same reasoning as the sidebar's
     // detail half in applySessionListLayout(). Taller rows also move every
     // connector anchored to a tab rect.
-    const changed = orientationChanged || previousDetail !== detail || previousSort !== sort;
+    const changed = orientationChanged || previousDetail !== detail || previousSort !== sort || previousArrangement !== arrangement || previousStateOrder !== stateOrder;
     if (orientationChanged) {
       this.updateTabOverflowMode?.();
       if (!settleRailWidth) this.syncTerminalGeometry?.();
@@ -4049,10 +4149,10 @@ Object.assign(CodemanApp.prototype, {
         // NOTE: Feature toggles (subagentTrackingEnabled, imageWatcherEnabled, ralphTrackerEnabled)
         // are NOT display keys — they control server-side behavior and must sync from server.
         const displayKeys = new Set([
-          'showFontControls', 'showSystemStats', 'showTokenCount', 'showCost',
+          'showFontControls', 'showSystemStats', 'headerStatsStyle', 'showTokenCount', 'showCost',
           'showLifecycleLog', 'showResponseViewer', 'showRedrawButton',
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
-          'subagentActiveTabOnly', 'tabTwoRows', 'tabOrientation', 'tabRailWidth', 'tabRailDetail', 'tabRailSort', 'sessionListLayout', 'sessionSidebarFontSize', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
+          'subagentActiveTabOnly', 'tabTwoRows', 'tabOrientation', 'tabRailWidth', 'tabRailDetail', 'tabRailSort', 'tabArrangement', 'tabStateOrder', 'sessionListLayout', 'sessionSidebarFontSize', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
           'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'showFileViewerButton', 'webglRendererEnabled',
           'terminalFontFamily', 'terminalFontWeight', 'terminalFontWeightBold',
           'language',

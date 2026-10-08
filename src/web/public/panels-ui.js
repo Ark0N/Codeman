@@ -6028,6 +6028,11 @@ Object.assign(CodemanApp.prototype, {
       }
     }
 
+    // Rings for the Compact header style, kept current in every style (two
+    // style writes a poll) so switching styles never shows an empty ring.
+    this._setStatRing('statCpuRing', stats.cpu);
+    this._setStatRing('statMemRing', stats.memory?.percent);
+
     if (memEl && memBar) {
       const memGB = (stats.memory.usedMB / 1024).toFixed(1);
       memEl.textContent = `${memGB}G`;
@@ -6043,6 +6048,20 @@ Object.assign(CodemanApp.prototype, {
         memBar.classList.add('medium');
       }
     }
+  },
+
+  /**
+   * Fill one stat ring (Compact header style) to `percent`, clamped to 0-100,
+   * and flag it `high` above 80%, the same threshold at which the value next
+   * to it turns red.
+   */
+  _setStatRing(id, percent) {
+    const ring = this.$(id);
+    if (!ring) return;
+    const value = Number(percent);
+    const fill = Number.isFinite(value) ? Math.round(Math.min(100, Math.max(0, value))) : 0;
+    ring.style.setProperty('--pu', String(fill));
+    ring.classList.toggle('high', fill > 80);
   },
 
   // ─── Clipboard ──────────────────────────────────────────────────────────────

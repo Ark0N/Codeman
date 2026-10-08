@@ -20631,3 +20631,668 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
   padding-left: 0.4rem;
   border-left: 1px solid var(--border);
 }
+
+/* ============================================================
+   Tab grouping by state (tabArrangement: 'state', the default;
+   Discussion #426 option C)
+   ============================================================
+   app.js writes a flex `order` per tab plus one heading and one row break per
+   non-empty state, all direct children of #sessionTabs (_syncTabTriageChrome).
+   The DOM stays in tab order; computeTabTriageLayout() in constants.js owns the
+   bands. With grouping off none of this matches anything. */
+.tab-triage-head {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  gap: 5px;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  padding: 0 6px 0 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--text-muted);
+  user-select: none;
+  pointer-events: none;
+}
+
+.tab-triage-count {
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
+.tab-triage-head--needs .tab-triage-label {
+  color: var(--red);
+}
+
+.tab-triage-head--waiting .tab-triage-label {
+  color: var(--yellow);
+}
+
+.tab-triage-head--working .tab-triage-label {
+  color: var(--green);
+}
+
+.tab-triage-break {
+  display: none;
+}
+
+/* Counts describe the whole group, so they step aside while the sidebar
+   filter narrows the rows under them. */
+.session-tabs.tabs-filtering > .tab-triage-head {
+  display: none;
+}
+
+/* Header strip, wrapping (desktop): one row per state. Each heading sits in a
+   left gutter, so a group too long for one line continues under its own tabs
+   rather than under its heading, and each row ends with a full-width break. */
+/* The label column is as wide as the widest label on screen (app.js measures
+   it into --tab-triage-gutter whenever the labels change; 92px is only the
+   first-paint fallback) and the labels are left-aligned in it.
+
+   The brand leaves the flow and sits over the strip's top-left corner, so the
+   strip starts at the header's left edge: the first row's heading (the lead)
+   is pushed past the brand by --tab-triage-brand, and every later row starts
+   at the edge, under "Codeman", instead of leaving that corner empty. The
+   rows under the first one line up with each other in the label column. */
+.header:has(> .session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows)) > .header-brand {
+  position: absolute;
+  top: 0.35rem;
+  left: 0.75rem;
+  z-index: 1;
+}
+
+.session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) {
+  padding-left: var(--tab-triage-gutter, 92px);
+}
+
+.session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) > .tab-triage-head {
+  justify-content: flex-start;
+  width: var(--tab-triage-gutter, 92px);
+  margin-left: calc(-1 * var(--tab-triage-gutter, 92px));
+  padding: 0 8px 0 0;
+}
+
+/* The first row starts beside the brand and lines up with nothing else, so its
+   label takes its own width and its tabs follow it directly. */
+.session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) > .tab-triage-head--lead {
+  width: auto;
+  margin-left: calc(var(--tab-triage-brand, 100px) - var(--tab-triage-gutter, 92px));
+}
+
+.session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) > .tab-triage-break {
+  display: block;
+  flex: 0 0 100%;
+  height: 0;
+}
+
+/* Side rail and sidebar: each heading is a section row above its rows. */
+html[data-tab-orientation='vertical'] .tab-rail .session-tabs.tabs-triage > .tab-triage-head,
+html[data-session-list='sidebar'] .session-sidebar .session-tabs.tabs-triage > .tab-triage-head {
+  align-self: auto;
+  width: 100%;
+  padding: 8px 6px 3px;
+}
+
+/* The collapsed sidebar is a 44px icon rail with no room for a label. */
+html[data-session-list='sidebar'][data-sidebar='collapsed'] .session-sidebar .tab-triage-head {
+  display: none;
+}
+
+/* ============================================================
+   Tab clusters by case (tabArrangement: 'case'; Discussion #426 option A)
+   ============================================================
+   app.js wraps each case's tabs in a .tab-cluster box (_renderTabClusters):
+   a labelled box per case with two or more tabs, an unlabelled box with a
+   colour swatch per case with one, and a box per web tab. --cluster-color is
+   the case's colour from the session palette. Tabs inside keep their own
+   markup; only the `-<case>` part of a generated name (.tab-name-case) is
+   hidden, and only here. */
+.session-tabs.tabs-clusters .tab-name-case {
+  display: none;
+}
+
+.tab-cluster-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 0 6px 0 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--text-dim);
+  user-select: none;
+  pointer-events: none;
+}
+
+.tab-cluster-count {
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+
+.tab-cluster-swatch {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--cluster-color, var(--text-muted));
+}
+
+/* Header strip: each cluster is an inline box that wraps inside itself when a
+   case has more tabs than fit on a line. */
+.session-tabs-host > .session-tabs.tabs-clusters {
+  gap: 6px;
+}
+
+.session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 1px 3px 1px 8px;
+  border: 1px solid var(--control-border);
+  border-left: 3px solid var(--cluster-color, var(--control-border));
+  border-radius: 8px;
+  background: var(--control-bg);
+}
+
+/* A case with one tab and a web tab are boxed but not labelled: the single
+   case keeps its swatch, a web tab has no case at all. */
+.session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster--single {
+  border-left-width: 1px;
+  padding-left: 6px;
+}
+
+.session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster--single .tab-cluster-name,
+.session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster--single .tab-cluster-count {
+  display: none;
+}
+
+.session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster--single .tab-cluster-label {
+  padding: 0 2px;
+}
+
+.session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster--web {
+  padding-left: 3px;
+}
+
+/* Side rail and sidebar: every case is a section with its label on top
+   (vertical space is cheap there, so a one-tab case is labelled too). The
+   label goes first by `order`, because a sorted rail orders the rows inside
+   each cluster. */
+html[data-tab-orientation='vertical'] .tab-rail .session-tabs.tabs-clusters > .tab-cluster,
+html[data-session-list='sidebar'] .session-sidebar .session-tabs.tabs-clusters > .tab-cluster {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .session-tabs.tabs-clusters > .tab-cluster + .tab-cluster,
+html[data-session-list='sidebar'] .session-sidebar .session-tabs.tabs-clusters > .tab-cluster + .tab-cluster {
+  margin-top: 6px;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .session-tabs.tabs-clusters .tab-cluster-label,
+html[data-session-list='sidebar'] .session-sidebar .session-tabs.tabs-clusters .tab-cluster-label {
+  order: -1;
+  padding: 6px 6px 3px;
+}
+
+/* The collapsed sidebar is a 44px icon rail with no room for a label. */
+html[data-session-list='sidebar'][data-sidebar='collapsed'] .session-sidebar .tab-cluster-label {
+  display: none;
+}
+
+/* ============================================================
+   Ledger (tabArrangement: 'ledger'; Discussion #426 option B)
+   ============================================================
+   The flat list, in tab order, on an aligned column grid: equal cells, mono
+   type, a 3px status bar on the left instead of the dot. Desktop header strip
+   only (updateTabOverflowMode() keeps it wrapping); narrower strips, the rail
+   and the sidebar keep the plain list. Nothing here touches the markup. */
+@media (min-width: 768px) {
+  .session-tabs-host > .session-tabs.tabs-ledger {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+    align-content: start;
+    /* The strip's own align-items: flex-start applies to grid items too; a
+       cell must stretch, or the active cell (taller with its actions) breaks
+       its row. */
+    align-items: stretch;
+    gap: 4px 6px;
+  }
+
+  .session-tabs-host > .session-tabs.tabs-ledger > .session-tab {
+    --ledger-bar: var(--green);
+    min-width: 0;
+    /* Tall enough for the active cell's actions, so every row is one height. */
+    min-height: 30px;
+    box-sizing: border-box;
+    gap: 7px;
+    padding: 4px 8px 4px 11px;
+    border: 1px solid var(--control-border);
+    border-radius: 4px;
+    background: var(--control-bg);
+    box-shadow: inset 3px 0 0 var(--ledger-bar);
+    font-family: 'JetBrains Mono', var(--font-mono, monospace);
+    font-size: 12px;
+  }
+
+  .session-tabs-host > .session-tabs.tabs-ledger > .session-tab .tab-info {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .session-tabs-host > .session-tabs.tabs-ledger > .session-tab .tab-number {
+    width: auto;
+    min-width: 1ch;
+    height: auto;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .session-tabs-host > .session-tabs.tabs-ledger > .session-tab .tab-status {
+    display: none;
+  }
+
+  .session-tabs-host > .session-tabs.tabs-ledger > .session-tab.tab-alert-idle {
+    --ledger-bar: var(--yellow);
+  }
+
+  .session-tabs-host > .session-tabs.tabs-ledger > .session-tab:is(.tab-alert-action, :has(> .tab-status.error)) {
+    --ledger-bar: var(--red);
+  }
+
+  .session-tabs-host > .session-tabs.tabs-ledger > .session-tab:is(.tab-agent-exited, .session-tab--web, :has(> .tab-status.stopped)) {
+    --ledger-bar: var(--text-muted);
+  }
+
+  /* The active cell has to win against a grid of look-alike cells. The skin's
+     active rule (1px accent border, no shadow, both !important) is too quiet
+     here, so an inset second pixel doubles the border without resizing the
+     cell, and the status bar turns accent. */
+  .session-tabs-host > .session-tabs.tabs-ledger > .session-tab.active {
+    background: rgba(var(--accent-rgb), 0.2) !important;
+    box-shadow: inset 0 0 0 1px var(--accent), inset 4px 0 0 var(--accent) !important;
+    color: var(--text) !important;
+  }
+}
+
+/* ============================================================
+   Header stats styles (headerStatsStyle; Discussion #426 option G)
+   ============================================================
+   html[data-header-stats] picks how the WS / CPU / MEM / plan-usage cluster
+   is drawn. 'classic' matches nothing below except the hidden parts, so the
+   header looks exactly as before. 'compact' and 'tiles' are desktop only
+   (settings-ui.js resolves anything narrower, and a solo window, to
+   'classic'), and applyHeaderStatsStyle() has already moved
+   #connectionIndicator into #headerSystemStats and #planUsageChip right after
+   it, so the cluster is contiguous. */
+
+/* Parts only the two new styles draw. */
+.stat-ring,
+.connection-tile,
+.header-plan-usage .pu-ring,
+.header-plan-usage .pu-meter {
+  display: none;
+}
+
+/* --- Compact: two pills, a ring beside every value ------------------------ */
+/* One system pill (WS, CPU, MEM) and one plan pill (5h, 7d). Every reading is
+   the same shape, ring then label then value, so the two pills read as one
+   set; CPU and MEM rings are the accent colour (red past 80%, like their
+   value), the plan rings green, yellow or red by how much is used. */
+html[data-header-stats='compact'] .header-system-stats,
+html[data-header-stats='compact'] .header-plan-usage {
+  align-items: center;
+  height: 24px;
+  min-height: 24px;
+  padding: 0 11px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  font-family: 'JetBrains Mono', var(--font-mono, monospace);
+  font-size: 0.68rem;
+  color: var(--text);
+}
+
+html[data-header-stats='compact'] .header-system-stats {
+  gap: 13px;
+}
+
+html[data-header-stats='compact'] .header-system-stats > .connection-indicator {
+  font-size: inherit;
+  color: var(--text);
+}
+
+html[data-header-stats='compact'] .header-system-stats > .connection-indicator > .connection-dot {
+  width: 7px;
+  height: 7px;
+}
+
+html[data-header-stats='compact'] .header-system-stats .stat-item {
+  gap: 5px;
+}
+
+html[data-header-stats='compact'] .header-system-stats .stat-bar {
+  display: none;
+}
+
+/* One label style and one value style across both pills. */
+html[data-header-stats='compact'] .header-system-stats .stat-label,
+html[data-header-stats='compact'] .header-plan-usage .pu-label {
+  min-width: 0;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+html[data-header-stats='compact'] .header-system-stats .stat-value,
+html[data-header-stats='compact'] .header-plan-usage .pu-val {
+  min-width: 0;
+  text-align: left;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-header-stats='compact'] .header-system-stats .stat-value:not(.high) {
+  color: var(--text);
+}
+
+html[data-header-stats='compact'] .header-plan-usage {
+  flex-direction: row;
+  gap: 13px;
+}
+
+html[data-header-stats='compact'] .header-plan-usage .pu-row {
+  align-items: center;
+  gap: 8px;
+}
+
+html[data-header-stats='compact'] .header-plan-usage .pu-provider {
+  width: auto;
+  flex: none;
+}
+
+html[data-header-stats='compact'] .header-plan-usage .pu-windows {
+  align-items: center;
+  gap: 13px;
+}
+
+html[data-header-stats='compact'] .header-plan-usage .pu-sep {
+  display: none;
+}
+
+html[data-header-stats='compact'] .header-plan-usage .pu-win {
+  align-items: center;
+  gap: 5px;
+}
+
+/* A ring: a conic fill masked down to a 2px stroke. Its colour is currentColor,
+   so a plan ring takes the pu-green/-yellow/-red class it shares with its
+   value, and a stat ring the accent (red when .high). */
+html[data-header-stats='compact'] .stat-ring,
+html[data-header-stats='compact'] .header-plan-usage .pu-ring {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 50%;
+  background: conic-gradient(currentColor calc(var(--pu, 0) * 1%), var(--control-border-hover, var(--control-border)) 0);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2px));
+}
+
+html[data-header-stats='compact'] .stat-ring {
+  color: var(--accent);
+}
+
+html[data-header-stats='compact'] .stat-ring.high {
+  color: var(--red);
+}
+
+/* --- Tiles: label over value, a bar underneath, no icons ----------------- */
+/* Each tile is a three-row grid (label, value, bar) with pixel line-heights,
+   so its height comes from the layout, not from whichever monospace face the
+   machine falls back to. The bar is a real row, never laid over the bottom
+   edge: an absolutely placed bar under a fixed-height tile is what put the
+   value on top of it with a taller system font (SF Mono). The bundled
+   JetBrains Mono comes first so every machine draws the same tile. */
+html[data-header-stats='tiles'] .header-system-stats {
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+}
+
+html[data-header-stats='tiles'] .header-system-stats > .stat-item,
+html[data-header-stats='tiles'] .header-plan-usage .pu-win,
+html[data-header-stats='tiles'] .header-system-stats > .connection-indicator > .connection-tile {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 9px 14px 2px;
+  row-gap: 2px;
+  align-content: center;
+  justify-items: start;
+  min-width: 54px;
+  /* 2 + 9 + 2 + 14 + 2 + 2 + 3 plus the 1px borders: 36px, the header's own
+     height, so the tiles never make the header grow. */
+  padding: 2px 10px 3px;
+  box-sizing: border-box;
+  border-radius: 7px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  font-family: 'JetBrains Mono', var(--font-mono, monospace);
+  white-space: nowrap;
+}
+
+/* The tile label and value: the stat items already carry a label and a value,
+   the connection indicator gets its own pair (its text line keeps the classic
+   wording, queued bytes included, and stays the accessible name via title). */
+html[data-header-stats='tiles'] .header-system-stats .stat-label,
+html[data-header-stats='tiles'] .connection-tile-label,
+html[data-header-stats='tiles'] .header-plan-usage .pu-label {
+  display: block;
+  grid-row: 1;
+  min-width: 0;
+  font-size: 9px;
+  line-height: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+html[data-header-stats='tiles'] .header-system-stats .stat-value,
+html[data-header-stats='tiles'] .connection-tile-value,
+html[data-header-stats='tiles'] .header-plan-usage .pu-val {
+  display: block;
+  grid-row: 2;
+  min-width: 0;
+  text-align: left;
+  font-size: 12px;
+  line-height: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Plan values keep their green/yellow/red; the stat values read as plain text
+   unless they are running high. */
+html[data-header-stats='tiles'] .header-system-stats .stat-value:not(.high),
+html[data-header-stats='tiles'] .connection-tile-value {
+  color: var(--text);
+}
+
+/* The WS tile: JS sets the indicator's `display` inline (flex, or none when
+   there is nothing to report), so the grid lives on the .connection-tile span
+   inside it and the indicator itself only keeps the flex box it already has. */
+html[data-header-stats='tiles'] .header-system-stats > .connection-indicator {
+  padding: 0;
+}
+
+html[data-header-stats='tiles'] .header-system-stats > .connection-indicator > .connection-dot,
+html[data-header-stats='tiles'] .header-system-stats > .connection-indicator > .connection-text {
+  display: none;
+}
+
+html[data-header-stats='tiles'] .connection-tile-value.connected {
+  color: var(--green);
+}
+
+html[data-header-stats='tiles'] .connection-tile-value.fallback,
+html[data-header-stats='tiles'] .connection-tile-value.reconnecting,
+html[data-header-stats='tiles'] .connection-tile-value.draining {
+  color: var(--yellow);
+}
+
+html[data-header-stats='tiles'] .connection-tile-value.offline {
+  color: var(--red);
+}
+
+/* The bar is the third row, full tile width. The WS tile has no bar, and its
+   empty third row keeps it the same height as its neighbours. */
+html[data-header-stats='tiles'] .header-system-stats .stat-bar,
+html[data-header-stats='tiles'] .header-plan-usage .pu-meter {
+  display: block;
+  grid-row: 3;
+  justify-self: stretch;
+  width: auto;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(127, 127, 127, 0.18);
+  overflow: hidden;
+}
+
+html[data-header-stats='tiles'] .header-plan-usage .pu-meter > i {
+  display: block;
+  height: 100%;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+html[data-header-stats='tiles'] .header-plan-usage {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  min-height: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+}
+
+html[data-header-stats='tiles'] .header-plan-usage .pu-row {
+  align-items: center;
+  gap: 6px;
+}
+
+html[data-header-stats='tiles'] .header-plan-usage .pu-provider {
+  width: auto;
+  flex: none;
+  font-size: 0.55rem;
+}
+
+html[data-header-stats='tiles'] .header-plan-usage .pu-windows {
+  align-items: center;
+  gap: 6px;
+}
+
+html[data-header-stats='tiles'] .header-plan-usage .pu-sep {
+  display: none;
+}
+
+/* An idle window keeps its tile and dims the whole thing. */
+html[data-header-stats='tiles'] .header-plan-usage .pu-win-idle {
+  opacity: 0.55;
+}
+
+/* --- Header buttons next to the clustered stats ------------------------ */
+/* Bare 16px glyphs beside 36px tiles read as a different design. In Tiles the
+   header's icon buttons take the tile box (same height, border and fill, a
+   larger icon); in Compact they become round chips the height of the pills.
+   Only the box changes: the marker classes still hide them, and the gear
+   keeps its quarter turn on hover, on the glyph rather than the whole box. */
+html[data-header-stats='tiles'] .header-right > .btn-icon-header,
+html[data-header-stats='compact'] .header-right > .btn-icon-header {
+  box-sizing: border-box;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  color: var(--text-dim);
+}
+
+html[data-header-stats='tiles'] .header-right > .btn-icon-header {
+  width: 36px;
+  height: 36px;
+  border-radius: 7px;
+}
+
+html[data-header-stats='compact'] .header-right > .btn-icon-header {
+  width: 26px;
+  height: 26px;
+  border-radius: 13px;
+}
+
+html[data-header-stats='tiles'] .header-right > .btn-icon-header > svg {
+  width: 18px;
+  height: 18px;
+}
+
+html[data-header-stats='compact'] .header-right > .btn-icon-header > svg {
+  width: 15px;
+  height: 15px;
+}
+
+html[data-header-stats='tiles'] .header-right > .btn-icon-header:hover,
+html[data-header-stats='compact'] .header-right > .btn-icon-header:hover {
+  background: var(--control-bg-hover);
+  border-color: var(--control-border-hover);
+  color: var(--text);
+  transform: none;
+}
+
+html[data-header-stats='tiles'] .header-right > .btn-icon-header > svg,
+html[data-header-stats='compact'] .header-right > .btn-icon-header > svg {
+  transition: transform var(--transition-smooth);
+}
+
+html[data-header-stats='tiles'] .header-right > .btn-settings:hover > svg,
+html[data-header-stats='compact'] .header-right > .btn-settings:hover > svg {
+  transform: rotate(45deg);
+}
+
+/* Before the first plan reading the chip holds a bare em dash; give it a tile
+   of its own so it does not read as a stray mark between the tiles. */
+html[data-header-stats='tiles'] .header-plan-usage:not(:has(.pu-row)) {
+  justify-content: center;
+  min-width: 54px;
+  height: 36px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  border-radius: 7px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  color: var(--text-muted);
+}

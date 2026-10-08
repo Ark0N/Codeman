@@ -295,6 +295,7 @@
     Running: '运行中',
     Idle: '空闲',
     Working: '工作中',
+    Waiting: '等待中',
     Today: '今天',
     Home: '主页',
     Local: '本地',
