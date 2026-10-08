@@ -2182,10 +2182,15 @@ describe('session-routes', () => {
           // The request budget, not the 90 s session default: the reverse proxy would
           // cut the request at 60 s while the session was still being built.
           expect(wakeWaitUntilReady).toHaveBeenCalledWith(expect.objectContaining({ hostId: 'hufflepuff' }), {
-            timeoutMs: REMOTE_WAKE_REQUEST_READY_TIMEOUT_MS,
+            timeoutMs: expect.any(Number),
             // The shutdown signal rides along so `WebServer.stop()` can end the poll.
             signal: expect.any(AbortSignal),
           });
+          // Not asserted to the millisecond: the wake's own elapsed time is subtracted,
+          // so a slow runner lands a few ms under the budget.
+          const [, readyOpts] = wakeWaitUntilReady.mock.calls[0] as unknown as [unknown, { timeoutMs: number }];
+          expect(readyOpts.timeoutMs).toBeLessThanOrEqual(REMOTE_WAKE_REQUEST_READY_TIMEOUT_MS);
+          expect(readyOpts.timeoutMs).toBeGreaterThan(REMOTE_WAKE_REQUEST_READY_TIMEOUT_MS - 1_000);
         } finally {
           startShell.mockRestore();
         }
