@@ -36,14 +36,60 @@ or settled a question the spec left open. The invariants as built are in
   one tile, key names untranslated, mouse actions in the Help modal's key column (`Click`,
   `Right-click`) and `Arrows` translated. Every string has its own entry or pattern; refreshes
   compare with the last English value, not the translated DOM.
-- **The Tiles button opens the grid at once** (owner decision 8): a click (and
-  `Ctrl+Shift+G`, the same `toggleTileGrid`) opens `tileGridOpenSet` (constants.js): the
-  grid this tab last had, else an open split's two sessions, else the open sessions in tab
-  order up to what the grid takes here (the cap, or fewer when the window fits fewer), the
-  active one always included and focused. A remembered grid wins over an open split: the
-  split closes and its sessions do not join (the owner's order, read literally). Right-click
-  opens the picker; with the grid open it shows the current tiles and Open replaces them.
-  Ctrl/Cmd+click on a tab with the grid closed opens the same set plus that session.
+- **The Tiles button opens the grid at once** (owner decision 8, with the count of
+  decision 10): a click (and `Ctrl+Shift+G`, the same `toggleTileGrid`) opens the remembered
+  count of tiles (default 6, at most what the window fits). `tileGridOpenSet`
+  (constants.js) picks the grid this tab last had, else an open split's two sessions, else
+  the open sessions in tab order, the active one always included and focused, and
+  `tileGridSetForCount` trims it (from the end, the session to focus kept) or fills it
+  (from tab order) to the count. A remembered grid comes back with its tiles first, in
+  their cells, then sessions in tab order, to the count in total: the count is a shape
+  change under the cell model's rule (`reformTileCells`: the tiles keep their row and
+  column when all fit, else they pack in reading order) and the added tiles fill the empty
+  cells first. This supersedes decision 8's "exactly the stored set" (owner answer). A
+  remembered grid still wins over an open split: the split closes and its sessions are not
+  seeded first. A page-load restore brings back exactly the stored grid, whatever the
+  count. Ctrl/Cmd+click on a tab with the grid closed opens the count in total, that
+  session among them and focused (owner answer: N, not N+1).
+- **Right-click on Tiles is a 2 / 4 / 6 count menu** (owner decision 10; the session
+  picker is gone). Three counts with their shapes (the grid's own 2x1, 2x2, 3x2 drawn as
+  cells), the remembered one checked. A count the window cannot fit is greyed out with the
+  reason ("This window fits N tiles"); a remembered count that does not fit stays checked
+  but greyed, the keyboard starts on the largest that fits, and a click opens what fits.
+  Shift+F10 and the Menu key open it too (the browser's contextmenu event). Arrows move
+  over the counts that fit, Enter or Space picks, Escape closes it alone (the global
+  Escape handler gives it the key first, like the tab-group menu) and puts the keyboard
+  back on the Tiles button, Tab and a click elsewhere close it. A pick is remembered per
+  device in `codeman:tile-count` (`codeman:tile-grid` stays ids only) and opens that many
+  tiles; with the grid open it re-forms it (`_reformTileGrid`): the focused tile always
+  stays, the others leave from the end or join from tab order, filling empty cells first,
+  every joining tile mounted and laid out before any connects (one fit, one PTY resize
+  each), and a zoom the user chose ends. The other ways in (Ctrl/Cmd+click, a dragged tab,
+  "Open group as tiles", Run) still add up to the cap of 6.
+- **The grid opens and closes with a short animation, on by default** (owner request:
+  "when clicking on the tile button first make this animation nicer"). It is the grid's
+  own, not an `entrance-animations.js` theme (those are off by default). Opening, each tile
+  fades and settles in (opacity, translateY 6px and scale .97), 180 ms, 24 ms apart in
+  reading order (`--tile-enter-index`): the last of six is done at 300 ms; a tile added
+  later enters the same way. Its terminal stays transparent (`.tile--revealing`) until the
+  load queue reports its first capture done, then fades in whole (160 ms), so no replay
+  scrolls by. Closing with the toggle (button, Ctrl+Shift+G; owner answer: only these), a
+  still copy of the tiles (`_ghostTileGrid`: clones, no xterm, socket or listener; inert,
+  `aria-hidden`, no pointer) dims at once over the stage (so the click is answered) and
+  stays until the single view's `selectSession` has replayed its session, at most 700 ms,
+  then fades: no empty single view between the two. A re-form fades the old grid's copy at
+  once. The count menu fades in (140 ms). Every one animates opacity and transform only, so
+  FitAddon measures the final cell and each tile still sends one PTY resize; under
+  `prefers-reduced-motion` nothing moves and no copy is made. A web tab hides the copy.
+- **Opening paints the frames first** (owner answer: "paced connect: in"). The six
+  terminals used to be built inside the click (about 100 of its 140 ms before the first
+  frame). `_connectTilesPaced` builds one per animation frame, the focused tile's first,
+  so the click paints its empty tiles in about 20 ms and the entrance plays while they are
+  built. The time until all tiles have painted is unchanged: the load queue serves one
+  capture at a time, so only the focused tile's connect is on its path, one frame later.
+  `openTileGrid` therefore returns before the terminals exist: a selection that focuses a
+  tile whose terminal is not built yet hands the keyboard over in `_connectTile`
+  (`focusOnConnect`), never when `focus: false` was asked.
 - **The grid holds at most 6 tiles** (owner decision 7). `TILE_GRID_MAX` in constants.js is
   the one cap every limit reads; the layout table keeps 7 to 9 (`TILE_LAYOUT_MAX`), unreachable,
   so going back to nine is that one line. A stored grid with more ids comes back as its first
@@ -59,9 +105,9 @@ or settled a question the spec left open. The invariants as built are in
   B's close is a tile button (26px).
 - **No + in the tile header** (owner decision 9): the header is `● name ……… ⋯ ⤢ ×`. The
   + menu and its "New session in this case" are gone; tiles are added from the Tiles
-  button (and its right-click picker), Ctrl/Cmd+click on a tab, a dragged tab, "Open group
-  as tiles" and Run joining the open grid. Where this spec describes a `+`, it no longer
-  exists.
+  button (and its right-click count menu), Ctrl/Cmd+click on a tab, a dragged tab, "Open
+  group as tiles" and Run joining the open grid. Where this spec describes a `+`, it no
+  longer exists.
 - **No SSE terminal stream while tiles own the terminal** (performance pass): the filter
   names a fixed id no session takes (`TILE_GRID_SSE_FILTER`), not `[activeSessionId]` as
   "Parking the main terminal" below says; the server's filter gates only terminal
@@ -97,9 +143,9 @@ or settled a question the spec left open. The invariants as built are in
   only: its `ids` are the cells, `null` for an empty one (a build before cells drops the
   nulls and reads them packed); a reload brings the holes back when the shape is the same, a
   session gone by then leaves its cell empty, another shape packs, and the old packed format
-  reads unchanged. A fresh grid (the picker's Open, Ctrl/Cmd+click with the grid closed,
-  "Open group as tiles") opens packed; only the toggle and the page-load restore bring holes
-  back. Moving is off while a tile is zoomed (the chords still apply there, as a no-op, so
+  reads unchanged. A fresh grid (Ctrl/Cmd+click with the grid closed, "Open group as
+  tiles") opens packed; only the toggle and the page-load restore bring holes back (the
+  toggle through `reformTileCells` when the count changes the set). Moving is off while a tile is zoomed (the chords still apply there, as a no-op, so
   their keys never reach the CLI; a tiled tab dropped on the zoomed tile is refused too, as
   the owner confirmed) and with a single tile. Both arrow chord families, focus and move,
   skip a text field, where shifted arrows select (owner's answer: best practice). Default
@@ -218,9 +264,9 @@ work also fixes gaps the split pane has today.
 ### Entry points
 
 - **Header Tiles button** (its own button, beside Split). As built (decision 8)
-  a click opens the grid at once, the same as the toggle shortcut; the picker
-  with checkboxes over open sessions, ordered like the tab strip, is on
-  right-click. When the grid is open, a click closes it.
+  a click opens the grid at once, the same as the toggle shortcut; right-click
+  is the 2 / 4 / 6 count menu (decision 10; the session picker it replaced is
+  gone). When the grid is open, a click closes it.
 - **Ctrl/Cmd+click a tab**: add that session to the grid (opens the grid if
   closed).
 - **Drag a tab** from the strip onto a tile to replace it, or onto an empty
@@ -246,8 +292,8 @@ Automatic by tile count, computed by a pure helper:
 | 7-9 | 3x3 |
 
 Hard cap 9. Capacity is also bounded by a minimum tile size (about 480x240 px,
-roughly 60 columns at the default tile font), so the picker disables additions
-the window cannot fit.
+roughly 60 columns at the default tile font), so the count menu greys out the
+counts the window cannot fit.
 
 Column and row dividers are draggable (generalizing the split divider): the
 grid stores track fractions (`grid-template-columns: <a>fr <b>fr …`), each
@@ -678,7 +724,7 @@ and share one tile class:
 | A second desktop browser shows a tiled session full-size | Last resize wins and only the resizing socket hears `zc` (existing behavior, see follow-up 2) |
 | Split collapses or a tile is removed mid-divider-drag | Drag teardown first (carried over from the split's mid-drag fix) |
 | Remote (SSH) and Docker sessions | Work unchanged: their pane is a local tmux pane like any other |
-| Multi-user mode | The picker lists only visible sessions (the client map is already scoped); the socket upgrade checks ownership server-side |
+| Multi-user mode | The grid only ever opens visible sessions (the client map is already scoped); the socket upgrade checks ownership server-side |
 | Solo window | Tiles unavailable |
 
 ## Server
@@ -729,8 +775,9 @@ Separate follow-up PRs worth doing (see "Follow-ups").
 - **Per-device setting**: in `displayKeys`, stripped from the PUT, not in the
   `.strict()` schema; the `--hidden` marker class has a `display: none` rule.
 - **Palette chords** are swallowed in every xterm key handler.
-- **Escape**: the picker's close method returns early when the picker is not
-  open (the global Escape handler calls every close method).
+- **Escape**: the count menu's close method returns early when the menu is not
+  open, and an open menu owns the Escape (it closes alone and the keyboard goes
+  back to the Tiles button, like the tab-group menu).
 - **User text** (names) via `textContent` / attributes, never `innerHTML`.
 - **No secrets in localStorage**: the stored grid holds ids only.
 - **Memory**: everything a tile creates is released in `destroy()`.
@@ -963,12 +1010,27 @@ exits green. Use the browser runner for those files and read the file count.
    split's two sessions, else the open sessions in tab order up to the cap with
    the active one focused; `Ctrl+Shift+G` runs the same function. The picker
    is on right-click of the button (its title says so, as do the wiki and the
-   Help modal).
+   Help modal). Superseded in part by decision 10: right-click is now the count
+   menu, and a remembered grid is filled to the count instead of opening
+   exactly as stored.
 9. **No + in the tile header.** Decided by the owner ("remove the + button from
    these views"): the header is `● name ……… ⋯ ⤢ ×`. The + menu and its "New
    session in this case" went with it. Tiles are added from the Tiles button
-   and its right-click picker, Ctrl/Cmd+click on a tab, a dragged tab, "Open
-   group as tiles" and Run joining the open grid.
+   and its right-click count menu, Ctrl/Cmd+click on a tab, a dragged tab,
+   "Open group as tiles" and Run joining the open grid.
+10. **Right-click Tiles is a 2 / 4 / 6 count menu.** Decided by the owner
+   ("give me then the option to choose only HOW many tiles, 2,4,6 default is 6
+   so the menu is easier"; asked where it lives: "Click opens 6"): a click
+   still opens the grid at once, with the remembered count (default 6); the
+   right-click menu offers 2, 4 and 6, remembered per device; the session
+   picker is gone, and decision 8's "picker on right-click" is superseded. The
+   owner's answers on the details: the count wins over a remembered grid's
+   size (its tiles first, in their cells, holes filled first, then tab order);
+   Ctrl/Cmd+click with the grid closed opens the count in total, that session
+   focused; shrinking keeps the focused tile; only the toggle animates the
+   close; a remembered count larger than the window stays checked but greyed
+   and a click opens what fits; the close keeps its dimmed still until the
+   single view has painted (at most 700 ms); paced connect is in.
 
 ## Code anchors
 

@@ -15,16 +15,21 @@ button in the header, beside Split, and enables `Ctrl+Shift+G`.
 
 ## Opening a grid
 
-- **Tiles button**: one click shows the tiles straight away. You get the grid you last
-  had; if there is none, an open split as two tiles; otherwise your open sessions in tab
-  order, up to six (fewer if the window is too small), with the session you are on
-  focused. With the grid open, the same button closes it.
-- **Right-click the Tiles button** to choose which sessions: a checkbox per open session in
-  tab order, starting with the tiles you have (or had), greying out the rest once the grid
-  is full. **Open tiles** shows them, replacing what the grid showed.
+- **Tiles button**: one click shows the tiles straight away, as many as you last chose
+  (six until you choose; fewer if the window is too small or you have fewer sessions open).
+  You get the grid you last had, its tiles where they were, topped up with your open
+  sessions in tab order; if there is none, an open split's two first; otherwise your open
+  sessions in tab order, with the session you are on focused. With the grid open, the same
+  button closes it.
+- **Right-click the Tiles button** (or press `Shift+F10` on it) to choose how many tiles:
+  **2**, **4** or **6**, each drawn as its layout. Your choice is remembered on this device
+  and is what the next click opens. With the grid open, picking a count re-forms it: the
+  tile you are in always stays, extra tiles leave from the end, new ones join from your tab
+  order. A count the window is too small for is greyed out, with the reason.
 - **`Ctrl+Shift+G`**: exactly what a click on the Tiles button does.
 - **`Ctrl`+click (or `Cmd`+click) a tab**: adds that session to the grid and focuses it. With
-  the grid closed it opens what the Tiles button would show, plus that session. On macOS use
+  the grid closed it opens what the Tiles button would show, with that session among them
+  (still the count you chose in total). On macOS use
   `Cmd`: `Ctrl`+click there opens the tab's rename instead.
 - **Drag a tab onto a tile** to replace that tile with it (the replaced session keeps
   running), or onto an empty slot to add it. Dragging a session that is already tiled onto
@@ -35,7 +40,12 @@ button in the header, beside Split, and enables `Ctrl+Shift+G`.
 
 The layout follows the tile count: 1x1, 2x1, three side by side on a wide screen (else a
 2x2 with one empty slot), 2x2, 3x2. The grid holds at most six tiles, fewer when the
-window is too small for six; the picker says which limit applies.
+window is too small for six; the count menu says which limit applies.
+
+Opening, the tiles fade in one after another and each terminal appears once its history
+has loaded, rather than scrolling through it. Closing with the button, the tiles stay
+on screen, dimmed, until the single session behind them has loaded, then fade away. With
+reduced motion turned on in your system settings, the grid opens and closes at once.
 
 ## A tile
 
