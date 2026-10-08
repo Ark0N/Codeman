@@ -42,6 +42,9 @@ const TILE_GHOST_HOLD_MAX_MS = 700;
 // A tile's terminal shows once its first capture has landed (the load queue
 // says so); this is the backstop should that never be reported.
 const TILE_REVEAL_FALLBACK_MS = 15000;
+// How long the pointer (or a keyboard focus) rests on the Tiles button before
+// its hover card shows (owner feedback 1).
+const TILE_HINT_DELAY_MS = 300;
 // Trailing debounce for refitting tiles after the grid area changes size, so a
 // window drag sends each tile's PTY one resize, not one per frame.
 const TILE_GRID_REFIT_MS = 150;
@@ -108,6 +111,31 @@ function tileCountGlyph(n) {
       svg.appendChild(rect);
     }
   }
+  return svg;
+}
+
+/**
+ * The hover card's mouse: a rounded body with its left or right button filled.
+ */
+function tileHintMouseGlyph(button) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('class', `tile-hint-glyph tile-hint-glyph--${button}`);
+  svg.setAttribute('viewBox', '0 0 10 14');
+  svg.setAttribute('aria-hidden', 'true');
+  const body = document.createElementNS(NS, 'rect');
+  for (const [k, v] of Object.entries({ x: '0.75', y: '0.75', width: '8.5', height: '12.5', rx: '4.25' })) {
+    body.setAttribute(k, v);
+  }
+  const press = document.createElementNS(NS, 'path');
+  press.setAttribute('class', 'tile-hint-press');
+  press.setAttribute(
+    'd',
+    button === 'left'
+      ? 'M4.6 1.3 V6 H1.3 V5.2 A3.6 3.6 0 0 1 4.6 1.3 Z'
+      : 'M5.4 1.3 V6 H8.7 V5.2 A3.6 3.6 0 0 0 5.4 1.3 Z'
+  );
+  svg.append(body, press);
   return svg;
 }
 
@@ -487,6 +515,7 @@ Object.assign(CodemanApp.prototype, {
    * backstop that hides it even if this never runs).
    */
   _applyTileGridButtonVisibility(enabled) {
+    this._installTileGridHint();
     this._tileGridButtonSettingEnabled = !!enabled;
     const btn = document.querySelector('.btn-tile-grid');
     const wide = window.innerWidth >= SPLIT_PANE_MIN_WIDTH;
@@ -505,11 +534,163 @@ Object.assign(CodemanApp.prototype, {
     const open = this._tilesOwnTerminal();
     btn.classList.toggle('tiles-open', open);
     btn.setAttribute('aria-pressed', open ? 'true' : 'false');
-    const title = open
-      ? 'Tiles: back to a single session (right-click for how many tiles)'
-      : 'Tiles: show several sessions side by side (right-click for how many)';
-    btn.title = title;
-    btn.setAttribute('aria-label', title);
+    // No native title: the hover card says it (two tooltips never stack), and
+    // aria-describedby gives screen readers the same text.
+    btn.setAttribute(
+      'aria-label',
+      open
+        ? 'Tiles: back to a single session (right-click for how many tiles)'
+        : 'Tiles: show several sessions side by side (right-click for how many)'
+    );
+    this._renderTileHint();
+  },
+
+  /**
+   * The Tiles button's hover card (owner feedback 1: "give me the hover info
+   * to right click over the tile button to adjust it"): the title with the
+   * remembered count, what a click does (open or close the grid), that a
+   * right-click chooses 2, 4 or 6, what opens when the count does not fit the
+   * window, and, shown from the keyboard, Shift+F10. It replaces the button's
+   * native title. The card always exists (hidden) and is kept current, since
+   * the button's aria-describedby reads it for screen readers without a
+   * hover. Installed once, from the button's visibility setter; never in a
+   * solo window.
+   */
+  _installTileGridHint() {
+    if (this._tileHint || this.isSoloWindow) return;
+    const btn = document.querySelector('.btn-tile-grid');
+    if (!btn) return;
+    const card = document.createElement('div');
+    card.id = 'tileGridHint';
+    card.className = 'tile-hint';
+    card.setAttribute('role', 'tooltip');
+    card.hidden = true;
+    const title = document.createElement('div');
+    title.className = 'tile-hint-title';
+    const line = (glyph) => {
+      const row = document.createElement('div');
+      row.className = 'tile-hint-line';
+      const text = document.createElement('span');
+      if (glyph) row.appendChild(glyph);
+      row.appendChild(text);
+      return { row, text };
+    };
+    const click = line(tileHintMouseGlyph('left'));
+    const right = line(tileHintMouseGlyph('right'));
+    right.text.textContent = 'Right-click: choose 2, 4 or 6 tiles';
+    const fits = line(null);
+    fits.row.classList.add('tile-hint-note');
+    const keys = line(null);
+    keys.row.classList.add('tile-hint-keys');
+    keys.text.textContent = 'Shift+F10: the same menu from the keyboard';
+    card.append(title, click.row, right.row, fits.row, keys.row);
+    document.body.appendChild(card);
+    btn.removeAttribute('title');
+    btn.setAttribute('aria-describedby', card.id);
+    const hint = (this._tileHint = { btn, card, title, click: click.text, fits, keys, timer: null, suppressed: false });
+    const canHover = () => window.matchMedia?.('(hover: hover)')?.matches !== false;
+    btn.addEventListener('pointerenter', (e) => {
+      if (e?.pointerType === 'touch' || !canHover()) return;
+      this._scheduleTileHint({ keyboard: false });
+    });
+    btn.addEventListener('pointerleave', () => {
+      hint.suppressed = false;
+      this._hideTileHint();
+    });
+    btn.addEventListener('focus', () => {
+      // Focus put back by the count menu's Escape: the user was just there.
+      if (hint.skipFocus) {
+        hint.skipFocus = false;
+        return;
+      }
+      if (btn.matches?.(':focus-visible')) this._scheduleTileHint({ keyboard: true });
+    });
+    btn.addEventListener('blur', () => this._hideTileHint());
+    // Capture: these run before the button's own handlers, so the card is gone
+    // before a right-click opens the count menu or a click opens the grid; and
+    // it stays gone while the pointer rests there.
+    const dismiss = () => {
+      hint.suppressed = true;
+      this._hideTileHint();
+    };
+    for (const type of ['pointerdown', 'click', 'contextmenu']) btn.addEventListener(type, dismiss, true);
+    // While shown: Escape, a scroll anywhere, a resize.
+    hint.onKey = (e) => {
+      if (e.key === 'Escape') this._hideTileHint();
+    };
+    hint.onAway = () => this._hideTileHint();
+    this._renderTileHint();
+  },
+
+  /**
+   * The card's text, from the remembered count, the grid's state and what the
+   * window fits. Compared with the last English text set, never the DOM (in
+   * zh-CN the DOM holds the translation; see _renderTileOverlay).
+   */
+  _renderTileHint() {
+    const hint = this._tileHint;
+    if (!hint) return;
+    const count = this._tileGridCount();
+    const open = this._tilesOwnTerminal();
+    const capacity = this._tileGridLimit().capacity;
+    const set = (el, key, text) => {
+      if (hint[key] === text) return;
+      hint[key] = text;
+      el.textContent = text;
+    };
+    set(hint.title, 'titleText', `Tiles \u00B7 ${count}`);
+    set(hint.click, 'clickText', open ? 'Click: close the grid' : 'Click: open the grid');
+    const plural = capacity === 1 ? '' : 's';
+    const fitsText =
+      count <= capacity
+        ? ''
+        : open
+          ? `This window fits ${capacity} tile${plural}`
+          : `This window fits ${capacity} tile${plural}: a click opens ${capacity}`;
+    set(hint.fits.text, 'fitsText', fitsText);
+    hint.fits.row.hidden = !fitsText;
+  },
+
+  _scheduleTileHint({ keyboard }) {
+    const hint = this._tileHint;
+    if (!hint || hint.suppressed) return;
+    clearTimeout(hint.timer);
+    hint.timer = setTimeout(() => this._showTileHint({ keyboard }), TILE_HINT_DELAY_MS);
+  },
+
+  /** Under the button, right-aligned as the count menu; never with the menu open or the button hidden. */
+  _showTileHint({ keyboard }) {
+    const hint = this._tileHint;
+    hint.timer = null;
+    if (hint.suppressed || this._tileCountMenu || hint.btn.classList.contains('btn-tile-grid--hidden')) return;
+    this._renderTileHint();
+    hint.keys.row.hidden = !keyboard;
+    const rect = hint.btn.getBoundingClientRect?.();
+    if (rect) {
+      hint.card.style.top = `${rect.bottom + 6}px`;
+      hint.card.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+    }
+    if (!hint.card.hidden) return;
+    hint.card.hidden = false;
+    document.addEventListener('keydown', hint.onKey, true);
+    window.addEventListener('scroll', hint.onAway, true);
+    window.addEventListener('resize', hint.onAway);
+  },
+
+  /** Idempotent: cancels a pending show and hides the card. */
+  _hideTileHint() {
+    const hint = this._tileHint;
+    if (!hint) return;
+    clearTimeout(hint.timer);
+    hint.timer = null;
+    if (hint.card.hidden) return;
+    hint.card.hidden = true;
+    // Hidden, the card is the button's description in full: a hidden line
+    // inside it would be left out of what a screen reader hears.
+    hint.keys.row.hidden = false;
+    document.removeEventListener('keydown', hint.onKey, true);
+    window.removeEventListener('scroll', hint.onAway, true);
+    window.removeEventListener('resize', hint.onAway);
   },
 
   /**
@@ -554,6 +735,8 @@ Object.assign(CodemanApp.prototype, {
     } catch {
       /* Per-device convenience only. */
     }
+    // The hover card names the count.
+    this._renderTileHint();
   },
 
   /**
@@ -570,6 +753,9 @@ Object.assign(CodemanApp.prototype, {
   openTileCountMenu(event) {
     // The right-click: the browser's own context menu stays away.
     event?.preventDefault?.();
+    // Never beside a hover card still showing (its own capture listener has
+    // usually hidden it already).
+    this._hideTileHint();
     if (this._tileCountMenu) {
       this.closeTileCountMenu();
       return;
@@ -709,7 +895,12 @@ Object.assign(CodemanApp.prototype, {
     document.removeEventListener('click', menu.onOutside);
     document.removeEventListener('keydown', menu.onKey, true);
     menu.menu.remove();
-    if (refocus) document.querySelector('.btn-tile-grid')?.focus?.();
+    if (refocus) {
+      // The user was just in the menu: no hover card for this focus.
+      if (this._tileHint) this._tileHint.skipFocus = true;
+      document.querySelector('.btn-tile-grid')?.focus?.();
+      if (this._tileHint) this._tileHint.skipFocus = false;
+    }
   },
 
   /**

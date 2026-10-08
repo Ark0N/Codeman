@@ -19952,6 +19952,89 @@ body.tile-grid-resizing--row * {
   font-size: 11px;
 }
 
+/* The Tiles button's hover card (tile-grid.js _installTileGridHint): the
+   count, what a click and a right-click do, Shift+F10 from the keyboard.
+   Under the button in the count menu's panel style; it never takes a pointer,
+   and only pointers that hover get it. */
+.tile-hint {
+  position: fixed;
+  z-index: 1000;
+  max-width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--floating-bg, var(--bg-secondary, #1a1a1a));
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--control-border, var(--border-color, #333));
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.25);
+  color: var(--text, #e6e6e6);
+  font-size: 12px;
+  line-height: 1.35;
+  pointer-events: none;
+  transform-origin: top right;
+  animation: tile-hint-in 120ms ease-out both;
+}
+
+.tile-hint[hidden],
+.tile-hint [hidden] {
+  display: none;
+}
+
+@keyframes tile-hint-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+}
+
+.tile-hint-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.tile-hint-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted, #999);
+  white-space: nowrap;
+}
+
+/* The fits and keyboard lines have no mouse: the same indent as the text. */
+.tile-hint-note,
+.tile-hint-keys {
+  padding-left: 18px;
+}
+
+.tile-hint-glyph {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.1;
+}
+
+.tile-hint-glyph .tile-hint-press {
+  fill: var(--accent, #4a9eff);
+  stroke: none;
+}
+
+@media (hover: none) {
+  .tile-hint {
+    display: none !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile-hint {
+    animation: none;
+  }
+}
+
 /* ── Tile grid motion (the grid's own default, not an entrance theme) ──────
    Opening the grid, each tile fades and settles in, staggered in reading
    order; its terminal stays transparent until its first capture lands, then

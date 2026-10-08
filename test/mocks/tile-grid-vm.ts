@@ -137,6 +137,10 @@ export class FakeEl {
   getAttribute(k: string) {
     return this.attrs[k] ?? null;
   }
+  removeAttribute(k: string) {
+    delete this.attrs[k];
+    if (k === 'title') this.title = '';
+  }
   /** Per event type, whether each listener was registered for the capture phase. */
   captureFlags: Record<string, boolean[]> = {};
   addEventListener(type: string, fn: (ev: unknown) => void, opts?: boolean | { capture?: boolean }) {

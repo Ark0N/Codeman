@@ -65,7 +65,7 @@ afterAll(() => {
 });
 
 // What may stay Latin in a translation: key names, compact durations, glyphs.
-const ALLOWED = /\b(Ctrl|Cmd|Shift|Alt|Option|Enter|G)\b|<1m|\b\d+[dhm]\b/g;
+const ALLOWED = /\b(Ctrl|Cmd|Shift|Alt|Option|Enter|G|F10)\b|<1m|\b\d+[dhm]\b/g;
 const leftover = (text: string) => text.replace(ALLOWED, '').match(/[A-Za-z]+/g) ?? [];
 
 /** Every string a translation must handle, with where it was seen. */
@@ -166,6 +166,16 @@ async function exercise() {
   // A session named like a UI string (a count menu label): user text, never translated.
   app.sessions.get('s-5').name = '6 tiles';
 
+  // The Tiles button's hover card, closed: the default count, then a count
+  // the window cannot fit (the card is in body, harvested with it).
+  app._applyTileGridButtonVisibility(true);
+  harvestAll(app, 'hover card, closed');
+  wrapRect = { width: 1200, height: 900 };
+  app._rememberTileGridCount(6);
+  harvestAll(app, 'hover card, does not fit');
+  wrapRect = { width: 2400, height: 1200 };
+  app._renderTileHint();
+
   // The count menu: the cap (nothing greyed), then the window wording.
   app.openTileCountMenu({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
   harvestAll(app, 'count menu, cap');
@@ -184,6 +194,12 @@ async function exercise() {
   // The grid: five tiles first (an empty slot), then the sixth.
   app.openTileGrid(EIGHT.slice(0, 5));
   harvestAll(app, 'grid of five');
+  // The hover card with the grid open, and a count it cannot fit there.
+  section.getBoundingClientRect = () => ({ width: 1200, height: 900, top: 0, left: 0, right: 1200, bottom: 900 });
+  app._renderTileHint();
+  harvestAll(app, 'hover card, open, does not fit');
+  delete (section as unknown as Record<string, unknown>).getBoundingClientRect;
+  app._renderTileHint();
   app.addTile('s-6');
   app._renderTileChrome();
   harvestAll(app, 'grid of six');
@@ -260,6 +276,12 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
     const expected = [
       'How many tiles',
       'Tiles',
+      'Tiles \u00B7 6',
+      'Click: open the grid',
+      'Click: close the grid',
+      'Right-click: choose 2, 4 or 6 tiles',
+      'Shift+F10: the same menu from the keyboard',
+      'This window fits 4 tiles: a click opens 4',
       '2 tiles',
       '4 tiles',
       '6 tiles',
@@ -384,12 +406,13 @@ describe('the static markup through the real translator (JSDOM, zh-CN)', () => {
   api.start();
   api.configure({ language: 'zh-CN' });
 
-  it('the Tiles header button: title and accessible name', () => {
+  it('the Tiles header button: its accessible name, no native title, its description is the hover card', () => {
     const btn = doc.querySelector('.btn-tile-grid')!;
-    for (const text of [btn.getAttribute('title')!, btn.getAttribute('aria-label')!]) {
-      expect(text).toContain('平铺');
-      expect(leftover(text)).toEqual([]);
-    }
+    const label = btn.getAttribute('aria-label')!;
+    expect(label).toContain('平铺');
+    expect(leftover(label)).toEqual([]);
+    expect(btn.hasAttribute('title')).toBe(false);
+    expect(btn.getAttribute('aria-describedby')).toBe('tileGridHint');
   });
 
   it('the App Settings chips (Tiles, and Split beside it) and the grid region', () => {

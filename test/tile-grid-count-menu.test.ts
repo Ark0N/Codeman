@@ -123,17 +123,20 @@ describe('the Tiles button', () => {
     app.openTileGrid(IDS.slice(0, 3));
     expect(btn.getAttribute('aria-pressed')).toBe('true');
     expect(btn.classList.contains('tiles-open')).toBe(true);
-    expect(btn.title).toBe('Tiles: back to a single session (right-click for how many tiles)');
+    expect(btn.getAttribute('aria-label')).toBe('Tiles: back to a single session (right-click for how many tiles)');
     app.toggleTileGrid();
     expect(app._tilesOwnTerminal()).toBe(false);
     expect(btn.getAttribute('aria-pressed')).toBe('false');
-    expect(btn.title).toBe('Tiles: show several sessions side by side (right-click for how many)');
+    expect(btn.getAttribute('aria-label')).toBe('Tiles: show several sessions side by side (right-click for how many)');
+    // No native title (the hover card says it, tile-grid-hint.test.ts).
+    expect(btn.title).toBe('');
     expect(menu()).toBeNull();
   });
 
   it('right-click opens the count menu, the click still toggles (one function with Ctrl+Shift+G)', () => {
     expect(html).toContain('onclick="app.toggleTileGrid()" oncontextmenu="app.openTileCountMenu(event)"');
-    expect(html).toContain('title="Tiles: show several sessions side by side (right-click for how many)"');
+    expect(html).toContain('aria-label="Tiles: show several sessions side by side (right-click for how many)"');
+    expect(html).toContain('aria-describedby="tileGridHint"');
   });
 });
 

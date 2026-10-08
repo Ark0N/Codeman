@@ -107,6 +107,11 @@
       '平铺：并排显示多个会话（右键单击可选择窗格数量）',
     'Tiles: back to a single session (right-click for how many tiles)': '平铺：返回单个会话（右键单击可选择窗格数量）',
     'How many tiles': '窗格数量',
+    // The Tiles button's hover card (the count and the fits note are patterns).
+    'Click: open the grid': '单击：打开平铺网格',
+    'Click: close the grid': '单击：关闭平铺网格',
+    'Right-click: choose 2, 4 or 6 tiles': '右键单击：选择 2、4 或 6 个窗格',
+    'Shift+F10: the same menu from the keyboard': 'Shift+F10：用键盘打开同一菜单',
     'Split: unavailable while tiles are open': '分屏：平铺打开时不可用',
     'Toggle Tile Grid': '切换平铺网格',
     'Focus Tile Left': '聚焦左侧窗格',
@@ -1057,6 +1062,11 @@
       ],
       // Tile grid: counts, exit codes and durations pass through.
       [/^(\d+) tiles$/, (_m, n) => `${n} 个窗格`],
+      [/^Tiles \u00B7 (\d+)$/, (_m, n) => `平铺 · ${n}`],
+      [
+        /^This window fits (\d+) tiles?: a click opens (\d+)$/,
+        (_m, n, m) => `此窗口可容纳 ${n} 个窗格：单击将打开 ${m} 个`,
+      ],
       [/^This window fits (\d+) tiles?$/, (_m, n) => `此窗口可容纳 ${n} 个窗格`],
       [/^The grid holds at most (\d+) tiles$/, (_m, n) => `平铺网格最多容纳 ${n} 个窗格`],
       [
