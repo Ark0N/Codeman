@@ -69,7 +69,7 @@ output. The other CLIs expose no equivalent.
 | Respawn cycling and unattended runs               | Yes    | Yes                                                  |
 | Cron jobs                                         | Yes    | Yes                                                  |
 | Docker cases, remote SSH cases                    | Yes    | Yes                                                  |
-| Precise idle detection                            | Yes    | Codex: same screen check, via its own prompt and working line. DeepSeek: reports its state itself. Others: output stabilization, coarser |
+| Precise idle detection                            | Yes    | Codex and Pi: same screen check, via their own prompt and working line. DeepSeek: reports its state itself. Others: output stabilization, coarser |
 | Auto-resume when a usage limit resets             | Yes    | No                                                   |
 | Plan usage chip                                   | Yes    | No                                                   |
 | Approvals Inbox                                   | Yes    | DeepSeek yes; others no                              |
@@ -169,6 +169,10 @@ Pi needs the opposite instincts from every other CLI here.
   `HF_TOKEN`, and so on) share no common prefix, and the environment allowlist is global
   rather than per mode, so admitting them for Pi would widen the allowlist for every mode at
   once. They stay out.
+- **Work detection reads Pi's composer rule.** Pi has no prompt glyph; while a turn runs it
+  puts a spinner into the rule above the composer (`── ⠏ Working ───`), and Codeman reads
+  that to tell working from idle. Before 1.36.0 a Pi session that had started a turn showed
+  as working for good.
 
 Guide: [`docs/pi-integration.md`](https://github.com/Ark0N/Codeman/blob/master/docs/pi-integration.md).
 

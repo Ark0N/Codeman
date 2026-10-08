@@ -935,6 +935,20 @@ const PI: CliEntry = {
     ...agentDefaults(),
     altScreen: 'preserve', // pi's TUI renders into the main screen with terminal-owned scrollback
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // Measured on a live pi 1.1.0 pane (capture-pane every 250 ms through a turn,
+    // 2026-10-09): pi has no composer glyph. Its composer sits between two `─` rules, and
+    // while a turn runs it embeds its status in the TOP rule as `── ⠏ Working ───…`, the
+    // braille frame animating every ~80 ms; at rest both rules are plain `─`. So the rule
+    // is the glyph that arms the idle confirmation, and a spinner frame inside it is the
+    // working line (the frame, not the word: an extension can replace "Working").
+    // ⚠️ Without this entry a pi session never left `busy` once marked working: the
+    // braille spinner trips SPINNER_PATTERN, and pi never draws Claude's `❯`, the
+    // fallback that would have armed the idle check. The rules carry no prompt text, so
+    // the submit verifier reading them stands down instead of re-pressing Enter.
+    workDetect: {
+      promptGlyph: '─',
+      workingLine: '── [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] ',
+    },
     // pi's absent-config default is an interactive trust PROMPT the session user could
     // just answer "yes" to, so omitting --approve is not itself a clamp — MATERIALIZE
     // approveProjectTrust:false so buildPiCommand emits --no-approve outright.

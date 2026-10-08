@@ -1,5 +1,5 @@
 /**
- * Working/idle detection for an interactive agent pane, Claude's and Codex's.
+ * Working/idle detection for an interactive agent pane, Claude's, Codex's and pi's.
  *
  * The bug this pins: Claude redraws the composer (`❯`) about once a second all
  * the way through a turn, so the old "saw a ❯, wait 2s, call it idle" rule
@@ -13,12 +13,14 @@
  * work exactly as before.
  *
  * The status-line fixtures below are verbatim captures from live panes
- * (`tmux -L codeman capture-pane -p`) on Claude Code 2.1.220 and Codex CLI 0.152.1.
+ * (`tmux -L codeman capture-pane -p`) on Claude Code 2.1.220, Codex CLI 0.152.1 and pi 1.1.0.
  */
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { Session } from '../src/session.js';
 import { getCli } from '../src/config/cli-registry/index.js';
 import { CLAUDE_WORKING_LINE_PATTERN } from '../src/utils/regex-patterns.js';
+import { stripAnsi } from '../src/utils/index.js';
+import { promptStillInComposer } from '../src/session-submit-verifier.js';
 import {
   trackActivityStreak,
   isSustainedActivity,
@@ -44,7 +46,7 @@ function feed(session: Session, data: string): void {
  * A session whose mux reports a fixed (or scripted) screen, so the pane probe has
  * something to read. Only `capturePaneText` is exercised by these paths.
  */
-function withFakePane(screen: string | (() => string), mode: 'claude' | 'codex' = 'claude'): Session {
+function withFakePane(screen: string | (() => string), mode: 'claude' | 'codex' | 'pi' = 'claude'): Session {
   const read = typeof screen === 'function' ? screen : () => screen;
   const mux = {
     isAvailable: () => true,
@@ -71,6 +73,20 @@ const CODEX_FINISHED =
   '  gpt-5.6-sol high · Context 57% left · ~/innovi/irisplus-ent-2 · main\n';
 /** Codex's own composer repaint, the frame that arms the idle confirmation. */
 const CODEX_COMPOSER_REPAINT = '\x1b[31;1H\x1b[38;5;246m›\xa0\x1b[39m\x1b[0m';
+
+/**
+ * pi's pane, verbatim from a live pi 1.1.0 capture (rules shortened): no composer glyph,
+ * the composer sits between two `─` rules, and a running turn puts a braille spinner and
+ * its status into the TOP rule. At rest both rules are plain.
+ */
+const PI_RULE = '─'.repeat(48);
+const PI_FOOTER = '~/codeman-cases/testcase\n0.8%/253k (auto)            qwen3.8-27b-pi • xhigh\n';
+const PI_WORKING = ` say ok\n── ⠏ Working ${PI_RULE}\n\n${PI_RULE}\n${PI_FOOTER}`;
+const PI_AT_REST = ` Error: Retry failed after 3 attempts: Connection error.\n${PI_RULE}\n\n${PI_RULE}\n${PI_FOOTER}`;
+/** One spinner frame on the wire: pi rewrites the whole top rule each time (~80 ms). */
+const PI_SPINNER_FRAME = `\x1b[35;1H\x1b(B\x1b[m\x1b[A\x1b[K\x1b[95m── ⠼\x1b[39m \x1b[95mWorking ${PI_RULE}`;
+/** The turn's last repaint: the top rule drawn plain again. */
+const PI_RULE_REPAINT = `\x1b[35;1H\x1b(B\x1b[m\x1b[A\x1b[K${PI_RULE}`;
 
 /** A composer repaint: the frame Claude ships roughly once a second while working. */
 const COMPOSER_REPAINT =
@@ -489,6 +505,81 @@ describe("codex's work-detection descriptor", () => {
   it('names the glyph Codex actually draws on its composer row', () => {
     expect(CODEX_COMPOSER_REPAINT).toContain(codex!.promptGlyph);
     expect(CODEX_WORKING).toContain(codex!.promptGlyph);
+  });
+});
+
+describe("pi's work-detection descriptor", () => {
+  const pi = getCli('pi')?.capabilities.workDetect;
+
+  it('matches the spinner pi embeds in its composer rule while a turn runs', () => {
+    expect(new RegExp(pi!.workingLine).test(PI_WORKING)).toBe(true);
+    // The stream detector reads the ANSI-stripped chunk.
+    expect(new RegExp(pi!.workingLine).test(stripAnsi(PI_SPINNER_FRAME))).toBe(true);
+  });
+
+  it('does not match the plain rules of a pane at rest', () => {
+    expect(new RegExp(pi!.workingLine).test(PI_AT_REST)).toBe(false);
+  });
+
+  it('names a glyph every pi repaint carries, so the idle check can arm', () => {
+    expect(PI_SPINNER_FRAME).toContain(pi!.promptGlyph);
+    expect(PI_RULE_REPAINT).toContain(pi!.promptGlyph);
+  });
+
+  it('leaves the submit verifier unable to press Enter on a pi pane', () => {
+    // The verifier reads the last row starting with the glyph, which for pi is a bare
+    // rule with no prompt text in it: it must stand down, never report "unsubmitted".
+    expect(promptStillInComposer(PI_AT_REST, 'say ok', pi!.promptGlyph)).toBe(false);
+    expect(promptStillInComposer(PI_WORKING, 'say ok', pi!.promptGlyph)).toBe(false);
+  });
+});
+
+describe('pi interactive idle detection', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('marks a pi turn working, and lets it end', () => {
+    vi.useFakeTimers();
+    let screen = PI_WORKING;
+    const session = withFakePane(() => screen, 'pi');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    // Eight seconds of spinner frames: every one carries the rule glyph, which must
+    // not end the turn while the pane is still animating.
+    for (let i = 0; i < 80; i++) {
+      feed(session, PI_SPINNER_FRAME);
+      vi.advanceTimersByTime(100);
+    }
+    expect(events).toEqual(['working']);
+    expect(session.status).toBe('busy');
+
+    // Turn over. Before pi declared its rule and spinner, nothing ever armed the idle
+    // check (pi never draws `❯`), so the session stayed busy for good.
+    screen = PI_AT_REST;
+    feed(session, PI_RULE_REPAINT);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['working', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('settles a reattached pi pane that is at rest', () => {
+    vi.useFakeTimers();
+    // A restored pane starts in the `busy` that startInteractive() sets and gets no
+    // launch timer; the reattach repaint is what has to bring it to idle.
+    const session = withFakePane(PI_AT_REST, 'pi');
+    (session as unknown as { _status: string })._status = 'busy';
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+
+    feed(session, PI_RULE_REPAINT);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['idle']);
+    expect(session.status).toBe('idle');
   });
 });
 

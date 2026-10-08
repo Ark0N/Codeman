@@ -223,9 +223,13 @@ command override instead.
 ## Known gaps
 
 - **No idle/completion hook.** Pi has no hook system Codeman can install into, so
-  idle detection falls back to output-stabilization like the other external CLIs.
-  Pi 0.84.0 shipped an `agent_settled` extension event that is a genuine idle
-  signal; a Codeman pi extension using it is the highest-value follow-up.
+  idle detection reads the screen: the registry entry's `workDetect` names pi's
+  composer rule (`─`) as the glyph that arms the idle check and the spinner pi embeds
+  in that rule while a turn runs (`── ⠏ Working ───`) as the working line, measured
+  on pi 1.1.0. Without it a pi session that had started a turn never left `busy`,
+  since pi never draws Claude's `❯`. Pi 0.84.0 shipped an `agent_settled` extension
+  event that is a genuine idle signal; a Codeman pi extension using it is still the
+  highest-value follow-up.
 - **No response viewer.** Pi writes JSONL v3 session files under
   `~/.pi/agent/sessions/`; nothing reads them yet.
 - **Cron jobs mis-detect readiness.** The cron readiness poll looks for `❯` or a
