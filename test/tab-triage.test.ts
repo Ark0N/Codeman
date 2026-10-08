@@ -295,7 +295,9 @@ describe('tab grouping in the render paths (app.js)', () => {
     const app = makeApp();
     app._fullRenderSessionTabs();
     const lead = () =>
-      [...container().querySelectorAll<HTMLElement>(':scope > .tab-triage-head--lead')].map((h) => h.dataset.triageGroup);
+      [...container().querySelectorAll<HTMLElement>(':scope > .tab-triage-head--lead')].map(
+        (h) => h.dataset.triageGroup
+      );
     expect(lead()).toEqual(['needs']);
     document.documentElement.dataset.tabStateOrder = 'urgent-last';
     app._renderSessionTabsImmediate();
@@ -424,9 +426,7 @@ describe('tab grouping wiring (static)', () => {
   const mobileCss = read('mobile.css');
 
   it('stamps data-tab-arrangement and data-tab-state-order before first paint', () => {
-    expect(html).toContain(
-      "dataset.tabArrangement=(T==='case'||T==='ledger'||T==='classic')?T:'state'"
-    );
+    expect(html).toContain("dataset.tabArrangement=(T==='case'||T==='ledger'||T==='classic')?T:'state'");
     expect(html).toContain("dataset.tabStateOrder=(A.tabStateOrder==='urgent-last')?'urgent-last':'urgent-first'");
     // The catch branch (localStorage threw) must set both too.
     expect(html).toContain(
@@ -447,6 +447,24 @@ describe('tab grouping wiring (static)', () => {
     expect(css).toMatch(/\.tab-triage-break \{\s*display: none;/);
     expect(css).toContain(
       '.session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) > .tab-triage-break'
+    );
+  });
+
+  it('spaces the rows with item margins, so a row break costs no second gap', () => {
+    // Each break is a zero-height flex line of its own. With a row-gap, a group
+    // boundary cost two gaps (12px each with lineage lines, 54px row pitch
+    // instead of 42), and a negative margin on the break cannot win one back,
+    // because a flex line's cross size is clamped at zero.
+    const strip = css.indexOf('.session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) {');
+    const block = css.slice(strip, css.indexOf('}', strip));
+    expect(block).toContain('row-gap: 0;');
+    expect(block).toContain('padding-bottom: 0;');
+    expect(css).toMatch(
+      /\.session-tabs\.tabs-triage:is\(\.tabs-auto-wrap, \.tabs-two-rows\) > :not\(\.tab-triage-break\) \{\s*margin-bottom: var\(--lineage-row-gap, 4px\);/
+    );
+    // With lineage the last row's margin is part of the bottom routing room.
+    expect(css).toMatch(
+      /\.session-tabs\.tabs-triage\.lineage-tree:is\(\.tabs-auto-wrap, \.tabs-two-rows\) \{[^}]*padding-bottom: calc\(var\(--lineage-bottom-room\) - var\(--lineage-row-gap\)\);/
     );
   });
 

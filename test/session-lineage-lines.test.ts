@@ -384,6 +384,28 @@ describe('lineage wiring', () => {
     expect(wrapped).toContain('padding-left');
   });
 
+  it('keeps the routing row gap in every tab arrangement through one variable', () => {
+    // The ledger grid and the case clusters set their own `gap` at a specificity
+    // that beat the lineage rule, packing the lanes onto the cell borders. Every
+    // arrangement now reads the one variable, which only the lineage rule sets.
+    expect(stylesCss.match(/--lineage-row-gap:/g)).toHaveLength(1);
+    const wrapped = stylesCss.slice(stylesCss.indexOf('.session-tabs.lineage-tree.tabs-auto-wrap {'));
+    expect(wrapped.slice(0, wrapped.indexOf('}'))).toMatch(
+      /--lineage-row-gap: 12px;\s[^}]*row-gap: var\(--lineage-row-gap\);/
+    );
+    expect(stylesCss).toMatch(
+      /\.session-tabs-host > \.session-tabs\.tabs-ledger \{[^}]*gap: var\(--lineage-row-gap, 4px\) 6px;/
+    );
+    expect(stylesCss).toMatch(
+      /\.session-tabs-host > \.session-tabs\.tabs-clusters \{\s*gap: var\(--lineage-row-gap, 6px\) 6px;/
+    );
+    expect(stylesCss).toMatch(
+      /\.session-tabs-host > \.session-tabs\.tabs-clusters > \.tab-cluster \{[^}]*gap: var\(--lineage-row-gap, 2px\) 2px;/
+    );
+    // No arrangement may hard-code a gap the lineage rows depend on.
+    expect(stylesCss).not.toMatch(/\.session-tabs\.tabs-(ledger|clusters) \{[^}]*\bgap: \d+px( \d+px)?;/);
+  });
+
   it('syncs the routing room before the wrap is measured, and redraws on selection', () => {
     const overflow = appJs.slice(appJs.indexOf('  updateTabOverflowMode() {'));
     expect(overflow.indexOf('_syncLineageGutter')).toBeGreaterThan(-1);

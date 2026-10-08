@@ -601,15 +601,24 @@ body {
    another, and never toggled by the selection, so switching tabs cannot resize
    the header (and with it the terminal). The bottom padding is the last row's
    gap; a wrapped strip also widens the row gap the routes run in, and opens the
-   spine channel on the left that joins one row's gap to another's. */
+   spine channel on the left that joins one row's gap to another's.
+
+   ⚠ The row gap is ONE variable, --lineage-row-gap, set only here. Every tab
+   arrangement that spaces its rows itself (the ledger grid, the case clusters,
+   the state rows' item margins, near the end of this file) reads it with its
+   own fallback, so the routes get the same 12px gap in every layout instead of
+   losing a specificity contest to whichever rule comes later. */
 .session-tabs.lineage-tree {
-  padding-bottom: 14px;
+  --lineage-bottom-room: 14px;
+  padding-bottom: var(--lineage-bottom-room);
 }
 
 .session-tabs.lineage-tree.tabs-two-rows,
 .session-tabs.lineage-tree.tabs-auto-wrap {
-  row-gap: 12px;
-  padding-left: 20px;
+  --lineage-row-gap: 12px;
+  --lineage-spine-channel: 20px;
+  row-gap: var(--lineage-row-gap);
+  padding-left: var(--lineage-spine-channel);
 }
 
 .session-tabs::-webkit-scrollbar {
@@ -20718,8 +20727,28 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
   z-index: 1;
 }
 
+/* ⚠ The rows are spaced by a bottom margin on every item, not by row-gap.
+   Each .tab-triage-break is a zero-height flex line of its own, so with a
+   row-gap every group boundary cost TWO gaps (the gap before the break's line
+   and the one after it), and a negative margin cannot win them back: a flex
+   line's cross size is clamped at zero. A margin on the items spaces a group
+   boundary and a group's own continuation line alike, and the break, which
+   carries none, adds nothing. The last row's margin replaces the bottom
+   padding (with lineage, part of its room). The gap is --lineage-row-gap
+   while lineage lines are routed through it (`.session-tabs.lineage-tree`,
+   near the top of this file). */
 .session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) {
   padding-left: var(--tab-triage-gutter, 92px);
+  padding-bottom: 0;
+  row-gap: 0;
+}
+
+.session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) > :not(.tab-triage-break) {
+  margin-bottom: var(--lineage-row-gap, 4px);
+}
+
+.session-tabs-host > .session-tabs.tabs-triage.lineage-tree:is(.tabs-auto-wrap, .tabs-two-rows) {
+  padding-bottom: calc(var(--lineage-bottom-room) - var(--lineage-row-gap));
 }
 
 .session-tabs-host > .session-tabs.tabs-triage:is(.tabs-auto-wrap, .tabs-two-rows) > .tab-triage-head {
@@ -20800,16 +20829,17 @@ html[data-session-list='sidebar'][data-sidebar='collapsed'] .session-sidebar .ta
 }
 
 /* Header strip: each cluster is an inline box that wraps inside itself when a
-   case has more tabs than fit on a line. */
+   case has more tabs than fit on a line. Both row gaps open up to
+   --lineage-row-gap while lineage lines are routed through them. */
 .session-tabs-host > .session-tabs.tabs-clusters {
-  gap: 6px;
+  gap: var(--lineage-row-gap, 6px) 6px;
 }
 
 .session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 2px;
+  gap: var(--lineage-row-gap, 2px) 2px;
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
@@ -20886,7 +20916,8 @@ html[data-session-list='sidebar'][data-sidebar='collapsed'] .session-sidebar .ta
        cell must stretch, or the active cell (taller with its actions) breaks
        its row. */
     align-items: stretch;
-    gap: 4px 6px;
+    /* The row gap opens up while lineage lines run through it. */
+    gap: var(--lineage-row-gap, 4px) 6px;
   }
 
   .session-tabs-host > .session-tabs.tabs-ledger > .session-tab {
