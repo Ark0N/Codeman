@@ -1265,7 +1265,8 @@ Object.assign(CodemanApp.prototype, {
     // A real mouse click normally reaches the PTY through xterm's own mouse
     // encoder, but that encoder only runs while mouseTrackingMode is ON — and
     // the server strips the enabling DECSETs from claude/codex/gemini output
-    // (isAltScreenStripMode, session.ts) so the wheel keeps scrolling
+    // (isAltScreenStripMode, session.ts) and from opencode's (isMuxMouseStripMode,
+    // so a drag selects text) so the wheel keeps scrolling
     // scrollback. Desktop clicks therefore stopped reporting entirely (the
     // same breakage the mobile touchend tap branch above works around).
     // Hand-encode the SGR report for plain left-clicks on those sessions.
@@ -5271,36 +5272,32 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  // Mirror of the server's isAltScreenStripMode (session.ts): session modes whose
-  // output stream has mouse-tracking DECSET sequences stripped before reaching the
-  // browser. For these, xterm's live mouseTrackingMode is useless as a gate — the
-  // PTY-side TUI keeps tracking enabled, we just never see the enable sequence.
   /**
-   * True when the browser has to hand-encode a click report for the CLI.
+   * True when the browser has to hand-encode a click report for the CLI: the
+   * server stripped this session's mouse-tracking DECSETs out of the stream (so
+   * xterm's own encoder is permanently idle here and something has to stand in
+   * for it) AND the CLI has a tracking mode on right now.
    *
-   * Two conditions, and dropping either one is a bug that has already happened:
+   * One flag answers both. The server sets `cliMouseTracking` only as it strips a
+   * tracking DECSET (`_recordStrippedMouseMode` in session.ts, called from the
+   * mouse-strip branch of `_handleTerminalOutput` and nowhere else), so it can
+   * only ever be true for a mode whose DECSETs are stripped: whichever modes the
+   * registry decides to strip, the browser follows, with no mode list here to
+   * keep in step. For a `preserve` / `strip-mux-only` mode the flag stays false
+   * and xterm keeps encoding its own reports. That invariant is pinned server-side
+   * in test/claude-scrollback-strip.test.ts.
    *
-   * 1. The session's mode is one whose mouse DECSETs the server STRIPS out of
-   *    the stream (claude/codex/gemini, `isAltScreenStripMode`), which is why
-   *    xterm's own encoder is permanently idle here and something has to stand
-   *    in for it.
-   * 2. The CLI actually has a mouse-tracking mode on right now. The server
-   *    records that as it strips (`_recordStrippedMouseMode` in session.ts) and
-   *    publishes it as `cliMouseTracking`. Without this half the browser
-   *    reported EVERY click, so a CLI sitting at its composer with no dialog
-   *    open, or a pane that has fallen back to a shell prompt, received mouse
-   *    reports it never asked for. A shell prints those as literal text
-   *    (`[<0;88;20M`) and they garble the next line typed.
+   * Without the flag the browser reported EVERY click, so a CLI sitting at its
+   * composer with no dialog open, or a pane that has fallen back to a shell
+   * prompt, received mouse reports it never asked for. A shell prints those as
+   * literal text (`[<0;88;20M`) and they garble the next line typed.
    *
    * Fails toward silence: an unknown or stale flag reports nothing rather than
    * injecting bytes. After a server restart the flag is false until the CLI
    * re-emits its DECSET, which closing and reopening a dialog does.
    */
   _shouldReportMouseToCli() {
-    const session = this.sessions?.get(this.activeSessionId);
-    const mode = session?.mode || 'claude';
-    if (mode !== 'claude' && mode !== 'codex' && mode !== 'gemini') return false;
-    return session?.cliMouseTracking === true;
+    return this.sessions?.get(this.activeSessionId)?.cliMouseTracking === true;
   },
 
   // True when xterm's viewport shows the live PTY screen (not scrolled up into
@@ -5631,7 +5628,8 @@ Object.assign(CodemanApp.prototype, {
    * The reason is that the habit and xterm's Shift mean different things once
    * the DECSETs are stripped. xterm reads Shift as "force selection" ONLY while
    * the app actually has mouse tracking on; the server strips those DECSETs for
-   * claude/codex/gemini (isAltScreenStripMode), so xterm's mouseTrackingMode is
+   * claude/codex/gemini (isAltScreenStripMode) and opencode (isMuxMouseStripMode),
+   * so xterm's mouseTrackingMode is
    * permanently `none`, that branch is unreachable, and Shift instead falls into
    * `_onIncrementalClick` — EXTEND an existing selection. Extending is a no-op
    * when `selectionStart` is null, so the drag never anchors and no selection is

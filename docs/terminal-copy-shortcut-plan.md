@@ -82,6 +82,7 @@ This is exactly how `command-palette` already behaves: it is a full registry ent
 
 - The server strips mouse-tracking DECSETs for `claude`, `codex`, and `gemini` (`isAltScreenStripMode`, `src/session.ts:179`), which is why plain drag-select works in those tabs even though the TUI has mouse tracking on.
 - `shell`, `opencode`, and `antigravity` keep mouse reporting, so xterm requires `Shift`+drag to force a selection there. Worth one line in the docs, it is not a code change.
+  ⚠️ **Corrected 2026-09-16:** `opencode` no longer keeps mouse reporting in the browser. Its TUI enables tracking DECSETs, tmux `mouse off` passes them through to the tmux client, and xterm then reported DRAGS to the TUI instead of selecting — so `Shift`+drag was the only way to select, and a plain drag silently copied nothing (measured 62 `none` / 18 `any` over 16s; 5/5 dead drags while `any`). The server now strips those DECSETs (`isMuxMouseStripMode`), so a plain drag selects in opencode. `shell` and `antigravity` are unchanged.
 - Touch devices deliberately disable selection entirely (`body.touch-device .terminal-container .xterm{user-select:none !important}`, `styles.css:3196`), and phones have no Ctrl key. This feature is desktop and hardware-keyboard only, with no mobile regression surface.
 
 ### 2.6 Helpers that already exist and should be reused
@@ -245,7 +246,7 @@ The shortcut overlay (`Ctrl+?`) and App Settings -> Shortcuts are registry-drive
 | Whitespace-only or empty selection | `getSelection()` empty string is treated as "no selection", so Ctrl+C still interrupts |
 | macOS Cmd+C | registry treats ctrl/meta as interchangeable, so with a selection it takes our path (same visible result as today's native copy), without one it falls through |
 | Chrome/Firefox `Ctrl+Shift+C` is the devtools inspect chord | browser-level and may still toggle devtools, our copy runs regardless. Document as a caveat, `Ctrl+C` is the primary path |
-| Selection in a tab whose TUI owns the mouse (`shell`/`opencode`/`antigravity`) | unchanged, `Shift`+drag selects, then Ctrl+C copies |
+| Selection in a tab whose TUI owns the mouse (`shell`/`antigravity`; `opencode` left this list on 2026-09-16 — its DECSETs are stripped now) | unchanged, `Shift`+drag selects, then Ctrl+C copies |
 | Web tab (iframe dashboard) focused | xterm handler never runs, browser-native copy inside the iframe |
 | Teammate/subagent terminals (`panels-ui.js:2268`, `onData` wired) | same limitation exists there, out of scope for this PR (section 8) |
 
@@ -281,7 +282,7 @@ Against a throwaway session on the live instance (`curl -sk https://localhost:30
 3. Type a few characters with local echo on (phone or `localEchoEnabled` forced), press Ctrl+C with no selection, confirm buffered text plus interrupt behave as before.
 4. Uncheck the shortcut in App Settings -> Shortcuts, confirm Ctrl+C always interrupts even with a selection.
 5. Rebind it, confirm the new chord copies and Ctrl+C reverts to pure interrupt.
-6. Repeat 1 and 2 in an `opencode` or `shell` tab using Shift+drag to select.
+6. Repeat 1 and 2 in a `shell` or `antigravity` tab using Shift+drag to select (`opencode` selects with a plain drag since 2026-09-16).
 7. Load over plain HTTP (`--host` LAN or `http://127.0.0.1:<port>`) and confirm the `execCommand` fallback copies and focus returns to the terminal.
 8. Mobile smoke: confirm nothing changed (selection is CSS-disabled, no Ctrl key).
 

@@ -491,7 +491,7 @@ const OPENCODE: CliEntry = {
   },
   capabilities: {
     ...agentDefaults(),
-    altScreen: 'strip-mux-only',
+    altScreen: 'strip-mux-and-mouse',
     echo: { policy: 'buffer', anchor: { kind: 'cursor' }, predictProfile: undefined },
     // opencode's global config dir is xdg-basedir's `$XDG_CONFIG_HOME/opencode`.
     mcpConfig: {

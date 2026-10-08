@@ -289,7 +289,7 @@ const capabilitiesSchema = z
     requiresMux: z.boolean(),
     hooks: z.enum(['none', 'always', 'supervised']),
     transcript: z.enum(['claude-jsonl', 'codex-rollout', 'deepseek-zstd', 'omp-jsonl', 'none']),
-    altScreen: z.enum(['strip-full', 'strip-mux-only', 'preserve']),
+    altScreen: z.enum(['strip-full', 'strip-mux-only', 'strip-mux-and-mouse', 'preserve']),
     echo: echoSchema,
     wheelForward: z
       .object({ mode: z.enum(['never', 'version-gated']), minVersion: z.string().max(20).optional() })
