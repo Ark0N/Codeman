@@ -605,7 +605,12 @@ Object.assign(CodemanApp.prototype, {
       }
       if (btn.matches?.(':focus-visible')) this._scheduleTileHint({ keyboard: true });
     });
-    btn.addEventListener('blur', () => this._hideTileHint());
+    // Leaving the button ends a click's suppression too: a keyboard focus that
+    // comes back later is a new arrival, even with the pointer still on it.
+    btn.addEventListener('blur', () => {
+      hint.suppressed = false;
+      this._hideTileHint();
+    });
     // Capture: these run before the button's own handlers, so the card is gone
     // before a right-click opens the count menu or a click opens the grid; and
     // it stays gone while the pointer rests there.

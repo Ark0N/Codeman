@@ -281,6 +281,18 @@ describe('hiding', () => {
     }
   });
 
+  it('a keyboard focus coming back after a click shows it, the pointer still resting there', () => {
+    shown();
+    btn.dispatch('click', {});
+    expect(card()!.hidden).toBe(true);
+    // Tab away and back, the mouse never moved.
+    btn.dispatch('blur', {});
+    (btn as unknown as { matches: (s: string) => boolean }).matches = (s) => s === ':focus-visible';
+    btn.dispatch('focus', {});
+    vi.advanceTimersByTime(300);
+    expect(card()!.hidden).toBe(false);
+  });
+
   it('the count menu never opens beside it: openTileCountMenu hides it first', () => {
     const app = shown();
     app.openTileCountMenu({ preventDefault: vi.fn() });
