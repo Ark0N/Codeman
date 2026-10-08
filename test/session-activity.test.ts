@@ -296,6 +296,176 @@ describe('Session interactive idle detection', () => {
   });
 });
 
+/**
+ * The launch settle (`_armPaneSettle` / `_settlePaneStartup`, 3 s after `startInteractive()`
+ * started a pane). The bug this pins: it set the status to idle WITHOUT an event, and when
+ * the launch paint never marked the pane working, the later idle confirmation found the
+ * status already idle and announced nothing either. The browser kept the `busy` the spawn
+ * broadcast, so a fresh codex, pi or opencode tile spun "working" for as long as it sat at
+ * its composer (measured on the 1.36.0 beta: `lastPromptTime: 0`, never an idle edge).
+ * A RESTORED pane of a CLI without work detection never got the settle at all.
+ */
+describe('external CLI launch settle', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  type LaunchInternals = { _resetBuffers(): void; _armPaneSettle(isRestored: boolean): void };
+
+  /** Codex at its composer after launch, verbatim from the beta pane that showed the bug. */
+  const CODEX_READY =
+    '  >_ OpenAI Codex (v0.162.0)\n     ~/codeman-cases/testcase\n› Ask Codex to do anything\n' +
+    '  GPT-6-Luna default · ~/codeman-cases/testcase\n  ? for shortcuts\n';
+
+  /** A session as `startInteractive()` leaves it: spawn-time `busy`, settle armed if it applies. */
+  function launch(session: Session, isRestored = false): string[] {
+    const internals = session as unknown as LaunchInternals;
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+    session.on('working', () => events.push('working'));
+    session.on('needsRefresh', () => events.push('needsRefresh'));
+    internals._resetBuffers();
+    internals._armPaneSettle(isRestored);
+    return events;
+  }
+
+  it('announces a codex pane that paints its composer and goes quiet after the timer', () => {
+    vi.useFakeTimers();
+    const session = withFakePane(CODEX_READY, 'codex');
+    const events = launch(session);
+
+    // The composer arms the confirmation, but a second paint keeps the pane
+    // from going quiet until after the 3 s timer has fired.
+    feed(session, CODEX_COMPOSER_REPAINT);
+    vi.advanceTimersByTime(600);
+    feed(session, '\x1b[33;3H\x1b[2m? for shortcuts\x1b[0m');
+    vi.advanceTimersByTime(60_000);
+
+    expect(events).toEqual(['idle', 'needsRefresh']);
+    expect(session.status).toBe('idle');
+    expect(session.isWorking).toBe(false);
+  });
+
+  it('announces a codex pane whose launch paint never arms the confirmation', () => {
+    vi.useFakeTimers();
+    const session = withFakePane(CODEX_READY, 'codex');
+    const events = launch(session);
+
+    feed(session, '\x1b[1;3H>_ OpenAI Codex (v0.162.0)');
+    vi.advanceTimersByTime(3000);
+
+    expect(events).toEqual(['idle', 'needsRefresh']);
+    expect(session.status).toBe('idle');
+
+    // A composer repaint later on (a tile resize) must not announce it twice.
+    feed(session, CODEX_COMPOSER_REPAINT);
+    vi.advanceTimersByTime(60_000);
+    expect(events).toEqual(['idle', 'needsRefresh']);
+  });
+
+  it('does not announce twice when the confirmation already concluded before the timer', () => {
+    vi.useFakeTimers();
+    const session = withFakePane(CODEX_READY, 'codex');
+    const events = launch(session);
+
+    feed(session, CODEX_COMPOSER_REPAINT);
+    vi.advanceTimersByTime(60_000);
+
+    expect(events).toEqual(['idle', 'needsRefresh']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('leaves a codex pane that is already working to its own confirmation', () => {
+    vi.useFakeTimers();
+    let screen = CODEX_WORKING;
+    const session = withFakePane(() => screen, 'codex');
+    const events = launch(session);
+
+    for (let i = 0; i < 4; i++) {
+      feed(session, CODEX_COMPOSER_REPAINT);
+      vi.advanceTimersByTime(1000);
+    }
+    vi.advanceTimersByTime(10_000);
+
+    // The timer fired mid-turn and did not call the turn over.
+    expect(events).toEqual(['working', 'needsRefresh']);
+    expect(session.status).toBe('busy');
+
+    screen = CODEX_FINISHED;
+    vi.advanceTimersByTime(20_000);
+    expect(events).toEqual(['working', 'needsRefresh', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('settles a CLI without work detection even when a launch spinner latched it working', () => {
+    vi.useFakeTimers();
+    // Nothing arms an idle confirmation for a CLI that names no composer glyph, so
+    // the launch timer is the only thing that can ever settle this pane.
+    expect(getCli('opencode')?.capabilities.workDetect).toBeUndefined();
+    const session = new Session({ workingDir: '/tmp', mode: 'opencode' });
+    const events = launch(session);
+
+    feed(session, '\x1b[5;3H⠋ Loading');
+    expect(session.isWorking).toBe(true);
+    vi.advanceTimersByTime(3000);
+
+    expect(events).toEqual(['working', 'idle', 'needsRefresh']);
+    expect(session.status).toBe('idle');
+    expect(session.isWorking).toBe(false);
+  });
+
+  it('settles a RESTORED pane of a CLI without work detection, without a refetch', () => {
+    vi.useFakeTimers();
+    // A Codeman restart re-attaches every surviving pane through startInteractive(),
+    // which leaves it busy; opencode and gemini have no glyph that would ever clear that.
+    for (const mode of ['opencode', 'gemini', 'shell'] as const) {
+      expect(getCli(mode)?.capabilities.workDetect).toBeUndefined();
+      const session = new Session({ workingDir: '/tmp', mode });
+      const events = launch(session, true);
+      expect(session.status).toBe('busy');
+
+      vi.advanceTimersByTime(3000);
+
+      expect(events).toEqual(['idle']);
+      expect(session.status).toBe('idle');
+    }
+  });
+
+  it('leaves a RESTORED claude or codex pane to its own glyph, so a restart mid-turn is not called idle', () => {
+    vi.useFakeTimers();
+    for (const mode of ['claude', 'codex'] as const) {
+      const session = new Session({ workingDir: '/tmp', mode });
+      const events = launch(session, true);
+
+      vi.advanceTimersByTime(3000);
+
+      expect(events).toEqual([]);
+      expect(session.status).toBe('busy');
+    }
+  });
+
+  it('arms nothing for a NEW claude pane, which waits for its ❯ instead', () => {
+    vi.useFakeTimers();
+    const session = new Session({ workingDir: '/tmp', mode: 'claude' });
+    const events = launch(session);
+
+    vi.advanceTimersByTime(3000);
+
+    expect(events).toEqual([]);
+  });
+
+  it('does nothing for a session stopped before the timer', () => {
+    vi.useFakeTimers();
+    const session = withFakePane(CODEX_READY, 'codex');
+    const events = launch(session);
+    (session as unknown as { _isStopped: boolean })._isStopped = true;
+
+    vi.advanceTimersByTime(3000);
+
+    expect(events).toEqual([]);
+  });
+});
+
 describe("codex's work-detection descriptor", () => {
   const codex = getCli('codex')?.capabilities.workDetect;
 

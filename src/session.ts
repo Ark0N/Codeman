@@ -2783,19 +2783,14 @@ export class Session extends EventEmitter {
           this.id;
 
         // For NEW mux sessions: wait for readiness then clean buffer
-        // For RESTORED mux sessions: don't do anything - client will fetch buffer on tab switch
+        // For RESTORED mux sessions: leave the buffer alone - client will fetch it on tab switch
         if (!isRestored) {
           if (isExternalCliMode(this.mode)) {
             // External CLIs use custom TUIs — no ❯ prompt to detect.
             // Wait for TUI to stabilize (output stops changing), then mark ready.
             // Don't clear the buffer — the TUI's initial render IS the useful content.
             // Emit needsRefresh so the client fetches the full buffer once the TUI has rendered.
-            this._promptCheckTimeout = setTimeout(() => {
-              this._promptCheckTimeout = null;
-              if (this._isStopped) return;
-              this._status = 'idle';
-              this.emit('needsRefresh');
-            }, 3000);
+            this._armPaneSettle(false);
           } else {
             // Claude mode: wait for ❯ prompt
             this._promptCheckInterval = setInterval(() => {
@@ -2827,6 +2822,8 @@ export class Session extends EventEmitter {
               this._promptCheckTimeout = null;
             }, 5000);
           }
+        } else {
+          this._armPaneSettle(true);
         }
       } catch (err) {
         console.error('[Session] Failed to create mux session, falling back to direct PTY:', err);
@@ -3433,14 +3430,68 @@ export class Session extends EventEmitter {
     // 1. Claude was working and is now at prompt (normal case)
     // 2. Session just started and is ready (status is 'busy' but _isWorking is false)
     const wasWorking = this._isWorking;
-    const isInitialReady = this._status === 'busy' && !this._isWorking;
-    if (wasWorking || isInitialReady) {
-      this._isWorking = false;
-      this._status = 'idle';
-      this._lastPromptTime = Date.now();
-      if (wasWorking) this._maybeCaptureOmpSessionId();
-      this.emit('idle');
-    }
+    if (wasWorking || this._status === 'busy') this._concludeIdle(wasWorking);
+  }
+
+  /**
+   * The one place a pane is concluded idle: status, working flag and prompt stamp
+   * change together, and the change is ANNOUNCED. The `idle` event is what the web
+   * server turns into `session:idle` plus a state broadcast, so a path that flips
+   * `_status` without it leaves every browser on the `busy` it was last sent. A fresh
+   * codex pane used to stay "working" in the UI for its whole life that way.
+   *
+   * @param turnEnded a real turn just finished (not a pane becoming ready at launch)
+   */
+  private _concludeIdle(turnEnded: boolean): void {
+    this._isWorking = false;
+    this._status = 'idle';
+    this._lastPromptTime = Date.now();
+    // Only a finished turn proves omp has written its session file; a pane that is
+    // merely ready has nothing to resolve yet and could claim a neighbour's file.
+    if (turnEnded) this._maybeCaptureOmpSessionId();
+    this.emit('idle');
+  }
+
+  /**
+   * Arm the launch settle (`_settlePaneStartup`) for a pane `startInteractive()` just
+   * started or re-attached, when one applies:
+   * - a NEW pane of an external CLI, whose TUI has no ❯ for the Claude wait to find;
+   * - a RESTORED pane (Codeman restart, auto-reattach, tile Attach) of a CLI that
+   *   declares no `capabilities.workDetect`. It is `busy` from `_resetBuffers()` like a
+   *   new pane, and with no composer glyph to arm `_confirmIdle()` nothing else would
+   *   ever settle it. A restored claude or codex pane is left to its glyph, which
+   *   reads the screen first, so a restart in mid-turn is never called idle.
+   */
+  private _armPaneSettle(isRestored: boolean): void {
+    const applies = isRestored ? !getCli(this.mode)?.capabilities.workDetect : isExternalCliMode(this.mode);
+    if (!applies) return;
+    this._promptCheckTimeout = setTimeout(() => this._settlePaneStartup(!isRestored), 3000);
+  }
+
+  /**
+   * The launch settle: 3 s after a NEW external-CLI pane spawned, or after ANY pane of a
+   * CLI without work detection was re-attached, its TUI is taken to have rendered. A pane
+   * still in its spawn-time `busy` is concluded idle (announced, see `_concludeIdle`),
+   * then, for a new pane, the browser is told to refetch the rendered screen.
+   *
+   * ⚠️ This used to set `_status = 'idle'` without an event. When the launch paint
+   * never tripped `_markWorking()`, the later `_confirmIdle()` found the status
+   * already idle and emitted nothing, so no browser ever learned the pane was ready.
+   *
+   * A pane marked working by then is left alone only when its CLI declares
+   * `capabilities.workDetect`: that CLI's composer glyph arms `_confirmIdle()`, which
+   * reads the screen and ends the turn properly. For every other CLI this timer is the
+   * only thing that ever settles a fresh pane, so it settles it even if a stray spinner
+   * glyph in the launch paint latched `_isWorking`.
+   *
+   * @param refreshScreen emit `needsRefresh` (a new pane; an attach refetches by itself)
+   */
+  private _settlePaneStartup(refreshScreen: boolean): void {
+    this._promptCheckTimeout = null;
+    if (this._isStopped) return;
+    const leaveToConfirm = this._isWorking && !!getCli(this.mode)?.capabilities.workDetect;
+    if (this._status === 'busy' && !leaveToConfirm) this._concludeIdle(false);
+    if (refreshScreen) this.emit('needsRefresh');
   }
 
   /**
