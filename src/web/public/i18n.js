@@ -214,6 +214,7 @@
     'Run DeepSeek': '运行 DeepSeek',
     'Run OMP': '运行 OMP',
     'Run Shell': '运行 Shell',
+    'More tools': '更多工具',
     'Select AI backend': '选择 AI 后端',
     'Create New Case': '新建案例',
     'Create new case': '新建案例',

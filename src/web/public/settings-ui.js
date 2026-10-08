@@ -1645,40 +1645,81 @@ Object.assign(CodemanApp.prototype, {
     return flags[tool] !== false;
   },
 
-  /** Render the registry's enabled, available CLIs as welcome-screen actions. */
+  /**
+   * Render the registry's enabled, available CLIs as welcome-screen actions:
+   * ONE primary button, then every other entry as a slim chip in a row under it.
+   *
+   * The primary is the first AGENT in catalog order (the first entry whose kind
+   * is not 'shell'), so on a stock install it is Claude Code, and with Claude
+   * disabled or missing it is simply the next agent; only a catalog with no agent
+   * at all promotes the shell. Chosen from the catalog's order and kind, never by
+   * an id: the registry decides what comes first. Everything else keeps catalog
+   * order inside the chip row, so the DOM order across both is the catalog's.
+   *
+   * The CLI id travels only as DATA: `data-mode` for the click, and the
+   * `run-mode-dot <id>` logo slot every Run menu shares (styles.css draws the
+   * brand mark, or a plain dot for an id it has no logo for). No per-id class on
+   * the buttons themselves, so no rule anywhere can give one CLI its own look.
+   */
   renderWelcomeCliActions() {
     const container = document.getElementById('welcomeCliActions');
     if (!container) return;
     const catalog = Array.isArray(window.__codemanCliCatalog) ? window.__codemanCliCatalog : [];
+    const offered = catalog.filter((cli) => cli.enabled && this.isCliAvailable(cli.id));
+    const primary = offered.find((cli) => cli.kind !== 'shell') || offered[0];
+    // "Run <label>", the strings i18n.js translates ("Run Claude Code", "Run Shell");
+    // a custom CLI's label simply has no dictionary entry, so it renders as typed.
+    const runLabel = (cli) => `Run ${cli.kind === 'shell' ? 'Shell' : cli.label}`;
+    const logo = (cli) => {
+      const dot = document.createElement('span');
+      dot.className = `run-mode-dot ${cli.id}`;
+      dot.setAttribute('aria-hidden', 'true');
+      return dot;
+    };
+    const launch = (cli) => () => {
+      this.setRunMode(cli.id);
+      void this.run();
+    };
     container.replaceChildren();
-    for (const cli of catalog) {
-      if (!cli.enabled || !this.isCliAvailable(cli.id)) continue;
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = `welcome-btn welcome-btn-cli welcome-btn-${cli.id}`;
-      btn.dataset.mode = cli.id;
-      const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      icon.setAttribute('width', '20');
-      icon.setAttribute('height', '20');
-      icon.setAttribute('viewBox', '0 0 24 24');
-      icon.setAttribute('fill', 'none');
-      icon.setAttribute('stroke', 'currentColor');
-      icon.setAttribute('stroke-width', '2');
-      icon.setAttribute('aria-hidden', 'true');
-      const play = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-      play.setAttribute('points', '5 3 19 12 5 21 5 3');
-      icon.appendChild(play);
-      btn.appendChild(icon);
-      // Same "Run <label>" text the static buttons had ("Run Claude Code", "Run Shell"),
-      // left translatable on purpose: i18n.js carries these strings, and a custom CLI's
-      // label simply has no dictionary entry, so it renders as typed.
-      btn.append(`Run ${cli.kind === 'shell' ? 'Shell' : cli.label}`);
-      btn.onclick = () => {
-        this.setRunMode(cli.id);
-        void this.run();
-      };
-      container.appendChild(btn);
+    if (!primary) return;
+
+    const main = document.createElement('button');
+    main.type = 'button';
+    main.className = 'welcome-primary';
+    main.dataset.mode = primary.id;
+    // The mark sits on a small light disc: brand marks (Claude's is orange) turn
+    // muddy straight on the accent fill, and the disc reads on every skin.
+    const disc = document.createElement('span');
+    disc.className = 'welcome-primary-logo';
+    disc.appendChild(logo(primary));
+    main.appendChild(disc);
+    // One raw string, kept whole: i18n.js matches the exact text node.
+    main.append(runLabel(primary));
+    main.onclick = launch(primary);
+    container.appendChild(main);
+
+    const rest = offered.filter((cli) => cli !== primary);
+    if (!rest.length) return;
+    const chips = document.createElement('div');
+    chips.className = 'welcome-chips';
+    chips.setAttribute('role', 'group');
+    chips.setAttribute('aria-label', 'More tools');
+    for (const cli of rest) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'welcome-chip';
+      chip.dataset.mode = cli.id;
+      // The chip shows the bare name (the row under "Run …" already says what it
+      // does); the full "Run <label>" is its accessible name and tooltip, both of
+      // which i18n.js translates.
+      chip.title = runLabel(cli);
+      chip.setAttribute('aria-label', runLabel(cli));
+      chip.appendChild(logo(cli));
+      chip.append(cli.kind === 'shell' ? 'Shell' : cli.label);
+      chip.onclick = launch(cli);
+      chips.appendChild(chip);
     }
+    container.appendChild(chips);
   },
 
   /**

@@ -4360,229 +4360,207 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   margin-bottom: 0.5rem;
 }
 
+/* Launchers: ONE primary action, then every other CLI as a slim chip.
+   The primary is the first agent in the registry catalog (settings-ui.js
+   renderWelcomeCliActions), drawn in the accent fill the toolbar's Run button
+   uses, so the screen has one obvious thing to press. The chips are the
+   Compact header's pill language (control-bg surface, control-border, small
+   type): uniform, quiet, and the same on every skin. No rule here is keyed on
+   a CLI id; the only per-CLI look is the logo in the shared `run-mode-dot`
+   slot, which also falls back to a plain dot for an id it has no mark for. */
 .welcome-actions {
   display: flex;
-  gap: 0.75rem;
-  justify-content: center;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: center;
   margin-top: 2rem;
   margin-bottom: 1.5rem;
 }
 
 .welcome-cli-actions {
-  display: contents;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.1rem;
+  width: 100%;
 }
 
-.welcome-btn-cli {
-  background: linear-gradient(135deg, #1f2937 0%, #374151 100%);
-  border-color: rgba(148, 163, 184, 0.35);
-  color: #e2e8f0;
+.welcome-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  height: 46px;
+  padding: 0 1.4rem 0 0.45rem;
+  box-sizing: border-box;
+  border: 1px solid var(--accent);
+  border-radius: 23px;
+  background: linear-gradient(135deg, var(--accent-grad-a), var(--accent-grad-b));
+  color: var(--accent-ink);
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.005em;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 8px 24px -12px rgba(var(--accent-rgb), 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  transition: background var(--transition-smooth), box-shadow var(--transition-smooth), transform 0.12s ease;
 }
 
-.welcome-btn-cli:hover {
-  background: linear-gradient(135deg, #374151 0%, #4b5563 100%);
-  border-color: rgba(203, 213, 225, 0.5);
-  color: #f8fafc;
-  transform: translateY(-1px);
+.welcome-primary:hover {
+  background: linear-gradient(135deg, var(--run-hover-a), var(--run-hover-b));
+  box-shadow: 0 10px 30px -10px rgba(var(--accent-rgb), 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.welcome-primary:active {
+  transform: translateY(1px);
+}
+
+/* OG has no designed --accent-ink (its Daylight extras are placeholders), and a
+   dark ink on its brighter blue reads poorly: it gets the deeper blue and light
+   text of its own toolbar Run button instead. */
+html[data-skin="og"] .welcome-primary {
+  background: linear-gradient(135deg, #1e4fb8 0%, #2563eb 100%);
+  border-color: rgba(96, 165, 250, 0.5);
+  color: #fff;
+}
+
+html[data-skin="og"] .welcome-primary:hover {
+  background: linear-gradient(135deg, #2454a8 0%, #2d6cf0 100%);
+}
+
+/* The global accent outline would vanish against the accent fill; the offset
+   puts a ring of page background between the two. */
+.welcome-primary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* The logo sits on a small light disc: a brand mark straight on the accent fill
+   turns muddy (Claude's orange on blue), and a disc reads on dark and light
+   skins alike. Monochrome marks are masks over currentColor, so the disc sets
+   a dark ink; --text-dim is redeclared because the plain fallback dot of an id
+   with no logo paints with it. */
+.welcome-primary-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+  color: #1f2328;
+  --text-dim: #59636e;
+  font-size: 16px;
+}
+
+.welcome-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  max-width: 100%;
+}
+
+.welcome-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  height: 30px;
+  padding: 0 0.85rem 0 0.7rem;
+  box-sizing: border-box;
+  border: 1px solid var(--control-border);
+  border-radius: 15px;
+  background: var(--control-bg);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--transition-smooth), border-color var(--transition-smooth), color var(--transition-smooth);
+}
+
+.welcome-chip:hover {
+  background: var(--control-bg-hover);
+  border-color: var(--control-border-hover);
+  color: var(--text);
+}
+
+.welcome-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  color: var(--text);
+}
+
+/* Cloudflare Tunnel: not a launcher, so it stays out of the launcher row as a
+   quiet text link under it. settings-ui.js owns its contents (it rewrites the
+   icon, label and spinner on every state change) and its inline display, so
+   everything here is styled from the outside: the 20px svg it writes is sized
+   down, and the states are text colour only. Ahead of #welcomeQr on purpose,
+   so the QR opens right under the control that toggled it. */
+.welcome-tunnel-link {
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 1.4rem;
+  padding: 0.3rem 0.65rem;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition-smooth), color var(--transition-smooth);
+}
+
+.welcome-tunnel-link svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.welcome-tunnel-link .tunnel-spinner {
+  width: 11px;
+  height: 11px;
+  border-width: 1.5px;
+}
+
+.welcome-tunnel-link:hover {
+  background: var(--control-bg);
+  color: var(--text);
+}
+
+.welcome-tunnel-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  color: var(--text);
+}
+
+.welcome-tunnel-link.active {
+  color: var(--green);
+}
+
+.welcome-tunnel-link.connecting,
+.welcome-tunnel-link:disabled {
+  cursor: wait;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .welcome-primary,
+  .welcome-chip,
+  .welcome-tunnel-link {
+    transition: none;
+  }
+
+  .welcome-primary:active {
+    transform: none;
+  }
 }
 
 .run-mode-cli-options {
   display: contents;
-}
-
-.welcome-btn {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.7rem 1.3rem;
-  font-size: 0.85rem;
-  font-weight: 600;
-  border-radius: 10px;
-  border: 1px solid transparent;
-  cursor: pointer;
-  transition: all var(--transition-smooth);
-  letter-spacing: 0.01em;
-}
-
-.welcome-btn-claude {
-  background: linear-gradient(135deg, #1a3358 0%, #1e4fb8 50%, #2563eb 100%);
-  border-color: rgba(59, 130, 246, 0.4);
-  color: #e0e7ff;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-}
-
-.welcome-btn-claude:hover {
-  background: linear-gradient(135deg, #2454a8 0%, #2d6cf0 50%, #4b8af7 100%);
-  box-shadow: 0 4px 20px rgba(59, 130, 246, 0.35), 0 0 40px rgba(59, 130, 246, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  border-color: rgba(96, 165, 250, 0.5);
-  color: #fff;
-  transform: translateY(-1px);
-}
-
-.welcome-btn-opencode {
-  background: linear-gradient(135deg, #0a2e2a 0%, #0b3d35 50%, #0d4a40 100%);
-  border-color: rgba(16, 185, 129, 0.4);
-  color: #6ee7b7;
-  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-
-.welcome-btn-opencode:hover {
-  background: linear-gradient(135deg, #0d4a40 0%, #116a58 50%, #15856e 100%);
-  box-shadow: 0 4px 20px rgba(16, 185, 129, 0.3), 0 0 40px rgba(16, 185, 129, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  border-color: rgba(52, 211, 153, 0.5);
-  color: #a7f3d0;
-  transform: translateY(-1px);
-}
-
-.welcome-btn-codex {
-  background: linear-gradient(135deg, #2a0a3e 0%, #350b4d 50%, #400d5e 100%);
-  border-color: rgba(168, 85, 247, 0.4);
-  color: #d8b4fe;
-  box-shadow: 0 2px 8px rgba(168, 85, 247, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-
-.welcome-btn-codex:hover {
-  background: linear-gradient(135deg, #400d5e 0%, #581c87 50%, #6b21a8 100%);
-  box-shadow: 0 4px 20px rgba(168, 85, 247, 0.3), 0 0 40px rgba(88, 28, 135, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  border-color: rgba(192, 132, 252, 0.5);
-  color: #e9d5ff;
-  transform: translateY(-1px);
-}
-
-/* Antigravity: cyan identity, matching .btn-toolbar.btn-run.mode-antigravity so
-   the welcome action reads as the same backend. */
-.welcome-btn-antigravity {
-  background: linear-gradient(135deg, #0b2b33 0%, #0e7490 55%, #0891b2 100%);
-  border-color: rgba(34, 211, 238, 0.4);
-  color: #cffafe;
-  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-
-.welcome-btn-antigravity:hover {
-  background: linear-gradient(135deg, #124450 0%, #0891b2 55%, #06b6d4 100%);
-  box-shadow: 0 4px 20px rgba(34, 211, 238, 0.3), 0 0 40px rgba(8, 145, 178, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  border-color: rgba(103, 232, 249, 0.5);
-  color: #ecfeff;
-  transform: translateY(-1px);
-}
-
-/* Pi (pi.dev): rose identity, matching .btn-toolbar.btn-run.mode-pi so the
-   welcome action reads as the same backend. */
-.welcome-btn-pi {
-  background: linear-gradient(135deg, #33121f 0%, #9d174d 55%, #be185d 100%);
-  border-color: rgba(244, 114, 182, 0.4);
-  color: #fce7f3;
-  box-shadow: 0 2px 8px rgba(244, 114, 182, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-
-.welcome-btn-pi:hover {
-  background: linear-gradient(135deg, #4a1a2c 0%, #be185d 55%, #db2777 100%);
-  box-shadow: 0 4px 20px rgba(244, 114, 182, 0.3), 0 0 40px rgba(190, 24, 93, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  border-color: rgba(249, 168, 212, 0.5);
-  color: #fff1f7;
-  transform: translateY(-1px);
-}
-/* OMP: indigo identity, matching .btn-toolbar.btn-run.mode-omp so the welcome
-   action reads as the same backend. */
-.welcome-btn-omp {
-  background: linear-gradient(135deg, #1e1b4b 0%, #4f46e5 55%, #6366f1 100%);
-  border-color: rgba(129, 140, 248, 0.4);
-  color: #e0e7ff;
-  box-shadow: 0 2px 8px rgba(129, 140, 248, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-
-.welcome-btn-omp:hover {
-  background: linear-gradient(135deg, #312e81 0%, #6366f1 55%, #818cf8 100%);
-  box-shadow: 0 4px 20px rgba(129, 140, 248, 0.3), 0 0 40px rgba(79, 70, 229, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  border-color: rgba(165, 180, 252, 0.5);
-  color: #eef2ff;
-  transform: translateY(-1px);
-}
-
-/* Grok (xAI): monochrome charcoal identity, matching .btn-toolbar.btn-run.mode-grok
-   so the welcome action reads as the same backend. */
-.welcome-btn-grok {
-  background: linear-gradient(135deg, #131316 0%, #27272a 55%, #3f3f46 100%);
-  border-color: rgba(212, 212, 216, 0.4);
-  color: #f4f4f5;
-  box-shadow: 0 2px 8px rgba(212, 212, 216, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-
-.welcome-btn-grok:hover {
-  background: linear-gradient(135deg, #1f1f23 0%, #3f3f46 55%, #52525b 100%);
-  box-shadow: 0 4px 20px rgba(212, 212, 216, 0.22), 0 0 40px rgba(161, 161, 170, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  border-color: rgba(228, 228, 231, 0.5);
-  color: #fafafa;
-  transform: translateY(-1px);
-}
-
-/* DeepSeek Harness: the #4d6bfe blue identity, matching
-   .btn-toolbar.btn-run.mode-deepseek so the welcome action reads as the same
-   backend. */
-.welcome-btn-deepseek {
-  background: linear-gradient(135deg, #101a4d 0%, #2740c4 55%, #4d6bfe 100%);
-  border-color: rgba(124, 147, 255, 0.4);
-  color: #eef2ff;
-  box-shadow: 0 2px 8px rgba(77, 107, 254, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-
-.welcome-btn-deepseek:hover {
-  background: linear-gradient(135deg, #16225f 0%, #3350e6 55%, #6b83ff 100%);
-  box-shadow: 0 4px 20px rgba(77, 107, 254, 0.3), 0 0 40px rgba(39, 64, 196, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  border-color: rgba(150, 170, 255, 0.5);
-  color: #f8faff;
-  transform: translateY(-1px);
-}
-
-.welcome-btn-gemini {
-  background: linear-gradient(135deg, #10243f 0%, #174ea6 55%, #4f46e5 100%);
-  border-color: rgba(96, 165, 250, 0.4);
-  color: #dbeafe;
-  box-shadow: 0 2px 8px rgba(96, 165, 250, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-
-.welcome-btn-gemini:hover {
-  background: linear-gradient(135deg, #17345f 0%, #2563eb 55%, #6366f1 100%);
-  box-shadow: 0 4px 20px rgba(96, 165, 250, 0.3), 0 0 40px rgba(99, 102, 241, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  border-color: rgba(147, 197, 253, 0.5);
-  color: #eff6ff;
-  transform: translateY(-1px);
-}
-
-.welcome-btn-tunnel {
-  background: linear-gradient(135deg, #221538 0%, #3b1a7a 50%, #6d28d9 100%);
-  border-color: rgba(124, 58, 237, 0.4);
-  color: #ddd6fe;
-  box-shadow: 0 2px 8px rgba(109, 40, 217, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-
-.welcome-btn-tunnel:hover {
-  background: linear-gradient(135deg, #4c1d95 0%, #6d28d9 50%, #7c3aed 100%);
-  box-shadow: 0 4px 20px rgba(124, 58, 237, 0.35), 0 0 40px rgba(124, 58, 237, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  border-color: rgba(139, 92, 246, 0.5);
-  color: #fff;
-  transform: translateY(-1px);
-}
-
-.welcome-btn-tunnel.active {
-  background: linear-gradient(135deg, #047857 0%, #059669 50%, #10b981 100%);
-  border-color: rgba(52, 211, 153, 0.5);
-  color: #ecfdf5;
-  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-}
-
-.welcome-btn-tunnel.active:hover {
-  background: linear-gradient(135deg, #059669 0%, #10b981 50%, #34d399 100%);
-  box-shadow: 0 4px 20px rgba(52, 211, 153, 0.35), 0 0 40px rgba(52, 211, 153, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  color: #fff;
-  transform: translateY(-1px);
-}
-
-.welcome-btn-tunnel.connecting {
-  background: linear-gradient(135deg, #1e1e3a 0%, #312e81 50%, #4338ca 100%);
-  border-color: rgba(99, 102, 241, 0.4);
-  color: #c7d2fe;
-  cursor: wait;
 }
 
 .tunnel-spinner {
@@ -15903,74 +15881,17 @@ html:not([data-skin="og"]) {
 /* ---- PROGRESS RING (Ralph large): the one place a soft glow lives ---- */
 .ralph-ring-fill { filter: drop-shadow(0 0 6px rgba(var(--accent-rgb), 0.45)); }
 
-/* ---- Welcome overlay: emerald title + Daylight buttons ---- */
+/* ---- Welcome overlay: emerald title (the launchers are token-driven
+   already, see `.welcome-primary` / `.welcome-chip`) ---- */
 .welcome-title {
   background: linear-gradient(135deg, var(--accent-grad-a) 0%, var(--accent-grad-b) 50%, var(--accent-grad-a) 100%);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
-.welcome-btn-claude {
-  background: linear-gradient(135deg, var(--accent-grad-a), var(--accent-grad-b));
-  border-color: var(--accent);
-  color: var(--accent-ink);
-}
-.welcome-btn-claude:hover { box-shadow: 0 0 28px -4px rgba(var(--accent-rgb), 0.3); }
-.welcome-btn-opencode {
-  background: linear-gradient(135deg, var(--accent-d), var(--accent-grad-b));
-  border-color: rgba(var(--accent-rgb), 0.4);
-  color: var(--accent-ink);
-}
-.welcome-btn-opencode:hover { box-shadow: 0 0 28px -4px rgba(var(--accent-rgb), 0.25); }
-.welcome-btn-tunnel {
-  background: linear-gradient(135deg, var(--bg-input), var(--bg-hover));
-  border-color: var(--border-light);
-  color: var(--text);
-}
-.welcome-btn-tunnel:hover { box-shadow: none; }
-.welcome-btn-tunnel.active {
-  background: linear-gradient(135deg, var(--accent-d), var(--accent-grad-a));
-  border-color: var(--accent);
-  color: var(--accent-ink);
-}
 
 /* ---- Focus rings (driven by --accent, now emerald) stay accessible ---- */
 :focus-visible { outline-color: var(--accent); }
-}
-
-/* ---- Daylight Blue: distinct identity per welcome action button ----
-   Run Claude Code keeps the blue accent; Cloudflare Tunnel is purple; Run
-   OpenCode is emerald green — so the three are clearly different colors instead
-   of all reading blue. Scoped to daylight-blue only; placed after the shared
-   daylight block to win on equal specificity. ---- */
-html[data-skin="daylight-blue"] .welcome-btn-opencode {
-  background: linear-gradient(135deg, #0d9f6e, #2fbf85);
-  border-color: rgba(16, 185, 129, 0.5);
-  color: #04291b;
-}
-html[data-skin="daylight-blue"] .welcome-btn-opencode:hover {
-  background: linear-gradient(135deg, #10b981, #34d399);
-  border-color: rgba(52, 211, 153, 0.6);
-  box-shadow: 0 0 28px -4px rgba(16, 185, 129, 0.4);
-}
-html[data-skin="daylight-blue"] .welcome-btn-tunnel {
-  background: linear-gradient(135deg, #7c3aed, #a855f7);
-  border-color: rgba(168, 85, 247, 0.5);
-  color: #f5f3ff;
-}
-html[data-skin="daylight-blue"] .welcome-btn-tunnel:hover {
-  background: linear-gradient(135deg, #8b5cf6, #c084fc);
-  border-color: rgba(192, 132, 252, 0.6);
-  box-shadow: 0 0 28px -4px rgba(124, 58, 237, 0.45);
-}
-html[data-skin="daylight-blue"] .welcome-btn-tunnel.active {
-  background: linear-gradient(135deg, #6d28d9, #7c3aed);
-  border-color: rgba(124, 58, 237, 0.6);
-  color: #f5f3ff;
-}
-html[data-skin="daylight-blue"] .welcome-btn-tunnel.active:hover {
-  background: linear-gradient(135deg, #7c3aed, #8b5cf6);
-  box-shadow: 0 0 28px -4px rgba(124, 58, 237, 0.5);
 }
 
 /* ── Cron Jobs ───────────────────────────────── */

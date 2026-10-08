@@ -470,11 +470,21 @@ describe('Codex quick start settings', () => {
       cloudflared: false,
     };
 
+    // Every welcome launcher in DOM order: the primary button, then the chips
+    // inside their group. A launcher is anything carrying data-mode; the walk
+    // stops there, so a button's own logo spans are never mistaken for one.
+    function launchers(container: any): any[] {
+      return container.children.flatMap((c: any) =>
+        typeof c === 'string' ? [] : c.dataset?.mode ? [c] : launchers(c)
+      );
+    }
+    const offeredModes = (container: any) => launchers(container).map((btn: any) => btn.dataset.mode);
+    const textOf = (btn: any) => btn.children.filter((c: unknown) => typeof c === 'string').join('');
+
     it('renders only enabled and available registry entries on the welcome screen', () => {
       const { app, welcomeCliActions, tunnelBtn } = loadUi({ ...ALL_OFF, claude: true, 'custom-agent': true });
       app.applyWelcomeCliVisibility();
-      const offered = welcomeCliActions.children.map((btn: any) => btn.dataset.mode);
-      expect(offered).toEqual(['claude', 'custom-agent', 'shell']);
+      expect(offeredModes(welcomeCliActions)).toEqual(['claude', 'custom-agent', 'shell']);
       // #200 originally DELETED the tunnel button and its QR outright; it is gated
       // on cloudflared instead, so a box that has cloudflared keeps the feature.
       expect(tunnelBtn.style.display).toBe('none');
@@ -485,7 +495,7 @@ describe('Codex quick start settings', () => {
 
       const withPi = loadUi({ ...ALL_OFF, pi: true });
       withPi.app.applyWelcomeCliVisibility();
-      expect(withPi.welcomeCliActions.children.map((btn: any) => btn.dataset.mode)).toEqual(['pi', 'shell']);
+      expect(offeredModes(withPi.welcomeCliActions)).toEqual(['pi', 'shell']);
     });
 
     it('gates every run mode in the dropdown, antigravity included, and never shell', () => {
@@ -509,13 +519,100 @@ describe('Codex quick start settings', () => {
       expect(runModeCliOptions.children.map((btn: any) => btn.dataset.mode)).not.toContain('shell');
     });
 
-    it('labels welcome buttons "Run <label>", the strings i18n.js translates ("Run Claude Code")', () => {
+    it('labels the primary "Run <label>" and each chip by name, with "Run <label>" as its tooltip', () => {
+      // "Run Claude Code" / "Run Shell" are the strings i18n.js translates: the
+      // primary carries one as ONE text node (i18n matches whole nodes), and a
+      // chip carries one as its title and accessible name, both translated
+      // attributes, beside the bare CLI name it shows.
       const { app, welcomeCliActions } = loadUi({ ...ALL_OFF, claude: true });
       app.applyWelcomeCliVisibility();
-      const texts = welcomeCliActions.children.map((btn: any) =>
-        btn.children.filter((c: unknown) => typeof c === 'string').join('')
+      const [primary, ...chips] = launchers(welcomeCliActions);
+      expect(textOf(primary)).toBe('Run Claude Code');
+      expect(chips.map(textOf)).toEqual(['Shell']);
+      expect(chips.map((chip: any) => chip.title)).toEqual(['Run Shell']);
+    });
+
+    it('promotes the first AGENT in catalog order to the primary, chosen by kind and order, never by id', () => {
+      const primaryOf = (flags: Record<string, boolean> | undefined, catalog = CATALOG) => {
+        const { app, welcomeCliActions } = loadUi(flags, catalog);
+        app.applyWelcomeCliVisibility();
+        const first = welcomeCliActions.children[0];
+        return first ? { mode: first.dataset.mode, className: first.className } : null;
+      };
+      expect(primaryOf(undefined)).toEqual({ mode: 'claude', className: 'welcome-primary' });
+      // Claude missing or disabled: the next agent takes the slot, not a hardcoded fallback.
+      expect(primaryOf({ ...ALL_OFF, opencode: true, codex: true })?.mode).toBe('opencode');
+      const noClaude = CATALOG.map((cli) => (cli.id === 'claude' ? { ...cli, enabled: false } : cli));
+      expect(primaryOf(undefined, noClaude)?.mode).toBe('opencode');
+      // A shell listed first never outranks an agent after it...
+      const shellFirst = [CATALOG[CATALOG.length - 1], ...CATALOG.slice(0, -1)];
+      expect(primaryOf({ ...ALL_OFF, codex: true }, shellFirst)?.mode).toBe('codex');
+      // ...and a custom agent at the head of the catalog is the primary like any other.
+      const customFirst = [
+        { id: 'my-agent', label: 'My Agent', shortBadge: 'MA', kind: 'agent', enabled: true },
+        ...CATALOG,
+      ];
+      expect(primaryOf({ ...ALL_OFF, 'my-agent': true, claude: true }, customFirst)?.mode).toBe('my-agent');
+      // Only the shell left: it is the primary rather than an empty screen.
+      expect(primaryOf({ ...ALL_OFF })?.mode).toBe('shell');
+    });
+
+    it('renders the rest as chips in catalog order, carrying the CLI id only as data', () => {
+      const { app, welcomeCliActions } = loadUi(undefined);
+      app.applyWelcomeCliVisibility();
+      expect(welcomeCliActions.children).toHaveLength(2);
+      const [primary, chipRow] = welcomeCliActions.children;
+      expect(chipRow.className).toBe('welcome-chips');
+      expect(chipRow.children.map((chip: any) => chip.dataset.mode)).toEqual(
+        CATALOG.map((cli) => cli.id).filter((id) => id !== primary.dataset.mode)
       );
-      expect(texts).toEqual(['Run Claude Code', 'Run Shell']);
+      for (const btn of launchers(welcomeCliActions)) {
+        const id = btn.dataset.mode;
+        // The logo is the shared Run-menu slot, so styles.css draws the brand mark
+        // (or the plain fallback dot of an id it has no mark for).
+        const logos: any[] = [];
+        const collect = (el: any) =>
+          el.children.forEach((c: any) => {
+            if (typeof c === 'string') return;
+            if (String(c.className).startsWith('run-mode-dot')) logos.push(c);
+            collect(c);
+          });
+        collect(btn);
+        expect(logos.map((l) => l.className)).toEqual([`run-mode-dot ${id}`]);
+        // No per-id class on the button itself, so no rule can restyle one CLI.
+        expect(btn.className).not.toContain(id);
+        expect(typeof btn.onclick).toBe('function');
+      }
+    });
+
+    it('styles the launchers from skin tokens only, with no per-CLI welcome rule left', () => {
+      const css = readFileSync(resolve(import.meta.dirname, '../src/web/public/styles.css'), 'utf8');
+      const mobileCss = readFileSync(resolve(import.meta.dirname, '../src/web/public/mobile.css'), 'utf8');
+      const html = readFileSync(resolve(import.meta.dirname, '../src/web/public/index.html'), 'utf8');
+      // The old look was one gradient per CLI (.welcome-btn-codex, …) plus skin
+      // overrides of the same classes; any survivor would re-tint one launcher.
+      expect(css).not.toMatch(/\.welcome-btn\b/);
+      expect(mobileCss).not.toMatch(/\.welcome-btn\b/);
+      const rule = (selector: string) => {
+        const at = css.indexOf(`\n${selector} {`);
+        expect(at, `${selector} rule`).toBeGreaterThan(-1);
+        return css.slice(at, css.indexOf('}', at));
+      };
+      expect(rule('.welcome-primary')).toContain('var(--accent-grad-a)');
+      expect(rule('.welcome-chip')).toContain('var(--control-bg)');
+      expect(rule('.welcome-chip')).toContain('var(--control-border)');
+      // Hover motion stays off for anyone who asked for less of it.
+      expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.welcome-primary,/);
+      // The tunnel keeps its id and handler, is no longer a launcher, and sits
+      // between the launchers and the QR it reveals.
+      expect(html).toMatch(
+        /class="welcome-tunnel-link" id="welcomeTunnelBtn"[^>]*onclick="app\.toggleTunnelFromWelcome\(\)"/
+      );
+      const actions = html.indexOf('id="welcomeCliActions"');
+      const tunnel = html.indexOf('id="welcomeTunnelBtn"');
+      expect(actions).toBeGreaterThan(-1);
+      expect(tunnel).toBeGreaterThan(actions);
+      expect(html.indexOf('id="welcomeQr"')).toBeGreaterThan(tunnel);
     });
 
     it('falls back to the first ENABLED agent when the chosen run mode is disabled, never a hardcoded claude', () => {
@@ -545,7 +642,7 @@ describe('Codex quick start settings', () => {
       const { app, welcomeCliActions, modeBtns, menu } = loadUi(undefined);
       app.applyWelcomeCliVisibility();
       app._refreshRunModeAvailability(menu);
-      expect(welcomeCliActions.children.map((btn: any) => btn.dataset.mode)).toContain('claude');
+      expect(offeredModes(welcomeCliActions)).toContain('claude');
       expect(modeBtns.gemini.style.display).toBe('flex');
     });
   });

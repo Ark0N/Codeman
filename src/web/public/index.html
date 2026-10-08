@@ -460,9 +460,14 @@
         <div class="welcome-content">
           <h1 class="welcome-title">Codeman</h1>
           <p class="welcome-desc">Manage AI Coding tools in persistent tmux sessions.</p>
+          <!-- Launchers (settings-ui.js renderWelcomeCliActions): one primary
+               button for the first agent in the registry catalog, then a chip
+               row for every other enabled CLI. The tunnel is not a launcher, so
+               it sits under them as a quiet link; settings-ui.js rewrites its
+               contents on every state change and owns its inline display. -->
           <div class="welcome-actions">
             <div class="welcome-cli-actions" id="welcomeCliActions"></div>
-            <button class="welcome-btn welcome-btn-tunnel" id="welcomeTunnelBtn" style="display: none;" onclick="app.toggleTunnelFromWelcome()">
+            <button type="button" class="welcome-tunnel-link" id="welcomeTunnelBtn" style="display: none;" onclick="app.toggleTunnelFromWelcome()">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
               Cloudflare Tunnel
             </button>
