@@ -44,6 +44,13 @@ export type UnifiedSessionItem = {
   worktreeRepo?: string;
   remote?: boolean;
   /**
+   * Remote host whose mirrored transcript produced this row (remote-claude-sync.ts).
+   * Absent for the local tree. A live remote session carries `remote: true`
+   * instead; both may be set when a mirror row merges with its live session.
+   */
+  hostId?: string;
+  hostLabel?: string;
+  /**
    * Token this row's CLI resumes by, when that is not `sessionId`. Set only from
    * a transcript scanner — see the field of the same name on `HistoryInput`.
    */
@@ -108,6 +115,9 @@ export type HistoryInput = {
   gitBranch?: string;
   worktreeName?: string;
   worktreeRepo?: string;
+  /** Remote host this transcript was mirrored from; absent for the local tree. */
+  hostId?: string;
+  hostLabel?: string;
   /**
    * Set only by a non-claude transcript source (currently omp and codex); the
    * Claude scanner never stamps this; the meaningfulness floor below still
@@ -200,6 +210,8 @@ export function mergeUnifiedSessions(sources: UnifiedSources): UnifiedSessionIte
     overwrite(item, 'gitBranch', h.gitBranch);
     overwrite(item, 'worktreeName', h.worktreeName);
     overwrite(item, 'worktreeRepo', h.worktreeRepo);
+    overwrite(item, 'hostId', h.hostId);
+    overwrite(item, 'hostLabel', h.hostLabel);
     // Claude rows never set this (they're implicitly claude); a non-claude
     // transcript source (currently only omp) does, so a history-only row
     // still gets a mode badge instead of reading as claude by default.
@@ -388,7 +400,16 @@ export function filterAndPaginate(
   const q = (opts.q ?? '').trim().toLowerCase();
   const filtered = q
     ? items.filter((it) => {
-        const hay = [it.name, it.firstPrompt, it.lastPrompt, it.workingDir, it.sessionId, it.worktreeName, it.gitBranch]
+        const hay = [
+          it.name,
+          it.firstPrompt,
+          it.lastPrompt,
+          it.workingDir,
+          it.sessionId,
+          it.worktreeName,
+          it.gitBranch,
+          it.hostLabel,
+        ]
           .filter((v): v is string => typeof v === 'string')
           .join(' ')
           .toLowerCase();

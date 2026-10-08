@@ -9,6 +9,7 @@ import type { PlanOrchestrator } from '../../plan-orchestrator.js';
 import type { TeamWatcher } from '../../team-watcher.js';
 import type { TunnelManager } from '../../tunnel-manager.js';
 import type { PushSubscriptionStore } from '../../push-store.js';
+import type { RemoteClaudeSyncStatus } from '../../remote-claude-sync.js';
 
 /** A scheduled autonomous run with session lifecycle management */
 export interface ScheduledRun {
@@ -38,4 +39,7 @@ export interface InfraPort {
   readonly pushStore: PushSubscriptionStore;
   startScheduledRun(prompt: string, workingDir: string, durationMinutes: number, owner?: string): Promise<ScheduledRun>;
   stopScheduledRun(id: string): Promise<void>;
+  /** Remote transcript history mirror (remote-claude-sync.ts): per-host status and a manual pass. */
+  getRemoteClaudeSyncStatus(): RemoteClaudeSyncStatus[];
+  runRemoteClaudeSyncNow(): Promise<void>;
 }

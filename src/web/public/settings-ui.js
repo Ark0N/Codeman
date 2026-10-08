@@ -461,6 +461,7 @@ Object.assign(CodemanApp.prototype, {
     if (gestureItem) gestureItem.style.display = window.__codemanGestureAvailable ? '' : 'none';
     document.getElementById('appSettingsGestureControl').checked = settings.gestureControlEnabled ?? defaults.gestureControlEnabled ?? false;
     document.getElementById('appSettingsSubagentTracking').checked = settings.subagentTrackingEnabled ?? defaults.subagentTrackingEnabled ?? true;
+    document.getElementById('appSettingsRemoteHistory').checked = settings.remoteHistory?.enabled ?? false;
     document.getElementById('appSettingsSubagentActiveTabOnly').checked = settings.subagentActiveTabOnly ?? defaults.subagentActiveTabOnly ?? true;
     document.getElementById('appSettingsImageWatcherEnabled').checked = settings.imageWatcherEnabled ?? defaults.imageWatcherEnabled ?? false;
     document.getElementById('appSettingsTunnelEnabled').checked = settings.tunnelEnabled ?? false;
@@ -2504,6 +2505,7 @@ Object.assign(CodemanApp.prototype, {
       gitStatusTree: document.getElementById('appSettingsGitStatusTree').checked,
       gestureControlEnabled: document.getElementById('appSettingsGestureControl').checked,
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
+      remoteHistory: { enabled: document.getElementById('appSettingsRemoteHistory').checked },
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
       imageWatcherEnabled: document.getElementById('appSettingsImageWatcherEnabled').checked,
       tunnelEnabled: document.getElementById('appSettingsTunnelEnabled').checked,

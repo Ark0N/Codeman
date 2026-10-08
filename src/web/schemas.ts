@@ -1086,6 +1086,16 @@ export const QuickStartSchema = z.object({
    *  remote cases (the file would be written on the WRONG machine). */
   modelOverride: z.string().max(50).optional(),
   mode: sessionModeSchema().optional(),
+  /**
+   * Claude conversation to resume in this case (the history list's remote rows:
+   * a remote case is the only way to launch on that host). Validated against the
+   * case's own transcript root — the host's mirror for a remote case — and dropped
+   * with a log line when absent, exactly like `POST /api/sessions`.
+   */
+  resumeSessionId: z
+    .string()
+    .regex(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/)
+    .optional(),
   openCodeConfig: OpenCodeConfigSchema,
   codexConfig: CodexConfigSchema,
   geminiConfig: GeminiConfigSchema,
@@ -1298,6 +1308,18 @@ export const SettingsUpdateSchema = z
     ralphTrackerEnabled: z.boolean().optional(),
     subagentTrackingEnabled: z.boolean().optional(),
     subagentActiveTabOnly: z.boolean().optional(),
+    /**
+     * Remote transcript history (default OFF): mirror each remote host's
+     * `~/.claude/projects` into the data dir on a timer so history, the response
+     * viewer and sub-agent windows cover remote cases. See remote-claude-sync.ts.
+     */
+    remoteHistory: z
+      .object({
+        enabled: z.boolean().optional(),
+        intervalSec: z.number().int().min(15).max(3600).optional(),
+      })
+      .strict()
+      .optional(),
     /** Ultracode/Workflow run visualization (default OFF). Gates workflowRunWatcher + the master-detail tab. SYNCED. */
     showUltracodeAgents: z.boolean().optional(),
     /** Floating ultracode run windows w/ tab connector lines (default OFF). Also starts workflowRunWatcher. SYNCED. */

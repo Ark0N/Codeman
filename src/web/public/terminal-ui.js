@@ -2666,6 +2666,11 @@ Object.assign(CodemanApp.prototype, {
         (() => {
           if (isLive && this.sessions.has(s.sessionId)) {
             this.selectSession(s.sessionId);
+          } else if (s.hostId) {
+            // A mirrored remote transcript: the only way to run it is a remote
+            // case on that host (POST /api/sessions would launch locally with a
+            // conversation id this machine has no transcript for).
+            this.resumeRemoteHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '', s.name, s.hostId, s.hostLabel);
           } else {
             this.resumeHistorySession(s.claudeSessionId || s.sessionId, s.workingDir || '', s.name, s.mode, s.resumeId);
           }
@@ -2696,6 +2701,15 @@ Object.assign(CodemanApp.prototype, {
       modeBadge.className = 'history-item-badge history-item-badge-mode';
       modeBadge.textContent = s.mode;
       badgeRow.appendChild(modeBadge);
+    }
+    // Host pill: the row came from a remote host's mirrored transcripts
+    // (remote-claude-sync). Reads as metadata like the worktree pill, not as state.
+    if (s.hostId) {
+      const hostBadge = document.createElement('span');
+      hostBadge.className = 'history-item-badge history-item-badge-host';
+      hostBadge.textContent = '@' + (s.hostLabel || s.hostId);
+      hostBadge.title = `On remote host ${s.hostLabel || s.hostId}`;
+      badgeRow.appendChild(hostBadge);
     }
     // Worktree pill (#266): distinguishes sessions from different worktrees of the
     // same repo, which are otherwise identical in this list. Name AND branch when
@@ -3376,6 +3390,45 @@ Object.assign(CodemanApp.prototype, {
       }
     }
     return `w${startNumber}-${dirName}`;
+  },
+
+  /**
+   * Resume a conversation that lives on a remote host. Goes through
+   * /api/quick-start with the remote case that owns that path, which is what
+   * launches the CLI on the host; the server validates the id against the
+   * host's mirror and drops it (fresh session) when absent.
+   */
+  async resumeRemoteHistorySession(sessionId, workingDir, existingName, hostId, hostLabel) {
+    document.getElementById('runModeMenu')?.classList.remove('active');
+    this._closeFolderHistoryModal();
+    const label = hostLabel || hostId;
+    const cases = this.cases || [];
+    // Exact path first, then the deepest case the path sits under.
+    const owning = cases
+      .filter((c) => c.location === 'remote' && c.remote?.hostId === hostId && c.remote?.path)
+      .filter((c) => workingDir === c.remote.path || workingDir.startsWith(c.remote.path.replace(/\/+$/, '') + '/'))
+      .sort((a, b) => b.remote.path.length - a.remote.path.length)[0];
+    if (!owning) {
+      this.showToast?.(`No remote case on ${label} covers ${workingDir}. Link one (+ → Remote) and try again.`, 'error');
+      this.terminal.writeln(`\x1b[1;31m No remote case on ${label} for ${workingDir}; link one first (+ → Remote).\x1b[0m`);
+      return;
+    }
+    try {
+      this.terminal.clear();
+      this.terminal.writeln(`\x1b[1;32m Resuming conversation ${sessionId.slice(0, 8)} on ${label}...\x1b[0m`);
+      const name = this._resolveResumeName(existingName, workingDir);
+      const res = await fetch('/api/quick-start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caseName: owning.name, mode: 'claude', sessionName: name, resumeSessionId: sessionId }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'quick-start failed');
+      const newSessionId = data.data?.sessionId;
+      if (newSessionId) this.selectSession(newSessionId);
+    } catch (error) {
+      this.terminal.writeln(`\x1b[1;31m Failed to resume on ${label}: ${error.message}\x1b[0m`);
+    }
   },
 
   async resumeHistorySession(sessionId, workingDir, existingName, mode, resumeId) {

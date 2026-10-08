@@ -153,6 +153,7 @@ import { RunSummaryTracker } from '../../run-summary.js';
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
 import { MAX_PASTE_IMAGE_BYTES } from '../../config/buffer-limits.js';
 import { dataPath, getDataDir } from '../../config/instance.js';
+import { listClaudeProjectRoots, claudeProjectRootForHost, type ClaudeProjectRoot } from '../../remote-claude-sync.js';
 import {
   checkRemoteTmuxAvailable,
   readRemoteCases,
@@ -2598,13 +2599,26 @@ export function registerSessionRoutes(
       };
     }
 
-    // Scan ~/.claude/projects/*/ for the transcript file
-    const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
+    // Scan ~/.claude/projects/*/ for the transcript file — or, for a remote
+    // session, that host's mirror (remote-claude-sync.ts). No mirror yet means
+    // no transcript to show; the response below is the same empty shape.
+    const remoteRoot = session.remote?.hostId
+      ? await claudeProjectRootForHost(CODEMAN_CONFIG_DIR, session.remote.hostId)
+      : undefined;
+    if (session.remote && !remoteRoot) {
+      const q = req.query as { context?: string };
+      return q.context === 'full' || q.context === 'turn'
+        ? { text: '', timestamp: '', messages: [] }
+        : { text: '', timestamp: '' };
+    }
+    const projectsDir = remoteRoot?.projectsDir ?? join(process.env.HOME || '/tmp', '.claude', 'projects');
 
     // Adopt the current conversation id if the user ran `/clear` — Claude CLI's
     // interactive PTY emits no JSON on stdout, so without this lookup the
-    // stored id stays pinned to the pre-/clear transcript.
-    const activeId = await resolveActiveClaudeSessionIdFromHistory(session, projectsDir);
+    // stored id stays pinned to the pre-/clear transcript. The correlation reads
+    // the LOCAL ~/.claude/history.jsonl, which says nothing about a remote host's
+    // conversations, so a remote session keeps the id it has (as syncClaudeTitle does).
+    const activeId = session.remote ? null : await resolveActiveClaudeSessionIdFromHistory(session, projectsDir);
     if (activeId && activeId !== session.claudeSessionId) {
       session.adoptClaudeSessionId(activeId);
       // Flush the Enter that vouched for this adoption to state.json. A `/clear`
@@ -3426,6 +3440,7 @@ export function registerSessionRoutes(
       sessionName,
       mode = 'claude',
       modelOverride,
+      resumeSessionId: requestedResumeId,
       openCodeConfig,
       codexConfig,
       geminiConfig,
@@ -3692,6 +3707,30 @@ export function registerSessionRoutes(
     // By this point casePath is guaranteed non-null: for remote cases it was set from remoteCase.remotePath,
     // for local cases the !casePath guard above returned early. TypeScript can't narrow across the if/else.
     const resolvedCasePath = casePath as string;
+
+    // Resume a past Claude conversation in this case. Pre-validated like the
+    // create route, but against the root the case actually runs in: a remote
+    // case's transcripts live in that host's mirror (remote-claude-sync.ts), and
+    // a docker case keeps its own seed (dockerResumeId, below) and is left alone.
+    let qsResumeId: string | undefined;
+    if (requestedResumeId && mode === 'claude' && !dockerCase) {
+      const root = remoteCase
+        ? await claudeProjectRootForHost(CODEMAN_CONFIG_DIR, remoteCase.hostId)
+        : { projectsDir: join(process.env.HOME || '/tmp', '.claude', 'projects') };
+      let found = false;
+      if (root) {
+        const projectDirs = await fs.readdir(root.projectsDir).catch(() => [] as string[]);
+        for (const projDir of projectDirs) {
+          const st = await fs.stat(join(root.projectsDir, projDir, `${requestedResumeId}.jsonl`)).catch(() => null);
+          if (st && st.size > 4000) {
+            found = true;
+            break;
+          }
+        }
+      }
+      if (found) qsResumeId = requestedResumeId;
+      else console.log(`[Session] Resume session ${requestedResumeId} not found for case ${caseName}, starting fresh`);
+    }
 
     // Multi-user linchpin (section 6.2): confine the resolved workingDir to the caller's
     // own case space BEFORE any mkdir/scaffold below creates or mutates it. Applies to
@@ -4038,7 +4077,7 @@ export function registerSessionRoutes(
       advisorModel,
       remote,
       docker,
-      resumeSessionId: dockerResumeId,
+      resumeSessionId: qsResumeId ?? dockerResumeId,
       tmuxHistoryLimit: qsTerminalHistoryConfig.tmuxHistoryLimit,
       parentSessionId: qsParentSessionId,
     };
@@ -4625,21 +4664,34 @@ export function registerSessionRoutes(
     gitBranch?: string;
     worktreeName?: string;
     worktreeRepo?: string;
+    /** Remote host this transcript was mirrored from (remote-claude-sync.ts); absent for local. */
+    hostId?: string;
+    hostLabel?: string;
   };
 
   // Scan a single project directory and return all valid history sessions in it.
   // Reused by both the global overview and the single-folder drill-down.
+  // `root` names the projects tree the directory belongs to; a remote host's
+  // mirror stamps hostId/hostLabel on every row.
   async function scanProjectDir(
     projPath: string,
     projDir: string,
     smallHeadBuf: Buffer,
-    headBuf: Buffer
+    headBuf: Buffer,
+    root?: ClaudeProjectRoot
   ): Promise<HistorySession[]> {
     const out: HistorySession[] = [];
     const stat = await fs.stat(projPath).catch(() => null);
     if (!stat?.isDirectory()) return out;
 
-    const workingDir = await decodeProjectKey(projDir);
+    // decodeProjectKey backtracks against the LOCAL filesystem to undo Claude's
+    // `/`, `_`, `.` → `-` mangling. A remote host's key describes a path on that
+    // host, so the stat-walk would either resolve a local look-alike or collapse to
+    // $HOME. Use the naive expansion as the fallback and rely on the transcript's
+    // literal cwd (workingDirExact) below, which is present on every modern row.
+    const workingDir = root?.hostId
+      ? '/' + projDir.replace(/^-/, '').replace(/-/g, '/')
+      : await decodeProjectKey(projDir);
     const entries = await fs.readdir(projPath).catch(() => [] as string[]);
 
     for (const entry of entries) {
@@ -4759,14 +4811,17 @@ export function registerSessionRoutes(
         gitBranch: git.gitBranch,
         worktreeName: git.worktreeName,
         worktreeRepo: git.worktreeRepo,
+        hostId: root?.hostId,
+        hostLabel: root?.hostLabel,
       });
     }
     return out;
   }
 
   app.get('/api/history/sessions', async (req) => {
-    const query = req.query as { projectKey?: string; offset?: string; limit?: string };
-    const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
+    const query = req.query as { projectKey?: string; offset?: string; limit?: string; hostId?: string };
+    // The local tree plus one mirror per remote host (remote-claude-sync.ts).
+    const roots = await listClaudeProjectRoots(CODEMAN_CONFIG_DIR);
     // scanProjectDir tries smallHeadBuf (16KB, the original size) first for every
     // file and only escalates to headBuf (128KB) when that wasn't enough — see the
     // comment at the escalation site in scanProjectDir for why unconditional 128KB
@@ -4790,25 +4845,33 @@ export function registerSessionRoutes(
       }
       const offset = Math.max(0, parseInt(query.offset || '0', 10) || 0);
       const limit = Math.min(100, Math.max(1, parseInt(query.limit || '20', 10) || 20));
-      const projPath = join(projectsDir, query.projectKey);
-      let all = await scanProjectDir(projPath, query.projectKey, smallHeadBuf, headBuf);
+      // A projectKey is only unique within one root: the same path on two hosts
+      // mangles to the same key. `hostId` (same charset rule as projectKey) picks
+      // the mirror; absent means the local tree.
+      if (query.hostId && !/^[A-Za-z0-9_-]+$/.test(query.hostId)) return { sessions: [], total: 0 };
+      const root = query.hostId ? roots.find((r) => r.hostId === query.hostId) : roots[0];
+      if (!root) return { sessions: [], total: 0 };
+      const projPath = join(root.projectsDir, query.projectKey);
+      let all = await scanProjectDir(projPath, query.projectKey, smallHeadBuf, headBuf, root);
       // Confine to the caller's workspace (a projectKey maps to a single foreign cwd).
       if (scopeHistory) all = all.filter((r) => isWorkingDirAllowed(user, r.workingDir));
       all.sort((a, b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
       return { sessions: all.slice(offset, offset + limit), total: all.length };
     }
 
-    // Global overview: scan all projects, return up to 50 most-recent sessions.
+    // Global overview: scan all projects in every root, return up to 50 most-recent sessions.
     let results: HistorySession[] = [];
-    try {
-      const projectDirs = await fs.readdir(projectsDir);
-      for (const projDir of projectDirs) {
-        const projPath = join(projectsDir, projDir);
-        const list = await scanProjectDir(projPath, projDir, smallHeadBuf, headBuf);
-        results.push(...list);
+    for (const root of roots) {
+      try {
+        const projectDirs = await fs.readdir(root.projectsDir);
+        for (const projDir of projectDirs) {
+          const projPath = join(root.projectsDir, projDir);
+          const list = await scanProjectDir(projPath, projDir, smallHeadBuf, headBuf, root);
+          results.push(...list);
+        }
+      } catch {
+        // Projects dir may not exist
       }
-    } catch {
-      // Projects dir may not exist
     }
 
     // Multi-user: drop rows outside the non-admin caller's own case space.
@@ -4887,34 +4950,38 @@ export function registerSessionRoutes(
       // Lifecycle log may be unavailable; treat as empty.
     }
 
-    // Transcript history (~/.claude/projects) — reuse the same scanner as the overview.
+    // Transcript history (~/.claude/projects, plus each remote host's mirror) —
+    // reuse the same scanner as the overview.
     const history: HistoryInput[] = [];
-    try {
-      const projectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
-      // See the sibling allocation above for why there are two sizes.
-      const smallHeadBuf = Buffer.alloc(16384);
-      const headBuf = Buffer.alloc(131072);
-      const projectDirs = await fs.readdir(projectsDir);
-      for (const projDir of projectDirs) {
-        const projPath = join(projectsDir, projDir);
-        const list = await scanProjectDir(projPath, projDir, smallHeadBuf, headBuf);
-        for (const h of list) {
-          history.push({
-            sessionId: h.sessionId,
-            workingDir: h.workingDir,
-            sizeBytes: h.sizeBytes,
-            lastModified: h.lastModified,
-            firstPrompt: h.firstPrompt,
-            lastPrompt: h.lastPrompt,
-            projectKey: h.projectKey,
-            gitBranch: h.gitBranch,
-            worktreeName: h.worktreeName,
-            worktreeRepo: h.worktreeRepo,
-          });
+    // See the sibling allocation above for why there are two sizes.
+    const smallHeadBuf = Buffer.alloc(16384);
+    const headBuf = Buffer.alloc(131072);
+    for (const root of await listClaudeProjectRoots(CODEMAN_CONFIG_DIR)) {
+      try {
+        const projectDirs = await fs.readdir(root.projectsDir);
+        for (const projDir of projectDirs) {
+          const projPath = join(root.projectsDir, projDir);
+          const list = await scanProjectDir(projPath, projDir, smallHeadBuf, headBuf, root);
+          for (const h of list) {
+            history.push({
+              sessionId: h.sessionId,
+              workingDir: h.workingDir,
+              sizeBytes: h.sizeBytes,
+              lastModified: h.lastModified,
+              firstPrompt: h.firstPrompt,
+              lastPrompt: h.lastPrompt,
+              projectKey: h.projectKey,
+              gitBranch: h.gitBranch,
+              worktreeName: h.worktreeName,
+              worktreeRepo: h.worktreeRepo,
+              hostId: h.hostId,
+              hostLabel: h.hostLabel,
+            });
+          }
         }
+      } catch {
+        // Projects dir may not exist.
       }
-    } catch {
-      // Projects dir may not exist.
     }
 
     // OMP's own session files (~/.omp/agent/sessions) — the non-claude twin

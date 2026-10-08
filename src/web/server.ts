@@ -72,6 +72,7 @@ import {
   type SubagentMessage,
   type SubagentToolResult,
 } from '../subagent-watcher.js';
+import { RemoteClaudeSync, DEFAULT_SYNC_INTERVAL_SEC, listClaudeProjectRoots } from '../remote-claude-sync.js';
 import { imageWatcher } from '../image-watcher.js';
 import { workflowRunWatcher, summarizeRun } from '../workflow-run-watcher.js';
 import { attachmentRegistry, buildFileThumbnailRoute, registerExternalAttachment } from '../attachment-registry.js';
@@ -301,6 +302,7 @@ export class WebServer extends EventEmitter {
   private app: FastifyInstance;
   private sessions: Map<string, Session> = new Map();
   private respawnControllers: Map<string, RespawnController> = new Map();
+  private remoteClaudeSync: RemoteClaudeSync | undefined;
   private respawnTimers: Map<string, { timer: NodeJS.Timeout; endAt: number; startedAt: number }> = new Map();
   private runSummaryTrackers: Map<string, RunSummaryTracker> = new Map();
   private transcriptWatchers: Map<string, TranscriptWatcher> = new Map();
@@ -763,6 +765,8 @@ export class WebServer extends EventEmitter {
       startTranscriptWatcher: this.startTranscriptWatcher.bind(this),
       stopTranscriptWatcher: this.stopTranscriptWatcher.bind(this),
       getTranscriptPath: (sessionId: string) => this.transcriptWatchers.get(sessionId)?.getPath() ?? null,
+      getRemoteClaudeSyncStatus: this.getRemoteClaudeSyncStatus.bind(this),
+      runRemoteClaudeSyncNow: this.runRemoteClaudeSyncNow.bind(this),
       getReadMyMindModel: this.getReadMyMindModel.bind(this),
       // InfraPort
       mux: this.mux,
@@ -3096,12 +3100,24 @@ export class WebServer extends EventEmitter {
     );
 
     // Start subagent watcher for Claude Code background agent visibility (if enabled)
+    // Sub-agents in a remote host's mirrored transcripts show up too (hostId-stamped).
+    subagentWatcher.setProjectRootsProvider(() => listClaudeProjectRoots(getDataDir()));
     if (await this.isSubagentTrackingEnabled()) {
       subagentWatcher.start();
       console.log('Subagent watcher started - monitoring ~/.claude/projects for background agent activity');
     } else {
       console.log('Subagent watcher disabled by user settings');
     }
+
+    // Remote transcript history: a per-host mirror of ~/.claude/projects (opt-in).
+    // The sync re-reads settings every cycle, so the toggle takes effect without
+    // a restart; the subagent watcher picks new mirrors up on its full scans.
+    this.remoteClaudeSync = new RemoteClaudeSync(getDataDir(), {
+      isEnabled: () => this.remoteHistorySettings().enabled,
+      intervalSec: () => this.remoteHistorySettings().intervalSec,
+      log: (msg) => console.log(msg),
+    });
+    this.remoteClaudeSync.start();
 
     // Start workflow run watcher for ultracode / Workflow run visualization (if enabled)
     if (await this.isWorkflowAgentTrackingEnabled()) {
@@ -3137,6 +3153,34 @@ export class WebServer extends EventEmitter {
     // Start team watcher for agent team awareness (always on — lightweight polling)
     this.teamWatcher.start();
     console.log('Team watcher started - monitoring ~/.claude/teams/ for agent team activity');
+  }
+
+  /**
+   * `remoteHistory` from settings.json, defaults applied by the reader (the GET
+   * route never writes). Read synchronously on each sync cycle — it is a tiny file.
+   */
+  private remoteHistorySettings(): { enabled: boolean; intervalSec: number } {
+    try {
+      const settings = JSON.parse(readFileSync(dataPath('settings.json'), 'utf-8')) as {
+        remoteHistory?: { enabled?: boolean; intervalSec?: number };
+      };
+      return {
+        enabled: settings.remoteHistory?.enabled === true,
+        intervalSec: settings.remoteHistory?.intervalSec ?? DEFAULT_SYNC_INTERVAL_SEC,
+      };
+    } catch {
+      return { enabled: false, intervalSec: DEFAULT_SYNC_INTERVAL_SEC };
+    }
+  }
+
+  /** Sync status per host, for `GET /api/remote-claude-sync`. */
+  getRemoteClaudeSyncStatus(): ReturnType<RemoteClaudeSync['getStatus']> {
+    return this.remoteClaudeSync?.getStatus() ?? [];
+  }
+
+  /** Force one sync pass now (the route behind the UI's "sync now"). */
+  async runRemoteClaudeSyncNow(): Promise<void> {
+    await this.remoteClaudeSync?.runCycle();
   }
 
   /**
@@ -4040,6 +4084,7 @@ export class WebServer extends EventEmitter {
 
     // Stop subagent watcher
     subagentWatcher.stop();
+    this.remoteClaudeSync?.stop();
 
     // Stop workflow run watcher
     workflowRunWatcher.stop();

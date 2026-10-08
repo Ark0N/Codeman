@@ -139,6 +139,8 @@ export function createMockRouteContext(options?: {
     startTranscriptWatcher: vi.fn(),
     stopTranscriptWatcher: vi.fn(),
     getTranscriptPath: vi.fn(() => null),
+    getRemoteClaudeSyncStatus: vi.fn(() => []),
+    runRemoteClaudeSyncNow: vi.fn(async () => {}),
     getReadMyMindModel: vi.fn(async () => 'claude-opus-4-5-20251101'),
 
     // -- InfraPort --

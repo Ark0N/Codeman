@@ -5038,6 +5038,16 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   white-space: nowrap;
 }
 
+/* Host pill (remote transcript history): which machine the conversation lives on. */
+.history-item-badge-host {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text-muted);
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .history-item-meta {
   font-size: 0.7rem;
   color: var(--text-muted);

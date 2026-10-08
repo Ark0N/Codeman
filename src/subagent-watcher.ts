@@ -39,6 +39,7 @@ import { PENDING_TOOL_CALL_TTL_MS, MAX_PENDING_TOOL_CALLS, MAX_TRACKED_AGENTS } 
 import { STALE_DATA_MAX_AGE_MS } from './config/server-timing.js';
 import { FILE_PEEK_BYTES } from './config/buffer-limits.js';
 import { CleanupManager, KeyedDebouncer } from './utils/index.js';
+import type { ClaudeProjectRoot } from './remote-claude-sync.js';
 
 // ========== Types ==========
 
@@ -59,6 +60,9 @@ export interface SubagentInfo {
   totalInputTokens?: number; // Running total of input tokens
   totalOutputTokens?: number; // Running total of output tokens
   pid?: number; // Cached process ID for fast liveness checks
+  /** Remote host whose mirrored transcript this agent was read from (remote-claude-sync.ts). */
+  hostId?: string;
+  hostLabel?: string;
 }
 
 export interface SubagentToolCall {
@@ -139,6 +143,11 @@ export interface SubagentToolResult {
 // ========== Constants ==========
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude/projects');
+// A mirrored (remote) agent's file is only as fresh as the last rsync, so its
+// liveness window must absorb a full sync interval on top of the local threshold.
+const REMOTE_FILE_ALIVE_THRESHOLD_MS = 3 * 60 * 1000;
+// How often the scan re-reads the remote-host list for new mirrors.
+const ROOTS_REFRESH_MS = 30000;
 const IDLE_TIMEOUT_MS = 30000; // Consider agent idle after 30s of no activity
 const POLL_INTERVAL_MS = 1000; // Base poll interval (lightweight checks)
 const FULL_SCAN_EVERY_N_POLLS = 5; // Full directory traversal every 5th poll (5s)
@@ -199,6 +208,53 @@ export class SubagentWatcher extends EventEmitter {
   constructor() {
     super();
     this.setMaxListeners(50);
+  }
+
+  // ========== Projects roots (local + remote mirrors) ==========
+
+  private roots: ClaudeProjectRoot[] = [{ projectsDir: CLAUDE_PROJECTS_DIR }];
+  private rootsRefreshedAt = 0;
+  private rootsProvider: (() => Promise<ClaudeProjectRoot[]>) | undefined;
+
+  /**
+   * Install the source of extra projects roots (the remote host mirrors kept by
+   * remote-claude-sync.ts). Injected rather than imported so this module stays
+   * free of the remote/ssh code; the server wires it before `start()`.
+   */
+  setProjectRootsProvider(provider: () => Promise<ClaudeProjectRoot[]>): void {
+    this.rootsProvider = provider;
+    this.rootsRefreshedAt = 0;
+  }
+
+  /** The local tree plus one root per remote host mirror; refreshed at most every 30s. */
+  private async refreshRoots(): Promise<ClaudeProjectRoot[]> {
+    if (!this.rootsProvider) return this.roots;
+    const now = Date.now();
+    if (now - this.rootsRefreshedAt < ROOTS_REFRESH_MS) return this.roots;
+    this.rootsRefreshedAt = now;
+    try {
+      const roots = await this.rootsProvider();
+      // Keep the local root first and stable even if the data dir is unreadable.
+      this.roots = roots.length > 0 ? roots : [{ projectsDir: CLAUDE_PROJECTS_DIR }];
+    } catch {
+      // Keep whatever we had.
+    }
+    return this.roots;
+  }
+
+  /** The root a transcript path lives under (longest prefix wins). */
+  private rootForPath(filePath: string): ClaudeProjectRoot {
+    let best: ClaudeProjectRoot | undefined;
+    for (const root of this.roots) {
+      const prefix = root.projectsDir.endsWith('/') ? root.projectsDir : root.projectsDir + '/';
+      if (filePath.startsWith(prefix) && (!best || root.projectsDir.length > best.projectsDir.length)) best = root;
+    }
+    return best ?? this.roots[0];
+  }
+
+  /** The projects tree an agent transcript belongs to (its root's projectsDir). */
+  private projectsDirForAgentFile(agentFilePath: string): string {
+    return this.rootForPath(agentFilePath).projectsDir;
   }
 
   /**
@@ -358,6 +414,15 @@ export class SubagentWatcher extends EventEmitter {
             // Tier 1: File mtime check (~0.3ms per agent)
             if (await this.checkSubagentFileAlive(info)) continue;
 
+            // A mirrored agent runs on another machine: there is no local PID to
+            // probe and `pgrep` here would never find it, so tiers 2 and 3 would
+            // only ever say "dead". The file's age (tier 1, with the wider remote
+            // window) is the whole answer.
+            if (info.hostId) {
+              this.markSubagentAsCompleted(info);
+              continue;
+            }
+
             // Tier 2: Cached PID check (~0.1ms per agent)
             if (info.pid && (await this.checkPidAlive(info.pid))) continue;
 
@@ -488,7 +553,7 @@ export class SubagentWatcher extends EventEmitter {
       const fileStat = await statAsync(info.filePath);
       const mtime = fileStat.mtime.getTime();
       const now = Date.now();
-      if (now - mtime < FILE_ALIVE_THRESHOLD_MS) {
+      if (now - mtime < (info.hostId ? REMOTE_FILE_ALIVE_THRESHOLD_MS : FILE_ALIVE_THRESHOLD_MS)) {
         return true;
       }
     } catch {
@@ -651,9 +716,14 @@ export class SubagentWatcher extends EventEmitter {
    * Get subagents for a specific Codeman session
    * Maps Codeman working directory to Claude's project hash
    */
-  getSubagentsForSession(workingDir: string): SubagentInfo[] {
+  getSubagentsForSession(workingDir: string, hostId?: string): SubagentInfo[] {
     const projectHash = this.getProjectHash(workingDir);
-    return Array.from(this.agentInfo.values()).filter((info) => info.projectHash === projectHash);
+    // The same path on two hosts mangles to the same hash, so the host is part
+    // of the key: a local session sees only local agents, a remote session only
+    // its host's mirror.
+    return Array.from(this.agentInfo.values()).filter(
+      (info) => info.projectHash === projectHash && (info.hostId ?? undefined) === (hostId ?? undefined)
+    );
   }
 
   /**
@@ -987,7 +1057,7 @@ export class SubagentWatcher extends EventEmitter {
     fallbackText?: string
   ): Promise<string | undefined> {
     // First try parent transcript (most reliable)
-    const fromParent = await this.extractDescriptionFromParentTranscript(projectHash, sessionId, agentId);
+    const fromParent = await this.extractDescriptionFromParentTranscript(projectHash, sessionId, agentId, filePath);
     if (fromParent) return fromParent;
 
     // Fallback: inline text (from processEntry) or file extraction
@@ -1012,9 +1082,11 @@ export class SubagentWatcher extends EventEmitter {
   private async extractDescriptionFromParentTranscript(
     projectHash: string,
     sessionId: string,
-    agentId: string
+    agentId: string,
+    agentFilePath: string
   ): Promise<string | undefined> {
-    const cacheKey = `${projectHash}/${sessionId}`;
+    // Keyed by root too: the same project/session pair can exist on two hosts.
+    const cacheKey = `${this.projectsDirForAgentFile(agentFilePath)}/${projectHash}/${sessionId}`;
     const CACHE_TTL_MS = 5000;
 
     // Check cache first (covers burst of simultaneous agent discoveries)
@@ -1024,8 +1096,9 @@ export class SubagentWatcher extends EventEmitter {
     }
 
     try {
-      // The parent session's transcript is at: ~/.claude/projects/{projectHash}/{sessionId}.jsonl
-      const transcriptPath = join(CLAUDE_PROJECTS_DIR, projectHash, `${sessionId}.jsonl`);
+      // The parent session's transcript is at: <root>/{projectHash}/{sessionId}.jsonl —
+      // the local tree, or the mirror the agent file itself was found in.
+      const transcriptPath = join(this.projectsDirForAgentFile(agentFilePath), projectHash, `${sessionId}.jsonl`);
       let fileSize: number;
       try {
         const fileStat = await statAsync(transcriptPath);
@@ -1123,17 +1196,24 @@ export class SubagentWatcher extends EventEmitter {
    * Scan for all subagent directories (async to avoid blocking event loop)
    */
   private async scanForSubagents(): Promise<void> {
+    for (const root of await this.refreshRoots()) {
+      await this.scanProjectsRoot(root.projectsDir);
+    }
+  }
+
+  /** One projects tree (the local one, or a remote host's mirror). */
+  private async scanProjectsRoot(projectsDir: string): Promise<void> {
     try {
-      await statAsync(CLAUDE_PROJECTS_DIR);
+      await statAsync(projectsDir);
     } catch {
       return;
     }
 
     try {
-      const projects = await readdir(CLAUDE_PROJECTS_DIR);
+      const projects = await readdir(projectsDir);
 
       for (const project of projects) {
-        const projectPath = join(CLAUDE_PROJECTS_DIR, project);
+        const projectPath = join(projectsDir, project);
 
         try {
           const st = await statAsync(projectPath);
@@ -1383,6 +1463,7 @@ export class SubagentWatcher extends EventEmitter {
       return;
     }
 
+    const root = this.rootForPath(filePath);
     const info: SubagentInfo = {
       agentId,
       sessionId,
@@ -1395,6 +1476,8 @@ export class SubagentWatcher extends EventEmitter {
       entryCount: 0,
       fileSize: fileStat.size,
       description,
+      hostId: root.hostId,
+      hostLabel: root.hostLabel,
     };
 
     // Enforce MAX_TRACKED_AGENTS during insertion — evict oldest inactive agent
@@ -1478,6 +1561,7 @@ export class SubagentWatcher extends EventEmitter {
     }
     if (this.isInternalAgent(description)) return;
 
+    const metaRoot = this.rootForPath(metaPath);
     const info: SubagentInfo = {
       agentId,
       sessionId,
@@ -1490,6 +1574,8 @@ export class SubagentWatcher extends EventEmitter {
       entryCount: 0,
       fileSize: fileStat.size,
       description,
+      hostId: metaRoot.hostId,
+      hostLabel: metaRoot.hostLabel,
     };
 
     if (this.agentInfo.size >= MAX_TRACKED_AGENTS) {

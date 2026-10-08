@@ -766,6 +766,8 @@ Object.assign(CodemanApp.prototype, {
           mode: s.mode,
           claudeSessionId: s.claudeSessionId,
           resumeId: s.resumeId,
+          hostId: s.hostId,
+          hostLabel: s.hostLabel,
         };
         const isLive = !!this.sessions?.has?.(s.sessionId);
         const item = this._buildHistoryItem(record, this.cases, {
@@ -774,6 +776,15 @@ Object.assign(CodemanApp.prototype, {
             this.closeSessionManager();
             if (isLive) {
               void this.selectSession(s.sessionId);
+            } else if (s.hostId && record.workingDir) {
+              // Mirrored remote transcript: launch on its host via its remote case.
+              void this.resumeRemoteHistorySession(
+                s.claudeSessionId || s.sessionId,
+                record.workingDir,
+                undefined,
+                s.hostId,
+                s.hostLabel
+              );
             } else if (record.workingDir) {
               // History rows are keyed by the Claude conversation UUID; resumed
               // sessions carry theirs separately as claudeSessionId.

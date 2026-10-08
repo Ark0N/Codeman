@@ -1757,6 +1757,57 @@ describe('session-routes', () => {
       expect(row.workingDir).not.toBe(home);
     });
 
+    it('includes a remote host mirror as a labelled root and resolves its workingDir from the transcript cwd', async () => {
+      // remote-claude-sync keeps `<data dir>/remote-claude/<hostId>/projects`;
+      // the scanner must treat it as one more root, stamp the host on each row,
+      // and NOT stat-walk the key against the local filesystem (the path is on
+      // the other machine) — the transcript's own cwd is the answer.
+      const { remoteClaudeProjectsDir } = await import('../../src/remote-claude-sync.js');
+      const { getDataDir } = await import('../../src/config/instance.js');
+      const dataDir = getDataDir();
+      // readRemoteHosts is mocked in this file: hosts come from remoteStore.
+      remoteStore.hosts = [{ id: 'apophis', label: 'apophis', host: '10.27.20.10', username: 'agent' }];
+      const projectKey = '-home-agent-projects-DumberTech';
+      const projDir = join(remoteClaudeProjectsDir(dataDir, 'apophis'), projectKey);
+      await mkdir(projDir, { recursive: true });
+      const sessionId = 'abcdefab-1234-1234-1234-123456789012';
+      const line =
+        JSON.stringify({
+          type: 'user',
+          cwd: '/home/agent/projects/DumberTech',
+          message: { role: 'user', content: 'remote hello' },
+        }) + '\n';
+      await writeFile(join(projDir, `${sessionId}.jsonl`), line + '#'.repeat(4200 - line.length));
+
+      // Overview: the mirrored row appears with its host.
+      const overview = await harness.app.inject({ method: 'GET', url: '/api/history/sessions' });
+      const row = JSON.parse(overview.body).data.sessions.find((s: { sessionId: string }) => s.sessionId === sessionId);
+      expect(row).toBeDefined();
+      expect(row.hostId).toBe('apophis');
+      expect(row.hostLabel).toBe('apophis');
+      expect(row.workingDir).toBe('/home/agent/projects/DumberTech');
+      expect(row.workingDirExact).toBe(true);
+
+      // Drill-down: the same key means nothing in the local tree without hostId…
+      const local = await harness.app.inject({ method: 'GET', url: `/api/history/sessions?projectKey=${projectKey}` });
+      expect(JSON.parse(local.body).data.sessions).toHaveLength(0);
+      // …and finds the mirror with it.
+      const remote = await harness.app.inject({
+        method: 'GET',
+        url: `/api/history/sessions?projectKey=${projectKey}&hostId=apophis`,
+      });
+      const rows = JSON.parse(remote.body).data.sessions;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].hostId).toBe('apophis');
+
+      // The unified merge carries the host through (the route itself is
+      // short-circuited by ctx.testMode in this harness).
+      const { mergeUnifiedSessions } = await import('../../src/services/unified-session-service.js');
+      const merged = mergeUnifiedSessions({ history: [{ ...row, mode: undefined }] });
+      expect(merged[0]?.hostId).toBe('apophis');
+      expect(merged[0]?.hostLabel).toBe('apophis');
+    });
+
     it('prefers the dotdir over a same-named non-dot sibling, and never emits a "//" path', async () => {
       // A doubled dash also lets the decoder read the empty split segment as a
       // directory NAME. `isDir(current + '/' + '')` stats `current + '/'`, which

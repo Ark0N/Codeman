@@ -1211,6 +1211,20 @@ export function registerSystemRoutes(
     return { success: true, data: run };
   });
 
+  // ========== Remote transcript history (remote-claude-sync.ts) ==========
+
+  app.get('/api/remote-claude-sync', async (req, reply) => {
+    // Host-level, like /api/remote-hosts: admin-only in multi-user mode.
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
+    return { success: true, data: ctx.getRemoteClaudeSyncStatus() };
+  });
+
+  app.post('/api/remote-claude-sync/run', async (req, reply) => {
+    if (isMultiUserMode() && !requireAdmin(req, reply)) return;
+    await ctx.runRemoteClaudeSyncNow();
+    return { success: true, data: ctx.getRemoteClaudeSyncStatus() };
+  });
+
   // ========== Subagent Monitoring ==========
 
   app.get('/api/subagents', async (req, reply) => {
@@ -1227,7 +1241,7 @@ export function registerSystemRoutes(
   app.get('/api/sessions/:id/subagents', async (req) => {
     const { id } = req.params as { id: string };
     const session = findSessionOrFail(ctx, id, req);
-    const subagents = subagentWatcher.getSubagentsForSession(session.workingDir);
+    const subagents = subagentWatcher.getSubagentsForSession(session.workingDir, session.remote?.hostId);
     return { success: true, data: subagents };
   });
 
