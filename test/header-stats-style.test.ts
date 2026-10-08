@@ -23,6 +23,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
+import postcss from 'postcss';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 const PUBLIC = join(process.cwd(), 'src/web/public');
@@ -223,6 +224,40 @@ describe('header stats wiring (static)', () => {
       /html\[data-header-stats='tiles'\] \.header-right > \.btn-icon-header \{\s*width: 36px;\s*height: 36px;/
     );
     expect(css).toMatch(/html\[data-header-stats='tiles'\] \.header-right > \.btn-icon-header > svg \{\s*width: 18px;/);
+  });
+
+  it('keeps the open Tiles and Split buttons pressed (accent) in the boxed styles, hover included', () => {
+    // The box rule (html[data-header-stats] .header-right > .btn-icon-header)
+    // outranks the buttons' own open-state accent, so nothing would show that
+    // the next click closes the grid or the split.
+    const found = new Map<string, Record<string, string>>();
+    postcss.parse(css).walkRules((rule) => {
+      const decls: Record<string, string> = {};
+      rule.walkDecls((d) => {
+        decls[d.prop] = d.value;
+      });
+      for (const sel of rule.selectors) found.set(sel, { ...found.get(sel), ...decls });
+    });
+    const missing: string[] = [];
+    for (const style of ['tiles', 'compact']) {
+      for (const open of ['btn-tile-grid.tiles-open', 'btn-split.split-open']) {
+        for (const hover of ['', ':hover']) {
+          // Starting from the box rule's own selector keeps it the more specific one.
+          const sel = `html[data-header-stats='${style}'] .header-right > .btn-icon-header.${open}${hover}`;
+          const d = found.get(sel);
+          if (
+            d?.background !== 'var(--accent)' ||
+            d['border-color'] !== 'var(--accent)' ||
+            d.color !== 'var(--accent-ink)'
+          )
+            missing.push(sel);
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+    // Classic keeps the buttons' own rules: nothing scoped to it touches them.
+    expect([...found.keys()].filter((s) => s.includes("'classic'") && /tiles-open|split-open/.test(s))).toEqual([]);
+    expect([...found.keys()].filter((s) => /(tiles|split)-open/.test(s) && s.includes(':is('))).toEqual([]);
   });
 
   it('stamps data-header-stats before first paint, tiles by default and classic on narrow screens', () => {

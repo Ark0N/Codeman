@@ -21354,6 +21354,22 @@ html[data-header-stats='compact'] .header-right > .btn-icon-header:hover {
   transform: none;
 }
 
+/* An open grid or split keeps its pressed look in the box: the rules above
+   outrank the buttons' own accent (.tiles-open, .split-open), and that accent
+   is the only thing saying the next click closes the grid or the split. */
+html[data-header-stats='tiles'] .header-right > .btn-icon-header.btn-tile-grid.tiles-open,
+html[data-header-stats='tiles'] .header-right > .btn-icon-header.btn-tile-grid.tiles-open:hover,
+html[data-header-stats='tiles'] .header-right > .btn-icon-header.btn-split.split-open,
+html[data-header-stats='tiles'] .header-right > .btn-icon-header.btn-split.split-open:hover,
+html[data-header-stats='compact'] .header-right > .btn-icon-header.btn-tile-grid.tiles-open,
+html[data-header-stats='compact'] .header-right > .btn-icon-header.btn-tile-grid.tiles-open:hover,
+html[data-header-stats='compact'] .header-right > .btn-icon-header.btn-split.split-open,
+html[data-header-stats='compact'] .header-right > .btn-icon-header.btn-split.split-open:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
 /* Before the first plan reading the chip holds a bare em dash; give it a tile
    of its own so it does not read as a stray mark between the tiles. */
 html[data-header-stats='tiles'] .header-plan-usage:not(:has(.pu-row)) {
