@@ -944,6 +944,23 @@ codeman tui --list                       #      numbered session list (plain tex
 codeman tui 3                            #      attach to session 3 of that list
 ```
 
+### `codeman agent` — session-to-session verbs in every CLI mode
+
+The skill above is claude-shaped (Codeman seeds its preamble for claude sessions only). An `opencode`, `codex`, `pi` or `gemini` agent has the same environment (`CODEMAN_MUX=1`, `CODEMAN_SESSION_ID`, `CODEMAN_API_URL` are exported into every pane) but nothing that teaches it the verbs — so `codeman agent` packages them as commands. It is a thin client over the endpoints listed under [API](#api): no new route, no new transport, auth and ownership unchanged. One line in a case's `AGENTS.md` is enough: *"other sessions: `codeman agent --help`"*.
+
+```bash
+codeman agent ls                                          # sessions; * marks this one
+SID=$(codeman agent spawn scratch-1 --mode claude)        # quick-start + wait for the composer where the mode has a ready mark
+codeman agent send "$SID" 'review src/, then say DONE' --until stop,exit --timeout 300000   # --wait = default signal set
+codeman agent read "$SID"                                 # last answer (as the server reads it for that mode)
+codeman agent read "$SID" --tail 3000                     # terminal tail, ANSI stripped (every mode)
+codeman agent wait "$SID" --match DONE_4711               # marker wait for hook-less modes (opencode, pi, …)
+codeman agent interrupt "$SID"                            # a bare ESC, conversation intact
+codeman agent rm "$SID"                                   # refuses your own id
+```
+
+Rules the commands enforce rather than document: they refuse outside a Codeman session and never guess a URL; `send` transmits printable text plus Enter only (a control byte such as `Ctrl+C` is `app_exit` in opencode — ESC exists solely as `interrupt`, which never appends Enter); `rm` refuses an empty id, an unprovable self id and a prefix match in either direction. Ids may be the 8-character prefixes `ls` prints (resolved through the list; an ambiguous prefix refuses). Exit codes: `0` delivered/matched/signal, `1` error, `2` timeout, `3` the worker exited or the wait ended without an answer (`delivered:false`, `ended:true`), `4` refused. `spawn` prints the id alone on stdout (prose goes to stderr), so `SID=$(…)` captures exactly the id. `--json` prints the envelope's `data` for every verb. `--until stop` on a mode without hook signals is the server's 400, passed through — the marker path (`--match`) is the answer there, exactly as for the skill.
+
 ### Hooks (events flowing _back_ to Codeman)
 
 Codeman registers Claude Code hooks that `POST /api/hook-event` (`permission_prompt`, `idle_prompt`, `stop`, `task_completed`, …) so the dashboard reacts in real time. This endpoint is auth-exempt on loopback but, under a managed tunnel, requires the `X-Codeman-Hook-Secret` header (read it from `$CODEMAN_HOOK_SECRET_FILE`). You normally don't call this by hand — Codeman wires it up — but it's how the autonomy layers "see" what the agent is doing.

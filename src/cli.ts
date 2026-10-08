@@ -19,6 +19,7 @@ import { readCodemanCredentials } from './codeman-credentials.js';
 import { casePath } from './config/cases-dir.js';
 import { assertValidBasePath } from './config/base-path.js';
 import { installAgentSkillInto, removeAgentSkillFrom, type AgentSkillApplyResult } from './hooks-config.js';
+import { registerAgentCommands } from './cli-agent.js';
 import { getSessionManager } from './session-manager.js';
 import { getTaskQueue } from './task-queue.js';
 import { getRalphLoop } from './ralph-loop.js';
@@ -228,6 +229,10 @@ skillCmd
       process.exit(1);
     }
   });
+
+// ============ Agent Commands (session-to-session, any CLI mode) ============
+
+registerAgentCommands(program);
 
 // ============ Session Commands ============
 
