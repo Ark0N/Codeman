@@ -32,6 +32,16 @@ const TILE_GRID_STORAGE_KEY = 'codeman:tile-grid';
 // right-click menu (2, 4 or 6; owner decision 10), per device. Its own key, so
 // the stored grid above stays ids only.
 const TILE_GRID_COUNT_KEY = 'codeman:tile-count';
+// The leaving tiles' fade (styles.css .tile--leaving) plus slack: the still
+// copy of a closing grid goes even if animationend never comes (a hidden tab,
+// a cancelled animation).
+const TILE_GHOST_FALLBACK_MS = 450;
+// The longest a closing grid's still copy waits for the single view's replay
+// before it fades anyway, so a slow load never leaves a stale picture up.
+const TILE_GHOST_HOLD_MAX_MS = 700;
+// A tile's terminal shows once its first capture has landed (the load queue
+// says so); this is the backstop should that never be reported.
+const TILE_REVEAL_FALLBACK_MS = 15000;
 // Trailing debounce for refitting tiles after the grid area changes size, so a
 // window drag sends each tile's PTY one resize, not one per frame.
 const TILE_GRID_REFIT_MS = 150;
@@ -194,7 +204,11 @@ Object.assign(CodemanApp.prototype, {
         // A quiet "loading" state on a tile until its capture has landed.
         onChange: (tile, state) => {
           const entry = grid.tiles.get(tile.sessionId);
-          if (entry?.tile === tile) entry.el.classList.toggle('tile--loading', state !== 'idle');
+          if (entry?.tile !== tile) return;
+          entry.el.classList.toggle('tile--loading', state !== 'idle');
+          // The first capture has landed (or failed): the terminal fades in,
+          // whole, instead of showing its replay scroll by.
+          if (state === 'idle') entry.el.classList.remove('tile--revealing');
         },
       });
     }
@@ -264,6 +278,8 @@ Object.assign(CodemanApp.prototype, {
     // here (a 1000-line serialize and up to 256 KB of localStorage for a
     // non-shell session) only ever produced a copy that was thrown away.
     this._cleanupPreviousSession(focus, { skipSnapshot: wanted.includes(this.activeSessionId) });
+    // A grid closed a moment ago may still be fading out over the stage.
+    this._purgeTileGhosts();
     grid.open = true;
     grid.cells = [];
     grid.cols = 0;
@@ -274,8 +290,10 @@ Object.assign(CodemanApp.prototype, {
     this.hideWelcome();
     // Mount every tile and lay the grid out BEFORE any tile connects, so each
     // first fit measures its real cell; the focused tile connects first, so
-    // its capture is the one the queue starts with.
-    for (const id of wanted) this._mountTile(id);
+    // its capture is the one the queue starts with. Each tile enters in
+    // reading order (opacity and transform only: the fit measures the final
+    // cell, so the animation adds no resize).
+    wanted.forEach((id, k) => this._mountTile(id, { enterIndex: k }));
     // Packed from the first cell (_applyTileLayout pads the shape with empty cells).
     grid.cells = wanted.filter((id) => grid.tiles.has(id));
     this._applyTileLayout();
@@ -300,17 +318,24 @@ Object.assign(CodemanApp.prototype, {
    *
    * `keepStored` remembers the grid for one-click return (toggleTileGrid).
    * `reselect` shows the focused session in the single view through a forced
-   * reload; pass false when the caller selects something itself.
+   * reload; pass false when the caller selects something itself. `animate`
+   * (the Tiles toggle only, owner answer 4) leaves a still copy of the tiles
+   * over the stage until the single view has its content (_ghostTileGrid).
    *
    * The main terminal's cached content for EVERY tiled id is invalidated: it was
    * written before the grid opened, possibly hours ago, and selectSession paints
    * a snapshot as its first frame.
    */
-  closeTileGrid({ keepStored = true, reselect = true } = {}) {
+  closeTileGrid({ keepStored = true, reselect = true, animate = false } = {}) {
     const grid = this._tileGrid;
     if (!grid?.open) return;
     const focusedId = grid.focusedId;
     const ids = grid.ids.slice();
+    // The close itself stays synchronous (every caller relies on the grid
+    // being gone on return); what the user sees leave is a still copy of the
+    // tiles, dimmed at once, held until the single view has replayed its
+    // session (no empty flash), then faded out over it.
+    const releaseGhosts = animate ? this._ghostTileGrid({ hold: reselect }) : null;
     // Remembered (closed) for one-click return, or forgotten.
     if (keepStored) this._persistTileGrid({ open: false });
     else this._forgetStoredTileGrid();
@@ -365,7 +390,92 @@ Object.assign(CodemanApp.prototype, {
     this._updateTileGridButtonState();
     // The tabs drop their .in-tiles marker.
     this.renderSessionTabs?.();
-    if (reselect) this._selectAfterTileGrid(focusedId);
+    if (reselect) {
+      const shown = this._selectAfterTileGrid(focusedId);
+      if (releaseGhosts) Promise.resolve(shown).finally(releaseGhosts);
+    } else {
+      releaseGhosts?.();
+    }
+  },
+
+  /** False under prefers-reduced-motion: the grid then opens and closes at once. */
+  _tileMotionAllowed() {
+    return !window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+  },
+
+  /**
+   * A still copy of the open grid over the stage, so the tiles leave calmly
+   * while closeTileGrid (or a re-form) tears the real ones down at once.
+   * Clones only: no xterm, socket or listener comes along (the DOM renderer's
+   * rows and their style elements do, so the copy shows the text), and the
+   * layer is inert, hidden from assistive tech and takes no pointer. With
+   * `hold` it dims at once and waits for the returned release() (the single
+   * view has its content), at most TILE_GHOST_HOLD_MAX_MS; without, it fades
+   * out straight away. It removes itself when the fade ends (or after
+   * TILE_GHOST_FALLBACK_MS). Nothing under reduced motion (release is then a
+   * no-op).
+   *
+   * @returns {() => void} release
+   */
+  _ghostTileGrid({ hold = false } = {}) {
+    const grid = this._tileGrid;
+    const section = document.getElementById('tileGrid');
+    const main = section?.parentElement;
+    const none = () => {};
+    if (!grid?.open || !section || !main || !this._tileMotionAllowed()) return none;
+    this._purgeTileGhosts();
+    const s = section.getBoundingClientRect();
+    const m = main.getBoundingClientRect();
+    if (!(s.width > 0 && s.height > 0)) return none;
+    const layer = document.createElement('div');
+    layer.className = hold ? 'tile-grid-ghosts' : 'tile-grid-ghosts tile-grid-ghosts--now';
+    layer.setAttribute('aria-hidden', 'true');
+    layer.inert = true;
+    layer.style.left = `${s.left - m.left}px`;
+    layer.style.top = `${s.top - m.top}px`;
+    layer.style.width = `${s.width}px`;
+    layer.style.height = `${s.height}px`;
+    layer.style.gridTemplateColumns = section.style.gridTemplateColumns;
+    layer.style.gridTemplateRows = section.style.gridTemplateRows;
+    // Zoomed, only the zoomed tile is on screen (the others are display: none
+    // under .tile-grid--zoomed, a rule the ghost layer does not carry).
+    const zoomed = section.classList.contains('tile-grid--zoomed');
+    for (const id of grid.ids) {
+      const el = grid.tiles.get(id)?.el;
+      if (!el || (zoomed && !el.classList.contains('tile--zoomed'))) continue;
+      const ghost = el.cloneNode(true);
+      ghost.classList.remove('tile--entering', 'tile--needs', 'tile--loading', 'tile--drop-target', 'tile--dragging');
+      ghost.classList.add('tile--leaving');
+      layer.appendChild(ghost);
+    }
+    main.appendChild(layer);
+    let fallback = null;
+    let holdCap = null;
+    const done = () => {
+      clearTimeout(fallback);
+      clearTimeout(holdCap);
+      layer.remove();
+      if (this._tileGhostLayer === layer) this._tileGhostLayer = null;
+    };
+    const release = () => {
+      if (fallback !== null || !layer.isConnected) return;
+      clearTimeout(holdCap);
+      layer.classList.add('tile-grid-ghosts--release');
+      fallback = setTimeout(done, TILE_GHOST_FALLBACK_MS);
+    };
+    layer.addEventListener('animationend', (e) => {
+      if (/^tile-leave/.test(e.animationName) && e.target === layer.lastElementChild) done();
+    });
+    if (hold) holdCap = setTimeout(release, TILE_GHOST_HOLD_MAX_MS);
+    else release();
+    this._tileGhostLayer = layer;
+    return release;
+  },
+
+  /** Drops a still copy still showing (the grid reopened, or another close came). */
+  _purgeTileGhosts() {
+    this._tileGhostLayer?.remove();
+    this._tileGhostLayer = null;
   },
 
   /**
@@ -629,6 +739,8 @@ Object.assign(CodemanApp.prototype, {
     const leaving = grid.ids.filter((id) => !target.includes(id));
     const joining = target.filter((id) => !grid.tiles.has(id));
     if (leaving.length === 0 && joining.length === 0) return;
+    // The old grid fades out over the new one as it forms.
+    this._ghostTileGrid();
     // A divider or header drag in progress measured the old grid.
     this._tileDividerDragTeardown?.();
     this._endTileMoveDrag();
@@ -640,7 +752,7 @@ Object.assign(CodemanApp.prototype, {
     }
     if (grid.zoomedId && !grid.autoZoom) grid.zoomedId = null;
     const staying = grid.ids.filter((id) => grid.tiles.has(id));
-    const mounted = joining.filter((id) => this._mountTile(id));
+    const mounted = joining.filter((id, k) => this._mountTile(id, { enterIndex: k }));
     const { cols, rows } = this._tileShapeFor(grid.tiles.size);
     grid.cells = T.reformTileCells(grid.cells, grid.cols, staying, mounted, cols, rows);
     grid.cols = cols;
@@ -748,7 +860,7 @@ Object.assign(CodemanApp.prototype, {
   toggleTileGrid() {
     this.closeTileCountMenu();
     if (this._tilesOwnTerminal()) {
-      this.closeTileGrid({ keepStored: true, reselect: true });
+      this.closeTileGrid({ keepStored: true, reselect: true, animate: true });
       return;
     }
     if (!this.canOpenTileGrid()) return;
@@ -817,10 +929,11 @@ Object.assign(CodemanApp.prototype, {
   // replayed fresh (forceReload drops the stale snapshot and nulls
   // activeSessionId BEFORE _cleanupPreviousSession, so nothing wrong is saved),
   // or, if that session is gone, the same fallback as closing the active tab.
+  // Returns the selection's promise (it settles once the replay is written),
+  // or undefined for the welcome screen.
   _selectAfterTileGrid(sessionId) {
     if (sessionId && this.sessions.has(sessionId)) {
-      this.selectSession(sessionId, { forceReload: true, auto: true });
-      return;
+      return this.selectSession(sessionId, { forceReload: true, auto: true });
     }
     this.activeSessionId = null;
     try {
@@ -829,24 +942,23 @@ Object.assign(CodemanApp.prototype, {
       /* Nothing stored. */
     }
     const next = this.sessionOrder.find((id) => this.sessions.has(id));
-    if (next) {
-      this.selectSession(next, { auto: true });
-    } else {
-      this.terminal?.clear();
-      this.showWelcome();
-    }
+    if (next) return this.selectSession(next, { auto: true });
+    this.terminal?.clear();
+    this.showWelcome();
+    return undefined;
   },
 
   /**
    * Adds one session as a tile (open grid only), into `cell` when that cell is
    * empty (a tab dropped on it), else the first empty cell in reading order
-   * (_placeTile). Returns whether it was added.
+   * (_placeTile). It enters as the `enterIndex`-th of a staggered group
+   * (_mountTile). Returns whether it was added.
    */
-  addTile(sessionId, { cell = -1 } = {}) {
+  addTile(sessionId, { cell = -1, enterIndex = 0 } = {}) {
     const grid = this._tileGrid;
     if (!grid?.open || grid.tiles.has(sessionId)) return false;
     if (grid.ids.length >= window.CodemanTileGrid.TILE_GRID_MAX) return false;
-    if (!this._mountTile(sessionId)) return false;
+    if (!this._mountTile(sessionId, { enterIndex })) return false;
     this._placeTile(sessionId, cell);
     // A tile added while one is zoomed by hand is meant to be seen.
     if (grid.zoomedId && !grid.autoZoom) grid.zoomedId = null;
@@ -924,12 +1036,31 @@ Object.assign(CodemanApp.prototype, {
     return true;
   },
 
-  _mountTile(sessionId) {
+  /**
+   * Builds one tile (header, body, TerminalTile); where it goes is the
+   * caller's (grid.cells). It enters with a short fade and settle
+   * (styles.css .tile--entering, the `enterIndex`-th of a staggered group),
+   * and its terminal stays transparent until its first capture lands
+   * (.tile--revealing, cleared by the load queue, with a backstop timer).
+   * Opacity and transform only, never anything its fit reads.
+   */
+  _mountTile(sessionId, { enterIndex = 0 } = {}) {
     const grid = this._tileGrid;
     const session = this.sessions.get(sessionId);
     if (!session || this.detachedSessions?.has(sessionId)) return false;
     const el = document.createElement('div');
-    el.className = 'tile';
+    el.className = 'tile tile--revealing';
+    setTimeout(() => el.classList.remove('tile--revealing'), TILE_REVEAL_FALLBACK_MS);
+    if (this._tileMotionAllowed()) {
+      el.classList.add('tile--entering');
+      el.style.setProperty('--tile-enter-index', String(enterIndex));
+      const onEnd = (e) => {
+        if (e.target !== el || e.animationName !== 'tile-enter') return;
+        el.removeEventListener('animationend', onEnd);
+        el.classList.remove('tile--entering');
+      };
+      el.addEventListener('animationend', onEnd);
+    }
     el.dataset.sessionId = sessionId;
     // Header and body are siblings: the chrome is refreshed in place
     // (_renderTileHeader), never by rewriting the tile, which would take the

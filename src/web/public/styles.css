@@ -19817,6 +19817,15 @@ body.tile-grid-resizing--row * {
   border-radius: 10px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.25);
   font-size: 13px;
+  transform-origin: top right;
+  animation: tile-count-menu-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes tile-count-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.96);
+  }
 }
 
 .tile-count-heading {
@@ -19888,6 +19897,129 @@ body.tile-grid-resizing--row * {
   margin-top: 2px;
   color: var(--text-muted, #888);
   font-size: 11px;
+}
+
+/* ── Tile grid motion (the grid's own default, not an entrance theme) ──────
+   Opening the grid, each tile fades and settles in, staggered in reading
+   order; its terminal stays transparent until its first capture lands, then
+   fades in whole (no replay scrolling by). Closing it with the Tiles toggle, a
+   still copy of the tiles (tile-grid.js _ghostTileGrid: clones, no
+   terminals) dims at once, stays over the single view until it has its
+   content, then fades. Every one animates opacity and transform only:
+   FitAddon reads the untransformed layout box, so each tile still fits once
+   at its final size and sends one PTY resize (#464). Nothing moves under
+   prefers-reduced-motion. */
+.tile.tile--entering {
+  animation: tile-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation-delay: calc(var(--tile-enter-index, 0) * 24ms);
+}
+
+/* A tile that needs you enters AND pulses (one animation property). */
+.tile.tile--entering.tile--needs {
+  animation:
+    tile-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1) calc(var(--tile-enter-index, 0) * 24ms) both,
+    tile-needs-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes tile-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+}
+
+.tile-body .xterm {
+  transition: opacity 160ms ease-out;
+}
+
+.tile.tile--revealing .tile-body .xterm {
+  opacity: 0;
+}
+
+/* The "Loading…" label breathes while the tile waits for its turn. */
+.tile.tile--loading .tile-body::after {
+  animation: tile-loading-breathe 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes tile-loading-breathe {
+  from {
+    opacity: 0.25;
+  }
+  to {
+    opacity: 0.7;
+  }
+}
+
+.tile-grid-ghosts {
+  position: absolute;
+  z-index: 3;
+  display: grid;
+  gap: 0;
+  padding: 4px;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+/* A web tab takes the stage at once, the still copy with it. */
+.main.webview-active .tile-grid-ghosts {
+  display: none;
+}
+
+.tile-grid-ghosts .tile.tile--leaving {
+  animation: tile-ghost-dim 150ms ease-out both;
+}
+
+.tile-grid-ghosts.tile-grid-ghosts--release .tile.tile--leaving {
+  animation: tile-leave 170ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+.tile-grid-ghosts.tile-grid-ghosts--now.tile-grid-ghosts--release .tile.tile--leaving {
+  animation: tile-leave-now 170ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@keyframes tile-ghost-dim {
+  to {
+    opacity: 0.8;
+    transform: scale(0.985);
+  }
+}
+
+@keyframes tile-leave {
+  from {
+    opacity: 0.8;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+@keyframes tile-leave-now {
+  to {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tile-count-menu,
+  .tile.tile--entering,
+  .tile.tile--entering.tile--needs,
+  .tile.tile--loading .tile-body::after,
+  .tile-grid-ghosts .tile.tile--leaving,
+  .tile-grid-ghosts.tile-grid-ghosts--release .tile.tile--leaving,
+  .tile-grid-ghosts.tile-grid-ghosts--now.tile-grid-ghosts--release .tile.tile--leaving {
+    animation: none;
+  }
+
+  .tile-grid-ghosts {
+    display: none;
+  }
+
+  .tile-body .xterm {
+    transition: none;
+  }
 }
 
 /* Split-picker menu: a small popover listing sessions to split with, appended

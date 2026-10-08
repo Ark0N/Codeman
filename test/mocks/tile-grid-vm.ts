@@ -22,7 +22,14 @@ export class FakeEl {
   id = '';
   className = '';
   dataset: Record<string, string> = {};
-  style: Record<string, string> = {};
+  /** Inline style; `setProperty` (custom properties) writes into it too. */
+  style: Record<string, string> = Object.defineProperty({} as Record<string, string>, 'setProperty', {
+    value(this: Record<string, string>, name: string, value: string) {
+      this[name] = value;
+    },
+    enumerable: false,
+  });
+  inert = false;
   children: FakeEl[] = [];
   parentElement: FakeEl | null = null;
   attrs: Record<string, string> = {};
@@ -89,6 +96,29 @@ export class FakeEl {
   }
   get firstChild() {
     return this.children[0] ?? null;
+  }
+  get lastElementChild() {
+    return this.children.at(-1) ?? null;
+  }
+  /** In the fake document: its ancestors end at `main` or `body`. */
+  get isConnected(): boolean {
+    let n: FakeEl = this;
+    while (n.parentElement) n = n.parentElement;
+    return n === main || n === body;
+  }
+  /** A copy of this element and (deep) its subtree: classes, data, style, attributes, text; no listeners. */
+  cloneNode(deep = false): FakeEl {
+    const copy = new FakeEl();
+    copy.id = this.id;
+    copy.className = this.className;
+    copy.dataset = { ...this.dataset };
+    for (const [k, v] of Object.entries(this.style)) copy.style[k] = v;
+    copy.attrs = { ...this.attrs };
+    copy.textContent = this.textContent;
+    copy.title = this.title;
+    copy.hidden = this.hidden;
+    if (deep) for (const child of this.children) copy.appendChild(child.cloneNode(true));
+    return copy;
   }
   get nextSibling() {
     const siblings = this.parentElement?.children ?? [];
@@ -324,6 +354,8 @@ export function makeGridApp(ids: string[] = ['s-a', 's-b', 's-c']): GridApp {
 /** Resets the shared fake DOM and tile registry between tests. */
 export function resetGridHarness() {
   FakeTile.all = [];
+  // A test's prefers-reduced-motion answer (window.matchMedia) goes with it.
+  delete windowStub.matchMedia;
   focusedEl = null;
   idleCallbacks.length = 0;
   rafCallbacks.length = 0;
