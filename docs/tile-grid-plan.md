@@ -59,7 +59,9 @@ or settled a question the spec left open. The invariants as built are in
   Shift+F10 and the Menu key open it too (the browser's contextmenu event). Arrows move
   over the counts that fit, Enter or Space picks, Escape closes it alone (the global
   Escape handler gives it the key first, like the tab-group menu) and puts the keyboard
-  back on the Tiles button, Tab and a click elsewhere close it. A pick is remembered per
+  back on the Tiles button, Tab, a click elsewhere and the keyboard leaving it for another
+  element close it (the single view a close starts focuses its terminal when its replay
+  lands; a menu left open behind that would send its keys there). A pick is remembered per
   device in `codeman:tile-count` (`codeman:tile-grid` stays ids only) and opens that many
   tiles; with the grid open it re-forms it (`_reformTileGrid`): the focused tile always
   stays, the others leave from the end or join from tab order, filling empty cells first,

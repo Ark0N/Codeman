@@ -259,6 +259,24 @@ describe('the count menu', () => {
     expect(menu()).toBeNull();
   });
 
+  it('closes when the keyboard leaves it for something else (a late focus of the single view), not for nothing', () => {
+    const app = gridApp();
+    open(app);
+    // Inside: moving between counts keeps it.
+    menu()!.dispatch('focusout', { relatedTarget: item(2) });
+    expect(menu()).not.toBeNull();
+    // Nowhere (a click on a button in Safari focuses nothing): kept.
+    menu()!.dispatch('focusout', { relatedTarget: null });
+    expect(menu()).not.toBeNull();
+    // Another element, the single view's terminal: closed, the keyboard left there.
+    const textarea = new FakeEl();
+    textarea.className = 'xterm-helper-textarea';
+    textarea.focus();
+    menu()!.dispatch('focusout', { relatedTarget: textarea });
+    expect(menu()).toBeNull();
+    expect(activeElement()).toBe(textarea);
+  });
+
   it('a second right-click closes it; a click on Tiles closes it and toggles', () => {
     const app = gridApp();
     open(app);

@@ -677,6 +677,16 @@ Object.assign(CodemanApp.prototype, {
         this.closeTileCountMenu();
       }
     };
+    // The keyboard leaving the menu for something else closes it, as any menu:
+    // closing the grid starts a selection that focuses the single view's
+    // terminal when its replay lands, and a menu left open behind that would
+    // send the keys meant for it (arrows, Enter, Escape) into the terminal. A
+    // focus going nowhere (a click on a button in Safari, which does not focus
+    // it) does not count.
+    menu.addEventListener('focusout', (e) => {
+      const to = e.relatedTarget;
+      if (to && !menu.contains?.(to)) this.closeTileCountMenu({ refocus: false });
+    });
     this._tileCountMenu = { menu, onOutside, onKey };
     document.addEventListener('click', onOutside);
     document.addEventListener('keydown', onKey, true);
