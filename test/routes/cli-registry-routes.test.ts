@@ -15,7 +15,12 @@ import { EventEmitter } from 'node:events';
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
-import { installEnv, registerCliRegistryRoutes, type CliListItem } from '../../src/web/routes/cli-registry-routes.js';
+import {
+  installEnv,
+  npmGlobalPrefixWritable,
+  registerCliRegistryRoutes,
+  type CliListItem,
+} from '../../src/web/routes/cli-registry-routes.js';
 import { SETTINGS_PATH } from '../../src/web/route-helpers.js';
 import { CreateSessionSchema } from '../../src/web/schemas.js';
 import { buildSpawnCommandFromRegistry } from '../../src/session-cli-registry-bridge.js';
@@ -711,13 +716,39 @@ describe('registry writes are serialized and never clobber a file the reader wou
     } finally {
       delete process.env.CODEMAN_TEST_SECRET;
     }
-    expect(installEnv({ CODEMAN_PASSWORD: 'x', HOME: '/h' })).toEqual({ HOME: '/h' });
+    expect(installEnv({ CODEMAN_PASSWORD: 'x', HOME: '/h' }, () => true)).toEqual({ HOME: '/h' });
   });
 
   it('redirects npm installs to the persistent HOME inside the Compose container', () => {
     expect(
       installEnv({ CODEMAN_IN_CONTAINER: '1', HOME: '/home/codeman', NPM_CONFIG_PREFIX: '/opt/codeman-cli' })
     ).toEqual({ HOME: '/home/codeman', NPM_CONFIG_PREFIX: '/home/codeman/.local' });
+  });
+
+  it('redirects npm installs to ~/.local on a native install whose global prefix is not writable', () => {
+    // A system node under /usr: `npm install -g` as the server user dies with EACCES (exit 243).
+    expect(installEnv({ HOME: '/home/dev', CODEMAN_PASSWORD: 'x' }, () => false)).toEqual({
+      HOME: '/home/dev',
+      NPM_CONFIG_PREFIX: '/home/dev/.local',
+    });
+  });
+
+  it('leaves a writable, explicit or undeterminable npm prefix alone on a native install', () => {
+    expect(installEnv({ HOME: '/home/dev' }, () => true)).toEqual({ HOME: '/home/dev' });
+    // An operator-set prefix wins even if it is not writable: it is theirs to fix.
+    expect(installEnv({ HOME: '/home/dev', NPM_CONFIG_PREFIX: '/opt/npm' }, () => false)).toEqual({
+      HOME: '/home/dev',
+      NPM_CONFIG_PREFIX: '/opt/npm',
+    });
+    // No HOME means nowhere to redirect to.
+    expect(installEnv({ PATH: '/usr/bin' }, () => false)).toEqual({ PATH: '/usr/bin' });
+  });
+
+  it('npmGlobalPrefixWritable follows npm config and treats a probe failure as writable', () => {
+    // Real probe against this machine: must return a boolean and never throw.
+    expect(typeof npmGlobalPrefixWritable({ PATH: process.env.PATH })).toBe('boolean');
+    // npm not found on PATH: cannot tell, so do not redirect.
+    expect(npmGlobalPrefixWritable({ PATH: '/nonexistent' })).toBe(true);
   });
 });
 

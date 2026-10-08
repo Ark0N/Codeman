@@ -29,7 +29,9 @@
  * write path (`registry-writer.ts` mirrors `custom-model-hosts.ts`).
  */
 
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { accessSync, constants as fsConstants } from 'node:fs';
+import { join } from 'node:path';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
 import { getAuthUser, isAdmin, parseBody, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
@@ -208,13 +210,53 @@ const CLI_INSTALL_TIMEOUT_MS = 300_000;
 const installsInFlight = new Set<string>();
 
 /**
+ * True when `npm install -g` can write to this process's npm global prefix, or when that cannot
+ * be determined (then nothing is redirected: a wrong guess would move installs somewhere the
+ * user did not choose). `npm config get prefix` is asked rather than guessed from `process.execPath`
+ * because a user `.npmrc` / `NPM_CONFIG_PREFIX` can point it anywhere.
+ */
+export function npmGlobalPrefixWritable(source: NodeJS.ProcessEnv): boolean {
+  try {
+    const prefix = execFileSync('npm', ['config', 'get', 'prefix'], {
+      env: source,
+      encoding: 'utf8',
+      timeout: 5_000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (!prefix) return true;
+    // npm creates lib/node_modules under the prefix; check that directory when it exists, else the prefix.
+    for (const dir of [join(prefix, 'lib', 'node_modules'), prefix]) {
+      try {
+        accessSync(dir, fsConstants.W_OK);
+        return true;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+      }
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * The server's environment minus every `CODEMAN_*` variable. An install script is third-party
  * code, and those variables carry Codeman's own secrets and wiring (`CODEMAN_PASSWORD`, the
- * data dir, the tmux socket), none of which an installer needs. Inside the Docker Compose
- * container (`CODEMAN_IN_CONTAINER=1`) it also points `NPM_CONFIG_PREFIX` at `$HOME/.local`,
- * so an `npm install -g` lands on the persistent home mount instead of the image.
+ * data dir, the tmux socket), none of which an installer needs.
+ *
+ * It also points `NPM_CONFIG_PREFIX` at `$HOME/.local` so an `npm install -g` lands somewhere the
+ * server user can write and Codeman's resolvers already search (`~/.local/bin`):
+ *  - inside the Docker Compose container (`CODEMAN_IN_CONTAINER=1`), so installs survive an image
+ *    update (the image's own prefix is image content);
+ *  - on a native install whose npm global prefix is not writable by the server user (a system node
+ *    under `/usr`, installed by root). Without this `npm install -g` died with EACCES (exit 243),
+ *    e.g. DeepSeek's `npm install -g @deepseek-ai/dsh`. An explicit `NPM_CONFIG_PREFIX` the
+ *    operator set is respected, and so is a prefix that is writable (nvm, `~/.npm-global`, ...).
  */
-export function installEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function installEnv(
+  source: NodeJS.ProcessEnv = process.env,
+  prefixWritable: (env: NodeJS.ProcessEnv) => boolean = npmGlobalPrefixWritable
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(source)) {
     if (!key.startsWith('CODEMAN_')) env[key] = value;
@@ -224,6 +266,8 @@ export function installEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.Proc
   // vanishes. HOME is the persistent bind mount and `~/.local/bin` is already on every resolver's search
   // list, so npm-based installs are redirected there. curl|bash installers already target HOME.
   if (source.CODEMAN_IN_CONTAINER === '1' && source.HOME) {
+    env.NPM_CONFIG_PREFIX = `${source.HOME}/.local`;
+  } else if (process.platform !== 'win32' && source.HOME && !source.NPM_CONFIG_PREFIX && !prefixWritable(env)) {
     env.NPM_CONFIG_PREFIX = `${source.HOME}/.local`;
   }
   return env;
