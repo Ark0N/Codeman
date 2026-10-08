@@ -14,6 +14,9 @@
  *    heading.
  *  - `tabArrangement: 'classic'` leaves no trace (no headings, no inline order, no
  *    class), and named groups in the vertical rail win over it.
+ *  - In the phone/tablet strip (one scrolling row) the ACTIVE tab changing band
+ *    is revealed, since its chip moves while scrollLeft stays; another tab
+ *    changing band never moves the strip (#257's browse-the-far-end rule).
  *
  * The real modules run INSIDE a JSDOM window (runScripts: 'outside-only'), so
  * `document` below is that window's.
@@ -409,6 +412,102 @@ describe('tab grouping in the render paths (app.js)', () => {
     document.documentElement.dataset.tabArrangement = 'classic';
     app._fullRenderSessionTabs();
     expect(app._isTabDropAcrossGroups(tab('s1'))).toBe(false);
+  });
+
+  describe('keeping the active tab in view in the scrolling row (phones, tablets)', () => {
+    // The phone and tablet strip is ONE horizontally scrolling row, and a state
+    // change moves a tab to another band while scrollLeft stays put. The active
+    // tab moving band is revealed; anything else moving must not yank the strip.
+    function setup() {
+      const app = makeApp();
+      const reveal = vi.fn();
+      app._scrollActiveTabIntoView = reveal;
+      app._fullRenderSessionTabs();
+      reveal.mockClear();
+      return { app, reveal };
+    }
+
+    it('reveals the active tab when it changes state band on an incremental pass', () => {
+      const { app, reveal } = setup();
+      const fullRender = vi.spyOn(app, '_fullRenderSessionTabs');
+      // s2 is active and working; its turn ends.
+      app.sessions.get('s2').status = 'idle';
+      app._renderSessionTabsImmediate();
+      expect(fullRender).not.toHaveBeenCalled();
+      expect(reveal).toHaveBeenCalledTimes(1);
+      expect(reveal.mock.calls[0][0]).toBe('s2');
+      // And again when a permission prompt sends it to the front.
+      app.pendingHooks.set('s2', new Set(['permission_prompt']));
+      app._renderSessionTabsImmediate();
+      expect(reveal).toHaveBeenCalledTimes(2);
+      // A pass that changes nothing reveals nothing.
+      app._renderSessionTabsImmediate();
+      expect(reveal).toHaveBeenCalledTimes(2);
+    });
+
+    it('leaves the strip alone when another tab changes band, even one that shifts the active tab', () => {
+      const { app, reveal } = setup();
+      // s4 leaves the working row.
+      app.sessions.get('s4').status = 'idle';
+      app._renderSessionTabsImmediate();
+      // s1 joins the working row AHEAD of the active s2, so s2's own order value
+      // changes while its band does not.
+      const before = orderOf(tab('s2'));
+      app.pendingHooks.delete('s1');
+      app.sessions.get('s1').status = 'busy';
+      app._renderSessionTabsImmediate();
+      expect(orderOf(tab('s2'))).not.toBe(before);
+      expect(reveal).not.toHaveBeenCalled();
+    });
+
+    it('counts a band change in the pass right after a switch (viewing a waiting tab)', () => {
+      const { app, reveal } = setup();
+      // Switch to s1, which is waiting; looking at it spends the alert.
+      app.activeSessionId = 's1';
+      app._updateActiveTabImmediate('s1');
+      expect(reveal).toHaveBeenCalledTimes(1);
+      app.pendingHooks.delete('s1');
+      app._renderSessionTabsImmediate();
+      expect(reveal).toHaveBeenCalledTimes(2);
+      expect(reveal.mock.calls[1][0]).toBe('s1');
+    });
+
+    it('reveals it when the same pass falls through to a full rebuild', () => {
+      const { app, reveal } = setup();
+      const fullRender = vi.spyOn(app, '_fullRenderSessionTabs');
+      // A task badge appearing forces the rebuild, mid-loop.
+      app.sessions.get('s2').status = 'idle';
+      app.sessions.get('s2').taskStats = { running: 1, total: 1 };
+      app._renderSessionTabsImmediate();
+      expect(fullRender).toHaveBeenCalled();
+      expect(reveal).toHaveBeenCalledTimes(1);
+      expect(reveal.mock.calls[0][0]).toBe('s2');
+    });
+
+    it('does nothing in a wrapping strip or a vertical list', () => {
+      const { app, reveal } = setup();
+      container().classList.add('tabs-auto-wrap');
+      app.sessions.get('s2').status = 'idle';
+      app._renderSessionTabsImmediate();
+      container().classList.remove('tabs-auto-wrap');
+      container().classList.add('tabs-two-rows');
+      app.sessions.get('s2').status = 'busy';
+      app._renderSessionTabsImmediate();
+      container().classList.remove('tabs-two-rows');
+      document.documentElement.setAttribute('data-tab-orientation', 'vertical');
+      app.sessions.get('s2').status = 'idle';
+      app._renderSessionTabsImmediate();
+      expect(reveal).not.toHaveBeenCalled();
+    });
+
+    it('does nothing while a web tab holds the highlight', () => {
+      const { app, reveal } = setup();
+      app.activeWebviewId = 'w1';
+      app._renderSessionTabsImmediate();
+      app.sessions.get('s2').status = 'idle';
+      app._renderSessionTabsImmediate();
+      expect(reveal).not.toHaveBeenCalled();
+    });
   });
 
   it('degrades to the flat strip when mobile-overview.js is stale or missing', () => {

@@ -5870,6 +5870,10 @@ class CodemanApp {
     // strip scrolls horizontally, so a tab selected from the palette, a swipe,
     // Alt+N or a push notification could stay parked off-screen.
     this._scrollActiveTabIntoView(sessionId);
+    // Where the new active tab sits now, so the render pass that follows can
+    // tell when it changes state band (viewing a waiting tab spends its alert
+    // and drops it into the idle row).
+    this._noteActiveTabBand(container);
     // Lineage lines draw only the SELECTED tab's family (session-lineage.js), so a
     // selection change is a redraw whenever any lineage exists at all.
     if (this._lineageTotalEdges > 0) this.updateConnectionLines();
@@ -5928,6 +5932,54 @@ class CodemanApp {
     } else {
       container.scrollLeft = target;
     }
+  }
+
+  /**
+   * Record the active tab's state band and report whether it MOVED band since
+   * the last record while staying the active tab.
+   *
+   * Grouped by state (tabArrangement 'state'), the phone/tablet strip is still
+   * one scrolling row, but its tabs come in bands of `order` values, one band
+   * per state (CodemanTabTriage, constants.js). The active session changing
+   * state (a prompt sent: idle to working; a permission prompt: needs you)
+   * moves its tab into another band while scrollLeft stays put, so the tab in
+   * use slid out of view (measured at 390px: x 165 to -870). Both render paths
+   * reveal it when this says so.
+   *
+   * The band, not the raw order: another tab entering or leaving the active
+   * tab's band shifts its order value by one, and that must not yank a strip
+   * the user may be browsing. A changed active tab is not a move either: the
+   * switch already revealed it (#257). Read off the element, so the record is
+   * what is on screen, and called from _updateActiveTabImmediate() too, so a
+   * band change in the pass right after a switch still counts.
+   *
+   * @returns {boolean}
+   */
+  _noteActiveTabBand(container) {
+    const id = this.activeWebviewId ? null : this.activeSessionId;
+    const tab = id && container ? container.querySelector(`.session-tab[data-id="${id}"]`) : null;
+    const prev = this._activeTabBand;
+    if (!tab) {
+      this._activeTabBand = null;
+      return false;
+    }
+    const order = tab.style.order;
+    const stride = window.CodemanTabTriage?.STRIDE || 10000;
+    const band = order === '' ? null : Math.floor(Number(order) / stride);
+    this._activeTabBand = { id, band };
+    return !!prev && prev.id === id && prev.band !== band;
+  }
+
+  /**
+   * True when the tab list is the header's one horizontally scrolling row
+   * (phones and tablets): neither wrapping into rows nor a vertical list.
+   */
+  _isScrollingTabRow(container) {
+    return (
+      !this._isVerticalTabList() &&
+      !container.classList.contains('tabs-auto-wrap') &&
+      !container.classList.contains('tabs-two-rows')
+    );
   }
 
   /**
@@ -6055,6 +6107,7 @@ class CodemanApp {
       !this._isTabGroupStructureStale(groupProjection) &&
       (clusterLayout ? clusterLayout.key : null) === (this._lastTabClusterKey ?? null);
 
+    let activeBandMoved = false;
     if (canIncremental) {
       // Read once for the whole pass, like the full-rebuild path: this touches
       // the DOM and the loop below runs for every session on every SSE tick.
@@ -6266,6 +6319,9 @@ class CodemanApp {
       }
       this._syncTabTriageChrome(container, triage);
       this._syncTabArrangementClasses(container, { clusters: !!clusterLayout, groupProjection });
+      // A state change is this path's job, and so is the active tab changing
+      // state band: revealed below, once the wrap mode is current.
+      activeBandMoved = this._noteActiveTabBand(container);
     } else {
       // Full rebuild needed (sessions added/removed)
       this._fullRenderSessionTabs();
@@ -6277,6 +6333,7 @@ class CodemanApp {
     this._lastRenderedActiveTabId = this.activeSessionId;
 
     this.updateTabOverflowMode();
+    if (activeBandMoved && this._isScrollingTabRow(container)) this._scrollActiveTabIntoView(this.activeSessionId);
     // After the wrap measurement: the `unroll` style starts tabs at max-width 0,
     // so measuring mid-animation would decide the wrap on collapsed widths.
     this._applyTabEntrances?.();
@@ -6600,16 +6657,18 @@ class CodemanApp {
     }
     this._syncTabTriageChrome(container, triage);
     this._syncTabArrangementClasses(container, { clusters: !!clusterLayout, groupProjection });
+    const activeBandMoved = this._noteActiveTabBand(container) && this._isScrollingTabRow(container);
 
     // Put the strip back where the user left it, then reveal the active tab
-    // only when it CHANGED (or on the first paint). Restoring unconditionally
+    // only when it CHANGED, or moved to another state band in the scrolling row
+    // (_noteActiveTabBand), or on the first paint. Restoring unconditionally
     // and revealing conditionally is what lets someone browse the far end of
     // the strip while a background rebuild fires, without the active tab ever
     // being stranded off-screen after a switch.
     container.scrollLeft = prevScrollLeft;
     container.scrollTop = prevScrollTop;
     this._lastRenderedActiveTabId = this.activeSessionId;
-    if (isFirstRender || prevActiveTabId !== this.activeSessionId) {
+    if (isFirstRender || prevActiveTabId !== this.activeSessionId || activeBandMoved) {
       this._scrollActiveTabIntoView(this.activeSessionId, isFirstRender ? 'auto' : 'smooth');
     }
 
