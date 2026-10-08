@@ -14,6 +14,12 @@
  * 3. Those motions live inside `@media (hover: hover)`, so a tap on a touch
  *    screen cannot leave an icon stuck mid-motion, and reduced motion turns the
  *    transitions off.
+ * 4. That holds for EVERY rule that reaches a header glyph, not only the ones
+ *    naming `.btn-icon-header`: the header stats styles (#538) restyle the
+ *    buttons through `.header-right > .btn-settings > svg`, and a rotate or a
+ *    transition there out-specified the guarded rules (a reduced-motion user
+ *    still saw the gear turn, a tap left it turned, and #561's spring was
+ *    replaced by a plain ease).
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -49,6 +55,15 @@ function rules(): FoundRule[] {
 
 const all = rules();
 const iconRules = all.filter((r) => r.selector.includes('btn-icon-header'));
+/**
+ * Every rule that reaches a header button's glyph, whatever names the button:
+ * the class list, a per-button class, or the header's right side.
+ */
+const glyphRules = all.filter(
+  (r) =>
+    /btn-icon-header|\.header-right|btn-settings|btn-tile-grid|btn-file-viewer/.test(r.selector) &&
+    /\bsvg\b/.test(r.selector)
+);
 
 function buttonTag(cls: string): string {
   const i = html.indexOf(`class="btn-icon-header ${cls}`);
@@ -121,5 +136,41 @@ describe('header icon hover', () => {
     for (const sel of ['.btn-icon-header.btn-settings:hover svg', '.btn-icon-header.btn-tile-grid:hover svg rect']) {
       expect(reduced.find((r) => r.selector === sel)?.decls.transform, sel).toBe('none');
     }
+  });
+});
+
+describe('header glyph motion, whatever selector reaches it (header stats styles included)', () => {
+  it('finds the header stats styles glyph rules (the scan is not vacuous)', () => {
+    // Their 18px / 15px glyph sizes are reached through .header-right.
+    const sized = glyphRules.filter((r) => r.selector.startsWith('html[data-header-stats=') && r.decls.width);
+    expect(sized.map((r) => r.decls.width).sort()).toEqual(['15px', '18px']);
+  });
+
+  it('turns a glyph on hover only inside the pointer guard', () => {
+    const offenders = glyphRules.filter(
+      (r) =>
+        r.selector.includes(':hover') &&
+        r.decls.transform &&
+        r.decls.transform !== 'none' &&
+        !r.media.includes('(hover: hover)')
+    );
+    expect(offenders.map((r) => `${r.selector} { transform: ${r.decls.transform} }`)).toEqual([]);
+    const rotations = glyphRules.filter((r) => /rotate\(/.test(r.decls.transform || ''));
+    expect(rotations.map((r) => r.selector)).toEqual(['.btn-icon-header.btn-settings:hover svg']);
+  });
+
+  it('animates the glyphs with the one spring transition, which reduced motion turns off', () => {
+    // A second transition on the same glyphs (a header-wide restyle, say)
+    // would out-specify the spring and the reduced-motion `none` alike.
+    const animated = glyphRules.filter((r) => 'transition' in r.decls || 'animation' in r.decls);
+    const glyphs = [
+      '.btn-icon-header.btn-settings svg',
+      '.btn-icon-header.btn-tile-grid svg rect',
+      '.btn-icon-header.btn-file-viewer svg .icon-folder-closed',
+      '.btn-icon-header.btn-file-viewer svg .icon-folder-open',
+    ];
+    expect(animated.map((r) => `${r.media.join(' ')} ${r.selector}`.trim()).sort()).toEqual(
+      [...glyphs, ...glyphs.map((g) => `(prefers-reduced-motion: reduce) ${g}`)].sort()
+    );
   });
 });

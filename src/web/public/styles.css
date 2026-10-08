@@ -21311,8 +21311,11 @@ html[data-header-stats='tiles'] .header-plan-usage .pu-win-idle {
 /* Bare 16px glyphs beside 36px tiles read as a different design. In Tiles the
    header's icon buttons take the tile box (same height, border and fill, a
    larger icon); in Compact they become round chips the height of the pills.
-   Only the box changes: the marker classes still hide them, and the gear
-   keeps its quarter turn on hover, on the glyph rather than the whole box. */
+   Only the box changes: the marker classes still hide them, and the glyph
+   motion (the gear's quarter turn, the folder, the Tiles squares) stays with
+   the guarded rules beside .btn-icon-header:hover. A glyph transform or
+   transition here would out-specify them and slip past their (hover: hover)
+   and reduced-motion guards. */
 html[data-header-stats='tiles'] .header-right > .btn-icon-header,
 html[data-header-stats='compact'] .header-right > .btn-icon-header {
   box-sizing: border-box;
@@ -21349,16 +21352,6 @@ html[data-header-stats='compact'] .header-right > .btn-icon-header:hover {
   border-color: var(--control-border-hover);
   color: var(--text);
   transform: none;
-}
-
-html[data-header-stats='tiles'] .header-right > .btn-icon-header > svg,
-html[data-header-stats='compact'] .header-right > .btn-icon-header > svg {
-  transition: transform var(--transition-smooth);
-}
-
-html[data-header-stats='tiles'] .header-right > .btn-settings:hover > svg,
-html[data-header-stats='compact'] .header-right > .btn-settings:hover > svg {
-  transform: rotate(45deg);
 }
 
 /* Before the first plan reading the chip holds a bare em dash; give it a tile
