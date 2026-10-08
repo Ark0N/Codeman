@@ -4389,6 +4389,7 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   align-items: center;
   gap: 0.65rem;
   height: 46px;
+  max-width: 100%;
   padding: 0 1.4rem 0 0.45rem;
   box-sizing: border-box;
   border: 1px solid var(--accent);
@@ -4416,7 +4417,8 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
 
 /* OG has no designed --accent-ink (its Daylight extras are placeholders), and a
    dark ink on its brighter blue reads poorly: it gets the deeper blue and light
-   text of its own toolbar Run button instead. */
+   text of its own toolbar Run button instead. These are that button's colours
+   (`.btn-toolbar.btn-run.mode-claude` and its :hover, below): keep the two in step. */
 html[data-skin="og"] .welcome-primary {
   background: linear-gradient(135deg, #1e4fb8 0%, #2563eb 100%);
   border-color: rgba(96, 165, 250, 0.5);
@@ -4462,11 +4464,22 @@ html[data-skin="og"] .welcome-primary:hover {
   max-width: 100%;
 }
 
+/* A long custom label (clis.json) ellipsizes inside its button (both carry
+   max-width: 100%) instead of pushing a horizontal scrollbar into
+   .welcome-content. The span holds the label as ONE text node, so i18n.js still
+   matches it whole. */
+.welcome-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .welcome-chip {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
   height: 30px;
+  max-width: 100%;
   padding: 0 0.85rem 0 0.7rem;
   box-sizing: border-box;
   border: 1px solid var(--control-border);
@@ -4497,17 +4510,17 @@ html[data-skin="og"] .welcome-primary:hover {
    quiet text link under it. settings-ui.js owns its contents (it rewrites the
    icon, label and spinner on every state change) and its inline display, so
    everything here is styled from the outside: the 20px svg it writes is sized
-   down, and the states are text colour only. Ahead of #welcomeQr on purpose,
+   down, and the states are text colour (plus a pill while a tunnel runs). Ahead of #welcomeQr on purpose,
    so the QR opens right under the control that toggled it. */
 .welcome-tunnel-link {
   align-items: center;
   gap: 0.4rem;
   margin-top: 1.4rem;
   padding: 0.3rem 0.65rem;
-  border: none;
-  border-radius: 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
   background: none;
-  color: var(--text-muted);
+  color: var(--text-dim);
   font: inherit;
   font-size: 0.75rem;
   font-weight: 500;
@@ -4525,6 +4538,10 @@ html[data-skin="og"] .welcome-primary:hover {
   width: 11px;
   height: 11px;
   border-width: 1.5px;
+  /* The shared spinner's track is translucent WHITE, which vanishes on the
+     light skins; draw it from the link's own text colour instead. */
+  border-color: color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
 }
 
 .welcome-tunnel-link:hover {
@@ -4538,8 +4555,20 @@ html[data-skin="og"] .welcome-primary:hover {
   color: var(--text);
 }
 
+/* A running tunnel is a state, not a recoloured link: it gets a quiet green pill. */
 .welcome-tunnel-link.active {
+  border-color: color-mix(in srgb, var(--green) 45%, transparent);
+  background: color-mix(in srgb, var(--green) 9%, transparent);
   color: var(--green);
+}
+
+/* Touch screens wide enough for this view (tablets) get finger-sized chips. */
+@media (pointer: coarse) {
+  .welcome-chip {
+    height: 40px;
+    border-radius: 20px;
+    padding: 0 1rem 0 0.85rem;
+  }
 }
 
 .welcome-tunnel-link.connecting,

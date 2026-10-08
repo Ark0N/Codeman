@@ -479,7 +479,12 @@ describe('Codex quick start settings', () => {
       );
     }
     const offeredModes = (container: any) => launchers(container).map((btn: any) => btn.dataset.mode);
-    const textOf = (btn: any) => btn.children.filter((c: unknown) => typeof c === 'string').join('');
+    // The visible label sits in a .welcome-label span (it ellipsizes a long custom
+    // label) as one text node; a bare string child would be one too.
+    const textOf = (btn: any) =>
+      btn.children
+        .map((c: any) => (typeof c === 'string' ? c : c?.className === 'welcome-label' ? c.textContent : ''))
+        .join('');
 
     it('renders only enabled and available registry entries on the welcome screen', () => {
       const { app, welcomeCliActions, tunnelBtn } = loadUi({ ...ALL_OFF, claude: true, 'custom-agent': true });
@@ -530,6 +535,9 @@ describe('Codex quick start settings', () => {
       expect(textOf(primary)).toBe('Run Claude Code');
       expect(chips.map(textOf)).toEqual(['Shell']);
       expect(chips.map((chip: any) => chip.title)).toEqual(['Run Shell']);
+      // Each label is its own span, so a long one ellipsizes instead of overflowing.
+      expect(primary.children.filter((c: any) => c?.className === 'welcome-label')).toHaveLength(1);
+      expect(chips[0].children.filter((c: any) => c?.className === 'welcome-label')).toHaveLength(1);
     });
 
     it('promotes the first AGENT in catalog order to the primary, chosen by kind and order, never by id', () => {
@@ -601,6 +609,13 @@ describe('Codex quick start settings', () => {
       expect(rule('.welcome-primary')).toContain('var(--accent-grad-a)');
       expect(rule('.welcome-chip')).toContain('var(--control-bg)');
       expect(rule('.welcome-chip')).toContain('var(--control-border)');
+      // Light skins: the tunnel spinner's track follows the link's text colour (the
+      // shared track is translucent white), and a running tunnel reads as a pill.
+      expect(rule('.welcome-tunnel-link .tunnel-spinner')).toContain('currentColor');
+      expect(rule('.welcome-tunnel-link.active')).toContain('background:');
+      expect(rule('.welcome-label')).toContain('text-overflow: ellipsis');
+      expect(rule('.welcome-primary')).toContain('max-width: 100%');
+      expect(rule('.welcome-chip')).toContain('max-width: 100%');
       // Hover motion stays off for anyone who asked for less of it.
       expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.welcome-primary,/);
       // The tunnel keeps its id and handler, is no longer a launcher, and sits

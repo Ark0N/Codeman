@@ -1693,8 +1693,12 @@ Object.assign(CodemanApp.prototype, {
     disc.className = 'welcome-primary-logo';
     disc.appendChild(logo(primary));
     main.appendChild(disc);
-    // One raw string, kept whole: i18n.js matches the exact text node.
-    main.append(runLabel(primary));
+    // One raw string, kept whole: i18n.js matches the exact text node. The span
+    // only lets a long custom label ellipsize (styles.css .welcome-label).
+    const mainLabel = document.createElement('span');
+    mainLabel.className = 'welcome-label';
+    mainLabel.textContent = runLabel(primary);
+    main.appendChild(mainLabel);
     main.onclick = launch(primary);
     container.appendChild(main);
 
@@ -1715,7 +1719,10 @@ Object.assign(CodemanApp.prototype, {
       chip.title = runLabel(cli);
       chip.setAttribute('aria-label', runLabel(cli));
       chip.appendChild(logo(cli));
-      chip.append(cli.kind === 'shell' ? 'Shell' : cli.label);
+      const chipLabel = document.createElement('span');
+      chipLabel.className = 'welcome-label';
+      chipLabel.textContent = cli.kind === 'shell' ? 'Shell' : cli.label;
+      chip.appendChild(chipLabel);
       chip.onclick = launch(cli);
       chips.appendChild(chip);
     }
