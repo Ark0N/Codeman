@@ -166,8 +166,9 @@ describe('entrance animation styles', () => {
     expect(blur).not.toBeNull();
     expect(blur.match(/var\(--line-glow\)/g)?.length).toBe(2);
     // The 100% frame deliberately omits opacity so the endpoint comes from the
-    // element's own resting value: 0.9 on a subagent line, 0.72 on a lineage
-    // line, 0.95 on a working one. Pinning a number here snaps three of them.
+    // element's own resting value: 0.9 on a subagent line, 1 on a lineage
+    // line (its family group is translucent), 0.5 on a proxied one. Pinning a
+    // number here snaps them.
     expect(blur).toMatch(/100%\s*\{\s*filter:[^}]*\}/);
     expect(blur).not.toMatch(/100%\s*\{[^}]*opacity/);
   });

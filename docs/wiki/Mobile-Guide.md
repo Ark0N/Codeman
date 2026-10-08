@@ -158,7 +158,7 @@ enough to fix a typo an agent introduced while you are away from your desk.
   enforces it.
 - The Approvals bell. Phones get the NEEDS YOU strips on the home screen instead.
 - The desktop home tab rail, which needs a wide window.
-- Lineage arcs, which are a desktop overlay.
+- Lineage lines, which are a desktop overlay.
 
 ## Gotchas
 

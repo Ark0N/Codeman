@@ -596,6 +596,22 @@ body {
   max-height: var(--tab-strip-max-height, 40vh);
 }
 
+/* Lineage routing room (`_syncLineageGutter()` in session-lineage.js, geometry in
+   computeLineageTree, constants.js). Present only while some tab has spawned
+   another, and never toggled by the selection, so switching tabs cannot resize
+   the header (and with it the terminal). The bottom padding is the last row's
+   gap; a wrapped strip also widens the row gap the routes run in, and opens the
+   spine channel on the left that joins one row's gap to another's. */
+.session-tabs.lineage-tree {
+  padding-bottom: 14px;
+}
+
+.session-tabs.lineage-tree.tabs-two-rows,
+.session-tabs.lineage-tree.tabs-auto-wrap {
+  row-gap: 12px;
+  padding-left: 20px;
+}
+
 .session-tabs::-webkit-scrollbar {
   width: 4px;
   height: 0;
@@ -1681,9 +1697,10 @@ html[data-line-anim="packet"] .connection-line.line-enter {
 
    ⚠ The 100% frame deliberately omits `opacity`, which makes the browser take
    the endpoint from the element's own computed value: a subagent line rests at
-   0.9, a lineage line at 0.72, and a WORKING lineage line at 0.95. Pinning 0.9
-   here - as `line-enter-fade` above still does - lands every lineage line on the
-   wrong opacity and snaps it when the class comes off. */
+   0.9, a lineage line at 1 (its `.lineage-family` group carries the
+   translucency), a proxied one at 0.5. Pinning 0.9 here - as `line-enter-fade`
+   above still does - lands every lineage line on the wrong opacity and snaps it
+   when the class comes off. */
 html[data-line-anim="blur"] .connection-line.line-enter {
   animation-name: line-enter-blur;
   animation-duration: calc(380ms * var(--anim-enter-scale, 1));
@@ -10795,112 +10812,121 @@ kbd {
 }
 
 /* ===== Session lineage lines (tab → tab it spawned, session-lineage.js) =====
-   Deliberately quieter and thinner than the subagent lines above so the two
-   layers read as different things in the same SVG.
+   One quiet orthogonal tree per spawning tab, every family always drawn and
+   routed through the gaps between tab rows (computeLineageTree in constants.js).
+   The SELECTED tab's families (what it spawned, and the family it was spawned
+   into) are emphasized by `.lineage-family--focus`: thicker, full opacity, a
+   larger end dot, drawn last (owner call 2026-10-07: see every connection always,
+   thicker when selected). The routing room itself is reserved on the strip by
+   `.session-tabs.lineage-tree` near the top of this file.
+
+   ⚠ QUIET ON PURPOSE (owner call 2026-10-06, "B2"): 1.5px, solid, rounded
+   corners and a 1px dark outline in place of the old double glow. The old lines
+   were glowing dashed beziers that hung into the terminal, and with ten children
+   across a wrapped strip they read as a tangle. The lines no longer cross text,
+   so they no longer need a glow to survive it. Dashes now MEAN something: only a
+   working child's route is dashed.
 
    Colour: every rule reads --lineage-color, which session-lineage.js sets INLINE
-   per line from the CodemanLineage.COLORS palette (per child, first-seen order,
-   owner call 2026-08-15: several connected tabs must get several colours). The
-   FIRST line gets no override, so it falls through to --session-blue, which EVERY
-   skin block already defines and tunes for its own background; a lone arc therefore
-   still renders the skin-aware blue that shipped in 1.18.2. Do not add a per-skin
-   `.lineage-line` override inside the html:not([data-skin="og"]) block: a bare
-   class rule in there resolves to (0,2,1) and would outrank this one from a
-   surprising place.
+   per path and dot from the CodemanLineage.COLORS palette (per SPAWNING tab,
+   first-seen order). The first spawning tab gets no override and falls through to
+   --session-blue, which EVERY skin block already defines and tunes for its own
+   background. Do not add a per-skin `.lineage-line` override inside the
+   html:not([data-skin="og"]) block: a bare class rule in there resolves to
+   (0,2,1) and would outrank this one from a surprising place.
 
-   ⚠ BLUE, NOT THE VIOLET THIS SHIPPED WITH (owner call, 2026-08-14: "make these
-   lines in blue that they are better visible"). Violet sits close to the terminal's
-   own dim foreground and lost contrast the moment it crossed text. Hue therefore no
-   longer separates this layer from the subagent lines, so the separation rests
-   entirely on SHAPE (this one hangs under the strip and never reaches a window),
-   weight and dash: keep those differences intact. Per skin the two are not even the
-   same blue, since --session-blue is tuned per palette while the subagent rule
-   hardcodes #3b82f6. */
-/* ⚠ QUIETER THAN THE SUBAGENT LINES, NOT INVISIBLE. The first cut ran 2px at 0.55
-   with a single 5px glow, which reads on a design mock and disappears on a real
-   1080p desktop: a faint thread over terminal text, exactly what it is drawn on
-   top of. The weight stays UNDER the subagent lines' 3px so the two layers still
-   separate, and the second, wider glow is what buys the contrast instead: it lifts
-   the line off the terminal without thickening it. Dashes scale with the stroke
-   (4 4 on a 2.5px line reads as a dotted smudge), and `lineage-flow` marches by
-   exactly two dash cycles, so it has to move with them. */
+   Opacity lives on the family GROUP (`.lineage-family`), not on the paths: a
+   parent's routes overlap exactly along the trunk, and translucent paths would
+   stack there into a brighter line than the branches. */
+.lineage-family {
+  opacity: 0.75;
+}
+
+.lineage-family--focus {
+  opacity: 1;
+}
+
 .connection-line.lineage-line {
   stroke: var(--lineage-color, var(--session-blue, #2b8fd9));
-  stroke-width: 2.5;
-  stroke-dasharray: 5 5;
+  stroke-width: 1.5;
+  stroke-dasharray: none;
   stroke-linecap: round;
-  opacity: 0.72;
-  --line-glow: drop-shadow(0 0 2px rgba(0, 0, 0, 0.7))
-    drop-shadow(0 0 5px var(--lineage-color, var(--session-blue, #2b8fd9)))
-    drop-shadow(0 0 11px var(--lineage-color, var(--session-blue, #2b8fd9)));
+  stroke-linejoin: round;
+  opacity: 1;
+  --line-glow: drop-shadow(0 0 1px rgba(0, 0, 0, 0.9));
   filter: var(--line-glow);
 }
 
-/* ⚠ OUTSIDE the reduced-motion block below on purpose. A working child is the case
-   the line exists to signal, and pairing the brightness with the marching dashes
-   left every worker's arc at the resting 0.72 for anyone who turns motion off. */
+/* The selected tab's families: thicker (the group above makes them opaque). */
+.lineage-family--focus .connection-line.lineage-line {
+  stroke-width: 2.5;
+}
+
+/* A working child's route is dashed even with motion turned off; the march
+   below is the extra. Routes start at the PARENT, so dashes on the shared trunk
+   stay in phase between working siblings. */
 .connection-line.lineage-line--working {
-  opacity: 0.95;
+  stroke-dasharray: 4 3;
 }
 
-.connection-line.lineage-line:hover {
-  opacity: 1;
-  stroke-width: 3;
-}
-
+/* The radius rides a variable so the pulse below can breathe from whichever size
+   the dot rests at; the `r` attribute session-lineage.js sets is only a fallback. */
 .lineage-line-dot {
+  --lineage-dot-r: 2.5px;
+  r: var(--lineage-dot-r);
   fill: var(--lineage-color, var(--session-blue, #2b8fd9));
-  opacity: 0.85;
-  filter: drop-shadow(0 0 4px var(--lineage-color, var(--session-blue, #2b8fd9)))
-    drop-shadow(0 0 9px var(--lineage-color, var(--session-blue, #2b8fd9)));
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.9));
 }
 
-/* An arc re-anchored to a collapsed group's header (its row is hidden): quieter
+.lineage-family--focus .lineage-line-dot {
+  --lineage-dot-r: 3.5px;
+}
+
+/* A line re-anchored to a collapsed group's header (its row is hidden): quieter
    and dotted, so it reads as "somewhere in there" rather than a real row. */
 .connection-line.lineage-line--proxied {
-  stroke-dasharray: 2 7;
-  opacity: 0.46;
+  stroke-dasharray: 1 5;
+  opacity: 0.5;
 }
 
 .connection-line.lineage-line--proxied.lineage-line--working {
-  opacity: 0.62;
+  opacity: 0.65;
 }
 
 .lineage-line-dot.lineage-line-dot--proxied {
-  opacity: 0.46;
+  opacity: 0.5;
 }
 
-/* The child end marches while that worker is actually working, so the line
-   itself carries the signal. Motion is opt-out-able at the OS level. */
+/* The working route marches from parent to child, so the line itself carries
+   the signal. Motion is opt-out-able at the OS level. */
 @media (prefers-reduced-motion: no-preference) {
   .connection-line.lineage-line--working {
     animation: lineage-flow 1.1s linear infinite;
   }
 
   .lineage-line-dot--working {
-    opacity: 1;
     animation: lineage-dot-pulse 1.4s ease-in-out infinite;
   }
 }
 
-/* Two full dash cycles, so the march loops seamlessly. Tied to `stroke-dasharray`
-   above: at `5 5` the cycle is 10px, so this is -20 rather than the -16 that
-   matched the old `4 4`. Leaving them out of step makes the dashes jump once per
-   iteration. */
+/* Two full dash cycles, so the march loops seamlessly. Tied to the working
+   `stroke-dasharray` above: at `4 3` the cycle is 7px, so this is -14. Leaving
+   them out of step makes the dashes jump once per iteration. */
 @keyframes lineage-flow {
   to {
-    stroke-dashoffset: -20;
+    stroke-dashoffset: -14;
   }
 }
 
+/* Breathes from the dot's own resting radius (`--lineage-dot-r`). */
 @keyframes lineage-dot-pulse {
   0%, 100% {
     opacity: 0.75;
-    r: 3.5;
+    r: var(--lineage-dot-r);
   }
   50% {
     opacity: 1;
-    r: 4.5;
+    r: calc(var(--lineage-dot-r) + 0.8px);
   }
 }
 

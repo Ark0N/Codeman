@@ -189,7 +189,7 @@ followed by a wait races, and reports the previous turn's state.
 ## Lineage
 
 A create request can name the session that spawned it, through a body field or a header, and
-the dashboard then draws a lineage arc from parent to child. The skill sets it automatically.
+the dashboard then draws a lineage line from parent to child. The skill sets it automatically.
 
 It is resolved rather than trusted: an unresolvable parent is dropped silently rather than
 failing the spawn, because a cosmetic field must never break a worker.

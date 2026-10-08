@@ -84,13 +84,18 @@ title is derived locally from the prompt's first sentence; no text leaves the ma
 On phones the strip scrolls horizontally instead of wrapping, and the active tab is always
 scrolled into view. It is not reordered to the front, so the `Alt+N` numbering stays stable.
 
-### Lineage arcs
+### Lineage lines
 
 When one session spawns another (an agent starting a worker through the API), Codeman draws
-a coloured arc under the strip connecting parent to child, with one colour per child. It is
-how a fan-out of eight workers stays readable.
+lines from the parent to each child, in the parent's colour, routed through the gaps between
+tab rows so they never cover a tab or the terminal. Every family is always shown; selecting
+a tab draws its own family thicker and brighter. A dashed branch means that child is
+working. It is how a fan-out of eight workers stays readable.
 
-Desktop only, and on by default. Turn it off in **App Settings → Appearance**. Arcs are
+While any tab has spawned another, the strip keeps a little extra room between rows for the
+lines, so switching tabs never changes the header height.
+
+Desktop only, and on by default. Turn it off in **App Settings → Appearance**. Lines are
 skipped for tabs scrolled out of the strip.
 
 ## Header controls
