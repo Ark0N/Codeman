@@ -70,17 +70,13 @@ const HOME_SESSIONS_PILL_LABEL = {
   done: 'done',
 };
 
-/** Short backend badge, mirroring `.tab-mode` in the tab strip. */
+/**
+ * Text badge per backend, mirroring the tab strip: only the shell has one. Every
+ * agent CLI (claude included) shows its logo instead, through the same
+ * `run-mode-dot <id>` slot the strip uses (see _buildHomeSessionRow).
+ */
 const HOME_SESSIONS_MODE_BADGE = {
   shell: 'sh',
-  opencode: 'oc',
-  codex: 'cx',
-  gemini: 'gm',
-  antigravity: 'ag',
-  pi: 'pi',
-  grok: 'gk',
-  deepseek: 'ds',
-  omp: 'om',
 };
 
 Object.assign(CodemanApp.prototype, {
@@ -430,6 +426,13 @@ Object.assign(CodemanApp.prototype, {
       badge.setAttribute('data-i18n-skip', '');
       badge.textContent = row.modeBadge;
       line1.appendChild(badge);
+    } else {
+      // The agent's logo: PR #532's slot, the mode id as data (an id with no
+      // logo rule gets the slot's plain dot).
+      const logo = document.createElement('span');
+      logo.className = `home-sessions-harness run-mode-dot ${row.mode}`;
+      logo.setAttribute('aria-hidden', 'true');
+      line1.appendChild(logo);
     }
     const name = document.createElement('span');
     // .session-name is in the i18n skip list: a session name is user content.

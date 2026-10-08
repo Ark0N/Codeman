@@ -692,6 +692,7 @@ Object.assign(CodemanApp.prototype, {
         <span class="tab-number">${base + i + 1}</span>
         <span class="tab-status idle" aria-hidden="true"></span>
         <span class="tab-info"><span class="tab-name-row">
+          <span class="tab-harness run-mode-dot claude" aria-hidden="true"></span>
           <span class="tab-name">w${base + i + 1}-demo</span>
         </span></span>`;
       container.appendChild(tab);

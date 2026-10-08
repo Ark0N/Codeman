@@ -354,12 +354,7 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
 html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(
   .search-filter-chip.active,
   .search-badge-session,
-  .history-view-all-btn,
-  .session-tab .tab-mode.gemini,
-  .session-tab .tab-mode.antigravity,
-  .session-tab .tab-mode.pi,
-  .session-tab .tab-mode.grok,
-  .session-tab .tab-mode.omp
+  .history-view-all-btn
 ) {
   color: var(--accent-d);
 }
@@ -1911,6 +1906,7 @@ html[data-tab-orientation='vertical'].tab-rail-compact
   .session-tab:has(.tab-name-renaming)
   :is(
     .tab-mode,
+    .tab-harness,
     .tab-exited-badge,
     .tab-detached-badge,
     .tab-badge,
@@ -3008,49 +3004,10 @@ body.solo-mode .btn-lifecycle-log {
   color: var(--yellow);
 }
 
-.session-tab .tab-mode.opencode {
-  background: rgba(16, 185, 129, 0.2);
-  color: #10b981;
-}
-
-.session-tab .tab-mode.codex {
-  background: rgba(168, 85, 247, 0.2);
-  color: #a855f7;
-}
-
-.session-tab .tab-mode.gemini {
-  background: rgba(138, 180, 248, 0.2);
-  color: #8ab4f8;
-}
-
-.session-tab .tab-mode.antigravity {
-  background: rgba(34, 211, 238, 0.2);
-  color: #22d3ee;
-}
-.session-tab .tab-mode.omp {
-  background: rgba(129, 140, 248, 0.2);
-  color: #818cf8;
-}
-
-.session-tab .tab-mode.pi {
-  background: rgba(244, 114, 182, 0.2);
-  color: #f472b6;
-}
-
-.session-tab .tab-mode.grok {
-  background: rgba(212, 212, 216, 0.18);
-  color: #d4d4d8;
-}
-
-/* DeepSeek: the vendor's own brand blue. Deliberately NOT added to the
-   light-skin `--accent-d` override list above (which rescues gemini/antigravity/
-   pi/grok, whose pastels wash out on paper backgrounds) — this indigo already
-   carries enough contrast on the light skins, and overriding it would throw away
-   the one cue that separates a dsh tab from its neighbours. */
-.session-tab .tab-mode.deepseek {
-  background: rgba(77, 107, 254, 0.18);
-  color: #7c93ff;
-}
+/* Every agent CLI (claude included) shows its logo instead, in a
+   `.tab-harness.run-mode-dot <id>` slot that the run-mode-dot rules draw: brand
+   marks as is, monochrome ones in the tab's own text colour, so no per-CLI tab
+   colour lives here any more. Only the shell keeps a pill. */
 
 /* Timer Banner - Compact */
 .timer-banner {
@@ -16796,6 +16753,8 @@ html[data-tab-orientation='vertical'] .home-sessions {
   opacity: 0.95;
 }
 
+/* Only the shell has this text pill; an agent row shows its logo instead in a
+   `.home-sessions-harness.run-mode-dot <id>` slot, as the tab strip does. */
 .home-sessions-mode {
   flex-shrink: 0;
   padding: 0 0.35em;

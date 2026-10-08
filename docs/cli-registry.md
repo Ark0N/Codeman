@@ -36,7 +36,7 @@ These are the only writes to `clis.json`. They are serialized, and a file that d
 interface CliEntry {
   id: CliId; // 'codex'
   label: string; // 'Codex' — shown in menus
-  shortBadge: string; // tab badge, e.g. 'CX'
+  shortBadge: string; // short label ("Run CX", the Settings CLI list), e.g. 'CX'; tabs show the run-mode-dot logo instead
   accent: string; // single hex colour
   enabled: boolean;
   stock: boolean; // set by the loader; a custom entry can never claim it
