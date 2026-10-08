@@ -700,11 +700,9 @@
           <button class="btn-toolbar btn-enter" onclick="app.sendEnterKey()" title="Send Enter">
             Enter
           </button>
-          <div class="tab-count-group" title="Instance count">
-            <button class="tab-count-btn" onclick="app.decrementShellCount()">−</button>
-            <input type="number" id="shellCount" class="tab-count-input" value="1" min="1" max="20" readonly>
-            <button class="tab-count-btn" onclick="app.incrementShellCount()">+</button>
-          </div>
+          <!-- Run Shell had a second, identical instance-count stepper here. The
+               toolbar carried two of them side by side, so it is gone and Run
+               Shell reads the one above (#tabCount) like the Run button does. -->
           <div class="case-select-group">
             <div class="case-combobox" id="quickStartCasePicker">
               <input

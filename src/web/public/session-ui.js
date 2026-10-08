@@ -1803,19 +1803,6 @@ Object.assign(CodemanApp.prototype, {
     input.value = Math.max(1, current - 1);
   },
 
-  // Shell count stepper functions
-  incrementShellCount() {
-    const input = document.getElementById('shellCount');
-    const current = parseInt(input.value) || 1;
-    input.value = Math.min(20, current + 1);
-  },
-
-  decrementShellCount() {
-    const input = document.getElementById('shellCount');
-    const current = parseInt(input.value) || 1;
-    input.value = Math.max(1, current - 1);
-  },
-
   // Next free <prefix><n> index for a case's session tabs (e.g. w1-<case>,
   // w2-<case> for agents, s1-<case> for shells), shared by the local and
   // remote/docker launch paths so all tabs follow the same naming convention.
@@ -2082,7 +2069,9 @@ Object.assign(CodemanApp.prototype, {
 
   async runShell() {
     const caseName = document.getElementById('quickStartCase').value || 'testcase';
-    const shellCount = Math.min(20, Math.max(1, parseInt(document.getElementById('shellCount').value) || 1));
+    // Run Shell reads the toolbar's one instance stepper, like every other run*();
+    // its own second `− 1 +` group (#shellCount) was removed (#428).
+    const shellCount = this._readTabCount();
 
     const ownsLaunchTerminal = this._beginSessionLaunchStatus(
       `Starting ${shellCount} Shell session(s) in ${caseName}...`,

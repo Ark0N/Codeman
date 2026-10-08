@@ -734,7 +734,9 @@ describe('case selector refresh', () => {
   it('creates remote shell sessions by caseName instead of remote display path', async () => {
     const elements: Record<string, any> = {
       quickStartCase: { value: 'gpu-work' },
-      shellCount: { value: '1' },
+      // The toolbar's one instance stepper, shared by Run and Run Shell since
+      // the second (#shellCount) group was removed.
+      tabCount: { value: '1' },
     };
     const requests: Array<{ url: string; body?: any }> = [];
     const CodemanApp = function CodemanApp(this: any) {};
@@ -868,6 +870,45 @@ describe('case selector refresh', () => {
       method: 'PUT',
       body: { lastUsedCase: 'kept-case' },
     });
+  });
+});
+
+describe('toolbar instance count', () => {
+  // Run Shell used to carry its own `#shellCount` stepper next to the Run one.
+  // It was removed (#428), so every launch path reads #tabCount through
+  // _readTabCount(), and an absent stepper (phones and tablets hide the group)
+  // has to read as 1, not throw.
+  function loadCounter(elements: Record<string, any>) {
+    const CodemanApp = function CodemanApp(this: any) {};
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: (id: string) => elements[id] ?? null },
+      console,
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+    return new (CodemanApp as any)();
+  }
+
+  it('reads the shared stepper and falls back to 1 when it is absent', () => {
+    expect(loadCounter({ tabCount: { value: '3' } })._readTabCount()).toBe(3);
+    expect(loadCounter({})._readTabCount()).toBe(1);
+    expect(loadCounter({ tabCount: { value: '' } })._readTabCount()).toBe(1);
+    expect(loadCounter({ tabCount: { value: '0' } })._readTabCount()).toBe(1);
+    expect(loadCounter({ tabCount: { value: '99' } })._readTabCount()).toBe(20);
+  });
+
+  it('no longer exposes the removed shell stepper handlers', () => {
+    const app = loadCounter({ tabCount: { value: '1' } });
+    expect(app.incrementShellCount).toBeUndefined();
+    expect(app.decrementShellCount).toBeUndefined();
+  });
+
+  it('ships one stepper in the toolbar markup, not two', () => {
+    const html = readFileSync(resolve(import.meta.dirname, '../src/web/public/index.html'), 'utf8');
+    expect(html).not.toContain('id="shellCount"');
+    expect(html.match(/class="tab-count-group"/g)).toHaveLength(1);
   });
 });
 
@@ -1233,7 +1274,6 @@ describe('case lookup before a local launch', () => {
   function loadLaunchHarness(caseAnswer: Record<string, unknown>) {
     const elements: Record<string, any> = {
       quickStartCase: { value: 'nas-case' },
-      shellCount: { value: '1' },
       tabCount: { value: '1' },
     };
     const requests: Array<{ url: string; method?: string }> = [];
