@@ -13,13 +13,24 @@
  * behavior matches production exactly).
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
 import { ApiErrorCode, httpStatusForErrorCode } from '../../src/types.js';
 import { registerCaseRoutes } from '../../src/web/routes/case-routes.js';
+import { probePath } from '../../src/utils/index.js';
+import { MAX_STALLED_PATH_PROBES } from '../../src/config/path-probe.js';
+
+// A short path-probe timeout keeps the unreachable-mount tests quick. Read when the
+// probe's config module is first imported, so it is set before any import runs.
+vi.hoisted(() => {
+  process.env.CODEMAN_PATH_PROBE_TIMEOUT_MS = '300';
+});
+afterAll(() => {
+  delete process.env.CODEMAN_PATH_PROBE_TIMEOUT_MS;
+});
 
 // Mock filesystem modules
 vi.mock('node:fs', async (importOriginal) => {
@@ -35,6 +46,7 @@ vi.mock('node:fs', async (importOriginal) => {
 
 vi.mock('node:fs/promises', () => ({
   default: {
+    stat: vi.fn(),
     readdir: vi.fn(async () => []),
     readFile: vi.fn(async () => {
       const err = new Error('ENOENT') as NodeJS.ErrnoException;
@@ -74,6 +86,7 @@ const mockedReaddirSync = vi.mocked(readdirSync);
 const mockedReaddir = vi.mocked(fs.readdir);
 const mockedReadFile = vi.mocked(fs.readFile);
 const mockedWriteFile = vi.mocked(fs.writeFile);
+const mockedStat = vi.mocked(fs.stat);
 const mockedCheckRemoteTmux = vi.mocked(checkRemoteTmuxAvailable);
 
 interface CaseRouteHarness {
@@ -127,6 +140,12 @@ describe('case-routes', () => {
     // Default: existsSync returns false, readFile throws ENOENT
     mockedExistsSync.mockReturnValue(false);
     mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    // Async stat (the bounded path probe) follows the mocked existsSync, so a
+    // test that sets up a path's presence via existsSync drives both the same way.
+    mockedStat.mockImplementation(async (path) => {
+      if (mockedExistsSync(path)) return { isDirectory: () => true } as never;
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
   });
 
   afterEach(async () => {
@@ -209,6 +228,53 @@ describe('case-routes', () => {
       const body = JSON.parse(res.body);
       // Should have both regular and linked cases
       expect(body.data.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('still answers promptly when a linked case sits on an unreachable mount', async () => {
+      // A hard network mount that went away: a synchronous probe blocks the
+      // thread (simulated by a busy-wait), and an async stat never settles.
+      const stalledPath = '/mnt/unreachable/linked-nfs';
+      const BLOCK_MS = 4_000;
+      mockedReaddir.mockResolvedValue([] as never);
+      mockedReadFile.mockResolvedValueOnce(JSON.stringify({ 'linked-nfs': stalledPath }) as never);
+      mockedExistsSync.mockImplementation((p) => {
+        if (String(p) !== stalledPath) return false;
+        const until = Date.now() + BLOCK_MS;
+        while (Date.now() < until) {
+          // spin: the event loop is frozen for as long as the mount does not answer
+        }
+        return true;
+      });
+      let release: (() => void) | undefined;
+      mockedStat.mockImplementation((p) => {
+        if (String(p) !== stalledPath) {
+          return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+        }
+        return new Promise((resolve) => {
+          release = () => resolve({ isDirectory: () => true } as never);
+        });
+      });
+
+      const started = Date.now();
+      const res = await harness.app.inject({ method: 'GET', url: '/api/cases' });
+      const elapsed = Date.now() - started;
+      release?.();
+
+      expect(res.statusCode).toBe(200);
+      expect(elapsed).toBeLessThan(BLOCK_MS - 1_000);
+      // The unreachable case is listed as such rather than holding the list
+      // hostage, or vanishing as though it had been deleted.
+      expect(JSON.parse(res.body).data).toEqual([
+        {
+          name: 'linked-nfs',
+          path: stalledPath,
+          hasClaudeMd: false,
+          linked: true,
+          location: 'linked-local',
+          unreachable: true,
+        },
+      ]);
+      await new Promise((r) => setTimeout(r, 0)); // let the released stat clear its stall
     });
   });
 
@@ -670,6 +736,66 @@ describe('case-routes', () => {
       expect(body.data.name).toBe('regular-case');
     });
 
+    it('answers a linked case on an unreachable mount with its registered path, not NOT_FOUND', async () => {
+      // The timeout path: the mount does not answer at all.
+      const stalledPath = '/mnt/unreachable/linked-get';
+      mockedReadFile.mockResolvedValue(JSON.stringify({ 'linked-get': stalledPath }) as never);
+      let release: (() => void) | undefined;
+      mockedStat.mockImplementation((p) => {
+        if (String(p) !== stalledPath) {
+          return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+        }
+        return new Promise((resolve) => {
+          release = () => resolve({ isDirectory: () => true } as never);
+        });
+      });
+
+      const res = await harness.app.inject({ method: 'GET', url: '/api/cases/linked-get' });
+      release?.();
+      await new Promise((r) => setTimeout(r, 0)); // let the released stat clear its stall
+
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data).toMatchObject({ name: 'linked-get', path: stalledPath, linked: true, unreachable: true });
+    });
+
+    it('still answers a healthy case while unrelated mounts are stalled past the cap', async () => {
+      const dead = Array.from({ length: MAX_STALLED_PATH_PROBES }, (_, i) => `/mnt/dead-${i}/linked`);
+      const releases: Array<() => void> = [];
+      mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      mockedStat.mockImplementation((p) => {
+        if (dead.includes(String(p))) {
+          return new Promise((resolve) => releases.push(() => resolve({ isDirectory: () => true } as never)));
+        }
+        return Promise.resolve({ isDirectory: () => true } as never);
+      });
+      expect(await Promise.all(dead.map((p) => probePath(p)))).toEqual(dead.map(() => 'unknown'));
+
+      const res = await harness.app.inject({ method: 'GET', url: '/api/cases/healthy-local' });
+      releases.forEach((release) => release());
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(res.statusCode).toBe(200);
+      expect(JSON.parse(res.body).data).toMatchObject({ name: 'healthy-local' });
+      expect(JSON.parse(res.body).data.unreachable).toBeUndefined();
+      // Its CLAUDE.md is probed the same way as its folder, so it is not misreported missing.
+      expect(JSON.parse(res.body).data.hasClaudeMd).toBe(true);
+    });
+
+    it('answers a local case it cannot read with a non-NOT_FOUND error', async () => {
+      // A soft mount that gave up (EIO) is not proof the case is gone, and the Run
+      // button creates a case on NOT_FOUND.
+      mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      mockedStat.mockRejectedValue(Object.assign(new Error('EIO'), { code: 'EIO' }));
+
+      const res = await harness.app.inject({ method: 'GET', url: '/api/cases/eio-case' });
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('OPERATION_FAILED');
+      expect(res.statusCode).not.toBe(404);
+    });
+
     it('returns error when case not found anywhere', async () => {
       mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
       mockedExistsSync.mockReturnValue(false);
@@ -702,6 +828,16 @@ describe('case-routes', () => {
       expect(body.data.exists).toBe(false);
       expect(body.data.content).toBeNull();
       expect(body.data.todos).toEqual([]);
+    });
+
+    it('reports an unreadable fix plan as an error, not as "no plan"', async () => {
+      mockedReadFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      mockedStat.mockRejectedValue(Object.assign(new Error('EIO'), { code: 'EIO' }));
+
+      const res = await harness.app.inject({ method: 'GET', url: '/api/cases/my-case/fix-plan' });
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(false);
+      expect(body.errorCode).toBe('OPERATION_FAILED');
     });
 
     it('parses fix plan with todos and stats', async () => {

@@ -736,6 +736,86 @@ html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-toggle:focus-v
   content: '\25B8';
 }
 
+/* Group editing: the header's menu glyph, the inline rename editor, and the
+   pointer-drag marks. All of it lives inside the grouped rail only. */
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-menu {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: 0;
+  letter-spacing: 0;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header:hover .tab-layout-group-menu,
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header:focus-visible .tab-layout-group-menu {
+  opacity: 1;
+}
+
+/* No hover on a touch tablet, and a long press there is not a contextmenu
+   event: the glyph is the only way into the group menu, so keep it shown. */
+@media (hover: none) {
+  html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-menu {
+    opacity: 1;
+  }
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-menu:hover {
+  color: var(--text);
+  background: var(--bg-tertiary, var(--bg-hover));
+}
+
+/* The label is a nowrap ellipsis box; while it holds the editor it becomes a
+   plain flex slot so the input gets the whole width and repaints as you type. */
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-name--renaming {
+  display: flex;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-rename-input {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  padding: 1px 4px;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  outline: none;
+  color: var(--text);
+  background: var(--bg-input);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: normal;
+  user-select: text;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .session-tabs--grouped .session-tab,
+html[data-tab-orientation='vertical'] .tab-rail .session-tabs--grouped .tab-layout-group-header {
+  user-select: none;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-drag-active {
+  cursor: grabbing;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-dragging {
+  opacity: 0.45;
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-drop-into {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 html[data-tab-orientation='vertical'] .header-right {
   margin-left: auto;
 }
@@ -1768,22 +1848,51 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab .tab-name-prefix {
   -webkit-line-clamp: unset;
   line-clamp: unset;
   overflow: visible;
+  /* An input's intrinsic width counts toward the label's min-content, so with
+     the default min-width:auto a long `w<n>-<case>` prefix plus the input
+     pushed the label past its row: the prefix slid out of view and, in the
+     compact rail, the input was clipped mid-word. */
+  min-width: 0;
 }
 
+/* The prefix gives way first, down to a stub with an ellipsis. */
 :is(
   html[data-tab-orientation='vertical'] .tab-rail,
   html[data-session-list='sidebar'] .session-sidebar
 ) .tab-name-renaming .tab-rename-prefix {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 2rem;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* The input takes the rest of the row. Its 4rem floor is the editor's own
+   inline min-width (startInlineRename picks it per layout). */
 :is(
   html[data-tab-orientation='vertical'] .tab-rail,
   html[data-session-list='sidebar'] .session-sidebar
 ) .tab-name-renaming .tab-rename-input {
   flex: 1 1 0;
   width: auto;
-  min-width: 0;
+}
+
+/* A compact rail row has no room for both the editor and its adornments, so
+   they step aside while the name is being edited (the re-render that ends the
+   edit brings them back). */
+html[data-tab-orientation='vertical'].tab-rail-compact
+  .tab-rail
+  .session-tab:has(.tab-name-renaming)
+  :is(
+    .tab-mode,
+    .tab-exited-badge,
+    .tab-detached-badge,
+    .tab-badge,
+    .tab-subagent-badge,
+    .tab-ultracode-badge,
+    .tab-actions
+  ) {
+  display: none;
 }
 
 /* Tab folder path — hidden by default, shown via .tabs-show-folder on container */
@@ -18815,6 +18924,13 @@ html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail
   line-clamp: 3;
 }
 
+/* ...except while it is being edited: this rule outranks the shared renaming
+   rule's unclamp, so restate it (the editor is a flex row, never clamped). */
+html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab .tab-name.tab-name-renaming {
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+}
+
 html[data-tab-orientation='vertical'][data-tab-rail-detail='rich']:not(.tab-rail-compact) .tab-rail .session-tab .tab-folder {
   font-size: 0.66rem;
   margin-top: 0.1rem;
@@ -19273,4 +19389,402 @@ html[data-session-list="sidebar"][data-sidebar="collapsed"] .btn-sidebar-toggle 
   padding: 8px 10px;
   font-size: 13px;
   color: var(--text-muted);
+}
+
+
+/* ── Git status: bottom-bar indicator + panel (git-status-ui.js) ─────────────── */
+
+/* .btn-toolbar sets display:flex, which beats the [hidden] attribute's UA display:none. */
+.btn-git-status[hidden] {
+  display: none;
+}
+
+.btn-git-status {
+  gap: 0.4rem;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.68rem;
+  padding: 0.2rem 0.55rem;
+  white-space: nowrap;
+}
+
+.btn-git-status .git-status-label {
+  letter-spacing: 0.02em;
+}
+
+/* The skin block in styles.css nests every .btn-toolbar rule under html:not([data-skin="og"]), which
+   out-ranks a bare .btn-git-status.<tone> rule, so the tones carry the same `html .toolbar` prefix
+   (specificity (0,3,1) against the skin's (0,2,1)). Without it the amber never shows. */
+html .toolbar .btn-git-status.git-status--clean {
+  color: var(--text-muted);
+}
+
+html .toolbar .btn-git-status.git-status--clean svg {
+  color: rgb(34, 197, 94);
+}
+
+html .toolbar .btn-git-status.git-status--dirty {
+  color: #e0a030;
+  border-color: rgba(224, 160, 48, 0.4);
+}
+
+html .toolbar .btn-git-status.git-status--conflict {
+  color: #e5534b;
+  border-color: rgba(229, 83, 75, 0.5);
+}
+
+html .toolbar .btn-git-status[aria-expanded='true'] {
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+
+/* Same look as the Files window. Default spot is just left of it so both can be open. */
+.git-status-panel {
+  position: fixed;
+  top: calc(var(--header-height) + 10px);
+  /* Just left of the Files window; on a narrow viewport slide right so the left edge never leaves the screen. */
+  right: clamp(8px, calc(100vw - 388px), 320px);
+  width: 380px;
+  max-width: calc(100vw - 16px);
+  height: calc(100vh - var(--header-height) - var(--toolbar-height) - 40px);
+  height: calc(100dvh - var(--header-height) - var(--toolbar-height) - 40px);
+  max-height: 600px;
+  min-width: 260px;
+  min-height: 220px;
+  background: var(--floating-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 100;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  resize: both;
+}
+
+.git-status-panel.visible {
+  display: flex;
+}
+
+.git-status-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-input);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.git-status-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.git-status-branch {
+  margin-left: 0.4rem;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.git-status-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.git-status-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.74rem;
+  color: var(--text);
+}
+
+.git-status-footer {
+  padding: 0.35rem 0.6rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.64rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.git-status-empty,
+.git-status-ok,
+.git-status-note,
+.git-status-more {
+  color: var(--text-muted);
+  padding: 0.25rem 0;
+}
+
+.git-status-ok {
+  color: rgb(34, 197, 94);
+}
+
+.git-status-branchline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.6rem;
+}
+
+.git-status-chip {
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.66rem;
+  color: var(--text-muted);
+}
+
+.git-status-chip--warn {
+  color: #e0a030;
+  border-color: rgba(224, 160, 48, 0.4);
+}
+
+.git-status-section {
+  margin-bottom: 0.75rem;
+}
+
+.git-status-section-title {
+  margin: 0 0 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.git-status-group {
+  margin-bottom: 0.4rem;
+}
+
+.git-status-group-title {
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin: 0.2rem 0;
+}
+
+.git-status-file,
+.git-status-commit {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.15rem 0.25rem;
+  border-radius: 4px;
+  min-width: 0;
+}
+
+.git-status-file--clickable {
+  cursor: pointer;
+}
+
+.git-status-file--clickable:hover,
+.git-status-file--clickable:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.git-status-badge {
+  flex: 0 0 1.1rem;
+  text-align: center;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: #e0a030;
+}
+
+.git-status-badge--A,
+.git-status-badge--new {
+  color: rgb(34, 197, 94);
+}
+
+.git-status-badge--D,
+.git-status-badge--U {
+  color: #e5534b;
+}
+
+.git-status-path,
+.git-status-subject {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+}
+
+.git-status-subject {
+  font-family: inherit;
+  flex: 1;
+}
+
+.git-status-orig,
+.git-status-commit-meta {
+  flex: 0 0 auto;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+.git-status-hash {
+  flex: 0 0 auto;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.66rem;
+  color: #e0a030;
+}
+
+/* One section per repository when a session's folder holds several (git-status-ui.js). */
+.git-status-repo {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 0.5rem;
+  overflow: hidden;
+}
+
+.git-status-repo-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  cursor: pointer;
+  background: var(--bg-input);
+  list-style: none;
+  min-width: 0;
+}
+
+.git-status-repo-summary::-webkit-details-marker {
+  display: none;
+}
+
+.git-status-repo-name {
+  font-weight: 600;
+  font-size: 0.74rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-status-repo-path,
+.git-status-repo-branch {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.git-status-repo-state {
+  margin-left: auto;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.git-status-repo-state--dirty {
+  color: #e0a030;
+}
+
+.git-status-repo-body {
+  padding: 0.5rem 0.6rem;
+}
+
+/* Git status panel: per-file diff view */
+.git-diff-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.4rem;
+  min-width: 0;
+}
+
+.git-diff-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+}
+
+.git-diff-kind {
+  font-size: 0.64rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.git-diff {
+  margin: 0;
+  padding: 0.3rem 0;
+  overflow-x: auto;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.git-diff-line {
+  display: block;
+  padding: 0 0.5rem;
+  white-space: pre;
+}
+
+.git-diff-line--add {
+  background: color-mix(in srgb, var(--green) 18%, transparent);
+}
+
+.git-diff-line--del {
+  background: color-mix(in srgb, var(--red) 18%, transparent);
+}
+
+.git-diff-line--hunk {
+  color: var(--text-muted);
+  background: var(--bg-hover);
+}
+
+.git-diff-line--meta {
+  color: var(--text-muted);
+}
+
+/* Git status panel: files grouped under collapsible folders */
+.git-tree-dir > .git-tree-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.15rem 0.25rem;
+  border-radius: 4px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.git-tree-dir > .git-tree-summary:hover {
+  background: var(--bg-hover);
+}
+
+.git-tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.7rem;
+}
+
+.git-tree-count {
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+.git-tree-children {
+  margin-left: 0.7rem;
+  padding-left: 0.4rem;
+  border-left: 1px solid var(--border);
 }

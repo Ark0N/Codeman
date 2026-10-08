@@ -8,7 +8,9 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import { EXEC_TIMEOUT_MS } from '../config/exec-timeout.js';
+import { isExecutableRegularFile } from './cli-executable-resolver.js';
 import type { ProbeEnvironment, ToolCategory, ToolDependency } from '../config/dependency-registry.js';
 
 export interface EnvDetectionInputs {
@@ -62,6 +64,8 @@ export interface ProbeHost {
   environment: ProbeEnvironment;
   which(bin: string): string | null;
   fileExists(path: string): boolean;
+  /** An executable regular file, the run mode's own test for a `searchDirs` candidate. */
+  isExecutableFile(path: string): boolean;
   runVersion(bin: string, args: string[]): string | null;
   windowsProgramRoots(): string[];
   windowsFileVersion(winPath: string): string | null;
@@ -94,18 +98,33 @@ export function checkTool(tool: ToolDependency, host: ProbeHost): ToolResult {
   if (!spec) return { ...base, status: 'skipped', reason: `not applicable on ${host.environment}` };
 
   if (spec.resolver.kind === 'path') {
-    const { bins, versionArg, versionRegex, requireVersionMatch } = spec.resolver;
+    const { bins, versionArg, versionRegex, requireVersionMatch, searchDirs } = spec.resolver;
     for (const bin of bins) {
-      const resolved = host.which(bin);
-      if (resolved) {
-        const out = host.runVersion(bin, [versionArg ?? '--version']);
+      // The same candidate order and the same per-candidate test as the run mode's resolver
+      // (createCliExecutableResolver): the `which` hit (the PATH), then each search dir. Under
+      // a service the PATH is minimal and the run mode finds the CLI through those dirs, so
+      // the doctor must too. A search-dir candidate counts only as an absolute path to an
+      // executable regular file, so a relative dir from a custom clis.json or a file without
+      // the x bit reads as missing here exactly as it does in the Run menu.
+      const candidates: string[] = [];
+      const onPath = host.which(bin);
+      if (onPath && isAbsolute(onPath)) candidates.push(onPath);
+      for (const dir of searchDirs ?? []) {
+        const candidate = join(dir, bin);
+        if (candidates.includes(candidate)) continue; // a search dir that is also on the PATH
+        if (isAbsolute(candidate) && host.isExecutableFile(candidate)) candidates.push(candidate);
+      }
+      for (const candidate of candidates) {
+        // Run the RESOLVED path: a bare name would miss the same binary `which` just missed.
+        const out = host.runVersion(candidate, [versionArg ?? '--version']);
         const version = out ? extractVersion(out, versionRegex) : undefined;
         // A generic binary name that prints the wrong thing is some OTHER program (see
-        // PathResolver.requireVersionMatch). Keep looking, then report MISSING; the
-        // alternative is claiming a tool is installed that the feature's own resolver
-        // rejects, which reads as "the mode is broken" rather than "install it".
+        // PathResolver.requireVersionMatch). Try the next candidate, then report MISSING;
+        // the alternative is claiming a tool is installed that the feature's own resolver
+        // rejects, or missing one it accepts (an npm squatter on the PATH in front of the
+        // real grok in ~/.grok/bin), which reads as "the mode is broken".
         if (requireVersionMatch && !version) continue;
-        return finalize(base, tool, resolved, version);
+        return finalize(base, tool, candidate, version);
       }
     }
     return { ...base, status: 'missing', installHint };
@@ -132,11 +151,16 @@ export function checkAll(registry: ToolDependency[], host: ProbeHost): ToolResul
   return registry.map((tool) => checkTool(tool, host));
 }
 
+// SIGKILL on every probe below: execFileSync's `timeout` only SENDS the kill signal and then
+// keeps waiting for the child, so a `--version` that ignores the default SIGTERM would hold
+// the doctor (now a Settings button) until GET /api/doctor's own timeout, then be orphaned.
+// Same reasoning as the resolver host in cli-executable-resolver.ts.
 function safeWhich(bin: string): string | null {
   try {
     const out = execFileSync(process.platform === 'win32' ? 'where' : 'which', [bin], {
       encoding: 'utf-8',
       timeout: EXEC_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
     }).trim();
     const first = out.split(/\r?\n/)[0]?.trim();
     return first && existsSync(first) ? first : null;
@@ -151,6 +175,7 @@ function safeRunVersion(bin: string, args: string[]): string | null {
       encoding: 'utf-8',
       timeout: EXEC_TIMEOUT_MS,
       stdio: ['ignore', 'pipe', 'ignore'],
+      killSignal: 'SIGKILL',
     });
   } catch (err: unknown) {
     // Some tools (e.g. ffmpeg) exit non-zero on -version but still print to stdout
@@ -187,11 +212,12 @@ function readWindowsFileVersion(winPath: string): string | null {
     const windowsPath = execFileSync('wslpath', ['-w', winPath], {
       encoding: 'utf-8',
       timeout: EXEC_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
     }).trim();
     const out = execFileSync(
       'powershell.exe',
       ['-NoProfile', '-Command', `(Get-Item '${windowsPath.replace(/'/g, "''")}').VersionInfo.ProductVersion`],
-      { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS }
+      { encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS, killSignal: 'SIGKILL' }
     ).trim();
     return out || null;
   } catch {
@@ -209,6 +235,7 @@ export function createRealHost(): ProbeHost {
     environment,
     which: safeWhich,
     fileExists: existsSync,
+    isExecutableFile: isExecutableRegularFile,
     runVersion: safeRunVersion,
     windowsProgramRoots: listWindowsProgramRoots,
     windowsFileVersion: readWindowsFileVersion,

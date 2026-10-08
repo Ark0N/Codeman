@@ -298,7 +298,9 @@ Object.assign(CodemanApp.prototype, {
   },
 
   closeTabRailActionMenu(options = {}) {
-    const menu = document.querySelector('.tab-rail-action-menu');
+    // The group menu borrows this class for its look but has its own owner
+    // (closeTabGroupMenu); removing its DOM here would strand its listeners.
+    const menu = document.querySelector('.tab-rail-action-menu:not(.tab-layout-group-action-menu)');
     const trigger = this._tabRailActionMenuTrigger;
     menu?.remove();
     if (this._tabRailActionMenuOutside) {
@@ -325,6 +327,8 @@ Object.assign(CodemanApp.prototype, {
     const settings = this.loadAppSettingsFromStorage();
     const actions = [
       { label: 'Session options', run: () => this.openSessionOptions(sessionId) },
+      // Group placement (vertical rail with a tab layout only; [] elsewhere).
+      ...(this._tabRefMoveActions?.({ kind: 'session', id: sessionId }) || []),
       ...(settings.showTabDetachButton || this.detachedSessions?.has(sessionId)
         ? [{ label: 'Open in a new window', run: () => this.detachSession(sessionId) }]
         : []),

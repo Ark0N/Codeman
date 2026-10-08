@@ -19,7 +19,7 @@ Three ways to get one, all under **+** next to the case picker:
 
 | How               | Result                                                                                                 |
 | ----------------- | ------------------------------------------------------------------------------------------------------ |
-| **Create New**    | A fresh `~/codeman-cases/<name>` with a scaffolded `CLAUDE.md`.                                          |
+| **Create New**    | A fresh `~/codeman-cases/<name>` with a scaffolded `CLAUDE.md`, or with **Create in a custom folder**, a new folder inside a parent you choose, scaffolded the same way and registered in place like a linked case. |
 | **Clone Repo**    | A repo cloned into `~/codeman-cases/<name>` and registered as a case. Private repos need this machine's own git credentials (see below). |
 | **Link Existing** | An existing folder anywhere on disk, registered in place. Nothing is copied or moved.                    |
 

@@ -14,6 +14,7 @@ export { registerHookEventRoutes } from './hook-event-routes.js';
 export { registerApprovalRoutes } from './approval-routes.js';
 export { registerRebootRestoreRoutes } from './reboot-restore-routes.js';
 export { registerReadMyMindRoutes } from './readmymind-routes.js';
+export { registerGitStatusRoutes } from './git-status-routes.js';
 export { registerStatusTelemetryRoutes } from './status-telemetry-routes.js';
 export { registerCaseRoutes } from './case-routes.js';
 export { registerSessionRoutes } from './session-routes.js';
@@ -31,6 +32,7 @@ export { registerWebviewRoutes, tryWebviewRefererFallback } from './webview-rout
 export { registerTabLayoutRoutes } from './tab-layout-routes.js';
 export { registerMcpSyncRoutes } from './mcp-sync-routes.js';
 export { registerWebhookRoutes } from './webhook-routes.js';
+export { registerDoctorRoutes } from './doctor-routes.js';
 export {
   registerCustomModelRoutes,
   refreshAllCustomModelHosts,

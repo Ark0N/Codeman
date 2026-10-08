@@ -95,6 +95,9 @@ Differences from `quick-start` worth knowing before you debug one:
 - the id is at `.data.session.id`, not `.data.sessionId`;
 - `workingDir` must already exist (400 `INVALID_INPUT`, "workingDir does not exist"),
   and in multi-user mode must be inside the caller's own workspace (403 `FORBIDDEN`);
+  one that does not answer or cannot be read (an unreachable network mount, a
+  permission error) is 422 `OPERATION_FAILED`, never "does not exist", so do not
+  create a replacement for it;
 - hitting the session cap here is `OPERATION_FAILED`, where `quick-start` returns
   `SESSION_BUSY` for the identical condition.
 
