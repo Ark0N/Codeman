@@ -6644,6 +6644,17 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   margin: 0 0.25rem;
 }
 
+/* Run Shell used to be followed by a second instance stepper whose 0.25rem
+   margins were the only space before the case picker (the desktop
+   .toolbar-group has gap: 0). That stepper is gone (#428), so the case picker
+   keeps the same 4px itself. At 768px and below mobile.css spaces the group
+   with a gap instead. */
+@media (min-width: 769px) {
+  .toolbar-group > .case-select-group {
+    margin-left: 0.25rem;
+  }
+}
+
 .tab-count-btn {
   display: flex;
   align-items: center;
