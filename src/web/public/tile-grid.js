@@ -289,15 +289,17 @@ Object.assign(CodemanApp.prototype, {
     const section = this._tileGridSection();
     this.hideWelcome();
     // Mount every tile and lay the grid out BEFORE any tile connects, so each
-    // first fit measures its real cell; the focused tile connects first, so
-    // its capture is the one the queue starts with. Each tile enters in
+    // first fit measures its real cell. Each tile enters in
     // reading order (opacity and transform only: the fit measures the final
     // cell, so the animation adds no resize).
     wanted.forEach((id, k) => this._mountTile(id, { enterIndex: k }));
     // Packed from the first cell (_applyTileLayout pads the shape with empty cells).
     grid.cells = wanted.filter((id) => grid.tiles.has(id));
     this._applyTileLayout();
-    for (const id of [focus, ...wanted.filter((id) => id !== focus)]) this._connectTile(id);
+    // The tiles' frames paint first; their terminals are built one per frame
+    // after it, the focused tile's first, so its capture is the one the queue
+    // starts with (_connectTilesPaced).
+    this._connectTilesPaced([focus, ...wanted.filter((id) => id !== focus)]);
     if (!grid.resizeObserver && typeof ResizeObserver !== 'undefined') {
       // The main terminal's observer watches a node that is now hidden; this one
       // catches window resizes, sidebar toggles and rail drags for the grid.
@@ -1397,6 +1399,7 @@ Object.assign(CodemanApp.prototype, {
     const hadKeyboard = this._focusedTile === entry.tile;
     this._destroyTerminalTile(entry.tile);
     entry.tile = this._newTerminalTile(sessionId, entry.body);
+    entry.connected = false;
     this._connectTile(sessionId);
     if (hadKeyboard) this._noteFocusedTile(entry.tile);
   },
@@ -1779,13 +1782,46 @@ Object.assign(CodemanApp.prototype, {
     input.select?.();
   },
 
+  /**
+   * Starts a tile's terminal and socket (TerminalTile.connect builds the xterm
+   * synchronously, then loads through the grid's queue). Once per tile. A
+   * focus that selected this tile before its terminal existed lands now.
+   */
   _connectTile(sessionId) {
-    this._tileGrid?.tiles
-      .get(sessionId)
-      ?.tile.connect()
-      .catch(() => {
-        /* Best-effort, as the split's Pane B: live output arrives once the socket opens. */
-      });
+    const grid = this._tileGrid;
+    const entry = grid?.tiles.get(sessionId);
+    if (!entry || entry.connected) return;
+    entry.connected = true;
+    entry.tile.connect().catch(() => {
+      /* Best-effort, as the split's Pane B: live output arrives once the socket opens. */
+    });
+    if (grid.focusOnConnect === sessionId) {
+      grid.focusOnConnect = null;
+      entry.tile.terminal?.focus();
+    }
+  },
+
+  /**
+   * Opening the grid: the tiles' terminals are built one per animation frame,
+   * in `order` (the focused tile first), instead of all of them inside the
+   * click. Building six xterms took about 100 ms of the click's 140 ms before
+   * the first frame; paced, the click paints its empty frames in about 20 ms
+   * and the entrance plays while the terminals are built. Nothing waits for
+   * it: the load queue serves one capture at a time anyway, so only the
+   * focused tile's connect is on its critical path, one frame later. Each
+   * tile still fits once, at its final size (laid out before any connect),
+   * and sends one PTY resize. A tile removed, replaced or already connected
+   * meanwhile is skipped; a grid closed (or opened again) meanwhile stops it.
+   */
+  _connectTilesPaced(order) {
+    const grid = this._tileGrid;
+    const run = (grid.paceRun = (grid.paceRun || 0) + 1);
+    const step = (k) => {
+      if (!grid.open || grid.paceRun !== run || k >= order.length) return;
+      this._connectTile(order[k]);
+      requestAnimationFrame(() => step(k + 1));
+    };
+    requestAnimationFrame(() => step(0));
   },
 
   /**
@@ -2143,8 +2179,14 @@ Object.assign(CodemanApp.prototype, {
     const idleCb = typeof requestIdleCallback === 'function' ? requestIdleCallback : (cb) => setTimeout(cb, 16);
     idleCb(() => this._refreshSessionPanels(sessionId, selectGen));
     // The keyboard follows focus: shortcuts, voice and paste act on this tile.
+    // A tile whose terminal is not built yet (the grid just opened, paced)
+    // takes it as soon as it is (_connectTile).
     this._noteFocusedTile(entry.tile);
-    if (options.focus !== false) entry.tile.terminal?.focus();
+    grid.focusOnConnect = null;
+    if (options.focus !== false) {
+      if (entry.connected) entry.tile.terminal?.focus();
+      else grid.focusOnConnect = sessionId;
+    }
     this._persistTileGrid();
   },
 

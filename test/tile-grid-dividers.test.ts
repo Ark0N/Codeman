@@ -17,6 +17,7 @@ import {
   FakeEl,
   FakeTile,
   body,
+  flushFrames,
   makeGridApp,
   rafCallbacks,
   resetGridHarness,
@@ -32,6 +33,8 @@ const tile = (id: string) => FakeTile.all.find((t) => t.sessionId === id) as Fak
 function grid(ids: string[]): GridApp {
   const app = makeGridApp(ids);
   app.openTileGrid(ids);
+  // The tiles' terminals are built one per frame (_connectTilesPaced).
+  flushFrames();
   for (const t of FakeTile.all) {
     t.fit.mockClear();
     t.localFit.mockClear();

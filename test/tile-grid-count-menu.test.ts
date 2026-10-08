@@ -35,6 +35,7 @@ import {
   activeElement,
   body,
   bySelector,
+  flushFrames,
   localStore,
   makeGridApp,
   resetGridHarness,
@@ -370,6 +371,7 @@ describe('re-forming an open grid', () => {
   it('2 to 6 keeps both in their cells and fills from tab order; nothing remounts', () => {
     const app = gridApp();
     app.openTileGrid(['s-c', 's-a']);
+    flushFrames();
     const before = new Map(FakeTile.all.map((t) => [t.sessionId, t]));
     open(app);
     item(6).dispatch('click', { stopPropagation: vi.fn() });

@@ -36,6 +36,7 @@ import {
   FakeTile,
   advanceClock,
   clockNow,
+  flushFrames,
   localStore,
   main,
   makeGridApp,
@@ -118,6 +119,8 @@ describe('parking the main terminal', () => {
     expect(app._cleanupPreviousSession).toHaveBeenCalledTimes(1);
     expect(main.classList.contains('tiles-active')).toBe(true);
     expect(FakeTile.all.map((t) => t.sessionId)).toEqual(IDS);
+    // Built one per frame after the click (_connectTilesPaced), each once.
+    flushFrames();
     expect(FakeTile.all.every((t) => t.connect.mock.calls.length === 1)).toBe(true);
     expect(app.activeSessionId).toBe('s-b');
     expect(app._tilesOwnTerminal()).toBe(true);

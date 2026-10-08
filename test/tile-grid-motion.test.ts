@@ -30,6 +30,7 @@ import {
   FakeTile,
   body,
   bySelector,
+  flushFrames,
   main,
   makeGridApp,
   resetGridHarness,
@@ -134,6 +135,7 @@ describe('opening', () => {
       reducedMotion(!motion);
       const app = gridApp();
       app.openTileGrid(IDS);
+      flushFrames();
       vi.advanceTimersByTime(1000);
       return FakeTile.all.map((t) => [t.connect.mock.calls.length, t.fit.mock.calls.length, t.localFit.mock.calls.length]);
     };

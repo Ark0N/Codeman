@@ -222,6 +222,13 @@ export const clockNow = () => clock;
 export const perfObserverCallbacks: Array<(list: { getEntries(): unknown[] }) => void> = [];
 /** Animation-frame callbacks the code under test queued (id = index + 1); a test runs them. */
 export const rafCallbacks: Array<() => void> = [];
+/**
+ * Runs every queued animation frame, and the frames those queue in turn (the
+ * grid builds its tiles' terminals one per frame), until none is left.
+ */
+export function flushFrames(limit = 100) {
+  for (let n = 0; n < limit && rafCallbacks.length; n++) for (const cb of rafCallbacks.splice(0)) cb();
+}
 /** What the code under test deferred with requestIdleCallback; a test runs them. */
 export const idleCallbacks: Array<() => void> = [];
 export const windowStub: Record<string, unknown> = {

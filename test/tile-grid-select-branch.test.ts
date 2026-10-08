@@ -22,6 +22,7 @@ import {
   FakeEl,
   FakeTile,
   bySelector,
+  flushFrames,
   idleCallbacks,
   localStore,
   makeGridApp,
@@ -36,6 +37,8 @@ const IDS = ['s-a', 's-b', 's-c'];
 function openGrid(): GridApp {
   const app = makeGridApp(IDS);
   app.openTileGrid(IDS);
+  // The tiles' terminals are built one per frame (_connectTilesPaced).
+  flushFrames();
   delete app.selectSession; // the prototype's, for real
   app._cleanupPreviousSession.mockClear();
   app.markIdleAlertSeen.mockClear();
