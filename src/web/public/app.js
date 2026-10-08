@@ -5174,10 +5174,16 @@ class CodemanApp {
    * every later row starting under it.
    *
    * The labels are measured only when their text changes (a group appears,
-   * goes, or its count gains a digit) and once more when the web fonts finish
-   * loading. The brand is watched by a ResizeObserver (a display-name change,
-   * the sidebar toggle appearing), so a render pass never forces a layout read
-   * for it. The vertical lists use neither length and are never measured.
+   * goes, or its count gains a digit), when the strip starts wrapping, and
+   * once more when the web fonts finish loading. Only the WRAPPING strip reads
+   * the label column, so the phone and tablet row (headings hidden under
+   * 600px, inline dividers above) is never measured and keeps no measurement:
+   * a phone turned to landscape or a foldable opened crosses into the wrapping
+   * strip with no tab render behind it, and updateTabOverflowMode(), which the
+   * resize handler calls, sizes it right after deciding to wrap. The brand is
+   * watched by a ResizeObserver (a display-name change, the sidebar toggle
+   * appearing), so a render pass never forces a layout read for it. The
+   * vertical lists use neither length and are never measured.
    */
   _sizeTabTriageGutter(container, triage) {
     const inHeader = !!container.parentElement?.classList.contains('session-tabs-host');
@@ -5194,15 +5200,31 @@ class CodemanApp {
         container.style.setProperty('--tab-triage-brand', brand);
       }
     }
+    // Not wrapping: forget the measurement, so wrapping again measures afresh.
+    if (!container.classList.contains('tabs-auto-wrap') && !container.classList.contains('tabs-two-rows')) {
+      this._tabTriageGutterKey = null;
+      return;
+    }
     const key = triage.groups.map((g) => `${g.key}:${g.count}`).join('|');
     if (key === this._tabTriageGutterKey) return;
     let widest = 0;
     for (const head of container.querySelectorAll(':scope > .tab-triage-head')) {
+      // Laid-out parts only. A hidden heading measures 0 per part, and counting
+      // the 5px gap between its parts anyway turned that into a 15px column
+      // that was then cached as if measured.
       let width = 0;
-      for (const part of head.children) width += part.getBoundingClientRect().width;
-      widest = Math.max(widest, width + 5 * Math.max(0, head.children.length - 1));
+      let parts = 0;
+      for (const part of head.children) {
+        const partWidth = part.getBoundingClientRect().width;
+        if (partWidth > 0) {
+          width += partWidth;
+          parts++;
+        }
+      }
+      if (parts) widest = Math.max(widest, width + 5 * (parts - 1));
     }
-    // Hidden (display: none on phones, or a detached strip): nothing to size.
+    // Hidden (display: none, or a detached strip): nothing to size, and no key
+    // either, so the next pass measures again.
     if (!widest) return;
     this._tabTriageGutterKey = key;
     container.style.setProperty('--tab-triage-gutter', `${Math.ceil(widest + 10)}px`);
@@ -6394,6 +6416,8 @@ class CodemanApp {
 
     if (manualTwoRows || deviceType !== 'desktop') {
       container.classList.remove('tabs-auto-wrap');
+      // Wrap decided: the state labels' column follows it (_sizeTabTriageGutter).
+      this._sizeTabTriageGutter(container, this._lastTabTriage);
       return;
     }
 
@@ -6404,6 +6428,7 @@ class CodemanApp {
     // ledger stays the plain strip.
     if (container.classList.contains('tabs-triage') || container.classList.contains('tabs-ledger')) {
       container.classList.add('tabs-auto-wrap');
+      this._sizeTabTriageGutter(container, this._lastTabTriage);
       return;
     }
 

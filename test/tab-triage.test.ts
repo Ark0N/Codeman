@@ -17,6 +17,10 @@
  *  - In the phone/tablet strip (one scrolling row) the ACTIVE tab changing band
  *    is revealed, since its chip moves while scrollLeft stays; another tab
  *    changing band never moves the strip (#257's browse-the-far-end rule).
+ *  - The desktop label column (`--tab-triage-gutter`) is never sized or cached
+ *    from headings that are not laid out (mobile.css hides them under 600px),
+ *    and is measured again whenever the strip starts wrapping, which a phone
+ *    turned to landscape or a foldable opened does with no tab render behind it.
  *
  * The real modules run INSIDE a JSDOM window (runScripts: 'outside-only'), so
  * `document` below is that window's.
@@ -28,7 +32,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const PUBLIC = join(process.cwd(), 'src/web/public');
 const read = (name: string) => readFileSync(join(PUBLIC, name), 'utf8');
@@ -507,6 +511,92 @@ describe('tab grouping in the render paths (app.js)', () => {
       app.sessions.get('s2').status = 'idle';
       app._renderSessionTabsImmediate();
       expect(reveal).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('sizing the label column (--tab-triage-gutter)', () => {
+    // JSDOM lays nothing out, so every heading measures as hidden (0 wide) until
+    // `layHeadings()` gives its label and count a width, the way a desktop
+    // browser would once mobile.css stops hiding them.
+    const gutter = () => container().style.getPropertyValue('--tab-triage-gutter');
+    function layHeadings(widths: { label: number; count: number } | null) {
+      for (const head of container().querySelectorAll<HTMLElement>(':scope > .tab-triage-head')) {
+        for (const part of head.children) {
+          const width = !widths ? 0 : part.classList.contains('tab-triage-label') ? widths.label : widths.count;
+          (part as HTMLElement).getBoundingClientRect = () => ({ width }) as DOMRect;
+        }
+      }
+    }
+    let realDeviceType: () => string;
+    beforeEach(() => {
+      realDeviceType = window.MobileDetection.getDeviceType;
+    });
+    afterEach(() => {
+      window.MobileDetection.getDeviceType = realDeviceType;
+    });
+    /** An app whose updateTabOverflowMode() is the real one, as the resize handler calls it. */
+    function liveOverflowApp(deviceType: string) {
+      const app = makeApp();
+      app.updateTabOverflowMode = CodemanApp.prototype.updateTabOverflowMode;
+      app.loadAppSettingsFromStorage = () => ({});
+      app.getDefaultSettings = () => ({});
+      window.MobileDetection.getDeviceType = () => deviceType;
+      return app;
+    }
+
+    it('never sizes or keys the column from hidden headings', () => {
+      const app = makeApp();
+      app._fullRenderSessionTabs();
+      // The phone row: not wrapping, headings hidden.
+      expect(gutter()).toBe('');
+      expect(app._tabTriageGutterKey).toBeNull();
+      // Even in a wrapping strip, headings that are not laid out size nothing.
+      // They used to: 5px of gap per label + count made a 15px column, cached.
+      container().classList.add('tabs-auto-wrap');
+      app._sizeTabTriageGutter(container(), app._lastTabTriage);
+      expect(gutter()).toBe('');
+      expect(app._tabTriageGutterKey).toBeNull();
+      // Laid out, the widest label (+ the gap + 10px) sizes it and is cached.
+      layHeadings({ label: 50, count: 8 });
+      app._sizeTabTriageGutter(container(), app._lastTabTriage);
+      expect(gutter()).toBe('73px');
+      expect(app._tabTriageGutterKey).not.toBeNull();
+    });
+
+    it('measures when a phone turns to landscape or a foldable opens, with no tab render', () => {
+      const app = liveOverflowApp('mobile');
+      app._fullRenderSessionTabs();
+      app.updateTabOverflowMode();
+      expect(container().classList.contains('tabs-auto-wrap')).toBe(false);
+      expect(gutter()).toBe('');
+      // Unfolded: mobile.css no longer hides the headings, and the resize
+      // handler's updateTabOverflowMode() is the only call that arrives.
+      layHeadings({ label: 50, count: 8 });
+      window.MobileDetection.getDeviceType = () => 'desktop';
+      app.updateTabOverflowMode();
+      expect(container().classList.contains('tabs-auto-wrap')).toBe(true);
+      expect(gutter()).toBe('73px');
+    });
+
+    it('measures afresh after the strip stopped wrapping and starts again, counts unchanged', () => {
+      const app = liveOverflowApp('desktop');
+      layHeadings({ label: 50, count: 8 });
+      app._fullRenderSessionTabs();
+      layHeadings({ label: 50, count: 8 });
+      app.updateTabOverflowMode();
+      expect(gutter()).toBe('73px');
+      // Folded: the strip stops wrapping and the measurement is forgotten.
+      layHeadings(null);
+      window.MobileDetection.getDeviceType = () => 'mobile';
+      app.updateTabOverflowMode();
+      expect(container().classList.contains('tabs-auto-wrap')).toBe(false);
+      expect(app._tabTriageGutterKey).toBeNull();
+      // Unfolded again with wider labels (a font, a skin): re-measured, even
+      // though no group or count changed.
+      layHeadings({ label: 60, count: 8 });
+      window.MobileDetection.getDeviceType = () => 'desktop';
+      app.updateTabOverflowMode();
+      expect(gutter()).toBe('83px');
     });
   });
 
