@@ -1014,9 +1014,11 @@ Object.assign(CodemanApp.prototype, {
   /**
    * The tile chord `e` asks for, if it applies right now, else null. The
    * toggle applies while the grid is open, or where one could open AND the
-   * per-device `showTileGridButton` setting is on: with it off (the default)
-   * the chord is inert and reaches the terminal like any unbound key (owner
-   * decision 6 in docs/tile-grid-plan.md). The focus, move,
+   * per-device `showTileGridButton` setting is on (the desktop default; OFF on
+   * handhelds): with it off the chord is inert and reaches the terminal like
+   * any unbound key (owner decision 6 in docs/tile-grid-plan.md). An absent key
+   * resolves through the device defaults exactly as the header button does
+   * (settings-ui.js), so the chord and the button can never disagree. The focus, move,
    * zoom and remove chords apply only while the grid is open, however it was
    * opened (a move chord also while a tile is zoomed, as a no-op, so its keys
    * never reach the CLI). The arrow chords never apply in a text field, whose
@@ -1036,7 +1038,8 @@ Object.assign(CodemanApp.prototype, {
       if (!spec || shortcut.disabled || !this.matchesShortcutEvent(e, shortcut)) continue;
       if ((spec.direction || spec.move) && isTextFieldTarget(e.target)) continue;
       if (spec.needsOpen) return open ? shortcut.id : null;
-      const enabled = this.loadAppSettingsFromStorage?.()?.showTileGridButton === true;
+      const stored = this.loadAppSettingsFromStorage?.()?.showTileGridButton;
+      const enabled = (stored ?? this.getDefaultSettings?.()?.showTileGridButton ?? true) === true;
       return open || (enabled && this.canOpenTileGrid()) ? shortcut.id : null;
     }
     return null;

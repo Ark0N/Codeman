@@ -5052,7 +5052,7 @@ class CodemanApp {
   }
 
   /**
-   * True when the tab list groups by state (`tabArrangement: 'state'`, the default;
+   * True when the tab list groups by state (`tabArrangement: 'state'`, opt-in;
    * Discussion #426 option C): a row per state in the header strip, a section
    * per state in the flat side rail and the sidebar, most urgent on top.
    *
@@ -6543,7 +6543,7 @@ class CodemanApp {
     // strip's markup is byte-identical to before.
     const liveIds = tabOrder.filter((id) => this.sessions.has(id));
     const railSortOrder = this._tabRailSortOrder(liveIds);
-    // Grouped by state (tabArrangement 'state', the default): the same `order` mechanism,
+    // Grouped by state (tabArrangement 'state', opt-in): the same `order` mechanism,
     // one band of values per state. Null in the grouped rail and with grouping
     // off, and the rows then carry exactly the inline order they did before.
     const groupProjection = this._projectTabGroups();

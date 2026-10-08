@@ -51,6 +51,11 @@ const withTilesSetting = (app: GridApp) => {
   app.loadAppSettingsFromStorage = () => ({ showTileGridButton: true });
   return app;
 };
+/** The per-device Tiles setting explicitly off on this device. */
+const withTilesSettingOff = (app: GridApp) => {
+  app.loadAppSettingsFromStorage = () => ({ showTileGridButton: false });
+  return app;
+};
 const RIGHT = { key: 'ArrowRight', code: 'ArrowRight', altKey: true, shiftKey: true };
 
 beforeEach(() => {
@@ -88,13 +93,27 @@ describe('when a chord applies', () => {
     expect(app.tileShortcutFor(chord(TOGGLE))).toBe('toggle-tile-grid');
   });
 
-  it('with the Tiles setting off (the default) the toggle is inert, like an unbound key', () => {
-    const app = makeGridApp(IDS);
+  it('with the Tiles setting off the toggle is inert, like an unbound key', () => {
+    const app = withTilesSettingOff(makeGridApp(IDS));
     expect(app.tileShortcutFor(chord(TOGGLE))).toBeNull();
   });
 
+  it('with no stored value the device default decides: ON on desktop, OFF on a handheld', () => {
+    // Desktop: nothing stored and no device default, so the chord follows the
+    // button's own `?? true` (settings-ui.js) and applies.
+    const desktop = makeGridApp(IDS);
+    desktop.loadAppSettingsFromStorage = () => ({});
+    desktop.getDefaultSettings = () => ({});
+    expect(desktop.tileShortcutFor(chord(TOGGLE))).toBe('toggle-tile-grid');
+    // Handheld: the device defaults say OFF, so the chord stays inert.
+    const handheld = makeGridApp(IDS);
+    handheld.loadAppSettingsFromStorage = () => ({});
+    handheld.getDefaultSettings = () => ({ showTileGridButton: false });
+    expect(handheld.tileShortcutFor(chord(TOGGLE))).toBeNull();
+  });
+
   it('with the setting off, a grid opened another way (Ctrl+click, a drop) still has its chords, toggle included', () => {
-    const app = makeGridApp(IDS);
+    const app = withTilesSettingOff(makeGridApp(IDS));
     app.openTileGrid(IDS);
     expect(app.tileShortcutFor(chord(RIGHT))).toBe('focus-tile-right');
     expect(app.tileShortcutFor(chord(TOGGLE))).toBe('toggle-tile-grid');
@@ -176,7 +195,7 @@ describe('the capture-phase handler', () => {
   }
 
   it('setting off: Ctrl+Shift+G is left alone (no preventDefault), the grid stays closed', () => {
-    const app = makeGridApp(IDS);
+    const app = withTilesSettingOff(makeGridApp(IDS));
     const onKeydown = handlerFor(app);
     const e = chord(TOGGLE);
     onKeydown(e);

@@ -27,7 +27,7 @@ Session List Layout** can move it into a vertical sidebar on the left instead, a
 
 | Layout               | Behaviour                                                                       |
 | -------------------- | --------------------------------------------------------------------------------- |
-| **Header tab strip** | The default. On desktop it is one row per state by default (see [Tab layouts](#tab-layouts)); it scrolls sideways on a phone. |
+| **Header tab strip** | The default. One list in tab order unless you pick another [Tab layout](#tab-layouts); it scrolls sideways on a phone. |
 | **Left sidebar**     | A vertical list with a filter box and a live session count. `Alt+B` collapses it to a narrow rail that keeps the status dots and task badges visible. On a phone it is an off-canvas drawer rather than a docked rail. A detailed variant adds the home screen's per-session line (`created 3d ago · working 12m`) and a status pill. |
 | **Vertical rail**    | The strip turned vertical beside the terminal, resizable, with detailed rows by default. **Vertical Rail Order** sorts it by activity (blocked on you first, then longest running, then most recently quiet), the same order as the home screens; pick *Manual* to get your own order and drag-reordering back. **Tab groups:** pick *Move to new group* from a row's ⋯ menu (or Shift+F10 on it) to make the first one; a group header's menu (right-click, Shift+F10 or its ⋯ glyph) renames it (also F2), reorders or deletes it, rows move between groups from their own menu or by dragging with a mouse or pen, and a collapsed group stays collapsed on that device. Desktop and tablet only. |
 
@@ -41,10 +41,10 @@ per device, so a sidebar on your desktop does not force one onto your phone.
 
 | Layout                 | What it does                                                                         |
 | ---------------------- | ------------------------------------------------------------------------------------ |
-| **By state** (default) | Groups the tabs by what each session needs from you (below).                         |
+| **By state**           | Groups the tabs by what each session needs from you (below).                         |
 | **By case**            | One box per case, labelled with the case and its tab count. Inside a box, `w75-api-gateway` reads just `w75`. A case with one tab gets a box with a colour swatch. |
 | **Ledger**             | The same list on an aligned column grid: equal cells, monospace names, a coloured bar on the left of each cell instead of the dot (yellow waiting, red needs you). Desktop header only. |
-| **Classic**            | The single list in tab order, as before.                                             |
+| **Classic** (default)  | The single list in tab order, as before.                                             |
 
 **By state** groups the tabs like this, most urgent on top:
 
@@ -141,7 +141,7 @@ The right side of the header. Almost all of these are off until you enable them 
 | ---------------------- | ------------------ | ------------------------------------------------------------------------------- |
 | Connection dot         | Always on          | SSE connection health. Green is connected.                                       |
 | Font size `-` / `+`    | Always on          | `Ctrl +` / `Ctrl -` do the same.                                                 |
-| CPU / MEM              | On                 | Server resource use. Drawn as tiles by default; see Header Stats Style below.    |
+| CPU / MEM              | On                 | Server resource use. Drawn as a compact pill by default; see Header Stats Style below. |
 | File Viewer            | On                 | Toggles the file browser panel.                                                  |
 | Settings gear          | Always on          | App Settings.                                                                    |
 | Plan usage chip        | On, desktop only   | Live Claude subscription usage. Claude-only, and needs its telemetry exporter, which the same setting installs. |
@@ -157,7 +157,7 @@ The right side of the header. Almost all of these are off until you enable them 
 | Cron ⏰                | Off                | Scheduled jobs.                                                                   |
 | Multi-monitor          | Off, macOS         | Opens a window spanning every display.                                            |
 | Split                  | Off, desktop only  | View a second session beside the active one, with a draggable divider.           |
-| Tiles                  | Off, desktop only  | Up to six live sessions side by side. See [Tile Grid](Tile-Grid).                |
+| Tiles                  | On, desktop only   | Up to six live sessions side by side. See [Tile Grid](Tile-Grid).                |
 | Tunnel indicator       | When a tunnel runs | Cloudflare tunnel status.                                                        |
 | Admin panel            | Multi-user only    | User administration.                                                              |
 
@@ -168,8 +168,8 @@ The connection readout, CPU, MEM and the plan usage windows can be drawn three w
 
 | Style          | Look                                                                                   |
 | -------------- | -------------------------------------------------------------------------------------- |
-| **Tiles**      | The default. One small tile each (`WS live`, `CPU 22%`, `MEM 14.4G`, `5H 28%`, `7D 35%`): label over value, a thin bar underneath, no icons. |
-| **Compact**    | Two slim pills, `WS · CPU · MEM` and the plan windows, with a small ring beside every value. Hands the tabs back the most room. |
+| **Tiles**      | One small tile each (`WS live`, `CPU 22%`, `MEM 14.4G`, `5H 28%`, `7D 35%`): label over value, a thin bar underneath, no icons. |
+| **Compact**    | The default. Two slim pills, `WS · CPU · MEM` and the plan windows, with a small ring beside every value. Hands the tabs back the most room. |
 | **As before**  | The bars and the `5H · 7D` chip, exactly as they were.                                 |
 
 Hiding System Stats or Plan Usage still hides them in every style.

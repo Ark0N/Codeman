@@ -71,7 +71,8 @@ afterAll(() => {
 describe('the Tab Layout settings rows in zh-CN', () => {
   it('finds the three rows and all their options (the check is not vacuous)', () => {
     expect(english.size).toBe(15);
-    expect(english.get('appSettingsHeaderStatsStyle option tiles')).toBe('Tiles (default)');
+    expect(english.get('appSettingsHeaderStatsStyle option compact')).toBe('Compact (default)');
+    expect(english.get('appSettingsHeaderStatsStyle option tiles')).toBe('Tiles (label over value)');
     expect(english.get('appSettingsTabStateOrder option urgent-last')).toBe('Needs you at the bottom');
   });
 

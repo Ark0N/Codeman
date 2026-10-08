@@ -9,9 +9,9 @@ never offered in a popped-out session window.
 
 ## Turning it on
 
-**App Settings → Header & Panels → Tiles.** This is a per-device setting, off by default,
-so turning it on at your desk never puts the button on your phone. It shows a **Tiles**
-button in the header, beside Split, and enables `Ctrl+Shift+G`.
+**App Settings → Header & Panels → Tiles.** This is a per-device setting, on by default
+everywhere except phones, and the button only appears in a window at least 1180px wide.
+It shows a **Tiles** button in the header, beside Split, and enables `Ctrl+Shift+G`.
 
 ## Opening a grid
 

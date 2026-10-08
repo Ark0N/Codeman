@@ -2,7 +2,7 @@
 // Port: none (pure static analysis, runs in CI, no browser/server).
 //
 // `showTileGridButton` (the header Tiles button, and the Ctrl+Shift+G chord) is
-// a PER-DEVICE setting, default OFF, with the same three-way rule as
+// a PER-DEVICE setting (default ON on desktop, OFF on handhelds) with the same three-way rule as
 // showSplitButton (test/split-pane-per-device-setting.test.ts, read it for the
 // history): in settings-ui.js's displayKeys merge policy, stripped out of the
 // object saveAppSettings() PUTs (SettingsUpdateSchema is .strict(), so sending
@@ -38,10 +38,16 @@ describe('showTileGridButton stays per-device: display key, stripped from the PU
     expect(schemas).not.toContain('showTileGridButton');
   });
 
-  it('defaults OFF on handhelds (and reads as OFF when absent everywhere)', () => {
+  it('defaults ON on desktop (an absent key reads as ON) and OFF on handhelds', () => {
+    // Owner's pick on the 1.36.0 beta: the Tiles button ships visible on desktop.
+    // Handhelds keep it OFF in their defaults object, and the button never shows
+    // below 1180px wide anyway.
     expect(settingsUi).toMatch(/showSplitButton: false,\s*showTileGridButton: false,/);
     expect(settingsUi).toContain(
-      "document.getElementById('appSettingsShowTileGridButton').checked = settings.showTileGridButton ?? defaults.showTileGridButton ?? false;"
+      "document.getElementById('appSettingsShowTileGridButton').checked = settings.showTileGridButton ?? defaults.showTileGridButton ?? true;"
+    );
+    expect(settingsUi).toContain(
+      'const showTileGridButton = settings.showTileGridButton ?? defaults.showTileGridButton ?? true;'
     );
   });
 

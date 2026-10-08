@@ -348,14 +348,14 @@
     'Pop-out Button on Tabs': '标签页弹出窗口按钮',
     // Tab Layout and Header Stats Style (Discussion #426). The header style's
     // "Tiles" is 磁贴, never 平铺: that is the tile grid's word (the Tiles
-    // button), and "Tiles (default)" must not read as the grid.
+    // button), and "Tiles (label over value)" must not read as the grid.
     'Tab Layout': '标签页布局',
     'By state: a row each for needs you, waiting, working and idle. By case: one box per case. Ledger: an aligned column grid. Classic: the single list, as before. By state and By case group the side rail and sidebar too. Alt+1..9 keeps the tab order.':
       '按状态：需要你、等待中、工作中和空闲各占一行。按案例：每个案例一个框。台账：对齐的列网格。经典：与以前相同的单一列表。按状态和按案例也会为侧边标签栏和侧边栏分组。Alt+1..9 仍按标签页顺序切换。',
-    'By state (default)': '按状态（默认）',
+    'By state (rows per state)': '按状态（每种状态一行）',
     'By case (clusters)': '按案例（分组框）',
     'Ledger (aligned columns)': '台账（对齐的列）',
-    'Classic (as before)': '经典（与以前相同）',
+    'Classic (default)': '经典（默认）',
     'State Order': '状态顺序',
     'For Tab Layout by state. At the bottom flips the rows, so needs you sits right above the terminal.':
       '用于按状态的标签页布局。选择在底部会倒转各行，让“需要你”紧挨在终端上方。',
@@ -365,8 +365,8 @@
     'How WS, CPU, MEM and the plan-usage windows are drawn. Compact puts a ring beside each value in two pills; Tiles put each label over its value with a bar underneath.':
       'WS、CPU、MEM 和套餐用量窗口的显示方式。紧凑：在两个胶囊中每个数值旁显示一个圆环；磁贴：每个标签位于数值上方，下方带一条进度条。',
     'As before (bars)': '与以前相同（进度条）',
-    'Compact (pill + rings)': '紧凑（胶囊 + 圆环）',
-    'Tiles (default)': '磁贴（默认）',
+    'Compact (default)': '紧凑（默认）',
+    'Tiles (label over value)': '磁贴（标签在数值上方）',
     Panels: '面板',
     Monitor: '监视器',
     'Project Insights': '项目洞察',

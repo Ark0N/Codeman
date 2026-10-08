@@ -68,9 +68,9 @@ Git window; see [Working With Files](Working-With-Files#git-changes). **Git stat
 by folder** (per device, on by default) shows changed files under collapsed folders in that
 window; off lists every file by its full path.
 
-Most default to off. The stock desktop header is system stats, File Viewer, and the gear.
-**Header Stats Style** picks how the system stats and plan usage are drawn: *Tiles*
-(default; label over value with a bar underneath), *Compact* (two pills with a ring beside every value) or *As before* (the bars and the `5H · 7D` chip). Desktop only, per device.
+Most default to off. The stock desktop header is system stats, File Viewer, Tiles, and the gear.
+**Header Stats Style** picks how the system stats and plan usage are drawn: *Compact*
+(default; two pills with a ring beside every value), *Tiles* (label over value with a bar underneath) or *As before* (the bars and the `5H · 7D` chip). Desktop only, per device.
 New header controls never appear on phones. Split is desktop-only regardless of this
 setting — the button and the feature both stay off below a ~1180px viewport, where two
 resizable panes plus their divider have nowhere to go. **Tiles** is desktop-only the same
@@ -90,7 +90,7 @@ every session or only the active tab.
 | Interface Language     | English or Simplified Chinese. Per device.                                                 |
 | Session List Layout    | Header tab strip (default), a collapsible left sidebar, or the sidebar with detailed rows. See [The Dashboard](The-Dashboard#session-list-layout). |
 | Tab Orientation        | Keeps the header list but turns the strip vertical beside the terminal, resizable, with detailed rows by default. Desktop and tablet only. |
-| Tab Layout             | *By state* (default): a row each for needs you, waiting, working and idle, sections in the rail and sidebar. *By case*: one box per case. *Ledger*: an aligned column grid. *Classic*: the single list as before. See [The Dashboard](The-Dashboard#tab-layouts). |
+| Tab Layout             | *Classic* (default): the single list as before. *By state*: a row each for needs you, waiting, working and idle, sections in the rail and sidebar. *By case*: one box per case. *Ledger*: an aligned column grid. See [The Dashboard](The-Dashboard#tab-layouts). |
 | State Order            | For *By state*: needs you on top (default) or at the bottom, right above the terminal. |
 | Vertical Rail Order    | *By activity* (default) sorts the rail the way the home screens are sorted; *Manual* keeps your tab order and drag-reordering. With *By state* or *By case* it orders the rows inside each section. |
 | Tall Tabs              | Taller tab strip.                                                                          |

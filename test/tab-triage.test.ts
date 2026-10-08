@@ -615,17 +615,19 @@ describe('tab grouping wiring (static)', () => {
   const mobileCss = read('mobile.css');
 
   it('stamps data-tab-arrangement and data-tab-state-order before first paint', () => {
-    expect(html).toContain("dataset.tabArrangement=(T==='case'||T==='ledger'||T==='classic')?T:'state'");
+    expect(html).toContain("dataset.tabArrangement=(T==='state'||T==='case'||T==='ledger')?T:'classic'");
     expect(html).toContain("dataset.tabStateOrder=(A.tabStateOrder==='urgent-last')?'urgent-last':'urgent-first'");
     // The catch branch (localStorage threw) must set both too.
     expect(html).toContain(
-      "document.documentElement.dataset.tabArrangement='state';document.documentElement.dataset.tabStateOrder='urgent-first';"
+      "document.documentElement.dataset.tabArrangement='classic';document.documentElement.dataset.tabStateOrder='urgent-first';"
     );
   });
 
-  it('offers the four layouts with "By state" as the default, and the state order', () => {
+  it('offers the four layouts with "Classic" as the default, and the state order', () => {
+    // Classic (the single strip, as before) is the default: the owner's pick on
+    // the 1.36.0 beta. By state, By case and Ledger are opt-in.
     expect(html).toMatch(
-      /<select id="appSettingsTabArrangement"[^>]*>\s*<option value="state">By state \(default\)<\/option>\s*<option value="case">[^<]+<\/option>\s*<option value="ledger">[^<]+<\/option>\s*<option value="classic">Classic \(as before\)<\/option>/
+      /<select id="appSettingsTabArrangement"[^>]*>\s*<option value="state">By state \(rows per state\)<\/option>\s*<option value="case">[^<]+<\/option>\s*<option value="ledger">[^<]+<\/option>\s*<option value="classic">Classic \(default\)<\/option>/
     );
     expect(html).toMatch(
       /<select id="appSettingsTabStateOrder"[^>]*>\s*<option value="urgent-first">Needs you on top \(default\)<\/option>\s*<option value="urgent-last">/

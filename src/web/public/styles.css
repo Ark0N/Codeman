@@ -20653,7 +20653,7 @@ html .toolbar .btn-git-status[aria-expanded='true'] {
 }
 
 /* ============================================================
-   Tab grouping by state (tabArrangement: 'state', the default;
+   Tab grouping by state (tabArrangement: 'state', opt-in;
    Discussion #426 option C)
    ============================================================
    app.js writes a flex `order` per tab plus one heading and one row break per

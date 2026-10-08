@@ -1,11 +1,11 @@
 /**
  * @fileoverview The header-stats styles (`headerStatsStyle`, Discussion #426
  * option G): 'classic' (as before), 'compact' (one system pill with rings
- * plus a plan-ring pill) and 'tiles' (label over value, bar underneath; the
- * default).
+ * plus a plan-ring pill; the default, the owner's pick on the 1.36.0 beta) and
+ * 'tiles' (label over value, bar underneath).
  *
  * Pinned here:
- *  - The default is 'tiles', and only the three known values are honoured.
+ *  - The default is 'compact', and only the three known values are honoured.
  *  - The two clustered styles move the connection indicator INTO the system
  *    stats pill and the plan chip right after it, on the REAL header markup
  *    from index.html, and 'classic' puts both back exactly where the template
@@ -69,8 +69,7 @@ function makeApp() {
 }
 
 /** Element children of the header's right side, by id (or first class). */
-const rightSide = () =>
-  [...document.getElementById('headerRight')!.children].map((el) => el.id || el.classList[0]);
+const rightSide = () => [...document.getElementById('headerRight')!.children].map((el) => el.id || el.classList[0]);
 const statsChildren = () =>
   [...document.getElementById('headerSystemStats')!.children].map((el) => el.id || el.classList[0]);
 
@@ -80,14 +79,27 @@ beforeEach(() => {
 });
 
 describe('resolveHeaderStatsStyle', () => {
-  it("defaults to 'tiles' and honours only the three known styles", () => {
+  it("defaults to 'compact' and honours only the three known styles", () => {
     const app = makeApp();
-    expect(app.resolveHeaderStatsStyle({})).toBe('tiles');
-    expect(app.resolveHeaderStatsStyle(undefined)).toBe('tiles');
+    expect(app.resolveHeaderStatsStyle({})).toBe('compact');
+    expect(app.resolveHeaderStatsStyle(undefined)).toBe('compact');
     expect(app.resolveHeaderStatsStyle({ headerStatsStyle: 'classic' })).toBe('classic');
     expect(app.resolveHeaderStatsStyle({ headerStatsStyle: 'compact' })).toBe('compact');
     expect(app.resolveHeaderStatsStyle({ headerStatsStyle: 'tiles' })).toBe('tiles');
-    expect(app.resolveHeaderStatsStyle({ headerStatsStyle: 'neon' })).toBe('tiles');
+    expect(app.resolveHeaderStatsStyle({ headerStatsStyle: 'neon' })).toBe('compact');
+  });
+});
+
+describe('resolveTabArrangement', () => {
+  it("defaults to 'classic' and honours only the four known layouts", () => {
+    // Lives here because this file already loads settings-ui.js's resolvers.
+    const app = makeApp();
+    expect(app.resolveTabArrangement({})).toBe('classic');
+    expect(app.resolveTabArrangement(undefined)).toBe('classic');
+    for (const value of ['state', 'case', 'ledger', 'classic']) {
+      expect(app.resolveTabArrangement({ tabArrangement: value })).toBe(value);
+    }
+    expect(app.resolveTabArrangement({ tabArrangement: 'neon' })).toBe('classic');
   });
 });
 
@@ -260,15 +272,16 @@ describe('header stats wiring (static)', () => {
     expect([...found.keys()].filter((s) => /(tiles|split)-open/.test(s) && s.includes(':is('))).toEqual([]);
   });
 
-  it('stamps data-header-stats before first paint, tiles by default and classic on narrow screens', () => {
+  it('stamps data-header-stats before first paint, compact by default and classic on narrow screens', () => {
     expect(INDEX).toContain(
-      "dataset.headerStats=(window.innerWidth<768||solo)?'classic':(H==='classic'||H==='compact')?H:'tiles'"
+      "dataset.headerStats=(window.innerWidth<768||solo)?'classic':(H==='classic'||H==='tiles')?H:'compact'"
     );
   });
 
-  it('offers the three styles with tiles marked as the default', () => {
+  it('offers the three styles with compact marked as the default', () => {
     expect(INDEX).toMatch(
-      /<select id="appSettingsHeaderStatsStyle"[^>]*>\s*<option value="classic">[^<]+<\/option>\s*<option value="compact">[^<]+<\/option>\s*<option value="tiles">Tiles \(default\)<\/option>/
+      /<select id="appSettingsHeaderStatsStyle"[^>]*>\s*<option value="classic">[^<]+<\/option>\s*<option value="compact">Compact \(default\)<\/option>\s*<option value="tiles">[^<]+<\/option>/
     );
+    expect(INDEX).not.toContain('Tiles (default)');
   });
 });

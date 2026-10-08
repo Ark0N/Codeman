@@ -431,7 +431,7 @@ Object.assign(CodemanApp.prototype, {
       settings.ultracodeFloatingWindows ?? defaults.ultracodeFloatingWindows ?? false;
     document.getElementById('appSettingsShowMultiMonitorButton').checked = settings.showMultiMonitorButton ?? defaults.showMultiMonitorButton ?? false;
     document.getElementById('appSettingsShowSplitButton').checked = settings.showSplitButton ?? defaults.showSplitButton ?? false;
-    document.getElementById('appSettingsShowTileGridButton').checked = settings.showTileGridButton ?? defaults.showTileGridButton ?? false;
+    document.getElementById('appSettingsShowTileGridButton').checked = settings.showTileGridButton ?? defaults.showTileGridButton ?? true;
     document.getElementById('appSettingsShowPlanUsageLimits').checked = this.planUsageChipEnabled(settings);
     document.getElementById('appSettingsShowRedrawButton').checked = settings.showRedrawButton ?? defaults.showRedrawButton ?? false;
     // Phone overview home screen: only meaningful under 600px, so the row is
@@ -3467,7 +3467,7 @@ Object.assign(CodemanApp.prototype, {
         tabRailWidth: 256,
         tabRailDetail: 'rich',
         tabRailSort: 'activity',
-        tabArrangement: 'state',
+        tabArrangement: 'classic',
         tabStateOrder: 'urgent-first',
         sessionListLayout: 'header',
         sessionSidebarFontSize: 12,
@@ -3572,12 +3572,13 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * The stored tab layout, or the default. Anything but the four known values
-   * (an absent key, a value from a newer build) reads as 'state', the default
-   * (Discussion #426, option C).
+   * (an absent key, a value from a newer build) reads as 'classic', the default:
+   * the single strip as before, the owner's pick on the 1.36.0 beta. 'state'
+   * (Discussion #426, option C), 'case' and 'ledger' are opt-in.
    */
   resolveTabArrangement(settings) {
     const value = settings?.tabArrangement ?? this.getDefaultSettings().tabArrangement;
-    return value === 'case' || value === 'ledger' || value === 'classic' ? value : 'state';
+    return value === 'state' || value === 'case' || value === 'ledger' ? value : 'classic';
   },
 
   /** The stored state-group order: 'urgent-last' only when chosen, else 'urgent-first'. */
@@ -3588,12 +3589,13 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * The stored header-stats style, or the default. Anything but the three
-   * known values (an absent key, a value from a newer build) reads as 'tiles',
-   * the default (the tile variant of Discussion #426's option G).
+   * known values (an absent key, a value from a newer build) reads as
+   * 'compact', the default (the two-pill ring variant of Discussion #426's
+   * option G, picked by the owner on the 1.36.0 beta over 'tiles').
    */
   resolveHeaderStatsStyle(settings) {
     const value = settings?.headerStatsStyle ?? this.getDefaultSettings().headerStatsStyle;
-    return value === 'classic' || value === 'compact' ? value : 'tiles';
+    return value === 'classic' || value === 'tiles' ? value : 'compact';
   },
 
   /**
@@ -3733,7 +3735,7 @@ Object.assign(CodemanApp.prototype, {
     this._applySplitButtonVisibility?.(showSplitButton);
 
     // Tiles button: same gate and backstop as Split (tile-grid.js).
-    const showTileGridButton = settings.showTileGridButton ?? defaults.showTileGridButton ?? false;
+    const showTileGridButton = settings.showTileGridButton ?? defaults.showTileGridButton ?? true;
     this._applyTileGridButtonVisibility?.(showTileGridButton);
 
     // Ultracode/Workflow agents launcher — hidden by default; reveal when enabled.

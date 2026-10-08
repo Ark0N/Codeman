@@ -20,6 +20,10 @@ or settled a question the spec left open. The invariants as built are in
 - **`Ctrl+Shift+G` follows `showTileGridButton`** (decided by the owner, decision 6): with
   the setting off the toggle chord is inert. A grid opened another
   way (Ctrl/Cmd+click, a dropped tab, "Open group as tiles") keeps all its chords.
+- **The Tiles button ships ON** (owner, 1.36.0 beta): `showTileGridButton` defaults to on
+  everywhere but handhelds (their defaults object keeps it off), so the chord is live by
+  default too. An absent key resolves through the device defaults in both the button
+  (settings-ui.js) and the chord (`tileShortcutFor`), so they cannot disagree.
 - **Dividers are grid tracks.** Each gap between columns and rows is its own 6px track (the
   grid gap is 0) and every tile and every empty slot is placed explicitly in its cell
   (`grid.cells`, see "Tiles move"). Fractions reset when the column or row count changes.
