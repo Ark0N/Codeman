@@ -277,7 +277,7 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
       'This window fits 4 tiles',
       'This window fits 1 tile',
       'The grid already holds what this window fits (4)',
-      'Drop a tab here',
+      'Drop a tab or a tile here',
       'Resize tile columns',
       'Resize tile rows',
       'Zoom this tile',

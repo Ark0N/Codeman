@@ -177,51 +177,86 @@ describe('dragging a tile by its header', () => {
       delete (section as unknown as Record<string, unknown>).getBoundingClientRect;
     });
 
-    // Owner: "dont move the tile". A slot is always the last cell, so a move
-    // there shifted every tile after it; the slot refuses a tile instead.
-    it('the slot refuses it: held (never reaching anything below), no highlight, nothing moves', () => {
-      const app = openGrid(['s-a', 's-b', 's-c'], 's-b');
-      app.markIdleAlertSeen.mockClear();
-      localStore.delete('codeman:tile-grid');
-      const costsNothing = snapshotCost();
-      clearFits();
-      expect(slots()).toHaveLength(1);
-      startDrag('s-a');
-      const o = over(slots()[0]);
-      expect(o.preventDefault).toHaveBeenCalled();
-      expect(o.stopPropagation).toHaveBeenCalled();
-      expect(o.dataTransfer.dropEffect).toBe('none');
+    // Owner: an empty cell can be any cell, and a tile dragged onto one moves
+    // THERE, leaving its own cell empty; nothing else moves.
+    const LAYOUTS = [
+      { name: '2x2 with 3 tiles', ids: ['s-a', 's-b', 's-c'], cells: 4 },
+      { name: '3x2 with 5 tiles', ids: SIX.slice(0, 5), cells: 6 },
+    ];
+    for (const layout of LAYOUTS) {
+      it(`${layout.name}: from every cell into the hole wherever it is, by header drag`, () => {
+        const bad: string[] = [];
+        for (let hole = 0; hole < layout.cells; hole++) {
+          for (let from = 0; from < layout.cells; from++) {
+            if (from === hole) continue;
+            resetGridHarness();
+            section.getBoundingClientRect = () => ({
+              width: 1700,
+              height: 1000,
+              top: 0,
+              left: 0,
+              right: 1700,
+              bottom: 1000,
+            });
+            const app = openGrid(layout.ids, layout.ids[0]);
+            const cells: Array<string | null> = layout.ids.slice();
+            cells.splice(hole, 0, null);
+            app._tileGrid.cells = cells.slice(0, layout.cells);
+            app._applyTileLayout();
+            const moved = app._tileGrid.cells[from];
+            const costsNothing = snapshotCost();
+            expect(slots()).toHaveLength(1);
+            expect(slots()[0].dataset.cell).toBe(String(hole));
+            const { over: o } = dragTileOnto(moved, slots()[0]);
+            const expected = app._tileGrid.cells.slice();
+            const want = cells.slice(0, layout.cells);
+            want[hole] = moved;
+            want[from] = null;
+            const ok =
+              JSON.stringify(expected) === JSON.stringify(want) &&
+              o.dataTransfer.dropEffect === 'move' &&
+              app.activeSessionId === moved &&
+              JSON.stringify(stored().ids) === JSON.stringify(want) &&
+              slots().length === 1 &&
+              slots()[0].dataset.cell === String(from);
+            if (!ok) bad.push(`hole ${hole} from ${from}: got ${JSON.stringify(expected)}`);
+            costsNothing();
+          }
+        }
+        expect(bad).toEqual([]);
+      });
+    }
+
+    it('the moved tile sits in the hole (its grid place), and the slot takes its old place', () => {
+      const app = openGrid(SIX.slice(0, 5));
+      // [a b c / d e _]: c into the hole below it.
+      dragTileOnto('s-c', slots()[0]);
+      expect(app._tileGrid.cells).toEqual(['s-a', 's-b', null, 's-d', 's-e', 's-c']);
+      expect([tileEl('s-c').style.gridColumn, tileEl('s-c').style.gridRow]).toEqual(['5', '3']);
+      expect([slots()[0].style.gridColumn, slots()[0].style.gridRow]).toEqual(['5', '1']);
       expect(slots()[0].classList.contains('tile--drop-target')).toBe(false);
-      // A browser sends no drop on a refused target; one that did never reaches the slot's handler.
-      const toSlot = vi.spyOn(app, 'dropSessionOnSlot');
-      drop(slots()[0]);
-      expect(toSlot).not.toHaveBeenCalled();
-      toSlot.mockRestore();
-      end('s-a');
-      expect(app._tileGrid.ids).toEqual(['s-a', 's-b', 's-c']);
-      expect(app.activeSessionId).toBe('s-b');
-      expect(app.markIdleAlertSeen).not.toHaveBeenCalled();
-      expect(localStore.has('codeman:tile-grid')).toBe(false);
-      expect(FakeTile.all.every((t) => t.fit.mock.calls.length === 0)).toBe(true);
-      costsNothing();
     });
 
-    it('so does the tab of a tiled session; a session not tiled yet still joins there', () => {
-      const app = openGrid(['s-a', 's-b', 's-c']);
-      app.draggedTabId = 's-a';
-      const o = over(slots()[0]);
-      expect(o.dataTransfer.dropEffect).toBe('none');
+    it('a tab of a tiled session moves the same way; a session not tiled yet joins in THAT cell', () => {
+      const app = openGrid(SIX.slice(0, 5));
+      app._tileGrid.cells = ['s-a', null, 's-b', 's-c', 's-d', 's-e'];
+      app._applyTileLayout();
+      app.draggedTabId = 's-e';
       drop(slots()[0]);
-      expect(app._tileGrid.ids).toEqual(['s-a', 's-b', 's-c']);
-      // dropSessionOnSlot itself refuses a tiled session too.
-      app.dropSessionOnSlot('s-a');
-      expect(app._tileGrid.ids).toEqual(['s-a', 's-b', 's-c']);
-
+      expect(app._tileGrid.cells).toEqual(['s-a', 's-e', 's-b', 's-c', 's-d', null]);
       app.draggedTabId = 's-other';
       expect(over(slots()[0]).dataTransfer.dropEffect).toBe('move');
       drop(slots()[0]);
-      expect(app._tileGrid.ids).toEqual(['s-a', 's-b', 's-c', 's-other']);
+      expect(app._tileGrid.cells).toEqual(['s-a', 's-e', 's-b', 's-c', 's-d', 's-other']);
       expect(app.activeSessionId).toBe('s-other');
+    });
+
+    it('while a tile is zoomed there is no slot, and a move into a hole is refused', () => {
+      const app = openGrid(SIX.slice(0, 5));
+      app.zoomTile('s-a');
+      expect(slots()).toHaveLength(0);
+      expect(app._moveTileToCell('s-b', 5)).toBe(false);
+      expect(app._tileGrid.cells).toEqual([...SIX.slice(0, 5), null]);
     });
   });
 
@@ -528,9 +563,9 @@ describe('Move Tile Left/Right/Up/Down (Ctrl+Shift+Arrows)', () => {
     return keydown[1];
   }
 
-  // The neighbour in each direction, by cell, written out by hand (null: an
-  // edge). A partial last row: down from a cell above an empty one goes to the
-  // last tile, the rule the focus chords follow.
+  // The cell next to each cell in each direction, written out by hand (null:
+  // an edge). A move goes to that cell: a swap when a tile is there, a move
+  // into it when it is empty (the partial layouts below).
   const TABLES: Record<
     string,
     { ids: string[]; cols: number; width?: number; next: Array<Record<Dir, number | null>> }
@@ -563,28 +598,6 @@ describe('Move Tile Left/Right/Up/Down (Ctrl+Shift+Arrows)', () => {
         { left: null, right: 4, up: 0, down: null },
         { left: 3, right: 5, up: 1, down: null },
         { left: 4, right: null, up: 2, down: null },
-      ],
-    },
-    '2x2 with 3 tiles': {
-      cols: 2,
-      ids: ['s-a', 's-b', 's-c'],
-      width: 1700,
-      next: [
-        { left: null, right: 1, up: null, down: 2 },
-        { left: 0, right: null, up: null, down: 2 },
-        { left: null, right: null, up: 0, down: null },
-      ],
-    },
-    '3x2 with 5 tiles': {
-      cols: 3,
-      ids: SIX.slice(0, 5),
-      width: 1700,
-      next: [
-        { left: null, right: 1, up: null, down: 3 },
-        { left: 0, right: 2, up: null, down: 4 },
-        { left: 1, right: null, up: null, down: 4 },
-        { left: null, right: 4, up: 0, down: null },
-        { left: 3, right: null, up: 1, down: null },
       ],
     },
   };
@@ -631,6 +644,71 @@ describe('Move Tile Left/Right/Up/Down (Ctrl+Shift+Arrows)', () => {
       expect(bad).toEqual([]);
     });
   }
+
+  // Owner: an empty cell can be any cell. With the hole in every cell in turn,
+  // every tile and every direction: into the hole, or a swap, or nothing.
+  const HOLED = [
+    { name: '2x2 with 3 tiles', ids: ['s-a', 's-b', 's-c'], adjacency: TABLES['2x2'].next },
+    { name: '3x2 with 5 tiles', ids: SIX.slice(0, 5), adjacency: TABLES['3x2'].next },
+  ];
+  for (const layout of HOLED) {
+    it(`${layout.name}: with the hole anywhere, every tile, every direction (into the hole, a swap, or nothing)`, () => {
+      const bad: string[] = [];
+      const size = layout.adjacency.length;
+      for (let hole = 0; hole < size; hole++) {
+        const cells: Array<string | null> = layout.ids.slice();
+        cells.splice(hole, 0, null);
+        for (let i = 0; i < size; i++) {
+          if (i === hole) continue;
+          for (const dir of Object.keys(ARROW) as Dir[]) {
+            resetGridHarness();
+            section.getBoundingClientRect = () => ({
+              width: 1700,
+              height: 1000,
+              top: 0,
+              left: 0,
+              right: 1700,
+              bottom: 1000,
+            });
+            const moved = cells[i] as string;
+            const app = openGrid(layout.ids, moved);
+            app._tileGrid.cells = cells.slice();
+            app._applyTileLayout();
+            const costsNothing = snapshotCost();
+            const e = chord(dir);
+            handlerFor(app)(e);
+            const want = cells.slice();
+            const j = layout.adjacency[i][dir];
+            if (j !== null) [want[i], want[j]] = [want[j], want[i]];
+            const ok =
+              e.preventDefault.mock.calls.length === 1 &&
+              JSON.stringify(app._tileGrid.cells) === JSON.stringify(want) &&
+              app.activeSessionId === moved &&
+              app._tileGrid.focusedId === moved &&
+              JSON.stringify(stored().ids) === JSON.stringify(want);
+            if (!ok) bad.push(`hole ${hole}, cell ${i} ${dir}: got ${JSON.stringify(app._tileGrid.cells)}`);
+            costsNothing();
+            expect(FakeTile.all.every((t) => t.fit.mock.calls.length === 0)).toBe(true);
+          }
+        }
+      }
+      expect(bad).toEqual([]);
+    });
+  }
+
+  it('a move into a hole across columns of different widths: only the moved tile fits, once', () => {
+    section.getBoundingClientRect = () => ({ width: 1700, height: 1000, top: 0, left: 0, right: 1700, bottom: 1000 });
+    const five = SIX.slice(0, 5);
+    const app = openGrid(five, 's-b');
+    app._tileGrid.colFr = [1, 1, 2];
+    app._applyTileLayout();
+    clearFits();
+    // [a b c / d e _]: b (column 1) down into... e is there; first move e right into the hole.
+    app._selectTiledSession('s-e', { auto: true });
+    handlerFor(app)(chord('right'));
+    expect(app._tileGrid.cells).toEqual(['s-a', 's-b', 's-c', 's-d', null, 's-e']);
+    expect(fitCounts(five)).toEqual({ 's-a': 0, 's-b': 0, 's-c': 0, 's-d': 0, 's-e': 1 });
+  });
 
   it('focus stays on the moved tile through several moves, and the order is stored', () => {
     const app = openGrid(SIX, 's-a');

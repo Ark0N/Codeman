@@ -140,7 +140,7 @@
     'Zoom this tile': '放大此窗格',
     'Restore the grid': '恢复平铺网格',
     'Remove tile (the session keeps running)': '移除窗格（会话继续运行）',
-    'Drop a tab here': '将标签页拖放到此处',
+    'Drop a tab or a tile here': '将标签页或窗格拖放到此处',
     // A tile header's tooltip while tiles can move (with the state above it: a pattern below).
     'Drag to move the tile': '拖动可移动窗格',
     'Resize tile columns': '调整窗格列宽',

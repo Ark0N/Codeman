@@ -21,8 +21,8 @@ or settled a question the spec left open. The invariants as built are in
   the setting off the toggle chord is inert. A grid opened another
   way (Ctrl/Cmd+click, a dropped tab, "Open group as tiles") keeps all its chords.
 - **Dividers are grid tracks.** Each gap between columns and rows is its own 6px track (the
-  grid gap is 0) and tiles are placed explicitly in reading order, which is also what the
-  empty-slot drop targets need. Fractions reset when the column or row count changes.
+  grid gap is 0) and every tile and every empty slot is placed explicitly in its cell
+  (`grid.cells`, see "Tiles move"). Fractions reset when the column or row count changes.
 - **Zoom follows tmux.** Moving focus to another tile restores the grid; an automatic zoom
   (window too small for the minimum tile) follows focus instead.
 - **Tile loads are bounded** (`boundedLoad`), carry a fetch deadline covering the body (Pane
@@ -68,28 +68,46 @@ or settled a question the spec left open. The invariants as built are in
   batches, so lifecycle and hook events are unaffected, and leaving the grid
   re-subscribes the shown session.
 - **Tiles move** (owner request: "give me the option to move the tiles around"; not a
-  numbered decision). A tile's header, its free area (not the buttons, not the rename
-  input), drags it onto another tile and the two trade places. An empty slot refuses a tile,
-  its header drag and its tab alike (owner's answer, "dont move the tile": a slot is always
-  the last cell, so a move there shifted every tile after it); a session not tiled yet still
-  joins there. It is a native drag through the tab drop targets (capture phase, stopped
-  before xterm), carrying a type of its own and never text, and it is not `draggedTabId`, so
-  neither a text field nor the tab strip takes it; Escape or a drop anywhere else cancels
-  with nothing changed, focus included: the header focuses its tile on click, not on press
-  (owner's answer: best practice; the body keeps press-to-focus, so focus moves before a
-  press reaches xterm). `Ctrl+Shift+Arrows` (Move Tile Left/Right/Up/Down, registry,
-  rebindable) swap the focused tile with the neighbour the focus chords pick, and focus
-  stays on it. Every move, a tiled tab's drop included, goes through `_reorderTiles`: no
-  remount, reconnect or reload; divider sizes belong to the cells, so only a tile whose cell
-  size changed fits (one PTY resize, #464). Moving is off while a tile is zoomed (the chords
-  still apply there, as a no-op, so their keys never reach the CLI; a tiled tab dropped on
-  the zoomed tile is refused too, as the owner confirmed) and with a single tile. Both arrow
-  chord families, focus and move, skip a text field, where shifted arrows select (owner's
-  answer: best practice). Default keys: every other two-modifier arrow chord is taken
-  (Ctrl+Alt switches workspaces, Ctrl+Alt+Shift moves a window to another workspace in
-  GNOME, Alt is back/forward, Alt+Shift focuses tiles); Ctrl+Shift+Arrows is unclaimed by
-  the browsers, GNOME, KDE, macOS and Claude Code, and costs only a terminal editor's word
-  selection inside a tile while the grid is open.
+  numbered decision). The grid is CELLS, not a packed list (owner: "the empty tab doesnt
+  always have to be the last one ... it can also be tab nr 4 or 3"): `grid.cells` holds a
+  session id or `null` per cell and is the one source of truth, `grid.ids` the tiles in
+  reading order derived from it. The shape still comes from the tile count (the layout
+  table), the cap counts tiles, never empty cells, and an empty cell can be any cell (in
+  practice one at most: a 3x2 holds 5 or 6 tiles, a 2x2 3 or 4). A tile's header, its free
+  area (not the buttons, not the rename input), drags it: onto another tile the two trade
+  places, onto an empty cell it moves there and leaves its own cell empty, nothing else
+  moving; a tiled session's tab does the same, and a tab of a session not tiled yet joins in
+  the cell it is dropped on. It is a native drag through the tab drop targets (capture
+  phase, stopped before xterm), carrying a type of its own and never text, and it is not
+  `draggedTabId`, so neither a text field nor the tab strip takes it; Escape or a drop
+  anywhere else cancels with nothing changed, focus included: the header focuses its tile on
+  click, not on press (owner's answer: best practice; the body keeps press-to-focus, so
+  focus moves before a press reaches xterm). `Ctrl+Shift+Arrows` (Move Tile
+  Left/Right/Up/Down, registry, rebindable) move the focused tile to the adjacent cell: into
+  it when empty, trading places when a tile is there, never jumping a cell; focus stays on
+  it. Every move goes through `_reorderTiles`: no remount, reconnect or reload; divider
+  sizes belong to the cells, so only a tile whose cell size changed fits (one PTY resize,
+  #464). Removing a tile leaves its cell empty where it was, and adding one takes the first
+  empty cell (or the one a tab was dropped on), while the shape stays; a shape change
+  (`fitTileCells`, constants.js) keeps each tile's row and column when all fit and otherwise
+  packs the tiles in reading order, which differs from plain packing only when a 2x2 grows
+  to a 3x2 (the four tiles stay put). Focus never lands on an empty cell: Alt+Shift+Arrows
+  go along the row past one, or to the nearest row with a tile (the same column, else the
+  nearest), and Ctrl+Tab and Alt+[ / ] cycle the tiles only. `codeman:tile-grid` stays ids
+  only: its `ids` are the cells, `null` for an empty one (a build before cells drops the
+  nulls and reads them packed); a reload brings the holes back when the shape is the same, a
+  session gone by then leaves its cell empty, another shape packs, and the old packed format
+  reads unchanged. A fresh grid (the picker's Open, Ctrl/Cmd+click with the grid closed,
+  "Open group as tiles") opens packed; only the toggle and the page-load restore bring holes
+  back. Moving is off while a tile is zoomed (the chords still apply there, as a no-op, so
+  their keys never reach the CLI; a tiled tab dropped on the zoomed tile is refused too, as
+  the owner confirmed) and with a single tile. Both arrow chord families, focus and move,
+  skip a text field, where shifted arrows select (owner's answer: best practice). Default
+  keys: every other two-modifier arrow chord is taken (Ctrl+Alt switches workspaces,
+  Ctrl+Alt+Shift moves a window to another workspace in GNOME, Alt is back/forward,
+  Alt+Shift focuses tiles); Ctrl+Shift+Arrows is unclaimed by the browsers, GNOME, KDE,
+  macOS and Claude Code, and costs only a terminal editor's word selection inside a tile
+  while the grid is open.
 - **A tile that joins before its pane exists resends its size when the pid appears**
   (`TerminalTile.paneStarted()`): the server drops a resize for a session with no PTY and
   spawns at 120x40, and Run's own resize measures the parked main terminal. Applying a

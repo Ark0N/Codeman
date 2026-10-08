@@ -24,7 +24,8 @@
 // Per-device tile font size (a tile is a fraction of the screen).
 const TILE_GRID_FONT_KEY = 'codeman-tile-font-size';
 // The grid this device last had, ids only (sanitizeTileGridState, constants.js):
-// `{ v: 1, open, ids, focused, zoomed, colFr, rowFr }`. `open: false` keeps it
+// `{ v: 1, open, ids, focused, zoomed, colFr, rowFr }`, `ids` being the cells
+// in reading order with `null` for an empty one. `open: false` keeps it
 // remembered for one-click return; restored on reload inside handleInit.
 const TILE_GRID_STORAGE_KEY = 'codeman:tile-grid';
 // Trailing debounce for refitting tiles after the grid area changes size, so a
@@ -72,8 +73,10 @@ function isTextFieldTarget(target) {
 class TileGridModel {
   constructor() {
     this.open = false;
-    // Session ids in reading order (row-major).
-    this.ids = [];
+    // The grid's cells in reading order (row-major), cols x rows of them: a
+    // session id, or null for an empty cell. THE source of truth for where
+    // each tile is (owner: an empty cell can be any cell); `ids` derives from it.
+    this.cells = [];
     // id -> { tile: TerminalTile, el: HTMLElement }
     this.tiles = new Map();
     this.focusedId = null;
@@ -97,6 +100,11 @@ class TileGridModel {
 
   has(id) {
     return this.open && this.tiles.has(id);
+  }
+
+  /** The tiled sessions in reading order, holes skipped (a fresh array: change `cells`, never this). */
+  get ids() {
+    return this.cells.filter(Boolean);
   }
 }
 
@@ -225,7 +233,9 @@ Object.assign(CodemanApp.prototype, {
     // non-shell session) only ever produced a copy that was thrown away.
     this._cleanupPreviousSession(focus, { skipSnapshot: wanted.includes(this.activeSessionId) });
     grid.open = true;
-    grid.ids = [];
+    grid.cells = [];
+    grid.cols = 0;
+    grid.rows = 0;
     grid.focusedId = focus;
     document.querySelector('.main')?.classList.add('tiles-active');
     const section = this._tileGridSection();
@@ -234,6 +244,8 @@ Object.assign(CodemanApp.prototype, {
     // first fit measures its real cell; the focused tile connects first, so
     // its capture is the one the queue starts with.
     for (const id of wanted) this._mountTile(id);
+    // Packed from the first cell (_applyTileLayout pads the shape with empty cells).
+    grid.cells = wanted.filter((id) => grid.tiles.has(id));
     this._applyTileLayout();
     for (const id of [focus, ...wanted.filter((id) => id !== focus)]) this._connectTile(id);
     if (!grid.resizeObserver && typeof ResizeObserver !== 'undefined') {
@@ -291,7 +303,9 @@ Object.assign(CodemanApp.prototype, {
     grid.slots = [];
     grid.colFr = [];
     grid.rowFr = [];
-    grid.ids = [];
+    grid.cells = [];
+    grid.cols = 0;
+    grid.rows = 0;
     grid.focusedId = null;
     grid.zoomedId = null;
     grid.autoZoom = false;
@@ -624,7 +638,8 @@ Object.assign(CodemanApp.prototype, {
   focusTileInDirection(direction) {
     const grid = this._tileGrid;
     if (!grid?.open) return;
-    const id = window.CodemanTileGrid.tileInDirection(grid.ids, grid.focusedId, direction, grid.cols);
+    // Over the cells: focus skips an empty one, never lands on it.
+    const id = window.CodemanTileGrid.tileInDirection(grid.cells, grid.focusedId, direction, grid.cols);
     if (id) this.selectSession(id);
   },
 
@@ -672,12 +687,17 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  /** Adds one session as a tile (open grid only). Returns whether it was added. */
-  addTile(sessionId) {
+  /**
+   * Adds one session as a tile (open grid only), into `cell` when that cell is
+   * empty (a tab dropped on it), else the first empty cell in reading order
+   * (_placeTile). Returns whether it was added.
+   */
+  addTile(sessionId, { cell = -1 } = {}) {
     const grid = this._tileGrid;
     if (!grid?.open || grid.tiles.has(sessionId)) return false;
     if (grid.ids.length >= window.CodemanTileGrid.TILE_GRID_MAX) return false;
     if (!this._mountTile(sessionId)) return false;
+    this._placeTile(sessionId, cell);
     // A tile added while one is zoomed by hand is meant to be seen.
     if (grid.zoomedId && !grid.autoZoom) grid.zoomedId = null;
     this._applyTileLayout();
@@ -688,7 +708,37 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Removes one tile; the session keeps running. When it held focus, `refocus`
+   * Puts a tile just mounted into a cell. The shape for one more tile comes
+   * first (fitTileCells: the same shape keeps every cell; 2x2 growing to 3x2
+   * keeps each tile where it is), then `cell` if it is empty there, else the
+   * first empty cell in reading order.
+   */
+  _placeTile(sessionId, cell = -1) {
+    const grid = this._tileGrid;
+    const { cols, rows } = this._tileShapeFor(grid.ids.length + 1);
+    grid.cells = window.CodemanTileGrid.fitTileCells(grid.cells, grid.cols, cols, rows);
+    grid.cols = cols;
+    grid.rows = rows;
+    const k = Number.isInteger(cell) && grid.cells[cell] === null ? cell : grid.cells.indexOf(null);
+    // (No empty cell cannot happen: the shape for n tiles has at least n cells.
+    // Appended, the next layout packs it in.)
+    if (k === -1) grid.cells.push(sessionId);
+    else grid.cells[k] = sessionId;
+  },
+
+  /** Columns x rows (and whether they fit) for `count` tiles in the grid area as it is now. */
+  _tileShapeFor(count) {
+    const rect = this._tileGridSection().getBoundingClientRect?.() || { width: 0, height: 0 };
+    return window.CodemanTileGrid.computeTileLayout({
+      count,
+      width: rect.width || window.innerWidth,
+      height: rect.height || window.innerHeight,
+    });
+  },
+
+  /**
+   * Removes one tile; the session keeps running. Its cell becomes empty where
+   * it was, unless the shape changes with the count (then fitTileCells). When it held focus, `refocus`
    * moves focus to the neighbouring tile (next in grid order, else previous),
    * as the app's choice (`auto`: no idle alert is spent). The last tile
    * leaving closes the grid: with `refocus` the single view then shows that
@@ -714,7 +764,7 @@ Object.assign(CodemanApp.prototype, {
     this._destroyTerminalTile(entry.tile);
     entry.el.remove();
     grid.tiles.delete(sessionId);
-    grid.ids.splice(grid.ids.indexOf(sessionId), 1);
+    grid.cells[grid.cells.indexOf(sessionId)] = null;
     // Before the layout, which may zoom the focused tile on a small window.
     if (wasFocused) grid.focusedId = null;
     this._applyTileLayout();
@@ -775,7 +825,7 @@ Object.assign(CodemanApp.prototype, {
       // The pid this tile last saw, so a pane that starts later is noticed.
       pid: this.sessions.get(sessionId)?.pid ?? null,
     });
-    grid.ids.push(sessionId);
+    // Where it goes is the caller's (grid.cells).
     this._renderTileHeader(sessionId);
     return true;
   },
@@ -786,8 +836,8 @@ Object.assign(CodemanApp.prototype, {
    * (`_draggedTileId`, _installTileMoveDrag). Capture phase, with the event
    * stopped: a tab drag carries the session id as text, and xterm's helper
    * textarea would otherwise accept that drop and type the id into a PTY.
-   * `accepts(id)` is the target's own rule (a tile: any session but its own;
-   * an empty slot: only a session not tiled yet). A session it does not accept
+   * `accepts(id)` is the target's own rule (a tile takes any session but its
+   * own; an empty cell takes any). A session it does not accept
    * is held there too, but refused (`dropEffect: 'none'`, no highlight, so no
    * drop follows). Any other drag (a file) is left alone.
    */
@@ -830,58 +880,77 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Puts the tiles in a new reading order (the same sessions): the one path
-   * every move takes, a header drag, the tab of a tiled session dropped on a
-   * tile, and the Move Tile chords. Nothing is remounted, reconnected or
-   * reloaded, and no session joins or leaves. Divider sizes belong to the
-   * cells, so a moved tile takes its new cell's size: each tile whose cell
-   * size changed fits once (its xterm and one PTY resize together, #464),
-   * every other tile is left alone. Refused while a tile is zoomed (moving is
-   * off then).
+   * Puts the tiles in new cells (the same sessions, the same shape): the one
+   * path every move takes, a header drag, the tab of a tiled session dropped
+   * on a tile or an empty cell, and the Move Tile chords. Nothing is
+   * remounted, reconnected or reloaded, and no session joins or leaves.
+   * Divider sizes belong to the cells, so a moved tile takes its new cell's
+   * size: each tile whose cell size changed fits once (its xterm and one PTY
+   * resize together, #464), every other tile is left alone. Refused while a
+   * tile is zoomed (moving is off then).
    *
-   * @param {string[]} ids - the new order
+   * @param {(string|null)[]} cells - the new cells
    * @returns {boolean} false when refused, true otherwise (also when nothing moved)
    */
-  _reorderTiles(ids) {
+  _reorderTiles(cells) {
     const grid = this._tileGrid;
-    if (!grid?.open || grid.zoomedId) return false;
-    if (ids.length !== grid.ids.length || ids.some((id) => !grid.tiles.has(id))) return false;
-    if (ids.every((id, k) => grid.ids[k] === id)) return true;
+    if (!grid?.open || grid.zoomedId || cells.length !== grid.cells.length) return false;
+    const tiles = cells.filter(Boolean);
+    if (tiles.length !== grid.tiles.size || new Set(tiles).size !== tiles.length) return false;
+    if (tiles.some((id) => !grid.tiles.has(id))) return false;
+    if (cells.every((id, k) => (id || null) === grid.cells[k])) return true;
     // A divider drag in progress measured the tiles at their old places.
     this._tileDividerDragTeardown?.();
     const cell = (k) => `${grid.colFr[k % grid.cols]}x${grid.rowFr[Math.floor(k / grid.cols)]}`;
-    const before = new Map(grid.ids.map((id, k) => [id, cell(k)]));
-    grid.ids = ids.slice();
+    const before = new Map();
+    grid.cells.forEach((id, k) => id && before.set(id, cell(k)));
+    grid.cells = cells.map((id) => id || null);
     this._applyTileLayout();
     // Synchronous: the fit's measurement forces the new placement's layout.
-    grid.ids.forEach((id, k) => {
-      if (before.get(id) !== cell(k)) grid.tiles.get(id).tile.fit();
+    grid.cells.forEach((id, k) => {
+      if (id && before.get(id) !== cell(k)) grid.tiles.get(id).tile.fit();
     });
     return true;
   },
 
-  /** Two tiles trade places (_reorderTiles). */
+  /** Two tiles trade cells (_reorderTiles). */
   _swapTiles(a, b) {
-    const ids = this._tileGrid.ids.slice();
-    const i = ids.indexOf(a);
-    const j = ids.indexOf(b);
+    const cells = this._tileGrid.cells.slice();
+    const i = cells.indexOf(a);
+    const j = cells.indexOf(b);
     if (i === -1 || j === -1) return false;
-    ids[i] = b;
-    ids[j] = a;
-    return this._reorderTiles(ids);
+    cells[i] = b;
+    cells[j] = a;
+    return this._reorderTiles(cells);
   },
 
   /**
-   * Move Tile Left/Right/Up/Down: the focused tile trades places with its
-   * neighbour in that direction, the neighbour the Alt+Shift+Arrow focus
-   * chords pick (tileInDirection). Focus stays on the moved tile. Nothing while
-   * a tile is zoomed, or at an edge.
+   * A tile moves into empty cell `k`, leaving its own cell empty: nothing else
+   * moves (_reorderTiles). False when `k` is not an empty cell, or moving is off.
+   */
+  _moveTileToCell(sessionId, k) {
+    const cells = this._tileGrid.cells.slice();
+    const from = cells.indexOf(sessionId);
+    if (from === -1 || !Number.isInteger(k) || cells[k] !== null) return false;
+    cells[from] = null;
+    cells[k] = sessionId;
+    return this._reorderTiles(cells);
+  },
+
+  /**
+   * Move Tile Left/Right/Up/Down: the focused tile goes to the cell next to it
+   * in that direction (tileCellInDirection, never jumping a cell): into it
+   * when it is empty, trading places when a tile is there. Focus stays on the
+   * moved tile. Nothing while a tile is zoomed, or at an edge.
    */
   moveTileInDirection(direction) {
     const grid = this._tileGrid;
     if (!grid?.open || grid.zoomedId || !grid.focusedId) return;
-    const neighbor = window.CodemanTileGrid.tileInDirection(grid.ids, grid.focusedId, direction, grid.cols);
-    if (neighbor) this._swapTiles(grid.focusedId, neighbor);
+    const from = grid.cells.indexOf(grid.focusedId);
+    const to = window.CodemanTileGrid.tileCellInDirection(from, direction, grid.cols, grid.cells.length);
+    if (to === -1) return;
+    if (grid.cells[to]) this._swapTiles(grid.focusedId, grid.cells[to]);
+    else this._moveTileToCell(grid.focusedId, to);
   },
 
   /**
@@ -899,11 +968,9 @@ Object.assign(CodemanApp.prototype, {
       if (!this._swapTiles(draggedId, targetId)) return;
     } else {
       this._tileDividerDragTeardown?.();
-      const index = grid.ids.indexOf(targetId);
       if (!this._mountTile(draggedId)) return;
-      // _mountTile appended it; it takes the replaced tile's place instead.
-      grid.ids.pop();
-      grid.ids.splice(index, 1, draggedId);
+      // It takes the replaced tile's cell.
+      grid.cells[grid.cells.indexOf(targetId)] = draggedId;
       const old = grid.tiles.get(targetId);
       this._destroyTerminalTile(old.tile);
       old.el.remove();
@@ -919,13 +986,20 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * A tab dropped on an empty slot joins the grid there. A session already
-   * tiled is not moved to a slot (the slot refuses it, see _syncTileSlots).
+   * Something dropped on empty cell `cell`: a tab of a session not tiled yet
+   * joins the grid in that cell; a tiled session (its tab, or the tile dragged
+   * by its header) moves into it, leaving its own cell empty
+   * (_moveTileToCell, refused while a tile is zoomed). Either way the dropped
+   * session takes focus (a human selection).
    */
-  dropSessionOnSlot(draggedId) {
+  dropSessionOnSlot(draggedId, cell) {
     const grid = this._tileGrid;
     if (!grid?.open || !this.sessions.has(draggedId) || this.detachedSessions?.has(draggedId)) return;
-    if (grid.tiles.has(draggedId) || !this.addTile(draggedId)) return;
+    if (grid.tiles.has(draggedId)) {
+      if (!this._moveTileToCell(draggedId, cell)) return;
+    } else if (!this.addTile(draggedId, { cell })) {
+      return;
+    }
     this.selectSession(draggedId);
   },
 
@@ -1249,9 +1323,10 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * The header moves its tile: dragged onto another tile the two trade places
-   * (dropSessionOnTile, the path a dragged tab takes, through the same
-   * capture-phase drop targets, _acceptTabDrops); an empty slot refuses it. A native drag, so Escape and a drop anywhere else are the
+   * The header moves its tile: dragged onto another tile the two trade places,
+   * onto an empty cell it moves there and leaves its own cell empty
+   * (dropSessionOnTile / dropSessionOnSlot, the path a dragged tab takes,
+   * through the same capture-phase drop targets, _acceptTabDrops). A native drag, so Escape and a drop anywhere else are the
    * browser's own cancel: nothing moves, and dragend clears what the drag
    * painted. The drag carries a type of its own and never text, so no text
    * field or terminal, in this page or another application, can take it as
@@ -1444,16 +1519,18 @@ Object.assign(CodemanApp.prototype, {
     this.removeTile(sessionId);
   },
 
-  /** Columns x rows for the current tile count, applied to the grid section. */
+  /**
+   * Columns x rows for the current tile count, applied to the grid section.
+   * The shape comes from the count alone; within it each tile sits in its
+   * cell (grid.cells) and any cell may be empty. When the shape changes, the
+   * cells follow fitTileCells (each tile keeps its row and column if all fit,
+   * else the tiles pack in reading order).
+   */
   _applyTileLayout() {
     const grid = this._tileGrid;
     const section = this._tileGridSection();
-    const rect = section.getBoundingClientRect?.() || { width: 0, height: 0 };
-    const { cols, rows, fits } = window.CodemanTileGrid.computeTileLayout({
-      count: grid.ids.length,
-      width: rect.width || window.innerWidth,
-      height: rect.height || window.innerHeight,
-    });
+    const { cols, rows, fits } = this._tileShapeFor(grid.ids.length);
+    grid.cells = window.CodemanTileGrid.fitTileCells(grid.cells, grid.cols, cols, rows);
     if (grid.colFr.length !== cols) grid.colFr = new Array(cols).fill(1);
     if (grid.rowFr.length !== rows) grid.rowFr = new Array(rows).fill(1);
     grid.cols = cols;
@@ -1476,18 +1553,23 @@ Object.assign(CodemanApp.prototype, {
     for (const entry of grid.tiles.values()) this._paintTileHandle(entry);
     // Zoomed: one cell; the other tiles stay connected but hidden (CSS), so
     // they measure nothing and send no resize. Otherwise every tile is placed
-    // explicitly in reading order, with a divider track between columns and
-    // between rows.
+    // explicitly in its cell, with a divider track between columns and between
+    // rows, and every empty cell holds a drop slot.
     section.style.gridTemplateColumns = zoomed ? 'minmax(0, 1fr)' : tileGridTracks(grid.colFr);
     section.style.gridTemplateRows = zoomed ? 'minmax(0, 1fr)' : tileGridTracks(grid.rowFr);
-    grid.ids.forEach((id, k) => {
+    const holes = [];
+    grid.cells.forEach((id, k) => {
+      if (!id) {
+        holes.push(k);
+        return;
+      }
       const el = grid.tiles.get(id)?.el;
       if (!el) return;
       el.style.gridColumn = id === zoomed ? '1' : String(2 * (k % cols) + 1);
       el.style.gridRow = id === zoomed ? '1' : String(2 * Math.floor(k / cols) + 1);
     });
     this._syncTileDividers(zoomed ? 0 : cols, zoomed ? 0 : rows);
-    this._syncTileSlots(zoomed ? 0 : cols * rows - grid.ids.length, cols);
+    this._syncTileSlots(zoomed ? [] : holes, cols);
     this._persistTileGrid();
   },
 
@@ -1511,26 +1593,23 @@ Object.assign(CodemanApp.prototype, {
   },
 
   // The empty cells of a layout that is not full (3 tiles in a 2x2, 5 in a
-  // 3x2): drop targets for a tab, after the tiles in reading order.
-  _syncTileSlots(count, cols) {
+  // 3x2), wherever they are: drop targets for a tab (it joins there) and for a
+  // tile (it moves there). Each slot knows its cell (`data-cell`).
+  _syncTileSlots(holes, cols) {
     const grid = this._tileGrid;
     grid.slots ||= [];
-    while (grid.slots.length > count) grid.slots.pop().remove();
-    while (grid.slots.length < count) {
+    while (grid.slots.length > holes.length) grid.slots.pop().remove();
+    while (grid.slots.length < holes.length) {
       const slot = document.createElement('div');
       slot.className = 'tile-slot';
-      slot.textContent = 'Drop a tab here';
-      // Only a session not tiled yet: a tile is never moved to a slot (owner:
-      // "dont move the tile"; a slot is always last, so a move there shifted
-      // every tile after it).
-      this._acceptTabDrops(slot, (draggedId) => this.dropSessionOnSlot(draggedId), {
-        accepts: (id) => !this._tileGrid?.tiles.has(id),
-      });
+      slot.textContent = 'Drop a tab or a tile here';
+      this._acceptTabDrops(slot, (draggedId) => this.dropSessionOnSlot(draggedId, Number(slot.dataset.cell)));
       this._tileGridSection().appendChild(slot);
       grid.slots.push(slot);
     }
     grid.slots.forEach((slot, i) => {
-      const k = grid.ids.length + i;
+      const k = holes[i];
+      slot.dataset.cell = String(k);
       slot.style.gridColumn = String(2 * (k % cols) + 1);
       slot.style.gridRow = String(2 * Math.floor(k / cols) + 1);
     });
@@ -1596,7 +1675,8 @@ Object.assign(CodemanApp.prototype, {
     const start = isCol ? e.clientX : e.clientY;
     const minPx = isCol ? T.TILE_MIN_W : T.TILE_MIN_H;
     const affected = [];
-    grid.ids.forEach((id, k) => {
+    grid.cells.forEach((id, k) => {
+      if (!id) return;
       const track = isCol ? k % grid.cols : Math.floor(k / grid.cols);
       if (track === index || track === index + 1) affected.push(grid.tiles.get(id).tile);
     });
@@ -1799,7 +1879,10 @@ Object.assign(CodemanApp.prototype, {
     const state = {
       v: 1,
       open,
-      ids: grid.ids.slice(),
+      // The cells, null for an empty one, so a hole comes back where it was
+      // (sanitizeTileGridState; a build before cells drops the nulls and reads
+      // the tiles packed, as it always did).
+      ids: grid.cells.slice(),
       focused: grid.focusedId,
       zoomed: grid.autoZoom ? null : grid.zoomedId,
       colFr: grid.colFr.slice(),
@@ -1843,6 +1926,14 @@ Object.assign(CodemanApp.prototype, {
     // Exactly the stored set: an open split closes without joining it (decision 8, case a).
     if (!this.openTileGrid(stored.ids, { focusedId: focus, auto: true, mergeSplit: false })) return false;
     const grid = this._tileGrid;
+    // openTileGrid packed the tiles from the first cell. The stored holes come
+    // back where they were when the shape is the same as when they were stored
+    // (as many cells as this layout has); a session gone since leaves its cell
+    // empty then. Otherwise the tiles stay packed.
+    const cells = (stored.cells || []).map((id) => (id && grid.tiles.has(id) ? id : null));
+    if (cells.length === grid.cols * grid.rows && cells.filter(Boolean).length === grid.tiles.size) {
+      grid.cells = cells;
+    }
     // openTileGrid laid the grid out with equal tracks. The stored ones go back
     // on; _applyTileLayout drops them again if they do not match the column or
     // row count (the window may have changed the layout since).
@@ -1879,8 +1970,10 @@ Object.assign(CodemanApp.prototype, {
   _closeStoredTileGrid() {
     const stored = this._readStoredTileGrid();
     if (!stored?.open) return;
+    // Stored as it was read, holes included (`ids` carries the cells).
+    const { cells, ...rest } = stored;
     try {
-      localStorage.setItem(TILE_GRID_STORAGE_KEY, JSON.stringify({ ...stored, open: false }));
+      localStorage.setItem(TILE_GRID_STORAGE_KEY, JSON.stringify({ ...rest, ids: cells, open: false }));
     } catch {
       /* Per-device convenience only. */
     }

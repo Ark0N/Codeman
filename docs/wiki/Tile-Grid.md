@@ -65,18 +65,23 @@ whose agent exited inside its pane says so instead; close that session from `⋯
 ## Moving tiles
 
 Drag a tile by its header (anywhere but its buttons) onto another tile and the two trade
-places; the dropped tile takes the focus. Empty slots are for adding sessions (drop a tab
-there), so a tile cannot be dropped on one. Press `Escape` or let go anywhere else and nothing
-changes, not even which tile has the focus: a header focuses its tile when you click it, not
-when you press it.
+places. Drop it on an empty slot and it moves there, leaving its old place empty; nothing else
+moves, so the empty slot can be anywhere in the grid. The dropped tile takes the focus. Press
+`Escape` or let go anywhere else and nothing changes, not even which tile has the focus: a
+header focuses its tile when you click it, not when you press it.
 
-With the keyboard, `Ctrl+Shift+Arrows` moves the focused tile left, right, up or down: it
-trades places with the tile next to it (the one `Alt+Shift+Arrows` would focus) and keeps the
-focus.
+With the keyboard, `Ctrl+Shift+Arrows` moves the focused tile one place left, right, up or
+down: into the empty slot if that is the place, else trading places with the tile there. It
+keeps the focus.
 
 A moved tile takes the size of the place it lands in: column widths and row heights stay
-where you dragged the dividers. Tiles do not move while one is zoomed. The new order is
-saved with the grid.
+where you dragged the dividers. Tiles do not move while one is zoomed. Where everything is,
+the empty slot included, is saved with the grid and comes back on reload.
+
+Closing a tile leaves its place empty when the grid keeps its shape (six tiles to five), and a
+new tile takes the first empty place. When the number of tiles changes the grid's shape (four
+tiles to five is two columns to three), the tiles keep their places if they still fit, or line
+up again from the top left. `Alt+Shift+Arrows` and `Ctrl+Tab` never stop on an empty slot.
 
 ## Keys
 
