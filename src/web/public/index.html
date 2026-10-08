@@ -722,8 +722,9 @@
             <select id="quickStartCase" class="toolbar-select case-native-select" title="Select case" aria-hidden="true" tabindex="-1">
               <option value="testcase">testcase</option>
             </select>
-            <button class="btn-case-add" onclick="app.showCreateCaseModal()" title="Create new case">+</button>
-            <button class="btn-case-settings" onclick="app.toggleCaseSettings()" title="Case settings">&#x2699;</button>
+            <!-- "New or link a case…" and "Case settings…" are the last two rows of
+                 the case picker's own list (CASE_PICKER_ACTIONS, session-ui.js); the
+                 "+" and gear buttons that sat here were removed (owner, 1.36.0). -->
             <div class="case-settings-popover hidden" id="caseSettingsPopover">
               <label class="checkbox-inline">
                 <input type="checkbox" id="caseAgentTeams" onchange="app.onCaseSettingChanged()">

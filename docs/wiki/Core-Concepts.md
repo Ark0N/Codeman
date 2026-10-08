@@ -15,7 +15,8 @@ Codeman-side configuration:
 - Per-case toggles (Agent Teams, 1M Opus context).
 - Where it runs, if it is not the local filesystem: see [Location overlays](#location-overlays).
 
-Three ways to get one, all under **+** next to the case picker:
+Three ways to get one, all under **New or link a case…** at the bottom of the case picker
+(the case dropdown in the bottom toolbar; on a phone, the case sheet's **Create New Case**):
 
 | How               | Result                                                                                                 |
 | ----------------- | ------------------------------------------------------------------------------------------------------ |

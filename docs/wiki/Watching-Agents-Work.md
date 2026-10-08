@@ -47,7 +47,8 @@ in the CLI's own environment:
 CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
 ```
 
-and turn the per-case **Agent Teams** toggle on in the case settings gear.
+and turn the per-case **Agent Teams** toggle on under **Case settings…** at the bottom of the case
+picker (the gear beside the case button on a phone).
 
 Codeman watches the team directory and matches teammates to the session leading them.
 Teammates are in-process threads rather than separate CLI processes, so they show up as

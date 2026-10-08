@@ -125,6 +125,17 @@ const RUN_MODE_LAUNCH = {
 /** How often the OPEN case picker re-reads /api/cases (it also refreshes once on open). */
 const CASE_PICKER_REFRESH_MS = 5000;
 
+/**
+ * Action rows at the bottom of the toolbar case picker. They replaced the "+"
+ * and gear buttons that sat beside the picker (owner, 1.36.0 beta): the same two
+ * actions, one click away, without two extra controls in the toolbar. The arrow
+ * keys reach them after the last case; Enter or a click runs `run`.
+ */
+const CASE_PICKER_ACTIONS = [
+  { id: 'add', icon: '+', label: 'New or link a case…', run: (app) => app.showCreateCaseModal() },
+  { id: 'settings', icon: '\u2699', label: 'Case settings…', run: (app) => app.toggleCaseSettings() },
+];
+
 const EXTERNAL_CLI_MODES = new Set(Object.keys(RUN_MODE_LAUNCH));
 const BUILT_IN_RUN_MODES = new Set(['claude', 'shell', ...Object.keys(RUN_MODE_LAUNCH)]);
 
@@ -343,13 +354,32 @@ Object.assign(CodemanApp.prototype, {
 
     const options = this.filterCasePickerOptions(this.getCasePickerOptions(), this._casePickerFilter || '');
     const selectedName = select.value || 'testcase';
-    const maxIndex = Math.max(0, options.length - 1);
+    // The arrow keys walk the cases, then the action rows under them.
+    const maxIndex = options.length + CASE_PICKER_ACTIONS.length - 1;
     this._casePickerActiveIndex = Math.min(Math.max(this._casePickerActiveIndex || 0, 0), maxIndex);
 
+    const actionRows = CASE_PICKER_ACTIONS.map((action, i) => {
+      const index = options.length + i;
+      const active = index === this._casePickerActiveIndex;
+      return `
+          <button
+            type="button"
+            id="quickStartCaseOption-${index}"
+            class="case-combobox-action ${active ? 'active' : ''}"
+            role="option"
+            aria-selected="false"
+            data-case-action="${action.id}">
+            <span class="case-combobox-action-icon" aria-hidden="true">${action.icon}</span>
+            <span class="case-combobox-option-label">${escapeHtml(action.label)}</span>
+          </button>
+        `;
+    }).join('');
+    const actionsBlock = `<div class="case-combobox-actions" role="presentation">${actionRows}</div>`;
+
     if (options.length === 0) {
-      list.innerHTML = '<div class="case-combobox-empty">No cases match</div>';
+      list.innerHTML = '<div class="case-combobox-empty">No cases match</div>' + actionsBlock;
       list.classList.remove('hidden');
-      input.removeAttribute('aria-activedescendant');
+      input.setAttribute('aria-activedescendant', `quickStartCaseOption-${this._casePickerActiveIndex}`);
       return;
     }
 
@@ -372,9 +402,20 @@ Object.assign(CodemanApp.prototype, {
           </button>
         `;
       })
-      .join('');
+      .join('') + actionsBlock;
     list.classList.remove('hidden');
     input.setAttribute('aria-activedescendant', `quickStartCaseOption-${this._casePickerActiveIndex}`);
+  },
+
+  /** Run a case picker action row (`CASE_PICKER_ACTIONS`): close the list first, then act. */
+  runCasePickerAction(id) {
+    const action = CASE_PICKER_ACTIONS.find((a) => a.id === id);
+    if (!action) return;
+    const select = document.getElementById('quickStartCase');
+    if (select) this.updateCasePickerInput(select.value);
+    this.closeCasePicker();
+    document.getElementById('quickStartCaseSearch')?.blur?.();
+    action.run(this);
   },
 
   selectQuickStartCase(caseName, { save = true } = {}) {
@@ -419,18 +460,26 @@ Object.assign(CodemanApp.prototype, {
       const options = this.filterCasePickerOptions(this.getCasePickerOptions(), this._casePickerFilter || input.value);
       if (event.key === 'ArrowDown') {
         event.preventDefault();
-        this._casePickerActiveIndex = Math.min((this._casePickerActiveIndex || 0) + 1, Math.max(0, options.length - 1));
+        this._casePickerActiveIndex = Math.min(
+          (this._casePickerActiveIndex || 0) + 1,
+          options.length + CASE_PICKER_ACTIONS.length - 1
+        );
         this._casePickerOpen ? this.renderCasePickerList() : this.openCasePicker(input.value);
       } else if (event.key === 'ArrowUp') {
         event.preventDefault();
         this._casePickerActiveIndex = Math.max((this._casePickerActiveIndex || 0) - 1, 0);
         this._casePickerOpen ? this.renderCasePickerList() : this.openCasePicker(input.value);
       } else if (event.key === 'Enter') {
-        const option = options[this._casePickerActiveIndex || 0];
+        const index = this._casePickerActiveIndex || 0;
+        const option = options[index];
+        const action = this._casePickerOpen ? CASE_PICKER_ACTIONS[index - options.length] : undefined;
         if (option) {
           event.preventDefault();
           this.selectQuickStartCase(option.name);
           this.run?.();
+        } else if (action) {
+          event.preventDefault();
+          this.runCasePickerAction(action.id);
         }
       } else if (event.key === 'Escape') {
         event.preventDefault();
@@ -443,6 +492,11 @@ Object.assign(CodemanApp.prototype, {
     });
     list.addEventListener('mousedown', event => event.preventDefault());
     list.addEventListener('click', event => {
+      const action = event.target.closest?.('.case-combobox-action');
+      if (action?.dataset?.caseAction) {
+        this.runCasePickerAction(action.dataset.caseAction);
+        return;
+      }
       const option = event.target.closest?.('.case-combobox-option');
       if (option?.dataset?.case) {
         this.selectQuickStartCase(option.dataset.case);
@@ -3083,7 +3137,7 @@ Object.assign(CodemanApp.prototype, {
 
       // Close on outside click (one-shot listener)
       const closeHandler = (e) => {
-        if (!popover.contains(e.target) && !e.target.classList.contains('btn-case-settings')) {
+        if (!popover.contains(e.target) && !e.target.closest?.('.case-combobox-action')) {
           popover.classList.add('hidden');
           document.removeEventListener('click', closeHandler);
         }

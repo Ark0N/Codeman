@@ -6269,7 +6269,7 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   padding: 0.4rem 1.6rem 0.4rem 0.65rem;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: var(--btn-radius) 0 0 var(--btn-radius);
+  border-radius: var(--btn-radius);
   color: var(--text-dim);
   font-size: 0.75rem;
   font-family: inherit;
@@ -6354,6 +6354,49 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   text-align: center;
 }
 
+/* The picker's own action rows ("New or link a case…", "Case settings…"),
+   which replaced the "+" and gear buttons beside it. Sticky at the bottom so
+   a long case list scrolls under them, a hairline above, quieter than a case. */
+.case-combobox-actions {
+  position: sticky;
+  bottom: -0.35rem;
+  margin: 0.3rem -0.35rem -0.35rem;
+  padding: 0.3rem 0.35rem 0.35rem;
+  border-top: 1px solid var(--control-border, rgba(255, 255, 255, 0.08));
+  background: inherit;
+  border-radius: 0 0 8px 8px;
+}
+
+.case-combobox-action {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  width: 100%;
+  min-height: 30px;
+  padding: 0.3rem 0.45rem;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.case-combobox-action:hover,
+.case-combobox-action.active {
+  background: rgba(59, 130, 246, 0.16);
+  border-color: rgba(96, 165, 250, 0.28);
+  color: var(--text);
+}
+
+.case-combobox-action-icon {
+  color: var(--accent);
+  font-weight: 600;
+  text-align: center;
+}
+
 .toolbar-select {
   padding: 0.4rem 1.5rem 0.4rem 0.6rem;
   background: rgba(255, 255, 255, 0.05);
@@ -6391,50 +6434,6 @@ body.touch-device .terminal-container .xterm .xterm-helper-textarea {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.2);
-}
-
-.btn-case-add {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-left: none;
-  border-radius: 0;
-  color: var(--green);
-  font-size: 1.1rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all var(--transition-smooth);
-}
-
-.btn-case-add:hover {
-  background: var(--green);
-  color: white;
-  border-color: var(--green);
-  box-shadow: 0 0 8px rgba(34, 197, 94, 0.3);
-}
-
-.btn-case-settings {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-left: none;
-  border-radius: 0 var(--btn-radius) var(--btn-radius) 0;
-  color: var(--text-dim);
-  font-size: 1rem;
-  cursor: pointer;
-  transition: all var(--transition-smooth);
-}
-
-.btn-case-settings:hover {
-  background: var(--accent);
-  color: white;
-  border-color: var(--accent);
 }
 
 .case-settings-popover {
@@ -15885,7 +15884,6 @@ html:not([data-skin="og"]) {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.25);
 }
-.btn-case-add { color: var(--accent-soft); }
 
 /* ---- Header system stats: cohesive accent meters ---- */
 .stat-bar-mem { background: linear-gradient(90deg, var(--accent), var(--accent-hover)); }

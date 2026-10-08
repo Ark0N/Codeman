@@ -731,6 +731,86 @@ describe('case selector refresh', () => {
     expect(app.run).toHaveBeenCalledTimes(1);
   });
 
+  it('ends the picker with "New or link a case…" and "Case settings…" rows that replaced the toolbar buttons', () => {
+    const elements: Record<string, any> = {};
+    const listeners: Record<string, (event: any) => void> = {};
+    let listClick: ((event: any) => void) | null = null;
+    const CodemanApp = function CodemanApp(this: any) {};
+    elements.quickStartCase = { value: 'Alpha', dataset: {} };
+    elements.quickStartCaseSearch = {
+      value: '',
+      dataset: {},
+      setAttribute: vi.fn(),
+      removeAttribute: vi.fn(),
+      addEventListener: vi.fn((event: string, handler: (event: any) => void) => {
+        listeners[event] = handler;
+      }),
+      select: vi.fn(),
+      blur: vi.fn(),
+    };
+    elements.quickStartCaseList = {
+      innerHTML: '',
+      classList: { add: vi.fn(), remove: vi.fn() },
+      addEventListener: vi.fn((event: string, handler: (event: any) => void) => {
+        if (event === 'click') listClick = handler;
+      }),
+    };
+    elements.quickStartCasePicker = { contains: () => true };
+    const context = vm.createContext({
+      CodemanApp,
+      localStorage: { getItem: () => null, setItem: () => {} },
+      document: { getElementById: (id: string) => elements[id] ?? null, addEventListener: vi.fn() },
+      console,
+      escapeHtml: (s: string) => s,
+      setInterval: () => 1,
+      clearInterval: () => {},
+      fetch: () => new Promise(() => {}),
+    });
+    const sessionUi = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+    vm.runInContext(sessionUi, context, { filename: 'session-ui.js' });
+    const app = new (CodemanApp as any)();
+    app.cases = [{ name: 'Alpha' }, { name: 'zeta' }];
+    app.updateDirDisplayForCase = vi.fn();
+    app.updateMobileCaseLabel = vi.fn();
+    app.saveLastUsedCase = vi.fn();
+    app.updateCasePickerInput = vi.fn();
+    app.run = vi.fn(async () => {});
+    app.showCreateCaseModal = vi.fn();
+    app.toggleCaseSettings = vi.fn();
+    app.setupQuickStartCasePicker();
+
+    // Both rows render after the last case, also when nothing matches.
+    app.openCasePicker('');
+    const html = elements.quickStartCaseList.innerHTML;
+    const lastCase = html.lastIndexOf('data-case="');
+    expect(html.indexOf('data-case-action="add"')).toBeGreaterThan(lastCase);
+    expect(html.indexOf('data-case-action="settings"')).toBeGreaterThan(html.indexOf('data-case-action="add"'));
+    app.openCasePicker('no-such-case');
+    expect(elements.quickStartCaseList.innerHTML).toContain('No cases match');
+    expect(elements.quickStartCaseList.innerHTML).toContain('data-case-action="add"');
+
+    // The arrow keys walk past the cases (Alpha, testcase, zeta) onto the rows; Enter runs one.
+    app.openCasePicker('');
+    for (let i = 0; i < 3; i++) listeners.keydown({ key: 'ArrowDown', preventDefault: vi.fn() });
+    expect(elements.quickStartCaseList.innerHTML).toMatch(
+      /class="case-combobox-action active"[^>]*data-case-action="add"/
+    );
+    listeners.keydown({ key: 'Enter', preventDefault: vi.fn() });
+    expect(app.showCreateCaseModal).toHaveBeenCalledTimes(1);
+    expect(app.run).not.toHaveBeenCalled();
+
+    // A click on the settings row opens the case settings popover.
+    app.openCasePicker('');
+    const settingsRow = { dataset: { caseAction: 'settings' } };
+    listClick!({ target: { closest: (sel: string) => (sel === '.case-combobox-action' ? settingsRow : null) } });
+    expect(app.toggleCaseSettings).toHaveBeenCalledTimes(1);
+
+    // The toolbar buttons themselves are gone.
+    const html2 = readFileSync(resolve(import.meta.dirname, '../src/web/public/index.html'), 'utf8');
+    expect(html2).not.toContain('class="btn-case-add"');
+    expect(html2).not.toContain('class="btn-case-settings"');
+  });
+
   it('creates remote shell sessions by caseName instead of remote display path', async () => {
     const elements: Record<string, any> = {
       quickStartCase: { value: 'gpu-work' },

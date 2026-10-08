@@ -1468,15 +1468,6 @@ html.mobile-init .file-browser-panel {
     padding: 6px 14px;
   }
 
-  /* Add case button - compact (keeping for when shown via menu) */
-  .btn-case-add {
-    display: none !important;
-  }
-
-  .btn-case-settings {
-    display: none !important;
-  }
-
   /* When keyboard is visible, also move accessory bar up */
   .keyboard-visible .keyboard-accessory-bar.visible {
     /* Position is handled by JS transform along with toolbar */
@@ -1488,33 +1479,6 @@ html.mobile-init .file-browser-panel {
   /* LEGACY: Hide old toolbar select (no longer used on mobile) */
   .toolbar-select {
     display: none !important;
-  }
-
-  /* Keep btn-case-add styling for tablet/future use */
-  .toolbar .btn-case-add {
-    min-width: 26px !important;
-    max-width: 26px !important;
-    width: 26px !important;
-    min-height: 26px !important;
-    max-height: 26px !important;
-    height: 26px !important;
-    padding: 0 !important;
-    font-size: 0.9rem;
-    font-weight: bold;
-    display: inline-flex !important;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    border-radius: 4px;
-    background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    color: #9ca3af;
-  }
-
-  .btn-case-add:hover,
-  .btn-case-add:active {
-    background: rgba(255, 255, 255, 0.1);
-    color: #fff;
   }
 
   /* Panels on mobile - full width, positioned above toolbar, visibility controlled by JS */
@@ -3231,13 +3195,13 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
    both stylesheets and repainted the armed modifier back to a resting button on
    all four light skins. Excluding the state here fixes phone and tablet at once;
    adding a class to the armed rules would only have moved the tie. */
-html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-voice-mobile, .btn-settings-mobile, .btn-toolbar.btn-shell, .toolbar .btn-case-add, .accessory-btn:not(.armed)) {
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-voice-mobile, .btn-settings-mobile, .btn-toolbar.btn-shell, .accessory-btn:not(.armed)) {
   background: var(--control-bg);
   border-color: var(--control-border);
   color: var(--text-dim);
 }
 
-html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-voice-mobile:active, .btn-settings-mobile:active, .btn-toolbar.btn-shell:hover, .btn-toolbar.btn-shell:active, .btn-case-add:hover, .btn-case-add:active, .accessory-btn:active) {
+html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="catppuccin-latte"], [data-skin="rose-pine-dawn"]) :is(.btn-voice-mobile:active, .btn-settings-mobile:active, .btn-toolbar.btn-shell:hover, .btn-toolbar.btn-shell:active, .accessory-btn:active) {
   background: var(--control-bg-hover);
   border-color: var(--control-border-hover);
   color: var(--text);
