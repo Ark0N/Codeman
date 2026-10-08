@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 const PUBLIC = join(new URL('.', import.meta.url).pathname, '../src/web/public');
 
-describe.each(['terminal-ui.js', 'terminal-split.js'])('%s Shift/Ctrl+Enter handler', (file) => {
+describe.each(['terminal-ui.js', 'terminal-tile.js'])('%s Shift/Ctrl+Enter handler', (file) => {
   const src = readFileSync(join(PUBLIC, file), 'utf8');
 
   it('swallows every event type for Shift/Ctrl+Enter', () => {

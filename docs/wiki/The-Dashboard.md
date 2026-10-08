@@ -64,7 +64,7 @@ reloading while a permission prompt is blocking does not lose the red tab.
 | Jump to tab N                   | `Alt+1` to `Alt+9` (the number on the tab)              |
 | Next / previous                 | `Ctrl+Tab`, `Alt+[`, `Alt+]`                            |
 | Move the active tab             | `Ctrl+Shift+{`, `Ctrl+Shift+}`                          |
-| Close                           | `Ctrl+W`                                                |
+| Close                           | The tab's close control (no key by default)            |
 | Find any session, open or past  | `Ctrl+K` (also `Cmd+K` and `Alt+K`)                     |
 
 Tabs can also be dragged to reorder.

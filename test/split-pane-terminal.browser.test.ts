@@ -1,4 +1,4 @@
-/** @fileoverview Real Chromium + real WebSocket coverage for SplitTerminalPane (Task 4 of the split-pane-sessions plan). */
+/** @fileoverview Real Chromium + real WebSocket coverage for TerminalTile (Task 4 of the split-pane-sessions plan). */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
@@ -6,7 +6,7 @@ import { WebServer } from '../src/web/server.js';
 const PORT = 3175;
 const BASE_URL = `http://localhost:${PORT}`;
 
-describe('SplitTerminalPane in a real browser', () => {
+describe('TerminalTile in a real browser', () => {
   let server: WebServer;
   let browser: Browser;
   let page: Page;
@@ -37,7 +37,7 @@ describe('SplitTerminalPane in a real browser', () => {
       // Testing section) — the shell PTY only spawns once this is called, and
       // without it the WS opens but no bytes ever flow, and the echo assertion
       // below would hang until its own timeout for reasons unrelated to
-      // SplitTerminalPane.
+      // TerminalTile.
       await fetch(`/api/sessions/${id}/shell`, { method: 'POST' });
       return id;
     });
@@ -48,7 +48,7 @@ describe('SplitTerminalPane in a real browser', () => {
       mount.style.height = '300px';
       document.body.appendChild(mount);
 
-      const pane = new (window as any).SplitTerminalPane(id, mount);
+      const pane = new (window as any).TerminalTile(id, mount);
       pane.connect();
 
       // Wait for the WS to open, then send a real input frame — testMode's
@@ -107,7 +107,7 @@ describe('SplitTerminalPane in a real browser', () => {
       });
       const id = (await res.json()).data.session.id;
       await fetch(`/api/sessions/${id}/shell`, { method: 'POST' });
-      // Write directly to the session (not through SplitTerminalPane, which
+      // Write directly to the session (not through TerminalTile, which
       // does not exist yet). Poll the real ?full=1 capture (same endpoint
       // connect() below will use) rather than a fixed delay — the shell's
       // own startup can race an early write and, on this box, a startup
@@ -135,7 +135,7 @@ describe('SplitTerminalPane in a real browser', () => {
       mount.style.height = '300px';
       document.body.appendChild(mount);
 
-      const pane = new (window as any).SplitTerminalPane(id, mount);
+      const pane = new (window as any).TerminalTile(id, mount);
       await pane.connect();
 
       // xterm's write() parses asynchronously (it queues data and processes it
@@ -191,7 +191,7 @@ describe('SplitTerminalPane in a real browser', () => {
       mount.style.height = '300px';
       document.body.appendChild(mount);
 
-      const pane = new (window as any).SplitTerminalPane(id, mount);
+      const pane = new (window as any).TerminalTile(id, mount);
       await pane.connect();
       await new Promise((resolve) => {
         const check = () => (pane._wsReady ? resolve(undefined) : setTimeout(check, 100));

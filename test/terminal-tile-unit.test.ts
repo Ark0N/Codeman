@@ -1,8 +1,9 @@
-// test/split-pane-terminal-unit.test.ts
-// Port: N/A (no server/browser; SplitTerminalPane is loaded via `vm`, like
+// test/terminal-tile-unit.test.ts
+// Port: N/A (no server/browser; TerminalTile is loaded via `vm`, like
 // split-pane-auto-collapse-unit.test.ts loads the CodemanApp patches).
 //
-// Unit coverage for the two SplitTerminalPane (terminal-split.js) fixes from
+// Unit coverage for the two TerminalTile (terminal-tile.js, the split pane's
+// Pane B until it moved out of terminal-split.js) fixes from
 // the final review of #453 that need no browser: destroy() nulling EVERY socket
 // handler (onclose used to survive it and fire its "disconnected" write into a
 // pane already torn down), and the `{t:'r'}` server-refresh path being
@@ -15,7 +16,7 @@
 // The last block covers the scroll-to-top history pull: a burst of output leaves
 // a shell pane's xterm with about one screen of scrollback while tmux holds every
 // line, and Pane B (a separate xterm from the primary pane) never went back to
-// ask. See _maybeLoadMoreHistory / _pullHistory in terminal-split.js.
+// ask. See _maybeLoadMoreHistory / _pullHistory in terminal-tile.js.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
@@ -73,9 +74,9 @@ const fetchMock = vi.fn();
 const rafQueue: Array<() => void> = [];
 /** Recorded deadline timers (see the context's setTimeout); `fn` aborts the request. */
 const deadlines: Array<{ fn: () => void; ms: number; cleared: boolean }> = [];
-const SOURCE = readFileSync(resolve(import.meta.dirname, '../src/web/public/terminal-split.js'), 'utf8');
+const SOURCE = readFileSync(resolve(import.meta.dirname, '../src/web/public/terminal-tile.js'), 'utf8');
 
-function loadSplitTerminalPane() {
+function loadTerminalTile() {
   const context = vm.createContext({
     console: { ...console, log: vi.fn(), warn: vi.fn(), error: vi.fn() },
     // The primary pane's row estimator, reduced to a line count: the pull only
@@ -111,18 +112,18 @@ function loadSplitTerminalPane() {
   });
   // The module's tail patches CodemanApp.prototype; nothing on it runs here.
   vm.runInContext(`class CodemanApp { _onSessionDeleted() {} selectSession() {} }\n${SOURCE}`, context);
-  return (context.window as { SplitTerminalPane: new (id: string, mount: unknown, opts?: object) => PaneUnderTest })
-    .SplitTerminalPane;
+  return (context.window as { TerminalTile: new (id: string, mount: unknown, opts?: object) => PaneUnderTest })
+    .TerminalTile;
 }
 
-const SplitTerminalPane = loadSplitTerminalPane();
+const TerminalTile = loadTerminalTile();
 
 function makePane(
   mode = 'claude',
   mount: unknown = {},
   opts: { detachedSessions?: Set<string> } = {}
 ): PaneUnderTest & { terminal: FakeTerminal } {
-  const pane = new SplitTerminalPane('s1', mount, { mode, ...opts });
+  const pane = new TerminalTile('s1', mount, { mode, ...opts });
   pane.terminal = {
     // xterm invokes a write's callback once everything before it is parsed.
     write: vi.fn((_data: string, done?: () => void) => done?.()),
@@ -175,7 +176,8 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-const isMarker = (data: unknown) => typeof data === 'string' && data.includes('Pane B disconnected');
+// Every marker variant (reconnecting, session ended, refused, taken over) starts the same way.
+const isMarker = (data: unknown) => typeof data === 'string' && data.includes('[disconnected');
 
 /** Lets every microtask the vm-side promise chain queued run. */
 const settle = () => new Promise((r) => setTimeout(r, 0));
@@ -187,7 +189,7 @@ beforeEach(() => {
   clock = 0;
 });
 
-describe('SplitTerminalPane.destroy()', () => {
+describe('TerminalTile.destroy()', () => {
   it('nulls every WebSocket handler, onclose included, before closing the socket', () => {
     const pane = makePane();
     const terminal = pane.terminal;
@@ -210,7 +212,7 @@ describe('SplitTerminalPane.destroy()', () => {
   });
 });
 
-describe('SplitTerminalPane server-refresh single-flight', () => {
+describe('TerminalTile server-refresh single-flight', () => {
   it('a refresh with nothing in flight clears and fetches straight away', async () => {
     const pane = makePane();
     fetchMock.mockResolvedValueOnce(jsonResponse('one'));
@@ -329,7 +331,7 @@ describe('SplitTerminalPane server-refresh single-flight', () => {
   });
 });
 
-describe('SplitTerminalPane scroll-to-top history pull', () => {
+describe('TerminalTile scroll-to-top history pull', () => {
   it('a shell pane at the top pulls a bounded window of full history and replays it', async () => {
     const pane = makePane('shell');
     const term = pane.terminal;
@@ -721,8 +723,11 @@ describe('SplitTerminalPane scroll-to-top history pull', () => {
     expect(connect).toContain('this._installWheelListener();');
     expect(connect).toContain('this._onLiveClear();');
     expect(connect).not.toContain('this.terminal.clear();');
-    // The tests below drive the close through _onSocketClosed() directly.
-    expect(connect).toContain('this.ws.onclose = () => this._onSocketClosed();');
+    // The tests below drive the close through _onSocketClosed() directly; the
+    // socket's own handler forwards the close event (and its code) there, and
+    // only for the current socket (_openSocket).
+    expect(connect).toContain('this._onSocketClosed(event);');
+    expect(connect).toMatch(/ws\.onclose = \(event\) => \{\s*if \(ws !== this\.ws\) return;/);
   });
 
   it('a close with no pull running writes the marker straight away', () => {
@@ -746,9 +751,9 @@ describe('SplitTerminalPane scroll-to-top history pull', () => {
     void pane._pullHistory();
     await settle();
 
-    const marker = expect.stringContaining('Pane B disconnected');
+    const marker = expect.stringContaining('[disconnected');
     const writes = pane.terminal.write.mock.calls.map((c) => c[0]);
-    expect(writes.at(-1)).toEqual(expect.stringMatching(/Pane B disconnected/));
+    expect(writes.at(-1)).toEqual(expect.stringMatching(/\[disconnected/));
     expect(pane.terminal.write).toHaveBeenCalledWith(marker);
   });
 
@@ -1003,7 +1008,7 @@ describe('SplitTerminalPane scroll-to-top history pull', () => {
     await settle();
 
     for (const call of pane.terminal.write.mock.calls) {
-      expect(call[0]).toEqual(expect.not.stringMatching(/Pane B disconnected/));
+      expect(call[0]).toEqual(expect.not.stringMatching(/\[disconnected/));
     }
   });
 

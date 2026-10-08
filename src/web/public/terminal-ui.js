@@ -544,6 +544,9 @@ Object.assign(CodemanApp.prototype, {
     this._installMobileTapMouseGuard();
     this._installShiftDragSelection();
     this._installTouchSelectionFocusGuard();
+    // Focus coming back to the primary terminal ends a second pane's claim on
+    // the keyboard (see _focusedPane).
+    this.terminal.textarea?.addEventListener('focus', () => this._noteFocusedTile(null));
 
     // Let xterm's CompositionHelper own IME key events. In particular, a
     // non-composing keyCode 229 is how an active IME commits numbers and
@@ -1416,7 +1419,7 @@ Object.assign(CodemanApp.prototype, {
         // without this call Pane B never learned about a window resize, an
         // Alt+B sidebar toggle, or a tab-rail drag, and its PTY silently
         // stayed at whatever size it was last dragged to.
-        this._splitPane?.fit();
+        this._forEachTile?.((tile) => tile.fit());
       }, 300); // Trailing-edge: only fire after 300ms of no resize events
     };
 
@@ -1827,9 +1830,24 @@ Object.assign(CodemanApp.prototype, {
    * Register a custom link provider for xterm.js that detects file paths
    * in terminal output and makes them clickable.
    * When clicked, opens a floating log viewer window with live streaming.
+   *
+   * `target` defaults to the primary terminal and the active session. A second
+   * terminal (the split pane) passes its own `{ terminal, getSessionId,
+   * setHovered }`, so a path printed there opens against THAT pane's session and
+   * hovering it never flips the primary pane's `_linkHovered`. Only the primary
+   * registration is kept on `_terminalLinkProvider`, which the touch path reads.
+   * Returns the provider.
    */
-  registerFilePathLinkProvider() {
+  registerFilePathLinkProvider(target = {}) {
     const self = this;
+    const terminal = target.terminal || this.terminal;
+    const getSessionId = target.getSessionId || (() => this.activeSessionId);
+    const setHovered =
+      target.setHovered ||
+      ((hovered) => {
+        this._linkHovered = hovered;
+      });
+    const isPrimary = terminal === this.terminal;
 
     // Debug: Track if provider is being invoked
     let lastInvokedLine = -1;
@@ -1842,7 +1860,7 @@ Object.assign(CodemanApp.prototype, {
           console.debug('[LinkProvider] Checking line:', bufferLineNumber);
         }
 
-        const buffer = self.terminal.buffer.active;
+        const buffer = terminal.buffer.active;
         // provideLinks passes 1-based line number, getLine expects 0-based
         const line = buffer.getLine(bufferLineNumber - 1);
 
@@ -1866,7 +1884,7 @@ Object.assign(CodemanApp.prototype, {
         const logical = window.CodemanTerminalLines?.terminalLogicalLine(
           buffer,
           bufferLineNumber - 1,
-          self.terminal.cols,
+          terminal.cols,
           MAX_STITCHED_ROWS
         );
         if (!logical) {
@@ -1919,10 +1937,10 @@ Object.assign(CodemanApp.prototype, {
               window.open(text, '_blank', 'noopener,noreferrer');
             },
             hover() {
-              self._linkHovered = true;
+              setHovered(true);
             },
             leave() {
-              self._linkHovered = false;
+              setHovered(false);
             },
           });
         };
@@ -1978,17 +1996,18 @@ Object.assign(CodemanApp.prototype, {
               // path clicked in the response viewer previewed fine. The preview
               // reads those through the guarded attachment routes, so external
               // paths route there and the two surfaces agree.
-              if (previewsInFileViewer(text) || self._isExternalPreviewPath(text, self.activeSessionId)) {
-                self.openFilePreview(text, self.activeSessionId);
+              const sessionId = getSessionId();
+              if (previewsInFileViewer(text) || self._isExternalPreviewPath(text, sessionId)) {
+                self.openFilePreview(text, sessionId);
                 return;
               }
-              self.openLogViewerWindow(text, self.activeSessionId);
+              self.openLogViewerWindow(text, sessionId);
             },
             hover() {
-              self._linkHovered = true;
+              setHovered(true);
             },
             leave() {
-              self._linkHovered = false;
+              setHovered(false);
             },
           });
         };
@@ -2031,10 +2050,11 @@ Object.assign(CodemanApp.prototype, {
     // produce), so the tap path asks this SAME provider what is under the finger
     // rather than growing a second, driftable copy of the patterns.
     // See _terminalLinkAtPoint.
-    this._terminalLinkProvider = provider;
-    this.terminal.registerLinkProvider(provider);
+    if (isPrimary) this._terminalLinkProvider = provider;
+    terminal.registerLinkProvider(provider);
 
     console.log('[LinkProvider] File path link provider registered');
+    return provider;
   },
 
   /**
@@ -4480,8 +4500,45 @@ Object.assign(CodemanApp.prototype, {
   // Terminal Controls
   // ═══════════════════════════════════════════════════════════════
 
+  /**
+   * The terminal the keyboard is in, as `{ terminal, sessionId, isPrimary, tile }`.
+   *
+   * The ONE place a shortcut, voice or paste should ask "which pane?", rather
+   * than reading `this.terminal` / `this.activeSessionId`, which always mean the
+   * primary pane. It answers with the pane whose terminal was focused LAST, not
+   * with `document.activeElement`: clicking the mic or a header button moves
+   * DOM focus to that button, and the dictation it starts still belongs to the
+   * pane the user was typing in. A second pane (the split pane's Pane B) claims
+   * it from its own terminal's focus; the primary terminal's focus gives it back.
+   */
+  _focusedPane() {
+    const tile = this._focusedTile;
+    if (tile && !tile._destroyed && tile.terminal) {
+      return { terminal: tile.terminal, sessionId: tile.sessionId, isPrimary: false, tile };
+    }
+    return { terminal: this.terminal, sessionId: this.activeSessionId, isPrimary: true, tile: null };
+  },
+
+  /** Record which second pane holds the keyboard (null: the primary terminal). */
+  _noteFocusedTile(tile) {
+    this._focusedTile = tile || null;
+  },
+
+  /**
+   * Run `fn(tile)` for every secondary terminal pane on screen: today the split
+   * pane's second terminal, when one is open. Font, weight, family and skin
+   * changes go through here so they reach every pane without a special case
+   * per pane kind. Agent Teams terminals size themselves and are not tiles.
+   */
+  _forEachTile(fn) {
+    if (this._splitPane?.terminal) fn(this._splitPane);
+  },
+
+  // Clears the pane the keyboard is in. The chord itself also reaches that
+  // pane's xterm (the capture handler only preventDefault()s), so the ^L lands
+  // in the same pane whose display is cleared, never a different one.
   clearTerminal() {
-    this.terminal.clear();
+    this._focusedPane().terminal?.clear();
   },
 
   /** Insert editable text at the active prompt without pressing Enter. */
@@ -4545,6 +4602,14 @@ Object.assign(CodemanApp.prototype, {
    * Ctrl+L is NOT sent here (Claude Code 2.x treats it as "clear conversation").
    */
   async restoreTerminalSize() {
+    // A second pane owns its own geometry: refit it and force its PTY to the
+    // size it renders at (TerminalTile.fit), whatever another device set.
+    const pane = this._focusedPane();
+    if (!pane.isPrimary) {
+      pane.tile.fit({ force: true });
+      this.showToast(`Terminal restored to ${pane.terminal.cols}x${pane.terminal.rows}`, 'success');
+      return;
+    }
     if (!this.activeSessionId) {
       this.showToast('No active session', 'warning');
       return;
@@ -4639,15 +4704,18 @@ Object.assign(CodemanApp.prototype, {
    * terminal._core for cell dimensions, and falls back to cleaning normally if
    * a future xterm renames it. SelectionMode.COLUMN is 3.
    */
-  cleanedTerminalSelection(text) {
-    const raw = text ?? (this.terminal?.hasSelection?.() ? this.terminal.getSelection() : '');
+  cleanedTerminalSelection(text, target = {}) {
+    // `target` names a second terminal (the split pane) and its session; both
+    // default to the primary pane, whose `this.terminal` this file otherwise reads.
+    const terminal = target.terminal || this.terminal;
+    const raw = text ?? (terminal?.hasSelection?.() ? terminal.getSelection() : '');
     if (!raw) return '';
-    if (this.terminal?._core?._selectionService?._activeSelectionMode === 3) return raw;
+    if (terminal?._core?._selectionService?._activeSelectionMode === 3) return raw;
     const clean = window.CodemanCopySelection?.clean;
     if (!clean) return raw;
-    const range = this._normalisedSelectionRange();
+    const range = this._normalisedSelectionRange(terminal);
     return clean(raw, {
-      margin: this._cliGutterColumns(),
+      margin: this._cliGutterColumns(target.sessionId),
       firstLinePartial: !!range && range.start.x > 0,
     });
   },
@@ -4717,8 +4785,11 @@ Object.assign(CodemanApp.prototype, {
   // Copy the current terminal selection. Goes through _copyText (Clipboard API,
   // then a hidden-textarea + execCommand fallback) because install.sh's LAN
   // option serves plain HTTP, where navigator.clipboard is undefined.
-  async copyTerminalSelection(text) {
-    const selection = this.cleanedTerminalSelection(text);
+  async copyTerminalSelection(text, target = {}) {
+    // Every terminal touched below is the TARGET one: clearing or refocusing the
+    // primary after copying from the split pane would hit the wrong pane.
+    const terminal = target.terminal || this.terminal;
+    const selection = this.cleanedTerminalSelection(text, target);
     // trim(), not emptiness: a multi-row drag across padding cleans to newlines
     // alone, which are truthy, and a bare newline pasted into a chat composer
     // or a shell submits the line. decideAutoCopy applies the same rule.
@@ -4727,7 +4798,7 @@ Object.assign(CodemanApp.prototype, {
       // selection, so a padding-only selection left set can no longer swallow a
       // later interrupt; it cleans to '' and the press reaches the PTY. What the
       // clear avoids is a highlight that sits there having copied nothing.
-      this.terminal?.clearSelection?.();
+      terminal?.clearSelection?.();
       this.showToast('Nothing to copy', 'warning');
       return false;
     }
@@ -4735,14 +4806,14 @@ Object.assign(CodemanApp.prototype, {
     if (ok) {
       // Clearing is what makes a second Ctrl+C an interrupt (and xterm already
       // drops the selection on any keypress, so this matches existing feel).
-      this.terminal.clearSelection?.();
+      terminal.clearSelection?.();
       this.showToast('Copied to clipboard', 'success');
     } else {
       this.showToast('Failed to copy', 'error');
     }
     // The execCommand fallback focuses a temp textarea, so hand focus back. This
     // is the CJK-aware focus router, not xterm's raw focus().
-    this.terminal.focus();
+    terminal.focus();
     return ok;
   },
 
@@ -5688,10 +5759,10 @@ Object.assign(CodemanApp.prototype, {
     // Update overlay font cache and re-render at new cell dimensions
     this._localEchoOverlay?.refreshFont();
     this._predictiveEcho?.refreshFont();
-    if (this._splitPane?.terminal) {
-      this._splitPane.terminal.options.fontSize = size;
-      this._splitPane.fitAddon?.fit();
-    }
+    this._forEachTile?.((tile) => {
+      tile.terminal.options.fontSize = size;
+      tile.fit(); // a font change is a size change: tell its PTY too (#464)
+    });
   },
 
   /**
@@ -5717,10 +5788,10 @@ Object.assign(CodemanApp.prototype, {
     this._refitAfterCellSizeChange();
     this._localEchoOverlay?.refreshFont();
     this._predictiveEcho?.refreshFont();
-    if (this._splitPane?.terminal) {
-      this._splitPane.terminal.options.fontFamily = resolved;
-      this._splitPane.fitAddon?.fit();
-    }
+    this._forEachTile?.((tile) => {
+      tile.terminal.options.fontFamily = resolved;
+      tile.fit(); // a font change is a size change: tell its PTY too (#464)
+    });
   },
 
   /**
@@ -5772,11 +5843,11 @@ Object.assign(CodemanApp.prototype, {
         /* pane not laid out yet — its own resize observer refits it */
       }
     }
-    if (this._splitPane?.terminal) {
-      this._splitPane.terminal.options.fontWeight = fontWeight;
-      this._splitPane.terminal.options.fontWeightBold = fontWeightBold;
-      this._splitPane.fitAddon?.fit();
-    }
+    this._forEachTile?.((tile) => {
+      tile.terminal.options.fontWeight = fontWeight;
+      tile.terminal.options.fontWeightBold = fontWeightBold;
+      tile.fit(); // a font change is a size change: tell its PTY too (#464)
+    });
   },
 
   loadFontSize() {
@@ -6245,13 +6316,13 @@ Object.assign(CodemanApp.prototype, {
         }
       }
     }
-    if (this._splitPane?.terminal) {
-      this._splitPane.terminal.options.minimumContrastRatio = minimumContrastRatio;
-      this._splitPane.terminal.options.theme = { ...theme };
+    this._forEachTile?.((tile) => {
+      tile.terminal.options.minimumContrastRatio = minimumContrastRatio;
+      tile.terminal.options.theme = { ...theme };
       try {
-        this._splitPane.terminal.refresh(0, this._splitPane.terminal.rows - 1);
+        tile.terminal.refresh(0, tile.terminal.rows - 1);
       } catch {}
-    }
+    });
   },
 });
 

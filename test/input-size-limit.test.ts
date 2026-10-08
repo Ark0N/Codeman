@@ -97,7 +97,7 @@ describe('the client never queues or keeps an undeliverable frame', () => {
   });
 
   it('drops a frame the WebSocket refused with an error ACK', () => {
-    const handler = appSource.slice(appSource.indexOf('_onWsInputAck(seq, msg) {'));
+    const handler = appSource.slice(appSource.indexOf('_onWsInputAck(seq, msg, sessionId = this._wsSessionId) {'));
     expect(handler.slice(0, 600)).toMatch(/if \(msg && msg\.err\)/);
   });
 

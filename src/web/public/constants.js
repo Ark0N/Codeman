@@ -1614,7 +1614,7 @@ function buildSplitPickerSessions(sessions, sessionOrder, excludeId, detachedIds
     if (id === excludeId) continue;
     // A detached (popped-out) session's own window already yields its PTY
     // size (see sendResize's detachedElsewhere guard in terminal-ui.js) —
-    // Pane B's SplitTerminalPane._sendResize() has no such check, so letting
+    // Pane B's TerminalTile._sendResize() has no such check, so letting
     // one into the picker put its detached window and Pane B in a fight over
     // the same PTY's dimensions.
     if (detachedIds?.has?.(id)) continue;
@@ -1622,7 +1622,7 @@ function buildSplitPickerSessions(sessions, sessionOrder, excludeId, detachedIds
     if (!session) continue;
     // A session with no PTY attached (exited CLI, a crash-looped session
     // whose breaker tripped, a restore that failed to re-attach) has nothing
-    // reading its tmux pane. SplitTerminalPane never does selectSession()'s
+    // reading its tmux pane. TerminalTile never does selectSession()'s
     // re-attach POST, so its socket would open onto a pane nothing feeds:
     // no terminal events, and Session.write() silently drops every keystroke
     // with no ack either way (Pane B sends no `seq`), so the loss is
