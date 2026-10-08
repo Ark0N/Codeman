@@ -776,6 +776,20 @@ export function resolveOmpConfigForCreate(
 }
 
 /**
+ * The tmux history lines a full capture may read (`capture-pane -S -<n>`): the
+ * optional `lines` query parameter, an integer of at least 1, never more than
+ * the configured history limit; absent or malformed, the limit itself, as
+ * before. A grid tile sends its own scrollback size: its xterm keeps no more
+ * than that, while a capture of the whole history (tens of thousands of lines,
+ * cut to `tail` only afterwards) is synchronous work on this event loop.
+ */
+function captureHistoryLines(raw: string | undefined, historyLimit: number): number {
+  if (typeof raw !== 'string' || !/^\d{1,9}$/.test(raw)) return historyLimit;
+  const lines = Number(raw);
+  return lines >= 1 ? Math.min(lines, historyLimit) : historyLimit;
+}
+
+/**
  * `RemoteHost` → the wake registry's host shape. They differ in one field name only
  * (`id` in host config vs `hostId` on a session's `remote`), but the rename is load-
  * bearing: the registry keys its per-host wake state on `hostId`. The proxy fields
@@ -2986,7 +3000,7 @@ export function registerSessionRoutes(
   app.get('/api/sessions/:id/terminal', async (req, reply) => {
     const routeStartedAt = performance.now();
     const { id } = req.params as { id: string };
-    const query = req.query as { tail?: string; full?: string };
+    const query = req.query as { tail?: string; full?: string; lines?: string };
     const session = findSessionOrFail(ctx, id, req);
 
     // `full=1` is the EXPLICIT full-history signal (COD-47): capture the ENTIRE
@@ -3010,8 +3024,14 @@ export function registerSessionRoutes(
     // single reason: `capturedGeometry` comes BACK on it, and the response has
     // to tell the client what size the frame it is about to render was built
     // for. See PaneCaptureOptions.capturedGeometry.
+    // `lines` bounds only the history a FULL capture reads; the visible-frame
+    // path reads no history and is untouched by it.
     const captureOpts: PaneCaptureOptions = isFullReload
-      ? { fullHistory: true, historyLimitLines: tmuxHistoryLimit, maxCaptureBytes: terminalBufferMaxBytes }
+      ? {
+          fullHistory: true,
+          historyLimitLines: captureHistoryLines(query.lines, tmuxHistoryLimit),
+          maxCaptureBytes: terminalBufferMaxBytes,
+        }
       : {};
     const liveMuxBuffer =
       muxName && typeof ctx.mux.captureActivePaneBuffer === 'function'

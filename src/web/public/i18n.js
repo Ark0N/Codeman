@@ -96,6 +96,80 @@
     'Split: close the second session': '分屏：关闭第二个会话',
     'Close split': '关闭分屏',
     'No other sessions to split with': '没有其他可用于分屏的会话',
+    // Tile grid (tile-grid.js, docs/tile-grid-plan.md). 平铺 is the feature (the
+    // button, the setting, the grid), 窗格 one tile in it. Key names stay as
+    // they are; Click / Right-click are mouse actions, Arrows the arrow keys.
+    // Counts, exit codes and durations are patterns in translateDynamic.
+    Tiles: '平铺',
+    Split: '分屏',
+    'Tiled sessions': '平铺的会话',
+    'Tiles: show several sessions side by side (right-click for how many)':
+      '平铺：并排显示多个会话（右键单击可选择窗格数量）',
+    'Tiles: back to a single session (right-click for how many tiles)': '平铺：返回单个会话（右键单击可选择窗格数量）',
+    'How many tiles': '窗格数量',
+    // The Tiles button's hover card (the count and the fits note are patterns).
+    'Click: open the grid': '单击：打开平铺网格',
+    'Click: close the grid': '单击：关闭平铺网格',
+    'Right-click: choose 2, 4 or 6 tiles': '右键单击：选择 2、4 或 6 个窗格',
+    'Shift+F10: the same menu from the keyboard': 'Shift+F10：用键盘打开同一菜单',
+    'Split: unavailable while tiles are open': '分屏：平铺打开时不可用',
+    'Toggle Tile Grid': '切换平铺网格',
+    'Focus Tile Left': '聚焦左侧窗格',
+    'Focus Tile Right': '聚焦右侧窗格',
+    'Focus Tile Up': '聚焦上方窗格',
+    'Focus Tile Down': '聚焦下方窗格',
+    'Focus Tile Left / Right / Up / Down': '聚焦左侧 / 右侧 / 上方 / 下方窗格',
+    'Move Tile Left': '向左移动窗格',
+    'Move Tile Right': '向右移动窗格',
+    'Move Tile Up': '向上移动窗格',
+    'Move Tile Down': '向下移动窗格',
+    'Move Tile Left / Right / Up / Down': '向左 / 右 / 上 / 下移动窗格',
+    Drag: '拖动',
+    "a tile's header": '窗格的标题栏',
+    'Move the Tile (onto Another: Swap)': '移动窗格（拖到另一个窗格上：互换位置）',
+    'Zoom Focused Tile': '放大聚焦的窗格',
+    'Remove Focused Tile': '移除聚焦的窗格',
+    'Add the Session to the Tile Grid': '将该会话加入平铺网格',
+    'Choose How Many Tiles (2, 4 or 6)': '选择窗格数量（2、4 或 6）',
+    'a tab': '标签页',
+    'the Tiles button': '平铺按钮',
+    Click: '单击',
+    'Right-click': '右键单击',
+    Arrows: '方向键',
+    'not bound': '未绑定',
+    'Open group as tiles': '以平铺方式打开分组',
+    'No sessions to show as tiles': '没有可平铺显示的会话',
+    'This group has no session to show as tiles': '此分组没有可平铺显示的会话',
+    'Zoom this tile': '放大此窗格',
+    'Restore the grid': '恢复平铺网格',
+    'Remove tile (the session keeps running)': '移除窗格（会话继续运行）',
+    'Drop a tab or a tile here': '将标签页或窗格拖放到此处',
+    // A tile header's tooltip while tiles can move (with the state above it: a pattern below).
+    'Drag to move the tile': '拖动可移动窗格',
+    'Resize tile columns': '调整窗格列宽',
+    'Resize tile rows': '调整窗格行高',
+    Attach: '附加',
+    'Attaching…': '正在附加…',
+    'Not attached': '未附加',
+    'The session ended': '会话已结束',
+    'The agent exited': '智能体已退出',
+    'It cannot be restarted in place: close it from ⋯ (Close session).': '无法原地重启：请通过 ⋯（关闭会话）关闭它。',
+    'Could not attach the session': '无法附加会话',
+    // The tab's exited-agent badge (app.js applyPaneExitBadge, Ark0N/Codeman#446);
+    // its exit-code forms and the tab's accessible name are patterns.
+    exited: '已退出',
+    // The Run button family (session-ui.js _applyRunMode; "Run CC", "Run SH" ...
+    // are a pattern; mode codes and product names stay), and the toolbar beside it.
+    'Terminal / Shell': '终端 / Shell',
+    'Send Enter': '发送回车',
+    // The Help modal and the shortcut overlay. Key names stay; Wheel is a mouse
+    // input like Click (单击).
+    Tabs: '标签页',
+    'Toggle Session Sidebar': '切换会话侧边栏',
+    'Copy Selection': '复制选中内容',
+    'Copy Selection (interrupts when nothing is selected)': '复制选中内容（无选中内容时中断）',
+    'Focus Tabs': '聚焦标签页',
+    Wheel: '滚轮',
     'Ultracode / Workflow agents': 'Ultracode / Workflow 智能体',
     'Open ultracode workflow agents': '打开 Ultracode 工作流智能体',
     Notifications: '通知',
@@ -951,6 +1025,17 @@
     return value.replace(/\{([a-zA-Z][\w]*)\}/g, (_match, key) => String(variables[key] ?? ''));
   }
 
+  // The six-state words of a tile header's tooltip (tile-grid.js _paintTileHandle).
+  const TILE_STATE_ZH = {
+    'needs you': '需要你',
+    error: '错误',
+    waiting: '等待中',
+    working: '工作中',
+    idle: '空闲',
+    done: '已完成',
+    exited: '已退出',
+  };
+
   function translateDynamic(source) {
     const patterns = [
       [/^(\d+) tokens?$/, (_m, count) => `${count} 个 Token`],
@@ -974,6 +1059,71 @@
       [
         /^Delete group "(.+)"\? Its tabs move to Ungrouped\.$/,
         (_m, group) => `删除分组“${group}”？其中的标签将移到未分组。`,
+      ],
+      // Tile grid: counts, exit codes and durations pass through.
+      [/^(\d+) tiles$/, (_m, n) => `${n} 个窗格`],
+      [/^Tiles \u00B7 (\d+)$/, (_m, n) => `平铺 · ${n}`],
+      [
+        /^This window fits (\d+) tiles?: a click opens (\d+)$/,
+        (_m, n, m) => `此窗口可容纳 ${n} 个窗格：单击将打开 ${m} 个`,
+      ],
+      [/^This window fits (\d+) tiles?$/, (_m, n) => `此窗口可容纳 ${n} 个窗格`],
+      [/^The grid holds at most (\d+) tiles$/, (_m, n) => `平铺网格最多容纳 ${n} 个窗格`],
+      [
+        /^The grid already holds what this window fits \((\d+)\)$/,
+        (_m, n) => `平铺网格已达到此窗口可容纳的数量（${n}）`,
+      ],
+      [
+        /^The grid holds at most (\d+) tiles: the new session opens on its own$/,
+        (_m, n) => `平铺网格最多容纳 ${n} 个窗格：新会话将单独打开`,
+      ],
+      [
+        /^The grid already holds what this window fits \((\d+)\): the new session opens on its own$/,
+        (_m, n) => `平铺网格已达到此窗口可容纳的数量（${n}）：新会话将单独打开`,
+      ],
+      [
+        /^The window is too small for (\d+) tiles: showing the focused one$/,
+        (_m, n) => `窗口太小，容纳不下 ${n} 个窗格：只显示聚焦的窗格`,
+      ],
+      [/^The agent exited \((-?\d+)\)$/, (_m, code) => `智能体已退出（${code}）`],
+      [/^The agent exited \(signal (\d+)\)$/, (_m, signal) => `智能体已退出（信号 ${signal}）`],
+      // A session header's harness logo (tile grid, split pane): "<harness> · <model>",
+      // and where the model came from when the CLI did not report it. The harness
+      // and model names pass through untranslated.
+      [/^(.+) \(set at launch\)$/, (_m, names) => `${names}（启动时设定）`],
+      [/^(.+) \(custom endpoint\)$/, (_m, names) => `${names}（自定义端点）`],
+      [/^(.+) \(from config\)$/, (_m, names) => `${names}（来自配置）`],
+      // The Run button's mode codes ("Run CC", "Run SH", "Run OC" ...; a registry
+      // CLI's shortBadge too). Exact entries win first ("Run Shell", "Run OMP").
+      [/^Run ([A-Z][A-Z0-9]{1,5})$/, (_m, code) => `运行 ${code}`],
+      // The tab's exited-agent badge, and the tab's accessible name carrying it.
+      // The session name is user text: it passes through untranslated.
+      [/^exited \((-?\d+)\)$/, (_m, code) => `已退出（${code}）`],
+      [/^exited \(signal (\d+)\)$/, (_m, signal) => `已退出（信号 ${signal}）`],
+      [
+        /^(.+) session, agent exited \(signal (\d+)\)$/,
+        (_m, name, signal) => `${name} 会话，智能体已退出（信号 ${signal}）`,
+      ],
+      [/^(.+) session, agent exited \((-?\d+)\)$/, (_m, name, code) => `${name} 会话，智能体已退出（${code}）`],
+      [/^(.+) session, agent exited$/, (_m, name) => `${name} 会话，智能体已退出`],
+      // A session name is user text: it passes through untranslated.
+      [
+        /^(.+) was stopped after crashing repeatedly\. Restart it\?$/,
+        (_m, name) => `${name} 因反复崩溃已被停止。要重启吗？`,
+      ],
+      // A tile header's tooltip: a state and how long ("idle 3m"). The duration
+      // is required: bare state words stay out of the table, they collide with
+      // state strings on other surfaces (see mobile-overview.js).
+      [
+        /^(needs you|error|waiting|working|idle|done|exited) (<1m|\d+[dhm](?: \d+[hm])?)$/,
+        (_m, state, duration) => `${TILE_STATE_ZH[state]} ${duration}`,
+      ],
+      // The same while tiles can move, with the drag hint on a second line.
+      // Anchored on the hint, so a bare state word is safe here.
+      [
+        /^(needs you|error|waiting|working|idle|done|exited)(?: (<1m|\d+[dhm](?: \d+[hm])?))?\nDrag to move the tile$/,
+        (_m, state, duration) =>
+          `${TILE_STATE_ZH[state]}${duration ? ` ${duration}` : ''}\n${ZH_CN['Drag to move the tile']}`,
       ],
     ];
     for (const [pattern, replacement] of patterns) {
@@ -1031,6 +1181,23 @@
   function shouldSkip(node) {
     const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
     return !element || Boolean(element.closest(SKIP_SELECTOR));
+  }
+
+  // xterm's DOM renderer rewrites its rows (`.xterm-rows > div`) on every frame
+  // a pane changes: thousands of mutation records a second with a grid of tiles,
+  // each paying a closest() over the whole skip list. All rows of one terminal
+  // share that parent, so its own shouldSkip() verdict is kept once it says
+  // skip; a skip verdict cannot lapse, since xterm keeps `.xterm-rows` inside
+  // its `.xterm`. A rows container that is not skipped is never kept: its rows
+  // go through the full check below like any other node.
+  const skippedRows = new WeakSet();
+  function isSkippedRow(node) {
+    const rows = node.parentNode;
+    if (!rows?.classList?.contains('xterm-rows')) return false;
+    if (skippedRows.has(rows)) return true;
+    if (!shouldSkip(rows)) return false;
+    skippedRows.add(rows);
+    return true;
   }
 
   function shouldSkipText(node) {
@@ -1128,6 +1295,13 @@
     observer = new MutationObserver((mutations) => {
       if (applying) return;
       for (const mutation of mutations) {
+        // A change inside a skipped surface cannot need translating: every
+        // node it adds or edits sits under the same skip ancestor, so both
+        // translators would return on their own closest() check anyway. One
+        // check per record instead of one per text node and attribute matters
+        // for xterm's DOM renderer, which replaces rows every frame (the split
+        // pane, every tile of the grid).
+        if (isSkippedRow(mutation.target) || shouldSkip(mutation.target)) continue;
         if (mutation.type === 'characterData') translateNode(mutation.target);
         if (mutation.type === 'attributes') translateAttributes(mutation.target);
         for (const added of mutation.addedNodes) translateNode(added);

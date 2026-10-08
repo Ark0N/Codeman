@@ -445,6 +445,20 @@ count against the same 16, not 16 of each. An abandoned request no longer holds 
 slot, because the routes release the waiter when the client disconnects, but a
 client that opens many concurrent waits against one session will still hit the cap.
 
+## Terminal capture (`GET /api/v1/sessions/:id/terminal`)
+
+What a session's terminal shows, for a client to replay: `data.terminalBuffer`,
+with `source` (`mux-visible`, `mux-full-history` or `history`), `truncated`,
+`truncationReason`, `fullSize`, and `captureCols`/`captureRows` when the pane's
+geometry was read. The capture runs synchronous tmux calls on the server; the
+`Server-Timing` header reports `capture`, `prepare` and `total`.
+
+| Query | Meaning |
+|---|---|
+| `full=1` | tmux's scrollback, not only the visible frame (`source: 'mux-full-history'`), ending with a relative cursor move back to the pane's caret. |
+| `tail=<bytes>` | Keep the newest `<bytes>` of the result (`truncationReason: 'tail'` when it cut). |
+| `lines=<n>` | With `full=1` only: read at most `<n>` lines of tmux history above the visible frame. An integer of at least 1, clamped to the configured history limit; absent or malformed, the whole limit (100,000 lines by default), as before. `truncated` and `truncationReason` describe byte cuts only, not this bound. Without it a full capture reads all of that history before `tail` cuts it, so a client that keeps a fixed number of lines (the tile grid sends its xterm's scrollback plus its rows) should send it. |
+
 ## Session lineage (`parentSessionId`)
 
 A create request may name the session that spawned it, which the web UI draws as a
@@ -469,6 +483,32 @@ silently dropped and the session is created without lineage — never a `400`. I
 also pure decoration: it confers no permission, and a child is unaffected by its
 parent exiting. It appears on session state as `parentSessionId` (absent when
 unresolved) and survives a server restart.
+
+## Session model (`displayModel`)
+
+Session state (`GET /api/v1/sessions`, the `session:updated` event) carries the model a
+session runs as far as the server knows it, for the web UI's session headers:
+
+```json
+"displayModel": { "model": "qwen3.8-27b", "source": "screen" }
+```
+
+`source` is where it came from, strongest first:
+
+| `source`          | Meaning                                                                                               |
+| ----------------- | ----------------------------------------------------------------------------------------------------- |
+| `custom-endpoint` | The session is pointed at a Custom Model Endpoint Profile; its `modelId` answers, whatever the CLI prints. |
+| `statusline`      | Claude's statusLine exporter reported it (`model.display_name`); follows an in-session `/model`.          |
+| `screen`          | Read off the CLI's own footer (`capabilities.modelDetect`, today dsh and codex); follows a switch.      |
+| `config`          | What the CLI's own config pins for the session (`capabilities.modelDetect.configResolver`, today dsh-TUI's route), while its screen names none. |
+| `launch`          | What the session was launched with (`--model`, the app-wide default, `<cli>Config.model`); nothing has reported since. |
+
+Between `statusline` and `screen` the newest report wins. The field is absent when no
+model is known (a shell, a CLI that reports none and was launched without one). `model`
+is display text from a pane or a CLI report: control characters are stripped and it is at
+most 64 characters, but treat it as untrusted text. A `statusline` or `screen` value is
+persisted and restored after a server restart until the next report replaces it; a
+`config` value is read again at every pane start, attach and relaunch instead.
 
 ## Approvals Inbox
 

@@ -118,6 +118,7 @@ The right side of the header. Almost all of these are off until you enable them 
 | Cron ⏰                | Off                | Scheduled jobs.                                                                   |
 | Multi-monitor          | Off, macOS         | Opens a window spanning every display.                                            |
 | Split                  | Off, desktop only  | View a second session beside the active one, with a draggable divider.           |
+| Tiles                  | Off, desktop only  | Up to six live sessions side by side. See [Tile Grid](Tile-Grid).                |
 | Tunnel indicator       | When a tunnel runs | Cloudflare tunnel status.                                                        |
 | Admin panel            | Multi-user only    | User administration.                                                              |
 

@@ -44,6 +44,7 @@ export interface SessionListenerRefs {
   working: () => void;
   idle: () => void;
   watchingChanged: () => void;
+  displayModelChanged: () => void;
   taskCreated: (task: BackgroundTask) => void;
   taskUpdated: (task: BackgroundTask) => void;
   taskCompleted: (task: BackgroundTask) => void;
@@ -273,6 +274,16 @@ export function createSessionListeners(session: Session, deps: SessionListenerDe
      */
     watchingChanged: () => {
       deps.broadcastSessionStateDebounced(session.id);
+    },
+
+    /**
+     * Pushes the session state when the model the CLI reports changes (its statusline,
+     * or its own footer), which the status does not reflect. Persisted too: a restart
+     * restores the last reported model until the next report.
+     */
+    displayModelChanged: () => {
+      deps.broadcastSessionStateDebounced(session.id);
+      deps.persistSessionState(session);
     },
 
     // ─── Background Task Events ──────────────────────────────
@@ -508,6 +519,7 @@ export function attachSessionListeners(session: Session, refs: SessionListenerRe
   session.on('working', refs.working);
   session.on('idle', refs.idle);
   session.on('watchingChanged', refs.watchingChanged);
+  session.on('displayModelChanged', refs.displayModelChanged);
   session.on('taskCreated', refs.taskCreated);
   session.on('taskUpdated', refs.taskUpdated);
   session.on('taskCompleted', refs.taskCompleted);
@@ -545,6 +557,7 @@ export function detachSessionListeners(session: Session, refs: SessionListenerRe
   session.off('working', refs.working);
   session.off('idle', refs.idle);
   session.off('watchingChanged', refs.watchingChanged);
+  session.off('displayModelChanged', refs.displayModelChanged);
   session.off('taskCreated', refs.taskCreated);
   session.off('taskUpdated', refs.taskUpdated);
   session.off('taskCompleted', refs.taskCompleted);

@@ -1612,25 +1612,457 @@ function buildSplitPickerSessions(sessions, sessionOrder, excludeId, detachedIds
   const result = [];
   for (const id of sessionOrder) {
     if (id === excludeId) continue;
-    // A detached (popped-out) session's own window already yields its PTY
-    // size (see sendResize's detachedElsewhere guard in terminal-ui.js) —
-    // Pane B's TerminalTile._sendResize() has no such check, so letting
-    // one into the picker put its detached window and Pane B in a fight over
-    // the same PTY's dimensions.
+    // A detached (popped-out) session's own window owns its PTY size (see
+    // sendResize's detachedElsewhere guard in terminal-ui.js;
+    // TerminalTile._sendResize() stands aside the same way), so Pane B could
+    // only show it at a size it cannot set.
     if (detachedIds?.has?.(id)) continue;
     const session = sessions.get(id);
     if (!session) continue;
     // A session with no PTY attached (exited CLI, a crash-looped session
     // whose breaker tripped, a restore that failed to re-attach) has nothing
-    // reading its tmux pane. TerminalTile never does selectSession()'s
-    // re-attach POST, so its socket would open onto a pane nothing feeds:
-    // no terminal events, and Session.write() silently drops every keystroke
-    // with no ack either way (Pane B sends no `seq`), so the loss is
-    // invisible — the healthy socket never trips the disconnect banner.
+    // reading its tmux pane, and the split never does selectSession()'s
+    // re-attach POST: Pane B would open a healthy-looking socket onto a pane
+    // that nothing feeds and nothing reads.
     if (session.pid === null) continue;
     result.push({ id, label: session.name || 'Session' });
   }
   return result;
+}
+
+// ── Tile grid (tile-grid.js) ───────────────────────────────────────────────
+//
+// Pure layout and state helpers for the tile grid (docs/tile-grid-plan.md):
+// 1 to TILE_GRID_MAX live sessions side by side, each in its own TerminalTile.
+// Desktop only, behind the same 1180px gate as the split pane.
+
+/**
+ * Hard cap on tiles in one grid: the ONE place it is set (owner decision 7 in
+ * docs/tile-grid-plan.md). Six was tested smooth on a real desktop; nine missed
+ * the headless frame bar and is untested on hardware. Everything that limits
+ * the grid reads this, and the layout table still covers up to TILE_LAYOUT_MAX,
+ * so raising the cap is this one line.
+ */
+const TILE_GRID_MAX = 6;
+/** The largest count the layout table covers (3x3). Never a cap by itself. */
+const TILE_LAYOUT_MAX = 9;
+// The smallest tile worth showing: about 60 columns and a dozen rows at the
+// default tile font. Bounds how many tiles a window can hold.
+const TILE_MIN_W = 480;
+const TILE_MIN_H = 240;
+// Three tiles go side by side (3x1) only when each still gets ~600px;
+// otherwise they take three cells of a 2x2.
+const TILE_GRID_WIDE_3X1 = 1800;
+// A tile's xterm keeps this many lines, not DEFAULT_SCROLLBACK: a grid of DOM
+// renderers at 50k lines each is a real memory cost, and a tile's load is a
+// bounded 1 MiB window anyway, so more scrollback only fills with live output.
+const TILE_SCROLLBACK = 10000;
+// Tiles have their own per-device font size (a tile is a fraction of the screen).
+const TILE_FONT_SIZE_DEFAULT = 13;
+// What the page's SSE filter names while tiles own the terminal: a value no
+// session id takes (ids are UUIDs), so the server, whose filter gates only
+// session:terminal batches, sends none. The tiles carry their own output over
+// their own sockets, and the parked main terminal only parsed those frames to
+// drop them (16 to 18 a second for one busy shell). Every other event still
+// arrives (test/sse-tile-grid-filter.test.ts pins the server's side of this).
+const TILE_GRID_SSE_FILTER = 'tile-grid';
+
+/**
+ * Columns and rows for `count` tiles, by count (the spec's table), and whether
+ * that layout gives every cell at least the minimum tile size (TILE_MIN_W x
+ * TILE_MIN_H) in a grid area of `width` x `height` px.
+ *
+ * @param {{count: number, width?: number, height?: number}} p
+ * @returns {{cols: number, rows: number, fits: boolean}}
+ */
+function computeTileLayout({ count, width = Infinity, height = Infinity }) {
+  const n = Math.min(Math.max(0, Math.floor(Number(count) || 0)), TILE_LAYOUT_MAX);
+  let cols;
+  let rows;
+  if (n === 0) return { cols: 0, rows: 0, fits: true };
+  if (n === 1) { cols = 1; rows = 1; }
+  else if (n === 2) { cols = 2; rows = 1; }
+  else if (n === 3) {
+    if (width >= TILE_GRID_WIDE_3X1) { cols = 3; rows = 1; }
+    else { cols = 2; rows = 2; }
+  }
+  else if (n === 4) { cols = 2; rows = 2; }
+  else if (n <= 6) { cols = 3; rows = 2; }
+  else { cols = 3; rows = 3; }
+  const fits = width / cols >= TILE_MIN_W && height / rows >= TILE_MIN_H;
+  return { cols, rows, fits };
+}
+
+/**
+ * How many tiles a grid area can hold: the largest count up to TILE_GRID_MAX
+ * whose layout, and every smaller count's layout, fits. 0 when not even one
+ * tile fits.
+ *
+ * @param {{width: number, height: number}} p
+ * @returns {number}
+ */
+function tileGridCapacity({ width, height }) {
+  let capacity = 0;
+  for (let n = 1; n <= TILE_GRID_MAX; n++) {
+    if (!computeTileLayout({ count: n, width, height }).fits) break;
+    capacity = n;
+  }
+  return capacity;
+}
+
+/**
+ * The stored grid (`codeman:tile-grid`, ids only) made safe to apply: unknown,
+ * deleted, detached and duplicate ids are dropped, the list is capped at
+ * TILE_GRID_MAX, `focused` / `zoomed` must name a kept id, and track fractions
+ * must be 1 to 3 finite positive numbers. Anything that is not a v1 object
+ * (or its JSON) gives null.
+ *
+ * The stored `ids` are the grid's CELLS in reading order, `null` for an empty
+ * one (a hole can be any cell). The old packed list (no nulls) reads as cells
+ * with no hole. `ids` comes back packed (the tiles in reading order, what
+ * every list consumer wants) and `cells` keeps the holes: a dropped id (gone,
+ * detached, a duplicate, past the cap) becomes `null` there, never a shift.
+ *
+ * @param {unknown} raw - the parsed value, or the stored JSON string
+ * @param {{has(id: string): boolean}|Iterable<string>} liveSessions - ids that exist now
+ * @param {{has(id: string): boolean}} [detachedIds] - sessions popped out to their own window
+ * @returns {{v: 1, open: boolean, ids: string[], cells: (string|null)[], focused: string|null,
+ *   zoomed: string|null, colFr: number[]|null, rowFr: number[]|null}|null}
+ */
+function sanitizeTileGridState(raw, liveSessions, detachedIds) {
+  let value = raw;
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value); } catch { return null; }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.v !== 1) return null;
+  const live = liveSessions && typeof liveSessions.has === 'function' ? liveSessions : new Set(liveSessions || []);
+  const ids = [];
+  const cells = [];
+  for (const id of (Array.isArray(value.ids) ? value.ids : []).slice(0, TILE_LAYOUT_MAX)) {
+    const keep =
+      typeof id === 'string' && id && !ids.includes(id) && live.has(id) && !detachedIds?.has?.(id) &&
+      ids.length < TILE_GRID_MAX;
+    if (keep) ids.push(id);
+    // A malformed entry (not a string, not null) is a hole too.
+    cells.push(keep ? id : null);
+  }
+  const fractions = (fr) => {
+    if (!Array.isArray(fr) || fr.length < 1 || fr.length > 3) return null;
+    return fr.every((x) => typeof x === 'number' && Number.isFinite(x) && x > 0) ? fr.slice() : null;
+  };
+  return {
+    v: 1,
+    open: value.open === true && ids.length > 0,
+    ids,
+    cells,
+    focused: ids.includes(value.focused) ? value.focused : (ids[0] ?? null),
+    zoomed: ids.includes(value.zoomed) ? value.zoomed : null,
+    colFr: fractions(value.colFr),
+    rowFr: fractions(value.rowFr),
+  };
+}
+
+/**
+ * New track fractions after a divider drag (grid-template `fr` values): the two
+ * tracks either side of divider `index` trade `deltaPx` of size, each kept at
+ * least `minPx` (or half the pair, if the pair cannot give both the minimum).
+ * Every other track keeps its size. Computed from the fractions the drag
+ * STARTED with and the pointer's total travel, so a drag never drifts.
+ *
+ * @param {number[]} fr - the fractions when the drag started
+ * @param {number} index - the divider: between track `index` and `index + 1`
+ * @param {number} deltaPx - pointer travel since the drag started
+ * @param {number} totalPx - the size the tracks share (dividers and padding excluded)
+ * @param {number} minPx - the smallest a track may get
+ * @returns {number[]} new fractions, same length
+ */
+function dragTrackFractions(fr, index, deltaPx, totalPx, minPx) {
+  const out = fr.slice();
+  if (index < 0 || index + 1 >= fr.length || !(totalPx > 0)) return out;
+  const sum = fr.reduce((a, b) => a + b, 0);
+  if (!(sum > 0)) return out;
+  const a = (fr[index] / sum) * totalPx;
+  const b = (fr[index + 1] / sum) * totalPx;
+  const pair = a + b;
+  const lo = Math.min(minPx, pair / 2);
+  const hi = pair - lo;
+  const nextA = Math.min(Math.max(a + (Number(deltaPx) || 0), lo), hi);
+  out[index] = (nextA / totalPx) * sum;
+  out[index + 1] = ((pair - nextA) / totalPx) * sum;
+  return out;
+}
+
+/**
+ * The sessions the Tiles button can open (case c of tileGridOpenSet, and the
+ * ones a count fills a grid with), in tab order: live ones only, never a session popped out to
+ * its own window (that window owns its PTY size). A session with no PTY
+ * attached IS offered: its tile shows the Attach overlay.
+ *
+ * @param {Map<string, {name?: string}>} sessions
+ * @param {string[]} sessionOrder
+ * @param {{has(id: string): boolean}} [detachedIds]
+ * @returns {Array<{id: string, label: string}>}
+ */
+function buildTilePickerSessions(sessions, sessionOrder, detachedIds) {
+  const result = [];
+  for (const id of sessionOrder) {
+    if (detachedIds?.has?.(id)) continue;
+    const session = sessions.get(id);
+    if (!session) continue;
+    result.push({ id, label: session.name || 'Session' });
+  }
+  return result;
+}
+
+/**
+ * What the Tiles button and Ctrl+Shift+G open, at once and without asking
+ * (owner decision 8). In order:
+ *   a. the grid this tab last had (`stored`, already sanitized: live, not
+ *      detached, at most the cap), if any of its sessions survive;
+ *   b. else an open split's two sessions, Pane A focused;
+ *   c. else the open sessions in tab order (buildTilePickerSessions: no
+ *      detached ones), up to `limit`, the active session always among them and focused
+ *      (when it sits past the limit, the first `limit - 1` others come with it).
+ * Null when there is nothing to open.
+ *
+ * @param {{stored?: {ids: string[], focused: string|null, zoomed: string|null}|null,
+ *   split?: string[]|null, sessions: Map<string, object>, sessionOrder: string[],
+ *   detachedIds?: {has(id: string): boolean}, activeId?: string|null, limit: number}} p
+ * @returns {{source: 'stored'|'split'|'tabs', ids: string[], focusedId: string|null}|null}
+ */
+function tileGridOpenSet({ stored = null, split = null, sessions, sessionOrder, detachedIds, activeId = null, limit }) {
+  if (stored?.ids?.length) {
+    const focus = stored.zoomed || stored.focused;
+    return { source: 'stored', ids: stored.ids.slice(), focusedId: stored.ids.includes(focus) ? focus : stored.ids[0] };
+  }
+  const usable = (id) => typeof id === 'string' && sessions.has(id) && !detachedIds?.has?.(id);
+  const pair = (split || []).filter(usable);
+  if (split && pair.length) return { source: 'split', ids: [...new Set(pair)], focusedId: pair[0] };
+  const max = Math.max(1, Math.min(Math.floor(Number(limit) || 0), TILE_GRID_MAX));
+  const all = buildTilePickerSessions(sessions, sessionOrder, detachedIds).map((c) => c.id);
+  if (all.length === 0) return null;
+  let ids = all.slice(0, max);
+  if (all.includes(activeId) && !ids.includes(activeId)) {
+    ids = [...all.filter((id) => id !== activeId).slice(0, max - 1), activeId];
+  }
+  return { source: 'tabs', ids, focusedId: ids.includes(activeId) ? activeId : ids[0] };
+}
+
+/**
+ * The tile counts the Tiles button's right-click menu offers, and the count a
+ * click opens until one is picked (owner decision 10 in docs/tile-grid-plan.md).
+ */
+const TILE_GRID_COUNTS = [2, 4, 6];
+const TILE_GRID_COUNT_DEFAULT = 6;
+
+/** A remembered tile count made safe: one of TILE_GRID_COUNTS, else the default. */
+function sanitizeTileCount(raw) {
+  const n = Number(raw);
+  return TILE_GRID_COUNTS.includes(n) ? n : TILE_GRID_COUNT_DEFAULT;
+}
+
+/**
+ * `base` (what the grid would open, or what an open grid shows, in its order)
+ * trimmed or filled to `n` tiles: trimmed from the end, the session to focus
+ * (`keepId`) always kept (it takes the last place when it sat past `n`, as in
+ * tileGridOpenSet's case c); filled from `all` (the open sessions in tab order)
+ * with the ones not in it yet. Fewer sessions than `n` give fewer tiles.
+ *
+ * @param {string[]} base
+ * @param {string[]} all
+ * @param {number} n - at most TILE_GRID_MAX
+ * @param {string|null} [keepId]
+ * @returns {string[]}
+ */
+function tileGridSetForCount(base, all, n, keepId = null) {
+  const max = Math.max(1, Math.min(Math.floor(Number(n) || 0), TILE_GRID_MAX));
+  const ids = [];
+  for (const id of [...(base || []), ...(all || [])]) {
+    if (typeof id === 'string' && id && !ids.includes(id)) ids.push(id);
+  }
+  // Every `base` id comes before every filler, so a trim never drops a base id
+  // in favour of one.
+  let out = ids.slice(0, max);
+  if (keepId && ids.includes(keepId) && !out.includes(keepId)) out = [...out.slice(0, max - 1), keepId];
+  return out;
+}
+
+/**
+ * Which tile takes focus when `id` leaves the grid: the next one in grid
+ * order, else the previous one, else null.
+ *
+ * @param {string[]} ids - the grid's tiles, in reading order
+ * @param {string} id - the tile that is leaving
+ * @returns {string|null}
+ */
+function tileNeighbor(ids, id) {
+  const i = ids.indexOf(id);
+  if (i === -1) return ids[0] ?? null;
+  return ids[i + 1] ?? ids[i - 1] ?? null;
+}
+
+/**
+ * The tile a directional focus chord moves to, in a row-major grid of `cols`
+ * columns whose empty cells are `null` (a hole can be any cell) or simply
+ * missing at the end. Focus never lands on a hole. Left and right go along
+ * the row, past any hole, and never leave it. Up and down take the nearest
+ * row in that direction that has a tile: the tile in the same column, else
+ * the one in the nearest column (the lower column on a tie), so moving down
+ * onto a short or holed last row lands on its nearest tile. Null when there
+ * is no tile in that direction.
+ *
+ * @param {(string|null)[]} cells - the grid's cells in reading order (or its packed tiles)
+ * @param {string} focusedId - the tile the keyboard is in
+ * @param {'left'|'right'|'up'|'down'} direction
+ * @param {number} cols - the layout's column count
+ * @returns {string|null}
+ */
+function tileInDirection(cells, focusedId, direction, cols) {
+  const i = focusedId ? cells.indexOf(focusedId) : -1;
+  if (i === -1 || !(cols >= 1)) return null;
+  const rows = Math.ceil(cells.length / cols);
+  const row = Math.floor(i / cols);
+  const col = i % cols;
+  const at = (r, c) => cells[r * cols + c] || null;
+  if (direction === 'left' || direction === 'right') {
+    const step = direction === 'left' ? -1 : 1;
+    for (let c = col + step; c >= 0 && c < cols; c += step) {
+      if (at(row, c)) return at(row, c);
+    }
+    return null;
+  }
+  if (direction !== 'up' && direction !== 'down') return null;
+  const step = direction === 'up' ? -1 : 1;
+  for (let r = row + step; r >= 0 && r < rows; r += step) {
+    let best = null;
+    let bestDistance = Infinity;
+    for (let c = 0; c < cols; c++) {
+      const id = at(r, c);
+      if (id && Math.abs(c - col) < bestDistance) {
+        best = id;
+        bestDistance = Math.abs(c - col);
+      }
+    }
+    if (best) return best;
+  }
+  return null;
+}
+
+/**
+ * The cell next to cell `index` in that direction (Move Tile: a tile moves
+ * into an empty neighbour cell, or swaps with a tiled one), or -1 at the
+ * edge. Adjacent only: a move never jumps over a cell.
+ *
+ * @param {number} index - the cell, in reading order
+ * @param {'left'|'right'|'up'|'down'} direction
+ * @param {number} cols - the layout's column count
+ * @param {number} cellCount - cols x rows
+ * @returns {number}
+ */
+function tileCellInDirection(index, direction, cols, cellCount) {
+  if (!(cols >= 1) || index < 0 || index >= cellCount) return -1;
+  const col = index % cols;
+  let j = -1;
+  if (direction === 'left') j = col > 0 ? index - 1 : -1;
+  else if (direction === 'right') j = col < cols - 1 ? index + 1 : -1;
+  else if (direction === 'up') j = index - cols;
+  else if (direction === 'down') j = index + cols;
+  return j >= 0 && j < cellCount ? j : -1;
+}
+
+/**
+ * The grid's cells after its shape changed (or to fill one for the first
+ * time): `cols` x `rows` cells, `null` for an empty one. The same shape keeps
+ * every cell as it is. A new shape keeps each tile at its row and column when
+ * every tile still fits there (2x2 growing to 3x2: the four tiles stay put),
+ * and otherwise packs the tiles in reading order from the first cell, holes
+ * collapsed (positions do not map between shapes). `oldCols` 0 (no layout
+ * yet) always packs.
+ *
+ * @param {(string|null)[]} cells - the current cells, laid out `oldCols` wide
+ * @param {number} oldCols - the column count they were laid out with
+ * @param {number} cols
+ * @param {number} rows
+ * @returns {(string|null)[]}
+ */
+function fitTileCells(cells, oldCols, cols, rows) {
+  const size = Math.max(0, cols * rows);
+  if (oldCols === cols && cells.length === size) return cells.slice();
+  const out = new Array(size).fill(null);
+  const placed = cells.map((id, k) => (id ? { id, row: Math.floor(k / oldCols), col: k % oldCols } : null));
+  const keep = oldCols >= 1 && placed.every((p) => !p || (p.row < rows && p.col < cols));
+  if (keep) {
+    for (const p of placed) if (p) out[p.row * cols + p.col] = p.id;
+    return out;
+  }
+  cells.filter(Boolean).slice(0, size).forEach((id, k) => {
+    out[k] = id;
+  });
+  return out;
+}
+
+/**
+ * How many columns a grid of `length` cells was laid out with: stored cells
+ * carry no shape of their own, and the layout table gives each cell count one
+ * shape (computeTileLayout: 1x1, 2x1, 3x1, 2x2, 3x2, 3x3). 0 for any other
+ * length (fitTileCells then packs).
+ *
+ * @param {number} length
+ * @returns {number}
+ */
+function tileCellCols(length) {
+  // Every cell count is some count's shape on a wide grid area (2x2, the
+  // narrow 3-tile shape, is also the 4-tile one).
+  for (let n = 1; n <= TILE_LAYOUT_MAX; n++) {
+    const { cols, rows } = computeTileLayout({ count: n });
+    if (cols * rows === length) return cols;
+  }
+  return 0;
+}
+
+/**
+ * The cells of a grid re-formed to another set of tiles (a count picked in the
+ * Tiles menu, or the Tiles button bringing back a remembered grid with more or
+ * fewer tiles): the tiles in `keep` stay in their cells and every other cell
+ * empties, then the cell model's shape rule (fitTileCells: each tile keeps its
+ * row and column when all fit, else they pack in reading order), then the
+ * tiles in `add` fill the empty cells in reading order, holes first.
+ *
+ * @param {(string|null)[]} cells - the cells now, laid out `oldCols` wide
+ * @param {number} oldCols
+ * @param {string[]} keep - tiles that stay
+ * @param {string[]} add - tiles that join, in the order they fill
+ * @param {number} cols - the new shape
+ * @param {number} rows
+ * @returns {(string|null)[]}
+ */
+function reformTileCells(cells, oldCols, keep, add, cols, rows) {
+  const kept = (cells || []).map((id) => (id && keep.includes(id) ? id : null));
+  const out = fitTileCells(kept, oldCols, cols, rows);
+  for (const id of add) {
+    if (!id || out.includes(id)) continue;
+    const k = out.indexOf(null);
+    // Not for a shape made for the count; a full grid takes no more.
+    if (k === -1) break;
+    out[k] = id;
+  }
+  return out;
+}
+
+/**
+ * The tile Ctrl+Tab / Alt+] (delta 1) or Alt+[ (delta -1) moves to while the
+ * grid is open: tiles cycle in reading order and wrap.
+ *
+ * @param {string[]} ids
+ * @param {string} focusedId
+ * @param {number} delta - +1 or -1
+ * @returns {string|null}
+ */
+function cycleTile(ids, focusedId, delta) {
+  if (ids.length === 0) return null;
+  const i = ids.indexOf(focusedId);
+  if (i === -1) return ids[0];
+  return ids[(i + delta + ids.length) % ids.length];
 }
 
 // ── Renderer liveness ──────────────────────────────────────────────────────
@@ -1869,7 +2301,59 @@ function sessionIdFromFragment(hash) {
   return id && id.trim() ? id.trim() : null;
 }
 
+/** Longest model name a session header shows (the server caps it as well). */
+const SESSION_MODEL_MAX_CHARS = 64;
+/** A CLI registry id (src/config/cli-registry/schema.ts); anything else is not a class name. */
+const CLI_ID_PATTERN = /^[a-z][a-z0-9-]{0,23}$/;
+
+/**
+ * What a session's header says about its harness: the CLI id (the
+ * `run-mode-dot <id>` logo class), the registry's label for it, the model the
+ * session runs when the server knows it (`SessionState.displayModel`), and the
+ * tooltip naming both.
+ *
+ * The id is data: the label comes from the injected CLI catalog and falls back
+ * to the id, so a CLI added through clis.json still gets a name. The model is
+ * untrusted text (read off a pane, or a CLI's own report): control characters
+ * are dropped and the length capped here too, and callers render it with
+ * textContent. The tooltip says where a model that is not the CLI's own report
+ * came from, so it never claims more than the server knows: one the session
+ * was launched with may have been switched since, one read from the CLI's
+ * config is what it is configured to run, and a custom endpoint's model is the
+ * endpoint's, whatever the CLI calls it.
+ *
+ * @param {object} session - a session from app.sessions
+ * @param {Array<{id: string, label?: string}>} [catalog] - window.__codemanCliCatalog
+ * @returns {{id: string, label: string, model: string, title: string}}
+ */
+function describeSessionHarness(session, catalog) {
+  const id = typeof session?.mode === 'string' && CLI_ID_PATTERN.test(session.mode) ? session.mode : '';
+  const entry = id && Array.isArray(catalog) ? catalog.find((cli) => cli?.id === id) : null;
+  const label = (typeof entry?.label === 'string' && entry.label.trim()) || id;
+  const raw = session?.displayModel?.model;
+  const model =
+    typeof raw === 'string'
+      ? raw
+          .replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
+          .trim()
+          .slice(0, SESSION_MODEL_MAX_CHARS)
+      : '';
+  const source = session?.displayModel?.source;
+  const qualifier = !model
+    ? ''
+    : source === 'launch'
+      ? ' (set at launch)'
+      : source === 'custom-endpoint'
+        ? ' (custom endpoint)'
+        : source === 'config'
+          ? ' (from config)'
+          : '';
+  const title = [label, model].filter(Boolean).join(' \u00B7 ') + qualifier;
+  return { id, label, model, title };
+}
+
 if (typeof window !== 'undefined') {
+  window.CodemanSessionHarness = { describeSessionHarness, SESSION_MODEL_MAX_CHARS };
   window.CodemanHistoryFormat = { formatHistoryBytes, computeHistoryTruncationNotice, computeRewriteScrollLine };
   window.CodemanFilePaths = { absoluteFilePathPattern, previewsInFileViewer, FILE_PREVIEW_EXTENSIONS };
   window.CodemanTerminalLines = { terminalLogicalLine };
@@ -1878,6 +2362,32 @@ if (typeof window !== 'undefined') {
     clampDividerPercent,
     buildSplitPickerSessions,
     SPLIT_PANE_MIN_WIDTH,
+  };
+  window.CodemanTileGrid = {
+    computeTileLayout,
+    tileGridCapacity,
+    sanitizeTileGridState,
+    buildTilePickerSessions,
+    dragTrackFractions,
+    tileNeighbor,
+    tileInDirection,
+    tileCellInDirection,
+    fitTileCells,
+    cycleTile,
+    tileGridOpenSet,
+    sanitizeTileCount,
+    tileGridSetForCount,
+    tileCellCols,
+    reformTileCells,
+    TILE_GRID_COUNTS,
+    TILE_GRID_COUNT_DEFAULT,
+    TILE_GRID_MAX,
+    TILE_LAYOUT_MAX,
+    TILE_MIN_W,
+    TILE_MIN_H,
+    TILE_SCROLLBACK,
+    TILE_FONT_SIZE_DEFAULT,
+    TILE_GRID_SSE_FILTER,
   };
   window.CodemanRenderLiveness = { shouldKickRenderer, RENDER_STALL_MS, RENDER_LIVENESS_POLL_MS };
   window.CodemanFetchDeadline = {

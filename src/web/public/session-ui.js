@@ -573,6 +573,10 @@ Object.assign(CodemanApp.prototype, {
     }
 
     if (session?.id) this._onSessionCreated(session);
+    // A session this tab's Run created joins an open tile grid (tile-grid.js),
+    // so Run's selectSession() below focuses its tile instead of leaving the
+    // grid. Only here: sessions created elsewhere arrive by session:created.
+    this._joinTileGridFromRun?.(sessionId);
     // session:created normally uses the debounced renderer. The direct POST path
     // needs the tab in the DOM before selectSession() marks it active.
     this._renderSessionTabsImmediate?.();

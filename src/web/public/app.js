@@ -381,8 +381,17 @@ function applyPaneExitBadge(tab, paneExit) {
   tab.classList.toggle('tab-agent-exited', !!label);
   // The tab's aria-label overrides its contents for the accessible name, and the
   // badge is aria-hidden like its siblings, so the exit has to ride the label.
+  // Compared with the last English label set (data-aria-source, seeded by the
+  // full render too), never the attribute: in zh-CN the translator rewrites it,
+  // and writing English back on every pass would have it translate again.
   const name = tab.querySelector('.tab-name')?.dataset?.fullName;
-  if (name) tab.setAttribute('aria-label', paneExitAriaLabel(name, label));
+  if (name) {
+    const aria = paneExitAriaLabel(name, label);
+    if (tab.dataset.ariaSource !== aria) {
+      tab.dataset.ariaSource = aria;
+      tab.setAttribute('aria-label', aria);
+    }
+  }
   if (!label) {
     existing?.remove();
     return;
@@ -391,16 +400,19 @@ function applyPaneExitBadge(tab, paneExit) {
     const badge = document.createElement('span');
     badge.className = 'tab-exited-badge';
     badge.setAttribute('aria-hidden', 'true');
-    // Generated status text, like the status pills: it carries data-i18n-skip
-    // rather than a dictionary entry. Without it the translator would rewrite
-    // the badge and the next render pass would rewrite it back, because the
-    // comparison below is against the English string.
-    badge.setAttribute('data-i18n-skip', '');
+    // Translated like any other text (i18n.js has "exited" and its exit-code
+    // forms). The comparison below is with the last English label (data-label),
+    // never the DOM, which holds the translation in zh-CN: a DOM compare would
+    // write the English back on every pass for the translator to redo.
+    badge.dataset.label = label;
     badge.textContent = label;
     tab.querySelector('.tab-name')?.insertAdjacentElement('afterend', badge);
     return;
   }
-  if (existing.textContent !== label) existing.textContent = label;
+  if (existing.dataset.label !== label) {
+    existing.dataset.label = label;
+    existing.textContent = label;
+  }
 }
 
 const DEFAULT_SHORTCUTS = [
@@ -524,6 +536,106 @@ const DEFAULT_SHORTCUTS = [
     // the brackets, and the registry claims Alt for KeyK and Slash only.
     bindings: [{ modifiers: ['alt'], key: 'b', code: 'KeyB' }],
     action: 'toggleSessionSidebar',
+  },
+  // Tile grid (tile-grid.js). Dispatched by tileShortcutFor()/runTileShortcut()
+  // and deliberately absent from SHORTCUT_ACTIONS: each applies only in some
+  // states (the focus chords only while the grid is open), and outside them the
+  // chord must reach the terminal untouched. Every xterm key handler swallows a
+  // chord that applies, so it never reaches a PTY. Defaults: Ctrl+Shift+G makes
+  // xterm emit nothing (a shifted Ctrl letter) and overrides only the browser's
+  // find-previous; Alt+Shift+Arrows are bound by no CLI Codeman runs. The
+  // arrow chords (focus, move) never apply in a text field, where shifted
+  // arrows select (tileShortcutFor).
+  {
+    id: 'toggle-tile-grid',
+    group: 'Tiles',
+    label: 'Toggle Tile Grid',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: 'G', code: 'KeyG' }],
+    action: 'toggleTileGrid',
+  },
+  {
+    id: 'focus-tile-left',
+    group: 'Tiles',
+    label: 'Focus Tile Left',
+    bindings: [{ modifiers: ['alt', 'shift'], key: 'ArrowLeft' }],
+    action: 'focusTileLeft',
+  },
+  {
+    id: 'focus-tile-right',
+    group: 'Tiles',
+    label: 'Focus Tile Right',
+    bindings: [{ modifiers: ['alt', 'shift'], key: 'ArrowRight' }],
+    action: 'focusTileRight',
+  },
+  {
+    id: 'focus-tile-up',
+    group: 'Tiles',
+    label: 'Focus Tile Up',
+    bindings: [{ modifiers: ['alt', 'shift'], key: 'ArrowUp' }],
+    action: 'focusTileUp',
+  },
+  {
+    id: 'focus-tile-down',
+    group: 'Tiles',
+    label: 'Focus Tile Down',
+    bindings: [{ modifiers: ['alt', 'shift'], key: 'ArrowDown' }],
+    action: 'focusTileDown',
+  },
+  // Move the focused tile: it trades places with the neighbour the focus
+  // chords would pick. Ctrl+Shift+Arrows because every other two-modifier
+  // arrow chord is taken: Ctrl+Alt+Arrows switch workspaces (GNOME, Xfce, and
+  // rotate the screen on some Windows graphics drivers), Ctrl+Alt+Shift+Arrows
+  // move a window to another workspace (GNOME, Cinnamon, Xfce), Super chords
+  // belong to the desktop, Alt+Arrows are the browser's back and forward, and
+  // Alt+Shift+Arrows focus tiles. No browser, GNOME, KDE or macOS default and
+  // no Claude Code default uses Ctrl+Shift+Arrows (it parallels Ctrl+Shift+{ }
+  // for moving tabs); what it costs is word selection, so the chords skip a
+  // text field (tileShortcutFor) and give up only a terminal editor's
+  // word selection (nano, micro, emacs) inside a tile while the grid is open.
+  {
+    id: 'move-tile-left',
+    group: 'Tiles',
+    label: 'Move Tile Left',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: 'ArrowLeft' }],
+    action: 'moveTileLeft',
+  },
+  {
+    id: 'move-tile-right',
+    group: 'Tiles',
+    label: 'Move Tile Right',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: 'ArrowRight' }],
+    action: 'moveTileRight',
+  },
+  {
+    id: 'move-tile-up',
+    group: 'Tiles',
+    label: 'Move Tile Up',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: 'ArrowUp' }],
+    action: 'moveTileUp',
+  },
+  {
+    id: 'move-tile-down',
+    group: 'Tiles',
+    label: 'Move Tile Down',
+    bindings: [{ modifiers: ['ctrl', 'shift'], key: 'ArrowDown' }],
+    action: 'moveTileDown',
+  },
+  {
+    id: 'zoom-tile',
+    group: 'Tiles',
+    label: 'Zoom Focused Tile',
+    // Toggles. Alt+Shift+Enter would otherwise reach the CLI as ESC CR (Alt+Enter
+    // is a newline in Claude Code); it is swallowed only while the grid is open.
+    bindings: [{ modifiers: ['alt', 'shift'], key: 'Enter' }],
+    action: 'zoomTile',
+  },
+  {
+    id: 'remove-tile',
+    group: 'Tiles',
+    label: 'Remove Focused Tile',
+    // Unbound by default; the session keeps running either way.
+    bindings: [],
+    action: 'removeTile',
   },
   {
     id: 'previous-next-session',
@@ -1197,6 +1309,11 @@ class CodemanApp {
     try {
       this._webglLongTaskObserver = new PerformanceObserver((list) => {
         if (!this._webglAddon) return;
+        // ⚠️ The observer sees EVERY long task on the page. While the tile grid
+        // owns the terminal the main terminal is parked and draws nothing; the
+        // long tasks are tile renders and replays (DOM renderers), and counting
+        // them would write the sticky 7-day WebGL disable for no WebGL reason.
+        if (this._tilesOwnTerminal?.()) return;
         const now = performance.now();
         if (now - installedAt < WEBGL_FALLBACK.GRACE_MS) return;
         if (evaluateWebGLLongTaskTrip(recent, list.getEntries(), now)) {
@@ -1300,6 +1417,12 @@ class CodemanApp {
           this._tabLayoutDragKeydown(e);
           return;
         }
+        // So does the Tiles count menu: it closes alone and gives the keyboard
+        // back to the Tiles button (tile-grid.js).
+        if (this._tileCountMenu) {
+          this.closeTileCountMenu({ refocus: true });
+          return;
+        }
         this.closeAllPanels();
         this.closeHelp();
         if (this.attachmentHistoryDrawerOpen) this.closeAttachmentHistory();
@@ -1357,6 +1480,15 @@ class CodemanApp {
         }
       }
 
+      // Tile grid chords: only where they apply (tile-grid.js tileShortcutFor),
+      // so outside the grid Alt+Shift+Arrows still reach the terminal.
+      const tileShortcut = this.tileShortcutFor?.(e);
+      if (tileShortcut) {
+        e.preventDefault();
+        this.runTileShortcut(tileShortcut);
+        return;
+      }
+
       // Match against the shortcut registry so user rebinds and per-shortcut
       // disables (App Settings → Shortcuts) take effect. Every dispatchable
       // binding requires Ctrl/Cmd/Alt (capture enforces the same), so plain
@@ -1391,17 +1523,30 @@ class CodemanApp {
   // ═══════════════════════════════════════════════════════════════
 
   /**
+   * The session id the SSE filter names for `sessionId`: itself, or while the
+   * tile grid owns the terminal the grid's fixed filter (TILE_GRID_SSE_FILTER,
+   * constants.js), which no session matches. Both places that set the filter
+   * ask here: the live re-subscribe below and the connect URL (connectSSE),
+   * which an SSE reconnect rebuilds with the grid still open.
+   */
+  _sseFilterSessionId(sessionId) {
+    if (this._tilesOwnTerminal?.()) return window.CodemanTileGrid?.TILE_GRID_SSE_FILTER || sessionId;
+    return sessionId;
+  }
+
+  /**
    * POST a live subscription update so the server filters terminal events
-   * to the given session(s) for this client. Fire-and-forget — failures
+   * to the given session(s) for this client. Fire-and-forget: failures
    * are non-fatal because we'll still get every event we don't want
    * (just at higher cost), and the next reconnect carries the filter via
    * the SSE query string.
    */
   _updateSseSubscription(sessionId) {
     try {
+      const filterId = this._sseFilterSessionId(sessionId);
       const body = JSON.stringify({
         clientId: this._clientId,
-        sessions: sessionId ? [sessionId] : null,
+        sessions: filterId ? [filterId] : null,
       });
       fetch('/api/events/subscribe', {
         method: 'POST',
@@ -1466,7 +1611,9 @@ class CodemanApp {
       return false;
     }
     this._retireUrlSession();
-    this.selectSession(id, { auto: true });
+    // Following a link is navigation: a tiled id focuses its tile, any other
+    // leaves the tile grid for the single view (the grid is remembered).
+    this.selectSession(id, { auto: true, leaveTiles: true });
     return true;
   }
 
@@ -1605,6 +1752,9 @@ class CodemanApp {
    *  Full re-renders re-apply the class from this.detachedSessions. */
   _markDetached(id, on) {
     if (on) this.detachedSessions.add(id); else this.detachedSessions.delete(id);
+    // A popped-out session's window owns its PTY size now, so it leaves the
+    // tile grid (one place per session in this browser tab).
+    if (on && this._tileGrid?.has(id)) this.removeTile(id);
     const container = this.$('sessionTabs');
     const tab = container && container.querySelector(`.session-tab[data-id="${id}"]`);
     if (tab) tab.classList.toggle('detached', on);
@@ -1792,7 +1942,8 @@ class CodemanApp {
     // session we're rendering. Lifecycle/metadata events are sent globally
     // regardless of filter (server side).
     const _sseParams = new URLSearchParams({ clientId: this._clientId });
-    if (this.activeSessionId) _sseParams.set('sessions', this.activeSessionId);
+    const _sseFilterId = this._sseFilterSessionId(this.activeSessionId);
+    if (_sseFilterId) _sseParams.set('sessions', _sseFilterId);
     this.eventSource = new EventSource(CodemanBase.url(`/api/events?${_sseParams.toString()}`));
 
     // Store all event listeners for cleanup on reconnect.
@@ -2202,6 +2353,10 @@ class CodemanApp {
   }
 
   _onSessionTerminal(data) {
+    // Tile grid open: the main terminal is parked and its socket closed, so the
+    // SSE fallback would write the focused tile's output into a hidden xterm.
+    // The tiles carry their own output over their own sockets.
+    if (this._tilesOwnTerminal?.()) return;
     if (data.id === this.activeSessionId) {
       if (data.data.length > 32768) _crashDiag.log(`TERMINAL: ${(data.data.length/1024).toFixed(0)}KB`);
 
@@ -2251,6 +2406,8 @@ class CodemanApp {
    */
   _scheduleDroppedOutputRecovery(sessionId, attempt = 0, queuedBytes) {
     if (!sessionId || this._clientDropRecoveryTimer) return;
+    // Nothing of the main terminal's to recover while the tile grid owns it.
+    if (this._tilesOwnTerminal?.()) return;
     // Behind the debounce guard: one line per window, not per dropped frame.
     if (Number.isFinite(queuedBytes)) _crashDiag.log(`TERMINAL DROP: ${(queuedBytes / 1024).toFixed(0)}KB queued`);
     this._clientDropRecoveryTimer = setTimeout(async () => {
@@ -2928,6 +3085,10 @@ class CodemanApp {
   async _onSessionNeedsRefresh(event = {}) {
     // Server sends this after SSE backpressure clears — terminal data was dropped,
     // so reload the buffer to recover from any display corruption.
+    // Tile grid open: the main terminal is parked, so this would fetch a capture
+    // for a hidden xterm. Each tile refreshes itself through the grid's queue.
+    // `false`, never undefined: the drop recovery reads the result.
+    if (this._tilesOwnTerminal?.()) return false;
     const sessionId = this.activeSessionId;
     if (event?.id && event.id !== sessionId) return false;
     if (!sessionId || !this.terminal) return false;
@@ -3030,6 +3191,8 @@ class CodemanApp {
   }
 
   async _onSessionClearTerminal(data) {
+    // The tiles get the clear over their own sockets; the parked main terminal must not refetch.
+    if (this._tilesOwnTerminal?.()) return;
     if (data.id === this.activeSessionId) {
       // Skip if selectSession is already loading the buffer — clearTerminal arriving
       // during buffer load would clear the terminal mid-write, causing visible flicker
@@ -3075,14 +3238,15 @@ class CodemanApp {
   _onSessionCompletion(data) {
     this.totalCost += data.cost || 0;
     this.updateCost();
-    if (data.id === this.activeSessionId) {
+    // Not into the parked main terminal while the tile grid owns the screen.
+    if (data.id === this.activeSessionId && !this._tilesOwnTerminal?.()) {
       this.terminal.writeln('');
       this.terminal.writeln(`\x1b[1;32m Done (Cost: $${(data.cost || 0).toFixed(4)})\x1b[0m`);
     }
   }
 
   _onSessionError(data) {
-    if (data.id === this.activeSessionId) {
+    if (data.id === this.activeSessionId && !this._tilesOwnTerminal?.()) {
       this.terminal.writeln(`\x1b[1;31m Error: ${data.error}\x1b[0m`);
     }
     this._notifySession(data.id, 'critical', 'session-error', 'Session Error', data.error || 'Unknown error');
@@ -4034,9 +4198,12 @@ class CodemanApp {
     }
 
     // With an active terminal, show its transport (WebSocket vs HTTP fallback).
+    // While the tile grid owns the terminal the main socket is parked on
+    // purpose, so the state comes from the tiles' sockets: all open is
+    // connected, any still coming back is reconnecting.
     if (this.activeSessionId) {
       let cls, label, detail;
-      switch (this._wsState) {
+      switch (this._tilesOwnTerminal?.() ? this._tileGridSocketState() : this._wsState) {
         case 'connected':
           cls = 'connected'; label = 'WS'; detail = 'Terminal connected over WebSocket';
           break;
@@ -4217,8 +4384,11 @@ class CodemanApp {
     this._updateConnectionLossUi();
     this.connectSSE();
     // The terminal socket does not always come back on its own (planWsReconnect
-    // 'give-up'), so the same button re-arms it.
-    if (this.activeSessionId && this._wsState !== 'connected') {
+    // 'give-up'), so the same button re-arms it. With the tile grid open the
+    // main socket is parked on purpose: re-arm the tiles' sockets instead.
+    if (this._tilesOwnTerminal?.()) {
+      for (const { tile } of this._tileGrid.tiles.values()) tile.reconnectNow();
+    } else if (this.activeSessionId && this._wsState !== 'connected') {
       this._wsReconnectAttempts = 0;
       this._connectWs(this.activeSessionId);
     }
@@ -4561,8 +4731,16 @@ class CodemanApp {
       return;
     }
 
+    // Tile grid open (tile-grid.js): tiles whose sessions are gone are removed,
+    // the live ones are kept as they are and reconnect now, and the main
+    // terminal stays parked. Before the link below, which may leave the grid.
+    const tilesOpen = this._reconcileTileGrid?.() === true;
+
     // A `#session=<id>` link wins over restoring the last active tab.
     if (this._urlSessionId && this.sessions.has(this._urlSessionId)) {
+      // And over a tile grid stored open: it stays remembered, closed, rather
+      // than reappearing unexplained on the next reload.
+      if (!tilesOpen) this._closeStoredTileGrid?.();
       this.activeSessionId = null;
       this._selectUrlSession();
       return;
@@ -4570,6 +4748,10 @@ class CodemanApp {
     // Not listed yet: its wait starts now that the list has loaded, and the
     // last active tab is restored meanwhile.
     if (this._urlSessionId) this._armUrlSessionWait(this._urlSessionId);
+    // The grid holds the focused session: nothing below may reconnect or reload
+    // the parked main terminal (its keepTerminal branch would reopen the main
+    // socket onto a session a tile already shows).
+    if (tilesOpen) return;
 
     const previousActiveId = this.activeSessionId;
     if (this.sessionOrder.length === 0) {
@@ -4594,6 +4776,11 @@ class CodemanApp {
         this._splitPane?.reconnectNow?.();
       } else {
         this.activeSessionId = null;
+        // A tile grid stored open on this device (tile-grid.js) comes back IN
+        // PLACE of the single-view restore below, so the main terminal never
+        // loads (its first select would pull a whole-history capture only to
+        // be parked a moment later).
+        if (this._restoreTileGrid?.()) return;
         // `auto`: the app is restoring a session on load, not a human opening
         // one, so a pending idle alert on that tab stays armed until it is
         // actually tapped (see the userInitiated note in selectSession).
@@ -5550,6 +5737,9 @@ class CodemanApp {
         else if (wantIdle && !hasIdle) { tab.classList.add('tab-alert-idle'); tab.classList.remove('tab-alert-action'); }
         else if (!alertType && (hasAction || hasIdle)) { tab.classList.remove('tab-alert-action', 'tab-alert-idle'); }
 
+        // Tile grid membership (tile-grid.js): a tiled session's tab says so.
+        tab.classList.toggle('in-tiles', !!this._tileGrid?.has(id));
+
         // Inject tab-number badge if missing (added after initial render)
         if (!tab.querySelector('.tab-number')) {
           const idx = this.sessionOrder.indexOf(id);
@@ -5903,7 +6093,7 @@ class CodemanApp {
       const inlineSessionActions = this.shouldInlineSessionActions();
       const tabActionsHtml = `<span class="tab-actions"><span class="tab-gear" onclick="event.stopPropagation(); app.openSessionOptions(${escapeHtml(JSON.stringify(id))})" title="Session options" aria-label="Session options" tabindex="0">&#x2699;</span><span class="tab-detach" onclick="event.stopPropagation(); app.detachSession(${escapeHtml(JSON.stringify(id))})" title="Open in a new window" aria-label="Open session in a new window" tabindex="0">&#x29C9;</span><span class="tab-close" onclick="event.stopPropagation(); app.requestCloseSession(${escapeHtml(JSON.stringify(id))})" title="Close session" aria-label="Close session" tabindex="0">&times;</span><button type="button" class="tab-more" onclick="event.stopPropagation(); app.openTabRailActionMenu(event, ${escapeHtml(JSON.stringify(id))})" title="Session actions" aria-label="Session actions">&#x22EF;</button></span>`;
 
-      rowHtml.set(id, `<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${paneExitBadge ? ' tab-agent-exited' : ''}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}"${richData}${railOrderStyle} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
+      rowHtml.set(id, `<div class="session-tab ${isActive ? 'active' : ''}${alertClass}${richClass}${paneExitBadge ? ' tab-agent-exited' : ''}${loadState ? ' tab-loading' : ''}${this.hasTabDetachOverride(id) ? ' tab-show-detach' : ''}${this._tileGrid?.has(id) ? ' in-tiles' : ''}"${richData}${railOrderStyle} data-id="${id}" data-color="${color}" ${loadState ? `data-load-phase="${escapeHtml(loadState.phase)}"` : ''} onclick="app.handleSessionTabClick(event, ${escapeHtml(JSON.stringify(id))})" oncontextmenu="event.preventDefault(); app.startInlineRename(${escapeHtml(JSON.stringify(id))})" tabindex="0" role="tab" aria-selected="${isActive ? 'true' : 'false'}" aria-busy="${loadState ? 'true' : 'false'}" aria-label="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" data-aria-source="${escapeHtml(paneExitAriaLabel(name, paneExitBadge))}" ${tabTooltip ? `title="${escapeHtml(tabTooltip)}"` : ''}>
           ${_tabIdx < 9 ? '<span class="tab-number">' + (_tabIdx + 1) + '</span>' : ''}
           ${loadState ? '<span class="tab-load-spinner" aria-hidden="true"></span>' : ''}
           <span class="tab-status ${status}" aria-hidden="true"></span>
@@ -5911,7 +6101,7 @@ class CodemanApp {
             <span class="tab-name-row">
               ${mode === 'shell' ? '<span class="tab-mode shell" aria-hidden="true">sh</span>' : mode === 'opencode' ? '<span class="tab-mode opencode" aria-hidden="true">oc</span>' : mode === 'codex' ? '<span class="tab-mode codex" aria-hidden="true">cx</span>' : mode === 'gemini' ? '<span class="tab-mode gemini" aria-hidden="true">gm</span>' : mode === 'antigravity' ? '<span class="tab-mode antigravity" aria-hidden="true">ag</span>' : mode === 'pi' ? '<span class="tab-mode pi" aria-hidden="true">pi</span>' : mode === 'grok' ? '<span class="tab-mode grok" aria-hidden="true">gk</span>' : mode === 'deepseek' ? '<span class="tab-mode deepseek" aria-hidden="true">ds</span>' : mode === 'omp' ? '<span class="tab-mode omp" aria-hidden="true">om</span>' : ''}
               <span class="tab-name" data-session-id="${id}" data-full-name="${escapeHtml(name)}">${tabLabel}</span>
-              ${paneExitBadge ? `<span class="tab-exited-badge" data-i18n-skip aria-hidden="true">${escapeHtml(paneExitBadge)}</span>` : ''}
+              ${paneExitBadge ? `<span class="tab-exited-badge" data-label="${escapeHtml(paneExitBadge)}" aria-hidden="true">${escapeHtml(paneExitBadge)}</span>` : ''}
               ${inlineSessionActions ? tabActionsHtml : ''}
               <span class="tab-detached-badge" aria-hidden="true">detached</span>
             </span>
@@ -6327,6 +6517,10 @@ class CodemanApp {
 
   handleSessionTabClick(event, sessionId) {
     event?.preventDefault?.();
+    // Ctrl/Cmd+click puts the session in the tile grid (opening it if needed)
+    // instead of switching to it; on a window too narrow for the grid it is an
+    // ordinary click.
+    if ((event?.ctrlKey || event?.metaKey) && this.addSessionToTiles?.(sessionId)) return;
     // On touch with the keyboard hidden, blur the tapped tab so switching
     // sessions doesn't pop the on-screen keyboard. Focus policy itself lives
     // in selectSession via _shouldFocusTerminalForTabSwitch().
@@ -6803,6 +6997,7 @@ class CodemanApp {
     const index = groups.findIndex((group) => group.id === groupId);
     if (index < 0) return false;
     return this._openTabLayoutMenu(event, `group:${groupId}`, 'Group actions', [
+      ...(this.canOpenTileGrid?.() ? [{ label: 'Open group as tiles', run: () => this.openGroupAsTiles(groupId) }] : []),
       { label: 'Rename group', run: () => this.startTabGroupRename(groupId) },
       ...(this._canCreateTabGroup() ? [{ label: 'New group', run: () => this.createTabGroup({ index: index + 1 }) }] : []),
       ...(index > 0 ? [{ label: 'Move group up', run: () => this.moveTabGroup(groupId, -1) }] : []),
@@ -7438,7 +7633,9 @@ class CodemanApp {
     }
   }
 
-  _cleanupPreviousSession(newSessionId) {
+  // `skipSnapshot`: the tile grid opening on the session it parks
+  // (tile-grid.js openTileGrid), whose snapshot closing the grid discards.
+  _cleanupPreviousSession(newSessionId, { skipSnapshot = false } = {}) {
     // Snapshot the OUTGOING session's xterm rendered state (viewport + scrollback +
     // colors/attrs) before the terminal gets cleared/reset. Lets us restore the
     // exact view on switch-back rather than replaying codex's byte stream, which
@@ -7449,6 +7646,7 @@ class CodemanApp {
     // quota for them. Unknown/undefined mode still snapshots, matching restore.
     const outgoingSession = this.activeSessionId ? this.sessions?.get?.(this.activeSessionId) : null;
     if (
+      !skipSnapshot &&
       this.activeSessionId &&
       outgoingSession?.mode !== 'shell' &&
       this._serializeAddon &&
@@ -7665,6 +7863,8 @@ class CodemanApp {
     const sessionId = this.activeSessionId;
     if (!sessionId || this._fullHistoryRepullInFlight || this._isLoadingBuffer) return;
     if (this.detachedSessions?.has(sessionId)) return;
+    // The parked main terminal has no history to pull while tiles own the screen.
+    if (this._tilesOwnTerminal?.()) return;
     const session = this.sessions.get(sessionId);
     // A shell's full capture can be many megabytes, and replaying all of it from
     // an ordinary scroll gesture blocks xterm's main thread. So a shell scroll
@@ -7937,6 +8137,20 @@ class CodemanApp {
       // yellow tab that no tap could clear.
       if (userInitiated) this.markIdleAlertSeen(sessionId);
       return;
+    }
+    // Tile grid open (tile-grid.js): a tiled session is FOCUSED in its tile and
+    // never loaded into the parked main terminal. Decision 1: only a USER-
+    // initiated pick of a session that is not tiled (or an explicit
+    // `leaveTiles`, a followed link) leaves the grid for the single view, the
+    // grid remembered for one-click return. An app-driven pick (`auto`) never
+    // collapses it.
+    if (this._tileGrid?.open) {
+      if (this._tileGrid.has(sessionId)) return this._selectTiledSession(sessionId, options);
+      if (options?.auto === true && !options?.leaveTiles) return;
+      this.closeTileGrid({ keepStored: true, reselect: false });
+      // The parked terminal still holds what it showed before the grid opened;
+      // with no active id, the switch below snapshots none of it.
+      this.activeSessionId = null;
     }
     if (this.activeSessionId === sessionId && forceReload) {
       this.terminalBufferCache?.delete(sessionId);
@@ -8513,78 +8727,7 @@ class CodemanApp {
       // Defer secondary panel updates so they don't block the main thread
       // after terminal content is already visible.
       const idleCb = typeof requestIdleCallback === 'function' ? requestIdleCallback : (cb) => setTimeout(cb, 16);
-      idleCb(() => {
-        // Guard against stale generation — user may have switched tabs again
-        if (selectGen !== this._selectGeneration) return;
-
-        // Update respawn banner
-        if (this.respawnStatus[sessionId]) {
-          this.showRespawnBanner();
-          this.updateRespawnBanner(this.respawnStatus[sessionId].state);
-          document.getElementById('respawnCycleCount').textContent = this.respawnStatus[sessionId].cycleCount || 0;
-          this.updateCountdownTimerDisplay();
-          this.updateActionLogDisplay();
-          if (Object.keys(this.respawnCountdownTimers[sessionId] || {}).length > 0) {
-            this.startCountdownInterval();
-          }
-        } else {
-          this.hideRespawnBanner();
-          this.stopCountdownInterval();
-        }
-
-        // Update task panel if open
-        const taskPanel = document.getElementById('taskPanel');
-        if (taskPanel && taskPanel.classList.contains('open')) {
-          this.renderTaskPanel();
-        }
-
-        // Update ralph state panel for this session
-        const curSession = this.sessions.get(sessionId);
-        if (curSession && (curSession.ralphLoop || curSession.ralphTodos)) {
-          this.updateRalphState(sessionId, {
-            loop: curSession.ralphLoop,
-            todos: curSession.ralphTodos
-          });
-        }
-        this.renderRalphStatePanel();
-
-        // Update CLI info bar (mobile - shows Claude version/model)
-        this.updateCliInfoDisplay();
-
-        // Update project insights panel for this session
-        this.renderProjectInsightsPanel();
-
-        // Update subagent window visibility for active session
-        this.updateSubagentWindowVisibility();
-
-        // Load file browser if enabled
-        const settings = this.loadAppSettingsFromStorage();
-        if (settings.showFileBrowser) {
-          const fileBrowserPanel = this.$('fileBrowserPanel');
-          if (fileBrowserPanel) {
-            fileBrowserPanel.classList.add('visible');
-            this.loadFileBrowser(sessionId);
-            // Attach drag listeners if not already attached
-            if (!this.fileBrowserDragListeners) {
-              const header = fileBrowserPanel.querySelector('.file-browser-header');
-              if (header) {
-                const onFirstDrag = () => {
-                  if (!fileBrowserPanel.style.left) {
-                    const rect = fileBrowserPanel.getBoundingClientRect();
-                    fileBrowserPanel.style.left = `${rect.left}px`;
-                    fileBrowserPanel.style.top = `${rect.top}px`;
-                    fileBrowserPanel.style.right = 'auto';
-                  }
-                };
-                header.addEventListener('mousedown', onFirstDrag);
-                header.addEventListener('touchstart', onFirstDrag, { passive: true });
-                this.fileBrowserDragListeners = this.makeWindowDraggable(fileBrowserPanel, header);
-                this.fileBrowserDragListeners._onFirstDrag = onFirstDrag;
-              }
-            }
-          }
-        }
-      });
+      idleCb(() => this._refreshSessionPanels(sessionId, selectGen));
 
       // Open WebSocket for low-latency terminal I/O (after buffer load completes)
       this._connectWs(sessionId);
@@ -8707,6 +8850,90 @@ class CodemanApp {
     }
   }
 
+  /**
+   * The panels that follow the active session (respawn banner and countdown,
+   * action log, task panel, Ralph state, CLI info, project insights, subagent
+   * window visibility, file browser). Run deferred, after the terminal content
+   * is on screen, by selectSession and by the tile grid's focus change
+   * (tile-grid.js _selectTiledSession), so both share one copy.
+   *
+   * @param {string} sessionId - the session that just became active
+   * @param {number} selectGen - the `_selectGeneration` of that selection; a
+   *   newer one (the user switched again) makes this a no-op
+   */
+  _refreshSessionPanels(sessionId, selectGen) {
+    // A newer selection won: the user switched tabs again.
+    if (selectGen !== this._selectGeneration) return;
+
+    // Update respawn banner
+    if (this.respawnStatus[sessionId]) {
+      this.showRespawnBanner();
+      this.updateRespawnBanner(this.respawnStatus[sessionId].state);
+      document.getElementById('respawnCycleCount').textContent = this.respawnStatus[sessionId].cycleCount || 0;
+      this.updateCountdownTimerDisplay();
+      this.updateActionLogDisplay();
+      if (Object.keys(this.respawnCountdownTimers[sessionId] || {}).length > 0) {
+        this.startCountdownInterval();
+      }
+    } else {
+      this.hideRespawnBanner();
+      this.stopCountdownInterval();
+    }
+
+    // Update task panel if open
+    const taskPanel = document.getElementById('taskPanel');
+    if (taskPanel && taskPanel.classList.contains('open')) {
+      this.renderTaskPanel();
+    }
+
+    // Update ralph state panel for this session
+    const curSession = this.sessions.get(sessionId);
+    if (curSession && (curSession.ralphLoop || curSession.ralphTodos)) {
+      this.updateRalphState(sessionId, {
+        loop: curSession.ralphLoop,
+        todos: curSession.ralphTodos
+      });
+    }
+    this.renderRalphStatePanel();
+
+    // Update CLI info bar (mobile - shows Claude version/model)
+    this.updateCliInfoDisplay();
+
+    // Update project insights panel for this session
+    this.renderProjectInsightsPanel();
+
+    // Update subagent window visibility for active session
+    this.updateSubagentWindowVisibility();
+
+    // Load file browser if enabled
+    const settings = this.loadAppSettingsFromStorage();
+    if (settings.showFileBrowser) {
+      const fileBrowserPanel = this.$('fileBrowserPanel');
+      if (fileBrowserPanel) {
+        fileBrowserPanel.classList.add('visible');
+        this.loadFileBrowser(sessionId);
+        // Attach drag listeners if not already attached
+        if (!this.fileBrowserDragListeners) {
+          const header = fileBrowserPanel.querySelector('.file-browser-header');
+          if (header) {
+            const onFirstDrag = () => {
+              if (!fileBrowserPanel.style.left) {
+                const rect = fileBrowserPanel.getBoundingClientRect();
+                fileBrowserPanel.style.left = `${rect.left}px`;
+                fileBrowserPanel.style.top = `${rect.top}px`;
+                fileBrowserPanel.style.right = 'auto';
+              }
+            };
+            header.addEventListener('mousedown', onFirstDrag);
+            header.addEventListener('touchstart', onFirstDrag, { passive: true });
+            this.fileBrowserDragListeners = this.makeWindowDraggable(fileBrowserPanel, header);
+            this.fileBrowserDragListeners._onFirstDrag = onFirstDrag;
+          }
+        }
+      }
+    }
+  }
+
   // Shared cleanup for all session data — called from both closeSession() and session:deleted handler
   _cleanupSessionData(sessionId) {
     this.closeTabRailActionMenu?.();
@@ -8780,12 +9007,24 @@ class CodemanApp {
     // next session or dumped you on the home screen, depending on which path
     // won the race (both outcomes measured on one build, 2026-08-17).
     const wasActive = this.activeSessionId === sessionId;
+    // Tile grid open: the fallback is the NEIGHBOURING TILE, never the first
+    // sessionOrder entry (often not tiled, which would collapse the grid).
+    // Captured here for the same reason as wasActive: the SSE delete can remove
+    // the tile while the request is still in flight.
+    const grid = this._tileGrid;
+    const tileNeighborId = grid?.has(sessionId) ? window.CodemanTileGrid.tileNeighbor(grid.ids, sessionId) : null;
     this._closingSessions.add(sessionId);
     try {
       await this._apiDelete(`/api/sessions/${sessionId}?killMux=${killMux}`);
       this._cleanupSessionData(sessionId);
+      // The last tile leaving closes the grid (no reselect): the pick below runs.
+      if (grid?.has(sessionId)) this.removeTile(sessionId, { refocus: false });
 
-      if (wasActive) {
+      if (wasActive && grid?.open) {
+        // `auto`: the app chose this tile because the previous one went away.
+        const target = grid.has(tileNeighborId) ? tileNeighborId : grid.ids[0];
+        this._selectTiledSession(target, { auto: true });
+      } else if (wasActive) {
         this.activeSessionId = null;
         try { localStorage.removeItem('codeman-active-session'); } catch {}
         // Next tab in the user's own order, skipping ids the cleanup has not
@@ -8870,6 +9109,8 @@ class CodemanApp {
   }
 
   nextSession() {
+    // With the tile grid open, Ctrl+Tab and Alt+[ / Alt+] cycle through the tiles.
+    if (this._cycleTileFocus?.(1)) return;
     if (this.sessionOrder.length <= 1) return;
 
     const currentIndex = this.sessionOrder.indexOf(this.activeSessionId);
@@ -8878,6 +9119,7 @@ class CodemanApp {
   }
 
   prevSession() {
+    if (this._cycleTileFocus?.(-1)) return;
     if (this.sessionOrder.length <= 1) return;
 
     const currentIndex = this.sessionOrder.indexOf(this.activeSessionId);
@@ -8893,6 +9135,8 @@ class CodemanApp {
     // Going Home is choosing something else, so a `#session=<id>` link still
     // waiting for its session must not take the screen later.
     this._retireUrlSession();
+    // Home is a choice to leave the grid too; it is remembered for Tiles.
+    this.closeTileGrid?.({ keepStored: true, reselect: false });
     // Deselect active session and show welcome screen
     this.activeSessionId = null;
     try { localStorage.removeItem('codeman-active-session'); } catch {}
@@ -8943,6 +9187,8 @@ class CodemanApp {
 
     try {
       await this._apiDelete('/api/sessions');
+      // Every tiled session is gone: nothing left to remember or reselect.
+      this.closeTileGrid?.({ keepStored: false, reselect: false });
       this.sessions.clear();
       this.terminalBuffers.clear();
       this.terminalBufferCache.clear();
@@ -9139,14 +9385,16 @@ class CodemanApp {
       groups[g].push(shortcut);
     }
     const fmtBindings = (s) => {
-      if (s.displayBindings) return s.displayBindings.map((b) => `<kbd>${escapeHtml(b)}</kbd>`).join(' / ');
+      // Key names, never translated: "Home" is also a dictionary word (the Home
+      // button), so without the skip zh-CN showed the key as 主页.
+      if (s.displayBindings) return s.displayBindings.map((b) => `<kbd data-i18n-skip>${escapeHtml(b)}</kbd>`).join(' / ');
       if (!s.bindings) return '';
       // An action with no key (Close Session by default) is still listed, so the
       // overlay says so instead of showing an empty key column.
       if (s.bindings.length === 0) return '<span class="shortcut-overlay-unbound">not bound</span>';
       return s.bindings.map((b) => {
         const parts = [...(b.modifiers || []).map((m) => m.charAt(0).toUpperCase() + m.slice(1)), b.key || b.code || ''];
-        return `<kbd>${escapeHtml(parts.join('+'))}</kbd>`;
+        return `<kbd data-i18n-skip>${escapeHtml(parts.join('+'))}</kbd>`;
       }).join(' / ');
     };
     list.innerHTML = Object.entries(groups).map(([group, items]) =>

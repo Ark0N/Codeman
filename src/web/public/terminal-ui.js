@@ -590,6 +590,11 @@ Object.assign(CodemanApp.prototype, {
         return false;
       }
 
+      // Tile grid chords (Ctrl+Shift+G, Alt+Shift+Arrows): the capture handler
+      // has already acted on one that applies, and its preventDefault() does not
+      // stop xterm. Every event type, and BEFORE the Shift+Enter branch below.
+      if (this.tileShortcutFor?.(ev)) return false;
+
       // Smart copy (#211): with a selection, Ctrl+C copies it instead of sending
       // ^C. With NO selection the branch must fall through (return true, and no
       // preventDefault) or the interrupt key is lost, which is the whole reason
@@ -1328,6 +1333,9 @@ Object.assign(CodemanApp.prototype, {
         // Same yield as sendResize: never resize a PTY whose session is showing
         // in its own window. Dragging the dashboard's border must not reshape it.
         const detachedElsewhere = !this.isSoloWindow && this.detachedSessions?.has(this.activeSessionId);
+        // The tile grid parks the main terminal: its session is sized by its
+        // tile, which this same timer refits below (_forEachTile).
+        const tilesOwnTerminal = this._tilesOwnTerminal?.();
         // ⚠️ Whether to fit is the SAME question as whether to send (issue #464).
         // This block used to fit unconditionally and skip only the SIGWINCH,
         // which is the one combination that cannot be right: it moves xterm to
@@ -1335,7 +1343,9 @@ Object.assign(CodemanApp.prototype, {
         // repaints from the shape it was told. Withhold both, or neither —
         // a reflow nothing is rendering for buys nothing and costs correctness.
         const dims =
-          this.activeSessionId && !keyboardUp && !detachedElsewhere ? this._geometryForResizeRequest() : null;
+          this.activeSessionId && !keyboardUp && !detachedElsewhere && !tilesOwnTerminal
+            ? this._geometryForResizeRequest()
+            : null;
         // ⚠️ A null measurement is NOT a reason to report the floor. It used to
         // fall back to a bare 40x10, which tells the PTY a shape nothing measured
         // and xterm does not hold — the write-only guess this whole change exists
@@ -1418,8 +1428,11 @@ Object.assign(CodemanApp.prototype, {
         // frame — this observer only ever measured Pane A's container, so
         // without this call Pane B never learned about a window resize, an
         // Alt+B sidebar toggle, or a tab-rail drag, and its PTY silently
-        // stayed at whatever size it was last dragged to.
-        this._forEachTile?.((tile) => tile.fit());
+        // stayed at whatever size it was last dragged to. Grid tiles are left
+        // out: the grid's own observer (tile-grid.js _scheduleTileGridRefit)
+        // refits every one of them on the same resize, and a second fit here
+        // only re-measured six panes to send nothing.
+        this._forEachTile?.((tile) => tile.fit(), { grid: false });
       }, 300); // Trailing-edge: only fire after 300ms of no resize events
     };
 
@@ -4512,7 +4525,12 @@ Object.assign(CodemanApp.prototype, {
    * it from its own terminal's focus; the primary terminal's focus gives it back.
    */
   _focusedPane() {
-    const tile = this._focusedTile;
+    let tile = this._focusedTile;
+    // With the tile grid open the main terminal is parked, so the pane is the
+    // focused tile even when DOM focus sits on a button or a panel.
+    if ((!tile || tile._destroyed || !tile.terminal) && this._tilesOwnTerminal?.()) {
+      tile = this._tileFor(this.activeSessionId);
+    }
     if (tile && !tile._destroyed && tile.terminal) {
       return { terminal: tile.terminal, sessionId: tile.sessionId, isPrimary: false, tile };
     }
@@ -4525,13 +4543,19 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Run `fn(tile)` for every secondary terminal pane on screen: today the split
-   * pane's second terminal, when one is open. Font, weight, family and skin
-   * changes go through here so they reach every pane without a special case
-   * per pane kind. Agent Teams terminals size themselves and are not tiles.
+   * Run `fn(tile)` for every secondary terminal pane on screen: the split
+   * pane's second terminal and every tile of the tile grid (never both: the two
+   * modes are not open together). Font, weight, family and skin changes go
+   * through here so they reach every pane without a special case per pane kind.
+   * `{ grid: false }` skips grid tiles (they keep their own font size).
+   * Agent Teams terminals size themselves and are not tiles.
    */
-  _forEachTile(fn) {
+  _forEachTile(fn, { grid = true } = {}) {
     if (this._splitPane?.terminal) fn(this._splitPane);
+    if (!grid || !this._tileGrid?.open) return;
+    for (const { tile } of this._tileGrid.tiles.values()) {
+      if (tile.terminal) fn(tile);
+    }
   },
 
   // Clears the pane the keyboard is in. The chord itself also reaches that
@@ -4614,6 +4638,9 @@ Object.assign(CodemanApp.prototype, {
       this.showToast('No active session', 'warning');
       return;
     }
+    // Backstop: _focusedPane() answers with the focused tile while the grid is
+    // open, so this is reached only if that tile is gone mid-call.
+    if (this._tilesOwnTerminal?.()) return;
 
     // The pane belongs to the popup showing it, so this window has nothing to
     // restore. Say so rather than reporting a size that was never sent — the
@@ -5742,11 +5769,20 @@ Object.assign(CodemanApp.prototype, {
   },
 
   increaseFontSize() {
+    // With the tile grid open, Ctrl +/- sizes the tiles (their own font size).
+    if (this._tilesOwnTerminal?.()) {
+      this.setTileFontSize(Math.min(this._tileGridFontSize() + 2, 24));
+      return;
+    }
     const current = this.terminal.options.fontSize || 14;
     this.setFontSize(Math.min(current + 2, 24));
   },
 
   decreaseFontSize() {
+    if (this._tilesOwnTerminal?.()) {
+      this.setTileFontSize(Math.max(this._tileGridFontSize() - 2, 10));
+      return;
+    }
     const current = this.terminal.options.fontSize || 14;
     this.setFontSize(Math.max(current - 2, 10));
   },
@@ -5759,10 +5795,13 @@ Object.assign(CodemanApp.prototype, {
     // Update overlay font cache and re-render at new cell dimensions
     this._localEchoOverlay?.refreshFont();
     this._predictiveEcho?.refreshFont();
-    this._forEachTile?.((tile) => {
-      tile.terminal.options.fontSize = size;
-      tile.fit(); // a font change is a size change: tell its PTY too (#464)
-    });
+    this._forEachTile?.(
+      (tile) => {
+        tile.terminal.options.fontSize = size;
+        tile.fit(); // a font change is a size change: tell its PTY too (#464)
+      },
+      { grid: false }
+    );
   },
 
   /**
@@ -6066,6 +6105,9 @@ Object.assign(CodemanApp.prototype, {
     // settle-time refit through this call and has no fallback, which is correct:
     // a pane it does not own is not its to refit either.
     if (!this.isSoloWindow && this.detachedSessions?.has(sessionId)) return false;
+    // Backstop: while the tile grid owns the terminal, a tile sizes this PTY and
+    // the parked main terminal measures nothing worth sending.
+    if (this._tilesOwnTerminal?.()) return false;
     // Fit, floor, and apply in one step so the numbers below are the numbers
     // xterm is actually holding (or, while another device holds the width,
     // the numbers this container would hold if the PTY followed).

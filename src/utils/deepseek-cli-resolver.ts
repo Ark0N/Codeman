@@ -156,6 +156,11 @@ const STOCK_NON_INTERACTIVE_PROFILES = new Map<string, DeepSeekProfileKind>([
 /** Profile directory names that are not profiles. */
 const NON_PROFILE_DIRS = new Set(['node_modules', '.bin', '.pnpm']);
 
+/** Whether a directory under `$DSH_HOME/profiles` can be a profile at all (not `node_modules`, not hidden). */
+export function isProfileDirName(name: string): boolean {
+  return !NON_PROFILE_DIRS.has(name) && !name.startsWith('.');
+}
+
 function classifyProfile(name: string, bundles: string[]): DeepSeekProfileKind {
   const haystack = [name, ...bundles].join(' ');
   // Order matters: a profile that composes BOTH a web app and a tui bundle is a
@@ -174,7 +179,19 @@ function classifyProfile(name: string, bundles: string[]): DeepSeekProfileKind {
  */
 function readProfile(profilesDir: string, name: string): DeepSeekProfile | null {
   try {
-    const raw = readFileSync(join(profilesDir, name, 'package.json'), 'utf-8');
+    return deepSeekProfileFromManifest(name, readFileSync(join(profilesDir, name, 'package.json'), 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A profile from its directory name and the text of its `package.json`, or null when
+ * that text is not JSON. Pure, so a caller with its own (bounded, async) reads gets the
+ * same classification as the inventory below.
+ */
+export function deepSeekProfileFromManifest(name: string, raw: string): DeepSeekProfile | null {
+  try {
     const parsed = JSON.parse(raw) as { dsh?: { profile?: { bundles?: unknown } } };
     const rawBundles = parsed?.dsh?.profile?.bundles;
     const bundles = Array.isArray(rawBundles) ? rawBundles.filter((b): b is string => typeof b === 'string') : [];
@@ -198,7 +215,7 @@ export function listDeepSeekProfiles(): DeepSeekProfile[] {
   let entries: string[];
   try {
     entries = readdirSync(profilesDir, { withFileTypes: true })
-      .filter((e) => e.isDirectory() && !NON_PROFILE_DIRS.has(e.name) && !e.name.startsWith('.'))
+      .filter((e) => e.isDirectory() && isProfileDirName(e.name))
       .map((e) => e.name);
   } catch {
     return [];

@@ -1037,6 +1037,62 @@ describe('session-routes', () => {
       expect(body.data.terminalBuffer.endsWith(`${newestMarker}${cursorRestore}`)).toBe(true);
     });
 
+    it('`lines=` bounds the history a full capture reads, clamped to the configured limit', async () => {
+      // Grid tiles send it (TerminalTile._historyLinesQuery): without it a full
+      // capture reads the whole history limit synchronously, and `tail` cuts it
+      // only afterwards. Absent or malformed, the limit itself, as before.
+      const limit = (await harness.ctx.getTerminalHistoryConfig()).tmuxHistoryLimit;
+      harness.ctx._session.mode = 'claude';
+      const captureSpy = vi.fn((_name: string, _opts?: { historyLimitLines?: number }) => 'captured frame');
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = captureSpy;
+      const linesFor = async (query: string) => {
+        captureSpy.mockClear();
+        await harness.app.inject({ method: 'GET', url: `/api/sessions/${harness.ctx._sessionId}/terminal?${query}` });
+        return captureSpy.mock.calls[0]?.[1]?.historyLimitLines;
+      };
+
+      expect(await linesFor(`full=1&tail=${1024 * 1024}&lines=10040`)).toBe(10040);
+      expect(await linesFor('full=1&lines=1')).toBe(1);
+      expect(await linesFor('full=1')).toBe(limit);
+      expect(await linesFor(`full=1&lines=${limit + 5}`)).toBe(limit);
+      for (const bad of ['0', '-5', 'abc', '1.5', '', '1e4', '9999999999']) {
+        expect(await linesFor(`full=1&lines=${bad}`), `lines=${bad}`).toBe(limit);
+      }
+    });
+
+    it('`lines=` leaves a visible-frame capture (no full=1) exactly as it was', async () => {
+      harness.ctx._session.mode = 'shell';
+      const captureSpy = vi.fn(() => 'only the visible frame');
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = captureSpy;
+      await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?tail=${1024 * 1024}&lines=500`,
+      });
+      expect(captureSpy).toHaveBeenCalledWith(harness.ctx._session.muxName, {});
+    });
+
+    it('a capture bounded by `lines=` is still a full capture: rows kept, cursor restore last', async () => {
+      // Only how much history tmux reads changes. The row-preserving skips key
+      // on isFullCapture, and the relative cursor move must still end it.
+      const cursorRestore = '\x1b[3A\r\x1b[2C';
+      const capture = `\r\n${['first row', 'second row', 'last row'].join('\r\n')}${cursorRestore}`;
+      harness.ctx._session.mode = 'claude';
+      harness.ctx._session.terminalBuffer = 'byte history that must not be prepended';
+      const captureSpy = vi.fn((_name: string, opts?: { fullHistory?: boolean }) =>
+        opts?.fullHistory ? capture : 'only the visible frame'
+      );
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = captureSpy;
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?full=1&tail=${1024 * 1024}&lines=40`,
+      });
+      const body = JSON.parse(res.body);
+      expect(body.data.source).toBe('mux-full-history');
+      expect(body.data.terminalBuffer.startsWith('\r\nfirst row')).toBe(true);
+      expect(body.data.terminalBuffer.endsWith(`last row${cursorRestore}`)).toBe(true);
+      expect(body.data.terminalBuffer).not.toContain('byte history');
+    });
+
     it('full reload (?full=1) returns the tmux capture ALONE — byte history is not duplicated', async () => {
       // The full-history capture is the rendered form of everything already in
       // the byte buffer; prepending the byte history would replay the whole

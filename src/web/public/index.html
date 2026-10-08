@@ -189,9 +189,10 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
           <span class="attachment-history-badge" id="attachmentHistoryBadge" style="display:none;">0</span>
         </button>
-        <button class="btn-icon-header btn-file-viewer" onclick="app.toggleFileBrowserButton()" title="File Viewer" aria-label="Open file viewer" aria-expanded="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></button>
+        <button class="btn-icon-header btn-file-viewer" onclick="app.toggleFileBrowserButton()" title="File Viewer" aria-label="Open file viewer" aria-expanded="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="icon-folder-closed" d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><g class="icon-folder-open"><path d="M3 17V7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1.5"/><path d="M3 17l2.3-5.4A2 2 0 0 1 7.2 10.5H20a1.5 1.5 0 0 1 1.4 2l-1.9 5.2A2 2 0 0 1 17.6 19H5a2 2 0 0 1-2-2z"/></g></svg></button>
         <button class="btn-icon-header btn-multimonitor btn-multimonitor--hidden" onclick="app.launchMultiMonitor()" title="Open Codeman across all displays" aria-label="Open Codeman across all displays"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="13" height="9" rx="1.5"/><rect x="11" y="9" width="11" height="8" rx="1.5"/></svg></button>
         <button class="btn-icon-header btn-split btn-split--hidden" onclick="app.openSplitPicker(event)" title="Split: open a second session beside this one" aria-label="Split: open a second session beside this one" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg></button>
+        <button class="btn-icon-header btn-tile-grid btn-tile-grid--hidden" onclick="app.toggleTileGrid()" oncontextmenu="app.openTileCountMenu(event)" aria-describedby="tileGridHint" aria-label="Tiles: show several sessions side by side (right-click for how many)" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg></button>
         <button class="btn-icon-header btn-ultracode-agents btn-ultracode-agents--hidden" onclick="app.toggleUltracodeAgentsPanel()" title="Ultracode / Workflow agents" aria-label="Open ultracode workflow agents"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.2 7.2 15.6 11M8.2 16.8 15.6 13"/></svg></button>
         <div class="header-plan-usage header-plan-usage--hidden" id="planUsageChip" title="Claude and Codex plan usage limits">—</div>
         <button class="btn-icon-header btn-notifications" onclick="app.toggleNotifications()" title="Notifications" aria-label="Toggle notifications" style="display:none;">
@@ -434,6 +435,12 @@
           maxlength="65536" aria-label="CJK IME input field"
           autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
       </div>
+
+      <!-- Tile grid (tile-grid.js): 1 to 6 sessions side by side, each a
+           TerminalTile. A SIBLING of .terminal-wrap, never a parent: while
+           .main.tiles-active is set the main terminal is parked (hidden) and
+           this section takes its place. -->
+      <section class="tile-grid" id="tileGrid" aria-label="Tiled sessions"></section>
 
       <!-- Web tab layer: one iframe per open dashboard, shown in place of the
            terminal while a web tab is active. Frames stay mounted while hidden so
@@ -821,9 +828,21 @@
               <div><kbd>Ctrl</kbd>+<kbd>}</kbd></div><div>Move Active Tab Right</div>
               <div><kbd>ArrowLeft</kbd> / <kbd>ArrowUp</kbd></div><div>Focus Previous Tab</div>
               <div><kbd>ArrowRight</kbd> / <kbd>ArrowDown</kbd></div><div>Focus Next Tab</div>
-              <div><kbd>Home</kbd></div><div>Focus First Tab</div>
+              <div><kbd data-i18n-skip>Home</kbd></div><div>Focus First Tab</div>
               <div><kbd>End</kbd></div><div>Focus Last Tab</div>
               <div><kbd>Enter</kbd> / <kbd>Space</kbd></div><div>Activate Focused Tab</div>
+            </div>
+          </section>
+          <section class="shortcut-section">
+            <h4>Tiles</h4>
+            <div class="shortcuts-grid">
+              <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd></div><div>Toggle Tile Grid</div>
+              <div><kbd>Alt/Option</kbd>+<kbd>Shift</kbd>+<kbd>Arrows</kbd></div><div>Focus Tile Left / Right / Up / Down</div>
+              <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Arrows</kbd></div><div>Move Tile Left / Right / Up / Down</div>
+              <div><kbd>Drag</kbd> a tile's header</div><div>Move the Tile (onto Another: Swap)</div>
+              <div><kbd>Alt/Option</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd></div><div>Zoom Focused Tile</div>
+              <div><kbd>Ctrl/Cmd</kbd>+<kbd>Click</kbd> a tab</div><div>Add the Session to the Tile Grid</div>
+              <div><kbd>Right-click</kbd> the Tiles button</div><div>Choose How Many Tiles (2, 4 or 6)</div>
             </div>
           </section>
           <section class="shortcut-section">
@@ -1903,7 +1922,7 @@
                 <div class="set-group-head"><h4>Header buttons</h4><span class="set-scope">device</span></div>
                 <p class="set-group-hint">Tap to show a control in the header. Multi-monitor is the one entry here that syncs across devices.</p>
                 <div class="set-group-body">
-                  <div class="set-chips" data-search="header buttons plan usage font stats lifecycle response file viewer attachments monitor session away cron redraw">
+                  <div class="set-chips" data-search="header buttons plan usage font stats lifecycle response file viewer attachments monitor session away cron redraw split tiles">
                     <label class="set-chip" data-preview="header" data-preview-order="1" data-preview-text="A+"><input type="checkbox" id="appSettingsShowFontControls"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20 10 5l6 15"/><path d="M6.5 15h7"/><path d="M18 12h4M20 10v4"/></svg><span>Font Size</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="2" data-preview-text="CPU 12%"><input type="checkbox" id="appSettingsShowSystemStats" checked><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l2.5-7 4 14L16 12h5"/></svg><span>System Stats</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="3"><input type="checkbox" id="appSettingsShowRedrawButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg><span>Redraw Terminal</span></label>
@@ -1913,7 +1932,8 @@
                     <label class="set-chip" data-preview="header" data-preview-order="9"><input type="checkbox" id="appSettingsShowAttachmentsButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg><span>Attachments</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="10"><input type="checkbox" id="appSettingsShowFileViewerButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span>File Viewer</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="11"><input type="checkbox" id="appSettingsShowMultiMonitorButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="13" height="9" rx="1.5"/><rect x="11" y="9" width="11" height="8" rx="1.5"/></svg><span>Multi-monitor</span></label>
-                    <label class="set-chip" data-preview="header" data-preview-order="11.5"><input type="checkbox" id="appSettingsShowSplitButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg><span>Split</span></label>
+                    <label class="set-chip" data-search="split pane side by side two sessions" data-preview="header" data-preview-order="11.5"><input type="checkbox" id="appSettingsShowSplitButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg><span>Split</span></label>
+                    <label class="set-chip" data-search="tiles tile grid side by side several sessions" data-preview="header" data-preview-order="11.6"><input type="checkbox" id="appSettingsShowTileGridButton"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg><span>Tiles</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="13" data-preview-text="42%"><input type="checkbox" id="appSettingsShowPlanUsageLimits"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4.5-5"/></svg><span>Plan Usage</span></label>
                     <label class="set-chip" data-preview="header" data-preview-order="14"><input type="checkbox" id="appSettingsShowLifecycleLog"><svg class="set-chip-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span>Lifecycle Log</span></label>
                   </div>
@@ -3920,6 +3940,7 @@
   <script defer src="terminal-ui.js"></script>
   <script defer src="terminal-tile.js"></script>
   <script defer src="terminal-split.js"></script>
+  <script defer src="tile-grid.js"></script>
   <script defer src="respawn-ui.js"></script>
   <script defer src="ralph-panel.js"></script>
   <script defer src="orchestrator-panel.js"></script>

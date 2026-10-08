@@ -18,114 +18,15 @@
  *
  * Real code under test: constants.js + app.js (the queue) + terminal-ui.js (the
  * shared input predicates) + terminal-tile.js, in one `vm` context. xterm, the
- * fit addon and WebSocket are fakes; `connect()` runs for real.
+ * fit addon and WebSocket are fakes (test/mocks/terminal-tile-fakes.ts);
+ * `connect()` runs for real.
  */
 import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
-type Frame = { t: string; d?: string; seq?: number; cid?: string; c?: number; r?: number };
-
-class FakeSocket {
-  static OPEN = 1;
-  static instances: FakeSocket[] = [];
-  readyState = 0;
-  sent: Frame[] = [];
-  onopen: (() => void) | null = null;
-  onmessage: ((ev: { data: string }) => void) | null = null;
-  onclose: ((ev?: { code: number }) => void) | null = null;
-  onerror: (() => void) | null = null;
-  constructor(public url: string) {
-    FakeSocket.instances.push(this);
-  }
-  send(data: string) {
-    this.sent.push(JSON.parse(data) as Frame);
-  }
-  close = vi.fn(() => {
-    this.readyState = 3;
-  });
-  open() {
-    this.readyState = 1;
-    this.onopen?.();
-  }
-  receive(msg: object) {
-    this.onmessage?.({ data: JSON.stringify(msg) });
-  }
-  inputFrames() {
-    return this.sent.filter((f) => f.t === 'i');
-  }
-}
-
-/** The fit addon: proposes `FakeFit.proposed` and, like the real one, resizes to it (NaN = hidden pane). */
-class FakeFit {
-  static proposed = { cols: 80, rows: 24 };
-  term: FakeTerminal | null = null;
-  fit() {
-    const { cols, rows } = FakeFit.proposed;
-    if (!Number.isFinite(cols) || !Number.isFinite(rows)) return;
-    this.term?.resize(cols, rows);
-  }
-  proposeDimensions() {
-    return { ...FakeFit.proposed };
-  }
-}
-
-class FakeTerminal {
-  static last: FakeTerminal | null = null;
-  options: Record<string, unknown>;
-  cols = 80;
-  rows = 24;
-  dataCb: ((data: string) => void) | null = null;
-  buffer = { active: { type: 'normal', viewportY: 0, length: 24 } };
-  constructor(options: Record<string, unknown>) {
-    this.options = { ...options };
-    FakeTerminal.last = this;
-  }
-  loadAddon(addon: FakeFit) {
-    addon.term = this;
-  }
-  open() {}
-  onData(cb: (data: string) => void) {
-    this.dataCb = cb;
-  }
-  keyHandler: ((ev: Record<string, unknown>) => boolean) | null = null;
-  focusListeners: Array<() => void> = [];
-  textarea = {
-    addEventListener: (type: string, fn: () => void) => {
-      if (type === 'focus') this.focusListeners.push(fn);
-    },
-    removeEventListener: (type: string, fn: () => void) => {
-      if (type === 'focus') this.focusListeners = this.focusListeners.filter((f) => f !== fn);
-    },
-  };
-  focusTextarea() {
-    for (const fn of this.focusListeners) fn();
-  }
-  attachCustomKeyEventHandler(fn: (ev: Record<string, unknown>) => boolean) {
-    this.keyHandler = fn;
-  }
-  registerLinkProvider() {}
-  writes: string[] = [];
-  write(data: string, cb?: () => void) {
-    this.writes.push(data);
-    cb?.();
-  }
-  clear() {
-    this.writes.push('<CLEAR>');
-  }
-  resizes: Array<[number, number]> = [];
-  resize(cols: number, rows: number) {
-    this.resizes.push([cols, rows]);
-    this.cols = cols;
-    this.rows = rows;
-  }
-  dispose() {}
-  type(data: string) {
-    this.dataCb?.(data);
-  }
-}
+import { FakeFit, FakeSocket, FakeTerminal } from './mocks/terminal-tile-fakes.js';
 
 const fetchMock = vi.fn();
 
@@ -583,6 +484,39 @@ describe('TerminalTile geometry (#464: the pane and its PTY never disagree)', ()
     expect(resizeFrames(ws).at(-1)).toEqual({ t: 'z', c: 28, r: 30, v: 'desktop' });
   });
 
+  it('paneStarted() resends an unchanged size: the first one went out before there was a PTY', async () => {
+    const { tile, ws } = await connectTile(makeApp());
+    ws.open();
+    tile.paneStarted();
+    expect(resizeFrames(ws)).toEqual([
+      { t: 'z', c: 80, r: 24, v: 'desktop' },
+      { t: 'z', c: 80, r: 24, v: 'desktop' },
+    ]);
+    // Only once: the size is recorded again, so a plain fit does not repeat it.
+    tile.fit();
+    expect(resizeFrames(ws)).toHaveLength(2);
+  });
+
+  it('paneStarted() on a hidden tile sends nothing, and its next fit sends the size', async () => {
+    const { tile, ws } = await connectTile(makeApp());
+    ws.open();
+    FakeFit.proposed = { cols: NaN, rows: NaN };
+    tile.paneStarted();
+    expect(resizeFrames(ws)).toHaveLength(1);
+    // Shown again (a zoom ends) at the same size it had: still sent.
+    FakeFit.proposed = { cols: 80, rows: 24 };
+    tile.fit();
+    expect(resizeFrames(ws)).toHaveLength(2);
+  });
+
+  it('paneStarted() before the socket opens sends nothing; the open sends the size once', async () => {
+    const { tile, ws } = await connectTile(makeApp());
+    tile.paneStarted();
+    expect(resizeFrames(ws)).toHaveLength(0);
+    ws.open();
+    expect(resizeFrames(ws)).toEqual([{ t: 'z', c: 80, r: 24, v: 'desktop' }]);
+  });
+
   it('reports nothing while hidden (the fit addon measures NaN)', async () => {
     const { tile, ws, term } = await connectTile(makeApp());
     ws.open();
@@ -659,6 +593,67 @@ describe('TerminalTile links and paste follow THIS pane', () => {
     term.keyHandler!({ type: 'keydown', key: 'V', ctrlKey: true, shiftKey: true, code: 'KeyV' });
 
     expect(paste).not.toHaveBeenCalled();
+  });
+});
+
+describe("TerminalTile Ctrl+C copies through the primary pane's copy helpers", () => {
+  const ctrlC = (extra: Record<string, unknown> = {}) => ({
+    type: 'keydown',
+    key: 'c',
+    code: 'KeyC',
+    ctrlKey: true,
+    preventDefault: vi.fn(),
+    ...extra,
+  });
+
+  it("copies THIS pane's selection; a failed write keeps it and focus returns to this pane", async () => {
+    const app = makeApp();
+    const copyText = vi.fn(async () => false);
+    app._copyText = copyText;
+    const { term } = await connectTile(app);
+    term.selection = 'npm run build';
+
+    const ev = ctrlC();
+    expect(term.keyHandler!(ev)).toBe(false);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(ev.preventDefault).toHaveBeenCalled();
+    expect(copyText).toHaveBeenCalledWith('npm run build');
+    expect(app.showToast).toHaveBeenCalledWith('Failed to copy', 'error');
+    // As in the primary pane: nothing was copied, so the selection stays for a retry.
+    expect(term.clearSelection).not.toHaveBeenCalled();
+    expect(term.selection).toBe('npm run build');
+    // The execCommand fallback focuses a temporary textarea; the keyboard comes back here.
+    expect(term.focus).toHaveBeenCalled();
+  });
+
+  it('a successful write clears the selection (a second Ctrl+C interrupts) and refocuses this pane', async () => {
+    const app = makeApp();
+    app._copyText = vi.fn(async () => true);
+    const { term } = await connectTile(app);
+    term.selection = 'npm run build';
+
+    expect(term.keyHandler!(ctrlC())).toBe(false);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(app.showToast).toHaveBeenCalledWith('Copied to clipboard', 'success');
+    expect(term.clearSelection).toHaveBeenCalled();
+    expect(term.focus).toHaveBeenCalled();
+  });
+
+  it('with nothing selected, Ctrl+C reaches the PTY and Ctrl+Shift+C does not', async () => {
+    const app = makeApp();
+    const copyText = vi.fn(async () => true);
+    app._copyText = copyText;
+    const { term } = await connectTile(app);
+
+    const plain = ctrlC();
+    expect(term.keyHandler!(plain)).toBe(true);
+    expect(plain.preventDefault).not.toHaveBeenCalled();
+    const shifted = ctrlC({ key: 'C', shiftKey: true });
+    expect(term.keyHandler!(shifted)).toBe(false);
+    expect(shifted.preventDefault).toHaveBeenCalled();
+    expect(copyText).not.toHaveBeenCalled();
   });
 });
 

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Session } from '../src/session.js';
-import { createSessionListeners } from '../src/web/session-listener-wiring.js';
+import {
+  attachSessionListeners,
+  createSessionListeners,
+  detachSessionListeners,
+} from '../src/web/session-listener-wiring.js';
 import { SseEvent } from '../src/web/sse-events.js';
 
 describe('session listener wiring', () => {
@@ -35,6 +39,27 @@ describe('session listener wiring', () => {
     refs.watchingChanged();
 
     expect(broadcastSessionStateDebounced).toHaveBeenCalledWith('wiring-watching-test');
+  });
+
+  it('pushes and persists the session state when the reported model changes', () => {
+    // A model switch changes nothing the status reflects, so without its own broadcast
+    // every header would keep naming the old model; persisting it is what lets a restart
+    // restore it.
+    const session = new Session({ id: 'wiring-model-test', workingDir: '/tmp', mode: 'claude' });
+    const broadcastSessionStateDebounced = vi.fn();
+    const persistSessionState = vi.fn();
+    const deps = { broadcastSessionStateDebounced, persistSessionState } as unknown as Parameters<
+      typeof createSessionListeners
+    >[1];
+
+    const refs = createSessionListeners(session, deps);
+    attachSessionListeners(session, refs);
+    session.noteReportedModel('statusline', 'Sonnet 4.6');
+
+    expect(broadcastSessionStateDebounced).toHaveBeenCalledWith('wiring-model-test');
+    expect(persistSessionState).toHaveBeenCalledWith(session);
+    detachSessionListeners(session, refs);
+    expect(session.listenerCount('displayModelChanged')).toBe(0);
   });
 
   /** The listener reads the setting asynchronously; let its promise chain settle. */
