@@ -18,16 +18,21 @@
  * capability then serves ONLY the files in that file's own directory tree, filtered
  * by the same blocklist plus an asset-extension allowlist and a no-dotfile rule, so
  * a page cannot use its own directory to pull a `.env` out through the browser.
+ * Because that tree is served recursively, minting is refused for an HTML file in a
+ * hidden directory or directly in a broad root (`/`, home, the temp dir, the cases
+ * and user-space roots), see {@link isBroadHtmlViewRoot}.
  */
 
 import type { FastifyInstance } from 'fastify';
 import { createReadStream, realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, resolve, sep } from 'node:path';
 import { ApiErrorCode, createErrorResponse } from '../../types.js';
 import { isBlockedAttachmentPath, isUnderTree, loadAttachmentGuardConfig } from '../../config/attachment-guard.js';
 import { HTML_VIEW_PREFIX, htmlViewCapabilities } from '../../html-view-capabilities.js';
-import { findSessionOrFail, ownerFor, validateSessionFilePath } from '../route-helpers.js';
+import { CASES_DIR, findSessionOrFail, ownerFor, validateSessionFilePath } from '../route-helpers.js';
+import { getUserSpacesDir } from '../../config/multiuser.js';
 import { exceedsDownloadLimit } from '../../config/buffer-limits.js';
 import type { SessionPort } from '../ports/index.js';
 
@@ -75,6 +80,32 @@ const SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-popups allow-modals
 
 function extensionOf(path: string): string {
   return extname(path).toLowerCase().replace(/^\./, '');
+}
+
+/** realpath when the path exists, else the plain resolved path. */
+function canonical(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/**
+ * Whether a directory is too broad to hand to a page as its asset root. The
+ * capability serves the HTML file's directory RECURSIVELY to the page's own
+ * scripts, so `/tmp/report.html` would expose every other session's scratch
+ * output under `/tmp`, and `~/report.html` the home tree. Refuse those roots
+ * (and the cases / user-space roots, which hold every workspace) outright.
+ */
+export function isBroadHtmlViewRoot(dir: string): boolean {
+  const target = canonical(dir);
+  const userSpaces = canonical(getUserSpacesDir());
+  const broad = [sep, homedir(), tmpdir(), CASES_DIR, userSpaces].map(canonical);
+  if (broad.includes(target)) return true;
+  // A user's own space (`<spaces>/<user>`) and its cases dir hold every workspace of that user.
+  if (dirname(target) === userSpaces) return true;
+  return basename(target) === 'cases' && dirname(dirname(target)) === userSpaces;
 }
 
 export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): void {
@@ -125,6 +156,27 @@ export function registerHtmlViewRoutes(app: FastifyInstance, ctx: SessionPort): 
     const stat = await fs.stat(resolvedPath).catch(() => null);
     if (!stat?.isFile()) {
       reply.code(404).send(createErrorResponse(ApiErrorCode.NOT_FOUND, 'File not found'));
+      return;
+    }
+
+    // The serving route never descends into a dot segment below the capability
+    // root; the HTML file's own path gets the same rule, or `.cache/r.html` would
+    // mint a capability over a hidden directory and serve its `token.json`.
+    if (resolvedPath.split(sep).some((segment) => segment.startsWith('.'))) {
+      reply
+        .code(403)
+        .send(createErrorResponse(ApiErrorCode.INVALID_INPUT, 'HTML files in hidden directories cannot be rendered'));
+      return;
+    }
+    if (isBroadHtmlViewRoot(dirname(resolvedPath))) {
+      reply
+        .code(403)
+        .send(
+          createErrorResponse(
+            ApiErrorCode.INVALID_INPUT,
+            'This folder is too broad to render a page from; move the HTML file into its own folder'
+          )
+        );
       return;
     }
 

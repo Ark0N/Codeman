@@ -8,10 +8,10 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
-import { registerHtmlViewRoutes } from '../../src/web/routes/html-view-routes.js';
+import { isBroadHtmlViewRoot, registerHtmlViewRoutes } from '../../src/web/routes/html-view-routes.js';
 import { capabilityFromHtmlViewPath, htmlViewCapabilities } from '../../src/html-view-capabilities.js';
 
 describe('html-view routes', () => {
@@ -105,5 +105,71 @@ describe('html-view routes', () => {
 
   it('reuses one capability per directory', async () => {
     expect(await openUrl()).toBe(await openUrl());
+  });
+  describe('outside the workspace', () => {
+    let outsideDir: string;
+    const saved = {
+      confine: process.env.CODEMAN_ATTACHMENT_CONFINE,
+      blocked: process.env.CODEMAN_ATTACHMENT_BLOCKED_PATHS,
+    };
+
+    beforeEach(() => {
+      outsideDir = join(root, 'reports');
+      mkdirSync(outsideDir);
+      writeFileSync(join(outsideDir, 'report.html'), '<p>report</p>');
+    });
+
+    afterEach(() => {
+      for (const [key, value] of [
+        ['CODEMAN_ATTACHMENT_CONFINE', saved.confine],
+        ['CODEMAN_ATTACHMENT_BLOCKED_PATHS', saved.blocked],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    it('mints for a page under the attachment guard', async () => {
+      expect((await open(join(outsideDir, 'report.html'))).statusCode).toBe(200);
+    });
+
+    it('refuses a page in a blocked tree', async () => {
+      process.env.CODEMAN_ATTACHMENT_BLOCKED_PATHS = outsideDir;
+      expect((await open(join(outsideDir, 'report.html'))).statusCode).toBe(403);
+    });
+
+    it('refuses every out-of-workspace page when attachments are confined to the workspace', async () => {
+      process.env.CODEMAN_ATTACHMENT_CONFINE = '1';
+      expect((await open(join(outsideDir, 'report.html'))).statusCode).toBe(403);
+      // The workspace itself is still fine.
+      expect((await open(join(workspace, 'index.html'))).statusCode).toBe(200);
+    });
+  });
+
+  it('refuses an HTML file inside a hidden directory, in or out of the workspace', async () => {
+    mkdirSync(join(workspace, '.cache'));
+    writeFileSync(join(workspace, '.cache', 'r.html'), '<p>r</p>');
+    writeFileSync(join(workspace, '.cache', 'token.json'), '{}');
+    expect((await open(join(workspace, '.cache', 'r.html'))).statusCode).toBe(403);
+    mkdirSync(join(root, '.hidden'));
+    writeFileSync(join(root, '.hidden', 'r.html'), '<p>r</p>');
+    expect((await open(join(root, '.hidden', 'r.html'))).statusCode).toBe(403);
+  });
+
+  it('treats the filesystem root, home and the temp dir as too broad to serve', () => {
+    expect(isBroadHtmlViewRoot('/')).toBe(true);
+    expect(isBroadHtmlViewRoot(homedir())).toBe(true);
+    expect(isBroadHtmlViewRoot(tmpdir())).toBe(true);
+    expect(isBroadHtmlViewRoot(workspace)).toBe(false);
+  });
+
+  it('refuses a page sitting directly in the temp dir', async () => {
+    const page = join(tmpdir(), `html-view-broad-${process.pid}.html`);
+    writeFileSync(page, '<p>broad</p>');
+    try {
+      expect((await open(page)).statusCode).toBe(403);
+    } finally {
+      rmSync(page, { force: true });
+    }
   });
 });
