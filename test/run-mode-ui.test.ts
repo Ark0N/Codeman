@@ -556,6 +556,25 @@ describe('Codex quick start settings', () => {
       expect(context.isExternalCliSession('custom-agent')).toBe(true);
     });
 
+    it('keeps the served external flag when App Settings resyncs the catalog from /api/clis', () => {
+      const catalog = CATALOG.map((cli) => ({ ...cli, external: cli.id !== 'claude' && cli.id !== 'shell' }));
+      const { app, context } = loadUi(undefined, catalog);
+      // /api/clis rows: no capabilities, so no `external`.
+      app._cliList = CATALOG.map((cli) => ({ ...cli, installed: true }));
+      app.runMode = 'claude';
+      app._syncCliLaunchCatalog();
+      expect(context.isExternalCliSession('claude')).toBe(false);
+      expect(context.isExternalCliSession('codex')).toBe(true);
+    });
+
+    it('gates Session Options on isExternalCliSession, not the launch-path check', () => {
+      const src = readFileSync(resolve(import.meta.dirname, '../src/web/public/session-ui.js'), 'utf8');
+      const open = src.slice(src.indexOf('\n  openSessionOptions('));
+      const body = open.slice(0, open.indexOf('\n  },'));
+      expect(body).toContain('isExternalCliSession(session.mode)');
+      expect(body).not.toContain('isExternalCliRunMode(');
+    });
+
     it('shows everything when the flags were never injected', () => {
       // A cached page from a build without the injection, or a solo popup. Hiding
       // every run button on a doubt would leave a working install nothing to click.
