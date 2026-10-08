@@ -171,7 +171,9 @@ describe('tab layouts by case and ledger (app.js)', () => {
       name: box.querySelector('.tab-cluster-name')?.textContent ?? null,
       count: box.querySelector('.tab-cluster-count')?.textContent ?? null,
       single: box.classList.contains('tab-cluster--single'),
-      rows: [...box.querySelectorAll<HTMLElement>('.session-tab')].map((t) => t.dataset.id || `web:${t.dataset.webviewId}`),
+      rows: [...box.querySelectorAll<HTMLElement>('.session-tab')].map(
+        (t) => t.dataset.id || `web:${t.dataset.webviewId}`
+      ),
     }));
 
   beforeEach(() => {
@@ -190,7 +192,9 @@ describe('tab layouts by case and ledger (app.js)', () => {
       { name: null, count: null, single: true, rows: ['web:w1'] },
     ]);
     for (const box of container().querySelectorAll<HTMLElement>(':scope > .tab-cluster:not(.tab-cluster--web)')) {
-      expect(box.getAttribute('style')).toMatch(/^--cluster-color: var\(--session-(blue|green|purple|orange|pink|yellow|red)\)$/);
+      expect(box.getAttribute('style')).toMatch(
+        /^--cluster-color: var\(--session-(blue|green|purple|orange|pink|yellow|red)\)$/
+      );
       expect(box.getAttribute('role')).toBe('presentation');
     }
   });
@@ -261,6 +265,35 @@ describe('tab layouts by case and ledger (app.js)', () => {
     expect(container().classList.contains('tabs-clusters')).toBe(false);
   });
 
+  it('wraps the header strip when a case box wraps inside itself', () => {
+    // A case wider than the strip wraps in its own box and never overflows, so
+    // the measured auto-wrap alone would leave the strip unwrapped, and with it the
+    // lineage routing room unreserved.
+    const app = makeApp();
+    app._fullRenderSessionTabs();
+    Object.assign(app, {
+      _syncLineageGutter: () => {},
+      isSessionSidebarActive: () => false,
+      loadAppSettingsFromStorage: () => ({ tabArrangement: 'case' }),
+      getDefaultSettings: () => ({ tabTwoRows: false, tabOrientation: 'horizontal' }),
+    });
+    const webshop = [...container().querySelectorAll<HTMLElement>('[data-cluster-key="/c/webshop"] > .session-tab')];
+    expect(webshop).toHaveLength(3);
+    const place = (tops: number[]) =>
+      webshop.forEach((el, i) => Object.defineProperty(el, 'offsetTop', { configurable: true, value: tops[i] }));
+    const overflow = CodemanApp.prototype.updateTabOverflowMode;
+
+    place([0, 0, 0]);
+    overflow.call(app);
+    expect(container().classList.contains('tabs-auto-wrap')).toBe(false);
+    expect(app._tabClustersWrapInside(container())).toBe(false);
+
+    place([0, 0, 38]);
+    overflow.call(app);
+    expect(app._tabClustersWrapInside(container())).toBe(true);
+    expect(container().classList.contains('tabs-auto-wrap')).toBe(true);
+  });
+
   it('draws the ledger with the classic markup and one class', () => {
     makeApp('classic')._fullRenderSessionTabs();
     const classic = container().innerHTML;
@@ -279,6 +312,19 @@ describe('tab layouts by case and ledger (static)', () => {
     expect(css).toMatch(/\.session-tabs\.tabs-clusters \.tab-name-case \{\s*display: none;/);
   });
 
+  it('keeps each case box its width on the desktop header strip, so the strip wraps box by box', () => {
+    // Allowed to shrink, every box squeezed and wrapped inside itself at 1440px
+    // (overlapping tab rows, the lineage routes through tabs and labels) and the
+    // strip never overflowed, so it never wrapped.
+    const media = css.indexOf(
+      '@media (min-width: 768px) {\n  .session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster {'
+    );
+    expect(media).toBeGreaterThan(-1);
+    expect(css.slice(media, css.indexOf('}', media))).toContain('flex-shrink: 0;');
+    // Only a case wider than the strip wraps inside its box.
+    expect(css).toMatch(/\.session-tabs-host > \.session-tabs\.tabs-clusters > \.tab-cluster \{[^}]*max-width: 100%;/);
+  });
+
   it('keeps the ledger to the desktop header strip', () => {
     const media = css.indexOf('@media (min-width: 768px) {\n  .session-tabs-host > .session-tabs.tabs-ledger {');
     expect(media).toBeGreaterThan(-1);
@@ -288,7 +334,9 @@ describe('tab layouts by case and ledger (static)', () => {
   });
 
   it('keeps every ledger row one height and makes the active cell stand out', () => {
-    const ledger = css.slice(css.indexOf('@media (min-width: 768px) {\n  .session-tabs-host > .session-tabs.tabs-ledger {'));
+    const ledger = css.slice(
+      css.indexOf('@media (min-width: 768px) {\n  .session-tabs-host > .session-tabs.tabs-ledger {')
+    );
     expect(ledger).toContain('align-items: stretch;');
     expect(ledger).toContain('min-height: 30px;');
     expect(ledger).toMatch(

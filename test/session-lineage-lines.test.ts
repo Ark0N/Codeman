@@ -380,6 +380,87 @@ describe('lineage tree geometry: header strip', () => {
   });
 });
 
+describe('lineage tree geometry: never through a tab, in any arrangement', () => {
+  // Measured live (1440x900, tabArrangement 'case', nine tabs in four cases) before
+  // the case boxes kept their width: every box squeezed and wrapped inside itself,
+  // so tabs sat at tops 10, 20, 42 and 43 with spans that overlap. The old rows
+  // (grouped by top alone) put the "gap" under the first row at y 30, inside the
+  // tabs, and the routes ran through them.
+  const strip: Rect = { left: 94, top: 6, width: 980, height: 85 };
+  const squeezed: Record<string, Rect> = {
+    'w1-webshop': { left: 201, top: 10, width: 99, height: 30 },
+    'w2-webshop': { left: 109, top: 42, width: 101, height: 30 },
+    'w3-webshop': { left: 212, top: 42, width: 101, height: 30 },
+    'w1-api-gateway': { left: 518, top: 10, width: 99, height: 30 },
+    'w2-api-gateway': { left: 407, top: 42, width: 143, height: 32 },
+    'w3-api-gateway': { left: 552, top: 43, width: 101, height: 30 },
+    'w1-notes': { left: 744, top: 20, width: 136, height: 30 },
+    'w1-docs-site': { left: 968, top: 10, width: 99, height: 30 },
+    'w2-docs-site': { left: 870, top: 42, width: 101, height: 30 },
+  };
+  const all = Object.values(squeezed);
+
+  it('makes overlapping spans one row, so no gap is ever inside a tab', () => {
+    const helper = loadLineageHelper();
+    // 10-40 and 20-50 overlap, and 42-74 overlaps 20-50: one row, no gap inside.
+    expect(helper.computeRows(all)).toEqual([{ top: 10, bottom: 74 }]);
+    // Rows that only share a top (the active tab is taller) stay one row, and rows
+    // with a real gap between them stay apart.
+    expect(helper.computeRows([tab(0, 4), tab(130, 4, 120, 32), tab(0, 46)])).toEqual([
+      { top: 4, bottom: 36 },
+      { top: 46, bottom: 76 },
+    ]);
+  });
+
+  it('draws no segment inside a tab, whichever tab is the parent or the child', () => {
+    const helper = loadLineageHelper();
+    const names = Object.keys(squeezed);
+    let drawn = 0;
+    for (const parentName of names) {
+      for (const lane of [0, 1, 2]) {
+        const children = names.filter((n) => n !== parentName).map((n) => ({ id: n, rect: squeezed[n] }));
+        const geom = helper.computeTree({
+          parent: squeezed[parentName],
+          children,
+          strip,
+          tabs: all,
+          lane,
+          laneCount: 3,
+        });
+        for (const route of geom?.routes ?? []) {
+          drawn++;
+          for (let i = 1; i < route.points.length; i++) {
+            for (const r of all) {
+              expect(crossesRect(route.points[i - 1], route.points[i], r), `${parentName} -> ${route.id}`).toBe(false);
+            }
+          }
+        }
+      }
+    }
+    // Some routes still have a clean way (a tab with nothing under it), so the
+    // check above is not vacuous.
+    expect(drawn).toBeGreaterThan(0);
+  });
+
+  it('draws nothing into rows with no gap between them', () => {
+    const helper = loadLineageHelper();
+    // Two rows touching (no row gap at all): the only place a route could run is
+    // through the tabs of the other row.
+    const upper = [tab(0, 4), tab(130, 4)];
+    const lower = [tab(0, 34), tab(130, 34)];
+    const geom = helper.computeTree({
+      parent: upper[0],
+      children: [
+        { id: 'below', rect: lower[1] },
+        { id: 'beside', rect: upper[1] },
+      ],
+      strip: { left: 0, top: 0, width: 600, height: 80 },
+      tabs: [...upper, ...lower],
+    })!;
+    expect(geom.routes).toEqual([]);
+  });
+});
+
 describe('lineage tree geometry: vertical rail', () => {
   const strip: Rect = { left: 100, top: 20, width: 320, height: 320 };
   const parent: Rect = { left: 132, top: 40, width: 260, height: 40 };

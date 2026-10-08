@@ -20891,6 +20891,21 @@ html[data-session-list='sidebar'][data-sidebar='collapsed'] .session-sidebar .ta
   padding-left: 3px;
 }
 
+/* Desktop: a cluster keeps its width, so clusters that do not fit on one line
+   overflow the strip and updateTabOverflowMode() wraps it box by box. Allowed
+   to shrink, every box squeezed and wrapped inside itself instead (a one-tab
+   case's swatch alone on a line above its tab), the strip never overflowed,
+   and the lineage routing room, which needs a wrapped strip, never applied:
+   the routes ran through tabs, labels and box borders. Only a case wider than
+   the whole strip still wraps inside its box (max-width: 100%), and the strip
+   wraps around it too (_tabClustersWrapInside). The narrower screens keep
+   their scrolling strip. */
+@media (min-width: 768px) {
+  .session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster {
+    flex-shrink: 0;
+  }
+}
+
 /* Side rail and sidebar: every case is a section with its label on top
    (vertical space is cheap there, so a one-tab case is labelled too). The
    label goes first by `order`, because a sorted rail orders the rows inside

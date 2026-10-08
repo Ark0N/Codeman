@@ -207,6 +207,9 @@ function shouldAutoWrapTabs(input) {
   if (!input || input.deviceType !== 'desktop') return false;
   if (input.manualTwoRows) return false;
   if ((input.tabCount || 0) < 2) return false;
+  // A box in the strip already wraps inside itself (a case cluster wider than the
+  // whole strip): the strip has rows although nothing overflows.
+  if (input.innerWrap) return true;
 
   const scrollWidth = Number(input.scrollWidth) || 0;
   const clientWidth = Number(input.clientWidth) || 0;
@@ -330,6 +333,12 @@ function computeTabScrollLeft(input) {
 // left out of `routes`. `.session-tabs` scrolls, so a scrolled-out tab still HAS a
 // rect, lying over the logo or the header buttons. Skipping is honest; clamping
 // would point at a tab that is not there.
+//
+// A child is also left out when its route has nowhere to run: rows whose spans
+// overlap are one row (no gap between them), a row with no gap under it routes
+// nothing, and a route that would still cross a tab is dropped whole. So no tab
+// arrangement can put a line through a tab; a layout without the reserved room
+// loses lines instead.
 const LINEAGE_CORNER_RADIUS_PX = 10;
 // Families drawn together take separate lanes: gap lines this far apart, spines
 // LINEAGE_SPINE_STEP_PX apart.
@@ -342,6 +351,8 @@ const LINEAGE_SPINE_STEP_PX = 4;
 // The last row has no row below it; with no strip rect to measure, its gap is
 // taken to be this deep.
 const LINEAGE_LAST_GAP_PX = 12;
+// Narrower than this, the space between two rows is not a gap a route can run in.
+const LINEAGE_MIN_GAP_PX = 2;
 const LINEAGE_ROW_TOLERANCE_PX = 6;
 const LINEAGE_STRIP_TOLERANCE_PX = 4;
 // How far the vertical rail's track sits in from the rail's left edge. It has to
@@ -385,21 +396,37 @@ function lineageRect(rect) {
  * Group tab rects into the strip's visual rows, top to bottom. A row spans from its
  * highest top to its LOWEST bottom, so a taller tab (the active one) sets the row's
  * gap for everyone in it.
+ *
+ * ⚠ Rows never overlap. Tabs whose spans overlap are in one row however far apart
+ * their tops are: case clusters stack and centre tabs inside their boxes, and two
+ * overlapping "rows" put the gap of one in the middle of the other's tabs.
  */
 function computeLineageRows(rects) {
-  const rows = [];
+  const sorted = [];
   for (const raw of rects || []) {
     const r = lineageRect(raw);
-    if (!r) continue;
-    const row = rows.find((candidate) => Math.abs(candidate.top - r.top) <= LINEAGE_ROW_TOLERANCE_PX);
-    if (row) {
-      row.top = Math.min(row.top, r.top);
+    if (r) sorted.push(r);
+  }
+  sorted.sort((a, b) => a.top - b.top);
+  const rows = [];
+  for (const r of sorted) {
+    // Sorted by top, so only the last row can take this rect, and merging into it
+    // keeps every earlier row clear of it.
+    const row = rows[rows.length - 1];
+    if (row && (r.top < row.bottom || r.top - row.top <= LINEAGE_ROW_TOLERANCE_PX)) {
       row.bottom = Math.max(row.bottom, r.bottom);
     } else {
       rows.push({ top: r.top, bottom: r.bottom });
     }
   }
-  return rows.sort((a, b) => a.top - b.top);
+  return rows;
+}
+
+/** Does an axis-aligned segment pass through the inside of a rect? Touching an edge is fine. */
+function lineageSegmentCrosses([x1, y1], [x2, y2], r) {
+  const eps = 0.5;
+  if (Math.max(x1, x2) <= r.left + eps || Math.min(x1, x2) >= r.right - eps) return false;
+  return Math.max(y1, y2) > r.top + eps && Math.min(y1, y2) < r.bottom - eps;
 }
 
 /**
@@ -503,19 +530,23 @@ function computeLineageTree(input) {
   const rowOf = (r) => rows.findIndex((row) => r.cy >= row.top - tol && r.cy <= row.bottom + tol);
   const laneOffset = (lane - (laneCount - 1) / 2) * LINEAGE_LANE_STEP_PX;
   // Y of the gap under row i, this family's lane. The offset is clamped so a busy
-  // gap never pushes a lane into the tabs on either side of it.
+  // gap never pushes a lane into the tabs on either side of it. Null when there is
+  // no gap: the row is not found, or the next row starts (nearly) where it ends.
   const gapUnder = (i) => {
     const row = rows[i];
+    if (!row) return null;
     const next = rows[i + 1];
     let bottom;
     if (next) bottom = next.top;
     else if (strip && strip.bottom > row.bottom + 1) bottom = strip.bottom;
     else bottom = row.bottom + LINEAGE_LAST_GAP_PX;
+    if (!(bottom - row.bottom >= LINEAGE_MIN_GAP_PX)) return null;
     const half = Math.max(0, (bottom - row.bottom) / 2 - 1);
     return (row.bottom + bottom) / 2 + Math.max(-half, Math.min(half, laneOffset));
   };
   const pRow = rowOf(parent);
   const gp = gapUnder(pRow);
+  if (gp === null) return { routes };
   // The spine runs from one row's gap to another's, so it only ever passes BESIDE
   // rows after the first, and only their tabs bound it. The first row may start
   // left of the channel (grouped by state it starts after the brand and a label
@@ -524,16 +555,23 @@ function computeLineageTree(input) {
   const lowerLefts = [parent, ...visible.map((c) => c.rect), ...(input?.tabs || []).map(lineageRect)]
     .filter((r) => r && rowOf(r) > 0)
     .map((r) => r.left);
-  const minLeft = lowerLefts.length ? Math.min(...lowerLefts) : Math.min(parent.left, ...visible.map((c) => c.rect.left));
+  const minLeft = lowerLefts.length
+    ? Math.min(...lowerLefts)
+    : Math.min(parent.left, ...visible.map((c) => c.rect.left));
   const channelLeft = Number(input?.spineLeft);
   const spineBase = strip
     ? Math.max(strip.left, Number.isFinite(channelLeft) ? channelLeft : strip.left)
     : minLeft - LINEAGE_SPINE_INSET_PX * 2;
   const spineX = Math.min(spineBase + LINEAGE_SPINE_INSET_PX + lane * LINEAGE_SPINE_STEP_PX, minLeft - 2);
 
+  // Every tab a route must stay out of. A segment can only cross one if the rows
+  // above failed to describe the layout, so this is a backstop that drops the
+  // route whole rather than drawing it through a tab.
+  const obstacles = [parent, ...visible.map((c) => c.rect), ...(input?.tabs || []).map(lineageRect)].filter(Boolean);
   for (const { id, rect } of visible) {
     const cRow = rowOf(rect);
     const gc = gapUnder(cRow);
+    if (gc === null) continue;
     const points =
       cRow === pRow
         ? [
@@ -550,6 +588,10 @@ function computeLineageTree(input) {
             [rect.cx, gc],
             [rect.cx, rect.bottom],
           ];
+    // The rounded corners cut inside each turn by a few pixels at most
+    // (lineagePolylinePath), so the segments are what has to clear the tabs.
+    const blocked = points.some((p, i) => i > 0 && obstacles.some((r) => lineageSegmentCrosses(points[i - 1], p, r)));
+    if (blocked) continue;
     const d = lineagePolylinePath(points, radius);
     if (d) routes.push({ id, points: roundPoints(points), d, endX: r1(rect.cx), endY: r1(rect.bottom) });
   }

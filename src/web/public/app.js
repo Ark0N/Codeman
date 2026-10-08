@@ -6359,10 +6359,27 @@ class CodemanApp {
           tabCount: this.sessions.size,
           scrollWidth: container.scrollWidth,
           clientWidth: container.clientWidth,
+          innerWrap: container.classList.contains('tabs-clusters') && this._tabClustersWrapInside(container),
         })
       : container.scrollWidth > container.clientWidth + 1;
 
     container.classList.toggle('tabs-auto-wrap', shouldWrap);
+  }
+
+  /**
+   * True when a case cluster in the header strip wraps inside its own box: a case
+   * wider than the whole strip (styles.css caps a box at the strip's width). The
+   * strip then has rows although it never overflows, so it must still wrap, or
+   * the lineage routing room (`.lineage-tree.tabs-auto-wrap`) is never reserved
+   * and the routes have no gap between the box's rows to run in. Read right
+   * after the overflow measure, so layout is already clean.
+   */
+  _tabClustersWrapInside(container) {
+    for (const box of container.querySelectorAll(':scope > .tab-cluster')) {
+      const tabs = box.querySelectorAll(':scope > .session-tab');
+      if (tabs.length > 1 && tabs[tabs.length - 1].offsetTop > tabs[0].offsetTop + 4) return true;
+    }
+    return false;
   }
 
   // Middle-click closes a tab, mirroring browser tab strips. Session tabs go
