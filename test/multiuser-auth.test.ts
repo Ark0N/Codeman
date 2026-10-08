@@ -1,12 +1,12 @@
 /**
- * @fileoverview Phase 2 multi-user auth integration tests (live server, port 3170+).
+ * @fileoverview Phase 2 multi-user auth integration tests (live server, ephemeral port).
  *
  * Verifies the multi-user auth branch end to end: per-user Basic verify, cookie
  * identity, wrong-password / disabled-user rejection, the mustChangePassword
  * lockbox + self-service change, per-account rate limiting, and QR identity binding
  * (tunnel-manager unit level). Single-user auth is covered by auth-security.test.ts.
  *
- * Ports: 3170 (multi-user server), 3171 (rate-limit server).
+ * Ports: ephemeral (`new WebServer(0, …)`, read back through `boundPort`).
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -20,9 +20,6 @@ import { createUser, invalidateUsersCache } from '../src/user-store.js';
 import { AUTH_FAILURE_MAX } from '../src/config/auth-config.js';
 
 vi.spyOn(TmuxManager, 'isTmuxAvailable').mockReturnValue(true);
-
-const PORT = 3170;
-const RATE_PORT = 3171;
 
 function basic(user: string, pass: string): string {
   return 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
@@ -68,7 +65,7 @@ beforeAll(async () => {
   const { updateUser } = await import('../src/user-store.js');
   await updateUser('carol', { disabled: true });
 
-  server = new WebServer(PORT, false, true);
+  server = new WebServer(0, false, true);
   await server.start();
 });
 
@@ -84,7 +81,7 @@ afterAll(async () => {
   await fs.rm(spacesDir, { recursive: true, force: true }).catch(() => {});
 });
 
-const url = (p: string) => `http://localhost:${PORT}${p}`;
+const url = (p: string) => `http://localhost:${server.boundPort}${p}`;
 
 describe('multi-user auth', () => {
   it('rejects unauthenticated requests', async () => {
@@ -161,9 +158,9 @@ describe('multi-user auth', () => {
   });
 
   it('verify-first: a correct password is never rate-limited and self-heals failures (#17)', async () => {
-    rateServer = new WebServer(RATE_PORT, false, true);
+    rateServer = new WebServer(0, false, true);
     await rateServer.start();
-    const rurl = (p: string) => `http://localhost:${RATE_PORT}${p}`;
+    const rurl = (p: string) => `http://localhost:${rateServer.boundPort}${p}`;
 
     // Nine wrong passwords (one below the cap) are each rejected 401 — not throttled yet.
     for (let i = 0; i < AUTH_FAILURE_MAX - 1; i++) {
