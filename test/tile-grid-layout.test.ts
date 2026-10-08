@@ -6,9 +6,17 @@
  *   cell clears the minimum tile size.
  * - `tileGridCapacity`: how many tiles a grid area can hold.
  * - `sanitizeTileGridState`: the stored `codeman:tile-grid` value made safe to
- *   apply (unknown, deleted, detached and duplicate ids dropped).
+ *   apply (unknown, deleted, detached and duplicate ids dropped); the stored
+ *   `ids` are the grid's cells, `null` for a hole, and come back as `cells`
+ *   (holes kept, a dropped id a hole) beside the packed `ids`. The old packed
+ *   format reads as cells with no hole.
+ * - `fitTileCells`: the cells after a shape change (owner: an empty cell can be
+ *   any cell). Same shape: unchanged; a new one: each tile keeps its row and
+ *   column when all fit, else the tiles pack in reading order.
  * - `tileNeighbor`, `tileInDirection`, `cycleTile`: which tile takes focus when
- *   one leaves, on a directional chord, and on Ctrl+Tab / Alt+[ ].
+ *   one leaves, on a directional chord (over cells: never onto a hole), and on
+ *   Ctrl+Tab / Alt+[ ]. `tileCellInDirection`: the adjacent cell a Move Tile
+ *   chord moves into or swaps with.
  *
  * Loaded via `vm` like split-pane-helpers.test.ts. Port: N/A.
  */
@@ -23,7 +31,9 @@ type TileGrid = {
   tileGridCapacity(p: Record<string, number>): number;
   sanitizeTileGridState(raw: unknown, live: unknown, detached?: Set<string>): Record<string, unknown> | null;
   tileNeighbor(ids: string[], id: string): string | null;
-  tileInDirection(ids: string[], focused: string, dir: string, cols: number): string | null;
+  tileInDirection(cells: Array<string | null>, focused: string, dir: string, cols: number): string | null;
+  tileCellInDirection(index: number, dir: string, cols: number, cellCount: number): number;
+  fitTileCells(cells: Array<string | null>, oldCols: number, cols: number, rows: number): Array<string | null>;
   cycleTile(ids: string[], focused: string, delta: number): string | null;
   TILE_GRID_MAX: number;
   TILE_LAYOUT_MAX: number;
@@ -111,6 +121,7 @@ describe('sanitizeTileGridState', () => {
       v: 1,
       open: true,
       ids: ['a', 'b'],
+      cells: ['a', 'b'],
       focused: 'b',
       zoomed: 'a',
       colFr: [1, 2],
@@ -161,6 +172,33 @@ describe('sanitizeTileGridState', () => {
     expect(out?.rowFr).toBeNull();
   });
 
+  it('stored cells keep their holes; the list beside them is packed', () => {
+    const raw = { v: 1, open: true, ids: ['a', null, 'b', 'c', 'd', null], focused: 'c' };
+    const out = T.sanitizeTileGridState(raw, live);
+    expect(out?.cells).toEqual(['a', null, 'b', 'c', 'd', null]);
+    expect(out?.ids).toEqual(['a', 'b', 'c', 'd']);
+    expect(out?.focused).toBe('c');
+  });
+
+  it('a dropped id (gone, detached, a duplicate, malformed) leaves a hole where it was, never a shift', () => {
+    const raw = { v: 1, open: true, ids: ['a', 'gone', 'b', 'a', 7, 'c'] };
+    const out = T.sanitizeTileGridState(raw, live, new Set(['b']));
+    expect(out?.cells).toEqual(['a', null, null, null, null, 'c']);
+    expect(out?.ids).toEqual(['a', 'c']);
+  });
+
+  it('the old packed format reads unchanged: cells with no hole', () => {
+    const out = T.sanitizeTileGridState({ v: 1, open: true, ids: ['a', 'b', 'c'] }, live);
+    expect(out?.cells).toEqual(['a', 'b', 'c']);
+    expect(out?.ids).toEqual(['a', 'b', 'c']);
+  });
+
+  it('past the cap a tile becomes a hole; no more cells than the largest layout', () => {
+    const many = Array.from({ length: 12 }, (_, i) => `s${i}`);
+    const out = T.sanitizeTileGridState({ v: 1, open: true, ids: many }, many);
+    expect(out?.cells).toEqual([...many.slice(0, 6), null, null, null]);
+  });
+
   it.each([null, 'not json', '[]', 42, { v: 2, ids: ['a'] }, { ids: ['a'] }])('rejects %j', (raw) => {
     expect(T.sanitizeTileGridState(raw, live)).toBeNull();
   });
@@ -190,10 +228,77 @@ describe('focus helpers', () => {
     expect(T.tileInDirection(ids, 'e', 'down', 3)).toBeNull();
   });
 
+  it('tileInDirection never lands on a hole: along a row it skips one, never leaving the row', () => {
+    // 3x2:  a _ c
+    //       d e f
+    const cells = ['a', null, 'c', 'd', 'e', 'f'];
+    expect(T.tileInDirection(cells, 'a', 'right', 3)).toBe('c');
+    expect(T.tileInDirection(cells, 'c', 'left', 3)).toBe('a');
+    expect(T.tileInDirection(cells, 'c', 'right', 3)).toBeNull();
+    expect(T.tileInDirection(cells, 'd', 'left', 3)).toBeNull();
+    // Up from e (a hole above): the nearest tile in that row, the lower column on a tie.
+    expect(T.tileInDirection(cells, 'e', 'up', 3)).toBe('a');
+    expect(T.tileInDirection(cells, 'f', 'up', 3)).toBe('c');
+    expect(T.tileInDirection(cells, 'a', 'down', 3)).toBe('d');
+  });
+
+  it('tileInDirection: up and down go to the nearest row that has a tile, even across a column', () => {
+    // 3x2:  a b c
+    //       _ _ f
+    const cells = ['a', 'b', 'c', null, null, 'f'];
+    expect(T.tileInDirection(cells, 'a', 'down', 3)).toBe('f');
+    expect(T.tileInDirection(cells, 'c', 'down', 3)).toBe('f');
+    expect(T.tileInDirection(cells, 'f', 'up', 3)).toBe('c');
+    expect(T.tileInDirection(cells, 'f', 'left', 3)).toBeNull();
+    // A row with no tile at all is passed over (a 3x3, which the layout table keeps).
+    const tall = ['a', null, null, null, null, null, null, 'h', null];
+    expect(T.tileInDirection(tall, 'a', 'down', 3)).toBe('h');
+    expect(T.tileInDirection(tall, 'h', 'up', 3)).toBe('a');
+    // A hole is never the focused cell either.
+    expect(T.tileInDirection(cells, null as unknown as string, 'up', 3)).toBeNull();
+  });
+
+  it('tileCellInDirection: the adjacent cell, or -1 at the edge', () => {
+    // 3x2 cells 0 1 2 / 3 4 5
+    expect([0, 1, 2, 3, 4, 5].map((i) => T.tileCellInDirection(i, 'left', 3, 6))).toEqual([-1, 0, 1, -1, 3, 4]);
+    expect([0, 1, 2, 3, 4, 5].map((i) => T.tileCellInDirection(i, 'right', 3, 6))).toEqual([1, 2, -1, 4, 5, -1]);
+    expect([0, 1, 2, 3, 4, 5].map((i) => T.tileCellInDirection(i, 'up', 3, 6))).toEqual([-1, -1, -1, 0, 1, 2]);
+    expect([0, 1, 2, 3, 4, 5].map((i) => T.tileCellInDirection(i, 'down', 3, 6))).toEqual([3, 4, 5, -1, -1, -1]);
+    // 2x2
+    expect([0, 1, 2, 3].map((i) => T.tileCellInDirection(i, 'down', 2, 4))).toEqual([2, 3, -1, -1]);
+    expect(T.tileCellInDirection(7, 'left', 3, 6)).toBe(-1);
+  });
+
   it('cycleTile wraps in reading order', () => {
     expect(T.cycleTile(['a', 'b', 'c'], 'c', 1)).toBe('a');
     expect(T.cycleTile(['a', 'b', 'c'], 'a', -1)).toBe('c');
     expect(T.cycleTile([], 'a', 1)).toBeNull();
+  });
+});
+
+describe('fitTileCells (the cells after a shape change)', () => {
+  it('the same shape keeps every cell, holes included', () => {
+    expect(T.fitTileCells(['a', null, 'c', 'd', 'e', 'f'], 3, 3, 2)).toEqual(['a', null, 'c', 'd', 'e', 'f']);
+  });
+
+  it('a first layout (no columns yet) packs and pads', () => {
+    expect(T.fitTileCells(['a', 'b', 'c', 'd', 'e'], 0, 3, 2)).toEqual(['a', 'b', 'c', 'd', 'e', null]);
+    expect(T.fitTileCells(['a', 'b', 'c'], 0, 2, 2)).toEqual(['a', 'b', 'c', null]);
+  });
+
+  it('growing 2x2 to 3x2: every tile keeps its row and column', () => {
+    expect(T.fitTileCells(['a', 'b', 'c', 'd'], 2, 3, 2)).toEqual(['a', 'b', null, 'c', 'd', null]);
+    // 2x1 to 2x2 likewise (the same as packing there).
+    expect(T.fitTileCells(['a', 'b'], 2, 2, 2)).toEqual(['a', 'b', null, null]);
+  });
+
+  it('shrinking: kept where every tile fits, else packed in reading order', () => {
+    // 3x2 -> 2x2 with the third column empty: the tiles stay put.
+    expect(T.fitTileCells(['a', 'b', null, 'd', 'e', null], 3, 2, 2)).toEqual(['a', 'b', 'd', 'e']);
+    // A tile in the third column: packed, holes collapsed.
+    expect(T.fitTileCells(['a', null, 'c', 'd', 'e', null], 3, 2, 2)).toEqual(['a', 'c', 'd', 'e']);
+    // 2x2 -> 3x1 (a wider window, three tiles): row 1 does not fit, packed.
+    expect(T.fitTileCells(['a', null, 'c', 'd'], 2, 3, 1)).toEqual(['a', 'c', 'd']);
   });
 });
 

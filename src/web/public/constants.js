@@ -1717,11 +1717,17 @@ function tileGridCapacity({ width, height }) {
  * must be 1 to 3 finite positive numbers. Anything that is not a v1 object
  * (or its JSON) gives null.
  *
+ * The stored `ids` are the grid's CELLS in reading order, `null` for an empty
+ * one (a hole can be any cell). The old packed list (no nulls) reads as cells
+ * with no hole. `ids` comes back packed (the tiles in reading order, what
+ * every list consumer wants) and `cells` keeps the holes: a dropped id (gone,
+ * detached, a duplicate, past the cap) becomes `null` there, never a shift.
+ *
  * @param {unknown} raw - the parsed value, or the stored JSON string
  * @param {{has(id: string): boolean}|Iterable<string>} liveSessions - ids that exist now
  * @param {{has(id: string): boolean}} [detachedIds] - sessions popped out to their own window
- * @returns {{v: 1, open: boolean, ids: string[], focused: string|null, zoomed: string|null,
- *   colFr: number[]|null, rowFr: number[]|null}|null}
+ * @returns {{v: 1, open: boolean, ids: string[], cells: (string|null)[], focused: string|null,
+ *   zoomed: string|null, colFr: number[]|null, rowFr: number[]|null}|null}
  */
 function sanitizeTileGridState(raw, liveSessions, detachedIds) {
   let value = raw;
@@ -1731,12 +1737,14 @@ function sanitizeTileGridState(raw, liveSessions, detachedIds) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || value.v !== 1) return null;
   const live = liveSessions && typeof liveSessions.has === 'function' ? liveSessions : new Set(liveSessions || []);
   const ids = [];
-  for (const id of Array.isArray(value.ids) ? value.ids : []) {
-    if (typeof id !== 'string' || !id || ids.includes(id)) continue;
-    if (!live.has(id)) continue;
-    if (detachedIds?.has?.(id)) continue;
-    ids.push(id);
-    if (ids.length === TILE_GRID_MAX) break;
+  const cells = [];
+  for (const id of (Array.isArray(value.ids) ? value.ids : []).slice(0, TILE_LAYOUT_MAX)) {
+    const keep =
+      typeof id === 'string' && id && !ids.includes(id) && live.has(id) && !detachedIds?.has?.(id) &&
+      ids.length < TILE_GRID_MAX;
+    if (keep) ids.push(id);
+    // A malformed entry (not a string, not null) is a hole too.
+    cells.push(keep ? id : null);
   }
   const fractions = (fr) => {
     if (!Array.isArray(fr) || fr.length < 1 || fr.length > 3) return null;
@@ -1746,6 +1754,7 @@ function sanitizeTileGridState(raw, liveSessions, detachedIds) {
     v: 1,
     open: value.open === true && ids.length > 0,
     ids,
+    cells,
     focused: ids.includes(value.focused) ? value.focused : (ids[0] ?? null),
     zoomed: ids.includes(value.zoomed) ? value.zoomed : null,
     colFr: fractions(value.colFr),
@@ -1855,31 +1864,102 @@ function tileNeighbor(ids, id) {
 
 /**
  * The tile a directional focus chord moves to, in a row-major grid of `cols`
- * columns. Left and right stay within the row; up and down move a whole row,
- * and moving down onto a short last row lands on its last tile. Null when
- * there is nothing in that direction.
+ * columns whose empty cells are `null` (a hole can be any cell) or simply
+ * missing at the end. Focus never lands on a hole. Left and right go along
+ * the row, past any hole, and never leave it. Up and down take the nearest
+ * row in that direction that has a tile: the tile in the same column, else
+ * the one in the nearest column (the lower column on a tie), so moving down
+ * onto a short or holed last row lands on its nearest tile. Null when there
+ * is no tile in that direction.
  *
- * @param {string[]} ids - the grid's tiles, in reading order
+ * @param {(string|null)[]} cells - the grid's cells in reading order (or its packed tiles)
  * @param {string} focusedId - the tile the keyboard is in
  * @param {'left'|'right'|'up'|'down'} direction
  * @param {number} cols - the layout's column count
  * @returns {string|null}
  */
-function tileInDirection(ids, focusedId, direction, cols) {
-  const n = ids.length;
-  const i = ids.indexOf(focusedId);
-  if (i === -1 || n === 0 || !(cols >= 1)) return null;
+function tileInDirection(cells, focusedId, direction, cols) {
+  const i = focusedId ? cells.indexOf(focusedId) : -1;
+  if (i === -1 || !(cols >= 1)) return null;
+  const rows = Math.ceil(cells.length / cols);
+  const row = Math.floor(i / cols);
   const col = i % cols;
-  let j = -1;
-  if (direction === 'left') j = col > 0 ? i - 1 : -1;
-  else if (direction === 'right') j = col < cols - 1 && i + 1 < n ? i + 1 : -1;
-  else if (direction === 'up') j = i - cols;
-  else if (direction === 'down') {
-    j = i + cols;
-    const lastRow = Math.floor((n - 1) / cols);
-    if (j >= n && Math.floor(i / cols) < lastRow) j = n - 1;
+  const at = (r, c) => cells[r * cols + c] || null;
+  if (direction === 'left' || direction === 'right') {
+    const step = direction === 'left' ? -1 : 1;
+    for (let c = col + step; c >= 0 && c < cols; c += step) {
+      if (at(row, c)) return at(row, c);
+    }
+    return null;
   }
-  return j >= 0 && j < n && j !== i ? ids[j] : null;
+  if (direction !== 'up' && direction !== 'down') return null;
+  const step = direction === 'up' ? -1 : 1;
+  for (let r = row + step; r >= 0 && r < rows; r += step) {
+    let best = null;
+    let bestDistance = Infinity;
+    for (let c = 0; c < cols; c++) {
+      const id = at(r, c);
+      if (id && Math.abs(c - col) < bestDistance) {
+        best = id;
+        bestDistance = Math.abs(c - col);
+      }
+    }
+    if (best) return best;
+  }
+  return null;
+}
+
+/**
+ * The cell next to cell `index` in that direction (Move Tile: a tile moves
+ * into an empty neighbour cell, or swaps with a tiled one), or -1 at the
+ * edge. Adjacent only: a move never jumps over a cell.
+ *
+ * @param {number} index - the cell, in reading order
+ * @param {'left'|'right'|'up'|'down'} direction
+ * @param {number} cols - the layout's column count
+ * @param {number} cellCount - cols x rows
+ * @returns {number}
+ */
+function tileCellInDirection(index, direction, cols, cellCount) {
+  if (!(cols >= 1) || index < 0 || index >= cellCount) return -1;
+  const col = index % cols;
+  let j = -1;
+  if (direction === 'left') j = col > 0 ? index - 1 : -1;
+  else if (direction === 'right') j = col < cols - 1 ? index + 1 : -1;
+  else if (direction === 'up') j = index - cols;
+  else if (direction === 'down') j = index + cols;
+  return j >= 0 && j < cellCount ? j : -1;
+}
+
+/**
+ * The grid's cells after its shape changed (or to fill one for the first
+ * time): `cols` x `rows` cells, `null` for an empty one. The same shape keeps
+ * every cell as it is. A new shape keeps each tile at its row and column when
+ * every tile still fits there (2x2 growing to 3x2: the four tiles stay put),
+ * and otherwise packs the tiles in reading order from the first cell, holes
+ * collapsed (positions do not map between shapes). `oldCols` 0 (no layout
+ * yet) always packs.
+ *
+ * @param {(string|null)[]} cells - the current cells, laid out `oldCols` wide
+ * @param {number} oldCols - the column count they were laid out with
+ * @param {number} cols
+ * @param {number} rows
+ * @returns {(string|null)[]}
+ */
+function fitTileCells(cells, oldCols, cols, rows) {
+  const size = Math.max(0, cols * rows);
+  if (oldCols === cols && cells.length === size) return cells.slice();
+  const out = new Array(size).fill(null);
+  const placed = cells.map((id, k) => (id ? { id, row: Math.floor(k / oldCols), col: k % oldCols } : null));
+  const keep = oldCols >= 1 && placed.every((p) => !p || (p.row < rows && p.col < cols));
+  if (keep) {
+    for (const p of placed) if (p) out[p.row * cols + p.col] = p.id;
+    return out;
+  }
+  cells.filter(Boolean).slice(0, size).forEach((id, k) => {
+    out[k] = id;
+  });
+  return out;
 }
 
 /**
@@ -2204,6 +2284,8 @@ if (typeof window !== 'undefined') {
     dragTrackFractions,
     tileNeighbor,
     tileInDirection,
+    tileCellInDirection,
+    fitTileCells,
     cycleTile,
     tileGridOpenSet,
     TILE_GRID_MAX,
