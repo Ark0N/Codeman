@@ -45,6 +45,13 @@ payload return `{ "success": true, "data": {} }`.
 > `GET /api/sessions/:id/tail-file` (SSE), `GET /api/download`,
 > `GET /api/screenshots/:name`, `GET /q/:code` (QR redirect), and the
 > `GET /ws/sessions/:id/terminal` WebSocket upgrade.
+>
+> **Deprecated:** `POST /api/screenshots`, `GET /api/screenshots` and
+> `GET /api/screenshots/:name` keep working but log a one-time warning on first
+> use. They are removed in a later MAJOR, after at least one MINOR release that
+> carries this warning (see `docs/versioning-policy.md`). To hand
+> a file to an agent, use `POST /api/sessions/:id/paste-image`, which saves it into
+> that session's workspace.
 
 > The [agent wait endpoints](#long-polling-agent-wait) use the normal envelope but
 > are the only JSON endpoints that deliberately **hold the connection open**, for up

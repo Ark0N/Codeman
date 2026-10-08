@@ -1708,17 +1708,16 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  _updateTunnelUrlRow(rowId, displayId, url, suffix = '') {
-    const row = document.getElementById(rowId);
-    const display = document.getElementById(displayId);
+  _updateTunnelUrlDisplay(url) {
+    const row = document.getElementById('tunnelUrlRow');
+    const display = document.getElementById('tunnelUrlDisplay');
     if (!row || !display) return;
     if (url) {
-      const fullUrl = url + suffix;
       row.style.display = '';
-      display.textContent = fullUrl;
+      display.textContent = url;
       display.onclick = () => {
-        navigator.clipboard.writeText(fullUrl).then(() => {
-          this.showToast(`${suffix ? 'Upload' : 'Tunnel'} URL copied`, 'success');
+        navigator.clipboard.writeText(url).then(() => {
+          this.showToast('Tunnel URL copied', 'success');
         });
       };
     } else {
@@ -1726,11 +1725,6 @@ Object.assign(CodemanApp.prototype, {
       display.textContent = '';
       display.onclick = null;
     }
-  },
-
-  _updateTunnelUrlDisplay(url) {
-    this._updateTunnelUrlRow('tunnelUrlRow', 'tunnelUrlDisplay', url);
-    this._updateTunnelUrlRow('tunnelUploadUrlRow', 'tunnelUploadUrlDisplay', url, '/upload.html');
   },
 
   showTunnelQR() {

@@ -11,7 +11,8 @@
  *
  * That contract is load-bearing: assets are served `immutable` for a year, and
  * `index.html` must revalidate every time or a deploy leaves browsers on stale
- * markup (see `cacheBustAssets` in server.ts).
+ * markup (see `cacheBustAssets` in server.ts). No HTML is left behind the static
+ * plugin (every page has its own route), so the HTML half is asserted on the route.
  *
  * These tests drive a REAL WebServer on purpose. Asserting against an inline
  * re-registration of the plugin would keep passing after a revert in server.ts.
@@ -59,18 +60,6 @@ describe('static asset Cache-Control headers', () => {
   it('marks long-lived assets immutable', async () => {
     const res = await get(`${baseUrl}/app.js`);
     expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
-  });
-
-  it('makes static HTML revalidate so deploys are picked up', async () => {
-    // ⚠️ upload.html, NOT index.html. `/index.html` has its own explicit route that
-    // answers from renderIndexHtml() and never reaches @fastify/static, so asserting
-    // on it passes even with setHeaders fully broken (verified: reverting server.ts
-    // to the v9 form fails the two /app.js tests and leaves an index.html assertion
-    // green). upload.html has no route of its own, so it is the only HTML that
-    // actually exercises the `.html` branch of setHeaders.
-    const res = await get(`${baseUrl}/upload.html`);
-    expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('no-cache');
   });
 
   it('lets a route keep the Cache-Control it set, so sw.js stays uncached', async () => {

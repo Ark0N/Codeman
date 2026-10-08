@@ -127,7 +127,7 @@ Codeman is a Claude Code session manager with web interface and autonomous Ralph
 
 **Code style**: Prettier (`singleQuote: true`, `printWidth: 120`, `trailingComma: "es5"`) — config lives in the **`"prettier"` key of `package.json`**, not a `.prettierrc` (keeps the repo root short; editors read it natively). `.prettierignore` stays at the root because Prettier resolves it relative to cwd. ESLint flat config (`config/eslint.config.js`) allows `no-console`, warns on `@typescript-eslint/no-explicit-any`. Ignores: `app.js`, `scripts/**/*.mjs`, `src/web/public/vendor/**`, `scripts/remotion/**`.
 
-**Prettier scope is deliberately narrow.** `npm run format` globs only `src/**/*.ts` and `src/web/public/**` (`lint` only `src/**/*.ts`), and `.prettierignore` then exempts most of `src/web/public/*.js` (app.js, styles.css, **mobile.css**, index.html, upload.html, and 15 hand-formatted modules) plus `CLAUDE.md`. Those files are hand-formatted by design; `npm run check:public-assets` and `check:frontend-syntax` are what guard them (NUL bytes + JS syntax), not Prettier. Do not "fix" a file by adding it back to Prettier's scope.
+**Prettier scope is deliberately narrow.** `npm run format` globs only `src/**/*.ts` and `src/web/public/**` (`lint` only `src/**/*.ts`), and `.prettierignore` then exempts most of `src/web/public/*.js` (app.js, styles.css, **mobile.css**, index.html, and 15 hand-formatted modules) plus `CLAUDE.md`. Those files are hand-formatted by design; `npm run check:public-assets` and `check:frontend-syntax` are what guard them (NUL bytes + JS syntax), not Prettier. Do not "fix" a file by adding it back to Prettier's scope.
 
 ## Common Gotchas
 
@@ -487,7 +487,7 @@ curl -sk https://localhost:3000/api/subagents | jq # Background agents
 cat ~/.codeman/state.json | jq                     # Persisted state
 ```
 
-Mobile screenshots: `~/.codeman/screenshots/`, accessed via `GET/POST /api/screenshots`.
+Legacy screenshots (deprecated): `GET/POST /api/screenshots` still read and write `~/.codeman/screenshots/`, but the upload page that fed them is gone, they log a one-time deprecation warning, and they are removed in a later MAJOR, after at least one MINOR release that carries the warning (`docs/versioning-policy.md`). To hand a file to an agent use `POST /api/sessions/:id/paste-image`.
 
 ## Performance & Limits
 
