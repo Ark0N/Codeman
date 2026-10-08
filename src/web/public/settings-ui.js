@@ -2775,6 +2775,13 @@ Object.assign(CodemanApp.prototype, {
       // .strict() schema — syncing it would push a desktop-shaped choice onto
       // devices that cannot render it at all.
       sessionLineageLines: _sll,
+      // Keyboard shortcut overrides are per-device (bindings follow the keyboard
+      // and the OS: Cmd on macOS, Ctrl elsewhere) and absent from the .strict()
+      // SettingsUpdateSchema. They used to ride along here, so the first
+      // Shortcuts change on a device (even a Reset, which leaves an empty {})
+      // made EVERY later App Settings save a 400, and every synced key stopped
+      // reaching the server while the toast still said "Settings saved".
+      shortcutOverrides: _sco,
       ...serverSettings
     } = settings;
     let webhookError = '';
