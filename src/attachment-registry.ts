@@ -53,15 +53,20 @@ export const AUDIO_ATTACHMENT_EXTENSIONS: ReadonlySet<string> = new Set([
  */
 export const TEXT_ATTACHMENT_EXTENSIONS: ReadonlySet<string> = EDITABLE_EXTENSIONS;
 
+/**
+ * Document types an attachment card previews. Also the list `codeman attach`'s
+ * error text names, so the help cannot drift from what is accepted. `xlsx` is
+ * previewed client-side (spreadsheet-preview-worker.js) and served raw like the rest.
+ */
+export const DOCUMENT_ATTACHMENT_EXTENSIONS: readonly string[] = Object.freeze(['pdf', 'docx', 'pptx', 'xlsx']);
+
 const SUPPORTED_ATTACHMENT_EXTENSIONS = new Set([
   'png',
   'jpg',
   'jpeg',
   'gif',
   'webp',
-  'pdf',
-  'docx',
-  'pptx',
+  ...DOCUMENT_ATTACHMENT_EXTENSIONS,
   'md',
   'txt',
   ...VIDEO_ATTACHMENT_EXTENSIONS,
@@ -154,6 +159,7 @@ export function getAttachmentType(extension: string): AttachmentDetectedType {
   if (AUDIO_ATTACHMENT_EXTENSIONS.has(normalized)) return 'audio';
   if (normalized === 'pdf') return 'pdf';
   if (normalized === 'pptx') return 'presentation';
+  if (normalized === 'xlsx') return 'spreadsheet';
   if (normalized === 'md') return 'markdown';
   // Everything else in the text family reads as text, including code and
   // config: the card and the preview both treat it as a plain-text file.

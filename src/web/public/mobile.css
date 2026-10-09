@@ -4037,3 +4037,24 @@ html[data-session-list="sidebar"] .session-sidebar .session-tab .tab-close {
     max-height: min(88vh, env(viewport-segment-height 0 1, 88vh));
   }
 }
+
+/* XLSX preview (spreadsheet-preview.js): larger sheet tabs and a taller,
+   touch-scrollable grid on phones. */
+@media (max-width: 700px) {
+  .spreadsheet-sheet-tabs {
+    padding-inline: 4px;
+    scroll-snap-type: x proximity;
+  }
+
+  .spreadsheet-sheet-tab {
+    min-width: 96px;
+    min-height: 40px;
+    scroll-snap-align: start;
+  }
+
+  .spreadsheet-grid {
+    min-height: 55vh;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+  }
+}

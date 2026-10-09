@@ -23,7 +23,7 @@ import { getTaskQueue } from './task-queue.js';
 import { getRalphLoop } from './ralph-loop.js';
 import { getStore } from './state-store.js';
 import { getErrorMessage } from './types.js';
-import { isSupportedAttachmentExtension } from './attachment-registry.js';
+import { DOCUMENT_ATTACHMENT_EXTENSIONS, isSupportedAttachmentExtension } from './attachment-registry.js';
 import { daemonStatus, startDaemon, stopDaemon, type WebLaunchOptions } from './daemon-control.js';
 import { installService, serviceStatus, uninstallService } from './service-installer.js';
 import { isLoopbackBindHost, isUnauthenticatedNetworkAcknowledged } from './web/network-auth-policy.js';
@@ -111,7 +111,11 @@ program
   .action(async (filePath, options) => {
     const extension = String(filePath).split('.').pop()?.toLowerCase() || '';
     if (!isAbsolute(filePath) || !isSupportedAttachmentExtension(extension)) {
-      console.error(palette.err('✗ attach requires an absolute path to a png, pdf, docx, pptx, md, or txt file'));
+      console.error(
+        palette.err(
+          `✗ attach requires an absolute path to an image (png, jpg, gif, webp), document (${DOCUMENT_ATTACHMENT_EXTENSIONS.join(', ')}), audio, video, md, txt or other text file`
+        )
+      );
       process.exit(1);
     }
 

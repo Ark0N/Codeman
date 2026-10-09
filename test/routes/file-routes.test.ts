@@ -707,18 +707,42 @@ describe('file-routes', () => {
       expect(body.data.url).toContain('file-raw');
     });
 
-    it('flags known-binary extensions (e.g. xlsx) instead of dumping mojibake', async () => {
+    it('flags known-binary extensions (e.g. xls) instead of dumping mojibake', async () => {
       mockedStat.mockResolvedValue({ size: 4096 } as never);
 
       const res = await harness.app.inject({
         method: 'GET',
-        url: `/api/sessions/${harness.ctx._sessionId}/file-content?path=sheet.xlsx`,
+        url: `/api/sessions/${harness.ctx._sessionId}/file-content?path=sheet.xls`,
       });
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.success).toBe(true);
       expect(body.data.type).toBe('binary');
       expect(body.data.content).toBeUndefined();
+    });
+
+    it('classifies xlsx as a client-side spreadsheet preview, never a text body', async () => {
+      mockedStat.mockResolvedValue({ size: 4096 } as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/file-content?path=sheet.xlsx`,
+      });
+      const body = JSON.parse(res.body);
+      expect(body.success).toBe(true);
+      expect(body.data.type).toBe('spreadsheet');
+      expect(body.data.url).toBe(`/api/sessions/${harness.ctx._sessionId}/file-raw?path=sheet.xlsx`);
+      expect(body.data.content).toBeUndefined();
+    });
+
+    it('keeps ods (and xls) download-only binaries', async () => {
+      mockedStat.mockResolvedValue({ size: 4096 } as never);
+
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/file-content?path=sheet.ods`,
+      });
+      expect(JSON.parse(res.body).data.type).toBe('binary');
     });
 
     it('sniffs NUL bytes and flags binary content for unknown extensions', async () => {
@@ -892,6 +916,22 @@ describe('file-routes', () => {
       });
       expect(res.statusCode).toBe(413);
       expect(JSON.parse(res.body).error).toContain('CODEMAN_MAX_DOWNLOAD_BYTES');
+    });
+
+    it('caps an xlsx ?preview=true fetch at 10 MB, leaving downloads and small previews alone', async () => {
+      mockedStat.mockResolvedValue({ size: 11 * 1024 * 1024 } as never);
+      const url = `/api/sessions/${harness.ctx._sessionId}/file-raw?path=book.xlsx`;
+
+      const preview = await harness.app.inject({ method: 'GET', url: `${url}&preview=true` });
+      expect(preview.statusCode).toBe(413);
+      expect(JSON.parse(preview.body).error).toMatch(/too large to preview/i);
+
+      const download = await harness.app.inject({ method: 'GET', url: `${url}&preview=true&download=true` });
+      expect(download.statusCode).toBe(200);
+
+      mockedStat.mockResolvedValue({ size: 2048 } as never);
+      const small = await harness.app.inject({ method: 'GET', url: `${url}&preview=true` });
+      expect(small.statusCode).toBe(200);
     });
   });
 

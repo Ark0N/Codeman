@@ -49,6 +49,9 @@ run('xterm-addon-serialize', 'npx esbuild node_modules/@xterm/addon-serialize/li
 run('xterm-addon-webgl', 'cp node_modules/@xterm/addon-webgl/lib/addon-webgl.js dist/web/public/vendor/xterm-addon-webgl.min.js');
 run('xterm-addon-unicode11', 'npx esbuild node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js --minify --outfile=dist/web/public/vendor/xterm-addon-unicode11.min.js');
 run('xterm-zerolag-input', 'npx esbuild packages/xterm-zerolag-input/src/zerolag-input-addon.ts --bundle --minify --format=iife --global-name=XtermZerolagInput --outfile=dist/web/public/vendor/xterm-zerolag-input.js');
+// XLSX preview parser bundles: loaded only inside spreadsheet-preview-worker.js,
+// never by the page (see scripts/prepare-spreadsheet-assets.mjs).
+run('spreadsheet preview vendors', 'node scripts/prepare-spreadsheet-assets.mjs dist/web/public/vendor');
 
 // Append global aliases so app.js can use `new LocalEchoOverlay(terminal)`
 appendFileSync(
@@ -129,6 +132,7 @@ console.log('\n[build] content-hash cache busting');
     'api-client.js',
     'subagent-windows.js',
     'image-input.js',
+    'spreadsheet-preview.js',
     'vendor/xterm-zerolag-input.js',
     'vendor/xterm-predictive-echo.js',
   ];
