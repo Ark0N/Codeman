@@ -52,6 +52,8 @@
       '新本地 Codex 会话（包括 WSL）使用的模型 ID。留空时使用 Codex 配置。',
     'Applies to new local sessions; supported levels depend on the model and Codex version. Custom endpoints, Docker and remote sessions keep their own settings.':
       '应用于新本地会话；可用强度取决于模型和 Codex 版本。自定义端点、Docker 和远程会话保留自己的设置。',
+    'Default Codex model may only contain letters, digits, ".", "_", "-" and "/"':
+      'Codex 默认模型只能包含字母、数字、"."、"_"、"-" 和 "/"',
     'Skip to terminal': '跳转到终端',
     'Go to main page': '返回主页',
     'Session tabs': '会话标签页',

@@ -1,3 +1,16 @@
+/**
+ * @fileoverview Launch-time defaults for Codex sessions.
+ *
+ * Resolves the synced App Settings `codexModel` / `codexReasoningEffort` into the
+ * `codexConfig` a launch uses, filling ONLY the fields the caller left unset.
+ * Persisted values are re-validated with `SettingsUpdateSchema`, so a hand-edited
+ * settings.json can never smuggle an unchecked value onto the codex command line.
+ *
+ * Scope is the caller's decision: the create and quick-start routes apply it to
+ * local launches only, never to remote, Docker or custom-endpoint launches.
+ * Nothing here writes Codex's own config files.
+ */
+
 import type { CodexConfig } from '../types.js';
 import { SettingsUpdateSchema } from './schemas.js';
 import { readJsonConfig, SETTINGS_PATH } from './route-helpers.js';

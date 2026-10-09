@@ -2607,6 +2607,15 @@ Object.assign(CodemanApp.prototype, {
       },
     };
 
+    // SettingsUpdateSchema is .strict() and checks codexModel with this same
+    // pattern, so one bad character 400s the WHOLE settings PUT while the toast
+    // still says "Settings saved". Refuse it here, before anything is persisted.
+    if (!/^[A-Za-z0-9._\/-]*$/.test(settings.codexModel)) {
+      this.showToast('Default Codex model may only contain letters, digits, ".", "_", "-" and "/"', 'error');
+      document.getElementById('appSettingsCodexModel')?.focus();
+      return;
+    }
+
     // The "Token Count" / "Show Cost ($)" header toggles were removed from the
     // UI, but their features still read settings.showTokenCount / settings.showCost
     // (applyHeaderVisibilitySettings, the header cost render). saveAppSettings
