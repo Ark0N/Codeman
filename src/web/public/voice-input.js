@@ -1007,15 +1007,30 @@ const VoiceInput = {
     } else {
       // Direct mode: inject into local echo overlay if available, else send to PTY.
       // The overlay belongs to the ACTIVE session's terminal, so text dictated
-      // for any other session must not be typed into it.
+      // for any other session must not be typed into it. It also belongs to the
+      // MAIN terminal, which the tile grid parks (display: none): with tiles
+      // open the text would sit in an invisible overlay the focused tile never
+      // sees, so it goes straight to the session instead.
       const isActive = target === app.activeSessionId;
-      if (isActive && app._localEchoEnabled && app._localEchoOverlay) {
+      const tilesOpen = !!app._tilesOwnTerminal?.();
+      if (isActive && !tilesOpen && app._localEchoEnabled && app._localEchoOverlay) {
         app._localEchoOverlay.appendText(trimmed);
       } else {
         this._sendToTarget(target, trimmed).catch(() => {});
       }
       this._showVoiceSendBtn();
-      setTimeout(() => { if (isActive && app.terminal) app.terminal.focus(); }, 150);
+      setTimeout(() => {
+        if (!isActive) return;
+        // With the grid open the keyboard belongs to the focused tile; the
+        // parked main terminal cannot take focus. Split view keeps the main
+        // terminal, even if Pane B took focus meanwhile (it is not the target).
+        if (app._tilesOwnTerminal?.()) {
+          const pane = app._focusedPane?.();
+          if (pane?.sessionId === target) pane.terminal?.focus();
+        } else if (app.terminal) {
+          app.terminal.focus();
+        }
+      }, 150);
     }
   },
 
@@ -1045,9 +1060,10 @@ const VoiceInput = {
       if (!target) return;
       // Simulate Enter key: if local echo is active, flush its buffer + send \r;
       // otherwise just send \r directly to the PTY. Both the overlay and the
-      // predictions belong to the ACTIVE session's terminal, so a dictation
-      // for another session just sends its Enter there.
-      if (target !== app.activeSessionId) {
+      // predictions belong to the ACTIVE session's MAIN terminal, so a
+      // dictation for another session, or for a tile while the grid has the
+      // main terminal parked, just sends its Enter there.
+      if (target !== app.activeSessionId || app._tilesOwnTerminal?.()) {
         this._sendToTarget(target, '\r').catch(() => {});
       } else if (app._localEchoEnabled && app._localEchoOverlay) {
         const text = app._localEchoOverlay.pendingText || '';

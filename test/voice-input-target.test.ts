@@ -8,6 +8,12 @@
  * session. The target is now captured in `start()` (through `_focusedPane()`,
  * so a second terminal pane can claim it later) and every send path uses it.
  *
+ * With the tile grid open the main terminal (and with it the local-echo
+ * overlay) is parked with `display: none`, so direct-mode dictation used to be
+ * typed into an invisible overlay and never reached the focused tile. While
+ * `_tilesOwnTerminal()` is true the overlay is skipped and the keyboard goes
+ * back to the focused tile, not the parked main terminal.
+ *
  * Loaded via `vm` with a stubbed `app` (no jsdom).
  */
 import { readFileSync } from 'node:fs';
@@ -27,10 +33,13 @@ type Voice = {
   _targetSessionId: string | null;
 };
 
-function load(opts: { insertMode?: string; localEcho?: boolean; focused?: string } = {}) {
+type Pane = { sessionId: string; isPrimary?: boolean; terminal?: { focus: () => void } };
+
+function load(opts: { insertMode?: string; localEcho?: boolean; focused?: string; tiles?: boolean; pane?: Pane } = {}) {
   const sendInput = vi.fn(async () => {});
   const sendInputAsync = vi.fn();
   const appendText = vi.fn();
+  const overlayClear = vi.fn();
   const showToast = vi.fn();
   const gear = {
     classList: { contains: () => false, add: vi.fn(), remove: vi.fn() },
@@ -53,9 +62,19 @@ function load(opts: { insertMode?: string; localEcho?: boolean; focused?: string
     showToast,
     terminal: { focus: vi.fn() },
     _localEchoEnabled: !!opts.localEcho,
-    _localEchoOverlay: opts.localEcho ? { appendText, pendingText: '', clear: vi.fn() } : null,
+    _localEchoOverlay: opts.localEcho
+      ? { appendText, pendingText: '', clear: overlayClear, suppressBufferDetection: vi.fn() }
+      : null,
+    _predictiveEcho: { clearPredictions: vi.fn() },
   };
   if (opts.focused) app._focusedPane = () => ({ sessionId: opts.focused });
+  // A full pane record, as terminal-ui.js _focusedPane() returns it. Reassign
+  // app._focusedPane in a test to move focus between panes.
+  if (opts.pane) {
+    const pane = opts.pane;
+    app._focusedPane = () => pane;
+  }
+  if (opts.tiles) app._tilesOwnTerminal = () => true;
   const context = vm.createContext({
     console,
     setTimeout: (fn: () => void) => fn(),
@@ -81,7 +100,12 @@ function load(opts: { insertMode?: string; localEcho?: boolean; focused?: string
   // Recording itself is out of scope: start() only has to pick the target.
   voice._resolveProvider = () => 'webspeech';
   voice._startWebSpeech = vi.fn();
-  return { voice, app, sendInput, sendInputAsync, appendText, showToast, gear };
+  return { voice, app, sendInput, sendInputAsync, appendText, overlayClear, showToast, gear };
+}
+
+function clickGreenSend(gear: { addEventListener: { mock: { calls: unknown[][] } } }) {
+  const handler = gear.addEventListener.mock.calls.find((c: unknown[]) => c[0] === 'click')?.[1] as () => void;
+  handler();
 }
 
 describe('dictation target', () => {
@@ -161,6 +185,63 @@ describe('dictation target', () => {
     expect(sendInput).not.toHaveBeenCalled();
     expect(sendInputAsync).not.toHaveBeenCalled();
     expect(showToast).toHaveBeenCalledWith('That session has closed; dictation not sent', 'warning');
+  });
+
+  it('with the tile grid open, dictation goes to the focused tile, not the parked overlay', () => {
+    const tileTerminal = { focus: vi.fn() };
+    const { voice, app, appendText, sendInput, sendInputAsync } = load({
+      localEcho: true,
+      tiles: true,
+      pane: { sessionId: 'session-a', isPrimary: false, terminal: tileTerminal },
+    });
+    voice.start();
+
+    voice._insertText('into the tile');
+
+    expect(appendText).not.toHaveBeenCalled();
+    expect(sendInput).toHaveBeenCalledWith('into the tile');
+    expect(sendInputAsync).not.toHaveBeenCalled();
+    // The keyboard goes back to the tile; the main terminal is display: none.
+    expect(tileTerminal.focus).toHaveBeenCalled();
+    expect((app.terminal as { focus: ReturnType<typeof vi.fn> }).focus).not.toHaveBeenCalled();
+  });
+
+  it('with the tile grid open, the green send button sends only Enter to the tile session', () => {
+    const tileTerminal = { focus: vi.fn() };
+    const { voice, app, gear, sendInput, overlayClear } = load({
+      localEcho: true,
+      tiles: true,
+      pane: { sessionId: 'session-a', isPrimary: false, terminal: tileTerminal },
+    });
+    voice.start();
+    voice._insertText('ship it');
+    // Something stale in the parked main overlay must not ride along.
+    (app._localEchoOverlay as { pendingText: string }).pendingText = 'stale main-terminal text';
+
+    clickGreenSend(gear);
+
+    expect(overlayClear).not.toHaveBeenCalled();
+    expect(sendInput).not.toHaveBeenCalledWith('stale main-terminal text');
+    expect(sendInput).toHaveBeenLastCalledWith('\r');
+    // The parked main terminal's predictions are not this pane's.
+    expect(
+      (app._predictiveEcho as { clearPredictions: ReturnType<typeof vi.fn> }).clearPredictions
+    ).not.toHaveBeenCalled();
+  });
+
+  it('split view is unchanged: a Pane A dictation keeps the overlay and refocuses the main terminal', () => {
+    const paneB = { focus: vi.fn() };
+    const { voice, app, appendText, sendInput } = load({ localEcho: true, focused: 'session-a' });
+    voice.start();
+    // The user clicked into Pane B while speaking.
+    app._focusedPane = () => ({ sessionId: 'session-b', isPrimary: false, terminal: paneB });
+
+    voice._insertText('for pane a');
+
+    expect(appendText).toHaveBeenCalledWith('for pane a');
+    expect(sendInput).not.toHaveBeenCalled();
+    expect((app.terminal as { focus: ReturnType<typeof vi.fn> }).focus).toHaveBeenCalled();
+    expect(paneB.focus).not.toHaveBeenCalled();
   });
 
   it('refuses to start with no session at all', () => {
