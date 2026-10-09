@@ -2,7 +2,7 @@ var __defProp = Object.defineProperty;
 var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
 var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
-// node_modules/@mediapipe/tasks-vision/vision_bundle.mjs
+// ../wt-cli/node_modules/@mediapipe/tasks-vision/vision_bundle.mjs
 var t = "undefined" != typeof self ? self : {};
 function e() {
   throw Error("Invalid UTF8");
