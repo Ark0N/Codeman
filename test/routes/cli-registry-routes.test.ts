@@ -12,7 +12,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync, statSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname } from 'node:path';
 import { createRouteTestHarness } from './_route-test-utils.js';
 import {
@@ -744,11 +745,70 @@ describe('registry writes are serialized and never clobber a file the reader wou
     expect(installEnv({ PATH: '/usr/bin' }, () => false)).toEqual({ PATH: '/usr/bin' });
   });
 
-  it('npmGlobalPrefixWritable follows npm config and treats a probe failure as writable', () => {
-    // Real probe against this machine: must return a boolean and never throw.
-    expect(typeof npmGlobalPrefixWritable({ PATH: process.env.PATH })).toBe('boolean');
-    // npm not found on PATH: cannot tell, so do not redirect.
-    expect(npmGlobalPrefixWritable({ PATH: '/nonexistent' })).toBe(true);
+  it('drops every spelling of npm_config_prefix when it redirects (npm run exports the lowercase one)', () => {
+    // npm reads npm_config_* case-insensitively and a sorting /bin/sh lets the older key win.
+    expect(installEnv({ HOME: '/h', npm_config_prefix: '/usr' }, () => false)).toEqual({
+      HOME: '/h',
+      NPM_CONFIG_PREFIX: '/h/.local',
+    });
+    expect(installEnv({ HOME: '/h', Npm_Config_Prefix: '/usr', NPM_CONFIG_PREFIX: '' }, () => false)).toEqual({
+      HOME: '/h',
+      NPM_CONFIG_PREFIX: '/h/.local',
+    });
+    expect(
+      installEnv({ CODEMAN_IN_CONTAINER: '1', HOME: '/h', npm_config_prefix: '/usr', NPM_CONFIG_PREFIX: '/opt/x' })
+    ).toEqual({ HOME: '/h', NPM_CONFIG_PREFIX: '/h/.local' });
+    // The operator guard is the uppercase key only: npm run always injects the lowercase one.
+    expect(installEnv({ HOME: '/h', npm_config_prefix: '/usr' }, () => true)).toEqual({
+      HOME: '/h',
+      npm_config_prefix: '/usr',
+    });
+  });
+
+  describe('npmGlobalPrefixWritable', () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(`${tmpdir()}/npm-prefix-`);
+    });
+    afterEach(() => {
+      chmodSync(dir, 0o755);
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    /** A fake `npm` on PATH that prints `prefix` for `npm config get prefix`. */
+    function fakeNpm(prefix: string): NodeJS.ProcessEnv {
+      const bin = `${dir}/bin`;
+      mkdirSync(bin, { recursive: true });
+      writeFileSync(`${bin}/npm`, `#!/bin/sh\necho '${prefix}'\n`, { mode: 0o755 });
+      return { PATH: `${bin}:/usr/bin:/bin` };
+    }
+
+    it('is true for a writable prefix, whether or not lib/node_modules exists', async () => {
+      mkdirSync(`${dir}/w`);
+      expect(await npmGlobalPrefixWritable(fakeNpm(`${dir}/w`))).toBe(true);
+      mkdirSync(`${dir}/w/lib/node_modules`, { recursive: true });
+      expect(await npmGlobalPrefixWritable(fakeNpm(`${dir}/w`))).toBe(true);
+    });
+
+    it('is false for a prefix the server user cannot write', async () => {
+      if (process.getuid?.() === 0) return; // root can write anywhere
+      mkdirSync(`${dir}/ro`);
+      chmodSync(`${dir}/ro`, 0o555);
+      expect(await npmGlobalPrefixWritable(fakeNpm(`${dir}/ro`))).toBe(false);
+    });
+
+    it('judges a prefix that does not exist yet by its nearest existing ancestor', async () => {
+      // A user .npmrc with prefix=~/.npm-global before it was created: npm makes it, so do not move it.
+      expect(await npmGlobalPrefixWritable(fakeNpm(`${dir}/not/yet/made`))).toBe(true);
+      if (process.getuid?.() === 0) return;
+      mkdirSync(`${dir}/ro2`);
+      chmodSync(`${dir}/ro2`, 0o555);
+      expect(await npmGlobalPrefixWritable(fakeNpm(`${dir}/ro2/not/yet`))).toBe(false);
+    });
+
+    it('treats a probe failure (npm missing) as writable, and never throws', async () => {
+      expect(await npmGlobalPrefixWritable({ PATH: '/nonexistent' })).toBe(true);
+    });
   });
 });
 

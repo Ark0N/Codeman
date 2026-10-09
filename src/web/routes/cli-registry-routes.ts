@@ -29,9 +29,11 @@
  * write path (`registry-writer.ts` mirrors `custom-model-hosts.ts`).
  */
 
-import { execFileSync, spawn } from 'node:child_process';
-import { accessSync, constants as fsConstants } from 'node:fs';
-import { join } from 'node:path';
+import { execFile, spawn } from 'node:child_process';
+import { constants as fsConstants } from 'node:fs';
+import { access } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { promisify } from 'node:util';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ApiErrorCode, createErrorResponse, getErrorMessage, type ApiResponse } from '../../types.js';
 import { getAuthUser, isAdmin, parseBody, readJsonConfig, SETTINGS_PATH } from '../route-helpers.js';
@@ -209,31 +211,42 @@ const CLI_INSTALL_TIMEOUT_MS = 300_000;
  */
 const installsInFlight = new Set<string>();
 
+const execFileAsync = promisify(execFile);
+
 /**
  * True when `npm install -g` can write to this process's npm global prefix, or when that cannot
  * be determined (then nothing is redirected: a wrong guess would move installs somewhere the
  * user did not choose). `npm config get prefix` is asked rather than guessed from `process.execPath`
  * because a user `.npmrc` / `NPM_CONFIG_PREFIX` can point it anywhere.
+ *
+ * Async so the server keeps serving while npm boots (130 to 240 ms), and killed with SIGKILL on
+ * timeout because `SIGTERM` alone leaves the wait running. A prefix that does not exist yet is
+ * judged by the nearest ancestor that does: npm creates the missing directories, so a user
+ * `.npmrc` pointing at `~/.npm-global` before it was made is not moved.
  */
-export function npmGlobalPrefixWritable(source: NodeJS.ProcessEnv): boolean {
+export async function npmGlobalPrefixWritable(source: NodeJS.ProcessEnv): Promise<boolean> {
   try {
-    const prefix = execFileSync('npm', ['config', 'get', 'prefix'], {
+    const { stdout } = await execFileAsync('npm', ['config', 'get', 'prefix'], {
       env: source,
       encoding: 'utf8',
       timeout: 5_000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+      killSignal: 'SIGKILL',
+    });
+    const prefix = stdout.trim();
     if (!prefix) return true;
-    // npm creates lib/node_modules under the prefix; check that directory when it exists, else the prefix.
-    for (const dir of [join(prefix, 'lib', 'node_modules'), prefix]) {
+    // npm creates lib/node_modules under the prefix; walk up to the first directory that exists.
+    let dir = join(prefix, 'lib', 'node_modules');
+    for (;;) {
       try {
-        accessSync(dir, fsConstants.W_OK);
+        await access(dir, fsConstants.W_OK);
         return true;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+        const parent = dirname(dir);
+        if (parent === dir) return false;
+        dir = parent;
       }
     }
-    return false;
   } catch {
     return true;
   }
@@ -255,7 +268,7 @@ export function npmGlobalPrefixWritable(source: NodeJS.ProcessEnv): boolean {
  */
 export function installEnv(
   source: NodeJS.ProcessEnv = process.env,
-  prefixWritable: (env: NodeJS.ProcessEnv) => boolean = npmGlobalPrefixWritable
+  prefixWritable: (env: NodeJS.ProcessEnv) => boolean = () => true
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(source)) {
@@ -266,11 +279,38 @@ export function installEnv(
   // vanishes. HOME is the persistent bind mount and `~/.local/bin` is already on every resolver's search
   // list, so npm-based installs are redirected there. curl|bash installers already target HOME.
   if (source.CODEMAN_IN_CONTAINER === '1' && source.HOME) {
-    env.NPM_CONFIG_PREFIX = `${source.HOME}/.local`;
+    redirectNpmPrefix(env, source.HOME);
   } else if (process.platform !== 'win32' && source.HOME && !source.NPM_CONFIG_PREFIX && !prefixWritable(env)) {
-    env.NPM_CONFIG_PREFIX = `${source.HOME}/.local`;
+    redirectNpmPrefix(env, source.HOME);
   }
   return env;
+}
+
+/**
+ * Point npm at `$HOME/.local`, dropping every spelling of the prefix key first. `npm run` exports a
+ * lowercase `npm_config_prefix`, npm reads `npm_config_*` case-insensitively, and when both spellings
+ * are present a `/bin/sh` that sorts its environment (bash) lets the older value win. The explicit
+ * operator guard in `installEnv` stays on the uppercase key only: npm always injects the lowercase one.
+ */
+function redirectNpmPrefix(env: NodeJS.ProcessEnv, home: string): void {
+  for (const key of Object.keys(env)) if (/^npm_config_prefix$/i.test(key)) delete env[key];
+  env.NPM_CONFIG_PREFIX = `${home}/.local`;
+}
+
+/**
+ * `installEnv` for this process, with the (async) npm prefix probe done first and only when the
+ * command runs npm at all: a `curl | bash` installer never pays for it.
+ */
+async function installEnvFor(command: string, source: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
+  const usesNpm = /\bnpm\b/.test(command);
+  const probeNeeded =
+    usesNpm &&
+    source.CODEMAN_IN_CONTAINER !== '1' &&
+    process.platform !== 'win32' &&
+    !!source.HOME &&
+    !source.NPM_CONFIG_PREFIX;
+  const writable = probeNeeded ? await npmGlobalPrefixWritable(installEnv(source)) : true;
+  return installEnv(source, () => writable);
 }
 
 interface InstallResult {
@@ -288,6 +328,7 @@ interface InstallResult {
  * CUSTOM entry can never reach this function at all — see the route's own guard below.
  */
 async function runInstallCommand(command: string): Promise<InstallResult> {
+  const env = await installEnvFor(command);
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>;
     try {
@@ -299,7 +340,7 @@ async function runInstallCommand(command: string): Promise<InstallResult> {
         // out into package-manager children, and spawn's own `timeout` option signals
         // only the direct child, leaving survivors holding the pipes open forever.
         detached: true,
-        env: installEnv(),
+        env,
       });
     } catch (err) {
       resolve({ code: null, output: `spawn failed: ${getErrorMessage(err)}`, timedOut: false });
