@@ -439,11 +439,40 @@ export interface CliCapabilities {
    */
   transcript: 'claude-jsonl' | 'codex-rollout' | 'deepseek-zstd' | 'omp-jsonl' | 'none';
   /**
-   * 'strip-full'     — alt-screen + erase-scrollback + mouse DECSETs stripped (Ink TUIs).
-   * 'strip-mux-only' — only tmux's own attach-time smcup (the safe default).
-   * 'preserve'       — leave everything (a direct-PTY shell running vim/less/htop).
+   * What the server strips from this CLI's output stream before the browser sees it.
+   * The value encodes three independent choices (predicates in session.ts):
+   *
+   * | value                 | alt-screen toggles  | `3J` (erase scrollback) | mouse DECSETs       |
+   * |-----------------------|---------------------|-------------------------|---------------------|
+   * | `strip-full`          | stripped            | stripped                | stripped            |
+   * | `strip-mux-and-mouse` | stripped under tmux | kept                    | stripped under tmux |
+   * | `strip-mux-only`      | stripped under tmux | kept                    | kept                |
+   * | `preserve`            | stripped under tmux | kept                    | kept                |
+   *
+   * `strip-full` is `isAltScreenStripMode`; `strip-mux-and-mouse` is `isMuxMouseStripMode`;
+   * every other value takes `isMuxAltScreenOnlyStripMode`, so at runtime `preserve` and
+   * `strip-mux-only` are the same row — `preserve` only says what such a CLI's pane
+   * holds (terminal-owned scrollback: a shell, pi), not a different strip.
+   *
+   * - alt-screen: the tmux CLIENT emits `smcup` as its first bytes at attach, parking
+   *   xterm in the scrollback-less alternate buffer; a pane program's own toggles never
+   *   reach the client (tmux repaints instead). "Under tmux" means `useMux`: on a
+   *   direct-PTY fallback the `?1049h` is the program's own and must stay.
+   * - `3J`: a user's `clear` is a deliberate scrollback wipe; only an Ink TUI's
+   *   redraw-driven `3J` (strip-full) is noise.
+   * - mouse DECSETs: stripping them keeps a drag a local selection instead of a report
+   *   to the TUI. The browser then hand-encodes clicks (`_sendSyntheticSgrTap`), gated
+   *   on the `cliMouseTracking` the server records as it strips. Kept where a program's
+   *   own mouse support must work in the pane (htop/vim in a shell).
+   *
+   * Stock CLIs: `strip-full` = claude, codex, gemini (Ink TUIs); `strip-mux-and-mouse` =
+   * opencode (a full-screen TUI that enables tracking itself); `strip-mux-only` =
+   * antigravity, grok, deepseek, omp; `preserve` = shell, pi.
+   *
+   * A fourth combination is the point to split this into flags; three is still cheaper
+   * as an enum.
    */
-  altScreen: 'strip-full' | 'strip-mux-only' | 'preserve';
+  altScreen: 'strip-full' | 'strip-mux-only' | 'strip-mux-and-mouse' | 'preserve';
   echo: {
     policy: 'buffer' | 'predict' | 'off';
     /** How the local-echo overlay locates the composer row. */

@@ -147,7 +147,7 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
           <span>Admin Panel</span>
         </button>
-        <button class="btn-icon-header btn-solo-redock" id="soloRedockBtn" style="display: none;" onclick="window.close()" title="Re-dock to dashboard (close window)" aria-label="Re-dock session to dashboard">&#x229E;</button>
+        <button class="btn-icon-header btn-solo-redock" id="soloRedockBtn" style="display: none;" onclick="app._closeSoloWindow()" title="Re-dock to dashboard (close window)" aria-label="Re-dock session to dashboard">&#x229E;</button>
         <button class="tunnel-indicator" id="tunnelIndicator" style="display: none;" onclick="app.toggleTunnelPanel()" title="Cloudflare Tunnel" aria-label="Tunnel status">
           <span class="tunnel-dot"></span>
         </button>
@@ -2009,6 +2009,20 @@
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsGitStatusTree" checked><span class="slider"></span></label>
                   </div>
+                  <div class="set-row" data-search="git status maximum repositories folder many repos limit">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Git status: max repositories <span class="set-scope">device</span></span>
+                      <span class="set-row-desc">When the session's folder holds several projects instead of being one, the Git window lists up to this many (1 to 50, default 12). Each one costs a few git commands per refresh.</span>
+                    </div>
+                    <input type="number" id="appSettingsGitStatusMaxRepos" class="set-num" value="12" min="1" max="50" step="1">
+                  </div>
+                  <div class="set-row" data-search="git status timeout seconds slow share network">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Git status: git timeout <span class="set-scope">device</span></span>
+                      <span class="set-row-desc">Seconds one git command may run before that repository is reported as unreadable (5 to 120, default 30). Raise it for repositories on a slow network share.</span>
+                    </div>
+                    <input type="number" id="appSettingsGitStatusTimeout" class="set-num" value="30" min="5" max="120" step="1">
+                  </div>
                 </div>
               </div>
 
@@ -2586,6 +2600,30 @@
               <div class="set-group" id="appSettingsCodexGroup">
                 <div class="set-group-head"><h4>Codex</h4><span class="set-scope">synced</span></div>
                 <div class="set-group-body">
+                  <div class="set-row has-field" data-search="codex default model">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Default Codex model</span>
+                      <span class="set-row-desc">Model ID for new local Codex sessions, including WSL. Leave empty to use Codex configuration.</span>
+                    </div>
+                    <input id="appSettingsCodexModel" class="set-input" type="text" maxlength="100" aria-label="Default Codex model" placeholder="Use Codex configuration" autocomplete="off" spellcheck="false">
+                  </div>
+                  <div class="set-row has-field" data-search="codex default reasoning effort thinking">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Default Codex reasoning effort</span>
+                      <span class="set-row-desc">Applies to new local sessions; supported levels depend on the model and Codex version. Custom endpoints, Docker and remote sessions keep their own settings.</span>
+                    </div>
+                    <select id="appSettingsCodexReasoningEffort" class="set-select" aria-label="Default Codex reasoning effort">
+                      <option value="">Use Codex configuration</option>
+                      <option value="none">none</option>
+                      <option value="minimal">minimal</option>
+                      <option value="low">low</option>
+                      <option value="medium">medium</option>
+                      <option value="high">high</option>
+                      <option value="xhigh">xhigh</option>
+                      <option value="max">max</option>
+                      <option value="ultra">ultra</option>
+                    </select>
+                  </div>
                   <div class="set-row" data-search="codex bypass approvals sandbox">
                     <div class="set-row-text">
                       <span class="set-row-label">Bypass approvals and sandbox</span>
@@ -2991,10 +3029,6 @@
                       <span id="tunnelUrlDisplay" class="set-copy" title="Click to copy"></span>
                       <button class="btn-icon-sm" id="tunnelQrBtn" onclick="app.showTunnelQR()" title="Show QR code">&#x229E;</button>
                     </div>
-                  </div>
-                  <div class="set-row" id="tunnelUploadUrlRow" style="display:none">
-                    <div class="set-row-text"><span class="set-row-label">Upload URL</span></div>
-                    <span id="tunnelUploadUrlDisplay" class="set-copy" title="Click to copy"></span>
                   </div>
                 </div>
               </div>
@@ -4005,5 +4039,6 @@
   <script defer src="ultracode-windows.js"></script>
   <script defer src="session-lineage.js"></script>
   <script defer src="image-input.js"></script>
+  <script defer src="spreadsheet-preview.js"></script>
 </body>
 </html>

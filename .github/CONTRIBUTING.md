@@ -55,7 +55,9 @@ npm run test:all       # literally everything, environmental failures included
 
 Expect `test:browser`/`test:mobile`/`test:perf` to fail where the machine cannot provide what they need; read that as "not runnable here", not as a regression. `config/test-suites.ts` holds the globs, and both configs derive from it, so the exclusions and those runners cannot drift apart.
 
-If you add a test that binds a port, pick a unique one at 3150 or above (search the repo for `const PORT =` first). Never 3000.
+The browser suite also runs nightly (and on demand) in `.github/workflows/browser-suite.yml`; it is informational, not a gate.
+
+If you add a test that binds a port, bind port 0 (`new WebServer(0, …)` + `server.boundPort`, or `listen({ port: 0 })` + `address().port`), or use `app.inject()` when no socket is needed; `test/test-ports-guard.test.ts` fails a `WebServer` built on any other port. Mobile tests (`test/mobile/**`, via `createTestServer(PORT)`) keep the fixed-port convention in `test/mobile/README.md` for now, because that helper caches servers by port. Never 3000.
 
 Tests are tmux-safe by design: under vitest, the tmux layer becomes an in-memory mock, so tests cannot touch real sessions.
 

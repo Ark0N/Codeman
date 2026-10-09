@@ -312,7 +312,9 @@ export function registerCliRegistryRoutes(app: FastifyInstance): void {
   // admin/settings surface; every SPAWN-time caller elsewhere uses
   // enabledClis() instead). Deliberately excludes launch/env/capabilities/
   // overlays/discovery — the same rule every other catalogue-export surface in
-  // this codebase follows.
+  // this codebase follows, with one deliberate exception: the page catalog
+  // (`window.__codemanCliCatalog`, server.ts) carries `capabilities.external`,
+  // which Session Options reads to keep Claude's Respawn and Ralph tabs.
   //
   // NOT gated on cliManagementEnabled: reading the list is cheap and is not
   // the risky part. The Settings UI section simply never fetches this while

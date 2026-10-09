@@ -1273,7 +1273,8 @@ Object.assign(CodemanApp.prototype, {
     // A real mouse click normally reaches the PTY through xterm's own mouse
     // encoder, but that encoder only runs while mouseTrackingMode is ON — and
     // the server strips the enabling DECSETs from claude/codex/gemini output
-    // (isAltScreenStripMode, session.ts) so the wheel keeps scrolling
+    // (isAltScreenStripMode, session.ts) and from opencode's (isMuxMouseStripMode,
+    // so a drag selects text) so the wheel keeps scrolling
     // scrollback. Desktop clicks therefore stopped reporting entirely (the
     // same breakage the mobile touchend tap branch above works around).
     // Hand-encode the SGR report for plain left-clicks on those sessions.
@@ -1809,6 +1810,7 @@ Object.assign(CodemanApp.prototype, {
       this._keyCode229Recovery = window.CodemanKeyCode229Recovery?.create?.({
         textarea: this.terminal.textarea,
         emitRecovered: (data) => handleTerminalData(data),
+        getCompositionHelper: () => this.terminal?._core?._compositionHelper,
         isScreenReaderMode: () => this.terminal?.options?.screenReaderMode === true,
       });
     } catch {
@@ -5303,9 +5305,10 @@ Object.assign(CodemanApp.prototype, {
       // follows the same path as a desktop click.
       this._dispatchSyntheticTerminalClick(touch.clientX, touch.clientY);
     } else if (shouldActivate && this._shouldReportMouseToCli()) {
-      // Claude/Codex/Gemini DECSETs are stripped from the browser stream, so
-      // report directly to the PTY while retaining local touch scrollback. Only
-      // while the CLI actually has tracking on (see _shouldReportMouseToCli).
+      // This session's mouse DECSETs are stripped from the browser stream
+      // (strip-full or strip-mux-and-mouse), so report directly to the PTY
+      // while retaining local touch scrollback, and only while the CLI
+      // actually has tracking on (see _shouldReportMouseToCli).
       this._sendSyntheticSgrTap(touch.clientX, touch.clientY);
     }
 
@@ -5369,36 +5372,32 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  // Mirror of the server's isAltScreenStripMode (session.ts): session modes whose
-  // output stream has mouse-tracking DECSET sequences stripped before reaching the
-  // browser. For these, xterm's live mouseTrackingMode is useless as a gate — the
-  // PTY-side TUI keeps tracking enabled, we just never see the enable sequence.
   /**
-   * True when the browser has to hand-encode a click report for the CLI.
+   * True when the browser has to hand-encode a click report for the CLI: the
+   * server stripped this session's mouse-tracking DECSETs out of the stream (so
+   * xterm's own encoder is permanently idle here and something has to stand in
+   * for it) AND the CLI has a tracking mode on right now.
    *
-   * Two conditions, and dropping either one is a bug that has already happened:
+   * One flag answers both. The server sets `cliMouseTracking` only as it strips a
+   * tracking DECSET (`_recordStrippedMouseMode` in session.ts, called from the
+   * mouse-strip branch of `_handleTerminalOutput` and nowhere else), so it can
+   * only ever be true for a mode whose DECSETs are stripped: whichever modes the
+   * registry decides to strip, the browser follows, with no mode list here to
+   * keep in step. For a `preserve` / `strip-mux-only` mode the flag stays false
+   * and xterm keeps encoding its own reports. That invariant is pinned server-side
+   * in test/claude-scrollback-strip.test.ts.
    *
-   * 1. The session's mode is one whose mouse DECSETs the server STRIPS out of
-   *    the stream (claude/codex/gemini, `isAltScreenStripMode`), which is why
-   *    xterm's own encoder is permanently idle here and something has to stand
-   *    in for it.
-   * 2. The CLI actually has a mouse-tracking mode on right now. The server
-   *    records that as it strips (`_recordStrippedMouseMode` in session.ts) and
-   *    publishes it as `cliMouseTracking`. Without this half the browser
-   *    reported EVERY click, so a CLI sitting at its composer with no dialog
-   *    open, or a pane that has fallen back to a shell prompt, received mouse
-   *    reports it never asked for. A shell prints those as literal text
-   *    (`[<0;88;20M`) and they garble the next line typed.
+   * Without the flag the browser reported EVERY click, so a CLI sitting at its
+   * composer with no dialog open, or a pane that has fallen back to a shell
+   * prompt, received mouse reports it never asked for. A shell prints those as
+   * literal text (`[<0;88;20M`) and they garble the next line typed.
    *
    * Fails toward silence: an unknown or stale flag reports nothing rather than
    * injecting bytes. After a server restart the flag is false until the CLI
    * re-emits its DECSET, which closing and reopening a dialog does.
    */
   _shouldReportMouseToCli() {
-    const session = this.sessions?.get(this.activeSessionId);
-    const mode = session?.mode || 'claude';
-    if (mode !== 'claude' && mode !== 'codex' && mode !== 'gemini') return false;
-    return session?.cliMouseTracking === true;
+    return this.sessions?.get(this.activeSessionId)?.cliMouseTracking === true;
   },
 
   // True when xterm's viewport shows the live PTY screen (not scrolled up into
@@ -5583,15 +5582,29 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * True when this session's LOCAL scrollback is structurally empty: a Claude
-   * pane in repaint mode, where tmux reports `history_size≈0` and every frame
-   * overwrites the last, so xterm's normal buffer never grows past one screen
+   * True when this session's LOCAL scrollback is structurally empty: a pane whose
+   * TUI repaints one full screen in place, so tmux keeps no history for it
+   * (`history_size≈0`) and xterm's normal buffer never grows past one screen
    * (`baseY === 0`). Scrolling that buffer is a no-op no matter how the gesture
    * is routed — the "wheel does nothing at all" half of the #205 retest.
+   *
+   * Two shapes, measured separately:
+   *  - `claude` in repaint mode (the original, #205 round 2), and
+   *  - `opencode`, whose TUI runs on the ALTERNATE SCREEN (opencode 1.18.31: tmux
+   *    `alternate_on=1`, `history_size=0`) and so pushes nothing into the
+   *    terminal's scrollback at all. It pages its own transcript with the same
+   *    PageUp/PageDown keys (`messages_page_up/down`) but IGNORES SGR wheel
+   *    reports — six `\x1b[<64;…M` reports against an idle pane left the capture
+   *    byte-identical — so paging is the only gesture that reaches it. Without
+   *    this the wheel was silently dead in every opencode tab.
+   *
+   * Every other mode is deliberately absent: shell/pi own real terminal
+   * scrollback, and codex/gemini/antigravity/grok/deepseek/omp page-key behaviour
+   * is unverified (docs/scrollback-fix-plan.md).
    */
   _localScrollbackIsHollow() {
     const mode = this.sessions?.get(this.activeSessionId)?.mode || 'claude';
-    if (mode !== 'claude') return false;
+    if (mode !== 'claude' && mode !== 'opencode') return false;
     const buf = this.terminal?.buffer?.active;
     if (!buf || buf.type === 'alternate') return false;
     return (buf.baseY || 0) === 0;
@@ -5602,18 +5615,19 @@ Object.assign(CodemanApp.prototype, {
    * coalesced PageUp/PageDown key sends so the CLI pages its OWN transcript.
    *
    * The rescue path for every way `_shouldForwardWheelToApp` can come back false
-   * on a Claude session that has no local history to fall back on: the CLI
-   * version probe failed or is genuinely older than 2.1.187, the CLI's mouse
-   * tracking flag is unset (the inline renderer, or fullscreen right after a
-   * server restart), or the user turned on "Wheel scrolls local history" (which
-   * pins the wheel to a buffer that, for a repaint-mode CLI, is empty: the
-   * setting's footgun). Before this, all of those produced a completely dead
-   * gesture; the #205 reporter proved the keyboard route works by paging back
-   * through intact text with Fn+Up.
+   * on a session that has no local history to fall back on: the CLI version probe
+   * failed or is genuinely older than 2.1.187, the CLI's mouse tracking flag is
+   * unset (the inline renderer, or fullscreen right after a server restart), the
+   * user turned on "Wheel scrolls local history" (which pins the wheel to a buffer
+   * that, for a repaint-mode CLI, is empty: the setting's footgun), or the CLI is
+   * opencode, which never fills the buffer and never accepts the wheel. Before
+   * this, all of those produced a completely dead gesture; the #205 reporter
+   * proved the keyboard route works by paging back through intact text with Fn+Up.
    *
-   * Triple-guarded (claude mode + gate false + `baseY === 0`), so a session with
-   * real local scrollback is never touched. Shift is excluded on purpose: it is
-   * the explicit "give me local scrollback" gesture and must keep that meaning.
+   * Guarded by `_localScrollbackIsHollow()` plus a false forwarding gate, so a
+   * session with real local scrollback is never touched. Shift is excluded on
+   * purpose: it is the explicit "give me local scrollback" gesture and must keep
+   * that meaning.
    *
    * @returns true when the gesture was consumed here (the caller must not also
    *          scroll locally).
@@ -5714,7 +5728,8 @@ Object.assign(CodemanApp.prototype, {
    * The reason is that the habit and xterm's Shift mean different things once
    * the DECSETs are stripped. xterm reads Shift as "force selection" ONLY while
    * the app actually has mouse tracking on; the server strips those DECSETs for
-   * claude/codex/gemini (isAltScreenStripMode), so xterm's mouseTrackingMode is
+   * claude/codex/gemini (isAltScreenStripMode) and opencode (isMuxMouseStripMode),
+   * so xterm's mouseTrackingMode is
    * permanently `none`, that branch is unreachable, and Shift instead falls into
    * `_onIncrementalClick` — EXTEND an existing selection. Extending is a no-op
    * when `selectionStart` is null, so the drag never anchors and no selection is

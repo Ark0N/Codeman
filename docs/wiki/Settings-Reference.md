@@ -63,10 +63,15 @@ Ultracode Windows, Cron.
 
 **Bottom bar** (below the chips): **Git status** shows a small indicator at the right of the
 bottom bar, off by default and per device. It reads `● N` uncommitted files, `↑ N` commits not
-pushed, `⚠ N` merge conflicts, or `✓` when everything is committed and pushed. Click it for the
-Git window; see [Working With Files](Working-With-Files#git-changes). **Git status: group files
+pushed, `⚠ N` merge conflicts, `? N` repositories git could not read, or `✓` when everything is
+committed and pushed. Click it for the Git window; see
+[Working With Files](Working-With-Files#git-changes). **Git status: group files
 by folder** (per device, on by default) shows changed files under collapsed folders in that
-window; off lists every file by its full path.
+window; off lists every file by its full path. **Git status: max repositories** (per device,
+1 to 50, default 12) is how many repositories the window lists when a session's folder holds
+several projects. **Git status: git timeout** (per device, 5 to 120 seconds, default 30) is how
+long one git command may run before that repository is reported as unreadable; raise it for
+repositories on a slow network share.
 
 Most default to off. The stock desktop header is system stats, File Viewer, Tiles, and the gear.
 **Header Stats Style** picks how the system stats and plan usage are drawn: *Compact*
@@ -133,7 +138,9 @@ instead of its native cloud backend. See [Custom Model Endpoints](Custom-Model-E
 | Codeman Agent Skill              | Injects the agent skill into new Claude sessions per case. Off by default. See [Driving Codeman From An Agent](Driving-Codeman-From-An-Agent). |
 | Remote auto-reconnect            | Reattaches dropped remote SSH sessions. On by default.                                         |
 | Nice priority / value            | Runs agent processes at a lower CPU priority.                                                  |
-| Bypass approvals and sandbox     | Pi's project trust. Read [Agent CLIs](Agent-CLIs) before enabling.                             |
+| Default Codex model              | Model for new local Codex sessions; empty uses Codex's own config. Letters, digits, `.` `_` `-` `/` only. |
+| Default Codex reasoning effort   | Reasoning level for new local Codex sessions; empty uses Codex's own config.                   |
+| Bypass approvals and sandbox     | Starts new Codex sessions with `--dangerously-bypass-approvals-and-sandbox`. Read [Agent CLIs](Agent-CLIs) before enabling. |
 | Animated status effects          | Cosmetic.                                                                                      |
 | MCP server sync                  | Copies the MCP servers each installed, enabled CLI (Claude, Codex, Gemini, OpenCode, Antigravity) has into the others' own config files. Synced, off by default, admin only in multi-user mode. Turn it on and save, then **Preview** shows what would change and **Sync now** applies it. It only adds missing servers, keeps the previous file as `.codeman-bak`, and leaves a file that receives env values or headers readable by you only. A config dir moved by `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME` or `GEMINI_CLI_HOME` in Codeman's own environment is followed. |
 
@@ -158,7 +165,7 @@ Rebinding for the shortcut registry. See [Keyboard Shortcuts](Keyboard-Shortcuts
 ### System
 
 `CLAUDE.md` template for new cases, default working directory, the image watcher, and
-Cloudflare tunnel controls including the tunnel and upload URLs. The **Diagnostics** group runs
+Cloudflare tunnel controls including the tunnel URL. The **Diagnostics** group runs
 `codeman doctor` on the server and lists the agent CLIs, tmux, Node and the optional office
 tools with their versions and install hints (admin only in multi-user mode). In multi-user
 mode, the **Users** administration entry is injected here.

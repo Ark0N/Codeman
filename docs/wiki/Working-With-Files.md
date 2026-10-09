@@ -17,6 +17,7 @@ It renders what it can:
 | Markdown                 | Rendered by default: headings, tables, code blocks with copy buttons, images and links relative to the file (root-relative ones resolve from the workspace root, as on GitHub). Opened from an attachment card, where the file's folder is unknown, relative images show their alt text and relative links show as plain text. The MD pill in the header flips to source. |
 | Images                   | Inline.                                                                    |
 | Audio and video          | Inline with a working scrub bar, because range requests are supported.     |
+| Spreadsheets (`.xlsx`)   | Read-only grid, parsed in your browser (never on the server), up to 10 MB. `.xls` and `.ods` are download only. |
 | PDF and Office documents | Converted for preview when a converter is available.                       |
 | Anything else            | Download.                                                                  |
 
@@ -168,7 +169,7 @@ surface as an artifact attachment rather than a path you have to go and find.
 Agents often leave work uncommitted or unpushed. Turn on **App Settings → Header & Panels →
 Bottom bar → Git status** (per device, off by default) and the right of the bottom bar shows
 the active session's repository: `● 3` uncommitted files, `↑ 2` commits not pushed, `⚠` merge
-conflicts, `✓` when everything is committed and pushed.
+conflicts, `? 1` a repository git could not read, `✓` when everything is committed and pushed.
 
 Click it for a draggable window, in the style of the File Viewer:
 
@@ -187,7 +188,10 @@ Click it for a draggable window, in the style of the File Viewer:
   **Open file** jumps to the File Viewer; **Back** returns to the list. A binary file shows a
   note instead, and a diff over 400 KB is cut short.
 - A session folder that holds several projects gets one collapsible section per repository
-  found up to two levels down. They all start collapsed (each summary line shows its branch and
+  found up to two levels down (up to **Git status: max repositories**, 12 by default; the window says
+  when there are more). A repository git could not read, typically a timeout on a slow network
+  share, is listed with the reason and counted as `? N` in the bottom-bar indicator, never silently
+  left out; the **git timeout** setting raises how long it waits. They all start collapsed (each summary line shows its branch and
   what is outstanding), and the ones you open stay open when the window refreshes; an unrelated repository above the workspace (a dotfiles repo
   in your home folder) is ignored.
 

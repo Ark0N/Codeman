@@ -366,14 +366,33 @@ describe('terminal touch tap mouse guard', () => {
     expect(sent).toEqual(['\x1b[<0;1;24M\x1b[<0;1;24m']);
   });
 
-  it('never hand-reports for a shell session, even with tracking somehow set', () => {
-    // Shell DECSETs are NOT stripped (narrow strip), so xterm's own encoder owns
-    // the mouse there and a second, hand-encoded report would double-report.
+  it('follows the server flag alone, with no mode list of its own', () => {
+    // A shell's DECSETs are not stripped, so xterm's own encoder owns the mouse there
+    // and a hand-encoded report would double-report. That is kept by the SERVER never
+    // setting the flag for a non-stripping mode (pinned in claude-scrollback-strip.test.ts),
+    // not by a mode check here: the browser reads only the flag.
     const { app } = loadTerminalUiHarness();
     app.activeSessionId = 'sess-1';
-    app.sessions = new Map([['sess-1', { mode: 'shell', cliMouseTracking: true }]]);
-
+    app.sessions = new Map([['sess-1', { mode: 'shell' }]]);
     expect(app._shouldReportMouseToCli()).toBe(false);
+
+    app.sessions = new Map([['sess-1', { mode: 'some-future-cli', cliMouseTracking: true }]]);
+    expect(app._shouldReportMouseToCli()).toBe(true);
+  });
+
+  it('hand-reports for opencode, whose DECSETs the server now strips', () => {
+    // opencode's TUI enables mouse tracking, tmux passes the DECSETs through, and
+    // xterm used to report DRAGS to the TUI instead of selecting — so marking text
+    // copied nothing. The server strips them now (isMuxMouseStripMode), which makes
+    // the hand-encoded tap the only way a click still reaches opencode.
+    const { app } = loadTerminalUiHarness();
+    app.activeSessionId = 'sess-1';
+
+    app.sessions = new Map([['sess-1', { mode: 'opencode' }]]);
+    expect(app._shouldReportMouseToCli()).toBe(false);
+
+    app.sessions = new Map([['sess-1', { mode: 'opencode', cliMouseTracking: true }]]);
+    expect(app._shouldReportMouseToCli()).toBe(true);
   });
 
   it('hand-reports only while the CLI actually has mouse tracking on', () => {

@@ -559,9 +559,14 @@ describe('RemoteWakeRegistry', () => {
       h.registry.ensureAwake(h.session, { force: true, timeoutMs: REMOTE_WAKE_REQUEST_READY_TIMEOUT_MS })
     ).resolves.toBe(true);
     expect(h.waitUntilReady).toHaveBeenCalledWith(remote, {
-      timeoutMs: REMOTE_WAKE_REQUEST_READY_TIMEOUT_MS,
+      timeoutMs: expect.any(Number),
       signal: expect.any(AbortSignal),
     });
+    // Not asserted to the millisecond: the wake's own elapsed time is subtracted, so a
+    // slow runner lands a few ms under the budget.
+    const [, readyOpts] = h.waitUntilReady.mock.calls[0] as [unknown, { timeoutMs: number; signal: AbortSignal }];
+    expect(readyOpts.timeoutMs).toBeLessThanOrEqual(REMOTE_WAKE_REQUEST_READY_TIMEOUT_MS);
+    expect(readyOpts.timeoutMs).toBeGreaterThan(REMOTE_WAKE_REQUEST_READY_TIMEOUT_MS - 1_000);
   });
 });
 

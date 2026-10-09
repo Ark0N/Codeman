@@ -398,6 +398,123 @@ describe('Git status indicator in a real browser', () => {
     await page.waitForSelector('#gitStatusPanel.visible');
   }, 30000);
 
+  it('sends the max-repositories and git-timeout settings, and lists an unreadable repository with its reason', async () => {
+    const setLimits = async (maxRepos: string, timeout: string) => {
+      await page.evaluate(() => (window as any).app.openAppSettings());
+      await page.fill('#appSettingsGitStatusMaxRepos', maxRepos);
+      await page.fill('#appSettingsGitStatusTimeout', timeout);
+      await page.evaluate(() => (window as any).app.saveAppSettings());
+      await page.waitForTimeout(300);
+      await page.evaluate(() => (window as any).app.closeAppSettings());
+    };
+    await setLimits('7', '45');
+    // Per-device keys must never reach the strict PUT /api/settings.
+    expect(settingsPutStatuses.every((st) => st === 200)).toBe(true);
+    expect(await page.evaluate(() => (window as any).app.gitStatusLimits())).toEqual({ maxRepos: 7, timeout: 45 });
+    await refresh();
+    expect(gitStatusRequests.at(-1)).toMatch(/maxRepos=7/);
+    expect(gitStatusRequests.at(-1)).toMatch(/timeout=45/);
+
+    // Out-of-range values are clamped when saved, not sent as typed.
+    await setLimits('9999', '1');
+    expect(await page.evaluate(() => (window as any).app.gitStatusLimits())).toEqual({ maxRepos: 50, timeout: 5 });
+
+    // A folder with more repositories than the limit, one of which git could not read.
+    const emptyCounts = { staged: 0, unstaged: 0, untracked: 0, conflicted: 0, uncommitted: 0, stashes: 0 };
+    const status = (over: Record<string, unknown>) => ({
+      state: 'ok',
+      branch: 'main',
+      detached: false,
+      upstream: 'origin/main',
+      upstreamGone: false,
+      ahead: 0,
+      behind: 0,
+      hasRemote: true,
+      counts: emptyCounts,
+      files: [],
+      filesTruncated: false,
+      unpushedCount: 0,
+      unpushed: [],
+      checkedAt: Date.now(),
+      ...over,
+    });
+    await page.route('**/api/sessions/*/git-status*', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            state: 'ok',
+            reposTruncated: true,
+            repoLimit: 2,
+            checkedAt: Date.now(),
+            repos: [
+              { name: 'fast', path: 'fast', status: status({ repoRoot: '/x/fast' }) },
+              { name: 'slow', path: 'slow', status: status({ state: 'error', error: 'git timed out' }) },
+            ],
+          },
+        }),
+      })
+    );
+    await refresh();
+    await page.waitForFunction(() =>
+      /could not read/.test(document.getElementById('gitStatusBody')?.textContent ?? '')
+    );
+    const body = (await page.textContent('#gitStatusBody')) ?? '';
+    expect(body).toContain('slow');
+    expect(body).toContain('could not read: git timed out');
+    expect(body).toContain('Showing the first 2 of more than 2 repositories');
+    expect(body).toContain('Raise “Git status: max repositories”');
+    // The unreadable repository must keep the indicator from claiming everything is fine.
+    expect(await label()).toContain('? 1');
+    expect(await label()).not.toContain('✓');
+    expect(await page.getAttribute('#gitStatusBtn', 'title')).toMatch(/1 repository could not be read/);
+
+    const mockOverview = async (data: Record<string, unknown>) => {
+      await page.unroute('**/api/sessions/*/git-status*');
+      await page.route('**/api/sessions/*/git-status*', (route) =>
+        route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, data: { state: 'ok', checkedAt: Date.now(), ...data } }),
+        })
+      );
+      await refresh();
+    };
+    // The ONLY repository git could not read: still the error row, never a clean, empty repository.
+    await mockOverview({
+      reposTruncated: false,
+      repoLimit: 12,
+      repos: [
+        {
+          name: 'slow',
+          path: 'slow',
+          status: status({ state: 'error', error: 'git timed out', branch: null, hasRemote: false, upstream: null }),
+        },
+      ],
+    });
+    await page.waitForFunction(() => document.getElementById('gitStatusBranch')?.textContent === '1 repository');
+    const lone = (await page.textContent('#gitStatusBody')) ?? '';
+    expect(lone).toContain('could not read: git timed out');
+    expect(lone).not.toContain('Nothing uncommitted');
+    expect(await label()).toContain('? 1');
+    expect(await page.getAttribute('#gitStatusBtn', 'title')).toMatch(/Git \(slow\)/);
+
+    // A limit of 1 in a folder of several: the one row shown keeps the "Showing the first" notice.
+    await mockOverview({
+      reposTruncated: true,
+      repoLimit: 1,
+      repos: [{ name: 'fast', path: 'fast', status: status({ repoRoot: '/x/fast' }) }],
+    });
+    await page.waitForFunction(() =>
+      /Showing the first 1 /.test(document.getElementById('gitStatusBody')?.textContent ?? '')
+    );
+    expect(await page.textContent('#gitStatusBranch')).toBe('1 repository');
+
+    await page.unroute('**/api/sessions/*/git-status*');
+    await setLimits('12', '30');
+    await refresh();
+  }, 40000);
+
   it('closing the panel resets it; turning the setting off hides the button, closes the panel and stops polling', async () => {
     await page.click('.git-status-actions button[aria-label="Close git status"]');
     expect(await page.isVisible('#gitStatusPanel')).toBe(false);

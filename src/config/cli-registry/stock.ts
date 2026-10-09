@@ -491,7 +491,7 @@ const OPENCODE: CliEntry = {
   },
   capabilities: {
     ...agentDefaults(),
-    altScreen: 'strip-mux-only',
+    altScreen: 'strip-mux-and-mouse',
     echo: { policy: 'buffer', anchor: { kind: 'cursor' }, predictProfile: undefined },
     // Measured on a live opencode 1.3.0 pane (capture-pane every 250-300 ms through real
     // turns at 40, 60, 120 and 200 columns, plus the raw PTY stream, 2026-10-09). Every
@@ -1157,8 +1157,9 @@ const GROK: CliEntry = {
   },
   capabilities: {
     ...agentDefaults(),
-    // Fullscreen alt-screen TUI with mouse support — same shape as opencode/antigravity:
-    // only the tmux-attach-time smcup strip, not Ink's full erase-scrollback+DECSET strip.
+    // Fullscreen alt-screen TUI with mouse support, same strip as antigravity until measured
+    // (opencode's mouse strip is #443): only the tmux-attach-time smcup strip, not Ink's full
+    // erase-scrollback+DECSET strip.
     altScreen: 'strip-mux-only',
     // Buffer-policy fallthrough default, unmeasured against an authenticated grok composer
     // (the existing hedge, preserved verbatim) — same as gemini/antigravity/pi.
@@ -1491,7 +1492,7 @@ const OMP: CliEntry = {
   },
   capabilities: {
     ...agentDefaults(),
-    // Fullscreen alt-screen TUI, same shape as opencode/antigravity/grok: only the
+    // Fullscreen alt-screen TUI, same shape as antigravity/grok: only the
     // tmux-attach-time smcup strip, not Ink's full erase-scrollback+DECSET strip.
     altScreen: 'strip-mux-only',
     // Codeman reads omp's own `~/.omp/agent/sessions/**/*.jsonl` host-side, which is what

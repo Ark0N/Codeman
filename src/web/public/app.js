@@ -1164,6 +1164,8 @@ class CodemanApp {
         this._selectUrlSession();
       });
     }
+    // mobile.css keeps the pop-out icon off phones unless a host can open windows.
+    document.documentElement.classList.toggle('host-windows', this.hasHostWindows());
     // Initialize mobile handlers
     KeyboardHandler.init();
     SwipeHandler.init();
@@ -1667,6 +1669,24 @@ class CodemanApp {
     // false only when we owned a now-closed window (re-dock + fall through to
     // genuinely re-open below).
     if (this.detachedSessions.has(id) && this._raiseDetached(id)) return;
+    // A native wrapper (an Android WebView app) has no browser pop-ups, but can
+    // open the solo URL in a window of its own, beside this one on a foldable or
+    // a split screen. There is no WindowProxy to poll, so the tab is tracked the
+    // way a dashboard reload tracks it: the solo window's channel announcements
+    // plus the roll-call liveness check. Without a channel there is no roll-call
+    // either, so a hosted tab could never re-dock: refuse before asking the host.
+    const hosted = this.hasHostWindows() && !this.windowChannel
+      ? false
+      : this.openInHostWindow(CodemanBase.url('/session/' + encodeURIComponent(id)));
+    if (hosted !== null) {
+      if (!hosted) {
+        this.showToast?.('Could not open a new window for this session', 'error');
+        return;
+      }
+      this._markDetached(id, true);
+      this._postWindowMessage({ type: 'detached', id });
+      return;
+    }
     const features = 'width=960,height=680,menubar=no,toolbar=no,location=no,status=no';
     let win = null;
     try { win = window.open(CodemanBase.url('/session/' + encodeURIComponent(id)), 'codeman-session-' + id, features); } catch {}
@@ -1679,6 +1699,44 @@ class CodemanApp {
     this._watchDetachedWindow(id, win);
     this._postWindowMessage({ type: 'detached', id });
     try { win.focus(); } catch {}
+  }
+
+  /**
+   * The embedding app's window opener, when there is one. A native wrapper
+   * exposes `window.CodemanHost.openWindow(absoluteUrl)` (anything but false
+   * counts as opened) to say it can put a page in a window of its own; browsers
+   * never define it.
+   * @returns {boolean} whether a host window opener is present
+   */
+  hasHostWindows() {
+    try {
+      return typeof window !== 'undefined' && typeof window.CodemanHost?.openWindow === 'function';
+    } catch { return false; }
+  }
+
+  /**
+   * The tab pop-out setting, defaulting ON under a host that opens windows.
+   * The one resolver for the tab icon, App Settings and the tab action menu.
+   * @param {object} settings stored per-device App Settings
+   * @param {object} [defaults] the device's default settings
+   * @returns {boolean} whether the pop-out control shows
+   */
+  tabDetachButtonEnabled(settings, defaults = {}) {
+    return settings?.showTabDetachButton ?? (this.hasHostWindows() || (defaults?.showTabDetachButton ?? false));
+  }
+
+  /**
+   * Open an http(s) URL in a host window, usually Codeman's own origin (a saved
+   * web tab passes its own).
+   * @param {string} url absolute or base-relative URL
+   * @returns {boolean|null} null when there is no host (use window.open),
+   *   otherwise whether the host opened a window
+   */
+  openInHostWindow(url) {
+    if (!this.hasHostWindows()) return null;
+    try {
+      return window.CodemanHost.openWindow(new URL(url, location.href).href) !== false;
+    } catch { return false; }
   }
 
   /** Raise the popup for an already-detached session. Returns true if the raise
@@ -1810,8 +1868,12 @@ class CodemanApp {
       // Roll-call has no id (broadcast to all) — answer before the id filter.
       if (msg.type === 'roll-call') { this._postWindowMessage({ type: 'detached', id: this.soloSessionId }); return; }
       if (msg.id !== this.soloSessionId) return;
-      if (msg.type === 'close-request') { try { window.close(); } catch {} }
-      else if (msg.type === 'focus-request') { try { window.focus(); } catch {} }
+      // A host window ignores window.close()/focus() from script it did not
+      // open by window.open, so ask the host when it offers the call.
+      if (msg.type === 'close-request') { this._closeSoloWindow(); }
+      else if (msg.type === 'focus-request') {
+        try { if (typeof window.CodemanHost?.focusWindow === 'function') window.CodemanHost.focusWindow(); else window.focus(); } catch {}
+      }
       return;
     }
     // Dashboard side.
@@ -1863,6 +1925,14 @@ class CodemanApp {
     }, 1200);
   }
 
+  /** Solo window: close itself (the re-dock button and a dashboard close-request). */
+  _closeSoloWindow() {
+    try {
+      if (typeof window.CodemanHost?.closeWindow === 'function') window.CodemanHost.closeWindow();
+      else window.close();
+    } catch {}
+  }
+
   /** Solo window: select the target session and apply minimal single-session
    *  chrome. Called from handleInit once the session list has loaded. */
   _applySoloMode() {
@@ -1894,7 +1964,7 @@ class CodemanApp {
     el.className = 'solo-gone-overlay';
     el.innerHTML = '<h2>Session unavailable</h2>'
       + '<p>This session has ended or is no longer available.</p>'
-      + '<button class="btn-primary" onclick="window.close()">Close window</button>';
+      + '<button class="btn-primary" onclick="app._closeSoloWindow()">Close window</button>';
     document.body.appendChild(el);
     document.title = (window.codemanT?.('Session ended') || 'Session ended')
       + ' — ' + (window.CodemanI18n?.displayName || 'Codeman');

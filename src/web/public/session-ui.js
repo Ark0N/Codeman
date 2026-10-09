@@ -151,6 +151,13 @@ function isExternalCliRunMode(mode) {
   return EXTERNAL_CLI_MODES.has(mode) || registryCliById(mode)?.kind === 'agent';
 }
 
+// Does this session lack the Claude-only features (Respawn, Ralph)? The registry's
+// `capabilities.external`, the flag the server's isExternalCliMode() reads. Not
+// isExternalCliRunMode(): that picks a launch path, and claude is `kind: 'agent'` too.
+function isExternalCliSession(mode) {
+  return registryCliById(mode)?.external ?? isExternalCliRunMode(mode);
+}
+
 Object.assign(CodemanApp.prototype, {
   /**
    * Build envOverrides payload from case + global settings.
@@ -2477,7 +2484,7 @@ Object.assign(CodemanApp.prototype, {
     if (detachToggle) detachToggle.checked = this.hasTabDetachOverride(sessionId);
 
     // Reset to an appropriate tab — Summary for external CLIs (Respawn/Ralph are Claude-only)
-    const isAltMode = isExternalCliRunMode(session.mode);
+    const isAltMode = isExternalCliSession(session.mode);
     this.switchOptionsTab(isAltMode ? 'summary' : 'respawn');
 
     // Update respawn status display and buttons

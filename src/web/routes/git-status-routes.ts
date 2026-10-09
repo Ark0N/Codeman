@@ -20,6 +20,7 @@ import {
   emptyOverview,
   findWorkspaceRepo,
   getGitFileDiff,
+  resolveOverviewLimits,
   getGitWorkspaceOverview,
   getGitWorkspaceStatus,
   type GitFileDiff,
@@ -33,6 +34,20 @@ import type { SessionPort } from '../ports/index.js';
 const defaultDockerWorkspaces = async (): Promise<string[]> =>
   (await readDockerCases(getDataDir()).catch(() => [])).map((c) => c.hostWorkspacePath).filter(Boolean);
 
+/**
+ * The repository limit and git timeout a request asks for (Settings → Bottom bar, per device):
+ * `maxRepos` and `timeout` (seconds) query parameters, each clamped to a safe range, so an odd value
+ * can never cost more than the module's own ceiling.
+ */
+function limitsFrom(query: { maxRepos?: unknown; timeout?: unknown }) {
+  // A repeated key arrives as an array: it is not a number, so it means "default" like '' and absent.
+  const timeout = typeof query.timeout === 'string' && query.timeout.trim() ? query.timeout : undefined;
+  return resolveOverviewLimits({
+    maxRepos: query.maxRepos,
+    timeoutMs: timeout !== undefined ? Number(timeout) * 1000 : undefined,
+  });
+}
+
 export function registerGitStatusRoutes(
   app: FastifyInstance,
   ctx: SessionPort,
@@ -41,7 +56,9 @@ export function registerGitStatusRoutes(
 ): void {
   app.get('/api/sessions/:id/git-status', async (req): Promise<ApiResponse<GitWorkspaceOverview>> => {
     const { id } = req.params as { id: string };
-    const { fresh } = req.query as { fresh?: string };
+    const query = req.query as { fresh?: string; maxRepos?: unknown; timeout?: unknown };
+    const { fresh } = query;
+    const limits = limitsFrom(query);
     const session = findSessionOrFail(ctx, id, req);
     if (session.remote) return { success: true, data: emptyOverview('unsupported', { reason: 'remote' }) };
     if (session.docker) return { success: true, data: emptyOverview('unsupported', { reason: 'docker' }) };
@@ -50,6 +67,7 @@ export function registerGitStatusRoutes(
       data: await getGitWorkspaceOverview(session.workingDir, {
         git,
         fresh: fresh === '1',
+        ...limits,
         dockerWorkspaces: await dockerWorkspaces(),
       }),
     };
@@ -62,16 +80,24 @@ export function registerGitStatusRoutes(
   // repository's status is refreshed: a click must not re-read every repository in the folder.
   app.get('/api/sessions/:id/git-diff', async (req, reply): Promise<ApiResponse<GitFileDiff>> => {
     const { id } = req.params as { id: string };
-    const { repo, path, kind } = req.query as { repo?: string; path?: string; kind?: string };
+    const query = req.query as { repo?: string; path?: string; kind?: string; maxRepos?: unknown; timeout?: unknown };
+    const { repo, path, kind } = query;
+    const limits = limitsFrom(query);
     const session = findSessionOrFail(ctx, id, req);
     if (session.remote || session.docker) {
       reply.code(400);
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Git is not available for remote or Docker sessions');
     }
     const repoRoot = repo
-      ? await findWorkspaceRepo(session.workingDir, repo, { git, dockerWorkspaces: await dockerWorkspaces() })
+      ? await findWorkspaceRepo(session.workingDir, repo, {
+          git,
+          ...limits,
+          dockerWorkspaces: await dockerWorkspaces(),
+        })
       : null;
-    const status = repoRoot ? await getGitWorkspaceStatus(repoRoot, { git, fresh: true }) : null;
+    const status = repoRoot
+      ? await getGitWorkspaceStatus(repoRoot, { git, fresh: true, timeoutMs: limits.timeoutMs })
+      : null;
     const entry =
       status?.state === 'ok'
         ? status.files.find((f) => f.path === path && f.kind === (kind as GitFileKind))
@@ -81,7 +107,10 @@ export function registerGitStatusRoutes(
       return createErrorResponse(ApiErrorCode.NOT_FOUND, 'That file has no outstanding change any more');
     }
     try {
-      return { success: true, data: await getGitFileDiff(status.repoRoot, entry, { git }) };
+      return {
+        success: true,
+        data: await getGitFileDiff(status.repoRoot, entry, { git, timeoutMs: limits.timeoutMs }),
+      };
     } catch (err) {
       reply.code(500);
       return createErrorResponse(

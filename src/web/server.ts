@@ -323,6 +323,14 @@ export class WebServer extends EventEmitter {
   private store = getStore();
   private tabLayouts!: TabLayoutService;
   private port: number;
+
+  /**
+   * The port the server is actually listening on once `start()` has resolved — the
+   * OS-assigned one for `new WebServer(0, …)` — and the constructor's port before that.
+   */
+  get boundPort(): number {
+    return this.port;
+  }
   private host: string;
   private https: boolean;
   /** Reverse-proxy sub-path prefix (normalized: '' for root, or '/foo'). */
@@ -746,7 +754,11 @@ export class WebServer extends EventEmitter {
       saveRespawnConfig: this.saveRespawnConfig.bind(this),
       // ConfigPort
       store: this.store,
-      port: this.port,
+      // A getter, not a snapshot: this context is built in setupRoutes(), BEFORE
+      // listen() resolves an ephemeral `port: 0`, and the tunnel start reads it later.
+      get port() {
+        return self.port;
+      },
       https: this.https,
       testMode: this.testMode,
       serverStartTime: this.serverStartTime,
@@ -920,7 +932,9 @@ export class WebServer extends EventEmitter {
     });
 
     // Serve static files — content-hashed assets (e.g. app.a3f8c2e1.js) are immutable, cache aggressively.
-    // HTML must revalidate every time so browsers pick up new hashed filenames after deploys.
+    // HTML must revalidate every time so browsers pick up new hashed filenames after deploys, and every
+    // HTML page has its own route that says so (/, /index.html, /session/:id). ⚠️ A new static .html
+    // needs such a route too: this plugin would hand it a year of `immutable`.
     // cacheControl disabled so setHeaders owns Cache-Control for plain static assets.
     // preCompressed: serve pre-built .br/.gz files (from build step) to avoid per-request CPU compression
     await this.app.register(fastifyStatic, {
@@ -932,7 +946,7 @@ export class WebServer extends EventEmitter {
       // `ServerResponse` to a `FastifyReply`, so it is `reply.header()` here and
       // NOT `res.setHeader()`. A v9-style body throws TypeError on every static
       // request, which is every page load. See the v10.0.0 release notes.
-      setHeaders: (reply, path) => {
+      setHeaders: (reply) => {
         // ⚠️ That same change ALSO flipped precedence, and silently. Under v9 this
         // callback wrote to the raw response and Fastify's staged reply headers then
         // overwrote it, so a route that set its own Cache-Control before .sendFile()
@@ -941,12 +955,7 @@ export class WebServer extends EventEmitter {
         // no-store` its route asks for — a service worker that can never update.
         // So: a route that already decided keeps its answer.
         if (reply.getHeader('Cache-Control') !== undefined) return;
-        // Use .includes() not .endsWith() — preCompressed serves .html.br/.html.gz
-        if (path.includes('.html')) {
-          reply.header('Cache-Control', 'no-cache');
-        } else {
-          reply.header('Cache-Control', 'public, max-age=31536000, immutable');
-        }
+        reply.header('Cache-Control', 'public, max-age=31536000, immutable');
       },
     });
 
@@ -1154,7 +1163,9 @@ export class WebServer extends EventEmitter {
     // due times for any persisted jobs, then expose it to its routes.
     this.cronService = new CronService(ctx);
     this.cronService.init();
-    registerCronRoutes(this.app, { ...ctx, cron: this.cronService });
+    // Only what CronPort declares: a spread of ctx would copy `port` by value (the
+    // pre-listen 0 of an ephemeral bind) into an object nothing keeps in sync.
+    registerCronRoutes(this.app, { cron: this.cronService });
 
     registerWsRoutes(this.app, ctx, () => this.getHostPolicy());
     registerVoiceRoutes(this.app, ctx, () => this.getHostPolicy());
@@ -1713,6 +1724,7 @@ export class WebServer extends EventEmitter {
           shortBadge: entry.shortBadge,
           order: entry.order,
           kind: entry.kind,
+          external: entry.capabilities.external,
           enabled,
           available: enabled && installed,
         };
@@ -2909,6 +2921,12 @@ export class WebServer extends EventEmitter {
     }
 
     await this.app.listen({ port: this.port, host: this.host });
+    // A `port: 0` bind gets its number from the OS. Everything below and every later
+    // reader (the banner, CODEMAN_API_URL, the docker bridge listener, the
+    // unauthenticated-bind warnings, the route context's getter) must see that number,
+    // not the 0 that was asked for.
+    const address = this.app.server.address();
+    if (address !== null && typeof address === 'object') this.port = address.port;
     const protocol = this.https ? 'https' : 'http';
     const displayHost = this.host === '0.0.0.0' ? 'localhost' : this.host;
     // The only startup banner: `codeman web` used to print its own copy of this

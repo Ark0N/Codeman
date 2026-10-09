@@ -18,6 +18,15 @@
  * the case this module exists for, and the case its browser test asserts by
  * checking WHO delivered the byte rather than merely that one arrived.
  *
+ * A SECOND failure lives in that same self-rescue: xterm diffs `newValue.replace(oldValue, '')`,
+ * which only works when the keyboard APPENDED. A soft keyboard that autocorrects on space
+ * (SwiftKey, Gboard) rewrites the tail instead: it deletes the word and inserts the corrected
+ * one, and xterm answers by sending the WHOLE new textarea value (the old value is not a
+ * substring of it), then sends the inserted text AGAIN from the second keydown's timer. One
+ * autocorrect turned `testing the peompt` + <space> into
+ * `testing the peompttesting the prompt rompt `. A multi-character delete is also sent as ONE
+ * DEL. `installEditSync` below replaces that diff with an edit-based one.
+ *
  * The recovery never guesses the character: the `input` event already carries
  * the real committed text in `ev.data`, which is exactly what xterm itself
  * would have forwarded. We only decide WHETHER to forward it, by asking
@@ -38,6 +47,21 @@
  */
 (function (global) {
   'use strict';
+
+  /**
+   * What turns `previous` into `next`, as a terminal sees it: how many characters to delete from
+   * the END of the line, then what to type. Everything after the common prefix is treated as
+   * replaced, because a terminal can only edit at its cursor. Counts are code points, so an
+   * emoji is one DEL, as it is one backspace.
+   */
+  function editBetween(previous, next) {
+    const a = Array.from(previous);
+    const b = Array.from(next);
+    let prefix = 0;
+    const max = Math.min(a.length, b.length);
+    while (prefix < max && a[prefix] === b[prefix]) prefix += 1;
+    return { deleted: a.length - prefix, inserted: b.slice(prefix).join('') };
+  }
 
   function create(options) {
     const textarea = options?.textarea;
@@ -65,6 +89,9 @@
     let keydownSnapshot = 0;
     let composing = false;
     const pending = [];
+    // Applies any edit-sync diff still waiting on its timer. Assigned by installEditSync() below; a
+    // no-op when xterm's internals are not available.
+    let settleEdit = () => {};
 
     /**
      * Resolve every candidate still pending, right now, instead of waiting for
@@ -147,6 +174,13 @@
       // reach the PTY — see flushPending(). This runs from xterm's custom key
       // handler, i.e. before xterm processes the key, so a recovered character
       // is always ordered ahead of the bytes this keydown produces.
+      // ORDER MATTERS. Settle the edit-sync diff first: it bumps `canonicalCount` for the
+      // keystroke it belongs to, so flushPending() then stands that keystroke's orphan candidate
+      // down. Swapped, the candidate would resolve first and the character would be sent twice.
+      // It also has to happen BEFORE xterm handles THIS key: for Enter, xterm clears the textarea
+      // in its own keydown, and a timer left pending would then diff the whole line against ''
+      // and send one DEL per character ahead of the submitted line.
+      settleEdit(event);
       flushPending();
       keydownSnapshot = canonicalCount;
     }
@@ -176,6 +210,92 @@
       }
     }
 
+    /**
+     * Replace xterm's `_handleAnyTextareaChanges` (see the header) with an edit-based diff against
+     * the value the PTY side has already been told about. `synced` is that value; it is shared by
+     * every keydown's timer, so two timers that both see the final textarea value cannot both
+     * send it. Returns an uninstall function, or null when xterm's internals are not as expected
+     * (then xterm's own, flawed, behaviour is left in place).
+     */
+    function installEditSync() {
+      let helper;
+      try {
+        helper = options.getCompositionHelper?.();
+      } catch {
+        return null;
+      }
+      const original = helper?._handleAnyTextareaChanges;
+      const coreService = helper?._coreService;
+      if (typeof original !== 'function' || typeof coreService?.triggerDataEvent !== 'function') return null;
+
+      let synced = textarea.value;
+      const waiting = new Set();
+
+      /** Send what changed since `synced`, once, and remember it. */
+      function applyEdit() {
+        if (destroyed || helper._isComposing) return; // xterm's composition path owns this one
+        const current = textarea.value;
+        if (current === synced) return;
+        const { deleted, inserted } = editBetween(synced, current);
+        synced = current;
+        try {
+          // One DEL per character, like repeated backspace presses: the local-echo composer and
+          // the PTY both treat each as a single edit.
+          for (let i = 0; i < deleted; i += 1) coreService.triggerDataEvent('\x7f', true);
+          if (inserted) {
+            helper._dataAlreadySent = inserted;
+            coreService.triggerDataEvent(inserted, true);
+          }
+        } catch {
+          // Delivery is best effort; never throw into the browser's timer queue.
+        }
+      }
+
+      helper._handleAnyTextareaChanges = function handleAnyTextareaChanges() {
+        if (destroyed) return original.call(this);
+        // No edit in flight and the value is not what we last sent: something outside the IME
+        // changed it (xterm clears it after Enter, a composition committed). Nothing to send;
+        // resynchronise.
+        if (waiting.size === 0 && synced !== textarea.value) synced = textarea.value;
+        const entry = { id: null };
+        waiting.add(entry);
+        entry.id = setTimer(() => {
+          waiting.delete(entry);
+          applyEdit();
+        }, 0);
+      };
+
+      // Apply the pending edit NOW instead of on its timer (see handleKeyEvent).
+      settleEdit = (event) => {
+        if (waiting.size === 0) return;
+        for (const entry of waiting) {
+          try {
+            clearTimer(entry.id);
+          } catch {
+            // A broken timer host must not break input handling.
+          }
+        }
+        // Cleared BEFORE the return below, on purpose: left pending, the timer would fire after
+        // Enter clears the textarea and send one DEL per character ahead of the submitted line.
+        waiting.clear();
+        // A composition just ended and this key makes xterm finalize it SYNCHRONOUSLY, through
+        // `_finalizeComposition(false)`, which ignores `_dataAlreadySent`: that text is xterm's, and
+        // sending the edit too would deliver it twice. On 229, CapsLock and the modifiers xterm keeps
+        // the composition on its async path, which honours `_dataAlreadySent`, so the edit still
+        // applies there. Only this settle path is guarded: on the timer path xterm always finalizes
+        // asynchronously, and skipping the edit there would drop a byte master delivers.
+        if (helper._isSendingComposition && ![229, 20, 16, 17, 18].includes(event?.keyCode)) return;
+        applyEdit();
+      };
+
+      return () => {
+        settleEdit = () => {};
+        if (helper._handleAnyTextareaChanges !== original) helper._handleAnyTextareaChanges = original;
+      };
+    }
+
+    const uninstallEditSync = installEditSync();
+
     function onCompositionStart() {
       if (destroyed) return;
       composing = true;
@@ -191,6 +311,11 @@
       if (destroyed) return;
       destroyed = true;
       cancelPending();
+      try {
+        uninstallEditSync?.();
+      } catch {
+        // Best effort.
+      }
       try {
         textarea.removeEventListener('input', onInput, true);
         textarea.removeEventListener('compositionstart', onCompositionStart, true);
@@ -228,5 +353,5 @@
     return Object.freeze({ handleKeyEvent, notifyCanonicalData, destroy });
   }
 
-  global.CodemanKeyCode229Recovery = Object.freeze({ create });
+  global.CodemanKeyCode229Recovery = Object.freeze({ create, editBetween });
 })(typeof window !== 'undefined' ? window : globalThis);

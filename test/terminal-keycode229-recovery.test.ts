@@ -422,3 +422,294 @@ describe('terminal-ui wiring: what counts as "xterm spoke for this keystroke"', 
     expect(typed.emitted, 'xterm really did deliver this one').toEqual([]);
   });
 });
+
+/**
+ * xterm's `_handleAnyTextareaChanges` diffs the helper textarea with
+ * `newValue.replace(oldValue, '')`, which only works when the keyboard appended.
+ * Autocorrect on space (SwiftKey, Gboard) deletes the word and inserts the corrected
+ * one, and xterm answers by sending the WHOLE value, then the inserted text again:
+ * a real device log produced `testing the peompttesting the prompt rompt `.
+ */
+function editSyncHarness() {
+  const source = readFileSync(new URL('../src/web/public/terminal-keycode229-recovery.js', import.meta.url), 'utf8');
+  const exposed: Record<string, any> = {};
+  vm.runInNewContext(source, { window: exposed, globalThis: exposed }, { filename: 'terminal-keycode229-recovery.js' });
+
+  const textarea = Object.assign(makeTextarea(), { value: '' });
+  const sent: string[] = [];
+  const timers = new Map<number, () => void>();
+  let timerId = 0;
+  // xterm's own (flawed) diff, as shipped, so the control case can prove the bug.
+  const xtermOriginal = function (this: any) {
+    const oldValue = textarea.value;
+    exposed.__timers.set(++timerId, () => {
+      const newValue = textarea.value;
+      const diff = newValue.replace(oldValue, '');
+      if (newValue.length > oldValue.length) sent.push(diff);
+      else if (newValue.length < oldValue.length) sent.push('\x7f');
+      else if (newValue !== oldValue) sent.push(newValue);
+    });
+  };
+  exposed.__timers = timers;
+  const helper = {
+    _isComposing: false,
+    _dataAlreadySent: '',
+    _handleAnyTextareaChanges: xtermOriginal,
+    _coreService: { triggerDataEvent: (data: string) => sent.push(data) },
+  };
+  const create = (withSync: boolean) =>
+    exposed.CodemanKeyCode229Recovery.create({
+      textarea,
+      emitRecovered: (data: string) => sent.push(data),
+      getCompositionHelper: withSync ? () => helper : undefined,
+      setTimer: (callback: () => void) => {
+        const id = ++timerId;
+        timers.set(id, callback);
+        return id;
+      },
+      clearTimer: (id: number) => timers.delete(id),
+    });
+  return {
+    exposed,
+    helper,
+    textarea,
+    sent,
+    create,
+    /** One keydown, whose xterm timer is registered at keydown time like the real one. */
+    keydown() {
+      helper._handleAnyTextareaChanges();
+    },
+    edit(value: string) {
+      textarea.value = value;
+    },
+    flush() {
+      for (const [id, callback] of [...timers]) {
+        timers.delete(id);
+        callback();
+      }
+    },
+    /** What the shell line holds once every DEL has been applied. */
+    line() {
+      const out: string[] = [];
+      for (const ch of sent.join('')) {
+        if (ch === '\x7f') out.pop();
+        else out.push(ch);
+      }
+      return out.join('');
+    },
+  };
+}
+
+describe('edit-based sync of the helper textarea (autocorrect replacements)', () => {
+  const typeKeys = (h: ReturnType<typeof editSyncHarness>, text: string) => {
+    for (const ch of text) {
+      h.keydown();
+      h.edit(h.textarea.value + ch);
+      h.flush();
+    }
+  };
+
+  // The exact event shape from a device log: per-key appends, then ONE keydown deleting five
+  // characters and a SECOND keydown inserting `rompt `, both landing before any timer runs.
+  const autocorrect = (h: ReturnType<typeof editSyncHarness>) => {
+    typeKeys(h, 'testing the peompt');
+    h.keydown();
+    h.edit('testing the p');
+    h.keydown();
+    h.edit('testing the prompt ');
+    h.flush();
+  };
+
+  // The batched Android shape (#441): the last character's keydown and `insertText` arrive in the
+  // SAME page task as Enter's keydown. xterm's own Enter handling clears the textarea before the
+  // edit's timer runs, so a timer left pending would diff the whole line against '' and send one
+  // DEL per character AHEAD of the submitted line. The edit is therefore settled at the next
+  // keydown, before xterm sees that key.
+  it('settles a pending edit at the next keydown, so Enter in the same task cannot erase the line', () => {
+    const h = editSyncHarness();
+    const controller = h.create(true);
+    typeKeys(h, 'hell');
+    h.keydown();
+    h.edit('hello');
+    controller.handleKeyEvent({ type: 'keydown', key: 'Enter', keyCode: 13 });
+    h.textarea.value = ''; // xterm's CR handling, which runs after the custom key handler
+    h.flush();
+    expect(h.sent.join('')).toBe('hello');
+    expect(h.sent).not.toContain('\x7f');
+  });
+
+  it('autocorrect and Enter in one task submits the corrected line, not a run of DELs', () => {
+    const h = editSyncHarness();
+    const controller = h.create(true);
+    typeKeys(h, 'testing the peompt');
+    h.keydown();
+    h.edit('testing the p');
+    h.keydown();
+    h.edit('testing the prompt ');
+    controller.handleKeyEvent({ type: 'keydown', key: 'Enter', keyCode: 13 });
+    h.textarea.value = '';
+    h.flush();
+    expect(h.line()).toBe('testing the prompt ');
+    expect(h.sent.filter((c) => c === '\x7f')).toHaveLength(5); // the five deleted characters, nothing more
+  });
+
+  it('settling first stands the same keystroke’s orphan candidate down (no double send)', () => {
+    const h = editSyncHarness();
+    const controller = h.create(true);
+    // xterm's canonical-data hook, as terminal-ui.js wires it.
+    const origTrigger = h.helper._coreService.triggerDataEvent;
+    h.helper._coreService.triggerDataEvent = (data: string) => {
+      origTrigger(data);
+      controller.notifyCanonicalData();
+    };
+    controller.handleKeyEvent({ type: 'keydown', key: 'Unidentified', keyCode: 229 });
+    h.keydown();
+    h.edit('o');
+    h.textarea.fire('input', inputEvent('o'));
+    controller.handleKeyEvent({ type: 'keydown', key: 'Enter', keyCode: 13 });
+    h.flush();
+    expect(h.sent.join('')).toBe('o');
+  });
+
+  // compositionend and the Enter keydown in one task: xterm's keydown then finalizes the
+  // composition SYNCHRONOUSLY via `_finalizeComposition(false)`, which ignores `_dataAlreadySent`,
+  // so the settle must leave that text to xterm or it is sent twice.
+  it('does not resend a composition xterm finalizes itself at the Enter keydown', () => {
+    const h = editSyncHarness();
+    const controller = h.create(true);
+    typeKeys(h, 'ab ');
+    h.keydown();
+    h.edit('ab word');
+    (h.helper as any)._isSendingComposition = true;
+    controller.handleKeyEvent({ type: 'keydown', key: 'Enter', keyCode: 13 });
+    h.flush();
+    expect(h.sent.join('')).toBe('ab ');
+  });
+
+  // On the timer path (and at a 229 keydown) xterm finalizes the composition ASYNCHRONOUSLY and
+  // skips `_dataAlreadySent`, so the edit must still be applied there: guarding it would drop the
+  // non-composing `x` typed before the composition.
+  it('still applies the edit while xterm finalizes a composition asynchronously', () => {
+    const h = editSyncHarness();
+    h.create(true);
+    typeKeys(h, 'ab ');
+    h.keydown();
+    h.edit('ab xword');
+    (h.helper as any)._isSendingComposition = true;
+    h.flush();
+    expect(h.sent.join('')).toBe('ab xword');
+    expect(h.helper._dataAlreadySent).toBe('xword');
+
+    const k = editSyncHarness();
+    const controller = k.create(true);
+    typeKeys(k, 'ab ');
+    k.keydown();
+    k.edit('ab xword');
+    (k.helper as any)._isSendingComposition = true;
+    controller.handleKeyEvent({ type: 'keydown', key: 'Unidentified', keyCode: 229 });
+    k.flush();
+    expect(k.sent.join('')).toBe('ab xword');
+    expect(k.helper._dataAlreadySent).toBe('xword');
+  });
+
+  it('control: xterm alone duplicates the line when the keyboard autocorrects', () => {
+    const h = editSyncHarness();
+    h.create(false);
+    autocorrect(h);
+    expect(h.sent.join('')).toBe('testing the peompttesting the prompt rompt ');
+  });
+
+  it('with edit sync the line ends up exactly as the textarea reads', () => {
+    const h = editSyncHarness();
+    h.create(true);
+    autocorrect(h);
+    expect(h.line()).toBe('testing the prompt ');
+    expect(h.sent.filter((s) => s === '\x7f')).toHaveLength(5);
+  });
+
+  it('plain typing is still one chunk per keystroke, and a single delete is one DEL', () => {
+    const h = editSyncHarness();
+    h.create(true);
+    typeKeys(h, 'abc');
+    h.keydown();
+    h.edit('ab');
+    h.flush();
+    expect(h.sent).toEqual(['a', 'b', 'c', '\x7f']);
+  });
+
+  it('a multi-character delete sends one DEL per character, not one DEL in total', () => {
+    const h = editSyncHarness();
+    h.create(true);
+    typeKeys(h, 'hello');
+    h.keydown();
+    h.edit('he');
+    h.flush();
+    expect(h.sent.slice(5)).toEqual(['\x7f', '\x7f', '\x7f']);
+  });
+
+  it('an equal-length rewrite is a delete and a retype, not the whole value again', () => {
+    const h = editSyncHarness();
+    h.create(true);
+    typeKeys(h, 'cat');
+    h.keydown();
+    h.edit('cut');
+    h.flush();
+    expect(h.sent.slice(3)).toEqual(['\x7f', '\x7f', 'ut']);
+    expect(h.line()).toBe('cut');
+  });
+
+  it('does not resend after xterm clears the textarea (Enter), and counts emoji as one character', () => {
+    const h = editSyncHarness();
+    h.create(true);
+    typeKeys(h, 'hi');
+    h.textarea.value = ''; // xterm's own reset after Enter: no input event, no emission
+    typeKeys(h, 'yo');
+    expect(h.sent).toEqual(['h', 'i', 'y', 'o']);
+
+    const e = editSyncHarness();
+    e.create(true);
+    typeKeys(e, 'a😀');
+    e.keydown();
+    e.edit('a');
+    e.flush();
+    expect(e.sent.slice(2)).toEqual(['\x7f']);
+  });
+
+  it('stays out of the way while composing, and leaves xterm alone without its internals', () => {
+    const h = editSyncHarness();
+    h.create(true);
+    h.helper._isComposing = true;
+    h.keydown();
+    h.edit('x');
+    h.flush();
+    expect(h.sent).toEqual([]);
+
+    const bare = editSyncHarness();
+    const original = bare.helper._handleAnyTextareaChanges;
+    bare.create(false);
+    expect(bare.helper._handleAnyTextareaChanges).toBe(original);
+  });
+
+  it('restores xterm’s own handler on destroy', () => {
+    const h = editSyncHarness();
+    const original = h.helper._handleAnyTextareaChanges;
+    const controller = h.create(true);
+    expect(h.helper._handleAnyTextareaChanges).not.toBe(original);
+    controller.destroy();
+    expect(h.helper._handleAnyTextareaChanges).toBe(original);
+  });
+
+  it('terminal-ui.js hands the controller xterm’s composition helper', () => {
+    const terminalSource = readFileSync(new URL('../src/web/public/terminal-ui.js', import.meta.url), 'utf8');
+    expect(terminalSource).toMatch(/getCompositionHelper:\s*\(\)\s*=>\s*this\.terminal\?\._core\?\._compositionHelper/);
+  });
+
+  it('editBetween counts code points and replaces everything after the common prefix', () => {
+    const { editBetween } = editSyncHarness().exposed.CodemanKeyCode229Recovery;
+    expect(editBetween('abc', 'abcd')).toEqual({ deleted: 0, inserted: 'd' });
+    expect(editBetween('abc', 'ab')).toEqual({ deleted: 1, inserted: '' });
+    expect(editBetween('testing the peompt', 'testing the prompt ')).toEqual({ deleted: 5, inserted: 'rompt ' });
+    expect(editBetween('x😀', 'x')).toEqual({ deleted: 1, inserted: '' });
+    expect(editBetween('', '')).toEqual({ deleted: 0, inserted: '' });
+  });
+});

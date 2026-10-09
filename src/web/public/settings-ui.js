@@ -455,6 +455,8 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowCronButton').checked = settings.showCronButton ?? defaults.showCronButton ?? false;
     document.getElementById('appSettingsShowGitStatus').checked = settings.showGitStatus ?? defaults.showGitStatus ?? false;
     document.getElementById('appSettingsGitStatusTree').checked = settings.gitStatusTree ?? defaults.gitStatusTree ?? true;
+    document.getElementById('appSettingsGitStatusMaxRepos').value = settings.gitStatusMaxRepos ?? defaults.gitStatusMaxRepos ?? 12;
+    document.getElementById('appSettingsGitStatusTimeout').value = settings.gitStatusTimeoutSeconds ?? defaults.gitStatusTimeoutSeconds ?? 30;
     // Gesture control lives in the Input section (alongside Local Echo / CJK Input)
     // but is only available when the instance runs with CODEMAN_GESTURE=1 (server sets
     // window.__codemanGestureAvailable). Hide just this item otherwise so the toggle
@@ -504,7 +506,9 @@ Object.assign(CodemanApp.prototype, {
       settings.tabRailSort ?? defaults.tabRailSort ?? 'activity';
     document.getElementById('appSettingsTabArrangement').value = this.resolveTabArrangement(settings);
     document.getElementById('appSettingsTabStateOrder').value = this.resolveTabStateOrder(settings);
-    document.getElementById('appSettingsShowTabDetachButton').checked = settings.showTabDetachButton ?? defaults.showTabDetachButton ?? false;
+    document.getElementById('appSettingsShowTabDetachButton').checked =
+      this.tabDetachButtonEnabled?.(settings, defaults)
+      ?? (settings.showTabDetachButton ?? defaults.showTabDetachButton ?? false);
     document.getElementById('appSettingsSessionListLayout').value =
       settings.sessionListLayout ?? defaults.sessionListLayout ?? 'header';
     const sessionSidebarFontSize = this.resolveSessionSidebarFontSize(
@@ -530,6 +534,8 @@ Object.assign(CodemanApp.prototype, {
       settings.codexDangerouslyBypassApprovals ?? false;
     document.getElementById('appSettingsCodexAnimations').checked =
       settings.codexAnimationsEnabled ?? false;
+    document.getElementById('appSettingsCodexModel').value = settings.codexModel ?? '';
+    document.getElementById('appSettingsCodexReasoningEffort').value = settings.codexReasoningEffort ?? '';
     this._applyCodexSettingsVisibility();
     // Claude Permissions settings
     document.getElementById('appSettingsAgentTeams').checked = settings.agentTeamsEnabled ?? false;
@@ -1760,17 +1766,16 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
-  _updateTunnelUrlRow(rowId, displayId, url, suffix = '') {
-    const row = document.getElementById(rowId);
-    const display = document.getElementById(displayId);
+  _updateTunnelUrlDisplay(url) {
+    const row = document.getElementById('tunnelUrlRow');
+    const display = document.getElementById('tunnelUrlDisplay');
     if (!row || !display) return;
     if (url) {
-      const fullUrl = url + suffix;
       row.style.display = '';
-      display.textContent = fullUrl;
+      display.textContent = url;
       display.onclick = () => {
-        navigator.clipboard.writeText(fullUrl).then(() => {
-          this.showToast(`${suffix ? 'Upload' : 'Tunnel'} URL copied`, 'success');
+        navigator.clipboard.writeText(url).then(() => {
+          this.showToast('Tunnel URL copied', 'success');
         });
       };
     } else {
@@ -1778,11 +1783,6 @@ Object.assign(CodemanApp.prototype, {
       display.textContent = '';
       display.onclick = null;
     }
-  },
-
-  _updateTunnelUrlDisplay(url) {
-    this._updateTunnelUrlRow('tunnelUrlRow', 'tunnelUrlDisplay', url);
-    this._updateTunnelUrlRow('tunnelUploadUrlRow', 'tunnelUploadUrlDisplay', url, '/upload.html');
   },
 
   showTunnelQR() {
@@ -2556,6 +2556,9 @@ Object.assign(CodemanApp.prototype, {
       showCronButton: document.getElementById('appSettingsShowCronButton').checked,
       showGitStatus: document.getElementById('appSettingsShowGitStatus').checked,
       gitStatusTree: document.getElementById('appSettingsGitStatusTree').checked,
+      // Clamped here and again on the server; an empty or odd value falls back to the default.
+      gitStatusMaxRepos: Math.min(50, Math.max(1, parseInt(document.getElementById('appSettingsGitStatusMaxRepos').value, 10) || 12)),
+      gitStatusTimeoutSeconds: Math.min(120, Math.max(5, parseInt(document.getElementById('appSettingsGitStatusTimeout').value, 10) || 30)),
       gestureControlEnabled: document.getElementById('appSettingsGestureControl').checked,
       subagentTrackingEnabled: document.getElementById('appSettingsSubagentTracking').checked,
       subagentActiveTabOnly: document.getElementById('appSettingsSubagentActiveTabOnly').checked,
@@ -2590,6 +2593,8 @@ Object.assign(CodemanApp.prototype, {
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
       allowedTools: document.getElementById('appSettingsAllowedTools').value.trim(),
       // Codex CLI settings
+      codexModel: document.getElementById('appSettingsCodexModel').value.trim(),
+      codexReasoningEffort: document.getElementById('appSettingsCodexReasoningEffort').value,
       codexDangerouslyBypassApprovals: document.getElementById('appSettingsCodexDangerouslyBypassApprovals').checked,
       codexAnimationsEnabled: document.getElementById('appSettingsCodexAnimations').checked,
       // Claude Permissions settings
@@ -2608,6 +2613,15 @@ Object.assign(CodemanApp.prototype, {
         niceValue: parseInt(document.getElementById('appSettingsNiceValue').value) || 10,
       },
     };
+
+    // SettingsUpdateSchema is .strict() and checks codexModel with this same
+    // pattern, so one bad character 400s the WHOLE settings PUT while the toast
+    // still says "Settings saved". Refuse it here, before anything is persisted.
+    if (!/^[A-Za-z0-9._\/-]*$/.test(settings.codexModel)) {
+      this.showToast('Default Codex model may only contain letters, digits, ".", "_", "-" and "/"', 'error');
+      document.getElementById('appSettingsCodexModel')?.focus();
+      return;
+    }
 
     // The "Token Count" / "Show Cost ($)" header toggles were removed from the
     // UI, but their features still read settings.showTokenCount / settings.showCost
@@ -2816,6 +2830,8 @@ Object.assign(CodemanApp.prototype, {
       // Per-device bottom-bar indicator, absent from SettingsUpdateSchema (.strict()): it must not reach the PUT.
       showGitStatus: _sgs,
       gitStatusTree: _gst,
+      gitStatusMaxRepos: _gsm,
+      gitStatusTimeoutSeconds: _gst2,
       showTabDetachButton: _tdb,
       // Phone-only home surface, and absent from SettingsUpdateSchema (.strict()).
       mobileOverviewEnabled: _mov,
@@ -3226,12 +3242,18 @@ Object.assign(CodemanApp.prototype, {
   /** Keep the launch surfaces in sync with Settings mutations without a reload. */
   _syncCliLaunchCatalog() {
     if (!Array.isArray(this._cliList) || this._cliList.length === 0) return;
+    // /api/clis rows carry no capabilities, so keep the served catalog's `external`
+    // (isExternalCliSession() reads it). A new custom CLI has none and falls back to `kind`.
+    const previous = new Map(
+      (Array.isArray(window.__codemanCliCatalog) ? window.__codemanCliCatalog : []).map((cli) => [cli.id, cli])
+    );
     window.__codemanCliCatalog = this._cliList.map((cli) => ({
       id: cli.id,
       label: cli.label,
       shortBadge: cli.shortBadge,
       order: cli.order,
       kind: cli.kind,
+      external: previous.get(cli.id)?.external,
       enabled: cli.enabled,
       available: cli.kind === 'shell' || (cli.enabled && cli.installed),
     }));
@@ -3701,7 +3723,11 @@ Object.assign(CodemanApp.prototype, {
     // default OFF, per-device). Mirrored as a class on <html>: styles.css hides
     // .tab-detach without it (a tab that is already detached keeps its icon as
     // the re-focus affordance for the popped-out window).
-    const showTabDetach = settings.showTabDetachButton ?? defaults.showTabDetachButton ?? false;
+    // Under a host that opens windows (see hasHostWindows) popping out is the
+    // way to get two panes side by side, so the button defaults on there.
+    const showTabDetach =
+      this.tabDetachButtonEnabled?.(settings, defaults)
+      ?? (settings.showTabDetachButton ?? defaults.showTabDetachButton ?? false);
     document.documentElement.classList.toggle('tabs-show-detach', showTabDetach);
     const compactHeader = MobileDetection.getDeviceType() !== 'desktop';
     const showFontControls = compactHeader ? false : (settings.showFontControls ?? defaults.showFontControls ?? false);
@@ -4215,7 +4241,7 @@ Object.assign(CodemanApp.prototype, {
           'language',
           'terminalWheelLocalScrollback',
           'autoCopySelection', 'copyStripMargin',
-          'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus', 'gitStatusTree',
+          'showSessionButton', 'showAwayDigestButton', 'showCronButton', 'showGitStatus', 'gitStatusTree', 'gitStatusMaxRepos', 'gitStatusTimeoutSeconds',
           'showTabDetachButton',
           'mobileOverviewEnabled',
           'sessionLineageLines',

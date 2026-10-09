@@ -46,10 +46,17 @@ function lockedVersions(lock: PackageLock, packageName: string): string[] {
   return [...versions].sort();
 }
 
-function expectEveryLockedVersionAtLeast(lock: PackageLock, packageName: string, minimum: string): void {
+function expectEveryLockedVersionAtLeast(
+  lock: PackageLock,
+  packageName: string,
+  minimum: string,
+  /** Exact versions deliberately outside this policy; each call site says why. */
+  exempt: string[] = []
+): void {
   const versions = lockedVersions(lock, packageName);
   expect(versions, `${packageName} should be present in package-lock.json`).not.toHaveLength(0);
   for (const version of versions) {
+    if (exempt.includes(version)) continue;
     expect(
       compareVersions(version, minimum),
       `${packageName}@${version} should be >= ${minimum}`
@@ -136,7 +143,11 @@ describe('dependency security policy', () => {
     // <=10.1.1, so every 9.x is affected and the fix is only on the 10.x line.
     expectEveryLockedVersionAtLeast(lock, '@fastify/static', '10.1.2');
     expectEveryLockedVersionAtLeast(lock, 'ip-address', '10.2.0');
-    expectEveryLockedVersionAtLeast(lock, 'uuid', '14.0.0');
+    // Our own uuid stays >= 14. exceljs@4.4.0 (devDependency, vendored into the
+    // XLSX preview worker at build time) pins uuid@8.3.2 and only calls v4();
+    // GHSA-w5hq-g745-h8pq is MODERATE and covers v3/v5/v6 with a caller buffer,
+    // so it is outside this CRITICAL/HIGH policy and unreachable from exceljs.
+    expectEveryLockedVersionAtLeast(lock, 'uuid', '14.0.0', ['8.3.2']);
     // ⚠️ Floor stays 8.20.1, NOT 8.21.0. Production ws is already 8.21.0 and clear of
     // GHSA-96hv-2xvq-fx4p, but @remotion/renderer bundles its own ws@8.20.1 and remotion
     // is pinned to 4.0.473 on purpose (the compositor refuses to start on a version
@@ -149,6 +160,10 @@ describe('dependency security policy', () => {
     expectEveryLockedVersionAtLeast(lock, 'find-my-way', '9.7.0');
     expectEveryLockedVersionAtLeast(lock, 'basic-ftp', '5.3.1');
     expectEveryLockedVersionAtLeast(lock, 'flatted', '3.4.2');
+    // GHSA-px8p-9vwx-vf98 (unbounded loop on a ZIP64 marker in a local header)
+    // covers <=0.8.2. The XLSX preview worker streams untrusted files through
+    // fflate's Unzip before any admission callback runs.
+    expectEveryLockedVersionAtLeast(lock, 'fflate', '0.8.3');
     expectNoVulnerableBraceExpansion(lock);
     expectNoVulnerableVite(lock);
     expectNoVulnerablePicomatch(lock);

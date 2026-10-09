@@ -117,7 +117,9 @@ Object.assign(CodemanApp.prototype, {
     const epoch = (this._gitStatusEpoch = (this._gitStatusEpoch || 0) + 1);
     this._gitStatusFetchedAt = Date.now();
     try {
-      const data = await this._apiJson(`/api/sessions/${encodeURIComponent(sid)}/git-status${fresh ? '?fresh=1' : ''}`);
+      const query = new URLSearchParams(this.gitStatusLimits());
+      if (fresh) query.set('fresh', '1');
+      const data = await this._apiJson(`/api/sessions/${encodeURIComponent(sid)}/git-status?${query}`);
       if (epoch !== this._gitStatusEpoch || sid !== this.activeSessionId || !this.isGitStatusEnabled()) return;
       this._gitStatus = data ? { sessionId: sid, data } : null;
     } catch {
@@ -129,6 +131,23 @@ Object.assign(CodemanApp.prototype, {
     if (epoch !== this._gitStatusEpoch) return;
     this._renderGitStatusButton();
     if (this._isGitStatusPanelOpen()) this._renderGitStatusPanel();
+  },
+
+  /**
+   * How many repositories to list below a folder that is not itself a repository, and how long one
+   * git command may run, in seconds (Settings → Bottom bar, per device). The server clamps both again.
+   */
+  gitStatusLimits() {
+    const settings = this.loadAppSettingsFromStorage();
+    const defaults = this.getDefaultSettings();
+    const num = (v, min, max, fallback) => {
+      const n = Math.trunc(Number(v));
+      return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+    };
+    return {
+      maxRepos: num(settings.gitStatusMaxRepos ?? defaults.gitStatusMaxRepos, 1, 50, 12),
+      timeout: num(settings.gitStatusTimeoutSeconds ?? defaults.gitStatusTimeoutSeconds, 5, 120, 30),
+    };
   },
 
   /** Whether the Git window groups changed files under collapsible folders (default on). */
@@ -150,13 +169,16 @@ Object.assign(CodemanApp.prototype, {
     let uncommitted = 0;
     let unpushed = 0;
     let conflicted = 0;
+    let unreadable = 0;
     for (const r of overview.repos) {
+      if (r.status.state === 'error') unreadable += 1;
       uncommitted += r.status.counts.uncommitted;
       unpushed += r.status.unpushedCount;
       conflicted += r.status.counts.conflicted;
     }
-    const tone = conflicted > 0 ? 'conflict' : uncommitted > 0 || unpushed > 0 ? 'dirty' : 'clean';
-    return { uncommitted, unpushed, conflicted, repos: overview.repos.length, tone };
+    // A repository that could not be read is not "clean": it must not let the indicator say ✓.
+    const tone = conflicted > 0 ? 'conflict' : uncommitted > 0 || unpushed > 0 || unreadable > 0 ? 'dirty' : 'clean';
+    return { uncommitted, unpushed, conflicted, unreadable, repos: overview.repos.length, tone };
   },
 
   /** One sentence for the tooltip and the screen-reader label. */
@@ -168,12 +190,14 @@ Object.assign(CodemanApp.prototype, {
     if (sum.conflicted) bits.push(plural(sum.conflicted, 'file with a merge conflict', 'files with merge conflicts'));
     if (sum.uncommitted) bits.push(plural(sum.uncommitted, 'uncommitted file', 'uncommitted files'));
     if (sum.unpushed) bits.push(plural(sum.unpushed, 'commit not pushed', 'commits not pushed'));
+    if (sum.unreadable)
+      bits.push(plural(sum.unreadable, 'repository could not be read', 'repositories could not be read'));
     if (!bits.length) bits.push('everything is committed and pushed');
     let where;
     if (sum.repos > 1) where = `${sum.repos} repositories`;
     else {
       const d = overview.repos[0].status;
-      where = d.detached ? 'detached HEAD' : d.branch || 'no branch';
+      where = d.state === 'error' ? overview.repos[0].name : d.detached ? 'detached HEAD' : d.branch || 'no branch';
     }
     return `Git (${where}): ${bits.join(', ')}. Click for details.`;
   },
@@ -196,6 +220,7 @@ Object.assign(CodemanApp.prototype, {
     if (sum.conflicted) parts.push(`⚠ ${sum.conflicted}`);
     if (sum.uncommitted) parts.push(`● ${sum.uncommitted}`);
     if (sum.unpushed) parts.push(`↑ ${sum.unpushed}`);
+    if (sum.unreadable) parts.push(`? ${sum.unreadable}`);
     if (!parts.length) parts.push('✓');
     if (label) label.textContent = parts.join('  ');
     const sentence = this._gitStatusSentence(data);
@@ -333,17 +358,23 @@ Object.assign(CodemanApp.prototype, {
     }
 
     const repos = overview.repos;
-    if (repos.length === 1) {
-      // One repository: the panel is that repository, as it always was.
+    if (repos.length === 1 && repos[0].status.state !== 'error' && !overview.reposTruncated) {
+      // One repository: the panel is that repository, as it always was. One that git could not read,
+      // or the only one shown of several (the limit is 1), takes the list view below instead, so its
+      // error row or the "Showing the first" notice is not lost.
       const d = repos[0].status;
       if (head) head.textContent = d.detached ? 'detached HEAD' : d.branch || '';
       this._renderGitRepoInto(body, d);
     } else {
-      if (head) head.textContent = `${repos.length} repositories`;
+      if (head) head.textContent = repos.length === 1 ? '1 repository' : `${repos.length} repositories`;
       for (const r of repos) body.append(this._gitRepoSection(r));
       if (overview.reposTruncated) {
         body.append(
-          el('div', 'git-status-more', `Showing the first ${repos.length} repositories found under this folder.`)
+          el(
+            'div',
+            'git-status-more',
+            `Showing the first ${overview.repoLimit || repos.length} of more than ${overview.repoLimit || repos.length} repositories under this folder. Raise “Git status: max repositories” in Settings → Bottom bar to see more.`
+          )
         );
       }
     }
@@ -364,6 +395,16 @@ Object.assign(CodemanApp.prototype, {
   _gitRepoSection(r) {
     const el = (tag, cls, text) => this._gitEl(tag, cls, text);
     const d = r.status;
+    if (d.state === 'error') {
+      // Kept in the list with the reason, rather than silently left out.
+      const row = el('div', 'git-status-repo git-status-repo--error');
+      row.append(el('span', 'git-status-repo-name', r.name));
+      if (r.path !== r.name) row.append(el('span', 'git-status-repo-path', r.path));
+      const why = el('span', 'git-status-repo-unreadable', `⚠ could not read: ${d.error || 'git failed'}`);
+      why.title = 'If this is a timeout, raise “Git status: git timeout” in Settings → Bottom bar.';
+      row.append(why);
+      return row;
+    }
     const section = el('details', 'git-status-repo');
     const outstanding = d.counts.uncommitted > 0 || d.unpushedCount > 0;
     const openRepos = (this._gitTreeOpen = this._gitTreeOpen || new Set());
@@ -582,7 +623,12 @@ Object.assign(CodemanApp.prototype, {
     const view = { sessionId, repoRoot, file, letter, state: 'loading' };
     this._gitDiffView = view;
     this._renderGitStatusPanel();
-    const qs = new URLSearchParams({ repo: repoRoot, path: file.path, kind: file.kind });
+    const qs = new URLSearchParams({
+      repo: repoRoot,
+      path: file.path,
+      kind: file.kind,
+      ...this.gitStatusLimits(),
+    });
     const res = await this._api(`/api/sessions/${encodeURIComponent(sessionId)}/git-diff?${qs}`);
     // Back, another file or another session while this was in flight: drop the answer.
     if (this._gitDiffView !== view) return;

@@ -680,6 +680,49 @@ describe('system-routes', () => {
     });
   });
 
+  describe('/api/screenshots deprecation', () => {
+    it('warns once across requests and leaves the response unchanged', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        mockedExistsSync.mockReturnValue(false);
+        const first = await harness.app.inject({ method: 'GET', url: '/api/screenshots' });
+        const second = await harness.app.inject({ method: 'GET', url: '/api/screenshots' });
+        expect(JSON.parse(first.body)).toEqual({ files: [] });
+        expect(JSON.parse(second.body)).toEqual({ files: [] });
+        const deprecations = warn.mock.calls.filter((c) => String(c[0]).includes('/api/screenshots'));
+        expect(deprecations).toHaveLength(1);
+        expect(String(deprecations[0][0])).toContain('POST /api/sessions/:id/paste-image');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    // One request per route on the fresh per-test harness, so each warn call is pinned on its own
+    // (the once-flag would let the first route's warning mask a missing call on the others).
+    it.each([
+      { label: 'GET /api/screenshots', method: 'GET' as const, url: '/api/screenshots' },
+      {
+        label: 'POST /api/screenshots',
+        method: 'POST' as const,
+        url: '/api/screenshots',
+        payload: { file: 'data' },
+        headers: { 'content-type': 'application/json' },
+      },
+      { label: 'GET /api/screenshots/:name', method: 'GET' as const, url: '/api/screenshots/nonexistent.png' },
+    ])('$label warns that it is deprecated', async ({ method, url, payload, headers }) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        mockedExistsSync.mockReturnValue(false);
+        await harness.app.inject({ method, url, payload, headers });
+        const deprecations = warn.mock.calls.filter((c) => String(c[0]).includes('/api/screenshots'));
+        expect(deprecations).toHaveLength(1);
+        expect(String(deprecations[0][0])).toContain('POST /api/sessions/:id/paste-image');
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
   // ========== GET /api/screenshots/:name ==========
 
   describe('GET /api/screenshots/:name', () => {

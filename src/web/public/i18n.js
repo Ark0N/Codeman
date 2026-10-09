@@ -45,6 +45,15 @@
   // Exact English-source translations. Technical names, command examples, model
   // names, keyboard chords, and user-authored content intentionally stay unchanged.
   const ZH_CN = Object.freeze({
+    'Default Codex model': 'Codex 默认模型',
+    'Default Codex reasoning effort': 'Codex 默认思考强度',
+    'Use Codex configuration': '使用 Codex 配置',
+    'Model ID for new local Codex sessions, including WSL. Leave empty to use Codex configuration.':
+      '新本地 Codex 会话（包括 WSL）使用的模型 ID。留空时使用 Codex 配置。',
+    'Applies to new local sessions; supported levels depend on the model and Codex version. Custom endpoints, Docker and remote sessions keep their own settings.':
+      '应用于新本地会话；可用强度取决于模型和 Codex 版本。自定义端点、Docker 和远程会话保留自己的设置。',
+    'Default Codex model may only contain letters, digits, ".", "_", "-" and "/"':
+      'Codex 默认模型只能包含字母、数字、"."、"_"、"-" 和 "/"',
     'Skip to terminal': '跳转到终端',
     'Go to main page': '返回主页',
     'Session tabs': '会话标签页',
@@ -448,7 +457,6 @@
     'Remote Access': '远程访问',
     'Cloudflare Tunnel': 'Cloudflare 隧道',
     'Tunnel URL': '隧道地址',
-    'Upload URL': '上传地址',
     Updates: '更新',
     'Current Version': '当前版本',
     'Check for Updates': '检查更新',
@@ -850,6 +858,18 @@
     'Wrap lines': '自动换行',
     'Unsaved changes': '未保存的更改',
     Saved: '已保存',
+    'Loading spreadsheet…': '正在加载电子表格…',
+    'This workbook is too large to preview (10 MB limit).': '此工作簿太大，无法预览（上限 10 MB）。',
+    'This workbook has no visible worksheets.': '此工作簿没有可见的工作表。',
+    'This worksheet is empty.': '此工作表为空。',
+    'Some workbook features are not shown': '部分工作簿功能未显示',
+    'Spreadsheet preview timed out.': '电子表格预览超时。',
+    'Spreadsheet preview failed': '电子表格预览失败',
+    'Spreadsheet parser failed.': '电子表格解析器出错。',
+    'Spreadsheet parser failed to start': '电子表格解析器启动失败',
+    'Spreadsheet parser message failed.': '电子表格解析器消息出错。',
+    'Spreadsheet parser message failed': '电子表格解析器消息出错',
+    'Spreadsheet preview is unavailable.': '电子表格预览不可用。',
     'Export as JSON': '导出为 JSON',
     'Export as Markdown': '导出为 Markdown',
     'Mark all read': '全部标为已读',
