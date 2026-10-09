@@ -49,7 +49,8 @@
  */
 
 (function (global) {
-  // How long a scroll-to-top history pull may hold this pane's live output.
+  // How long a load may hold this pane's live output while it reads a bounded
+  // body: a scroll-to-top history pull, or a refresh of a bounded window.
   const HISTORY_PULL_TIMEOUT_MS = 10000;
 
   // How much of a replay is queued in xterm at once: a 1 MiB load goes in one
@@ -666,10 +667,11 @@
     // a closed socket. Called from each load's own finally, just before
     // _endBufferLoad() starts any trailing refresh.
     _stampMarkerIfOwed() {
-      // A trailing refresh is about to clear() synchronously, while xterm parses
-      // a write() on a later tick: a marker written here would land in the
-      // freshly cleared buffer ABOVE that refresh's replay, a second, stale copy.
-      // The refresh re-owes the marker on a closed socket and stamps it itself.
+      // A trailing refresh is about to run, and it settles the marker itself:
+      // a replay's queued `\x1bc` would wipe one written here (it re-owes the
+      // marker on a closed socket and stamps it below the replay), and a refresh
+      // that writes nothing stamps the one still owed. Stamped here as well,
+      // there would be two marker writes for one close.
       if (this._bufferRefreshPending && !this._destroyed) return;
       const owed = this._markerOwed;
       this._markerOwed = false;
@@ -683,11 +685,12 @@
     }
 
     // Fetches and writes the session's current scrollback. Used both by
-    // connect() (initial load) and by the `{t:'r'}` server-refresh frame
-    // (above). The primary pane's own _onSessionNeedsRefresh (app.js) is
-    // scoped to `this.activeSessionId` and clears/rewrites the primary
-    // terminal, neither of which applies to this independent pane, so this is
-    // a standalone equivalent rather than a call into it.
+    // connect() (initial load) and by the refresh frames (`{t:'r'}`, `{t:'c'}`)
+    // and a reconnect (_refreshBuffer). The primary pane's own
+    // _onSessionNeedsRefresh (app.js) is scoped to `this.activeSessionId` and
+    // rewrites the primary terminal, neither of which applies to this
+    // independent pane, so this is a standalone equivalent rather than a call
+    // into it, in the primary's order (below).
     //
     // Mirrors the primary pane's own mode check (app.js's selectSession /
     // _onSessionNeedsRefresh): a shell session can retain hundreds of
@@ -699,6 +702,21 @@
     // wrapper (constants.js), which already prefixes CodemanBase, unlike the
     // raw WebSocket URL above, which does not.
     //
+    // A refresh replaces what the pane shows, in the primary pane's order
+    // (_onSessionNeedsRefresh, _resetTerminalForReplay): fetch FIRST, so the
+    // pane keeps its last frame through the round trip (and through a grid
+    // tile's wait in the load queue); then the queued in-stream `\x1bc`, never
+    // xterm's clear(): clear() is synchronous while write() is parsed on a later
+    // tick, so live bytes still queued would land after it and fuse into the
+    // snapshot, and it keeps the cursor's row, column, SGR and margins, so the
+    // capture (raw rows, no home) started wherever the cursor sat. Live frames
+    // from the response onward are held (`_liveQueue`, the primary's
+    // _finishBufferLoad `since` rule, as _pullHistory() holds them) and only
+    // those that arrived after it are written behind the replay. A failed,
+    // aborted or empty fetch writes nothing and resets nothing: the pane keeps
+    // its last frame and every held frame. The initial load needs none of
+    // this: it runs before the pane has a socket, onto a fresh xterm.
+    //
     // Single-flight: the flag is held across the fetch AND the chunked write
     // (writeChunked resolves after its last chunk), so two replays can never
     // interleave their chunks into one terminal. A second call while one is
@@ -709,42 +727,60 @@
       this._bufferLoading = true;
       await this._runLoad(refresh ? 'refresh' : 'initial', async () => {
         this._loadRunning = true;
+        let replayed = false;
+        let capturedAt = 0;
+        // A deadline covering the body as well as the headers (the primary
+        // pane's budgets, CodemanFetchDeadline): a capture that never answers
+        // would otherwise hold this pane's single-flight flag, and in the grid
+        // the one load queue every tile waits behind, forever. Re-armed once a
+        // refresh's headers land (below), so one signal carries both budgets.
+        const controller = global.AbortController ? new global.AbortController() : null;
+        let abortTimer = null;
+        const armDeadline = (ms) => {
+          if (!controller) return;
+          clearTimeout(abortTimer);
+          abortTimer = setTimeout(() => controller.abort(), ms);
+        };
         try {
           if (this._destroyed) return;
-          if (refresh) {
-            // Cleared at the load's turn, not when it was asked for: a grid tile
-            // waiting in the queue keeps its last frame instead of sitting blank.
-            this.terminal?.clear();
-            this._overflowRows = 0;
-            // The clear wipes a "disconnected" marker (a `{t:'r'}` frame can queue
-            // a trailing refresh behind a pull that the socket's close then
-            // interrupts), so a refresh on a closed socket owes it back once its
-            // replay is written.
-            if (this._wsClosed) this._markerOwed = true;
-          }
           const shell = this.sessionMode === 'shell';
           let query = shell ? `tail=${TERMINAL_TAIL_SIZE}` : 'full=1';
           if (this.boundedLoad && !shell) query = `full=1&tail=${TERMINAL_TAIL_SIZE}${this._historyLinesQuery()}`;
-          // A deadline covering the body as well as the headers (the primary
-          // pane's budgets, CodemanFetchDeadline): a capture that never answers
-          // would otherwise hold this pane's single-flight flag, and in the grid
-          // the one load queue every tile waits behind, forever.
-          const controller = global.AbortController ? new global.AbortController() : null;
           this._loadAbort = controller;
-          const budget = global.CodemanFetchDeadline?.terminalFetchDeadlineMs?.({ full: !shell }) ?? 45000;
-          const timer = controller ? setTimeout(() => controller.abort(), budget) : null;
+          armDeadline(global.CodemanFetchDeadline?.terminalFetchDeadlineMs?.({ full: !shell }) ?? 45000);
           let payload;
           try {
             const res = await fetch(
               `/api/sessions/${this.sessionId}/terminal?${query}`,
               controller ? { signal: controller.signal } : undefined
             );
+            if (refresh) {
+              // The response's arrival stands in for the instant tmux took the
+              // capture (see _pullHistory()). Frames from here on are news the
+              // capture cannot hold, so they wait for the replay. From now on
+              // live output IS held, so a bounded window's body (at most
+              // TERMINAL_TAIL_SIZE) gets the pull's short budget; an unbounded
+              // capture (the split's Pane B, up to 32 MB) keeps the request's.
+              capturedAt = performance.now();
+              this._liveQueue = [];
+              if (shell || this.boundedLoad) armDeadline(HISTORY_PULL_TIMEOUT_MS);
+            }
             payload = (await res.json())?.data ?? {};
           } finally {
-            clearTimeout(timer);
+            clearTimeout(abortTimer);
             this._loadAbort = null;
           }
-          if (payload.terminalBuffer && this.terminal) {
+          if (payload.terminalBuffer && this.terminal && !this._destroyed) {
+            if (refresh) {
+              this.terminal.write('\x1bc');
+              this._overflowRows = 0; // the reset leaves nothing above the screen
+              replayed = true;
+              // The reset wipes a "disconnected" marker (a `{t:'r'}` frame can
+              // queue a trailing refresh behind a pull that the socket's close
+              // then interrupts), so a refresh on a closed socket owes it back
+              // once its replay is written.
+              if (this._wsClosed) this._markerOwed = true;
+            }
             await writeChunked(
               this.terminal,
               payload.terminalBuffer,
@@ -756,7 +792,12 @@
         } catch {
           /* Best-effort: live output still arrives once the socket connects. */
         } finally {
+          clearTimeout(abortTimer);
+          this._loadAbort = null;
           this._loadRunning = false;
+          // Held frames before the marker, so the marker stays the last thing on
+          // screen (see _pullHistory()).
+          this._flushLiveQueue(replayed ? capturedAt : 0);
           this._stampMarkerIfOwed();
           this._endBufferLoad();
         }
@@ -800,14 +841,27 @@
       }
     }
 
-    // Live terminal output. Written straight through, except while a history
-    // pull is replaying: a capture is current only up to the instant tmux took
-    // it, so a frame arriving mid-replay is held with its arrival time and
-    // replayed behind the snapshot by _pullHistory() (the primary pane's
-    // _finishBufferLoad `since` rule), never written underneath it.
+    // Live terminal output. Written straight through, except while a refresh or
+    // a history pull is replaying: a capture is current only up to the instant
+    // tmux took it, so a frame arriving mid-replay is held with its arrival time
+    // and written behind the snapshot by that load's _flushLiveQueue() (the
+    // primary pane's _finishBufferLoad `since` rule), never underneath it.
     _onLiveOutput(data) {
       if (this._liveQueue) this._liveQueue.push({ at: performance.now(), data });
       else this.terminal?.write(data);
+    }
+
+    // Releases the frames a load held (_liveQueue) and closes the queue. After a
+    // replay only those that arrived after the capture are news (`cutoff`, the
+    // response's arrival; earlier ones are already in it); with no replay
+    // (`cutoff` 0) every one is.
+    _flushLiveQueue(cutoff) {
+      const queued = this._liveQueue ?? [];
+      this._liveQueue = null;
+      for (const entry of queued) {
+        if (entry.at < cutoff) continue;
+        this.terminal?.write(entry.data);
+      }
     }
 
     // The server's `{t:'c'}` frame, which is a refresh, not a wipe. Its one
@@ -1097,15 +1151,9 @@
         clearTimeout(abortTimer);
         this._loadAbort = null;
         this._loadRunning = false;
-        const queued = this._liveQueue ?? [];
-        this._liveQueue = null;
         // After a replay, only frames that arrived after the capture are news;
         // earlier ones are already in it. With no replay, every held frame is.
-        const cutoff = replayed ? capturedAt : 0;
-        for (const entry of queued) {
-          if (entry.at < cutoff) continue;
-          this.terminal?.write(entry.data);
-        }
+        this._flushLiveQueue(replayed ? capturedAt : 0);
         // Settled after the queue flush so the marker is the last thing on
         // screen: a close during the pull wrote nothing (_onSocketClosed() defers
         // it while a load runs), and a replay's own `\x1bc` (flagged above) wipes
@@ -1128,12 +1176,13 @@
       return `&lines=${this.scrollback + (this.terminal?.rows || 0)}`;
     }
 
-    // The `{t:'r'}` server-refresh path: clear, then replay. Two refresh
-    // frames in a row must not start two concurrent replays, each clearing
-    // the terminal under the other's chunked write. A refresh that arrives
-    // mid-replay is COALESCED into one trailing re-run rather than ignored:
-    // the in-flight fetch may predate the drop the new frame is reporting,
-    // and no further frame is coming to correct stale content.
+    // The refresh path (`{t:'r'}`, `{t:'c'}`, a reconnect): fetch, then reset
+    // in-stream and replay (_loadBuffer). Two refresh frames in a row must not
+    // start two concurrent replays, each resetting the terminal under the
+    // other's chunked write. A refresh that arrives mid-replay is COALESCED
+    // into one trailing re-run rather than ignored: the in-flight fetch may
+    // predate the drop the new frame is reporting, and no further frame is
+    // coming to correct stale content.
     _refreshBuffer() {
       if (this._bufferLoading) {
         this._bufferRefreshPending = true;

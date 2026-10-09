@@ -64,7 +64,8 @@ export class FakeTerminal {
   /**
    * Opt-in, set by a test BEFORE the tile connects: the buffer's rows follow
    * what is written, as in xterm. Every `\n` adds a line, `baseY` is the lines
-   * beyond the screen, a clear leaves one line, and a resize recomputes it
+   * beyond the screen, a clear or an in-stream reset (RIS, `\x1bc`) leaves one
+   * line, and a resize recomputes it
    * (a row-shrinking fit pushes rows above the screen, a growing one pulls them
    * back). The viewport follows the bottom. Off, `baseY` stays where a test
    * puts it.
@@ -155,7 +156,10 @@ export class FakeTerminal {
     // (its callback) that everything before it has been parsed.
     if (data) this.writes.push(data);
     if (data && this.emulate) {
-      this.lineCount += data.split('\n').length - 1;
+      // A replay's reset (RIS) empties the buffer, as clear() does.
+      const reset = data.lastIndexOf('\x1bc');
+      if (reset !== -1) this.lineCount = 1;
+      this.lineCount += data.slice(reset === -1 ? 0 : reset + 2).split('\n').length - 1;
       this.settleRows();
     }
     if (!this.holdParse) cb?.();

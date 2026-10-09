@@ -13,8 +13,9 @@
  *   for N tiles reconnecting together;
  * - the focused tile goes first, then reading order, and a history pull (the
  *   user is waiting on it) jumps ahead of background refreshes;
- * - `{t:'r'}` goes through the same queue, and a tile waiting its turn keeps its
- *   last frame (the clear happens at its turn);
+ * - `{t:'r'}` and `{t:'c'}` go through the same queue, and a tile keeps its
+ *   last frame while it waits its turn and through its own capture's round
+ *   trip (it is reset in-stream only once the capture is in hand);
  * - a destroyed tile's queued load is dropped, and destroying the tile whose
  *   load is running aborts its fetch so the queue moves on;
  * - a load that never answers is cut off by its deadline;
@@ -270,12 +271,14 @@ describe('refreshes', () => {
     await settle();
 
     expect(captures.map((c) => c.url.split('/')[3])).toEqual(['a']);
-    // b has not been cleared: it shows its last frame until its load runs.
-    expect(b.terminal?.writes).not.toContain('<CLEAR>');
+    // b has not been reset: it shows its last frame until its load runs.
+    const before = [...(b.terminal?.writes ?? [])];
+    expect(before).not.toContain('<CLEAR>');
 
     await drain('fresh');
     expect(captures.map((c) => c.url.split('/')[3])).toEqual(['a', 'b']);
-    expect(b.terminal?.writes.slice(-2)).toEqual(['<CLEAR>', 'fresh']);
+    // Its turn reset it in-stream, right before the replay, never with clear().
+    expect(b.terminal?.writes).toEqual([...before, '\x1bc', 'fresh']);
   });
 
   it("a server {t:'c'} (a Claude pane's first prompt) is a refresh through the same queue", async () => {
@@ -294,6 +297,28 @@ describe('refreshes', () => {
       `/api/sessions/b/terminal?full=1&tail=${TAIL}${LINES}`,
     ]);
     expect(b.terminal?.writes.at(-1)).toBe('banner');
+  });
+
+  it("a tile keeps its last frame through its own capture's round trip, and one cut off leaves it as it was", async () => {
+    vi.useFakeTimers();
+    const { tiles } = makeGrid(['a']);
+    await connectAll(tiles);
+    const [a] = tiles;
+    a.ws?.receive({ t: 'o', d: 'last frame' });
+    a.ws?.receive({ t: 'r' });
+    await settle();
+
+    // Its turn came and its capture is in flight: nothing reset yet.
+    expect(inFlight()).toBe(1);
+    expect(a.terminal?.writes.at(-1)).toBe('last frame');
+
+    // The full-capture budget runs out with no answer.
+    await vi.advanceTimersByTimeAsync(45_000);
+    await settle();
+    expect(captures.at(-1)?.aborted).toBe(true);
+    expect(a.terminal?.writes.at(-1)).toBe('last frame');
+    expect(a.terminal?.writes).not.toContain('\x1bc');
+    expect(a.terminal?.writes).not.toContain('<CLEAR>');
   });
 
   it('a history pull jumps ahead of background refreshes', async () => {
@@ -326,10 +351,11 @@ describe('refreshes', () => {
     const markers = () => (b.terminal?.writes ?? []).filter((w) => w.includes('[disconnected')).length;
     expect(markers()).toBe(1);
     await drain('fresh');
-    // Its turn cleared the screen, so the marker is written again below the replay: one on screen.
+    // Its replay reset the screen, so the marker is written again below the replay: one on screen.
     const writes = b.terminal?.writes ?? [];
-    expect(writes.slice(writes.lastIndexOf('<CLEAR>'))).toEqual([
-      '<CLEAR>',
+    expect(writes).not.toContain('<CLEAR>');
+    expect(writes.slice(writes.lastIndexOf('\x1bc'))).toEqual([
+      '\x1bc',
       'fresh',
       expect.stringContaining('[disconnected'),
     ]);

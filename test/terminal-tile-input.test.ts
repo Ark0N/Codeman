@@ -333,12 +333,14 @@ describe('TerminalTile reconnects after a transient drop', () => {
     ws2.open();
     await settle();
 
-    // The refresh cleared the pane and replayed the current screen, and nothing
-    // after that clear is a marker: the pane is healthy again.
-    const lastClear = term.writes.lastIndexOf('<CLEAR>');
-    expect(lastClear).toBeGreaterThan(-1);
-    expect(term.writes.slice(lastClear)).toContain('fresh screen');
-    expect(term.writes.slice(lastClear).some(isMarker)).toBe(false);
+    // The refresh reset the pane in-stream (never xterm's clear()) and replayed
+    // the current screen, and nothing after that reset is a marker: the pane is
+    // healthy again.
+    expect(term.writes).not.toContain('<CLEAR>');
+    const lastReset = term.writes.lastIndexOf('\x1bc');
+    expect(lastReset).toBeGreaterThan(-1);
+    expect(term.writes.slice(lastReset)).toEqual(['\x1bc', 'fresh screen']);
+    expect(term.writes.slice(lastReset).some(isMarker)).toBe(false);
     expect(tile._reconnectAttempts).toBe(0);
     expect(tile.ws).toBe(ws2);
   });
