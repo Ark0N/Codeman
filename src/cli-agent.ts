@@ -19,6 +19,9 @@
  * 3. `rm` fails closed: empty id, a short self id, or a prefix match in EITHER
  *    direction refuses. Ids appear in full and 8-char form, so equality alone
  *    misses a real combination — and the miss deletes the caller.
+ * 4. An id shorter than 8 characters refuses (exit 4) before any request, on every
+ *    verb. `9` would resolve to whichever session is alone with that first
+ *    character, the user's own interactive tab included.
  *
  * Commands live here as functions returning an exit code, not calling
  * `process.exit`, so the whole surface is unit-testable against a fake server.
@@ -37,6 +40,7 @@ import {
 import { getCli } from './config/cli-registry/registry.js';
 import { GLYPH, palette, table } from './cli-style.js';
 import { getErrorMessage } from './types.js';
+import { stripAnsi as stripAnsiSequences } from './utils/regex-patterns.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Context and guard
@@ -113,11 +117,6 @@ export function deleteRefusal(selfId: string, id: string): string | undefined {
 }
 
 /**
- * Why `send` refuses this text, or `undefined` when it is printable. The composer
- * takes one line; the server strips `\r`/`\n` but everything else below 0x20 (and
- * DEL) reaches the pane as a keypress. None of that is a prompt.
- */
-/**
  * The prompt `send` was given, which must be ONE argument. Joining several with spaces
  * would turn an unquoted `$(cat notes.txt)`, which the shell splits on every newline,
  * back into a single line, so the multi-line refusal below would never see it.
@@ -125,10 +124,15 @@ export function deleteRefusal(selfId: string, id: string): string | undefined {
 export function sendPromptFromArgs(words: readonly string[]): { text: string } | { error: string } {
   if (words.length === 1) return { text: words[0] };
   return {
-    error: `refusing: the prompt must be ONE argument, got ${words.length} — quote it (\`send <id> "…"\`)`,
+    error: `refusing: the prompt must be ONE argument, got ${words.length} — quote it (\`send <id> "…"\`; a prompt that starts with "-" goes after --: \`send <id> -- "- fix the bug"\`)`,
   };
 }
 
+/**
+ * Why `send` refuses this text, or `undefined` when it is printable. The composer
+ * takes one line; the server strips `\r`/`\n` but everything else below 0x20 (and
+ * DEL) reaches the pane as a keypress. None of that is a prompt.
+ */
 export function inputRefusal(text: string): string | undefined {
   if (text.length === 0) return 'refusing: empty input (use `interrupt` for ESC, `send <id> ""` is never a prompt)';
   // The composer is one line: the server strips newlines, which silently joins the
@@ -175,10 +179,13 @@ export function defaultClientId(selfId: string, suffix = ''): string {
   return `codeman-agent-cli-${selfId.slice(0, 8)}${suffix ? `-${suffix}` : ''}`;
 }
 
-/** Strip ANSI CSI/charset sequences from a terminal buffer (GNU and BSD alike). */
+/**
+ * Strip a terminal buffer for humans: the shared ANSI strip (CSI, OSC such as window
+ * titles, keypad modes) plus the charset designators (`ESC ( B`) it leaves in.
+ */
 export function stripAnsi(text: string): string {
   // eslint-disable-next-line no-control-regex
-  return text.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\x1b[()][AB0]/g, '');
+  return stripAnsiSequences(text).replace(/\x1b[()][AB0]/g, '');
 }
 
 /** Parse a positive-integer option (`--timeout` ms, `--tail` bytes); the server rejects anything else. */
@@ -369,20 +376,37 @@ interface SessionRow {
 const FULL_ID_LENGTH = 36;
 
 /**
+ * Shortest prefix that may name a session: the 8-char form `ls` prints, and the floor
+ * the server's own resolver uses (`PARENT_SESSION_ID_MIN_PREFIX`, route-helpers.ts).
+ */
+export const MIN_ID_PREFIX_LENGTH = 8;
+
+/**
  * Turn the id a human typed into the one the routes accept. `ls` prints 8-char
  * prefixes and the routes answer 404 to those (measured live), so anything shorter
  * than a full id resolves through the session list; an ambiguous prefix refuses
- * rather than picking one.
+ * rather than picking one. Below 8 characters it refuses before the list: "unique"
+ * means nothing for `9` — it names whatever session happens to be alone with that
+ * first character, and `rm`/`send` would act on it.
  */
-export async function resolveSessionId(deps: AgentDeps, id: string): Promise<{ id: string } | { error: string }> {
-  if (!id) return { error: 'refusing: empty session id' };
+export async function resolveSessionId(
+  deps: AgentDeps,
+  id: string
+): Promise<{ id: string } | { error: string; code: number }> {
+  if (!id) return { error: 'refusing: empty session id', code: EXIT.refused };
+  if (id.length < MIN_ID_PREFIX_LENGTH) {
+    return {
+      error: `refusing: "${id}" is shorter than ${MIN_ID_PREFIX_LENGTH} characters — use the 8-character id \`agent ls\` prints, or the full id`,
+      code: EXIT.refused,
+    };
+  }
   if (id.length >= FULL_ID_LENGTH) return { id };
   const res = await deps.request(deps.ctx, { method: 'GET', path: '/api/v1/sessions' });
-  if (!res.json?.success) return { error: describeFailure(res) };
+  if (!res.json?.success) return { error: describeFailure(res), code: EXIT.error };
   const matches = ((res.json.data as SessionRow[] | undefined) ?? []).filter((s) => s.id.startsWith(id));
   if (matches.length === 1) return { id: matches[0].id };
-  if (matches.length === 0) return { error: `no session starts with "${id}" (see \`agent ls\`)` };
-  return { error: `"${id}" is ambiguous: ${matches.map((s) => s.id.slice(0, 13)).join(', ')}` };
+  if (matches.length === 0) return { error: `no session starts with "${id}" (see \`agent ls\`)`, code: EXIT.error };
+  return { error: `"${id}" is ambiguous: ${matches.map((s) => s.id.slice(0, 13)).join(', ')}`, code: EXIT.error };
 }
 
 /** `agent ls` — every session the caller can see, self marked. */
@@ -529,7 +553,7 @@ export async function agentSend(deps: AgentDeps, options: SendOptions): Promise<
   const refusal = inputRefusal(options.text);
   if (refusal) return fail(deps, refusal, EXIT.refused);
   const target = await resolveSessionId(deps, options.id);
-  if ('error' in target) return fail(deps, target.error);
+  if ('error' in target) return fail(deps, target.error, target.code);
   const body = buildSendBody(options.text, {
     enter: options.enter,
     clientId: options.clientId ?? defaultClientId(deps.ctx.selfId),
@@ -544,8 +568,24 @@ export async function agentSend(deps: AgentDeps, options: SendOptions): Promise<
     timeoutMs: (options.timeoutMs ?? 60_000) + 10_000,
   });
   if (!res.json?.success) return fail(deps, describeFailure(res));
-  const data = res.json.data as { delivered?: boolean; duplicate?: boolean; wait?: WaitResult } | undefined;
+  const data = res.json.data as
+    | { delivered?: boolean; duplicate?: boolean; buffered?: boolean; dropped?: boolean; wait?: WaitResult }
+    | undefined;
   if (deps.json) emitJson(deps, data ?? {});
+  // Fire-and-forget to a remote session whose host is asleep (wake-on-LAN): the server
+  // holds the chunk and types it once the pane is back (`buffered`), or the chunk was
+  // over the wake buffer's cap and is gone (`dropped`). The seq is spent either way,
+  // so a retry needs a new one (the default, the clock, gives it that).
+  if (data?.dropped) {
+    if (!deps.json) {
+      deps.io.err(
+        palette.err(
+          `${GLYPH.fail} dropped: ${target.id}'s host is waking and its input buffer is full — nothing will be typed; send again once it is back`
+        )
+      );
+    }
+    return EXIT.error;
+  }
   // `delivered:false` without `duplicate` is the route's "the bytes went nowhere":
   // the PTY exited or send-keys hit a dead pane. The field exists so a client does not
   // say "wait longer" when the truth is "restart the worker" — so it is a failure here.
@@ -561,6 +601,12 @@ export async function agentSend(deps: AgentDeps, options: SendOptions): Promise<
     const noEnter = options.enter ? '' : ' (no Enter)';
     if (data?.duplicate) {
       deps.io.out(palette.warn(`${GLYPH.warn} duplicate (clientId/seq already applied): nothing typed`));
+    } else if (data?.buffered) {
+      deps.io.out(
+        palette.ok(
+          `${GLYPH.ok} buffered for ${target.id}${noEnter}: its host is asleep; Codeman is waking it and types this once the pane is back`
+        )
+      );
     } else if (data?.delivered === true) {
       deps.io.out(palette.ok(`${GLYPH.ok} delivered to ${target.id}${noEnter}`));
     } else {
@@ -608,7 +654,7 @@ export async function agentWait(deps: AgentDeps, options: WaitOptions): Promise<
   if (options.until && options.match)
     return fail(deps, 'use either --until <signals> or --match <marker>, not both', EXIT.refused);
   const target = await resolveSessionId(deps, options.id);
-  if ('error' in target) return fail(deps, target.error);
+  if ('error' in target) return fail(deps, target.error, target.code);
   const sid = encodeURIComponent(target.id);
   const res = options.match
     ? await deps.request(deps.ctx, {
@@ -653,7 +699,7 @@ export interface ReadOptions {
 /** `agent read` — the last answer (the route picks the transcript reader or the pane segmenter) or a terminal tail. */
 export async function agentRead(deps: AgentDeps, options: ReadOptions): Promise<number> {
   const target = await resolveSessionId(deps, options.id);
-  if ('error' in target) return fail(deps, target.error);
+  if ('error' in target) return fail(deps, target.error, target.code);
   const sid = encodeURIComponent(target.id);
   if (options.tail !== undefined) {
     const res = await deps.request(deps.ctx, {
@@ -699,7 +745,7 @@ export async function agentRead(deps: AgentDeps, options: ReadOptions): Promise<
 export async function agentInterrupt(deps: AgentDeps, options: { id: string }): Promise<number> {
   if (isSelfSession(deps.ctx.selfId, options.id)) return fail(deps, `refusing: ${options.id} is me`, EXIT.refused);
   const target = await resolveSessionId(deps, options.id);
-  if ('error' in target) return fail(deps, target.error);
+  if ('error' in target) return fail(deps, target.error, target.code);
   const body = buildInterruptBody(defaultClientId(deps.ctx.selfId, 'interrupt'), (deps.now ?? Date.now)());
   const res = await deps.request(deps.ctx, {
     method: 'POST',
@@ -722,7 +768,7 @@ export async function agentRm(deps: AgentDeps, options: { id: string }): Promise
   const refusal = deleteRefusal(deps.ctx.selfId, options.id);
   if (refusal) return fail(deps, refusal, EXIT.refused);
   const target = await resolveSessionId(deps, options.id);
-  if ('error' in target) return fail(deps, target.error);
+  if ('error' in target) return fail(deps, target.error, target.code);
   // The guard again on the RESOLVED id: a prefix that is not me can still resolve
   // to me only if the list is lying, but a delete is the one call worth the paranoia.
   const resolvedRefusal = deleteRefusal(deps.ctx.selfId, target.id);
@@ -814,7 +860,9 @@ export function registerAgentCommands(program: Command): Command {
 
   agent
     .command('send <id> <text...>')
-    .description('Type a prompt into another session and press Enter (ONE quoted argument, printable text only)')
+    .description(
+      'Type a prompt into another session and press Enter (ONE quoted argument, printable text only; a prompt that starts with "-" goes after --: send <id> -- "- fix the bug")'
+    )
     .option('-w, --wait', 'Block until end of turn (the default signal set; see --until)')
     .option('-u, --until <signals>', 'Signals to wait for, comma list such as stop,exit (implies --wait)')
     .option('-t, --timeout <ms>', 'Wait budget in ms (with --wait)', String(DEFAULT_WAIT_MS))
@@ -863,7 +911,10 @@ export function registerAgentCommands(program: Command): Command {
       '-u, --until <signals>',
       'Comma list: stop,idle,exit,working,blocked (stop/blocked need hook signals for the session; where there are none the server answers 400, passed through)'
     )
-    .option('-m, --match <marker>', 'Literal substring to wait for in the output (ANSI-stripped, no regex)')
+    .option(
+      '-m, --match <marker>',
+      'Literal substring to wait for in the output (ANSI-stripped, no regex). The echo of your own prompt is output too, so never put the marker verbatim in the prompt: ask for it in halves ("print WORKDONE followed by _4711") and wait on the joined form (WORKDONE_4711)'
+    )
     .option('--from <where>', 'buffer (scan existing output first, the default) or now', 'buffer')
     .option('--nocase', 'Case-insensitive --match')
     .option('--fresh', 'Require an actual transition (--until only)')
@@ -921,7 +972,7 @@ export function registerAgentCommands(program: Command): Command {
 
   agent
     .command('rm <id>')
-    .description('Delete a session you created (refuses your own id)')
+    .description('Delete any session except this one (refuses your own id)')
     .option('--json', 'Machine-readable output')
     .action((id: string, options: { json?: boolean }) => run(Boolean(options.json), (deps) => agentRm(deps, { id })));
 
