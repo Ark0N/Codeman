@@ -385,6 +385,14 @@ Beyond single-session respawn, the **Orchestrator** turns a high-level goal into
 
 Run **20 parallel sessions** with full visibility — real-time xterm.js terminals at 60fps, per-session token and cost tracking, tab-based navigation, and one-click management.
 
+### Tile Grid
+
+<p align="center">
+  <img src="docs/images/tile-grid-20261009.gif" alt="Tile grid: the Tiles button opens six live sessions side by side (DeepSeek Harness, Claude Code, Codex, a shell, OpenCode and Pi), and a second click returns to a single session" width="800">
+</p>
+
+Watch and drive up to **six sessions side by side** in one window. Click **Tiles** in the header (or press `Ctrl+Shift+G`) and your sessions open as a grid of live terminals: every tile takes your keystrokes and shows its agent's logo, model and state in its header. Right-click **Tiles** to choose 2, 4 or 6 tiles, and drag a tile by its header to move it. Click **Tiles** again to return to a single session; the grid is remembered for next time. Desktop only (a window about 1180px wide or more). Full guide: [Tile Grid](docs/wiki/Tile-Grid.md).
+
 ### Persistent Sessions
 
 Every session runs inside **tmux** — sessions survive server restarts, network drops, and machine sleep. Auto-recovery on startup with dual redundancy. Ghost session discovery finds orphaned tmux sessions. Managed sessions are environment-tagged so the agent won't kill its own session.
