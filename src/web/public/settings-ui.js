@@ -506,7 +506,8 @@ Object.assign(CodemanApp.prototype, {
       settings.tabRailSort ?? defaults.tabRailSort ?? 'activity';
     document.getElementById('appSettingsTabArrangement').value = this.resolveTabArrangement(settings);
     document.getElementById('appSettingsTabStateOrder').value = this.resolveTabStateOrder(settings);
-    document.getElementById('appSettingsShowTabDetachButton').checked = settings.showTabDetachButton ?? defaults.showTabDetachButton ?? false;
+    document.getElementById('appSettingsShowTabDetachButton').checked =
+      settings.showTabDetachButton ?? (this.hasHostWindows?.() ? true : (defaults.showTabDetachButton ?? false));
     document.getElementById('appSettingsSessionListLayout').value =
       settings.sessionListLayout ?? defaults.sessionListLayout ?? 'header';
     const sessionSidebarFontSize = this.resolveSessionSidebarFontSize(
@@ -3721,7 +3722,10 @@ Object.assign(CodemanApp.prototype, {
     // default OFF, per-device). Mirrored as a class on <html>: styles.css hides
     // .tab-detach without it (a tab that is already detached keeps its icon as
     // the re-focus affordance for the popped-out window).
-    const showTabDetach = settings.showTabDetachButton ?? defaults.showTabDetachButton ?? false;
+    // Under a host that opens windows (see hasHostWindows) popping out is the
+    // way to get two panes side by side, so the button defaults on there.
+    const showTabDetach =
+      settings.showTabDetachButton ?? (this.hasHostWindows?.() ? true : (defaults.showTabDetachButton ?? false));
     document.documentElement.classList.toggle('tabs-show-detach', showTabDetach);
     const compactHeader = MobileDetection.getDeviceType() !== 'desktop';
     const showFontControls = compactHeader ? false : (settings.showFontControls ?? defaults.showFontControls ?? false);
