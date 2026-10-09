@@ -23,8 +23,10 @@ import { describe, expect, it, vi } from 'vitest';
 function loadTerminalUiHarness() {
   const CodemanApp = function CodemanApp(this: any) {};
   const logs: string[] = [];
+  // terminal-ui.js hangs CodemanTerminalInput off window; tests read it there.
+  const windowRef: Record<string, any> = {};
   const context = vm.createContext({
-    window: {},
+    window: windowRef,
     CodemanApp,
     console: { warn: vi.fn(), log: (msg: string) => logs.push(msg) },
     _crashDiag: { log: vi.fn() },
@@ -43,12 +45,12 @@ function loadTerminalUiHarness() {
 
   const code = readFileSync(resolve(import.meta.dirname, '../src/web/public/terminal-ui.js'), 'utf8');
   vm.runInContext(code, context, { filename: 'terminal-ui.js' });
-  return { app: new (CodemanApp as any)(), logs };
+  return { app: new (CodemanApp as any)(), logs, windowRef };
 }
 
 /** A session whose local buffer holds exactly one screen (baseY 0) — a hollow pane. */
 function hollowApp(overrides: { mode?: string; cliVersion?: string; rows?: number; cliMouseTracking?: boolean } = {}) {
-  const { app, logs } = loadTerminalUiHarness();
+  const { app, logs, windowRef } = loadTerminalUiHarness();
   const sent: Array<{ id: string; data: string }> = [];
   app.activeSessionId = 'sess-1';
   app.sessions = new Map([
@@ -68,7 +70,7 @@ function hollowApp(overrides: { mode?: string; cliVersion?: string; rows?: numbe
     modes: { mouseTrackingMode: 'none' },
     buffer: { active: { type: 'normal', viewportY: 0, baseY: 0, length: 36 } },
   };
-  return { app, sent, logs };
+  return { app, sent, logs, windowRef };
 }
 
 describe('full-history re-pull downgrade guard (issue #205 round 2)', () => {
@@ -252,6 +254,80 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
     expect(source).toContain('if (this._maybePageCliTranscript(ev, lines)) return;');
     // Touch: touchmove and the momentum loop both fall through to it.
     expect(source.match(/else if \(!this\._maybePageCliTranscript\(\{ shiftKey: false \}, lines\)\)/g)).toHaveLength(2);
+  });
+});
+
+describe('the paging gates asked for another pane (a TerminalTile)', () => {
+  it('exports the paging math, and the primary pane runs on it', () => {
+    const { app, sent, windowRef } = hollowApp();
+    const { wheelDeltaLines, pageKeysForTravel } = windowRef.CodemanTerminalInput;
+
+    expect(wheelDeltaLines({ deltaY: -50, deltaMode: 0 }, 36)).toBe(-2); // pixels, 25 a line
+    expect(wheelDeltaLines({ deltaY: 3, deltaMode: 1 }, 36)).toBe(3); // lines (Firefox)
+    expect(wheelDeltaLines({ deltaY: 1, deltaMode: 2 }, 36)).toBe(36); // pages: the given rows
+    expect(wheelDeltaLines({ deltaY: 0, deltaX: -75, shiftKey: true, deltaMode: 0 }, 36)).toBe(-3); // Shift axis
+    expect(pageKeysForTravel(0, -10, 36)).toEqual({ pending: -10, keys: '' });
+    expect(pageKeysForTravel(-10, -8, 36)).toEqual({ pending: 0, keys: '\x1b[5~' });
+    expect(pageKeysForTravel(0, -1000, 36).keys).toBe('\x1b[5~'.repeat(3));
+    expect(pageKeysForTravel(0, 40, 36)).toEqual({ pending: 4, keys: '\x1b[6~'.repeat(2) });
+
+    // The primary pane's own methods agree with them.
+    const ev = { deltaY: -250, deltaMode: 2 };
+    expect(app._wheelScrollLinesFloat(ev)).toBe(wheelDeltaLines(ev, 36));
+    let pending = 0;
+    let expected = '';
+    for (const lines of [-10, -10, 30, -1000, 7]) {
+      const step = pageKeysForTravel(pending, lines, 36);
+      pending = step.pending;
+      expected += step.keys;
+      app._maybePageCliTranscript({ shiftKey: false }, lines);
+    }
+    app._flushWheelSgrQueue();
+    expect(app._pageKeyPending).toBe(pending);
+    expect(expected).not.toBe('');
+    expect(sent).toEqual([{ id: 'sess-1', data: expected }]);
+  });
+
+  it("_localScrollbackIsHollow reads the target's session, buffer and rows, never the active ones", () => {
+    const { app } = hollowApp({ mode: 'shell' }); // the ACTIVE session is a shell
+    app.sessions.set('tile-1', { mode: 'opencode' });
+    const tileBuffer = { type: 'normal', viewportY: 16, baseY: 16 };
+    const tileTerminal = { rows: 24, buffer: { active: tileBuffer } };
+
+    expect(app._localScrollbackIsHollow()).toBe(false); // the primary's own answer
+    // 16 rows above the tile's screen, all of them its own overflow: hollow.
+    expect(app._localScrollbackIsHollow({ sessionId: 'tile-1', terminal: tileTerminal, localRows: 0 })).toBe(true);
+    // Real history in the tile: not hollow, whatever the primary holds.
+    expect(app._localScrollbackIsHollow({ sessionId: 'tile-1', terminal: tileTerminal, localRows: 3 })).toBe(false);
+    // No localRows: the tile's own baseY decides.
+    expect(app._localScrollbackIsHollow({ sessionId: 'tile-1', terminal: tileTerminal })).toBe(false);
+    tileBuffer.type = 'alternate';
+    expect(app._localScrollbackIsHollow({ sessionId: 'tile-1', terminal: tileTerminal, localRows: 0 })).toBe(false);
+    tileBuffer.type = 'normal';
+    app.sessions.set('tile-1', { mode: 'codex' });
+    expect(app._localScrollbackIsHollow({ sessionId: 'tile-1', terminal: tileTerminal, localRows: 0 })).toBe(false);
+  });
+
+  it("_shouldForwardWheelToApp reads the target's session and the target terminal's tracking mode", () => {
+    const { app } = hollowApp({ mode: 'opencode' }); // the ACTIVE session would never forward
+    app.sessions.set('tile-1', { mode: 'claude', cliVersion: '2.1.223', cliMouseTracking: true });
+    const tileTerminal = { rows: 24, modes: { mouseTrackingMode: 'none' } };
+
+    expect(app._shouldForwardWheelToApp({ shiftKey: false })).toBe(false);
+    expect(app._shouldForwardWheelToApp({ shiftKey: false }, { sessionId: 'tile-1', terminal: tileTerminal })).toBe(
+      true
+    );
+    // The tile's own xterm encoder owns the wheel while its tracking is on.
+    tileTerminal.modes.mouseTrackingMode = 'any';
+    expect(app._shouldForwardWheelToApp({ shiftKey: false }, { sessionId: 'tile-1', terminal: tileTerminal })).toBe(
+      false
+    );
+    // And the primary's tracking mode does not leak into the tile's answer.
+    tileTerminal.modes.mouseTrackingMode = 'none';
+    app.terminal.modes.mouseTrackingMode = 'any';
+    expect(app._shouldForwardWheelToApp({ shiftKey: false }, { sessionId: 'tile-1', terminal: tileTerminal })).toBe(
+      true
+    );
   });
 });
 

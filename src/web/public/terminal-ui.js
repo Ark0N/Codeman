@@ -92,6 +92,36 @@
   // Bound on page keys emitted from one gesture batch, mirroring the SGR tick
   // cap: a fling must not build a backlog that keeps paging after it stops.
   const PAGE_KEY_MAX_PER_BATCH = 3;
+
+  // Wheel delta → scroll lines (fractional), for a terminal `rows` tall. The
+  // body of the primary pane's _wheelScrollLinesFloat (see its comment for the
+  // Shift-axis trap and the deltaMode units), pure so a TerminalTile pages with
+  // the same math against its own row count.
+  function wheelDeltaLines(ev, rows) {
+    const delta = ev.shiftKey && Math.abs(ev.deltaX) > Math.abs(ev.deltaY) ? ev.deltaX : ev.deltaY;
+    if (!delta) return 0;
+    return ev.deltaMode === 1 // DOM_DELTA_LINE (Firefox mouse wheel)
+      ? delta
+      : ev.deltaMode === 2 // DOM_DELTA_PAGE
+        ? delta * (rows || 24)
+        : delta / 25; // DOM_DELTA_PIXEL (Chrome/WebKit, and every trackpad)
+  }
+
+  // Gesture travel → PageUp/PageDown keys for a terminal `rows` tall: adds
+  // `lines` to the sub-page travel already `pending`, and returns the travel
+  // left over plus the keys to send ('' below one page). The arithmetic of the
+  // primary pane's _maybePageCliTranscript, pure so a TerminalTile (which keeps
+  // its own pending travel) pages identically.
+  function pageKeysForTravel(pending, lines, rows) {
+    const perPage = Math.max(2, Math.round((rows || 24) * PAGE_KEY_SCREEN_FRACTION));
+    const total = (pending || 0) + lines;
+    const pages = Math.trunc(total / perPage);
+    const keys = pages
+      ? (pages < 0 ? KEY_PAGE_UP : KEY_PAGE_DOWN).repeat(Math.min(Math.abs(pages), PAGE_KEY_MAX_PER_BATCH))
+      : '';
+    return { pending: total - pages * perPage, keys };
+  }
+
   const TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM = 4;
   // Composer navigation keys as xterm.js encodes user keystrokes: plain and
   // modified arrows (CSI A-D, CSI 1;mA-D, SS3 A-D), Home/End (CSI H/F, SS3
@@ -229,6 +259,8 @@
     KEY_PAGE_DOWN,
     PAGE_KEY_SCREEN_FRACTION,
     PAGE_KEY_MAX_PER_BATCH,
+    wheelDeltaLines,
+    pageKeysForTravel,
     TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
     MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR,
     MOBILE_KEYBOARD_DISMISS_TAP_SLOP,
@@ -5395,42 +5427,51 @@ Object.assign(CodemanApp.prototype, {
    * Fails toward silence: an unknown or stale flag reports nothing rather than
    * injecting bytes. After a server restart the flag is false until the CLI
    * re-emits its DECSET, which closing and reopening a dialog does.
+   *
+   * `sessionId` defaults to the primary pane's session; a TerminalTile passes
+   * its own (through _handleDesktopTerminalClick's target), never the active one.
    */
-  _shouldReportMouseToCli() {
-    return this.sessions?.get(this.activeSessionId)?.cliMouseTracking === true;
+  _shouldReportMouseToCli(sessionId = this.activeSessionId) {
+    return this.sessions?.get(sessionId)?.cliMouseTracking === true;
   },
 
   // True when xterm's viewport shows the live PTY screen (not scrolled up into
   // local scrollback). SGR coordinates are only meaningful then: the TUI's
   // screen is the bottom `rows` of the buffer, so a report computed from a
   // scrolled-up viewport would hit-test a completely different row.
-  _terminalViewportAtBottom() {
-    const buf = this.terminal?.buffer?.active;
+  // `terminal` defaults to the primary pane's (a TerminalTile passes its own).
+  _terminalViewportAtBottom(terminal = this.terminal) {
+    const buf = terminal?.buffer?.active;
     return !buf || buf.viewportY >= buf.baseY;
   },
 
   // Map a viewport point to a 1-based terminal cell the same way xterm maps a
   // click: offset inside .xterm-screen divided by the rendered cell size,
   // clamped to the grid. Returns null when the terminal isn't measurable yet.
-  _clientPointToCell(clientX, clientY) {
-    if (!this.terminal || !Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
-    const screen = this.terminal.element?.querySelector('.xterm-screen');
-    const cell = this.terminal._core?._renderService?.dimensions?.css?.cell;
+  // `terminal` defaults to the primary pane's (a TerminalTile passes its own).
+  _clientPointToCell(clientX, clientY, terminal = this.terminal) {
+    if (!terminal || !Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+    const screen = terminal.element?.querySelector('.xterm-screen');
+    const cell = terminal._core?._renderService?.dimensions?.css?.cell;
     if (!screen || !cell?.width || !cell?.height) return null;
     const rect = screen.getBoundingClientRect();
-    const col = Math.max(1, Math.min(this.terminal.cols, Math.floor((clientX - rect.left) / cell.width) + 1));
-    const row = Math.max(1, Math.min(this.terminal.rows, Math.floor((clientY - rect.top) / cell.height) + 1));
+    const col = Math.max(1, Math.min(terminal.cols, Math.floor((clientX - rect.left) / cell.width) + 1));
+    const row = Math.max(1, Math.min(terminal.rows, Math.floor((clientY - rect.top) / cell.height) + 1));
     return { col, row };
   },
 
   // Encode a tap as an SGR mouse report (press + release at button 0) and send it
-  // to the PTY directly, bypassing xterm's mouse encoder.
-  _sendSyntheticSgrTap(clientX, clientY) {
-    if (!this.activeSessionId) return;
-    if (!this._terminalViewportAtBottom()) return; // scrollback click → misfire, do nothing
-    const pos = this._clientPointToCell(clientX, clientY);
+  // to the PTY directly, bypassing xterm's mouse encoder. `target` ({ terminal,
+  // sessionId }) aims it at a TerminalTile instead of the primary pane; either
+  // field left out means the primary pane's.
+  _sendSyntheticSgrTap(clientX, clientY, target = {}) {
+    const sessionId = target.sessionId || this.activeSessionId;
+    const terminal = target.terminal || this.terminal;
+    if (!sessionId) return;
+    if (!this._terminalViewportAtBottom(terminal)) return; // scrollback click → misfire, do nothing
+    const pos = this._clientPointToCell(clientX, clientY, terminal);
     if (!pos) return;
-    this._sendInputAsync(this.activeSessionId, `\x1b[<0;${pos.col};${pos.row}M\x1b[<0;${pos.col};${pos.row}m`);
+    this._sendInputAsync(sessionId, `\x1b[<0;${pos.col};${pos.row}M\x1b[<0;${pos.col};${pos.row}m`);
   },
 
   // True when a parsed CLI version string ('2.1.187' — banner-parsed on the
@@ -5486,18 +5527,17 @@ Object.assign(CodemanApp.prototype, {
 
   /** Unrounded variant for the smooth local-scroll path, which accumulates
    *  sub-line fractions across events instead of forcing every tiny trackpad
-   *  delta to a whole ±1 line. Same unit handling and Shift-axis trap. */
+   *  delta to a whole ±1 line. Same unit handling and Shift-axis trap. The
+   *  math is the pure CodemanTerminalInput.wheelDeltaLines (top of this file),
+   *  which a TerminalTile calls with its own row count. */
   _wheelScrollLinesFloat(ev) {
-    const delta = ev.shiftKey && Math.abs(ev.deltaX) > Math.abs(ev.deltaY) ? ev.deltaX : ev.deltaY;
-    if (!delta) return 0;
-    return ev.deltaMode === 1 // DOM_DELTA_LINE (Firefox mouse wheel)
-      ? delta
-      : ev.deltaMode === 2 // DOM_DELTA_PAGE
-        ? delta * (this.terminal?.rows || 24)
-        : delta / 25; // DOM_DELTA_PIXEL (Chrome/WebKit, and every trackpad)
+    return window.CodemanTerminalInput.wheelDeltaLines(ev, this.terminal?.rows);
   },
 
-  _shouldForwardWheelToApp(ev) {
+  // `target` ({ terminal, sessionId }) asks the question for a TerminalTile:
+  // its own terminal's tracking mode and its own session, never the active one.
+  // Either field left out means the primary pane's.
+  _shouldForwardWheelToApp(ev, target = {}) {
     if (ev.shiftKey) return false;
     // Opt-out (App Settings → Input → "Wheel scrolls local history"): pin the
     // plain wheel to xterm's own scrollback like pre-#144, for users who prefer
@@ -5514,9 +5554,9 @@ Object.assign(CodemanApp.prototype, {
     // falls through to _maybePageCliTranscript, so the gesture still pages the
     // CLI's transcript and the setting keeps meaning exactly what it says.
     if (this.loadAppSettingsFromStorage?.()?.terminalWheelLocalScrollback) return false;
-    const mode = this.terminal?.modes?.mouseTrackingMode;
+    const mode = (target.terminal || this.terminal)?.modes?.mouseTrackingMode;
     if (mode && mode !== 'none') return false;
-    const session = this.sessions?.get(this.activeSessionId);
+    const session = this.sessions?.get(target.sessionId || this.activeSessionId);
     const sessionMode = session?.mode || 'claude';
     if (sessionMode !== 'claude') return false;
     if (!this._cliVersionAtLeast(session?.cliVersion, '2.1.187')) return false;
@@ -5571,6 +5611,10 @@ Object.assign(CodemanApp.prototype, {
    * tmux send-keys server-side, so per-event writes would spawn a process storm
    * on a single flick; the queue is bounded so a wild scroll can't build a
    * backlog that keeps scrolling after the finger stops.
+   *
+   * A TerminalTile keeps its own narrow twin (TerminalTile._queueScrollBytes,
+   * terminal-tile.js: same 40ms window, same 512-byte bound) because this queue
+   * flushes to the active session only; keep the two in step.
    */
   _queueScrollBytes(data) {
     if (!data || !this.activeSessionId) return;
@@ -5601,13 +5645,20 @@ Object.assign(CodemanApp.prototype, {
    * Every other mode is deliberately absent: shell/pi own real terminal
    * scrollback, and codex/gemini/antigravity/grok/deepseek/omp page-key behaviour
    * is unverified (docs/scrollback-fix-plan.md).
+   *
+   * `target` ({ terminal, sessionId, localRows }) asks for a TerminalTile, which
+   * calls this with its own session and terminal, so the mode list above stays
+   * here alone. `localRows` replaces `baseY` as the history row count: a tile
+   * discounts the stale rows its own load order leaves above the screen
+   * (TerminalTile._localRows). Every field left out means the primary pane's.
    */
-  _localScrollbackIsHollow() {
-    const mode = this.sessions?.get(this.activeSessionId)?.mode || 'claude';
+  _localScrollbackIsHollow(target = {}) {
+    const mode = this.sessions?.get(target.sessionId || this.activeSessionId)?.mode || 'claude';
     if (mode !== 'claude' && mode !== 'opencode') return false;
-    const buf = this.terminal?.buffer?.active;
+    const buf = (target.terminal || this.terminal)?.buffer?.active;
     if (!buf || buf.type === 'alternate') return false;
-    return (buf.baseY || 0) === 0;
+    const rows = Number.isFinite(target.localRows) ? target.localRows : buf.baseY;
+    return (rows || 0) === 0;
   },
 
   /**
@@ -5631,6 +5682,10 @@ Object.assign(CodemanApp.prototype, {
    *
    * @returns true when the gesture was consumed here (the caller must not also
    *          scroll locally).
+   *
+   * Twin: TerminalTile._maybePageCliTranscript (terminal-tile.js) pages a tile
+   * through the same gates and the same pageKeysForTravel arithmetic; keep the
+   * two in step.
    */
   _maybePageCliTranscript(ev, lines) {
     if (!lines || ev?.shiftKey || !this.activeSessionId) return false;
@@ -5640,15 +5695,9 @@ Object.assign(CodemanApp.prototype, {
       this._pageKeySession = this.activeSessionId;
       this._pageKeyPending = 0;
     }
-    const tuning = window.CodemanTerminalInput;
-    const perPage = Math.max(2, Math.round((this.terminal?.rows || 24) * tuning.PAGE_KEY_SCREEN_FRACTION));
-    const pending = (this._pageKeyPending || 0) + lines;
-    const pages = Math.trunc(pending / perPage);
-    this._pageKeyPending = pending - pages * perPage;
-    if (pages) {
-      const key = pages < 0 ? tuning.KEY_PAGE_UP : tuning.KEY_PAGE_DOWN;
-      this._queueScrollBytes(key.repeat(Math.min(Math.abs(pages), tuning.PAGE_KEY_MAX_PER_BATCH)));
-    }
+    const step = window.CodemanTerminalInput.pageKeysForTravel(this._pageKeyPending, lines, this.terminal?.rows);
+    this._pageKeyPending = step.pending;
+    if (step.keys) this._queueScrollBytes(step.keys);
     this._logScrollRouting('page-keys');
     return true;
   },
@@ -5703,18 +5752,24 @@ Object.assign(CodemanApp.prototype, {
   // synthetic SGR press could e.g. dismiss a claude permission dialog),
   // clicks outside the cell grid, and sessions where xterm's own encoder is
   // live (it reported the click itself — a second report would double-move).
-  _handleDesktopTerminalClick(ev) {
-    if (!this.terminal || !ev?.isTrusted) return;
+  //
+  // `target` ({ terminal, sessionId, linkHovered }) runs the same skips for a
+  // TerminalTile's click: its own terminal, its own session's tracking flag and
+  // its own link hover (the primary pane's _linkHovered belongs to its terminal
+  // alone). Every field left out means the primary pane's.
+  _handleDesktopTerminalClick(ev, target = {}) {
+    const terminal = target.terminal || this.terminal;
+    if (!terminal || !ev?.isTrusted) return;
     if (ev.button !== 0 || ev.detail !== 1) return;
     if (ev.shiftKey || ev.altKey || ev.ctrlKey || ev.metaKey) return;
-    const mode = this.terminal.modes?.mouseTrackingMode;
+    const mode = terminal.modes?.mouseTrackingMode;
     if (mode && mode !== 'none') return;
-    if (!this._shouldReportMouseToCli()) return;
-    if (this.terminal.hasSelection?.()) return;
-    if (this._linkHovered) return; // link provider hover/leave callbacks (registerFilePathLinkProvider)
+    if (!this._shouldReportMouseToCli(target.sessionId)) return;
+    if (terminal.hasSelection?.()) return;
+    if (target.linkHovered ?? this._linkHovered) return; // link provider hover/leave callbacks (registerFilePathLinkProvider)
     if (performance.now() <= (this._trustedTapMouseSuppressUntil || 0)) return;
     if (!ev.target?.closest?.('.xterm-screen')) return;
-    this._sendSyntheticSgrTap(ev.clientX, ev.clientY);
+    this._sendSyntheticSgrTap(ev.clientX, ev.clientY, target);
   },
 
   /**
