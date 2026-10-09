@@ -11,12 +11,27 @@
  *
  * Deliberately plainer than the primary pane (this.terminal/this._ws in
  * terminal-ui.js): no local-echo overlay, no CJK IME, no touch/mobile
- * handlers, no keyboard accessory bar. Desktop-only by nature; see
- * docs/split-pane-sessions-plan.md.
+ * handlers (a swipe on a touch screen pages nothing), no keyboard accessory
+ * bar, and no SGR wheel forwarding to Claude's fullscreen renderer
+ * (docs/tile-grid-plan.md follow-up 4). Built for wide screens; see
+ * docs/split-pane-sessions-plan.md and docs/tile-grid-plan.md.
+ *
+ * What it does carry over from the primary pane, through the primary pane's
+ * own code aimed at THIS pane (its terminal, its session, never the active
+ * one):
+ *  - Hollow-buffer paging (#555): a CLI that draws in place (opencode on the
+ *    alternate screen, Claude's repaint mode) leaves the xterm no scrollback,
+ *    so the wheel pages the CLI's own transcript with PageUp/PageDown
+ *    (_maybePageCliTranscript) through the primary pane's gates, plus an
+ *    overflow-row discount for this pane's capture-before-resize load
+ *    (_localRows).
+ *  - The desktop click report: a plain left-click hand-encoded as SGR while
+ *    the session's CLI has mouse tracking on (cliMouseTracking), for the modes
+ *    whose mouse DECSETs the server strips (_installClickListener).
  *
  * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js
  * @dependency constants.js (window.CodemanTerminalFont, window.CodemanFetchDeadline, DEFAULT_SCROLLBACK, TERMINAL_TAIL_SIZE, TERMINAL_CHUNK_SIZE)
- * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight)
+ * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight, CodemanTerminalInput.wheelDeltaLines/pageKeysForTravel, app._shouldForwardWheelToApp/_localScrollbackIsHollow/_handleDesktopTerminalClick)
  * @loadorder 7.4 of 16, loaded after terminal-ui.js and before terminal-split.js
  */
 
@@ -157,6 +172,19 @@
       // flag, app._linkHovered, belongs to its terminal alone).
       this._linkHovered = false;
       this._onFocusIn = null;
+      // Hollow-buffer paging (_maybePageCliTranscript): wheel travel short of a
+      // whole page, carried to the next wheel event.
+      this._pageKeyPending = 0;
+      // Page keys waiting for the 40 ms flush, and its timer (_queueScrollBytes).
+      this._scrollBytes = '';
+      this._scrollFlushTimer = null;
+      // Rows above the screen that this pane pushed there itself rather than
+      // received as history: a capture taken at the PTY's previous, taller size
+      // and row-shrinking fits (_overflowAfterLoad, _noteResizeRows). Not
+      // history, so the paging gate leaves them out (_localRows).
+      this._overflowRows = 0;
+      // The desktop click reporter (_installClickListener).
+      this._onClick = null;
     }
 
     async connect() {
@@ -192,6 +220,7 @@
       });
 
       this._installWheelListener();
+      this._installClickListener();
 
       // Focusing this terminal makes it the pane the keyboard is in, so the
       // app-level shortcuts, voice and paste act on it (app._focusedPane).
@@ -600,6 +629,7 @@
             // Cleared at the load's turn, not when it was asked for: a grid tile
             // waiting in the queue keeps its last frame instead of sitting blank.
             this.terminal?.clear();
+            this._overflowRows = 0;
             // The clear wipes a "disconnected" marker (a `{t:'r'}` frame can queue
             // a trailing refresh behind a pull that the socket's close then
             // interrupts), so a refresh on a closed socket owes it back once its
@@ -635,6 +665,7 @@
               () => this._destroyed,
               (cancel) => (this._cancelReplay = cancel)
             );
+            if (!this._destroyed && this.terminal) this._overflowRows = this._overflowAfterLoad(payload);
           }
         } catch {
           /* Best-effort: live output still arrives once the socket connects. */
@@ -699,18 +730,140 @@
     // one it is restoring. Queued, it lands in order with the frames around it.
     _onLiveClear() {
       if (this._liveQueue) this._liveQueue.push({ at: performance.now(), clear: true });
-      else this.terminal?.clear();
+      else this._clearTerminal();
+    }
+
+    // A clear leaves no rows above the screen, the pane's own overflow included.
+    _clearTerminal() {
+      this.terminal?.clear();
+      this._overflowRows = 0;
     }
 
     // Capture phase, because xterm's own wheel handler stopPropagation()s every
     // event it consumes, so a bubbling listener here would never see the wheel
-    // while the pane still has scrollback to scroll. Passive: this only observes,
-    // xterm keeps doing the scrolling.
+    // while the pane still has scrollback to scroll. Not passive: the one route
+    // this pane takes over, paging a hollow buffer's CLI transcript
+    // (_maybePageCliTranscript), is consumed right here (preventDefault plus
+    // stopPropagation in the capture phase, the primary pane's technique), so
+    // xterm's viewport, a descendant, never sees it. Every other wheel is left
+    // to xterm, which keeps doing the scrolling, and only observed for the
+    // shell history pull.
     _installWheelListener() {
       this._onWheel = (ev) => {
+        if (this._maybePageCliTranscript(ev)) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          return;
+        }
         if (ev.deltaY < 0) this._maybeLoadMoreHistory();
       };
-      this.mountEl.addEventListener('wheel', this._onWheel, { capture: true, passive: true });
+      this.mountEl.addEventListener('wheel', this._onWheel, { capture: true, passive: false });
+    }
+
+    // A plain left-click reported to the CLI, the primary pane's desktop click
+    // (terminal-ui.js _handleDesktopTerminalClick) aimed at this pane. The
+    // server strips the mouse DECSETs of some modes (opencode's since #555, so a
+    // drag selects text), which leaves this xterm's own mouse encoder idle for
+    // them; without this a click in such a pane never reached the CLI. Only
+    // while this pane's session has tracking on (cliMouseTracking), through the
+    // same skips as the primary pane. Bubble phase, as there. The target is
+    // built per click, so the terminal and the link hover are read live.
+    _installClickListener() {
+      this._onClick = (ev) => {
+        if (this._destroyed || !this.terminal) return;
+        global.app?._handleDesktopTerminalClick?.(ev, {
+          terminal: this.terminal,
+          sessionId: this.sessionId,
+          linkHovered: this._linkHovered,
+        });
+      };
+      this.mountEl.addEventListener('click', this._onClick);
+    }
+
+    // Hollow-buffer paging, the twin of the primary pane's
+    // _maybePageCliTranscript (terminal-ui.js; keep the two in step). A CLI that
+    // draws in place (opencode, on the alternate screen; Claude's repaint mode)
+    // leaves this xterm no scrollback, so a wheel scrolled nothing; instead the
+    // travel pages the CLI's own transcript with PageUp/PageDown. Every gate is
+    // the primary pane's own, asked for THIS pane (its terminal, its session,
+    // never the active one), so the CLI rules stay in terminal-ui.js and this
+    // file names no CLI. Returns true when the wheel was consumed here.
+    _maybePageCliTranscript(ev) {
+      if (this._destroyed || !this.terminal || !ev || ev.shiftKey) return false;
+      const app = global.app;
+      const input = global.CodemanTerminalInput;
+      if (!app || !input?.pageKeysForTravel || !input.wheelDeltaLines) return false;
+      // xterm's own encoder forwards the wheel while the CLI's tracking reaches
+      // it (a shell running htop), as in the primary pane.
+      const tracking = this.terminal.modes?.mouseTrackingMode;
+      if (tracking && tracking !== 'none') return false;
+      const target = { terminal: this.terminal, sessionId: this.sessionId };
+      // The primary pane would forward this wheel to Claude's fullscreen
+      // renderer as SGR reports. Tiles do not do that yet (docs/tile-grid-plan.md
+      // follow-up 4), so the wheel stays with xterm, as before.
+      if (app._shouldForwardWheelToApp?.(ev, target)) return false;
+      if (!app._localScrollbackIsHollow?.({ ...target, localRows: this._localRows() })) return false;
+      const lines = input.wheelDeltaLines(ev, this.terminal.rows);
+      if (!lines) return false;
+      const step = input.pageKeysForTravel(this._pageKeyPending, lines, this.terminal.rows);
+      this._pageKeyPending = step.pending;
+      if (step.keys) this._queueScrollBytes(step.keys);
+      return true;
+    }
+
+    // Coalesces the page keys into one send per 40 ms, bounded at 512 bytes so a
+    // fling cannot build a backlog that keeps paging after it stops. A narrow
+    // twin of the primary pane's _queueScrollBytes / _flushWheelSgrQueue
+    // (terminal-ui.js; keep the two in step), which flushes to the active
+    // session only. Sent ephemeral (no seq, never persisted) to THIS pane's
+    // session, over this pane's socket while it is open.
+    _queueScrollBytes(data) {
+      if (!data || this._destroyed) return;
+      if (this._scrollBytes.length > 512) return;
+      this._scrollBytes += data;
+      if (this._scrollFlushTimer) return;
+      this._scrollFlushTimer = setTimeout(() => {
+        this._scrollFlushTimer = null;
+        const bytes = this._scrollBytes;
+        this._scrollBytes = '';
+        if (bytes && !this._destroyed) global.app?._sendInputEphemeral?.(this.sessionId, bytes);
+      }, 40);
+    }
+
+    // History rows in this xterm, for the paging gate: baseY less the rows this
+    // pane pushed up itself. Clamped, because a clear (Ctrl+L, a `{t:'c'}`
+    // frame) or an ED3/RIS in the stream drops rows behind this count's back.
+    _localRows() {
+      const baseY = this.terminal?.buffer?.active?.baseY || 0;
+      this._overflowRows = Math.min(this._overflowRows, baseY);
+      return baseY - this._overflowRows;
+    }
+
+    // After a local resize: rows a shrinking fit pushed above the screen count
+    // as overflow, and rows a growing one pulled back come off it. `before` is
+    // baseY just before the resize (xterm resizes synchronously).
+    _noteResizeRows(before) {
+      const after = this.terminal?.buffer?.active?.baseY || 0;
+      this._overflowRows = Math.max(0, Math.min(after, this._overflowRows + (after - before)));
+    }
+
+    // The overflow a finished load leaves: everything above the screen when the
+    // capture held a single screen (the server says how tall in `captureRows`;
+    // the full-history path keeps every pane row and trims one newline), none
+    // when it carried history. The counterpart of the primary pane resizing the
+    // PTY before it captures (app.js selectSession's sendResize), which this
+    // pane does not do: its first capture is taken at the PTY's previous size
+    // (usually the primary pane's, taller) and written into a shorter xterm,
+    // whose extra rows land above the screen with nothing after them to clear
+    // them. Without a `captureRows` the raw baseY stands, as in the primary.
+    _overflowAfterLoad(payload) {
+      const captureRows = payload?.captureRows;
+      if (!Number.isFinite(captureRows)) return 0;
+      const text = payload.terminalBuffer || '';
+      let lines = 1;
+      for (let i = text.indexOf('\n'); i !== -1 && lines <= captureRows; i = text.indexOf('\n', i + 1)) lines++;
+      if (lines > captureRows) return 0;
+      return this.terminal?.buffer?.active?.baseY || 0;
     }
 
     // Wheel-up at the top of a SHELL pane's scrollback. tmux repaints a burst of
@@ -818,6 +971,7 @@
         }
         this._historyPullUseless = false;
         term.write('\x1bc');
+        this._overflowRows = 0; // the reset leaves nothing above the screen
         replayed = true;
         if (this._wsClosed) this._markerOwed = true;
         await writeChunked(
@@ -849,7 +1003,7 @@
         const cutoff = replayed ? capturedAt : 0;
         for (const entry of queued) {
           if (entry.at < cutoff) continue;
-          if (entry.clear) this.terminal?.clear();
+          if (entry.clear) this._clearTerminal();
           else this.terminal?.write(entry.data);
         }
         // Settled after the queue flush so the marker is the last thing on
@@ -894,7 +1048,9 @@
     // pane's own convention (throttledResize in terminal-ui.js).
     localFit() {
       if (!this.fitAddon) return;
+      const before = this.terminal?.buffer?.active?.baseY || 0;
       this.fitAddon.fit();
+      this._noteResizeRows(before);
     }
 
     // Reflow to the container and tell the PTY, as one step: the xterm and the
@@ -955,7 +1111,9 @@
         { cols, rows }
       );
       if (!verdict?.adopt) return;
+      const before = terminal.buffer?.active?.baseY || 0;
       terminal.resize(verdict.cols, terminal.rows);
+      this._noteResizeRows(before); // a column change reflows rows above the screen
       this._lastSentDims = { cols: verdict.cols, rows: terminal.rows };
     }
 
@@ -982,6 +1140,15 @@
         this.mountEl?.removeEventListener('wheel', this._onWheel, { capture: true });
         this._onWheel = null;
       }
+      if (this._onClick) {
+        this.mountEl?.removeEventListener('click', this._onClick);
+        this._onClick = null;
+      }
+      // Page keys still waiting for their flush go nowhere: the pane is gone.
+      clearTimeout(this._scrollFlushTimer);
+      this._scrollFlushTimer = null;
+      this._scrollBytes = '';
+      this._pageKeyPending = 0;
       this._detachSocket();
       if (this._onFocusIn) {
         this.terminal?.textarea?.removeEventListener('focus', this._onFocusIn);

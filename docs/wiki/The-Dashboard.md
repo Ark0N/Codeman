@@ -219,7 +219,8 @@ Worth knowing:
   `~/.claude/settings.json`), so the wheel scrolls the conversation rather than the terminal.
   Claude's default inline view keeps its history in the terminal and scrolls locally. `Shift+Wheel` is
   always local scrollback. OpenCode's wheel and swipes page its own conversation
-  (PageUp/PageDown). Other CLIs scroll locally.
+  (PageUp/PageDown); in a grid tile or the split view's second pane the wheel does
+  too. Other CLIs scroll locally.
 - **Selection copy.** `Ctrl+C` copies when text is selected and interrupts when it is not.
   `Ctrl+Shift+C` always copies.
 - **Selecting where the CLI owns the mouse.** `Shift+drag` starts a selection even in a pane
