@@ -237,8 +237,15 @@ Object.assign(CodemanApp.prototype, {
           if (state !== 'idle') this._setTileLoadingLabel(entry.body);
           entry.el.classList.toggle('tile--loading', state !== 'idle');
           // The first capture has landed (or failed): the terminal fades in,
-          // whole, instead of showing its replay scroll by.
-          if (state === 'idle') entry.el.classList.remove('tile--revealing');
+          // whole, instead of showing its replay scroll by, or plays the
+          // terminal pane's entrance style (entrance-animations.js).
+          if (state === 'idle') {
+            entry.el.classList.remove('tile--revealing');
+            if (entry.screenOwed) {
+              entry.screenOwed = false;
+              this.playTileScreenEntrance?.(entry.body);
+            }
+          }
         },
       });
     }
@@ -536,14 +543,28 @@ Object.assign(CodemanApp.prototype, {
     // Zoomed, only the zoomed tile is on screen (the others are display: none
     // under .tile-grid--zoomed, a rule the ghost layer does not carry).
     const zoomed = section.classList.contains('tile-grid--zoomed');
+    const copies = [];
     for (const id of grid.ids) {
       const el = grid.tiles.get(id)?.el;
       if (!el || (zoomed && !el.classList.contains('tile--zoomed'))) continue;
       const ghost = el.cloneNode(true);
-      ghost.classList.remove('tile--entering', 'tile--needs', 'tile--loading', 'tile--drop-target', 'tile--dragging');
+      ghost.classList.remove(
+        'tile--entering',
+        'tile--enter-themed',
+        'tile--enter-hold',
+        'tile--needs',
+        'tile--loading',
+        'tile--drop-target',
+        'tile--dragging'
+      );
+      ghost.querySelector?.('.tile-body')?.classList.remove('term-enter');
       ghost.classList.add('tile--leaving');
       layer.appendChild(ghost);
+      copies.push({ ghost, el, sessionId: id });
     }
+    // The entrance style's own way out (entrance-animations.js): back into the
+    // tabs, a CRT switch-off. Placed while the real tiles are still measurable.
+    const leaveMs = this._stageTileExit?.(copies, { now: !hold }) || 0;
     main.appendChild(layer);
     let fallback = null;
     let holdCap = null;
@@ -557,10 +578,11 @@ Object.assign(CodemanApp.prototype, {
       if (fallback !== null || !layer.isConnected) return;
       clearTimeout(holdCap);
       layer.classList.add('tile-grid-ghosts--release');
-      fallback = setTimeout(done, TILE_GHOST_FALLBACK_MS);
+      fallback = setTimeout(done, Math.max(TILE_GHOST_FALLBACK_MS, leaveMs));
     };
     layer.addEventListener('animationend', (e) => {
-      if (/^tile-leave/.test(e.animationName) && e.target === layer.lastElementChild) done();
+      if (e.pseudoElement || e.target !== layer.lastElementChild) return;
+      if (/^tile-leave/.test(e.animationName)) done();
     });
     if (hold) holdCap = setTimeout(release, TILE_GHOST_HOLD_MAX_MS);
     else release();
@@ -1323,11 +1345,10 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * Builds one tile (header, body, TerminalTile); where it goes is the
-   * caller's (grid.cells). It enters with a short fade and settle
-   * (styles.css .tile--entering, the `enterIndex`-th of a staggered group),
-   * and its terminal stays transparent until its first capture lands
-   * (.tile--revealing, cleared by the load queue, with a backstop timer).
-   * Opacity and transform only, never anything its fit reads.
+   * caller's (grid.cells). It enters as the `enterIndex`-th of a staggered
+   * group (_beginTileEntrance), and its terminal stays transparent until its
+   * first capture lands (.tile--revealing, cleared by the load queue, with a
+   * backstop timer). Opacity and transform only, never anything its fit reads.
    */
   _mountTile(sessionId, { enterIndex = 0 } = {}) {
     const grid = this._tileGrid;
@@ -1336,16 +1357,11 @@ Object.assign(CodemanApp.prototype, {
     const el = document.createElement('div');
     el.className = 'tile tile--revealing';
     setTimeout(() => el.classList.remove('tile--revealing'), TILE_REVEAL_FALLBACK_MS);
-    if (this._tileMotionAllowed()) {
-      el.classList.add('tile--entering');
-      el.style.setProperty('--tile-enter-index', String(enterIndex));
-      const onEnd = (e) => {
-        if (e.target !== el || e.animationName !== 'tile-enter') return;
-        el.removeEventListener('animationend', onEnd);
-        el.classList.remove('tile--entering');
-      };
-      el.addEventListener('animationend', onEnd);
-    }
+    // Its screen plays the terminal pane's entrance once its first capture
+    // lands, when its frame entered in a tile style (Tile Animations): never
+    // with the default `settle`, nor on a reload's restore, which settles.
+    const entered = this._beginTileEntrance(el, sessionId, enterIndex);
+    const screenOwed = !!entered && entered !== 'settle';
     el.dataset.sessionId = sessionId;
     // Header and body are siblings: the chrome is refreshed in place
     // (_renderTileHeader), never by rewriting the tile, which would take the
@@ -1391,10 +1407,59 @@ Object.assign(CodemanApp.prototype, {
       renaming: false,
       // The pid this tile last saw, so a pane that starts later is noticed.
       pid: this.sessions.get(sessionId)?.pid ?? null,
+      // Its screen plays the terminal entrance once its first capture lands.
+      screenOwed,
     });
     // Where it goes is the caller's (grid.cells).
     this._renderTileHeader(sessionId);
     return true;
+  },
+
+  /**
+   * A tile's frame enters as the `enterIndex`-th of a staggered group, in the
+   * entrance style (entrance-animations.js, App Settings → Entrance
+   * Animations). `settle` is the grid's own fade and settle (styles.css
+   * .tile--entering), and what a reload restores with whatever the theme:
+   * nothing animates on page load. Any other style is timed by the entrance
+   * module a frame later, once the layout is final (_stageTileEntrance).
+   * Opacity and transform only, never anything the fit reads.
+   *
+   * @returns {string|null} the style it enters with, or null when it does not animate
+   */
+  _beginTileEntrance(el, sessionId, enterIndex = 0) {
+    const style = this._tileEnterQuiet ? 'settle' : this.tileEntranceStyle?.() || 'settle';
+    if (!this._tileMotionAllowed() || style === 'off') return null;
+    el.classList.add('tile--entering');
+    el.style.setProperty('--tile-enter-index', String(enterIndex));
+    let backstop = null;
+    const finish = () => {
+      clearTimeout(backstop);
+      el.removeEventListener('animationend', onEnd);
+      el.classList.remove('tile--entering', 'tile--enter-themed', 'tile--enter-hold');
+      if (el._tileEnterFinish === finish) el._tileEnterFinish = null;
+    };
+    // The tile's own entrance (`tile-enter`, or a themed `tile-enter-*`),
+    // never a child's animation or a wash on its ::before.
+    const onEnd = (e) => {
+      if (e.target !== el || e.pseudoElement || !/^tile-enter/.test(e.animationName || '')) return;
+      finish();
+    };
+    el.addEventListener('animationend', onEnd);
+    el._tileEnterFinish = finish;
+    if (style !== 'settle') {
+      this._stageTileEntrance?.(el, sessionId, (ms) => {
+        clearTimeout(backstop);
+        backstop = setTimeout(finish, ms);
+      });
+    }
+    return style;
+  },
+
+  /** Plays a mounted tile's entrance again (the entrance lab's replay): nothing is remounted or refitted. */
+  _replayTileEntrance(el, sessionId, enterIndex = 0) {
+    el._tileEnterFinish?.();
+    void el.offsetWidth;
+    return this._beginTileEntrance(el, sessionId, enterIndex);
   },
 
   /**
@@ -2598,7 +2663,13 @@ Object.assign(CodemanApp.prototype, {
     if (this._tilesOwnTerminal()) return false;
     const stored = this._readStoredTileGrid();
     if (!stored?.open || stored.ids.length === 0) return false;
-    return this._openStoredTileGrid(stored);
+    // Put back, not opened: the tiles settle in whatever the entrance theme.
+    this._tileEnterQuiet = true;
+    try {
+      return this._openStoredTileGrid(stored);
+    } finally {
+      this._tileEnterQuiet = false;
+    }
   },
 
   /** A followed `#session=` link took the screen on load: the stored grid stays remembered, closed. */

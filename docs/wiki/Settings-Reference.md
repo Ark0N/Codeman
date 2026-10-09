@@ -91,6 +91,7 @@ every session or only the active tab.
 | ---------------------- | ----------------------------------------------------------------------------------------- |
 | Skin                   | Theme palettes, light ones included. Applied before first paint, so no flash of the wrong theme. |
 | Entrance Animations     | Per-surface animation styles for tabs, terminals, windows, and lineage lines. All default to the legacy no-animation behaviour. |
+| Tile Animations         | How tiles arrive when the tile grid opens and leave when it closes: fly out of their tabs, dealt from the Tiles button, CRT, beam down, cascade, pop or soft; each screen then plays the theme's terminal animation. Off by default (the grid's quick fade); picking an Entrance Animations theme presets it. |
 | Display Name           | Your name in the UI. Cosmetic only; it never renames the package, CLI, API, or storage.    |
 | Interface Language     | English or Simplified Chinese. Per device.                                                 |
 | Session List Layout    | Header tab strip (default), a collapsible left sidebar, or the sidebar with detailed rows. See [The Dashboard](The-Dashboard#session-list-layout). |

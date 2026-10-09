@@ -1,8 +1,9 @@
 /**
- * @fileoverview Entrance animations for the four things that appear when work
+ * @fileoverview Entrance animations for the things that appear when work
  * starts: session TABS, the main TERMINAL pane a session's CLI runs in, floating
- * agent WINDOWS, and the CONNECTION LINES tying a window back to its parent tab.
- * One picker per surface, plus themes that set all four to a matching look.
+ * agent WINDOWS, the CONNECTION LINES tying a window back to its parent tab, and
+ * the TILES of the tile grid (tile-grid.js). One picker per surface, plus themes
+ * that set all five to a matching look.
  *
  * Everything is OFF by default (the `legacy` theme), so an untouched install
  * behaves exactly as it did before this module existed. Opt in via App Settings
@@ -34,13 +35,28 @@
  *    once-per-id even though the POST response and the SSE event both call
  *    `_onSessionCreated`.
  *
+ * Tiles are off by default (`settle`, the grid's own quick fade, exactly as
+ * before) and switched on in App Settings → Appearance → Tile Animations, or
+ * preset by a theme. A styled tile plays in two beats that combine two
+ * surfaces. The FRAME enters as it mounts, in its own style
+ * (TILE_ANIM_STYLES); the SCREEN plays the terminal pane's style when its
+ * first capture lands (`.tile-body.term-enter`, the same keyframes as the main
+ * pane). The load queue serves one capture at a time, so
+ * the screens light up one after another, the focused tile first. The frame
+ * styles move transform and opacity only (six tiles animate at once; a blur
+ * belongs to the serialized screen beat), and each has its own way out on the
+ * closing grid's still copy. A reload restores with `settle` whatever the
+ * setting.
+ *
  * Styles are selected by `data-tab-anim` / `data-term-anim` / `data-win-anim` /
- * `data-line-anim` on <html>; the keyframes live in styles.css. `?animlab=1`
- * opens a floating picker that fakes tabs, a pane replay, a window and a line,
- * so styles can be compared without spawning real sessions or agents.
+ * `data-line-anim` / `data-tile-anim` on <html>; the keyframes live in
+ * styles.css. `?animlab=1` opens a floating picker that fakes tabs, a pane
+ * replay, a window and a line, and replays the tile grid in place, so styles
+ * can be compared without spawning real sessions or agents.
  *
  * @mixin Extends CodemanApp.prototype via Object.assign
- * @dependency app.js (tab render pipeline), subagent-windows.js (window + line hooks)
+ * @dependency app.js (tab render pipeline), subagent-windows.js (window + line hooks),
+ *   tile-grid.js (tile mount, reveal and still-copy hooks)
  * @dependency constants.js (escapeHtml)
  * @loadorder 12.6 of 16, after webview-tabs.js, before ralph-wizard.js
  */
@@ -94,7 +110,6 @@ const LINE_ANIM_STYLES = [
  */
 const TERM_ANIM_STYLES = [
   { key: 'crt', label: 'CRT', blurb: 'Power-on: a hot line that expands to full height.', duration: 560 },
-  { key: 'boot', label: 'Boot', blurb: 'Flickers on under a green scan sweep.', duration: 760 },
   { key: 'wipe', label: 'Wipe', blurb: 'Reveals top-to-bottom behind a bright edge.', duration: 520 },
   { key: 'slide', label: 'Slide up', blurb: 'Rises into place from below.', duration: 420 },
   { key: 'fade', label: 'Fade', blurb: 'Quiet fade with a touch of scale.', duration: 340 },
@@ -102,18 +117,64 @@ const TERM_ANIM_STYLES = [
   { key: 'off', label: 'Off', blurb: 'Current behaviour: the pane just appears.', duration: 0 },
 ];
 
+/**
+ * Tile grid entrance styles, for each tile's FRAME (its screen plays the
+ * TERM_ANIM_STYLES style once content lands). Transform and opacity only, plus
+ * a wash on ::before: FitAddon reads the untransformed layout box, so a tile
+ * still fits once at its final size (#464). `stagger` is the default gap
+ * between tiles and `order` the default cascade: `reading` (row by row),
+ * `wave` (diagonals from the top left) or `ripple` (outward from the focused
+ * tile). `from`: the tile is measured against a source after layout (its tab,
+ * the Tiles button), so it is held one frame and timed by _runTileEntrances.
+ */
+// prettier-ignore
+const TILE_ANIM_STYLES = [
+  { key: 'settle', label: 'Off (default)', blurb: "The grid's own quick fade and settle.", duration: 180, stagger: 24, order: 'reading' },
+  { key: 'fly', label: 'Fly from tab', blurb: 'Each tile flies out of its session tab, and back into it on close.', duration: 560, stagger: 55, order: 'reading', from: 'tab' },
+  { key: 'deal', label: 'Deal', blurb: 'Dealt out of the Tiles button like cards, gathered back on close.', duration: 600, stagger: 75, order: 'reading', from: 'button' },
+  { key: 'crt', label: 'CRT', blurb: 'Powers on as a hot line; switches off to a dot on close.', duration: 560, stagger: 70, order: 'wave' },
+  { key: 'beam', label: 'Beam down', blurb: 'A beam draws down from its tab, then the tile materializes.', duration: 620, stagger: 90, order: 'reading', from: 'tab' },
+  { key: 'cascade', label: 'Cascade', blurb: 'Swings down from its top edge in a diagonal wave.', duration: 600, stagger: 80, order: 'wave' },
+  { key: 'pop', label: 'Pop', blurb: 'Springs open, rippling out from the focused tile.', duration: 480, stagger: 70, order: 'ripple' },
+  { key: 'soft', label: 'Soft', blurb: 'Drifts in slowly, rippling out from the focused tile.', duration: 620, stagger: 60, order: 'ripple' },
+  { key: 'off', label: 'None', blurb: 'Tiles just appear.', duration: 0, stagger: 0, order: 'reading' },
+];
+
+/** Cascade orders for the tile grid; `auto` is each style's own. */
+const TILE_ANIM_ORDERS = [
+  { key: 'auto', label: 'Style default' },
+  { key: 'reading', label: 'Reading order' },
+  { key: 'wave', label: 'Diagonal wave' },
+  { key: 'ripple', label: 'Ripple from focus' },
+];
+
 /** How long a `beam` window waits before materializing. Just under the line draw. */
 const BEAM_HOLD_MS = 360;
 
+/** Gap between tiles leaving, in reading order, so the last copy ends last. */
+const TILE_EXIT_STAGGER_MS = 35;
+
+/** Tile exit durations per style (styles.css `tile-leave-*`); the rest use the default fade. */
+const TILE_EXIT_MS = { fly: 460, deal: 520, crt: 520, beam: 480, cascade: 480, pop: 380, soft: 520 };
+
 /** One-click combinations that read as a single look. */
 const ANIM_THEMES = [
-  { key: 'terminal', label: 'Terminal', tab: 'crt', win: 'crt', line: 'draw', term: 'crt' },
-  { key: 'beamdown', label: 'Beam down', tab: 'crt', win: 'beam', line: 'draw', term: 'wipe' },
-  { key: 'softfocus', label: 'Soft focus', tab: 'blur', win: 'blur', line: 'blur', term: 'blur' },
-  { key: 'quiet', label: 'Quiet', tab: 'slide', win: 'materialize', line: 'fade', term: 'fade' },
-  { key: 'playful', label: 'Playful', tab: 'pop', win: 'pop', line: 'packet', term: 'slide' },
-  { key: 'legacy', label: 'Legacy', tab: 'off', win: 'fly', line: 'off', term: 'off' },
+  { key: 'terminal', label: 'Terminal', tab: 'crt', win: 'crt', line: 'draw', term: 'crt', tile: 'crt' },
+  { key: 'beamdown', label: 'Beam down', tab: 'crt', win: 'beam', line: 'draw', term: 'wipe', tile: 'beam' },
+  { key: 'launch', label: 'Launch', tab: 'pop', win: 'fly', line: 'packet', term: 'fade', tile: 'fly' },
+  { key: 'softfocus', label: 'Soft focus', tab: 'blur', win: 'blur', line: 'blur', term: 'blur', tile: 'soft' },
+  { key: 'quiet', label: 'Quiet', tab: 'slide', win: 'materialize', line: 'fade', term: 'fade', tile: 'settle' },
+  { key: 'playful', label: 'Playful', tab: 'pop', win: 'pop', line: 'packet', term: 'slide', tile: 'deal' },
+  { key: 'legacy', label: 'Legacy', tab: 'off', win: 'fly', line: 'off', term: 'off', tile: 'settle' },
 ];
+
+/**
+ * The surfaces a theme is recognised by. A theme also PRESETS the tile style
+ * when it is picked, but the tile style is its own setting (App Settings →
+ * Appearance → Tile Animations, off by default), so changing it afterwards
+ * does not turn the theme into "Custom".
+ */
+const ANIM_SURFACES = ['tab', 'win', 'line', 'term'];
 
 /**
  * Defaults are the `legacy` theme: every entrance OFF, and agent windows on the
@@ -126,6 +187,9 @@ const TAB_ANIM_DEFAULT = 'off';
 const WIN_ANIM_DEFAULT = 'fly';
 const LINE_ANIM_DEFAULT = 'off';
 const TERM_ANIM_DEFAULT = 'off';
+/** The grid's own fade and settle, unchanged for anyone who never picks a theme. */
+const TILE_ANIM_DEFAULT = 'settle';
+const TILE_ANIM_ORDER_DEFAULT = 'auto';
 const TAB_ANIM_STAGGER_DEFAULT = 90;
 /** A new id joins the current cascade if it arrives within this of the last one. */
 const TAB_ANIM_BATCH_WINDOW_MS = 600;
@@ -135,6 +199,8 @@ const ANIM_KEYS = {
   win: 'codeman:winAnim',
   line: 'codeman:lineAnim',
   term: 'codeman:termAnim',
+  tile: 'codeman:tileAnim',
+  tileOrder: 'codeman:tileAnimOrder',
   termSwitch: 'codeman:termAnimOnSwitch',
   stagger: 'codeman:tabAnimStagger',
   speed: 'codeman:tabAnimSpeed',
@@ -164,6 +230,10 @@ Object.assign(CodemanApp.prototype, {
     this.setWinAnimStyle(pick('winanim', WIN_ANIM_STYLES, ANIM_KEYS.win, WIN_ANIM_DEFAULT), { persist: false });
     this.setLineAnimStyle(pick('lineanim', LINE_ANIM_STYLES, ANIM_KEYS.line, LINE_ANIM_DEFAULT), { persist: false });
     this.setTermAnimStyle(pick('termanim', TERM_ANIM_STYLES, ANIM_KEYS.term, TERM_ANIM_DEFAULT), { persist: false });
+    // Off (the grid's own `settle`) until chosen: a theme saved before tiles
+    // were a surface gives them nothing new.
+    this.setTileAnimStyle(pick('tileanim', TILE_ANIM_STYLES, ANIM_KEYS.tile, TILE_ANIM_DEFAULT), { persist: false });
+    this.setTileAnimOrder(this._animRead(ANIM_KEYS.tileOrder, TILE_ANIM_ORDER_DEFAULT), { persist: false });
     this.setTermAnimOnSwitch(this._animRead(ANIM_KEYS.termSwitch, '0') === '1', { persist: false });
 
     this.setTabAnimStagger(Number(this._animRead(ANIM_KEYS.stagger, TAB_ANIM_STAGGER_DEFAULT)), { persist: false });
@@ -219,6 +289,18 @@ Object.assign(CodemanApp.prototype, {
     this._setAnimStyle('_termAnimStyle', key, TERM_ANIM_STYLES, TERM_ANIM_DEFAULT, 'data-term-anim', ANIM_KEYS.term, persist);
   },
 
+  setTileAnimStyle(key, { persist = true } = {}) {
+    // prettier-ignore
+    this._setAnimStyle('_tileAnimStyle', key, TILE_ANIM_STYLES, TILE_ANIM_DEFAULT, 'data-tile-anim', ANIM_KEYS.tile, persist);
+  },
+
+  /** The tile cascade: `auto` (the style's own) or a TILE_ANIM_ORDERS key. */
+  setTileAnimOrder(key, { persist = true } = {}) {
+    this._tileAnimOrder = TILE_ANIM_ORDERS.some((o) => o.key === key) ? key : TILE_ANIM_ORDER_DEFAULT;
+    if (persist) this._animWrite(ANIM_KEYS.tileOrder, this._tileAnimOrder);
+    this._syncAnimLab?.();
+  },
+
   /** Replay the terminal entrance on every tab switch, not just on a new session. */
   setTermAnimOnSwitch(on, { persist = true } = {}) {
     this._termAnimOnSwitch = !!on;
@@ -234,18 +316,25 @@ Object.assign(CodemanApp.prototype, {
     this.setWinAnimStyle(theme.win);
     this.setLineAnimStyle(theme.line);
     this.setTermAnimStyle(theme.term);
+    this.setTileAnimStyle(theme.tile);
     this._syncEntranceAnimSetting?.();
   },
 
-  /** The theme matching the four current styles, or 'custom' for a lab mix. */
+  /** The current style of each surface, keyed as ANIM_SURFACES. */
+  _currentAnimStyles() {
+    return {
+      tab: this._tabAnimStyle,
+      win: this._winAnimStyle,
+      line: this._lineAnimStyle,
+      term: this._termAnimStyle,
+      tile: this._tileAnimStyle,
+    };
+  },
+
+  /** The theme matching the current tab, window, line and pane styles, or 'custom' for a lab mix. */
   currentAnimTheme() {
-    const match = ANIM_THEMES.find(
-      (t) =>
-        t.tab === this._tabAnimStyle &&
-        t.win === this._winAnimStyle &&
-        t.line === this._lineAnimStyle &&
-        t.term === this._termAnimStyle
-    );
+    const current = this._currentAnimStyles();
+    const match = ANIM_THEMES.find((t) => ANIM_SURFACES.every((k) => t[k] === current[k]));
     return match ? match.key : 'custom';
   },
 
@@ -257,15 +346,29 @@ Object.assign(CodemanApp.prototype, {
 
   _syncEntranceAnimSetting() {
     const sel = document.getElementById('appSettingsEntranceAnim');
-    if (!sel) return;
-    sel.value = this.currentAnimTheme();
-    if (!sel.dataset.bound) {
-      sel.dataset.bound = '1';
-      sel.addEventListener('change', () => {
-        // 'custom' is a readout of a lab mix, not something you can select into.
-        if (sel.value === 'custom') sel.value = this.currentAnimTheme();
-        else this.setAnimTheme(sel.value);
-      });
+    if (sel) {
+      sel.value = this.currentAnimTheme();
+      if (!sel.dataset.bound) {
+        sel.dataset.bound = '1';
+        sel.addEventListener('change', () => {
+          // 'custom' is a readout of a lab mix, not something you can select into.
+          if (sel.value === 'custom') sel.value = this.currentAnimTheme();
+          else this.setAnimTheme(sel.value);
+        });
+      }
+    }
+    // Tile Animations: its own row, off (`settle`) by default. A theme picked
+    // above presets it; picked here, it applies to tiles alone.
+    const tileSel = document.getElementById('appSettingsTileAnim');
+    if (tileSel) {
+      tileSel.value = this._tileAnimStyle || TILE_ANIM_DEFAULT;
+      if (!tileSel.dataset.bound) {
+        tileSel.dataset.bound = '1';
+        tileSel.addEventListener('change', () => {
+          this.setTileAnimStyle(tileSel.value);
+          this._syncEntranceAnimSetting();
+        });
+      }
     }
   },
 
@@ -301,6 +404,10 @@ Object.assign(CodemanApp.prototype, {
 
   _termAnimDuration() {
     return this._styleDuration(TERM_ANIM_STYLES, this._termAnimStyle);
+  },
+
+  _tileAnimDuration() {
+    return this._styleDuration(TILE_ANIM_STYLES, this._tileAnimStyle);
   },
 
   // ── Tabs ──────────────────────────────────────────────────────────────────
@@ -501,6 +608,317 @@ Object.assign(CodemanApp.prototype, {
     }
   },
 
+  // ── Tile grid ─────────────────────────────────────────────────────────────
+
+  /** The frame style a tile mounted now enters with (tile-grid.js _mountTile). */
+  tileEntranceStyle() {
+    return this._tileAnimStyle || TILE_ANIM_DEFAULT;
+  },
+
+  /**
+   * Holds a just-mounted tile (`.tile--enter-hold`: invisible, not animating)
+   * until the next frame, when its cell is final and _runTileEntrances can
+   * order it and measure it against its source. `setBackstop(ms)` arms the
+   * mount's own timer that ends the entrance should animationend never come
+   * (a hidden browser tab, a zoomed grid hiding the tile); armed long at once,
+   * so a frame that never comes cannot strand a tile invisible.
+   */
+  _stageTileEntrance(el, sessionId, setBackstop) {
+    el.classList.add('tile--enter-themed', 'tile--enter-hold');
+    (this._tileEnterQueue ||= []).push({ el, sessionId, setBackstop });
+    setBackstop(4000);
+    if (!this._tileEnterRaf) this._tileEnterRaf = requestAnimationFrame(() => this._runTileEntrances());
+  },
+
+  /**
+   * One frame after the tiles mounted, every cell is final (openTileGrid packs,
+   * then a stored grid moves its tiles back). Each held tile gets its delay
+   * from the cascade order and, for `fly`/`deal`, the offset that starts it on
+   * its tab or the Tiles button (FLIP: transform only, so the fit it already
+   * did at its real size stands). `beam` draws its lines instead.
+   */
+  _runTileEntrances() {
+    this._tileEnterRaf = 0;
+    const queue = (this._tileEnterQueue || []).filter((q) => q.el.isConnected);
+    this._tileEnterQueue = [];
+    if (queue.length === 0) return;
+    const def = TILE_ANIM_STYLES.find((s) => s.key === this._tileAnimStyle) || TILE_ANIM_STYLES[0];
+    const speed = this._animSpeed || 1;
+    const stagger = def.stagger / speed;
+    const duration = this._tileAnimDuration();
+    const hold = def.key === 'beam' ? BEAM_HOLD_MS / speed : 0;
+    const order = this._tileAnimOrder && this._tileAnimOrder !== 'auto' ? this._tileAnimOrder : def.order;
+    const ranks = this._tileEnterRanks(
+      queue.map((q) => q.sessionId),
+      order
+    );
+    const beams = [];
+    queue.forEach((item, k) => {
+      const { el, sessionId } = item;
+      const delay = ranks[k] * stagger;
+      el.style.setProperty('--tile-enter-delay', `${Math.round(delay + hold)}ms`);
+      if (def.from) {
+        const to = el.getBoundingClientRect();
+        const from = this._tileSourceRect(def.from, sessionId);
+        if (from && to.width > 0 && to.height > 0) {
+          if (def.key === 'beam') beams.push({ from, to, delay });
+          else this._setTileFlight(el, from, to, def.key, ranks[k], '--tile-from');
+          if (def.from === 'tab') this._flashTileSourceTab(sessionId, delay);
+        }
+      }
+      el.classList.remove('tile--enter-hold');
+      // When the frame lands, for a screen whose content arrives earlier.
+      el._tileEnterEndsAt = performance.now() + delay + hold + duration;
+      item.setBackstop(delay + hold + duration + 900);
+    });
+    if (beams.length > 0) this._drawTileBeams(beams);
+  },
+
+  /**
+   * Cascade steps for `ids` (tiles in this batch) by their cells: `reading`
+   * row by row, `wave` by diagonal (row + column), `ripple` by distance from
+   * the focused tile. Equal keys share a step, so a diagonal lands together.
+   */
+  _tileEnterRanks(ids, order) {
+    const grid = this._tileGrid;
+    const cols = Math.max(1, grid?.cols || 1);
+    const cellOf = (id) => (Array.isArray(grid?.cells) ? grid.cells.indexOf(id) : -1);
+    const pos = ids.map((id, k) => {
+      const c = cellOf(id);
+      return c < 0 ? { cell: k, row: 0, col: k } : { cell: c, row: Math.floor(c / cols), col: c % cols };
+    });
+    let keys;
+    if (order === 'wave') {
+      keys = pos.map((p) => p.row + p.col);
+    } else if (order === 'ripple') {
+      const f = cellOf(grid?.focusedId);
+      const fr = f < 0 ? 0 : Math.floor(f / cols);
+      const fc = f < 0 ? 0 : f % cols;
+      keys = pos.map((p) => Math.abs(p.row - fr) + Math.abs(p.col - fc));
+    } else {
+      keys = pos.map((p) => p.cell);
+    }
+    const steps = [...new Set(keys)].sort((a, b) => a - b);
+    return keys.map((v) => steps.indexOf(v));
+  },
+
+  /** On-screen rect of a tile's source: its session tab (`tab`), else the Tiles button. */
+  _tileSourceRect(kind, sessionId) {
+    const visible = (node) => {
+      const r = node?.getBoundingClientRect?.();
+      if (!r || !(r.width > 0 && r.height > 0)) return null;
+      return r.bottom > 0 && r.right > 0 && r.top < window.innerHeight && r.left < window.innerWidth ? r : null;
+    };
+    if (kind === 'tab') {
+      const tab = document.querySelector(`.session-tab[data-id="${CSS.escape(sessionId)}"]`);
+      const r = visible(tab);
+      if (r) return r;
+    }
+    return visible(document.querySelector('.btn-tile-grid'));
+  },
+
+  /**
+   * The transform that puts a tile laid out at `to` onto `from`, as custom
+   * properties `<prefix>-x/-y/-sx/-sy/-rot` for the keyframes: the tab's own
+   * size for `fly` (it grows out of it), a small card turned a little for
+   * `deal`.
+   */
+  _setTileFlight(el, from, to, kind, rank, prefix) {
+    const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+    const dy = from.top + from.height / 2 - (to.top + to.height / 2);
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    let sx;
+    let sy;
+    let rot = 0;
+    if (kind === 'deal') {
+      sx = sy = clamp((from.width * 1.6) / to.width, 0.04, 0.3);
+      rot = [-14, 10, -7, 13, -11, 8][rank % 6];
+    } else {
+      sx = clamp(from.width / to.width, 0.02, 1);
+      sy = clamp(from.height / to.height, 0.02, 1);
+    }
+    el.style.setProperty(`${prefix}-x`, `${Math.round(dx)}px`);
+    el.style.setProperty(`${prefix}-y`, `${Math.round(dy)}px`);
+    el.style.setProperty(`${prefix}-sx`, sx.toFixed(4));
+    el.style.setProperty(`${prefix}-sy`, sy.toFixed(4));
+    el.style.setProperty(`${prefix}-rot`, `${rot}deg`);
+  },
+
+  /** The tab a tile leaves from glows as it goes (`fly`, `beam`). */
+  _flashTileSourceTab(sessionId, delay) {
+    const tab = document.querySelector(`.session-tab[data-id="${CSS.escape(sessionId)}"]`);
+    if (!tab) return;
+    tab.style.setProperty('--tab-launch-delay', `${Math.round(delay)}ms`);
+    tab.classList.remove('tab-launch');
+    void tab.offsetWidth;
+    tab.classList.add('tab-launch');
+    const onEnd = (e) => {
+      if (e.target === tab && /^tab-launch/.test(e.animationName || '')) done();
+    };
+    const done = () => {
+      clearTimeout(timer);
+      tab.removeEventListener('animationend', onEnd);
+      tab.classList.remove('tab-launch');
+      tab.style.removeProperty('--tab-launch-delay');
+    };
+    const timer = setTimeout(done, delay + 900);
+    tab.addEventListener('animationend', onEnd);
+  },
+
+  /**
+   * `beam`: a line draws from each tile's tab (or the Tiles button) down into
+   * the middle of its tile, in the connection-line look, with a packet riding it
+   * when the line style is `packet`; the tile materializes as it lands. Its
+   * own overlay: the agent lines' one is rebuilt from scratch on every redraw.
+   * The overlay goes once every line has faded.
+   */
+  _drawTileBeams(beams) {
+    const ns = 'http://www.w3.org/2000/svg';
+    let svg = document.getElementById('tileBeamLines');
+    if (!svg) {
+      svg = document.createElementNS(ns, 'svg');
+      svg.id = 'tileBeamLines';
+      svg.setAttribute('class', 'connection-lines-svg tile-beam-lines');
+      svg.setAttribute('aria-hidden', 'true');
+      document.body.appendChild(svg);
+    }
+    const packet = this._lineAnimStyle === 'packet';
+    let last = 0;
+    for (const { from, to, delay } of beams) {
+      const x1 = from.left + from.width / 2;
+      const y1 = from.bottom;
+      // Into the tile's middle: its top edge sits right under the tab strip,
+      // so a beam aimed there ran sideways along the strip instead of down.
+      const x2 = to.left + to.width / 2;
+      const y2 = to.top + to.height / 2;
+      const midY = (y1 + y2) / 2;
+      const path = document.createElementNS(ns, 'path');
+      path.setAttribute('d', `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`);
+      path.setAttribute('class', 'connection-line tile-beam-line');
+      svg.appendChild(path);
+      const len = Math.max(1, Math.round(path.getTotalLength()));
+      path.style.setProperty('--line-len', `${len}px`);
+      path.style.setProperty('--line-enter-delay', `${Math.round(delay)}ms`);
+      if (packet) {
+        const dot = path.cloneNode(false);
+        dot.setAttribute('class', 'connection-line-packet');
+        svg.appendChild(dot);
+      }
+      last = Math.max(last, delay);
+    }
+    clearTimeout(this._tileBeamTimer);
+    this._tileBeamTimer = setTimeout(() => svg.remove(), last + 1500 / (this._animSpeed || 1));
+  },
+
+  /**
+   * A tile's screen lights up when its first capture lands (tile-grid.js load
+   * queue), in the terminal pane's style: the same keyframes as the main pane,
+   * on `.tile-body`. Transform, opacity and clip-path (and `blur`'s filter, one
+   * tile at a time, since the queue serves one capture at a time), so the
+   * xterm inside keeps its size and its fit.
+   */
+  playTileScreenEntrance(body) {
+    if (!body || (this._termAnimStyle || TERM_ANIM_DEFAULT) === 'off') return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return;
+    body._codemanScreenDone?.();
+    // Content that lands while the frame is still flying in waits (held at
+    // its first keyframe, so hidden) until the frame has nearly landed: two
+    // beats, frame then screen, rather than both at once.
+    const frame = body.closest?.('.tile');
+    const endsAt = frame?.classList.contains('tile--entering') ? frame._tileEnterEndsAt || 0 : 0;
+    const wait = Math.max(0, Math.round(endsAt - performance.now() - 120 / (this._animSpeed || 1)));
+    body.style.setProperty('--tile-screen-delay', `${wait}ms`);
+    body.classList.remove('term-enter');
+    void body.offsetWidth;
+    body.classList.add('term-enter');
+    let timer = null;
+    const done = (e) => {
+      if (e && (e.target !== body || e.pseudoElement)) return;
+      clearTimeout(timer);
+      body.removeEventListener('animationend', done);
+      body.removeEventListener('animationcancel', done);
+      body.classList.remove('term-enter');
+      body.style.removeProperty('--tile-screen-delay');
+      if (body._codemanScreenDone === done) body._codemanScreenDone = null;
+    };
+    body._codemanScreenDone = done;
+    body.addEventListener('animationend', done);
+    body.addEventListener('animationcancel', done);
+    // Backstop, as the main pane's: a backgrounded tab never fires animationend.
+    timer = setTimeout(() => done(), wait + this._termAnimDuration() + 900);
+  },
+
+  /**
+   * The closing grid's still copy (tile-grid.js _ghostTileGrid) leaves the
+   * frame style's own way: `fly` back into each tab, `deal` gathered into the
+   * Tiles button, `crt` switched off to a dot, and so on. Copies leave in
+   * reading order, so the last one ends last (the layer goes on its
+   * animationend). Re-forming the grid (`now`) keeps the plain fade: that copy
+   * covers tiles that stay. Returns how long the slowest copy takes, for the
+   * layer's fallback timer, or 0 for the default fade.
+   */
+  _stageTileExit(copies, { now = false } = {}) {
+    const style = this._tileAnimStyle || TILE_ANIM_DEFAULT;
+    const ms = TILE_EXIT_MS[style];
+    if (now || !ms || copies.length === 0) return 0;
+    const speed = this._animSpeed || 1;
+    const def = TILE_ANIM_STYLES.find((s) => s.key === style);
+    copies.forEach(({ ghost, el, sessionId }, k) => {
+      ghost.style.setProperty('--tile-exit-delay', `${Math.round((k * TILE_EXIT_STAGGER_MS) / speed)}ms`);
+      if (style !== 'fly' && style !== 'deal') return;
+      const at = el.getBoundingClientRect();
+      const target = this._tileSourceRect(def.from, sessionId);
+      if (target && at.width > 0 && at.height > 0) this._setTileFlight(ghost, target, at, style, k, '--tile-to');
+    });
+    return (ms + copies.length * TILE_EXIT_STAGGER_MS) / speed + 250;
+  },
+
+  /**
+   * Lab: replay the open grid's entrance IN PLACE (frames re-enter, screens
+   * light up again in queue order): no remount, reconnect or resize. With the
+   * grid closed it opens it, the real path.
+   */
+  _demoTiles() {
+    const grid = this._tileGrid;
+    if (!grid?.open) {
+      if (this.canOpenTileGrid?.()) this.toggleTileGrid?.();
+      else this.showToast?.('The tile grid needs a window at least 1180 px wide', 'info');
+      return;
+    }
+    if (!this._tileMotionAllowed?.()) return;
+    const ids = grid.ids.slice();
+    ids.forEach((id, k) => {
+      const entry = grid.tiles.get(id);
+      if (entry) this._replayTileEntrance?.(entry.el, id, k);
+    });
+    // The screens, as the load queue would land them: focused first, then reading order.
+    const speed = this._animSpeed || 1;
+    const lead = Math.min(this._tileAnimDuration() * 0.55, 420);
+    const order = [grid.focusedId, ...ids.filter((id) => id !== grid.focusedId)].filter(Boolean);
+    clearTimeout(this._tileDemoTimer);
+    const timers = order.map((id, k) =>
+      setTimeout(() => this.playTileScreenEntrance(grid.tiles.get(id)?.body), lead + (k * 140) / speed)
+    );
+    this._tileDemoTimers?.forEach(clearTimeout);
+    this._tileDemoTimers = timers;
+  },
+
+  /** Lab: close the grid with its exit, then open it again with its entrance (the real paths). */
+  _demoTilesRoundTrip() {
+    if (!this._tileGrid?.open) {
+      this._demoTiles();
+      return;
+    }
+    this.toggleTileGrid?.();
+    clearTimeout(this._tileDemoTimer);
+    this._tileDemoTimer = setTimeout(
+      () => {
+        if (!this._tileGrid?.open) this.toggleTileGrid?.();
+      },
+      1400 / (this._animSpeed || 1)
+    );
+  },
+
   // ── Lab (compare styles without spawning sessions or agents) ───────────────
 
   /** Floating picker: switch styles per surface and replay fake entrances. */
@@ -538,6 +956,12 @@ Object.assign(CodemanApp.prototype, {
         </label>
         ${group('Agent windows', WIN_ANIM_STYLES, 'win')}
         ${group('Connection lines', LINE_ANIM_STYLES, 'line')}
+        ${group('Tile grid (frames; screens use the pane style)', TILE_ANIM_STYLES, 'tile')}
+        <label class="anim-lab-select">Tile order
+          <select data-select="tileOrder">
+            ${TILE_ANIM_ORDERS.map((o) => `<option value="${o.key}">${escapeHtml(o.label)}</option>`).join('')}
+          </select>
+        </label>
       </div>
       <label class="anim-lab-range">Tab stagger <output data-out="stagger"></output>
         <input type="range" data-range="stagger" min="0" max="260" step="10">
@@ -551,6 +975,11 @@ Object.assign(CodemanApp.prototype, {
         <button type="button" data-demo="term">Pane</button>
         <button type="button" data-demo="window">Window</button>
         <button type="button" data-demo="all">All</button>
+      </div>
+      <div class="anim-lab-demo">
+        <span>Tiles</span>
+        <button type="button" data-demo="tiles">Replay</button>
+        <button type="button" data-demo="tiles-roundtrip">Close + reopen</button>
       </div>
       <p class="anim-lab-hint">Fake tabs, window and line, removed after the run. Real launches use the same timing.</p>
     `;
@@ -570,10 +999,16 @@ Object.assign(CodemanApp.prototype, {
         if (attr === 'tab') this.setTabAnimStyle(style);
         else if (attr === 'win') this.setWinAnimStyle(style);
         else if (attr === 'term') this.setTermAnimStyle(style);
+        else if (attr === 'tile') this.setTileAnimStyle(style);
         else this.setLineAnimStyle(style);
         this._syncAnimLab();
-        this.demoEntrance({ tab: 'tabs', term: 'term' }[attr] || 'all');
+        this._syncEntranceAnimSetting?.();
+        this.demoEntrance({ tab: 'tabs', term: 'term', tile: 'tiles' }[attr] || 'all');
       });
+    });
+    panel.querySelector('select[data-select="tileOrder"]').addEventListener('change', (e) => {
+      this.setTileAnimOrder(e.target.value);
+      this.demoEntrance('tiles');
     });
     panel.querySelector('input[data-check="termSwitch"]').addEventListener('change', (e) => {
       this.setTermAnimOnSwitch(e.target.checked);
@@ -601,19 +1036,16 @@ Object.assign(CodemanApp.prototype, {
   _syncAnimLab() {
     const panel = document.getElementById('animLab');
     if (!panel) return;
-    const current = {
-      tab: this._tabAnimStyle,
-      win: this._winAnimStyle,
-      line: this._lineAnimStyle,
-      term: this._termAnimStyle,
-    };
+    const current = this._currentAnimStyles();
     panel.querySelectorAll('.anim-lab-style').forEach((btn) => {
       btn.classList.toggle('selected', current[btn.dataset.attr] === btn.dataset.style);
     });
     panel.querySelectorAll('button[data-theme]').forEach((btn) => {
       const t = ANIM_THEMES.find((x) => x.key === btn.dataset.theme);
-      btn.classList.toggle('selected', !!t && ['tab', 'win', 'line', 'term'].every((k) => t[k] === current[k]));
+      btn.classList.toggle('selected', !!t && ANIM_SURFACES.every((k) => t[k] === current[k]));
     });
+    const order = panel.querySelector('select[data-select="tileOrder"]');
+    if (order) order.value = this._tileAnimOrder || TILE_ANIM_ORDER_DEFAULT;
     const check = panel.querySelector('input[data-check="termSwitch"]');
     if (check) check.checked = !!this._termAnimOnSwitch;
     panel.querySelector('input[data-range="stagger"]').value = String(this._tabAnimStagger);
@@ -647,9 +1079,14 @@ Object.assign(CodemanApp.prototype, {
     return svg;
   },
 
-  /** @param {'tabs'|'term'|'window'|'all'} what */
+  /** @param {'tabs'|'term'|'window'|'all'|'tiles'|'tiles-roundtrip'} what */
   demoEntrance(what = 'all') {
     this._clearEntranceDemo();
+
+    if (what === 'tiles') return this._demoTiles();
+    if (what === 'tiles-roundtrip') return this._demoTilesRoundTrip();
+    // With the grid open, the "pane" is every tile's screen.
+    if (what === 'term' && this._tileGrid?.open) return this._demoTiles();
 
     // The pane is a real, shared element rather than a throwaway, so replay it
     // through the same entry point a real launch uses (bypassing the owed-id
