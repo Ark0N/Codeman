@@ -385,8 +385,10 @@ const capabilitiesSchema = z
           )
           .optional(),
         // Bounded hard, like watchingLines: every row it adds is one more row the agent
-        // itself may be able to write.
-        screenLines: z.number().int().min(1).max(4).optional(),
+        // itself may be able to write. 8 is the reader's own cap (readScreenModel); a
+        // window taller than the CLI's footer needs a pattern only that CLI's chrome can
+        // satisfy at its position, as opencode's does by taking the LAST composer row.
+        screenLines: z.number().int().min(1).max(8).optional(),
         // Single tokens, bounded: each is compared against one captured field.
         rejectWords: z.array(z.string().min(1).max(40).regex(/^\S+$/)).max(32).optional(),
         // A NAMED reader (src/model-config-resolvers.ts), never code in config.

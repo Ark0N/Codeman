@@ -514,6 +514,22 @@ const OPENCODE: CliEntry = {
       promptGlyph: '┃',
       workingLine: '[⬝■]{8}',
     },
+    // The composer's agent row, measured on live opencode 1.3.0 panes (home screen and in
+    // session, at 40, 60, 120 and 200 columns, 2026-10-09): `┃  Build  Big Pickle OpenCode
+    // Zen`, directly above the box's bottom edge `╹▀▀▀`. opencode renders it as the agent,
+    // then the model's name, then the provider's name (then `· <variant>` when the model
+    // has one), and only colour tells model from provider, so the field is all of it: what
+    // opencode itself shows, owner's choice. A double space ends it, which is where the
+    // 200-column layout's sidebar shares the row. The lookahead takes the LAST such row in
+    // the window, so nothing the agent prints higher up can stand in for it; below the
+    // composer there is only opencode's own chrome (key hints, a tip, the cwd/version
+    // row), which is why the window can be 8 rows: the home screen puts up to 5 of those
+    // rows under it. A permission prompt or shell mode hides the row, and the last model
+    // is kept. `No provider ` is opencode's placeholder before a provider is connected.
+    modelDetect: {
+      screenLine: String.raw`┃ {2}[^\s·]+ {2}(?!No provider )([^ \n](?:[^ \n]| (?! ))*)(?: {2}.*)?\n *╹(?![\s\S]*\n *╹)`,
+      screenLines: 8,
+    },
     // opencode's global config dir is xdg-basedir's `$XDG_CONFIG_HOME/opencode`.
     mcpConfig: {
       path: '.config/opencode/opencode.json',

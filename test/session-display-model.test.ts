@@ -6,6 +6,7 @@
  * The pane fixtures are verbatim `capture-pane -p` rows (trailing blanks trimmed) from
  * live panes on 2026-10-07: dsh-TUI 0.10.0-beta.1 on the owner's qwen route, and codex
  * 0.147.0. The codex 0.154.0 footer is the one `session-watching.test.ts` pins.
+ * The opencode 1.3.0 composer rows are from 2026-10-09 captures.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -299,6 +300,133 @@ describe('readScreenModel', () => {
   it('says nothing about an empty or unreadable frame', () => {
     expect(readScreenModel('', DSH, DSH_ROWS)).toBeUndefined();
     expect(readScreenModel(null, CODEX, CODEX_ROWS)).toBeUndefined();
+  });
+});
+
+/**
+ * opencode 1.3.0's composer agent row, verbatim (trailing blanks trimmed, bars shortened):
+ * the owner's home screen on the 1.36.0 beta, one with a tip, an in-session pane at 200
+ * columns whose sidebar shares the row, and a 40-column pane mid-turn.
+ */
+const OC_EDGE = '╹' + '▀'.repeat(56);
+const OC_HOME = [
+  '  ┃',
+  '  ┃  Ask anything... "Fix a TODO in the codebase"',
+  '  ┃',
+  '  ┃  Build  Big Pickle OpenCode Zen',
+  `  ${OC_EDGE}`,
+  '               ctrl+t variants  tab agents  ctrl+p commands',
+  '  ~/codeman-cases/testcase                            1.3.0',
+  '',
+].join('\n');
+const OC_HOME_TIP = [
+  '                       ┃  Ask anything... "Fix a TODO in the codebase"',
+  '                       ┃',
+  '                       ┃  Build  Big Pickle OpenCode Zen',
+  `                       ${OC_EDGE}`,
+  '                                                      ctrl+t variants  tab agents  ctrl+p commands',
+  '                       ● Tip Use {env:VAR_NAME} syntax to reference environment variables in',
+  '  /tmp/claude-1000/-home-arkon-default-claudeman/6dec47be/scratchpad/oc-repro        1.3.0',
+  '',
+].join('\n');
+const OC_WIDE = [
+  '     ▣  Build · qwen3.8-27b · 11.9s' + ' '.repeat(40) + '[•] summarize',
+  '  ┃' + ' '.repeat(157) + '/tmp/claude-1000/-home-arkon-default-',
+  '  ┃' + ' '.repeat(157) + 'claudeman/6dec47be-0153-4e13-a229-',
+  '  ┃  Build  qwen3.8-27b Qwen 5090' + ' '.repeat(127) + 'fc335c2c76c8/scratchpad/oc-turn',
+  `  ${OC_EDGE}`,
+  ' '.repeat(129) + 'tab agents  ctrl+p commands    • OpenCode 1.3.0',
+  '',
+].join('\n');
+const OC_PHONE_MID = [
+  '  ┃',
+  '  ┃  Build  qwen3.8-27b Qwen 5090',
+  '  ╹' + '▀'.repeat(35),
+  '   ⬝⬝⬝⬝⬝⬝⬝⬝  esc   tab     ctrl+p',
+  '             interragents  commands',
+  '             upt',
+  '',
+].join('\n');
+const OC = compileVersionRegex(detectOf('opencode').screenLine)!;
+const OC_ROWS = detectOf('opencode').screenLines;
+
+describe("opencode's composer agent row", () => {
+  it('compiles through compileVersionRegex() with exactly one capture group', () => {
+    expect(OC).not.toBeNull();
+    expect(countCaptureGroups(detectOf('opencode').screenLine!)).toBe(1);
+  });
+
+  it('reads the model and provider opencode shows, at every width and on the home screen', () => {
+    expect(readScreenModel(OC_HOME, OC, OC_ROWS)).toBe('Big Pickle OpenCode Zen');
+    expect(readScreenModel(OC_HOME_TIP, OC, OC_ROWS)).toBe('Big Pickle OpenCode Zen');
+    // The 200-column sidebar shares the row after a run of spaces, and stays out of it.
+    expect(readScreenModel(OC_WIDE, OC, OC_ROWS)).toBe('qwen3.8-27b Qwen 5090');
+    expect(readScreenModel(OC_PHONE_MID, OC, OC_ROWS)).toBe('qwen3.8-27b Qwen 5090');
+  });
+
+  it('keeps the variant opencode shows after the provider', () => {
+    const variant = OC_HOME.replace('Big Pickle OpenCode Zen', 'Claude Sonnet 4.5 Anthropic · high');
+    expect(readScreenModel(variant, OC, OC_ROWS)).toBe('Claude Sonnet 4.5 Anthropic · high');
+  });
+
+  it('says nothing where the row is hidden or holds no model', () => {
+    // A permission prompt replaces the composer: no agent row above a `╹` edge.
+    const permission = [
+      '  ┃  △ Permission required',
+      '  ┃  $ echo permission-check',
+      '  ┃   Allow once   Allow always   Reject            ctrl+f fullscreen  ⇆ select  enter confirm',
+      '  ┃',
+      '',
+    ].join('\n');
+    expect(readScreenModel(permission, OC, OC_ROWS)).toBeUndefined();
+    // Shell mode draws `Shell` and no model; before a provider is connected, a placeholder.
+    expect(readScreenModel(OC_HOME.replace('Build  Big Pickle OpenCode Zen', 'Shell'), OC, OC_ROWS)).toBeUndefined();
+    const none = OC_HOME.replace('Big Pickle OpenCode Zen', 'No provider selected Connect a provider');
+    expect(readScreenModel(none, OC, OC_ROWS)).toBeUndefined();
+  });
+
+  it('never takes a row the agent printed above the composer', () => {
+    // An answer that draws a composer-shaped row and an edge under it: the real composer
+    // is the LAST such pair, and only opencode's own chrome sits below that.
+    const forged = [
+      '     ┃  Build  evil-model Evil',
+      `     ${OC_EDGE}`,
+      '  ┃',
+      '  ┃  Build  Big Pickle OpenCode Zen',
+      `  ${OC_EDGE}`,
+      '               ctrl+t variants  tab agents  ctrl+p commands',
+      '  ~/codeman-cases/testcase                            1.3.0',
+      '',
+    ].join('\n');
+    // Both pairs sit inside the window, so this is the lookahead's doing, not the window's.
+    expect(forged.split('\n').filter(Boolean).length).toBeLessThanOrEqual(OC_ROWS!);
+    expect(readScreenModel(forged, OC, OC_ROWS)).toBe('Big Pickle OpenCode Zen');
+  });
+
+  it('publishes the model through a session once the idle check reads the pane', () => {
+    vi.useFakeTimers();
+    try {
+      const mux = { isAvailable: () => true, capturePaneText: () => OC_HOME } as unknown as NonNullable<
+        ConstructorParameters<typeof Session>[0]
+      >['mux'];
+      const session = new Session({
+        workingDir: '/tmp',
+        mode: 'opencode',
+        mux,
+        muxSession: { muxName: 'codeman-test', sessionId: 'test', createdAt: Date.now() },
+      } as ConstructorParameters<typeof Session>[0]);
+      const internals = session as unknown as {
+        _handleTerminalOutput(data: string): void;
+        _detectInteractiveActivity(data: string): void;
+      };
+      const frame = '\x1b[37;3H┃  Build  Big Pickle OpenCode Zen';
+      internals._handleTerminalOutput(frame);
+      internals._detectInteractiveActivity(frame);
+      vi.advanceTimersByTime(IDLE_SILENCE_MS + 3000);
+      expect(session.toState().displayModel).toEqual({ model: 'Big Pickle OpenCode Zen', source: 'screen' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

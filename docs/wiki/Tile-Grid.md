@@ -58,7 +58,7 @@ Each tile has a small header: `● [logo] name · model ......... ⋯ ⤢ ×`
 | `●`    | The session's state: working, idle, waiting on you, needs you (red, and the tile's border pulses), error, ended. Hover the header for how long. |
 | logo   | Which agent runs in the tile (Claude Code, Codex, DeepSeek, Shell, ...). Hover it for the agent and the model by name. |
 | name   | Double-click to rename the session.                                                              |
-| model  | The model the session runs, when Codeman knows it: what the agent itself reports (it follows a `/model` switch), else the model its own config pins (DeepSeek's route, shown "from config"), else the model it was started with. Nothing when unknown. |
+| model  | The model the session runs, when Codeman knows it: what the agent itself reports (it follows a `/model` switch), else the model its own config pins (DeepSeek's route, shown "from config"), else the model it was started with. Nothing when unknown. OpenCode shows the model and its provider together (`Big Pickle OpenCode Zen`), exactly as its own composer does. |
 | `⋯`    | The session menu: options, open in a new window, close the session.                              |
 | `⤢`    | Zoom: the tile fills the grid; press it again (or `Alt+Shift+Enter`) to get the grid back.        |
 | `×`    | Remove the tile. The session keeps running; close it from `⋯` if you want it gone.                |
