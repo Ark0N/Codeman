@@ -5355,7 +5355,8 @@ html[data-skin="og"] .welcome-primary:hover {
    z-index inside the toolbar. When the popover is open, raise the toolbar
    above the CJK input (z-index 52) so the popover is interactable. */
 .toolbar:has(.case-settings-popover:not(.hidden)),
-.toolbar:has(.case-combobox-list:not(.hidden)) {
+.toolbar:has(.case-combobox-list:not(.hidden)),
+.toolbar:has(.run-mode-menu.active) {
   z-index: 100;
 }
 
@@ -5651,11 +5652,19 @@ html[data-skin="og"] .welcome-primary:hover {
      endpoint entries, Terminal and the saved URLs it can be taller than the room above the
      toolbar: its top then sits off-screen with nothing to scroll, and the entries up there
      cannot be reached (worst on a phone). Cap it to the space between the header and the
-     toolbar and scroll inside it. `dvh` so an on-screen keyboard or a collapsing browser bar
-     shrinks the cap with it; the `vh` line is the fallback for browsers without it. */
-  max-height: calc(100vh - var(--header-height) - var(--toolbar-height) - 16px);
-  max-height: calc(100dvh - var(--header-height) - var(--toolbar-height) - 16px);
+     toolbar and scroll inside it. The cap follows --app-height, not `dvh`: the viewport meta
+     has no interactive-widget, so `dvh` does not shrink for an on-screen keyboard, while
+     MobileDetection always sets --app-height to the visual viewport height and KeyboardHandler
+     keeps it there while the keyboard is up. Both safe areas come off too, because the phone
+     header and toolbar grow by them in the iPhone home-screen app. The second line is the one
+     that applies (a declaration carrying var() is never dropped at parse time, so the first
+     line is not a working fallback for it; it stays only as the plain-viewport form). */
+  max-height: calc(100vh - var(--header-height) - var(--safe-area-top) - var(--toolbar-height) - var(--safe-area-bottom) - 16px);
+  max-height: calc(var(--app-height, 100dvh) - var(--header-height) - var(--safe-area-top) - var(--toolbar-height) - var(--safe-area-bottom) - 16px);
   overflow-y: auto;
+  /* overflow-y: auto computes overflow-x to auto as well, so a long nowrap custom-endpoint
+     label would show a horizontal scrollbar that touch-action: pan-y cannot pan. */
+  overflow-x: hidden;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
