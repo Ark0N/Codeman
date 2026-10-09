@@ -24,6 +24,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import postcss, { type AtRule, type Rule } from 'postcss';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   FakeEl,
@@ -279,7 +280,15 @@ describe('the CSS', () => {
   };
 
   it('every new keyframe animates opacity and transform only', () => {
-    for (const name of ['tile-enter', 'tile-ghost-dim', 'tile-leave', 'tile-leave-now', 'tile-loading-breathe', 'tile-count-menu-in']) {
+    for (const name of [
+      'tile-enter',
+      'tile-ghost-dim',
+      'tile-leave',
+      'tile-leave-now',
+      'tile-loading-breathe',
+      'tile-count-menu-in',
+      'tile-needs-pulse',
+    ]) {
       const body = keyframes(name);
       expect(body, name).not.toBe('');
       const props = [...body.matchAll(/^\s*([a-z-]+):/gm)].map((m) => m[1]);
@@ -300,11 +309,62 @@ describe('the CSS', () => {
   it('nothing moves under prefers-reduced-motion, and a web tab hides the copy', () => {
     const block = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce) {\n  .tile-count-menu,'));
     const reduced = block.slice(0, block.indexOf('\n}\n'));
-    for (const sel of ['.tile-count-menu', '.tile.tile--entering', '.tile.tile--loading .tile-body::after', '.tile-grid-ghosts .tile.tile--leaving']) {
+    for (const sel of [
+      '.tile-count-menu',
+      '.tile.tile--entering',
+      '.tile.tile--needs::after',
+      '.tile.tile--loading .tile-body::after',
+      '.tile-grid-ghosts .tile.tile--leaving',
+    ]) {
       expect(reduced).toContain(sel);
     }
     expect(reduced).toMatch(/animation: none;/);
     expect(reduced).toMatch(/\.tile-body \.xterm \{\s*transition: none;/);
     expect(css).toMatch(/\.main\.webview-active \.tile-grid-ghosts \{\s*display: none;/);
+  });
+
+  it('the needs-you pulse fades a static glow overlay in and out, never repainting the tile itself', () => {
+    // A needs tile pulses for as long as its prompt waits, hours at a time. A
+    // box-shadow animated on the tile repainted the whole tile (its DOM-rendered
+    // terminal rows with it, the whole stage when zoomed) every frame.
+    const rules: Array<{ selector: string; media: string; decls: Record<string, string> }> = [];
+    postcss.parse(css).walkRules((rule: Rule) => {
+      if (!rule.selector.includes('tile--needs')) return;
+      const decls: Record<string, string> = {};
+      rule.walkDecls((d) => {
+        decls[d.prop] = d.value;
+      });
+      const media = rule.parent?.type === 'atrule' ? (rule.parent as AtRule).params : '';
+      for (const selector of rule.selectors) rules.push({ selector, media, decls });
+    });
+    const find = (selector: string, media = '') => rules.filter((r) => r.selector === selector && r.media === media);
+
+    // The tile keeps its red border and animates nothing.
+    const [tile] = find('.tile.tile--needs');
+    expect(tile.decls['border-color']).toContain('var(--red');
+    expect(tile.decls.animation).toBeUndefined();
+    expect(tile.decls['box-shadow']).toBeUndefined();
+
+    // The glow is an overlay: a STATIC inset shadow (.tile is overflow: hidden
+    // and clips an outer one), above the Attach overlay, out of the pointer's way.
+    const [glow] = find('.tile.tile--needs::after');
+    expect(glow.decls.content).toBe("''");
+    expect(glow.decls.position).toBe('absolute');
+    expect(glow.decls.inset).toBe('0');
+    expect(glow.decls['pointer-events']).toBe('none');
+    expect(Number(glow.decls['z-index'])).toBeGreaterThan(2);
+    expect(glow.decls['box-shadow']).toMatch(/^inset /);
+    expect(glow.decls.animation).toMatch(/^tile-needs-pulse /);
+
+    // Only that overlay runs the pulse: no rule restates it on the tile (the old
+    // entering-and-needs shorthand would now blink the whole tile's opacity).
+    const pulsing = rules.filter((r) => /tile-needs-pulse/.test(r.decls.animation ?? ''));
+    expect(pulsing.map((r) => r.selector)).toEqual(['.tile.tile--needs::after']);
+    expect(rules.some((r) => r.selector.includes('tile--entering') && r.selector.includes('tile--needs'))).toBe(false);
+
+    // Reduced motion: no pulse, and a static ring on the tile instead.
+    const reduce = '(prefers-reduced-motion: reduce)';
+    expect(find('.tile.tile--needs::after', reduce).some((r) => r.decls.display === 'none')).toBe(true);
+    expect(find('.tile.tile--needs', reduce).some((r) => /^0 0 0 2px /.test(r.decls['box-shadow'] ?? ''))).toBe(true);
   });
 });

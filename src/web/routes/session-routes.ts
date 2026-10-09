@@ -116,7 +116,7 @@ import { clampEnvOverridesForOwner } from '../../session-env-clamp.js';
 import { enabledClis, getCli } from '../../config/cli-registry/registry.js';
 import type { NewlineSequence } from '../../config/cli-registry/types.js';
 import { resolveCliLaunchError } from '../../utils/cli-launcher.js';
-import { resolveCodexLaunchDefaults } from '../codex-launch-defaults.js';
+import { applyLaunchDefaults } from '../launch-defaults.js';
 import { legacyConfigForMode } from '../../session-cli-registry-bridge.js';
 import { isMultiUserMode } from '../../config/multiuser.js';
 import { AUTH_COOKIE_NAME } from '../middleware/auth.js';
@@ -1150,8 +1150,10 @@ export function registerSessionRoutes(
     const globalNice = await ctx.getGlobalNiceConfig();
     const modelConfig = await ctx.getModelConfig();
     const mode = body.mode || 'claude';
-    const launchCodexConfig =
-      mode === 'codex' && !remote ? await resolveCodexLaunchDefaults(body.codexConfig) : body.codexConfig;
+    // Synced App Settings launch defaults (capabilities.launchDefaults, codex's model and
+    // effort today) fill the CLI's own config object where the caller left it unset.
+    // Local launches only: a remote attach runs whatever the remote pane already runs.
+    const launchBody = remote ? body : await applyLaunchDefaults(mode, body);
     // Where a model override comes from is a capability, and the three answers are
     // genuinely different mechanisms:
     //   'flag'                 — the CLI takes --model, so read the value the caller sent
@@ -1166,10 +1168,9 @@ export function registerSessionRoutes(
     const modelSource = getCli(mode)?.capabilities.model;
     const model =
       modelSource?.source === 'flag'
-        ? (legacyConfigForMode(mode, { ...body, codexConfig: launchCodexConfig } as unknown as Record<
-            string,
-            unknown
-          >)?.[modelSource.param ?? 'model'] as string | undefined)
+        ? (legacyConfigForMode(mode, launchBody as unknown as Record<string, unknown>)?.[
+            modelSource.param ?? 'model'
+          ] as string | undefined)
         : modelSource?.source === 'claude-settings-file'
           ? body.model || modelConfig?.defaultModel || undefined
           : undefined;
@@ -1186,12 +1187,12 @@ export function registerSessionRoutes(
       deepSeekConfig: gatedDeepSeekConfig,
     } = await _clampExternalCliBypassForOwner(
       owner,
-      launchCodexConfig,
-      body.geminiConfig,
-      body.antigravityConfig,
-      body.piConfig,
-      body.grokConfig,
-      body.deepSeekConfig
+      launchBody.codexConfig,
+      launchBody.geminiConfig,
+      launchBody.antigravityConfig,
+      launchBody.piConfig,
+      launchBody.grokConfig,
+      launchBody.deepSeekConfig
     );
     const terminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const session = new Session({
@@ -1204,14 +1205,14 @@ export function registerSessionRoutes(
       model,
       claudeMode: effectiveClaudeMode,
       allowedTools: claudeModeConfig.allowedTools,
-      openCodeConfig: mode === 'opencode' ? body.openCodeConfig : undefined,
+      openCodeConfig: mode === 'opencode' ? launchBody.openCodeConfig : undefined,
       codexConfig: mode === 'codex' ? gatedCodexConfig : undefined,
       geminiConfig: mode === 'gemini' ? gatedGeminiConfig : undefined,
       antigravityConfig: mode === 'antigravity' ? gatedAntigravityConfig : undefined,
       piConfig: mode === 'pi' ? gatedPiConfig : undefined,
       grokConfig: mode === 'grok' ? gatedGrokConfig : undefined,
       deepSeekConfig: mode === 'deepseek' ? gatedDeepSeekConfig : undefined,
-      ompConfig: resolveOmpConfigForCreate(mode, workingDir, body.ompConfig),
+      ompConfig: resolveOmpConfigForCreate(mode, workingDir, launchBody.ompConfig),
       resumeSessionId: validatedResumeId,
       envOverrides: await clampEnvOverridesForOwner(owner, body.envOverrides),
       effort: body.effort,
@@ -3875,23 +3876,31 @@ export function registerSessionRoutes(
     // Apply global Nice priority config and model config from settings
     const niceConfig = await ctx.getGlobalNiceConfig();
     const qsModelConfig = await ctx.getModelConfig();
-    const qsLaunchCodexConfig =
-      mode === 'codex' && !remote && !docker
-        ? await resolveCodexLaunchDefaults(codexConfig, !!customModel)
-        : codexConfig;
+    // Synced App Settings launch defaults, as on the create path: local launches only, so
+    // never a remote or Docker case, and never a custom model endpoint launch.
+    const qsRequestConfigs = {
+      openCodeConfig,
+      codexConfig,
+      geminiConfig,
+      antigravityConfig,
+      piConfig,
+      grokConfig,
+      deepSeekConfig,
+      ompConfig,
+    };
+    const qsLaunchConfigs =
+      remote || docker ? qsRequestConfigs : await applyLaunchDefaults(mode, qsRequestConfigs, !!customModel);
+    // ⚠️ The model is read from a bag WITHOUT ompConfig, as it always was here: quick-start
+    // has never taken omp's session model from ompConfig (the create path does). Kept as
+    // found rather than changed in passing.
+    const { ompConfig: qsLaunchOmpConfig, ...qsModelConfigs } = qsLaunchConfigs;
     // See the create path for why this is a capability rather than a mode ladder.
     const qsModelSource = getCli(mode)?.capabilities.model;
     const qsModel =
       qsModelSource?.source === 'flag'
-        ? (legacyConfigForMode(mode, {
-            openCodeConfig,
-            codexConfig: qsLaunchCodexConfig,
-            geminiConfig,
-            antigravityConfig,
-            piConfig,
-            grokConfig,
-            deepSeekConfig,
-          } as unknown as Record<string, unknown>)?.[qsModelSource.param ?? 'model'] as string | undefined)
+        ? (legacyConfigForMode(mode, qsModelConfigs as unknown as Record<string, unknown>)?.[
+            qsModelSource.param ?? 'model'
+          ] as string | undefined)
         : qsModelSource?.source === 'claude-settings-file'
           ? qsModelConfig?.defaultModel || undefined
           : undefined;
@@ -3907,16 +3916,16 @@ export function registerSessionRoutes(
       deepSeekConfig: qsGatedDeepSeekConfig,
     } = await _clampExternalCliBypassForOwner(
       owner,
-      qsLaunchCodexConfig,
-      geminiConfig,
-      antigravityConfig,
-      piConfig,
-      grokConfig,
-      deepSeekConfig
+      qsLaunchConfigs.codexConfig,
+      qsLaunchConfigs.geminiConfig,
+      qsLaunchConfigs.antigravityConfig,
+      qsLaunchConfigs.piConfig,
+      qsLaunchConfigs.grokConfig,
+      qsLaunchConfigs.deepSeekConfig
     );
     const qsTerminalHistoryConfig = await ctx.getTerminalHistoryConfig();
     const qsGatedEnvOverrides = await clampEnvOverridesForOwner(owner, envOverrides);
-    const qsResolvedOmpConfig = resolveOmpConfigForCreate(mode, resolvedCasePath, ompConfig);
+    const qsResolvedOmpConfig = resolveOmpConfigForCreate(mode, resolvedCasePath, qsLaunchOmpConfig);
 
     // Custom Model Endpoint Profiles, applied AT CREATE TIME (docs/custom-model-endpoints-plan.md)
     // rather than via the dedicated restart-in-place route (POST /api/sessions/:id/custom-
@@ -4073,7 +4082,7 @@ export function registerSessionRoutes(
       claudeMode: qsEffectiveClaudeMode,
       allowedTools: qsClaudeModeConfig.allowedTools,
       owner,
-      openCodeConfig: mode === 'opencode' ? openCodeConfig : undefined,
+      openCodeConfig: mode === 'opencode' ? qsLaunchConfigs.openCodeConfig : undefined,
       codexConfig: mode === 'codex' ? qsGatedCodexConfig : undefined,
       geminiConfig: mode === 'gemini' ? qsGatedGeminiConfig : undefined,
       antigravityConfig: mode === 'antigravity' ? qsGatedAntigravityConfig : undefined,

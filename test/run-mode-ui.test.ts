@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
+import postcss, { type AtRule } from 'postcss';
 import { describe, expect, it } from 'vitest';
 
 function loadRunModeHarness() {
@@ -636,6 +637,29 @@ describe('Codex quick start settings', () => {
       expect(actions).toBeGreaterThan(-1);
       expect(tunnel).toBeGreaterThan(actions);
       expect(html.indexOf('id="welcomeQr"')).toBeGreaterThan(tunnel);
+    });
+
+    it('never gives a phone shorter launcher chips than a tablet', () => {
+      // styles.css sizes chips for touch screens under (pointer: coarse);
+      // mobile.css's phone block loads later at equal specificity and wins on
+      // every phone, so a lower height there shrank the phone's chips below the
+      // tablet's (36px against 40px).
+      const chipHeights = (file: string, media: string) => {
+        const heights: number[] = [];
+        const css = readFileSync(resolve(import.meta.dirname, `../src/web/public/${file}`), 'utf8');
+        postcss.parse(css).walkRules('.welcome-chip', (rule) => {
+          if (rule.parent?.type !== 'atrule' || (rule.parent as AtRule).params !== media) return;
+          rule.walkDecls('height', (d) => {
+            heights.push(parseFloat(d.value));
+          });
+        });
+        return heights;
+      };
+      const touch = chipHeights('styles.css', '(pointer: coarse)');
+      const phone = chipHeights('mobile.css', '(max-width: 599px)');
+      expect(touch).toEqual([40]);
+      expect(phone.length).toBeGreaterThan(0);
+      for (const h of phone) expect(h).toBeGreaterThanOrEqual(Math.max(...touch));
     });
 
     it('falls back to the first ENABLED agent when the chosen run mode is disabled, never a hardcoded claude', () => {

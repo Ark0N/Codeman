@@ -10,7 +10,8 @@ never offered in a popped-out session window.
 ## Turning it on
 
 **App Settings → Header & Panels → Tiles.** This is a per-device setting, on by default
-everywhere except phones, and the button only appears in a window at least 1180px wide.
+on desktops and laptops and off on phones and tablets, and the button only appears in a
+window at least 1180px wide.
 It shows a **Tiles** button in the header, beside Split, and enables `Ctrl+Shift+G`.
 
 ## Opening a grid

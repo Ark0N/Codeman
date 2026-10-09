@@ -15,7 +15,7 @@
 import { z } from 'zod';
 import { compileVersionRegex, countCaptureGroups, TOKEN_PATTERNS } from './patterns.js';
 import { isKnownLauncherProfile, isKnownSetenvProfile } from './profiles.js';
-import type { McpConfigFormat, ModelConfigResolverName } from './types.js';
+import type { LaunchDefaultSettingKey, McpConfigFormat, ModelConfigResolverName } from './types.js';
 
 /** A bare CLI id: lowercase, starts with a letter, at most 24 chars. Also used as a CSS/URL token. */
 const cliId = z
@@ -409,6 +409,17 @@ const capabilitiesSchema = z
         'rejectWords has nothing to filter without a screenLine'
       )
       .optional(),
+    // Launch param -> synced App Settings key. The values are a closed enum, like
+    // configResolver: a clis.json override names one of the settings this build knows
+    // how to validate, never an arbitrary key. Params are checked against the declared
+    // ones in the superRefine below.
+    launchDefaults: z
+      .record(
+        z.string(),
+        z.enum(['codexModel', 'codexReasoningEffort'] as const satisfies readonly LaunchDefaultSettingKey[])
+      )
+      .refine((v) => Object.keys(v).length >= 1 && Object.keys(v).length <= 8, 'launchDefaults takes 1 to 8 params')
+      .optional(),
     privilegedParams: z
       .array(
         z
@@ -626,6 +637,30 @@ export const CliEntrySchema = z
         });
       }
     });
+
+    // Same silent-no-op class again: a launch default for a param the entry never declared
+    // would be filled into the config object and then read by nothing. And without a
+    // `legacyConfigField` the entry's params are read off the request body itself, where a
+    // filled `model` would be a different field (claude's per-session one), so refuse it.
+    const { launchDefaults } = entry.capabilities;
+    if (launchDefaults !== undefined) {
+      if (entry.launch.legacyConfigField === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'launchDefaults needs launch.legacyConfigField to fill',
+          path: ['capabilities', 'launchDefaults'],
+        });
+      }
+      for (const param of Object.keys(launchDefaults)) {
+        if (!declaredParams.has(param)) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `launchDefaults param "${param}" is not a declared launch param`,
+            path: ['capabilities', 'launchDefaults', param],
+          });
+        }
+      }
+    }
 
     const { setenvProfile } = entry.env;
     if (setenvProfile !== undefined && !isKnownSetenvProfile(setenvProfile)) {

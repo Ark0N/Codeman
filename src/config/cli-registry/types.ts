@@ -96,6 +96,14 @@ export type NewlineSequence = 'line-feed' | 'esc-enter';
 /** The config readers `capabilities.modelDetect.configResolver` may name (src/model-config-resolvers.ts). */
 export type ModelConfigResolverName = 'deepseek-route';
 
+/**
+ * The synced App Settings keys `capabilities.launchDefaults` may name (src/web/launch-defaults.ts).
+ * A closed list rather than any settings key, so a clis.json override cannot feed an
+ * arbitrary setting onto a command line; each name must also be a `SettingsUpdateSchema`
+ * key, which the resolver's typing enforces.
+ */
+export type LaunchDefaultSettingKey = 'codexModel' | 'codexReasoningEffort';
+
 /** The MCP config dialects `src/mcp-sync.ts` has an adapter for. */
 export type McpConfigFormat = 'claude-json' | 'gemini-json' | 'codex-toml' | 'opencode-json' | 'antigravity-json';
 
@@ -529,6 +537,20 @@ export interface CliCapabilities {
     rejectWords?: string[];
     configResolver?: ModelConfigResolverName;
   };
+  /**
+   * Synced App Settings that seed this CLI's launch params when the caller left them unset,
+   * keyed by LAUNCH PARAM name (`{ model: 'codexModel' }`), never the legacy wire name; the
+   * resolver translates through `launch.legacyConfigAliases` like every other `param`.
+   *
+   * Filled into the entry's `launch.legacyConfigField` object at create time by
+   * `applyLaunchDefaults()` (src/web/launch-defaults.ts), which re-validates each value
+   * with `SettingsUpdateSchema` and never overwrites a value the caller sent. Which
+   * launches get it is the CALLER's decision (local ones only: never remote, Docker or a
+   * custom model endpoint). `schema.ts` refuses an undeclared param, and an entry without
+   * a `legacyConfigField`, whose params would otherwise be read off the request body itself.
+   * Absent = no launch defaults.
+   */
+  launchDefaults?: Record<string, LaunchDefaultSettingKey>;
   /**
    * Params a non-granted multi-user owner may not set freely, and what they are forced to.
    * Data-driven so a CUSTOM CLI's bypass flag is clampable exactly like codex's.

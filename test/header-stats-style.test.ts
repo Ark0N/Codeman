@@ -14,6 +14,9 @@
  *  - The parts only the new styles draw (stat rings, plan rings, meters, tile words)
  *    are rendered with sane values and hidden by default in CSS, which is what
  *    keeps 'classic' looking exactly as before.
+ *  - The connection tile's value word reads in Chinese through i18n.js's real
+ *    t(), from scoped keys (a bare 'retry' or 'live' key would also translate
+ *    other surfaces), and follows a language switch.
  *
  * The real modules run INSIDE a JSDOM window (runScripts: 'outside-only').
  *
@@ -22,6 +25,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
 import postcss from 'postcss';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -193,6 +197,73 @@ describe('the parts the new styles draw', () => {
     expect(document.getElementById('connectionTileLabel')!.textContent).toBe('WS');
     expect(document.getElementById('connectionTileValue')!.textContent).toBe('live');
     expect(document.getElementById('connectionTileValue')!.className).toBe('connection-tile-value connected');
+  });
+
+  it('writes the value word in the UI language, from scoped keys, and follows a language switch', () => {
+    const translator = (language: string) => {
+      const dom = new JSDOM('<!doctype html><html><body></body></html>', {
+        runScripts: 'outside-only',
+        url: 'http://localhost/',
+      });
+      vm.runInContext(read('i18n.js'), dom.getInternalVMContext(), { filename: 'i18n.js' });
+      const api = (dom.window as unknown as { CodemanI18n: { t(s: string): string; configure(o: object): void } })
+        .CodemanI18n;
+      api.configure({ language });
+      return { t: api.t, close: () => dom.window.close() };
+    };
+    const zh = translator('zh-CN');
+    const en = translator('en');
+    try {
+      window.codemanT = zh.t;
+      window.CodemanI18n = { language: 'zh-CN' };
+      const app = makeApp();
+      app._computeConnectionDescriptor = () => ({
+        display: 'flex',
+        dotClass: 'connection-dot connected',
+        text: 'WS',
+        title: 'Terminal connected over WebSocket',
+      });
+      app._updateConnectionIndicator();
+      expect(document.getElementById('connectionTileLabel')!.textContent).toBe('WS');
+      expect(document.getElementById('connectionTileValue')!.textContent).toBe('已连接');
+      // A switch back to English repaints it with nothing else happening: the
+      // value span is data-i18n-skip, so only applyLocalization (settings-ui.js,
+      // which every language change runs) can, and the same descriptor is not
+      // skipped as unchanged. No indicator update by hand here.
+      window.CodemanI18n = {
+        language: 'zh-CN',
+        configure({ language }: { language: string }) {
+          this.language = language;
+          window.codemanT = language === 'zh-CN' ? zh.t : en.t;
+          return { language };
+        },
+      };
+      app.loadAppSettingsFromStorage = () => ({ language: 'en' });
+      app.applyLocalization();
+      expect(window.CodemanI18n.language).toBe('en');
+      expect(document.getElementById('connectionTileValue')!.textContent).toBe('live');
+
+      // Every value word has its own Chinese, and none is a bare key.
+      window.codemanT = zh.t;
+      const values = [
+        'connection-dot connected',
+        'connection-dot fallback',
+        'connection-dot offline',
+        'connection-dot draining',
+        'connection-dot reconnecting',
+      ].map((dotClass) => app._connectionTileWords({ dotClass, text: '' }).value);
+      expect(values).toEqual(['live', 'fallback', 'offline', 'queued', 'retry']);
+      const shown = values.map((value: string) => app._connectionTileValueText(value));
+      expect(shown.filter((text: string) => /[A-Za-z]/.test(text))).toEqual([]);
+      expect(values.filter((value: string) => zh.t(value) !== value)).toEqual([]);
+      // The span the observer must leave alone (its text is set here, already translated).
+      expect(INDEX).toMatch(/id="connectionTileValue" data-i18n-skip>/);
+    } finally {
+      delete window.codemanT;
+      delete window.CodemanI18n;
+      zh.close();
+      en.close();
+    }
   });
 
   it('fills the CPU and MEM rings from the stats poll, clamped, red past 80%', () => {

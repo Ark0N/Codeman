@@ -51,6 +51,9 @@ interface CliEntry {
   //   that ended waiting for workers it will resume from
   //   .modelDetect?: { screenLine, screenLines? }
   //   (where this CLI's own chrome names the model it runs: SessionState.displayModel)
+  //   .launchDefaults?: { [launchParam]: settingsKey }
+  //   (synced App Settings that seed a LOCAL launch's params the caller left unset;
+  //   codex's model and reasoning effort, via src/web/launch-defaults.ts)
   overlays: CliOverlays; // remote-SSH / Docker pane commands, credential store
 }
 ```

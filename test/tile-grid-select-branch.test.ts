@@ -201,6 +201,35 @@ describe('moving focus between tiles', () => {
     expect(app.markIdleAlertSeen).not.toHaveBeenCalled();
   });
 
+  // The last tile popped out closes the grid. The single view must never try
+  // to show that session: selectSession only raises its window, and the parked
+  // terminal's stale pre-grid content would stay up under its tab (and be
+  // saved as its snapshot on the next switch).
+  it('popping out the LAST tile falls through to the next session, never the popped-out one', () => {
+    const app = makeGridApp(['s-a']);
+    app.openTileGrid(['s-a']);
+    app.$ = () => null;
+    app.selectSession = vi.fn();
+    app._markDetached('s-a', true);
+    expect(app._tilesOwnTerminal()).toBe(false);
+    expect(app.selectSession.mock.calls).toEqual([['s-other', { auto: true }]]);
+    // Nulled before the selection, so the parked buffer is not snapshotted as s-a's.
+    expect(app.activeSessionId).toBeNull();
+  });
+
+  it('popping out the last tile with every other session popped out too: the welcome screen, the parked terminal cleared', () => {
+    const app = makeGridApp(['s-a']);
+    app.detachedSessions.add('s-other');
+    app.openTileGrid(['s-a']);
+    app.$ = () => null;
+    app.selectSession = vi.fn();
+    app._markDetached('s-a', true);
+    expect(app.selectSession).not.toHaveBeenCalled();
+    expect(app.activeSessionId).toBeNull();
+    expect(app.terminal.clear).toHaveBeenCalled();
+    expect(app.showWelcome).toHaveBeenCalled();
+  });
+
   it('going Home leaves the grid, remembered', () => {
     const app = openGrid();
     app.goHome();

@@ -62,7 +62,9 @@ codeman web    # then open http://localhost:3000
 | Page                                       | What it answers                                            |
 | ------------------------------------------ | ---------------------------------------------------------- |
 | [The Dashboard](The-Dashboard)             | What is the UI telling me?                                 |
+| [Tile Grid](Tile-Grid)                     | How do I watch and drive several sessions side by side?    |
 | [Agent CLIs](Agent-CLIs)                   | Which agent should this session run, and how do I set it up? |
+| [Custom Model Endpoints](Custom-Model-Endpoints) | How do I point a session at my own OpenAI-compatible endpoint? |
 | [Working With Files](Working-With-Files)   | How do I read, edit, and attach files?                     |
 | [Input And Voice](Input-And-Voice)         | How do I talk to an agent, including by voice?             |
 | [Mobile Guide](Mobile-Guide)               | How well does this work on a phone?                        |

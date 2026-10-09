@@ -671,6 +671,11 @@ const CODEX: CliEntry = {
     // popup or a bare line of prose does not have that shape. A footer without an effort
     // word (a model with no reasoning setting) is not read, and the session keeps its
     // last known or launch model.
+    // The effort words are built from CODEX_REASONING_EFFORTS, the same list the
+    // `reasoningEffort` launch param above admits, plus `default` (what codex prints when
+    // no effort is configured). A hand-kept copy once left out `ultra`, so a session at
+    // that level never named its model. Every word is plain letters, so the join adds no
+    // quantifier and only a few characters to the 200-character compileVersionRegex cap.
     // ⚠️ It is not always the LAST row. 0.162.0 (measured 2026-10-09) adds a hint row
     // under it at rest, `  ← for agents · ? for shortcuts` or `  ? for shortcuts`, and
     // drops it again while a prompt is being typed. With a one-row window the footer was
@@ -681,9 +686,13 @@ const CODEX: CliEntry = {
     // and the `›` composer, and a forged footer-shaped transcript line is not followed by
     // an indented row, so it is not read.
     modelDetect: {
-      screenLine: String.raw`(?:^|\n) {2}([A-Za-z0-9][\w.:/@+-]{0,79}) (?:none|minimal|low|medium|high|xhigh|max|default) · [^\n]*(?:\n {2}[^\n]*)?$`,
+      screenLine: String.raw`(?:^|\n) {2}([A-Za-z0-9][\w.:/@+-]{0,79}) (?:${[...CODEX_REASONING_EFFORTS, 'default'].join('|')}) · [^\n]*(?:\n {2}[^\n]*)?$`,
       screenLines: 2,
     },
+    // App Settings → Codex model / reasoning effort (synced), filled into a LOCAL launch's
+    // codexConfig wherever the caller left the field unset. Launch-only: nothing writes
+    // codex's own config.toml. Read by applyLaunchDefaults() in src/web/launch-defaults.ts.
+    launchDefaults: { model: 'codexModel', reasoningEffort: 'codexReasoningEffort' },
     // Two columns, like claude's, measured on a live 0.154.0 answer: the `•`/`›`/`⚠`
     // markers sit in the gutter, prose continuations sit at 2, and a nested YAML block
     // the model wrote rendered at 2/4/6/8 for its own 0/2/4/6. Replayed at 100, 120,

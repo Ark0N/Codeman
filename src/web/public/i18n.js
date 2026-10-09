@@ -153,6 +153,8 @@
     'Restore the grid': '恢复平铺网格',
     'Remove tile (the session keeps running)': '移除窗格（会话继续运行）',
     'Drop a tab or a tile here': '将标签页或窗格拖放到此处',
+    // A file dropped on a tile (tile-grid.js) or the single view (image-input.js).
+    'Only image files are supported': '仅支持图像文件',
     // A tile header's tooltip while tiles can move (with the state above it: a pattern below).
     'Drag to move the tile': '拖动可移动窗格',
     'Resize tile columns': '调整窗格列宽',
@@ -228,6 +230,11 @@
     'Create New Case': '新建案例',
     'Create new case': '新建案例',
     'Link Existing': '关联现有目录',
+    // The toolbar case picker's action rows (session-ui.js CASE_PICKER_ACTIONS),
+    // which replaced the "+" and gear buttons, and its empty state.
+    'New or link a case…': '新建或关联案例…',
+    'Case settings…': '案例设置…',
+    'No cases match': '没有匹配的案例',
     'Add Case': '添加案例',
     'Open sessions': '打开会话',
     'Recent Sessions': '最近会话',
@@ -377,6 +384,32 @@
     'As before (bars)': '与以前相同（进度条）',
     'Compact (default)': '紧凑（默认）',
     'Tiles (label over value)': '磁贴（标签在数值上方）',
+    // The connection tile's value word in that style (app.js
+    // _connectionTileValueText). Scoped keys on purpose: the bare words also
+    // name other things ("retry" is the orchestrator's Retry button, "LIVE" a
+    // badge in the resume list), and a bare key would translate those too.
+    'Connection tile: live': '已连接',
+    'Connection tile: fallback': '回退',
+    'Connection tile: offline': '离线',
+    'Connection tile: queued': '已排队',
+    'Connection tile: retry': '重连中',
+    // App Settings → Bottom bar, translated as one group (the Git status rows,
+    // #543's two included). Keys are the trimmed label text, without the scope tag.
+    'Bottom bar': '底部栏',
+    'Git status': 'Git 状态',
+    "Shows, at the right of the bottom bar, when the active session's repository (or each repository inside its folder, up to two levels down) has uncommitted files or commits that are not pushed. Click it for the list. Read-only: Codeman never fetches or changes the repository. Not shown for Docker or remote sessions. Off by default.":
+      '在底部栏右侧显示当前会话的仓库（或其文件夹内向下两层以内的每个仓库）是否有未提交的文件或未推送的提交。点击可查看列表。只读：{name} 从不拉取或更改仓库。Docker 和远程会话不显示。默认关闭。',
+    'Git status: group files by folder': 'Git 状态：按文件夹分组显示文件',
+    'In the Git window, show changed files under their folders, collapsed until you click a folder. Off lists every file by its full path. On by default.':
+      '在 Git 窗口中，将更改的文件显示在各自的文件夹下，点击文件夹前保持折叠。关闭时按完整路径列出每个文件。默认开启。',
+    'Git status: max repositories': 'Git 状态：最多仓库数',
+    "When the session's folder holds several projects instead of being one, the Git window lists up to this many (1 to 50, default 12). Each one costs a few git commands per refresh.":
+      '当会话的文件夹包含多个项目（而不是本身就是一个项目）时，Git 窗口最多列出这么多个（1 到 50，默认 12）。每个仓库每次刷新都要运行几条 git 命令。',
+    'Git status: git timeout': 'Git 状态：git 超时',
+    'Seconds one git command may run before that repository is reported as unreadable (5 to 120, default 30). Raise it for repositories on a slow network share.':
+      '单条 git 命令可运行的秒数，超时后该仓库会被报告为无法读取（5 到 120，默认 30）。仓库位于较慢的网络共享上时请调高此值。',
+    'Refresh git status': '刷新 Git 状态',
+    'Close git status': '关闭 Git 状态',
     Panels: '面板',
     Monitor: '监视器',
     'Project Insights': '项目洞察',
@@ -697,6 +730,13 @@
     'Nothing to copy': '没有可复制的内容',
     // A `#session=<id>` link whose session never appeared (app.js _armUrlSessionWait).
     'Session not found': '未找到会话',
+    // A native host that would not open a window (app.js openInHostWindow); the
+    // "dashboard" is a web tab.
+    'Could not open a new window for this session': '无法在新窗口中打开此会话',
+    'Could not open a new window for this preview': '无法在新窗口中打开此预览',
+    'Could not open a new window for this dashboard': '无法在新窗口中打开此网页标签',
+    // Dictation whose session closed before the text was sent (voice-input.js).
+    'That session has closed; dictation not sent': '该会话已关闭，语音输入未发送',
     // Terminal touch-selection bar (long-press to select). The bar is a sibling of
     // `.xterm`, not a descendant, so SKIP_SELECTOR does not cover it and these apply.
     Copy: '复制',
@@ -870,6 +910,28 @@
     'Spreadsheet parser message failed.': '电子表格解析器消息出错。',
     'Spreadsheet parser message failed': '电子表格解析器消息出错',
     'Spreadsheet preview is unavailable.': '电子表格预览不可用。',
+    'Spreadsheet preview must use a same-origin URL': '电子表格预览必须使用同源 URL',
+    // Worker refusals, one sentence per error code (spreadsheet-preview.js
+    // WORKER_ERROR_TEXT), and the notice bar's items (renderWarnings). The
+    // counted ones are patterns in translateDynamic below.
+    'This workbook is password-protected or in the old .xls format, so it cannot be previewed.':
+      '此工作簿受密码保护或为旧版 .xls 格式，无法预览。',
+    'This workbook uses ZIP64, which the preview does not support.': '此工作簿使用 ZIP64 格式，预览不支持该格式。',
+    'This workbook is too large or complex to preview.': '此工作簿过大或过于复杂，无法预览。',
+    'This workbook could not be read. The file may be damaged or not a valid .xlsx file.':
+      '无法读取此工作簿。文件可能已损坏，或不是有效的 .xlsx 文件。',
+    // The features the preview leaves out (spreadsheet-preview.js warningText).
+    // Scoped keys on purpose: a bare 'charts' or 'macros' key would also
+    // translate a folder or case of that name (a Helm chart's charts/, a dbt
+    // project's macros/) in the Files panel and the case picker.
+    'Spreadsheet feature: charts': '图表',
+    'Spreadsheet feature: drawings': '绘图',
+    'Spreadsheet feature: pivot tables': '数据透视表',
+    'Spreadsheet feature: external links': '外部链接',
+    'Spreadsheet feature: macros': '宏',
+    'Formula has no cached result': '公式没有缓存的计算结果',
+    'Unsupported cell value': '不支持的单元格值',
+    'Unsupported number format': '不支持的数字格式',
     'Export as JSON': '导出为 JSON',
     'Export as Markdown': '导出为 Markdown',
     'Mark all read': '全部标为已读',
@@ -1097,6 +1159,10 @@
       [/^Selected: (.+)$/, (_m, value) => `已选择：${value}`],
       [/^Failed to (.+)$/, (_m, action) => `操作失败：${action}`],
       [/^Will create: (.+)$/, (_m, path) => `将创建：${path}`],
+      // The spreadsheet preview: an HTTP status, and the notice bar's counts.
+      [/^Spreadsheet preview failed \((\d+)\)$/, (_m, status) => `电子表格预览失败（${status}）`],
+      [/^View truncated to the first (\d+) cells$/, (_m, n) => `视图仅显示前 ${n} 个单元格`],
+      [/^(\d+) unsupported number formats$/, (_m, n) => `${n} 种不支持的数字格式`],
       // Group names are user text: they pass through untranslated.
       [/^Move to "(.+)"$/, (_m, group) => `移到“${group}”`],
       [

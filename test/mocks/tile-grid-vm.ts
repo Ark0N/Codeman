@@ -375,6 +375,10 @@ export function resetGridHarness() {
   // The CLI catalog the server injects (labels for the harness logos); a test sets its own.
   delete windowStub.__codemanCliCatalog;
   section.children = [];
+  // The grid binds its file-drop guard on the section once per app; an earlier
+  // test's app must not still be listening there.
+  section.listeners = {};
+  section.captureFlags = {};
   main.className = 'main';
   // A split a test left open moved .terminal-wrap into its container, with
   // Pane A's header strip in it.

@@ -7,17 +7,25 @@ import { createRouteTestHarness, type RouteTestHarness } from './_route-test-uti
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 import { registerSystemRoutes } from '../../src/web/routes/system-routes.js';
 import { CASES_DIR, SETTINGS_PATH } from '../../src/web/route-helpers.js';
-import { resolveCodexLaunchDefaults } from '../../src/web/codex-launch-defaults.js';
+import { applyLaunchDefaults } from '../../src/web/launch-defaults.js';
 import { buildCodexCommand } from '../../src/tmux-manager.js';
 import { Session } from '../../src/session.js';
 import { safeRmHomeTree } from '../mocks/index.js';
 import { getDataDir } from '../../src/config/instance.js';
 import { SettingsUpdateSchema } from '../../src/web/schemas.js';
+import { getCli } from '../../src/config/cli-registry/registry.js';
+import { STOCK_CLIS } from '../../src/config/cli-registry/stock.js';
+import type { CodexConfig } from '../../src/types.js';
 
 vi.mock('../../src/utils/cli-launcher.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/utils/cli-launcher.js')>();
   return { ...actual, resolveCliLaunchError: vi.fn().mockResolvedValue(null) };
 });
+
+/** The codexConfig a launch gets from the synced defaults alone (the caller sent `config`). */
+async function resolveCodexDefaults(config: CodexConfig | undefined, customEndpoint = false) {
+  return (await applyLaunchDefaults('codex', { codexConfig: config }, customEndpoint)).codexConfig;
+}
 
 describe('Codex launch defaults', () => {
   let harness: RouteTestHarness;
@@ -76,14 +84,45 @@ describe('Codex launch defaults', () => {
       { codexModel: 'bad;command', codexReasoningEffort: 'invalid' },
     ]) {
       await writeFile(SETTINGS_PATH, JSON.stringify(settings));
-      expect(await resolveCodexLaunchDefaults(undefined)).toBeUndefined();
-      expect(buildCodexCommand(await resolveCodexLaunchDefaults(undefined))).toBe('codex');
+      expect(await resolveCodexDefaults(undefined)).toBeUndefined();
+      expect(buildCodexCommand(await resolveCodexDefaults(undefined))).toBe('codex');
     }
   });
 
   it('keeps defaults out of custom endpoint launches', async () => {
     const config = { model: 'local-model', animations: false };
-    expect(await resolveCodexLaunchDefaults(config, true)).toBe(config);
+    expect(await resolveCodexDefaults(config, true)).toBe(config);
+  });
+
+  it('is driven by the registry: codex declares the defaults, and a CLI without them is untouched', async () => {
+    // The routes call applyLaunchDefaults for every mode and never ask which CLI it is, so
+    // what codex gets is exactly what its entry declares.
+    expect(getCli('codex')!.capabilities.launchDefaults).toEqual({
+      model: 'codexModel',
+      reasoningEffort: 'codexReasoningEffort',
+    });
+    for (const entry of STOCK_CLIS) {
+      if ((entry.id as string) === 'codex') continue;
+      expect(entry.capabilities.launchDefaults, entry.id).toBeUndefined();
+      const configs = { codexConfig: undefined, geminiConfig: { model: 'g' }, piConfig: undefined };
+      expect(await applyLaunchDefaults(entry.id, configs), entry.id).toBe(configs);
+    }
+    // Only the entry's own config object is filled; the rest of the bag passes through.
+    const bag = { codexConfig: { animations: false }, geminiConfig: { model: 'g' }, name: 'n' };
+    const filled = await applyLaunchDefaults('codex', bag);
+    expect(filled).toEqual({
+      codexConfig: { animations: false, model: 'gpt-6.1', reasoningEffort: 'high' },
+      geminiConfig: { model: 'g' },
+      name: 'n',
+    });
+    expect(filled.geminiConfig).toBe(bag.geminiConfig);
+    expect(bag.codexConfig).toEqual({ animations: false });
+    // A field the caller sent is never overwritten, one at a time.
+    expect(await resolveCodexDefaults({ model: 'mine' })).toEqual({ model: 'mine', reasoningEffort: 'high' });
+    expect(await resolveCodexDefaults({ reasoningEffort: 'low' })).toEqual({
+      model: 'gpt-6.1',
+      reasoningEffort: 'low',
+    });
   });
 
   it('does not record unused defaults for a Docker quick-start', async () => {
@@ -150,7 +189,7 @@ describe('Codex launch defaults', () => {
       expect((await put({ codexReasoningEffort: 'bogus' })).statusCode).toBe(400);
       expect((await put({ codexModel: 'bad;command' })).statusCode).toBe(400);
       expect((await put({ codexModel: '', codexReasoningEffort: '' })).statusCode).toBe(200);
-      expect(await resolveCodexLaunchDefaults(undefined)).toBeUndefined();
+      expect(await resolveCodexDefaults(undefined)).toBeUndefined();
     } finally {
       await system.app.close();
     }

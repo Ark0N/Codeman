@@ -291,6 +291,57 @@ describe('cross-field integrity', () => {
   });
 });
 
+describe('capabilities.launchDefaults', () => {
+  /** Codex with its shipped launch defaults replaced by `launchDefaults` (or with them unchanged). */
+  function codexWith(mutate: (entry: Record<string, unknown>) => void): boolean {
+    const entry = baseEntry('codex');
+    mutate(entry);
+    return CliEntrySchema.safeParse(entry).success;
+  }
+  const setDefaults = (value: unknown) => (e: Record<string, unknown>) => {
+    (e.capabilities as Record<string, unknown>).launchDefaults = value;
+  };
+
+  it('ships on codex alone, keyed by launch param', () => {
+    const declaring = STOCK_CLIS.filter((e) => e.capabilities.launchDefaults !== undefined).map((e) => e.id);
+    expect(declaring).toEqual(['codex']);
+    expect(codexWith(() => {})).toBe(true);
+  });
+
+  it('rejects a param the entry never declared', () => {
+    // Filled into the config object and then read by nothing: a silent no-op, like a
+    // privilegedParams clamp naming the wrong param.
+    expect(codexWith(setDefaults({ effort: 'codexReasoningEffort' }))).toBe(false);
+  });
+
+  it('rejects a settings key outside the closed list', () => {
+    // An override must not be able to pour an arbitrary setting onto a command line.
+    expect(codexWith(setDefaults({ model: 'claudeModel' }))).toBe(false);
+    expect(codexWith(setDefaults({ model: 'codexmodel' }))).toBe(false);
+  });
+
+  it('rejects an empty map', () => {
+    expect(codexWith(setDefaults({}))).toBe(false);
+  });
+
+  it('refuses an entry with no legacyConfigField to fill', () => {
+    // Without one the params are read off the request body itself, where `model` is
+    // claude's per-session field, not this CLI's.
+    expect(
+      codexWith((e) => {
+        delete (e.launch as Record<string, unknown>).legacyConfigField;
+      })
+    ).toBe(false);
+    // The same entry without launch defaults is fine: the refusal is about the pair.
+    expect(
+      codexWith((e) => {
+        delete (e.launch as Record<string, unknown>).legacyConfigField;
+        delete (e.capabilities as Record<string, unknown>).launchDefaults;
+      })
+    ).toBe(true);
+  });
+});
+
 describe('the env allowlist cannot be widened by config', () => {
   it('requires a prefix to end with an underscore', () => {
     expectRejected((e) => {

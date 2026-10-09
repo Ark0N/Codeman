@@ -8,12 +8,15 @@
  *   writes text: the count menu (cap and window wording), the Attach
  *   overlay (not attached, attaching, exited, ended), zoom, the header
  *   tooltip, the dividers, the empty slot, every toast, the crash-restart
- *   confirm, the Tiles and Split button titles. Each must translate to text
- *   with no Latin word left beyond key names and durations, and read
- *   unchanged in English.
+ *   confirm, the Tiles and Split button titles, the loading label (a body
+ *   attribute, shown as CSS generated content) and the rename field's name.
+ *   Each must translate to text with no Latin word left beyond key names and
+ *   durations, and read unchanged in English.
  * - Static strings: the shortcut registry's tile entries (overlay and App
  *   Settings list), and index.html run through the real translator in JSDOM
  *   (the Tiles button, the App Settings chips, the Help modal's Tiles rows).
+ * - No words in the tile CSS: generated content (`content: '...'`) is out of
+ *   the translator's reach, so a tile rule may carry glyphs, never text.
  * - User text stays as typed: session names (tile header) and group names
  *   carry data-i18n-skip, and a session name inside the
  *   confirm passes through the pattern untranslated.
@@ -24,6 +27,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
+import postcss from 'postcss';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
   FakeEl,
@@ -33,6 +37,7 @@ import {
   makeGridApp,
   resetGridHarness,
   section,
+  tileEl,
   windowStub,
   type GridApp,
 } from './mocks/tile-grid-vm.js';
@@ -102,6 +107,8 @@ function harvest(root: FakeEl | null | undefined, where: string) {
     add(el.title, 'title');
     add(el.attrs['aria-label'], 'aria-label');
     add(el.attrs.title, 'title attribute');
+    // The loading label: CSS shows it (content: attr(data-loading-label)).
+    add(el.dataset.loadingLabel, 'loading label');
     for (const child of el.children) walk(child, skip);
   };
   if (root) walk(root, false);
@@ -215,6 +222,19 @@ async function exercise() {
   harvestAll(app, 'zoomed');
   app.zoomTile('s-1');
 
+  // Renaming a tile: the input in the name's place, then Escape.
+  app.startTileRename('s-1');
+  harvestAll(app, 'renaming');
+  tileEl('s-1').querySelector('.tile-rename-input')!.dispatch('keydown', { key: 'Escape', preventDefault: vi.fn() });
+
+  // A file that is not an image dropped on a tile.
+  section.dispatch('drop', {
+    target: section.children.find((el) => el.dataset.sessionId === 's-1'),
+    dataTransfer: { types: ['Files'], files: [{ type: 'application/pdf' }] },
+    preventDefault: vi.fn(),
+  });
+  harvestAll(app, 'file drop');
+
   // The toasts of a full grid, by the cap and by the window.
   app._joinTileGridFromRun('s-7');
   app.addSessionToTiles('s-7');
@@ -314,10 +334,13 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
       'Could not attach the session',
       'This group has no session to show as tiles',
       'No sessions to show as tiles',
+      'Only image files are supported',
       'Split: unavailable while tiles are open',
       'Tiles: show several sessions side by side (right-click for how many)',
       'Tiles: back to a single session (right-click for how many tiles)',
       '6 tiles was stopped after crashing repeatedly. Restart it?',
+      'Loading…',
+      'Session name',
     ];
     const missing = expected.filter((s) => !seen.has(s));
     expect(missing).toEqual([]);
@@ -460,5 +483,57 @@ describe('user text in the tile code', () => {
   it('a session name inside the crash-restart confirm passes through the pattern untranslated', () => {
     expect(confirmText).toEqual(['6 tiles was stopped after crashing repeatedly. Restart it?']);
     expect(zh.api.t(confirmText[0])).toBe('6 tiles 因反复崩溃已被停止。要重启吗？');
+  });
+});
+
+describe('the loading label: CSS generated content, written in the UI language', () => {
+  it('goes through the translator when the tile is built, and again each time the tile starts loading', () => {
+    setUp();
+    const Queue = windowStub.TileLoadQueue;
+    const queue: { onChange?: (tile: unknown, state: string) => void } = {};
+    windowStub.TileLoadQueue = class {
+      constructor(opts: { onChange: (tile: unknown, state: string) => void }) {
+        queue.onChange = opts.onChange;
+      }
+      schedule() {}
+      drop() {}
+    };
+    try {
+      windowStub.codemanT = zh.api.t;
+      const app = makeGridApp(EIGHT);
+      app.openTileGrid(EIGHT.slice(0, 2));
+      const entry = app._tileGrid.tiles.get('s-1');
+      expect(entry.body.dataset.loadingLabel).toBe('加载中…');
+      // A language switched since is picked up the next time the tile loads.
+      windowStub.codemanT = en.api.t;
+      app._tileLoadQueue();
+      queue.onChange!(entry.tile, 'queued');
+      expect(entry.el.classList.contains('tile--loading')).toBe(true);
+      expect(entry.body.dataset.loadingLabel).toBe('Loading…');
+      queue.onChange!(entry.tile, 'idle');
+      expect(entry.el.classList.contains('tile--loading')).toBe(false);
+    } finally {
+      windowStub.TileLoadQueue = Queue;
+      delete windowStub.codemanT;
+    }
+  });
+
+  it('no tile rule carries words in generated content (the translator cannot reach it)', () => {
+    const bad: string[] = [];
+    const contents = new Map<string, string>();
+    postcss.parse(read('styles.css')).walkRules((rule) => {
+      if (!/\.tile\b/.test(rule.selector)) return;
+      rule.walkDecls('content', (decl) => {
+        contents.set(rule.selector, decl.value);
+        // CSS escapes are glyphs (\2026, \00B7), not words.
+        const literals = [...decl.value.matchAll(/'([^']*)'|"([^"]*)"/g)].map((m) =>
+          (m[1] ?? m[2]).replace(/\\[0-9a-fA-F]{1,6}\s?/g, '')
+        );
+        if (literals.some((text) => /[A-Za-z]/.test(text))) bad.push(`${rule.selector} { content: ${decl.value} }`);
+      });
+    });
+    // Not vacuous: the loading label is one of the rules read.
+    expect(contents.get('.tile.tile--loading .tile-body::after')).toBe('attr(data-loading-label)');
+    expect(bad).toEqual([]);
   });
 });

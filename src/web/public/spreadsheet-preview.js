@@ -31,6 +31,76 @@
     workerUrl: `/spreadsheet-preview-worker.js?v=${SPREADSHEET_ASSET_VERSION}`,
   });
 
+  // What a refusal from the worker says on screen. The core's own messages
+  // (spreadsheet-xlsx-core.js) are developer detail, so each error code maps to
+  // one sentence with a zh-CN entry in i18n.js, and the raw message goes to the
+  // console. Any other code (parse-failed carries ExcelJS's own exception text)
+  // shows the generic failure.
+  const TOO_LARGE_OR_COMPLEX = 'This workbook is too large or complex to preview.';
+  const UNREADABLE = 'This workbook could not be read. The file may be damaged or not a valid .xlsx file.';
+  const WORKER_ERROR_TEXT = Object.freeze({
+    encrypted: 'This workbook is password-protected or in the old .xls format, so it cannot be previewed.',
+    zip64: 'This workbook uses ZIP64, which the preview does not support.',
+    malformed: UNREADABLE,
+    'number-format': UNREADABLE,
+    'entry-limit': TOO_LARGE_OR_COMPLEX,
+    'entry-size': TOO_LARGE_OR_COMPLEX,
+    'inflated-size': TOO_LARGE_OR_COMPLEX,
+    'compression-ratio': TOO_LARGE_OR_COMPLEX,
+    'worksheet-limit': TOO_LARGE_OR_COMPLEX,
+    'element-limit': TOO_LARGE_OR_COMPLEX,
+    'row-limit': TOO_LARGE_OR_COMPLEX,
+    'cell-limit': TOO_LARGE_OR_COMPLEX,
+    'merge-limit': TOO_LARGE_OR_COMPLEX,
+    'style-limit': TOO_LARGE_OR_COMPLEX,
+  });
+
+  // The workbook features the preview leaves out, as the core names them
+  // (featureForName), in words for the notice bar.
+  const FEATURE_LABELS = Object.freeze({
+    charts: 'charts',
+    drawings: 'drawings',
+    pivotTables: 'pivot tables',
+    externalLinks: 'external links',
+    macros: 'macros',
+  });
+  const UNSUPPORTED_FORMAT_PREFIX = 'Unsupported number format: ';
+
+  function translate(text) {
+    return global.codemanT?.(text) || text;
+  }
+
+  function own(map, key) {
+    return Object.prototype.hasOwnProperty.call(map, key);
+  }
+
+  function workerErrorText(payload) {
+    const code = String(payload?.code || '');
+    if (payload?.message) console.warn(`Spreadsheet preview: ${code || 'error'}: ${payload.message}`);
+    return own(WORKER_ERROR_TEXT, code) ? WORKER_ERROR_TEXT[code] : 'Spreadsheet preview failed';
+  }
+
+  // One notice bar item, translated on its own (the bar is one text node, which
+  // the i18n layer could only match whole; the bar itself carries
+  // data-i18n-skip). A number format's code is workbook text: it is appended
+  // as is, never passed through the translator, which would read a `{…}` in it
+  // as a placeholder. A feature word goes through its scoped
+  // 'Spreadsheet feature: <word>' key and reads as the plain word when that key
+  // has no translation: a bare 'charts' key would also rename a charts/ folder.
+  function warningText(warning) {
+    const text = String(warning);
+    if (text.startsWith(UNSUPPORTED_FORMAT_PREFIX)) {
+      return `${translate('Unsupported number format')}: ${text.slice(UNSUPPORTED_FORMAT_PREFIX.length)}`;
+    }
+    if (own(FEATURE_LABELS, text)) {
+      const label = FEATURE_LABELS[text];
+      const key = `Spreadsheet feature: ${label}`;
+      const translated = translate(key);
+      return translated !== key ? translated : label;
+    }
+    return translate(text);
+  }
+
   function message(container, text, kind) {
     container.textContent = '';
     const state = document.createElement('div');
@@ -209,9 +279,8 @@
       if (!notice) return;
       const warnings = [...(metadata?.warnings || []), ...(tileWarnings || [])];
       notice.hidden = warnings.length === 0;
-      const warningLabel =
-        global.codemanT?.('Some workbook features are not shown') || 'Some workbook features are not shown';
-      notice.textContent = warnings.length ? `${warningLabel}: ${warnings.join(', ')}` : '';
+      const warningLabel = translate('Some workbook features are not shown');
+      notice.textContent = warnings.length ? `${warningLabel}: ${warnings.map(warningText).join(', ')}` : '';
     }
 
     function pinHeadings() {
@@ -376,6 +445,10 @@
       }
       const notice = document.createElement('div');
       notice.className = 'spreadsheet-preview-notice';
+      // Written already translated, item by item (renderWarnings), and it ends
+      // with workbook text (a number format's code): the observer's t() over
+      // the whole line would rewrite a `{name}` or a "Codeman" in that code.
+      notice.setAttribute('data-i18n-skip', '');
       notice.hidden = true;
       emptySheetState = document.createElement('div');
       emptySheetState.className = 'spreadsheet-empty-sheet';
@@ -459,7 +532,7 @@
             clearTimer();
             renderMetadata(payload);
           } else if (payload.type === 'tile') renderTile(payload);
-          else if (payload.type === 'error') fail(payload.message);
+          else if (payload.type === 'error') fail(workerErrorText(payload));
         };
         worker.onerror = () => fail('Spreadsheet parser failed.');
         worker.onmessageerror = () => fail('Spreadsheet parser message failed.');

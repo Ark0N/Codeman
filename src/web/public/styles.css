@@ -4519,7 +4519,8 @@ html[data-skin="og"] .welcome-primary:hover {
   color: var(--green);
 }
 
-/* Touch screens wide enough for this view (tablets) get finger-sized chips. */
+/* Touch screens get finger-sized chips. Phones too: mobile.css's 599px block
+   loads later and wins at equal specificity, so it restates the 40px. */
 @media (pointer: coarse) {
   .welcome-chip {
     height: 40px;
@@ -19741,28 +19742,49 @@ body.tile-grid-resizing--row * {
   color: var(--accent, #4a9eff);
 }
 
-/* A permission prompt or question, visible across the room. Only the border
-   colour and a box-shadow animate: anything that moves layout would resize
-   the tile's PTY every frame. */
+/* A permission prompt or question, visible across the room: a red border and
+   a glow that pulses for as long as the prompt waits, which can be hours.
+   Anything that moves layout would resize the tile's PTY every frame, and a
+   box-shadow animated on the tile itself repainted the whole tile (its DOM
+   rendered terminal rows included, the whole stage when zoomed) every frame.
+   So the glow is a STATIC shadow on an overlay and only its opacity
+   animates, which the compositor runs without repainting the tile. The
+   shadow is inset because .tile is overflow: hidden and would clip an outer
+   one on its own pseudo-element. Above .tile-attach (z-index 2), and never
+   in the way of a click. */
 .tile.tile--needs {
   border-color: var(--red, #ef4444);
+}
+
+.tile.tile--needs::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: inset 0 0 10px 2px color-mix(in srgb, var(--red, #ef4444) 55%, transparent);
+  opacity: 0;
   animation: tile-needs-pulse 1.6s ease-in-out infinite;
 }
 
 @keyframes tile-needs-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--red, #ef4444) 0%, transparent);
+    opacity: 0;
   }
   50% {
-    box-shadow: 0 0 10px 2px color-mix(in srgb, var(--red, #ef4444) 55%, transparent);
+    opacity: 1;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .tile.tile--needs {
-    animation: none;
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--red, #ef4444) 55%, transparent);
+  }
+
+  .tile.tile--needs::after {
+    display: none;
   }
 }
 
@@ -19821,9 +19843,11 @@ body.tile-grid-resizing--row * {
 }
 
 /* Quiet "loading" state while the tile's capture waits in the grid's one load
-   queue (or runs). */
+   queue (or runs). The text is the body's data-loading-label, which tile-grid.js
+   writes in the UI language (_setTileLoadingLabel): generated content is out of
+   the i18n layer's reach, so no literal words here. */
 .tile.tile--loading .tile-body::after {
-  content: 'Loading\2026';
+  content: attr(data-loading-label);
   position: absolute;
   top: 6px;
   right: 10px;
@@ -20030,13 +20054,6 @@ body.tile-grid-resizing--row * {
   animation-delay: calc(var(--tile-enter-index, 0) * 24ms);
 }
 
-/* A tile that needs you enters AND pulses (one animation property). */
-.tile.tile--entering.tile--needs {
-  animation:
-    tile-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1) calc(var(--tile-enter-index, 0) * 24ms) both,
-    tile-needs-pulse 1.6s ease-in-out infinite;
-}
-
 @keyframes tile-enter {
   from {
     opacity: 0;
@@ -20121,7 +20138,7 @@ body.tile-grid-resizing--row * {
 @media (prefers-reduced-motion: reduce) {
   .tile-count-menu,
   .tile.tile--entering,
-  .tile.tile--entering.tile--needs,
+  .tile.tile--needs::after,
   .tile.tile--loading .tile-body::after,
   .tile-grid-ghosts .tile.tile--leaving,
   .tile-grid-ghosts.tile-grid-ghosts--release .tile.tile--leaving,
@@ -20981,7 +20998,9 @@ html[data-session-list='sidebar'][data-sidebar='collapsed'] .session-sidebar .ta
    the routes ran through tabs, labels and box borders. Only a case wider than
    the whole strip still wraps inside its box (max-width: 100%), and the strip
    wraps around it too (_tabClustersWrapInside). The narrower screens keep
-   their scrolling strip. */
+   their scrolling strip: mobile.css dissolves the boxes into its chip row on
+   phones (599px block) and on tablets (600 to 767px block), since a box
+   allowed to shrink there wrapped its tabs out of the one-row strip. */
 @media (min-width: 768px) {
   .session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster {
     flex-shrink: 0;

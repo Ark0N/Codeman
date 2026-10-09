@@ -334,6 +334,34 @@ html.mobile-init .file-browser-panel {
   }
 }
 
+/* Tab Layout "By case" at tablet widths, getDeviceType()'s 'tablet' (600 to
+   767px). The strip is the tablet block's one scrolling row and
+   updateTabOverflowMode() never wraps it here, so the boxes, which may shrink
+   below 768px, squeezed and wrapped their tabs inside themselves instead of
+   overflowing: the strip never scrolled, and every tab past a box's first
+   line was clipped under the fixed header. The boxes dissolve into the chip
+   row as on phones (the 599px block), which keeps the tablet's own 40px chip
+   geometry; a 44px box would hang below the 48px header. Ends at 767px, not
+   at the tablet block's 768: from 768 getDeviceType() says 'desktop', and the
+   desktop rule in styles.css (flex-shrink: 0, wrapping box by box) owns the
+   strip. With the boxes, their labels and their case-colour borders gone, the
+   `-<case>` part of a generated name (.tab-name-case, which styles.css hides
+   in the clustered strip) is the only cue left to which case a chip is in: the
+   w<n> counter is per case, so w1-alpha and w1-beta would both read "w1". */
+@media (min-width: 600px) and (max-width: 767px) {
+  :where(.header) .session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster {
+    display: contents;
+  }
+
+  :where(.header) .tab-cluster-label {
+    display: none;
+  }
+
+  :where(.header) .session-tabs-host > .session-tabs.tabs-clusters .tab-name-case {
+    display: inline;
+  }
+}
+
 /* Edge fade for the phone's header tab strip (used in the block below).
    Registered so the keyframes can interpolate them as lengths; @property is
    only valid at the top level, hence out here. */
@@ -767,13 +795,19 @@ html.mobile-init .file-browser-panel {
 
   /* Clustered by case, the same holds: the boxes dissolve into the one chip
      row (in cluster order) and the labels go, since every chip still names
-     its session. */
+     its session. It does so in full: the `-<case>` part of a generated name,
+     which styles.css hides in the clustered strip, shows again, or w1-alpha
+     and w1-beta (the w<n> counter is per case) would both read "w1". */
   :where(.header) .session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster {
     display: contents;
   }
 
   :where(.header) .tab-cluster-label {
     display: none;
+  }
+
+  :where(.header) .session-tabs-host > .session-tabs.tabs-clusters .tab-name-case {
+    display: inline;
   }
 
   /* Only the active tab shows its action icons on a phone (see below), so on
@@ -1718,7 +1752,10 @@ html.mobile-init .file-browser-panel {
   }
 
   /* Only reached with the phone overview switched off. The primary spans the
-     column; the chips keep wrapping, a little taller for a thumb. */
+     column; the chips keep wrapping at the finger size styles.css gives touch
+     screens (40px, its pointer: coarse rule). This rule loads later at equal
+     specificity, so a lower value here made a phone's chips shorter than a
+     tablet's; restating 40px also covers a narrow window with a mouse. */
   .welcome-primary {
     width: 100%;
     justify-content: center;
@@ -1727,8 +1764,8 @@ html.mobile-init .file-browser-panel {
   }
 
   .welcome-chip {
-    height: 36px;
-    border-radius: 18px;
+    height: 40px;
+    border-radius: 20px;
   }
 
   .history-show-more {

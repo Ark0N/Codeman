@@ -25,6 +25,7 @@ import {
   sanitizeModelName,
 } from '../src/session-display-model.js';
 import { IDLE_SILENCE_MS } from '../src/session-activity.js';
+import { CODEX_REASONING_EFFORTS } from '../src/types/session.js';
 
 const detectOf = (mode: string) => getCli(mode)!.capabilities.modelDetect!;
 const DSH = compileVersionRegex(detectOf('deepseek').screenLine)!;
@@ -221,6 +222,20 @@ describe('readScreenModel', () => {
     expect(readScreenModel(typing, CODEX, CODEX_ROWS)).toBe('GPT-6-Luna');
     // Neither hint row is ever read as a model.
     expect(readScreenModel(codexPane(null, [], '  ← for agents · ? for shortcuts'), CODEX, CODEX_ROWS)).toBeUndefined();
+  });
+
+  it("reads codex's model at every reasoning effort Codeman can launch it with, ultra included", () => {
+    // `ultra` is offered by the codexReasoningEffort App Setting and codex's own /model
+    // picker; a hand-kept effort list in the pattern once left it out, so an ultra
+    // session's header never named its model. The footer prints the lowercase level.
+    const ultra = codexPane('  GPT-6-Astra ultra · ~/codeman-cases/testcase', [], '  ? for shortcuts');
+    expect(readScreenModel(ultra, CODEX, CODEX_ROWS)).toBe('GPT-6-Astra');
+    for (const effort of [...CODEX_REASONING_EFFORTS, 'default']) {
+      const atRest = codexPane(`  GPT-6-Astra ${effort} · ~/codeman-cases/testcase`, [], '  ? for shortcuts');
+      expect(readScreenModel(atRest, CODEX, CODEX_ROWS), effort).toBe('GPT-6-Astra');
+      const typing = codexPane(`  GPT-6-Astra ${effort} · ~/codeman-cases/testcase`);
+      expect(readScreenModel(typing, CODEX, CODEX_ROWS), effort).toBe('GPT-6-Astra');
+    }
   });
 
   it('never takes a transcript line shaped like the footer', () => {

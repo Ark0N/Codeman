@@ -3549,7 +3549,14 @@ Object.assign(CodemanApp.prototype, {
     }
     // Desktop defaults - rely on ?? operators in apply functions
     // This allows desktop to have different defaults without duplication
-    return {};
+    // A touch-primary tablet (iPad, an Android tablet: not a handheld, so it
+    // lands here) keeps the Tiles button opt-in, as Split is: a tile has none of
+    // the main terminal's touch, IME and soft-keyboard handling. The PRIMARY
+    // pointer decides, never MobileDetection.isTouchDevice(), which is true on a
+    // touchscreen laptop too (fine primary pointer: the desktop default stays).
+    const coarsePrimaryPointer =
+      typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)')?.matches === true;
+    return coarsePrimaryPointer ? { showTileGridButton: false } : {};
   },
 
   loadAppSettingsFromStorage() {
@@ -3566,8 +3573,15 @@ Object.assign(CodemanApp.prototype, {
     } catch (err) {
       console.error('Failed to load app settings:', err);
     }
-    // Return device-specific defaults
-    this._cachedAppSettings = this.getDefaultSettings();
+    // Return device-specific defaults, without showTileGridButton: its default
+    // on a non-handheld follows the LIVE primary pointer (getDefaultSettings),
+    // and this object is what a fresh device caches and the server-settings
+    // merge then persists, which would freeze a 2-in-1's first-load posture
+    // into a stored value. Every reader resolves the absent key through a
+    // fresh getDefaultSettings() (?? defaults.showTileGridButton ?? true).
+    const defaults = { ...this.getDefaultSettings() };
+    delete defaults.showTileGridButton;
+    this._cachedAppSettings = defaults;
     return this._cachedAppSettings;
   },
 
@@ -3613,6 +3627,10 @@ Object.assign(CodemanApp.prototype, {
     if (result && this.notificationManager) {
       this.notificationManager.originalTitle = document.title;
     }
+    // The connection tile's value word (Header Stats Style Tiles) is written
+    // already translated into a data-i18n-skip span, so the translator above
+    // cannot revert it; its own language compare makes this one call repaint it.
+    this._updateConnectionIndicator?.();
   },
 
   // Resolved per-device state of the plan-usage chip. Desktop defaults ON,
