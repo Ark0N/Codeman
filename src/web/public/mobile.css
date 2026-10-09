@@ -344,7 +344,10 @@ html.mobile-init .file-browser-panel {
    geometry; a 44px box would hang below the 48px header. Ends at 767px, not
    at the tablet block's 768: from 768 getDeviceType() says 'desktop', and the
    desktop rule in styles.css (flex-shrink: 0, wrapping box by box) owns the
-   strip. */
+   strip. With the boxes, their labels and their case-colour borders gone, the
+   `-<case>` part of a generated name (.tab-name-case, which styles.css hides
+   in the clustered strip) is the only cue left to which case a chip is in: the
+   w<n> counter is per case, so w1-alpha and w1-beta would both read "w1". */
 @media (min-width: 600px) and (max-width: 767px) {
   :where(.header) .session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster {
     display: contents;
@@ -352,6 +355,10 @@ html.mobile-init .file-browser-panel {
 
   :where(.header) .tab-cluster-label {
     display: none;
+  }
+
+  :where(.header) .session-tabs-host > .session-tabs.tabs-clusters .tab-name-case {
+    display: inline;
   }
 }
 
@@ -788,13 +795,19 @@ html.mobile-init .file-browser-panel {
 
   /* Clustered by case, the same holds: the boxes dissolve into the one chip
      row (in cluster order) and the labels go, since every chip still names
-     its session. */
+     its session. It does so in full: the `-<case>` part of a generated name,
+     which styles.css hides in the clustered strip, shows again, or w1-alpha
+     and w1-beta (the w<n> counter is per case) would both read "w1". */
   :where(.header) .session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster {
     display: contents;
   }
 
   :where(.header) .tab-cluster-label {
     display: none;
+  }
+
+  :where(.header) .session-tabs-host > .session-tabs.tabs-clusters .tab-name-case {
+    display: inline;
   }
 
   /* Only the active tab shows its action icons on a phone (see below), so on

@@ -920,11 +920,15 @@
     'This workbook is too large or complex to preview.': '此工作簿过大或过于复杂，无法预览。',
     'This workbook could not be read. The file may be damaged or not a valid .xlsx file.':
       '无法读取此工作簿。文件可能已损坏，或不是有效的 .xlsx 文件。',
-    charts: '图表',
-    drawings: '绘图',
-    'pivot tables': '数据透视表',
-    'external links': '外部链接',
-    macros: '宏',
+    // The features the preview leaves out (spreadsheet-preview.js warningText).
+    // Scoped keys on purpose: a bare 'charts' or 'macros' key would also
+    // translate a folder or case of that name (a Helm chart's charts/, a dbt
+    // project's macros/) in the Files panel and the case picker.
+    'Spreadsheet feature: charts': '图表',
+    'Spreadsheet feature: drawings': '绘图',
+    'Spreadsheet feature: pivot tables': '数据透视表',
+    'Spreadsheet feature: external links': '外部链接',
+    'Spreadsheet feature: macros': '宏',
     'Formula has no cached result': '公式没有缓存的计算结果',
     'Unsupported cell value': '不支持的单元格值',
     'Unsupported number format': '不支持的数字格式',

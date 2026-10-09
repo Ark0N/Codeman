@@ -81,15 +81,24 @@
   }
 
   // One notice bar item, translated on its own (the bar is one text node, which
-  // the i18n layer could only match whole). A number format's code is workbook
-  // text: it is appended as is, never passed through the translator, which
-  // would read a `{…}` in it as a placeholder.
+  // the i18n layer could only match whole; the bar itself carries
+  // data-i18n-skip). A number format's code is workbook text: it is appended
+  // as is, never passed through the translator, which would read a `{…}` in it
+  // as a placeholder. A feature word goes through its scoped
+  // 'Spreadsheet feature: <word>' key and reads as the plain word when that key
+  // has no translation: a bare 'charts' key would also rename a charts/ folder.
   function warningText(warning) {
     const text = String(warning);
     if (text.startsWith(UNSUPPORTED_FORMAT_PREFIX)) {
       return `${translate('Unsupported number format')}: ${text.slice(UNSUPPORTED_FORMAT_PREFIX.length)}`;
     }
-    return translate(own(FEATURE_LABELS, text) ? FEATURE_LABELS[text] : text);
+    if (own(FEATURE_LABELS, text)) {
+      const label = FEATURE_LABELS[text];
+      const key = `Spreadsheet feature: ${label}`;
+      const translated = translate(key);
+      return translated !== key ? translated : label;
+    }
+    return translate(text);
   }
 
   function message(container, text, kind) {
@@ -436,6 +445,10 @@
       }
       const notice = document.createElement('div');
       notice.className = 'spreadsheet-preview-notice';
+      // Written already translated, item by item (renderWarnings), and it ends
+      // with workbook text (a number format's code): the observer's t() over
+      // the whole line would rewrite a `{name}` or a "Codeman" in that code.
+      notice.setAttribute('data-i18n-skip', '');
       notice.hidden = true;
       emptySheetState = document.createElement('div');
       emptySheetState.className = 'spreadsheet-empty-sheet';

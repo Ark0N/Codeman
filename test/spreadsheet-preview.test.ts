@@ -504,12 +504,64 @@ describe('spreadsheet preview text the user reads', () => {
         'View truncated to the first 2500 cells, Formula has no cached result, Unsupported cell value, ' +
         'Unsupported number format: {name}"x", 3 unsupported number formats'
     );
+    // The real English translator reads the feature words as plain words too,
+    // never as their scoped keys.
+    (window as any).codemanT = en;
+    expect(await notice()).toBe(english);
     (window as any).codemanT = zh;
     const chinese = await notice();
     // The format code is workbook text: kept as is ({name} is not a placeholder here).
     expect(chinese).toContain('不支持的数字格式: {name}"x"');
     expect(leftover(chinese.replace('{name}"x"', ''))).toEqual([]);
     expect(chinese.startsWith(`${zh('Some workbook features are not shown')}: 数据透视表, 外部链接, 图表`)).toBe(true);
+    // Through scoped keys only: the translator runs over the Files panel tree and
+    // the case picker too, where a bare 'charts' or 'macros' key would rename a
+    // Helm chart's charts/ or a dbt project's macros/ folder, or a case of that name.
+    const words = ['charts', 'drawings', 'pivot tables', 'external links', 'macros'];
+    expect(words.filter((word) => zh(word) !== word || zh(word.toUpperCase()) !== word.toUpperCase())).toEqual([]);
+  });
+
+  it('keeps the notice bar away from the page translator, so a format code is never rewritten', async () => {
+    // The real i18n.js in the renderer's own window. configure() walks the whole
+    // body with t(), which fills `{name}` and rebrands "Codeman" in every text
+    // node it reaches; the bar is written already translated, item by item, and
+    // ends with workbook text.
+    const { confirm, alert } = window;
+    const context = vm.createContext({
+      window,
+      document,
+      Node: window.Node,
+      NodeFilter: window.NodeFilter,
+      MutationObserver: window.MutationObserver,
+      console,
+    });
+    vm.runInContext(i18nSource, context, { filename: 'i18n.js' });
+    try {
+      const i18n = (window as any).CodemanI18n as { configure(o: object): void };
+      i18n.configure({ language: 'en', displayName: 'Acme' });
+      const worker = await openLoaded();
+      worker.emit({ ...metadata(), warnings: ['charts'] });
+      const request = worker.postMessage.mock.calls.at(-1)?.[0];
+      worker.emit({
+        type: 'tile',
+        requestId: request.requestId,
+        sheetId: '1',
+        cells: [],
+        warnings: ['Unsupported number format: {name}"Codeman"0'],
+      });
+      const bar = document.querySelector('.spreadsheet-preview-notice')!;
+      const written = 'Some workbook features are not shown: charts, Unsupported number format: {name}"Codeman"0';
+      expect(bar.textContent).toBe(written);
+      // A language or display-name change re-walks the page.
+      i18n.configure({ language: 'en', displayName: 'Acme' });
+      expect(bar.textContent).toBe(written);
+      expect(bar.hasAttribute('data-i18n-skip')).toBe(true);
+    } finally {
+      delete (window as any).CodemanI18n;
+      delete (window as any).codemanT;
+      window.confirm = confirm;
+      window.alert = alert;
+    }
   });
 
   it('the HTTP status line reads in Chinese with its status', async () => {

@@ -226,10 +226,21 @@ describe('the parts the new styles draw', () => {
       app._updateConnectionIndicator();
       expect(document.getElementById('connectionTileLabel')!.textContent).toBe('WS');
       expect(document.getElementById('connectionTileValue')!.textContent).toBe('已连接');
-      // The same descriptor after a switch back to English is not skipped as unchanged.
-      window.codemanT = en.t;
-      window.CodemanI18n = { language: 'en' };
-      app._updateConnectionIndicator();
+      // A switch back to English repaints it with nothing else happening: the
+      // value span is data-i18n-skip, so only applyLocalization (settings-ui.js,
+      // which every language change runs) can, and the same descriptor is not
+      // skipped as unchanged. No indicator update by hand here.
+      window.CodemanI18n = {
+        language: 'zh-CN',
+        configure({ language }: { language: string }) {
+          this.language = language;
+          window.codemanT = language === 'zh-CN' ? zh.t : en.t;
+          return { language };
+        },
+      };
+      app.loadAppSettingsFromStorage = () => ({ language: 'en' });
+      app.applyLocalization();
+      expect(window.CodemanI18n.language).toBe('en');
       expect(document.getElementById('connectionTileValue')!.textContent).toBe('live');
 
       // Every value word has its own Chinese, and none is a bare key.

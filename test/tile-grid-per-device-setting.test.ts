@@ -118,6 +118,56 @@ describe('the device default: ON on desktop, OFF on handhelds and touch-primary 
     expect(defaultsOn(PHONE).showTileGridButton).toBe(false);
   });
 
+  it('never stores the posture default: a 2-in-1 first opened as a tablet gets the button once it is docked', () => {
+    // A fresh device caches loadAppSettingsFromStorage()'s fallback, and the
+    // server-settings merge saves that object (saveAppSettingsToStorage(merged)),
+    // so a default taken from the instantaneous primary pointer must not be in it.
+    let coarse = true;
+    const stored = new Map<string, string>();
+    const CodemanApp = function CodemanApp(this: unknown) {};
+    const context = vm.createContext({
+      CodemanApp,
+      VoiceInput: {},
+      localStorage: {
+        getItem: (k: string) => stored.get(k) ?? null,
+        setItem: (k: string, v: string) => stored.set(k, String(v)),
+      },
+      document: { getElementById: () => null },
+      console,
+      MobileDetection: {
+        isHandheldDevice: () => false,
+        isTouchDevice: () => true,
+        getDeviceType: () => 'desktop',
+      },
+      window: {
+        matchMedia: (q: string) => ({
+          matches: q === '(pointer: coarse)' ? coarse : q === '(pointer: fine)' && !coarse,
+        }),
+      },
+    });
+    vm.runInContext(SOURCE, context, { filename: 'settings-ui.js' });
+    type SettingsApp = {
+      getDefaultSettings(): Record<string, unknown>;
+      loadAppSettingsFromStorage(): Record<string, unknown>;
+      saveAppSettingsToStorage(s: Record<string, unknown>): void;
+    };
+    const app = Object.create(CodemanApp.prototype) as SettingsApp;
+    // What every reader resolves (header button, App Settings chip, chord).
+    const resolvedNow = () =>
+      (app.loadAppSettingsFromStorage().showTileGridButton ?? app.getDefaultSettings().showTileGridButton ?? true) ===
+      true;
+
+    // First load in tablet posture: OFF, and nothing about it is cached or saved.
+    expect(resolvedNow()).toBe(false);
+    expect(app.loadAppSettingsFromStorage()).not.toHaveProperty('showTileGridButton');
+    app.saveAppSettingsToStorage({ ...app.loadAppSettingsFromStorage() });
+    expect([...stored.values()].join('')).not.toContain('showTileGridButton');
+
+    // Docked (keyboard and trackpad: fine primary pointer): the desktop default.
+    coarse = false;
+    expect(resolvedNow()).toBe(true);
+  });
+
   it('a context with no window at all still answers (the desktop default)', () => {
     const CodemanApp = function CodemanApp(this: unknown) {};
     const context = vm.createContext({

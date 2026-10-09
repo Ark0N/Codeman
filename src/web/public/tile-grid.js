@@ -337,15 +337,13 @@ Object.assign(CodemanApp.prototype, {
     const max = window.CodemanTileGrid.TILE_GRID_MAX;
     // The grid and the split are never open together. An open split becomes the
     // grid's first two tiles (Pane A focused, Pane B beside it), so "split, then
-    // want more" is one step. No closing resize for Pane A: it is about to park.
+    // want more" is one step.
     let requested = ids || [];
-    if (this._splitPane) {
+    const splitOpen = !!this._splitPane;
+    if (splitOpen && mergeSplit) {
       const seed = [this.activeSessionId, this._splitSessionId].filter(Boolean);
-      this.closeSplitPane({ skipPrimaryResize: true });
-      if (mergeSplit) {
-        requested = [...seed, ...requested];
-        if (!requested.includes(focusedId)) focusedId = seed[0] ?? null;
-      }
+      requested = [...seed, ...requested];
+      if (!requested.includes(focusedId)) focusedId = seed[0] ?? null;
     }
     const wanted = [];
     for (const id of requested) {
@@ -354,6 +352,12 @@ Object.assign(CodemanApp.prototype, {
       wanted.push(id);
       if (wanted.length === max) break;
     }
+    // No closing resize for Pane A only when it becomes a tile (its tile sizes
+    // the PTY). A Pane A left out of the set (a group, a stored grid: mergeSplit
+    // false) gets its full width back now, while the main terminal still shows
+    // it, or its PTY stays at the split's half width for as long as the grid
+    // is open.
+    if (splitOpen) this.closeSplitPane({ skipPrimaryResize: wanted.includes(this.activeSessionId) });
     if (wanted.length === 0) return grid.open;
     const focus = wanted.includes(focusedId) ? focusedId : wanted[0];
 

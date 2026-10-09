@@ -83,6 +83,7 @@ describe('opening the grid over an open split', () => {
     app.activeSessionId = 's-a';
     localStore.set('codeman:tile-count', '2');
     const paneB = openSplit(app);
+    app.sendResize.mockClear();
 
     app.toggleTileGrid();
 
@@ -91,6 +92,8 @@ describe('opening the grid over an open split', () => {
     // Filled from tab order (s-other first), not seeded with the split's two.
     expect(app._tileGrid.ids).toEqual(['s-c', 's-other']);
     expect(app.activeSessionId).toBe('s-c');
+    // Pane A (s-a) is not a tile: the split's closing resize gave it its full width back.
+    expect(app.sendResize.mock.calls).toEqual([['s-a', { force: true }]]);
   });
 
   it('an explicit open over a split keeps both split sessions first', () => {
@@ -126,6 +129,12 @@ describe('opening the grid over an open split', () => {
     expect(app._splitPane).toBeNull();
     expect(app._tileGrid.ids).toEqual(['s-c', 's-d']);
     expect(app.activeSessionId).toBe('s-c');
+    // Pane A (s-a) is not in the group, so no tile will ever size its PTY: the
+    // split's closing resize gives it its full width back before the main
+    // terminal parks, or it stays at the split's half width for as long as
+    // the grid is open. The split's opening resize, then the closing one.
+    expect(app.sendResize).toHaveBeenCalledTimes(2);
+    expect(app.sendResize).toHaveBeenLastCalledWith('s-a', { force: true });
   });
 
   it('Ctrl/Cmd+click over a split opens the remembered count in total, never one more', () => {
@@ -139,6 +148,8 @@ describe('opening the grid over an open split', () => {
     // The split's Pane A seeds the set (tileGridOpenSet), the clicked one joins: 2, not 3.
     expect(app._tileGrid.ids).toEqual(['s-a', 's-c']);
     expect(app.activeSessionId).toBe('s-c');
+    // Pane A is a tile, which sizes its PTY: no closing resize for it.
+    expect(app.sendResize).toHaveBeenCalledTimes(1); // the split's own opening resize only
   });
 
   it('Ctrl/Cmd+click over a split with a remembered grid: the remembered grid wins, not the split', () => {

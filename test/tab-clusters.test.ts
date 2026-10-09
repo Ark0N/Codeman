@@ -383,7 +383,7 @@ describe('tab layouts by case and ledger (static)', () => {
       widths: ReturnType<typeof mobileRuleWidths>;
     }> = [];
     postcss.parse(mobileCss).walkRules((rule) => {
-      if (!rule.selector.includes('tab-cluster')) return;
+      if (!rule.selector.includes('tab-cluster') && !rule.selector.includes('tab-name-case')) return;
       const decls: Record<string, string> = {};
       rule.walkDecls((d) => {
         decls[d.prop] = d.value;
@@ -411,6 +411,19 @@ describe('tab layouts by case and ledger (static)', () => {
           (r) => applies(r) && r.selector === ':where(.header) .tab-cluster-label' && r.decls.display === 'none'
         ),
         `label hidden at ${width}px`
+      ).toBe(true);
+      // With the box, its label and its case-colour border gone, the case part
+      // of a generated name is the only cue left: the w<n> counter is per case,
+      // so w1-alpha and w1-beta would otherwise both read "w1". It must outrank
+      // styles.css's `.session-tabs.tabs-clusters .tab-name-case { display: none }`.
+      expect(
+        rules.some(
+          (r) =>
+            applies(r) &&
+            r.selector === ':where(.header) .session-tabs-host > .session-tabs.tabs-clusters .tab-name-case' &&
+            r.decls.display === 'inline'
+        ),
+        `case part of the name shown at ${width}px`
       ).toBe(true);
     }
   });
