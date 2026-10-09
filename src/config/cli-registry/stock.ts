@@ -645,13 +645,23 @@ const CODEX: CliEntry = {
     },
     // The footer under the composer, measured on a live 0.147.0 pane:
     // `  gpt-5.6-terra default · ~/codeman-cases/th-scratch` (model, reasoning effort,
-    // cwd). It is the pane's LAST row, below the composer, so the transcript never
-    // reaches it, and the effort word right after the model is codex's own format: an
-    // open slash-command popup or a bare line of prose does not have that shape. A
-    // footer without an effort word (a model with no reasoning setting) is not read,
-    // and the session keeps its last known or launch model.
+    // cwd). It sits below the composer, so the transcript never reaches it, and the
+    // effort word right after the model is codex's own format: an open slash-command
+    // popup or a bare line of prose does not have that shape. A footer without an effort
+    // word (a model with no reasoning setting) is not read, and the session keeps its
+    // last known or launch model.
+    // ⚠️ It is not always the LAST row. 0.162.0 (measured 2026-10-09) adds a hint row
+    // under it at rest, `  ← for agents · ? for shortcuts` or `  ? for shortcuts`, and
+    // drops it again while a prompt is being typed. With a one-row window the footer was
+    // never seen and every codex tile showed no model. So the window is two rows and the
+    // footer is either the last one or followed by exactly one more two-space-indented
+    // row. The `$` (no `m` flag: the end of the window) is what keeps the guard the
+    // one-row rule had: with the footer hidden, the last two rows are a transcript line
+    // and the `›` composer, and a forged footer-shaped transcript line is not followed by
+    // an indented row, so it is not read.
     modelDetect: {
-      screenLine: String.raw`^ {2}([A-Za-z0-9][\w.:/@+-]{0,79}) (?:none|minimal|low|medium|high|xhigh|max|default) · `,
+      screenLine: String.raw`(?:^|\n) {2}([A-Za-z0-9][\w.:/@+-]{0,79}) (?:none|minimal|low|medium|high|xhigh|max|default) · [^\n]*(?:\n {2}[^\n]*)?$`,
+      screenLines: 2,
     },
     // Two columns, like claude's, measured on a live 0.154.0 answer: the `•`/`›`/`⚠`
     // markers sit in the gutter, prose continuations sit at 2, and a nested YAML block

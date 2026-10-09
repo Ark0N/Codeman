@@ -51,8 +51,11 @@ function dshPane(statusLine: string | null, transcript: string[] = []): string {
 }
 const DSH_LIVE = dshPane(' qwen3.8-27b · medium · th-scratch');
 
-/** The foot of a codex pane: transcript, composer, then the status line on the last row. */
-function codexPane(statusLine: string | null, transcript: string[] = []): string {
+/**
+ * The foot of a codex pane: transcript, composer, then the status line, and from 0.162.0
+ * on a hint row under it at rest (`hint`; absent while a prompt is being typed).
+ */
+function codexPane(statusLine: string | null, transcript: string[] = [], hint: string | null = null): string {
   return [
     '│ directory:   ~/codeman-cases/th-scratch       │',
     '│ permissions: YOLO mode                        │',
@@ -61,7 +64,9 @@ function codexPane(statusLine: string | null, transcript: string[] = []): string
     '  plan for free – let’s build together.',
     ...transcript,
     '› Explain this codebase',
+    '',
     ...(statusLine === null ? [] : [statusLine]),
+    ...(hint === null ? [] : [hint]),
     '',
   ].join('\n');
 }
@@ -69,6 +74,8 @@ const CODEX_LIVE = codexPane('  gpt-5.6-terra default · ~/codeman-cases/th-scra
 const CODEX_154 = codexPane(
   '  gpt-5.6-sol medium · Context 98% left · ~/codeman-cases/codex-probe · 5h 99% left · weekly 94% left'
 );
+/** 0.162.0 at rest, verbatim from the 1.36.0 beta pane whose tile showed no model. */
+const CODEX_162 = codexPane('  GPT-6-Luna default · ~/codeman-cases/testcase', [], '  ← for agents · ? for shortcuts');
 
 describe('the registry patterns', () => {
   it('compile through compileVersionRegex() with exactly one capture group', () => {
@@ -181,6 +188,17 @@ describe('readScreenModel', () => {
     expect(readScreenModel(CODEX_154, CODEX, CODEX_ROWS)).toBe('gpt-5.6-sol');
   });
 
+  it("reads codex's model above the 0.162.0 hint row, and with the hint gone while typing", () => {
+    expect(readScreenModel(CODEX_162, CODEX, CODEX_ROWS)).toBe('GPT-6-Luna');
+    const shortHint = codexPane('  GPT-6-Luna default · ~/codeman-cases/testcase', [], '  ? for shortcuts');
+    expect(readScreenModel(shortHint, CODEX, CODEX_ROWS)).toBe('GPT-6-Luna');
+    // Typing hides the hint, which puts the footer back on the last row.
+    const typing = codexPane('  GPT-6-Luna default · ~/codeman-cases/testcase');
+    expect(readScreenModel(typing, CODEX, CODEX_ROWS)).toBe('GPT-6-Luna');
+    // Neither hint row is ever read as a model.
+    expect(readScreenModel(codexPane(null, [], '  ← for agents · ? for shortcuts'), CODEX, CODEX_ROWS)).toBeUndefined();
+  });
+
   it('never takes a transcript line shaped like the footer', () => {
     // The agent printed a line exactly like each CLI's footer, and the real footer is
     // hidden (a dsh status bar switched off; a codex popup over its last row). The
@@ -200,6 +218,16 @@ describe('readScreenModel', () => {
       '  evil-model high · ~/codeman-cases/th-scratch',
     ]);
     expect(readScreenModel(codexBoth, CODEX, CODEX_ROWS)).toBe('gpt-5.6-terra');
+    // The two-row window must not open the door either: a forged line followed by an
+    // indented transcript row still has the `›` composer under it, so it is never read.
+    const codexForgedPair = codexPane(null, ['  evil-model high · ~/codeman-cases/th-scratch', '  ? for shortcuts']);
+    expect(readScreenModel(codexForgedPair, CODEX, CODEX_ROWS)).toBeUndefined();
+    const codexBoth162 = codexPane(
+      '  GPT-6-Luna default · ~/codeman-cases/testcase',
+      ['  evil-model high · ~/codeman-cases/th-scratch'],
+      '  ? for shortcuts'
+    );
+    expect(readScreenModel(codexBoth162, CODEX, CODEX_ROWS)).toBe('GPT-6-Luna');
   });
 
   it('does not read a popup under the composer as a model', () => {
