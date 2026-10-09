@@ -44,16 +44,18 @@ npm run test:mobile -- test/mobile/visual-regression.test.ts
 
 ## Test Files
 
-| File | Port | Description |
-|------|------|-------------|
-| `keyboard.test.ts` | 3200 | Virtual keyboard simulation (3-layer: CDP, mock, DOM) |
-| `tabs.test.ts` | 3201 | Tab switching, swipe navigation, keyboard nav |
-| `subagent-windows.test.ts` | 3202 | Mobile subagent card dimensions, stacking, interactions |
-| `settings.test.ts` | 3203 | Settings modal, mobile defaults, persistence |
-| `layout.test.ts` | 3204 | General mobile layout, fixed elements, device classes |
-| `device-matrix.test.ts` | 3205 | Cross-device parametric tests (138 devices) |
-| `visual-regression.test.ts` | 3206 | Screenshot comparison at key breakpoints |
-| `accessibility.test.ts` | 3207 | WCAG touch targets, zoom, focus, ARIA |
+Each file starts its own server on an ephemeral port (`createTestServer()`, then `server.boundPort`), so files never compete for a port.
+
+| File | Description |
+|------|-------------|
+| `keyboard.test.ts` | Virtual keyboard simulation (3-layer: CDP, mock, DOM) |
+| `tabs.test.ts` | Tab switching, swipe navigation, keyboard nav |
+| `subagent-windows.test.ts` | Mobile subagent card dimensions, stacking, interactions |
+| `settings.test.ts` | Settings modal, mobile defaults, persistence |
+| `layout.test.ts` | General mobile layout, fixed elements, device classes |
+| `device-matrix.test.ts` | Cross-device parametric tests (138 devices) |
+| `visual-regression.test.ts` | Screenshot comparison at key breakpoints |
+| `accessibility.test.ts` | WCAG touch targets, zoom, focus, ARIA |
 
 ## Device Matrix
 
@@ -99,7 +101,7 @@ The phone block is `max-width: 599px` and the tablet block starts at `min-width:
 
 ```
 Test File
-  ├─ helpers/server.ts      → WebServer(port, false, testMode=true)
+  ├─ helpers/server.ts      → WebServer(0, false, testMode=true), ephemeral port
   ├─ helpers/browser.ts      → Playwright Chromium / WebKit
   ├─ helpers/cdp.ts          → Chrome DevTools Protocol (Chromium only)
   ├─ helpers/keyboard-sim.ts → 3-layer keyboard simulation
@@ -144,10 +146,10 @@ Snapshots at 10 key breakpoints: 320, 375, 390, 393, 430, 440, 600, 768, 834, 10
 ## Helpers Reference
 
 ### `helpers/constants.ts`
-All magic numbers centralized: ports, CSS selectors, breakpoint thresholds, keyboard constants, swipe parameters, touch target minimums, body CSS classes, localStorage keys.
+All magic numbers centralized: CSS selectors, breakpoint thresholds, keyboard constants, swipe parameters, touch target minimums, body CSS classes, localStorage keys.
 
 ### `helpers/server.ts`
-`createTestServer(port)` / `stopTestServer(server)` — wraps `WebServer` with `testMode=true`.
+`createTestServer()` / `stopTestServer(server)` — wraps `WebServer` with `testMode=true` on an ephemeral port; read it from `server.boundPort`.
 
 ### `helpers/browser.ts`
 `createDevicePage(device, url, engine?)` — creates a Playwright browser context with the device's viewport, DPR, UA, touch support, navigates to the URL.
@@ -196,9 +198,7 @@ Unified `swipe()` / `tap()` with auto CDP/synthetic selection. Also exports per-
 
 ## Adding New Tests
 
-1. Pick a unique port (next: 3208+) — search `const PORT =` across test files
-2. Add the port to `helpers/constants.ts` PORTS object
-3. Use the standard test pattern:
+1. Use the standard test pattern (no port to pick: the server binds port 0):
 
 ```typescript
 import { createTestServer, stopTestServer } from './helpers/server.js';
@@ -207,12 +207,16 @@ import { REPRESENTATIVE_DEVICES } from './devices.js';
 
 describe('My Test', () => {
   let server;
-  beforeAll(async () => { server = await createTestServer(MY_PORT); });
+  let baseUrl: string;
+  beforeAll(async () => {
+    server = await createTestServer();
+    baseUrl = `http://localhost:${server.boundPort}`;
+  });
   afterAll(async () => { await stopTestServer(server); await closeAllBrowsers(); });
 
   it('works on phone', async () => {
     const device = REPRESENTATIVE_DEVICES['standard-phone'];
-    const { page, context } = await createDevicePage(device, `http://localhost:${MY_PORT}`);
+    const { page, context } = await createDevicePage(device, baseUrl);
     try {
       // ... assertions ...
     } finally {
@@ -222,7 +226,7 @@ describe('My Test', () => {
 });
 ```
 
-4. For new devices: add to `devices.ts` with correct category, viewport, UA, DPR
+2. For new devices: add to `devices.ts` with correct category, viewport, UA, DPR
 
 ## Findings Log
 
