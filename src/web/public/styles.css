@@ -5647,6 +5647,24 @@ html[data-skin="og"] .welcome-primary:hover {
      timestamp recent-session row still fits whole, which is what that list is for. */
   max-width: 250px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+  /* The menu grows UPWARD from the toolbar (`bottom: 100%`), so with every CLI, the custom
+     endpoint entries, Terminal and the saved URLs it can be taller than the room above the
+     toolbar: its top then sits off-screen with nothing to scroll, and the entries up there
+     cannot be reached (worst on a phone). Cap it to the space between the header and the
+     toolbar and scroll inside it. `dvh` so an on-screen keyboard or a collapsing browser bar
+     shrinks the cap with it; the `vh` line is the fallback for browsers without it. */
+  max-height: calc(100vh - var(--header-height) - var(--toolbar-height) - 16px);
+  max-height: calc(100dvh - var(--header-height) - var(--toolbar-height) - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+/* Children of a scrolling flex column must keep their natural height. Without this the ones
+   that have their own `overflow` (the history list, the saved-URL list, whose min-height is 0)
+   are squashed to nothing as the menu fills, instead of the menu scrolling. */
+.run-mode-menu > * {
+  flex-shrink: 0;
 }
 
 /* Above phone width the menu becomes a full-width drawer across the bottom of the
