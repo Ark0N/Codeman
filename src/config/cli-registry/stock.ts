@@ -1428,6 +1428,20 @@ const OMP: CliEntry = {
     // makes an omp conversation survive a full session kill.
     transcript: 'omp-jsonl',
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // Measured on live omp 18.8.6 and 18.0.11 panes (2026-10-09, a turn held open against
+    // an endpoint that never answers): the input row is `╰─ <text>`, redrawn when a turn
+    // ends, at launch and on reattach. While a turn runs the status bar's leading `π`
+    // becomes a braille spinner plus the elapsed time (` ⠼ 14s > ⬢ model > 📁 ~/dir ▶──`;
+    // 18.0.11 pads it with two spaces, past a minute it reads `1m`), and a `⎋ Working…`
+    // row appears above it. At rest the bar starts ` π > `.
+    // ⚠️ Without this entry an omp session never left `busy` once marked working, like pi:
+    // the spinner trips SPINNER_PATTERN and omp never draws Claude's `❯` after setup.
+    // The glyph also switches the submit verifier on for omp. A prompt sent mid-turn goes
+    // to omp's `Steering` queue and clears the input row, so the verifier stands down.
+    workDetect: {
+      promptGlyph: '╰─',
+      workingLine: '[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] [0-9hms ]+> |⎋ Working',
+    },
     // No permission prompts and no bypass flag, so nothing config-shaped to clamp — the
     // whole privileged surface here is env-shaped.
     privilegedParams: [],

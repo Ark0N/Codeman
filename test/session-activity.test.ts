@@ -1,5 +1,5 @@
 /**
- * Working/idle detection for an interactive agent pane, Claude's, Codex's, pi's and opencode's.
+ * Working/idle detection for an interactive agent pane, Claude's, Codex's, pi's, opencode's and omp's.
  *
  * The bug this pins: Claude redraws the composer (`❯`) about once a second all
  * the way through a turn, so the old "saw a ❯, wait 2s, call it idle" rule
@@ -13,8 +13,8 @@
  * work exactly as before.
  *
  * The status-line fixtures below are verbatim captures from live panes
- * (`tmux -L codeman capture-pane -p`) on Claude Code 2.1.220, Codex CLI 0.152.1, pi 1.1.0
- * and opencode 1.3.0.
+ * (`tmux -L codeman capture-pane -p`) on Claude Code 2.1.220, Codex CLI 0.152.1, pi 1.1.0,
+ * opencode 1.3.0 and omp 18.8.6 / 18.0.11.
  */
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { Session } from '../src/session.js';
@@ -49,7 +49,7 @@ function feed(session: Session, data: string): void {
  */
 function withFakePane(
   screen: string | (() => string),
-  mode: 'claude' | 'codex' | 'pi' | 'opencode' = 'claude'
+  mode: 'claude' | 'codex' | 'pi' | 'opencode' | 'omp' = 'claude'
 ): Session {
   const read = typeof screen === 'function' ? screen : () => screen;
   const mux = {
@@ -138,6 +138,24 @@ const OC_COMPOSER_REPAINT =
 const OC_TURN_END =
   '\x1b[?2026h\x1b[32;28H\x1b[38;2;128;128;128m\x1b[48;2;10;10;10m · 16.3s\x1b[39;4H\x1b[38;2;255;255;255m        ' +
   '\x1b[2C             \x1b[35;6H\x1b(B\x1b[m\x1b[?2026l';
+
+/**
+ * omp's pane, verbatim from live omp 18.8.6 and 18.0.11 captures (rules shortened): the
+ * input row is `╰─`, and a running turn swaps the status bar's leading `π` for a braille
+ * spinner plus the elapsed time, with a `⎋ Working…` row above it.
+ */
+const OMP_BAR_TAIL = '⬢ hang > 📁 ~/work ▶─────────5%' + '─'.repeat(40);
+const OMP_WORKING = ` say ok\n\n  ⎋ Working…\n ⠼ 14s > ${OMP_BAR_TAIL}\n╰─\n`;
+/** 18.0.11 pads the elapsed time with two spaces; past a minute it reads `1m`. */
+const OMP_WORKING_OLD = ` say ok\n\n  ⎋ Working…\n ⠼ 2s  > ${OMP_BAR_TAIL}\n╰─\n`;
+const OMP_WORKING_LONG = ` ⠧ 1m > ${OMP_BAR_TAIL}\n╰─\n`;
+const OMP_AT_REST = ` say ok\n\n π > ${OMP_BAR_TAIL}\n╰─\n`;
+/** One spinner frame on the wire: the Working row and the bar, never the input row. */
+const OMP_SPINNER_FRAME =
+  '\x1b[19;1H\x1b[0m\x1b[K \x1b[38;5;248m ⎋\x1b[39m \x1b[38;5;243mWorki\x1b[39;38;5;248mng\x1b[39;1;38;5;39m…\x1b[22;39m\n' +
+  `\x1b[20;1H\x1b[0m\x1b[K\x1b[48;5;233;39m \x1b[38;5;39m⠼ 5s\x1b[39m \x1b[38;5;236m>\x1b[39m ${OMP_BAR_TAIL}`;
+/** The input row omp redraws when a turn is submitted and when it ends. */
+const OMP_INPUT_REPAINT = '\x1b[20;1H\x1b[0m\x1b[K\x1b[38;5;239m╰─ \x1b[39;38;5;254;39m      \x1b[0m';
 
 /** A composer repaint: the frame Claude ships roughly once a second while working. */
 const COMPOSER_REPAINT =
@@ -852,5 +870,79 @@ describe('wire activity stamp across recovery', () => {
     const session = new Session({ workingDir: '/tmp', mode: 'claude' });
     (session as unknown as SessionInternals)._handleTerminalOutput('x');
     expect(session.lastActivityAt).toBeGreaterThanOrEqual(before);
+  });
+});
+
+describe("omp's work-detection descriptor", () => {
+  const omp = getCli('omp')?.capabilities.workDetect;
+
+  it('matches the status bar and Working row omp draws while a turn runs', () => {
+    const re = new RegExp(omp!.workingLine);
+    expect(re.test(OMP_WORKING)).toBe(true);
+    expect(re.test(OMP_WORKING_OLD)).toBe(true);
+    expect(re.test(OMP_WORKING_LONG)).toBe(true);
+    // The stream detector reads the ANSI-stripped chunk.
+    expect(re.test(stripAnsi(OMP_SPINNER_FRAME))).toBe(true);
+  });
+
+  it('does not match a pane at rest', () => {
+    expect(new RegExp(omp!.workingLine).test(OMP_AT_REST)).toBe(false);
+  });
+
+  it('names the input row omp redraws, so the idle check can arm', () => {
+    expect(OMP_INPUT_REPAINT).toContain(omp!.promptGlyph);
+  });
+
+  it('lets the submit verifier tell a submitted prompt from a stranded one', () => {
+    // Submitted (or queued for steering mid-turn): the input row is empty again.
+    expect(promptStillInComposer(OMP_AT_REST, 'say ok', omp!.promptGlyph)).toBe(false);
+    // Still sitting in the input row: the one case where pressing Enter again is right.
+    expect(promptStillInComposer(OMP_AT_REST.replace('╰─\n', '╰─ say ok\n'), 'say ok', omp!.promptGlyph)).toBe(true);
+  });
+});
+
+describe('omp interactive idle detection', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('marks an omp turn working, and lets it end', () => {
+    vi.useFakeTimers();
+    let screen = OMP_WORKING;
+    const session = withFakePane(() => screen, 'omp');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    // The submit redraws the input row, then eight seconds of spinner frames.
+    feed(session, OMP_INPUT_REPAINT);
+    for (let i = 0; i < 80; i++) {
+      feed(session, OMP_SPINNER_FRAME);
+      vi.advanceTimersByTime(100);
+    }
+    expect(events).toEqual(['working']);
+    expect(session.status).toBe('busy');
+
+    // Turn over: omp redraws the input row with the bar back to `π`.
+    screen = OMP_AT_REST;
+    feed(session, OMP_INPUT_REPAINT);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['working', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('settles a reattached omp pane that is at rest', () => {
+    vi.useFakeTimers();
+    const session = withFakePane(OMP_AT_REST, 'omp');
+    (session as unknown as { _status: string })._status = 'busy';
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+
+    feed(session, OMP_INPUT_REPAINT);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['idle']);
+    expect(session.status).toBe('idle');
   });
 });

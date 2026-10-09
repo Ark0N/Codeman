@@ -69,7 +69,7 @@ output. The other CLIs expose no equivalent.
 | Respawn cycling and unattended runs               | Yes    | Yes                                                  |
 | Cron jobs                                         | Yes    | Yes                                                  |
 | Docker cases, remote SSH cases                    | Yes    | Yes                                                  |
-| Precise idle detection                            | Yes    | Codex, Pi and OpenCode: same screen check, via their own prompt and working line. DeepSeek: reports its state itself. Others: output stabilization, coarser |
+| Precise idle detection                            | Yes    | Codex, Pi, OpenCode and OMP: same screen check, via their own prompt and working line. DeepSeek: reports its state itself. Others: output stabilization, coarser |
 | Auto-resume when a usage limit resets             | Yes    | No                                                   |
 | Plan usage chip                                   | Yes    | No                                                   |
 | Approvals Inbox                                   | Yes    | DeepSeek yes; others no                              |
@@ -231,7 +231,9 @@ documented default approval mode is `yolo`, so an OMP pane auto-approves tool us
 flag from Codeman; change that in OMP's own config, not here.
 
 OMP conversations appear in Past Sessions and can be resumed, and a respawn continues the
-same conversation with `--continue`.
+same conversation with `--continue`. Codeman tells working from idle by reading OMP's status
+bar, where a spinner and the elapsed time replace the `π` while a turn runs. Before 1.36.0
+an OMP session that had started a turn showed as working for good.
 
 Guide: [`docs/omp-integration.md`](https://github.com/Ark0N/Codeman/blob/master/docs/omp-integration.md).
 
