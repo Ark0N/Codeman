@@ -530,6 +530,8 @@ Object.assign(CodemanApp.prototype, {
       settings.codexDangerouslyBypassApprovals ?? false;
     document.getElementById('appSettingsCodexAnimations').checked =
       settings.codexAnimationsEnabled ?? false;
+    document.getElementById('appSettingsCodexModel').value = settings.codexModel ?? '';
+    document.getElementById('appSettingsCodexReasoningEffort').value = settings.codexReasoningEffort ?? '';
     this._applyCodexSettingsVisibility();
     // Claude Permissions settings
     document.getElementById('appSettingsAgentTeams').checked = settings.agentTeamsEnabled ?? false;
@@ -2584,6 +2586,8 @@ Object.assign(CodemanApp.prototype, {
       claudeMode: document.getElementById('appSettingsClaudeMode').value,
       allowedTools: document.getElementById('appSettingsAllowedTools').value.trim(),
       // Codex CLI settings
+      codexModel: document.getElementById('appSettingsCodexModel').value.trim(),
+      codexReasoningEffort: document.getElementById('appSettingsCodexReasoningEffort').value,
       codexDangerouslyBypassApprovals: document.getElementById('appSettingsCodexDangerouslyBypassApprovals').checked,
       codexAnimationsEnabled: document.getElementById('appSettingsCodexAnimations').checked,
       // Claude Permissions settings
