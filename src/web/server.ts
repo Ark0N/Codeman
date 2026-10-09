@@ -1713,6 +1713,7 @@ export class WebServer extends EventEmitter {
           shortBadge: entry.shortBadge,
           order: entry.order,
           kind: entry.kind,
+          external: entry.capabilities.external,
           enabled,
           available: enabled && installed,
         };

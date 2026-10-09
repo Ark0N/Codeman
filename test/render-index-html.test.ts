@@ -248,16 +248,23 @@ describe('WebServer.renderIndexHtml', () => {
       shortBadge: string;
       order: number;
       kind: string;
+      external: boolean;
       enabled: boolean;
       available: boolean;
     }>;
     expect(catalog.map((entry) => entry.id)).toEqual(STOCK_CLIS.map((entry) => entry.id));
-    expect(catalog.find((entry) => entry.id === 'codex')).toMatchObject({ label: 'Codex', kind: 'agent' });
+    expect(catalog.find((entry) => entry.id === 'codex')).toMatchObject({
+      label: 'Codex',
+      kind: 'agent',
+      external: true,
+    });
+    // claude is `kind: 'agent'` too; `external` is what keeps its Respawn/Ralph options visible.
+    expect(catalog.find((entry) => entry.id === 'claude')).toMatchObject({ kind: 'agent', external: false });
     expect(catalog.find((entry) => entry.id === 'shell')).toMatchObject({ enabled: true, available: true });
     expect(
       catalog.every((entry) =>
         Object.keys(entry).every((key) =>
-          ['id', 'label', 'shortBadge', 'order', 'kind', 'enabled', 'available'].includes(key)
+          ['id', 'label', 'shortBadge', 'order', 'kind', 'external', 'enabled', 'available'].includes(key)
         )
       )
     ).toBe(true);
