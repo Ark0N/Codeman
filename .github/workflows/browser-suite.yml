@@ -1,0 +1,61 @@
+name: Browser suite
+
+# The per-push CI gate deliberately skips the Playwright-driven suite (config/test-suites.ts),
+# which has twice let two PRs that conflict semantically merge green. This job runs it on a
+# schedule and on demand, so a browser-only regression (the Shift+Enter keypress bug was one)
+# is caught within a day instead of by a user. It is NOT a merge gate: a red run means "look",
+# and it never blocks a push or a PR.
+#
+# Needs: chromium (installed below), tmux, and the live server the tests start themselves.
+# Not run here: test:mobile (per-machine PNG baselines), test:perf (wall-clock), and
+# codex-predictive-echo (needs a real, authenticated codex binary).
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    name: Playwright browser suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install tmux
+        run: |
+          if ! command -v tmux >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y tmux
+          fi
+
+      - name: Install chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the browser suite
+        run: npm run test:browser -- --exclude test/codex-predictive-echo.test.ts
+
+      - name: Keep the failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-suite-results
+          path: |
+            test-results/
+            screenshots-echo-diag/
+          if-no-files-found: ignore
+          retention-days: 7
