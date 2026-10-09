@@ -251,6 +251,13 @@
         });
       }
       for (const cell of tile.cells.slice(0, 2500)) {
+        const merge = mergeByAnchor.get(`${cell.row}:${cell.col}`);
+        const height = rowSpan(cell.row, merge?.r2 || cell.row);
+        const width = colSpan(cell.col, merge?.c2 || cell.col);
+        // A cell clipped to nothing at the spacer's edge (or sized 0 px) is
+        // skipped like its heading: padding and border would still draw it as a
+        // small box below the spacer and grow the scroll area.
+        if (height <= 0 || width <= 0) continue;
         const element = document.createElement('div');
         element.className = `spreadsheet-cell spreadsheet-style-${Number(cell.styleId) || 0}`;
         element.dataset.row = String(cell.row);
@@ -258,9 +265,8 @@
         element.textContent = String(cell.text ?? '');
         element.style.top = `${rowTop(cell.row)}px`;
         element.style.left = `${colLeft(cell.col)}px`;
-        const merge = mergeByAnchor.get(`${cell.row}:${cell.col}`);
-        element.style.height = `${rowSpan(cell.row, merge?.r2 || cell.row)}px`;
-        element.style.width = `${colSpan(cell.col, merge?.c2 || cell.col)}px`;
+        element.style.height = `${height}px`;
+        element.style.width = `${width}px`;
         cellsLayer.appendChild(element);
       }
       // Headings take their size from the same axis math as the cells, so custom
