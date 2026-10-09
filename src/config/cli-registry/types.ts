@@ -105,7 +105,13 @@ export type ModelConfigResolverName = 'deepseek-route';
 export type LaunchDefaultSettingKey = 'codexModel' | 'codexReasoningEffort';
 
 /** The MCP config dialects `src/mcp-sync.ts` has an adapter for. */
-export type McpConfigFormat = 'claude-json' | 'gemini-json' | 'codex-toml' | 'opencode-json' | 'antigravity-json';
+export type McpConfigFormat =
+  | 'claude-json'
+  | 'gemini-json'
+  | 'codex-toml'
+  | 'opencode-json'
+  | 'antigravity-json'
+  | 'copilot-json';
 
 export interface CliLaunch {
   params: Record<string, ParamSpec>;

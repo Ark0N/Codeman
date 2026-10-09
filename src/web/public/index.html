@@ -2644,17 +2644,17 @@
               <div class="set-group" id="mcpSyncGroup">
                 <div class="set-group-head"><h4>MCP servers</h4><span class="set-scope">synced</span></div>
                 <div class="set-group-body">
-                  <div class="set-row" data-search="mcp server sync enable claude codex gemini opencode antigravity">
+                  <div class="set-row" data-search="mcp server sync enable claude codex gemini opencode antigravity copilot github">
                     <div class="set-row-text">
                       <span class="set-row-label">Enable MCP server sync</span>
-                      <span class="set-row-desc">Adds a control that copies MCP servers between your enabled CLIs by writing their own config files. Off by default: this changes other tools' configuration, not just Codeman's.</span>
+                      <span class="set-row-desc">Adds a control that copies MCP servers between your enabled CLIs, and GitHub Copilot CLI if it is installed, by writing their own config files. Off by default: this changes other tools' configuration, not just Codeman's.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsMcpSync" onchange="app.applyMcpSyncVisibility()"><span class="slider"></span></label>
                   </div>
                   <div class="set-row" id="mcpSyncActionRow" style="display:none" data-search="mcp server sync preview">
                     <div class="set-row-text">
                       <span class="set-row-label">Sync MCP servers across CLIs</span>
-                      <span class="set-row-desc">Copies each installed, enabled CLI's MCP servers into the others. Only adds missing servers; never edits, removes or copies a server you switched off. Env values and headers are copied too, so a file that receives them is left readable by you only. The previous file is kept as <code>.codeman-bak</code> (overwritten by each sync). A config dir moved by the CLI's own env var (<code>CODEX_HOME</code>, <code>CLAUDE_CONFIG_DIR</code>, <code>XDG_CONFIG_HOME</code>, <code>GEMINI_CLI_HOME</code>) is followed as Codeman's server sees it; a per-session override is not.</span>
+                      <span class="set-row-desc">Copies each installed, enabled CLI's MCP servers (and GitHub Copilot CLI's) into the others. Only adds missing servers; never edits, removes or copies a server you switched off. Env values and headers are copied too, so a file that receives them is left readable by you only. The previous file is kept as <code>.codeman-bak</code> (overwritten by each sync). A config dir moved by the CLI's own env var (<code>CODEX_HOME</code>, <code>CLAUDE_CONFIG_DIR</code>, <code>XDG_CONFIG_HOME</code>, <code>GEMINI_CLI_HOME</code>, <code>COPILOT_HOME</code>) is followed as Codeman's server sees it; a per-session override is not.</span>
                     </div>
                     <span>
                       <button class="btn-toolbar btn-sm" id="mcpSyncPreviewBtn" onclick="app.mcpSync(false)">Preview</button>
