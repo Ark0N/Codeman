@@ -1205,23 +1205,26 @@
     // Reflow to the container and tell the PTY, as one step: the xterm and the
     // PTY must never disagree about size (#464), and a font change is a size
     // change too, so the font setters call this rather than localFit().
-    // `force` resends an unchanged size.
+    // `force` resends an unchanged size and asks the server to apply it anyway
+    // (Redraw, restoreTerminalSize). Returns whether a resize went out.
     fit({ force = false } = {}) {
       this.localFit();
-      this._sendResize({ force });
+      return this._sendResize({ force });
     }
 
+    // Returns true only once a `{t:'z'}` frame was sent, false at every early
+    // exit, so Redraw can say when nothing reached the PTY.
     _sendResize({ force = false } = {}) {
-      if (!this._wsReady || !this.fitAddon || !this.terminal) return;
+      if (!this._wsReady || !this.fitAddon || !this.terminal) return false;
       // One PTY cannot hold two sizes (mirrors sendResize's own
       // detachedElsewhere yield in terminal-ui.js): the session got detached
       // to its own window AFTER this pane was opened, so its own window now
       // owns the PTY's size and this pane must stand aside.
-      if (this.detachedSessions?.has(this.sessionId)) return;
+      if (this.detachedSessions?.has(this.sessionId)) return false;
       // A hidden pane (a web tab over it, a zoomed neighbour) measures NaN, and
       // fit() then leaves the xterm alone: there is no size worth reporting.
       const dims = this.fitAddon.proposeDimensions();
-      if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return;
+      if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return false;
       // Report what the xterm actually holds, so the PTY gets exactly the size
       // the pane renders at. Unclamped, unlike the primary pane's 40x10 floor:
       // a floor would misreport the split's Pane B at its divider's reachable
@@ -1231,9 +1234,20 @@
       const cols = this.terminal.cols;
       const rows = this.terminal.rows;
       const last = this._lastSentDims;
-      if (!force && last && last.cols === cols && last.rows === rows) return;
+      if (!force && last && last.cols === cols && last.rows === rows) return false;
+      // `f` is the primary pane's forced resize (sendResize, terminal-ui.js):
+      // Session.resize (session.ts) otherwise skips a size equal to the one it
+      // last applied, so without it a forced resend reached the server and did
+      // nothing there (no tmux resize-window, no PTY resize).
+      const msg = { t: 'z', c: cols, r: rows, v: 'desktop' };
+      if (force) msg.f = true;
+      try {
+        this.ws.send(JSON.stringify(msg));
+      } catch {
+        return false; // nothing went out, so nothing is recorded as sent
+      }
       this._lastSentDims = { cols, rows };
-      this.ws.send(JSON.stringify({ t: 'z', c: cols, r: rows, v: 'desktop' }));
+      return true;
     }
 
     // The session's PTY is new: a tile can connect before its session has a

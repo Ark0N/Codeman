@@ -118,7 +118,7 @@ type Tile = {
   connect(): Promise<void>;
   destroy(): void;
   reconnectNow(): void;
-  fit(opts?: { force?: boolean }): void;
+  fit(opts?: { force?: boolean }): boolean;
   detachedSessions?: Set<string>;
   ws: FakeSocket | null;
   _reconnectAttempts: number;
@@ -514,15 +514,80 @@ describe('TerminalTile geometry (#464: the pane and its PTY never disagree)', ()
     const { tile, ws } = await connectTile(makeApp());
     ws.open();
 
-    tile.fit();
+    expect(tile.fit()).toBe(false); // unchanged: nothing sent
     expect(resizeFrames(ws)).toHaveLength(1);
 
     FakeFit.proposed = { cols: 100, rows: 30 };
-    tile.fit();
+    expect(tile.fit()).toBe(true);
     expect(resizeFrames(ws).at(-1)).toEqual({ t: 'z', c: 100, r: 30, v: 'desktop' });
 
-    tile.fit({ force: true });
+    expect(tile.fit({ force: true })).toBe(true);
     expect(resizeFrames(ws)).toHaveLength(3);
+    // The primary pane's forced resize flag: without it Session.resize skips a
+    // size equal to the one it last applied, and the forced resend did nothing.
+    expect(resizeFrames(ws).at(-1)).toEqual({ t: 'z', c: 100, r: 30, v: 'desktop', f: true });
+  });
+
+  it('force on a closed socket sends nothing and says so', async () => {
+    const { tile, ws } = await connectTile(makeApp());
+    ws.open();
+    ws.drop(1006);
+
+    expect(tile.fit({ force: true })).toBe(false);
+    expect(resizeFrames(ws)).toHaveLength(1); // only the open's own announcement
+  });
+
+  describe('Redraw (Ctrl+Shift+R, the header button) on a focused tile', () => {
+    type RedrawApp = App & {
+      restoreTerminalSize(): Promise<void>;
+      _noteFocusedTile(tile: unknown): void;
+      detachedSessions?: Set<string>;
+    };
+
+    it('forces the resize through to the server and reports the size it sent', async () => {
+      const app = makeApp() as RedrawApp;
+      const { tile, ws } = await connectTile(app);
+      ws.open();
+      app._noteFocusedTile(tile);
+
+      await app.restoreTerminalSize();
+
+      expect(resizeFrames(ws).at(-1)).toEqual({ t: 'z', c: 80, r: 24, v: 'desktop', f: true });
+      expect(app.showToast).toHaveBeenCalledWith('Terminal restored to 80x24', 'success');
+    });
+
+    it('with the socket down, sends nothing and does not report a success', async () => {
+      const app = makeApp() as RedrawApp;
+      const { tile, ws } = await connectTile(app);
+      ws.open();
+      app._noteFocusedTile(tile);
+      ws.drop(1006);
+
+      await app.restoreTerminalSize();
+
+      expect(resizeFrames(ws)).toHaveLength(1);
+      expect(app.showToast).not.toHaveBeenCalledWith(expect.stringContaining('restored'), 'success');
+      expect(app.showToast).toHaveBeenCalledWith(
+        'Terminal not connected: its size is sent when it reconnects',
+        'warning'
+      );
+    });
+
+    it('for a session popped out to its own window, says that window sizes it', async () => {
+      const app = makeApp() as RedrawApp;
+      const detached = new Set<string>();
+      app.detachedSessions = detached;
+      const { tile, ws } = await connectTile(app, { detachedSessions: detached });
+      ws.open();
+      app._noteFocusedTile(tile);
+      detached.add('s-tile'); // popped out after the tile opened
+
+      await app.restoreTerminalSize();
+
+      expect(resizeFrames(ws)).toHaveLength(1);
+      expect(app.showToast).not.toHaveBeenCalledWith(expect.stringContaining('restored'), 'success');
+      expect(app.showToast).toHaveBeenCalledWith('This session is sized by its own window', 'warning');
+    });
   });
 
   it('re-announces an unchanged size on a reconnected socket', async () => {
@@ -598,7 +663,7 @@ describe('TerminalTile geometry (#464: the pane and its PTY never disagree)', ()
     ws.open();
     FakeFit.proposed = { cols: 120, rows: 40 };
 
-    tile.fit();
+    expect(tile.fit()).toBe(false);
 
     expect(resizeFrames(ws)).toEqual([]);
   });
