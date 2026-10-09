@@ -1663,6 +1663,10 @@
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18 4.5 4.5 0 0 0 0-9 4.5 4.5 0 0 1 0-9z"/></svg>
                 <span>Appearance</span>
               </button>
+              <button type="button" class="set-rail-item" data-section="settings-animations">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/><path d="M3 19h6"/></svg>
+                <span>Animations</span>
+              </button>
               <button type="button" class="set-rail-item" data-section="settings-models">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>
                 <span>Models</span>
@@ -2053,7 +2057,7 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18 4.5 4.5 0 0 0 0-9 4.5 4.5 0 0 1 0-9z"/></svg>
                 <h2>Appearance</h2>
               </div>
-              <p class="set-section-blurb">Theme, motion, and what this install calls itself.</p>
+              <p class="set-section-blurb">Theme, and what this install calls itself.</p>
 
               <div class="set-group">
                 <div class="set-group-head"><h4>Theme</h4><span class="set-scope">device</span></div>
@@ -2075,39 +2079,6 @@
                         <option value="daylight-green">Daylight Green</option>
                         <option value="og">OG Codeman</option>
                       </optgroup>
-                    </select>
-                  </div>
-                  <div class="set-row has-field" data-search="entrance animations motion tabs windows">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Entrance Animations</span>
-                      <span class="set-row-desc">How new tabs, panes and agent windows arrive. Add ?animlab=1 to the URL for per-surface control.</span>
-                    </div>
-                    <select id="appSettingsEntranceAnim" class="set-select">
-                      <option value="legacy">Off (default)</option>
-                      <option value="terminal">Terminal (CRT)</option>
-                      <option value="beamdown">Beam down</option>
-                      <option value="launch">Launch (tiles fly from tabs)</option>
-                      <option value="softfocus">Soft focus (blur)</option>
-                      <option value="quiet">Quiet</option>
-                      <option value="playful">Playful</option>
-                      <option value="custom">Custom (set in the lab)</option>
-                    </select>
-                  </div>
-                  <div class="set-row has-field" data-search="tile animations tiles grid motion entrance fly deal crt beam">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Tile Animations</span>
-                      <span class="set-row-desc">How tiles arrive when the grid opens and leave when it closes. A theme above presets it.</span>
-                    </div>
-                    <select id="appSettingsTileAnim" class="set-select">
-                      <option value="settle">Off (default)</option>
-                      <option value="fly">Fly from tab</option>
-                      <option value="deal">Deal</option>
-                      <option value="crt">CRT</option>
-                      <option value="beam">Beam down</option>
-                      <option value="cascade">Cascade</option>
-                      <option value="pop">Pop</option>
-                      <option value="soft">Soft</option>
-                      <option value="off">None (tiles just appear)</option>
                     </select>
                   </div>
                 </div>
@@ -2261,6 +2232,70 @@
                       <span class="set-row-desc">The C logo opens the session overview instead of the welcome screen.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsMobileOverview" checked><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ══ Animations ═══════════════════════════════════════════════
+                 Every entrance animation in one place (entrance-animations.js).
+                 All per-device localStorage keys, applied as they are picked,
+                 never part of PUT /api/settings. -->
+            <section class="set-section" id="settings-animations" data-label="Animations">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/><path d="M3 19h6"/></svg>
+                <h2>Animations</h2>
+              </div>
+              <p class="set-section-blurb">How tabs, terminal panes, agent windows and tiles arrive. All off by default, applied as you pick them.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Entrances</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-row has-field" data-search="entrance animations theme motion tabs windows panes lines">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Entrance Theme</span>
+                      <span class="set-row-desc">One look for how new tabs, terminal panes, agent windows and their lines arrive.</span>
+                    </div>
+                    <select id="appSettingsEntranceAnim" class="set-select">
+                      <option value="legacy">Off (default)</option>
+                      <option value="terminal">Terminal (CRT)</option>
+                      <option value="beamdown">Beam down</option>
+                      <option value="launch">Launch (tiles fly from tabs)</option>
+                      <option value="softfocus">Soft focus (blur)</option>
+                      <option value="quiet">Quiet</option>
+                      <option value="playful">Playful</option>
+                      <option value="custom">Custom (set in the lab)</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field" data-search="tile animations tiles grid motion entrance fly deal crt beam">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Tile Animations</span>
+                      <span class="set-row-desc">How tiles arrive when the grid opens and leave when it closes. A theme above presets it.</span>
+                    </div>
+                    <select id="appSettingsTileAnim" class="set-select">
+                      <option value="settle">Off (default)</option>
+                      <option value="fly">Fly from tab</option>
+                      <option value="deal">Deal</option>
+                      <option value="crt">CRT</option>
+                      <option value="beam">Beam down</option>
+                      <option value="cascade">Cascade</option>
+                      <option value="pop">Pop</option>
+                      <option value="soft">Soft</option>
+                      <option value="off">None (tiles just appear)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Lab</h4></div>
+                <div class="set-group-body">
+                  <div class="set-row has-field" data-search="animation lab compare replay styles per surface animlab">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Animation Lab</span>
+                      <span class="set-row-desc">Closes settings and opens every style per surface side by side, with replay and speed. Same as adding ?animlab=1 to the URL.</span>
+                    </div>
+                    <button type="button" id="appSettingsOpenAnimLab" class="btn-toolbar btn-sm">Open lab</button>
                   </div>
                 </div>
               </div>

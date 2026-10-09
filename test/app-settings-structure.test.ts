@@ -80,6 +80,31 @@ describe('App Settings modal structure', () => {
     expect(system).toContain('id="appSettingsTunnelEnabled"');
   });
 
+  /**
+   * Owner decision (2026-10-09): every animation setting has its own
+   * Animations section, right after Appearance, so it is easy to find. The
+   * selects are wired by id in entrance-animations.js, not by the load/save
+   * path above, so they get their own check here.
+   */
+  it('keeps every animation setting in its own Animations section, after Appearance', () => {
+    const modal = settingsModal();
+    const rail = [...modal.matchAll(/data-section="([a-z-]+)"/g)].map((m) => m[1]);
+    const order = [...modal.matchAll(/<section class="set-section" id="([a-z-]+)"/g)].map((m) => m[1]);
+    for (const list of [rail, order]) {
+      expect(list[list.indexOf('settings-appearance') + 1]).toBe('settings-animations');
+    }
+    const animations = modal.match(/id="settings-animations"([\s\S]*?)<\/section>/)?.[1] ?? '';
+    for (const id of ['appSettingsEntranceAnim', 'appSettingsTileAnim', 'appSettingsOpenAnimLab']) {
+      expect(animations, `${id} belongs in the Animations section`).toContain(`id="${id}"`);
+    }
+    const appearance = modal.match(/id="settings-appearance"([\s\S]*?)<\/section>/)?.[1] ?? '';
+    expect(appearance).not.toMatch(/id="appSettings[A-Za-z]*Anim"/);
+    const anim = readFileSync(resolve(publicDir, 'entrance-animations.js'), 'utf8');
+    for (const id of ['appSettingsEntranceAnim', 'appSettingsTileAnim', 'appSettingsOpenAnimLab']) {
+      expect(anim).toContain(`document.getElementById('${id}')`);
+    }
+  });
+
   it('keeps Local Echo the first row of the second section', () => {
     const terminal = settingsModal().match(/id="settings-terminal"([\s\S]*?)<\/section>/);
     const localEcho = terminal?.[1].indexOf('appSettingsLocalEcho') ?? -1;

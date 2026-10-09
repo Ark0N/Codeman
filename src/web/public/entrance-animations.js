@@ -7,7 +7,7 @@
  *
  * Everything is OFF by default (the `legacy` theme), so an untouched install
  * behaves exactly as it did before this module existed. Opt in via App Settings
- * → Appearance → Entrance Animations.
+ * → Animations.
  *
  * Four constraints shape the design:
  *
@@ -36,7 +36,7 @@
  *    `_onSessionCreated`.
  *
  * Tiles are off by default (`settle`, the grid's own quick fade, exactly as
- * before) and switched on in App Settings → Appearance → Tile Animations, or
+ * before) and switched on in App Settings → Animations → Tile Animations, or
  * preset by a theme. A styled tile plays in two beats that combine two
  * surfaces. The FRAME enters as it mounts, in its own style
  * (TILE_ANIM_STYLES); the SCREEN plays the terminal pane's style when its
@@ -171,7 +171,7 @@ const ANIM_THEMES = [
 /**
  * The surfaces a theme is recognised by. A theme also PRESETS the tile style
  * when it is picked, but the tile style is its own setting (App Settings →
- * Appearance → Tile Animations, off by default), so changing it afterwards
+ * Animations → Tile Animations, off by default), so changing it afterwards
  * does not turn the theme into "Custom".
  */
 const ANIM_SURFACES = ['tab', 'win', 'line', 'term'];
@@ -180,8 +180,8 @@ const ANIM_SURFACES = ['tab', 'win', 'line', 'term'];
  * Defaults are the `legacy` theme: every entrance OFF, and agent windows on the
  * `fly` behaviour Codeman already had before this module existed. So a user who
  * never opens the picker sees exactly the pre-existing UI, and each mark/apply
- * hook short-circuits on its first line. Opt in via App Settings → Appearance →
- * Entrance Animations, which persists to the localStorage keys below.
+ * hook short-circuits on its first line. Opt in via App Settings → Animations,
+ * which persists to the localStorage keys below.
  */
 const TAB_ANIM_DEFAULT = 'off';
 const WIN_ANIM_DEFAULT = 'fly';
@@ -338,7 +338,7 @@ Object.assign(CodemanApp.prototype, {
     return match ? match.key : 'custom';
   },
 
-  // ── App Settings picker ───────────────────────────────────────────────────
+  // ── App Settings → Animations ─────────────────────────────────────────────
   //
   // Wired straight to setAnimTheme() rather than through saveAppSettings(): the
   // styles live in their own localStorage keys, so they stay per-device and never
@@ -356,6 +356,16 @@ Object.assign(CodemanApp.prototype, {
           else this.setAnimTheme(sel.value);
         });
       }
+    }
+    // App Settings → Animations → Animation Lab. Settings has no unsaved-edit
+    // tracking, so this closes it as Cancel does (the row says so).
+    const labBtn = document.getElementById('appSettingsOpenAnimLab');
+    if (labBtn && !labBtn.dataset.bound) {
+      labBtn.dataset.bound = '1';
+      labBtn.addEventListener('click', () => {
+        this.closeAppSettings?.();
+        this.openAnimLab();
+      });
     }
     // Tile Animations: its own row, off (`settle`) by default. A theme picked
     // above presets it; picked here, it applies to tiles alone.

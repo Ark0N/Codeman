@@ -20081,8 +20081,8 @@ body.tile-grid-resizing--row * {
 }
 
 /* ── Tile grid entrance styles (entrance-animations.js TILE_ANIM_STYLES) ───
-   Picked by the Entrance Animations theme (App Settings → Appearance) or per
-   surface in the lab (?animlab=1); `settle` is the rule above, the default,
+   Picked in App Settings → Animations (Tile Animations, or preset by the
+   Entrance Theme) or per surface in the lab (?animlab=1); `settle` is the rule above, the default,
    and what a reload restores with. Any other style is held one frame
    (.tile--enter-hold: invisible, not animating) while the entrance module
    orders the cascade and measures the tile's source on the final layout, then
