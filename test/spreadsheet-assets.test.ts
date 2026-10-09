@@ -7,8 +7,11 @@
  * that shape plus the pinned versions and the dev/prod vendoring steps.
  */
 
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DOCUMENT_ATTACHMENT_EXTENSIONS, isSupportedAttachmentExtension } from '../src/attachment-registry.js';
 
@@ -92,5 +95,74 @@ describe('spreadsheet preview assets', () => {
     }
     // The CLI's refusal text is built from the same list rather than restating it.
     expect(read('src/cli.ts')).toContain("DOCUMENT_ATTACHMENT_EXTENSIONS.join(', ')");
+  });
+});
+
+/**
+ * The build deletes dist/web/public and only then copies the vendor bundles out of
+ * node_modules. A tree whose node_modules predate exceljs/fflate (a deploy that pulled
+ * but never ran `npm install`) failed there, with the live assets already gone. The
+ * preflight at the top of build.mjs resolves them before anything is touched.
+ */
+describe('build preflight for the spreadsheet vendor packages', () => {
+  const preflightModules = (build: string): string[] => {
+    const list = /const BUILD_TIME_MODULES = \[([^\]]*)\]/.exec(build)?.[1] ?? '';
+    return [...list.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  };
+
+  it('covers every package prepare-spreadsheet-assets.mjs resolves, and runs before tsc and the clean', () => {
+    const build = read('scripts/build.mjs');
+    const preflight = preflightModules(build);
+    const resolvedByPrepare = [
+      ...read('scripts/prepare-spreadsheet-assets.mjs').matchAll(/require\.resolve\('([^']+)'\)/g),
+    ].map((m) => m[1]);
+    // Parse sanity; the loop below is the actual coverage check.
+    expect(resolvedByPrepare).toContain('exceljs/dist/exceljs.min.js');
+    expect(resolvedByPrepare).toContain('fflate');
+    for (const specifier of resolvedByPrepare) expect(preflight, specifier).toContain(specifier);
+
+    const bail = build.indexOf('[build] run `npm install` first');
+    expect(bail).toBeGreaterThan(-1);
+    expect(bail).toBeLessThan(build.indexOf("run('tsc', 'tsc')"));
+    expect(bail).toBeLessThan(build.indexOf("'rm -rf dist/web/public'"));
+  });
+
+  it('resolves every preflight package in this installed tree', () => {
+    const requireFromBuild = createRequire(resolve(root, 'scripts/build.mjs'));
+    const preflight = preflightModules(read('scripts/build.mjs'));
+    expect(preflight.length).toBeGreaterThan(0);
+    for (const specifier of preflight) expect(() => requireFromBuild.resolve(specifier), specifier).not.toThrow();
+  });
+
+  it('exits with an npm install hint, and touches nothing, where the packages do not resolve', () => {
+    // A copy of build.mjs outside the repo: nothing resolves from there, and its ROOT
+    // (derived from its own location) is the temp dir, so a missing preflight could
+    // only ever act on that throwaway tree.
+    const tree = mkdtempSync(join(tmpdir(), 'codeman-build-preflight-'));
+    try {
+      mkdirSync(join(tree, 'scripts'));
+      const copy = join(tree, 'scripts', 'build.mjs');
+      copyFileSync(resolve(root, 'scripts/build.mjs'), copy);
+      const requireFromCopy = createRequire(copy);
+      const unresolvable = ['exceljs/dist/exceljs.min.js', 'fflate'].filter((specifier) => {
+        try {
+          requireFromCopy.resolve(specifier);
+          return false;
+        } catch {
+          return true;
+        }
+      });
+      // Precondition: this host has no stray node_modules above the temp dir.
+      expect(unresolvable.length).toBeGreaterThan(0);
+
+      const result = spawnSync(process.execPath, [copy], { cwd: tree, encoding: 'utf8', timeout: 20_000 });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`[build] missing build dependency: ${unresolvable.join(', ')}`);
+      expect(result.stderr).toContain('run `npm install` first');
+      expect(result.stdout).not.toContain('[build] tsc');
+      expect(existsSync(join(tree, 'dist'))).toBe(false);
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+    }
   });
 });

@@ -124,7 +124,7 @@ environment is injected through socket-scoped `tmux setenv` rather than the comm
 Working and idle come from the screen: while a turn runs, OpenCode draws a small spinner at
 the start of its footer (`⬝■■■■■■⬝  esc interrupt`), and Codeman reads that to tell a working
 session from an idle one. A pending permission prompt shows as idle, since it is waiting on
-you. Before 1.36.0 an OpenCode session that had run a tool showed as working for good.
+you. Before 1.40.0 an OpenCode session that had run a tool showed as working for good.
 
 Integration detail: [`docs/opencode-integration.md`](https://github.com/Ark0N/Codeman/blob/master/docs/opencode-integration.md).
 
@@ -164,7 +164,7 @@ only the CLI you spawned yourself.
 
 Working and idle come from the screen: while a turn runs, Gemini CLI draws a spinner line
 (`⠦ Thinking... (esc to cancel, 6s)`) above its composer, and Codeman reads that. A tool
-confirmation that waits for you shows as idle. Before 1.36.0 a Gemini session showed as
+confirmation that waits for you shows as idle. Before 1.40.0 a Gemini session showed as
 working for good after its first turn.
 
 ### Antigravity
@@ -190,7 +190,7 @@ Pi needs the opposite instincts from every other CLI here.
   once. They stay out.
 - **Work detection reads Pi's composer rule.** Pi has no prompt glyph; while a turn runs it
   puts a spinner into the rule above the composer (`── ⠏ Working ───`), and Codeman reads
-  that to tell working from idle. Before 1.36.0 a Pi session that had started a turn showed
+  that to tell working from idle. Before 1.40.0 a Pi session that had started a turn showed
   as working for good.
 
 Guide: [`docs/pi-integration.md`](https://github.com/Ark0N/Codeman/blob/master/docs/pi-integration.md).
@@ -246,7 +246,7 @@ flag from Codeman; change that in OMP's own config, not here.
 
 OMP conversations appear in Past Sessions and can be resumed, and a respawn continues the
 same conversation with `--continue`. Codeman tells working from idle by reading OMP's status
-bar, where a spinner and the elapsed time replace the `π` while a turn runs. Before 1.36.0
+bar, where a spinner and the elapsed time replace the `π` while a turn runs. Before 1.40.0
 an OMP session that had started a turn showed as working for good.
 
 Guide: [`docs/omp-integration.md`](https://github.com/Ark0N/Codeman/blob/master/docs/omp-integration.md).

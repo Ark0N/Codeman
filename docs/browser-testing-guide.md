@@ -71,17 +71,21 @@ We tested three browser automation frameworks against the Codeman web UI:
 
 ## Test File Structure
 
-### Port Allocation
+### Ports
 
-| Port Range | Test File |
-|------------|-----------|
-| 3150-3153 | browser-e2e.test.ts (existing) |
-| 3154 | file-link-click.test.ts |
-| 3155 | browser-playwright.test.ts |
-| 3156 | browser-puppeteer.test.ts |
-| 3157 | browser-agent.test.ts |
-| 3158-3160 | browser-comparison.test.ts |
-| 3180-3182 | scripts/browser-comparison.mjs |
+A test that starts a server binds an ephemeral port, never a fixed one:
+
+- `WebServer`: `new WebServer(0, false, true)`, then read the port the OS handed out from
+  `server.boundPort` after `await server.start()`. `test/test-ports-guard.test.ts` fails
+  any `WebServer` built under `test/` on a non-zero port (a shrink-only legacy list
+  excepted).
+- A raw Fastify or `ws` server: `listen({ port: 0 })`, then `address().port`.
+- The mobile suite (`test/mobile/**`, via `createTestServer(PORT)`) keeps the fixed-port
+  convention in `test/mobile/README.md` for now.
+- Never port 3000: that is the live instance.
+
+`scripts/browser-comparison.mjs` is a standalone script outside the guard and still uses
+fixed ports 3180-3182.
 
 ### File Purposes
 
@@ -106,7 +110,7 @@ const browser = await chromium.launch({
 });
 
 const page = await browser.newPage();
-await page.goto('http://localhost:3000');
+await page.goto(BASE_URL);
 
 // Auto-waiting selectors
 await page.click('.btn-claude');
@@ -140,7 +144,7 @@ const browser = await puppeteer.launch({
 });
 
 const page = await browser.newPage();
-await page.goto('http://localhost:3000');
+await page.goto(BASE_URL);
 
 // Manual waiting often needed
 await page.click('.btn-claude');
@@ -186,7 +190,7 @@ function agentBrowserJson<T>(cmd: string): T {
 }
 
 // Usage
-agentBrowser('open http://localhost:3000');
+agentBrowser(`open ${BASE_URL}`);
 agentBrowser('click ".btn-claude"');
 const title = agentBrowserJson<{title: string}>('get title');
 
@@ -246,10 +250,13 @@ npx playwright install chromium
 ### 4. Wait for Server Startup
 
 ```typescript
-const server = new WebServer(PORT);
+const server = new WebServer(0, false, true); // port 0 (the OS picks one), no TLS, testMode
 await server.start();
-await new Promise(r => setTimeout(r, 1000)); // Allow server to stabilize
+const BASE_URL = `http://localhost:${server.boundPort}`;
 ```
+
+`boundPort` holds the real port only once `start()` has resolved. The `BASE_URL` used by the
+other snippets on this page is this one.
 
 ### 5. Clean Up Sessions
 

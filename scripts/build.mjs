@@ -4,6 +4,7 @@
  * Extracted from the package.json one-liner for readability and debuggability.
  *
  * Steps:
+ *   0. Preflight: the build-time packages resolve (nothing is touched before it)
  *   1. TypeScript compilation
  *   2. Copy static assets (web/public, templates)
  *   3. Build vendor xterm bundles
@@ -13,6 +14,7 @@
  */
 
 import { execSync } from 'child_process';
+import { createRequire } from 'module';
 import { appendFileSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
@@ -23,6 +25,31 @@ const ROOT = join(fileURLToPath(import.meta.url), '..', '..');
 function run(label, cmd) {
   console.log(`\n[build] ${label}`);
   execSync(cmd, { stdio: 'inherit', cwd: ROOT, shell: true });
+}
+
+// 0. Preflight: resolve the build-time packages the asset stage reads only AFTER it has
+// deleted dist/web/public (step 2), before anything is touched. A tree whose node_modules
+// predate them (a deploy that pulled but never ran `npm install`) used to fail mid-build
+// with dist/web/public already wiped, so the running server kept serving an index.html
+// whose hashed assets were gone. Keep the list in step with every require.resolve in
+// scripts/prepare-spreadsheet-assets.mjs (test/spreadsheet-assets.test.ts checks it).
+// Only specifiers that resolve without an exports map in the way: a subpath of a package
+// that has one (@xterm/*) can throw ERR_PACKAGE_PATH_NOT_EXPORTED while installed.
+// A hand-run of the asset stage alone (past a blocked tsc) skips this check.
+const BUILD_TIME_MODULES = ['exceljs/dist/exceljs.min.js', 'fflate'];
+const requireFromBuild = createRequire(import.meta.url);
+const missingModules = BUILD_TIME_MODULES.filter((specifier) => {
+  try {
+    requireFromBuild.resolve(specifier);
+    return false;
+  } catch {
+    return true;
+  }
+});
+if (missingModules.length > 0) {
+  console.error(`[build] missing build dependency: ${missingModules.join(', ')}`);
+  console.error('[build] run `npm install` first, then `npm run build` again. Nothing was built or deleted.');
+  process.exit(1);
 }
 
 // 1. TypeScript compilation
