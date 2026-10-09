@@ -24,6 +24,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
+import postcss, { type AtRule, type Rule } from 'postcss';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const PUBLIC = join(process.cwd(), 'src/web/public');
@@ -349,5 +350,80 @@ describe('tab layouts by case and ledger (static)', () => {
       /:where\(\.header\) \.session-tabs-host > \.session-tabs\.tabs-clusters > \.tab-cluster \{\s*display: contents;/
     );
     expect(mobileCss).toMatch(/:where\(\.header\) \.tab-cluster-label \{\s*display: none;/);
+  });
+
+  // The width range a mobile.css rule applies in: the file's own link media
+  // (max-width: 1023px) narrowed by every @media around the rule. `other` marks
+  // a rule that also needs a non-width feature, which therefore cannot be
+  // counted on to apply.
+  const mobileRuleWidths = (rule: Rule) => {
+    let min = 0;
+    let max = 1023;
+    let other = false;
+    for (let node = rule.parent; node && node.type !== 'root'; node = node.parent) {
+      if (node.type !== 'atrule') continue;
+      const at = node as AtRule;
+      if (at.name !== 'media') {
+        other = true;
+        continue;
+      }
+      for (const part of at.params.split(/\s+and\s+/)) {
+        const m = part.trim().match(/^\((min|max)-width:\s*(\d+)px\)$/);
+        if (!m) other = true;
+        else if (m[1] === 'min') min = Math.max(min, Number(m[2]));
+        else max = Math.min(max, Number(m[2]));
+      }
+    }
+    return { min, max, other };
+  };
+  const mobileClusterRules = () => {
+    const rules: Array<{
+      selector: string;
+      decls: Record<string, string>;
+      widths: ReturnType<typeof mobileRuleWidths>;
+    }> = [];
+    postcss.parse(mobileCss).walkRules((rule) => {
+      if (!rule.selector.includes('tab-cluster')) return;
+      const decls: Record<string, string> = {};
+      rule.walkDecls((d) => {
+        decls[d.prop] = d.value;
+      });
+      rules.push({ selector: rule.selector, decls, widths: mobileRuleWidths(rule) });
+    });
+    return rules;
+  };
+
+  it('dissolves the boxes on tablet widths too, where the strip is one scrolling row (600 to 767px)', () => {
+    // getDeviceType() says 'tablet' from 600 to 767px, and updateTabOverflowMode()
+    // never wraps the strip there. A box allowed to shrink in that one-row strip
+    // squeezed and wrapped its tabs inside itself, and every tab past a box's
+    // first line was clipped under the 48px fixed header, unreachable.
+    const rules = mobileClusterRules();
+    const box = '.session-tabs-host > .session-tabs.tabs-clusters > .tab-cluster';
+    for (const width of [360, 599, 600, 700, 744, 767]) {
+      const applies = (r: (typeof rules)[number]) => !r.widths.other && r.widths.min <= width && width <= r.widths.max;
+      expect(
+        rules.some((r) => applies(r) && r.selector === `:where(.header) ${box}` && r.decls.display === 'contents'),
+        `box dissolved at ${width}px`
+      ).toBe(true);
+      expect(
+        rules.some(
+          (r) => applies(r) && r.selector === ':where(.header) .tab-cluster-label' && r.decls.display === 'none'
+        ),
+        `label hidden at ${width}px`
+      ).toBe(true);
+    }
+  });
+
+  it('leaves the desktop strip (768px and up) to styles.css: no mobile.css cluster rule reaches it', () => {
+    // mobile.css is linked up to 1023px, and from 768 getDeviceType() says
+    // 'desktop': the boxes keep their width there and the strip wraps box by
+    // box. The tablet block of mobile.css runs to 768 inclusive, so a cluster
+    // rule put inside it would dissolve the boxes at exactly 768.
+    const rules = mobileClusterRules();
+    expect(rules.length).toBeGreaterThan(0);
+    for (const r of rules) {
+      expect(r.widths.max, `${r.selector} stops below 768px`).toBeLessThan(768);
+    }
   });
 });
