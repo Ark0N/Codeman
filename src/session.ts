@@ -3465,7 +3465,8 @@ export class Session extends EventEmitter {
   private _armPaneSettle(isRestored: boolean): void {
     const applies = isRestored ? !getCli(this.mode)?.capabilities.workDetect : isExternalCliMode(this.mode);
     if (!applies) return;
-    this._promptCheckTimeout = setTimeout(() => this._settlePaneStartup(!isRestored), 3000);
+    const armedAt = Date.now();
+    this._promptCheckTimeout = setTimeout(() => this._settlePaneStartup(!isRestored, armedAt), 3000);
   }
 
   /**
@@ -3478,18 +3479,23 @@ export class Session extends EventEmitter {
    * never tripped `_markWorking()`, the later `_confirmIdle()` found the status
    * already idle and emitted nothing, so no browser ever learned the pane was ready.
    *
-   * A pane marked working by then is left alone only when its CLI declares
-   * `capabilities.workDetect`: that CLI's composer glyph arms `_confirmIdle()`, which
-   * reads the screen and ends the turn properly. For every other CLI this timer is the
-   * only thing that ever settles a fresh pane, so it settles it even if a stray spinner
-   * glyph in the launch paint latched `_isWorking`.
+   * A pane is left to `_confirmIdle()` only when its CLI declares
+   * `capabilities.workDetect` (its composer glyph arms that confirmation, which reads
+   * the screen first) AND it is already working, or a prompt was submitted since the
+   * timer was armed: a turn started 2.9 s in is not marked working before the deferred
+   * parsers run, and an idle edge here would end a send-and-wait registered for it.
+   * For every other CLI this timer is the only thing that ever settles a fresh pane,
+   * so it settles it even if a stray spinner glyph in the launch paint latched
+   * `_isWorking`.
    *
    * @param refreshScreen emit `needsRefresh` (a new pane; an attach refetches by itself)
+   * @param armedAt when the timer was armed (a submit at or after it means a prompt)
    */
-  private _settlePaneStartup(refreshScreen: boolean): void {
+  private _settlePaneStartup(refreshScreen: boolean, armedAt: number): void {
     this._promptCheckTimeout = null;
     if (this._isStopped) return;
-    const leaveToConfirm = this._isWorking && !!getCli(this.mode)?.capabilities.workDetect;
+    const busyWithTurn = this._isWorking || this.lastSubmitAt >= armedAt;
+    const leaveToConfirm = busyWithTurn && !!getCli(this.mode)?.capabilities.workDetect;
     if (this._status === 'busy' && !leaveToConfirm) this._concludeIdle(false);
     if (refreshScreen) this.emit('needsRefresh');
   }

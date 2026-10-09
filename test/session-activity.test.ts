@@ -430,6 +430,46 @@ describe('external CLI launch settle', () => {
     expect(session.isWorking).toBe(false);
   });
 
+  it('never announces idle for a codex pane prompted before the timer, so a send-and-wait is not ended early', () => {
+    vi.useFakeTimers();
+    let screen = CODEX_READY;
+    const session = withFakePane(() => screen, 'codex');
+    const events = launch(session);
+
+    // A prompt 2 s in: its turn has not been marked working when the timer fires.
+    vi.advanceTimersByTime(2000);
+    session.markPromptSubmitted();
+    screen = CODEX_WORKING;
+    vi.advanceTimersByTime(1000);
+
+    expect(events).toEqual(['needsRefresh']);
+    expect(session.status).toBe('busy');
+
+    for (let i = 0; i < 4; i++) {
+      feed(session, CODEX_COMPOSER_REPAINT);
+      vi.advanceTimersByTime(1000);
+    }
+    screen = CODEX_FINISHED;
+    vi.advanceTimersByTime(30_000);
+
+    // The turn's own end is the one idle edge.
+    expect(events.filter((e) => e === 'idle')).toEqual(['idle']);
+    expect(events[events.length - 1]).toBe('idle');
+    expect(session.status).toBe('idle');
+  });
+
+  it('still settles a prompted CLI without work detection, which has nothing else to settle it', () => {
+    vi.useFakeTimers();
+    const session = new Session({ workingDir: '/tmp', mode: 'opencode' });
+    const events = launch(session);
+
+    vi.advanceTimersByTime(2000);
+    session.markPromptSubmitted();
+    vi.advanceTimersByTime(1000);
+
+    expect(events).toEqual(['idle', 'needsRefresh']);
+  });
+
   it('settles a RESTORED pane of a CLI without work detection, without a refetch', () => {
     vi.useFakeTimers();
     // A Codeman restart re-attaches every surviving pane through startInteractive(),
