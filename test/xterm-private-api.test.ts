@@ -49,18 +49,19 @@ describe('xterm private-API dependency guard', () => {
       'xterm moved off the verified version — re-verify _kickRenderer in a real browser ' +
         '(terminal-ui.js: _core._renderService._renderDebouncer._animationFrame) AND the ' +
         'CompositionHelper fields installEditSync() uses (terminal-keycode229-recovery.js: ' +
-        '_handleAnyTextareaChanges, _coreService, _isComposing, _dataAlreadySent), then update ' +
-        'VERIFIED_XTERM_VERSION here. The accessor is optional-chained, so a renamed field ' +
+        '_handleAnyTextareaChanges, _coreService, _isComposing, _isSendingComposition, _dataAlreadySent), ' +
+        'then update VERIFIED_XTERM_VERSION here. The accessor is optional-chained, so a renamed field ' +
         'degrades to a silent no-op and the freeze it heals comes back unnoticed.'
     ).toBe(VERIFIED_XTERM_VERSION);
   });
 
   // terminal-keycode229-recovery.js swaps in an edit-based replacement for xterm's
   // CompositionHelper._handleAnyTextareaChanges (Android autocorrect = delete + insert, which xterm's
-  // append-only diff duplicates). It reaches `_compositionHelper`, `_coreService`, `_isComposing`
-  // and `_dataAlreadySent`; if xterm renames any of them the install quietly falls back to xterm's own
-  // handler and the duplication returns. Property names survive minification, so a string check on
-  // the shipped bundle catches a rename on upgrade.
+  // append-only diff duplicates). It reaches `_compositionHelper`, `_coreService`, `_isComposing`,
+  // `_isSendingComposition` and `_dataAlreadySent`; if xterm renames any of them the install quietly
+  // falls back to xterm's own handler and the duplication returns (or, for `_isSendingComposition`, a
+  // composition xterm finalizes at an Enter keydown is sent twice). Property names survive
+  // minification, so a string check on the shipped bundle catches a rename on upgrade.
   it('still ships the composition-helper fields the edit-based 229 sync depends on', () => {
     const bundle = readFileSync(resolve(root, 'node_modules/@xterm/xterm/lib/xterm.js'), 'utf8');
     for (const name of [
@@ -68,6 +69,7 @@ describe('xterm private-API dependency guard', () => {
       '_compositionHelper',
       '_coreService',
       '_isComposing',
+      '_isSendingComposition',
       '_dataAlreadySent',
     ]) {
       expect(

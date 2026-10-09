@@ -180,7 +180,7 @@
       // It also has to happen BEFORE xterm handles THIS key: for Enter, xterm clears the textarea
       // in its own keydown, and a timer left pending would then diff the whole line against ''
       // and send one DEL per character ahead of the submitted line.
-      settleEdit();
+      settleEdit(event);
       flushPending();
       keydownSnapshot = canonicalCount;
     }
@@ -266,7 +266,7 @@
       };
 
       // Apply the pending edit NOW instead of on its timer (see handleKeyEvent).
-      settleEdit = () => {
+      settleEdit = (event) => {
         if (waiting.size === 0) return;
         for (const entry of waiting) {
           try {
@@ -275,7 +275,16 @@
             // A broken timer host must not break input handling.
           }
         }
+        // Cleared BEFORE the return below, on purpose: left pending, the timer would fire after
+        // Enter clears the textarea and send one DEL per character ahead of the submitted line.
         waiting.clear();
+        // A composition just ended and this key makes xterm finalize it SYNCHRONOUSLY, through
+        // `_finalizeComposition(false)`, which ignores `_dataAlreadySent`: that text is xterm's, and
+        // sending the edit too would deliver it twice. On 229, CapsLock and the modifiers xterm keeps
+        // the composition on its async path, which honours `_dataAlreadySent`, so the edit still
+        // applies there. Only this settle path is guarded: on the timer path xterm always finalizes
+        // asynchronously, and skipping the edit there would drop a byte master delivers.
+        if (helper._isSendingComposition && ![229, 20, 16, 17, 18].includes(event?.keyCode)) return;
         applyEdit();
       };
 

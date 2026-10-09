@@ -571,6 +571,47 @@ describe('edit-based sync of the helper textarea (autocorrect replacements)', ()
     expect(h.sent.join('')).toBe('o');
   });
 
+  // compositionend and the Enter keydown in one task: xterm's keydown then finalizes the
+  // composition SYNCHRONOUSLY via `_finalizeComposition(false)`, which ignores `_dataAlreadySent`,
+  // so the settle must leave that text to xterm or it is sent twice.
+  it('does not resend a composition xterm finalizes itself at the Enter keydown', () => {
+    const h = editSyncHarness();
+    const controller = h.create(true);
+    typeKeys(h, 'ab ');
+    h.keydown();
+    h.edit('ab word');
+    (h.helper as any)._isSendingComposition = true;
+    controller.handleKeyEvent({ type: 'keydown', key: 'Enter', keyCode: 13 });
+    h.flush();
+    expect(h.sent.join('')).toBe('ab ');
+  });
+
+  // On the timer path (and at a 229 keydown) xterm finalizes the composition ASYNCHRONOUSLY and
+  // skips `_dataAlreadySent`, so the edit must still be applied there: guarding it would drop the
+  // non-composing `x` typed before the composition.
+  it('still applies the edit while xterm finalizes a composition asynchronously', () => {
+    const h = editSyncHarness();
+    h.create(true);
+    typeKeys(h, 'ab ');
+    h.keydown();
+    h.edit('ab xword');
+    (h.helper as any)._isSendingComposition = true;
+    h.flush();
+    expect(h.sent.join('')).toBe('ab xword');
+    expect(h.helper._dataAlreadySent).toBe('xword');
+
+    const k = editSyncHarness();
+    const controller = k.create(true);
+    typeKeys(k, 'ab ');
+    k.keydown();
+    k.edit('ab xword');
+    (k.helper as any)._isSendingComposition = true;
+    controller.handleKeyEvent({ type: 'keydown', key: 'Unidentified', keyCode: 229 });
+    k.flush();
+    expect(k.sent.join('')).toBe('ab xword');
+    expect(k.helper._dataAlreadySent).toBe('xword');
+  });
+
   it('control: xterm alone duplicates the line when the keyboard autocorrects', () => {
     const h = editSyncHarness();
     h.create(false);
