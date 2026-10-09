@@ -583,12 +583,16 @@ describe('terminal touch tap mouse guard', () => {
     // primary pane's terminal and active session are not consulted.
     const { app } = loadTerminalUiHarness();
     const sent: Array<{ id: string; data: string }> = [];
+    // A tile's report must stay out of the persisted queue: it asks for the
+    // ephemeral path, and only a target that says so gets it.
+    const durable: Array<{ id: string; data: string }> = [];
     app.activeSessionId = 'sess-1';
     app.sessions = new Map([
       ['sess-1', { mode: 'claude', cliMouseTracking: false }],
       ['s2', { mode: 'opencode', cliMouseTracking: true }],
     ]);
-    app._sendInputAsync = (id: string, data: string) => sent.push({ id, data });
+    app._sendInputEphemeral = (id: string, data: string) => sent.push({ id, data });
+    app._sendInputAsync = (id: string, data: string) => durable.push({ id, data });
     app._linkHovered = true; // the PRIMARY pane's hover: must not block the tile
     app.terminal = {
       cols: 80,
@@ -618,20 +622,35 @@ describe('terminal touch tap mouse guard', () => {
       target: { closest: (sel: string) => (sel === '.xterm-screen' ? {} : null) },
     };
 
-    app._handleDesktopTerminalClick(click, { terminal: other, sessionId: 's2', linkHovered: false });
+    const tile = { terminal: other, sessionId: 's2', linkHovered: false, ephemeral: true };
+    app._handleDesktopTerminalClick(click, tile);
     expect(sent).toEqual([{ id: 's2', data: '\x1b[<0;21;6M\x1b[<0;21;6m' }]);
+    expect(durable).toEqual([]);
 
     // The tile's own selection and its own link hover do block it.
     otherSelected = true;
-    app._handleDesktopTerminalClick(click, { terminal: other, sessionId: 's2', linkHovered: false });
+    app._handleDesktopTerminalClick(click, tile);
     otherSelected = false;
-    app._handleDesktopTerminalClick(click, { terminal: other, sessionId: 's2', linkHovered: true });
+    app._handleDesktopTerminalClick(click, { ...tile, linkHovered: true });
     expect(sent).toHaveLength(1);
 
     // With no target the primary pane answers for itself, exactly as before.
     expect(app._shouldReportMouseToCli()).toBe(false);
     expect(app._shouldReportMouseToCli('s2')).toBe(true);
     app._handleDesktopTerminalClick(click);
+    expect(sent).toHaveLength(1);
+
+    // And the primary pane's own reports stay on the durable queue: an
+    // untargeted click and an untargeted touch tap.
+    app.sessions.set('sess-1', { mode: 'claude', cliMouseTracking: true });
+    app.terminal = { ...app.terminal, hasSelection: () => false, buffer: { active: { viewportY: 50, baseY: 50 } } };
+    app._linkHovered = false;
+    app._handleDesktopTerminalClick(click);
+    app._sendSyntheticSgrTap(50, 50);
+    expect(durable).toEqual([
+      { id: 'sess-1', data: '\x1b[<0;22;7M\x1b[<0;22;7m' }, // the primary's own origin (0, 0)
+      { id: 'sess-1', data: '\x1b[<0;7;4M\x1b[<0;7;4m' },
+    ]);
     expect(sent).toHaveLength(1);
   });
 

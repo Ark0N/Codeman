@@ -5465,8 +5465,13 @@ Object.assign(CodemanApp.prototype, {
 
   // Encode a tap as an SGR mouse report (press + release at button 0) and send it
   // to the PTY directly, bypassing xterm's mouse encoder. `target` ({ terminal,
-  // sessionId }) aims it at a TerminalTile instead of the primary pane; either
-  // field left out means the primary pane's.
+  // sessionId, ephemeral }) aims it at a TerminalTile instead of the primary
+  // pane; either of the first two left out means the primary pane's.
+  // `ephemeral: true` sends it through _sendInputEphemeral instead of the
+  // persisted exactly-once queue: a TerminalTile's mouse reports never enter
+  // that queue (CLAUDE.md, Split-pane sessions), or a reload would replay one
+  // onto a later screen. Left out, the report stays on _sendInputAsync, as the
+  // primary pane always sent it.
   _sendSyntheticSgrTap(clientX, clientY, target = {}) {
     const sessionId = target.sessionId || this.activeSessionId;
     const terminal = target.terminal || this.terminal;
@@ -5474,7 +5479,9 @@ Object.assign(CodemanApp.prototype, {
     if (!this._terminalViewportAtBottom(terminal)) return; // scrollback click → misfire, do nothing
     const pos = this._clientPointToCell(clientX, clientY, terminal);
     if (!pos) return;
-    this._sendInputAsync(sessionId, `\x1b[<0;${pos.col};${pos.row}M\x1b[<0;${pos.col};${pos.row}m`);
+    const report = `\x1b[<0;${pos.col};${pos.row}M\x1b[<0;${pos.col};${pos.row}m`;
+    if (target.ephemeral) this._sendInputEphemeral(sessionId, report);
+    else this._sendInputAsync(sessionId, report);
   },
 
   // True when a parsed CLI version string ('2.1.187' — banner-parsed on the
@@ -5758,10 +5765,12 @@ Object.assign(CodemanApp.prototype, {
   // clicks outside the cell grid, and sessions where xterm's own encoder is
   // live (it reported the click itself — a second report would double-move).
   //
-  // `target` ({ terminal, sessionId, linkHovered }) runs the same skips for a
-  // TerminalTile's click: its own terminal, its own session's tracking flag and
-  // its own link hover (the primary pane's _linkHovered belongs to its terminal
-  // alone). Every field left out means the primary pane's.
+  // `target` ({ terminal, sessionId, linkHovered, ephemeral }) runs the same
+  // skips for a TerminalTile's click: its own terminal, its own session's
+  // tracking flag and its own link hover (the primary pane's _linkHovered
+  // belongs to its terminal alone). `ephemeral` reaches _sendSyntheticSgrTap,
+  // so a TerminalTile's mouse report never enters the persisted input queue.
+  // Every field left out means the primary pane's.
   _handleDesktopTerminalClick(ev, target = {}) {
     const terminal = target.terminal || this.terminal;
     if (!terminal || !ev?.isTrusted) return;

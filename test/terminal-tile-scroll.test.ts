@@ -514,13 +514,16 @@ describe('a tile reports a plain click to a CLI with mouse tracking on', () => {
   });
   const TAP = '\x1b[<0;21;6M\x1b[<0;21;6m';
 
-  it("sends one seq-tagged SGR press+release on the tile's socket, from the tile's own geometry", async () => {
+  it("sends one ephemeral SGR press+release on the tile's socket, from the tile's own geometry", async () => {
     const app = makeApp({ other: { mode: 'shell' }, 's-tile': { mode: 'opencode', cliMouseTracking: true } });
     const { ws, mount } = await connectTile(app);
 
     mount.fire('click', click());
 
-    expect(ws.inputFrames().map((f) => [f.d, typeof f.seq])).toEqual([[TAP, 'number']]);
+    // No seq: like every mouse report from a tile, it never enters the
+    // persisted exactly-once queue, so a reload cannot replay it.
+    expect(ws.inputFrames().map((f) => [f.d, typeof f.seq])).toEqual([[TAP, 'undefined']]);
+    expect((app._pendingDeliveries as Map<string, unknown[]>).get('s-tile')?.length ?? 0).toBe(0);
   });
 
   it('sends nothing without the flag, over a selection, over its own hovered link, or scrolled up', async () => {

@@ -28,7 +28,8 @@
  *    wheel-down from those overflow rows is xterm's, and brings it home).
  *  - The desktop click report: a plain left-click hand-encoded as SGR while
  *    the session's CLI has mouse tracking on (cliMouseTracking), for the modes
- *    whose mouse DECSETs the server strips (_installClickListener).
+ *    whose mouse DECSETs the server strips (_installClickListener), sent
+ *    ephemeral, like every mouse report from this pane (_onTerminalData).
  *  - The soft-keyboard controller (terminal-keycode229-recovery.js), one per
  *    pane, on this pane's own textarea and composition helper and sending to
  *    this pane's session (_createKeyCode229Recovery): it forwards an
@@ -860,6 +861,9 @@
           terminal: this.terminal,
           sessionId: this.sessionId,
           linkHovered: this._linkHovered,
+          // Like every mouse report from this pane (_onTerminalData): once,
+          // never persisted, so a reload cannot replay it onto a later screen.
+          ephemeral: true,
         });
       };
       this.mountEl.addEventListener('click', this._onClick);
