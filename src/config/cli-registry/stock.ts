@@ -493,6 +493,27 @@ const OPENCODE: CliEntry = {
     ...agentDefaults(),
     altScreen: 'strip-mux-only',
     echo: { policy: 'buffer', anchor: { kind: 'cursor' }, predictProfile: undefined },
+    // Measured on a live opencode 1.3.0 pane (capture-pane every 250-300 ms through real
+    // turns at 40, 60, 120 and 200 columns, plus the raw PTY stream, 2026-10-09). Every
+    // composer row starts with a `┃` bar, and the submitted prompt lands in the transcript
+    // with the same bar, so a turn's first repaint arms the idle confirmation and tmux's
+    // reattach repaint does the same for a restored pane. While a turn runs the footer row
+    // starts with an 8-cell knight-rider spinner, `⬝■■■■■■⬝  esc interrupt`, redrawn about
+    // every 40 ms (never a 2.5 s gap mid-turn, so silence cannot end one early); at rest the
+    // row holds only the key hints and nothing on screen draws a `⬝`/`■` run, the wide
+    // layout's sidebar included. The working line is the spinner run, not the label: tmux
+    // ships `esc` and `interrupt` as separate words joined by cursor moves, and below about
+    // 45 columns the footer wraps the label itself. A pending permission prompt replaces
+    // the composer and stops the spinner, so it reads as idle (waiting on the user).
+    // ⚠️ Without this entry an opencode session latched `busy` after any turn that ran a
+    // tool: the braille spinner on a running tool row trips SPINNER_PATTERN, and opencode
+    // never draws Claude's `❯`, the fallback that would have armed the idle check. The
+    // last `┃` row on screen is the composer's agent/model row (or the permission box's
+    // closing bar), never the prompt text, so the submit verifier stands down.
+    workDetect: {
+      promptGlyph: '┃',
+      workingLine: '[⬝■]{8}',
+    },
     // opencode's global config dir is xdg-basedir's `$XDG_CONFIG_HOME/opencode`.
     mcpConfig: {
       path: '.config/opencode/opencode.json',

@@ -69,7 +69,7 @@ output. The other CLIs expose no equivalent.
 | Respawn cycling and unattended runs               | Yes    | Yes                                                  |
 | Cron jobs                                         | Yes    | Yes                                                  |
 | Docker cases, remote SSH cases                    | Yes    | Yes                                                  |
-| Precise idle detection                            | Yes    | Codex and Pi: same screen check, via their own prompt and working line. DeepSeek: reports its state itself. Others: output stabilization, coarser |
+| Precise idle detection                            | Yes    | Codex, Pi and OpenCode: same screen check, via their own prompt and working line. DeepSeek: reports its state itself. Others: output stabilization, coarser |
 | Auto-resume when a usage limit resets             | Yes    | No                                                   |
 | Plan usage chip                                   | Yes    | No                                                   |
 | Approvals Inbox                                   | Yes    | DeepSeek yes; others no                              |
@@ -120,6 +120,11 @@ ln -s ~/.claude/projects <configDir>/projects
 Renders its own TUI, so Codeman treats readiness as output stabilization rather than
 watching for a prompt marker. Requires tmux, with no direct-PTY fallback, because its
 environment is injected through socket-scoped `tmux setenv` rather than the command line.
+
+Working and idle come from the screen: while a turn runs, OpenCode draws a small spinner at
+the start of its footer (`⬝■■■■■■⬝  esc interrupt`), and Codeman reads that to tell a working
+session from an idle one. A pending permission prompt shows as idle, since it is waiting on
+you. Before 1.36.0 an OpenCode session that had run a tool showed as working for good.
 
 Integration detail: [`docs/opencode-integration.md`](https://github.com/Ark0N/Codeman/blob/master/docs/opencode-integration.md).
 

@@ -1,5 +1,5 @@
 /**
- * Working/idle detection for an interactive agent pane, Claude's, Codex's and pi's.
+ * Working/idle detection for an interactive agent pane, Claude's, Codex's, pi's and opencode's.
  *
  * The bug this pins: Claude redraws the composer (`❯`) about once a second all
  * the way through a turn, so the old "saw a ❯, wait 2s, call it idle" rule
@@ -13,7 +13,8 @@
  * work exactly as before.
  *
  * The status-line fixtures below are verbatim captures from live panes
- * (`tmux -L codeman capture-pane -p`) on Claude Code 2.1.220, Codex CLI 0.152.1 and pi 1.1.0.
+ * (`tmux -L codeman capture-pane -p`) on Claude Code 2.1.220, Codex CLI 0.152.1, pi 1.1.0
+ * and opencode 1.3.0.
  */
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { Session } from '../src/session.js';
@@ -46,7 +47,10 @@ function feed(session: Session, data: string): void {
  * A session whose mux reports a fixed (or scripted) screen, so the pane probe has
  * something to read. Only `capturePaneText` is exercised by these paths.
  */
-function withFakePane(screen: string | (() => string), mode: 'claude' | 'codex' | 'pi' = 'claude'): Session {
+function withFakePane(
+  screen: string | (() => string),
+  mode: 'claude' | 'codex' | 'pi' | 'opencode' = 'claude'
+): Session {
   const read = typeof screen === 'function' ? screen : () => screen;
   const mux = {
     isAvailable: () => true,
@@ -87,6 +91,53 @@ const PI_AT_REST = ` Error: Retry failed after 3 attempts: Connection error.\n${
 const PI_SPINNER_FRAME = `\x1b[35;1H\x1b(B\x1b[m\x1b[A\x1b[K\x1b[95m── ⠼\x1b[39m \x1b[95mWorking ${PI_RULE}`;
 /** The turn's last repaint: the top rule drawn plain again. */
 const PI_RULE_REPAINT = `\x1b[35;1H\x1b(B\x1b[m\x1b[A\x1b[K${PI_RULE}`;
+
+/**
+ * opencode's pane, verbatim from live opencode 1.3.0 captures (rows shortened). Every
+ * composer row starts with a `┃` bar; a running turn puts an 8-cell spinner at the head
+ * of the footer row, which is plain key hints at rest.
+ */
+const OC_RULE = '▀'.repeat(48);
+const OC_COMPOSER = `  ┃\n  ┃\n  ┃\n  ┃  Build  qwen3.8-27b Qwen 5090\n  ╹${OC_RULE}\n`;
+const OC_WORKING =
+  '  ┃\n  ┃  $ sleep 12; echo done\n  ┃\n     ▣  Build · qwen3.8-27b\n' +
+  `${OC_COMPOSER}   ■⬝⬝⬝⬝⬝⬝⬝  esc interrupt                 tab agents  ctrl+p commands\n`;
+const OC_AT_REST =
+  '     It is commonly used to insert deliberate delays between automated tasks.\n\n' +
+  `     ▣  Build · qwen3.8-27b · 16.3s\n${OC_COMPOSER}                           tab agents  ctrl+p commands\n`;
+/** The 200-column layout at rest: a right-hand sidebar with the todo list and version. */
+const OC_AT_REST_WIDE =
+  '  ┃  [✓] check disk                                  ▼ Todo\n' +
+  '  ┃  [✓] check memory                                [✓] check disk\n' +
+  '  ┃  [•] summarize                                   [✓] check memory\n' +
+  `     ▣  Build · qwen3.8-27b · 11.9s                   [•] summarize\n${OC_COMPOSER}` +
+  '                           tab agents  ctrl+p commands    • OpenCode 1.3.0\n';
+/** At 40 columns the footer wraps its own label; the spinner run stays whole. */
+const OC_WORKING_PHONE =
+  `  ┃  Build  qwen3.8-27b Qwen 5090\n  ╹${'▀'.repeat(35)}\n` +
+  '   ⬝⬝⬝⬝⬝⬝⬝⬝  esc   tab     ctrl+p\n             interragents  commands\n             upt\n';
+/** A permission prompt replaces the composer, with its own bars, and stops the spinner. */
+const OC_PERMISSION =
+  '     ▣  Build · qwen3.8-27b\n  ┃\n  ┃  △ Permission required\n' +
+  '  ┃    # Echo permission-check to test bash tool\n  ┃\n  ┃  $ echo permission-check\n  ┃\n  ┃\n' +
+  '  ┃   Allow once   Allow always   Reject            ctrl+f fullscreen  ⇆ select  enter confirm\n  ┃\n';
+/** One spinner frame on the wire (~40 ms apart through a turn), verbatim. */
+const OC_SPINNER_FRAME =
+  '\x1b[?2026h\x1b[39;4H\x1b[38;2;103;175;249m\x1b[48;2;10;10;10m■\x1b[38;2;92;156;245m■' +
+  '\x1b[38;2;33;50;75m⬝⬝⬝⬝⬝⬝\x1b[35;6H\x1b(B\x1b[m\x1b[?2026l';
+/** A running tool row: its braille spinner is what used to latch the session busy. */
+const OC_TOOL_ROW =
+  '\x1b[18;3H\x1b[38;2;10;10;10m┃\x1b[38;2;255;255;255m  \x1b[38;2;128;128;128m⠋\x1b[38;2;255;255;255m ' +
+  '\x1b[38;2;128;128;128mSleep for 12 seconds then print done';
+/** The composer's agent/model row repainted, verbatim. */
+const OC_COMPOSER_REPAINT =
+  '\x1b[37;3H\x1b[38;2;92;156;245m\x1b[48;2;10;10;10m┃\x1b[38;2;255;255;255m\x1b[48;2;30;30;30m  ' +
+  '\x1b[38;2;92;156;245mBuild \x1b[38;2;255;255;255m \x1b[38;2;238;238;238mqwen3.8-27b\x1b[38;2;255;255;255m ' +
+  '\x1b[38;2;128;128;128mQwen 5090';
+/** The turn's last chunk, verbatim: it blanks the spinner and carries no `┃`. */
+const OC_TURN_END =
+  '\x1b[?2026h\x1b[32;28H\x1b[38;2;128;128;128m\x1b[48;2;10;10;10m · 16.3s\x1b[39;4H\x1b[38;2;255;255;255m        ' +
+  '\x1b[2C             \x1b[35;6H\x1b(B\x1b[m\x1b[?2026l';
 
 /** A composer repaint: the frame Claude ships roughly once a second while working. */
 const COMPOSER_REPAINT =
@@ -417,8 +468,8 @@ describe('external CLI launch settle', () => {
     vi.useFakeTimers();
     // Nothing arms an idle confirmation for a CLI that names no composer glyph, so
     // the launch timer is the only thing that can ever settle this pane.
-    expect(getCli('opencode')?.capabilities.workDetect).toBeUndefined();
-    const session = new Session({ workingDir: '/tmp', mode: 'opencode' });
+    expect(getCli('gemini')?.capabilities.workDetect).toBeUndefined();
+    const session = new Session({ workingDir: '/tmp', mode: 'gemini' });
     const events = launch(session);
 
     feed(session, '\x1b[5;3H⠋ Loading');
@@ -460,7 +511,7 @@ describe('external CLI launch settle', () => {
 
   it('still settles a prompted CLI without work detection, which has nothing else to settle it', () => {
     vi.useFakeTimers();
-    const session = new Session({ workingDir: '/tmp', mode: 'opencode' });
+    const session = new Session({ workingDir: '/tmp', mode: 'gemini' });
     const events = launch(session);
 
     vi.advanceTimersByTime(2000);
@@ -473,8 +524,8 @@ describe('external CLI launch settle', () => {
   it('settles a RESTORED pane of a CLI without work detection, without a refetch', () => {
     vi.useFakeTimers();
     // A Codeman restart re-attaches every surviving pane through startInteractive(),
-    // which leaves it busy; opencode and gemini have no glyph that would ever clear that.
-    for (const mode of ['opencode', 'gemini', 'shell'] as const) {
+    // which leaves it busy; gemini and antigravity have no glyph that would ever clear that.
+    for (const mode of ['gemini', 'antigravity', 'shell'] as const) {
       expect(getCli(mode)?.capabilities.workDetect).toBeUndefined();
       const session = new Session({ workingDir: '/tmp', mode });
       const events = launch(session, true);
@@ -616,6 +667,145 @@ describe('pi interactive idle detection', () => {
     session.on('idle', () => events.push('idle'));
 
     feed(session, PI_RULE_REPAINT);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['idle']);
+    expect(session.status).toBe('idle');
+  });
+});
+
+describe("opencode's work-detection descriptor", () => {
+  const oc = getCli('opencode')?.capabilities.workDetect;
+
+  it('matches the spinner at the head of the footer while a turn runs, at any width', () => {
+    expect(new RegExp(oc!.workingLine).test(OC_WORKING)).toBe(true);
+    // Below ~45 columns the footer wraps `esc interrupt`, which is why the label is not the anchor.
+    expect(new RegExp(oc!.workingLine).test(OC_WORKING_PHONE)).toBe(true);
+    // The stream detector reads the ANSI-stripped chunk.
+    expect(new RegExp(oc!.workingLine).test(stripAnsi(OC_SPINNER_FRAME))).toBe(true);
+  });
+
+  it('does not match a pane at rest, the wide sidebar layout or a pending permission prompt', () => {
+    expect(new RegExp(oc!.workingLine).test(OC_AT_REST)).toBe(false);
+    expect(new RegExp(oc!.workingLine).test(OC_AT_REST_WIDE)).toBe(false);
+    expect(new RegExp(oc!.workingLine).test(OC_PERMISSION)).toBe(false);
+  });
+
+  it('names the bar the composer, the transcript and a running tool row are drawn with', () => {
+    expect(OC_COMPOSER_REPAINT).toContain(oc!.promptGlyph);
+    expect(OC_TOOL_ROW).toContain(oc!.promptGlyph);
+    expect(OC_AT_REST).toContain(oc!.promptGlyph);
+  });
+
+  it('leaves the submit verifier unable to press Enter on an opencode pane', () => {
+    // The last `┃` row is the composer's agent/model row, or the permission box's closing
+    // bar: never the prompt text, so the verifier stands down rather than re-pressing Enter.
+    const typed = OC_COMPOSER.replace('  ┃\n  ┃\n', '  ┃\n  ┃  say ok\n');
+    expect(promptStillInComposer(typed, 'say ok', oc!.promptGlyph)).toBe(false);
+    expect(promptStillInComposer(OC_AT_REST, 'say ok', oc!.promptGlyph)).toBe(false);
+    expect(promptStillInComposer(OC_WORKING, 'sleep 12', oc!.promptGlyph)).toBe(false);
+    expect(promptStillInComposer(OC_PERMISSION, 'Echo permission-check', oc!.promptGlyph)).toBe(false);
+  });
+});
+
+describe('opencode interactive idle detection', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A turn's worth of spinner frames, 40 ms apart, as opencode ships them. */
+  function spin(session: Session, ms: number): void {
+    for (let t = 0; t < ms; t += 40) {
+      feed(session, OC_SPINNER_FRAME);
+      vi.advanceTimersByTime(40);
+    }
+  }
+
+  it('lets a turn that ran a tool end, instead of latching busy', () => {
+    vi.useFakeTimers();
+    let screen = OC_WORKING;
+    const session = withFakePane(() => screen, 'opencode');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    // The tool row's braille marks the pane working; its bar arms the idle check, which
+    // must not end the turn while the spinner still animates.
+    feed(session, OC_TOOL_ROW);
+    spin(session, 8000);
+    expect(events).toEqual(['working']);
+    expect(session.status).toBe('busy');
+
+    // Before opencode declared its bar and spinner, nothing ever armed the idle check
+    // (opencode never draws `❯`), so this session stayed busy for good.
+    screen = OC_AT_REST;
+    feed(session, OC_TURN_END);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['working', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('marks a text-only turn working off the spinner, with no braille anywhere', () => {
+    vi.useFakeTimers();
+    let screen = OC_WORKING;
+    const session = withFakePane(() => screen, 'opencode');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    feed(session, OC_COMPOSER_REPAINT);
+    spin(session, 4000);
+    expect(events).toEqual(['working']);
+
+    screen = OC_AT_REST;
+    feed(session, OC_TURN_END);
+    vi.advanceTimersByTime(20_000);
+    expect(events).toEqual(['working', 'idle']);
+  });
+
+  it('reads a pending permission prompt as idle, and ends the resumed turn too', () => {
+    vi.useFakeTimers();
+    let screen = OC_WORKING;
+    const session = withFakePane(() => screen, 'opencode');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    feed(session, OC_TOOL_ROW);
+    spin(session, 3000);
+
+    // The prompt replaces the composer and the pane goes silent: waiting on the user.
+    screen = OC_PERMISSION;
+    feed(session, '\x1b[30;3H\x1b[38;2;250;178;131m┃\x1b[38;2;255;255;255m  △ Permission required');
+    vi.advanceTimersByTime(10_000);
+    expect(events).toEqual(['working', 'idle']);
+    expect(session.status).toBe('idle');
+
+    // Allowed: the composer comes back (its bar re-arms the check) and the spinner resumes.
+    screen = OC_WORKING;
+    feed(session, OC_COMPOSER_REPAINT);
+    spin(session, 4000);
+    expect(events).toEqual(['working', 'idle', 'working']);
+
+    screen = OC_AT_REST;
+    feed(session, OC_TURN_END);
+    vi.advanceTimersByTime(20_000);
+    expect(events).toEqual(['working', 'idle', 'working', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('settles a reattached opencode pane that is at rest', () => {
+    vi.useFakeTimers();
+    // A restored pane starts in the `busy` that startInteractive() sets and, now that
+    // opencode declares work detection, gets no launch timer: tmux's reattach repaint
+    // carries the composer's bar, and that is what has to bring it to idle.
+    const session = withFakePane(OC_AT_REST, 'opencode');
+    (session as unknown as { _status: string })._status = 'busy';
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+
+    feed(session, OC_COMPOSER_REPAINT);
     vi.advanceTimersByTime(20_000);
 
     expect(events).toEqual(['idle']);
