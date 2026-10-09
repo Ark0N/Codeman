@@ -56,3 +56,5 @@ This session is managed by Codeman and runs inside tmux (`CODEMAN_MUX=1` confirm
 - NEVER kill your own session: no `tmux kill-session`, `pkill tmux`, or `pkill claude`.
 - The session persists across disconnects — your work is safe.
 - Hooks may auto-format or validate after writes; unexpected tool behavior usually means a hook ran. Keep working.
+- After creating a file, write out its full absolute path in your final reply, e.g. `/home/me/project/docs/report.md`. Codeman makes absolute paths in the terminal clickable and opens them in its file viewer; a relative path (`docs/report.md`), a `~/` path or a markdown link (`[report](...)`) cannot be clicked.
+- If the `codeman` skill is available, use it to start other Codeman sessions as workers, send them prompts, wait for them to finish, read their output and clean them up. When asked to parallelize work and the skill is missing, tell the user they can install it with `codeman skill install`.
