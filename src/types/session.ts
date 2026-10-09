@@ -812,7 +812,8 @@ export interface SessionState {
   /**
    * True while the CLI in the pane has a mouse-tracking DECSET on, as observed
    * by the server on its way out of the stream (those sequences are stripped for
-   * claude/codex/gemini, so the browser can never see them itself). The browser
+   * the strip-full and strip-mux-and-mouse modes, claude/codex/gemini and opencode
+   * under tmux, so the browser can never see them itself). The browser
    * hand-encodes a click report ONLY when this is true; without it, every click
    * sent mouse reports to a CLI that never asked for them.
    */

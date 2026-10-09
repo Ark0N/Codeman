@@ -5304,9 +5304,10 @@ Object.assign(CodemanApp.prototype, {
       // follows the same path as a desktop click.
       this._dispatchSyntheticTerminalClick(touch.clientX, touch.clientY);
     } else if (shouldActivate && this._shouldReportMouseToCli()) {
-      // Claude/Codex/Gemini DECSETs are stripped from the browser stream, so
-      // report directly to the PTY while retaining local touch scrollback. Only
-      // while the CLI actually has tracking on (see _shouldReportMouseToCli).
+      // This session's mouse DECSETs are stripped from the browser stream
+      // (strip-full or strip-mux-and-mouse), so report directly to the PTY
+      // while retaining local touch scrollback, and only while the CLI
+      // actually has tracking on (see _shouldReportMouseToCli).
       this._sendSyntheticSgrTap(touch.clientX, touch.clientY);
     }
 

@@ -1382,7 +1382,7 @@ export class Session extends EventEmitter {
   /**
    * True when this session's PTY is a tmux client rather than the program itself.
    * Read by the replay-side alt-screen strip, which must apply the same
-   * `useMux` gate as the live strip (isMuxAltScreenOnlyStripMode).
+   * `useMux` gate as the live strip (isMuxAltScreenOnlyStripMode, isMuxMouseStripMode).
    */
   get usesMux(): boolean {
     return this._useMux;
