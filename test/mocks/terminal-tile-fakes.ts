@@ -61,14 +61,53 @@ export class FakeFit {
 /** An xterm that records writes, resizes and its handlers; `type()` feeds onData like a keystroke. */
 export class FakeTerminal {
   static last: FakeTerminal | null = null;
+  /**
+   * Opt-in, set by a test BEFORE the tile connects: the buffer's rows follow
+   * what is written, as in xterm. Every `\n` adds a line, `baseY` is the lines
+   * beyond the screen, a clear leaves one line, and a resize recomputes it
+   * (a row-shrinking fit pushes rows above the screen, a growing one pulls them
+   * back). The viewport follows the bottom. Off, `baseY` stays where a test
+   * puts it.
+   */
+  static emulateScroll = false;
+  /**
+   * Opt-in, set by a test BEFORE the tile connects (and reset after): extra
+   * fields merged into `_core`, e.g. xterm's `_compositionHelper` for the
+   * keyCode-229 controller, which reads it once when the tile creates it.
+   */
+  static coreFactory: ((term: FakeTerminal) => Record<string, unknown>) | null = null;
   options: Record<string, unknown>;
   cols = 80;
   rows = 24;
   dataCb: ((data: string) => void) | null = null;
-  buffer = { active: { type: 'normal', viewportY: 0, length: 24 } };
+  buffer = { active: { type: 'normal', viewportY: 0, baseY: 0, length: 24 } };
+  /** xterm's own mouse-tracking mode (DECSET 1000 and friends); 'none' while no app asked for the mouse. */
+  modes = { mouseTrackingMode: 'none' };
+  /** Lines in the buffer while emulating (the cursor line counts). */
+  lineCount = 1;
+  emulate = FakeTerminal.emulateScroll;
+  /** Called after an emulated resize, so a test can stand in for a reflow. */
+  afterResize: ((cols: number, rows: number) => void) | null = null;
+  /** Where the screen sits and how big a cell renders, for the click-to-cell math. */
+  screenRect = { left: 10, top: 20 };
+  element = {
+    querySelector: (sel: string) =>
+      sel === '.xterm-screen' ? { getBoundingClientRect: () => ({ ...this.screenRect }) } : null,
+  };
+  _core: Record<string, unknown> = {
+    _renderService: { dimensions: { css: { cell: { width: 8, height: 16 } } } },
+    ...(FakeTerminal.coreFactory?.(this) ?? {}),
+  };
   constructor(options: Record<string, unknown>) {
     this.options = { ...options };
     FakeTerminal.last = this;
+  }
+  /** Re-derives baseY (and a viewport following the bottom) from the emulated line count. */
+  settleRows() {
+    const active = this.buffer.active;
+    active.baseY = Math.max(0, this.lineCount - this.rows);
+    active.viewportY = active.baseY;
+    active.length = Math.max(this.lineCount, this.rows);
   }
   loadAddon(addon: FakeFit) {
     addon.term = this;
@@ -79,12 +118,26 @@ export class FakeTerminal {
   }
   keyHandler: ((ev: Record<string, unknown>) => boolean) | null = null;
   focusListeners: Array<() => void> = [];
+  /** Every other textarea listener, with the capture flag it was added with (the keyCode-229 controller's). */
+  textareaListeners: Array<{ type: string; fn: (ev: Record<string, unknown>) => void; capture: unknown }> = [];
   textarea = {
-    addEventListener: (type: string, fn: () => void) => {
-      if (type === 'focus') this.focusListeners.push(fn);
+    /** The helper textarea's text, which xterm's keyCode-229 diff (and the controller's) reads. */
+    value: '',
+    addEventListener: (type: string, fn: (ev?: Record<string, unknown>) => void, capture?: unknown) => {
+      if (type === 'focus') this.focusListeners.push(fn as () => void);
+      else this.textareaListeners.push({ type, fn, capture });
     },
-    removeEventListener: (type: string, fn: () => void) => {
+    removeEventListener: (type: string, fn: (ev?: Record<string, unknown>) => void, capture?: unknown) => {
       if (type === 'focus') this.focusListeners = this.focusListeners.filter((f) => f !== fn);
+      else {
+        this.textareaListeners = this.textareaListeners.filter(
+          (l) => !(l.type === type && l.fn === fn && Boolean(l.capture) === Boolean(capture))
+        );
+      }
+    },
+    /** Delivers `ev` to the textarea's listeners of `type`, in registration order. */
+    fire: (type: string, ev: Record<string, unknown> = {}) => {
+      for (const l of this.textareaListeners.filter((x) => x.type === type)) l.fn({ type, ...ev });
     },
   };
   focusTextarea() {
@@ -101,16 +154,28 @@ export class FakeTerminal {
     // An empty write puts nothing on screen; the replay queues one only to hear
     // (its callback) that everything before it has been parsed.
     if (data) this.writes.push(data);
+    if (data && this.emulate) {
+      this.lineCount += data.split('\n').length - 1;
+      this.settleRows();
+    }
     if (!this.holdParse) cb?.();
   }
   clear() {
     this.writes.push('<CLEAR>');
+    if (this.emulate) {
+      this.lineCount = 1;
+      this.settleRows();
+    }
   }
   resizes: Array<[number, number]> = [];
   resize(cols: number, rows: number) {
     this.resizes.push([cols, rows]);
     this.cols = cols;
     this.rows = rows;
+    if (this.emulate) {
+      this.settleRows();
+      this.afterResize?.(cols, rows);
+    }
   }
   scrollToLine() {}
   scrollToTop() {}

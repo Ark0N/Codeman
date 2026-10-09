@@ -577,6 +577,106 @@ describe('terminal touch tap mouse guard', () => {
     expect(sent).toEqual(['\x1b[<0;7;4M\x1b[<0;7;4m']);
   });
 
+  it('desktop click: a target aims the report at another pane (a TerminalTile)', () => {
+    // The tile's own terminal decides the geometry, the selection and the
+    // scroll position, and its own session decides the tracking flag; the
+    // primary pane's terminal and active session are not consulted.
+    const { app } = loadTerminalUiHarness();
+    const sent: Array<{ id: string; data: string }> = [];
+    // A tile's report must stay out of the persisted queue: it asks for the
+    // ephemeral path, and only a target that says so gets it.
+    const durable: Array<{ id: string; data: string }> = [];
+    app.activeSessionId = 'sess-1';
+    app.sessions = new Map([
+      ['sess-1', { mode: 'claude', cliMouseTracking: false }],
+      ['s2', { mode: 'opencode', cliMouseTracking: true }],
+    ]);
+    app._sendInputEphemeral = (id: string, data: string) => sent.push({ id, data });
+    app._sendInputAsync = (id: string, data: string) => durable.push({ id, data });
+    app._linkHovered = true; // the PRIMARY pane's hover: must not block the tile
+    app.terminal = {
+      cols: 80,
+      rows: 24,
+      modes: { mouseTrackingMode: 'none' },
+      hasSelection: () => true, // the PRIMARY pane's selection: must not block the tile
+      buffer: { active: { viewportY: 0, baseY: 50 } }, // primary scrolled up: must not block either
+      element: { querySelector: () => ({ getBoundingClientRect: () => ({ left: 0, top: 0 }) }) },
+      _core: { _renderService: { dimensions: { css: { cell: { width: 8, height: 16 } } } } },
+    };
+    let otherSelected = false;
+    const other = {
+      cols: 40,
+      rows: 12,
+      modes: { mouseTrackingMode: 'none' },
+      hasSelection: () => otherSelected,
+      buffer: { active: { viewportY: 5, baseY: 5 } },
+      element: { querySelector: () => ({ getBoundingClientRect: () => ({ left: 10, top: 20 }) }) },
+      _core: { _renderService: { dimensions: { css: { cell: { width: 8, height: 16 } } } } },
+    };
+    const click = {
+      isTrusted: true,
+      button: 0,
+      detail: 1,
+      clientX: 171,
+      clientY: 101,
+      target: { closest: (sel: string) => (sel === '.xterm-screen' ? {} : null) },
+    };
+
+    const tile = { terminal: other, sessionId: 's2', linkHovered: false, ephemeral: true };
+    app._handleDesktopTerminalClick(click, tile);
+    expect(sent).toEqual([{ id: 's2', data: '\x1b[<0;21;6M\x1b[<0;21;6m' }]);
+    expect(durable).toEqual([]);
+
+    // The tile's own selection and its own link hover do block it.
+    otherSelected = true;
+    app._handleDesktopTerminalClick(click, tile);
+    otherSelected = false;
+    app._handleDesktopTerminalClick(click, { ...tile, linkHovered: true });
+    expect(sent).toHaveLength(1);
+
+    // With no target the primary pane answers for itself, exactly as before.
+    expect(app._shouldReportMouseToCli()).toBe(false);
+    expect(app._shouldReportMouseToCli('s2')).toBe(true);
+    app._handleDesktopTerminalClick(click);
+    expect(sent).toHaveLength(1);
+
+    // And the primary pane's own reports stay on the durable queue: an
+    // untargeted click and an untargeted touch tap.
+    app.sessions.set('sess-1', { mode: 'claude', cliMouseTracking: true });
+    app.terminal = { ...app.terminal, hasSelection: () => false, buffer: { active: { viewportY: 50, baseY: 50 } } };
+    app._linkHovered = false;
+    app._handleDesktopTerminalClick(click);
+    app._sendSyntheticSgrTap(50, 50);
+    expect(durable).toEqual([
+      { id: 'sess-1', data: '\x1b[<0;22;7M\x1b[<0;22;7m' }, // the primary's own origin (0, 0)
+      { id: 'sess-1', data: '\x1b[<0;7;4M\x1b[<0;7;4m' },
+    ]);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("tap: a target uses that pane's geometry and scroll position", () => {
+    const { app } = loadTerminalUiHarness();
+    const sent: Array<{ id: string; data: string }> = [];
+    app.activeSessionId = 'sess-1';
+    app._sendInputAsync = (id: string, data: string) => sent.push({ id, data });
+    app.terminal = null; // the primary pane need not even exist
+    const other = {
+      cols: 40,
+      rows: 12,
+      buffer: { active: { viewportY: 0, baseY: 5 } }, // scrolled up
+      element: { querySelector: () => ({ getBoundingClientRect: () => ({ left: 0, top: 0 }) }) },
+      _core: { _renderService: { dimensions: { css: { cell: { width: 8, height: 16 } } } } },
+    };
+
+    app._sendSyntheticSgrTap(50, 9999, { terminal: other, sessionId: 's2' });
+    expect(sent).toEqual([]);
+
+    other.buffer.active.viewportY = 5; // back at the bottom
+    app._sendSyntheticSgrTap(50, 9999, { terminal: other, sessionId: 's2' });
+    // Row clamped to the TARGET's 12 rows, not the primary's.
+    expect(sent).toEqual([{ id: 's2', data: '\x1b[<0;7;12M\x1b[<0;7;12m' }]);
+  });
+
   it('tap: does nothing while the viewport is scrolled up into local scrollback', () => {
     const { app } = loadTerminalUiHarness();
     const sent: string[] = [];

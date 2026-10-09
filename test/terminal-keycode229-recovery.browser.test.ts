@@ -12,7 +12,9 @@
  *  - a keystroke xterm DOES handle is delivered exactly once, not twice;
  *  - a character committed in the SAME page task as Enter reaches the send
  *    path ahead of the `\r`, which is the ordering the zero-delay timer
- *    alone cannot produce.
+ *    alone cannot produce;
+ *  - a TerminalTile (grid tile, split Pane B) wires its own controller, so
+ *    the same shapes come out right there too, addressed to the tile's session.
  *
  * Browser-driven, so it is excluded from `npm run test:ci` like the other
  * Playwright suites. Run locally:
@@ -392,5 +394,193 @@ describe('orphaned terminal input recovery wiring', () => {
     const { line } = await autocorrectOnSpace();
     // Byte for byte what the phone sent in the device log.
     expect(line).toBe('testing the peompttesting the prompt rompt ');
+  });
+
+  /**
+   * The same keyboard shapes through a TerminalTile, the pane a grid tile and the split view's
+   * Pane B are made of. It wires its OWN controller (terminal-tile.js _createKeyCode229Recovery):
+   * its own xterm, helper textarea and composition helper, sending to its own session through
+   * `app._sendInputAsync(tileSessionId, …)`, never the active one. Declared after the primary
+   * pane's control above, which only switched the PRIMARY controller off.
+   */
+  describe("in a TerminalTile (a grid tile, the split view's Pane B)", () => {
+    const TILE_ID = 'cod541-tile-browser';
+
+    beforeAll(async () => {
+      await page.evaluate(async (id) => {
+        const w = window as any;
+        const mount = document.createElement('div');
+        mount.id = 'tile229Mount';
+        mount.style.cssText = 'position:fixed;left:0;top:0;width:480px;height:320px;z-index:9999;';
+        document.body.appendChild(mount);
+        // A session that does not exist: its socket is refused (4004) and the load finds
+        // nothing, neither of which the controller needs. Input is stubbed per test below.
+        const tile = new w.TerminalTile(id, mount, { mode: 'shell' });
+        w.__tile229 = tile;
+        await tile.connect();
+      }, TILE_ID);
+      await page.waitForFunction(() => (window as any).__tile229?._keyCode229Recovery, null, { timeout: 30000 });
+    }, 60000);
+
+    afterAll(async () => {
+      await page.evaluate(() => {
+        const w = window as any;
+        w.__tile229?.destroy();
+        delete w.__tile229;
+        document.getElementById('tile229Mount')?.remove();
+      });
+    });
+
+    type Scenario = 'autocorrect' | 'lastCharThenEnter' | 'autocorrectThenEnter' | 'orphanThenEnter' | 'selfRescued';
+
+    /**
+     * Runs one keyboard shape against the tile's own textarea (scoped to its mount:
+     * `document.querySelector` would find the PRIMARY pane's) and reports what reached the send
+     * path, which session each chunk was addressed to, and how often xterm itself spoke.
+     */
+    async function inTile(scenario: Scenario) {
+      return page.evaluate(
+        async ({ scenario, tileId }) => {
+          const w = window as any;
+          const app = w.app;
+          const tile = w.__tile229;
+          const textarea = document.querySelector('#tile229Mount .xterm-helper-textarea') as HTMLTextAreaElement;
+          const originalSendInput = app._sendInputAsync;
+          const originalSessionId = app.activeSessionId;
+          const rec = tile._keyCode229Recovery;
+          const sent: Array<[string, string]> = [];
+          let xtermEmitted = 0;
+          const keydown = (init: KeyboardEventInit, keyCode: number) => {
+            const down = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, composed: true, ...init });
+            Object.defineProperties(down, { keyCode: { value: keyCode }, which: { value: keyCode } });
+            textarea.dispatchEvent(down);
+          };
+          const key229 = () => keydown({ key: 'Unidentified' }, 229);
+          const enter = () => keydown({ key: 'Enter', code: 'Enter' }, 13);
+          const tick = () => new Promise((resolve) => setTimeout(resolve, 20));
+          const typeKeys = async (text: string) => {
+            for (const ch of text) {
+              key229();
+              document.execCommand('insertText', false, ch);
+              await tick();
+            }
+          };
+          const autocorrectEdit = () => {
+            key229();
+            textarea.setSelectionRange(textarea.value.length - 5, textarea.value.length);
+            document.execCommand('delete');
+            key229();
+            document.execCommand('insertText', false, 'rompt ');
+          };
+          try {
+            app.activeSessionId = 'cod541-not-the-tile';
+            app._sendInputAsync = (sessionId: string, chunk: string) => sent.push([sessionId, chunk]);
+            if (scenario === 'selfRescued') {
+              // Counts xterm's own canonical emissions: the tile's onData reads the property at
+              // call time, and the controller object itself is frozen.
+              tile._keyCode229Recovery = {
+                handleKeyEvent: (e: any) => rec.handleKeyEvent(e),
+                notifyCanonicalData: () => {
+                  xtermEmitted += 1;
+                  return rec.notifyCanonicalData();
+                },
+                destroy: () => rec.destroy(),
+              };
+            }
+            textarea.value = '';
+            textarea.focus();
+
+            if (scenario === 'autocorrect') {
+              await typeKeys('testing the peompt');
+              autocorrectEdit(); // both edits in one task, before any timer runs
+            } else if (scenario === 'lastCharThenEnter') {
+              await typeKeys('hell');
+              key229();
+              document.execCommand('insertText', false, 'o');
+              enter(); // same task
+            } else if (scenario === 'autocorrectThenEnter') {
+              await typeKeys('testing the peompt');
+              autocorrectEdit();
+              enter(); // same task
+            } else if (scenario === 'orphanThenEnter') {
+              // #441's batched shape: a keydown, the composed insertText xterm refuses, Enter.
+              keydown({ key: 'Unidentified' }, 65);
+              textarea.value = 'o';
+              textarea.dispatchEvent(
+                new InputEvent('input', { data: 'o', inputType: 'insertText', bubbles: true, composed: true })
+              );
+              enter();
+            } else {
+              key229();
+              textarea.value = 'y';
+              textarea.dispatchEvent(
+                new InputEvent('input', { data: 'y', inputType: 'insertText', bubbles: true, composed: true })
+              );
+            }
+            await new Promise((resolve) => setTimeout(resolve, 120));
+
+            const raw = sent.map(([, chunk]) => chunk).join('');
+            const line: string[] = [];
+            for (const ch of raw) {
+              if (ch === '\x7f') line.pop();
+              else line.push(ch);
+            }
+            return {
+              raw,
+              line: line.join(''),
+              textarea: textarea.value,
+              sessions: [...new Set(sent.map(([sessionId]) => sessionId))],
+              xtermEmitted,
+              tileId,
+            };
+          } finally {
+            app._sendInputAsync = originalSendInput;
+            app.activeSessionId = originalSessionId;
+            tile._keyCode229Recovery = rec;
+            textarea.value = '';
+          }
+        },
+        { scenario, tileId: TILE_ID }
+      );
+    }
+
+    it('an autocorrect on space reaches the shell once, not duplicated', async () => {
+      const r = await inTile('autocorrect');
+      expect(r.textarea).toBe('testing the prompt ');
+      expect(r.line).toBe('testing the prompt ');
+      expect(r.sessions).toEqual([TILE_ID]);
+    });
+
+    it('a 229 last character in the same task as Enter submits the whole line', async () => {
+      const r = await inTile('lastCharThenEnter');
+      expect(r.raw).not.toContain('\x7f');
+      expect(r.line).toBe('hello\r');
+      expect(r.sessions).toEqual([TILE_ID]);
+    });
+
+    it('an autocorrect plus Enter in one task submits the corrected line', async () => {
+      const r = await inTile('autocorrectThenEnter');
+      expect(r.line).toBe('testing the prompt \r');
+      expect(r.sessions).toEqual([TILE_ID]);
+    });
+
+    it('a refused insertText committed in the same task as Enter goes out BEFORE the carriage return', async () => {
+      const r = await inTile('orphanThenEnter');
+      expect(r.raw).toBe('o\r');
+      expect(r.sessions).toEqual([TILE_ID]);
+    });
+
+    it('a 229 keystroke xterm diffed itself is delivered once', async () => {
+      const r = await inTile('selfRescued');
+      expect(r.xtermEmitted).toBe(1);
+      expect(r.raw).toBe('y');
+    });
+
+    it("control: with the tile's controller destroyed, xterm alone duplicates the line", async () => {
+      // Keep LAST in this block: it leaves the tile's controller off.
+      await page.evaluate(() => (window as any).__tile229._keyCode229Recovery.destroy());
+      const r = await inTile('autocorrect');
+      expect(r.line).toBe('testing the peompttesting the prompt rompt ');
+    });
   });
 });

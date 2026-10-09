@@ -215,8 +215,10 @@ no `+`, owner decision 9).
 
 ## Non-goals (v1)
 
-- Phones and tablets. The grid is desktop-only, gated at 1180 px like the
-  split (`SPLIT_PANE_MIN_WIDTH`) and the home rail (`HOME_SESSIONS_MIN_WIDTH`).
+- Phones. The grid is gated on width alone at 1180 px like the split
+  (`SPLIT_PANE_MIN_WIDTH`) and the home rail (`HOME_SESSIONS_MIN_WIDTH`); a
+  wide tablet, or a large foldable unfolded in landscape, can reach it (see the
+  keyboard exception below).
 - More than 9 tiles.
 - WebGL rendering inside tiles (see "Rendering" below).
 - Full parity with the main terminal's touch and IME features: local-echo
@@ -224,7 +226,11 @@ no `+`, owner decision 9).
   mouse-wheel forwarding to Claude's fullscreen renderer, the "Load full
   history" banner. These exist for touch devices or rare cases; a desktop
   keyboard user types straight into xterm, which is how Codeman behaved before
-  those features existed.
+  those features existed. (One exception, since the 1180 px gate is width
+  only and a wide Android tablet clears it: every tile wires the main
+  terminal's keyCode-229 soft-keyboard controller, terminal-keycode229-recovery.js,
+  so an Android autocorrect is sent as an edit rather than a duplicated line,
+  #541, and a character committed with Enter is not lost, #441.)
 - Server-side persistence of grids (named presets per owner).
 - Pop-out windows (`/session/:id`, solo mode) showing a grid.
 
@@ -998,7 +1004,12 @@ exits green. Use the browser runner for those files and read the file count.
 3. WebSocket backpressure (`bufferedAmount` threshold, drop and send `{t:'r'}`
    on drain) for grids over slow links.
 4. Tile parity extras: mouse-wheel forwarding for Claude's fullscreen renderer,
-   a "Load full history" action inside a tile.
+   a "Load full history" action inside a tile. (Done since: a tile pages a
+   hollow buffer's CLI transcript with PageUp/PageDown, the primary pane's
+   #555 route, and hand-reports a plain click while its session has
+   `cliMouseTracking` on, both through the primary pane's gates aimed at the
+   tile. The SGR wheel forwarding itself is still open: a fullscreen Claude
+   tile leaves the wheel to xterm.)
 5. WebGL in tiles, after measuring the DOM renderer with nine busy tiles.
 6. Named grid presets, possibly per owner on the server.
 7. The end state: the main terminal becomes a 1x1 grid of `TerminalTile`,

@@ -65,6 +65,8 @@ type PaneUnderTest = {
   _onLiveOutput(data: string): void;
   _onLiveClear(): void;
   _installWheelListener(): void;
+  _installClickListener(): void;
+  _onClick: unknown;
   _writeDisconnectedMarker(): void;
   _onSocketClosed(): void;
 };
@@ -763,9 +765,13 @@ describe('TerminalTile scroll-to-top history pull', () => {
     // Capture phase: xterm's own wheel handler stopPropagation()s the events it
     // consumes, so a bubbling listener would never fire while the pane still has
     // scrollback to scroll, and the pull would work only from the exact top row.
+    // Not passive: the hollow-buffer paging route consumes its wheel right here
+    // (test/terminal-tile-scroll.test.ts). This stub window has neither the
+    // shared paging helpers nor the app's gates, so that route stays inert and
+    // every wheel below falls through to the pull, as before.
     const [type, listener, options] = mount.addEventListener.mock.calls[0];
     expect(type).toBe('wheel');
-    expect(options).toEqual({ capture: true, passive: true });
+    expect(options).toEqual({ capture: true, passive: false });
 
     listener({ deltaY: 120 }); // wheel down
     listener({ deltaY: 0 });
@@ -789,6 +795,22 @@ describe('TerminalTile scroll-to-top history pull', () => {
     expect(pane._onWheel).toBeNull();
   });
 
+  it('destroy() detaches exactly the click listener it registered', () => {
+    const mount = { addEventListener: vi.fn(), removeEventListener: vi.fn() };
+    const pane = makePane('opencode', mount);
+    pane._installWheelListener();
+    pane._installClickListener();
+    const [type, registered, options] = mount.addEventListener.mock.calls[1];
+    // Bubble phase, like the primary pane's click reporter (terminal-ui.js).
+    expect(type).toBe('click');
+    expect(options).toBeUndefined();
+
+    pane.destroy();
+
+    expect(mount.removeEventListener).toHaveBeenCalledWith('click', registered);
+    expect(pane._onClick).toBeNull();
+  });
+
   it('connect() installs the wheel listener (static guard)', () => {
     // connect() needs a whole xterm to run, so its wiring is pinned by source
     // rather than executed; the listener's behaviour is exercised above.
@@ -800,6 +822,7 @@ describe('TerminalTile scroll-to-top history pull', () => {
     expect(end).toBeGreaterThan(start);
     const connect = SOURCE.slice(start, end);
     expect(connect).toContain('this._installWheelListener();');
+    expect(connect).toContain('this._installClickListener();');
     expect(connect).toContain('this._onLiveClear();');
     expect(connect).not.toContain('this.terminal.clear();');
     // The tests below drive the close through _onSocketClosed() directly; the

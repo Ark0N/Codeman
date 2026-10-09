@@ -92,7 +92,15 @@ view needs a wide viewport). So:
   keyboard accessory bar. On a desktop, typing directly into an xterm
   instance with no overlay is exactly how Codeman behaved before the local-
   echo overlay existed for touch devices — normal, not degraded, for a
-  keyboard-and-mouse user.
+  keyboard-and-mouse user. (Since moved to `TerminalTile`, terminal-tile.js,
+  which has gained three pieces of the primary pane: hollow-buffer wheel
+  paging (#555) and the desktop click report for a CLI with
+  `cliMouseTracking` on, both through the primary pane's gates aimed at the
+  tile, and its own keyCode-229 soft-keyboard controller
+  (terminal-keycode229-recovery.js: the #441 next-keydown drain and #541's
+  edit-based diff, so an Android autocorrect is not sent twice). The 1180px
+  width gate is all that keeps a phone out, and a wide Android tablet clears
+  it. See that file's fileoverview.)
 
 If this asymmetry actually bothers you in daily use, promoting Pane B to full
 parity is a scoped v2 (extract the shared logic already once you have two
