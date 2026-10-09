@@ -619,10 +619,15 @@ const CODEX: CliEntry = {
     // Measured against a live codex-cli 0.154.0 pane on 2026-09-22: the row appears when
     // the terminal starts, follows the composer down as the conversation grows, and is
     // gone after `/stop`.
+    // ⚠️ Codex 0.162.0 (measured 2026-10-09) draws a hint row under the status line at
+    // rest (`  ← for agents · ? for shortcuts`) and drops it while a prompt is typed, so
+    // the chip is FOURTH from the bottom at rest and third while typing. A three-row
+    // window never saw it at rest, which is exactly when the idle probe reads it, so a
+    // session waiting on its terminal read as plainly idle. Four rows cover both.
     // ⚠️ This entry CANNOT promise what Claude's does, and the difference is Codex's
-    // layout rather than its pattern. The third row from the bottom is the chip only
+    // layout rather than its pattern. The fourth row from the bottom is the chip only
     // while a terminal runs; with none running it is the last row of the transcript,
-    // which the agent writes. Matching the complete row raises the bar — an assistant
+    // which the agent writes (and while a prompt is typed, the last two). Matching the complete row raises the bar — an assistant
     // message has to end with this exact line, to the character — but nothing here makes
     // forging it impossible, so do not read the Claude comment above as applying here.
     // What contains it is that codex declares `hooks: 'none'`: no hook event from a codex
@@ -641,7 +646,7 @@ const CODEX: CliEntry = {
       promptGlyph: '›',
       workingLine: '[Ee]sc to interrupt',
       watchingLine: String.raw`^\s{0,4}(\d+ background terminals?) running · /ps to view · /stop to close$`,
-      watchingLines: 3,
+      watchingLines: 4,
     },
     // The footer under the composer, measured on a live 0.147.0 pane:
     // `  gpt-5.6-terra default · ~/codeman-cases/th-scratch` (model, reasoning effort,

@@ -365,8 +365,8 @@ export interface CliCapabilities {
     /**
      * How many rows at the FOOT of the screen that row can appear in, counting non-blank
      * rows only. Claude writes its chip on the last row and keeps the default; Codex pins
-     * its own above the composer, which puts it third from the bottom, so it declares
-     * more. Keep each number as small as that CLI's layout allows: every extra row is
+     * its own above the composer, which puts it third or fourth from the bottom (its hint
+     * row comes and goes), so it declares more. Keep each number as small as that CLI's layout allows: every extra row is
      * another row an agent might be able to write, and the label is what silences an
      * alert. See `watchingLabel()` in `session-activity.ts`.
      */

@@ -45,6 +45,33 @@ const CODEX_WITH_TERMINAL = [
   CODEX_STATUS,
   '',
 ].join('\n');
+/**
+ * The same with codex-cli 0.162.0 (verbatim, 2026-10-09): a hint row now sits under the
+ * status line at rest, which pushes the terminal row to FOURTH from the bottom. While a
+ * prompt is typed the hint goes away and the row is third again.
+ */
+const CODEX_162_STATUS = '  GPT-6-Luna default · ~/codeman-cases/testcase';
+const CODEX_162_WITH_TERMINAL = [
+  '• OK',
+  '',
+  '  Worked for 4s • 3:15 AM',
+  '',
+  '  1 background terminal running · /ps to view · /stop to close',
+  '',
+  '',
+  '› Ask Codex to do anything',
+  '',
+  CODEX_162_STATUS,
+  '  ← for agents · ? for shortcuts',
+  '',
+].join('\n');
+const CODEX_162_TYPING = [
+  '  Worked for 4s • 3:15 AM',
+  '  1 background terminal running · /ps to view · /stop to close',
+  '› typing probe',
+  CODEX_162_STATUS,
+  '',
+].join('\n');
 const CODEX_STOPPED = [
   '• OK',
   '',
@@ -392,6 +419,14 @@ describe('the row Codex draws', () => {
     expect(CODEX_TAIL).toBeGreaterThanOrEqual(3);
   });
 
+  it("reads the row on codex 0.162's layout, at rest and while a prompt is typed", () => {
+    expect(watchingLabel(CODEX_162_WITH_TERMINAL, CODEX_WATCHING, CODEX_TAIL)).toBe('1 background terminal');
+    expect(watchingLabel(CODEX_162_TYPING, CODEX_WATCHING, CODEX_TAIL)).toBe('1 background terminal');
+    // The hint row is why three rows stopped being enough: at rest, the idle probe's
+    // moment, a three-row window ends at the composer.
+    expect(watchingLabel(CODEX_162_WITH_TERMINAL, CODEX_WATCHING, 3)).toBeNull();
+  });
+
   it('refuses a mention that is not the whole row', () => {
     // The pattern matches Codex's row end to end, so prose about background terminals —
     // including prose quoting part of the row — is not enough.
@@ -406,7 +441,7 @@ describe('the row Codex draws', () => {
   });
 
   it('CAN be forged by Codex own output, and is contained by Codex having no hooks', () => {
-    // Codex's row is third from the bottom only while a terminal runs; with none running
+    // Codex's row is third or fourth from the bottom only while a terminal runs; with none running
     // that slot is the last row of the transcript, which the agent writes. Matching the
     // complete row raises the bar but closes nothing, so this test states the limitation
     // rather than a protection the code does not have.

@@ -81,10 +81,11 @@ Two CLIs declare such a row today, and they put it in different places. Claude w
 chip on the last row of the screen, so it keeps the default one-row window and anchors on
 the `·` its footer joins items with. Codex pins
 `1 background terminal running · /ps to view · /stop to close` ABOVE its composer, which
-puts the row third from the bottom once the status line and the composer are counted, so its
-entry declares `watchingLines: 3` and matches that row end to end. Both were measured
-against live panes rather than read out of a binary, which is the standard for adding a
-third.
+puts the row third from the bottom once the status line and the composer are counted, and
+fourth on codex 0.162+ at rest, where a `← for agents · ? for shortcuts` hint row sits under
+the status line (it disappears while a prompt is typed). So its entry declares
+`watchingLines: 4` and matches that row end to end. Both were measured against live panes
+rather than read out of a binary, which is the standard for adding a third.
 
 `awaitingLine` covers the quiet pane that is neither idle nor watching: a turn that ENDED
 to wait for workers the CLI will resume from by itself. When background agents or an
