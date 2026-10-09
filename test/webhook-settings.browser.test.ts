@@ -5,7 +5,6 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
 
-const PORT = 3195;
 const SECRET = 'SUPERSECRET-topic-123';
 
 describe('Webhook settings in a real browser', () => {
@@ -30,11 +29,11 @@ describe('Webhook settings in a real browser', () => {
     await new Promise<void>((r) => receiver.listen(0, '127.0.0.1', r));
     receiverPort = (receiver.address() as AddressInfo).port;
 
-    server = new WebServer(PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
     browser = await chromium.launch({ headless: true });
     page = await browser.newPage();
-    await page.goto(`http://localhost:${PORT}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`http://localhost:${server.boundPort}`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
     await page.evaluate(() => (window as any).app.openAppSettings());
     await page.waitForSelector('#webhookGroup', { state: 'attached' });

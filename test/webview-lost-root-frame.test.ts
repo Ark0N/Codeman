@@ -12,12 +12,11 @@
  * real WebServer in test mode for the passwordless one, where the index route
  * itself has to answer.
  *
- * Port: 3198
+ * Port: ephemeral
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { WebServer } from '../src/web/server.js';
 
-const PORT = 3198;
 const lostFrame = { 'sec-fetch-dest': 'iframe', 'sec-fetch-mode': 'navigate', accept: 'text/html,*/*;q=0.8' };
 
 describe('landing-page reload of a proxied dashboard, passwordless install', () => {
@@ -25,7 +24,7 @@ describe('landing-page reload of a proxied dashboard, passwordless install', () 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let app: any;
   beforeAll(async () => {
-    server = new WebServer(PORT);
+    server = new WebServer(0);
     await server.start();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     app = (server as any).app;

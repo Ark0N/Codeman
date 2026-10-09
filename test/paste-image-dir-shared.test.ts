@@ -9,7 +9,7 @@
  * closes sessions unattended, which turns that from an occasional loss into a
  * routine one.
  *
- * Port: 3188
+ * Port: ephemeral
  */
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,8 +17,6 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { WebServer } from '../src/web/server.js';
 import { pasteImageDirInUseByOtherSession } from '../src/web/paste-image-gc.js';
-
-const PORT = 3188;
 
 describe('pasteImageDirInUseByOtherSession', () => {
   const none = new Set<string>();
@@ -108,12 +106,13 @@ describe('pasteImageDirInUseByOtherSession', () => {
 describe('deleting a session that shares its working directory', () => {
   let server: WebServer;
   let workingDir: string;
-  const base = `http://localhost:${PORT}`;
+  let base: string;
 
   beforeAll(async () => {
     workingDir = mkdtempSync(join(tmpdir(), 'codeman-paste-shared-'));
-    server = new WebServer(PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
+    base = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
