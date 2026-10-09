@@ -149,9 +149,23 @@ export class FakeTerminal {
   }
   registerLinkProvider() {}
   writes: string[] = [];
-  /** Set by a test: write callbacks never run, as on a disposed xterm. */
+  /**
+   * Set by a test: write callbacks do not run, as while xterm is still parsing
+   * (or never, on a disposed xterm). They wait in `heldParses` until `parse()`.
+   */
   holdParse = false;
+  heldParses: Array<() => void> = [];
+  /** xterm catches up: runs every write callback held so far, in order. */
+  parse() {
+    for (const cb of this.heldParses.splice(0)) cb();
+  }
+  /** Set by a test: the next write of exactly this data throws, as xterm's WriteBuffer does past 50M. */
+  throwOnWrite: string | null = null;
   write(data: string, cb?: () => void) {
+    if (this.throwOnWrite !== null && data === this.throwOnWrite) {
+      this.throwOnWrite = null;
+      throw new Error('write data discarded, use flow control to avoid losing data');
+    }
     // An empty write puts nothing on screen; the replay queues one only to hear
     // (its callback) that everything before it has been parsed.
     if (data) this.writes.push(data);
@@ -162,7 +176,9 @@ export class FakeTerminal {
       this.lineCount += data.slice(reset === -1 ? 0 : reset + 2).split('\n').length - 1;
       this.settleRows();
     }
-    if (!this.holdParse) cb?.();
+    if (!cb) return;
+    if (this.holdParse) this.heldParses.push(cb);
+    else cb();
   }
   clear() {
     this.writes.push('<CLEAR>');

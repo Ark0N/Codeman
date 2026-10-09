@@ -185,6 +185,10 @@ const isMarker = (data: unknown) => typeof data === 'string' && data.includes('[
  */
 const screenWrites = (pane: { terminal: FakeTerminal }) =>
   pane.terminal.write.mock.calls.map((call) => call[0]).filter((data) => data !== '');
+// Live frames are written with a callback (the tile counts them until xterm
+// has parsed them, _writeLive), so they are matched on the data argument
+// alone, never with toHaveBeenCalledWith(data): that would also miss, and a
+// `.not` on it would then pass for nothing.
 
 /**
  * Holds xterm's write callbacks, as a real xterm still parsing a replay does:
@@ -738,7 +742,7 @@ describe('TerminalTile scroll-to-top history pull', () => {
     // keeps painting during the round trip), and the replay then replaces it.
     clock = 1;
     pane._onLiveOutput('early');
-    expect(term.write).toHaveBeenCalledWith('early');
+    expect(screenWrites(pane)).toContain('early');
     await settle();
 
     // 200 rows (more than the pane holds, so it replays) of 400 columns each:
@@ -748,12 +752,14 @@ describe('TerminalTile scroll-to-top history pull', () => {
     clock = 2; // the response arrives: this is the cutoff
     response.resolve(jsonResponse(bigReplay));
     await settle();
-    expect(xterm.held).toHaveLength(1);
+    // Two parses pending: 'early' (a live write, counted until xterm parses it)
+    // and the replay's end marker.
+    expect(xterm.held).toHaveLength(2);
 
     // Arrives while the snapshot is still being parsed: must not land under it.
     clock = 3;
     pane._onLiveOutput('late');
-    expect(term.write).not.toHaveBeenCalledWith('late');
+    expect(screenWrites(pane)).not.toContain('late');
 
     // The replay parsed, then the pull's own settle write before it scrolls.
     xterm.parse();
@@ -778,12 +784,12 @@ describe('TerminalTile scroll-to-top history pull', () => {
     pane._maybeLoadMoreHistory();
     await settle();
     pane._onLiveOutput('held');
-    expect(pane.terminal.write).not.toHaveBeenCalledWith('held');
+    expect(screenWrites(pane)).not.toContain('held');
     held.release(rowsOf(30)); // nothing to gain: no replay
     await settle();
 
     // Nothing replaced the terminal, so the held frame is news.
-    expect(pane.terminal.write).toHaveBeenCalledWith('held');
+    expect(screenWrites(pane)).toContain('held');
   });
 
   it('a failed fetch releases the flag and the queue, so live output flows again', async () => {
@@ -799,9 +805,9 @@ describe('TerminalTile scroll-to-top history pull', () => {
 
     expect(pane._bufferLoading).toBe(false);
     expect(pane._liveQueue).toBeNull();
-    expect(pane.terminal.write).toHaveBeenCalledWith('held');
+    expect(screenWrites(pane)).toContain('held');
     pane._onLiveOutput('after');
-    expect(pane.terminal.write).toHaveBeenLastCalledWith('after');
+    expect(screenWrites(pane).at(-1)).toBe('after');
   });
 
   it('a refresh frame during the pull runs once behind it', async () => {
@@ -921,7 +927,7 @@ describe('TerminalTile scroll-to-top history pull', () => {
     expect(pane._liveQueue).toBeNull();
     expect(pane.terminal).toBeNull();
     expect(term.write).not.toHaveBeenCalledWith('\x1bc');
-    expect(term.write).not.toHaveBeenCalledWith('held');
+    expect(term.write.mock.calls.map((call) => call[0])).not.toContain('held');
   });
 
   it('a pull whose request is aborted (the deadline) frees the pane', async () => {
@@ -937,7 +943,7 @@ describe('TerminalTile scroll-to-top history pull', () => {
 
     expect(pane._bufferLoading).toBe(false);
     expect(pane._liveQueue).toBeNull();
-    expect(pane.terminal.write).toHaveBeenCalledWith('held');
+    expect(screenWrites(pane)).toContain('held');
   });
 
   it('the wheel listener is capture-phase, and only a wheel UP can trigger a pull', async () => {

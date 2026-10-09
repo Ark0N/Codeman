@@ -159,7 +159,19 @@
       this._historyPullAt = 0;
       this._historyPullUseless = false;
       this._liveQueue = null;
+      this._liveQueueBytes = 0;
       this._markerOwed = false;
+      // Live-output flow control (_writeLive, TerminalTile.LIVE_BACKLOG_BUDGET):
+      // code units written into this xterm and not yet parsed (each write's
+      // callback counts its own back down, unless a reset bumped `_liveEpoch`
+      // since), whether output was dropped and not yet recovered, when the last
+      // frame was dropped, and the debounced, bounded recovery refresh.
+      this._liveInFlight = 0;
+      this._liveEpoch = 0;
+      this._liveDropped = false;
+      this._liveDropAt = 0;
+      this._dropRecoveryTimer = null;
+      this._dropRecoveryAttempt = 0;
       this._onWheel = null;
       // `{ ws, lastRecvAt }`, registered with the app's input-socket map while
       // this pane's socket is open, so the exactly-once input queue delivers this
@@ -507,7 +519,12 @@
       this._lastSentDims = null;
       this._registerInputSocket();
       this._sendResize();
-      if (reconnected) this._refreshBuffer();
+      if (reconnected) {
+        // The gap already cost output, and the refresh below replaces the
+        // screen, so live-output accounting starts over with it.
+        this._resetLiveFlow();
+        this._refreshBuffer();
+      }
     }
 
     // Opens a replacement socket now instead of waiting out the backoff (for an
@@ -762,7 +779,7 @@
               // TERMINAL_TAIL_SIZE) gets the pull's short budget; an unbounded
               // capture (the split's Pane B, up to 32 MB) keeps the request's.
               capturedAt = performance.now();
-              this._liveQueue = [];
+              this._openLiveQueue();
               if (shell || this.boundedLoad) armDeadline(HISTORY_PULL_TIMEOUT_MS);
             }
             payload = (await res.json())?.data ?? {};
@@ -795,6 +812,9 @@
           clearTimeout(abortTimer);
           this._loadAbort = null;
           this._loadRunning = false;
+          // Before the flush: a refresh that recovered dropped output lets its
+          // held frames through.
+          if (refresh) this._settleDropRecovery({ replayed, capturedAt, timedOut: !!controller?.signal?.aborted });
           // Held frames before the marker, so the marker stays the last thing on
           // screen (see _pullHistory()).
           this._flushLiveQueue(replayed ? capturedAt : 0);
@@ -846,22 +866,147 @@
     // tmux took it, so a frame arriving mid-replay is held with its arrival time
     // and written behind the snapshot by that load's _flushLiveQueue() (the
     // primary pane's _finishBufferLoad `since` rule), never underneath it.
+    // Held frames count against the same budget as unparsed ones: a pull or a
+    // refresh holds output for up to its body budget, and a flood meanwhile
+    // must not grow the queue without bound either.
     _onLiveOutput(data) {
-      if (this._liveQueue) this._liveQueue.push({ at: performance.now(), data });
-      else this.terminal?.write(data);
+      if (!data) return;
+      if (this._liveQueue) {
+        if (this._liveQueueBytes + data.length > TerminalTile.LIVE_BACKLOG_BUDGET) {
+          this._noteLiveDrop();
+          return;
+        }
+        this._liveQueueBytes += data.length;
+        this._liveQueue.push({ at: performance.now(), data });
+        return;
+      }
+      this._writeLive(data);
+    }
+
+    _openLiveQueue() {
+      this._liveQueue = [];
+      this._liveQueueBytes = 0;
     }
 
     // Releases the frames a load held (_liveQueue) and closes the queue. After a
     // replay only those that arrived after the capture are news (`cutoff`, the
     // response's arrival; earlier ones are already in it); with no replay
-    // (`cutoff` 0) every one is.
+    // (`cutoff` 0) every one is. Through _writeLive(), so they are counted (and
+    // a write that throws cannot skip the load's marker and trailing refresh).
     _flushLiveQueue(cutoff) {
       const queued = this._liveQueue ?? [];
       this._liveQueue = null;
+      this._liveQueueBytes = 0;
       for (const entry of queued) {
         if (entry.at < cutoff) continue;
-        this.terminal?.write(entry.data);
+        this._writeLive(entry.data);
       }
+    }
+
+    // Writes one live frame into this xterm, under flow control. The server
+    // applies no backpressure (16 KB / 8 ms batches, never a bufferedAmount
+    // check), so a flood a tile cannot parse as fast as it arrives (a shell
+    // tile running `cat` on a huge log, `yes`) used to pile up in xterm's own
+    // write queue without bound, on a main thread six tiles share, until
+    // xterm's WriteBuffer throws past 50M code units and the frames were
+    // silently lost in onmessage's catch. The primary pane caps its queues
+    // and drops then recaptures (_onSessionTerminal, app.js); this is the
+    // tile's equivalent. Past TerminalTile.LIVE_BACKLOG_BUDGET unparsed, a
+    // frame is dropped and the tile stops writing until a refresh recaptures
+    // the screen (_scheduleDropRecovery): every byte after a hole is written
+    // onto a screen out of step with the PTY, which that refresh replaces
+    // anyway. A write that throws is the same drop, never a malformed frame.
+    _writeLive(data) {
+      const terminal = this.terminal;
+      if (!terminal || this._destroyed || !data) return;
+      if (this._liveDropped) {
+        this._noteLiveDrop();
+        return;
+      }
+      const n = data.length;
+      if (this._liveInFlight + n > TerminalTile.LIVE_BACKLOG_BUDGET) {
+        this._noteLiveDrop();
+        return;
+      }
+      const epoch = this._liveEpoch;
+      this._liveInFlight += n;
+      try {
+        terminal.write(data, () => {
+          if (epoch === this._liveEpoch) this._liveInFlight -= n;
+        });
+      } catch {
+        if (epoch === this._liveEpoch) this._liveInFlight -= n;
+        this._noteLiveDrop();
+      }
+    }
+
+    // A live frame was dropped. Marks the tile out of step and arms ONE
+    // recovery; later drops only move the stamp the recovery has to beat.
+    _noteLiveDrop() {
+      this._liveDropAt = performance.now();
+      if (this._liveDropped) return;
+      this._liveDropped = true;
+      this._scheduleDropRecovery();
+    }
+
+    // The primary pane's dropped-output recovery (_scheduleDroppedOutputRecovery,
+    // app.js), aimed at this tile: debounced by DROP_RECOVERY_DELAY_MS so a
+    // sustained flood collapses into one attempt, and run as an ordinary
+    // refresh, which is single-flight, bounded (`lines=`/`tail=`) and waits its
+    // turn in the grid's load queue. _settleDropRecovery() decides what the
+    // refresh it starts achieved.
+    _scheduleDropRecovery() {
+      if (this._dropRecoveryTimer || this._destroyed) return;
+      const delay = global.CodemanDroppedOutput?.DROP_RECOVERY_DELAY_MS ?? 2000;
+      this._dropRecoveryTimer = setTimeout(() => {
+        this._dropRecoveryTimer = null;
+        if (this._destroyed || !this._liveDropped) return;
+        this._dropRecoveryAttempt++;
+        this._refreshBuffer();
+      }, delay);
+    }
+
+    // A refresh finished while output was marked dropped. Recovered when its
+    // replay's capture was taken after the last dropped frame (the response's
+    // arrival, the cutoff every load uses): output flows again. Otherwise one
+    // more attempt, bounded by the primary pane's rule
+    // (shouldRetryDroppedOutputRecovery: DROP_RECOVERY_MAX_ATTEMPTS, and never
+    // after a capture cut off at its deadline, a stalled link); past that the
+    // flag is released so the tile is never left frozen, and it writes on, out
+    // of step, as every tile did before this existed.
+    _settleDropRecovery({ replayed, capturedAt, timedOut }) {
+      if (!this._liveDropped || this._destroyed) return;
+      if (replayed && capturedAt >= this._liveDropAt) {
+        this._liveDropped = false;
+        this._dropRecoveryAttempt = 0;
+        return;
+      }
+      // Another try is already on its way: the debounce, or a trailing refresh.
+      if (this._dropRecoveryTimer || this._bufferRefreshPending) return;
+      const retry =
+        global.CodemanDroppedOutput?.shouldRetryDroppedOutputRecovery?.({
+          repainted: false,
+          timedOut,
+          attempt: Math.max(0, this._dropRecoveryAttempt - 1),
+          stillActive: true,
+        }) === true;
+      if (retry) {
+        this._scheduleDropRecovery();
+        return;
+      }
+      this._liveDropped = false;
+      this._dropRecoveryAttempt = 0;
+    }
+
+    // Starts live-output accounting over (a reconnect, destroy): write callbacks
+    // still pending from before carry the old epoch and count nothing.
+    _resetLiveFlow() {
+      this._liveEpoch++;
+      this._liveInFlight = 0;
+      this._liveDropped = false;
+      this._dropRecoveryAttempt = 0;
+      clearTimeout(this._dropRecoveryTimer);
+      this._dropRecoveryTimer = null;
     }
 
     // The server's `{t:'c'}` frame, which is a refresh, not a wipe. Its one
@@ -1099,7 +1244,7 @@
         // Opened only now: a frame from before the response is either replaced by
         // the capture or written unchanged, so holding it for the round trip
         // would buy nothing and freeze the pane for as long as the fetch took.
-        this._liveQueue = [];
+        this._openLiveQueue();
         const payload = (await res.json())?.data;
         clearTimeout(abortTimer);
         const buffer = payload?.terminalBuffer;
@@ -1307,6 +1452,9 @@
         this.mountEl?.removeEventListener('click', this._onClick);
         this._onClick = null;
       }
+      // A disposed xterm never runs its write callbacks, and a pending
+      // recovery would refresh a pane nobody can see.
+      this._resetLiveFlow();
       // Page keys still waiting for their flush go nowhere: the pane is gone.
       clearTimeout(this._scrollFlushTimer);
       this._scrollFlushTimer = null;
@@ -1331,6 +1479,15 @@
       this.fitAddon = null;
     }
   }
+
+  // Code units of live output a pane lets sit unparsed in its xterm (or held
+  // behind a replay) before it drops a frame and recaptures (_writeLive). Not
+  // the primary pane's 128 KB: that caps its own rAF-paced queues, about two
+  // frames of them, while here xterm itself is the pacer, a burst normally
+  // parses within a frame or two, and a tight cap would trip on ordinary
+  // bursts and blank-and-reload the tile over and over. A few MB keeps a flood
+  // far below xterm's 50M code-unit throw and bounds each tile's memory.
+  TerminalTile.LIVE_BACKLOG_BUDGET = 4 * 1024 * 1024;
 
   // The marker a pane writes when its socket drops: a transient drop says it is
   // reconnecting; a permanent stop says why, keyed by close code. All start

@@ -802,6 +802,252 @@ describe('TerminalTile claims the keyboard for the app-level shortcuts', () => {
   });
 });
 
+describe('TerminalTile live-output flow control: a flood cannot pile up in xterm', () => {
+  // The server applies no backpressure, and a tile used to write every live
+  // frame straight into xterm: a flood it could not parse as fast piled up in
+  // xterm's own queue without bound, until xterm's WriteBuffer threw past 50M
+  // code units and onmessage's catch silently lost the frames. Now unparsed
+  // (and held) output is counted per tile; past the budget a frame is dropped,
+  // the tile stops writing onto the hole, and one debounced, bounded refresh
+  // recaptures the screen (the primary pane's _scheduleDroppedOutputRecovery).
+  const TileStatics = TerminalTile as unknown as { LIVE_BACKLOG_BUDGET: number };
+  const defaultBudget = TileStatics.LIVE_BACKLOG_BUDGET;
+  afterEach(() => {
+    TileStatics.LIVE_BACKLOG_BUDGET = defaultBudget;
+    delete windowStub.AbortController;
+  });
+  const out = (ws: FakeSocket, d: string) => ws.receive({ t: 'o', d });
+  const inFlight = (tile: Tile) => (tile as unknown as { _liveInFlight: number })._liveInFlight;
+  function serve(terminalBuffer: string) {
+    fetchMock.mockClear();
+    fetchMock.mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { terminalBuffer } }),
+    }));
+  }
+
+  it("the budget is a few MB, not the primary pane's 128 KB: a 1 MiB burst xterm has not parsed yet is still written", async () => {
+    expect(defaultBudget).toBeGreaterThanOrEqual(2 * 1024 * 1024);
+    expect(defaultBudget).toBeLessThanOrEqual(16 * 1024 * 1024);
+    vi.useFakeTimers();
+    const { ws, term } = await connectTile(makeApp());
+    ws.open();
+    serve('');
+    term.holdParse = true;
+
+    out(ws, 'z'.repeat(1024 * 1024));
+
+    expect(term.writes.at(-1)).toHaveLength(1024 * 1024);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('counts output until xterm has parsed it, so parsed bytes no longer hold the budget', async () => {
+    TileStatics.LIVE_BACKLOG_BUDGET = 100;
+    const { tile, ws, term } = await connectTile(makeApp());
+    ws.open();
+    term.holdParse = true;
+
+    out(ws, 'a'.repeat(40));
+    out(ws, 'b'.repeat(40));
+    expect(inFlight(tile)).toBe(80);
+    term.parse();
+    expect(inFlight(tile)).toBe(0);
+    out(ws, 'c'.repeat(90));
+
+    expect(term.writes.slice(-3)).toEqual(['a'.repeat(40), 'b'.repeat(40), 'c'.repeat(90)]);
+  });
+
+  it('stops writing past the budget, and ONE debounced refresh recaptures the screen', async () => {
+    TileStatics.LIVE_BACKLOG_BUDGET = 100;
+    vi.useFakeTimers();
+    const { ws, term } = await connectTile(makeApp());
+    ws.open();
+    serve('recovered screen');
+    term.holdParse = true; // xterm falls behind
+
+    out(ws, 'a'.repeat(60));
+    out(ws, 'b'.repeat(60)); // 120 unparsed: past the budget, dropped
+    out(ws, 'c');
+    term.parse(); // xterm catches up, but the stream already has a hole:
+    out(ws, 'd'); // nothing more is written onto it
+    expect(term.writes.filter((w) => /^[abcd]/.test(w))).toEqual(['a'.repeat(60)]);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    term.holdParse = false;
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(fetchMock).not.toHaveBeenCalled(); // debounced, like the primary pane's
+    await vi.advanceTimersByTimeAsync(1);
+    await settle();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/sessions/s-tile/terminal?full=1');
+    expect(term.writes.slice(-2)).toEqual(['\x1bc', 'recovered screen']);
+
+    out(ws, 'live again');
+    expect(term.writes.at(-1)).toBe('live again');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // one recovery for the whole burst
+  });
+
+  it("a write xterm refuses (its 50M throw) is a drop that schedules the same recovery, never a swallowed 'malformed frame'", async () => {
+    vi.useFakeTimers();
+    const { ws, term } = await connectTile(makeApp());
+    ws.open();
+    serve('recovered screen');
+    term.throwOnWrite = 'boom';
+
+    out(ws, 'boom');
+    out(ws, 'after the hole');
+    expect(term.writes).not.toContain('after the hole');
+
+    await vi.advanceTimersByTimeAsync(2000);
+    await settle();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(term.writes.slice(-2)).toEqual(['\x1bc', 'recovered screen']);
+  });
+
+  it('frames held behind a replay count against the budget too, and a hole there is recovered by another refresh', async () => {
+    TileStatics.LIVE_BACKLOG_BUDGET = 100;
+    vi.useFakeTimers();
+    const { ws, term } = await connectTile(makeApp());
+    ws.open();
+    fetchMock.mockClear();
+    let answer!: (body: string) => void;
+    fetchMock.mockImplementationOnce(async () => ({
+      ok: true,
+      status: 200,
+      json: () =>
+        new Promise((resolveBody) => {
+          answer = (terminalBuffer) => resolveBody({ data: { terminalBuffer } });
+        }),
+    }));
+    fetchMock.mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { terminalBuffer: 'second capture' } }),
+    }));
+
+    ws.receive({ t: 'r' });
+    await settle(); // the headers landed: from here frames are held
+    out(ws, 'x'.repeat(60));
+    out(ws, 'y'.repeat(60)); // the held queue would pass the budget: dropped
+    answer('first capture');
+    await settle();
+
+    // The capture predates the hole, so nothing after it is written onto it.
+    expect(term.writes.slice(-2)).toEqual(['\x1bc', 'first capture']);
+    expect(term.writes).not.toContain('y'.repeat(60));
+    await vi.advanceTimersByTimeAsync(2000);
+    await settle();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(term.writes.slice(-2)).toEqual(['\x1bc', 'second capture']);
+    out(ws, 'live again');
+    expect(term.writes.at(-1)).toBe('live again');
+  });
+
+  it('a recovery that keeps failing is retried a bounded number of times, then lets live output through again', async () => {
+    vi.useFakeTimers();
+    const { ws, term } = await connectTile(makeApp());
+    ws.open();
+    fetchMock.mockClear();
+    fetchMock.mockImplementation(async () => {
+      throw new Error('offline');
+    });
+    term.throwOnWrite = 'boom';
+
+    out(ws, 'boom');
+    out(ws, 'held back');
+    for (let i = 0; i < 10; i++) {
+      await vi.advanceTimersByTimeAsync(2000);
+      await settle();
+    }
+
+    const { DROP_RECOVERY_MAX_ATTEMPTS } = windowStub.CodemanDroppedOutput as { DROP_RECOVERY_MAX_ATTEMPTS: number };
+    expect(fetchMock).toHaveBeenCalledTimes(DROP_RECOVERY_MAX_ATTEMPTS);
+    expect(term.writes).not.toContain('held back');
+    out(ws, 'flowing');
+    expect(term.writes.at(-1)).toBe('flowing'); // never left frozen
+  });
+
+  it('a recovery cut off at its deadline is not retried (a stalled link), and lets live output through again', async () => {
+    windowStub.AbortController = AbortController;
+    vi.useFakeTimers();
+    const { ws, term } = await connectTile(makeApp());
+    ws.open();
+    fetchMock.mockClear();
+    fetchMock.mockImplementation(
+      (_url: string, init?: { signal?: AbortSignal }) =>
+        new Promise((_resolveFetch, rejectFetch) => {
+          init?.signal?.addEventListener('abort', () => rejectFetch(new Error('aborted')));
+        })
+    );
+    term.throwOnWrite = 'boom';
+
+    out(ws, 'boom');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(45_000); // the full-capture budget runs out
+    await settle();
+
+    out(ws, 'flowing');
+    expect(term.writes.at(-1)).toBe('flowing');
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a reconnect starts the count over, and callbacks from before it count nothing', async () => {
+    TileStatics.LIVE_BACKLOG_BUDGET = 100;
+    vi.useFakeTimers();
+    const { tile, ws, term } = await connectTile(makeApp());
+    ws.open();
+    term.holdParse = true;
+    out(ws, 'a'.repeat(60));
+    expect(inFlight(tile)).toBe(60);
+
+    ws.drop(1006);
+    await vi.advanceTimersByTimeAsync(300);
+    FakeSocket.instances.at(-1)!.open(); // reconnected: its refresh replaces the screen
+    expect(inFlight(tile)).toBe(0);
+    term.parse(); // the old write's callback lands after the reset
+    expect(inFlight(tile)).toBe(0);
+  });
+
+  it('a reconnect drops a pending recovery: its own refresh replaces the screen', async () => {
+    vi.useFakeTimers();
+    const { ws, term } = await connectTile(makeApp());
+    ws.open();
+    serve('');
+    term.throwOnWrite = 'boom';
+    out(ws, 'boom');
+
+    ws.drop(1006);
+    await vi.advanceTimersByTimeAsync(300);
+    const ws2 = FakeSocket.instances.at(-1)!;
+    ws2.open();
+    await settle();
+    expect(fetchMock).toHaveBeenCalledTimes(1); // the reconnect's refresh
+    out(ws2, 'flowing');
+    expect(term.writes.at(-1)).toBe('flowing');
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('destroy() cancels a pending recovery', async () => {
+    vi.useFakeTimers();
+    const { tile, ws, term } = await connectTile(makeApp());
+    ws.open();
+    fetchMock.mockClear();
+    term.throwOnWrite = 'boom';
+    out(ws, 'boom');
+
+    tile.destroy();
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 describe('the server coming back kicks Pane B', () => {
   it("handleInit's reconnect branch asks the split pane's tile to reconnect without waiting out its backoff", () => {
     // handleInit needs a whole app to run, so the wiring is pinned by source;
