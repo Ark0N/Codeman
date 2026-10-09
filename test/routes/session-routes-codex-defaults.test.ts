@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { createRouteTestHarness, type RouteTestHarness } from './_route-test-utils.js';
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
@@ -11,6 +12,7 @@ import { buildCodexCommand } from '../../src/tmux-manager.js';
 import { Session } from '../../src/session.js';
 import { safeRmHomeTree } from '../mocks/index.js';
 import { getDataDir } from '../../src/config/instance.js';
+import { SettingsUpdateSchema } from '../../src/web/schemas.js';
 
 vi.mock('../../src/utils/cli-launcher.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/utils/cli-launcher.js')>();
@@ -152,5 +154,27 @@ describe('Codex launch defaults', () => {
     } finally {
       await system.app.close();
     }
+  });
+
+  it('the App Settings client check mirrors SettingsUpdateSchema.codexModel and runs before the local write', () => {
+    // SettingsUpdateSchema is .strict(), so a codexModel the schema refuses 400s the
+    // WHOLE settings PUT while the toast still says "Settings saved". saveAppSettings()
+    // refuses it client-side with a copy of the schema's pattern; a looser copy brings
+    // that silent 400 back, a stricter one refuses valid model ids. Length is left
+    // out on purpose: the input's maxlength="100" covers .max(100).
+    const src = readFileSync(resolve(import.meta.dirname, '../../src/web/public/settings-ui.js'), 'utf8');
+    const start = src.indexOf('async saveAppSettings() {');
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start);
+    const m = body.match(/if \(!\/(\^\[[^\]\n]+\]\*\$)\/\.test\(settings\.codexModel\)\)/);
+    expect(m).not.toBeNull();
+    const client = new RegExp(m![1]);
+    for (const v of ['', 'gpt-5.1', 'org/model_1-x', 'gpt-oss:20b', 'a b', 'bad;cmd', '-x', 'é']) {
+      expect(client.test(v), v).toBe(SettingsUpdateSchema.safeParse({ codexModel: v }).success);
+    }
+    const guardAt = body.indexOf(m![0]);
+    const writeAt = body.indexOf('this.saveAppSettingsToStorage(settings);');
+    expect(writeAt).toBeGreaterThan(-1);
+    expect(guardAt).toBeLessThan(writeAt);
   });
 });
