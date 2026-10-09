@@ -466,6 +466,21 @@ geometry was read. The capture runs synchronous tmux calls on the server; the
 | `tail=<bytes>` | Keep the newest `<bytes>` of the result (`truncationReason: 'tail'` when it cut). |
 | `lines=<n>` | With `full=1` only: read at most `<n>` lines of tmux history above the visible frame. An integer of at least 1, clamped to the configured history limit; absent or malformed, the whole limit (100,000 lines by default), as before. `truncated` and `truncationReason` describe byte cuts only, not this bound. Without it a full capture reads all of that history before `tail` cuts it, so a client that keeps a fixed number of lines (the tile grid sends its xterm's scrollback plus its rows) should send it. |
 
+## Prompt uploads (`POST /api/v1/sessions/:id/paste-image`)
+
+A `multipart/form-data` body with one `image` part. The file is written into the
+session's workspace as `<workingDir>/.codeman-uploads/paste-<ms>-<hex>.<ext>`, and
+`data` carries `path` and `filename` for the client to type the path into the
+prompt. The folder is Codeman's own: hidden, created on first use with a
+`.gitignore` containing `*` (written once, never over a file already there), and
+cleaned up the way pasted images always were: `paste-*` files older than 7 days
+go in an hourly sweep, and the folder goes when the last session of that
+workspace is killed. Uploads made before this release sit in `.claude-images/`;
+that folder receives nothing new, and is swept and removed the same way for one
+release. A remote (SSH) session answers 400, since the file would land on the
+Codeman host under a path the remote agent cannot read; Docker sessions are
+fine, their workspace is bind-mounted at the same absolute path.
+
 ## Session lineage (`parentSessionId`)
 
 A create request may name the session that spawned it, which the web UI draws as a

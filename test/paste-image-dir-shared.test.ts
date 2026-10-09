@@ -1,8 +1,9 @@
 /**
- * @fileoverview Deleting a session keeps `.claude-images` while a sibling in the
+ * @fileoverview Deleting a session keeps the upload dirs while a sibling in the
  * same working directory is still live (Ark0N/Codeman#446).
  *
- * `cleanupSession()` removes `{workingDir}/.claude-images` recursively. That
+ * `cleanupSession()` removes `{workingDir}/.codeman-uploads` (and the pre-move
+ * `.claude-images`) recursively. That
  * dir belongs to the working directory, not to the session, and several
  * sessions routinely share one case directory, so closing one used to delete
  * the pasted images a live sibling still referred to. The exited-agent sweep
@@ -11,14 +12,12 @@
  *
  * Port: 3188
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { WebServer } from '../src/web/server.js';
 import { pasteImageDirInUseByOtherSession } from '../src/web/paste-image-gc.js';
-
-const PORT = 3188;
 
 describe('pasteImageDirInUseByOtherSession', () => {
   const none = new Set<string>();
@@ -108,12 +107,13 @@ describe('pasteImageDirInUseByOtherSession', () => {
 describe('deleting a session that shares its working directory', () => {
   let server: WebServer;
   let workingDir: string;
-  const base = `http://localhost:${PORT}`;
+  let base = '';
 
   beforeAll(async () => {
     workingDir = mkdtempSync(join(tmpdir(), 'codeman-paste-shared-'));
-    server = new WebServer(PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
+    base = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -133,18 +133,43 @@ describe('deleting a session that shares its working directory', () => {
 
   const remove = (id: string) => fetch(`${base}/api/sessions/${id}`, { method: 'DELETE' });
 
-  it('keeps the images while a sibling is live, and removes them with the last session', async () => {
+  it('keeps the uploads while a sibling is live, and removes them with the last session', async () => {
     const first = await create();
     const second = await create();
-    const imageDir = join(workingDir, '.claude-images');
-    mkdirSync(imageDir, { recursive: true });
-    writeFileSync(join(imageDir, 'paste-1.png'), 'x');
+    // Both the current dir and the pre-move one, which a case in use back then still carries.
+    const uploadDir = join(workingDir, '.codeman-uploads');
+    const legacyDir = join(workingDir, '.claude-images');
+    mkdirSync(uploadDir, { recursive: true });
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(uploadDir, 'paste-1.png'), 'x');
+    writeFileSync(join(legacyDir, 'paste-0.png'), 'x');
 
     expect((await remove(first)).status).toBe(200);
-    expect(existsSync(join(imageDir, 'paste-1.png'))).toBe(true);
+    expect(existsSync(join(uploadDir, 'paste-1.png'))).toBe(true);
+    expect(existsSync(join(legacyDir, 'paste-0.png'))).toBe(true);
 
     expect((await remove(second)).status).toBe(200);
-    expect(existsSync(imageDir)).toBe(false);
+    expect(existsSync(uploadDir)).toBe(false);
+    expect(existsSync(legacyDir)).toBe(false);
+  });
+
+  it('does not follow a planted symlink at the upload dir into another case when the last session closes', async () => {
+    const other = mkdtempSync(join(tmpdir(), 'codeman-paste-other-'));
+    const otherUploads = join(other, '.codeman-uploads');
+    mkdirSync(otherUploads);
+    writeFileSync(join(otherUploads, 'paste-7.png'), 'x');
+    // Planted by a workspace script. uploadDirs() never lists a link, so the delete
+    // removes nothing here, and the link itself stays: it is not Codeman's to remove.
+    symlinkSync(otherUploads, join(workingDir, '.codeman-uploads'));
+    try {
+      const only = await create();
+      expect((await remove(only)).status).toBe(200);
+      expect(existsSync(join(otherUploads, 'paste-7.png'))).toBe(true);
+      expect(lstatSync(join(workingDir, '.codeman-uploads')).isSymbolicLink()).toBe(true);
+    } finally {
+      rmSync(join(workingDir, '.codeman-uploads'), { force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 
   it('keeps the images while a sibling is only detached, since it still runs in tmux', async () => {
@@ -154,7 +179,7 @@ describe('deleting a session that shares its working directory', () => {
     // write, so wait for the record a long-running session would already have.
     const store = (server as unknown as { store: { getSession: (id: string) => unknown } }).store;
     await vi.waitFor(() => expect(store.getSession(detached)).toBeTruthy(), { timeout: 10_000 });
-    const imageDir = join(workingDir, '.claude-images');
+    const imageDir = join(workingDir, '.codeman-uploads');
     mkdirSync(imageDir, { recursive: true });
     writeFileSync(join(imageDir, 'paste-2.png'), 'x');
 

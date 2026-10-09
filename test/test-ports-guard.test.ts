@@ -52,7 +52,6 @@ const LEGACY_FIXED_PORT_FILES = new Set(
     'operation-lightspeed.test.ts',
     'ownership-scoping.test.ts',
     'pane-exit-sweep.test.ts',
-    'paste-image-dir-shared.test.ts',
     'perf-browser.test.ts',
     'quick-start.test.ts',
     'ralph-integration.test.ts',

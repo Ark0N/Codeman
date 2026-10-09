@@ -2004,7 +2004,7 @@ Object.assign(CodemanApp.prototype, {
         const cmdPattern = /\b(tail|cat|head|less|grep|watch|vim|nano)\s+(?:[^\s\/]+\s+){0,4}(\/[^\s"'<>|;&\n\x00-\x1f]+)/g;
 
         // Pattern 2: Paths with common extensions. Image/PDF/media extensions are
-        // included so pasted-attachment paths (`.claude-images/paste-*.png`) and
+        // included so pasted-attachment paths (`.codeman-uploads/paste-*.png`) and
         // screenshots an agent just wrote are clickable; those open the file
         // preview rather than the log viewer (see addLink).
         //

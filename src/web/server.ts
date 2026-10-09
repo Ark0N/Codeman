@@ -33,7 +33,7 @@ import fastifyCookie from '@fastify/cookie';
 import fastifyStatic from '@fastify/static';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
-import { pasteImageDirInUseByOtherSession, startPasteImageGc } from './paste-image-gc.js';
+import { pasteImageDirInUseByOtherSession, startPasteImageGc, uploadDirs } from './paste-image-gc.js';
 import { CLEAN_EXIT_CLOSE_REASON, shouldCloseCleanlyExitedSession } from '../pane-exit-sweep.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1546,11 +1546,14 @@ export class WebServer extends EventEmitter {
           killing: this.killingSessions,
         })
       ) {
-        const pasteImageDir = join(session.workingDir, '.claude-images');
-        try {
-          rmSync(pasteImageDir, { recursive: true, force: true });
-        } catch {
-          // Best-effort cleanup
+        // Both upload dirs, the pre-move one too; uploadDirs() lists only real
+        // directories clear of the data dir, and none for a remote session.
+        for (const uploadDir of uploadDirs(session)) {
+          try {
+            rmSync(uploadDir, { recursive: true, force: true });
+          } catch {
+            // Best-effort cleanup
+          }
         }
       }
       // Drop the agent skill's preamble cache for this session (seeded at create).
@@ -2911,7 +2914,7 @@ export class WebServer extends EventEmitter {
     }
 
     // Bound disk use under heavy paste-image traffic: delete `paste-*` files
-    // older than 7 days from each live session's .claude-images/ hourly.
+    // older than 7 days from each live session's upload dirs hourly.
     if (!this.testMode) {
       this._pasteImageGcStop = startPasteImageGc({ sessions: this.sessions });
       // Surface event-loop stalls (e.g. a slow synchronous tmux/ps call) so the
@@ -3363,7 +3366,7 @@ export class WebServer extends EventEmitter {
    * path adds the session's token totals to the lifetime figures, demotes a
    * pinned record to `stopped` (the durable marker of an intentional kill, which
    * would make the session permanently ineligible for a reboot restore), drops
-   * the persisted Ralph state, and recursively removes `.claude-images` from the
+   * the persisted Ralph state, and recursively removes the upload dirs from the
    * WORKING DIRECTORY, which belongs to the workspace rather than to this session
    * and may hold another live session's pasted images.
    *

@@ -14,6 +14,7 @@ import { basename, extname, relative } from 'node:path';
 import { statSync } from 'node:fs';
 import type { AttachmentDetectedEvent, AttachmentDetectedType, ImageDetectedEvent } from './types.js';
 import { KeyedDebouncer } from './utils/index.js';
+import { UPLOAD_DIR_NAMES } from './web/paste-image-gc.js';
 
 // ========== Types ==========
 
@@ -157,12 +158,15 @@ export class ImageWatcher extends EventEmitter {
         // Watch all subdirectories (images may be saved in src/, assets/, etc.)
         // Ignore common heavy directories for performance
         ignored: (path: string) => {
-          // Skip node_modules, .git, and other heavy directories
+          // Skip node_modules, .git, and other heavy directories, and Codeman's
+          // own upload folders: a pdf the user handed to the agent is not a file
+          // the agent produced.
           if (
             path.includes('/node_modules/') ||
             path.includes('/.git/') ||
             path.includes('/dist/') ||
-            path.includes('/.next/')
+            path.includes('/.next/') ||
+            UPLOAD_DIR_NAMES.some((name) => path.includes(`/${name}/`))
           ) {
             return true;
           }
