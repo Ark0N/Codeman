@@ -980,6 +980,23 @@ const PI: CliEntry = {
       promptGlyph: '─',
       workingLine: '── [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] ',
     },
+    // pi's footer stats row, read from pi 1.1.0's footer code (0.84.4's is the same) and
+    // measured live as `0.8%/253k (auto)            qwen3.8-27b-pi • xhigh`: usage and
+    // context on the left, then at least two spaces and `[(provider) ]<model>` followed
+    // by ` • <thinking>` for a reasoning model and ` → <routed model>` when routed. Only
+    // the last two rows are read, which sit below the composer where the transcript never
+    // reaches (an extension's status row may sit under the stats row), and the context
+    // field (`12.3%/253k`, `?/128k`) picks the stats row out of them.
+    // ⚠️ A narrow pane truncates the right side with NO ellipsis, leaving exactly two
+    // spaces of padding. So a model with nothing after it is read only with 3+ spaces in
+    // front; with two, only when a following ` •`/` →` proves the name is whole (the
+    // bullet only ever follows a complete name, even when the cut lands right after it).
+    // A cut name is never shown. `no-model` is pi's placeholder when none is selected.
+    modelDetect: {
+      screenLine: String.raw`[%?]/[\d.]+[kKM]?(?: \(auto\))?(?: • xp)? {2}(?: +|(?=(?:\(\S{1,40}\) )?\S{1,80} [•→]))(?:\([\w.@-]{1,40}\) )?([A-Za-z0-9][\w.:/@+-]{0,79})(?= [•→]|\n|$)`,
+      screenLines: 2,
+      rejectWords: ['no-model'],
+    },
     // pi's absent-config default is an interactive trust PROMPT the session user could
     // just answer "yes" to, so omitting --approve is not itself a clamp — MATERIALIZE
     // approveProjectTrust:false so buildPiCommand emits --no-approve outright.

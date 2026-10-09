@@ -31,6 +31,9 @@ const DSH_ROWS = detectOf('deepseek').screenLines;
 const DSH_REJECT = detectOf('deepseek').rejectWords;
 const CODEX = compileVersionRegex(detectOf('codex').screenLine)!;
 const CODEX_ROWS = detectOf('codex').screenLines;
+const PI = compileVersionRegex(detectOf('pi').screenLine)!;
+const PI_ROWS = detectOf('pi').screenLines;
+const PI_REJECT = detectOf('pi').rejectWords;
 
 const DSH_BORDER_TOP = '╭' + '─'.repeat(95) + '╮';
 const DSH_BORDER_BOTTOM = '╰' + '─'.repeat(95) + '╯';
@@ -79,7 +82,7 @@ const CODEX_162 = codexPane('  GPT-6-Luna default · ~/codeman-cases/testcase', 
 
 describe('the registry patterns', () => {
   it('compile through compileVersionRegex() with exactly one capture group', () => {
-    for (const mode of ['deepseek', 'codex']) {
+    for (const mode of ['deepseek', 'codex', 'pi']) {
       const { screenLine } = detectOf(mode);
       expect(compileVersionRegex(screenLine), mode).not.toBeNull();
       expect(countCaptureGroups(screenLine), mode).toBe(1);
@@ -143,6 +146,26 @@ describe('the registry patterns', () => {
     expect(countCaptureGroups('(')).toBe(-1);
   });
 });
+
+/**
+ * The foot of a pi pane (live pi 1.1.0 capture, rules shortened): transcript, the composer
+ * between two `─` rules, the cwd row, then the stats row with the model on the right.
+ */
+function piPane(statsRow: string | null, transcript: string[] = [], below: string[] = []): string {
+  const rule = '─'.repeat(60);
+  return [
+    ' Pi can explain its own features and look up its docs.',
+    ...transcript,
+    rule,
+    '',
+    rule,
+    '~/codeman-cases/testcase',
+    ...(statsRow === null ? [] : [statsRow]),
+    ...below,
+    '',
+  ].join('\n');
+}
+const PI_LIVE = piPane('0.8%/253k (auto)' + ' '.repeat(40) + 'qwen3.8-27b-pi • xhigh');
 
 describe('readScreenModel', () => {
   it("reads dsh's model off the row under its composer", () => {
@@ -239,6 +262,38 @@ describe('readScreenModel', () => {
     // whose first word could pass for a model id.
     const codexNoModel = codexPane('  default · ~/codeman-cases/th-scratch');
     expect(readScreenModel(codexNoModel, CODEX, CODEX_ROWS)).toBeUndefined();
+  });
+
+  it("reads pi's model off its footer stats row, in every shape pi's footer code draws", () => {
+    const read = (row: string, below: string[] = []) =>
+      readScreenModel(piPane(row, [], below), PI, PI_ROWS, { rejectWords: PI_REJECT, cwdBasename: 'testcase' });
+    expect(readScreenModel(PI_LIVE, PI, PI_ROWS)).toBe('qwen3.8-27b-pi');
+    // More than one provider configured: `(provider)` in front of the model.
+    expect(read('↑12k ↓3.4k $0.123 12.3%/200k (auto)     (anthropic) claude-sonnet-4-5 • medium')).toBe(
+      'claude-sonnet-4-5'
+    );
+    expect(read('?/128k     gpt-5 • thinking off')).toBe('gpt-5');
+    // A routed model: the selected one is named first.
+    expect(read('3.0%/1.0M (auto)   auto • high → qwen/qwen3-coder • low')).toBe('auto');
+    // A model without reasoning ends the row.
+    expect(read('0.8%/253k (auto)          llama3.3:70b')).toBe('llama3.3:70b');
+    // An extension's status row under the stats row.
+    expect(read('0.8%/253k (auto) • xp      qwen3.8-27b-pi • xhigh', ['my-ext: ready'])).toBe('qwen3.8-27b-pi');
+    // pi's placeholder when no model is selected.
+    expect(read('0.8%/253k (auto)         no-model')).toBeUndefined();
+  });
+
+  it('never reads a model pi truncated to fit a narrow pane', () => {
+    // pi cuts the right side with no ellipsis and leaves exactly two spaces in front.
+    const read = (row: string) => readScreenModel(piPane(row), PI, PI_ROWS);
+    expect(read('↑12k ↓3.4k R45k $0.123 12.3%/253k (auto)  qwen3.8-27b-pi •')).toBe('qwen3.8-27b-pi');
+    expect(read('↑12k ↓3.4k R45k $0.123 12.3%/253k (auto)  qwen3.8-2')).toBeUndefined();
+    expect(read('0.8%/253k (auto)  llama3.3:70')).toBeUndefined();
+  });
+
+  it('never takes a pi transcript line shaped like the footer', () => {
+    const forged = piPane(null, ['0.8%/253k (auto)          evil-model • high']);
+    expect(readScreenModel(forged, PI, PI_ROWS)).toBeUndefined();
   });
 
   it('says nothing about an empty or unreadable frame', () => {
@@ -378,6 +433,15 @@ describe('a session', () => {
     settle(session, '❯');
     expect(session.toState().displayModel).toEqual({ model: 'deepseek-v4-flash', source: 'screen' });
     expect(changed).toHaveBeenCalledTimes(2);
+  });
+
+  it('publishes the model a pi footer names once the pane settles', () => {
+    vi.useFakeTimers();
+    const session = withFakePane('pi', () => PI_LIVE);
+    expect(session.toState().displayModel).toBeUndefined();
+    // pi's composer rule is the glyph that arms the confirmation, whose probe reads the footer.
+    settle(session, '─');
+    expect(session.toState().displayModel).toEqual({ model: 'qwen3.8-27b-pi', source: 'screen' });
   });
 
   it("a footer field equal to the session's folder is not its model; the official ids are", () => {
