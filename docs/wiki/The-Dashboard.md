@@ -73,6 +73,10 @@ precedence there.
 
 One tab per session, in your order, and that order syncs across your devices.
 
+An agent tab shows its CLI's logo before the name, and a shell tab an `SH` badge. **CLI Logos
+on Tabs** (App Settings → Appearance → Tabs) hides the logos on that device; the tile and split
+headers and the Run menus keep theirs.
+
 **Status is carried by the dot and the tab's own styling:**
 
 | Look                          | Meaning                                                                 |
