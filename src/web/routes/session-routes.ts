@@ -36,6 +36,7 @@ import {
   isAltScreenStripMode,
   isExternalCliMode,
   isMuxAltScreenOnlyStripMode,
+  isMuxMouseStripMode,
 } from '../../session.js';
 import type { PaneCaptureOptions } from '../../mux-interface.js';
 import { SseEvent } from '../sse-events.js';
@@ -224,6 +225,37 @@ const ERASE_SCROLLBACK_PATTERN = /\x1b\[3J/g;
 // strip existed can still carry them; strip on replay for parity.
 // eslint-disable-next-line no-control-regex
 const MOUSE_TRACKING_PATTERN = /\x1b\[\?(?:1000|1001|1002|1003|1005|1006|1007)[hl]/g;
+
+/**
+ * The replay half of the strip parity triangle: what `_handleTerminalOutput` (session.ts)
+ * removes from the live stream, removed again from a stored buffer before it is replayed,
+ * because a buffer recorded before the live-side strip existed (or by an older server)
+ * still carries the sequences, and one replayed enable is enough to re-park xterm.
+ *
+ * - `strip-full` (claude/codex/gemini): alt-screen toggles, `3J` and mouse DECSETs.
+ *   xterm obeys the toggles by switching to its scrollback-less alt buffer and wiping
+ *   saved lines, so history disappeared on tab switch.
+ * - `strip-mux-and-mouse` (opencode, tmux-backed): alt-screen toggles and mouse DECSETs.
+ *   A replayed tracking enable parks xterm in report mode, where a drag goes to the CLI
+ *   instead of selecting text (and Ctrl+C without a selection is opencode's app_exit).
+ *   `3J` stays: a TUI is not a `clear` consumer.
+ * - every other mode, tmux-backed: tmux's own client smcup only (#205).
+ *
+ * Exported so the parity with the live strip is a test (claude-scrollback-strip.test.ts).
+ */
+export function stripReplayBuffer(buffer: string, mode: SessionMode, usesMux: boolean): string {
+  if (isAltScreenStripMode(mode)) {
+    return buffer
+      .replace(ALT_SCREEN_TOGGLE_PATTERN, '')
+      .replace(ERASE_SCROLLBACK_PATTERN, '')
+      .replace(MOUSE_TRACKING_PATTERN, '');
+  }
+  if (isMuxMouseStripMode(mode, usesMux)) {
+    return buffer.replace(ALT_SCREEN_TOGGLE_PATTERN, '').replace(MOUSE_TRACKING_PATTERN, '');
+  }
+  if (isMuxAltScreenOnlyStripMode(mode, usesMux)) return buffer.replace(ALT_SCREEN_TOGGLE_PATTERN, '');
+  return buffer;
+}
 
 /**
  * Strip redundant Ink spinner/status-bar redraw frames from the terminal buffer.
@@ -3111,21 +3143,9 @@ export function registerSessionRoutes(
         ? rawBuffer
         : stripInkRedrawBloat(rawBuffer);
 
-    // Strip alt-screen toggles and scrollback-erase from Codex/Claude byte
-    // streams. xterm.js obeys them by switching to its scrollback-less alt
-    // buffer and wiping saved lines, so conversation history disappears on tab
-    // switch. Same gate as the live-stream strip in session.ts.
-    if (isAltScreenStripMode(session.mode)) {
-      strippedBuffer = strippedBuffer
-        .replace(ALT_SCREEN_TOGGLE_PATTERN, '')
-        .replace(ERASE_SCROLLBACK_PATTERN, '')
-        .replace(MOUSE_TRACKING_PATTERN, '');
-    } else if (isMuxAltScreenOnlyStripMode(session.mode, session.usesMux)) {
-      // tmux-backed shell/opencode/antigravity: drop tmux's own client smcup only.
-      // A byte buffer recorded before the live-side strip existed can still carry
-      // it, and one replayed `\x1b[?1049h` re-parks xterm in the alt buffer (#205).
-      strippedBuffer = strippedBuffer.replace(ALT_SCREEN_TOGGLE_PATTERN, '');
-    }
+    // Same strip as the live stream (session.ts), so a buffer recorded before the
+    // live-side strip existed cannot re-park xterm on replay. See stripReplayBuffer.
+    strippedBuffer = stripReplayBuffer(strippedBuffer, session.mode, session.usesMux);
 
     if (tailBytes > 0 && strippedBuffer.length > tailBytes) {
       // Fast path: tail from the end, skip expensive banner search on full 2MB buffer.

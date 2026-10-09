@@ -491,7 +491,7 @@ const OPENCODE: CliEntry = {
   },
   capabilities: {
     ...agentDefaults(),
-    altScreen: 'strip-mux-only',
+    altScreen: 'strip-mux-and-mouse',
     echo: { policy: 'buffer', anchor: { kind: 'cursor' }, predictProfile: undefined },
     // Measured on a live opencode 1.3.0 pane (capture-pane every 250-300 ms through real
     // turns at 40, 60, 120 and 200 columns, plus the raw PTY stream, 2026-10-09). Every

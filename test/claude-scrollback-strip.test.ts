@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { Session, isAltScreenStripMode, isMuxAltScreenOnlyStripMode } from '../src/session.js';
+import { Session, isAltScreenStripMode, isMuxAltScreenOnlyStripMode, isMuxMouseStripMode } from '../src/session.js';
+import { STOCK_CLIS } from '../src/config/cli-registry/stock.js';
+import { stripReplayBuffer } from '../src/web/routes/session-routes.js';
 
 type SessionInternals = {
   _handleTerminalOutput(data: string): void;
@@ -94,15 +96,93 @@ describe('Shell terminal output on a DIRECT PTY is NOT stripped (vim/less/htop n
 
 describe('isMuxAltScreenOnlyStripMode', () => {
   it('covers exactly the modes the full strip does not, and only under tmux', () => {
-    for (const mode of ['shell', 'opencode', 'antigravity'] as const) {
+    for (const mode of ['shell', 'antigravity'] as const) {
       expect(isMuxAltScreenOnlyStripMode(mode, true)).toBe(true);
       // Direct-PTY fallback: the program's own alt screen really does reach xterm.
       expect(isMuxAltScreenOnlyStripMode(mode, false)).toBe(false);
     }
-    // The full strip already owns these; never double-gate them here.
-    for (const mode of ['claude', 'codex', 'gemini'] as const) {
+    // The full strip and the mouse strip already own their modes; never double-gate.
+    for (const mode of ['claude', 'codex', 'gemini', 'opencode'] as const) {
       expect(isMuxAltScreenOnlyStripMode(mode, true)).toBe(false);
     }
+  });
+});
+
+/**
+ * opencode's TUI is a mouse-capable full-screen app: it enables tracking DECSETs,
+ * tmux `mouse off` passes them straight through to the tmux CLIENT, and xterm then
+ * reports DRAGS to the TUI instead of selecting locally. That killed "mark text,
+ * copy on select" intermittently — and the obvious fallback, Ctrl+C, is opencode's
+ * `app_exit`, so the failure also ended sessions.
+ *
+ * It needs the alt-screen strip AND the mouse strip, but NOT `3J`: opencode is a
+ * TUI, not a `clear` consumer, so keeping 3J is the conservative middle ground
+ * between the full strip and the narrow one.
+ */
+describe('opencode: alt-screen + mouse DECSETs stripped, 3J kept', () => {
+  it('is a mouse-strip mode under tmux, and only there', () => {
+    expect(isMuxMouseStripMode('opencode', true)).toBe(true);
+    // Direct-PTY fallback: the pane's own alt screen really does reach xterm.
+    expect(isMuxMouseStripMode('opencode', false)).toBe(false);
+    for (const mode of ['claude', 'codex', 'gemini', 'shell', 'antigravity'] as const) {
+      expect(isMuxMouseStripMode(mode, true)).toBe(false);
+    }
+  });
+
+  it('drops mouse tracking so xterm keeps local text selection', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'opencode', useMux: true });
+    const emitted: string[] = [];
+    session.on('terminal', (data) => emitted.push(data));
+
+    handleOutput(session, '\x1b[?1003h\x1b[?1006hTUI\x1b[?1006l\x1b[?1003l');
+
+    expect(emitted[0]).toBe('TUI');
+    expect(session.terminalBuffer).toBe('TUI');
+  });
+
+  it('still drops tmux’s attach-time smcup', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'opencode', useMux: true });
+
+    handleOutput(session, '\x1b[?1049h\x1b[22;0;0t\x1b[H\x1b[2Jprompt');
+
+    expect(session.terminalBuffer).toBe('\x1b[22;0;0t\x1b[H\x1b[2Jprompt');
+  });
+
+  it('KEEPS 3J, unlike the full strip', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'opencode', useMux: true });
+
+    handleOutput(session, '\x1b[3Jtext');
+
+    expect(session.terminalBuffer).toBe('\x1b[3Jtext');
+  });
+
+  it('publishes cliMouseTracking so the browser can hand-encode clicks', () => {
+    // xterm can never see the DECSETs once they are stripped, so the click path
+    // (_sendSyntheticSgrTap) is the only way a click still reaches opencode.
+    const session = new Session({ workingDir: '/tmp', mode: 'opencode', useMux: true });
+
+    handleOutput(session, '\x1b[?1003h\x1b[?1006h');
+
+    expect(session.toState().cliMouseTracking).toBe(true);
+  });
+
+  it('reassembles a mouse DECSET split across PTY chunks', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'opencode', useMux: true });
+
+    handleOutput(session, 'before\x1b[?100');
+    handleOutput(session, '3h after');
+
+    expect(session.terminalBuffer).toBe('before after');
+    expect(session.toState().cliMouseTracking).toBe(true);
+  });
+
+  it('leaves a direct-PTY opencode pane untouched', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'opencode', useMux: false });
+    const out = '\x1b[?1049h\x1b[?1003h';
+
+    handleOutput(session, out);
+
+    expect(session.terminalBuffer).toBe(out);
   });
 });
 
@@ -127,6 +207,17 @@ describe('tmux-backed shell: strip tmux’s own client smcup, keep everything el
     expect(session.terminalBuffer).toBe('\x1b[3J\x1b[?1002h\x1b[?1006hhtop\x1b[?1006l\x1b[?1002l');
   });
 
+  it('never publishes cliMouseTracking for a mode whose DECSETs it keeps', () => {
+    // The browser's `_shouldReportMouseToCli()` reads only this flag, with no mode
+    // list: a flag set for a non-stripping mode would make it hand-encode a second
+    // report on top of xterm's own. Only the mouse-strip branch may set it.
+    for (const mode of ['shell', 'antigravity'] as const) {
+      const session = new Session({ workingDir: '/tmp', mode, useMux: true });
+      handleOutput(session, '\x1b[?1002h\x1b[?1006hmouse app');
+      expect(session.toState().cliMouseTracking, mode).toBeFalsy();
+    }
+  });
+
   it('reassembles alt-screen sequences split across PTY chunk boundaries', () => {
     const session = new Session({ workingDir: '/tmp', mode: 'shell', useMux: true });
     const emitted: string[] = [];
@@ -139,12 +230,10 @@ describe('tmux-backed shell: strip tmux’s own client smcup, keep everything el
     expect(emitted).toEqual(['before', ' after']);
   });
 
-  it('applies to opencode and antigravity too', () => {
-    for (const mode of ['opencode', 'antigravity'] as const) {
-      const session = new Session({ workingDir: '/tmp', mode, useMux: true });
-      handleOutput(session, '\x1b[?1049hTUI\x1b[3J');
-      expect(session.terminalBuffer).toBe('TUI\x1b[3J');
-    }
+  it('applies to antigravity too (opencode has its own strip — see below)', () => {
+    const session = new Session({ workingDir: '/tmp', mode: 'antigravity', useMux: true });
+    handleOutput(session, '\x1b[?1049hTUI\x1b[3J');
+    expect(session.terminalBuffer).toBe('TUI\x1b[3J');
   });
 });
 
@@ -237,4 +326,43 @@ describe('stripped mouse-tracking state', () => {
     expect(trackingOf(session)).toBeUndefined();
     expect(session.terminalBuffer).toBe('\x1b[?1002hhtop');
   });
+});
+
+/**
+ * The decision table in `CliCapabilities.altScreen`'s JSDoc, pinned for every stock CLI
+ * with and without tmux, on both halves of the parity triangle that can drift apart: the
+ * live stream (`_handleTerminalOutput`) and the replay of a stored buffer
+ * (`stripReplayBuffer`, session-routes.ts). The frontend half reads only the published
+ * `cliMouseTracking`, so the last column is what keeps it right.
+ */
+describe('strip decision table: live stream = replay, for every stock CLI', () => {
+  const ALT = '\x1b[?1049h';
+  const ERASE = '\x1b[3J';
+  const MOUSE = '\x1b[?1002h\x1b[?1006h';
+  const input = `A${ALT}B${ERASE}C${MOUSE}D`;
+
+  /** Read straight off the table, not off the predicates under test. */
+  function expected(altScreen: string, useMux: boolean): { out: string; tracking: boolean } {
+    const strip = { alt: false, erase: false, mouse: false };
+    if (altScreen === 'strip-full') Object.assign(strip, { alt: true, erase: true, mouse: true });
+    else if (useMux && altScreen === 'strip-mux-and-mouse') Object.assign(strip, { alt: true, mouse: true });
+    else if (useMux) strip.alt = true; // strip-mux-only and preserve: the same runtime row
+    return {
+      out: `A${strip.alt ? '' : ALT}B${strip.erase ? '' : ERASE}C${strip.mouse ? '' : MOUSE}D`,
+      tracking: strip.mouse,
+    };
+  }
+
+  for (const entry of STOCK_CLIS) {
+    for (const useMux of [true, false]) {
+      it(`${entry.id} (${entry.capabilities.altScreen}, ${useMux ? 'tmux' : 'direct PTY'})`, () => {
+        const want = expected(entry.capabilities.altScreen, useMux);
+        const session = new Session({ workingDir: '/tmp', mode: entry.id, useMux });
+        handleOutput(session, input);
+        expect(session.terminalBuffer).toBe(want.out);
+        expect(stripReplayBuffer(input, entry.id, useMux)).toBe(want.out);
+        expect(Boolean(session.toState().cliMouseTracking)).toBe(want.tracking);
+      });
+    }
+  }
 });
