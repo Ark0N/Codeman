@@ -1838,6 +1838,9 @@ Object.assign(CodemanApp.prototype, {
     // registers its own listener with `capture: true`; on bubble xterm's
     // `cancel()` (stopPropagation) would swallow exactly the handled events —
     // see the measured table in terminal-keycode229-recovery.js.
+    // Twin: TerminalTile (terminal-tile.js _createKeyCode229Recovery and its
+    // connect() key handler and onData) wires its own controller the same way
+    // for every grid tile and the split's Pane B; keep the two in step.
     try {
       this._keyCode229Recovery = window.CodemanKeyCode229Recovery?.create?.({
         textarea: this.terminal.textarea,

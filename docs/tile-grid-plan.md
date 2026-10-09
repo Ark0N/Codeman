@@ -224,7 +224,11 @@ no `+`, owner decision 9).
   mouse-wheel forwarding to Claude's fullscreen renderer, the "Load full
   history" banner. These exist for touch devices or rare cases; a desktop
   keyboard user types straight into xterm, which is how Codeman behaved before
-  those features existed.
+  those features existed. (One exception, since the 1180 px gate is width
+  only and a wide Android tablet clears it: every tile wires the main
+  terminal's keyCode-229 soft-keyboard controller, terminal-keycode229-recovery.js,
+  so an Android autocorrect is sent as an edit rather than a duplicated line,
+  #541, and a character committed with Enter is not lost, #441.)
 - Server-side persistence of grids (named presets per owner).
 - Pop-out windows (`/session/:id`, solo mode) showing a grid.
 

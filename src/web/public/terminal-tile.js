@@ -10,7 +10,7 @@
  * synchronous tmux call that blocks the server's event loop.
  *
  * Deliberately plainer than the primary pane (this.terminal/this._ws in
- * terminal-ui.js): no local-echo overlay, no CJK IME, no touch/mobile
+ * terminal-ui.js): no local-echo overlay, no CJK IME textarea, no touch/mobile
  * handlers (a swipe on a touch screen pages nothing), no keyboard accessory
  * bar, and no SGR wheel forwarding to Claude's fullscreen renderer
  * (docs/tile-grid-plan.md follow-up 4). Built for wide screens; see
@@ -28,10 +28,21 @@
  *  - The desktop click report: a plain left-click hand-encoded as SGR while
  *    the session's CLI has mouse tracking on (cliMouseTracking), for the modes
  *    whose mouse DECSETs the server strips (_installClickListener).
+ *  - The soft-keyboard controller (terminal-keycode229-recovery.js), one per
+ *    pane, on this pane's own textarea and composition helper and sending to
+ *    this pane's session (_createKeyCode229Recovery): it forwards an
+ *    `insertText` xterm refused, settles a pending textarea edit at the next
+ *    keydown ahead of that key (#441: the last character an Android keyboard
+ *    commits in the same task as Enter), and replaces xterm's append-only
+ *    keyCode-229 diff with an edit-based one (#541: autocorrect on space
+ *    duplicated the line). Not a desktop-only concern: the grid and the split
+ *    are gated on width alone (SPLIT_PANE_MIN_WIDTH, 1180 CSS px), which a wide
+ *    Android tablet, or a large foldable unfolded in landscape, reaches.
  *
  * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js
  * @dependency constants.js (window.CodemanTerminalFont, window.CodemanFetchDeadline, DEFAULT_SCROLLBACK, TERMINAL_TAIL_SIZE, TERMINAL_CHUNK_SIZE)
- * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight, CodemanTerminalInput.wheelDeltaLines/pageKeysForTravel, app._shouldForwardWheelToApp/_localScrollbackIsHollow/_handleDesktopTerminalClick)
+ * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight, CodemanTerminalInput.shouldSuppressTerminalQueryResponse/isTerminalFocusOrMouseReport/wheelDeltaLines/pageKeysForTravel, app._shouldForwardWheelToApp/_localScrollbackIsHollow/_handleDesktopTerminalClick)
+ * @dependency terminal-keycode229-recovery.js (window.CodemanKeyCode229Recovery, optional: absent, xterm's own textarea handling stands)
  * @loadorder 7.4 of 16, loaded after terminal-ui.js and before terminal-split.js
  */
 
@@ -185,6 +196,9 @@
       this._overflowRows = 0;
       // The desktop click reporter (_installClickListener).
       this._onClick = null;
+      // The soft-keyboard controller (terminal-keycode229-recovery.js): created
+      // in connect() once the xterm is open, torn down in destroy().
+      this._keyCode229Recovery = null;
     }
 
     async connect() {
@@ -227,7 +241,26 @@
       this._onFocusIn = () => global.app?._noteFocusedTile?.(this);
       this.terminal.textarea?.addEventListener('focus', this._onFocusIn);
 
-      this.terminal.onData((data) => this._onTerminalData(data));
+      this._createKeyCode229Recovery();
+      // The twin of terminal-ui.js's onData gate (initTerminal; keep the two in
+      // step). Canonical xterm data tells the controller this keystroke was
+      // delivered, but not a query reply or a focus/mouse report, which xterm
+      // emits on its own and which would otherwise stand a pending recovery
+      // down. The notify lives HERE and not in _onTerminalData(): the
+      // controller's own recovered bytes go through _onTerminalData() too, and
+      // must never count as xterm's, or a second pending character from the
+      // same keystroke window would stand down and be lost.
+      this.terminal.onData((data) => {
+        try {
+          const input = global.CodemanTerminalInput;
+          if (!input?.shouldSuppressTerminalQueryResponse?.(data) && !input?.isTerminalFocusOrMouseReport?.(data)) {
+            this._keyCode229Recovery?.notifyCanonicalData?.();
+          }
+        } catch {
+          /* Bookkeeping must never block real input. */
+        }
+        this._onTerminalData(data);
+      });
 
       // xterm has no gates of its own, so every app-level chord that the
       // document capture-phase handler (app.js) only preventDefault()s (never
@@ -242,6 +275,19 @@
       // here too. Ctrl+V goes through the primary pane's paste trap
       // (image-input.js), aimed at this pane (below).
       this.terminal.attachCustomKeyEventHandler((ev) => {
+        // FIRST, above the IME early return below, as in terminal-ui.js: every
+        // keydown settles this pane's pending textarea edit and drains a
+        // pending recovery BEFORE xterm handles the key, so a character an
+        // Android keyboard committed in the same task as Enter is sent ahead
+        // of the \r. Below that return a keyCode-229 keydown would skip the
+        // settle, the drain and the snapshot, and the panes would differ.
+        // Read at call time, never captured, so the controller can be swapped
+        // (the tests count xterm's emissions through it).
+        try {
+          this._keyCode229Recovery?.handleKeyEvent?.(ev);
+        } catch {
+          /* The controller must never interfere with xterm's own handling. */
+        }
         if (ev.isComposing || ev.key === 'Process' || ev.keyCode === 229) return true;
         if (
           ev.altKey &&
@@ -550,6 +596,44 @@
         return;
       }
       app?._sendInputAsync?.(this.sessionId, data);
+    }
+
+    // The soft-keyboard controller, the twin of the primary pane's wiring in
+    // terminal-ui.js initTerminal() (keep the two in step); the behaviour lives
+    // once, in terminal-keycode229-recovery.js. Everything it is handed is THIS
+    // pane's: its textarea, its xterm's CompositionHelper (whose
+    // `_handleAnyTextareaChanges` it patches, per instance) and its send path.
+    // Recovered text goes straight to _onTerminalData(), never through xterm's
+    // onData, so it is not counted as xterm's own (see connect()'s onData).
+    // Created after terminal.open(): xterm's capture `input` listener on the
+    // textarea is registered there, and must run before the controller's. No
+    // device or mode gate, as in the primary pane: with a hardware keyboard it
+    // costs one assignment per keydown. A failure leaves xterm's own handling.
+    _createKeyCode229Recovery() {
+      this._destroyKeyCode229Recovery();
+      if (!this.terminal) return;
+      try {
+        this._keyCode229Recovery =
+          global.CodemanKeyCode229Recovery?.create?.({
+            textarea: this.terminal.textarea,
+            emitRecovered: (data) => this._onTerminalData(data),
+            getCompositionHelper: () => this.terminal?._core?._compositionHelper,
+            isScreenReaderMode: () => this.terminal?.options?.screenReaderMode === true,
+          }) ?? null;
+      } catch {
+        this._keyCode229Recovery = null;
+      }
+    }
+
+    // Restores xterm's own textarea diff and removes the controller's capture
+    // listeners from the live textarea, so it runs before terminal.dispose().
+    _destroyKeyCode229Recovery() {
+      try {
+        this._keyCode229Recovery?.destroy?.();
+      } catch {
+        /* Optional; teardown must continue. */
+      }
+      this._keyCode229Recovery = null;
     }
 
     // Joins the app's input-socket map for this session and flushes anything
@@ -1154,6 +1238,10 @@
         this.terminal?.textarea?.removeEventListener('focus', this._onFocusIn);
         this._onFocusIn = null;
       }
+      // Before dispose(): puts xterm's own textarea diff back and takes the
+      // controller's listeners off the textarea; its pending timers are inert
+      // once it is destroyed.
+      this._destroyKeyCode229Recovery();
       // A destroyed pane cannot hold the keyboard: shortcuts fall back to the
       // primary terminal (_focusedPane also skips a destroyed tile on its own).
       if (global.app?._focusedTile === this) global.app._noteFocusedTile?.(null);

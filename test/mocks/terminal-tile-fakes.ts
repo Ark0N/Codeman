@@ -70,6 +70,12 @@ export class FakeTerminal {
    * puts it.
    */
   static emulateScroll = false;
+  /**
+   * Opt-in, set by a test BEFORE the tile connects (and reset after): extra
+   * fields merged into `_core`, e.g. xterm's `_compositionHelper` for the
+   * keyCode-229 controller, which reads it once when the tile creates it.
+   */
+  static coreFactory: ((term: FakeTerminal) => Record<string, unknown>) | null = null;
   options: Record<string, unknown>;
   cols = 80;
   rows = 24;
@@ -88,7 +94,10 @@ export class FakeTerminal {
     querySelector: (sel: string) =>
       sel === '.xterm-screen' ? { getBoundingClientRect: () => ({ ...this.screenRect }) } : null,
   };
-  _core = { _renderService: { dimensions: { css: { cell: { width: 8, height: 16 } } } } };
+  _core: Record<string, unknown> = {
+    _renderService: { dimensions: { css: { cell: { width: 8, height: 16 } } } },
+    ...(FakeTerminal.coreFactory?.(this) ?? {}),
+  };
   constructor(options: Record<string, unknown>) {
     this.options = { ...options };
     FakeTerminal.last = this;
@@ -109,12 +118,26 @@ export class FakeTerminal {
   }
   keyHandler: ((ev: Record<string, unknown>) => boolean) | null = null;
   focusListeners: Array<() => void> = [];
+  /** Every other textarea listener, with the capture flag it was added with (the keyCode-229 controller's). */
+  textareaListeners: Array<{ type: string; fn: (ev: Record<string, unknown>) => void; capture: unknown }> = [];
   textarea = {
-    addEventListener: (type: string, fn: () => void) => {
-      if (type === 'focus') this.focusListeners.push(fn);
+    /** The helper textarea's text, which xterm's keyCode-229 diff (and the controller's) reads. */
+    value: '',
+    addEventListener: (type: string, fn: (ev?: Record<string, unknown>) => void, capture?: unknown) => {
+      if (type === 'focus') this.focusListeners.push(fn as () => void);
+      else this.textareaListeners.push({ type, fn, capture });
     },
-    removeEventListener: (type: string, fn: () => void) => {
+    removeEventListener: (type: string, fn: (ev?: Record<string, unknown>) => void, capture?: unknown) => {
       if (type === 'focus') this.focusListeners = this.focusListeners.filter((f) => f !== fn);
+      else {
+        this.textareaListeners = this.textareaListeners.filter(
+          (l) => !(l.type === type && l.fn === fn && Boolean(l.capture) === Boolean(capture))
+        );
+      }
+    },
+    /** Delivers `ev` to the textarea's listeners of `type`, in registration order. */
+    fire: (type: string, ev: Record<string, unknown> = {}) => {
+      for (const l of this.textareaListeners.filter((x) => x.type === type)) l.fn({ type, ...ev });
     },
   };
   focusTextarea() {
