@@ -670,53 +670,85 @@ describe('TerminalTile scroll-to-top history pull', () => {
     expect(pane.terminal.write).toHaveBeenCalledWith('refreshed');
   });
 
-  it('a clear frame during the pull is queued in order, never applied under the replay', async () => {
+  // The server's `{t:'c'}` means "refresh after startup" (its one emitter is a
+  // fresh Claude pane's first prompt, session.ts), and the primary pane answers
+  // it with a refetch and replay (_onSessionClearTerminal). The three below
+  // replace two tests that pinned it as a bare xterm clear(), which kept only
+  // the cursor's row: a Claude session Run into the grid came up a near-empty
+  // tile.
+  it('a clear frame during the pull is coalesced into one refresh behind it, never applied under the replay', async () => {
     const pane = makePane('shell');
     const term = pane.terminal;
     const order: string[] = [];
     term.write.mockImplementation((data: string, done?: () => void) => {
-      order.push(`write:${data}`);
+      if (data) order.push(`write:${data}`);
       done?.();
     });
     term.clear.mockImplementation(() => order.push('clear'));
     const held = headersOnly();
-    fetchMock.mockResolvedValueOnce(held.response);
+    fetchMock.mockResolvedValueOnce(held.response).mockResolvedValueOnce(jsonResponse('after startup'));
 
     pane._maybeLoadMoreHistory();
     await settle();
     pane._onLiveOutput('before');
     pane._onLiveClear();
+    pane._onLiveClear(); // a second one joins the same trailing refresh
     pane._onLiveOutput('after');
-    // Held: clearing now would wipe a half-written snapshot.
+    // Held: nothing touches the screen under the pull, and nothing fetches yet.
     expect(order).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(pane._bufferRefreshPending).toBe(true);
 
     held.release(rowsOf(30)); // nothing to gain: no replay
     await settle();
 
-    expect(order).toEqual(['write:before', 'clear', 'write:after']);
+    // The held frames land in order, then ONE refresh fetches the pane's
+    // current screen and replays it last.
+    expect(order.slice(0, 2)).toEqual(['write:before', 'write:after']);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `/api/sessions/s1/terminal?tail=${TERMINAL_TAIL_SIZE}`,
+      expect.anything()
+    );
+    expect(order.at(-1)).toBe('write:after startup');
     expect(pane._liveQueue).toBeNull();
-
-    // With nothing in flight a clear frame applies straight away.
-    pane._onLiveClear();
-    expect(order.at(-1)).toBe('clear');
+    expect(pane._bufferLoading).toBe(false);
+    expect(pane._bufferRefreshPending).toBe(false);
   });
 
-  it('a clear that arrived before the capture is not replayed after it', async () => {
+  it('a clear frame with nothing in flight refetches the capture and replays it, like a refresh frame', async () => {
+    const pane = makePane();
+    fetchMock.mockResolvedValueOnce(jsonResponse('banner\r\n❯ '));
+
+    pane._onLiveClear();
+    await settle();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith('/api/sessions/s1/terminal?full=1', expect.anything());
+    expect(screenWrites(pane).at(-1)).toBe('banner\r\n❯ ');
+    expect(pane._bufferLoading).toBe(false);
+  });
+
+  it('a clear frame while a pull waits for its response does not touch the screen, and refreshes behind the pull', async () => {
     const pane = makePane('shell');
     const term = pane.terminal;
     const response = deferred<ReturnType<typeof jsonResponse>>();
-    fetchMock.mockReturnValueOnce(response.promise);
+    fetchMock.mockReturnValueOnce(response.promise).mockResolvedValueOnce(jsonResponse('refreshed'));
 
     pane._maybeLoadMoreHistory();
     clock = 1;
-    pane._onLiveClear(); // before the response: applied now, already in the capture
-    expect(term.clear).toHaveBeenCalledTimes(1);
+    pane._onLiveClear(); // before the response
+    expect(term.clear).not.toHaveBeenCalled();
+    expect(pane._bufferRefreshPending).toBe(true);
     clock = 2;
     response.resolve(jsonResponse(rowsOf(100)));
     await settle();
 
-    expect(term.write).toHaveBeenCalledWith('\x1bc');
-    expect(term.clear).toHaveBeenCalledTimes(1); // not replayed after the capture
+    const writes = screenWrites(pane);
+    expect(writes).toContain(rowsOf(100)); // the pull still replayed
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(writes.at(-1)).toBe('refreshed');
+    expect(pane._bufferLoading).toBe(false);
   });
 
   it('destroy() mid-pull leaves nothing running and nothing written to the dead terminal', async () => {

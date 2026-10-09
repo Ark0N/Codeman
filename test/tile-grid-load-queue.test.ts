@@ -278,6 +278,24 @@ describe('refreshes', () => {
     expect(b.terminal?.writes.slice(-2)).toEqual(['<CLEAR>', 'fresh']);
   });
 
+  it("a server {t:'c'} (a Claude pane's first prompt) is a refresh through the same queue", async () => {
+    const { tiles } = makeGrid(['a', 'b']);
+    await connectAll(tiles);
+    const [a, b] = tiles;
+    a.ws?.receive({ t: 'r' });
+    b.ws?.receive({ t: 'c' });
+    await settle();
+
+    // b waits behind a, like any refresh: one capture in flight.
+    expect(captures.map((c) => c.url.split('/')[3])).toEqual(['a']);
+    expect(await drain('banner')).toBe(1);
+    expect(captures.map((c) => c.url)).toEqual([
+      `/api/sessions/a/terminal?full=1&tail=${TAIL}${LINES}`,
+      `/api/sessions/b/terminal?full=1&tail=${TAIL}${LINES}`,
+    ]);
+    expect(b.terminal?.writes.at(-1)).toBe('banner');
+  });
+
   it('a history pull jumps ahead of background refreshes', async () => {
     const { tiles } = makeGrid(['a', 'b', 'sh'], { modes: { sh: 'shell' } });
     await connectAll(tiles);

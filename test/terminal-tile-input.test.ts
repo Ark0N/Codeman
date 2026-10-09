@@ -387,6 +387,55 @@ describe('TerminalTile reconnects after a transient drop', () => {
   });
 });
 
+describe("the server's {t:'c'} frame refreshes the tile (a Claude pane's first prompt)", () => {
+  // Session.startInteractive (session.ts) sends it once a fresh Claude pane
+  // shows its prompt, meaning "refresh after startup"; the primary pane refetches
+  // and replays (_onSessionClearTerminal). A tile used to run a bare xterm
+  // clear(), which kept only the cursor's row: banner and transcript gone, and an
+  // idle Claude never repaints them.
+  it('refetches the capture and replays it, never a bare clear', async () => {
+    const { ws, term } = await connectTile(makeApp());
+    ws.open();
+    fetchMock.mockClear();
+    fetchMock.mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { terminalBuffer: 'Claude Code banner\r\n❯ ' } }),
+    }));
+
+    ws.receive({ t: 'o', d: 'banner painted live' });
+    ws.receive({ t: 'c' });
+    await settle();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/sessions/s-tile/terminal?full=1');
+    expect(term.writes.at(-1)).toBe('Claude Code banner\r\n❯ ');
+  });
+
+  it('two clear frames during one refresh fetch once more, not twice', async () => {
+    const { ws } = await connectTile(makeApp());
+    ws.open();
+    fetchMock.mockClear();
+    let release!: () => void;
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolveFetch) => {
+          release = () =>
+            resolveFetch({ ok: true, status: 200, json: async () => ({ data: { terminalBuffer: 'a' } }) });
+        })
+    );
+
+    ws.receive({ t: 'c' });
+    ws.receive({ t: 'c' });
+    ws.receive({ t: 'c' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    release();
+    await settle();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('TerminalTile stops for good on codes that cannot get better', () => {
   it.each([
     [4004, 'the session ended'],

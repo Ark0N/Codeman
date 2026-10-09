@@ -810,19 +810,20 @@
       else this.terminal?.write(data);
     }
 
-    // The server's `{t:'c'}` clear frame takes the same route as output, for the
-    // same reason: clearing straight away, mid-replay, would wipe the half-written
-    // snapshot and leave _pullHistory() measuring a buffer that is no longer the
-    // one it is restoring. Queued, it lands in order with the frames around it.
+    // The server's `{t:'c'}` frame, which is a refresh, not a wipe. Its one
+    // emitter (Session.startInteractive, session.ts) sends it once a fresh Claude
+    // pane first shows its prompt: the server has just trimmed its own buffer and
+    // means "refresh after startup". The primary pane refetches the capture and
+    // replays it (_onSessionClearTerminal, app.js), and while the grid is open
+    // that handler stands aside for the tiles. A bare xterm clear() here kept
+    // only the cursor's row and dropped the banner and every row above it, and an
+    // idle Claude never repaints static rows, so a Claude session Run into the
+    // grid (or Attached in a tile) sat there as a near-empty tile. So it takes
+    // the `{t:'r'}` route: single-flight, coalesced into one trailing refresh
+    // behind a load already running (a pull's held frames included), and paced
+    // by the grid's load queue.
     _onLiveClear() {
-      if (this._liveQueue) this._liveQueue.push({ at: performance.now(), clear: true });
-      else this._clearTerminal();
-    }
-
-    // A clear leaves no rows above the screen, the pane's own overflow included.
-    _clearTerminal() {
-      this.terminal?.clear();
-      this._overflowRows = 0;
+      this._refreshBuffer();
     }
 
     // Capture phase, because xterm's own wheel handler stopPropagation()s every
@@ -931,8 +932,8 @@
     }
 
     // History rows in this xterm, for the paging gate: baseY less the rows this
-    // pane pushed up itself. Clamped, because a clear (Ctrl+L, a `{t:'c'}`
-    // frame) or an ED3/RIS in the stream drops rows behind this count's back.
+    // pane pushed up itself. Clamped, because a clear (Ctrl+L) or an ED3/RIS in
+    // the stream drops rows behind this count's back.
     _localRows() {
       const baseY = this.terminal?.buffer?.active?.baseY || 0;
       this._overflowRows = Math.min(this._overflowRows, baseY);
@@ -1103,8 +1104,7 @@
         const cutoff = replayed ? capturedAt : 0;
         for (const entry of queued) {
           if (entry.at < cutoff) continue;
-          if (entry.clear) this._clearTerminal();
-          else this.terminal?.write(entry.data);
+          this.terminal?.write(entry.data);
         }
         // Settled after the queue flush so the marker is the last thing on
         // screen: a close during the pull wrote nothing (_onSocketClosed() defers
