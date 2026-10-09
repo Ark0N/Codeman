@@ -1211,17 +1211,26 @@ const KeyboardAccessoryBar = {
    *  the durable session-bound path. Enter stays a separate delayed write
    *  because Codex drops keys sharing a PTY read with a bracketed paste. */
   _sendComposedPrompt(sessionId, text) {
+    if (!this._sendBracketedPaste(sessionId, text, 'Prompt')) return false;
+    setTimeout(() => app._sendInputAsync(sessionId, '\r', { useMux: true }), 120);
+    return true;
+  },
+
+  /** One bracketed-paste write on the durable session-bound path, the same
+   *  bytes a terminal paste produces, so the receiving shell or CLI takes a
+   *  multi-line block as one edit. Never presses Enter: callers decide.
+   *  `label` names the payload in the too-long toast. */
+  _sendBracketedPaste(sessionId, text, label) {
     if (!sessionId || !text || typeof app._sendInputAsync !== 'function') return false;
     app._predictiveEcho?.clearPredictions();
     // Match xterm's prepareTextForTerminal(): CR keeps embedded newlines inside
     // the single-line input transport and is what terminal.paste() emitted.
     const pasteText = text.replace(/\r?\n/g, '\r');
     if (pasteText.length > this._composerMaxLength) {
-      app.showToast?.(`Prompt is too long to send (maximum ${this._composerMaxLength.toLocaleString()} characters)`, 'error');
+      app.showToast?.(`${label} is too long to send (maximum ${this._composerMaxLength.toLocaleString()} characters)`, 'error');
       return false;
     }
     app._sendInputAsync(sessionId, `${COMPOSER_PASTE_START}${pasteText}${COMPOSER_PASTE_END}`);
-    setTimeout(() => app._sendInputAsync(sessionId, '\r', { useMux: true }), 120);
     return true;
   },
 
@@ -1408,6 +1417,9 @@ const KeyboardAccessoryBar = {
    *  uploads to /api/sessions/:id/paste-image and inserts the saved path. */
   pasteFromClipboard() {
     if (typeof app === 'undefined' || !app.activeSessionId) return;
+    // The shell this overlay was opened for: a tab switch while it is open must
+    // not deliver the paste to whatever session is active at Send time.
+    const sessionId = app.activeSessionId;
 
     // Create overlay
     const overlay = document.createElement('div');
@@ -1429,13 +1441,18 @@ const KeyboardAccessoryBar = {
 
     const close = () => overlay.remove();
 
+    // Only shell sessions reach this overlay (agent bars get Compose instead),
+    // so the text lands at the prompt as one bracketed paste and is NOT run:
+    // sent raw, every newline was an Enter and each line ran on its own as it
+    // arrived. The user reviews the block and presses Enter themselves.
     const sendText = () => {
       const text = textarea.value;
-      close();
-      if (text) {
-        app.sendInput(text);
-        setTimeout(() => app.sendInput('\r'), 80);
+      if (!text) {
+        close();
+        return;
       }
+      // A refused (too-long) paste keeps the dialog and its text for trimming.
+      if (this._sendBracketedPaste(sessionId, text, 'Paste')) close();
     };
 
     // Filter to images, close the dialog, and hand off to the shared
