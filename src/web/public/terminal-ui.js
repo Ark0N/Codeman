@@ -4605,6 +4605,15 @@ Object.assign(CodemanApp.prototype, {
   /** Insert editable text at the active prompt without pressing Enter. */
   insertTerminalText(text) {
     if (!this.activeSessionId || !text) return;
+    // A tile or the split's Pane B holds the keyboard: the text belongs to that
+    // pane's session. Those panes have no local-echo overlay, and the main
+    // overlay is parked behind the grid, so send it straight to the pane.
+    const pane = this._focusedPane?.();
+    if (pane && !pane.isPrimary) {
+      this._sendInputAsync(pane.sessionId, text);
+      pane.terminal?.focus();
+      return;
+    }
     // Under predict the text goes out via sendInput (bypasses onData), so the
     // hook never sees it: clear outstanding predictions here instead.
     if (this._localEchoPolicy === 'predict') this._predictiveEcho?.clearPredictions();
@@ -4628,6 +4637,16 @@ Object.assign(CodemanApp.prototype, {
     if (!this.activeSessionId) return;
 
     if (typeof CjkInput !== 'undefined') CjkInput.clear();
+    // A tile or Pane B holds the keyboard: its TUI owns the editable buffer
+    // (no local-echo overlay there), so kill the line in that pane's session,
+    // never in the parked main pane's.
+    const pane = this._focusedPane?.();
+    if (pane && !pane.isPrimary) {
+      this._sendInputAsync(pane.sessionId, '\x15');
+      this.showToast?.('Input cleared', 'success');
+      pane.terminal?.focus();
+      return;
+    }
     if (this._inputFlushTimeout) {
       clearTimeout(this._inputFlushTimeout);
       this._inputFlushTimeout = null;
