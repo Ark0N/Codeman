@@ -777,7 +777,7 @@ Admin only in multi-user mode (`403`), like `POST /api/cases/link`: it writes ou
 
 Both routes accept two optional query parameters, which the UI sends from its per-device settings and the server clamps again: `maxRepos` (1 to 50, default 12) and `timeout` (seconds one git command may run, 5 to 120, default 30). An empty or non-numeric value means the default. A repository whose `git status` fails (typically a timeout on a slow network share) is **kept in `repos[]`** with `status.state: 'error'` and the reason in `status.error`, not dropped, so it is visible that something is not being reported.
 
-`data` is `{ state, repos, reposTruncated, repoLimit, checkedAt }`:
+`data` is `{ state, repos, reposTruncated, repoLimit, checkedAt }` (`repoLimit` in the folder-of-projects case only):
 
 - `state: 'ok'`: `repos[]`, each `{ name, path, status }` where `name` is the repository folder's name, `path` its root relative to the working directory, and `status` is:
   `branch` (null when `detached`), `upstream`, `ahead`, `behind`, `hasRemote`, `counts` (`staged`, `unstaged`, `untracked`, `conflicted`, `uncommitted` = distinct paths, `stashes`), `files[]` (`path` relative to `repoRoot`, `origPath` for a rename, `index` and `worktree` status letters, `kind`: `staged` \| `unstaged` \| `untracked` \| `conflicted`; a file that is staged *and* modified again appears once per kind), `filesTruncated`, `unpushedCount` (exact) and `unpushed[]` (newest first: `hash`, `author`, `time` in epoch seconds, `subject`), `repoRoot`, `checkedAt`.

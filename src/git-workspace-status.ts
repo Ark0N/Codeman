@@ -15,8 +15,8 @@
  *     subfolder reports its whole enclosing repo; a nested repo below it is just an untracked folder
  *     to the outer one, and is not scanned;
  *   - NOT inside one (a folder that holds several projects): every repository found up to two levels
- *     DOWN (`MAX_REPOS` of them, skipping dot-folders, `node_modules` and the like, never following
- *     symlinks), each reported separately;
+ *     DOWN (the caller's `maxRepos` of them, `MAX_REPOS` by default, skipping dot-folders, `node_modules`
+ *     and the like, never following symlinks), each reported separately;
  *   - a repository that merely sits ABOVE the workspace and is the home folder or higher (a dotfiles
  *     repo in `$HOME`, or `/`) is ignored: its dirty files are not this session's work.
  *

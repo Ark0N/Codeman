@@ -63,8 +63,9 @@ Ultracode Windows, Cron.
 
 **Bottom bar** (below the chips): **Git status** shows a small indicator at the right of the
 bottom bar, off by default and per device. It reads `● N` uncommitted files, `↑ N` commits not
-pushed, `⚠ N` merge conflicts, or `✓` when everything is committed and pushed. Click it for the
-Git window; see [Working With Files](Working-With-Files#git-changes). **Git status: group files
+pushed, `⚠ N` merge conflicts, `? N` repositories git could not read, or `✓` when everything is
+committed and pushed. Click it for the Git window; see
+[Working With Files](Working-With-Files#git-changes). **Git status: group files
 by folder** (per device, on by default) shows changed files under collapsed folders in that
 window; off lists every file by its full path. **Git status: max repositories** (per device,
 1 to 50, default 12) is how many repositories the window lists when a session's folder holds

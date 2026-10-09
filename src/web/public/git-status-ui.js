@@ -197,7 +197,7 @@ Object.assign(CodemanApp.prototype, {
     if (sum.repos > 1) where = `${sum.repos} repositories`;
     else {
       const d = overview.repos[0].status;
-      where = d.detached ? 'detached HEAD' : d.branch || 'no branch';
+      where = d.state === 'error' ? overview.repos[0].name : d.detached ? 'detached HEAD' : d.branch || 'no branch';
     }
     return `Git (${where}): ${bits.join(', ')}. Click for details.`;
   },
@@ -358,13 +358,15 @@ Object.assign(CodemanApp.prototype, {
     }
 
     const repos = overview.repos;
-    if (repos.length === 1) {
-      // One repository: the panel is that repository, as it always was.
+    if (repos.length === 1 && repos[0].status.state !== 'error' && !overview.reposTruncated) {
+      // One repository: the panel is that repository, as it always was. One that git could not read,
+      // or the only one shown of several (the limit is 1), takes the list view below instead, so its
+      // error row or the "Showing the first" notice is not lost.
       const d = repos[0].status;
       if (head) head.textContent = d.detached ? 'detached HEAD' : d.branch || '';
       this._renderGitRepoInto(body, d);
     } else {
-      if (head) head.textContent = `${repos.length} repositories`;
+      if (head) head.textContent = repos.length === 1 ? '1 repository' : `${repos.length} repositories`;
       for (const r of repos) body.append(this._gitRepoSection(r));
       if (overview.reposTruncated) {
         body.append(

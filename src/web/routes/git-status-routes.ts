@@ -39,10 +39,12 @@ const defaultDockerWorkspaces = async (): Promise<string[]> =>
  * `maxRepos` and `timeout` (seconds) query parameters, each clamped to a safe range, so an odd value
  * can never cost more than the module's own ceiling.
  */
-function limitsFrom(query: { maxRepos?: string; timeout?: string }) {
+function limitsFrom(query: { maxRepos?: unknown; timeout?: unknown }) {
+  // A repeated key arrives as an array: it is not a number, so it means "default" like '' and absent.
+  const timeout = typeof query.timeout === 'string' && query.timeout.trim() ? query.timeout : undefined;
   return resolveOverviewLimits({
     maxRepos: query.maxRepos,
-    timeoutMs: query.timeout?.trim() ? Number(query.timeout) * 1000 : undefined, // '' and absent mean "default"
+    timeoutMs: timeout !== undefined ? Number(timeout) * 1000 : undefined,
   });
 }
 
@@ -54,7 +56,7 @@ export function registerGitStatusRoutes(
 ): void {
   app.get('/api/sessions/:id/git-status', async (req): Promise<ApiResponse<GitWorkspaceOverview>> => {
     const { id } = req.params as { id: string };
-    const query = req.query as { fresh?: string; maxRepos?: string; timeout?: string };
+    const query = req.query as { fresh?: string; maxRepos?: unknown; timeout?: unknown };
     const { fresh } = query;
     const limits = limitsFrom(query);
     const session = findSessionOrFail(ctx, id, req);
@@ -78,7 +80,7 @@ export function registerGitStatusRoutes(
   // repository's status is refreshed: a click must not re-read every repository in the folder.
   app.get('/api/sessions/:id/git-diff', async (req, reply): Promise<ApiResponse<GitFileDiff>> => {
     const { id } = req.params as { id: string };
-    const query = req.query as { repo?: string; path?: string; kind?: string; maxRepos?: string; timeout?: string };
+    const query = req.query as { repo?: string; path?: string; kind?: string; maxRepos?: unknown; timeout?: unknown };
     const { repo, path, kind } = query;
     const limits = limitsFrom(query);
     const session = findSessionOrFail(ctx, id, req);

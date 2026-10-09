@@ -168,7 +168,7 @@ surface as an artifact attachment rather than a path you have to go and find.
 Agents often leave work uncommitted or unpushed. Turn on **App Settings → Header & Panels →
 Bottom bar → Git status** (per device, off by default) and the right of the bottom bar shows
 the active session's repository: `● 3` uncommitted files, `↑ 2` commits not pushed, `⚠` merge
-conflicts, `✓` when everything is committed and pushed.
+conflicts, `? 1` a repository git could not read, `✓` when everything is committed and pushed.
 
 Click it for a draggable window, in the style of the File Viewer:
 

@@ -339,6 +339,15 @@ describe('GET /api/sessions/:id/git-status limits', () => {
     clearGitStatusCache();
     await app.inject({ method: 'GET', url: '/api/sessions/test-session-1/git-status?maxRepos=&timeout=&fresh=1' });
     expect(seen.at(-1)).toBe(30_000); // empty means "not given", not 0
+
+    // A repeated key reaches the route as an array: it means "default", never a 500.
+    clearGitStatusCache();
+    const repeated = await app.inject({
+      method: 'GET',
+      url: '/api/sessions/test-session-1/git-status?timeout=5&timeout=6&fresh=1',
+    });
+    expect(repeated.statusCode).toBe(200);
+    expect(seen.at(-1)).toBe(30_000);
   });
 });
 

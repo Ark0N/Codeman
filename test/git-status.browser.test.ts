@@ -469,6 +469,47 @@ describe('Git status indicator in a real browser', () => {
     expect(await label()).toContain('? 1');
     expect(await label()).not.toContain('✓');
     expect(await page.getAttribute('#gitStatusBtn', 'title')).toMatch(/1 repository could not be read/);
+
+    const mockOverview = async (data: Record<string, unknown>) => {
+      await page.unroute('**/api/sessions/*/git-status*');
+      await page.route('**/api/sessions/*/git-status*', (route) =>
+        route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({ success: true, data: { state: 'ok', checkedAt: Date.now(), ...data } }),
+        })
+      );
+      await refresh();
+    };
+    // The ONLY repository git could not read: still the error row, never a clean, empty repository.
+    await mockOverview({
+      reposTruncated: false,
+      repoLimit: 12,
+      repos: [
+        {
+          name: 'slow',
+          path: 'slow',
+          status: status({ state: 'error', error: 'git timed out', branch: null, hasRemote: false, upstream: null }),
+        },
+      ],
+    });
+    await page.waitForFunction(() => document.getElementById('gitStatusBranch')?.textContent === '1 repository');
+    const lone = (await page.textContent('#gitStatusBody')) ?? '';
+    expect(lone).toContain('could not read: git timed out');
+    expect(lone).not.toContain('Nothing uncommitted');
+    expect(await label()).toContain('? 1');
+    expect(await page.getAttribute('#gitStatusBtn', 'title')).toMatch(/Git \(slow\)/);
+
+    // A limit of 1 in a folder of several: the one row shown keeps the "Showing the first" notice.
+    await mockOverview({
+      reposTruncated: true,
+      repoLimit: 1,
+      repos: [{ name: 'fast', path: 'fast', status: status({ repoRoot: '/x/fast' }) }],
+    });
+    await page.waitForFunction(() =>
+      /Showing the first 1 /.test(document.getElementById('gitStatusBody')?.textContent ?? '')
+    );
+    expect(await page.textContent('#gitStatusBranch')).toBe('1 repository');
+
     await page.unroute('**/api/sessions/*/git-status*');
     await setLimits('12', '30');
     await refresh();
