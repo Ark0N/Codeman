@@ -47,10 +47,35 @@ describe('xterm private-API dependency guard', () => {
     expect(
       lock.packages['node_modules/@xterm/xterm']?.version,
       'xterm moved off the verified version — re-verify _kickRenderer in a real browser ' +
-        '(terminal-ui.js: _core._renderService._renderDebouncer._animationFrame), then update ' +
+        '(terminal-ui.js: _core._renderService._renderDebouncer._animationFrame) AND the ' +
+        'CompositionHelper fields installEditSync() uses (terminal-keycode229-recovery.js: ' +
+        '_handleAnyTextareaChanges, _coreService, _isComposing, _dataAlreadySent), then update ' +
         'VERIFIED_XTERM_VERSION here. The accessor is optional-chained, so a renamed field ' +
         'degrades to a silent no-op and the freeze it heals comes back unnoticed.'
     ).toBe(VERIFIED_XTERM_VERSION);
+  });
+
+  // terminal-keycode229-recovery.js swaps in an edit-based replacement for xterm's
+  // CompositionHelper._handleAnyTextareaChanges (Android autocorrect = delete + insert, which xterm's
+  // append-only diff duplicates). It reaches `_compositionHelper`, `_coreService`, `_isComposing`
+  // and `_dataAlreadySent`; if xterm renames any of them the install quietly falls back to xterm's own
+  // handler and the duplication returns. Property names survive minification, so a string check on
+  // the shipped bundle catches a rename on upgrade.
+  it('still ships the composition-helper fields the edit-based 229 sync depends on', () => {
+    const bundle = readFileSync(resolve(root, 'node_modules/@xterm/xterm/lib/xterm.js'), 'utf8');
+    for (const name of [
+      '_handleAnyTextareaChanges',
+      '_compositionHelper',
+      '_coreService',
+      '_isComposing',
+      '_dataAlreadySent',
+    ]) {
+      expect(
+        bundle,
+        `xterm no longer mentions ${name}: re-verify terminal-keycode229-recovery.js installEditSync() ` +
+          '(src/web/public) against the new CompositionHelper before bumping VERIFIED_XTERM_VERSION'
+      ).toContain(name);
+    }
   });
 
   // If someone deletes the watchdog, this guard is pointless noise — keep the
