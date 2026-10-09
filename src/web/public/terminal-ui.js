@@ -4903,8 +4903,9 @@ Object.assign(CodemanApp.prototype, {
    * settings save can forget to call, and the toggle takes effect on the next
    * selection instead of the next reload. ⚠️ The test is `!== false`, not
    * `=== true`: this one defaults ON, and the desktop branch of
-   * getDefaultSettings returns {} and leans on the read sites for defaults, so
-   * a device that has never opened App Settings has no stored value at all.
+   * getDefaultSettings sets no copyStripMargin and leans on the read sites for
+   * defaults, so a device that has never opened App Settings has no stored
+   * value at all.
    */
   _copyStripMarginEnabled() {
     try {

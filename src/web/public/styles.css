@@ -2598,8 +2598,9 @@ html[data-tab-orientation='vertical'].tab-rail-compact
   display: none !important;
 }
 
-/* Tile grid header button: hidden by default (opt-in, `showTileGridButton`),
-   and hard-gated to desktop widths like Split (the backstop below). */
+/* Tile grid header button: shown unless `showTileGridButton` resolves off
+   (default ON on desktop, OFF on phones and on coarse-pointer tablets), and
+   hard-gated to desktop widths like Split (the backstop below). */
 .btn-tile-grid--hidden {
   display: none !important;
 }

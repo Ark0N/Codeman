@@ -155,6 +155,12 @@
     'Drop a tab or a tile here': '将标签页或窗格拖放到此处',
     // A file dropped on a tile (tile-grid.js) or the single view (image-input.js).
     'Only image files are supported': '仅支持图像文件',
+    // Redraw (Ctrl+Shift+R, terminal-ui.js restoreTerminalSize) on the main pane, a tile or Pane B.
+    'No active session': '没有活动会话',
+    'This session is sized by its own window': '此会话的尺寸由它自己的窗口决定',
+    'Terminal not connected: its size is sent when it reconnects': '终端未连接：重新连接后会发送其尺寸',
+    'Could not determine terminal size': '无法确定终端尺寸',
+    'Failed to restore terminal size': '恢复终端尺寸失败',
     // A tile header's tooltip while tiles can move (with the state above it: a pattern below).
     'Drag to move the tile': '拖动可移动窗格',
     'Resize tile columns': '调整窗格列宽',
@@ -1161,6 +1167,7 @@
       [/^Will create: (.+)$/, (_m, path) => `将创建：${path}`],
       // The spreadsheet preview: an HTTP status, and the notice bar's counts.
       [/^Spreadsheet preview failed \((\d+)\)$/, (_m, status) => `电子表格预览失败（${status}）`],
+      [/^Terminal restored to (\d+)x(\d+)$/, (_m, cols, rows) => `终端已恢复为 ${cols}x${rows}`],
       [/^View truncated to the first (\d+) cells$/, (_m, n) => `视图仅显示前 ${n} 个单元格`],
       [/^(\d+) unsupported number formats$/, (_m, n) => `${n} 种不支持的数字格式`],
       // Group names are user text: they pass through untranslated.
