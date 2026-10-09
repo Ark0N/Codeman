@@ -43,8 +43,8 @@ npm run lint
 npm run format:check
 npm run check:frontend-syntax
 npm run check:browser-excludes
-npm test -- test/<file>.test.ts   # one file, the normal way
-npm run test:ci                    # the full CI sweep
+npm test                          # the gate, exactly what CI runs
+npm test -- test/<file>.test.ts   # one file
 ```
 
 `npm install` installs a `pre-push` git hook that runs the static checks above (about 10-40s,
@@ -53,9 +53,12 @@ something other than the checked-out HEAD, or when the tree has uncommitted chan
 checks would read. Skip it once with `CODEMAN_SKIP_PREPUSH=1 git push`; a
 `pre-push` hook of your own is never overwritten.
 
-**Never run bare `npm test`.** The default configuration includes browser-driven Playwright
-suites that need a live server, Chromium, and environment-specific baselines; they hang or
-fail on a normal machine. `test:ci` is the honest "run everything".
+`npm test` runs the same suite CI runs, so a green run locally means a green run there. It
+leaves out three suites that cannot pass on an arbitrary machine, each with its own command:
+`npm run test:browser` (Playwright, Chromium and a live server), `npm run test:mobile` (the
+same plus environment-specific screenshot baselines) and `npm run test:perf` (wall-clock
+benchmarks for an otherwise idle machine). Expect those to fail where the machine cannot
+provide what they need; that means "not runnable here", not a regression.
 
 Tests are tmux-safe by design: under vitest the tmux layer becomes an in-memory mock, so
 tests cannot touch real sessions. If you add a test that binds a port, pick a unique one at
