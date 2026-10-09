@@ -1,18 +1,18 @@
 name: Browser suite
 
 # The per-push CI gate deliberately skips the Playwright-driven suite (config/test-suites.ts),
-# which has twice let two PRs that conflict semantically merge green. This job runs it on a
-# schedule and on demand, so a browser-only regression (the Shift+Enter keypress bug was one)
-# is caught within a day instead of by a user. It is NOT a merge gate: a red run means "look",
-# and it never blocks a push or a PR.
+# so a browser-only regression can merge green. This job runs that suite on a schedule and on
+# demand, so such a regression (the Shift+Enter keypress bug was one) is caught within a day
+# instead of by a user. It is NOT a merge gate: a red run means "look", and it never blocks a
+# push or a PR.
 #
 # Needs: chromium (installed below), tmux, and the live server the tests start themselves.
 # Not run here: test:mobile (per-machine PNG baselines), test:perf (wall-clock), and
-# codex-predictive-echo (needs a real, authenticated codex binary).
+# codex-predictive-echo (needs a real codex binary; it also skips itself without one).
 
 on:
   schedule:
-    - cron: '17 3 * * *'
+    - cron: '23 3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -48,14 +48,3 @@ jobs:
 
       - name: Run the browser suite
         run: npm run test:browser -- --exclude test/codex-predictive-echo.test.ts
-
-      - name: Keep the failure artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: browser-suite-results
-          path: |
-            test-results/
-            screenshots-echo-diag/
-          if-no-files-found: ignore
-          retention-days: 7

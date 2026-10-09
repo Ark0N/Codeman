@@ -70,7 +70,7 @@ async function createSession(page: Page, name: string): Promise<string> {
     });
     const data = await res.json();
     // POST /api/sessions answers in the { success, data: { session } } envelope.
-    return data.data?.session?.id ?? data.id ?? data.session?.id;
+    return data.data?.session?.id;
   }, name);
   return result as string;
 }

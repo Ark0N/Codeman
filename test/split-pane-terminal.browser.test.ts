@@ -113,9 +113,9 @@ describe('TerminalTile in a real browser', () => {
       // own startup can race an early write and, on this box, a startup
       // script issues a `clear` that erases scrollback (modern ncurses
       // `clear` emits \x1b[3J) if the input lands before the shell is ready.
-      // Codeman itself writes `clear` into a NEW shell session ~100ms after
-      // creating it, which can erase an early marker, so re-send until the
-      // marker is present in the capture rather than writing once.
+      // Send with useMux:false: a plain prompt otherwise goes out through
+      // tmux send-keys, which test mode no-ops, so the marker never reached
+      // the PTY. Re-sending until the capture shows it is just belt and braces.
       const deadline = Date.now() + 8000;
       for (;;) {
         await fetch(`/api/sessions/${id}/input`, {
@@ -169,7 +169,7 @@ describe('TerminalTile in a real browser', () => {
     await page.evaluate(async (id) => {
       await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
     }, sessionId);
-  }, 20000);
+  });
 
   it('gates app-level chords out of Pane B instead of forwarding their raw bytes', async () => {
     // Regression guard for PR #453's Ctrl+K/Alt+1/Alt+B leak: Pane B had no

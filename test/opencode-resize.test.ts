@@ -119,13 +119,12 @@ describe('OpenCode session initial resize', () => {
       ws.on('framesent', (frame) => {
         try {
           const msg = JSON.parse(String(frame.payload));
-          if (msg.t === 'z') resizeCalls.push({ url: ws.url() + '#' + sessionIdForWs, cols: msg.c, rows: msg.r });
+          if (msg.t === 'z') resizeCalls.push({ url: ws.url(), cols: msg.c, rows: msg.r });
         } catch {
           /* not JSON */
         }
       });
     });
-    let sessionIdForWs = '';
     await page.route('**/api/sessions/*/resize', async (route) => {
       const request = route.request();
       const body = request.postDataJSON();
@@ -147,11 +146,10 @@ describe('OpenCode session initial resize', () => {
       });
       const data = await res.json();
       // POST /api/sessions answers in the { success, data: { session } } envelope.
-      return data.data?.session?.id ?? data.id ?? data.session?.id;
+      return data.data?.session?.id;
     });
 
     expect(sessionId).toBeTruthy();
-    sessionIdForWs = sessionId;
 
     // Call selectSession (which is what runOpenCode does after fix)
     await page.evaluate(async (sid: string) => {
@@ -194,7 +192,7 @@ describe('OpenCode session initial resize', () => {
       });
       const data = await res.json();
       // POST /api/sessions answers in the { success, data: { session } } envelope.
-      return data.data?.session?.id ?? data.id ?? data.session?.id;
+      return data.data?.session?.id;
     });
 
     expect(sessionId).toBeTruthy();
@@ -246,7 +244,7 @@ describe('OpenCode session initial resize', () => {
       });
       const data = await res.json();
       // POST /api/sessions answers in the { success, data: { session } } envelope.
-      return data.data?.session?.id ?? data.id ?? data.session?.id;
+      return data.data?.session?.id;
     });
 
     expect(sessionId).toBeTruthy();
@@ -331,7 +329,7 @@ describe('OpenCode close modal text', () => {
       });
       const data = await res.json();
       // POST /api/sessions answers in the { success, data: { session } } envelope.
-      return data.data?.session?.id ?? data.id ?? data.session?.id;
+      return data.data?.session?.id;
     });
 
     expect(sessionId).toBeTruthy();
@@ -374,7 +372,7 @@ describe('OpenCode close modal text', () => {
       });
       const data = await res.json();
       // POST /api/sessions answers in the { success, data: { session } } envelope.
-      return data.data?.session?.id ?? data.id ?? data.session?.id;
+      return data.data?.session?.id;
     });
 
     expect(sessionId).toBeTruthy();
