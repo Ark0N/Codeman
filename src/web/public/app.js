@@ -985,6 +985,7 @@ class CodemanApp {
     // Last rendered connection-indicator tuple; the hot input path skips DOM
     // writes when the freshly computed descriptor is identical (COD-136).
     this._lastIndicatorDescriptor = null;
+    this._lastIndicatorLanguage = null; // the UI language it was rendered in
     this._postDraining = new Set(); // sessionIds with an in-flight POST drainer
     // Terminal sockets OTHER than the primary one (`this._ws`), keyed by the
     // session they are bound to: the split pane's second terminal registers its
@@ -4354,6 +4355,21 @@ class CodemanApp {
     }
   }
 
+  /**
+   * The tile's value word as shown: i18n.js's scoped 'Connection tile: <word>'
+   * entry in Chinese, the English word otherwise. Never a bare-word key: those
+   * would also translate other text ("retry" is the orchestrator's Retry button),
+   * which is why the value span carries data-i18n-skip.
+   * @param {string} value
+   * @returns {string}
+   */
+  _connectionTileValueText(value) {
+    if (!value) return '';
+    const key = `Connection tile: ${value}`;
+    const translated = typeof window.codemanT === 'function' ? window.codemanT(key) : key;
+    return translated && translated !== key ? translated : value;
+  }
+
   _updateConnectionIndicator() {
     const indicator = this.$('connectionIndicator');
     const dot = this.$('connectionDot');
@@ -4365,8 +4381,12 @@ class CodemanApp {
     // writes when nothing changed (COD-136) — the compute above is DOM-free.
     const next = this._computeConnectionDescriptor();
     const prev = this._lastIndicatorDescriptor;
+    // The tile's value word is written in the UI language, so a language
+    // switch counts as a change too.
+    const language = window.CodemanI18n?.language || 'en';
     if (
       prev &&
+      language === this._lastIndicatorLanguage &&
       prev.display === next.display &&
       prev.dotClass === next.dotClass &&
       prev.text === next.text &&
@@ -4375,6 +4395,7 @@ class CodemanApp {
       return;
     }
     this._lastIndicatorDescriptor = next;
+    this._lastIndicatorLanguage = language;
 
     indicator.style.display = next.display;
     if (next.display !== 'none') {
@@ -4386,7 +4407,7 @@ class CodemanApp {
       if (tileLabel && tileValue) {
         const words = this._connectionTileWords(next);
         tileLabel.textContent = words.label;
-        tileValue.textContent = words.value;
+        tileValue.textContent = this._connectionTileValueText(words.value);
         tileValue.className = `connection-tile-value ${words.state}`.trim();
       }
     }

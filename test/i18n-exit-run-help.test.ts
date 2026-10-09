@@ -7,6 +7,10 @@
  * session name in the accessible name passed through untranslated (a name
  * that is itself a dictionary word included), and read unchanged in English.
  *
+ * The toolbar's case picker rows (which replaced the translated "+" and gear
+ * buttons) and the host-window and dictation toasts are read from their source,
+ * so a renamed label without an entry fails here.
+ *
  * Port: N/A.
  */
 import { readFileSync } from 'node:fs';
@@ -181,5 +185,42 @@ describe('the Help modal and the shortcut overlay in zh-CN', () => {
     const overlay = APP.slice(APP.indexOf('  renderShortcutOverlay() {'), APP.indexOf('  closeShortcutOverlay() {'));
     expect(overlay.match(/<kbd data-i18n-skip>/g)).toHaveLength(2);
     expect(overlay).not.toMatch(/<kbd>/);
+  });
+});
+
+describe('the case picker rows and the host-window and dictation toasts in zh-CN', () => {
+  const SESSION_UI = read('session-ui.js');
+  const actions = SESSION_UI.slice(
+    SESSION_UI.indexOf('const CASE_PICKER_ACTIONS = ['),
+    SESSION_UI.indexOf('];', SESSION_UI.indexOf('const CASE_PICKER_ACTIONS = ['))
+  );
+  const pickerLabels = [...actions.matchAll(/label: '([^']+)'/g)].map((m) => m[1]);
+  const toasts = ['app.js', 'panels-ui.js', 'webview-tabs.js', 'voice-input.js'].flatMap((file) =>
+    [
+      ...read(file).matchAll(
+        /showToast\??\.?\(\s*'(Could not open a new window for this \w+|That session has closed; dictation not sent)'/g
+      ),
+    ].map((m) => m[1])
+  );
+
+  it('finds the strings it checks (the check is not vacuous)', () => {
+    expect(pickerLabels).toEqual(['New or link a case\u2026', 'Case settings\u2026']);
+    expect(SESSION_UI).toContain('<div class="case-combobox-empty">No cases match</div>');
+    expect(toasts.sort()).toEqual([
+      'Could not open a new window for this dashboard',
+      'Could not open a new window for this preview',
+      'Could not open a new window for this session',
+      'That session has closed; dictation not sent',
+    ]);
+  });
+
+  it('each one reads in Chinese with no English left, and unchanged in English', () => {
+    const bad = [...pickerLabels, 'No cases match', ...toasts].filter((s) => {
+      const text = zh.api.t(s);
+      return text === s || leftover(text).length > 0 || en.api.t(s) !== s;
+    });
+    expect(bad).toEqual([]);
+    // The rows reuse the wording of the buttons they replaced.
+    expect(zh.api.t('Case settings\u2026')).toBe(`${zh.api.t('Case settings')}\u2026`);
   });
 });

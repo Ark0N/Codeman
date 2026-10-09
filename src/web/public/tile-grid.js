@@ -233,6 +233,8 @@ Object.assign(CodemanApp.prototype, {
         onChange: (tile, state) => {
           const entry = grid.tiles.get(tile.sessionId);
           if (entry?.tile !== tile) return;
+          // Rewritten on the way in, so a language switched since is picked up.
+          if (state !== 'idle') this._setTileLoadingLabel(entry.body);
           entry.el.classList.toggle('tile--loading', state !== 'idle');
           // The first capture has landed (or failed): the terminal fades in,
           // whole, instead of showing its replay scroll by.
@@ -241,6 +243,17 @@ Object.assign(CodemanApp.prototype, {
       });
     }
     return grid.queue;
+  },
+
+  /**
+   * The "Loading…" label of a tile body. It is CSS generated content (styles.css,
+   * `content: attr(data-loading-label)`), which the i18n layer never reaches, so
+   * the text is written here in the UI language.
+   */
+  _setTileLoadingLabel(body) {
+    if (!body) return;
+    const t = window.codemanT;
+    body.dataset.loadingLabel = typeof t === 'function' ? t('Loading…') : 'Loading…';
   },
 
   _tileGridSection() {
@@ -1336,6 +1349,7 @@ Object.assign(CodemanApp.prototype, {
     const header = this._buildTileHeader(sessionId);
     const body = document.createElement('div');
     body.className = 'tile-body';
+    this._setTileLoadingLabel(body);
     el.append(header.el, body);
     // Pressing a tile is a human selection: it focuses the tile and
     // acknowledges its idle alert (the already-focused tile hits

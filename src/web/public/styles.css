@@ -19843,9 +19843,11 @@ body.tile-grid-resizing--row * {
 }
 
 /* Quiet "loading" state while the tile's capture waits in the grid's one load
-   queue (or runs). */
+   queue (or runs). The text is the body's data-loading-label, which tile-grid.js
+   writes in the UI language (_setTileLoadingLabel): generated content is out of
+   the i18n layer's reach, so no literal words here. */
 .tile.tile--loading .tile-body::after {
-  content: 'Loading\2026';
+  content: attr(data-loading-label);
   position: absolute;
   top: 6px;
   right: 10px;

@@ -5,6 +5,12 @@
  * The renderer runs against a standalone JSDOM window (like i18n-branding.test.ts)
  * rather than the `jsdom` vitest environment. Workbook strings are asserted to
  * land as text, never markup.
+ *
+ * What the user reads is the renderer's, not the worker's: each worker error
+ * code is one sentence (the raw message goes to the console), feature ids are
+ * words, and every one of those, the HTTP status line and the notice bar's
+ * items read in Chinese through i18n.js's real t(); a number format's code is
+ * workbook text and passes through as is.
  */
 
 import { readFileSync } from 'node:fs';
@@ -14,6 +20,12 @@ import { JSDOM } from 'jsdom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const source = readFileSync(resolve(import.meta.dirname, '../src/web/public/spreadsheet-preview.js'), 'utf8');
+const coreSource = readFileSync(resolve(import.meta.dirname, '../src/web/public/spreadsheet-xlsx-core.js'), 'utf8');
+const workerSource = readFileSync(
+  resolve(import.meta.dirname, '../src/web/public/spreadsheet-preview-worker.js'),
+  'utf8'
+);
+const i18nSource = readFileSync(resolve(import.meta.dirname, '../src/web/public/i18n.js'), 'utf8');
 const panelsSource = readFileSync(resolve(import.meta.dirname, '../src/web/public/panels-ui.js'), 'utf8');
 
 // A real origin: the renderer resolves its fetch URL against `location.href`.
@@ -389,6 +401,125 @@ describe('spreadsheet preview renderer', () => {
     expect(css).toContain('.spreadsheet-style-2{}');
     expect(css).toContain('.spreadsheet-style-3{font-style:italic;text-align:center}');
     expect(css).not.toContain('background-color:#ffff00');
+  });
+});
+
+describe('spreadsheet preview text the user reads', () => {
+  type Translate = (s: string) => string;
+  const translator = (language: string): Translate => {
+    const i18nDom = new JSDOM('<!doctype html><html><body></body></html>', {
+      runScripts: 'outside-only',
+      url: 'http://localhost/',
+    });
+    vm.runInContext(i18nSource, i18nDom.getInternalVMContext(), { filename: 'i18n.js' });
+    const api = (i18nDom.window as any).CodemanI18n as { t: Translate; configure(o: object): void };
+    api.configure({ language });
+    return api.t;
+  };
+  const zh = translator('zh-CN');
+  const en = translator('en');
+  /** What may stay Latin in a translation: file formats, the URL acronym, digits. */
+  const leftover = (text: string) => text.replace(/\b(xlsx|xls|ZIP64|URL)\b/g, '').match(/[A-Za-z]+/g) ?? [];
+
+  beforeEach(() => {
+    WorkerMock.instances = [];
+    document.body.innerHTML = '<div id="preview"></div>';
+    delete (window as any).codemanT;
+    window.requestAnimationFrame = (callback: FrameRequestCallback) =>
+      setTimeout(() => callback(0), 0) as unknown as number;
+    window.cancelAnimationFrame = (id: number) => clearTimeout(id);
+  });
+
+  async function openLoaded() {
+    document.body.innerHTML = '<div id="preview"></div>';
+    const fetchMock = vi.fn(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(8) }));
+    loadRenderer(fetchMock).open({ container: document.querySelector('#preview'), url: '/book.xlsx', size: 8 });
+    const worker = WorkerMock.instances.at(-1)!;
+    worker.emit({ type: 'ready' });
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    return worker;
+  }
+
+  const shown = () => document.querySelector('.spreadsheet-preview-message')?.textContent ?? '';
+
+  it('shows one sentence per worker error code, never the raw message, and each reads in Chinese', async () => {
+    const codes = [
+      ...new Set(
+        [...`${coreSource}\n${workerSource}`.matchAll(/(?:\bfail|XlsxPreviewError)\('([a-z0-9-]+)'/g)].map((m) => m[1])
+      ),
+    ];
+    // Not vacuous: the refusals the core and the worker raise.
+    expect(codes).toEqual(expect.arrayContaining(['encrypted', 'zip64', 'malformed', 'cell-limit', 'style-limit']));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const texts = new Map<string, string>();
+      for (const code of [...codes, 'parse-failed']) {
+        const worker = await openLoaded();
+        worker.emit({ type: 'error', code, message: `raw ${code} detail` });
+        texts.set(code, shown());
+      }
+      expect([...texts.values()].filter((text) => /raw .* detail/.test(text))).toEqual([]);
+      // Every code the core and worker raise has its own sentence; only an
+      // unlisted one (ExcelJS's own failures) shows the generic failure.
+      expect(codes.filter((code) => texts.get(code) === 'Spreadsheet preview failed')).toEqual([]);
+      expect(texts.get('parse-failed')).toBe('Spreadsheet preview failed');
+      expect(texts.get('encrypted')).toBe(
+        'This workbook is password-protected or in the old .xls format, so it cannot be previewed.'
+      );
+      // The developer detail is kept, in the console.
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('raw encrypted detail'));
+      const bad = [...new Set(texts.values())].filter((text) => {
+        const t = zh(text);
+        return t === text || leftover(t).length > 0 || en(text) !== text;
+      });
+      expect(bad).toEqual([]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('words the notice bar: feature ids as words, each item translated, a format code as it is', async () => {
+    const notice = async () => {
+      const worker = await openLoaded();
+      worker.emit({ ...metadata(), warnings: ['pivotTables', 'externalLinks', 'charts', 'drawings', 'macros'] });
+      const request = worker.postMessage.mock.calls.at(-1)?.[0];
+      worker.emit({
+        type: 'tile',
+        requestId: request.requestId,
+        sheetId: '1',
+        cells: [],
+        warnings: [
+          'View truncated to the first 2500 cells',
+          'Formula has no cached result',
+          'Unsupported cell value',
+          'Unsupported number format: {name}"x"',
+          '3 unsupported number formats',
+        ],
+      });
+      return document.querySelector('.spreadsheet-preview-notice')!.textContent!;
+    };
+    const english = await notice();
+    expect(english).toBe(
+      'Some workbook features are not shown: pivot tables, external links, charts, drawings, macros, ' +
+        'View truncated to the first 2500 cells, Formula has no cached result, Unsupported cell value, ' +
+        'Unsupported number format: {name}"x", 3 unsupported number formats'
+    );
+    (window as any).codemanT = zh;
+    const chinese = await notice();
+    // The format code is workbook text: kept as is ({name} is not a placeholder here).
+    expect(chinese).toContain('不支持的数字格式: {name}"x"');
+    expect(leftover(chinese.replace('{name}"x"', ''))).toEqual([]);
+    expect(chinese.startsWith(`${zh('Some workbook features are not shown')}: 数据透视表, 外部链接, 图表`)).toBe(true);
+  });
+
+  it('the HTTP status line reads in Chinese with its status', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) }));
+    loadRenderer(fetchMock).open({ container: document.querySelector('#preview'), url: '/book.xlsx', size: 8 });
+    WorkerMock.instances.at(-1)!.emit({ type: 'ready' });
+    await vi.waitFor(() => expect(shown()).toBe('Spreadsheet preview failed (404)'));
+    expect(zh(shown())).toBe('电子表格预览失败（404）');
+    expect(en(shown())).toBe(shown());
+    expect(zh('Spreadsheet preview must use a same-origin URL')).toBe('电子表格预览必须使用同源 URL');
   });
 });
 
