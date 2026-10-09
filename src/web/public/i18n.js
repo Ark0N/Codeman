@@ -718,6 +718,8 @@
 
     // Dynamic common status / toasts
     'Settings saved': '设置已保存',
+    'Settings applied': '设置已应用',
+    'Save and keep Settings open': '保存并保持设置打开',
     'Settings saved locally': '设置已保存到本机',
     'Tunnel active': '隧道已启用',
     'Tunnel starting — QR code will appear when ready...': '隧道正在启动，准备好后将显示二维码…',

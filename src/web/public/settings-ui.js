@@ -1220,12 +1220,12 @@ Object.assign(CodemanApp.prototype, {
   /** Preview (apply=false) or run (apply=true) the MCP server sync across enabled CLIs. */
   async mcpSync(apply) {
     const out = this.$('mcpSyncResult');
-    const show = (html) => {
-      if (out) { out.style.display = 'block'; out.innerHTML = html; }
+    const show = (html, hint = '') => {
+      if (out) { out.style.display = 'block'; out.innerHTML = html; out.dataset.hint = hint; }
     };
     // Switched on in this modal but not saved yet: the routes would only answer "disabled".
     if (!this._mcpSyncSavedOn) {
-      show('Apply or Save settings to turn MCP sync on first, then preview or sync.');
+      show('Apply or Save settings to turn MCP sync on first, then preview or sync.', 'save-first');
       return;
     }
     if (apply && !confirm('Add missing MCP servers to every installed, enabled CLI\'s config file? Env values and headers on those servers are copied too.')) return;
@@ -2507,24 +2507,30 @@ Object.assign(CodemanApp.prototype, {
   },
 
   /**
-   * Apply button: the same save as Save, but the modal stays open and the groups that depend on
-   * a saved value (MCP sync, custom model endpoints, CLI management) are refreshed in place, so
-   * a switch that unlocks more settings needs no close-and-reopen. It is a wrapper rather than
-   * an option on saveAppSettings() so that function's signature (which tests locate by text)
-   * stays as it was.
+   * Apply button: the same save as Save, but the modal stays open and the MCP sync group (its
+   * Preview and Sync need the saved flag) and the CLI management writes are refreshed in place, so
+   * turning either on needs no close-and-reopen. It is a wrapper rather than an option on
+   * saveAppSettings() so that function's signature (which tests locate by text) stays as it was.
+   *
+   * `_keepSettingsOpenOnce` is the one-shot intent and `_applyInFlight` the double-click guard:
+   * saveAppSettings() consumes the intent before its first await, so a Save clicked while an Apply
+   * is still in flight is an ordinary Save and closes the modal.
    */
   async applyAppSettings() {
-    if (this._applyingSettings) return;
-    this._applyingSettings = true;
+    if (this._applyInFlight) return;
+    this._applyInFlight = true;
+    this._keepSettingsOpenOnce = true;
     try {
       await this.saveAppSettings();
     } finally {
-      this._applyingSettings = false;
+      this._applyInFlight = false;
+      this._keepSettingsOpenOnce = false;
     }
   },
 
   async saveAppSettings() {
-    const keepOpen = this._applyingSettings === true;
+    const keepOpen = this._keepSettingsOpenOnce === true;
+    this._keepSettingsOpenOnce = false;
     // Gesture overlay is injected at page render (server-side), so a change to it
     // only takes effect on reload — remember the prior value to decide below.
     const _prev = this.loadAppSettingsFromStorage();
@@ -2867,6 +2873,7 @@ Object.assign(CodemanApp.prototype, {
       ...serverSettings
     } = settings;
     let webhookError = '';
+    let serverSaved = false;
     try {
       const res = await this._apiPut('/api/settings', {
         ...serverSettings,
@@ -2887,6 +2894,10 @@ Object.assign(CodemanApp.prototype, {
         if (!keepOpen) this.closeAppSettings();
         return;
       }
+
+      // `_apiPut` answers null or a non-ok response instead of throwing, so this is the only
+      // evidence the server kept the flags the Apply refresh below reads.
+      serverSaved = !!res?.ok;
 
       // Save model configuration separately
       await this.saveModelConfigFromSettings();
@@ -2911,11 +2922,13 @@ Object.assign(CodemanApp.prototype, {
       this.showToast('Settings saved locally', 'warning');
     }
 
+    // Only when the settings PUT landed: after a 400 or a dropped connection the server still has the
+    // old flags, and a webhook-only failure still saved the rest, so this runs ahead of that branch.
+    if (keepOpen && serverSaved) this._refreshSettingsAfterApply(settings);
+
     if (webhookError) {
       document.getElementById('webhookGroup')?.scrollIntoView({ block: 'center' });
-    } else if (keepOpen) {
-      this._refreshSettingsAfterApply(settings);
-    } else {
+    } else if (!keepOpen) {
       this.closeAppSettings();
     }
 
@@ -2945,7 +2958,7 @@ Object.assign(CodemanApp.prototype, {
     // The MCP routes read the saved flag, so switching it on is only usable from now.
     this._mcpSyncSavedOn = settings.mcpSyncEnabled === true;
     const out = this.$('mcpSyncResult');
-    if (this._mcpSyncSavedOn && out && out.textContent.startsWith('Apply or Save settings')) {
+    if (this._mcpSyncSavedOn && out && out.dataset?.hint === 'save-first') {
       out.style.display = 'none';
       out.innerHTML = '';
     }
