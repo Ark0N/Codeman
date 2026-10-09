@@ -3010,6 +3010,19 @@ body.solo-mode .btn-lifecycle-log {
    marks as is, monochrome ones in the tab's own text colour, so no per-CLI tab
    colour lives here any more. Only the shell keeps a pill. */
 
+/* CLI Logos on Tabs off (`showTabCliLogos`, per-device; settings-ui.js
+   applyTabOrientation() and the pre-paint script in index.html stamp the
+   attribute). The logo leaves the session tabs (header strip, vertical rail,
+   sidebar, grouped rail, phone chips) and the desktop home rail; the status
+   dot and the shell's SH pill stay. Every row it sits in spaces its children
+   with flex `gap`, which skips a display:none item, so no empty slot is left.
+   Tile and split headers (.tile-harness, .split-harness) and the Run menus
+   keep their logos: only these two classes are named here. */
+html[data-tab-logos='off'] .session-tab .tab-harness,
+html[data-tab-logos='off'] .home-sessions-harness {
+  display: none;
+}
+
 /* Timer Banner - Compact */
 .timer-banner {
   display: flex;

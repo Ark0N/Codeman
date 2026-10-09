@@ -369,6 +369,9 @@
       '会话列表显示为顶栏横向标签条，或左侧可折叠侧边栏（Alt+B）。完整侧边栏为每个会话显示与主界面相同的详细信息。',
     'Tall Tabs (Name + Folder)': '双行标签（名称 + 文件夹）',
     'Pop-out Button on Tabs': '标签页弹出窗口按钮',
+    'CLI Logos on Tabs': '标签页上的 CLI 图标',
+    "Show each agent's CLI logo before the session name on tabs and the home screen's tab list. Off leaves the status dot and the shell's SH badge. Tiles, split headers and the Run menus keep their logos.":
+      '在标签页和主界面的标签列表中，于会话名称前显示每个智能体的 CLI 图标。关闭后仍保留状态圆点和 Shell 的 SH 标记。平铺、分屏标题栏和运行菜单中的图标不受影响。',
     // Tab Layout and Header Stats Style (Discussion #426). The header style's
     // "Tiles" is 磁贴, never 平铺: that is the tile grid's word (the Tiles
     // button), and "Tiles (label over value)" must not read as the grid.
