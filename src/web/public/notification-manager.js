@@ -4,7 +4,7 @@
  * The NotificationManager class implements five notification layers:
  *   1. In-app notification drawer (slide-out panel with grouped notifications)
  *   2. Tab title flash (alternating "⚠️ (N) codeman:<host>" / "codeman:<host>" when tab is hidden; uses this.originalTitle so it tracks any per-host title)
- *   3. Browser Notification API (desktop push with auto-close after 8s)
+ *   3. Browser Notification API (desktop push; auto-closes after 8s by default, configurable per device in Settings → Notifications)
  *   4. Web Push via service worker (OS-level notifications when tab is closed)
  *   5. Audio alerts (Web Audio API beep, user-opt-in)
  *
@@ -48,10 +48,6 @@ class NotificationManager {
 
     // Load preferences
     this.preferences = this.loadPreferences();
-
-    // Restore the history kept across reloads (newest first)
-    this.notifications = this.loadHistory();
-    this.unreadCount = this.notifications.filter((n) => !n.read).length;
 
     // Visibility tracking
     document.addEventListener('visibilitychange', () => {
@@ -217,68 +213,6 @@ class NotificationManager {
     localStorage.setItem(this.getStorageKey(), JSON.stringify(this.preferences));
   }
 
-  getHistoryKey() {
-    return this._usesMobilePreferences() ? 'codeman-notification-history-mobile' : 'codeman-notification-history';
-  }
-
-  loadHistory() {
-    try {
-      const saved = JSON.parse(localStorage.getItem(this.getHistoryKey()) || '[]');
-      if (!Array.isArray(saved)) return [];
-      return saved
-        .filter((n) => n && typeof n === 'object' && typeof n.id === 'string' && typeof n.timestamp === 'number')
-        .slice(0, NOTIFICATION_LIST_CAP);
-    } catch (_e) {
-      return [];
-    }
-  }
-
-  /** Keep the drawer's history across reloads. Best effort: storage may be full or blocked. */
-  persistHistory() {
-    try {
-      localStorage.setItem(this.getHistoryKey(), JSON.stringify(this.notifications.slice(0, NOTIFICATION_LIST_CAP)));
-    } catch (_e) { /* ignore */ }
-  }
-
-  /**
-   * Record a corner toast in the drawer so it can be read after it fades. Drawer-only: a
-   * toast never raises a browser notification, sound or title flash. Errors and warnings
-   * count as unread; routine confirmations are stored already read.
-   */
-  logToast(message, type = 'info') {
-    if (typeof message !== 'string' || !message) return;
-    const urgency = type === 'error' ? 'critical' : type === 'warning' ? 'warning' : 'info';
-    const title = { error: 'Error', warning: 'Warning', success: 'Done' }[type] || 'Info';
-    const now = Date.now();
-
-    // The same toast repeating (a retry loop) collapses into a count instead of flooding the list
-    const top = this.notifications[0];
-    if (top && top.category === 'toast' && top.message === message && now - top.timestamp < TOAST_REPEAT_WINDOW_MS) {
-      top.count = (top.count || 1) + 1;
-      top.timestamp = now;
-      this.persistHistory();
-      this.scheduleRender();
-      return;
-    }
-
-    const unread = urgency !== 'info';
-    this.notifications.unshift({
-      id: now + '-' + Math.random().toString(36).slice(2, 7),
-      urgency,
-      category: 'toast',
-      title,
-      message,
-      timestamp: now,
-      read: !unread,
-      count: 1,
-    });
-    if (this.notifications.length > NOTIFICATION_LIST_CAP) this.notifications.pop();
-    if (unread) this.unreadCount++;
-    this.updateBadge();
-    this.persistHistory();
-    this.scheduleRender();
-  }
-
   notify({ urgency, category, sessionId, sessionName, title, message }) {
     if (!this.preferences.enabled) return;
 
@@ -364,7 +298,6 @@ class NotificationManager {
     // Update unread
     this.unreadCount++;
     this.updateBadge();
-    this.persistHistory();
     this.scheduleRender();
 
     // Layer 2: Tab title (when tab unfocused)
@@ -550,8 +483,7 @@ class NotificationManager {
       notif.read = true;
       this.unreadCount = Math.max(0, this.unreadCount - 1);
       this.updateBadge();
-      this.persistHistory();
-    }
+      }
 
     // Switch to session if available
     if (notif.sessionId && this.app.sessions.has(notif.sessionId)) {
@@ -566,7 +498,6 @@ class NotificationManager {
     this.notifications.forEach(n => { n.read = true; });
     this.unreadCount = 0;
     this.updateBadge();
-    this.persistHistory();
     this.stopTitleFlash();
     this.scheduleRender();
   }
@@ -575,7 +506,6 @@ class NotificationManager {
     this.notifications = [];
     this.unreadCount = 0;
     this.updateBadge();
-    this.persistHistory();
     this.stopTitleFlash();
     this.scheduleRender();
   }

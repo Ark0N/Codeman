@@ -5876,8 +5876,6 @@ Object.assign(CodemanApp.prototype, {
    */
   showToast(message, type = 'info', opts = {}) {
     const { duration = this.notificationManager?.getToastDurationMs?.() ?? 3000, action } = opts;
-    // Keep a readable record in the notification drawer (a toast fades, the drawer entry stays)
-    this.notificationManager?.logToast?.(message, type);
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
 

@@ -38,7 +38,7 @@ afterEach(() => {
 describe('showToast', () => {
   it('uses the configured display time when no duration is given', () => {
     vi.useFakeTimers();
-    const app = loadApp({ getToastDurationMs: () => 10_000, logToast: vi.fn() });
+    const app = loadApp({ getToastDurationMs: () => 10_000 });
     app.showToast('hello');
     expect(windows[0].window.document.querySelectorAll('.toast')).toHaveLength(1);
     vi.advanceTimersByTime(9_000);
@@ -57,16 +57,9 @@ describe('showToast', () => {
 
   it('lets an explicit duration of 0 stay until dismissed', () => {
     vi.useFakeTimers();
-    const app = loadApp({ getToastDurationMs: () => 1_000, logToast: vi.fn() });
+    const app = loadApp({ getToastDurationMs: () => 1_000 });
     app.showToast('sticky', 'error', { duration: 0 });
     vi.advanceTimersByTime(60_000);
     expect(windows[0].window.document.querySelector('.toast.show')).not.toBeNull();
-  });
-
-  it('records every toast in the notification drawer', () => {
-    const logToast = vi.fn();
-    const app = loadApp({ getToastDurationMs: () => 3_000, logToast });
-    app.showToast('Saved', 'success');
-    expect(logToast).toHaveBeenCalledWith('Saved', 'success');
   });
 });

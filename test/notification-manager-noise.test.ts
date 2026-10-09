@@ -23,9 +23,7 @@ type Manager = {
   getStorageKey: () => string;
   normalizePreferences: (preferences: Record<string, unknown>) => NotificationPreferences;
   notify: (notification: Record<string, unknown>) => void;
-  logToast: (message: string, type?: string) => void;
   getToastDurationMs: () => number;
-  loadHistory: () => unknown[];
   unreadCount: number;
   markAllRead: () => void;
   clearAll: () => void;
@@ -35,8 +33,7 @@ const openWindows: JSDOM[] = [];
 
 function loadManager(
   saved?: Record<string, unknown>,
-  device: { deviceType?: string; handheld?: boolean } = {},
-  history?: unknown[]
+  device: { deviceType?: string; handheld?: boolean } = {}
 ): { dom: JSDOM; manager: Manager } {
   const dom = new JSDOM(
     '<!doctype html><body><span id="notifBadge"></span><div id="notifList"></div><div id="notifEmpty"></div></body>',
@@ -59,7 +56,6 @@ function loadManager(
       DEFAULT_TOAST_DURATION_MS: number;
       MIN_NOTIFICATION_DURATION_MS: number;
       MAX_NOTIFICATION_DURATION_MS: number;
-      TOAST_REPEAT_WINDOW_MS: number;
     };
   win.MobileDetection = {
     getDeviceType: () => device.deviceType ?? 'desktop',
@@ -72,7 +68,6 @@ function loadManager(
   win.DEFAULT_TOAST_DURATION_MS = 3_000;
   win.MIN_NOTIFICATION_DURATION_MS = 1_000;
   win.MAX_NOTIFICATION_DURATION_MS = 300_000;
-  win.TOAST_REPEAT_WINDOW_MS = 60_000;
   win.requestAnimationFrame = ((callback: FrameRequestCallback) => {
     callback(0);
     return 1;
@@ -80,10 +75,6 @@ function loadManager(
 
   if (saved) {
     win.localStorage.setItem('codeman-notification-prefs', JSON.stringify(saved));
-  }
-
-  if (history) {
-    win.localStorage.setItem('codeman-notification-history', JSON.stringify(history));
   }
 
   win.eval(`
@@ -171,7 +162,7 @@ describe('notification noise defaults', () => {
   });
 });
 
-describe('notification display time and history', () => {
+describe('notification display time', () => {
   it('defaults to 3s toasts and 8s browser notifications', () => {
     const { manager } = loadManager();
     expect(manager.getToastDurationMs()).toBe(3000);
@@ -188,53 +179,5 @@ describe('notification display time and history', () => {
     expect(clamp(9_999_999)).toBe(300_000);
     expect(clamp('soon')).toBe(3000);
     expect(clamp(undefined)).toBe(3000);
-  });
-
-  it('records toasts in the drawer without raising a notification', () => {
-    const { manager } = loadManager();
-    manager.logToast('Session closed', 'success');
-    manager.logToast('Failed to close session', 'error');
-
-    expect(manager.notifications).toHaveLength(2);
-    const [error, done] = manager.notifications as Array<Record<string, unknown>>;
-    expect(error).toMatchObject({ title: 'Error', urgency: 'critical', read: false, category: 'toast' });
-    expect(done).toMatchObject({ title: 'Done', urgency: 'info', read: true });
-    // only the error is unread
-    expect(manager.unreadCount).toBe(1);
-  });
-
-  it('collapses an identical repeating toast into a count', () => {
-    const { manager } = loadManager();
-    for (let i = 0; i < 4; i++) manager.logToast('Reconnecting…', 'warning');
-    expect(manager.notifications).toHaveLength(1);
-    expect((manager.notifications[0] as { count: number }).count).toBe(4);
-    expect(manager.unreadCount).toBe(1);
-  });
-
-  it('keeps toast history even when notifications are switched off', () => {
-    const { manager } = loadManager({ enabled: false });
-    manager.logToast('Saved', 'success');
-    expect(manager.notifications).toHaveLength(1);
-  });
-
-  it('restores history after a reload and rebuilds the unread count', () => {
-    const { dom, manager } = loadManager();
-    manager.logToast('Boom', 'error');
-    manager.logToast('Fine', 'success');
-    const stored = dom.window.localStorage.getItem('codeman-notification-history');
-
-    const { dom: reloadedDom, manager: reloaded } = loadManager(undefined, {}, JSON.parse(stored as string));
-    expect(reloaded.notifications).toHaveLength(2);
-    expect(reloaded.unreadCount).toBe(1);
-
-    reloaded.markAllRead();
-    expect(reloaded.unreadCount).toBe(0);
-    reloaded.clearAll();
-    expect(JSON.parse(reloadedDom.window.localStorage.getItem('codeman-notification-history') as string)).toEqual([]);
-  });
-
-  it('ignores a corrupt stored history', () => {
-    const { manager } = loadManager(undefined, {}, [null, 7, { id: 1 }, { id: 'a', timestamp: 1 }] as unknown[]);
-    expect(manager.notifications).toHaveLength(1);
   });
 });

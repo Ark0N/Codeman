@@ -113,7 +113,6 @@ const AUTO_CLOSE_NOTIFICATION_MS = 8000;    // Auto-close browser notifications
 const DEFAULT_TOAST_DURATION_MS = 3000;     // How long a corner toast stays by default
 const MIN_NOTIFICATION_DURATION_MS = 1000;  // Shortest configurable toast / browser-notification time
 const MAX_NOTIFICATION_DURATION_MS = 300000; // Longest configurable toast / browser-notification time
-const TOAST_REPEAT_WINDOW_MS = 60000;       // Identical toasts inside this window collapse into one drawer entry
 const THROTTLE_DELAY_MS = 100;              // General UI throttle delay
 const TERMINAL_CHUNK_SIZE = 32 * 1024;      // 32KB chunks for terminal buffer loading
 const TERMINAL_TAIL_SIZE = 1024 * 1024;     // 1MB tail for initial load (more scrollback on tab switch)
