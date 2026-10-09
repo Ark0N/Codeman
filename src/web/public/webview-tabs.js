@@ -515,7 +515,13 @@ Object.assign(CodemanApp.prototype, {
   openWebviewExternal(id) {
     const webview = this.webviews.get(id || this.activeWebviewId);
     if (!webview) return;
-    if (this.openInHostWindow?.(webview.url)) return;
+    // A host that refuses must not fall through to window.open, which in a
+    // WebView can replace the dashboard page.
+    const hosted = this.openInHostWindow?.(webview.url) ?? null;
+    if (hosted !== null) {
+      if (!hosted) this.showToast('Could not open a new window for this dashboard', 'error');
+      return;
+    }
     window.open(webview.url, '_blank', 'noopener');
   },
 

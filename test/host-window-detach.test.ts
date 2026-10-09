@@ -11,7 +11,9 @@
  *      already uses),
  *   2. a host that refuses leaves the tab docked and toasts,
  *   3. without a host nothing changes (`openInHostWindow` returns null),
- *   4. a solo window closes and raises itself through the host when it can.
+ *   4. a solo window closes and raises itself through the host when it can,
+ *   5. without a window channel (no BroadcastChannel) the host is never asked,
+ *      since a hosted tab could not re-dock without the roll-call.
  *
  * Loaded via `vm` with a stubbed context (no jsdom — see connection-indicator.test.ts).
  */
@@ -58,6 +60,8 @@ function load(host?: Record<string, unknown>) {
   app.sessions = new Map([['s1', {}]]);
   app.detachedSessions = new Set();
   app.detachedWindows = new Map();
+  // A live window channel, as _initWindowChannel would open in a browser.
+  app.windowChannel = {};
   app.$ = () => null;
   app.showToast = vi.fn();
   app._postWindowMessage = vi.fn();
@@ -87,6 +91,19 @@ describe('detach through a host window opener', () => {
 
     expect(windowStub.open).not.toHaveBeenCalled();
     expect(app.detachedSessions.has('s1')).toBe(false);
+    expect(app.showToast).toHaveBeenCalledWith(expect.stringContaining('Could not open'), 'error');
+  });
+
+  it('refuses without a window channel, so the tab is never stuck detached', () => {
+    const openWindow = vi.fn().mockReturnValue(true);
+    const { app, windowStub } = load({ openWindow });
+    app.windowChannel = null;
+
+    app.detachSession('s1');
+
+    expect(openWindow).not.toHaveBeenCalled();
+    expect(windowStub.open).not.toHaveBeenCalled();
+    expect(app.detachedSessions.size).toBe(0);
     expect(app.showToast).toHaveBeenCalledWith(expect.stringContaining('Could not open'), 'error');
   });
 

@@ -57,8 +57,10 @@ These may change in a **MINOR** (or even PATCH) release without a MAJOR bump:
    programmatically is not supported (there is no stable library entry point).
 3. **Experimental / opt-in features**, regardless of the app's version:
    Gesture Control (beta), Agent Teams
-   (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`), and anything labeled experimental
-   in the UI or docs. These may change or be removed at any time.
+   (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`), the native-wrapper window bridge
+   (`window.CodemanHost.openWindow` / `closeWindow` / `focusWindow`), and
+   anything labeled experimental in the UI or docs. These may change or be
+   removed at any time.
 
 ## Deprecation policy
 

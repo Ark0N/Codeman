@@ -329,7 +329,8 @@ Object.assign(CodemanApp.prototype, {
       { label: 'Session options', run: () => this.openSessionOptions(sessionId) },
       // Group placement (vertical rail with a tab layout only; [] elsewhere).
       ...(this._tabRefMoveActions?.({ kind: 'session', id: sessionId }) || []),
-      ...(settings.showTabDetachButton || this.detachedSessions?.has(sessionId)
+      ...((this.tabDetachButtonEnabled?.(settings) ?? settings.showTabDetachButton) ||
+      this.detachedSessions?.has(sessionId)
         ? [{ label: 'Open in a new window', run: () => this.detachSession(sessionId) }]
         : []),
       { label: 'Close session', className: 'danger', run: () => this.requestCloseSession(sessionId) },

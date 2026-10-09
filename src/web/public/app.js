@@ -1673,8 +1673,11 @@ class CodemanApp {
     // open the solo URL in a window of its own, beside this one on a foldable or
     // a split screen. There is no WindowProxy to poll, so the tab is tracked the
     // way a dashboard reload tracks it: the solo window's channel announcements
-    // plus the roll-call liveness check.
-    const hosted = this.openInHostWindow(CodemanBase.url('/session/' + encodeURIComponent(id)));
+    // plus the roll-call liveness check. Without a channel there is no roll-call
+    // either, so a hosted tab could never re-dock: refuse before asking the host.
+    const hosted = this.hasHostWindows() && !this.windowChannel
+      ? false
+      : this.openInHostWindow(CodemanBase.url('/session/' + encodeURIComponent(id)));
     if (hosted !== null) {
       if (!hosted) {
         this.showToast?.('Could not open a new window for this session', 'error');
@@ -1700,8 +1703,8 @@ class CodemanApp {
 
   /**
    * The embedding app's window opener, when there is one. A native wrapper
-   * exposes `window.CodemanHost.openWindow(absoluteUrl)` (returning whether a
-   * window opened) to say it can put a page in a window of its own; browsers
+   * exposes `window.CodemanHost.openWindow(absoluteUrl)` (anything but false
+   * counts as opened) to say it can put a page in a window of its own; browsers
    * never define it.
    * @returns {boolean} whether a host window opener is present
    */
@@ -1712,7 +1715,19 @@ class CodemanApp {
   }
 
   /**
-   * Open a same-origin page in a host window.
+   * The tab pop-out setting, defaulting ON under a host that opens windows.
+   * The one resolver for the tab icon, App Settings and the tab action menu.
+   * @param {object} settings stored per-device App Settings
+   * @param {object} [defaults] the device's default settings
+   * @returns {boolean} whether the pop-out control shows
+   */
+  tabDetachButtonEnabled(settings, defaults = {}) {
+    return settings?.showTabDetachButton ?? (this.hasHostWindows() || (defaults?.showTabDetachButton ?? false));
+  }
+
+  /**
+   * Open an http(s) URL in a host window, usually Codeman's own origin (a saved
+   * web tab passes its own).
    * @param {string} url absolute or base-relative URL
    * @returns {boolean|null} null when there is no host (use window.open),
    *   otherwise whether the host opened a window
@@ -1949,7 +1964,7 @@ class CodemanApp {
     el.className = 'solo-gone-overlay';
     el.innerHTML = '<h2>Session unavailable</h2>'
       + '<p>This session has ended or is no longer available.</p>'
-      + '<button class="btn-primary" onclick="window.close()">Close window</button>';
+      + '<button class="btn-primary" onclick="app._closeSoloWindow()">Close window</button>';
     document.body.appendChild(el);
     document.title = (window.codemanT?.('Session ended') || 'Session ended')
       + ' — ' + (window.CodemanI18n?.displayName || 'Codeman');
