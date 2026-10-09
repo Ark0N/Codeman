@@ -4664,11 +4664,24 @@ Object.assign(CodemanApp.prototype, {
    */
   async restoreTerminalSize() {
     // A second pane owns its own geometry: refit it and force its PTY to the
-    // size it renders at (TerminalTile.fit), whatever another device set.
+    // size it renders at (TerminalTile.fit sends the same forced `f` resize
+    // sendResize sends below), whatever another device set. fit() says whether
+    // the resize went out; when it did not, say why rather than report a size
+    // that was never sent, as the primary branch does below.
     const pane = this._focusedPane();
     if (!pane.isPrimary) {
-      pane.tile.fit({ force: true });
-      this.showToast(`Terminal restored to ${pane.terminal.cols}x${pane.terminal.rows}`, 'success');
+      const sent = pane.tile.fit({ force: true });
+      if (sent !== false) {
+        this.showToast(`Terminal restored to ${pane.terminal.cols}x${pane.terminal.rows}`, 'success');
+      } else if (this.detachedSessions?.has(pane.sessionId)) {
+        // Its own window owns the PTY's size (TerminalTile._sendResize yields).
+        this.showToast('This session is sized by its own window', 'warning');
+      } else if (!pane.tile._wsReady) {
+        // The tile announces its size again as soon as its socket reopens.
+        this.showToast('Terminal not connected: its size is sent when it reconnects', 'warning');
+      } else {
+        this.showToast('Could not determine terminal size', 'error');
+      }
       return;
     }
     if (!this.activeSessionId) {

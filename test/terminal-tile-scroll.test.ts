@@ -436,11 +436,18 @@ describe('rows the tile pushed above the screen itself are not history', () => {
     expect(flushed(ws)).toEqual([]);
   });
 
-  it('forgets the overflow on a server clear, so later real history counts', async () => {
+  it('forgets the overflow when a server clear refreshes the tile, so later real history counts', async () => {
+    // A `{t:'c'}` is a refresh (a fresh Claude pane's first prompt), and its
+    // in-stream reset leaves nothing above the screen; the fresh capture is one
+    // line, so it adds no overflow of its own.
     serveCapture(lines(40), 40);
     const { ws, term, mount } = await connectTile(makeApp({ 's-tile': { mode: 'opencode' } }));
+    expect(term.buffer.active.baseY).toBe(16);
 
+    serveCapture('fresh screen', 24);
     ws.receive({ t: 'c' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(term.writes.slice(-2)).toEqual(['\x1bc', 'fresh screen']);
     expect(term.buffer.active.baseY).toBe(0);
     ws.receive({ t: 'o', d: '\r\n'.repeat(term.rows + 1) }); // two real lines above the screen
     expect(term.buffer.active.baseY).toBe(2);

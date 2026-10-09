@@ -1,8 +1,8 @@
 # Tile Grid: Design Spec
 
-**Status**: PR 1 (tile foundation) implemented on `feat/terminal-tile`; PR 2 (the grid) implemented on `feat/tile-grid`, both local only. Builds on `docs/split-pane-sessions-plan.md`; the split pane stays.
+**Status**: Merged for the 1.40.0 release as #560 (the TerminalTile foundation) and #561 (the grid). Where the "As built" section below differs from this spec, As built is authoritative. Builds on `docs/split-pane-sessions-plan.md`; the split pane stays.
 **Author**: Claude (planning session with the maintainer), 2026-10-06
-**Branches**: PR 1 `feat/terminal-tile`, PR 2 `feat/tile-grid` stacked on it (worktrees `claudeman-tiles`, `claudeman-tilegrid`)
+**Branches**: developed as PR 1 `feat/terminal-tile` and PR 2 `feat/tile-grid` stacked on it, both merged
 **Scope**: v1 is fully designed here; follow-ups are named at the end and explicitly deferred.
 
 ## As built: where PR 2 differs from this spec
@@ -30,8 +30,11 @@ or settled a question the spec left open. The invariants as built are in
 - **Zoom follows tmux.** Moving focus to another tile restores the grid; an automatic zoom
   (window too small for the minimum tile) follows focus instead.
 - **Tile loads are bounded** (`boundedLoad`), carry a fetch deadline covering the body (Pane
-  B too), and a refresh clears the screen at its turn in the queue, so a waiting tile keeps
-  its last frame.
+  B too), and a refresh fetches at its turn in the queue: the tile keeps its last frame
+  through its wait and its own round trip, and is reset with the queued in-stream `\x1bc`
+  only once the capture is in hand, right before the replay (never xterm's `clear()` before
+  the fetch). A failed, aborted or empty fetch writes nothing and resets nothing: the tile
+  keeps its last frame and every held live frame.
 - **4009 lands on the Attach overlay**, and 4003/4004/4010 remove the tile.
 - **Tile header buttons are 26px targets with 16 to 19px glyphs** (owner feedback: the
   first build's 12px glyphs read as tiny next to the name), the size of the app header's own
@@ -408,7 +411,8 @@ against the live list without rebuilding tiles that are still alive.
 ### Gating
 
 - Setting `showTileGridButton`, per device (in `displayKeys`, stripped from the
-  settings PUT, NOT in `SettingsUpdateSchema`), default OFF. Independent of
+  settings PUT, NOT in `SettingsUpdateSchema`), default ON on desktop and OFF on
+  handhelds (specified OFF; superseded, see "As built"). Independent of
   `showSplitButton`, which is unchanged; a desk can show both buttons.
 - Hidden below 1180 px by both a JS width check with a `matchMedia` listener and
   a CSS `@media (max-width: 1179px)` backstop, exactly like the split button.

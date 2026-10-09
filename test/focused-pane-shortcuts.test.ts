@@ -127,6 +127,36 @@ describe('terminal shortcuts follow the focused pane', () => {
     expect(app.showToast).toHaveBeenCalledWith('Terminal restored to 60x30', 'success');
   });
 
+  // TerminalTile.fit() returns whether its resize went out. When it did not,
+  // Redraw used to report a size that was never sent.
+  it.each([
+    [
+      'popped out to its own window',
+      { detached: true, wsReady: true },
+      'This session is sized by its own window',
+      'warning',
+    ],
+    [
+      'whose socket is down',
+      { detached: false, wsReady: false },
+      'Terminal not connected: its size is sent when it reconnects',
+      'warning',
+    ],
+    ['that could not measure itself', { detached: false, wsReady: true }, 'Could not determine terminal size', 'error'],
+  ])('Ctrl+Shift+R on a second pane %s reports no success', async (_label, state, message, level) => {
+    const app = loadApp();
+    app.detachedSessions = new Set(state.detached ? ['session-b'] : []);
+    const tile = paneB({ fit: vi.fn(() => false), _wsReady: state.wsReady });
+    app._noteFocusedTile(tile);
+
+    await app.restoreTerminalSize();
+
+    expect(tile.fit).toHaveBeenCalledWith({ force: true });
+    expect(app.showToast).toHaveBeenCalledTimes(1);
+    expect(app.showToast).toHaveBeenCalledWith(message, level);
+    expect(app.sendResize).not.toHaveBeenCalled();
+  });
+
   it('Ctrl+Shift+R keeps restoring the primary when it holds the keyboard', async () => {
     const app = loadApp();
 
