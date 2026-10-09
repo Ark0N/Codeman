@@ -1,6 +1,6 @@
 /**
  * @fileoverview The server's side of the tile grid's SSE filter (live server,
- * multi-user mode, port 3287).
+ * multi-user mode, ephemeral port).
  *
  * While tiles own the terminal the page subscribes with TILE_GRID_SSE_FILTER
  * (constants.js), an id that names no session, so the server sends it no
@@ -31,8 +31,7 @@ import { createUser, invalidateUsersCache } from '../src/user-store.js';
 
 vi.spyOn(TmuxManager, 'isTmuxAvailable').mockReturnValue(true);
 
-const PORT = 3287;
-const url = (p: string) => `http://localhost:${PORT}${p}`;
+const url = (p: string) => `http://localhost:${server.boundPort}${p}`;
 const basic = (u: string, p: string) => 'Basic ' + Buffer.from(`${u}:${p}`).toString('base64');
 const alice = { Authorization: basic('alice', 'alicepass1') };
 
@@ -124,7 +123,7 @@ beforeAll(async () => {
   await createUser({ username: 'root', role: 'admin', password: 'rootpass123' });
   await createUser({ username: 'alice', role: 'user', password: 'alicepass1' });
   await createUser({ username: 'bob', role: 'user', password: 'bobpass1234' });
-  server = new WebServer(PORT, false, true);
+  server = new WebServer(0, false, true);
   await server.start();
 });
 

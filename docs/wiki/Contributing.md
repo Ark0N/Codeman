@@ -61,8 +61,11 @@ benchmarks for an otherwise idle machine). Expect those to fail where the machin
 provide what they need; that means "not runnable here", not a regression.
 
 Tests are tmux-safe by design: under vitest the tmux layer becomes an in-memory mock, so
-tests cannot touch real sessions. If you add a test that binds a port, pick a unique one at
-3150 or above, and never 3000.
+tests cannot touch real sessions. If you add a test that binds a port, bind port 0
+(`new WebServer(0, …)` + `server.boundPort`, or `listen({ port: 0 })` + `address().port`),
+or use `app.inject()` when no socket is needed. Never 3000. Mobile tests (`test/mobile/**`,
+via `createTestServer(PORT)`) keep the fixed ports in `test/mobile/README.md` for now,
+because that helper caches servers by port.
 
 ## Finding your way around
 

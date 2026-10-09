@@ -12,6 +12,6 @@ Quick pointers:
 
 - Type check: `tsc --noEmit` · Lint: `npm run lint` · Format: `npm run format:check`
 - Tests: `npm test` (the CI gate, safe to run bare) or `npm test -- test/<file>.test.ts` for one file
-- Route tests use `app.inject()`; new tests needing ports must pick a unique `const PORT =`
+- Route tests use `app.inject()`; new tests needing a socket bind port 0 (`new WebServer(0, …)` + `boundPort`), except mobile tests, which keep `createTestServer(PORT)` for now
 - Branch off `master` for all work; Conventional Commit-style messages (`fix(mobile): ...`)
 - Never commit secrets or local state from `~/.codeman/`
