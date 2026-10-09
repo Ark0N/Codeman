@@ -451,6 +451,38 @@ describe('rows the tile pushed above the screen itself are not history', () => {
     expect(flushed(ws)).toEqual([]);
   });
 
+  it('leaves the wheel to xterm while the viewport sits in those rows, and pages again from the bottom', async () => {
+    // Hollow by the discount alone: baseY > 0, every row above the screen the
+    // tile's own. Shift+PageUp, a scrollbar drag or a wheel during the replay
+    // can leave the viewport up there; a primary hollow buffer (baseY 0) never
+    // can. Paging from there would swallow every wheel and keep the stale rows
+    // on screen, so xterm gets the wheel and a wheel-down brings it home.
+    serveCapture(lines(40), 40);
+    const { tile, ws, term, mount } = await connectTile(makeApp({ 's-tile': { mode: 'opencode' } }));
+    const baseY = term.buffer.active.baseY;
+    expect(baseY).toBe(16);
+    expect((tile as unknown as { _localRows(): number })._localRows()).toBe(0);
+
+    term.buffer.active.viewportY = baseY - 5;
+    for (const ev of [wheelLines(-12), wheelLines(12), wheelLines(-5), wheelLines(-5)]) {
+      mount.fire('wheel', ev);
+      expect(ev.preventDefault).not.toHaveBeenCalled();
+      expect(ev.stopPropagation).not.toHaveBeenCalled();
+    }
+    expect(flushed(ws)).toEqual([]);
+
+    // Back on the live screen, only travel made there counts: two quarter-screen
+    // wheels are one PageUp, with nothing carried over from the wheels xterm had
+    // (the gate sits before the pending travel is touched).
+    term.buffer.active.viewportY = baseY;
+    const first = wheelLines(-6);
+    mount.fire('wheel', first);
+    expect(first.preventDefault).toHaveBeenCalled();
+    expect(flushed(ws)).toEqual([]);
+    mount.fire('wheel', wheelLines(-6));
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
+  });
+
   it('keeps paging when the PTY geometry report reflows the rows above the screen', async () => {
     serveCapture(lines(40), 40);
     const { tile, ws, term, mount } = await connectTile(makeApp({ 's-tile': { mode: 'opencode' } }));

@@ -10,6 +10,9 @@
  *    screen, and a row-shrinking fit pushes more rows up, which is what the
  *    tile's overflow discount (`_localRows`) counts. Output that scrolls real
  *    lines is history, and the tile stops paging.
+ *  - a viewport left up in those discounted rows gets its wheel back: a real
+ *    wheel-down scrolls xterm home instead of being paged, and paging resumes
+ *    from the live screen.
  *
  * The wheel is a real one (`page.mouse.wheel()`), and the last step proves it
  * reaches xterm: a wheel the tile does not page scrolls xterm's viewport, so
@@ -69,14 +72,15 @@ describe('TerminalTile wheel paging in a real browser', () => {
       } as Snap;
     });
 
-  /** A real wheel-up of a whole screen over the tile, then time for the 40 ms flush and a frame. */
-  async function wheelUp(rows: number) {
+  /** A real wheel of `rows` lines over the tile (negative = up), then time for the 40 ms flush and a frame. */
+  async function wheelBy(rows: number) {
     await page.mouse.move(200, 60);
-    await page.mouse.wheel(0, -rows * 25);
+    await page.mouse.wheel(0, rows * 25);
     await page.waitForTimeout(150);
   }
+  const wheelUp = (rows: number) => wheelBy(-rows);
 
-  it('pages a hollow tile, keeps xterm still, survives a shrink, and stops once real lines scroll', async () => {
+  it('pages a hollow tile, keeps xterm still, survives a shrink, returns an off-bottom wheel, and stops at real lines', async () => {
     await page.evaluate(async (id) => {
       const w = window as any;
       const app = w.app;
@@ -147,6 +151,29 @@ describe('TerminalTile wheel paging in a real browser', () => {
       expect(afterSecondWheel.sent.length).toBeGreaterThan(afterWheel.sent.length);
       expect(afterSecondWheel.viewportY).toBe(afterShrink.baseY);
 
+      // A viewport left up in those rows (Shift+PageUp, a scrollbar drag): the
+      // wheel is xterm's again, so a wheel-down really scrolls it home and sends
+      // no page key, and from the live screen the wheel pages once more.
+      await page.evaluate(() => (window as any).__tileProbe.tile.terminal.scrollLines(-5));
+      const scrolledUp = await snap();
+      expect(scrolledUp.viewportY).toBe(afterShrink.baseY - 5);
+      expect(scrolledUp.localRows).toBe(0);
+      // xterm scrolls a few lines per real wheel event, so wheel down until home
+      // (bounded), each step really moving it and none of them paged.
+      let backHome = scrolledUp;
+      for (let i = 0; i < 10 && backHome.viewportY < afterShrink.baseY; i++) {
+        const before = backHome.viewportY;
+        await wheelBy(afterShrink.rows);
+        backHome = await snap();
+        expect(backHome.viewportY).toBeGreaterThan(before);
+      }
+      expect(backHome.viewportY).toBe(afterShrink.baseY);
+      expect(backHome.sent.length).toBe(afterSecondWheel.sent.length);
+      await wheelUp(afterShrink.rows);
+      const pagedAgain = await snap();
+      expect(pagedAgain.sent.length).toBeGreaterThan(backHome.sent.length);
+      expect(pagedAgain.viewportY).toBe(afterShrink.baseY);
+
       // Output that scrolled real lines is history: the wheel goes back to
       // xterm, which scrolls its own buffer, and no page key is sent.
       await page.evaluate(
@@ -159,7 +186,7 @@ describe('TerminalTile wheel paging in a real browser', () => {
       expect(afterOutput.localRows).toBe(3);
       await wheelUp(afterOutput.rows);
       const afterThirdWheel = await snap();
-      expect(afterThirdWheel.sent.length).toBe(afterSecondWheel.sent.length);
+      expect(afterThirdWheel.sent.length).toBe(pagedAgain.sent.length);
       expect(afterThirdWheel.viewportY).toBeLessThan(afterOutput.baseY);
     } finally {
       await page.evaluate((id) => {

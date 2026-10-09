@@ -24,7 +24,8 @@
  *    so the wheel pages the CLI's own transcript with PageUp/PageDown
  *    (_maybePageCliTranscript) through the primary pane's gates, plus an
  *    overflow-row discount for this pane's capture-before-resize load
- *    (_localRows).
+ *    (_localRows), and only while the viewport is on the live screen (a
+ *    wheel-down from those overflow rows is xterm's, and brings it home).
  *  - The desktop click report: a plain left-click hand-encoded as SGR while
  *    the session's CLI has mouse tracking on (cliMouseTracking), for the modes
  *    whose mouse DECSETs the server strips (_installClickListener).
@@ -41,7 +42,7 @@
  *
  * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js
  * @dependency constants.js (window.CodemanTerminalFont, window.CodemanFetchDeadline, DEFAULT_SCROLLBACK, TERMINAL_TAIL_SIZE, TERMINAL_CHUNK_SIZE)
- * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight, CodemanTerminalInput.shouldSuppressTerminalQueryResponse/isTerminalFocusOrMouseReport/wheelDeltaLines/pageKeysForTravel, app._shouldForwardWheelToApp/_localScrollbackIsHollow/_handleDesktopTerminalClick)
+ * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight, CodemanTerminalInput.shouldSuppressTerminalQueryResponse/isTerminalFocusOrMouseReport/wheelDeltaLines/pageKeysForTravel, app._shouldForwardWheelToApp/_localScrollbackIsHollow/_terminalViewportAtBottom/_handleDesktopTerminalClick)
  * @dependency terminal-keycode229-recovery.js (window.CodemanKeyCode229Recovery, optional: absent, xterm's own textarea handling stands)
  * @loadorder 7.4 of 16, loaded after terminal-ui.js and before terminal-split.js
  */
@@ -887,6 +888,17 @@
       // follow-up 4), so the wheel stays with xterm, as before.
       if (app._shouldForwardWheelToApp?.(ev, target)) return false;
       if (!app._localScrollbackIsHollow?.({ ...target, localRows: this._localRows() })) return false;
+      // Only from the live screen. The one gate the primary pane never needs: a
+      // primary hollow buffer has baseY 0, so its viewport is always at the
+      // bottom, while a tile's is hollow with its own overflow rows still above
+      // the screen, and Shift+PageUp, a scrollbar drag or a wheel during the
+      // first replay can leave the viewport up there. Paging from there would
+      // swallow every wheel (wheel-down included) and keep the stale rows on
+      // screen while the CLI pages out of view; left to xterm, a wheel-down
+      // brings the viewport home and paging resumes from there. The click
+      // report refuses an off-bottom viewport for the same reason
+      // (_terminalViewportAtBottom).
+      if (!app._terminalViewportAtBottom?.(this.terminal)) return false;
       const lines = input.wheelDeltaLines(ev, this.terminal.rows);
       if (!lines) return false;
       const step = input.pageKeysForTravel(this._pageKeyPending, lines, this.terminal.rows);
