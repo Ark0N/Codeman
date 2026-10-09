@@ -323,6 +323,14 @@ export class WebServer extends EventEmitter {
   private store = getStore();
   private tabLayouts!: TabLayoutService;
   private port: number;
+
+  /**
+   * The port the server is actually listening on once `start()` has resolved — the
+   * OS-assigned one for `new WebServer(0, …)` — and the constructor's port before that.
+   */
+  get boundPort(): number {
+    return this.port;
+  }
   private host: string;
   private https: boolean;
   /** Reverse-proxy sub-path prefix (normalized: '' for root, or '/foo'). */
@@ -746,7 +754,11 @@ export class WebServer extends EventEmitter {
       saveRespawnConfig: this.saveRespawnConfig.bind(this),
       // ConfigPort
       store: this.store,
-      port: this.port,
+      // A getter, not a snapshot: this context is built in setupRoutes(), BEFORE
+      // listen() resolves an ephemeral `port: 0`, and the tunnel start reads it later.
+      get port() {
+        return self.port;
+      },
       https: this.https,
       testMode: this.testMode,
       serverStartTime: this.serverStartTime,
@@ -1154,7 +1166,9 @@ export class WebServer extends EventEmitter {
     // due times for any persisted jobs, then expose it to its routes.
     this.cronService = new CronService(ctx);
     this.cronService.init();
-    registerCronRoutes(this.app, { ...ctx, cron: this.cronService });
+    // Only what CronPort declares: a spread of ctx would copy `port` by value (the
+    // pre-listen 0 of an ephemeral bind) into an object nothing keeps in sync.
+    registerCronRoutes(this.app, { cron: this.cronService });
 
     registerWsRoutes(this.app, ctx, () => this.getHostPolicy());
     registerVoiceRoutes(this.app, ctx, () => this.getHostPolicy());
@@ -2910,6 +2924,12 @@ export class WebServer extends EventEmitter {
     }
 
     await this.app.listen({ port: this.port, host: this.host });
+    // A `port: 0` bind gets its number from the OS. Everything below and every later
+    // reader (the banner, CODEMAN_API_URL, the docker bridge listener, the
+    // unauthenticated-bind warnings, the route context's getter) must see that number,
+    // not the 0 that was asked for.
+    const address = this.app.server.address();
+    if (address !== null && typeof address === 'object') this.port = address.port;
     const protocol = this.https ? 'https' : 'http';
     const displayHost = this.host === '0.0.0.0' ? 'localhost' : this.host;
     // The only startup banner: `codeman web` used to print its own copy of this

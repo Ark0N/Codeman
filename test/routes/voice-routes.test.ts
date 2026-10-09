@@ -11,7 +11,7 @@
  * - the socket refuses exactly what the status endpoint calls unavailable,
  * - a cross-site upgrade cannot open a stream on the operator's subscription.
  *
- * Port: 3230 (routes), 3231 (mock upstream)
+ * Port: ephemeral (`port: 0` for the routes and the mock upstream)
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -20,6 +20,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import WebSocket, { WebSocketServer } from 'ws';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import type { AddressInfo } from 'node:net';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 import { registerVoiceRoutes, _resetVoiceStreamCountForTesting } from '../../src/web/routes/voice-routes.js';
 import { MAX_CONCURRENT_STREAMS } from '../../src/config/voice.js';
@@ -47,8 +48,9 @@ function removeCredentials(): void {
   rmSync(join(testHome(), '.claude', '.credentials.json'), { force: true });
 }
 
-const PORT = 3230;
-const UPSTREAM_PORT = 3231;
+/** Both assigned by the OS on every listen (`port: 0`); see beforeEach. */
+let PORT = 0;
+let UPSTREAM_PORT = 0;
 const TOKEN = 'sk-ant-oat01-voice-route-test';
 
 /** State captured by the mock upstream, so tests can assert what Codeman sent. */
@@ -118,7 +120,7 @@ describe('voice-routes', () => {
     voiceEnabled = true;
     capture = { headers: {}, url: '', binaryFrames: [], textFrames: [], socket: null };
 
-    upstream = new WebSocketServer({ port: UPSTREAM_PORT, host: '127.0.0.1' });
+    upstream = new WebSocketServer({ port: 0, host: '127.0.0.1' });
     upstream.on('connection', (socket, req) => {
       capture.headers = req.headers;
       capture.url = req.url ?? '';
@@ -129,6 +131,7 @@ describe('voice-routes', () => {
       });
     });
     await new Promise<void>((resolve) => upstream.once('listening', resolve));
+    UPSTREAM_PORT = (upstream.address() as AddressInfo).port;
     process.env.CODEMAN_VOICE_STREAM_BASE = `ws://127.0.0.1:${UPSTREAM_PORT}`;
 
     writeCredentials(Date.now() + 3_600_000);
@@ -138,7 +141,8 @@ describe('voice-routes', () => {
     ctx = createMockRouteContext();
     ctx.getClaudeVoiceEnabled = (async () => voiceEnabled) as typeof ctx.getClaudeVoiceEnabled;
     registerVoiceRoutes(app, ctx as never, () => ({ bindHost: '127.0.0.1', allowedHosts: [], tunnelHost: null }));
-    await app.listen({ port: PORT, host: '127.0.0.1' });
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    PORT = (app.server.address() as AddressInfo).port;
   });
 
   afterEach(async () => {
