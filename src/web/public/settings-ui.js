@@ -3549,7 +3549,14 @@ Object.assign(CodemanApp.prototype, {
     }
     // Desktop defaults - rely on ?? operators in apply functions
     // This allows desktop to have different defaults without duplication
-    return {};
+    // A touch-primary tablet (iPad, an Android tablet: not a handheld, so it
+    // lands here) keeps the Tiles button opt-in, as Split is: a tile has none of
+    // the main terminal's touch, IME and soft-keyboard handling. The PRIMARY
+    // pointer decides, never MobileDetection.isTouchDevice(), which is true on a
+    // touchscreen laptop too (fine primary pointer: the desktop default stays).
+    const coarsePrimaryPointer =
+      typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)')?.matches === true;
+    return coarsePrimaryPointer ? { showTileGridButton: false } : {};
   },
 
   loadAppSettingsFromStorage() {

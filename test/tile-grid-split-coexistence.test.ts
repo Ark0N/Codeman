@@ -100,6 +100,62 @@ describe('opening the grid over an open split', () => {
     expect(app._tileGrid.ids).toEqual(['s-a', 's-b', 's-c']);
     expect(app.activeSessionId).toBe('s-a');
   });
+
+  // The entry points that size their own set never get the split's two
+  // prepended on top of it (that went past the group, the count and the
+  // window's capacity, and auto-zoomed with a "too small" toast).
+  it("'Open group as tiles' over a split opens exactly the group, the split closed", () => {
+    const app = makeGridApp([...IDS, 's-d']);
+    app.tabLayout = {
+      groups: [
+        {
+          id: 'g',
+          name: 'G',
+          refs: [
+            { kind: 'session', id: 's-c' },
+            { kind: 'session', id: 's-d' },
+          ],
+        },
+      ],
+    };
+    const paneB = openSplit(app);
+
+    app.openGroupAsTiles('g');
+
+    expect(paneB.destroy).toHaveBeenCalledTimes(1);
+    expect(app._splitPane).toBeNull();
+    expect(app._tileGrid.ids).toEqual(['s-c', 's-d']);
+    expect(app.activeSessionId).toBe('s-c');
+  });
+
+  it('Ctrl/Cmd+click over a split opens the remembered count in total, never one more', () => {
+    const app = makeGridApp(IDS);
+    localStore.set('codeman:tile-count', '2');
+    openSplit(app);
+
+    app.addSessionToTiles('s-c');
+
+    expect(app._splitPane).toBeNull();
+    // The split's Pane A seeds the set (tileGridOpenSet), the clicked one joins: 2, not 3.
+    expect(app._tileGrid.ids).toEqual(['s-a', 's-c']);
+    expect(app.activeSessionId).toBe('s-c');
+  });
+
+  it('Ctrl/Cmd+click over a split with a remembered grid: the remembered grid wins, not the split', () => {
+    const app = makeGridApp(IDS);
+    app.selectSession = vi.fn();
+    app.openTileGrid(['s-other', 's-c']);
+    app.closeTileGrid({ reselect: false });
+    app.activeSessionId = 's-a';
+    localStore.set('codeman:tile-count', '2');
+    openSplit(app);
+
+    app.addSessionToTiles('s-b');
+
+    expect(app._splitPane).toBeNull();
+    expect(app._tileGrid.ids).toEqual(['s-other', 's-b']);
+    expect(app.activeSessionId).toBe('s-b');
+  });
 });
 
 describe('while the grid is open', () => {

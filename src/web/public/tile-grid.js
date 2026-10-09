@@ -253,7 +253,55 @@ Object.assign(CodemanApp.prototype, {
       const wrap = document.querySelector('.terminal-wrap');
       wrap?.parentElement?.insertBefore(section, wrap.nextSibling);
     }
+    // Once per section (index.html ships it, so not only on create).
+    if (this._tileFileDropSection !== section) {
+      this._tileFileDropSection = section;
+      this._installTileFileDrop(section);
+    }
     return section;
+  },
+
+  /**
+   * A file dragged over the grid. The single view's file drop (image-input.js)
+   * listens on #terminalContainer, hidden while tiles are open, so nothing
+   * cancelled a file drag here and the browser opened the file in place of
+   * Codeman. Anywhere over the grid (a tile, an empty cell, a divider, the
+   * padding) the drag is cancelled, so the page never navigates; dropped on a
+   * tile, its images upload to THAT tile's session and their paths are typed
+   * there, as the single view does for the active one. Bubble phase, files
+   * only: a tab or tile drag carries none, and its target stops it in the
+   * capture phase anyway (_acceptTabDrops).
+   */
+  _installTileFileDrop(section) {
+    const isFileDrag = (e) => {
+      const types = e.dataTransfer?.types;
+      return !!types && Array.from(types).includes('Files');
+    };
+    // The open grid's tile under `target`, or null (an empty cell, a divider, the padding).
+    const tileAt = (target) => {
+      const grid = this._tileGrid;
+      if (!grid?.open || !target) return null;
+      for (const [id, entry] of grid.tiles) if (entry.el.contains?.(target)) return id;
+      return null;
+    };
+    section.addEventListener('dragover', (e) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer && tileAt(e.target)) e.dataTransfer.dropEffect = 'copy';
+    });
+    section.addEventListener('drop', (e) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      const sessionId = tileAt(e.target);
+      const files = Array.from(e.dataTransfer?.files || []);
+      if (!sessionId || files.length === 0) return;
+      const images = files.filter((f) => String(f?.type || '').startsWith('image/'));
+      if (images.length === 0) {
+        this.showToast?.('Only image files are supported', 'error');
+        return;
+      }
+      this._uploadAndInsertImages?.(images, { sessionId });
+    });
   },
 
   /**
@@ -262,7 +310,8 @@ Object.assign(CodemanApp.prototype, {
    * adds what is missing and moves focus. `auto: false` makes the focus a human
    * selection (it acknowledges that session's idle alert). An open split
    * closes (the two are never open together); `mergeSplit` (default) makes its
-   * two sessions the first tiles, false opens exactly `ids` (a stored grid).
+   * two sessions the first tiles, false opens exactly `ids` (a stored grid, a
+   * group, a Ctrl/Cmd+click: callers that size their own set).
    *
    * Parks the main terminal first: `_cleanupPreviousSession()` runs ONCE, while
    * its snapshot of the session it shows is still right, and closes its socket.
@@ -1015,8 +1064,9 @@ Object.assign(CodemanApp.prototype, {
    * The tile chord `e` asks for, if it applies right now, else null. The
    * toggle applies while the grid is open, or where one could open AND the
    * per-device `showTileGridButton` setting is on (the desktop default; OFF on
-   * handhelds): with it off the chord is inert and reaches the terminal like
-   * any unbound key (owner decision 6 in docs/tile-grid-plan.md). An absent key
+   * handhelds and touch-primary tablets): with it off the chord is inert and
+   * reaches the terminal like any unbound key (owner decision 6 in
+   * docs/tile-grid-plan.md). An absent key
    * resolves through the device defaults exactly as the header button does
    * (settings-ui.js), so the chord and the button can never disagree. The focus, move,
    * zoom and remove chords apply only while the grid is open, however it was
@@ -1140,10 +1190,14 @@ Object.assign(CodemanApp.prototype, {
   // replayed fresh (forceReload drops the stale snapshot and nulls
   // activeSessionId BEFORE _cleanupPreviousSession, so nothing wrong is saved),
   // or, if that session is gone, the same fallback as closing the active tab.
-  // Returns the selection's promise (it settles once the replay is written),
-  // or undefined for the welcome screen.
+  // A popped-out session counts as gone in both: selectSession would only
+  // raise its window and return, leaving the parked terminal's pre-grid
+  // content on screen under its tab (and saved as its snapshot on the next
+  // switch). Returns the selection's promise (it settles once the replay is
+  // written), or undefined for the welcome screen.
   _selectAfterTileGrid(sessionId) {
-    if (sessionId && this.sessions.has(sessionId)) {
+    const usable = (id) => this.sessions.has(id) && !this.detachedSessions?.has(id);
+    if (sessionId && usable(sessionId)) {
       return this.selectSession(sessionId, { forceReload: true, auto: true });
     }
     this.activeSessionId = null;
@@ -1152,7 +1206,7 @@ Object.assign(CodemanApp.prototype, {
     } catch {
       /* Nothing stored. */
     }
-    const next = this.sessionOrder.find((id) => this.sessions.has(id));
+    const next = this.sessionOrder.find(usable);
     if (next) return this.selectSession(next, { auto: true });
     this.terminal?.clear();
     this.showWelcome();
@@ -1213,11 +1267,14 @@ Object.assign(CodemanApp.prototype, {
    * Removes one tile; the session keeps running. Its cell becomes empty where
    * it was, unless the shape changes with the count (then fitTileCells). When it held focus, `refocus`
    * moves focus to the neighbouring tile (next in grid order, else previous),
-   * as the app's choice (`auto`: no idle alert is spent). The last tile
+   * as the app's choice (`auto`: no idle alert is spent); `focus: false` keeps
+   * DOM focus where it is (an app-driven removal: a socket the server closed),
+   * so keystrokes never land in the neighbour's PTY unasked. The last tile
    * leaving closes the grid: with `refocus` the single view then shows that
-   * session, without it the caller decides what comes next.
+   * session (or, popped out, the next one: _selectAfterTileGrid), without it
+   * the caller decides what comes next.
    */
-  removeTile(sessionId, { refocus = true } = {}) {
+  removeTile(sessionId, { refocus = true, focus = true } = {}) {
     const grid = this._tileGrid;
     const entry = grid?.open ? grid.tiles.get(sessionId) : null;
     if (!entry) return false;
@@ -1243,7 +1300,7 @@ Object.assign(CodemanApp.prototype, {
     this._applyTileLayout();
     this._scheduleTileGridRefit();
     this.renderSessionTabs?.();
-    if (wasFocused && refocus && neighbor) this._selectTiledSession(neighbor, { auto: true });
+    if (wasFocused && refocus && neighbor) this._selectTiledSession(neighbor, { auto: true, focus });
     return true;
   },
 
@@ -1331,7 +1388,8 @@ Object.assign(CodemanApp.prototype, {
    * `accepts(id)` is the target's own rule (a tile takes any session but its
    * own; an empty cell takes any). A session it does not accept
    * is held there too, but refused (`dropEffect: 'none'`, no highlight, so no
-   * drop follows). Any other drag (a file) is left alone.
+   * drop follows). Any other drag (a file) is left to the grid section's own
+   * guard (_installTileFileDrop).
    */
   _acceptTabDrops(el, onDrop, { accepts = () => true } = {}) {
     const dragged = () => (this._tileGrid?.open ? this.draggedTabId || this._draggedTileId || null : null);
@@ -1525,7 +1583,9 @@ Object.assign(CodemanApp.prototype, {
     const n = Math.max(1, Math.min(this._tileGridCount(), capacity));
     const base = this._tileGridOpenSet()?.ids || [];
     const ids = [...base.filter((id) => id !== sessionId).slice(0, n - 1), sessionId];
-    this.openTileGrid(ids, { focusedId: sessionId, auto: false });
+    // Exactly these: an open split is already in `base` (tileGridOpenSet seeds
+    // it), and merging it again went past the count (N+1) and the window.
+    this.openTileGrid(ids, { focusedId: sessionId, auto: false, mergeSplit: false });
     return true;
   },
 
@@ -1567,7 +1627,9 @@ Object.assign(CodemanApp.prototype, {
       this.closeTileGrid({ keepStored: false, reselect: false });
       this.activeSessionId = null;
     }
-    return this.openTileGrid(ids, { focusedId: focus });
+    // Exactly the group: an open split closes without joining it (merged, its
+    // two pushed group members out and the grid past the window's capacity).
+    return this.openTileGrid(ids, { focusedId: focus, mergeSplit: false });
   },
 
   /** A grid tile's TerminalTile: the grid's one load queue, the tile scrollback, font and bounded load. */
@@ -2036,7 +2098,9 @@ Object.assign(CodemanApp.prototype, {
   /**
    * A tile's socket stopped for good. 4009 (the session exited) keeps the tile
    * with its "session ended" marker; 4003 (refused), 4004 (session gone) and
-   * 4010 (another socket took over) remove it.
+   * 4010 (another socket took over) remove it. Nobody here asked for that, so
+   * the neighbour takes focus without the keyboard (`focus: false`): what the
+   * user is typing never lands in another session's PTY.
    */
   _onTileExit(sessionId, tile, code) {
     if (this._tileGrid?.tiles.get(sessionId)?.tile !== tile) return;
@@ -2045,7 +2109,7 @@ Object.assign(CodemanApp.prototype, {
       this._renderTileOverlay(sessionId);
       return;
     }
-    this.removeTile(sessionId);
+    this.removeTile(sessionId, { focus: false });
   },
 
   /**
@@ -2560,8 +2624,9 @@ Object.assign(CodemanApp.prototype, {
     if (!grid.open) return false;
     // Only a focus that is gone moves: re-selecting the same tile would hide an
     // active web tab on every SSE blip (_selectTiledSession hides the web layer),
-    // which the single view's reconnect never does.
-    if (!grid.has(grid.focusedId)) this._selectTiledSession(grid.ids[0], { auto: true });
+    // which the single view's reconnect never does. The app's choice, so DOM
+    // focus stays put (an open modal or text field keeps the keyboard).
+    if (!grid.has(grid.focusedId)) this._selectTiledSession(grid.ids[0], { auto: true, focus: false });
     for (const { tile } of grid.tiles.values()) tile.reconnectNow();
     return true;
   },
@@ -2569,7 +2634,9 @@ Object.assign(CodemanApp.prototype, {
 
 // A tiled session deleted (here or elsewhere) loses its tile; if it held focus,
 // the neighbouring tile takes it (`auto`: the app chose, so no idle alert is
-// spent). Done BEFORE the original handler, so activeSessionId no longer names
+// spent; `focus: false`: the keyboard stays put, so what the user was typing
+// never goes on into the neighbour's PTY, as the single view sends it
+// nowhere). Done BEFORE the original handler, so activeSessionId no longer names
 // the deleted id and its welcome-screen handoff stays out of it. The last tile
 // closes the grid without a reselect, and the original handler then shows the
 // welcome screen as in the single view. A close started from this tab
@@ -2582,7 +2649,7 @@ CodemanApp.prototype._onSessionDeleted = function (data) {
     const neighbor = window.CodemanTileGrid.tileNeighbor(grid.ids, data.id);
     this.removeTile(data.id, { refocus: false });
     if (wasFocused && grid.open && neighbor && !this._closingSessions?.has(data.id)) {
-      this._selectTiledSession(neighbor, { auto: true });
+      this._selectTiledSession(neighbor, { auto: true, focus: false });
     }
   }
   return _tileGridOriginalOnSessionDeleted.call(this, data);
