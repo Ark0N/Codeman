@@ -1,8 +1,8 @@
 # Tile Grid: Design Spec
 
-**Status**: PR 1 (tile foundation) implemented on `feat/terminal-tile`; PR 2 (the grid) implemented on `feat/tile-grid`, both local only. Builds on `docs/split-pane-sessions-plan.md`; the split pane stays.
+**Status**: Merged for the 1.40.0 release as #560 (the TerminalTile foundation) and #561 (the grid). Where the "As built" section below differs from this spec, As built is authoritative. Builds on `docs/split-pane-sessions-plan.md`; the split pane stays.
 **Author**: Claude (planning session with the maintainer), 2026-10-06
-**Branches**: PR 1 `feat/terminal-tile`, PR 2 `feat/tile-grid` stacked on it (worktrees `claudeman-tiles`, `claudeman-tilegrid`)
+**Branches**: developed as PR 1 `feat/terminal-tile` and PR 2 `feat/tile-grid` stacked on it, both merged
 **Scope**: v1 is fully designed here; follow-ups are named at the end and explicitly deferred.
 
 ## As built: where PR 2 differs from this spec
@@ -408,7 +408,8 @@ against the live list without rebuilding tiles that are still alive.
 ### Gating
 
 - Setting `showTileGridButton`, per device (in `displayKeys`, stripped from the
-  settings PUT, NOT in `SettingsUpdateSchema`), default OFF. Independent of
+  settings PUT, NOT in `SettingsUpdateSchema`), default ON on desktop and OFF on
+  handhelds (specified OFF; superseded, see "As built"). Independent of
   `showSplitButton`, which is unchanged; a desk can show both buttons.
 - Hidden below 1180 px by both a JS width check with a `matchMedia` listener and
   a CSS `@media (max-width: 1179px)` backstop, exactly like the split button.
