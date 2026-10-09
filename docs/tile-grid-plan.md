@@ -30,8 +30,11 @@ or settled a question the spec left open. The invariants as built are in
 - **Zoom follows tmux.** Moving focus to another tile restores the grid; an automatic zoom
   (window too small for the minimum tile) follows focus instead.
 - **Tile loads are bounded** (`boundedLoad`), carry a fetch deadline covering the body (Pane
-  B too), and a refresh clears the screen at its turn in the queue, so a waiting tile keeps
-  its last frame.
+  B too), and a refresh fetches at its turn in the queue: the tile keeps its last frame
+  through its wait and its own round trip, and is reset with the queued in-stream `\x1bc`
+  only once the capture is in hand, right before the replay (never xterm's `clear()` before
+  the fetch). A failed, aborted or empty fetch writes nothing and resets nothing: the tile
+  keeps its last frame and every held live frame.
 - **4009 lands on the Attach overlay**, and 4003/4004/4010 remove the tile.
 - **Tile header buttons are 26px targets with 16 to 19px glyphs** (owner feedback: the
   first build's 12px glyphs read as tiny next to the name), the size of the app header's own

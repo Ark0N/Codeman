@@ -1040,11 +1040,32 @@ describe('TerminalTile live-output flow control: a flood cannot pile up in xterm
     fetchMock.mockClear();
     term.throwOnWrite = 'boom';
     out(ws, 'boom');
+    const flow = tile as unknown as { _dropRecoveryTimer: unknown; _liveDropped: boolean };
+    expect(flow._dropRecoveryTimer).not.toBeNull(); // the drop armed one recovery
 
     tile.destroy();
+    // Cleared by destroy() itself, read before any timer runs: the timer's own
+    // callback nulls the field and its destroyed guard skips the fetch, so the
+    // fetch check below alone cannot tell a cleared timer from a leaked one.
+    expect(flow._dropRecoveryTimer).toBeNull();
+    expect(flow._liveDropped).toBe(false);
     await vi.advanceTimersByTimeAsync(5000);
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('destroy() starts the count over: a write callback xterm still owed counts nothing', async () => {
+    TileStatics.LIVE_BACKLOG_BUDGET = 100;
+    const { tile, ws, term } = await connectTile(makeApp());
+    ws.open();
+    term.holdParse = true;
+    out(ws, 'a'.repeat(60));
+    expect(inFlight(tile)).toBe(60);
+
+    tile.destroy();
+    expect(inFlight(tile)).toBe(0);
+    term.parse(); // a callback from before destroy() carries the old epoch
+    expect(inFlight(tile)).toBe(0);
   });
 });
 
