@@ -8,13 +8,11 @@
  * Browser-driven, so excluded from `npm run test:ci` (config/test-suites.ts). Run locally:
  *   npm run test:browser -- test/run-mode-menu-scroll.browser.test.ts
  *
- * Port: 3290
+ * Port: ephemeral (`new WebServer(0, …)`, read back through `boundPort`)
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
-
-const PORT = 3290;
 
 describe('Run dropdown on a phone', () => {
   let server: WebServer;
@@ -22,7 +20,7 @@ describe('Run dropdown on a phone', () => {
   let page: Page;
 
   beforeAll(async () => {
-    server = new WebServer(PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({
@@ -32,7 +30,7 @@ describe('Run dropdown on a phone', () => {
       deviceScaleFactor: 2,
     });
     page = await context.newPage();
-    await page.goto(`http://localhost:${PORT}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`http://localhost:${server.boundPort}`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
   }, 90000);
 
