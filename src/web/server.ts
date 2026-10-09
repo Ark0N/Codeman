@@ -932,7 +932,9 @@ export class WebServer extends EventEmitter {
     });
 
     // Serve static files — content-hashed assets (e.g. app.a3f8c2e1.js) are immutable, cache aggressively.
-    // HTML must revalidate every time so browsers pick up new hashed filenames after deploys.
+    // HTML must revalidate every time so browsers pick up new hashed filenames after deploys, and every
+    // HTML page has its own route that says so (/, /index.html, /session/:id). ⚠️ A new static .html
+    // needs such a route too: this plugin would hand it a year of `immutable`.
     // cacheControl disabled so setHeaders owns Cache-Control for plain static assets.
     // preCompressed: serve pre-built .br/.gz files (from build step) to avoid per-request CPU compression
     await this.app.register(fastifyStatic, {
@@ -944,7 +946,7 @@ export class WebServer extends EventEmitter {
       // `ServerResponse` to a `FastifyReply`, so it is `reply.header()` here and
       // NOT `res.setHeader()`. A v9-style body throws TypeError on every static
       // request, which is every page load. See the v10.0.0 release notes.
-      setHeaders: (reply, path) => {
+      setHeaders: (reply) => {
         // ⚠️ That same change ALSO flipped precedence, and silently. Under v9 this
         // callback wrote to the raw response and Fastify's staged reply headers then
         // overwrote it, so a route that set its own Cache-Control before .sendFile()
@@ -953,12 +955,7 @@ export class WebServer extends EventEmitter {
         // no-store` its route asks for — a service worker that can never update.
         // So: a route that already decided keeps its answer.
         if (reply.getHeader('Cache-Control') !== undefined) return;
-        // Use .includes() not .endsWith() — preCompressed serves .html.br/.html.gz
-        if (path.includes('.html')) {
-          reply.header('Cache-Control', 'no-cache');
-        } else {
-          reply.header('Cache-Control', 'public, max-age=31536000, immutable');
-        }
+        reply.header('Cache-Control', 'public, max-age=31536000, immutable');
       },
     });
 

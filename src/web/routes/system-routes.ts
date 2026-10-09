@@ -1295,8 +1295,20 @@ export function registerSystemRoutes(
   // ═══════════════════════════════════════════════════════════════
 
   // ========== Screenshots ==========
+  // Deprecated (the upload page is gone): removed in a later MAJOR per
+  // docs/versioning-policy.md. Warns once per process on first use.
+  let screenshotsDeprecationWarned = false;
+  const warnScreenshotsDeprecated = (): void => {
+    if (screenshotsDeprecationWarned) return;
+    screenshotsDeprecationWarned = true;
+    console.warn(
+      '[deprecated] /api/screenshots is deprecated and will be removed in a future major release. ' +
+        'Use POST /api/sessions/:id/paste-image to hand a file to a session.'
+    );
+  };
 
   app.post('/api/screenshots', async (req, reply) => {
+    warnScreenshotsDeprecated();
     const contentType = req.headers['content-type'] ?? '';
     if (!contentType.includes('multipart/form-data')) {
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Expected multipart/form-data');
@@ -1383,6 +1395,7 @@ export function registerSystemRoutes(
   });
 
   app.get('/api/screenshots', async () => {
+    warnScreenshotsDeprecated();
     if (!existsSync(SCREENSHOTS_DIR)) {
       return { files: [] };
     }
@@ -1396,6 +1409,7 @@ export function registerSystemRoutes(
   });
 
   app.get('/api/screenshots/:name', async (req, reply) => {
+    warnScreenshotsDeprecated();
     const { name } = req.params as { name: string };
     // Prevent path traversal
     if (name.includes('/') || name.includes('\\') || name.includes('..')) {

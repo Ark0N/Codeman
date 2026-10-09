@@ -158,7 +158,7 @@ Rebinding for the shortcut registry. See [Keyboard Shortcuts](Keyboard-Shortcuts
 ### System
 
 `CLAUDE.md` template for new cases, default working directory, the image watcher, and
-Cloudflare tunnel controls including the tunnel and upload URLs. The **Diagnostics** group runs
+Cloudflare tunnel controls including the tunnel URL. The **Diagnostics** group runs
 `codeman doctor` on the server and lists the agent CLIs, tmux, Node and the optional office
 tools with their versions and install hints (admin only in multi-user mode). In multi-user
 mode, the **Users** administration entry is injected here.

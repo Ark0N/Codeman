@@ -448,7 +448,6 @@
     'Remote Access': '远程访问',
     'Cloudflare Tunnel': 'Cloudflare 隧道',
     'Tunnel URL': '隧道地址',
-    'Upload URL': '上传地址',
     Updates: '更新',
     'Current Version': '当前版本',
     'Check for Updates': '检查更新',
