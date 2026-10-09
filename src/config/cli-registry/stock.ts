@@ -790,6 +790,28 @@ const GEMINI: CliEntry = {
     ...agentDefaults(),
     altScreen: 'strip-full',
     echo: { policy: 'buffer', anchor: { kind: 'cursor' } },
+    // Measured on a live Gemini CLI 0.63.0 pane (capture-pane every 300 ms through real
+    // turns with a shell call at 40, 120 and 200 columns, YOLO and default approval mode,
+    // plus the raw PTY stream, 2026-10-09). The TUI repaints its whole bottom region on
+    // every frame, composer included, and the composer sits between a `▄` bar and a `▀`
+    // bar; the submitted prompt is echoed between the same bars. So the `▀` bar arms the
+    // idle confirmation (every repaint and tmux's reattach repaint carry it), and it is the
+    // glyph rather than the composer's prompt character, which follows the approval mode
+    // (`*` in YOLO) and whose `>` also starts the echoed prompt. While a turn runs a line
+    // `⠦ Thinking... (esc to cancel, 6s)` animates about every 80 ms (largest gap mid-turn:
+    // 214 ms); the label can be any loading phrase, so the working line is the
+    // `(esc to cancel, <n>` suffix, or a spinner frame opening a line where a long phrase
+    // pushed that suffix onto the next one. At rest nothing on screen matches either. A tool
+    // confirmation (default mode) replaces the composer and stops the spinner, and the pane
+    // goes silent, so it reads as idle (waiting on the user).
+    // ⚠️ Without this entry a gemini session latched `busy` after its first turn: the braille
+    // spinner trips SPINNER_PATTERN, and gemini never draws Claude's `❯`, the fallback that
+    // would have armed the idle check. A line starting with `▀` is a bar, never prompt text,
+    // so the submit verifier stands down.
+    workDetect: {
+      promptGlyph: '▀',
+      workingLine: String.raw`\(esc to cancel, \d|(?:^|\n) ?[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] `,
+    },
     // gemini's builder defaults an ABSENT approvalMode to 'yolo', so the clamp must
     // MATERIALIZE a config (not just touch an already-sent one) or a non-granted owner who
     // sends no geminiConfig at all would still get yolo for free.

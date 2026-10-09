@@ -1,5 +1,6 @@
 /**
- * Working/idle detection for an interactive agent pane, Claude's, Codex's, pi's, opencode's and omp's.
+ * Working/idle detection for an interactive agent pane, Claude's, Codex's, pi's, opencode's, omp's
+ * and Gemini CLI's.
  *
  * The bug this pins: Claude redraws the composer (`❯`) about once a second all
  * the way through a turn, so the old "saw a ❯, wait 2s, call it idle" rule
@@ -14,7 +15,8 @@
  *
  * The status-line fixtures below are verbatim captures from live panes
  * (`tmux -L codeman capture-pane -p`) on Claude Code 2.1.220, Codex CLI 0.152.1, pi 1.1.0,
- * opencode 1.3.0 and omp 18.8.6 / 18.0.11.
+ * opencode 1.3.0, omp 18.8.6 / 18.0.11 and Gemini CLI 0.63.0 (its turns driven by a local
+ * stand-in for the Gemini API, since the CLI's look does not depend on the backend).
  */
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { Session } from '../src/session.js';
@@ -49,7 +51,7 @@ function feed(session: Session, data: string): void {
  */
 function withFakePane(
   screen: string | (() => string),
-  mode: 'claude' | 'codex' | 'pi' | 'opencode' | 'omp' = 'claude'
+  mode: 'claude' | 'codex' | 'pi' | 'opencode' | 'omp' | 'gemini' = 'claude'
 ): Session {
   const read = typeof screen === 'function' ? screen : () => screen;
   const mux = {
@@ -156,6 +158,39 @@ const OMP_SPINNER_FRAME =
   `\x1b[20;1H\x1b[0m\x1b[K\x1b[48;5;233;39m \x1b[38;5;39m⠼ 5s\x1b[39m \x1b[38;5;236m>\x1b[39m ${OMP_BAR_TAIL}`;
 /** The input row omp redraws when a turn is submitted and when it ends. */
 const OMP_INPUT_REPAINT = '\x1b[20;1H\x1b[0m\x1b[K\x1b[38;5;239m╰─ \x1b[39;38;5;254;39m      \x1b[0m';
+
+/**
+ * Gemini CLI's pane, verbatim from live 0.63.0 captures (bars shortened). The composer
+ * sits between a `▄` bar and a `▀` bar, and a running turn draws a spinner line above it.
+ */
+const GEM_COMPOSER =
+  `${'─'.repeat(40)}\n YOLO Ctrl+Y\n${'▄'.repeat(40)}\n *   Type your message or @path/to/file\n` +
+  `${'▀'.repeat(40)}\n workspace               sandbox\n /tmp/.../gem-turn       no sandbox   …\n`;
+const GEM_WORKING =
+  '╭──────────────────────────────────╮\n│ ⊶  Shell sleep 8; echo done      │\n' +
+  `╰──────────────────────────────────╯\n ⠦ Thinking... (esc to cancel, 6s)\n${GEM_COMPOSER}`;
+const GEM_AT_REST =
+  '✦ The sleep command pauses the shell for\n  the number of seconds it is given,\n' +
+  `  before printing done.\n${GEM_COMPOSER}`;
+/**
+ * Default approval mode: the confirmation replaces the composer and the spinner stops.
+ * The submitted prompt above it is echoed between the composer's own bars.
+ */
+const GEM_CONFIRM =
+  `${'▄'.repeat(40)}\n > Run sleep 8 in the shell, then explain what sleep does.\n${'▀'.repeat(40)}\n` +
+  '╭──────────────────────────────────╮\n│ ? Shell  sleep 8; echo done      │\n' +
+  '│ Allow execution of [Shell]?      │\n│                                  │\n' +
+  '│ ● 1. Allow once                  │\n│   2. Allow for this session      │\n' +
+  '│   3. No, suggest changes (esc)   │\n╰──────────────────────────────────╯\n';
+/** One spinner frame on the wire (every ~80 ms), verbatim: the line starts with a cursor move. */
+const GEM_SPINNER_FRAME =
+  '\x1b[9;1H\x1b(B\x1b[m \x1b[38;5;111m⠧\x1b[39m \x1b[38;5;231m\x1b[3mThinking...\x1b(B\x1b[m ' +
+  `\x1b[38;5;145m(esc to cancel, 8s)\r\n\x1b[15;1H\x1b[49m\x1b[38;5;59m${'▀'.repeat(40)}`;
+/** The turn's last repaint, verbatim (shortened): no spinner line, the composer bars redrawn. */
+const GEM_TURN_END =
+  `\x1b[?2026h\x1b[11;1H\x1b(B\x1b[m \x1b[38;5;211mYOLO\x1b[38;5;145m Ctrl+Y\x1b[13;1H\x1b[38;5;59m${'▄'.repeat(40)}` +
+  '\x1b[14;1H\x1b[39m\x1b[48;5;59m \x1b[38;5;211m* \x1b[39m\x1b[7m \x1b(B\x1b[m\x1b[38;5;145m\x1b[48;5;59m Type your message' +
+  ` or @path/to/file\x1b[39m \x1b[15;1H\x1b[49m\x1b[38;5;59m${'▀'.repeat(40)}\x1b[?2026l`;
 
 /** A composer repaint: the frame Claude ships roughly once a second while working. */
 const COMPOSER_REPAINT =
@@ -337,11 +372,11 @@ describe('Session interactive idle detection', () => {
 
   it('does not mark an uncharacterised CLI working off raw activity', () => {
     vi.useFakeTimers();
-    // Gemini and OpenCode render their own TUIs, and Codeman knows neither one's glyph,
-    // so nothing would arm the idle confirmation and a session marked working here would
-    // never recover. A CLI that names no glyph therefore reports no work at all.
-    expect(getCli('gemini')?.capabilities.workDetect).toBeUndefined();
-    const session = new Session({ workingDir: '/tmp', mode: 'gemini' });
+    // Grok renders its own TUI, and Codeman knows no glyph for it, so nothing would arm
+    // the idle confirmation and a session marked working here would never recover. A CLI
+    // that names no glyph therefore reports no work at all.
+    expect(getCli('grok')?.capabilities.workDetect).toBeUndefined();
+    const session = new Session({ workingDir: '/tmp', mode: 'grok' });
     const events: string[] = [];
     session.on('working', () => events.push('working'));
 
@@ -486,8 +521,8 @@ describe('external CLI launch settle', () => {
     vi.useFakeTimers();
     // Nothing arms an idle confirmation for a CLI that names no composer glyph, so
     // the launch timer is the only thing that can ever settle this pane.
-    expect(getCli('gemini')?.capabilities.workDetect).toBeUndefined();
-    const session = new Session({ workingDir: '/tmp', mode: 'gemini' });
+    expect(getCli('grok')?.capabilities.workDetect).toBeUndefined();
+    const session = new Session({ workingDir: '/tmp', mode: 'grok' });
     const events = launch(session);
 
     feed(session, '\x1b[5;3H⠋ Loading');
@@ -529,7 +564,7 @@ describe('external CLI launch settle', () => {
 
   it('still settles a prompted CLI without work detection, which has nothing else to settle it', () => {
     vi.useFakeTimers();
-    const session = new Session({ workingDir: '/tmp', mode: 'gemini' });
+    const session = new Session({ workingDir: '/tmp', mode: 'grok' });
     const events = launch(session);
 
     vi.advanceTimersByTime(2000);
@@ -542,8 +577,8 @@ describe('external CLI launch settle', () => {
   it('settles a RESTORED pane of a CLI without work detection, without a refetch', () => {
     vi.useFakeTimers();
     // A Codeman restart re-attaches every surviving pane through startInteractive(),
-    // which leaves it busy; gemini and antigravity have no glyph that would ever clear that.
-    for (const mode of ['gemini', 'antigravity', 'shell'] as const) {
+    // which leaves it busy; grok and deepseek have no glyph that would ever clear that.
+    for (const mode of ['grok', 'deepseek', 'shell'] as const) {
       expect(getCli(mode)?.capabilities.workDetect).toBeUndefined();
       const session = new Session({ workingDir: '/tmp', mode });
       const events = launch(session, true);
@@ -824,6 +859,118 @@ describe('opencode interactive idle detection', () => {
     session.on('idle', () => events.push('idle'));
 
     feed(session, OC_COMPOSER_REPAINT);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['idle']);
+    expect(session.status).toBe('idle');
+  });
+});
+
+describe("gemini's work-detection descriptor", () => {
+  const gem = getCli('gemini')?.capabilities.workDetect;
+  const working = () => new RegExp(gem!.workingLine);
+
+  it('matches the spinner line while a turn runs, on screen and on the wire', () => {
+    expect(working().test(GEM_WORKING)).toBe(true);
+    // The stream detector reads the ANSI-stripped chunk, where a cursor move, not a
+    // newline, opens the spinner line: the `(esc to cancel` half is what matches there.
+    expect(working().test(stripAnsi(GEM_SPINNER_FRAME))).toBe(true);
+    // A long loading phrase can push the suffix onto the next line on a narrow pane
+    // (constructed, not captured): the spinner frame opening its line still matches.
+    expect(working().test(' ⠦ Reticulating the splines for your\n  request... (esc to cancel,\n')).toBe(true);
+  });
+
+  it('does not match a pane at rest, nor a pending tool confirmation', () => {
+    expect(working().test(GEM_AT_REST)).toBe(false);
+    expect(working().test(GEM_CONFIRM)).toBe(false);
+  });
+
+  it('names the composer bar every repaint carries, so the idle check can arm', () => {
+    expect(GEM_SPINNER_FRAME).toContain(gem!.promptGlyph);
+    expect(GEM_TURN_END).toContain(gem!.promptGlyph);
+    expect(GEM_AT_REST).toContain(gem!.promptGlyph);
+  });
+
+  it('leaves the submit verifier unable to press Enter on a gemini pane', () => {
+    // The last row starting with `▀` is a bar, never prompt text, even when the echoed
+    // prompt sits just above it while a confirmation waits.
+    const typed = GEM_COMPOSER.replace('Type your message or @path/to/file', 'say ok');
+    expect(promptStillInComposer(typed, 'say ok', gem!.promptGlyph)).toBe(false);
+    expect(promptStillInComposer(GEM_AT_REST, 'say ok', gem!.promptGlyph)).toBe(false);
+    expect(promptStillInComposer(GEM_CONFIRM, 'Run sleep 8 in the shell', gem!.promptGlyph)).toBe(false);
+  });
+});
+
+describe('gemini interactive idle detection', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function spin(session: Session, ms: number): void {
+    for (let t = 0; t < ms; t += 80) {
+      feed(session, GEM_SPINNER_FRAME);
+      vi.advanceTimersByTime(80);
+    }
+  }
+
+  it('lets a turn end, instead of latching busy', () => {
+    vi.useFakeTimers();
+    let screen = GEM_WORKING;
+    const session = withFakePane(() => screen, 'gemini');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    spin(session, 8000);
+    expect(events).toEqual(['working']);
+    expect(session.status).toBe('busy');
+
+    // Before gemini declared its bar and spinner line, nothing ever armed the idle check
+    // (gemini never draws `❯`), so this session stayed busy for good.
+    screen = GEM_AT_REST;
+    feed(session, GEM_TURN_END);
+    vi.advanceTimersByTime(20_000);
+
+    expect(events).toEqual(['working', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('reads a pending tool confirmation as idle, and ends the resumed turn too', () => {
+    vi.useFakeTimers();
+    let screen = GEM_WORKING;
+    const session = withFakePane(() => screen, 'gemini');
+    const events: string[] = [];
+    session.on('working', () => events.push('working'));
+    session.on('idle', () => events.push('idle'));
+
+    spin(session, 3000);
+
+    // The confirmation replaces the composer and the pane goes silent: waiting on the user.
+    screen = GEM_CONFIRM;
+    feed(session, `\x1b[5;1H${'▀'.repeat(40)}\x1b[7;1H│ Allow execution of [Shell]?`);
+    vi.advanceTimersByTime(10_000);
+    expect(events).toEqual(['working', 'idle']);
+
+    // Allowed: the spinner line returns with every repaint carrying the bar.
+    screen = GEM_WORKING;
+    spin(session, 4000);
+    expect(events).toEqual(['working', 'idle', 'working']);
+
+    screen = GEM_AT_REST;
+    feed(session, GEM_TURN_END);
+    vi.advanceTimersByTime(20_000);
+    expect(events).toEqual(['working', 'idle', 'working', 'idle']);
+    expect(session.status).toBe('idle');
+  });
+
+  it('settles a reattached gemini pane that is at rest', () => {
+    vi.useFakeTimers();
+    const session = withFakePane(GEM_AT_REST, 'gemini');
+    (session as unknown as { _status: string })._status = 'busy';
+    const events: string[] = [];
+    session.on('idle', () => events.push('idle'));
+
+    feed(session, GEM_TURN_END);
     vi.advanceTimersByTime(20_000);
 
     expect(events).toEqual(['idle']);

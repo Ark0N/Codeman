@@ -69,7 +69,7 @@ output. The other CLIs expose no equivalent.
 | Respawn cycling and unattended runs               | Yes    | Yes                                                  |
 | Cron jobs                                         | Yes    | Yes                                                  |
 | Docker cases, remote SSH cases                    | Yes    | Yes                                                  |
-| Precise idle detection                            | Yes    | Codex, Pi, OpenCode and OMP: same screen check, via their own prompt and working line. DeepSeek: reports its state itself. Others: output stabilization, coarser |
+| Precise idle detection                            | Yes    | Codex, Pi, OpenCode, OMP and Gemini: same screen check, via their own prompt and working line. DeepSeek: reports its state itself. Others: output stabilization, coarser |
 | Auto-resume when a usage limit resets             | Yes    | No                                                   |
 | Plan usage chip                                   | Yes    | No                                                   |
 | Approvals Inbox                                   | Yes    | DeepSeek yes; others no                              |
@@ -152,6 +152,11 @@ includes the broad `GOOGLE_*` namespace, deliberately, because Vertex AI authent
 needs `GOOGLE_CLOUD_PROJECT`, `GOOGLE_APPLICATION_CREDENTIALS`, and
 `GOOGLE_GENAI_USE_VERTEXAI`. That is the loosest allowlist entry in Codeman and it affects
 only the CLI you spawned yourself.
+
+Working and idle come from the screen: while a turn runs, Gemini CLI draws a spinner line
+(`⠦ Thinking... (esc to cancel, 6s)`) above its composer, and Codeman reads that. A tool
+confirmation that waits for you shows as idle. Before 1.36.0 a Gemini session showed as
+working for good after its first turn.
 
 ### Antigravity
 

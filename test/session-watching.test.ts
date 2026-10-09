@@ -373,8 +373,8 @@ describe('Session.watching', () => {
 
   it('reports nothing for a CLI whose screen nobody has characterised', () => {
     vi.useFakeTimers();
-    expect(getCli('gemini')?.capabilities.workDetect).toBeUndefined();
-    const session = withFakePane(WITH_MONITOR, 'gemini');
+    expect(getCli('grok')?.capabilities.workDetect).toBeUndefined();
+    const session = withFakePane(WITH_MONITOR, 'grok');
     runAndSettle(session);
     expect(session.watching).toBeNull();
   });
