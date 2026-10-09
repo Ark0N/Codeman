@@ -215,8 +215,10 @@ no `+`, owner decision 9).
 
 ## Non-goals (v1)
 
-- Phones and tablets. The grid is desktop-only, gated at 1180 px like the
-  split (`SPLIT_PANE_MIN_WIDTH`) and the home rail (`HOME_SESSIONS_MIN_WIDTH`).
+- Phones. The grid is gated on width alone at 1180 px like the split
+  (`SPLIT_PANE_MIN_WIDTH`) and the home rail (`HOME_SESSIONS_MIN_WIDTH`); a
+  wide tablet, or a large foldable unfolded in landscape, can reach it (see the
+  keyboard exception below).
 - More than 9 tiles.
 - WebGL rendering inside tiles (see "Rendering" below).
 - Full parity with the main terminal's touch and IME features: local-echo
