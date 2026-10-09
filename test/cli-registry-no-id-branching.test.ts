@@ -33,6 +33,13 @@
  * CAN DO, it belongs in `CliCapabilities` instead — and if it needs to run code, in
  * `config/cli-registry/profiles.ts` as a named profile.
  *
+ * ⚠️ Each entry also carries how many times its expression occurs in that file, compared
+ * EXACTLY. The key is only `<file>::<expression>`, so without a count an approved branch
+ * approved every later copy of the same text in the same file: the codex launch defaults
+ * added two more `mode === 'codex'` branches to session-routes.ts and passed silently,
+ * because the legacy-plumbing entry already covered that string. A new copy now fails as
+ * an unapproved branch would, and a removed one fails as stale until the count drops.
+ *
  * Port: none (pure static analysis).
  */
 
@@ -67,47 +74,67 @@ const EXEMPT_FILES = new Set(
   ].map((p) => p.split('/').join(sep))
 );
 
+/** One approved branch: how many copies of it the file holds, and why it is not a capability. */
+interface Allowance {
+  count: number;
+  reason: string;
+}
+
+const allow = (count: number, reason: string): Allowance => ({ count, reason });
+
 /**
- * Specific surviving branches, each with the reason it is not a capability.
+ * Specific surviving branches, each with the reason it is not a capability and the exact
+ * number of times the expression occurs in that file (see the header).
  * Keyed `<relative path>::<the matched expression>`.
  */
-const ALLOWED_BRANCHES: Record<string, string> = {
+const ALLOWED_BRANCHES: Record<string, Allowance> = {
   // --- Legacy <Mode>Config plumbing (public wire shape, see the header) ---
-  "web/routes/session-routes.ts::mode === 'opencode'": 'legacy <Mode>Config plumbing',
-  "web/routes/session-routes.ts::mode === 'codex'": 'legacy <Mode>Config plumbing',
-  "web/routes/session-routes.ts::mode === 'gemini'": 'legacy <Mode>Config plumbing',
-  "web/routes/session-routes.ts::mode === 'antigravity'": 'legacy <Mode>Config plumbing',
-  "web/routes/session-routes.ts::mode === 'pi'": 'legacy <Mode>Config plumbing',
-  "web/routes/session-routes.ts::mode === 'grok'": 'legacy <Mode>Config plumbing',
-  "web/routes/session-routes.ts::mode === 'deepseek'": 'legacy <Mode>Config plumbing',
-  "web/server.ts::mode === 'opencode'": 'legacy <Mode>Config plumbing (session recovery)',
-  "web/server.ts::mode === 'codex'": 'legacy <Mode>Config plumbing (session recovery)',
-  "web/server.ts::mode === 'gemini'": 'legacy <Mode>Config plumbing (session recovery)',
-  "web/server.ts::mode === 'antigravity'": 'legacy <Mode>Config plumbing (session recovery)',
-  "web/server.ts::mode === 'pi'": 'legacy <Mode>Config plumbing (session recovery)',
-  "web/server.ts::mode === 'grok'": 'legacy <Mode>Config plumbing (session recovery)',
-  "web/server.ts::mode === 'deepseek'": 'legacy <Mode>Config plumbing (session recovery)',
-  "web/server.ts::mode === 'omp'": 'legacy <Mode>Config plumbing (session recovery)',
+  "web/routes/session-routes.ts::mode === 'opencode'": allow(2, 'legacy <Mode>Config plumbing'),
+  "web/routes/session-routes.ts::mode === 'codex'": allow(2, 'legacy <Mode>Config plumbing'),
+  "web/routes/session-routes.ts::mode === 'gemini'": allow(2, 'legacy <Mode>Config plumbing'),
+  "web/routes/session-routes.ts::mode === 'antigravity'": allow(2, 'legacy <Mode>Config plumbing'),
+  "web/routes/session-routes.ts::mode === 'pi'": allow(2, 'legacy <Mode>Config plumbing'),
+  "web/routes/session-routes.ts::mode === 'grok'": allow(2, 'legacy <Mode>Config plumbing'),
+  "web/routes/session-routes.ts::mode === 'deepseek'": allow(2, 'legacy <Mode>Config plumbing'),
+  "web/server.ts::mode === 'opencode'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
+  "web/server.ts::mode === 'codex'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
+  "web/server.ts::mode === 'gemini'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
+  "web/server.ts::mode === 'antigravity'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
+  "web/server.ts::mode === 'pi'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
+  "web/server.ts::mode === 'grok'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
+  "web/server.ts::mode === 'deepseek'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
+  "web/server.ts::mode === 'omp'": allow(1, 'legacy <Mode>Config plumbing (session recovery)'),
 
   // --- Claude's remote/docker command construction ---
-  "tmux-manager.ts::mode === 'claude'":
+  "tmux-manager.ts::mode === 'claude'": allow(
+    2,
     "claude's remote pane command carries per-session permission flags, and its docker form is " +
-    '`--session-id … || resume`; neither fits a static overlays.command string',
-  "tmux-manager.ts::mode === 'omp'":
+      '`--session-id … || resume`; neither fits a static overlays.command string'
+  ),
+  "tmux-manager.ts::mode === 'omp'": allow(
+    1,
     'remote omp respawn needs the pinned/continue --resume override threaded through ' +
-    '(resumeSessionId/ompConfig), which the static overlays.remote.command string has no ' +
-    'room for; the command itself is still rendered through buildSpawnCommandFromRegistry, ' +
-    'the same mode-agnostic engine local/docker spawns use — only the BRANCH is per-mode',
+      '(resumeSessionId/ompConfig), which the static overlays.remote.command string has no ' +
+      'room for; the command itself is still rendered through buildSpawnCommandFromRegistry, ' +
+      'the same mode-agnostic engine local/docker spawns use — only the BRANCH is per-mode'
+  ),
 
   // --- Per-CLI prose and launch handling not yet generalised ---
-  "web/session-wait-registry.ts::mode === 'deepseek'":
-    'an error message explaining why THIS mode in particular will never deliver a stop signal',
-  "web/routes/approval-routes.ts::mode === 'deepseek'":
-    'the DeepSeek status bridge is the only non-claude source of approval items',
-  "cron/cron-service.ts::mode === 'claude'": 'cron launch handling, not yet generalised',
-  "cron/cron-service.ts::mode === 'shell'": 'cron launch handling, not yet generalised',
-  "web/routes/session-routes.ts::mode === 'claude'": 'docker case bookkeeping keyed on the claude conversation id',
-  "cli.ts::mode === 'shell'": 'a CLI-table label, not behaviour',
+  "web/session-wait-registry.ts::mode === 'deepseek'": allow(
+    1,
+    'an error message explaining why THIS mode in particular will never deliver a stop signal'
+  ),
+  "web/routes/approval-routes.ts::mode === 'deepseek'": allow(
+    1,
+    'the DeepSeek status bridge is the only non-claude source of approval items'
+  ),
+  "cron/cron-service.ts::mode === 'claude'": allow(1, 'cron launch handling, not yet generalised'),
+  "cron/cron-service.ts::mode === 'shell'": allow(1, 'cron launch handling, not yet generalised'),
+  "web/routes/session-routes.ts::mode === 'claude'": allow(
+    2,
+    'docker case bookkeeping keyed on the claude conversation id'
+  ),
+  "cli.ts::mode === 'shell'": allow(1, 'a CLI-table label, not behaviour'),
 
   // --- Negated forms surfaced when BRANCH_PATTERN widened past `===` (see its comment) ---
   //
@@ -121,43 +148,58 @@ const ALLOWED_BRANCHES: Record<string, string> = {
   // there, the shared predicate silently widened both to a mode with no transcript to read.
   // CLAUDE.md documents this as deliberate and `test/deepseek-mode.test.ts` pins it, so a
   // capability here would be actively wrong.
-  "web/routes/readmymind-routes.ts::mode !== 'claude'":
-    'deliberately mode-not-capability; pinned by deepseek-mode.test.ts',
-  "web/server.ts::mode !== 'claude'":
+  "web/routes/readmymind-routes.ts::mode !== 'claude'": allow(
+    1,
+    'deliberately mode-not-capability; pinned by deepseek-mode.test.ts'
+  ),
+  "web/server.ts::mode !== 'claude'": allow(
+    2,
     "intent capture reads Claude's own transcript, and the recovered-workspace hook sweep " +
-    'writes .claude hooks — both are claude questions, not capability ones (see CLAUDE.md)',
+      'writes .claude hooks — both are claude questions, not capability ones (see CLAUDE.md)'
+  ),
 
   // The TUI is a CLIENT of the server, and these two are about what it can offer for a row:
   // resume builds a `claude --resume`, and the mode badge is suppressed for the default mode
   // purely so the common case reads clean. The badge one is cosmetic and not a capability at
   // all; the resume one would need a "resumable from a claude transcript" field that nothing
   // else would read.
-  "tui/tui-app.ts::mode !== 'claude'": 'TUI resume builds a claude --resume; claude-transcript-only by construction',
-  "tui/tui-render.ts::mode !== 'claude'": 'cosmetic: suppress the mode badge for the default mode',
+  "tui/tui-app.ts::mode !== 'claude'": allow(
+    1,
+    'TUI resume builds a claude --resume; claude-transcript-only by construction'
+  ),
+  "tui/tui-render.ts::mode !== 'claude'": allow(1, 'cosmetic: suppress the mode badge for the default mode'),
 
   // Push approve/deny BUTTONS are withheld for dsh because the answer route refuses
   // keystrokes for its dialogs (third-party TUI, unmeasured contract) — a button whose
   // answer would be refused is worse than none. Arguably wants an "answerable dialogs"
   // capability; deliberately not invented here.
-  "web/routes/hook-event-routes.ts::mode !== 'deepseek'":
-    'push buttons withheld where the answer route refuses keystrokes',
+  "web/routes/hook-event-routes.ts::mode !== 'deepseek'": allow(
+    1,
+    'push buttons withheld where the answer route refuses keystrokes'
+  ),
 
   // Legacy <Mode>Config plumbing, same category as the `===` entries above.
-  "web/routes/session-routes.ts::mode !== 'omp'": 'legacy <Mode>Config plumbing (resolveOmpConfigForCreate)',
+  "web/routes/session-routes.ts::mode !== 'omp'": allow(
+    2,
+    'legacy <Mode>Config plumbing (resolveOmpConfigForCreate), and one link of the scaffolded-case hooks ' +
+      'chain (see the opencode entry below)'
+  ),
 
   // ⚠️ Scaffolded-case hooks. This chain excludes seven CLIs but NOT `deepseek`, while its
   // own comment says DeepSeek uses its own system — so a scaffolded deepseek case gets a
   // Claude hooks block written into it. That inconsistency is UPSTREAM's and predates this
   // change; expressing the chain as a capability would have to pick a side and would
   // therefore be a behaviour change. Left exactly as found, and named here so it is visible.
-  "web/routes/session-routes.ts::mode !== 'opencode'":
+  "web/routes/session-routes.ts::mode !== 'opencode'": allow(
+    2,
     'scaffolded-case hooks + the COD-91 self-heal skip; the chain omits deepseek upstream, ' +
-    'so any capability form would change behaviour — see PR discussion',
-  "web/routes/session-routes.ts::mode !== 'codex'": 'scaffolded-case hooks (see the opencode entry)',
-  "web/routes/session-routes.ts::mode !== 'gemini'": 'scaffolded-case hooks (see the opencode entry)',
-  "web/routes/session-routes.ts::mode !== 'antigravity'": 'scaffolded-case hooks (see the opencode entry)',
-  "web/routes/session-routes.ts::mode !== 'pi'": 'scaffolded-case hooks (see the opencode entry)',
-  "web/routes/session-routes.ts::mode !== 'grok'": 'scaffolded-case hooks (see the opencode entry)',
+      'so any capability form would change behaviour — see PR discussion'
+  ),
+  "web/routes/session-routes.ts::mode !== 'codex'": allow(1, 'scaffolded-case hooks (see the opencode entry)'),
+  "web/routes/session-routes.ts::mode !== 'gemini'": allow(1, 'scaffolded-case hooks (see the opencode entry)'),
+  "web/routes/session-routes.ts::mode !== 'antigravity'": allow(1, 'scaffolded-case hooks (see the opencode entry)'),
+  "web/routes/session-routes.ts::mode !== 'pi'": allow(1, 'scaffolded-case hooks (see the opencode entry)'),
+  "web/routes/session-routes.ts::mode !== 'grok'": allow(1, 'scaffolded-case hooks (see the opencode entry)'),
 };
 
 /** Every stock CLI id, derived rather than restated so a new entry is covered automatically. */
@@ -246,6 +288,43 @@ function scan(): { findings: Finding[]; filesScanned: number } {
 
 const { findings, filesScanned } = scan();
 
+interface CountMismatch {
+  key: string;
+  allowed: number;
+  found: number;
+  lines: string[];
+}
+
+/**
+ * Allowlisted keys whose occurrence count differs from the approved one: `grown` holds the
+ * keys with MORE copies than approved (a new branch riding an old approval), `shrunk` the
+ * ones with fewer (a stale approval that would let the next copy back in unseen).
+ * Unallowlisted keys are not this function's business; the offenders check covers them.
+ */
+function countMismatches(
+  found: Finding[],
+  allowed: Record<string, Allowance>
+): { grown: CountMismatch[]; shrunk: CountMismatch[] } {
+  const byKey = new Map<string, Finding[]>();
+  for (const f of found) byKey.set(f.key, [...(byKey.get(f.key) ?? []), f]);
+  const grown: CountMismatch[] = [];
+  const shrunk: CountMismatch[] = [];
+  for (const [key, allowance] of Object.entries(allowed)) {
+    const hits = byKey.get(key) ?? [];
+    const mismatch = {
+      key,
+      allowed: allowance.count,
+      found: hits.length,
+      lines: hits.map((f) => `${f.file}:${f.line}`),
+    };
+    if (hits.length > allowance.count) grown.push(mismatch);
+    else if (hits.length < allowance.count) shrunk.push(mismatch);
+  }
+  return { grown, shrunk };
+}
+
+const { grown, shrunk } = countMismatches(findings, ALLOWED_BRANCHES);
+
 describe('no CLI-id branching outside the stock catalog', () => {
   it('scans a meaningful number of source files (sanity)', () => {
     // If this collapses toward zero the walker or the exemption list drifted and every
@@ -293,12 +372,56 @@ describe('no CLI-id branching outside the stock catalog', () => {
     ).toEqual([]);
   });
 
+  it('has no new copy of an allowlisted branch', () => {
+    // An approval covers the copies that were reviewed, not every later line that happens
+    // to spell the same expression in the same file.
+    const detail = grown
+      .map((m) => `  ${m.key}: ${m.found} found, ${m.allowed} approved\n    ${m.lines.join('\n    ')}`)
+      .join('\n');
+    expect(
+      grown,
+      grown.length === 0
+        ? ''
+        : `Found more copies of an allowlisted CLI-id branch than were approved:\n${detail}\n\n` +
+            'Express the new copy as a CliCapabilities field (or a named profile) rather than raising ' +
+            "the count. Raise it only for another branch of the SAME kind, and read this file's header first."
+    ).toEqual([]);
+  });
+
   it('has no stale allowlist entries', () => {
     // An allowlisted branch that no longer exists is a lie about the codebase, and the next
-    // person to reintroduce that exact branch would sail straight through.
-    const present = new Set(findings.map((f) => f.key));
-    const stale = Object.keys(ALLOWED_BRANCHES).filter((key) => !present.has(key));
-    expect(stale, `ALLOWED_BRANCHES entries no longer present — delete them:\n  ${stale.join('\n  ')}`).toEqual([]);
+    // person to reintroduce that exact branch would sail straight through. The same holds
+    // for an approved count above what the file still has.
+    const stale = shrunk.map((m) => `${m.key}: ${m.found} found, ${m.allowed} approved`);
+    expect(
+      stale,
+      `ALLOWED_BRANCHES entries no longer (fully) present; delete them or lower the count:\n  ${stale.join('\n  ')}`
+    ).toEqual([]);
+  });
+
+  it('counts copies per key, so one extra copy of an approved branch fails (anti-vacuity)', () => {
+    const at = (line: number): Finding => ({
+      file: 'web/example.ts',
+      expression: "mode === 'codex'",
+      line,
+      key: "web/example.ts::mode === 'codex'",
+    });
+    const approved = { "web/example.ts::mode === 'codex'": allow(1, 'synthetic') };
+    expect(countMismatches([at(10)], approved)).toEqual({ grown: [], shrunk: [] });
+    const extra = countMismatches([at(10), at(42)], approved);
+    expect(extra.grown).toEqual([
+      {
+        key: "web/example.ts::mode === 'codex'",
+        allowed: 1,
+        found: 2,
+        lines: ['web/example.ts:10', 'web/example.ts:42'],
+      },
+    ]);
+    expect(countMismatches([], approved).shrunk.map((m) => m.key)).toEqual(["web/example.ts::mode === 'codex'"]);
+    // Every live entry carries a positive whole count, or the comparison means nothing.
+    for (const [key, { count }] of Object.entries(ALLOWED_BRANCHES)) {
+      expect(Number.isInteger(count) && count > 0, key).toBe(true);
+    }
   });
 });
 
