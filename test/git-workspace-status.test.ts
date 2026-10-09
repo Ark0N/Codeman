@@ -896,3 +896,99 @@ describe('Docker case workspaces are never inspected', () => {
     expect(o.state).toBe('ok');
   });
 });
+
+import {
+  clampInt,
+  DEFAULT_GIT_TIMEOUT_MS,
+  MAX_GIT_TIMEOUT_MS,
+  MAX_REPOS_LIMIT,
+  MIN_GIT_TIMEOUT_MS,
+  resolveOverviewLimits,
+} from '../src/git-workspace-status.js';
+
+describe('configurable repository limit and git timeout', () => {
+  let top: string;
+  let home: string;
+  const repoAt = (p: string): string => {
+    mkdir(p, { recursive: true });
+    git(p, 'init', '-q', '-b', 'main');
+    writeFileSync(join(p, 'f.txt'), '1\n');
+    git(p, 'add', '-A');
+    git(p, 'commit', '-q', '-m', 'c');
+    return p;
+  };
+
+  beforeEach(() => {
+    top = mkdtempSync(join(tmpdir(), 'git-limits-'));
+    home = join(top, 'home');
+    mkdir(home, { recursive: true });
+    clearGitStatusCache();
+  });
+  afterEach(() => rmSync(top, { recursive: true, force: true }));
+
+  it('clampInt keeps untrusted values inside the range, and falls back for anything that is not a number', () => {
+    expect(clampInt('7', 1, 50, 12)).toBe(7);
+    expect(clampInt(7.9, 1, 50, 12)).toBe(7);
+    expect(clampInt(0, 1, 50, 12)).toBe(1);
+    expect(clampInt(9999, 1, 50, 12)).toBe(50);
+    for (const bad of [undefined, null, '', 'abc', NaN, Infinity, {}]) expect(clampInt(bad, 1, 50, 12)).toBe(12);
+  });
+
+  it('resolveOverviewLimits defaults to 12 repositories and a 30 s timeout, and clamps both ends', () => {
+    expect(resolveOverviewLimits({})).toEqual({ maxRepos: MAX_REPOS, timeoutMs: DEFAULT_GIT_TIMEOUT_MS });
+    expect(DEFAULT_GIT_TIMEOUT_MS).toBe(30_000);
+    expect(resolveOverviewLimits({ maxRepos: 500, timeoutMs: 10 ** 9 })).toEqual({
+      maxRepos: MAX_REPOS_LIMIT,
+      timeoutMs: MAX_GIT_TIMEOUT_MS,
+    });
+    expect(resolveOverviewLimits({ maxRepos: -3, timeoutMs: 1 })).toEqual({
+      maxRepos: 1,
+      timeoutMs: MIN_GIT_TIMEOUT_MS,
+    });
+  });
+
+  it('lists up to maxRepos, says what the limit was, and a different limit is not answered from the old cache', async () => {
+    const ws = join(home, 'case');
+    for (const n of ['a', 'b', 'c', 'd', 'e']) repoAt(join(ws, n));
+    const three = await getGitWorkspaceOverview(ws, { home, maxRepos: 3 });
+    expect(three.repos.map((r) => r.name)).toEqual(['a', 'b', 'c']);
+    expect(three).toMatchObject({ reposTruncated: true, repoLimit: 3 });
+    // No `fresh`: the 30 s discovery cache must be keyed by the limit.
+    const ten = await getGitWorkspaceOverview(ws, { home, maxRepos: 10 });
+    expect(ten.repos).toHaveLength(5);
+    expect(ten).toMatchObject({ reposTruncated: false, repoLimit: 10 });
+  });
+
+  it('keeps a repository git could not read in the list, with the reason, instead of dropping it', async () => {
+    const ws = join(home, 'case');
+    for (const n of ['fast', 'slow']) repoAt(join(ws, n));
+    const flaky: GitRunner = (cwd, args, opts) => {
+      if (cwd.endsWith('slow')) return Promise.reject(Object.assign(new Error('timed out'), { killed: true }));
+      return runGit(cwd, args, opts);
+    };
+    const o = await getGitWorkspaceOverview(ws, { home, git: flaky });
+    expect(o.repos.map((r) => [r.name, r.status.state])).toEqual([
+      ['fast', 'ok'],
+      ['slow', 'error'],
+    ]);
+    expect(o.repos[1].status.error).toBe('git timed out');
+  });
+
+  it('passes the timeout to every git command, clamped', async () => {
+    const ws = join(home, 'case');
+    repoAt(join(ws, 'a'));
+    const seen: Array<number | undefined> = [];
+    const spy: GitRunner = (cwd, args, opts) => {
+      seen.push(opts?.timeoutMs);
+      return runGit(cwd, args, opts);
+    };
+    await getGitWorkspaceOverview(ws, { home, git: spy, timeoutMs: 45_000, fresh: true });
+    expect(seen.length).toBeGreaterThan(0);
+    expect(new Set(seen)).toEqual(new Set([45_000]));
+
+    clearGitStatusCache();
+    seen.length = 0;
+    await getGitWorkspaceOverview(ws, { home, git: spy, timeoutMs: 10 ** 9, fresh: true });
+    expect(new Set(seen)).toEqual(new Set([MAX_GIT_TIMEOUT_MS]));
+  });
+});

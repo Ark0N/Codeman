@@ -66,7 +66,11 @@ bottom bar, off by default and per device. It reads `● N` uncommitted files, `
 pushed, `⚠ N` merge conflicts, or `✓` when everything is committed and pushed. Click it for the
 Git window; see [Working With Files](Working-With-Files#git-changes). **Git status: group files
 by folder** (per device, on by default) shows changed files under collapsed folders in that
-window; off lists every file by its full path.
+window; off lists every file by its full path. **Git status: max repositories** (per device,
+1 to 50, default 12) is how many repositories the window lists when a session's folder holds
+several projects. **Git status: git timeout** (per device, 5 to 120 seconds, default 30) is how
+long one git command may run before that repository is reported as unreadable; raise it for
+repositories on a slow network share.
 
 Most default to off. The stock desktop header is system stats, File Viewer, Tiles, and the gear.
 **Header Stats Style** picks how the system stats and plan usage are drawn: *Compact*

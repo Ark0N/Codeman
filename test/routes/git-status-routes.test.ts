@@ -298,3 +298,50 @@ describe('GET /api/sessions/:id/git-diff in a folder of several repositories', (
     expect(calls.filter(([, verb]) => verb === 'status').map(([cwd]) => cwd)).toEqual([api]);
   });
 });
+
+describe('GET /api/sessions/:id/git-status limits', () => {
+  it('honours maxRepos and timeout (seconds), clamped, and reports the limit it used', async () => {
+    for (const n of ['a', 'b', 'c']) {
+      mkdirSync(join(dir, n));
+      git(join(dir, n), 'init', '-q', '-b', 'main');
+    }
+    const seen: Array<number | undefined> = [];
+    const spy: GitRunner = (cwd, args, opts) => {
+      seen.push(opts?.timeoutMs);
+      return execFileSyncGit(cwd, args);
+    };
+    const { app } = await setup({ git: spy });
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/sessions/test-session-1/git-status?maxRepos=2&timeout=7',
+    });
+    const data = res.json().data;
+    expect(data.repos.map((r: { name: string }) => r.name)).toEqual(['a', 'b']);
+    expect(data).toMatchObject({ reposTruncated: true, repoLimit: 2 });
+    expect(new Set(seen)).toEqual(new Set([7000]));
+
+    clearGitStatusCache();
+    const wild = await app.inject({
+      method: 'GET',
+      url: '/api/sessions/test-session-1/git-status?maxRepos=9999&timeout=1&fresh=1',
+    });
+    expect(wild.json().data.repoLimit).toBe(50);
+    expect(seen.at(-1)).toBe(5000);
+
+    clearGitStatusCache();
+    const junk = await app.inject({
+      method: 'GET',
+      url: '/api/sessions/test-session-1/git-status?maxRepos=abc&timeout=xyz&fresh=1',
+    });
+    expect(junk.json().data.repoLimit).toBe(12);
+    expect(seen.at(-1)).toBe(30_000);
+
+    clearGitStatusCache();
+    await app.inject({ method: 'GET', url: '/api/sessions/test-session-1/git-status?maxRepos=&timeout=&fresh=1' });
+    expect(seen.at(-1)).toBe(30_000); // empty means "not given", not 0
+  });
+});
+
+function execFileSyncGit(cwd: string, args: string[]): Promise<string> {
+  return Promise.resolve(execFileSync('git', ['--no-optional-locks', ...args], { cwd, env: ENV, encoding: 'utf8' }));
+}
