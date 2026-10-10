@@ -5,7 +5,7 @@
 
 ### Thanks
 - @Randalix for `codeman agent` (#557), the session verbs (`ls`, `spawn`, `send`, `wait`, `read`, `interrupt`, `rm`) for agents in every CLI mode, and for moving every test server onto an ephemeral port (#570), which finishes #440. Thanks also for reporting and fixing git's clone errors on non-English hosts (#568, shipped as #572 with your commit).
-- @opticon454 for four PRs: an Apply button that saves Settings without closing them (#565), configurable toast and browser-notification display times (#564), in-document links in rendered markdown that scroll to their heading (#563), and npm-based CLI installs that work when the system npm prefix is root-owned (#562).
+- @opticon454 for five PRs: MCP server sync for GitHub Copilot CLI (#581), an Apply button that saves Settings without closing them (#565), configurable toast and browser-notification display times (#564), in-document links in rendered markdown that scroll to their heading (#563), and npm-based CLI installs that work when the system npm prefix is root-owned (#562).
 - @JDProfresh for three PRs: pasted and uploaded files moving into a hidden, self-ignoring `.codeman-uploads/` folder (#574, after your #553 proposal), local echo that keeps painting on phones when the view sits above the bottom (#576), and upload failures that say why they failed (#578).
 
 ![Codeman tile grid: six live agents powering on and off with the CRT tile animation](https://raw.githubusercontent.com/Ark0N/Codeman/08694b5862534b2b1224e9e272ad9858c787ebef/release-1.41/tiles-crt-stats-800.gif)
@@ -17,6 +17,8 @@
 **`codeman agent`: session verbs for every CLI (#557).** Agents in any mode (Codex, OpenCode, Gemini, Pi and the rest, not just Claude) can now drive other Codeman sessions from the command line: `codeman agent ls | spawn | send | wait | read | interrupt | rm`. It is a thin client over the existing session API: every call names the session that made it, `wait` blocks on a signal (`--until stop,exit`) or a literal output marker (`--match`), and exit codes say what happened (`0` ok, `1` error, `2` timeout, `3` exited, `4` refused). Ids shorter than 8 characters are refused, so a stray `rm 9` can never pick a session at random, and `rm` never deletes the session it runs in. See the README section "`codeman agent`" and the wiki page Driving Codeman From An Agent. This is phase 1 of #445.
 
 **Settings: Apply (#565).** Next to Save, an Apply button saves the same way but keeps Settings open. Switching on MCP server sync makes its Preview and Sync usable straight away, and CLI management's add, enable and disable work without closing and reopening Settings.
+
+**MCP server sync reaches GitHub Copilot CLI (#581).** With MCP server sync on (App Settings, off by default), Copilot CLI's `~/.copilot/mcp-config.json` now takes part like the agent CLIs' own files: its servers are copied to the others and theirs to it, additively, with the previous file kept as `.codeman-bak`. Copilot joins only when it is installed or already has that file, a server switched off in Copilot is never copied, and `COPILOT_HOME` is followed. Copilot is a sync target only, not a new run mode.
 
 **Notifications stay up longer if you want (#564).** Settings → Notifications has a Toast display time and a Browser notification display time (1 second to 5 minutes, per device; the defaults stay 3 s and 8 s).
 
