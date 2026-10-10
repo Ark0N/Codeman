@@ -111,6 +111,8 @@ import { intentStore } from '../intent-store.js';
 import { AI_CHECK_MODEL } from '../config/ai-defaults.js';
 import { approvalInbox } from './approval-inbox.js';
 import { stopDeepSeekWeb } from '../deepseek-web-server.js';
+import { keepAwake } from '../keep-awake-manager.js';
+import { resolveKeepAwakeConfig } from '../keep-awake.js';
 import {
   wireRespawnListeners,
   setupTimedRespawn,
@@ -3142,6 +3144,10 @@ export class WebServer extends EventEmitter {
       console.log('Image watcher disabled by user settings');
     }
 
+    // Keep-awake: holds an OS sleep lock while this server runs (opt-in, default OFF).
+    // A fresh read, like the gesture flag: it decides whether a lock is taken at all.
+    void keepAwake.apply(resolveKeepAwakeConfig(await this.readSettings(true)));
+
     // Tunnel only starts when user clicks the toggle in the UI — never on boot.
     // Reset persisted tunnelEnabled so the UI toggle reflects actual state.
     if (await this.isTunnelEnabled()) {
@@ -3975,6 +3981,11 @@ export class WebServer extends EventEmitter {
     // port against the next start — the exact EADDRINUSE this feature already
     // got wrong once.
     void stopDeepSeekWeb();
+
+    // Release the sleep lock with the server, not after it. The lock would also drop on
+    // its own once this process exits (stdin pipe / caffeinate -w), but a graceful stop
+    // should not leave the macOS lid request file to go stale on its own.
+    await keepAwake.stop();
 
     // Same teardown rule: the per-endpoint llama-swap log tails are otherwise closed
     // only by the periodic idle sweep, whose interval is disposed just below.

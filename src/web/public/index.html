@@ -3107,6 +3107,27 @@
                 </div>
               </div>
 
+              <div class="set-group" id="keepAwakeGroup">
+                <div class="set-group-head"><h4>Power</h4><span class="set-scope">server</span></div>
+                <div class="set-group-body">
+                  <div class="set-row" data-search="keep awake sleep suspend standby lid close laptop notebook power caffeinate inhibit">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Keep this computer awake</span>
+                      <span class="set-row-desc">While Codeman runs, stop the machine it runs on from sleeping, including when a laptop's lid is closed, so agents keep working and stay reachable from your phone. The screen can still turn off.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsKeepAwake"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" data-search="keep awake battery ac power charger plugged in">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Only on AC power</span>
+                      <span class="set-row-desc">Sleep normally on battery. A closed laptop in a bag gets hot and drains fast.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsKeepAwakeAcOnly" checked><span class="slider"></span></label>
+                  </div>
+                  <div id="keepAwakeStatus" class="set-note" style="display:none" data-i18n-skip></div>
+                </div>
+              </div>
+
               <div class="set-group">
                 <div class="set-group-head"><h4>Remote access</h4><span class="set-scope">synced</span></div>
                 <div class="set-group-body">

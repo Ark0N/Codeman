@@ -181,8 +181,14 @@ Rebinding for the shortcut registry. See [Keyboard Shortcuts](Keyboard-Shortcuts
 `CLAUDE.md` template for new cases, default working directory, the image watcher, and
 Cloudflare tunnel controls including the tunnel URL. The **Diagnostics** group runs
 `codeman doctor` on the server and lists the agent CLIs, tmux, Node and the optional office
-tools with their versions and install hints (admin only in multi-user mode). In multi-user
-mode, the **Users** administration entry is injected here.
+tools with their versions and install hints (admin only in multi-user mode). The **Power**
+group keeps the machine Codeman runs on awake while Codeman runs (`keepAwakeEnabled`, off by
+default; **Only on AC power**, `keepAwakeAcOnly`, on by default), and shows what the lock is
+doing right now. On Linux it blocks lid-close suspend while someone is logged in to the
+desktop (the desktop's own Automatic Suspend timer is separate). On macOS it blocks idle
+sleep, and lid-close sleep too once the root helper from `install.sh keep-awake` is
+installed. Admin only in multi-user mode. In multi-user mode, the **Users** administration
+entry is injected here.
 
 ## Session Options
 

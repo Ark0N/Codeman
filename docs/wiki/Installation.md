@@ -57,6 +57,11 @@ unattended. You can leave while it builds. What it asks you:
 4. **Whether to run Codeman in the background.** Enter installs a systemd user service or a
    macOS LaunchAgent that starts on boot; answering no offers to start it in this terminal
    instead, or not at all.
+5. **On a laptop only: keep it awake while Codeman runs?** Closing the lid suspends the
+   machine, and every agent session freezes until it wakes. Yes turns on App Settings >
+   System > **Power** (only while plugged in). On a Mac it also offers a small root helper,
+   because macOS sleeps on lid close whatever an app asks; it needs your admin password
+   once. The default is no, and `--yes` never turns it on.
 
 It ends on a screen with the URL (your tailnet, your network, or this machine), a QR code to
 scan with your phone, and the two commands you need to manage the service.
@@ -75,6 +80,7 @@ install.sh uninstall    # remove (offers to undo a rename it performed)
 install.sh tailscale    # retrofit Tailscale access onto an existing install
 install.sh name [<n>]   # rename this machine on your tailnet (default codeman-<hostname>)
 install.sh cloudflared  # install cloudflared for the in-app Cloudflare tunnel
+install.sh keep-awake   # keep this machine awake while Codeman runs (macOS: adds the lid helper)
 ```
 
 **Flags** answer the questions from the command line and pipe through `bash -s --`:
