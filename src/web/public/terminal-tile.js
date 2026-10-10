@@ -19,13 +19,15 @@
  * What it does carry over from the primary pane, through the primary pane's
  * own code aimed at THIS pane (its terminal, its session, never the active
  * one):
- *  - Hollow-buffer paging (#555): a CLI that draws in place (opencode on the
- *    alternate screen, Claude's repaint mode) leaves the xterm no scrollback,
- *    so the wheel pages the CLI's own transcript with PageUp/PageDown
- *    (_maybePageCliTranscript) through the primary pane's gates, plus an
- *    overflow-row discount for this pane's capture-before-resize load
- *    (_localRows), and only while the viewport is on the live screen (a
- *    wheel-down from those overflow rows is xterm's, and brings it home).
+ *  - Hollow-buffer paging (#555): a CLI that draws in place (opencode and codex
+ *    on the alternate screen, Claude's repaint mode) leaves the xterm no
+ *    scrollback, so the wheel pages the CLI's own transcript with
+ *    PageUp/PageDown (_maybePageCliTranscript) through the primary pane's gates
+ *    and its pure gesture rules (CodemanTerminalInput.pageKeysForGesture), plus
+ *    an overflow-row discount for this pane's capture-before-resize load
+ *    (_localRows), only while the viewport is on the live screen (a wheel-down
+ *    from those overflow rows is xterm's, and brings it home), and never while
+ *    THIS pane's session has a dialog open.
  *  - The desktop click report: a plain left-click hand-encoded as SGR while
  *    the session's CLI has mouse tracking on (cliMouseTracking), for the modes
  *    whose mouse DECSETs the server strips (_installClickListener), sent
@@ -43,7 +45,7 @@
  *
  * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js
  * @dependency constants.js (window.CodemanTerminalFont, window.CodemanFetchDeadline, DEFAULT_SCROLLBACK, TERMINAL_TAIL_SIZE, TERMINAL_CHUNK_SIZE)
- * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight, CodemanTerminalInput.shouldSuppressTerminalQueryResponse/isTerminalFocusOrMouseReport/wheelDeltaLines/pageKeysForTravel, app._shouldForwardWheelToApp/_localScrollbackIsHollow/_terminalViewportAtBottom/_handleDesktopTerminalClick)
+ * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight, CodemanTerminalInput.shouldSuppressTerminalQueryResponse/isTerminalFocusOrMouseReport/wheelDeltaLines/pageKeysForGesture, app._shouldForwardWheelToApp/_localScrollbackIsHollow/_terminalViewportAtBottom/_handleDesktopTerminalClick, app.tabAlerts)
  * @dependency terminal-keycode229-recovery.js (window.CodemanKeyCode229Recovery, optional: absent, xterm's own textarea handling stands)
  * @loadorder 7.4 of 16, loaded after terminal-ui.js and before terminal-split.js
  */
@@ -198,9 +200,10 @@
       // flag, app._linkHovered, belongs to its terminal alone).
       this._linkHovered = false;
       this._onFocusIn = null;
-      // Hollow-buffer paging (_maybePageCliTranscript): wheel travel short of a
-      // whole page, carried to the next wheel event.
-      this._pageKeyPending = 0;
+      // Hollow-buffer paging (_maybePageCliTranscript): the gesture in progress
+      // (travel short of a whole page, its direction and last event time), the
+      // state CodemanTerminalInput.pageKeysForGesture hands back.
+      this._pageKeyGesture = null;
       // Page keys waiting for the 40 ms flush, and its timer (_queueScrollBytes).
       this._scrollBytes = '';
       this._scrollFlushTimer = null;
@@ -1071,17 +1074,20 @@
 
     // Hollow-buffer paging, the twin of the primary pane's
     // _maybePageCliTranscript (terminal-ui.js; keep the two in step). A CLI that
-    // draws in place (opencode, on the alternate screen; Claude's repaint mode)
-    // leaves this xterm no scrollback, so a wheel scrolled nothing; instead the
-    // travel pages the CLI's own transcript with PageUp/PageDown. Every gate is
-    // the primary pane's own, asked for THIS pane (its terminal, its session,
-    // never the active one), so the CLI rules stay in terminal-ui.js and this
-    // file names no CLI. Returns true when the wheel was consumed here.
+    // draws in place (on the alternate screen, or Claude's repaint mode) leaves
+    // this xterm no scrollback, so a wheel scrolled nothing; instead the travel
+    // pages the CLI's own transcript with PageUp/PageDown. Every gate is the
+    // primary pane's own, asked for THIS pane (its terminal, its session, never
+    // the active one), so the CLI rules stay in terminal-ui.js and this file
+    // names no CLI. The gesture rules (first-event page, notch accumulation,
+    // pinch and sideways-swipe consume) are the shared pure
+    // CodemanTerminalInput.pageKeysForGesture, run on this tile's own state.
+    // Returns true when the wheel was consumed here.
     _maybePageCliTranscript(ev) {
       if (this._destroyed || !this.terminal || !ev || ev.shiftKey) return false;
       const app = global.app;
       const input = global.CodemanTerminalInput;
-      if (!app || !input?.pageKeysForTravel || !input.wheelDeltaLines) return false;
+      if (!app || !input?.pageKeysForGesture || !input.wheelDeltaLines) return false;
       // xterm's own encoder forwards the wheel while the CLI's tracking reaches
       // it (a shell running htop), as in the primary pane.
       const tracking = this.terminal.modes?.mouseTrackingMode;
@@ -1105,8 +1111,12 @@
       if (!app._terminalViewportAtBottom?.(this.terminal)) return false;
       const lines = input.wheelDeltaLines(ev, this.terminal.rows);
       if (!lines) return false;
-      const step = input.pageKeysForTravel(this._pageKeyPending, lines, this.terminal.rows);
-      this._pageKeyPending = step.pending;
+      // An open dialog (a pending permission prompt or question) in THIS tile's
+      // session, which is usually not the active one: a page key would move its
+      // selector. Consumed, so xterm does not scroll the rows under it either.
+      if (app.tabAlerts?.get(this.sessionId) === 'action') return true;
+      const step = input.pageKeysForGesture(this._pageKeyGesture, ev, lines, this.terminal.rows, performance.now());
+      this._pageKeyGesture = step.state;
       if (step.keys) this._queueScrollBytes(step.keys);
       return true;
     }
@@ -1459,7 +1469,7 @@
       clearTimeout(this._scrollFlushTimer);
       this._scrollFlushTimer = null;
       this._scrollBytes = '';
-      this._pageKeyPending = 0;
+      this._pageKeyGesture = null;
       this._detachSocket();
       if (this._onFocusIn) {
         this.terminal?.textarea?.removeEventListener('focus', this._onFocusIn);

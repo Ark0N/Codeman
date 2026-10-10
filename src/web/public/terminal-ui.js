@@ -117,19 +117,68 @@
         : delta / 25; // DOM_DELTA_PIXEL (Chrome/WebKit, and every trackpad)
   }
 
+  // Rows of travel per page key for a terminal `rows` tall (half a screen).
+  function pageKeyRows(rows) {
+    return Math.max(2, Math.round((rows || 24) * PAGE_KEY_SCREEN_FRACTION));
+  }
+
   // Gesture travel → PageUp/PageDown keys for a terminal `rows` tall: adds
   // `lines` to the sub-page travel already `pending`, and returns the travel
-  // left over plus the keys to send ('' below one page). The arithmetic of the
-  // primary pane's _maybePageCliTranscript, pure so a TerminalTile (which keeps
-  // its own pending travel) pages identically.
+  // left over plus the keys to send ('' below one page). The plain accumulation
+  // step of pageKeysForGesture below.
   function pageKeysForTravel(pending, lines, rows) {
-    const perPage = Math.max(2, Math.round((rows || 24) * PAGE_KEY_SCREEN_FRACTION));
+    const perPage = pageKeyRows(rows);
     const total = (pending || 0) + lines;
     const pages = Math.trunc(total / perPage);
     const keys = pages
       ? (pages < 0 ? KEY_PAGE_UP : KEY_PAGE_DOWN).repeat(Math.min(Math.abs(pages), PAGE_KEY_MAX_PER_BATCH))
       : '';
     return { pending: total - pages * perPage, keys };
+  }
+
+  // One wheel or touch event of a hollow-pane gesture → the PageUp/PageDown keys
+  // to send, for a terminal `rows` tall, at time `now` (ms). Pure: `state` is
+  // the previous call's returned state (null or {} for a fresh pane), and the
+  // caller keeps it, so the primary pane and every TerminalTile page with the
+  // same gesture rules through their own state:
+  //  - a pinch (`ctrlKey`, Chrome's trackpad-pinch wheel) and a mostly
+  //    horizontal swipe (both deltas present, |deltaX| > |deltaY|) send nothing
+  //    and leave the state alone (the caller still consumes them);
+  //  - after PAGE_KEY_GESTURE_GAP_MS of quiet, or a direction change, a NEW
+  //    gesture starts, and a trackpad-sized opening event (at least
+  //    PAGE_KEY_MIN_START_ROWS, under PAGE_KEY_IMMEDIATE_MAX_ROWS) pages AT ONCE,
+  //    pre-paid: the half screen it skipped is owed back by the rest of the
+  //    gesture, so the rate stays one page per half screen. A debt left by a
+  //    pre-paid page dies with its gesture;
+  //  - everything else, a wheel notch included, accumulates through
+  //    pageKeysForTravel, carried across notches.
+  // Returns { state, keys } with keys '' when nothing is due.
+  function pageKeysForGesture(state, ev, lines, rows, now) {
+    const prev = state || {};
+    if (ev?.ctrlKey) return { state: prev, keys: '' };
+    const dx = Math.abs(ev?.deltaX || 0);
+    const dy = Math.abs(ev?.deltaY || 0);
+    if (dx && dy && dx > dy) return { state: prev, keys: '' };
+    const perPage = pageKeyRows(rows);
+    const dir = lines < 0 ? -1 : 1;
+    let pending = prev.pending || 0;
+    let prepaid = !!prev.prepaid;
+    const gestureStart =
+      typeof prev.lastAt !== 'number' || now - prev.lastAt > PAGE_KEY_GESTURE_GAP_MS || dir !== prev.dir;
+    if (gestureStart) {
+      if (prepaid) pending = 0;
+      prepaid = false;
+      const size = Math.abs(lines);
+      if (size >= PAGE_KEY_MIN_START_ROWS && size < Math.min(perPage, PAGE_KEY_IMMEDIATE_MAX_ROWS)) {
+        // Pre-pay one page; the skipped travel is owed back (pending carries the opposite sign).
+        return {
+          state: { pending: lines - dir * perPage, lastAt: now, dir, prepaid: true },
+          keys: dir < 0 ? KEY_PAGE_UP : KEY_PAGE_DOWN,
+        };
+      }
+    }
+    const step = pageKeysForTravel(pending, lines, rows);
+    return { state: { pending: step.pending, lastAt: now, dir, prepaid }, keys: step.keys };
   }
 
   const TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM = 4;
@@ -271,6 +320,7 @@
     PAGE_KEY_MAX_PER_BATCH,
     wheelDeltaLines,
     pageKeysForTravel,
+    pageKeysForGesture,
     PAGE_KEY_GESTURE_GAP_MS,
     PAGE_KEY_MIN_START_ROWS,
     PAGE_KEY_IMMEDIATE_MAX_ROWS,
@@ -5760,54 +5810,34 @@ Object.assign(CodemanApp.prototype, {
    * @returns true when the gesture was consumed here (the caller must not also
    *          scroll locally).
    *
+   * The gesture rules above live in the pure CodemanTerminalInput.pageKeysForGesture
+   * (top of this file); this method adds the gates and keeps the state.
+   *
    * Twin: TerminalTile._maybePageCliTranscript (terminal-tile.js) pages a tile
-   * through the same gates and the same pageKeysForTravel arithmetic; keep the
-   * two in step. The tile adds one gate this pane cannot need, viewport at the
+   * through the same gates and the same pageKeysForGesture, with its own state
+   * and its OWN session's dialog check; keep the two in step. The tile adds one gate this pane cannot need, viewport at the
    * bottom: hollow here means baseY 0, so this viewport is always there, while a
    * tile is hollow with its own discounted rows still above the screen.
    */
   _maybePageCliTranscript(ev, lines) {
     if (!lines || ev?.shiftKey || !this.activeSessionId) return false;
     if (!this._localScrollbackIsHollow()) return false;
-    if (ev?.ctrlKey) return true; // pinch
-    const dx = Math.abs(ev?.deltaX || 0);
-    const dy = Math.abs(ev?.deltaY || 0);
-    if (dx && dy && dx > dy) return true; // mostly horizontal swipe
-    if (this.tabAlerts?.get(this.activeSessionId) === 'action') return true; // dialog up
-    // Leftover travel belongs to the tab it was made on.
+    // An open dialog in THIS pane's session (the active one): a page key would
+    // move its selector. Consumed, so the buffer does not scroll under it either.
+    if (this.tabAlerts?.get(this.activeSessionId) === 'action') return true;
+    // Leftover travel and the gesture in progress belong to the tab they were made on.
     if (this._pageKeySession !== this.activeSessionId) {
       this._pageKeySession = this.activeSessionId;
-      this._pageKeyPending = 0;
-      this._pageKeyLastAt = undefined;
-      this._pageKeyPrepaid = false;
+      this._pageKeyGesture = null;
     }
-    const tuning = window.CodemanTerminalInput;
-    const perPage = Math.max(2, Math.round((this.terminal?.rows || 24) * tuning.PAGE_KEY_SCREEN_FRACTION));
-    const now = performance.now();
-    const dir = lines < 0 ? -1 : 1;
-    const gestureStart =
-      typeof this._pageKeyLastAt !== 'number' ||
-      now - this._pageKeyLastAt > tuning.PAGE_KEY_GESTURE_GAP_MS ||
-      dir !== this._pageKeyDir;
-    this._pageKeyLastAt = now;
-    this._pageKeyDir = dir;
-    if (gestureStart) {
-      // A debt left by an earlier pre-paid page dies with its gesture; plain
-      // wheel travel keeps accumulating across notches.
-      if (this._pageKeyPrepaid) this._pageKeyPending = 0;
-      this._pageKeyPrepaid = false;
-      const size = Math.abs(lines);
-      if (size >= tuning.PAGE_KEY_MIN_START_ROWS && size < Math.min(perPage, tuning.PAGE_KEY_IMMEDIATE_MAX_ROWS)) {
-        // Pre-pay one page; the skipped travel is owed back (pending carries the opposite sign).
-        this._pageKeyPrepaid = true;
-        this._pageKeyPending = lines - dir * perPage;
-        this._queueScrollBytes(dir < 0 ? tuning.KEY_PAGE_UP : tuning.KEY_PAGE_DOWN);
-        this._logScrollRouting('page-keys');
-        return true;
-      }
-    }
-    const step = tuning.pageKeysForTravel(this._pageKeyPending, lines, this.terminal?.rows);
-    this._pageKeyPending = step.pending;
+    const step = window.CodemanTerminalInput.pageKeysForGesture(
+      this._pageKeyGesture,
+      ev,
+      lines,
+      this.terminal?.rows,
+      performance.now()
+    );
+    this._pageKeyGesture = step.state;
     if (step.keys) this._queueScrollBytes(step.keys);
     this._logScrollRouting('page-keys');
     return true;

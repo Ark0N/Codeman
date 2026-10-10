@@ -497,6 +497,11 @@ const OPENCODE: CliEntry = {
     ...agentDefaults(),
     altScreen: 'strip-mux-and-mouse',
     echo: { policy: 'buffer', anchor: { kind: 'cursor' }, predictProfile: undefined },
+    // Pages its own transcript on PageUp/PageDown (`messages_page_up/down`) and ignores
+    // SGR wheel reports, and its TUI runs on the alternate screen (1.18.31: tmux
+    // `alternate_on=1`, `history_size=0`), so a pane keeps no local history and the
+    // wheel is turned into page keys or it does nothing at all (#555).
+    transcriptPageKeys: true,
     // Measured on a live opencode 1.3.0 pane (capture-pane every 250-300 ms through real
     // turns at 40, 60, 120 and 200 columns, plus the raw PTY stream, 2026-10-09). Every
     // composer row starts with a `┃` bar, and the submitted prompt lands in the transcript

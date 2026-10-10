@@ -170,6 +170,7 @@ describe('WebServer.renderIndexHtml', () => {
       const modes = JSON.parse(match![1]) as string[];
       expect(modes).toContain('claude');
       expect(modes).toContain('codex');
+      expect(modes).toContain('opencode');
       expect(modes).not.toContain('shell');
       expect(modes).not.toContain('gemini');
     }

@@ -274,6 +274,16 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
     expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[6~' }]);
   });
 
+  it("reads the ACTIVE session's dialog, not some other tab's", () => {
+    const { app, sent } = hollowApp();
+    // A tile or a background tab with a pending prompt does not block this pane.
+    app.tabAlerts = new Map([['tile-1', 'action']]);
+
+    app._maybePageCliTranscript({ shiftKey: false }, -1);
+    app._flushWheelSgrQueue();
+    expect(sent).toEqual([{ id: 'sess-1', data: '\x1b[5~' }]);
+  });
+
   it('does not page on sub-row jitter that opens a gesture', () => {
     const { app, sent } = hollowApp();
 
@@ -416,10 +426,84 @@ describe('PageUp/PageDown fallback for a hollow local buffer (issue #205 round 2
   });
 });
 
+describe('pageKeysForGesture, the pure gesture rules both panes share', () => {
+  const UP = '\x1b[5~';
+  const DOWN = '\x1b[6~';
+  const helper = () => loadTerminalUiHarness().windowRef.CodemanTerminalInput.pageKeysForGesture;
+  type Step = { state: unknown; keys: string };
+  /** Runs [lines, msSinceStart, extra] events through the helper; returns every step. */
+  function run(events: Array<[number, number, Record<string, unknown>?]>, rows = 36) {
+    const pageKeysForGesture = helper();
+    let state: unknown = null;
+    return events.map(([lines, at, extra]) => {
+      const step: Step = pageKeysForGesture(state, { shiftKey: false, ...extra }, lines, rows, 10_000 + at);
+      state = step.state;
+      return step;
+    });
+  }
+
+  it('pages a trackpad-sized opening event at once and owes the half screen back', () => {
+    const steps = run([
+      [-1, 0],
+      [-16, 10],
+      [-18, 20],
+      [-1, 30],
+    ]);
+    expect(steps.map((s) => s.keys)).toEqual([UP, '', '', UP]);
+  });
+
+  it('accumulates a notch-sized opening event, and carries plain travel across notches', () => {
+    // Five 4-row notches 400 ms apart: each is a new gesture, none pages alone.
+    const steps = run([
+      [-4, 0],
+      [-4, 400],
+      [-4, 800],
+      [-4, 1200],
+      [-4, 1600],
+    ]);
+    expect(steps.map((s) => s.keys).join('')).toBe(UP);
+  });
+
+  it('drops a pre-paid debt when its gesture ends', () => {
+    // A flick pre-pays a page; a second flick after a pause pages at once again
+    // instead of first paying off the first one's debt.
+    const steps = run([
+      [-1, 0],
+      [-1, 500],
+    ]);
+    expect(steps.map((s) => s.keys)).toEqual([UP, UP]);
+  });
+
+  it('starts a new gesture on a direction change, and ignores sub-row jitter', () => {
+    const steps = run([
+      [-1, 0],
+      [1, 10],
+      [0.05, 20],
+      [-0.05, 1000],
+    ]);
+    expect(steps.map((s) => s.keys)).toEqual([UP, DOWN, '', '']);
+  });
+
+  it('sends nothing for a pinch or a mostly horizontal swipe, and leaves the state as it was', () => {
+    const pageKeysForGesture = helper();
+    const state = { pending: -7, lastAt: 9_990, dir: -1, prepaid: false };
+    const pinch = pageKeysForGesture(state, { ctrlKey: true, deltaY: -900 }, -36, 36, 10_000);
+    const swipe = pageKeysForGesture(state, { deltaX: -1000, deltaY: -900 }, -36, 36, 10_000);
+    expect(pinch).toEqual({ state, keys: '' });
+    expect(swipe).toEqual({ state, keys: '' });
+    // A mostly VERTICAL swipe with some sideways drift still pages.
+    expect(pageKeysForGesture(state, { deltaX: -100, deltaY: -900 }, -36, 36, 10_000).keys).toBe(UP.repeat(2));
+  });
+
+  it('caps a fling at PAGE_KEY_MAX_PER_BATCH keys', () => {
+    expect(run([[-1000, 0]])[0].keys).toBe(UP.repeat(3));
+  });
+});
+
 describe('the paging gates asked for another pane (a TerminalTile)', () => {
   it('exports the paging math, and the primary pane runs on it', () => {
     const { app, sent, windowRef } = hollowApp();
-    const { wheelDeltaLines, pageKeysForTravel } = windowRef.CodemanTerminalInput;
+    const { wheelDeltaLines, pageKeysForTravel, pageKeysForGesture } = windowRef.CodemanTerminalInput;
 
     expect(wheelDeltaLines({ deltaY: -50, deltaMode: 0 }, 36)).toBe(-2); // pixels, 25 a line
     expect(wheelDeltaLines({ deltaY: 3, deltaMode: 1 }, 36)).toBe(3); // lines (Firefox)
@@ -433,19 +517,31 @@ describe('the paging gates asked for another pane (a TerminalTile)', () => {
     // The primary pane's own methods agree with them.
     const ev = { deltaY: -250, deltaMode: 2 };
     expect(app._wheelScrollLinesFloat(ev)).toBe(wheelDeltaLines(ev, 36));
-    let pending = 0;
+    let state: unknown = null;
     let expected = '';
-    // One direction under a frozen clock, opening past the page size: a single
-    // gesture that accumulates, which is exactly the pure helper's arithmetic.
-    for (const lines of [-20, -10, -30, -1000, -7]) {
-      const step = pageKeysForTravel(pending, lines, 36);
-      pending = step.pending;
+    // Mixed: a trackpad opening, a notch-sized opening, a reversal, a pinch and
+    // a sideways swipe, all under a frozen clock (one gesture per direction).
+    const steps: Array<[number, Record<string, unknown>]> = [
+      [-1, {}],
+      [-10, {}],
+      [-30, {}],
+      [1, {}],
+      [-5, { ctrlKey: true }],
+      [-5, { deltaX: 400, deltaY: -125 }],
+      [-1000, {}],
+      [-7, {}],
+    ];
+    for (const [lines, extra] of steps) {
+      const event = { shiftKey: false, ...extra };
+      const step = pageKeysForGesture(state, event, lines, 36, 1_000);
+      state = step.state;
       expected += step.keys;
-      app._maybePageCliTranscript({ shiftKey: false }, lines);
+      app._maybePageCliTranscript(event, lines);
     }
     app._flushWheelSgrQueue();
-    expect(app._pageKeyPending).toBe(pending);
-    expect(expected).not.toBe('');
+    expect(app._pageKeyGesture).toEqual(state);
+    expect(expected).toContain('\x1b[5~');
+    expect(expected).toContain('\x1b[6~');
     expect(sent).toEqual([{ id: 'sess-1', data: expected }]);
   });
 
