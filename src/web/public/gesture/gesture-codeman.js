@@ -4448,6 +4448,7 @@ var GestureController = class {
 
 // packages/gesture-control/src/codeman/entry.ts
 var TAB_SELECTOR = ".session-tab";
+var TILE_SELECTOR = "#tileGrid .tile";
 var PANEL_SELECTOR = ".cg-float";
 var WINDOW_SELECTOR = ".subagent-window, .ultracode-window";
 var DOCK_SELECTOR = ".session-tabs";
@@ -4457,6 +4458,8 @@ var FLOAT_W = 640;
 var FLOAT_H = 420;
 var DETACH_PULL_PX = 70;
 var TAP_CANCEL_PX = 45;
+var TILE_MOVE_PX = 40;
+var TILE_GHOST_W = 280;
 var handColor = (handedness, pinching) => pinching ? "#4ade80" : handedness === "Right" ? "#a78bfa" : "#38bdf8";
 var GestureBridge = class {
   constructor() {
@@ -4533,7 +4536,7 @@ var GestureBridge = class {
       await this.gc.start();
       this.running = true;
       this.button.classList.add("on");
-      this.status.textContent = "on \u2014 pinch a tab, window, or button";
+      this.status.textContent = "on: pinch a tab, tile, window, or button";
     } catch (err) {
       const msg = describeError(err);
       this.status.textContent = `failed: ${msg}`;
@@ -4588,6 +4591,30 @@ var GestureBridge = class {
       this.status.textContent = "moving window";
       return;
     }
+    const tileId = window.app?.tileAtPoint?.(x2, y2) ?? null;
+    const tileEl = tileId ? this.hitClosest(x2, y2, TILE_SELECTOR) : null;
+    if (tileId && tileEl && window.app?.canGrabTile?.(tileId)) {
+      const rect = tileEl.getBoundingClientRect();
+      const ghost = this.tileGhost(tileEl, rect);
+      document.body.append(ghost);
+      tileEl.classList.add("tile--dragging");
+      this.grabs.set(hand, {
+        kind: "tile",
+        id: tileId,
+        el: tileEl,
+        ghost,
+        offsetX: Math.max(0, Math.min(x2 - rect.left, rect.width)),
+        offsetY: Math.max(0, Math.min(y2 - rect.top, rect.height)),
+        ox: x2,
+        oy: y2,
+        armed: false,
+        target: null,
+        out: false
+      });
+      this.positionGhost(ghost, x2, y2);
+      this.status.textContent = "moving tile";
+      return;
+    }
     const tab = this.hitClosest(x2, y2, TAB_SELECTOR);
     const id = tab?.dataset.id;
     if (tab && id) {
@@ -4599,7 +4626,7 @@ var GestureBridge = class {
       ghost.style.height = `${rect.height}px`;
       document.body.append(ghost);
       tab.classList.add("cg-grabbed");
-      this.grabs.set(hand, { kind: "tab", id, tab, ghost, ox: x2, oy: y2, armed: false });
+      this.grabs.set(hand, { kind: "tab", id, tab, ghost, ox: x2, oy: y2, armed: false, target: null });
       this.positionGhost(ghost, x2, y2);
       return;
     }
@@ -4613,13 +4640,30 @@ var GestureBridge = class {
   }
   onDrag(hand, x2, y2) {
     const grab = this.grabs.get(hand);
+    if (grab?.kind === "tile") {
+      this.positionGhost(grab.ghost, x2, y2);
+      if (!grab.armed && Math.hypot(x2 - grab.ox, y2 - grab.oy) >= TILE_MOVE_PX) grab.armed = true;
+      if (!grab.armed) return;
+      const app = window.app;
+      const target = app?.tileDropTargetAt?.(x2, y2, grab.id) ?? null;
+      this.setTileTarget(grab, target);
+      const out = !target && !!app?.tileDetachEnabled?.() && !app?.isOverTileGrid?.(x2, y2);
+      grab.out = out;
+      grab.ghost.classList.toggle("cg-armed", !!target);
+      grab.ghost.classList.toggle("cg-out", out);
+      this.status.textContent = target ? target.kind === "tile" ? "release to swap tiles" : "release to move the tile here" : out ? "release to open in a new window" : "moving tile";
+      return;
+    }
     if (grab?.kind === "tab") {
       this.positionGhost(grab.ghost, x2, y2);
       const pulled = Math.hypot(x2 - grab.ox, y2 - grab.oy) >= DETACH_PULL_PX;
-      if (pulled !== grab.armed) {
+      const target = pulled ? window.app?.tileDropTargetAt?.(x2, y2, grab.id) ?? null : null;
+      const targetChanged = (target?.el ?? null) !== (grab.target?.el ?? null);
+      this.setTileTarget(grab, target);
+      if (pulled !== grab.armed || targetChanged) {
         grab.armed = pulled;
         grab.ghost.classList.toggle("cg-armed", pulled);
-        this.status.textContent = pulled ? "release to float out" : "on \u2014 pinch a tab";
+        this.status.textContent = target ? "release to tile it here" : pulled ? "release to float out" : "on \u2014 pinch a tab";
       }
       return;
     }
@@ -4641,16 +4685,40 @@ var GestureBridge = class {
     if (tap && Math.hypot(x2 - tap.ox, y2 - tap.oy) > TAP_CANCEL_PX) {
       tap.el.classList.remove("cg-tap-armed");
       this.taps.delete(hand);
-      this.status.textContent = "on \u2014 pinch a tab, window, or button";
+      this.status.textContent = "on: pinch a tab, tile, window, or button";
     }
   }
   onDrop(hand, x2, y2) {
     const grab = this.grabs.get(hand);
+    if (grab?.kind === "tile") {
+      this.grabs.delete(hand);
+      grab.ghost.remove();
+      grab.el.classList.remove("tile--dragging");
+      this.setTileTarget(grab, null);
+      const app = window.app;
+      if (!grab.armed) {
+        this.flash("cancelled");
+        return;
+      }
+      const target = app?.tileDropTargetAt?.(x2, y2, grab.id) ?? null;
+      if (target) {
+        this.flash(app?.dropOnTileTarget?.(grab.id, target) ? "moved tile" : "cancelled");
+      } else if (grab.out && !app?.isOverTileGrid?.(x2, y2)) {
+        const opened = app?.detachTileAtPoint?.(grab.id, x2, y2, { offsetX: grab.offsetX, offsetY: grab.offsetY });
+        this.flash(opened ? "opened in a new window" : "pop-out blocked: allow popups for this site");
+      } else {
+        this.flash("cancelled");
+      }
+      return;
+    }
     if (grab?.kind === "tab") {
       this.grabs.delete(hand);
       grab.ghost.remove();
       grab.tab.classList.remove("cg-grabbed");
-      if (grab.armed) this.floatPanel(grab.id, x2, y2);
+      this.setTileTarget(grab, null);
+      const target = grab.armed ? window.app?.tileDropTargetAt?.(x2, y2, grab.id) ?? null : null;
+      if (target) this.flash(window.app?.dropOnTileTarget?.(grab.id, target) ? "tiled" : "cancelled");
+      else if (grab.armed) this.floatPanel(grab.id, x2, y2);
       else this.flash("cancelled");
       return;
     }
@@ -4775,11 +4843,41 @@ var GestureBridge = class {
     ghost.style.left = `${x2}px`;
     ghost.style.top = `${y2}px`;
   }
+  /** A small copy of a tile to follow the hand: its header (a copy: no
+   *  listeners come along) over an empty body, in the tile's proportions. */
+  tileGhost(tileEl, rect) {
+    const ghost = el("div", "cg-ghost cg-tile-ghost");
+    const width = Math.min(TILE_GHOST_W, rect.width);
+    ghost.style.width = `${width}px`;
+    ghost.style.height = `${Math.max(48, Math.round(width * rect.height / Math.max(1, rect.width)))}px`;
+    const header = tileEl.querySelector(".tile-header");
+    if (header) {
+      const copy = header.cloneNode(true);
+      copy.removeAttribute("draggable");
+      ghost.append(copy);
+    }
+    ghost.append(el("div", "cg-tile-ghost-body"));
+    return ghost;
+  }
+  /** Highlights the tile or empty cell a carried session would drop onto
+   *  (the mouse drag's own `tile--drop-target`), clearing the last one. */
+  setTileTarget(grab, target) {
+    if (grab.target?.el !== target?.el) {
+      grab.target?.el.classList.remove("tile--drop-target");
+      target?.el.classList.add("tile--drop-target");
+    }
+    grab.target = target;
+  }
   cancelAllGrabs() {
     for (const grab of this.grabs.values()) {
       if (grab.kind === "tab") {
         grab.ghost.remove();
         grab.tab.classList.remove("cg-grabbed");
+        this.setTileTarget(grab, null);
+      } else if (grab.kind === "tile") {
+        grab.ghost.remove();
+        grab.el.classList.remove("tile--dragging");
+        this.setTileTarget(grab, null);
       } else if (grab.kind === "panel") {
         grab.panel.el.style.pointerEvents = "";
         grab.panel.el.classList.remove("cg-float-grabbed", "cg-redock");
@@ -4791,6 +4889,7 @@ var GestureBridge = class {
     for (const tap of this.taps.values()) tap.el.classList.remove("cg-tap-armed");
     this.taps.clear();
     document.querySelectorAll(`${TAB_SELECTOR}.cg-grabbed, .cg-tap-armed, .cg-win-grabbed`).forEach((t2) => t2.classList.remove("cg-grabbed", "cg-tap-armed", "cg-win-grabbed"));
+    document.querySelectorAll(`${TILE_SELECTOR}.tile--dragging`).forEach((t2) => t2.classList.remove("tile--dragging"));
   }
   onStatus(fps, hands) {
     const { width, height } = this.canvas;
@@ -4863,6 +4962,13 @@ function injectStyles() {
     outline: 2px solid #38bdf8; outline-offset: -2px;
   }
   .cg-ghost.cg-armed { outline-color: #4ade80; box-shadow: 0 8px 28px rgba(74,222,128,.5); }
+  .cg-ghost.cg-out { outline-color: #fbbf24; box-shadow: 0 8px 28px rgba(251,191,36,.5); }
+  .cg-tile-ghost {
+    display: flex; flex-direction: column; overflow: hidden; transform: translate(-50%, -20%) scale(1);
+    background: var(--term-bg, #161b23); border: 1px solid var(--border-color, #333);
+  }
+  .cg-tile-ghost > .tile-header { flex: 0 0 auto; }
+  .cg-tile-ghost-body { flex: 1 1 auto; opacity: .5; }
   .cg-dock {
     position: fixed; right: 12px; bottom: 156px; z-index: ${Z2 + 3};
     display: flex; align-items: center; gap: 8px; font: 12px/1 system-ui, sans-serif;

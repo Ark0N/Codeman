@@ -329,10 +329,14 @@ Object.assign(CodemanApp.prototype, {
       { label: 'Session options', run: () => this.openSessionOptions(sessionId) },
       // Group placement (vertical rail with a tab layout only; [] elsewhere).
       ...(this._tabRefMoveActions?.({ kind: 'session', id: sessionId }) || []),
-      ...((this.tabDetachButtonEnabled?.(settings) ?? settings.showTabDetachButton) ||
-      this.detachedSessions?.has(sessionId)
-        ? [{ label: 'Open in a new window', run: () => this.detachSession(sessionId) }]
-        : []),
+      // A tile (Detach Tiles on) opens its own size, over where it is: the
+      // keyboard's way to what dragging its header out of the window does.
+      ...(this._tileGrid?.has?.(sessionId) && this._tileDetachAllowed?.()
+        ? [{ label: 'Open in a new window', run: () => this.detachTile(sessionId) }]
+        : (this.tabDetachButtonEnabled?.(settings) ?? settings.showTabDetachButton) ||
+            this.detachedSessions?.has(sessionId)
+          ? [{ label: 'Open in a new window', run: () => this.detachSession(sessionId) }]
+          : []),
       { label: 'Close session', className: 'danger', run: () => this.requestCloseSession(sessionId) },
     ];
     for (const action of actions) {

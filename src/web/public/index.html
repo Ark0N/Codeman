@@ -860,6 +860,7 @@
               <div><kbd>Alt/Option</kbd>+<kbd>Shift</kbd>+<kbd>Arrows</kbd></div><div>Focus Tile Left / Right / Up / Down</div>
               <div><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Arrows</kbd></div><div>Move Tile Left / Right / Up / Down</div>
               <div><kbd>Drag</kbd> a tile's header</div><div>Move the Tile (onto Another: Swap)</div>
+              <div><kbd>Drag</kbd> a tile's header out of the window</div><div>Open the Tile in Its Own Window (Detach Tiles)</div>
               <div><kbd>Alt/Option</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd></div><div>Zoom Focused Tile</div>
               <div><kbd>Ctrl/Cmd</kbd>+<kbd>Click</kbd> a tab</div><div>Add the Session to the Tile Grid</div>
               <div><kbd>Right-click</kbd> the Tiles button</div><div>Choose How Many Tiles (2, 4 or 6)</div>
@@ -2232,6 +2233,13 @@
                       <span class="set-row-desc">Open a session in its own window from the tab.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsShowTabDetachButton"><span class="slider"></span></label>
+                  </div>
+                  <div class="set-row" id="appSettingsTileDetachItem" data-search="detach tiles tile pop out window drag move another window">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Detach Tiles <span class="set-tag">desktop</span> <span class="set-tag set-tag-beta">beta</span></span>
+                      <span class="set-row-desc">Drag a tile's header out of the browser to open it in its own window, or onto another Codeman window's tiles to move it there. A popped-out window's title drags back onto tiles.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsTileDetach"><span class="slider"></span></label>
                   </div>
                   <div class="set-row" id="appSettingsLineageLinesItem" data-search="lineage lines spawned worker parent connection">
                     <div class="set-row-text">

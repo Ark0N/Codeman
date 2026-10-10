@@ -1667,8 +1667,12 @@ class CodemanApp {
    * side-effect-light. Calling it again for an already-open window just raises
    * that window.
    * @param {string} id session id
+   * @param {{width?: number, height?: number, left?: number, top?: number}} [placement]
+   *   the new window's size and screen position (a detached tile opens its own
+   *   size, where it was let go); omitted, the default 960x680 wherever the
+   *   browser puts it. A host window ignores it.
    */
-  detachSession(id) {
+  detachSession(id, placement = null) {
     if (this.isSoloWindow) return;            // a solo window can't spawn more
     if (!this.sessions.has(id)) return;
     // Already detached → raise the existing popup instead of opening (or
@@ -1696,7 +1700,7 @@ class CodemanApp {
       this._postWindowMessage({ type: 'detached', id });
       return;
     }
-    const features = 'width=960,height=680,menubar=no,toolbar=no,location=no,status=no';
+    const features = this._detachWindowFeatures(placement);
     let win = null;
     try { win = window.open(CodemanBase.url('/session/' + encodeURIComponent(id)), 'codeman-session-' + id, features); } catch {}
     if (!win) {
@@ -1708,6 +1712,21 @@ class CodemanApp {
     this._watchDetachedWindow(id, win);
     this._postWindowMessage({ type: 'detached', id });
     try { win.focus(); } catch {}
+  }
+
+  /**
+   * The window.open features of a pop-out: `placement`'s size (default
+   * 960x680) and, when it has one, its screen position. Only finite numbers
+   * make it into the string.
+   */
+  _detachWindowFeatures(placement) {
+    const int = (v) => (Number.isFinite(v) ? Math.round(v) : null);
+    const width = int(placement?.width) ?? 960;
+    const height = int(placement?.height) ?? 680;
+    const left = int(placement?.left);
+    const top = int(placement?.top);
+    const at = left !== null && top !== null ? `,left=${left},top=${top}` : '';
+    return `width=${width},height=${height}${at},menubar=no,toolbar=no,location=no,status=no`;
   }
 
   /**
@@ -1878,11 +1897,15 @@ class CodemanApp {
     if (!msg || typeof msg !== 'object') return;
     if (this.isSoloWindow) {
       // Roll-call has no id (broadcast to all) — answer before the id filter.
-      if (msg.type === 'roll-call') { this._postWindowMessage({ type: 'detached', id: this.soloSessionId }); return; }
+      // A window that has handed its session back stays silent.
+      if (msg.type === 'roll-call') {
+        if (!this._soloReleased) this._postWindowMessage({ type: 'detached', id: this.soloSessionId });
+        return;
+      }
       if (msg.id !== this.soloSessionId) return;
       // A host window ignores window.close()/focus() from script it did not
       // open by window.open, so ask the host when it offers the call.
-      if (msg.type === 'close-request') { this._closeSoloWindow(); }
+      if (msg.type === 'close-request') { this._releaseSoloWindow(); }
       else if (msg.type === 'focus-request') {
         try { if (typeof window.CodemanHost?.focusWindow === 'function') window.CodemanHost.focusWindow(); else window.focus(); } catch {}
       }
@@ -1890,6 +1913,10 @@ class CodemanApp {
     }
     // Dashboard side.
     if (msg.type === 'detached' && msg.id) {
+      // A pop-out this window just docked as a tile (Detach Tiles), answering
+      // a roll-call on its way out: not a new pop-out, which would take the
+      // tile straight back off.
+      if (this._tileDockedRecently?.(msg.id)) return;
       this._cancelPendingRedock(msg.id);    // a re-announce (e.g. popup reload) cancels a deferred redock
       this._detachPingPending?.delete(msg.id);  // and proves liveness for this tick
       this._detachOrphanStrikes.delete(msg.id); // any answer clears accumulated misses
@@ -1899,6 +1926,9 @@ class CodemanApp {
     } else if (msg.type === 'detach-request' && msg.id) {
       // Future gesture hook: another window asks the dashboard to detach a tab.
       this.detachSession(msg.id);
+    } else if (msg.type === 'tile-adopted' && msg.id && msg.by !== this._wsTabNonce) {
+      // Another window docked a tile dragged out of this one (tile-grid.js).
+      this._onTileAdoptedElsewhere?.(msg.id);
     }
   }
 
@@ -1945,6 +1975,41 @@ class CodemanApp {
     } catch {}
   }
 
+  /**
+   * Solo window: a dashboard took the session back (its re-dock, or a
+   * dashboard docked it as a tile). Says so at once and stops answering
+   * roll-calls, then closes. A window the browser will not let a script
+   * close (one opened by typing its URL) says where the session went
+   * instead, rather than staying a live pop-out that every dashboard would
+   * mark detached again at its next roll-call.
+   */
+  _releaseSoloWindow() {
+    if (this._soloReleased) return;
+    this._soloReleased = true;
+    this._postWindowMessage({ type: 'redocked', id: this.soloSessionId });
+    this._closeSoloWindow();
+    setTimeout(() => {
+      if (!window.closed) this._showSoloReleased();
+    }, 300);
+  }
+
+  /** Solo window: the session went back to a dashboard and this window could not close. */
+  _showSoloReleased() {
+    if (document.querySelector('.solo-gone-overlay')) return;
+    const el = document.createElement('div');
+    el.className = 'solo-gone-overlay';
+    const title = document.createElement('h2');
+    title.textContent = 'Session moved';
+    const text = document.createElement('p');
+    text.textContent = 'This session is back in a Codeman window. This one can be closed.';
+    const btn = document.createElement('button');
+    btn.className = 'btn-primary';
+    btn.textContent = 'Close window';
+    btn.addEventListener('click', () => this._closeSoloWindow());
+    el.append(title, text, btn);
+    document.body.appendChild(el);
+  }
+
   /** Solo window: select the target session and apply minimal single-session
    *  chrome. Called from handleInit once the session list has loaded. */
   _applySoloMode() {
@@ -1960,6 +2025,8 @@ class CodemanApp {
     if (titleEl) { titleEl.textContent = name; titleEl.style.display = ''; }
     const redock = document.getElementById('soloRedockBtn');
     if (redock) redock.style.display = '';
+    // Detach Tiles: the title drags onto a dashboard's tiles to dock there.
+    this._installSoloTileHandle?.();
     document.title = name + ' — ' + (window.CodemanI18n?.displayName || 'Codeman');
     if (this.notificationManager) this.notificationManager.originalTitle = document.title;
     // Neutralize the dashboard-only brand click in a solo window.
