@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { formatCursorRestore, formatPaneSnapshot, hasVisibleContent } from '../src/tmux-manager.js';
+import { formatCursorRestore, formatPaneSnapshot, hasVisibleContent, queryPaneCursor } from '../src/tmux-manager.js';
 
 describe('tmux full-history pane capture (COD-47)', () => {
   const source = readFileSync(resolve(import.meta.dirname, '../src/tmux-manager.ts'), 'utf8');
@@ -169,5 +169,29 @@ describe('why a capture has to report its height', () => {
     expect(Math.max(...addressed)).toBe(50);
     // A 30-row terminal cannot honour 20 of those addresses.
     expect(addressed.filter((row) => row > 30)).toHaveLength(20);
+  });
+});
+
+describe('queryPaneCursor history depth', () => {
+  it('reads tmux history_size as an optional fifth field', () => {
+    expect(queryPaneCursor(() => '4 22 133 24 25000\n')).toEqual({
+      cols: 133,
+      rows: 24,
+      cursorX: 4,
+      cursorY: 22,
+      historySize: 25000,
+    });
+  });
+
+  it('keeps the geometry and omits the depth when the fifth field is missing or invalid', () => {
+    for (const raw of ['4 22 133 24', '4 22 133 24 abc', '4 22 133 24 -1']) {
+      const geometry = queryPaneCursor(() => raw);
+      expect(geometry, raw).toEqual({ cols: 133, rows: 24, cursorX: 4, cursorY: 22 });
+    }
+  });
+
+  it('asks tmux for the history depth in the same display-message as the cursor', () => {
+    const source = readFileSync(resolve(import.meta.dirname, '../src/tmux-manager.ts'), 'utf8');
+    expect(source).toContain("'#{cursor_x} #{cursor_y} #{pane_width} #{pane_height} #{history_size}'");
   });
 });

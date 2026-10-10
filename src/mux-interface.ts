@@ -204,6 +204,13 @@ export interface PaneCaptureOptions {
    * rendering it needs the real height to know the frame fits.
    */
   capturedGeometry?: { cols: number; rows: number };
+  /**
+   * Filled in by the implementation with the pane's scrollback depth (lines
+   * above the screen) at capture time, when it can tell. A full-history
+   * capture bounded by `historyLimitLines` below this depth left older lines
+   * behind in the multiplexer, which the caller must report as recoverable.
+   */
+  capturedHistorySize?: number;
 }
 
 /**

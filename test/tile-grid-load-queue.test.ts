@@ -216,14 +216,14 @@ describe('initial loads', () => {
     expect(states.filter(([id]) => id === 'b').map(([, s]) => s)).toEqual(['queued', 'running', 'idle']);
   });
 
-  it('loads a bounded window: full=1&tail= for a TUI, tail= for a shell', async () => {
+  it("loads a bounded window of tmux's rendered history: the tile's lines for a TUI, the shell bound for a shell", async () => {
     const { tiles } = makeGrid(['tui', 'sh'], { modes: { sh: 'shell' } });
     const connecting = tiles.map((t) => t.connect());
     await drain();
     await Promise.all(connecting);
     expect(captures.map((c) => c.url)).toEqual([
       `/api/sessions/tui/terminal?full=1&tail=${TAIL}${LINES}`,
-      `/api/sessions/sh/terminal?tail=${TAIL}`,
+      `/api/sessions/sh/terminal?full=1&tail=${TAIL}&lines=10000`,
     ]);
   });
 

@@ -3203,15 +3203,16 @@ class CodemanApp {
     this._terminalRefreshOwner = refreshOwner;
     try {
       // A shell can retain a multi-megabyte/100k-line tmux history. Automatic
-      // recovery stays bounded just like normal shell selection; only the
-      // explicit "Load full history" action is allowed to pay for a full replay.
+      // recovery stays bounded just like normal shell selection (tmux's rendered
+      // history, SHELL_LOAD_QUERY); only the explicit "Load full history" action
+      // is allowed to pay for a full replay.
       // TUI modes still recover the whole picture, with the downgrade guard for
       // repaint-mode panes whose tmux capture can be smaller than xterm's buffer.
       const useFullHistory = this.sessions.get(sessionId)?.mode !== 'shell';
       let capture = await this._fetchTerminalCapture(
         useFullHistory
           ? `/api/sessions/${sessionId}/terminal?full=1`
-          : `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`,
+          : `/api/sessions/${sessionId}/terminal?${SHELL_LOAD_QUERY}`,
         { full: useFullHistory }
       );
       let headersReceivedAt = capture.headersAt;
@@ -3308,8 +3309,13 @@ class CodemanApp {
       try {
         // No-param capture: `terminalBufferMaxBytes` (32MB) is its only ceiling,
         // so it needs the full-history budget. Defaulting to the tail budget
-        // gave the largest payload the smallest deadline.
-        const capture = await this._fetchTerminalCapture(`/api/sessions/${data.id}/terminal`, { full: true });
+        // gave the largest payload the smallest deadline. A shell reloads tmux's
+        // rendered history instead (SHELL_LOAD_QUERY), never the byte recording.
+        const shellSession = this.sessions.get(data.id)?.mode === 'shell';
+        const capture = await this._fetchTerminalCapture(
+          shellSession ? `/api/sessions/${data.id}/terminal?${SHELL_LOAD_QUERY}` : `/api/sessions/${data.id}/terminal`,
+          { full: !shellSession }
+        );
         const headersReceivedAt = capture.headersAt;
         const termData = capture.json?.data ?? {};
 
@@ -9317,16 +9323,23 @@ class CodemanApp {
       // TUI sessions still get one canonical full replay per page (COD-47/#205).
       // A shell can retain hundreds of thousands of plain scrollback lines, so
       // automatically replaying all of them makes tab selection scale with the
-      // entire session. Load its bounded 1MB tail first; the existing truncation
-      // banner action fetches ?full=1 when the user explicitly asks for it.
-      const useFullHistory = session?.mode !== 'shell' && !this._fullHistoryLoaded.has(sessionId);
+      // entire session. Load a bounded window of tmux's RENDERED history first
+      // (SHELL_LOAD_QUERY: never the raw byte recording, whose repaints replay
+      // wrong at another pane height); the existing truncation banner action
+      // fetches ?full=1 when the user explicitly asks for it.
+      const shellSession = session?.mode === 'shell';
+      const useFullHistory = !shellSession && !this._fullHistoryLoaded.has(sessionId);
       if (useFullHistory) this._fullHistoryLoaded.add(sessionId);
       const fetchStartedAt = performance.now();
       const tailUrl = `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`;
       let capture;
       try {
         capture = await this._fetchTerminalCapture(
-          useFullHistory ? `/api/sessions/${sessionId}/terminal?full=1` : tailUrl,
+          useFullHistory
+            ? `/api/sessions/${sessionId}/terminal?full=1`
+            : shellSession
+              ? `/api/sessions/${sessionId}/terminal?${SHELL_LOAD_QUERY}`
+              : tailUrl,
           { full: useFullHistory }
         );
       } catch (err) {
