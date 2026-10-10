@@ -8240,14 +8240,6 @@ class CodemanApp {
       tab.setAttribute('draggable', 'true');
 
       tab.addEventListener('dragstart', (e) => {
-        // No drag while the rail search narrows the list: the drop rewrites the
-        // order every device sees, relative to rows the search is hiding
-        // (owner's call on #580). Refused here rather than by `draggable`,
-        // because a keystroke in the box does not re-render the rows.
-        if (this._tabRailSearchActive()) {
-          e.preventDefault();
-          return;
-        }
         this.draggedTabId = tab.dataset.id;
         tab.classList.add('dragging');
         e.dataTransfer.effectAllowed = 'move';
@@ -8264,6 +8256,13 @@ class CodemanApp {
       });
 
       tab.addEventListener('dragover', (e) => {
+        // No reorder while the rail search narrows the list: the drop rewrites
+        // the order every device sees, relative to rows the search is hiding
+        // (owner's call on #580). The rows refuse it here, never in dragstart
+        // or via `draggable`: a found tab can still be dropped onto the tile
+        // grid (per-device, nothing hidden to land beside), and a keystroke in
+        // the box does not re-render the rows.
+        if (this._tabRailSearchActive()) return;
         // Grouped by state: a tab in another group is not a drop target, and
         // leaving the event alone (no preventDefault) is what shows "no drop".
         if (this._isTabDropAcrossGroups(tab)) return;
@@ -8295,6 +8294,9 @@ class CodemanApp {
         e.preventDefault();
         tab.classList.remove('drag-over-left', 'drag-over-right');
 
+        // dragover refuses it during a rail search; this holds should anything
+        // above the row accept the drag and let a drop through.
+        if (this._tabRailSearchActive()) return;
         if (!this.draggedTabId || this.draggedTabId === tab.dataset.id) return;
         if (this._isTabDropAcrossGroups(tab)) return;
 

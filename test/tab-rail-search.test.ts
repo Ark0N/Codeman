@@ -22,6 +22,9 @@
  *   case box on screen (the owner's call on #580).
  * - Escape in a box that holds text clears the search and closes nothing else:
  *   the global key handler runs first (capture phase) and must route it.
+ * - No reorder by drag while searching (the owner's call): the grouped rail's
+ *   drag does not start, and the flat rail's rows refuse the drop, while a
+ *   found tab can still be dropped onto a tile.
  * - A change in what shows redraws the connector lines, which are anchored to
  *   row positions; an unchanged re-apply does not.
  * - The sidebar hides a case box its filter emptied, like the rail.
@@ -59,6 +62,21 @@ type TabSearch = {
     query: unknown
   ) => SearchResult;
 };
+
+/**
+ * The tile grid's real drop-target binder (`_acceptTabDrops`), lifted out of
+ * tile-grid.js in a context of its own, so the rest of that module (it wraps
+ * the tab renders) is never mixed into the app under test.
+ */
+function loadAcceptTabDrops(): (this: unknown, el: unknown, onDrop: (id: string) => void) => void {
+  const context = vm.createContext({ window: {}, document: {} });
+  vm.runInContext(
+    `function CodemanApp() {}\n${read('tile-grid.js')}\n;globalThis.__accept = CodemanApp.prototype._acceptTabDrops;`,
+    context,
+    { filename: 'tile-grid.js' }
+  );
+  return (context as unknown as { __accept: ReturnType<typeof loadAcceptTabDrops> }).__accept;
+}
 
 function loadSearch(): TabSearch {
   const context = vm.createContext({ window: {}, globalThis: {} });
@@ -690,7 +708,7 @@ describe('Escape in the search box', () => {
   });
 });
 
-describe('no drag while a rail search is active', () => {
+describe('no reorder by drag while a rail search is active', () => {
   it('will not start a grouped-rail drag, and starts one again once the search is cleared', () => {
     const app = makeApp();
     app._fullRenderSessionTabs();
@@ -718,30 +736,56 @@ describe('no drag while a rail search is active', () => {
     }
   });
 
-  it('refuses the flat rail drag while searching, though the rows stay bound for after', () => {
+  it('lets a found tab be dragged onto a tile, never dropped onto a rail row, and reorders again once cleared', () => {
     const app = makeApp({ tabLayout: null });
+    app.saveSessionOrder = vi.fn();
     app._fullRenderSessionTabs();
-    const row = () => document.querySelector<HTMLElement>('#sessionTabs [data-id="roadmap"]')!;
-    expect(row().getAttribute('draggable')).toBe('true');
-    const dragstart = () => {
-      const event = new window.Event('dragstart', { bubbles: true, cancelable: true });
-      Object.defineProperty(event, 'dataTransfer', { value: { effectAllowed: '', setData: () => {} } });
+    const row = (id: string) => document.querySelector<HTMLElement>(`#sessionTabs [data-id="${id}"]`)!;
+    expect(row('roadmap').getAttribute('draggable')).toBe('true');
+    const drag = (type: string, target: HTMLElement) => {
+      const event = new window.Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'dataTransfer', {
+        value: { effectAllowed: '', dropEffect: '', setData: () => {} },
+      });
+      target.dispatchEvent(event);
       return event;
     };
+    // A tile, with the tile grid's own drop-target binder (tile-grid.js).
+    const tile = document.createElement('div');
+    document.body.appendChild(tile);
+    const onTileDrop = vi.fn();
+    loadAcceptTabDrops().call(app, tile, onTileDrop);
+    app._tileGrid = { open: true };
 
-    app.setTabRailSearch('road');
-    const refused = dragstart();
-    row().dispatchEvent(refused);
-    expect(refused.defaultPrevented).toBe(true);
-    expect(app.draggedTabId ?? null).toBeNull();
-
-    // A keystroke does not re-render, so the cleared rail drags with the same rows.
-    app.clearTabRailSearch();
-    const allowed = dragstart();
-    row().dispatchEvent(allowed);
-    expect(allowed.defaultPrevented).toBe(false);
+    // 'r' leaves Roadmap and API Review both showing, so only the search refuses.
+    app.setTabRailSearch('r');
+    expect(visibleRows()).toEqual(['roadmap', 'review', 'web']);
+    expect(drag('dragstart', row('roadmap')).defaultPrevented).toBe(false);
     expect(app.draggedTabId).toBe('roadmap');
-    row().dispatchEvent(new window.Event('dragend', { bubbles: true }));
+
+    // A rail row is no drop target: no preventDefault (the browser shows no-drop),
+    // no indicator, and a drop that gets through anyway moves nothing.
+    expect(drag('dragover', row('review')).defaultPrevented).toBe(false);
+    expect(row('review').className).not.toMatch(/drag-over/);
+    drag('drop', row('review'));
+    expect(app.sessionOrder).toEqual(['alpha', 'roadmap', 'review', 'notes']);
+    expect(app.saveSessionOrder).not.toHaveBeenCalled();
+
+    // A tile is (per-device, nothing hidden to land beside).
+    expect(drag('dragover', tile).defaultPrevented).toBe(true);
+    drag('drop', tile);
+    expect(onTileDrop).toHaveBeenCalledWith('roadmap');
+    drag('dragend', row('roadmap'));
+    expect(app.draggedTabId ?? null).toBeNull();
+    app._tileGrid = null;
+
+    // A keystroke does not re-render, so the cleared rail reorders with the same rows.
+    app.clearTabRailSearch();
+    drag('dragstart', row('roadmap'));
+    expect(drag('dragover', row('review')).defaultPrevented).toBe(true);
+    drag('drop', row('review'));
+    expect(app.sessionOrder).toEqual(['alpha', 'review', 'roadmap', 'notes']);
+    expect(app.saveSessionOrder).toHaveBeenCalledTimes(1);
   });
 });
 
