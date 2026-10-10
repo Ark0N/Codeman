@@ -3627,10 +3627,24 @@ Object.assign(CodemanApp.prototype, {
    * the unbounded path. Must be called AFTER scrollLines(), since the check is on
    * the resulting position, and it is deliberately not folded into
    * _noteTerminalUserScroll for exactly that reason.
+   *
+   * It is also what brings up the partial-history notice, and what retires it
+   * once a downward scroll is back at live output (_setHistoryNoticeRevealed).
+   * The reveal waits for the pull this gesture started, so the notice describes
+   * what the pull left rather than flashing the state it is about to replace.
    */
   _maybeLoadMoreHistoryOnScroll(lines) {
-    if (lines >= 0) return;
-    if (this.terminal?.buffer?.active?.viewportY === 0) this._maybeRefetchFullHistory?.();
+    if (lines > 0) {
+      if (this.isTerminalAtBottom()) this._setHistoryNoticeRevealed?.(null);
+      return;
+    }
+    if (lines === 0 || this.terminal?.buffer?.active?.viewportY !== 0) return;
+    const sessionId = this.activeSessionId;
+    Promise.resolve(this._maybeRefetchFullHistory?.())
+      .catch(() => {})
+      .then(() => {
+        if (sessionId && this.activeSessionId === sessionId) this._setHistoryNoticeRevealed?.(sessionId);
+      });
   },
 
   /**

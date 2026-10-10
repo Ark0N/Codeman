@@ -1744,7 +1744,10 @@ function escapeHtml(text) {
 function formatHistoryBytes(bytes) {
   const n = typeof bytes === 'number' && isFinite(bytes) && bytes > 0 ? bytes : 0;
   if (n < 1024) return 'less than 1 KB';
-  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  // Switch on the ROUNDED value: a 1 MiB tail cut back to a line boundary is
+  // just under 1 MiB and used to print as "1024 KB".
+  const kb = Math.round(n / 1024);
+  if (kb < 1024) return `${kb} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
@@ -1758,12 +1761,27 @@ function formatHistoryBytes(bytes) {
  *   - atCeiling:   the FULL capture itself hit the byte ceiling
  *   - exhausted:   a full pull was refused as a downgrade, so this is all there is
  *
+ * ⚠️ `truncated` measures the server's BYTE stream, not history a pull can
+ * return. `paneHistoryLines` (tmux `#{history_size}`) is the latter: 0 means the
+ * pane keeps no scrollback at all (a fullscreen CLI in the alternate screen,
+ * whose transcript lives in the CLI and is scrolled there), so the bytes a tail
+ * cut dropped are old repaint frames that `full=1` cannot bring back. Measured
+ * on live fullscreen claude panes: "4.8 MB more" was ~33 copies of one frame,
+ * and the button only ever ended in the downgrade refusal. Nothing to offer,
+ * nothing to say. Absent means unknown and keeps the byte-based behaviour.
+ *
  * @param {{truncated?: boolean, reason?: string|null, source?: string|null,
- *          fullSize?: number, retainedBytes?: number, exhausted?: boolean}} state
+ *          fullSize?: number, retainedBytes?: number, exhausted?: boolean,
+ *          paneHistoryLines?: number|null}} state
  * @returns {{visible: boolean, message: string, canLoadMore: boolean}}
  */
 function computeHistoryTruncationNotice(state = {}) {
   if (!state.truncated) return { visible: false, message: '', canLoadMore: false };
+  const historyLines =
+    typeof state.paneHistoryLines === 'number' && Number.isFinite(state.paneHistoryLines)
+      ? Math.max(0, state.paneHistoryLines)
+      : null;
+  if (historyLines === 0) return { visible: false, message: '', canLoadMore: false };
 
   const retained = Math.max(0, state.retainedBytes || 0);
   const dropped = Math.max(0, (state.fullSize || 0) - retained);
@@ -1786,9 +1804,15 @@ function computeHistoryTruncationNotice(state = {}) {
       canLoadMore: false,
     };
   }
+  // Name what a pull can actually return when the server said: the byte gap
+  // counts repaints and redraw bloat, and overstates it many times over.
+  const more =
+    historyLines !== null
+      ? `${historyLines.toLocaleString('en-US')} ${historyLines === 1 ? 'line of scrollback is' : 'lines of scrollback are'} retained.`
+      : `${formatHistoryBytes(dropped)} more may still be retained.`;
   return {
     visible: true,
-    message: `Showing the most recent ${shown} of this session. ${formatHistoryBytes(dropped)} more may still be retained.`,
+    message: `Showing the most recent ${shown} of this session. ${more}`,
     canLoadMore: true,
   };
 }

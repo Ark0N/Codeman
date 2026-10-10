@@ -8689,6 +8689,9 @@ class CodemanApp {
       // Set once a full-history pull has been refused as a downgrade: the
       // browser holds more than the server can return, so there is no more.
       exhausted: !!payload.exhausted,
+      // tmux scrollback above the frame (null = not reported). 0 is a pane with
+      // nothing a pull could add, which hides the notice outright.
+      paneHistoryLines: payload.paneHistoryLines ?? null,
     });
     if (sessionId === this.activeSessionId) this._renderHistoryTruncationBanner();
   }
@@ -8696,7 +8699,25 @@ class CodemanApp {
   /** Drop banner state for a session that is going away. */
   _clearHistoryTruncation(sessionId) {
     this._historyTruncation?.delete(sessionId);
+    this._historyNoticeDismissed?.delete(sessionId);
     if (sessionId === this.activeSessionId) this._renderHistoryTruncationBanner();
+  }
+
+  /**
+   * Bring the partial-history notice up for `sessionId`, or retire it (null).
+   *
+   * The notice is LAZY: a tail replay is truncated on nearly every tab switch,
+   * and a bar over the top rows on every switch described history the user had
+   * not reached for. It now waits for the scroll gesture that reaches the top of
+   * the browser's buffer (the moment the missing part matters, and the same
+   * gesture that already re-pulls history), and goes away again once the user
+   * scrolls back down to live output. A tab switch retires it (selectSession).
+   */
+  _setHistoryNoticeRevealed(sessionId) {
+    const next = sessionId || null;
+    if ((this._historyNoticeRevealedFor ?? null) === next) return;
+    this._historyNoticeRevealedFor = next;
+    this._renderHistoryTruncationBanner();
   }
 
   /**
@@ -8708,13 +8729,22 @@ class CodemanApp {
    *   - recoverable  → offer to load the rest
    *   - exhausted    → say so plainly, offer nothing
    *   - at the limit → the full capture ITSELF hit the byte ceiling
+   *
+   * Shown only while revealed (`_setHistoryNoticeRevealed`: the user scrolled
+   * to the top of this tab's buffer) and never again for a session whose notice
+   * the user dismissed on this page.
    */
   _renderHistoryTruncationBanner() {
     const bar = document.getElementById('historyTruncationBar');
     if (!bar) return;
-    const state = this.activeSessionId ? this._historyTruncation?.get(this.activeSessionId) : null;
+    const sessionId = this.activeSessionId;
+    const state = sessionId ? this._historyTruncation?.get(sessionId) : null;
     const notice = computeHistoryTruncationNotice(state || {});
-    if (!notice.visible) {
+    if (
+      !notice.visible ||
+      this._historyNoticeRevealedFor !== sessionId ||
+      this._historyNoticeDismissed?.has(sessionId)
+    ) {
       bar.hidden = true;
       return;
     }
@@ -8747,6 +8777,9 @@ class CodemanApp {
     dismiss.setAttribute('aria-label', 'Dismiss history notice');
     dismiss.textContent = '×';
     dismiss.onclick = () => {
+      // Sticky for this session until the page reloads: a dismissed notice used
+      // to come straight back on the next tab switch.
+      (this._historyNoticeDismissed ||= new Set()).add(sessionId);
       bar.hidden = true;
     };
     bar.appendChild(dismiss);
@@ -8860,7 +8893,9 @@ class CodemanApp {
     this._activateFileBrowserSession?.(sessionId);
     // Repaint the partial-history banner for the tab being switched TO. The
     // replay paths refresh it when their fetch lands; without this the previous
-    // session's notice stays on screen until then (#258).
+    // session's notice stays on screen until then (#258). The switch lands at
+    // live output, so the notice waits for a scroll to the top again.
+    this._historyNoticeRevealedFor = null;
     this._renderHistoryTruncationBanner();
     try { localStorage.setItem('codeman-active-session', sessionId); } catch {}
     // Narrow SSE filter to the active session — server stops streaming

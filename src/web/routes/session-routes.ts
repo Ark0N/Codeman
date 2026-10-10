@@ -3225,6 +3225,12 @@ export function registerSessionRoutes(
       // damage that does not exist.
       captureCols: hasLiveMuxBuffer ? captureOpts.capturedGeometry?.cols : undefined,
       captureRows: hasLiveMuxBuffer ? captureOpts.capturedGeometry?.rows : undefined,
+      // Rows tmux holds above the visible frame, which is the most a `full=1`
+      // pull can add. `truncated` measures the BYTE stream, and for a pane that
+      // keeps no scrollback (a fullscreen CLI in the alternate screen) the bytes
+      // a tail cut drops are old repaints that no request can bring back, so a
+      // client must not offer to load them. Absent when the pane was not read.
+      paneHistoryLines: hasLiveMuxBuffer ? captureOpts.capturedHistoryLines : undefined,
     };
   });
 
