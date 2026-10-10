@@ -1,11 +1,12 @@
 ---
 "aicodeman": minor
+"xterm-zerolag-input": patch
 ---
 
 ### Thanks
 - @Randalix for `codeman agent` (#557), the session verbs (`ls`, `spawn`, `send`, `wait`, `read`, `interrupt`, `rm`) for agents in every CLI mode, and for moving every test server onto an ephemeral port (#570), which finishes #440. Thanks also for reporting and fixing git's clone errors on non-English hosts (#568, shipped as #572 with your commit).
 - @opticon454 for four PRs: an Apply button that saves Settings without closing them (#565), configurable toast and browser-notification display times (#564), in-document links in rendered markdown that scroll to their heading (#563), and npm-based CLI installs that work when the system npm prefix is root-owned (#562).
-- @JDProfresh for upload failures that say why they failed (#578).
+- @JDProfresh for two PRs: local echo that keeps painting on phones when the view sits a few rows above the bottom (#576), and upload failures that say why they failed (#578).
 
 ![Codeman tile grid: six live agents powering on and off with the CRT tile animation](https://raw.githubusercontent.com/Ark0N/Codeman/fc7ffe1ad899b894bc4f15380dd40af592e8be22/docs/images/tiles-crt-20261010.gif)
 
@@ -25,6 +26,7 @@
 - **Clone errors on non-English hosts (#572, from #568).** Cloning a repository as a case now classifies a failed clone correctly whatever the host's language: a missing branch or tag is "does not exist on the remote" (400) and a missing repository is a 404, instead of a generic 422 with git's German (or any other) error text. Git runs with `LC_ALL=C` for clones and repo status, so the repo status card's error text is English on every host as well.
 - **Links within a markdown file (#563).** A link to another heading of the same document (`[Install](#installation)`) in the File Viewer or Response Viewer scrolls to that heading instead of doing nothing. Headings get GitHub-style slugs, repeated titles are numbered, and non-ASCII headings work.
 - **npm CLI installs on a root-owned prefix (#562).** Installing an npm-based CLI from Settings (DeepSeek's `dsh`, pi, ...) no longer fails with EACCES when the system node keeps its global prefix under `/usr`: the install goes to `~/.local`, where Codeman already looks for CLIs. A prefix you set yourself, or one you can write to, is left alone, including when Codeman runs under `npm run`.
+- **Local echo on phones while scrolled up a little (#576).** With local echo on (the default on touch devices), the text you type kept disappearing whenever the terminal sat a few rows above the bottom, for example after the keyboard opened. The overlay now keeps painting as long as the prompt row is on screen, and hides only when you scroll the prompt out of view.
 - **Upload failures say why (#578).** When a prompt image upload fails, the toast shows the server's reason (for example a rate limit) instead of only "1 failed".
 - **New cases ask for clickable file paths.** The CLAUDE.md generated into a new case asks the agent to report every file it created as a full absolute path, which Codeman turns into a link that opens the File Viewer, and mentions the codeman skill for starting and managing worker sessions.
 
