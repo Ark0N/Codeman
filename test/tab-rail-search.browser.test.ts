@@ -103,7 +103,9 @@ describe('vertical rail session search in Chromium', () => {
       app.renderSubagentTabBadge = () => '';
       app.cancelHideSubagentDropdown = () => undefined;
       app.updateTabOverflowMode = () => undefined;
-      app.updateConnectionLines = () => undefined;
+      app.updateConnectionLines = () => {
+        w.__redraws++;
+      };
       app._applyTabEntrances = () => undefined;
       app._scrollActiveTabIntoView = () => undefined;
       app.isSessionSidebarActive = () => false;
@@ -153,6 +155,7 @@ describe('vertical rail session search in Chromium', () => {
       app._fullRenderSessionTabs();
       w.__activation = null;
       w.__closed = [];
+      w.__redraws = 0;
     }, LAYOUT);
   });
 
@@ -223,6 +226,25 @@ describe('vertical rail session search in Chromium', () => {
     // An empty box leaves Escape to the global handler, which closes as always.
     await search.press('Escape');
     expect(await page.evaluate(() => (window as any).__closed)).toEqual(['panels', 'help', 'session-manager']);
+  });
+
+  it('redraws the connector lines when a keystroke moves the rows', async () => {
+    const search = page.getByRole('searchbox', { name: 'Search sessions' });
+    const notesTop = () =>
+      page.evaluate(() => document.querySelector('#sessionTabs [data-id="notes"]')!.getBoundingClientRect().top);
+    // The first keystroke opens the collapsed Planning group, a render that
+    // redraws on its own. The next one only toggles classes.
+    await search.fill('e');
+    expect(await paintedRows()).toEqual(['review', 'notes']);
+    const before = await notesTop();
+    await page.evaluate(() => {
+      (window as any).__redraws = 0;
+    });
+
+    await search.fill('es');
+    expect(await paintedRows()).toEqual(['notes']);
+    expect(await notesTop()).toBeLessThan(before);
+    expect(await page.evaluate(() => (window as any).__redraws)).toBe(1);
   });
 
   it('walks only the matches with the arrow keys', async () => {

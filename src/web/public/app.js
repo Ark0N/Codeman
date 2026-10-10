@@ -5785,8 +5785,10 @@ class CodemanApp {
    *
    * A group or case box left with nothing showing hides with its header, its
    * count shows the rows left showing (a kept row included), and the grouped
-   * tree's roving stop and posinset follow the visible items. A collapsed group's rows are not in the DOM at all,
-   * which is why the rail search also expands the projection (_projectTabGroups).
+   * tree's roving stop and posinset follow the visible items. A collapsed
+   * group's rows are not in the DOM at all, which is why the rail search also
+   * expands the projection (_projectTabGroups). Rows that appear or disappear
+   * move the rows below them, so the connector lines are redrawn then.
    */
   _applyTabListFilter() {
     const container = this.$('sessionTabs');
@@ -5806,13 +5808,23 @@ class CodemanApp {
     }));
     const result = window.CodemanTabSearch?.filter(rows, query);
     if (!result) return;
+    // Whether anything appeared or disappeared: the rows below it then moved.
+    let moved = false;
     // State headings count the whole group, so they step aside while a filter
     // is narrowing the rows under them (styles.css, .tabs-filtering).
-    container.classList.toggle('tabs-filtering', result.active);
-    for (const row of rows) row.key.classList.toggle('tab-filtered-out', result.hidden.has(row.key));
+    if (container.classList.contains('tabs-filtering') !== result.active) {
+      container.classList.toggle('tabs-filtering', result.active);
+      moved = true;
+    }
+    const setFilteredOut = (el, out) => {
+      if (el.classList.contains('tab-filtered-out') === out) return;
+      el.classList.toggle('tab-filtered-out', out);
+      moved = true;
+    };
+    for (const row of rows) setFilteredOut(row.key, result.hidden.has(row.key));
     for (const section of container.querySelectorAll('.tab-layout-group, .tab-cluster')) {
       const shown = result.counts.get(section) ?? 0;
-      section.classList.toggle('tab-filtered-out', result.active && shown === 0);
+      setFilteredOut(section, result.active && shown === 0);
       const count = section.querySelector('.tab-layout-group-count, .tab-cluster-count');
       if (!count) continue;
       if (count.dataset.total === undefined) count.dataset.total = count.textContent;
@@ -5820,8 +5832,21 @@ class CodemanApp {
       if (count.textContent !== text) count.textContent = text;
     }
     const empty = document.getElementById('tabRailSearchEmpty');
-    if (empty) empty.hidden = !(rail && result.active && result.matchCount === 0);
-    if (container.getAttribute('role') === 'tree') {
+    const emptyHidden = !(rail && result.active && result.matchCount === 0);
+    if (empty && empty.hidden !== emptyHidden) {
+      empty.hidden = emptyHidden;
+      moved = true;
+    }
+    // Lineage and subagent/ultracode connectors are anchored to row positions.
+    // A render redraws them itself, but a keystroke in either box only toggles
+    // classes here, so the rows it moved would leave the lines pointing at where
+    // they were. Only when something moved: an unchanged re-apply at every
+    // render tail stays free, and the call coalesces with a render's own.
+    if (moved) this.updateConnectionLines?.();
+    // Both render paths already set posinset and the roving stop over an
+    // unfiltered tree, so this second pass only runs while a search hides
+    // something or right after one changed what shows.
+    if ((moved || result.active) && container.getAttribute('role') === 'tree') {
       const items = this._applyTabTreePositions(container);
       const stop = container.querySelector('[role="treeitem"][tabindex="0"]');
       if (items.length && !items.includes(stop)) {

@@ -606,6 +606,65 @@ describe('Escape in the search box', () => {
   });
 });
 
+describe('connector lines follow the rows a search moves', () => {
+  it('redraws on a rail keystroke that hides or reveals rows, and only then', () => {
+    const app = makeApp({ tabLayout: null });
+    app._fullRenderSessionTabs();
+    const redraw = vi.fn();
+    app.updateConnectionLines = redraw;
+    const full = vi.spyOn(app, '_fullRenderSessionTabs');
+
+    app.setTabRailSearch('road');
+    // The keystroke path: no render, which would have redrawn them itself.
+    expect(full).not.toHaveBeenCalled();
+    expect(redraw).toHaveBeenCalledTimes(1);
+
+    // Same rows showing: nothing moved, nothing to redraw.
+    app.setTabRailSearch('roa');
+    expect(redraw).toHaveBeenCalledTimes(1);
+
+    app.setTabRailSearch('');
+    expect(redraw).toHaveBeenCalledTimes(2);
+    // The re-apply every render tail runs costs nothing when nothing changed.
+    app._applyTabListFilter();
+    expect(redraw).toHaveBeenCalledTimes(2);
+  });
+
+  it('redraws on a grouped rail when a group empties, and when the empty note shows', () => {
+    const app = makeApp();
+    app._fullRenderSessionTabs();
+    const redraw = vi.fn();
+    app.updateConnectionLines = redraw;
+    const full = vi.spyOn(app, '_fullRenderSessionTabs');
+
+    app.setTabRailSearch('notes');
+    expect(full).not.toHaveBeenCalled();
+    // Only the Ungrouped section (no group id) is left showing.
+    expect(visibleGroups()).toEqual(['']);
+    expect(redraw).toHaveBeenCalledTimes(1);
+
+    // Nothing matches: the rows were already gone, but the note pushes the list down.
+    app.setTabRailSearch('notesz');
+    expect(emptyNote().hidden).toBe(false);
+    expect(redraw).toHaveBeenCalledTimes(2);
+  });
+
+  it('redraws on a sidebar filter keystroke too', () => {
+    const app = makeApp({ tabLayout: null });
+    document.documentElement.setAttribute('data-tab-orientation', 'horizontal');
+    app.isSessionSidebarActive = () => true;
+    app._fullRenderSessionTabs();
+    const redraw = vi.fn();
+    app.updateConnectionLines = redraw;
+
+    app.applySidebarFilter('/srv/api');
+    expect(visibleRows()).toEqual(['roadmap']);
+    expect(redraw).toHaveBeenCalledTimes(1);
+    app.applySidebarFilter('/srv/api');
+    expect(redraw).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ─── Markup + zh-CN ───────────────────────────────────────────────────────────
 
 describe('markup and zh-CN', () => {
