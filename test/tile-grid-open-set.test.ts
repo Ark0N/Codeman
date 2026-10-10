@@ -45,6 +45,7 @@ describe('tileGridOpenSet (what the Tiles button opens)', () => {
     expect(T.tileGridOpenSet({ ...base, stored, split: ['t1', 't9'], activeId: 't1' })).toEqual({
       source: 'stored',
       ids: ['t4', 't2'],
+      cells: ['t4', 't2'],
       focusedId: 't2',
     });
     expect(T.tileGridOpenSet({ ...base, stored: { ids: ['t4', 't2'], focused: 't4', zoomed: 't2' } })?.focusedId).toBe(

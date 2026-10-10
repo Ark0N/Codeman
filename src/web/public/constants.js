@@ -2202,11 +2202,11 @@ function tileGridCapacity({ width, height }) {
 }
 
 /**
- * The stored grid (`codeman:tile-grid`, ids only) made safe to apply: unknown,
- * deleted, detached and duplicate ids are dropped, the list is capped at
- * TILE_GRID_MAX, `focused` / `zoomed` must name a kept id, and track fractions
- * must be 1 to 3 finite positive numbers. Anything that is not a v1 object
- * (or its JSON) gives null.
+ * The stored grid (`codeman:tile-grid`: session ids and the layout, never
+ * content) made safe to apply: unknown, deleted, detached and duplicate ids
+ * are dropped, the list is capped at TILE_GRID_MAX, `focused` / `zoomed` must
+ * name a kept id, and track fractions must be 1 to 3 finite positive numbers.
+ * Anything that is not a v1 object (or its JSON) gives null.
  *
  * The stored `ids` are the grid's CELLS in reading order, `null` for an empty
  * one (a hole can be any cell). The old packed list (no nulls) reads as cells
@@ -2214,11 +2214,20 @@ function tileGridCapacity({ width, height }) {
  * every list consumer wants) and `cells` keeps the holes: a dropped id (gone,
  * detached, a duplicate, past the cap) becomes `null` there, never a shift.
  *
+ * `freed` names the cells whose session no longer exists (or was popped out
+ * to its own window) since the grid was stored: the ranking fills those first
+ * when the grid comes back (restoreTileGridCells). A hole the user left empty
+ * is not freed. `count` is how many tiles the grid had after the user's own
+ * last change (a session that went away by itself does not lower it), so the
+ * grid comes back to that many when there are sessions to fill it; a value
+ * stored before it existed, or a malformed one, reads as the number of
+ * sessions the stored cells name.
+ *
  * @param {unknown} raw - the parsed value, or the stored JSON string
  * @param {{has(id: string): boolean}|Iterable<string>} liveSessions - ids that exist now
  * @param {{has(id: string): boolean}} [detachedIds] - sessions popped out to their own window
- * @returns {{v: 1, open: boolean, ids: string[], cells: (string|null)[], focused: string|null,
- *   zoomed: string|null, colFr: number[]|null, rowFr: number[]|null}|null}
+ * @returns {{v: 1, open: boolean, ids: string[], cells: (string|null)[], freed: number[], count: number,
+ *   focused: string|null, zoomed: string|null, colFr: number[]|null, rowFr: number[]|null}|null}
  */
 function sanitizeTileGridState(raw, liveSessions, detachedIds) {
   let value = raw;
@@ -2229,11 +2238,16 @@ function sanitizeTileGridState(raw, liveSessions, detachedIds) {
   const live = liveSessions && typeof liveSessions.has === 'function' ? liveSessions : new Set(liveSessions || []);
   const ids = [];
   const cells = [];
+  const freed = [];
+  const named = [];
   for (const id of (Array.isArray(value.ids) ? value.ids : []).slice(0, TILE_LAYOUT_MAX)) {
-    const keep =
-      typeof id === 'string' && id && !ids.includes(id) && live.has(id) && !detachedIds?.has?.(id) &&
-      ids.length < TILE_GRID_MAX;
+    const isId = typeof id === 'string' && id !== '';
+    const present = isId && live.has(id) && !detachedIds?.has?.(id);
+    const keep = present && !ids.includes(id) && ids.length < TILE_GRID_MAX;
     if (keep) ids.push(id);
+    // Its session went away since: the cell is freed for the ranking to fill.
+    if (isId && !present && !named.includes(id)) freed.push(cells.length);
+    if (isId && !named.includes(id)) named.push(id);
     // A malformed entry (not a string, not null) is a hole too.
     cells.push(keep ? id : null);
   }
@@ -2241,16 +2255,69 @@ function sanitizeTileGridState(raw, liveSessions, detachedIds) {
     if (!Array.isArray(fr) || fr.length < 1 || fr.length > 3) return null;
     return fr.every((x) => typeof x === 'number' && Number.isFinite(x) && x > 0) ? fr.slice() : null;
   };
+  const count =
+    Number.isInteger(value.count) && value.count >= 1 && value.count <= TILE_GRID_MAX
+      ? value.count
+      : Math.min(named.length, TILE_GRID_MAX);
   return {
     v: 1,
     open: value.open === true && ids.length > 0,
     ids,
     cells,
+    freed,
+    count,
     focused: ids.includes(value.focused) ? value.focused : (ids[0] ?? null),
     zoomed: ids.includes(value.zoomed) ? value.zoomed : null,
     colFr: fractions(value.colFr),
     rowFr: fractions(value.rowFr),
   };
+}
+
+/**
+ * A stored grid as it comes back (the Tiles button, a page reload): its cells
+ * exactly as stored, holes the user left included, and its focus (or the tile
+ * it had zoomed). Only when it holds fewer tiles than its `count` (sessions
+ * that went away since, or by themselves while it was open) does it fill, from
+ * `ranked` (best first, never a session already in it): the freed cells first,
+ * then the other empty cells, in reading order; more than the cells hold join
+ * after them (the shape grows when the grid lays them out, reformTileCells).
+ * A cell stays empty only when no other session is left to place. Never
+ * trimmed to the window: a grid larger than the window fits shows its focused
+ * tile alone until the window fits it again, and the arrangement stays.
+ *
+ * @param {{cells?: (string|null)[], ids?: string[], freed?: number[], count?: number,
+ *   focused?: string|null, zoomed?: string|null}|null} stored - sanitized (sanitizeTileGridState)
+ * @param {string[]} ranked - the sessions that may fill a cell, best first (rankTileSessions)
+ * @returns {{ids: string[], cells: (string|null)[], focusedId: string}|null} null when none of its sessions survive
+ */
+function restoreTileGridCells(stored, ranked) {
+  const source = Array.isArray(stored?.cells) ? stored.cells : Array.isArray(stored?.ids) ? stored.ids : [];
+  const cells = [];
+  for (const id of source) cells.push(typeof id === 'string' && id && !cells.includes(id) ? id : null);
+  const tiles = cells.filter(Boolean);
+  if (tiles.length === 0) return null;
+  const focusedId =
+    [stored.zoomed, stored.focused].find((id) => typeof id === 'string' && tiles.includes(id)) ?? tiles[0];
+  const target = Math.min(Math.max(tiles.length, Math.floor(Number(stored.count)) || 0), TILE_GRID_MAX);
+  const fillers = [];
+  for (const id of ranked || []) {
+    if (typeof id === 'string' && id && !cells.includes(id) && !fillers.includes(id)) fillers.push(id);
+  }
+  const freed = new Set(Array.isArray(stored.freed) ? stored.freed : []);
+  const empty = [];
+  cells.forEach((id, k) => {
+    if (id === null) empty.push(k);
+  });
+  // Freed cells first, each group in reading order.
+  empty.sort((a, b) => Number(freed.has(b)) - Number(freed.has(a)) || a - b);
+  let count = tiles.length;
+  for (const k of empty) {
+    if (count >= target || fillers.length === 0) break;
+    cells[k] = fillers.shift();
+    count++;
+  }
+  const extra = fillers.slice(0, Math.max(0, target - count));
+  return { ids: [...cells.filter(Boolean), ...extra], cells, focusedId };
 }
 
 /**
@@ -2372,7 +2439,9 @@ function rankTileSessions(rows) {
  * What the Tiles button and Ctrl+Shift+G open, at once and without asking
  * (owner decision 8). In order:
  *   a. the grid this tab last had (`stored`, already sanitized: live, not
- *      detached, at most the cap), if any of its sessions survive;
+ *      detached, at most the cap), if any of its sessions survive, exactly
+ *      as it was (restoreTileGridCells: its cells and holes, a cell its
+ *      session freed filled from the ranking);
  *   b. else an open split's two sessions, Pane A focused;
  *   c. else the open sessions in `ranked` order (rankTileSessions: working,
  *      then needing input, then the most recent; tab order when no ranking is
@@ -2381,10 +2450,12 @@ function rankTileSessions(rows) {
  *      `limit - 1` others come with it).
  * Null when there is nothing to open.
  *
- * @param {{stored?: {ids: string[], focused: string|null, zoomed: string|null}|null,
+ * @param {{stored?: {ids: string[], cells?: (string|null)[], freed?: number[], count?: number,
+ *   focused: string|null, zoomed: string|null}|null,
  *   split?: string[]|null, ranked?: string[]|null, sessions: Map<string, object>, sessionOrder: string[],
  *   detachedIds?: {has(id: string): boolean}, activeId?: string|null, limit: number}} p
- * @returns {{source: 'stored'|'split'|'ranked', ids: string[], focusedId: string|null}|null}
+ * @returns {{source: 'stored'|'split'|'ranked', ids: string[], cells?: (string|null)[],
+ *   focusedId: string|null}|null}
  */
 function tileGridOpenSet({
   stored = null,
@@ -2399,10 +2470,8 @@ function tileGridOpenSet({
   const all = buildTilePickerSessions(sessions, Array.isArray(ranked) ? ranked : sessionOrder, detachedIds).map(
     (c) => c.id
   );
-  if (stored?.ids?.length) {
-    const focus = stored.zoomed || stored.focused;
-    return { source: 'stored', ids: stored.ids.slice(), focusedId: stored.ids.includes(focus) ? focus : stored.ids[0] };
-  }
+  const restored = stored ? restoreTileGridCells(stored, all) : null;
+  if (restored) return { source: 'stored', ...restored };
   const usable = (id) => typeof id === 'string' && sessions.has(id) && !detachedIds?.has?.(id);
   const pair = (split || []).filter(usable);
   if (split && pair.length) return { source: 'split', ids: [...new Set(pair)], focusedId: pair[0] };
@@ -2943,6 +3012,7 @@ if (typeof window !== 'undefined') {
     fitTileCells,
     cycleTile,
     tileGridOpenSet,
+    restoreTileGridCells,
     rankTileSessions,
     sanitizeTileCount,
     tileGridSetForCount,

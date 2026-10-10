@@ -10065,8 +10065,10 @@ class CodemanApp {
 
     try {
       await this._apiDelete('/api/sessions');
-      // Every tiled session is gone: nothing left to remember or reselect.
-      this.closeTileGrid?.({ keepStored: false, reselect: false });
+      // Every tiled session is gone: nothing to reselect. The stored grid is
+      // kept like every other close; it now names only gone sessions, so the
+      // next Tiles click ranks the open sessions from scratch.
+      this.closeTileGrid?.({ keepStored: true, reselect: false });
       this.sessions.clear();
       this.terminalBuffers.clear();
       this.terminalBufferCache.clear();
