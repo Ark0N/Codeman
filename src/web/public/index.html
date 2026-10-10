@@ -1635,6 +1635,7 @@
                Save; row-reverse keeps Save to the left of it on phones. -->
           <div class="set-head-actions">
             <button class="modal-close" onclick="app.closeAppSettings()" aria-label="Close app settings">&times;</button>
+            <button class="set-head-save set-head-apply" onclick="app.applyAppSettings()" title="Save and keep Settings open">Apply</button>
             <button class="set-head-save" onclick="app.saveAppSettings()">Save</button>
           </div>
         </div>
@@ -3117,6 +3118,7 @@
         </div>
         <div class="form-actions set-foot">
           <button class="btn-toolbar" onclick="app.closeAppSettings()">Cancel</button>
+          <button class="btn-toolbar" onclick="app.applyAppSettings()" title="Save and keep Settings open">Apply</button>
           <button class="btn-toolbar btn-primary" onclick="app.saveAppSettings()">Save</button>
         </div>
       </div>
