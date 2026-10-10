@@ -767,6 +767,12 @@ class CodemanApp {
     // their scrollback can be very large; full history stays available on demand.
     // Tracked PER SESSION rather than as a single "first load" flag (issue #205).
     this._fullHistoryLoaded = new Set();
+    // Rows of scrollback tmux reported above the visible frame on this session's
+    // last capture (`paneHistoryLines`). 0 marks a pane with no history to load
+    // (a fullscreen CLI in the alternate screen), which a tab switch serves from
+    // the small `full=1` capture instead of the 1 MiB byte tail: see
+    // _notePaneHistory and selectSession.
+    this._paneHistoryLines = new Map(); // Map<sessionId, number>
     // Cooldown per session for the scroll-to-top "load more history" re-pull.
     this._fullHistoryRepullAt = new Map(); // Map<sessionId, timestamp>
     this._fullHistoryRepullInFlight = false;
@@ -3193,6 +3199,7 @@ class CodemanApp {
         headersReceivedAt = capture.headersAt;
         data = capture.json?.data ?? {};
       }
+      this._notePaneHistory?.(sessionId, data);
       // Bail on a tab switch mid-fetch: writing here would paint this session's
       // history into the terminal the user is now looking at. The window is two
       // fetches wide in the fallback case, so this guard is not optional.
@@ -8552,6 +8559,7 @@ class CodemanApp {
       const headersReceivedAt = capture.headersAt;
       const payload = capture.json?.data ?? {};
       const bodyParsedAt = performance.now();
+      this._notePaneHistory?.(sessionId, payload);
       const buffer = payload.terminalBuffer;
       const timing = {
         trigger: force ? 'full-history-button' : 'full-history-scroll',
@@ -8700,7 +8708,25 @@ class CodemanApp {
   _clearHistoryTruncation(sessionId) {
     this._historyTruncation?.delete(sessionId);
     this._historyNoticeDismissed?.delete(sessionId);
+    this._paneHistoryLines?.delete(sessionId);
     if (sessionId === this.activeSessionId) this._renderHistoryTruncationBanner();
+  }
+
+  /**
+   * Remember how much scrollback tmux holds for a session's pane, from any
+   * terminal response. Called whether or not the response was written, since
+   * it describes the PANE, not the payload. A response without the field (a
+   * byte-history fallback, an older server) forgets it, so the next tab switch
+   * goes back to the bounded tail: unknown never counts as empty.
+   */
+  _notePaneHistory(sessionId, payload) {
+    if (!sessionId) return;
+    const lines = payload?.paneHistoryLines;
+    if (typeof lines === 'number' && Number.isFinite(lines) && lines >= 0) {
+      (this._paneHistoryLines ||= new Map()).set(sessionId, lines);
+    } else {
+      this._paneHistoryLines?.delete(sessionId);
+    }
   }
 
   /**
@@ -9166,7 +9192,23 @@ class CodemanApp {
       // automatically replaying all of them makes tab selection scale with the
       // entire session. Load its bounded 1MB tail first; the existing truncation
       // banner action fetches ?full=1 when the user explicitly asks for it.
-      const useFullHistory = session?.mode !== 'shell' && !this._fullHistoryLoaded.has(sessionId);
+      //
+      // A TUI pane whose last capture reported NO tmux scrollback (fullscreen
+      // claude: it lives in the alternate screen and keeps its transcript itself)
+      // takes `full=1` on every switch, not only the first. For such a pane that
+      // capture IS the visible frame, a few KB, while the tail is 1 MiB of the
+      // byte stream's old repaints. Measured on 11 live fullscreen claude panes:
+      // the tail took 250-1070 ms on the server and 70-510 ms to parse, and
+      // rendered one frame repeated (450 rows, 44 distinct); `full=1` took
+      // 150-330 ms and returned 0.9-5.6 KB. It also matches what a page load
+      // already shows, and an empty local buffer is what lets
+      // _maybePageCliTranscript send a wheel to the CLI's own transcript. The
+      // response re-reports the count, so a pane that starts keeping history
+      // (claude switched to its inline view) goes back to the tail on the next
+      // switch.
+      const paneKeepsNoHistory = this._paneHistoryLines?.get(sessionId) === 0;
+      const useFullHistory =
+        session?.mode !== 'shell' && (paneKeepsNoHistory || !this._fullHistoryLoaded.has(sessionId));
       if (useFullHistory) this._fullHistoryLoaded.add(sessionId);
       const fetchStartedAt = performance.now();
       const tailUrl = `/api/sessions/${sessionId}/terminal?tail=${TERMINAL_TAIL_SIZE}`;
@@ -9196,6 +9238,7 @@ class CodemanApp {
       }
       const data = capture.json?.data ?? {};
       const bodyParsedAt = performance.now();
+      this._notePaneHistory?.(sessionId, data);
       // How this load must end, decided here because `chunkedTerminalWrite` is
       // what actually ends it for a non-empty buffer. A tmux pane capture is a
       // point-in-time frame, so nothing that reached the browser after the

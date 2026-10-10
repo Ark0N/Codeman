@@ -210,6 +210,8 @@ TUIs render correctly.
 Worth knowing:
 
 - **Scrollback.** Agent/TUI sessions pull their entire tmux scrollback on first open.
+  A fullscreen Claude tab keeps its history inside Claude, so switching back to it
+  reloads only the current screen, which keeps tab switches fast.
   Shell sessions open from a bounded recent tail so a large transcript cannot stall tab
   switching. Scrolling to the top of a Shell pane pulls the most recent 1 MiB of its tmux
   history; press **Load full history** to pull the rest explicitly. That notice only
