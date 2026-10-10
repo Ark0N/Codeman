@@ -29,6 +29,12 @@ worked multi-worker flows in [reference/recipes.md](reference/recipes.md), endpo
 tables and a symptom gallery in [reference/endpoints.md](reference/endpoints.md), and
 direct messaging to claude workers in [reference/messaging.md](reference/messaging.md).
 
+Workers in **every other mode** never receive this preamble, but they have the same
+environment: tell them *"other sessions: `codeman agent --help`"* — the bundled CLI
+(`ls`, `spawn`, `send`, `wait`, `read`, `interrupt`, `rm`) is the same verbs over the
+same endpoints, with the guards below (no control bytes, no self-delete, no guessed
+URL) enforced in code.
+
 ## 0. Guard and bootstrap
 
 If `CODEMAN_MUX` is not `1`, **stop and say so**. Do not guess an API URL; a server

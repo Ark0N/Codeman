@@ -33,6 +33,7 @@ function walk(cmd: Command, path: string[] = []): Array<{ path: string[]; cmd: C
 const TOP_LEVEL: Record<string, string[]> = {
   attach: [],
   skill: [],
+  agent: [],
   session: ['s'],
   task: ['t'],
   ralph: ['r'],
@@ -53,6 +54,7 @@ const SUBCOMMANDS: Record<string, Record<string, string[]>> = {
   task: { add: [], list: ['ls'], status: [], remove: ['rm'], clear: [] },
   ralph: { start: [], stop: [], status: [] },
   skill: { install: [], uninstall: [] },
+  agent: { ls: ['list'], spawn: [], send: [], wait: [], read: [], interrupt: [], rm: [] },
   service: { install: [], uninstall: [], status: [] },
   users: { add: [], passwd: [], list: ['ls'], rm: [] },
 };
