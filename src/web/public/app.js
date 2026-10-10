@@ -2732,6 +2732,23 @@ class CodemanApp {
         return;
       }
 
+      // An in-document link (`[Install](#installation)`). The browser must not follow it: with
+      // `<base href="/">` a bare fragment points at the dashboard's root and would navigate the
+      // app away. Resolve it inside this rendered document and scroll there (constants.js).
+      // A fragment that matches nothing is simply ignored, never a navigation.
+      const fragmentLink = ev.target.closest('a[href^="#"]');
+      if (fragmentLink && body.contains(fragmentLink)) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const root = fragmentLink.closest('.rv-text') || body;
+        const target = window.CodemanMarkdownAnchors?.find(root, fragmentLink.getAttribute('href'));
+        if (target) {
+          const calm = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+          target.scrollIntoView({ block: 'start', behavior: calm ? 'auto' : 'smooth' });
+        }
+        return;
+      }
+
       // A `localhost` URL in the agent's answer: from another device that can
       // only load through the server, so hand it to a proxied web tab
       // (webview-tabs.js). Every other link keeps its new-tab default.
