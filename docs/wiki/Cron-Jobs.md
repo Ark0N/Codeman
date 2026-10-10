@@ -4,8 +4,8 @@ Saved, named jobs that start a session and send it a prompt on a schedule. Cron 
 sessions: *every weekday at 03:00, open a Claude session in `~/proj` and tell it to update
 dependencies and open a PR.*
 
-The ⏰ **Cron** header button is opt-in. Turn it on in
-**App Settings → Header & Panels**.
+The ⏰ **Cron** button in the bottom toolbar is opt-in. Turn it on under
+**App Settings → Header & Panels → Scheduling**.
 
 ## Creating a job
 
@@ -20,10 +20,10 @@ find out whether the prompt does what you meant.
 
 ## The fields
 
-| Field                    | Notes                                                                                       |
-| ------------------------ | ------------------------------------------------------------------------------------------- |
+| Field                    | Notes                                                                                    |
+| ------------------------ | ---------------------------------------------------------------------------------------------- |
 | **Name**                 | Also used as the created session's name.                                                     |
-| **Agent type**           | Any run mode, including `shell`.                                                             |
+| **Agent type**           | Any run mode, including `shell`.                                                                |
 | **Working directory**    | Validated when you save **and** again when the job fires. Blocked system trees are refused.  |
 | **Launch command**       | Shell jobs only. Sent as the first line once the shell is up, before the prompt.             |
 | **Prompt**               | Inline text, or a path to a file read at fire time.                                          |
@@ -39,12 +39,12 @@ find out whether the prompt does what you meant.
 All wall-clock times are in the **server's local timezone**, not your browser's. A job set
 for 03:00 fires at 03:00 where the server is.
 
-| Type       | Behaviour                                                                                          |
-| ---------- | -------------------------------------------------------------------------------------------------- |
+| Type       | Behaviour                                                                                      |
+| ---------- | ---------------------------------------------------------------------------------------------- |
 | `once`     | Fires at an absolute time, then disables itself. A job missed because the server was down still fires once on the next tick. |
-| `interval` | Every N minutes, from 1 minute to a year.                                                            |
-| `daily`    | At `HH:MM` every day. If today's time has passed, the next run is tomorrow.                          |
-| `weekly`   | At `HH:MM` on the weekdays you pick.                                                                 |
+| `interval` | Every N minutes, from 1 minute to a year.                                                      |
+| `daily`    | At HH:MM every day. If today's time has passed, the next run is tomorrow.                     |
+| `weekly`   | At HH:MM on the weekdays you pick.                                                             |
 
 Interval jobs re-anchor to when they actually fired, not to an ideal cadence, so a slow tick
 or a server restart shifts later runs slightly. That drift is accepted rather than corrected.
@@ -78,10 +78,10 @@ If any of that fails, the run is recorded as failed and **no session is created*
 
 Applies to scheduled runs only, never to **Run Now**:
 
-| Policy                          | Behaviour                                                                             |
-| ------------------------------- | -------------------------------------------------------------------------------------- |
-| `warn_only`                     | Always launch. The count of live same-type sessions is shown but does not block.        |
-| `skip_if_same_agent_running`    | Skip this fire if another live session of that mode exists.                             |
+| Policy                             | Behaviour                                                                    |
+| ---------------------------------- | ---------------------------------------------------------------------------- |
+| `warn_only`                        | Always launch. The count of live same-type sessions is shown but does not block. |
+| `skip_if_same_agent_running`       | Skip this fire if another live session of that mode exists.                  |
 
 The skip policy has the details you would want it to have:
 
@@ -96,11 +96,15 @@ The skip policy has the details you would want it to have:
 
 Every fire is recorded per job, with a status:
 
-| Status    | Meaning                                                              |
-| --------- | -------------------------------------------------------------------- |
-| `created` | The run started and a session was created.                            |
-| `skipped` | The concurrency policy blocked it. Not counted as a run.              |
-| `failed`  | The prompt could not be resolved, or the working directory was gone.  |
+| Status            | Meaning                                                                 |
+| ----------------- | ----------------------------------------------------------------------- |
+| `created`         | The run started and a session was created.                              |
+| `session_started` | The session was started successfully.                                   |
+| `prompt_sent`     | The prompt was delivered to the session.                                |
+| `skipped`         | The concurrency policy blocked it. Not counted as a run.                |
+| `failed`          | The prompt could not be resolved, or the working directory was gone.    |
+
+The history records whether the session started and the prompt was delivered, not whether the agent's task succeeded.
 
 The schedule is advanced **before** the session launches, so a slow start cannot cause the
 same job to re-trigger.
