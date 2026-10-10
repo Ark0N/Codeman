@@ -1,15 +1,20 @@
 /**
  * @fileoverview The grid survives a page reload, per device (`codeman:tile-grid`).
  *
- * - What is stored: ids, focus, a zoom the user chose and the divider
- *   fractions, never content. Closing the grid (Tiles, a pick outside it)
- *   keeps it remembered as `open: false` for one-click return; the last tile
- *   leaving forgets it. Never written or read in a solo window.
+ * - What is stored: ids (the cells), the tile count, focus, a zoom the user
+ *   chose and the divider fractions, never content. Closing the grid (Tiles,
+ *   a pick outside it, the last tile leaving) keeps it remembered as
+ *   `open: false` for one-click return, and the toggle brings it back exactly
+ *   (owner request, superseding decision 10's "the count wins over a
+ *   remembered grid's size"; the full set of close paths is in
+ *   tile-grid-layout-memory.test.ts). Never written or read in a solo window.
  * - The restore runs INSIDE handleInit, in place of its single-view
  *   `selectSession(restoreId, { auto: true })`: with a stored open grid the
  *   main terminal never loads on that page load (no select, no socket, no
- *   capture), deleted / detached / duplicate ids are dropped, and the stored
- *   fractions and zoom come back. A narrow window keeps the single view.
+ *   capture), a deleted or detached session frees its cell for the ranking
+ *   to fill (on status and stamps: pending approvals are seeded after, and
+ *   never re-form the restored grid), duplicate ids are dropped, and the
+ *   stored fractions and zoom come back. A narrow window keeps the single view.
  * - A `#session=` link on load wins, and leaves the stored grid remembered
  *   but closed.
  * - Leaving the grid invalidates the main terminal's cached content for every
@@ -25,7 +30,15 @@ const KEY = 'codeman:tile-grid';
 const stored = () => JSON.parse(localStore.get(KEY) ?? 'null');
 
 /** A fresh page: the app as handleInit leaves it on its FIRST run (gen 1). */
-function pageLoad(liveIds: string[], setup: (app: GridApp) => void = () => {}) {
+function pageLoad(
+  liveIds: string[],
+  setup: (app: GridApp) => void = () => {},
+  {
+    sessions = liveIds.map((id) => ({ id, name: id, mode: 'claude', pid: 1 })),
+    sessionOrder,
+    realOrder = false,
+  }: { sessions?: Array<Record<string, unknown>>; sessionOrder?: string[]; realOrder?: boolean } = {}
+) {
   const app = makeGridApp(IDS);
   app._initGeneration = 0;
   app.activeSessionId = null;
@@ -35,7 +48,7 @@ function pageLoad(liveIds: string[], setup: (app: GridApp) => void = () => {}) {
   for (const name of [
     '_clearTimer',
     '_updateCjkInputState',
-    'syncSessionOrder',
+    ...(realOrder ? [] : ['syncSessionOrder']),
     '_loadTabLayout',
     'cleanupAllFloatingWindows',
     'startSystemStatsPolling',
@@ -46,10 +59,7 @@ function pageLoad(liveIds: string[], setup: (app: GridApp) => void = () => {}) {
   }
   app.$ = () => null;
   setup(app);
-  app.handleInit({
-    sessions: liveIds.map((id) => ({ id, name: id, mode: 'claude', pid: 1 })),
-    scheduledRuns: [],
-  });
+  app.handleInit({ sessions, scheduledRuns: [], ...(sessionOrder ? { sessionOrder } : {}) });
   return app;
 }
 
@@ -58,13 +68,14 @@ beforeEach(() => {
 });
 
 describe('what is stored', () => {
-  it('opening the grid stores ids, focus and fractions, nothing else', () => {
+  it('opening the grid stores ids, its count, focus and fractions, nothing else', () => {
     const app = makeGridApp(IDS);
     app.openTileGrid(IDS, { focusedId: 's-b' });
     expect(stored()).toEqual({
       v: 1,
       open: true,
       ids: IDS,
+      count: 4,
       focused: 's-b',
       zoomed: null,
       colFr: [1, 1],
@@ -94,7 +105,7 @@ describe('what is stored', () => {
     expect(stored().zoomed).toBeNull();
   });
 
-  it('closing keeps it remembered (open: false); the last tile leaving forgets it', () => {
+  it('closing keeps it remembered (open: false); the last tile leaving keeps it too', () => {
     const app = makeGridApp(IDS);
     app.selectSession = vi.fn();
     app.openTileGrid(IDS);
@@ -103,7 +114,7 @@ describe('what is stored', () => {
 
     app.openTileGrid(['s-a']);
     app.removeTile('s-a');
-    expect(localStore.has(KEY)).toBe(false);
+    expect(stored()).toMatchObject({ open: false, ids: ['s-a'], count: 1 });
   });
 
   it('a solo window never writes', () => {
@@ -134,12 +145,81 @@ describe('page load with a stored open grid', () => {
     expect(app.markIdleAlertSeen).not.toHaveBeenCalled();
   });
 
-  it('drops a session that no longer exists, and stores the cleaned list', () => {
+  it('a session that no longer exists frees its cell, which the ranking fills; that is stored', () => {
     storeGrid({ ids: ['s-a', 'gone', 's-b'], focused: 'gone' });
     const app = pageLoad(IDS);
-    expect(app._tileGrid.ids).toEqual(['s-a', 's-b']);
+    // Every session quiet and unstamped here: the ranking is tab order (s-c first).
+    expect(app._tileGrid.cells).toEqual(['s-a', 's-c', 's-b']);
     expect(app.activeSessionId).toBe('s-a');
-    expect(stored().ids).toEqual(['s-a', 's-b']);
+    expect(stored().ids).toEqual(['s-a', 's-c', 's-b']);
+  });
+
+  it('the reload fill ranks with the init payload: its states, stamps and synced tab order', () => {
+    // The tab order comes from the server snapshot (synced before the restore
+    // runs); the states from the session payload. Pending approvals arrive
+    // later (seedApprovals is async), so only status and stamps rank here.
+    storeGrid({ ids: ['s-a', 'gone', 's-b'], focused: 's-a' });
+    const now = 1_000_000;
+    const app = pageLoad(IDS, () => {}, {
+      realOrder: true,
+      sessionOrder: ['s-c', 's-b', 's-a', 's-d'],
+      sessions: [
+        { id: 's-a', name: 's-a', mode: 'claude', pid: 1, status: 'idle', lastActivityAt: now },
+        { id: 's-b', name: 's-b', mode: 'claude', pid: 1, status: 'idle', lastActivityAt: now },
+        { id: 's-c', name: 's-c', mode: 'claude', pid: 1, status: 'idle', lastActivityAt: now - 10 },
+        { id: 's-d', name: 's-d', mode: 'claude', pid: 1, status: 'busy', lastSubmitAt: now - 500 },
+      ],
+    });
+    expect(app.sessionOrder).toEqual(['s-c', 's-b', 's-a', 's-d']);
+    // s-d is working: it takes the freed cell, though s-c comes first in the tab order.
+    expect(app._tileGrid.cells).toEqual(['s-a', 's-d', 's-b']);
+  });
+
+  it('pending approvals seeded after the reload never re-form the restored grid (known limit of the reload fill)', async () => {
+    // seedApprovals is async (GET /api/approvals), so the freed cell is filled
+    // from status and stamps alone. A needs-input session the seed reveals a
+    // moment later does not take a tile from the grid already back on screen:
+    // a late fill would reshape it (fewer tiles opened is another shape) and
+    // move the user's tiles a second after the reload.
+    storeGrid({ ids: ['s-a', 'gone', 's-b'], focused: 's-a' });
+    const now = 1_000_000;
+    let release!: () => void;
+    const app = pageLoad(
+      IDS,
+      (a) => {
+        a.tabAlerts = new Map();
+        a.seedApprovals = vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              release = () => {
+                a.setPendingHook('s-d', 'permission_prompt');
+                resolve();
+              };
+            })
+        );
+      },
+      {
+        sessions: [
+          { id: 's-a', name: 's-a', mode: 'claude', pid: 1, status: 'idle', lastActivityAt: now },
+          { id: 's-b', name: 's-b', mode: 'claude', pid: 1, status: 'idle', lastActivityAt: now },
+          { id: 's-c', name: 's-c', mode: 'claude', pid: 1, status: 'idle', lastActivityAt: now - 10 },
+          { id: 's-d', name: 's-d', mode: 'claude', pid: 1, status: 'idle', lastActivityAt: now - 500 },
+        ],
+      }
+    );
+    expect(app.seedApprovals).toHaveBeenCalledTimes(1);
+    // Before the seed lands: all quiet, the most recent (s-c) takes the freed cell.
+    expect(app._tileGrid.cells).toEqual(['s-a', 's-c', 's-b']);
+    const before = stored();
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    // The seed made s-d need input: the ranking now puts it first...
+    expect(app._tileGridRanking()[0]).toBe('s-d');
+    app._renderTileChrome();
+    // ...but the restored grid and the stored layout stay as they came back.
+    expect(app._tileGrid.cells).toEqual(['s-a', 's-c', 's-b']);
+    expect(stored()).toEqual(before);
   });
 
   it('brings back the fractions (same layout only) and a zoom the user chose', () => {
@@ -179,26 +259,30 @@ describe('page load with a stored open grid', () => {
     expect(app.activeSessionId).toBe('s-c');
   });
 
-  it('the toggle fills a stored grid to the remembered count: its tiles first, in their cells, then tab order', () => {
-    // Default 6 (owner answer 1, superseding decision 8's "exactly the stored set").
+  it('the toggle brings a stored grid back exactly, never filled to the remembered count', () => {
+    // Owner request ("always keep what the last setting was"), superseding
+    // decision 10's answer that the count wins over a remembered grid's size.
     localStore.set(KEY, JSON.stringify({ v: 1, open: false, ids: ['s-b', 's-c'], focused: 's-c' }));
     const app = pageLoad(IDS, (a) => localStore.set('codeman-active-session', 's-a'));
     app.activeSessionId = 's-a';
     app.toggleTileGrid();
-    // The two stay in the first row (2x1 to 2x2 keeps them), the rest join
-    // in tab order: every live session, fewer than the count.
-    expect(app._tileGrid.cells).toEqual(['s-b', 's-c', 's-a', 's-d']);
+    expect(app._tileGrid.cells).toEqual(['s-b', 's-c']);
     expect(app.activeSessionId).toBe('s-c');
   });
 
-  it('a stored hole is filled first when the count needs more tiles', () => {
-    // A 2x2 of three with the hole first; the count asks for four.
-    localStore.set(KEY, JSON.stringify({ v: 1, open: false, ids: [null, 's-b', 's-c', 's-d'], focused: 's-b' }));
-    localStore.set('codeman:tile-count', '4');
-    const app = pageLoad(IDS, (a) => localStore.set('codeman-active-session', 's-a'));
+  it('a stored hole stays a hole on the toggle; a count picked in the menu fills it first', () => {
+    // A 3x2 of five with the second cell empty; the remembered count is six.
+    const cells = ['s-a', null, 's-b', 's-c', 's-d', 's-e'];
+    localStore.set(KEY, JSON.stringify({ v: 1, open: false, ids: cells, focused: 's-b' }));
+    const app = pageLoad([...IDS, 's-e', 's-f']);
+    // (syncSessionOrder is stubbed here: the tab order the ranking reads.)
+    app.sessionOrder = [...IDS, 's-e', 's-f'];
     app.toggleTileGrid();
-    // s-a joins in the hole (packing would have put it last).
-    expect(app._tileGrid.cells).toEqual(['s-a', 's-b', 's-c', 's-d']);
+    expect(app._tileGrid.cells).toEqual(cells);
+    app.closeTileGrid({ reselect: false });
+    app._pickTileCount(6);
+    // s-f joins in the hole (packing would have put it last).
+    expect(app._tileGrid.cells).toEqual(['s-a', 's-f', 's-b', 's-c', 's-d', 's-e']);
   });
 
   it('a reload brings back exactly the stored grid, whatever the count', () => {

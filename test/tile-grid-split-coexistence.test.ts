@@ -89,8 +89,9 @@ describe('opening the grid over an open split', () => {
 
     expect(paneB.destroy).toHaveBeenCalledTimes(1);
     expect(app._splitPane).toBeNull();
-    // Filled from tab order (s-other first), not seeded with the split's two.
-    expect(app._tileGrid.ids).toEqual(['s-c', 's-other']);
+    // Exactly as stored (owner request: the last arrangement comes back), not
+    // seeded with the split's two, nor filled to the count.
+    expect(app._tileGrid.ids).toEqual(['s-c']);
     expect(app.activeSessionId).toBe('s-c');
     // Pane A (s-a) is not a tile: the split's closing resize gave it its full width back.
     expect(app.sendResize.mock.calls).toEqual([['s-a', { force: true }]]);
