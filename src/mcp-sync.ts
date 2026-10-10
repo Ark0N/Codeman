@@ -12,7 +12,8 @@
  *     does not understand) is never rewritten and nothing is ever removed. Same name with a
  *     different definition is reported as a conflict and left alone.
  *   - A server the user has switched off in its own CLI (codex `enabled = false`, opencode
- *     `enabled: false`, antigravity `disabled: true`) is not propagated: copying it would
+ *     `enabled: false`, antigravity `disabled: true`, Copilot's `disabledMcpServers` in its
+ *     `settings.json`) is not propagated: copying it would
  *     switch it on in every other CLI.
  *   - A file that does not parse (e.g. opencode JSONC with comments, a TOML file with a
  *     duplicate table) is never written, and a write is only made after the NEW text has been

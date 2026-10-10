@@ -1235,7 +1235,7 @@ Object.assign(CodemanApp.prototype, {
       show('Apply or Save settings to turn MCP sync on first, then preview or sync.', 'save-first');
       return;
     }
-    if (apply && !confirm('Add missing MCP servers to every installed, enabled CLI\'s config file? Env values and headers on those servers are copied too.')) return;
+    if (apply && !confirm('Add missing MCP servers to every installed, enabled CLI\'s config file (and GitHub Copilot CLI\'s, when it is installed)? Env values and headers on those servers are copied too.')) return;
     show('Working…');
     const res = apply ? await this._apiPost('/api/mcp-sync', {}) : await this._api('/api/mcp-sync');
     let body = null;

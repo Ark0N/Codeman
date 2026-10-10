@@ -16,6 +16,7 @@ import { registerMcpSyncRoutes } from '../../src/web/routes/mcp-sync-routes.js';
 import { SETTINGS_PATH } from '../../src/web/route-helpers.js';
 import { registryFilePath, reloadCliRegistry } from '../../src/config/cli-registry/registry.js';
 import { STOCK_CLIS } from '../../src/config/cli-registry/stock.js';
+import { MCP_SYNC_ONLY_TOOLS } from '../../src/mcp-sync-targets.js';
 
 // Which CLIs are installed on the machine running the tests must not decide the outcome: nothing
 // is installed, so only a CLI whose config file exists takes part.
@@ -43,14 +44,26 @@ vi.mock('../../src/utils/cli-installed-probes.js', () => ({
   probeStockCliAvailability: async () => ({}),
   isCliEntryInstalled: (e: { id: string }) => installed.has(e.id),
 }));
+// The sync-only tools (Copilot) probe the real PATH for their binary; route that through the same set.
+vi.mock('../../src/mcp-sync-targets.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/mcp-sync-targets.js')>();
+  return {
+    ...actual,
+    mcpSyncOnlyTargets: (taken: ReadonlySet<string>) =>
+      actual.mcpSyncOnlyTargets(taken, (binary) => installed.has(binary)),
+  };
+});
 
 // The route follows each CLI's relocation env var (CODEX_HOME, CLAUDE_CONFIG_DIR, XDG_CONFIG_HOME,
 // ...) from process.env, so the runner's own values (CI images set XDG_CONFIG_HOME) must never
 // aim a test write outside the temp HOME. Cleared before every test, restored after the file.
-const RELOCATION_VARS = STOCK_CLIS.flatMap((e) => {
-  const envVar = e.capabilities.mcpConfig?.relocation?.envVar;
-  return envVar ? [envVar] : [];
-});
+const RELOCATION_VARS = [
+  ...STOCK_CLIS.flatMap((e) => {
+    const envVar = e.capabilities.mcpConfig?.relocation?.envVar;
+    return envVar ? [envVar] : [];
+  }),
+  ...MCP_SYNC_ONLY_TOOLS.flatMap((t) => (t.relocation ? [t.relocation.envVar] : [])),
+];
 const savedEnv = Object.fromEntries(RELOCATION_VARS.map((k) => [k, process.env[k]]));
 afterAll(() => {
   for (const [k, v] of Object.entries(savedEnv)) {
