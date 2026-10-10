@@ -217,6 +217,18 @@ async function exercise() {
   }
   pill = 'idle';
 
+  // Detach Tiles on: the drag hint says a tile also leaves the window, and
+  // a tile that cannot move (zoomed) says only that.
+  const settings = app.loadAppSettingsFromStorage;
+  app.loadAppSettingsFromStorage = () => ({ tileDetachEnabled: true });
+  app._renderTileChrome();
+  harvestAll(app, 'detach tiles');
+  app.zoomTile('s-1');
+  harvestAll(app, 'detach tiles, zoomed');
+  app.zoomTile('s-1');
+  app.loadAppSettingsFromStorage = settings;
+  app._renderTileChrome();
+
   // Zoom and back.
   app.zoomTile('s-1');
   harvestAll(app, 'zoomed');
@@ -320,6 +332,8 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
       'idle 3m\nDrag to move the tile',
       'needs you 3m\nDrag to move the tile',
       'exited 3m\nDrag to move the tile',
+      'idle 3m\nDrag to move the tile, or out of the window to open it on its own',
+      'idle 3m\nDrag out of the window to open the tile on its own',
       'Not attached',
       'Attach',
       'Attaching…',
@@ -390,6 +404,30 @@ describe('every tile grid string the code puts on screen translates to zh-CN', (
     expect(zh.api.t('idle\nDrag to move the tile')).toBe('空闲\n拖动可移动窗格');
     expect(zh.api.t('Drag to move the tile')).toBe('拖动可移动窗格');
     expect(en.api.t('idle\nDrag to move the tile')).toBe('idle\nDrag to move the tile');
+    // Detach Tiles' two hints ride the same pattern.
+    expect(zh.api.t('idle\nDrag out of the window to open the tile on its own')).toBe(
+      '空闲\n拖出窗口可在独立窗口中打开此窗格'
+    );
+    expect(zh.api.t('working <1m\nDrag to move the tile, or out of the window to open it on its own')).toBe(
+      '工作中 <1m\n拖动可移动窗格，拖出窗口可在独立窗口中打开'
+    );
+  });
+
+  it("Detach Tiles' pop-out strings: its title as a handle, and a pop-out that could not close", () => {
+    const strings = [
+      "Drag onto a Codeman window's tiles to dock this session there",
+      'Session moved',
+      'This session is back in a Codeman window. This one can be closed.',
+      'Close window',
+    ];
+    // Not vacuous: each is a string the code really shows.
+    const code = read('app.js') + read('tile-grid.js');
+    expect(strings.filter((source) => !code.includes(source))).toEqual([]);
+    const bad = strings.filter((source) => {
+      const text = zh.api.t(source);
+      return text === source || leftover(text.replace(/Codeman/g, '')).length > 0 || en.api.t(source) !== source;
+    });
+    expect(bad).toEqual([]);
   });
 
   it('no UI label sits inside a skipped subtree (where the translator cannot reach it)', () => {
@@ -458,6 +496,17 @@ describe('the static markup through the real translator (JSDOM, zh-CN)', () => {
     expect(tiles!.textContent).toContain('向左 / 右 / 上 / 下移动窗格');
     expect(tiles!.textContent).toContain('拖动');
     expect(tiles!.textContent).toContain('窗格的标题栏');
+    // Detach Tiles: a header dragged out of the window.
+    expect(tiles!.textContent).toContain('窗格的标题栏到窗口之外');
+    expect(tiles!.textContent).toContain('在独立窗口中打开窗格（分离窗格）');
+  });
+
+  it('the Detach Tiles row in App Settings: its name and what it does', () => {
+    const row = doc.getElementById('appSettingsTileDetachItem')!;
+    expect(row.querySelector('.set-row-label')!.textContent).toContain('分离窗格');
+    const desc = row.querySelector('.set-row-desc')!.textContent!;
+    expect(desc).toContain('独立窗口');
+    expect(leftover(desc.replace('Codeman', ''))).toEqual([]);
   });
 
   it('user text stays as typed: a session name and a group name that are also UI words', () => {

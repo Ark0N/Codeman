@@ -139,6 +139,8 @@
     Drag: '拖动',
     "a tile's header": '窗格的标题栏',
     'Move the Tile (onto Another: Swap)': '移动窗格（拖到另一个窗格上：互换位置）',
+    "a tile's header out of the window": '窗格的标题栏到窗口之外',
+    'Open the Tile in Its Own Window (Detach Tiles)': '在独立窗口中打开窗格（分离窗格）',
     'Zoom Focused Tile': '放大聚焦的窗格',
     'Remove Focused Tile': '移除聚焦的窗格',
     'Add the Session to the Tile Grid': '将该会话加入平铺网格',
@@ -166,6 +168,11 @@
     'Failed to restore terminal size': '恢复终端尺寸失败',
     // A tile header's tooltip while tiles can move (with the state above it: a pattern below).
     'Drag to move the tile': '拖动可移动窗格',
+    // The same with Detach Tiles on (tile-grid.js _paintTileHandle), and a
+    // pop-out window's title as a handle back onto the tiles.
+    'Drag to move the tile, or out of the window to open it on its own': '拖动可移动窗格，拖出窗口可在独立窗口中打开',
+    'Drag out of the window to open the tile on its own': '拖出窗口可在独立窗口中打开此窗格',
+    "Drag onto a Codeman window's tiles to dock this session there": '拖到 {name} 窗口的窗格上，即可将此会话停靠到那里',
     'Resize tile columns': '调整窗格列宽',
     'Resize tile rows': '调整窗格行高',
     Attach: '附加',
@@ -214,6 +221,9 @@
     'Close window': '关闭窗口',
     'Session unavailable': '会话不可用',
     'This session has ended or is no longer available.': '此会话已结束或不再可用。',
+    // A pop-out whose session a dashboard took back, when it cannot close itself (app.js _showSoloReleased).
+    'Session moved': '会话已移走',
+    'This session is back in a Codeman window. This one can be closed.': '此会话已回到 {name} 窗口中。可以关闭此窗口。',
 
     // Welcome / quick start / common actions
     'Manage AI Coding tools in persistent tmux sessions.': '在持久化 tmux 会话中管理 AI 编程工具。',
@@ -405,6 +415,9 @@
     'CLI Logos on Tabs': '标签页上的 CLI 图标',
     "Show each agent's CLI logo before the session name on tabs and the home screen's tab list. Off leaves the status dot and the shell's SH badge. Tiles, split headers and the Run menus keep their logos.":
       '在标签页和主界面的标签列表中，于会话名称前显示每个智能体的 CLI 图标。关闭后仍保留状态圆点和 Shell 的 SH 标记。平铺、分屏标题栏和运行菜单中的图标不受影响。',
+    'Detach Tiles': '分离窗格',
+    "Drag a tile's header out of the browser to open it in its own window, or onto another Codeman window's tiles to move it there. A popped-out window's title drags back onto tiles.":
+      '将窗格的标题栏拖出浏览器，即可在独立窗口中打开它；拖到另一个 {name} 窗口的窗格上，即可将它移到那里。弹出窗口的标题也可以拖回窗格中。',
     // Tab Layout and Header Stats Style (Discussion #426). The header style's
     // "Tiles" is 磁贴, never 平铺: that is the tile grid's word (the Tiles
     // button), and "Tiles (label over value)" must not read as the grid.
@@ -1280,9 +1293,8 @@
       // The same while tiles can move, with the drag hint on a second line.
       // Anchored on the hint, so a bare state word is safe here.
       [
-        /^(needs you|error|waiting|working|idle|done|exited)(?: (<1m|\d+[dhm](?: \d+[hm])?))?\nDrag to move the tile$/,
-        (_m, state, duration) =>
-          `${TILE_STATE_ZH[state]}${duration ? ` ${duration}` : ''}\n${ZH_CN['Drag to move the tile']}`,
+        /^(needs you|error|waiting|working|idle|done|exited)(?: (<1m|\d+[dhm](?: \d+[hm])?))?\n(Drag to move the tile|Drag to move the tile, or out of the window to open it on its own|Drag out of the window to open the tile on its own)$/,
+        (_m, state, duration, hint) => `${TILE_STATE_ZH[state]}${duration ? ` ${duration}` : ''}\n${ZH_CN[hint]}`,
       ],
     ];
     for (const [pattern, replacement] of patterns) {

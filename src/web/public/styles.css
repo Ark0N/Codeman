@@ -2990,6 +2990,14 @@ body.solo-mode .btn-lifecycle-log {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Detach Tiles: the title is a handle, dragged onto a Codeman window's tiles
+   to dock the session there (tile-grid.js _installSoloTileHandle). */
+.solo-session-title.solo-session-title--handle {
+  cursor: grab;
+}
+.solo-session-title.solo-session-title--handle:active {
+  cursor: grabbing;
+}
 /* "Session unavailable" overlay for a solo window whose session has ended. */
 .solo-gone-overlay {
   position: fixed;

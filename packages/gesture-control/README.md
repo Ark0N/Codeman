@@ -133,6 +133,13 @@ its CSP for WebAssembly). Deploy = copy the bundle into Codeman's
   drop point. Pinch the panel again to move it anywhere. It stays inside the
   camera-owning page, so the hand keeps control (the old `window.app.detachSession`
   `window.open` was a one-way trip). A small twitch-and-release cancels.
+- **Tiles** (tile grid open): pinch anywhere on a tile and carry it onto
+  another tile (the two trade places) or an empty cell (it moves there). A
+  session tab carried onto a tile or an empty cell joins the grid there. With
+  **Detach Tiles** on (App Settings, per device, off by default) a tile let go
+  outside the grid opens as a window of its own, which needs the site's pop-ups
+  allowed (a hand is no click). The moves are tile-grid.js's own
+  (`tileDropTargetAt` / `dropOnTileTarget` / `detachTileAtPoint`).
 - **Run / Run Shell** — pinch over the **Run** (`#runBtn`) or **Run Shell**
   (`.btn-shell`) toolbar button and release in place to fire it; drifting too
   far first cancels the tap. The button list is `CLICK_SELECTOR` in `entry.ts`.

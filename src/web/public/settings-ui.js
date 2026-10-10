@@ -510,6 +510,11 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsShowTabDetachButton').checked =
       this.tabDetachButtonEnabled?.(settings, defaults)
       ?? (settings.showTabDetachButton ?? defaults.showTabDetachButton ?? false);
+    // Detach Tiles (tile-grid.js): per-device, OFF unless switched on. The tile
+    // grid is desktop-only, so the row is hidden elsewhere, like the lineage lines.
+    document.getElementById('appSettingsTileDetach').checked = settings.tileDetachEnabled === true;
+    const tileDetachItem = document.getElementById('appSettingsTileDetachItem');
+    if (tileDetachItem) tileDetachItem.style.display = MobileDetection.getDeviceType() === 'desktop' ? '' : 'none';
     document.getElementById('appSettingsSessionListLayout').value =
       settings.sessionListLayout ?? defaults.sessionListLayout ?? 'header';
     const sessionSidebarFontSize = this.resolveSessionSidebarFontSize(
@@ -2616,6 +2621,7 @@ Object.assign(CodemanApp.prototype, {
       tabArrangement: document.getElementById('appSettingsTabArrangement').value,
       tabStateOrder: document.getElementById('appSettingsTabStateOrder').value,
       showTabDetachButton: document.getElementById('appSettingsShowTabDetachButton').checked,
+      tileDetachEnabled: document.getElementById('appSettingsTileDetach').checked,
       sessionListLayout: document.getElementById('appSettingsSessionListLayout').value,
       sessionSidebarFontSize: this.resolveSessionSidebarFontSize(
         document.getElementById('appSettingsSessionSidebarFontSize').value
@@ -2867,6 +2873,9 @@ Object.assign(CodemanApp.prototype, {
       gitStatusMaxRepos: _gsm,
       gitStatusTimeoutSeconds: _gst2,
       showTabDetachButton: _tdb,
+      // Detach Tiles: what a tile drag does is a property of this device's
+      // windows, and the key is absent from the .strict() SettingsUpdateSchema.
+      tileDetachEnabled: _tde,
       // Phone-only home surface, and absent from SettingsUpdateSchema (.strict()).
       mobileOverviewEnabled: _mov,
       // Desktop-only tab decoration, per-device, and likewise absent from the
@@ -3902,6 +3911,8 @@ Object.assign(CodemanApp.prototype, {
     // Tiles button: same gate and backstop as Split (tile-grid.js).
     const showTileGridButton = settings.showTileGridButton ?? defaults.showTileGridButton ?? true;
     this._applyTileGridButtonVisibility?.(showTileGridButton);
+    // Detach Tiles changes what a tile's header does (and says): repaint the handles.
+    this._renderTileChrome?.();
 
     // Ultracode/Workflow agents launcher — hidden by default; reveal when enabled.
     // Marker class only (base is display:inline-flex !important) so it's auto-excluded
@@ -4358,6 +4369,7 @@ Object.assign(CodemanApp.prototype, {
           'sessionLineageLines',
           'showSplitButton',
           'showTileGridButton',
+          'tileDetachEnabled',
         ]);
         // The plan-usage chip is a PER-DEVICE display setting (desktop default ON,
         // handheld default OFF): desktop can show it while mobile stays hidden. Drop

@@ -56,6 +56,26 @@ const TILE_GRID_REFIT_MS = 150;
 // the grid section's padding (styles.css .tile-grid), for the drag math.
 const TILE_DIVIDER_PX = 6;
 const TILE_GRID_PADDING_PX = 4;
+// What a tile's header drag (and a popped-out window's title drag) carries:
+// the session id under a type of its own, never text, so no text field or
+// terminal takes it as typing. Another Codeman window reads it on drop.
+const TILE_DRAG_TYPE = 'application/x-codeman-tile';
+// Detach Tiles: a tile dropped outside every window waits this long before it
+// opens as a window of its own, so another window that took it (a
+// 'tile-adopted' message on the window channel) can still say so first.
+const TILE_TEAR_OFF_SETTLE_MS = 120;
+// How long after its drag ended a tile can still be claimed by another
+// window's drop (the claim and the dragend come from two windows).
+const TILE_ADOPT_WINDOW_MS = 5000;
+// A session docked here from another window: its old window's 'detached'
+// announcements this soon after are stale (it is closing), not a new pop-out.
+const TILE_DOCK_GRACE_MS = 2000;
+// The smallest window a detached tile opens as, and roughly how much browser
+// chrome sits above a pop-out's content (its title and address bars), so the
+// window's own header lands near where the tile was let go.
+const TILE_WINDOW_MIN_W = 480;
+const TILE_WINDOW_MIN_H = 320;
+const TILE_WINDOW_CHROME_PX = 60;
 
 /** `minmax(0, 1fr) 6px minmax(0, 2fr) ...`: tracks with a divider track between each. */
 function tileGridTracks(fr) {
@@ -1552,8 +1572,10 @@ Object.assign(CodemanApp.prototype, {
    * `accepts(id)` is the target's own rule (a tile takes any session but its
    * own; an empty cell takes any). A session it does not accept
    * is held there too, but refused (`dropEffect: 'none'`, no highlight, so no
-   * drop follows). Any other drag (a file) is left to the grid section's own
-   * guard (_installTileFileDrop).
+   * drop follows). With Detach Tiles on, a tile dragged from ANOTHER Codeman
+   * window (no drag of this page's own, the tile type in the drag) is taken
+   * too and docks here (_dockForeignTile). Any other drag (a file) is left to
+   * the grid section's own guard (_installTileFileDrop).
    */
   _acceptTabDrops(el, onDrop, { accepts = () => true } = {}) {
     const dragged = () => (this._tileGrid?.open ? this.draggedTabId || this._draggedTileId || null : null);
@@ -1561,7 +1583,16 @@ Object.assign(CodemanApp.prototype, {
       'dragover',
       (e) => {
         const id = dragged();
-        if (!id) return;
+        if (!id) {
+          // A tile from another Codeman window (Detach Tiles). Its id can
+          // only be read on drop, so it is held here whatever it is.
+          if (!this._isForeignTileDrag(e)) return;
+          e.preventDefault?.();
+          e.stopPropagation?.();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+          el.classList.add('tile--drop-target');
+          return;
+        }
         e.preventDefault?.();
         e.stopPropagation?.();
         const ok = accepts(id);
@@ -1578,7 +1609,13 @@ Object.assign(CodemanApp.prototype, {
       (e) => {
         el.classList.remove('tile--drop-target');
         const id = dragged();
-        if (!id) return;
+        if (!id) {
+          if (!this._isForeignTileDrag(e)) return;
+          e.preventDefault?.();
+          e.stopPropagation?.();
+          this._dockForeignTile(e.dataTransfer?.getData?.(TILE_DRAG_TYPE), onDrop);
+          return;
+        }
         e.preventDefault?.();
         e.stopPropagation?.();
         if (accepts(id)) onDrop(id);
@@ -2080,7 +2117,10 @@ Object.assign(CodemanApp.prototype, {
    * input starts no drag. dragstart's target is the header whatever was
    * pressed, so where the press landed is noted in the capture phase, ahead of
    * the buttons' own stopPropagation. `draggable` is off while moving is
-   * (_paintTileHandle: a zoomed grid, a single tile, a rename in progress).
+   * (_paintTileHandle: a zoomed grid, a single tile, a rename in progress),
+   * unless Detach Tiles is on: then a drop outside the window pops the tile
+   * out, and a drop on another Codeman window's tiles moves it there (see the
+   * Detach Tiles section); a rename still turns it off.
    */
   _installTileMoveDrag(sessionId, header, actions) {
     let pressedOnControl = false;
@@ -2094,7 +2134,10 @@ Object.assign(CodemanApp.prototype, {
     );
     header.addEventListener('dragstart', (e) => {
       const entry = this._tileGrid?.open ? this._tileGrid.tiles.get(sessionId) : null;
-      if (!entry || pressedOnControl || entry.renaming || !this._tilesMovable()) {
+      // Detach Tiles lets a tile that cannot move (alone, or zoomed) still be
+      // dragged, out of the window; no drop target here takes it then.
+      const detachable = this._tileDetachAllowed();
+      if (!entry || pressedOnControl || entry.renaming || !(this._tilesMovable() || detachable)) {
         e.preventDefault?.();
         return;
       }
@@ -2102,11 +2145,16 @@ Object.assign(CodemanApp.prototype, {
       entry.el.classList.add('tile--dragging');
       if (e.dataTransfer) {
         e.dataTransfer.effectAllowed = 'move';
-        // Firefox starts no drag without data.
-        e.dataTransfer.setData('application/x-codeman-tile', sessionId);
+        // Firefox starts no drag without data. Another Codeman window reads
+        // the id from it (Detach Tiles).
+        e.dataTransfer.setData(TILE_DRAG_TYPE, sessionId);
       }
+      if (detachable) this._beginTileTearOff(sessionId, entry, e);
     });
-    header.addEventListener('dragend', () => this._endTileMoveDrag());
+    header.addEventListener('dragend', (e) => {
+      this._settleTileTearOff(sessionId, e);
+      this._endTileMoveDrag();
+    });
   },
 
   /**
@@ -2117,6 +2165,7 @@ Object.assign(CodemanApp.prototype, {
    */
   _endTileMoveDrag() {
     this._draggedTileId = null;
+    this._stopTileTearOffTracking();
     const grid = this._tileGrid;
     for (const { el } of grid?.tiles.values() || []) el.classList.remove('tile--dragging', 'tile--drop-target');
     for (const slot of grid?.slots || []) slot.classList.remove('tile--drop-target');
@@ -2124,19 +2173,25 @@ Object.assign(CodemanApp.prototype, {
 
   /**
    * The header as a handle: `draggable` while the tile can move (not while a
-   * tile is zoomed, alone, or being renamed), and its tooltip, the state and
-   * how long ("working 3m") plus, while it can move, that it drags. Diffs on
-   * the last English text, never the DOM (translated in zh-CN; see
+   * tile is zoomed, alone, or being renamed) or, with Detach Tiles on, be
+   * dragged out of the window (then also alone or zoomed), and its tooltip,
+   * the state and how long ("working 3m") plus what a drag does. Diffs on the
+   * last English text, never the DOM (translated in zh-CN; see
    * _renderTileOverlay).
    */
   _paintTileHandle(entry) {
     const movable = this._tilesMovable();
-    const title = [entry.stateLabel, movable ? 'Drag to move the tile' : ''].filter(Boolean).join('\n');
+    const detachable = this._tileDetachAllowed();
+    let hint = '';
+    if (movable && detachable) hint = 'Drag to move the tile, or out of the window to open it on its own';
+    else if (movable) hint = 'Drag to move the tile';
+    else if (detachable) hint = 'Drag out of the window to open the tile on its own';
+    const title = [entry.stateLabel, hint].filter(Boolean).join('\n');
     if (entry.headerLabel !== title) {
       entry.headerLabel = title;
       entry.header.title = title;
     }
-    const draggable = movable && !entry.renaming ? 'true' : 'false';
+    const draggable = (movable || detachable) && !entry.renaming ? 'true' : 'false';
     if (entry.header.getAttribute('draggable') !== draggable) entry.header.setAttribute('draggable', draggable);
   },
 
@@ -2858,6 +2913,357 @@ Object.assign(CodemanApp.prototype, {
     if (!grid.has(grid.focusedId)) this._selectTiledSession(grid.ids[0], { auto: true, focus: false });
     for (const { tile } of grid.tiles.values()) tile.reconnectNow();
     return true;
+  },
+
+  // ── Detach Tiles (per-device `tileDetachEnabled`, default OFF) ───────────
+  //
+  // A tile leaves the grid for a window of its own, and comes back into any
+  // Codeman window's grid, by dragging:
+  //
+  //  - its header dropped OUTSIDE every window opens it as a pop-out window
+  //    (detachSession, the tab's own "Open in a new window"), at the drop point
+  //    and the tile's size;
+  //  - its header dropped on ANOTHER Codeman window's tile or empty cell moves
+  //    it there: that window docks it and says so on the window channel
+  //    ('tile-adopted'), and this one lets the tile go;
+  //  - a pop-out window's title dropped on a window's tile or empty cell docks
+  //    the session there, and the pop-out closes.
+  //
+  // Nothing new on the server: a pop-out is another client of the same session
+  // (see detachSession), and a tile is a TerminalTile in whichever window has it.
+  // A session stays in ONE place in this browser, as with every pop-out.
+
+  /** Whether Detach Tiles is on for this device. */
+  tileDetachEnabled() {
+    return this.loadAppSettingsFromStorage?.()?.tileDetachEnabled === true;
+  },
+
+  /** Detach Tiles applies here: on, and a dashboard (a pop-out has no grid to drag from). */
+  _tileDetachAllowed() {
+    return !this.isSoloWindow && this.tileDetachEnabled();
+  },
+
+  /**
+   * A drag over this page that is a tile from another Codeman window: none of
+   * this page's own drags is in flight, Detach Tiles is on and the drag
+   * carries the tile type (its id is only readable on drop).
+   */
+  _isForeignTileDrag(e) {
+    if (this.draggedTabId || this._draggedTileId || !this._tileGrid?.open || !this._tileDetachAllowed()) return false;
+    const types = e?.dataTransfer?.types;
+    return !!types && Array.from(types).includes(TILE_DRAG_TYPE);
+  },
+
+  /**
+   * A tile from another window dropped on one of this grid's targets: it docks
+   * through the target's own drop (`place`: a tile it replaces or trades
+   * places with, an empty cell it fills), and takes focus there (a human
+   * selection: the user just put it there). A session that was popped out comes
+   * back first (its window is asked to close). Once it is a tile here, every
+   * other window hears 'tile-adopted', and the one it was dragged from lets
+   * its tile go (_onTileAdoptedElsewhere). An id this page does not know (a
+   * session closed meanwhile, another user's) docks nowhere.
+   *
+   * @returns {boolean} whether the session is a tile here afterwards
+   */
+  _dockForeignTile(sessionId, place) {
+    const grid = this._tileGrid;
+    if (!grid?.open || typeof sessionId !== 'string' || !this.sessions.has(sessionId)) return false;
+    const poppedOut = !!this.detachedSessions?.has(sessionId);
+    // A pop-out window owns its session's place: take it back before mounting
+    // (a detached session never mounts).
+    if (poppedOut) this._redock?.(sessionId);
+    // Already a tile here too (two windows showed it): it moves to where it
+    // was dropped, as a drag inside this window would move it.
+    place(sessionId);
+    if (!grid.has(sessionId)) return false;
+    (this._tileDockedAt ||= new Map()).set(sessionId, Date.now());
+    if (poppedOut) this._postWindowMessage?.({ type: 'close-request', id: sessionId });
+    this._postWindowMessage?.({ type: 'tile-adopted', id: sessionId, by: this._wsTabNonce });
+    return true;
+  },
+
+  /**
+   * True for a session this window docked from another one a moment ago: a
+   * 'detached' announcement from its old pop-out is that window on its way
+   * out, never a new pop-out (it would take the tile straight back off).
+   */
+  _tileDockedRecently(sessionId) {
+    const at = this._tileDockedAt?.get(sessionId);
+    return typeof at === 'number' && Date.now() - at < TILE_DOCK_GRACE_MS;
+  },
+
+  /**
+   * Another window docked `sessionId` ('tile-adopted'). Only the window it
+   * was dragged FROM acts: its drag is still settling or ended a moment ago.
+   * The tile goes without taking the keyboard anywhere (the user is in the
+   * other window now). The last tile leaving closes the grid onto the welcome
+   * screen, never onto that session: two windows sizing one PTY garble it.
+   */
+  _onTileAdoptedElsewhere(sessionId) {
+    const recent = this._lastTileDrag;
+    const dragging = this._tileTearOff?.id === sessionId;
+    const pending = this._tileTearOffPending?.id === sessionId;
+    const justEnded = recent?.id === sessionId && Date.now() - recent.at < TILE_ADOPT_WINDOW_MS;
+    if (!dragging && !pending && !justEnded) return false;
+    this._cancelTileTearOff();
+    this._lastTileDrag = null;
+    const grid = this._tileGrid;
+    if (!grid?.has(sessionId)) return false;
+    if (grid.ids.length > 1) return this.removeTile(sessionId, { focus: false });
+    this.closeTileGrid({ keepStored: false, reselect: false });
+    this.activeSessionId = null;
+    try {
+      localStorage.removeItem('codeman-active-session');
+    } catch {
+      /* Nothing stored. */
+    }
+    this.terminal?.clear();
+    this.showWelcome?.();
+    return true;
+  },
+
+  /**
+   * A header drag starts with Detach Tiles on: note the tile's size and where
+   * in it the press landed (the pop-out opens that size, under the pointer),
+   * and watch whether the pointer leaves the page. Two signals, since
+   * browsers differ in what dragend reports for a drop outside the window:
+   * its coordinates, and the page's own dragleave at the viewport's edge
+   * with nothing entered (cleared again by any dragover inside).
+   */
+  _beginTileTearOff(sessionId, entry, e) {
+    this._stopTileTearOffTracking();
+    const rect = entry.el.getBoundingClientRect();
+    const within = (v, max) => (Number.isFinite(v) ? Math.max(0, Math.min(v, max)) : 0);
+    const drag = {
+      id: sessionId,
+      width: rect.width,
+      height: rect.height,
+      offsetX: within(e?.clientX - rect.left, rect.width),
+      offsetY: within(e?.clientY - rect.top, rect.height),
+      outside: false,
+      stop: null,
+    };
+    const onOver = () => {
+      drag.outside = false;
+    };
+    const onLeave = (ev) => {
+      if (ev.relatedTarget) return;
+      const x = ev.clientX;
+      const y = ev.clientY;
+      if (x <= 0 || y <= 0 || x >= window.innerWidth - 1 || y >= window.innerHeight - 1) drag.outside = true;
+    };
+    document.addEventListener('dragover', onOver, true);
+    document.addEventListener('dragleave', onLeave, true);
+    drag.stop = () => {
+      document.removeEventListener('dragover', onOver, true);
+      document.removeEventListener('dragleave', onLeave, true);
+    };
+    this._tileTearOff = drag;
+  },
+
+  /** The header drag is over (or the grid or tile went mid-drag): stop watching the pointer. */
+  _stopTileTearOffTracking() {
+    const drag = this._tileTearOff;
+    if (!drag) return;
+    this._tileTearOff = null;
+    drag.stop?.();
+  },
+
+  /**
+   * dragend of a tile's header with Detach Tiles on. Taken by a drop target
+   * (here or in another window: `dropEffect` is not 'none'), it stays where
+   * that put it. Let go OUTSIDE the window (the dragend point, or the page's
+   * own record of the pointer leaving), it opens as a window of its own after
+   * TILE_TEAR_OFF_SETTLE_MS, unless another window claims it first. Let go
+   * inside, on nothing, nothing happens, as before.
+   */
+  _settleTileTearOff(sessionId, e) {
+    const drag = this._tileTearOff?.id === sessionId ? this._tileTearOff : null;
+    this._lastTileDrag = { id: sessionId, at: Date.now() };
+    if (!drag) return false;
+    this._stopTileTearOffTracking();
+    const effect = e?.dataTransfer?.dropEffect;
+    if (effect && effect !== 'none') return false;
+    const cx = e?.clientX;
+    const cy = e?.clientY;
+    // (0, 0) is what a browser reports when it does not know where the drop was.
+    const known = Number.isFinite(cx) && Number.isFinite(cy) && !(cx === 0 && cy === 0);
+    const outside = known ? cx < 0 || cy < 0 || cx >= window.innerWidth || cy >= window.innerHeight : drag.outside;
+    if (!outside) return false;
+    const sx = e?.screenX;
+    const sy = e?.screenY;
+    const placed = Number.isFinite(sx) && Number.isFinite(sy) && !(sx === 0 && sy === 0);
+    const placement = {
+      width: drag.width,
+      height: drag.height,
+      ...(placed ? { screenX: sx, screenY: sy, offsetX: drag.offsetX, offsetY: drag.offsetY } : {}),
+    };
+    this._cancelTileTearOff();
+    const pending = { id: sessionId, timer: null };
+    pending.timer = setTimeout(() => {
+      if (this._tileTearOffPending !== pending) return;
+      this._tileTearOffPending = null;
+      this.detachTile(sessionId, placement);
+    }, TILE_TEAR_OFF_SETTLE_MS);
+    this._tileTearOffPending = pending;
+    return true;
+  },
+
+  _cancelTileTearOff() {
+    const pending = this._tileTearOffPending;
+    if (!pending) return;
+    this._tileTearOffPending = null;
+    clearTimeout(pending.timer);
+  },
+
+  /**
+   * Opens a tile as a window of its own (detachSession, which takes it out of
+   * the grid), the tile's size (at least TILE_WINDOW_MIN_W x MIN_H). Placed
+   * with its header under a screen point when given one (`screenX`/`screenY`
+   * and where in the tile it was held, `offsetX`/`offsetY`: a drop outside the
+   * window, a hand let go), otherwise over the tile itself (the ⋯ menu).
+   *
+   * @returns {boolean} whether the session is popped out afterwards
+   */
+  detachTile(sessionId, { screenX, screenY, offsetX = 0, offsetY = 0, width, height } = {}) {
+    const entry = this._tileGrid?.open ? this._tileGrid.tiles.get(sessionId) : null;
+    if (!entry || !this._tileDetachAllowed()) return false;
+    const rect = entry.el.getBoundingClientRect();
+    const availW = window.screen?.availWidth || Infinity;
+    const availH = window.screen?.availHeight || Infinity;
+    const size = (v, min, max) => Math.round(Math.min(Math.max(Number.isFinite(v) ? v : min, min), max));
+    const placement = {
+      width: size(width ?? rect.width, TILE_WINDOW_MIN_W, availW),
+      height: size(height ?? rect.height, TILE_WINDOW_MIN_H, availH),
+    };
+    if (Number.isFinite(screenX) && Number.isFinite(screenY)) {
+      placement.left = Math.round(screenX - offsetX);
+      placement.top = Math.round(screenY - offsetY - TILE_WINDOW_CHROME_PX);
+    } else if (Number.isFinite(window.screenX) && Number.isFinite(window.screenY)) {
+      // Over the tile: the page's own chrome sits above its viewport.
+      const chrome = Math.max(0, (window.outerHeight || 0) - (window.innerHeight || 0));
+      placement.left = Math.round(window.screenX + rect.left);
+      placement.top = Math.round(window.screenY + chrome + rect.top - TILE_WINDOW_CHROME_PX);
+    }
+    this.detachSession?.(sessionId, placement);
+    return !!this.detachedSessions?.has(sessionId);
+  },
+
+  // ── For the gesture overlay (packages/gesture-control, src/codeman/entry.ts)
+  //
+  // A hand is no native drag: the overlay asks where it is and what is under
+  // it, and every move still goes through the paths a mouse drag takes
+  // (dropSessionOnTile / dropSessionOnSlot, and so _reorderTiles), the
+  // pop-out through detachTile.
+
+  /** The tiled session whose tile is at viewport point (x, y), or null. */
+  tileAtPoint(x, y) {
+    const grid = this._tileGrid;
+    if (!grid?.open) return null;
+    const hit = document.elementFromPoint?.(x, y);
+    if (!hit) return null;
+    for (const [id, entry] of grid.tiles) if (entry.el.contains?.(hit)) return id;
+    return null;
+  },
+
+  /** Whether a hand may pick up this tile: it can move, or (Detach Tiles) leave the window. */
+  canGrabTile(sessionId) {
+    return !!this._tileGrid?.has(sessionId) && (this._tilesMovable() || this._tileDetachAllowed());
+  },
+
+  /**
+   * What a session dragged to viewport point (x, y) would drop onto, by the
+   * mouse drag's own rules: another tile (it takes that tile's place, or the
+   * two trade places), an empty cell (it moves or joins there). A tiled
+   * session only while tiles can move (not zoomed). Null for anything else,
+   * a popped-out session included.
+   *
+   * @returns {{kind: 'tile', id: string, el: HTMLElement}|{kind: 'cell', cell: number, el: HTMLElement}|null}
+   */
+  tileDropTargetAt(x, y, draggedId) {
+    const grid = this._tileGrid;
+    if (!grid?.open || !this.sessions.has(draggedId) || this.detachedSessions?.has(draggedId)) return null;
+    if (grid.tiles.has(draggedId) && !this._tilesMovable()) return null;
+    const hit = document.elementFromPoint?.(x, y);
+    if (!hit) return null;
+    for (const [id, entry] of grid.tiles) {
+      if (entry.el.contains?.(hit)) return id === draggedId ? null : { kind: 'tile', id, el: entry.el };
+    }
+    for (const slot of grid.slots || []) {
+      if (slot.contains?.(hit)) return { kind: 'cell', cell: Number(slot.dataset.cell), el: slot };
+    }
+    return null;
+  },
+
+  /**
+   * Drops a session on a target tileDropTargetAt returned (the hand let go).
+   *
+   * @returns {boolean} whether the session is a tile afterwards
+   */
+  dropOnTileTarget(draggedId, target) {
+    if (!target || !this._tileGrid?.open) return false;
+    if (target.kind === 'tile') this.dropSessionOnTile(draggedId, target.id);
+    else if (target.kind === 'cell') this.dropSessionOnSlot(draggedId, target.cell);
+    return !!this._tileGrid?.has(draggedId);
+  },
+
+  /** Whether viewport point (x, y) is over the open grid (a hand let go outside it pops the tile out). */
+  isOverTileGrid(x, y) {
+    if (!this._tileGrid?.open) return false;
+    const rect = document.getElementById('tileGrid')?.getBoundingClientRect?.();
+    return !!rect && x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom;
+  },
+
+  /**
+   * A hand let a tile go outside the grid (Detach Tiles): it opens as a window
+   * of its own with its header near that point. A script opening a window
+   * with no click behind it is what popup blockers stop; detachSession then
+   * says so and the tile stays.
+   */
+  detachTileAtPoint(sessionId, x, y, { offsetX = 0, offsetY = 0 } = {}) {
+    const chrome = Math.max(0, (window.outerHeight || 0) - (window.innerHeight || 0));
+    const sx = (window.screenX || 0) + x;
+    const sy = (window.screenY || 0) + chrome + y;
+    return this.detachTile(sessionId, { screenX: sx, screenY: sy, offsetX, offsetY });
+  },
+
+  /**
+   * A pop-out window's title, as a handle (Detach Tiles): dragged onto a
+   * Codeman window's tile or empty cell, the session docks there as a tile
+   * and this window closes (_dockForeignTile, which asks it to). The same
+   * drag type as a tile's header; on or off follows the setting, also when it
+   * changes in another window.
+   */
+  _installSoloTileHandle() {
+    const title = document.getElementById('soloSessionTitle');
+    if (!this.isSoloWindow || !title || title._codemanTileHandle) return;
+    title._codemanTileHandle = true;
+    const sync = () => {
+      this._cachedAppSettings = null;
+      const on = this.tileDetachEnabled();
+      title.setAttribute('draggable', on ? 'true' : 'false');
+      title.classList.toggle('solo-session-title--handle', on);
+      const label = on ? "Drag onto a Codeman window's tiles to dock this session there" : '';
+      if (title._codemanTileHandleLabel !== label) {
+        title._codemanTileHandleLabel = label;
+        title.title = label;
+      }
+    };
+    sync();
+    window.addEventListener('storage', (e) => {
+      if (!e.key || e.key === this.getSettingsStorageKey?.()) sync();
+    });
+    title.addEventListener('dragstart', (e) => {
+      if (!this.tileDetachEnabled() || !this.soloSessionId) {
+        e.preventDefault?.();
+        return;
+      }
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData(TILE_DRAG_TYPE, this.soloSessionId);
+      }
+    });
   },
 });
 

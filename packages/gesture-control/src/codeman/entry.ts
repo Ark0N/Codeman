@@ -27,6 +27,14 @@
 //   • Button "tap" — pinch over a toolbar button (Run / Run Shell) and release
 //     in place → fires the button's real click handler. Drift too far first and
 //     it's treated as a stray move, not a tap.
+//   • Tile "grab-to-move": with the tile grid open, pinch anywhere on a tile
+//     and carry it onto another tile (the two trade places) or an empty cell
+//     (it moves there). With Detach Tiles on (App Settings, per device, off by
+//     default) a tile let go OUTSIDE the grid opens as a window of its own.
+//     A session TAB carried onto a tile or an empty cell joins the grid there,
+//     as a mouse-dragged tab does. Every move goes through app.js's own paths
+//     (tile-grid.js tileDropTargetAt / dropOnTileTarget / detachTileAtPoint), so
+//     the hand and the mouse can never disagree about what a drop does.
 //
 // Why in-page floats, not OS-window detach (decided 2026-06-08, see
 // docs/MULTIMONITOR_DESIGN.md): the hand only exists in the one page that owns
@@ -52,11 +60,22 @@ declare global {
       saveSubagentWindowStates?: () => void;
       subagentWindowZIndex?: number;
       ultracodeWindowZIndex?: number;
+      // The tile grid (tile-grid.js). All optional: an older dashboard without
+      // them simply has no tile verbs for the hand.
+      tileAtPoint?: (x: number, y: number) => string | null;
+      canGrabTile?: (id: string) => boolean;
+      tileDropTargetAt?: (x: number, y: number, draggedId: string) => TileTarget | null;
+      dropOnTileTarget?: (draggedId: string, target: TileTarget) => boolean;
+      isOverTileGrid?: (x: number, y: number) => boolean;
+      tileDetachEnabled?: () => boolean;
+      detachTileAtPoint?: (id: string, x: number, y: number, at?: { offsetX: number; offsetY: number }) => boolean;
     };
   }
 }
 
 const TAB_SELECTOR = '.session-tab';
+/** A tile of the open tile grid (tile-grid.js), keyed by `data-session-id`. */
+const TILE_SELECTOR = '#tileGrid .tile';
 /** An in-page floating session panel this layer spawned — re-grabbable to move. */
 const PANEL_SELECTOR = '.cg-float';
 /** The dashboard's own floating agent windows (subagent runs + ultracode run and
@@ -81,10 +100,19 @@ const FLOAT_H = 420;
 const DETACH_PULL_PX = 70;
 /** If a button-pinch drifts more than this, it's a stray move, not a tap. */
 const TAP_CANCEL_PX = 45;
+/** How far (px) a grabbed tile must travel before it targets anything: a pinch
+ *  that barely moves is a stray one, and the tile stays where it is. */
+const TILE_MOVE_PX = 40;
+/** The width (px) of the small copy of a grabbed tile that follows the hand. */
+const TILE_GHOST_W = 280;
 
 /** First letter colours: cyan left, violet right; green while pinching. */
 const handColor = (handedness: string, pinching: boolean): string =>
   pinching ? '#4ade80' : handedness === 'Right' ? '#a78bfa' : '#38bdf8';
+
+/** Where a session carried by the hand would land in the tile grid: another
+ *  tile, or an empty cell (tile-grid.js tileDropTargetAt). */
+type TileTarget = { kind: 'tile'; id: string; el: HTMLElement } | { kind: 'cell'; cell: number; el: HTMLElement };
 
 /** A floating in-page session panel (an iframe of `/session/:id`) the hand can
  *  place and re-grab. Stays in this page's DOM, so it never leaves hand reach. */
@@ -107,6 +135,29 @@ type Grab =
       oy: number;
       /** Pulled past the float-out threshold at least once. */
       armed: boolean;
+      /** With the tile grid open: the tile or empty cell it would join (highlighted). */
+      target: TileTarget | null;
+    }
+  | {
+      /** A tile of the open grid, carried to another cell or (Detach Tiles)
+       *  out of the grid. The tile itself never moves until the drop: it dims
+       *  (`tile--dragging`, the mouse drag's own class) and a small copy of
+       *  it follows the hand. */
+      kind: 'tile';
+      id: string;
+      el: HTMLElement;
+      ghost: HTMLElement;
+      /** Where in the tile the hand closed, so a pop-out window lands under it. */
+      offsetX: number;
+      offsetY: number;
+      ox: number;
+      oy: number;
+      /** Travelled past TILE_MOVE_PX at least once. */
+      armed: boolean;
+      /** The tile or empty cell it would drop onto (highlighted). */
+      target: TileTarget | null;
+      /** Outside the grid with Detach Tiles on: letting go opens a window. */
+      out: boolean;
     }
   | {
       kind: 'panel';
@@ -224,7 +275,7 @@ class GestureBridge {
       await this.gc.start();
       this.running = true;
       this.button.classList.add('on');
-      this.status.textContent = 'on — pinch a tab, window, or button';
+      this.status.textContent = 'on: pinch a tab, tile, window, or button';
     } catch (err) {
       // Surface the *real* cause: MediaPipe/Emscripten can throw a non-Error
       // (number/string), so `(err as Error).message` was logging "undefined".
@@ -295,6 +346,35 @@ class GestureBridge {
       return;
     }
 
+    // A tile of the open tile grid → carry it to another cell, or (Detach
+    // Tiles) out of the grid. Anywhere on the tile: the hand is choosing the
+    // whole tile, as with the agent windows. A tile that can do neither (alone
+    // or zoomed, Detach Tiles off) is left alone, so the pinch falls through.
+    const tileId = window.app?.tileAtPoint?.(x, y) ?? null;
+    const tileEl = tileId ? this.hitClosest(x, y, TILE_SELECTOR) : null;
+    if (tileId && tileEl && window.app?.canGrabTile?.(tileId)) {
+      const rect = tileEl.getBoundingClientRect();
+      const ghost = this.tileGhost(tileEl, rect);
+      document.body.append(ghost);
+      tileEl.classList.add('tile--dragging');
+      this.grabs.set(hand, {
+        kind: 'tile',
+        id: tileId,
+        el: tileEl,
+        ghost,
+        offsetX: Math.max(0, Math.min(x - rect.left, rect.width)),
+        offsetY: Math.max(0, Math.min(y - rect.top, rect.height)),
+        ox: x,
+        oy: y,
+        armed: false,
+        target: null,
+        out: false,
+      });
+      this.positionGhost(ghost, x, y);
+      this.status.textContent = 'moving tile';
+      return;
+    }
+
     // A session tab → grab-and-pull-out into a floating panel (ghost follows).
     const tab = this.hitClosest(x, y, TAB_SELECTOR);
     const id = tab?.dataset.id;
@@ -308,7 +388,7 @@ class GestureBridge {
       document.body.append(ghost);
 
       tab.classList.add('cg-grabbed');
-      this.grabs.set(hand, { kind: 'tab', id, tab, ghost, ox: x, oy: y, armed: false });
+      this.grabs.set(hand, { kind: 'tab', id, tab, ghost, ox: x, oy: y, armed: false, target: null });
       this.positionGhost(ghost, x, y);
       return;
     }
@@ -325,13 +405,42 @@ class GestureBridge {
 
   private onDrag(hand: string, x: number, y: number): void {
     const grab = this.grabs.get(hand);
+    if (grab?.kind === 'tile') {
+      this.positionGhost(grab.ghost, x, y);
+      if (!grab.armed && Math.hypot(x - grab.ox, y - grab.oy) >= TILE_MOVE_PX) grab.armed = true;
+      if (!grab.armed) return;
+      const app = window.app;
+      const target = app?.tileDropTargetAt?.(x, y, grab.id) ?? null;
+      this.setTileTarget(grab, target);
+      const out = !target && !!app?.tileDetachEnabled?.() && !app?.isOverTileGrid?.(x, y);
+      grab.out = out;
+      grab.ghost.classList.toggle('cg-armed', !!target);
+      grab.ghost.classList.toggle('cg-out', out);
+      this.status.textContent = target
+        ? target.kind === 'tile'
+          ? 'release to swap tiles'
+          : 'release to move the tile here'
+        : out
+          ? 'release to open in a new window'
+          : 'moving tile';
+      return;
+    }
     if (grab?.kind === 'tab') {
       this.positionGhost(grab.ghost, x, y);
       const pulled = Math.hypot(x - grab.ox, y - grab.oy) >= DETACH_PULL_PX;
-      if (pulled !== grab.armed) {
+      // The tile grid open: a tile or an empty cell under the hand takes the
+      // tab there, as a mouse-dragged tab does.
+      const target = pulled ? (window.app?.tileDropTargetAt?.(x, y, grab.id) ?? null) : null;
+      const targetChanged = (target?.el ?? null) !== (grab.target?.el ?? null);
+      this.setTileTarget(grab, target);
+      if (pulled !== grab.armed || targetChanged) {
         grab.armed = pulled;
         grab.ghost.classList.toggle('cg-armed', pulled);
-        this.status.textContent = pulled ? 'release to float out' : 'on — pinch a tab';
+        this.status.textContent = target
+          ? 'release to tile it here'
+          : pulled
+            ? 'release to float out'
+            : 'on — pinch a tab';
       }
       return;
     }
@@ -354,17 +463,44 @@ class GestureBridge {
     if (tap && Math.hypot(x - tap.ox, y - tap.oy) > TAP_CANCEL_PX) {
       tap.el.classList.remove('cg-tap-armed');
       this.taps.delete(hand);
-      this.status.textContent = 'on — pinch a tab, window, or button';
+      this.status.textContent = 'on: pinch a tab, tile, window, or button';
     }
   }
 
   private onDrop(hand: string, x: number, y: number): void {
     const grab = this.grabs.get(hand);
+    if (grab?.kind === 'tile') {
+      this.grabs.delete(hand);
+      grab.ghost.remove();
+      grab.el.classList.remove('tile--dragging');
+      this.setTileTarget(grab, null);
+      const app = window.app;
+      if (!grab.armed) {
+        this.flash('cancelled');
+        return;
+      }
+      // Asked again at the drop: the grid may have changed since the last frame.
+      const target = app?.tileDropTargetAt?.(x, y, grab.id) ?? null;
+      if (target) {
+        this.flash(app?.dropOnTileTarget?.(grab.id, target) ? 'moved tile' : 'cancelled');
+      } else if (grab.out && !app?.isOverTileGrid?.(x, y)) {
+        // A window opened with no click behind it is what popup blockers stop:
+        // detachSession then says so in a toast and the tile stays.
+        const opened = app?.detachTileAtPoint?.(grab.id, x, y, { offsetX: grab.offsetX, offsetY: grab.offsetY });
+        this.flash(opened ? 'opened in a new window' : 'pop-out blocked: allow popups for this site');
+      } else {
+        this.flash('cancelled');
+      }
+      return;
+    }
     if (grab?.kind === 'tab') {
       this.grabs.delete(hand);
       grab.ghost.remove();
       grab.tab.classList.remove('cg-grabbed');
-      if (grab.armed) this.floatPanel(grab.id, x, y);
+      this.setTileTarget(grab, null);
+      const target = grab.armed ? (window.app?.tileDropTargetAt?.(x, y, grab.id) ?? null) : null;
+      if (target) this.flash(window.app?.dropOnTileTarget?.(grab.id, target) ? 'tiled' : 'cancelled');
+      else if (grab.armed) this.floatPanel(grab.id, x, y);
       else this.flash('cancelled');
       return;
     }
@@ -505,6 +641,33 @@ class GestureBridge {
     ghost.style.top = `${y}px`;
   }
 
+  /** A small copy of a tile to follow the hand: its header (a copy: no
+   *  listeners come along) over an empty body, in the tile's proportions. */
+  private tileGhost(tileEl: HTMLElement, rect: DOMRect): HTMLElement {
+    const ghost = el('div', 'cg-ghost cg-tile-ghost');
+    const width = Math.min(TILE_GHOST_W, rect.width);
+    ghost.style.width = `${width}px`;
+    ghost.style.height = `${Math.max(48, Math.round((width * rect.height) / Math.max(1, rect.width)))}px`;
+    const header = tileEl.querySelector('.tile-header');
+    if (header) {
+      const copy = header.cloneNode(true) as HTMLElement;
+      copy.removeAttribute('draggable');
+      ghost.append(copy);
+    }
+    ghost.append(el('div', 'cg-tile-ghost-body'));
+    return ghost;
+  }
+
+  /** Highlights the tile or empty cell a carried session would drop onto
+   *  (the mouse drag's own `tile--drop-target`), clearing the last one. */
+  private setTileTarget(grab: { target: TileTarget | null }, target: TileTarget | null): void {
+    if (grab.target?.el !== target?.el) {
+      grab.target?.el.classList.remove('tile--drop-target');
+      target?.el.classList.add('tile--drop-target');
+    }
+    grab.target = target;
+  }
+
   private cancelAllGrabs(): void {
     // Floats themselves persist (they're placed windows) — only release any
     // in-progress grab cleanly, restoring a moved panel's interactivity.
@@ -512,6 +675,11 @@ class GestureBridge {
       if (grab.kind === 'tab') {
         grab.ghost.remove();
         grab.tab.classList.remove('cg-grabbed');
+        this.setTileTarget(grab, null);
+      } else if (grab.kind === 'tile') {
+        grab.ghost.remove();
+        grab.el.classList.remove('tile--dragging');
+        this.setTileTarget(grab, null);
       } else if (grab.kind === 'panel') {
         grab.panel.el.style.pointerEvents = '';
         grab.panel.el.classList.remove('cg-float-grabbed', 'cg-redock');
@@ -525,6 +693,7 @@ class GestureBridge {
     document
       .querySelectorAll(`${TAB_SELECTOR}.cg-grabbed, .cg-tap-armed, .cg-win-grabbed`)
       .forEach((t) => t.classList.remove('cg-grabbed', 'cg-tap-armed', 'cg-win-grabbed'));
+    document.querySelectorAll(`${TILE_SELECTOR}.tile--dragging`).forEach((t) => t.classList.remove('tile--dragging'));
   }
 
   private onStatus(fps: number, hands: HandState[]): void {
@@ -607,6 +776,13 @@ function injectStyles(): void {
     outline: 2px solid #38bdf8; outline-offset: -2px;
   }
   .cg-ghost.cg-armed { outline-color: #4ade80; box-shadow: 0 8px 28px rgba(74,222,128,.5); }
+  .cg-ghost.cg-out { outline-color: #fbbf24; box-shadow: 0 8px 28px rgba(251,191,36,.5); }
+  .cg-tile-ghost {
+    display: flex; flex-direction: column; overflow: hidden; transform: translate(-50%, -20%) scale(1);
+    background: var(--term-bg, #161b23); border: 1px solid var(--border-color, #333);
+  }
+  .cg-tile-ghost > .tile-header { flex: 0 0 auto; }
+  .cg-tile-ghost-body { flex: 1 1 auto; opacity: .5; }
   .cg-dock {
     position: fixed; right: 12px; bottom: 156px; z-index: ${Z + 3};
     display: flex; align-items: center; gap: 8px; font: 12px/1 system-ui, sans-serif;
