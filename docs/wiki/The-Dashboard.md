@@ -6,7 +6,7 @@ Most of Codeman's UI is **opt-in**. A stock install shows a deliberately small h
 feature you read about here may simply not be on screen yet. Where that is the case, this
 page says so and names the setting.
 
-![Codeman dashboard](https://raw.githubusercontent.com/Ark0N/Codeman/master/docs/images/codeman-tour-20260724.png)
+![Codeman dashboard](https://raw.githubusercontent.com/Ark0N/Codeman/master/docs/images/codeman-tour-20261010.png)
 
 ## Layout
 
