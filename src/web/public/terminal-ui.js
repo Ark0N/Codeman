@@ -107,6 +107,32 @@
         : delta / 25; // DOM_DELTA_PIXEL (Chrome/WebKit, and every trackpad)
   }
 
+  // The same travel rounded to whole lines for the SGR wheel reports: a pure
+  // horizontal swipe is 0 (nothing to send), and anything else moves at least
+  // one line, so the small pixel deltas of a precision touchpad still scroll.
+  // The body of the primary pane's _wheelScrollLines.
+  function wheelDeltaWholeLines(ev, rows) {
+    const lines = wheelDeltaLines(ev, rows);
+    if (!lines) return 0;
+    return Math.round(lines) || (lines > 0 ? 1 : -1);
+  }
+
+  // Ticks one gesture batch may report: Claude applies its own scroll-speed
+  // multiplier and acceleration on top, so a bigger batch only overshoots.
+  const SGR_WHEEL_MAX_TICKS = 5;
+
+  // Whole wheel lines → SGR wheel reports at a 1-based cell `pos` ({ col, row },
+  // live-screen relative): button 64 per line up, 65 per line down, capped at
+  // SGR_WHEEL_MAX_TICKS. '' when there is nothing to send. The encoding of the
+  // primary pane's _sendSyntheticSgrWheel, pure so a TerminalTile forwards
+  // byte-identical reports to its own session.
+  function sgrWheelReports(lines, pos) {
+    if (!lines || !pos) return '';
+    const btn = lines < 0 ? 64 : 65;
+    const ticks = Math.min(Math.abs(lines), SGR_WHEEL_MAX_TICKS);
+    return `\x1b[<${btn};${pos.col};${pos.row}M`.repeat(ticks);
+  }
+
   // Gesture travel → PageUp/PageDown keys for a terminal `rows` tall: adds
   // `lines` to the sub-page travel already `pending`, and returns the travel
   // left over plus the keys to send ('' below one page). The arithmetic of the
@@ -260,6 +286,9 @@
     PAGE_KEY_SCREEN_FRACTION,
     PAGE_KEY_MAX_PER_BATCH,
     wheelDeltaLines,
+    wheelDeltaWholeLines,
+    SGR_WHEEL_MAX_TICKS,
+    sgrWheelReports,
     pageKeysForTravel,
     TUI_PROMPT_DEFAULT_ROWS_FROM_BOTTOM,
     MOBILE_KEYBOARD_DISMISS_EXEMPT_SELECTOR,
@@ -5563,9 +5592,8 @@ Object.assign(CodemanApp.prototype, {
   // the ±1 fallback — one line per notch, versus 4-5 for Chrome's ~110px. In
   // Claude mode the same value also capped the forwarded SGR report at one tick.
   _wheelScrollLines(ev) {
-    const lines = this._wheelScrollLinesFloat(ev);
-    if (!lines) return 0; // pure horizontal swipe: don't fall through to -1
-    return Math.round(lines) || (lines > 0 ? 1 : -1);
+    // Pure horizontal swipe: 0, never the ±1 fallback (wheelDeltaWholeLines).
+    return window.CodemanTerminalInput.wheelDeltaWholeLines(ev, this.terminal?.rows);
   },
 
   /** Unrounded variant for the smooth local-scroll path, which accumulates
@@ -5639,13 +5667,13 @@ Object.assign(CodemanApp.prototype, {
   // scroll-speed multiplier and acceleration on top), and the queue is bounded
   // so a wild scroll can't build a backlog that keeps scrolling after the finger
   // stops. Flushed via _sendInputEphemeral — loss-tolerant, off the durable queue.
+  // The encoding is the pure CodemanTerminalInput.sgrWheelReports, which a
+  // TerminalTile calls with its own cell (TerminalTile._maybeForwardWheelToCli).
   _sendSyntheticSgrWheel(clientX, clientY, lines) {
     if (!this.activeSessionId || !lines) return;
     const pos = this._clientPointToCell(clientX, clientY);
     if (!pos) return;
-    const btn = lines < 0 ? 64 : 65;
-    const ticks = Math.min(Math.abs(lines), 5);
-    this._queueScrollBytes(`\x1b[<${btn};${pos.col};${pos.row}M`.repeat(ticks));
+    this._queueScrollBytes(window.CodemanTerminalInput.sgrWheelReports(lines, pos));
   },
 
   /**
