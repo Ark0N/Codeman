@@ -2,12 +2,15 @@
  * @fileoverview Real-Chromium coverage for the vertical rail's session search.
  *
  * What DOM emulation cannot answer: that the shipped CSS actually hides a
- * filtered row and an emptied group, that the box shows only on the vertical
- * rail, that the inline oninput/onkeydown/onclick handlers in index.html reach
- * the app, and that a match inside a collapsed group can be clicked. The real
- * #tabRail markup is lifted from index.html, and the shipping constants.js,
- * tab-layout-browser.js, app.js, webview-tabs.js and styles.css are loaded
- * into a page.
+ * filtered row and an emptied group (and, in the sidebar layout, an emptied
+ * case box), that the box shows only on the vertical rail, that the inline
+ * oninput/onkeydown/onclick handlers in index.html reach the app, that a match
+ * inside a collapsed group can be clicked, and that Escape in the box clears
+ * the search WITHOUT the global key handler (installed for real, capture
+ * phase, so it runs before the box's own onkeydown) also closing every panel.
+ * The real #tabRail markup is lifted from index.html, and the shipping
+ * constants.js, tab-layout-browser.js, app.js, webview-tabs.js and styles.css
+ * are loaded into a page.
  *
  * Port: none (page.route on a fake origin, no server).
  */
@@ -245,6 +248,44 @@ describe('vertical rail session search in Chromium', () => {
     expect(await paintedRows()).toEqual(['notes']);
     expect(await notesTop()).toBeLessThan(before);
     expect(await page.evaluate(() => (window as any).__redraws)).toBe(1);
+  });
+
+  it('hides a case box the sidebar filter emptied, in the sidebar layout only', async () => {
+    const painted = await page.evaluate(() => {
+      const root = document.documentElement;
+      const probeHtml =
+        '<aside class="session-sidebar" id="sidebarProbe"><div class="session-tabs tabs-clusters">' +
+        '<div class="tab-cluster tab-filtered-out" data-probe="emptied">' +
+        '<span class="tab-cluster-label">api <span class="tab-cluster-count">0</span></span></div>' +
+        '<div class="tab-cluster" data-probe="kept">' +
+        '<span class="tab-cluster-label">web <span class="tab-cluster-count">1</span></span>' +
+        '<div class="session-tab">w1-web</div></div>' +
+        '</div></aside>';
+      const measure = () => {
+        const probe = document.getElementById('sidebarProbe')!;
+        return {
+          emptied: probe.querySelector('[data-probe="emptied"]')!.getClientRects().length,
+          kept: probe.querySelector('[data-probe="kept"]')!.getClientRects().length,
+        };
+      };
+      root.setAttribute('data-tab-orientation', 'horizontal');
+      document.body.insertAdjacentHTML('beforeend', probeHtml);
+      const probe = document.getElementById('sidebarProbe')!;
+      // Header layout (the box outside any sidebar, which that layout hides):
+      // the rule is scoped to the sidebar, so a leaked class hides nothing.
+      root.setAttribute('data-session-list', 'header');
+      probe.classList.remove('session-sidebar');
+      const header = measure();
+      root.setAttribute('data-session-list', 'sidebar');
+      probe.classList.add('session-sidebar');
+      const sidebar = measure();
+      document.getElementById('sidebarProbe')!.remove();
+      root.removeAttribute('data-session-list');
+      root.setAttribute('data-tab-orientation', 'vertical');
+      return { header, sidebar };
+    });
+    expect(painted.sidebar).toEqual({ emptied: 0, kept: 1 });
+    expect(painted.header.emptied).toBe(1);
   });
 
   it('walks only the matches with the arrow keys', async () => {

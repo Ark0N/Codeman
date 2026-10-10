@@ -530,6 +530,56 @@ describe('the sidebar filter keeps its own matching', () => {
     expect(visibleRows()).toEqual(['roadmap']);
     expect(emptyNote().hidden).toBe(true);
   });
+
+  it('marks a case box the sidebar filter emptied, unless an alerted row keeps it', () => {
+    const app = makeApp({ tabLayout: null });
+    document.documentElement.setAttribute('data-tab-orientation', 'horizontal');
+    document.documentElement.dataset.tabArrangement = 'case';
+    app.isSessionSidebarActive = () => true;
+    // alpha and notes share a folder, so they share a box.
+    app.sessions.get('notes').workingDir = '/srv/alpha';
+    const box = (key: string) => document.querySelector<HTMLElement>(`.tab-cluster[data-cluster-key="${key}"]`)!;
+    try {
+      app._fullRenderSessionTabs();
+      expect(box('/srv/alpha').querySelector('.tab-cluster-count')?.textContent).toBe('2');
+
+      app.applySidebarFilter('notes');
+      expect(visibleRows()).toEqual(['notes']);
+      expect(box('/srv/alpha').classList.contains('tab-filtered-out')).toBe(false);
+      expect(box('/srv/alpha').querySelector('.tab-cluster-count')?.textContent).toBe('1');
+      // The emptied box is marked (styles.css hides it in the sidebar too).
+      expect(box('/srv/api-plans').classList.contains('tab-filtered-out')).toBe(true);
+      expect(box('/srv/api-plans').querySelector('.tab-cluster-count')?.textContent).toBe('0');
+
+      // A row that needs the user keeps its box on screen, counted.
+      app.tabAlerts.set('roadmap', 'action');
+      app._applyTabListFilter();
+      // DOM order is box order: the /srv/alpha box (alpha, notes) comes first.
+      expect(visibleRows()).toEqual(['notes', 'roadmap']);
+      expect(box('/srv/api-plans').classList.contains('tab-filtered-out')).toBe(false);
+      expect(box('/srv/api-plans').querySelector('.tab-cluster-count')?.textContent).toBe('1');
+
+      app.applySidebarFilter('');
+      expect(document.querySelectorAll('.tab-cluster.tab-filtered-out')).toHaveLength(0);
+      expect(box('/srv/alpha').querySelector('.tab-cluster-count')?.textContent).toBe('2');
+    } finally {
+      delete document.documentElement.dataset.tabArrangement;
+    }
+  });
+
+  it('hides an emptied case box in the sidebar stylesheet, scoped to the sidebar layout', () => {
+    const css = read('styles.css');
+    const rule = /([^{}]+)\{\s*display:\s*none\s*!important;\s*\}/g;
+    const selectorsHiding = [...css.matchAll(rule)].flatMap((match) =>
+      match[1]
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .split(',')
+        .map((selector) => selector.trim())
+    );
+    expect(selectorsHiding).toContain('html[data-session-list="sidebar"] .tab-cluster.tab-filtered-out');
+    // Never unscoped: a leaked class must not hide a box on the header strip.
+    expect(selectorsHiding).not.toContain('.tab-cluster.tab-filtered-out');
+  });
 });
 
 describe('Escape in the search box', () => {

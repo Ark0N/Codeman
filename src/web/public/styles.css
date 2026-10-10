@@ -18814,8 +18814,12 @@ html[data-tab-orientation='vertical'] .tab-rail .session-tab.drag-over-right {
    Scoped to the sidebar layout on purpose: applySidebarFilter() already strips
    the class whenever the filter box is off screen, and this prefix is the
    second lock — a leaked class must never be able to hide tabs from the header
-   strip, which has no filter control to clear it with. */
-html[data-session-list="sidebar"] .session-tab.tab-filtered-out {
+   strip, which has no filter control to clear it with. The shared filter
+   (_applyTabListFilter) also marks a case box (tabArrangement 'case') the
+   filter emptied, which hides with its label and count rather than staying
+   on screen reading 0. */
+html[data-session-list="sidebar"] .session-tab.tab-filtered-out,
+html[data-session-list="sidebar"] .tab-cluster.tab-filtered-out {
   display: none !important;
 }
 
