@@ -422,7 +422,7 @@ The title is templated into the served HTML on first byte, so it's correct from 
 ### Tab Alerts
 
 <p align="center">
-  <img src="docs/images/tab-alerts-glow-20260815.gif" alt="Session tabs: a regular active tab beside a yellow waiting-for-input tab and a red needs-decision tab, both with a breathing glow" width="900">
+  <a href="docs/images/codeman-tab-states-20261010.png"><img src="docs/images/codeman-tab-states-20261010.gif" alt="Tab states, annotated: a working tab with a spinning green ring, a red tab blocked on the agent's question shown below it, and a yellow tab whose turn is done, both alert tabs breathing" width="900"></a>
 </p>
 
 Every tab tells you its state at a glance. A running session keeps its green status dot. When a session stops and waits for input, its tab turns **yellow**: steady ring, tinted background, yellow dot, with a slow breathing glow on top. When a permission prompt or question is **blocking** the agent, the tab turns **red** with a faster pulse. The base tint never blinks off, so even a split-second glance (or a screenshot) reads the true state; the ring stays visible while the tab is selected, and a page reload re-arms pending alerts from the server, so a blocked session can never hide behind a fresh-looking tab.
@@ -734,6 +734,10 @@ For AI agents and automation that control Codeman without a browser: an agent th
 ### The agent skill (start here)
 
 Everything in this section also ships as a **Claude Code skill** in [`skills/codeman`](skills/codeman/SKILL.md). Install it once and you never paste API docs into a prompt again. You ask for what you want in plain English, and the agent already sitting inside a Codeman session loads the recipes and drives the API itself.
+
+<p align="center">
+  <a href="docs/images/codeman-skill-20261010.png"><img src="docs/images/codeman-skill-20261010.gif" alt="A real codeman skill run: one plain-English request to a lead session, three Claude Code workers opening as new tabs, and lineage lines from the lead to every worker" width="900"></a>
+</p>
 
 #### Step 1: install it
 
