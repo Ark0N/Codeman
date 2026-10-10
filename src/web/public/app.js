@@ -4843,6 +4843,8 @@ class CodemanApp {
       }
     }
 
+    if (data.version) this.checkWhatsNew?.(data.version);
+
     // Stop any active voice recording on reconnect
     VoiceInput.cleanup();
 

@@ -369,6 +369,39 @@ Object.assign(CodemanApp.prototype, {
     return select?.value.trim() || '';
   },
 
+  /**
+   * Announce a new release once per browser: one toast naming its headline changes.
+   * The notes come from /whats-new.json, which `npm run version-packages` regenerates from
+   * CHANGELOG.md for each release. A browser that has never seen any version just records the
+   * current one, so a fresh install is not greeted with "what's new".
+   */
+  async checkWhatsNew(runningVersion) {
+    if (this._whatsNewChecked) return;
+    this._whatsNewChecked = true;
+    const KEY = 'codeman-whats-new-seen';
+    let seen = null;
+    try { seen = localStorage.getItem(KEY); } catch { /* storage blocked: skip the announcement */ return; }
+    if (seen === runningVersion) return;
+    const remember = () => { try { localStorage.setItem(KEY, runningVersion); } catch { /* ignore */ } };
+    if (!seen) { remember(); return; }
+    try {
+      const res = await fetch('/whats-new.json', { cache: 'no-cache' });
+      if (!res.ok) return;
+      const notes = await res.json();
+      if (notes?.version !== runningVersion || !Array.isArray(notes.highlights) || !notes.highlights.length) return;
+      const shown = notes.highlights.slice(0, 3).join(' · ');
+      const more = notes.highlights.length > 3 ? ` (+${notes.highlights.length - 3} more)` : '';
+      remember();
+      this.showToast(`Codeman updated to v${runningVersion}: ${shown}${more}`, 'info', {
+        duration: 20000,
+        action: {
+          label: "See what's new",
+          onClick: () => window.open(`https://github.com/Ark0N/Codeman/releases/tag/codeman%40${runningVersion}`, '_blank', 'noopener'),
+        },
+      });
+    } catch { /* offline or malformed: try again next load */ }
+  },
+
   openAppSettings() {
     // Load current settings
     const settings = this.loadAppSettingsFromStorage();
