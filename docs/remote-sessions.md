@@ -251,6 +251,18 @@ unreachable host answers "unknown", which also means do not revive. The answer
 is cached per session and cleared whenever the pane is next seen alive, so a
 stale `true` from one transport drop can never revive the NEXT clean exit.
 
+## Terminal history from the remote tmux
+
+The local pane runs the ssh attach, so it only sees the remote tmux client's
+full-screen repaints and keeps a fraction of the scrollback (none after a
+reattach). A full-history load (`GET /api/sessions/:id/terminal?full=1`) of a
+remote session therefore reads the scrollback rows from the REMOTE pane in one
+ssh round trip (`src/remote-pane-history.ts`) and splices them above the local
+visible frame and caret. Bounded (5 s, the shared ssh limiter) and fail-soft:
+any failure keeps the local capture and skips that host for 30 s. How much
+history exists is the remote tmux's own `history-limit`, which the launch
+command does not set (tmux's default is 2000 lines).
+
 ## File access over SSH
 
 A remote case's `workingDir` is an absolute path on the **remote** host
