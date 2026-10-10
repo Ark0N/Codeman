@@ -563,6 +563,12 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsNotifBrowser').checked = notifPrefs.browserNotifications ?? false;
     document.getElementById('appSettingsNotifAudio').checked = notifPrefs.audioAlerts ?? false;
     document.getElementById('appSettingsNotifStuckMins').value = Math.round((notifPrefs.stuckThresholdMs || 600000) / 60000);
+    document.getElementById('appSettingsNotifToastSecs').value = Math.round(
+      (this.notificationManager?.getToastDurationMs?.() ?? DEFAULT_TOAST_DURATION_MS) / 1000
+    );
+    document.getElementById('appSettingsNotifBrowserSecs').value = Math.round(
+      (notifPrefs.browserAutoCloseMs ?? AUTO_CLOSE_NOTIFICATION_MS) / 1000
+    );
     document.getElementById('appSettingsNotifCritical').checked = !notifPrefs.muteCritical;
     document.getElementById('appSettingsNotifWarning').checked = !notifPrefs.muteWarning;
     document.getElementById('appSettingsNotifInfo').checked = !notifPrefs.muteInfo;
@@ -2667,6 +2673,8 @@ Object.assign(CodemanApp.prototype, {
       browserNotifications: document.getElementById('appSettingsNotifBrowser').checked,
       audioAlerts: document.getElementById('appSettingsNotifAudio').checked,
       stuckThresholdMs: (parseInt(document.getElementById('appSettingsNotifStuckMins').value) || 10) * 60000,
+      toastDurationMs: (parseInt(document.getElementById('appSettingsNotifToastSecs').value) || 3) * 1000,
+      browserAutoCloseMs: (parseInt(document.getElementById('appSettingsNotifBrowserSecs').value) || 8) * 1000,
       muteCritical: !document.getElementById('appSettingsNotifCritical').checked,
       muteWarning: !document.getElementById('appSettingsNotifWarning').checked,
       muteInfo: !document.getElementById('appSettingsNotifInfo').checked,
@@ -2736,7 +2744,7 @@ Object.assign(CodemanApp.prototype, {
       _version: 5,
     };
     if (this.notificationManager) {
-      this.notificationManager.preferences = notifPrefsToSave;
+      this.notificationManager.preferences = this.notificationManager.normalizePreferences(notifPrefsToSave);
       this.notificationManager.savePreferences();
     }
 

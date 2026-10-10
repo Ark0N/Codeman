@@ -146,7 +146,11 @@ instead of its native cloud backend. See [Custom Model Endpoints](Custom-Model-E
 
 ### Notifications
 
-Master toggle, browser notifications, push subscription, audio alerts, the idle
+Master toggle, browser notifications, push subscription, audio alerts, how long a
+corner toast stays on screen (**Toast display time**, 1 to 300 seconds, default 3) and
+how long a desktop notification stays up before Codeman closes it (**Browser
+notification display time**, default 8; both per device, and your OS may close a
+desktop notification sooner), the idle
 threshold that decides when a quiet session counts as needing you, and the server-wide
 webhook (ntfy, Slack, Discord or generic JSON; admins only in multi-user mode). See
 [Notifications And Approvals](Notifications-And-Approvals).
