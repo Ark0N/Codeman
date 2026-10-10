@@ -725,3 +725,34 @@ describe('ZerolagInputAddon', () => {
     });
   });
 });
+
+describe('viewport scrolled away from the bottom', () => {
+  function parked(viewportY: number, baseY: number, cursorY: number, rows = 24) {
+    const mock = createMockTerminal({ buffer: { lines: ['$ '], viewportY, baseY, cursorY }, rows });
+    const addon = new ZerolagInputAddon({ prompt: { type: 'character', char: '$', offset: 2 } });
+    mock.terminal.loadAddon(addon);
+    cleanups.push(() => {
+      addon.dispose();
+      mock.cleanup();
+    });
+    const overlay = mock.terminal.element.querySelector('.xterm-screen')!.lastElementChild as HTMLDivElement;
+    return { addon, mock, overlay };
+  }
+
+  it('still paints with the viewport parked above the bottom while the cursor row is on screen', () => {
+    // The host parks the viewport to keep trailing blank rows out of view; the
+    // prompt and cursor are still visible, so the user's text must be too.
+    const { addon, overlay } = parked(0, 1, 0);
+    addon.appendText('abc');
+    expect(addon.pendingText).toBe('abc');
+    expect(overlay.style.display).not.toBe('none');
+    expect(overlay.textContent).toContain('abc');
+  });
+
+  it('hides once the cursor row is scrolled out of the viewport, even over a stale prompt glyph', () => {
+    const { addon, overlay } = parked(0, 30, 0);
+    addon.appendText('abc');
+    expect(addon.pendingText).toBe('abc');
+    expect(overlay.style.display).toBe('none');
+  });
+});

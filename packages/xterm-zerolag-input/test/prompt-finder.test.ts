@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createMockTerminal } from './helpers.js';
-import { findPrompt, readTextAfterPrompt } from '../src/prompt-finder.js';
+import { promptRowInViewport, findPrompt, readTextAfterPrompt } from '../src/prompt-finder.js';
 import type { XtermTerminal, PromptFinder } from '../src/types.js';
 
 function term(lines: string[]) {
@@ -154,5 +154,30 @@ describe('readTextAfterPrompt', () => {
     const text = readTextAfterPrompt(terminal as unknown as XtermTerminal, prompt, 2);
     expect(text).toBe('ls -la');
     cleanup();
+  });
+});
+
+describe('promptRowInViewport', () => {
+  const term = (viewportY: number, baseY: number, cursorY: number | undefined, rows = 24) =>
+    ({ rows, buffer: { active: { viewportY, baseY, cursorY, getLine: () => undefined } } }) as never;
+
+  it('is true at the bottom regardless of the cursor', () => {
+    expect(promptRowInViewport(term(10, 10, undefined))).toBe(true);
+  });
+
+  it('is true for a viewport parked above the bottom while the cursor row is on screen', () => {
+    // scrollToLastNonEmptyLine() parks rows - 2 above the last non-empty row
+    expect(promptRowInViewport(term(0, 16, 5))).toBe(true);
+    // cursor exactly on the last visible row
+    expect(promptRowInViewport(term(0, 23, 0))).toBe(true);
+  });
+
+  it('is false once the cursor row is scrolled out of the viewport', () => {
+    expect(promptRowInViewport(term(0, 24, 0))).toBe(false); // one past the last row
+    expect(promptRowInViewport(term(0, 200, 3))).toBe(false); // deep in history
+  });
+
+  it('keeps the bottom-only rule when the buffer has no cursorY', () => {
+    expect(promptRowInViewport(term(0, 1, undefined))).toBe(false);
   });
 });
