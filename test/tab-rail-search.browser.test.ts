@@ -117,6 +117,14 @@ describe('vertical rail session search in Chromium', () => {
       };
       w.__setApp(app);
       w.__app = app;
+      // The real global key handler (document, capture phase). The close
+      // methods it calls live in settings-ui.js / panels-ui.js, which are not
+      // loaded here, so they record instead.
+      app.setupColorPicker = () => undefined;
+      app.closeAllPanels = () => w.__closed.push('panels');
+      app.closeHelp = () => w.__closed.push('help');
+      app.closeSessionManager = () => w.__closed.push('session-manager');
+      app.setupEventListeners();
     });
   });
 
@@ -144,6 +152,7 @@ describe('vertical rail session search in Chromium', () => {
       app._resetTabRailSearch();
       app._fullRenderSessionTabs();
       w.__activation = null;
+      w.__closed = [];
     }, LAYOUT);
   });
 
@@ -199,6 +208,21 @@ describe('vertical rail session search in Chromium', () => {
     expect(await search.inputValue()).toBe('');
     expect(await page.locator('#tabRailSearchEmpty').isHidden()).toBe(true);
     expect(await paintedRows()).toEqual(['alpha', 'web', 'notes']);
+  });
+
+  it('Escape with text in the box clears it and closes nothing else', async () => {
+    const search = page.getByRole('searchbox', { name: 'Search sessions' });
+    await search.fill('review');
+    expect(await paintedRows()).toEqual(['review']);
+
+    await search.press('Escape');
+    expect(await search.inputValue()).toBe('');
+    expect(await paintedRows()).toEqual(['alpha', 'web', 'notes']);
+    expect(await page.evaluate(() => (window as any).__closed)).toEqual([]);
+
+    // An empty box leaves Escape to the global handler, which closes as always.
+    await search.press('Escape');
+    expect(await page.evaluate(() => (window as any).__closed)).toEqual(['panels', 'help', 'session-manager']);
   });
 
   it('walks only the matches with the arrow keys', async () => {

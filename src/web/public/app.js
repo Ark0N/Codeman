@@ -1427,6 +1427,13 @@ class CodemanApp {
           this.closeTileCountMenu({ refocus: true });
           return;
         }
+        // And so does the rail's search box while it holds text: that Escape
+        // clears the search and nothing else. This listener runs in the capture
+        // phase, before the box's own onkeydown, so the box cannot claim it there.
+        if (e.target?.id === 'tabRailSearch' && this._tabRailSearch) {
+          this.handleTabRailSearchKeydown(e);
+          return;
+        }
         this.closeAllPanels();
         this.closeHelp();
         if (this.attachmentHistoryDrawerOpen) this.closeAttachmentHistory();
@@ -5859,10 +5866,16 @@ class CodemanApp {
     input?.focus();
   }
 
+  /**
+   * Escape in a box that holds text clears the search and nothing else. The
+   * global key handler (setupEventListeners) runs in the CAPTURE phase, before
+   * the box's inline onkeydown, so it is the one that routes the key here and
+   * returns before its close-every-panel branch; stopping propagation from the
+   * inline handler would come too late. An empty box leaves Escape to it, and
+   * an Escape that cancels an IME composition is the IME's.
+   */
   handleTabRailSearchKeydown(event) {
-    if (event.key !== 'Escape' || !this._tabRailSearch) return;
-    // Consumed here: the global Escape handler would otherwise close whatever
-    // else is open on the same keypress.
+    if (event.key !== 'Escape' || event.isComposing || !this._tabRailSearch) return;
     event.preventDefault();
     event.stopPropagation();
     this.clearTabRailSearch();

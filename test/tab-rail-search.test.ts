@@ -532,6 +532,80 @@ describe('the sidebar filter keeps its own matching', () => {
   });
 });
 
+describe('Escape in the search box', () => {
+  /**
+   * The real global key handler from setupEventListeners(), on document in the
+   * capture phase, with the close methods it calls (settings-ui.js and
+   * panels-ui.js are not loaded here) as recorders. The box in this harness
+   * has no inline onkeydown, so only the global handler can clear it.
+   */
+  function installGlobalKeys(app: Record<string, any>) {
+    const closed: string[] = [];
+    app.setupColorPicker = () => {};
+    app.closeAllPanels = () => closed.push('panels');
+    app.closeHelp = () => closed.push('help');
+    app.closeSessionManager = () => closed.push('session-manager');
+    app.closeCommandPalette = () => {};
+    app.closeShortcutOverlay = () => {};
+    const add = vi.spyOn(document, 'addEventListener');
+    app.setupEventListeners();
+    const listener = add.mock.calls.find(([type]) => type === 'keydown')![1] as EventListener;
+    add.mockRestore();
+    return { closed, remove: () => document.removeEventListener('keydown', listener, true) };
+  }
+  const escape = () => new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+
+  it('clears a search and closes nothing else, though the global handler runs first', () => {
+    const app = makeApp();
+    app._fullRenderSessionTabs();
+    const keys = installGlobalKeys(app);
+    try {
+      input().value = 'review';
+      app.setTabRailSearch(input().value);
+      input().focus();
+
+      const event = escape();
+      input().dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      expect(input().value).toBe('');
+      expect(app._tabRailSearch).toBe('');
+      expect(visibleRows()).toEqual(['alpha', 'web', 'roadmap', 'review', 'notes']);
+      expect(keys.closed).toEqual([]);
+
+      // The box is empty now: the next Escape is the global handler's again.
+      input().dispatchEvent(escape());
+      expect(keys.closed).toEqual(['panels', 'help', 'session-manager']);
+    } finally {
+      keys.remove();
+    }
+  });
+
+  it('only claims an Escape that lands in the box', () => {
+    const app = makeApp();
+    app._fullRenderSessionTabs();
+    const keys = installGlobalKeys(app);
+    try {
+      app.setTabRailSearch('review');
+      document.body.dispatchEvent(escape());
+      expect(keys.closed).toEqual(['panels', 'help', 'session-manager']);
+      expect(app._tabRailSearch).toBe('review');
+      expect(visibleRows()).toEqual(['review']);
+    } finally {
+      keys.remove();
+    }
+  });
+
+  it('leaves an Escape that cancels an IME composition to the IME', () => {
+    const app = makeApp();
+    app._fullRenderSessionTabs();
+    app.setTabRailSearch('review');
+    const composing = new window.KeyboardEvent('keydown', { key: 'Escape', isComposing: true, cancelable: true });
+    app.handleTabRailSearchKeydown(composing);
+    expect(composing.defaultPrevented).toBe(false);
+    expect(app._tabRailSearch).toBe('review');
+  });
+});
+
 // ─── Markup + zh-CN ───────────────────────────────────────────────────────────
 
 describe('markup and zh-CN', () => {
