@@ -6709,7 +6709,9 @@ class CodemanApp {
       // every agent CLI, claude included, shows its logo through PR #532's
       // `run-mode-dot <id>` slot, the id as DATA, so the tab, the tile and split
       // headers and the Run menus draw the same mark. An id with no logo rule (a
-      // CLI added through ~/.codeman/clis.json) gets that slot's plain dot.
+      // CLI added through ~/.codeman/clis.json) gets that slot's plain dot. The
+      // span is always emitted: CLI Logos on Tabs (`showTabCliLogos`) hides it
+      // in CSS under html[data-tab-logos='off'], so a toggle never re-renders.
       const tabModeHtml = mode === 'shell'
         ? '<span class="tab-mode shell" aria-hidden="true">sh</span>'
         : `<span class="tab-harness run-mode-dot ${escapeHtml(mode)}" aria-hidden="true"></span>`;

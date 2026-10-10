@@ -487,6 +487,7 @@ Object.assign(CodemanApp.prototype, {
     document.getElementById('appSettingsCjkInput').checked = settings.cjkInputEnabled ?? defaults.cjkInputEnabled ?? false;
     document.getElementById('appSettingsExtendedKeyboardBar').checked = settings.extendedKeyboardBar ?? false;
     document.getElementById('appSettingsTabTwoRows').checked = settings.tabTwoRows ?? defaults.tabTwoRows ?? false;
+    document.getElementById('appSettingsShowTabCliLogos').checked = this.tabCliLogosEnabled(settings);
     document.getElementById('appSettingsTabOrientation').value =
       settings.tabOrientation ?? defaults.tabOrientation ?? 'horizontal';
     const tabRailWidth = window.CodemanTabRail?.resolveWidth({
@@ -2583,6 +2584,7 @@ Object.assign(CodemanApp.prototype, {
       webglRendererEnabled: document.getElementById('appSettingsWebglRenderer').checked,
       extendedKeyboardBar: document.getElementById('appSettingsExtendedKeyboardBar').checked,
       tabTwoRows: document.getElementById('appSettingsTabTwoRows').checked,
+      showTabCliLogos: document.getElementById('appSettingsShowTabCliLogos').checked,
       tabOrientation: document.getElementById('appSettingsTabOrientation').value,
       tabRailWidth: this.readTabRailWidthSetting?.() ?? 256,
       tabRailDetail: document.getElementById('appSettingsTabRailDetail').value,
@@ -3541,6 +3543,7 @@ Object.assign(CodemanApp.prototype, {
         imageWatcherEnabled: false,
         ralphTrackerEnabled: false,
         tabTwoRows: false,
+        showTabCliLogos: true,
         tabOrientation: 'horizontal',
         tabRailWidth: 256,
         tabRailDetail: 'rich',
@@ -3675,6 +3678,16 @@ Object.assign(CodemanApp.prototype, {
   resolveTabArrangement(settings) {
     const value = settings?.tabArrangement ?? this.getDefaultSettings().tabArrangement;
     return value === 'state' || value === 'case' || value === 'ledger' ? value : 'classic';
+  },
+
+  /**
+   * CLI Logos on Tabs (`showTabCliLogos`, per-device, default ON on every
+   * device). Anything but an explicit false reads as on, the same test the
+   * pre-paint script in index.html applies, so a reload and a Save never
+   * disagree about an odd stored value.
+   */
+  tabCliLogosEnabled(settings) {
+    return (settings?.showTabCliLogos ?? this.getDefaultSettings().showTabCliLogos) !== false;
   },
 
   /** The stored state-group order: 'urgent-last' only when chosen, else 'urgent-first'. */
@@ -3964,6 +3977,14 @@ Object.assign(CodemanApp.prototype, {
     const previousStateOrder = root.dataset.tabStateOrder || 'urgent-first';
     const stateOrder = this.resolveTabStateOrder(settings);
     root.dataset.tabStateOrder = stateOrder;
+    // CLI Logos on Tabs. Unlike the attributes above this one is pure CSS
+    // (styles.css hides `.tab-harness` and `.home-sessions-harness` under
+    // html[data-tab-logos='off']), so a flip re-renders nothing and stays out
+    // of `changed` below: the logo spans are always in the markup. It still
+    // resizes every agent tab, which the tail of this function settles.
+    const previousLogos = root.dataset.tabLogos;
+    const logos = this.tabCliLogosEnabled(settings) ? 'on' : 'off';
+    root.dataset.tabLogos = logos;
 
     const tabsEl = document.getElementById('sessionTabs');
     const rail = document.getElementById('tabRail');
@@ -4013,6 +4034,14 @@ Object.assign(CodemanApp.prototype, {
       if (!wrapRendered) this._fullRenderSessionTabs?.();
       this._updateConnectionLinesImmediate?.();
       this._refreshHomeSessionsIfVisible?.();
+    } else if (previousLogos !== logos) {
+      // A logo flip narrows or widens every agent tab with no render behind
+      // it, so re-take what a render would have: the strip's one-row wrap
+      // decision and the lines anchored to tab rects (lineage, subagent
+      // connectors). A header that gains or loses a row resizes the terminal
+      // container, whose ResizeObserver (terminal-ui.js) owns the PTY geometry.
+      this.updateTabOverflowMode?.();
+      this._updateConnectionLinesImmediate?.();
     }
     // Only detailed rows carry stamps that go stale with no event behind them.
     // _fullRenderSessionTabs() settles this too, but applyTabOrientation() runs
@@ -4261,7 +4290,7 @@ Object.assign(CodemanApp.prototype, {
           'showFontControls', 'showSystemStats', 'headerStatsStyle', 'showTokenCount', 'showCost',
           'showLifecycleLog', 'showResponseViewer', 'showRedrawButton',
           'showMonitor', 'showProjectInsights', 'showFileBrowser', 'showSubagents',
-          'subagentActiveTabOnly', 'tabTwoRows', 'tabOrientation', 'tabRailWidth', 'tabRailDetail', 'tabRailSort', 'tabArrangement', 'tabStateOrder', 'sessionListLayout', 'sessionSidebarFontSize', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
+          'subagentActiveTabOnly', 'tabTwoRows', 'showTabCliLogos', 'tabOrientation', 'tabRailWidth', 'tabRailDetail', 'tabRailSort', 'tabArrangement', 'tabStateOrder', 'sessionListLayout', 'sessionSidebarFontSize', 'localEchoEnabled', 'cjkInputEnabled', 'extendedKeyboardBar',
           'skin', 'showPlanUsageLimits', 'showAttachmentsButton', 'showFileViewerButton', 'webglRendererEnabled',
           'terminalFontFamily', 'terminalFontWeight', 'terminalFontWeightBold',
           'language',
