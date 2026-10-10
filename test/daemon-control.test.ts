@@ -6,6 +6,7 @@
 
 import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import {
   buildBaseUrl,
   buildStatusUrl,
@@ -16,7 +17,17 @@ import {
   probeServer,
 } from '../src/daemon-control.js';
 
-const PORT = 3216;
+/**
+ * A port nothing listens on: bind 0, read what the OS handed out, close. Free at the
+ * moment of use, unlike "the server's port + 1", which anything may hold.
+ */
+async function closedPort(): Promise<number> {
+  const probe = http.createServer();
+  await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const { port: free } = probe.address() as AddressInfo;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  return free;
+}
 
 describe('buildWebArgs', () => {
   it('always passes host and port through explicitly', () => {
@@ -143,6 +154,7 @@ describe('isProcessAlive', () => {
 
 describe('probeServer', () => {
   let server: http.Server;
+  let port: number;
 
   beforeAll(async () => {
     server = http.createServer((req, res) => {
@@ -157,7 +169,8 @@ describe('probeServer', () => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ success: true, data: { version: '9.9.9' } }));
     });
-    await new Promise<void>((resolve) => server.listen(PORT, '127.0.0.1', resolve));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = (server.address() as AddressInfo).port;
   });
 
   afterAll(async () => {
@@ -165,23 +178,23 @@ describe('probeServer', () => {
   });
 
   it('reports up and reads the version back', async () => {
-    const result = await probeServer(`http://127.0.0.1:${PORT}/api/status`);
+    const result = await probeServer(`http://127.0.0.1:${port}/api/status`);
     expect(result.up).toBe(true);
     expect(result.version).toBe('9.9.9');
   });
 
   it('counts a 401 as up, because auth being active proves a server is there', async () => {
-    const result = await probeServer(`http://127.0.0.1:${PORT}/unauthorized`);
+    const result = await probeServer(`http://127.0.0.1:${port}/unauthorized`);
     expect(result.up).toBe(true);
   });
 
   it('does not mistake an unrelated service squatting on the port for Codeman', async () => {
-    const result = await probeServer(`http://127.0.0.1:${PORT}/foreign`);
+    const result = await probeServer(`http://127.0.0.1:${port}/foreign`);
     expect(result.up).toBe(false);
   });
 
   it('reports down when nothing is listening', async () => {
-    const result = await probeServer(`http://127.0.0.1:${PORT + 1}/api/status`, 1000);
+    const result = await probeServer(`http://127.0.0.1:${await closedPort()}/api/status`, 1000);
     expect(result.up).toBe(false);
   });
 

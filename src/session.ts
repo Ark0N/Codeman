@@ -106,6 +106,7 @@ import {
   getClaudeBinaryPath,
   spawnPtyWithHelperRepair,
   resolveLocalShell,
+  waitForProcessesExit,
 } from './utils/index.js';
 import {
   MAX_TERMINAL_BUFFER_SIZE,
@@ -179,7 +180,10 @@ const WIRE_ACTIVITY_SETTLE_MS = 15_000;
 
 // Note: Auto-compact/clear timing constants moved to session-auto-ops.ts
 
-/** Graceful shutdown delay when stopping session (100ms) */
+/**
+ * Longest the PTY process gets to exit on SIGTERM before SIGKILL when stopping a
+ * session. A deadline, not a sleep: stop() moves on as soon as it has exited.
+ */
 const GRACEFUL_SHUTDOWN_DELAY_MS = 100;
 
 // Conversations kept in a pane's chain. A pane that /clears repeatedly would
@@ -4801,8 +4805,10 @@ export class Session extends EventEmitter {
           console.warn('[Session] Failed to send SIGTERM to PTY process (may already be dead):', err);
         }
 
-        // Give it a moment to terminate gracefully
-        await new Promise((resolve) => setTimeout(resolve, GRACEFUL_SHUTDOWN_DELAY_MS));
+        // Give it a moment to terminate gracefully. For a tmux-backed session this
+        // is the attach client, gone within a few ms of SIGTERM, and this used to be
+        // a fixed 100ms sleep on every close.
+        if (pid) await waitForProcessesExit([pid], { timeoutMs: GRACEFUL_SHUTDOWN_DELAY_MS });
 
         // Force kill with SIGKILL if still alive
         try {

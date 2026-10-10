@@ -238,4 +238,16 @@ describe('image upload insertion policy', () => {
     expect(app._uploadPasteImage).toHaveBeenCalledWith('session-b', { path: '/tmp/pane-b.png' });
     expect(app._sendInputAsync).toHaveBeenCalledWith('session-b', '/tmp/pane-b.png', { useMux: true });
   });
+
+  it('shows the server reason in the toast when an upload fails', async () => {
+    const app = loadImageInputApp();
+    const reason = 'Prompt uploads are not supported for remote (SSH) sessions';
+    app._uploadPasteImage = vi.fn(async () => {
+      throw new Error(reason);
+    });
+
+    await app._uploadAndInsertImages([{ path: '/tmp/shot.png' }]);
+
+    expect(app.showToast).toHaveBeenCalledWith(`1 failed: ${reason}`, 'error');
+  });
 });

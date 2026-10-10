@@ -1,7 +1,7 @@
 {
   "name": "aicodeman",
-  "version": "1.40.0",
-  "description": "Mission control for AI coding agents - run 20 autonomous agents with real-time monitoring and session persistence",
+  "version": "1.41.0",
+  "description": "Self-hosted mission control for AI coding agents: run Claude Code, Codex, OpenCode, Gemini, DeepSeek, Grok and more 24/7 in tmux, from any device.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -42,7 +42,7 @@
     "check:lockfile": "node scripts/check-lockfile-sync.mjs",
     "check:plugin": "node scripts/sync-plugin.mjs --check && claude plugin validate --strict plugins/codeman && claude plugin validate --strict .claude-plugin/marketplace.json",
     "knip": "npx --yes knip@latest --config config/knip.json",
-    "release": "changeset publish"
+    "release": "node scripts/npm-release.mjs"
   },
   "prettier": {
     "singleQuote": true,
@@ -171,7 +171,7 @@
   "bugs": {
     "url": "https://github.com/Ark0N/Codeman/issues"
   },
-  "homepage": "https://github.com/Ark0N/Codeman#readme",
+  "homepage": "https://getcodeman.com",
   "files": [
     "dist",
     "scripts/postinstall.js",

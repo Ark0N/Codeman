@@ -18,7 +18,7 @@
  *  4. **Only local mux-backed sessions.** A remote session's local pane is its
  *     ssh client, whose death may be a transport drop.
  *
- * Port: 3189
+ * Port: ephemeral
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Session } from '../src/session.js';
@@ -33,7 +33,6 @@ import {
   shouldCloseCleanlyExitedSession,
 } from '../src/pane-exit-sweep.js';
 
-const PORT = 3189;
 const AT = 1_700_000_000_000;
 
 describe('isCleanPaneExit', () => {
@@ -144,7 +143,7 @@ describe('the sweep on a real server', () => {
 
   /** A server whose mux reports `exit` for every pane, seen by `reads` reads. */
   const build = (exit: PaneExit | undefined, reads: number) => {
-    const web = new WebServer(PORT, false, true);
+    const web = new WebServer(0, false, true);
     server = web;
     const mux = (web as unknown as { mux: Record<string, unknown> }).mux;
     const state = { exit, reads };
@@ -245,7 +244,7 @@ describe('the sweep on a real server', () => {
   it('removes the session for real through cleanupSession', async () => {
     // No spy on cleanupSession here: the close runs the same path as the X
     // button, and the session leaves the server's map.
-    const web = new WebServer(PORT, false, true);
+    const web = new WebServer(0, false, true);
     server = web;
     const mux = (web as unknown as { mux: Record<string, unknown> }).mux;
     mux.getPaneExit = () => ({ status: 0, at: AT });
@@ -276,7 +275,7 @@ describe('a session the server is closing', () => {
   });
 
   it('is cleared again when the server gives the close up', async () => {
-    const web = new WebServer(PORT, false, true);
+    const web = new WebServer(0, false, true);
     try {
       const s = session();
       const sessions = (web as unknown as { sessions: Map<string, Session> }).sessions;

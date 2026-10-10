@@ -324,6 +324,8 @@ const capabilitiesSchema = z
     // A declared width cannot do either. Absent means no strip, so a CLI whose
     // transcript layout nobody has measured is never touched.
     transcriptGutter: z.number().int().min(1).max(8).optional(),
+    // Literal text matched by a `wait-output` long-poll, never compiled as a regex.
+    composerReadyMark: z.string().min(1).max(64).optional(),
     workDetect: z
       .object({
         promptGlyph: z.string().min(1).max(8),
@@ -453,6 +455,7 @@ const capabilitiesSchema = z
           'codex-toml',
           'opencode-json',
           'antigravity-json',
+          'copilot-json',
         ] as const satisfies readonly McpConfigFormat[]),
         // The env var the CLI reads to move the file, and the path under it (same no-traversal
         // rule: sync writes there too). Resolved from the server env at call time, never here.

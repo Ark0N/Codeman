@@ -14,6 +14,12 @@
  *    wheel-down scrolls xterm home instead of being paged, and paging resumes
  *    from the live screen.
  *
+ *  - a fullscreen Claude tile sends the wheel to the CLI as SGR wheel reports
+ *    at the pointer's cell in the TILE (Claude scrolls its own transcript on
+ *    them), and xterm's viewport stays on the live screen instead of
+ *    scrolling the stale replayed frames above it. Shift+wheel scrolls the
+ *    local scrollback, which xterm alone turns into a horizontal no-op.
+ *
  * The wheel is a real one (`page.mouse.wheel()`), and the last step proves it
  * reaches xterm: a wheel the tile does not page scrolls xterm's viewport, so
  * "xterm did not scroll" on a paged wheel means something. What keeps xterm
@@ -188,6 +194,97 @@ describe('TerminalTile wheel paging in a real browser', () => {
       const afterThirdWheel = await snap();
       expect(afterThirdWheel.sent.length).toBe(pagedAgain.sent.length);
       expect(afterThirdWheel.viewportY).toBeLessThan(afterOutput.baseY);
+    } finally {
+      await page.evaluate((id) => {
+        const w = window as any;
+        const probe = w.__tileProbe;
+        probe.tile.destroy();
+        probe.mount.remove();
+        w.app.sessions.delete(id);
+        w.app._sendInputEphemeral = probe.realEphemeral;
+        delete w.__tileProbe;
+      }, PROBE_ID);
+    }
+  });
+
+  it("forwards a fullscreen Claude tile's wheel as SGR reports from its own cells, and keeps xterm on the live screen", async () => {
+    await page.evaluate(async (id) => {
+      const w = window as any;
+      const app = w.app;
+      const CAPTURE_ROWS = 40;
+      const capture = Array.from({ length: CAPTURE_ROWS }, (_, i) => `frame ${i}`).join('\r\n');
+
+      // The tile's session: Claude in its fullscreen renderer (mouse tracking on).
+      app.sessions.set(id, { id, mode: 'claude', cliVersion: '2.1.295', cliMouseTracking: true });
+      const sent: Array<[string, string]> = [];
+      const realEphemeral = app._sendInputEphemeral;
+      app._sendInputEphemeral = (sessionId: string, data: string) => sent.push([sessionId, data]);
+      const realFetch = w.fetch;
+      w.fetch = async (url: string, init?: unknown) =>
+        String(url).includes(`/api/sessions/${id}/terminal`)
+          ? new Response(JSON.stringify({ data: { terminalBuffer: capture, captureRows: CAPTURE_ROWS } }))
+          : realFetch(url, init);
+      const RealWebSocket = w.WebSocket;
+      w.WebSocket = class {
+        static OPEN = 1;
+        readyState = 0;
+        send() {}
+        close() {}
+      };
+
+      // Offset from the page corner, so a cell computed against the wrong
+      // element (the primary pane's) would come out different.
+      const mount = document.createElement('div');
+      mount.style.cssText =
+        'position:fixed;left:100px;top:120px;width:640px;height:300px;z-index:99999;background:#000';
+      document.body.appendChild(mount);
+      const tile = new w.TerminalTile(id, mount, { mode: 'claude' });
+      try {
+        await tile.connect();
+      } finally {
+        w.fetch = realFetch;
+        w.WebSocket = RealWebSocket;
+      }
+      w.__tileProbe = { tile, mount, sent, realEphemeral };
+    }, PROBE_ID);
+
+    try {
+      // Where the pointer will be, as the tile's own screen maps it (1-based).
+      const expected = await page.evaluate(() => {
+        const term = (window as any).__tileProbe.tile.terminal;
+        const rect = term.element.querySelector('.xterm-screen').getBoundingClientRect();
+        const cell = term._core._renderService.dimensions.css.cell;
+        const x = rect.left + cell.width * 7.5;
+        const y = rect.top + cell.height * 3.5;
+        return { x, y, col: 8, row: 4 };
+      });
+      // The stale frames sit above the live screen: something xterm COULD scroll.
+      const before = await snap();
+      expect(before.baseY).toBeGreaterThan(0);
+      expect(before.viewportY).toBe(before.baseY);
+
+      await page.mouse.move(expected.x, expected.y);
+      await page.mouse.wheel(0, -100); // one Chrome-on-Windows notch up
+      await page.waitForTimeout(150);
+      await page.mouse.wheel(0, 50); // half a notch down
+      await page.waitForTimeout(150);
+
+      const after = await snap();
+      expect(after.viewportY).toBe(before.baseY); // xterm never scrolled the stale frames
+      expect(after.sent.every(([sid]) => sid === PROBE_ID)).toBe(true);
+      const up = `\x1b[<64;${expected.col};${expected.row}M`;
+      const down = `\x1b[<65;${expected.col};${expected.row}M`;
+      expect(after.sent.map(([, data]) => data)).toEqual([up.repeat(4), down.repeat(2)]);
+
+      // Shift+wheel is the explicit "local scrollback" gesture: scrolled locally
+      // by the tile (xterm alone turns it into a horizontal no-op), unforwarded.
+      await page.keyboard.down('Shift');
+      await page.mouse.wheel(0, -100);
+      await page.keyboard.up('Shift');
+      await page.waitForTimeout(150);
+      const shifted = await snap();
+      expect(shifted.sent.length).toBe(after.sent.length);
+      expect(shifted.viewportY).toBeLessThan(before.baseY);
     } finally {
       await page.evaluate((id) => {
         const w = window as any;

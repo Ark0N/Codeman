@@ -6,7 +6,7 @@ Most of Codeman's UI is **opt-in**. A stock install shows a deliberately small h
 feature you read about here may simply not be on screen yet. Where that is the case, this
 page says so and names the setting.
 
-![Codeman dashboard](https://raw.githubusercontent.com/Ark0N/Codeman/master/docs/images/codeman-tour-20260724.png)
+![Codeman dashboard](https://raw.githubusercontent.com/Ark0N/Codeman/master/docs/images/codeman-tour-20261010.png)
 
 ## Layout
 
@@ -29,7 +29,7 @@ Session List Layout** can move it into a vertical sidebar on the left instead, a
 | -------------------- | --------------------------------------------------------------------------------- |
 | **Header tab strip** | The default. One list in tab order unless you pick another [Tab layout](#tab-layouts); it scrolls sideways on a phone. |
 | **Left sidebar**     | A vertical list with a filter box and a live session count. `Alt+B` collapses it to a narrow rail that keeps the status dots and task badges visible. On a phone it is an off-canvas drawer rather than a docked rail. A detailed variant adds the home screen's per-session line (`created 3d ago · working 12m`) and a status pill. |
-| **Vertical rail**    | The strip turned vertical beside the terminal, resizable, with detailed rows by default. **Vertical Rail Order** sorts it by activity (blocked on you first, then longest running, then most recently quiet), the same order as the home screens; pick *Manual* to get your own order and drag-reordering back. **Tab groups:** pick *Move to new group* from a row's ⋯ menu (or Shift+F10 on it) to make the first one; a group header's menu (right-click, Shift+F10 or its ⋯ glyph) renames it (also F2), reorders or deletes it, rows move between groups from their own menu or by dragging with a mouse or pen, and a collapsed group stays collapsed on that device. Desktop and tablet only. |
+| **Vertical rail**    | The strip turned vertical beside the terminal, resizable, with detailed rows by default. **Vertical Rail Order** sorts it by activity (blocked on you first, then longest running, then most recently quiet), the same order as the home screens; pick *Manual* to get your own order and drag-reordering back. **Tab groups:** pick *Move to new group* from a row's ⋯ menu (or Shift+F10 on it) to make the first one; a group header's menu (right-click, Shift+F10 or its ⋯ glyph) renames it (also F2), reorders or deletes it, rows move between groups from their own menu or by dragging with a mouse or pen, and a collapsed group stays collapsed on that device. **Search sessions** at the top of the rail narrows it to the tabs whose name matches (a web tab by its title), across every group, collapsed ones included, without changing the groups or the order; a tab with an alert stays visible even when its name does not match; Escape or × clears it, and it is never saved. Desktop and tablet only. |
 
 It is the same list either way, just re-hosted: tab order, drag-to-reorder, the `Alt+1`
 to `Alt+9` numbers and every status colour below behave identically in both. The setting is
@@ -72,6 +72,10 @@ precedence there.
 ## Session tabs
 
 One tab per session, in your order, and that order syncs across your devices.
+
+An agent tab shows its CLI's logo before the name, and a shell tab an `SH` badge. **CLI Logos
+on Tabs** (App Settings → Appearance → Tabs) hides the logos on that device; the tile and split
+headers and the Run menus keep theirs.
 
 **Status is carried by the dot and the tab's own styling:**
 
@@ -254,7 +258,7 @@ Two extras depending on the device:
 | Respawn          | Session Options                    | [Keeping Agents Running](Keeping-Agents-Running)                  |
 | Ralph            | Session Options                    | [Autonomous Loops](Autonomous-Loops)                              |
 | Orchestrator     | Toolbar                            | [Autonomous Loops](Autonomous-Loops)                              |
-| Cron             | Header ⏰ (opt-in)                 | [Cron Jobs](Cron-Jobs)                                            |
+| Cron             | Bottom toolbar ⏰ (opt-in)         | [Cron Jobs](Cron-Jobs)                                            |
 | Subagents        | Automatic while agents run         | [Watching Agents Work](Watching-Agents-Work)                      |
 | Ultracode        | Header (opt-in)                    | [Watching Agents Work](Watching-Agents-Work)                      |
 | File Viewer      | Header                             | [Working With Files](Working-With-Files)                          |

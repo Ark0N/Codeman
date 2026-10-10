@@ -25,6 +25,7 @@
     '.response-viewer-content',
     '.file-preview-content',
     '.session-tab-name',
+    '.tab-name',
     '.session-name',
     '.case-name',
     '.notif-item-message',
@@ -61,6 +62,8 @@
     'Collapse session sidebar': '收起会话侧边栏',
     'Expand session sidebar': '展开会话侧边栏',
     'Filter sessions': '筛选会话',
+    'Search sessions': '搜索会话',
+    'No sessions match': '没有匹配的会话',
     'Admin Panel': '管理面板',
     'Open admin panel': '打开管理面板',
     'Re-dock to dashboard (close window)': '重新停靠到主界面（关闭窗口）',
@@ -340,6 +343,36 @@
       '此设备使用的界面语言。动态状态消息与对话框也会使用同一语言。',
     English: 'English',
     Appearance: '外观',
+    // App Settings > Animations (#571). 平铺 is the grid, 窗格 one tile in it.
+    Animations: '动画',
+    'How tabs, terminal panes, agent windows and tiles arrive. All off by default, applied as you pick them.':
+      '标签页、终端面板、智能体窗口和平铺窗格如何出现。默认全部关闭，选择后立即生效。',
+    Entrances: '入场',
+    'Entrance Theme': '入场主题',
+    'One look for how new tabs, terminal panes, agent windows and their lines arrive.':
+      '为新标签页、终端面板、智能体窗口及其连线的出现方式选择统一的风格。',
+    'Off (default)': '关闭（默认）',
+    'Terminal (CRT)': '终端（CRT）',
+    'Beam down': '光束降临',
+    'Launch (tiles fly from tabs)': '发射（窗格从标签页飞出）',
+    'Soft focus (blur)': '柔焦（模糊）',
+    Quiet: '安静',
+    Playful: '活泼',
+    'Custom (set in the lab)': '自定义（在实验室中设置）',
+    'Tile Animations': '平铺动画',
+    'How tiles arrive when the grid opens and leave when it closes. A theme above presets it.':
+      '平铺打开时窗格如何出现、关闭时如何离开。上方的主题会预设此项。',
+    'Fly from tab': '从标签页飞出',
+    Deal: '发牌',
+    Cascade: '级联',
+    Pop: '弹出',
+    Soft: '柔和',
+    'None (tiles just appear)': '无（窗格直接出现）',
+    Lab: '实验室',
+    'Animation Lab': '动画实验室',
+    'Closes settings and opens every style per surface side by side, with replay and speed. Same as adding ?animlab=1 to the URL.':
+      '关闭设置，并按界面并排打开所有样式，可重放和调速。等同于在网址后添加 ?animlab=1。',
+    'Open lab': '打开实验室',
     Skin: '皮肤',
     'Visual theme for this device (not synced)': '此设备的视觉主题（不同步）',
     'Daylight Blue': '日光蓝',
@@ -369,6 +402,9 @@
       '会话列表显示为顶栏横向标签条，或左侧可折叠侧边栏（Alt+B）。完整侧边栏为每个会话显示与主界面相同的详细信息。',
     'Tall Tabs (Name + Folder)': '双行标签（名称 + 文件夹）',
     'Pop-out Button on Tabs': '标签页弹出窗口按钮',
+    'CLI Logos on Tabs': '标签页上的 CLI 图标',
+    "Show each agent's CLI logo before the session name on tabs and the home screen's tab list. Off leaves the status dot and the shell's SH badge. Tiles, split headers and the Run menus keep their logos.":
+      '在标签页和主界面的标签列表中，于会话名称前显示每个智能体的 CLI 图标。关闭后仍保留状态圆点和 Shell 的 SH 标记。平铺、分屏标题栏和运行菜单中的图标不受影响。',
     // Tab Layout and Header Stats Style (Discussion #426). The header style's
     // "Tiles" is 磁贴, never 平铺: that is the tile grid's word (the Tiles
     // button), and "Tiles (label over value)" must not read as the grid.
@@ -592,6 +628,11 @@
     'Audio Alerts': '声音提醒',
     'Push Notifications': '推送通知',
     'Notification Levels': '通知级别',
+    'Toast display time': '弹出提示显示时长',
+    'How long the corner pop-ups stay on screen.': '角落弹出提示在屏幕上停留的时长。',
+    'Browser notification display time': '浏览器通知显示时长',
+    'How long a desktop notification stays up before Codeman closes it. Your OS may close it sooner.':
+      '桌面通知在 Codeman 关闭它之前保持显示的时长。系统可能会更早关闭它。',
     Critical: '严重',
     'Per-Event Settings': '按事件设置',
     'Permission prompts': '权限提示',
@@ -718,6 +759,8 @@
 
     // Dynamic common status / toasts
     'Settings saved': '设置已保存',
+    'Settings applied': '设置已应用',
+    'Save and keep Settings open': '保存并保持设置打开',
     'Settings saved locally': '设置已保存到本机',
     'Tunnel active': '隧道已启用',
     'Tunnel starting — QR code will appear when ready...': '隧道正在启动，准备好后将显示二维码…',

@@ -14,15 +14,14 @@
  * Browser-driven, so it is excluded from `npm run test:ci` like the other
  * Playwright suites. Run locally: npm run test:browser -- test/terminal-copy-shortcut.test.ts
  *
- * Port: 3174 (per MEMORY.md, ports 3150+ for tests)
+ * Port: ephemeral
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
 
-const PORT = 3174;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 const IME_PUNCTUATION = '，。！？；：“”、《》、（）';
 
 describe('terminal Ctrl+C smart copy', () => {
@@ -31,12 +30,13 @@ describe('terminal Ctrl+C smart copy', () => {
   let page: Page;
 
   beforeAll(async () => {
-    server = new WebServer(PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
+    baseUrl = `http://localhost:${server.boundPort}`;
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
     page = await context.newPage();
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
     // The first write after load can be dropped while the app finishes wiring
     // its render pipeline, so poll until one really lands in the buffer.
@@ -226,7 +226,7 @@ describe('terminal Ctrl+C smart copy', () => {
     const touchContext = await browser.newContext({ hasTouch: true });
     try {
       const touchPage = await touchContext.newPage();
-      await touchPage.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+      await touchPage.goto(baseUrl, { waitUntil: 'domcontentloaded' });
       const touchChunks = await captureImeInput(touchPage);
       expect(touchChunks.join('')).toBe('中文' + IME_PUNCTUATION);
     } finally {

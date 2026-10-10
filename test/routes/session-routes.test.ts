@@ -18,9 +18,9 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
 import fastifyMultipart from '@fastify/multipart';
 import { dirname, join } from 'node:path';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { registryFilePath, reloadCliRegistry } from '../../src/config/cli-registry/registry.js';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import fs, { mkdtemp, rm, mkdir, writeFile, readFile, readdir, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createMockRouteContext, type MockRouteContext } from '../mocks/index.js';
 import { installRouteErrorHandler } from '../../src/web/route-error-handler.js';
@@ -285,7 +285,7 @@ describe('session-routes', () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.success).toBe(true);
-      expect(body.data.path).toMatch(/\/\.claude-images\/paste-\d+-[a-f0-9]{8}\.jpg$/);
+      expect(body.data.path).toMatch(/\/\.codeman-uploads\/paste-\d+-[a-f0-9]{8}\.jpg$/);
       expect(heicConvert).toHaveBeenCalledWith(heic);
     });
 
@@ -314,8 +314,91 @@ describe('session-routes', () => {
       expect(res.statusCode).toBe(200);
       const body = JSON.parse(res.body);
       expect(body.success).toBe(true);
-      expect(body.data.path).toMatch(/\/\.claude-images\/paste-\d+-[a-f0-9]{8}\.jpg$/);
+      expect(body.data.path).toMatch(/\/\.codeman-uploads\/paste-\d+-[a-f0-9]{8}\.jpg$/);
       expect(heicConvert).toHaveBeenCalledWith(heic);
+    });
+
+    const jpeg = Buffer.from('ffd8ffe000104a46494600010100', 'hex');
+    const upload = (name: string, mime: string, bytes: Buffer) =>
+      harness.app.inject({
+        method: 'POST',
+        url: `/api/sessions/${harness.ctx._sessionId}/paste-image`,
+        headers: {
+          host: 'codeman.test',
+          origin: 'http://codeman.test',
+          'content-type': 'multipart/form-data; boundary=codeman-test-boundary',
+        },
+        payload: imageUploadBody('codeman-test-boundary', name, mime, bytes),
+      });
+
+    it('writes into .codeman-uploads with a self-ignoring .gitignore, written once and never over a file already there', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-uploads-'));
+      harness.ctx._session.workingDir = workDir;
+      try {
+        const first = await upload('shot.jpg', 'image/jpeg', jpeg);
+        expect(first.statusCode).toBe(200);
+        expect(JSON.parse(first.body).data.path).toMatch(/\/\.codeman-uploads\/paste-\d+-[a-f0-9]{8}\.jpg$/);
+        expect(await readdir(workDir)).toEqual(['.codeman-uploads']);
+        expect(await readFile(join(workDir, '.codeman-uploads', '.gitignore'), 'utf8')).toBe('*\n');
+
+        await writeFile(join(workDir, '.codeman-uploads', '.gitignore'), 'theirs\n');
+        expect((await upload('shot.jpg', 'image/jpeg', jpeg)).statusCode).toBe(200);
+        expect(await readFile(join(workDir, '.codeman-uploads', '.gitignore'), 'utf8')).toBe('theirs\n');
+      } finally {
+        await rm(workDir, { recursive: true });
+      }
+    });
+
+    it('takes back an ignore file whose write failed, so the next upload writes a real one', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-uploads-'));
+      harness.ctx._session.workingDir = workDir;
+      const ignoreFile = join(workDir, '.codeman-uploads', '.gitignore');
+      // The exclusive create succeeds and the two-byte write fails, as on a full disk.
+      const spy = vi.spyOn(fs, 'writeFile').mockImplementationOnce(async (path) => {
+        await writeFile(path as string, '');
+        throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
+      });
+      try {
+        expect((await upload('shot.jpg', 'image/jpeg', jpeg)).statusCode).toBe(500);
+        expect(existsSync(ignoreFile)).toBe(false);
+        expect((await upload('shot.jpg', 'image/jpeg', jpeg)).statusCode).toBe(200);
+        expect(await readFile(ignoreFile, 'utf8')).toBe('*\n');
+      } finally {
+        spy.mockRestore();
+        await rm(workDir, { recursive: true });
+      }
+    });
+
+    it('refuses a planted symlink at .codeman-uploads and writes nothing through it', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-uploads-'));
+      const elsewhere = await mkdtemp(join(tmpdir(), 'codeman-elsewhere-'));
+      harness.ctx._session.workingDir = workDir;
+      await symlink(elsewhere, join(workDir, '.codeman-uploads'));
+      try {
+        const res = await upload('shot.jpg', 'image/jpeg', jpeg);
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(res.body).error).toBe('.codeman-uploads is not a regular directory');
+        expect(await readdir(elsewhere)).toEqual([]);
+      } finally {
+        await rm(workDir, { recursive: true });
+        await rm(elsewhere, { recursive: true });
+      }
+    });
+
+    it('refuses an upload for a remote session before touching disk', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-uploads-'));
+      harness.ctx._session.workingDir = workDir;
+      // A remote session's workingDir is the REMOTE path: a file written here is unreadable there.
+      (harness.ctx._session as unknown as { remote: unknown }).remote = { hostId: 'gpu-box' };
+      try {
+        const res = await upload('shot.jpg', 'image/jpeg', jpeg);
+        expect(res.statusCode).toBe(400);
+        expect(JSON.parse(res.body).error).toMatch(/remote/);
+        expect(await readdir(workDir)).toEqual([]);
+      } finally {
+        (harness.ctx._session as unknown as { remote: unknown }).remote = undefined;
+        await rm(workDir, { recursive: true });
+      }
     });
 
     it('returns 415 with the error envelope when HEIC conversion fails', async () => {

@@ -124,11 +124,11 @@ describe('terminal link-provider regexes (shipped source)', () => {
   });
 
   it('the file-path pattern links pasted image/PDF/media attachment paths', () => {
-    // `.claude-images/paste-*.png` is what Codeman writes for a pasted screenshot;
+    // `.codeman-uploads/paste-*.png` is what Codeman writes for a pasted screenshot;
     // without image extensions the path rendered as plain, unclickable text.
     const ext = shippedPattern('FILE_PATH_LINK_PATTERN');
     const cases = [
-      '/home/arkon/default/claudeman/.claude-images/paste-1785164958410-d11eb7d0.png',
+      '/home/arkon/default/claudeman/.codeman-uploads/paste-1785164958410-d11eb7d0.png',
       '/tmp/shot.jpeg',
       '/opt/app/report.pdf',
       '/home/a/diagram.svg',

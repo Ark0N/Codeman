@@ -25,6 +25,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -35,8 +36,7 @@ import type { SearchResponseData } from '../../src/types/search.js';
 import type { ApprovalItem } from '../../src/web/approval-inbox.js';
 import type { AwayDigestResponse } from '../../src/web/away-digest.js';
 
-const PORT = 3244;
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+let baseUrl: string;
 const ROOT = resolve(import.meta.dirname, '..', '..');
 const COLS = 100;
 const ROWS = 30;
@@ -234,7 +234,7 @@ function childEnv(): Record<string, string> {
   delete env.CODEMAN_PORT;
   return {
     ...env,
-    CODEMAN_API_URL: BASE_URL,
+    CODEMAN_API_URL: baseUrl,
     CODEMAN_DATA_DIR: dataDir,
     CODEMAN_TMUX_SOCKET: 'codeman-tui-e2e',
     CODEMAN_TUI_GLYPHS: 'ascii',
@@ -347,7 +347,8 @@ beforeAll(async () => {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ success: false, error: 'no route', errorCode: 'NOT_FOUND' }));
   });
-  await new Promise<void>((done) => server.listen(PORT, '127.0.0.1', done));
+  await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 
 afterAll(async () => {

@@ -188,6 +188,7 @@ import {
 } from '../response-viewer-transcript.js';
 import { readDeepSeekLastResponse } from '../../deepseek-transcript.js';
 import { appendClaudeCustomTitle } from '../../claude-session-title.js';
+import { UPLOADS_DIR } from '../paste-image-gc.js';
 
 // Path to linked-cases registry (same file used by case-routes resolveCasePath)
 const LINKED_CASES_FILE = dataPath('linked-cases.json');
@@ -359,6 +360,51 @@ export function imageMagicMatchesExt(data: Buffer, ext: string): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * Create or re-verify `{workingDir}/.codeman-uploads` for a prompt upload, or
+ * null when something other than a regular directory sits there. An agent or
+ * postinstall script could plant `.codeman-uploads -> ~/.ssh/` and redirect
+ * future writes outside workingDir: lstat (not stat) sees the symlink itself,
+ * and mkdir without `recursive` does not follow one for the leaf either;
+ * O_EXCL|O_NOFOLLOW on the file open makes the write itself symlink-safe.
+ * The folder ignores itself: a `.gitignore` of `*`, written once with O_EXCL,
+ * so the user's repository never sees uploads, their own ignore file is never
+ * touched, and a file already there is theirs and stays as it is.
+ */
+async function ensureUploadDir(workingDir: string): Promise<string | null> {
+  // workingDir is guaranteed to exist (live session).
+  const uploadDir = join(workingDir, UPLOADS_DIR);
+  try {
+    const dirStat = await fs.lstat(uploadDir);
+    if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return null;
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    try {
+      await fs.mkdir(uploadDir);
+    } catch (mkErr: unknown) {
+      // Concurrent uploads (a batch of photos) race to create the dir — the
+      // losers get EEXIST. Treat an already-present REAL directory as success,
+      // but re-verify it isn't a symlink a racing actor planted.
+      if ((mkErr as NodeJS.ErrnoException).code !== 'EEXIST') throw mkErr;
+      const raceStat = await fs.lstat(uploadDir);
+      if (raceStat.isSymbolicLink() || !raceStat.isDirectory()) return null;
+    }
+  }
+  const ignoreFile = join(uploadDir, '.gitignore');
+  try {
+    // 'wx' = O_CREAT|O_EXCL, which also fails on a symlink at the path.
+    await fs.writeFile(ignoreFile, '*\n', { flag: 'wx' });
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return uploadDir;
+    // The create can succeed before the write fails (ENOSPC): an empty ignore
+    // file would read as the user's on the next upload, so take it back; its own
+    // failure must not replace the cause.
+    await fs.rm(ignoreFile, { force: true }).catch(() => {});
+    throw err;
+  }
+  return uploadDir;
 }
 
 // Per-(IP, sessionId) token bucket for paste-image. 30 requests/minute.
@@ -5198,6 +5244,20 @@ export function registerSessionRoutes(
 
     const session = findSessionOrFail(ctx, id, req);
 
+    // The file lands on THIS host under the session's working directory, which
+    // for a remote (SSH) session is the remote path: the agent there could never
+    // read it, and the write would land in a same-named local directory or fail.
+    // An owned Docker case is fine, its workspace is bind-mounted at the same
+    // absolute path; an adopted container (owned: false) mounts nothing, so its
+    // agent reads the file only if the container exposes that host path.
+    if (session.remote) {
+      reply.code(400);
+      return createErrorResponse(
+        ApiErrorCode.INVALID_INPUT,
+        'Prompt uploads are not supported for remote (SSH) sessions'
+      );
+    }
+
     if (!req.isMultipart()) {
       reply.code(400);
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, 'Expected multipart/form-data');
@@ -5294,37 +5354,11 @@ export function registerSessionRoutes(
       return createErrorResponse(ApiErrorCode.INVALID_INPUT, `Image bytes do not match declared type ${ext}`);
     }
 
-    // Save to {workingDir}/.claude-images/
-    // Refuse symlinks at imageDir — an agent or postinstall script could plant
-    // `.claude-images -> ~/.ssh/` and redirect future writes outside workingDir.
-    // We lstat (not stat) so we see the symlink itself. Use mkdir without
-    // `recursive` so the leaf creation does not follow a symlink either, and
-    // O_EXCL|O_NOFOLLOW on the file open so the write itself is symlink-safe.
-    const imageDir = join(session.workingDir, '.claude-images');
-    try {
-      const dirStat = await fs.lstat(imageDir);
-      if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) {
-        reply.code(403);
-        return createErrorResponse(ApiErrorCode.INVALID_INPUT, '.claude-images is not a regular directory');
-      }
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-      // Non-recursive mkdir: does not follow symlinks for the leaf.
-      // session.workingDir is guaranteed to exist (live session).
-      try {
-        await fs.mkdir(imageDir);
-      } catch (mkErr: unknown) {
-        // Concurrent uploads (a batch of photos) race to create .claude-images —
-        // the losers get EEXIST. Treat an already-present REAL directory as
-        // success, but re-verify it isn't a symlink a racing actor planted
-        // (preserve the symlink-safety guarantee above).
-        if ((mkErr as NodeJS.ErrnoException).code !== 'EEXIST') throw mkErr;
-        const raceStat = await fs.lstat(imageDir);
-        if (raceStat.isSymbolicLink() || !raceStat.isDirectory()) {
-          reply.code(403);
-          return createErrorResponse(ApiErrorCode.INVALID_INPUT, '.claude-images is not a regular directory');
-        }
-      }
+    // {workingDir}/.codeman-uploads/, see ensureUploadDir.
+    const imageDir = await ensureUploadDir(session.workingDir);
+    if (!imageDir) {
+      reply.code(403);
+      return createErrorResponse(ApiErrorCode.INVALID_INPUT, `${UPLOADS_DIR} is not a regular directory`);
     }
     // Date.now() collides on same-ms uploads from two tabs (last-write wins
     // silently). Append 8 hex chars so concurrent pastes get distinct names.

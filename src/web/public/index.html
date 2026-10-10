@@ -65,7 +65,7 @@
        app.js, NOT the handheld storage-key test `m`. Use a different predicate
        here and boot will contradict this value, animating the drawer open by
        itself on every load between 768 and 1023px. -->
-  <script>try{var m=window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024);var k=m?'codeman-app-settings-mobile':'codeman-app-settings';var A=JSON.parse(localStorage.getItem(k)||'{}');var L=A.sessionListLayout;var F=Number(A.sessionSidebarFontSize);var solo=/^\/session\//.test(location.pathname);var C=localStorage.getItem('codeman-sidebar-collapsed');var S=(L==='sidebar'||L==='sidebar-rich')&&!solo;document.documentElement.dataset.sessionList=S?'sidebar':'header';document.documentElement.dataset.sidebarDetail=(S&&L==='sidebar-rich')?'rich':'simple';document.documentElement.dataset.sidebar=(C===null?window.innerWidth<1024:C==='1')?'collapsed':'expanded';var V=A.tabOrientation==='vertical'&&!S&&!solo&&window.innerWidth>=768;document.documentElement.dataset.tabOrientation=V?'vertical':'horizontal';document.documentElement.dataset.tabRailDetail=(A.tabRailDetail==='simple')?'simple':'rich';document.documentElement.dataset.tabRailSort=(A.tabRailSort==='manual')?'manual':'activity';var T=A.tabArrangement;document.documentElement.dataset.tabArrangement=(T==='state'||T==='case'||T==='ledger')?T:'classic';document.documentElement.dataset.tabStateOrder=(A.tabStateOrder==='urgent-last')?'urgent-last':'urgent-first';var H=A.headerStatsStyle;document.documentElement.dataset.headerStats=(window.innerWidth<768||solo)?'classic':(H==='classic'||H==='tiles')?H:'compact';var W=Number(A.tabRailWidth);if(V){if(Number.isInteger(W)&&W>=208&&W<=360)document.documentElement.style.setProperty('--tab-rail-width',W+'px');else if(document.documentElement.dataset.tabRailDetail!=='simple')document.documentElement.style.setProperty('--tab-rail-width','320px');}if(Number.isInteger(F)&&F>=11&&F<=18)document.documentElement.style.setProperty('--session-sidebar-name-font-size',F+'px');}catch(e){document.documentElement.dataset.sessionList='header';document.documentElement.dataset.sidebarDetail='simple';document.documentElement.dataset.sidebar='expanded';document.documentElement.dataset.tabOrientation='horizontal';document.documentElement.dataset.tabRailDetail='rich';document.documentElement.dataset.tabRailSort='activity';document.documentElement.dataset.tabArrangement='classic';document.documentElement.dataset.tabStateOrder='urgent-first';document.documentElement.dataset.headerStats='classic';}</script>
+  <script>try{var m=window.innerWidth<768||(('ontouchstart' in window||navigator.maxTouchPoints>0)&&window.innerWidth<1024);var k=m?'codeman-app-settings-mobile':'codeman-app-settings';var A=JSON.parse(localStorage.getItem(k)||'{}');var L=A.sessionListLayout;var F=Number(A.sessionSidebarFontSize);var solo=/^\/session\//.test(location.pathname);var C=localStorage.getItem('codeman-sidebar-collapsed');var S=(L==='sidebar'||L==='sidebar-rich')&&!solo;document.documentElement.dataset.sessionList=S?'sidebar':'header';document.documentElement.dataset.sidebarDetail=(S&&L==='sidebar-rich')?'rich':'simple';document.documentElement.dataset.sidebar=(C===null?window.innerWidth<1024:C==='1')?'collapsed':'expanded';var V=A.tabOrientation==='vertical'&&!S&&!solo&&window.innerWidth>=768;document.documentElement.dataset.tabOrientation=V?'vertical':'horizontal';document.documentElement.dataset.tabRailDetail=(A.tabRailDetail==='simple')?'simple':'rich';document.documentElement.dataset.tabRailSort=(A.tabRailSort==='manual')?'manual':'activity';var T=A.tabArrangement;document.documentElement.dataset.tabArrangement=(T==='state'||T==='case'||T==='ledger')?T:'classic';document.documentElement.dataset.tabStateOrder=(A.tabStateOrder==='urgent-last')?'urgent-last':'urgent-first';document.documentElement.dataset.tabLogos=(A.showTabCliLogos===false)?'off':'on';var H=A.headerStatsStyle;document.documentElement.dataset.headerStats=(window.innerWidth<768||solo)?'classic':(H==='classic'||H==='tiles')?H:'compact';var W=Number(A.tabRailWidth);if(V){if(Number.isInteger(W)&&W>=208&&W<=360)document.documentElement.style.setProperty('--tab-rail-width',W+'px');else if(document.documentElement.dataset.tabRailDetail!=='simple')document.documentElement.style.setProperty('--tab-rail-width','320px');}if(Number.isInteger(F)&&F>=11&&F<=18)document.documentElement.style.setProperty('--session-sidebar-name-font-size',F+'px');}catch(e){document.documentElement.dataset.sessionList='header';document.documentElement.dataset.sidebarDetail='simple';document.documentElement.dataset.sidebar='expanded';document.documentElement.dataset.tabOrientation='horizontal';document.documentElement.dataset.tabRailDetail='rich';document.documentElement.dataset.tabRailSort='activity';document.documentElement.dataset.tabArrangement='classic';document.documentElement.dataset.tabStateOrder='urgent-first';document.documentElement.dataset.headerStats='classic';document.documentElement.dataset.tabLogos='on';}</script>
   <!-- Inline critical CSS for instant skeleton paint (before styles.css loads) -->
   <style>
     .loading-skeleton{display:flex;flex-direction:column;height:100vh;height:100dvh;background:var(--bg-dark,#11151c)}
@@ -394,6 +394,19 @@
     <!-- Main Terminal Area -->
     <main class="main">
       <aside class="tab-rail" id="tabRail" aria-label="Session navigation">
+        <!-- Session-name search (app.js setTabRailSearch): a view filter over the
+             rows below, in memory only. Shown with the rail, never elsewhere. -->
+        <div class="session-sidebar-filter tab-rail-search">
+          <input type="search" id="tabRailSearch" class="session-sidebar-filter-input"
+            placeholder="Search sessions" aria-label="Search sessions"
+            autocomplete="off" spellcheck="false"
+            oninput="app.setTabRailSearch(this.value)"
+            onkeydown="app.handleTabRailSearchKeydown(event)">
+          <button type="button" id="tabRailSearchClear" class="tab-rail-search-clear"
+            aria-label="Clear search" title="Clear search"
+            onclick="app.clearTabRailSearch()" hidden>&times;</button>
+        </div>
+        <div id="tabRailSearchEmpty" class="tab-rail-search-empty" role="status" hidden>No sessions match</div>
         <div
           id="tabRailResizeHandle"
           class="tab-rail-resize-handle"
@@ -1635,6 +1648,7 @@
                Save; row-reverse keeps Save to the left of it on phones. -->
           <div class="set-head-actions">
             <button class="modal-close" onclick="app.closeAppSettings()" aria-label="Close app settings">&times;</button>
+            <button class="set-head-save set-head-apply" onclick="app.applyAppSettings()" title="Save and keep Settings open">Apply</button>
             <button class="set-head-save" onclick="app.saveAppSettings()">Save</button>
           </div>
         </div>
@@ -1662,6 +1676,10 @@
               <button type="button" class="set-rail-item" data-section="settings-appearance">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18 4.5 4.5 0 0 0 0-9 4.5 4.5 0 0 1 0-9z"/></svg>
                 <span>Appearance</span>
+              </button>
+              <button type="button" class="set-rail-item" data-section="settings-animations">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/><path d="M3 19h6"/></svg>
+                <span>Animations</span>
               </button>
               <button type="button" class="set-rail-item" data-section="settings-models">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/><path d="M12 12l8-4.5M12 12v9M12 12L4 7.5"/></svg>
@@ -2053,7 +2071,7 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18 4.5 4.5 0 0 0 0-9 4.5 4.5 0 0 1 0-9z"/></svg>
                 <h2>Appearance</h2>
               </div>
-              <p class="set-section-blurb">Theme, motion, and what this install calls itself.</p>
+              <p class="set-section-blurb">Theme, and what this install calls itself.</p>
 
               <div class="set-group">
                 <div class="set-group-head"><h4>Theme</h4><span class="set-scope">device</span></div>
@@ -2075,21 +2093,6 @@
                         <option value="daylight-green">Daylight Green</option>
                         <option value="og">OG Codeman</option>
                       </optgroup>
-                    </select>
-                  </div>
-                  <div class="set-row has-field" data-search="entrance animations motion tabs windows">
-                    <div class="set-row-text">
-                      <span class="set-row-label">Entrance Animations</span>
-                      <span class="set-row-desc">How new tabs, panes and agent windows arrive. Add ?animlab=1 to the URL for per-surface control.</span>
-                    </div>
-                    <select id="appSettingsEntranceAnim" class="set-select">
-                      <option value="legacy">Off (default)</option>
-                      <option value="terminal">Terminal (CRT)</option>
-                      <option value="beamdown">Beam down</option>
-                      <option value="softfocus">Soft focus (blur)</option>
-                      <option value="quiet">Quiet</option>
-                      <option value="playful">Playful</option>
-                      <option value="custom">Custom (set in the lab)</option>
                     </select>
                   </div>
                 </div>
@@ -2216,6 +2219,13 @@
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsTabTwoRows"><span class="slider"></span></label>
                   </div>
+                  <div class="set-row" data-search="cli logos on tabs logo icon harness agent cli tab hide">
+                    <div class="set-row-text">
+                      <span class="set-row-label">CLI Logos on Tabs</span>
+                      <span class="set-row-desc">Show each agent's CLI logo before the session name on tabs and the home screen's tab list. Off leaves the status dot and the shell's SH badge. Tiles, split headers and the Run menus keep their logos.</span>
+                    </div>
+                    <label class="switch switch-sm"><input type="checkbox" id="appSettingsShowTabCliLogos" checked><span class="slider"></span></label>
+                  </div>
                   <div class="set-row" data-search="pop out detach tab window">
                     <div class="set-row-text">
                       <span class="set-row-label">Pop-out Button on Tabs</span>
@@ -2243,6 +2253,70 @@
                       <span class="set-row-desc">The C logo opens the session overview instead of the welcome screen.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsMobileOverview" checked><span class="slider"></span></label>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- ══ Animations ═══════════════════════════════════════════════
+                 Every entrance animation in one place (entrance-animations.js).
+                 All per-device localStorage keys, applied as they are picked,
+                 never part of PUT /api/settings. -->
+            <section class="set-section" id="settings-animations" data-label="Animations">
+              <div class="set-section-head">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/><path d="M3 19h6"/></svg>
+                <h2>Animations</h2>
+              </div>
+              <p class="set-section-blurb">How tabs, terminal panes, agent windows and tiles arrive. All off by default, applied as you pick them.</p>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Entrances</h4><span class="set-scope">device</span></div>
+                <div class="set-group-body">
+                  <div class="set-row has-field" data-search="entrance animations theme motion tabs windows panes lines">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Entrance Theme</span>
+                      <span class="set-row-desc">One look for how new tabs, terminal panes, agent windows and their lines arrive.</span>
+                    </div>
+                    <select id="appSettingsEntranceAnim" class="set-select">
+                      <option value="legacy">Off (default)</option>
+                      <option value="terminal">Terminal (CRT)</option>
+                      <option value="beamdown">Beam down</option>
+                      <option value="launch">Launch (tiles fly from tabs)</option>
+                      <option value="softfocus">Soft focus (blur)</option>
+                      <option value="quiet">Quiet</option>
+                      <option value="playful">Playful</option>
+                      <option value="custom">Custom (set in the lab)</option>
+                    </select>
+                  </div>
+                  <div class="set-row has-field" data-search="tile animations tiles grid motion entrance fly deal crt beam">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Tile Animations</span>
+                      <span class="set-row-desc">How tiles arrive when the grid opens and leave when it closes. A theme above presets it.</span>
+                    </div>
+                    <select id="appSettingsTileAnim" class="set-select">
+                      <option value="settle">Off (default)</option>
+                      <option value="fly">Fly from tab</option>
+                      <option value="deal">Deal</option>
+                      <option value="crt">CRT</option>
+                      <option value="beam">Beam down</option>
+                      <option value="cascade">Cascade</option>
+                      <option value="pop">Pop</option>
+                      <option value="soft">Soft</option>
+                      <option value="off">None (tiles just appear)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="set-group">
+                <div class="set-group-head"><h4>Lab</h4></div>
+                <div class="set-group-body">
+                  <div class="set-row has-field" data-search="animation lab compare replay styles per surface animlab">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Animation Lab</span>
+                      <span class="set-row-desc">Closes settings and opens every style per surface side by side, with replay and speed. Same as adding ?animlab=1 to the URL.</span>
+                    </div>
+                    <button type="button" id="appSettingsOpenAnimLab" class="btn-toolbar btn-sm">Open lab</button>
                   </div>
                 </div>
               </div>
@@ -2644,17 +2718,17 @@
               <div class="set-group" id="mcpSyncGroup">
                 <div class="set-group-head"><h4>MCP servers</h4><span class="set-scope">synced</span></div>
                 <div class="set-group-body">
-                  <div class="set-row" data-search="mcp server sync enable claude codex gemini opencode antigravity">
+                  <div class="set-row" data-search="mcp server sync enable claude codex gemini opencode antigravity copilot github">
                     <div class="set-row-text">
                       <span class="set-row-label">Enable MCP server sync</span>
-                      <span class="set-row-desc">Adds a control that copies MCP servers between your enabled CLIs by writing their own config files. Off by default: this changes other tools' configuration, not just Codeman's.</span>
+                      <span class="set-row-desc">Adds a control that copies MCP servers between your enabled CLIs, and GitHub Copilot CLI if it is installed, by writing their own config files. Off by default: this changes other tools' configuration, not just Codeman's.</span>
                     </div>
                     <label class="switch switch-sm"><input type="checkbox" id="appSettingsMcpSync" onchange="app.applyMcpSyncVisibility()"><span class="slider"></span></label>
                   </div>
                   <div class="set-row" id="mcpSyncActionRow" style="display:none" data-search="mcp server sync preview">
                     <div class="set-row-text">
                       <span class="set-row-label">Sync MCP servers across CLIs</span>
-                      <span class="set-row-desc">Copies each installed, enabled CLI's MCP servers into the others. Only adds missing servers; never edits, removes or copies a server you switched off. Env values and headers are copied too, so a file that receives them is left readable by you only. The previous file is kept as <code>.codeman-bak</code> (overwritten by each sync). A config dir moved by the CLI's own env var (<code>CODEX_HOME</code>, <code>CLAUDE_CONFIG_DIR</code>, <code>XDG_CONFIG_HOME</code>, <code>GEMINI_CLI_HOME</code>) is followed as Codeman's server sees it; a per-session override is not.</span>
+                      <span class="set-row-desc">Copies each installed, enabled CLI's MCP servers (and GitHub Copilot CLI's) into the others. Only adds missing servers; never edits, removes or copies a server you switched off. Env values and headers are copied too, so a file that receives them is left readable by you only. The previous file is kept as <code>.codeman-bak</code> (overwritten by each sync). A config dir moved by the CLI's own env var (<code>CODEX_HOME</code>, <code>CLAUDE_CONFIG_DIR</code>, <code>XDG_CONFIG_HOME</code>, <code>GEMINI_CLI_HOME</code>, <code>COPILOT_HOME</code>) is followed as Codeman's server sees it; a per-session override is not.</span>
                     </div>
                     <span>
                       <button class="btn-toolbar btn-sm" id="mcpSyncPreviewBtn" onclick="app.mcpSync(false)">Preview</button>
@@ -2721,6 +2795,26 @@
                     <div class="set-row-actions">
                       <input type="number" id="appSettingsNotifStuckMins" class="set-num" value="10" min="1" max="120">
                       <span class="set-unit">min</span>
+                    </div>
+                  </div>
+                  <div class="set-row" data-search="toast display time popup dismiss seconds notification">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Toast display time</span>
+                      <span class="set-row-desc">How long the corner pop-ups stay on screen.</span>
+                    </div>
+                    <div class="set-row-actions">
+                      <input type="number" id="appSettingsNotifToastSecs" class="set-num" value="3" min="1" max="300">
+                      <span class="set-unit">sec</span>
+                    </div>
+                  </div>
+                  <div class="set-row" data-search="browser notification auto close dismiss seconds">
+                    <div class="set-row-text">
+                      <span class="set-row-label">Browser notification display time</span>
+                      <span class="set-row-desc">How long a desktop notification stays up before Codeman closes it. Your OS may close it sooner.</span>
+                    </div>
+                    <div class="set-row-actions">
+                      <input type="number" id="appSettingsNotifBrowserSecs" class="set-num" value="8" min="1" max="300">
+                      <span class="set-unit">sec</span>
                     </div>
                   </div>
                 </div>
@@ -3037,6 +3131,7 @@
         </div>
         <div class="form-actions set-foot">
           <button class="btn-toolbar" onclick="app.closeAppSettings()">Cancel</button>
+          <button class="btn-toolbar" onclick="app.applyAppSettings()" title="Save and keep Settings open">Apply</button>
           <button class="btn-toolbar btn-primary" onclick="app.saveAppSettings()">Save</button>
         </div>
       </div>

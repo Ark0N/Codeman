@@ -90,7 +90,6 @@ every session or only the active tab.
 | Setting                | Notes                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------- |
 | Skin                   | Theme palettes, light ones included. Applied before first paint, so no flash of the wrong theme. |
-| Entrance Animations     | Per-surface animation styles for tabs, terminals, windows, and lineage lines. All default to the legacy no-animation behaviour. |
 | Display Name           | Your name in the UI. Cosmetic only; it never renames the package, CLI, API, or storage.    |
 | Interface Language     | English or Simplified Chinese. Per device.                                                 |
 | Session List Layout    | Header tab strip (default), a collapsible left sidebar, or the sidebar with detailed rows. See [The Dashboard](The-Dashboard#session-list-layout). |
@@ -99,10 +98,21 @@ every session or only the active tab.
 | State Order            | For *By state*: needs you on top (default) or at the bottom, right above the terminal. |
 | Vertical Rail Order    | *By activity* (default) sorts the rail the way the home screens are sorted; *Manual* keeps your tab order and drag-reordering. With *By state* or *By case* it orders the rows inside each section. |
 | Tall Tabs              | Taller tab strip.                                                                          |
+| CLI Logos on Tabs      | Each agent tab, and its row on the desktop home rail, shows the CLI's logo before the name. Off hides those logos on this device; the status dot and the shell's SH badge stay, and tiles, split headers and the Run menus keep their logos. On by default. |
 | Pop-out Button on Tabs | Adds the detach control to tabs, with a per-tab override.                                  |
 | Spawn Lineage Lines    | Lines from each tab to the sessions it spawned; the selected tab's family is drawn thicker. Desktop only, on by default. |
 | Auto-name Sessions     | Titles a new tab after its first prompt, keeping the case prefix (`w3-myapp: fix the login redirect`). Synced, off by default. See [The Dashboard](The-Dashboard#automatic-session-names). |
 | Overview Home Screen   | The phone home screen. On by default.                                                      |
+
+### Animations
+
+All per device, all off by default, applied as you pick them.
+
+| Setting                | Notes                                                                                     |
+| ---------------------- | ----------------------------------------------------------------------------------------- |
+| Entrance Theme         | One look for how new tabs, terminal panes, agent windows and their lines arrive (Terminal, Beam down, Launch, Soft focus, Quiet, Playful). Off by default. |
+| Tile Animations        | How tiles arrive when the tile grid opens and leave when it closes: fly out of their tabs, dealt from the Tiles button, CRT, beam down, cascade, pop or soft; each screen then plays the theme's terminal animation. Off by default (the grid's quick fade); picking a theme presets it. |
+| Animation Lab          | Opens the per-surface lab (the same as `?animlab=1`): every style side by side, with replay, stagger and speed. Closes settings first. |
 
 ### Models
 
@@ -142,11 +152,15 @@ instead of its native cloud backend. See [Custom Model Endpoints](Custom-Model-E
 | Default Codex reasoning effort   | Reasoning level for new local Codex sessions; empty uses Codex's own config.                   |
 | Bypass approvals and sandbox     | Starts new Codex sessions with `--dangerously-bypass-approvals-and-sandbox`. Read [Agent CLIs](Agent-CLIs) before enabling. |
 | Animated status effects          | Cosmetic.                                                                                      |
-| MCP server sync                  | Copies the MCP servers each installed, enabled CLI (Claude, Codex, Gemini, OpenCode, Antigravity) has into the others' own config files. Synced, off by default, admin only in multi-user mode. Turn it on and save, then **Preview** shows what would change and **Sync now** applies it. It only adds missing servers, keeps the previous file as `.codeman-bak`, and leaves a file that receives env values or headers readable by you only. A config dir moved by `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME` or `GEMINI_CLI_HOME` in Codeman's own environment is followed. |
+| MCP server sync                  | Copies the MCP servers each installed, enabled CLI (Claude, Codex, Gemini, OpenCode, Antigravity) and GitHub Copilot CLI has into the others' own config files. Synced, off by default, admin only in multi-user mode. Turn it on and **Apply** or **Save** (Apply keeps Settings open), then **Preview** shows what would change and **Sync now** applies it. It only adds missing servers, keeps the previous file as `.codeman-bak`, and leaves a file that receives env values or headers readable by you only. A config dir moved by `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XDG_CONFIG_HOME`, `GEMINI_CLI_HOME` or `COPILOT_HOME` in Codeman's own environment is followed. |
 
 ### Notifications
 
-Master toggle, browser notifications, push subscription, audio alerts, the idle
+Master toggle, browser notifications, push subscription, audio alerts, how long a
+corner toast stays on screen (**Toast display time**, 1 to 300 seconds, default 3) and
+how long a desktop notification stays up before Codeman closes it (**Browser
+notification display time**, default 8; both per device, and your OS may close a
+desktop notification sooner), the idle
 threshold that decides when a quiet session counts as needing you, and the server-wide
 webhook (ntfy, Slack, Discord or generic JSON; admins only in multi-user mode). See
 [Notifications And Approvals](Notifications-And-Approvals).

@@ -12,7 +12,8 @@
  *     does not understand) is never rewritten and nothing is ever removed. Same name with a
  *     different definition is reported as a conflict and left alone.
  *   - A server the user has switched off in its own CLI (codex `enabled = false`, opencode
- *     `enabled: false`, antigravity `disabled: true`) is not propagated: copying it would
+ *     `enabled: false`, antigravity `disabled: true`, Copilot's `disabledMcpServers` in its
+ *     `settings.json`) is not propagated: copying it would
  *     switch it on in every other CLI.
  *   - A file that does not parse (e.g. opencode JSONC with comments, a TOML file with a
  *     duplicate table) is never written, and a write is only made after the NEW text has been
@@ -284,6 +285,29 @@ function toOpencode(s: McpServer): Record<string, unknown> {
   return { type: 'remote', url: s.url, ...(s.headers ? { headers: s.headers } : {}), enabled: true };
 }
 
+/**
+ * GitHub Copilot CLI (`copilot mcp add`): `~/.copilot/mcp-config.json`, `mcpServers`. A stdio server is
+ * `type: "local"`; every entry carries `tools` (`["*"]` = all). Whether a server is switched off is NOT in
+ * this file: `copilot mcp disable` records the name in `settings.json` beside it (`disabledMcpServers`).
+ */
+function fromCopilot(raw: unknown): McpServer | null {
+  if (!isRecord(raw)) return null;
+  if ((raw.type === 'http' || raw.type === 'sse') && typeof raw.url === 'string') {
+    return clean({ transport: raw.type, url: raw.url, headers: strMap(raw.headers) });
+  }
+  if ((raw.type === undefined || raw.type === 'local' || raw.type === 'stdio') && typeof raw.command === 'string') {
+    return clean({ transport: 'stdio', command: raw.command, args: strArr(raw.args), env: strMap(raw.env) });
+  }
+  return null;
+}
+
+function toCopilot(s: McpServer): Record<string, unknown> {
+  if (s.transport === 'stdio') {
+    return { tools: ['*'], type: 'local', command: s.command, args: s.args ?? [], ...(s.env ? { env: s.env } : {}) };
+  }
+  return { tools: ['*'], type: s.transport, url: s.url, ...(s.headers ? { headers: s.headers } : {}) };
+}
+
 interface JsonDialect {
   /** Key holding the server table. */
   key: string;
@@ -291,12 +315,23 @@ interface JsonDialect {
   to(s: McpServer): Record<string, unknown> | null;
   /** Top-level keys to seed when creating the file from nothing. */
   seed?: Record<string, unknown>;
+  /**
+   * A file beside the config that lists the names of servers the user switched off (the switch is
+   * not stored on the server entry). Read, never written.
+   */
+  disabledIn?: { file: string; key: string };
 }
 
 const JSON_DIALECTS: Record<Exclude<McpFormat, 'codex-toml'>, JsonDialect> = {
   'claude-json': { key: 'mcpServers', from: fromClaude, to: toClaude },
   'gemini-json': { key: 'mcpServers', from: fromGemini, to: toGemini },
   'antigravity-json': { key: 'mcpServers', from: fromAntigravity, to: toAntigravity },
+  'copilot-json': {
+    key: 'mcpServers',
+    from: fromCopilot,
+    to: toCopilot,
+    disabledIn: { file: 'settings.json', key: 'disabledMcpServers' },
+  },
   'opencode-json': {
     key: 'mcp',
     from: fromOpencode,
@@ -558,6 +593,32 @@ function resolveFile(
   return { file: join(dir, rel.path) };
 }
 
+/**
+ * Mark the servers a CLI keeps switched off in a companion file (`JsonDialect.disabledIn`) as
+ * disabled, so they are not copied. If that file cannot be read as intended the target is
+ * reported unreadable rather than guessing: a guess could switch a server on everywhere.
+ */
+async function applyCompanionDisabled(format: McpFormat, file: string, servers: McpServerMap): Promise<void> {
+  if (format === 'codex-toml') return;
+  const companion = JSON_DIALECTS[format].disabledIn;
+  if (!companion) return;
+  const text = await readText(join(dirname(file), companion.file));
+  if (text === null || !text.trim()) return;
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    throw new McpConfigError(
+      `${companion.file} next to the config is not valid JSON, so which servers are switched off is unknown`
+    );
+  }
+  const list = isRecord(doc) ? doc[companion.key] : undefined;
+  if (list === undefined) return;
+  const names = strArr(list);
+  if (!names) throw new McpConfigError(`"${companion.key}" in ${companion.file} is not a list of names`);
+  for (const n of names) if (n in servers) servers[n] = { ...servers[n], disabled: true };
+}
+
 let applying = false;
 
 /**
@@ -611,6 +672,7 @@ async function run(targets: McpSyncTarget[], opts: McpSyncOptions, unsupported: 
         continue;
       }
       const parsed = parseConfig(s.t.format, await readText(s.file));
+      await applyCompanionDisabled(s.t.format, s.file, parsed.servers);
       s.servers = parsed.servers;
       s.names = parsed.names;
       s.res.servers = [...parsed.names];

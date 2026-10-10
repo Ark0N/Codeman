@@ -13,7 +13,7 @@ import { WebServer } from '../src/web/server.js';
 type Hint = { owner?: string; username?: string; adminOnly?: boolean; sessionScoped?: boolean } | undefined;
 
 function hintFor(event: string, payload: Record<string, unknown>, owners: Record<string, string> = {}): Hint {
-  const server = new WebServer(3999, false, true) as unknown as {
+  const server = new WebServer(0, false, true) as unknown as {
     sessions: Map<string, { owner?: string }>;
     deriveSseHint(event: string, data: unknown): Hint;
   };

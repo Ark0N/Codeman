@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { safeRmHomeTree } from './mocks/index.js';
 
-const TEST_PORT = 3110;
 const CASES_DIR = join(homedir(), 'codeman-cases');
 
 describe('Edge Cases and Error Handling', () => {
@@ -13,9 +12,9 @@ describe('Edge Cases and Error Handling', () => {
   const createdCases: string[] = [];
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterEach(() => {
@@ -263,9 +262,9 @@ describe('Concurrent Session Handling', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT + 1, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT + 1}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -360,9 +359,9 @@ describe('API Request Validation', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    server = new WebServer(TEST_PORT + 2, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
-    baseUrl = `http://localhost:${TEST_PORT + 2}`;
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {

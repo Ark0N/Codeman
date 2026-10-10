@@ -3552,7 +3552,7 @@ html:is([data-skin="paper-gray"], [data-skin="solarized-light"], [data-skin="cat
   }
 
   /* Save + Close are the two ways out of the sheet (save-and-close vs
-     discard-and-close), hit in the same corner with the same thumb, so here —
+     discard-and-close; Apply saves but keeps the sheet open), hit in the same corner with the same thumb, so here —
      and only here, since Save is header-only below 860px — they share a
      recessed tray and matching pill geometry instead of reading as a fat
      accent pill parked beside a stray × glyph. Tray colors come from skin

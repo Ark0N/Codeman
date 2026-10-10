@@ -4,7 +4,7 @@
  * The NotificationManager class implements five notification layers:
  *   1. In-app notification drawer (slide-out panel with grouped notifications)
  *   2. Tab title flash (alternating "⚠️ (N) codeman:<host>" / "codeman:<host>" when tab is hidden; uses this.originalTitle so it tracks any per-host title)
- *   3. Browser Notification API (desktop push with auto-close after 8s)
+ *   3. Browser Notification API (desktop push; auto-closes after 8s by default, configurable per device in Settings → Notifications)
  *   4. Web Push via service worker (OS-level notifications when tab is closed)
  *   5. Audio alerts (Web Audio API beep, user-opt-in)
  *
@@ -93,6 +93,10 @@ class NotificationManager {
       browserNotifications: !isMobile,
       audioAlerts: false,
       stuckThresholdMs: STUCK_THRESHOLD_DEFAULT_MS,
+      // How long a corner toast stays on screen, and how long a browser notification
+      // stays up before Codeman closes it (ms; per-device like the rest of these)
+      toastDurationMs: DEFAULT_TOAST_DURATION_MS,
+      browserAutoCloseMs: AUTO_CLOSE_NOTIFICATION_MS,
       // Legacy urgency muting (keep for backwards compat)
       muteCritical: false,
       muteWarning: false,
@@ -167,9 +171,22 @@ class NotificationManager {
     return {
       ...defaults,
       ...prefs,
+      toastDurationMs: this.clampDuration(prefs.toastDurationMs, defaults.toastDurationMs),
+      browserAutoCloseMs: this.clampDuration(prefs.browserAutoCloseMs, defaults.browserAutoCloseMs),
       eventTypes: { ...defaults.eventTypes, ...prefs.eventTypes },
       _version: 5,
     };
+  }
+
+  /** A display time in ms kept within [1s, 5min]; anything unusable falls back to the default. */
+  clampDuration(value, fallback) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+    return Math.min(MAX_NOTIFICATION_DURATION_MS, Math.max(MIN_NOTIFICATION_DURATION_MS, Math.round(value)));
+  }
+
+  /** Display time for corner toasts that do not set their own `duration`. */
+  getToastDurationMs() {
+    return this.clampDuration(this.preferences?.toastDurationMs, DEFAULT_TOAST_DURATION_MS);
   }
 
   loadPreferences() {
@@ -403,7 +420,7 @@ class NotificationManager {
     };
 
     // Auto-close
-    setTimeout(() => notif.close(), AUTO_CLOSE_NOTIFICATION_MS);
+    setTimeout(() => notif.close(), this.clampDuration(this.preferences.browserAutoCloseMs, AUTO_CLOSE_NOTIFICATION_MS));
   }
 
   async requestPermission() {

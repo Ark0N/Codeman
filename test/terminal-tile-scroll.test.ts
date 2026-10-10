@@ -18,6 +18,13 @@
  * history, so the tile discounts them (`_localRows`); the overflow cases below
  * fail without that discount.
  *
+ * Claude's fullscreen renderer is the other half: it scrolls its own
+ * transcript on SGR wheel reports, which the primary pane sends it, while a
+ * tile's xterm holds only replayed repaint frames. A tile left that wheel to
+ * xterm too, so in a grid of fullscreen Claude sessions the wheel dragged
+ * stale frames around or did nothing; it now forwards the reports to its own
+ * session, from its own geometry (`_maybeForwardWheelToCli`).
+ *
  * Real code under test: constants.js + app.js + terminal-ui.js +
  * terminal-tile.js in one `vm` context, as in terminal-tile-input.test.ts.
  * xterm, the fit addon and WebSocket are fakes (test/mocks/terminal-tile-fakes.ts),
@@ -276,7 +283,8 @@ describe('a tile pages a hollow buffer through the primary pane gates', () => {
       expect(ev.stopPropagation).not.toHaveBeenCalled();
     };
 
-    fireAndCheck(wheelLines(-12, { shiftKey: true })); // the explicit "local scrollback" gesture
+    // The explicit "local scrollback" gesture: scrolled locally, never paged.
+    mount.fire('wheel', wheelLines(-12, { shiftKey: true }));
 
     term.modes.mouseTrackingMode = 'any'; // xterm's own encoder forwards the wheel
     fireAndCheck(wheelLines(-12));
@@ -296,18 +304,207 @@ describe('a tile pages a hollow buffer through the primary pane gates', () => {
   });
 });
 
-describe("the forwarding gate behaves as in the primary pane, for the tile's session", () => {
-  it('leaves a fullscreen Claude tile to xterm (tiles do not forward SGR wheel yet)', async () => {
-    const app = makeApp({ 's-tile': { mode: 'claude', cliVersion: '2.1.223', cliMouseTracking: true } });
-    const { ws, mount } = await connectTile(app, { mode: 'claude' });
+describe('a fullscreen Claude tile forwards the wheel to the CLI as SGR reports', () => {
+  const FULLSCREEN: Session = { mode: 'claude', cliVersion: '2.1.295', cliMouseTracking: true };
+  // 10 + 8 * 20 + 1, 20 + 16 * 5 + 1 inside the tile's own screen: column 21, row 6.
+  const AT = { clientX: 171, clientY: 101 };
+  const UP = '\x1b[<64;21;6M';
+  const DOWN = '\x1b[<65;21;6M';
 
-    const ev = wheelLines(-12);
-    mount.fire('wheel', ev);
+  it("sends ephemeral reports on the tile's socket, from the tile's own geometry, and keeps xterm out", async () => {
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
 
-    expect(ev.preventDefault).not.toHaveBeenCalled();
+    const up = wheelLines(-3, AT);
+    mount.fire('wheel', up);
+
+    expect(up.preventDefault).toHaveBeenCalled();
+    expect(up.stopPropagation).toHaveBeenCalled();
+    expect(ws.inputFrames()).toEqual([]); // coalesced, not sent per event
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP.repeat(3) }]); // no seq: never persisted
+
+    mount.fire('wheel', wheelLines(2, AT));
+    expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: DOWN.repeat(2) });
+  });
+
+  it('forwards a Chrome-on-Windows notch (100 px) as four ticks and caps a fling at five', async () => {
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
+
+    mount.fire('wheel', wheel(-100, AT));
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP.repeat(4) }]);
+
+    mount.fire('wheel', wheelLines(-1000, AT));
+    expect(flushed(ws).at(-1)).toEqual({ t: 'i', d: UP.repeat(5) });
+  });
+
+  it('moves a precision touchpad delta one line, and consumes a pure horizontal swipe without sending', async () => {
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
+
+    mount.fire('wheel', wheel(-3, AT)); // 0.12 of a line
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]);
+
+    const sideways = wheel(0, { ...AT, deltaX: 120 });
+    mount.fire('wheel', sideways);
+    expect(sideways.preventDefault).toHaveBeenCalled(); // never xterm's stale frames
+    expect(flushed(ws)).toHaveLength(1);
+  });
+
+  it('coalesces the reports of wheels within 40 ms into one frame', async () => {
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
+
+    mount.fire('wheel', wheelLines(-2, AT));
+    vi.advanceTimersByTime(20);
+    mount.fire('wheel', wheelLines(-2, AT));
+
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP.repeat(4) }]);
+  });
+
+  it('snaps a scrolled-up viewport home before reporting, since SGR rows address the live screen', async () => {
+    const { ws, term, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
+    term.buffer.active.baseY = 10;
+    term.buffer.active.viewportY = 0;
+
+    mount.fire('wheel', wheelLines(-1, AT));
+
+    expect(term.scrolledToBottom).toBe(1);
+    expect(term.buffer.active.viewportY).toBe(10);
+    expect(flushed(ws)).toEqual([{ t: 'i', d: UP }]);
+  });
+
+  it("follows the tile session's gate, never the active session's", async () => {
+    // Active session is a shell; the tile shows fullscreen Claude: the tile forwards.
+    const forwarded = await connectTile(makeApp({ other: { mode: 'shell' }, 's-tile': FULLSCREEN }, 'other'), {
+      mode: 'claude',
+    });
+    forwarded.mount.fire('wheel', wheelLines(-1, AT));
+    expect(flushed(forwarded.ws)).toEqual([{ t: 'i', d: UP }]);
+
+    // Active session is fullscreen Claude; the tile shows inline Claude (no
+    // tracking): no reports, the hollow buffer is paged instead.
+    const inline = await connectTile(
+      makeApp({ other: FULLSCREEN, 's-tile': { ...FULLSCREEN, cliMouseTracking: false } }, 'other'),
+      { mode: 'claude' }
+    );
+    inline.mount.fire('wheel', wheelLines(-12, AT));
+    expect(flushed(inline.ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
+  });
+
+  it('scrolls Shift locally, and leaves a tracking xterm and the alternate buffer to xterm', async () => {
+    const { ws, term, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
+    const fireAndCheck = (ev: ReturnType<typeof wheel>) => {
+      mount.fire('wheel', ev);
+      expect(ev.preventDefault).not.toHaveBeenCalled();
+      expect(ev.stopPropagation).not.toHaveBeenCalled();
+    };
+
+    const shifted = wheelLines(-3, { ...AT, shiftKey: true }); // the explicit "local scrollback" gesture
+    mount.fire('wheel', shifted);
+    expect(shifted.preventDefault).toHaveBeenCalled();
+    expect(term.scrolledLines).toEqual([-3]);
+
+    term.modes.mouseTrackingMode = 'any'; // xterm's own encoder forwards the wheel
+    fireAndCheck(wheelLines(-3, AT));
+    term.modes.mouseTrackingMode = 'none';
+
+    term.buffer.active.type = 'alternate'; // xterm's alt-scroll owns it
+    fireAndCheck(wheelLines(-3, AT));
+
     expect(flushed(ws)).toEqual([]);
   });
 
+  it('pages, never reports, a Claude older than 2.1.187', async () => {
+    const app = makeApp({ 's-tile': { ...FULLSCREEN, cliVersion: '2.1.100' } });
+    const { ws, mount } = await connectTile(app, { mode: 'claude' });
+
+    mount.fire('wheel', wheelLines(-12, AT));
+
+    expect(flushed(ws)).toEqual([{ t: 'i', d: PAGE_UP }]);
+  });
+
+  it('sends exactly the bytes the primary pane sends for the same wheel sequence', async () => {
+    const sequence = [-1, -3, 2, -100, 40, -0.2, 7].map((n) => wheelLines(n, AT));
+    const { ws, mount } = await connectTile(makeApp({ 's-tile': FULLSCREEN }), { mode: 'claude' });
+    const tileBytes: string[] = [];
+    for (const ev of sequence) {
+      mount.fire('wheel', ev);
+      tileBytes.push(
+        ...flushed(ws)
+          .splice(tileBytes.length)
+          .map((f) => f.d as string)
+      );
+    }
+
+    const primary = makeApp({ other: FULLSCREEN }, 'other') as App & {
+      terminal: unknown;
+      _sendSyntheticSgrWheel(x: number, y: number, lines: number): void;
+      _wheelScrollLines(ev: unknown): number;
+      _flushWheelSgrQueue(): void;
+    };
+    const sent: string[] = [];
+    primary._sendInputEphemeral = (_id: string, data: string) => sent.push(data);
+    primary.terminal = new FakeTerminal({});
+    for (const ev of sequence) {
+      primary._sendSyntheticSgrWheel(ev.clientX, ev.clientY, primary._wheelScrollLines(ev));
+      primary._flushWheelSgrQueue();
+    }
+
+    expect(tileBytes.join('')).not.toBe('');
+    expect(tileBytes).toEqual(sent);
+  });
+});
+
+describe("Shift+wheel scrolls the tile's local scrollback itself", () => {
+  // xterm's own scroller turns a Shift+vertical wheel into a horizontal one off
+  // macOS, and Chrome on Windows already delivers Shift+wheel as deltaX, so
+  // left to xterm the gesture moved nothing.
+  it.each(['claude', 'opencode', 'shell'])('scrolls a %s tile with real history, and sends nothing', async (mode) => {
+    const { ws, term, mount } = await connectTile(makeApp({ 's-tile': { mode } }), { mode });
+    term.write(lines(40));
+    const bottom = term.buffer.active.baseY;
+    expect(bottom).toBeGreaterThan(5);
+
+    const up = wheelLines(-3, { shiftKey: true });
+    mount.fire('wheel', up);
+
+    expect(up.preventDefault).toHaveBeenCalled();
+    expect(up.stopPropagation).toHaveBeenCalled();
+    expect(term.buffer.active.viewportY).toBe(bottom - 3);
+    mount.fire('wheel', wheelLines(3, { shiftKey: true }));
+    expect(term.buffer.active.viewportY).toBe(bottom);
+    expect(flushed(ws)).toEqual([]);
+  });
+
+  it("reads Chrome-on-Windows' horizontal Shift+wheel (deltaX) as vertical travel", async () => {
+    const { term, mount } = await connectTile(makeApp({ 's-tile': { mode: 'claude' } }), { mode: 'claude' });
+
+    mount.fire('wheel', wheel(0, { deltaX: -100, shiftKey: true }));
+
+    expect(term.scrolledLines).toEqual([-4]);
+  });
+
+  it('carries sub-line travel to the next event, so a trackpad still scrolls', async () => {
+    const { term, mount } = await connectTile(makeApp({ 's-tile': { mode: 'claude' } }), { mode: 'claude' });
+
+    mount.fire('wheel', wheel(-10, { shiftKey: true })); // 0.4 of a line
+    mount.fire('wheel', wheel(-10, { shiftKey: true }));
+    expect(term.scrolledLines).toEqual([]);
+    mount.fire('wheel', wheel(-10, { shiftKey: true }));
+
+    expect(term.scrolledLines).toEqual([-1]);
+  });
+
+  it('still pulls history on a Shift+wheel-up at the top of a shell tile', async () => {
+    const { mount } = await connectTile(makeApp({ 's-tile': { mode: 'shell' } }), { mode: 'shell' });
+    expect(fetchMock).toHaveBeenCalledTimes(1); // the initial load
+
+    mount.fire('wheel', wheelLines(-3, { shiftKey: true }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1][0])).toContain('full=1&tail=');
+  });
+});
+
+describe("the forwarding gate behaves as in the primary pane, for the tile's session", () => {
   it('pages that same tile under the "Wheel scrolls local history" opt-out (the footgun rescue)', async () => {
     const app = makeApp({ 's-tile': { mode: 'claude', cliVersion: '2.1.223', cliMouseTracking: true } });
     app.loadAppSettingsFromStorage = () => ({ terminalWheelLocalScrollback: true });

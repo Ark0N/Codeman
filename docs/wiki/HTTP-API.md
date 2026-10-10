@@ -92,6 +92,32 @@ Roughly 235 handlers across 26 route modules. By domain:
 
 Each route module documents its own endpoints in its file header.
 
+## Cron jobs
+
+Saved scheduled jobs are distinct from the legacy `/api/scheduled` loops. Their
+versioned endpoints are:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/v1/cron/jobs` | List jobs |
+| POST | `/api/v1/cron/jobs` | Create a job |
+| GET | `/api/v1/cron/jobs/:id` | Read a job |
+| PUT | `/api/v1/cron/jobs/:id` | Update a job (partial body) |
+| DELETE | `/api/v1/cron/jobs/:id` | Delete a job |
+| PUT | `/api/v1/cron/jobs/:id/enabled` | Enable/disable with `{ enabled: boolean }` |
+| POST | `/api/v1/cron/jobs/:id/run` | Run now, without changing the schedule |
+| GET | `/api/v1/cron/jobs/:id/runs` | Read a job's run history |
+| GET | `/api/v1/cron/runs` | Read all accessible run history |
+
+Responses use the envelope above: job lists/history have arrays in `data`, a
+single-job GET has the job itself, create/update/enable have `{ job }`, delete has
+`{}`, and Run Now has `{ run, activeAgents }`. Prompt delivery is asynchronous;
+`session_started` and `prompt_sent` describe launch/delivery, not task success.
+
+The [cron API reference](https://github.com/Ark0N/Codeman/blob/master/docs/api-reference.md#cron-jobs)
+lists all request and response fields, validation, and ownership restrictions.
+[Creating a job](Cron-Jobs) covers the UI and schedule semantics.
+
 ## Long-polling instead of polling
 
 Three calls block until something happens, so an agent driving Codeman from a shell can wait

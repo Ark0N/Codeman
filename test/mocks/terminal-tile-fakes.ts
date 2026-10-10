@@ -199,6 +199,19 @@ export class FakeTerminal {
   }
   scrollToLine() {}
   scrollToTop() {}
+  /** Every scrollLines() amount; the viewport moves within [0, baseY], as in xterm. */
+  scrolledLines: number[] = [];
+  scrollLines(amount: number) {
+    this.scrolledLines.push(amount);
+    const active = this.buffer.active;
+    active.viewportY = Math.max(0, Math.min(active.baseY, active.viewportY + amount));
+  }
+  /** Times scrollToBottom() was called; the viewport moves to the live screen, as in xterm. */
+  scrolledToBottom = 0;
+  scrollToBottom() {
+    this.scrolledToBottom++;
+    this.buffer.active.viewportY = this.buffer.active.baseY;
+  }
   dispose() {}
   type(data: string) {
     this.dataCb?.(data);

@@ -537,7 +537,7 @@ While flushed text exists the prompt column is locked, so a full-screen redraw c
 
 ### Scroll awareness
 
-The overlay hides when the viewport is scrolled up (`viewportY !== baseY`) and re-renders, debounced, when you scroll back to the bottom.
+The overlay hides while the cursor row is scrolled out of the viewport and re-renders, debounced, when it scrolls back into view. A viewport parked a few rows above the bottom keeps painting as long as the cursor row is on screen. A buffer that reports no `cursorY` keeps the bottom-only rule.
 
 ---
 

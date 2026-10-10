@@ -68,6 +68,7 @@ import * as fs from 'fs';
 import * as fsPromises from 'node:fs/promises';
 import { createInterface } from 'readline';
 import { execSync } from 'child_process';
+import { execFile as nodeExecFile } from 'node:child_process';
 
 /**
  * Flush the microtask queue to allow async scanForSubagents() to complete.
@@ -1627,6 +1628,66 @@ describe('SubagentWatcher', () => {
       const result = await watcher.killSubagent('killactive');
       expect(result).toBe(true);
       expect(completedHandler).toHaveBeenCalled();
+    });
+
+    it("killSubagentsForSession scans the process table ONCE for all of a session's agents", async () => {
+      // Closing a session ran a full `pgrep -f claude` + /proc read per recently
+      // active subagent (~85ms each on a busy box); one scan now serves them all.
+      // One readline per transcript: discovery reads each agent's file in turn.
+      const rls: ReturnType<typeof createMockRl>[] = [];
+      mockCreateInterface.mockImplementation(() => {
+        const rl = createMockRl();
+        rls.push(rl);
+        return rl;
+      });
+      mockCreateReadStream.mockReturnValue({ destroy: vi.fn() });
+      mockExistsSync.mockReturnValue(true);
+      mockReaddirSync.mockImplementation((path: string) => {
+        if (path.includes('subagents')) return ['agent-k1.jsonl', 'agent-k2.jsonl', 'agent-k3.jsonl'];
+        if (path.includes('session1')) return ['subagents'];
+        if (path.includes('-home-user-project')) return ['session1'];
+        return ['-home-user-project'];
+      });
+      mockStatSync.mockReturnValue({ isDirectory: () => true, birthtime: new Date(), mtime: new Date(), size: 100 });
+      mockReadFileSync.mockReturnValue(createUserEntry('Test subagent task'));
+
+      watcher.start();
+      for (let i = 0; i < 3; i++) {
+        await flushAsyncScan();
+        rls.forEach((rl) => rl.emit('close'));
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      const agents = watcher.getSubagentsForSession('/home/user/project');
+      expect(agents.map((a) => a.agentId).sort()).toEqual(['k1', 'k2', 'k3']);
+
+      const execFileMock = vi.mocked(nodeExecFile) as unknown as Mock;
+      const originalExecFile = execFileMock.getMockImplementation();
+      let pgrepCalls = 0;
+      execFileMock.mockImplementation(
+        (cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null, stdout: string) => void) => {
+          if (cmd === 'pgrep') pgrepCalls++;
+          cb(null, '4242\n4343\n');
+        }
+      );
+      mockReadFile.mockImplementation(async (path: string) => {
+        if (path === '/proc/4242/environ') return 'HOME=/x\0PARENT=session1\0';
+        if (path.startsWith('/proc/')) return 'HOME=/x\0';
+        return mockReadFileSync(path);
+      });
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+      let killCalls: unknown[][] = [];
+      try {
+        await watcher.killSubagentsForSession('/home/user/project', 'session1');
+        killCalls = [...killSpy.mock.calls];
+      } finally {
+        killSpy.mockRestore();
+        execFileMock.mockImplementation(originalExecFile as never);
+      }
+
+      expect(pgrepCalls).toBe(1);
+      expect(agents.every((a) => a.status === 'completed')).toBe(true);
+      // Only the matching process, and only once.
+      expect(killCalls).toEqual([[4242, 'SIGTERM']]);
     });
   });
 

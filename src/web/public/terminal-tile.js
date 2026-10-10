@@ -11,14 +11,20 @@
  *
  * Deliberately plainer than the primary pane (this.terminal/this._ws in
  * terminal-ui.js): no local-echo overlay, no CJK IME textarea, no touch/mobile
- * handlers (a swipe on a touch screen pages nothing), no keyboard accessory
- * bar, and no SGR wheel forwarding to Claude's fullscreen renderer
- * (docs/tile-grid-plan.md follow-up 4). Built for wide screens; see
- * docs/split-pane-sessions-plan.md and docs/tile-grid-plan.md.
+ * handlers (a swipe on a touch screen pages nothing), and no keyboard
+ * accessory bar. Built for wide screens; see docs/split-pane-sessions-plan.md
+ * and docs/tile-grid-plan.md.
  *
  * What it does carry over from the primary pane, through the primary pane's
  * own code aimed at THIS pane (its terminal, its session, never the active
  * one):
+ *  - SGR wheel forwarding (_maybeForwardWheelToCli): Claude's fullscreen
+ *    renderer scrolls its own transcript on SGR wheel reports, while this
+ *    xterm holds only replayed repaint frames, so the wheel goes to the CLI
+ *    as reports at the pointer's cell in this pane, through the primary
+ *    pane's forwarding gate and its encoding (sgrWheelReports). Shift+wheel
+ *    scrolls the local scrollback itself (_maybeScrollLocalOnShift), as the
+ *    primary pane does, since xterm turns it into a horizontal no-op.
  *  - Hollow-buffer paging (#555): a CLI that draws in place (opencode and codex
  *    on the alternate screen, Claude's repaint mode) leaves the xterm no
  *    scrollback, so the wheel pages the CLI's own transcript with
@@ -45,7 +51,7 @@
  *
  * @dependency vendor/xterm.js, vendor/xterm-addon-fit.js
  * @dependency constants.js (window.CodemanTerminalFont, window.CodemanFetchDeadline, DEFAULT_SCROLLBACK, TERMINAL_TAIL_SIZE, TERMINAL_CHUNK_SIZE)
- * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight, CodemanTerminalInput.shouldSuppressTerminalQueryResponse/isTerminalFocusOrMouseReport/wheelDeltaLines/pageKeysForGesture, app._shouldForwardWheelToApp/_localScrollbackIsHollow/_terminalViewportAtBottom/_handleDesktopTerminalClick, app.tabAlerts)
+ * @dependency terminal-ui.js (codemanCurrentXtermTheme, codemanCurrentSkinIsLight, CodemanTerminalInput.shouldSuppressTerminalQueryResponse/isTerminalFocusOrMouseReport/wheelDeltaLines/wheelDeltaWholeLines/sgrWheelReports/pageKeysForGesture, app._shouldForwardWheelToApp/_localScrollbackIsHollow/_terminalViewportAtBottom/_clientPointToCell/_handleDesktopTerminalClick, app.tabAlerts)
  * @dependency terminal-keycode229-recovery.js (window.CodemanKeyCode229Recovery, optional: absent, xterm's own textarea handling stands)
  * @loadorder 7.4 of 16, loaded after terminal-ui.js and before terminal-split.js
  */
@@ -204,6 +210,9 @@
       // (travel short of a whole page, its direction and last event time), the
       // state CodemanTerminalInput.pageKeysForGesture hands back.
       this._pageKeyGesture = null;
+      // Shift+wheel travel short of a whole line, carried to the next wheel
+      // event (_maybeScrollLocalOnShift).
+      this._shiftScrollPending = 0;
       // Page keys waiting for the 40 ms flush, and its timer (_queueScrollBytes).
       this._scrollBytes = '';
       this._scrollFlushTimer = null;
@@ -1030,16 +1039,18 @@
 
     // Capture phase, because xterm's own wheel handler stopPropagation()s every
     // event it consumes, so a bubbling listener here would never see the wheel
-    // while the pane still has scrollback to scroll. Not passive: the one route
-    // this pane takes over, paging a hollow buffer's CLI transcript
-    // (_maybePageCliTranscript), is consumed right here (preventDefault plus
+    // while the pane still has scrollback to scroll. Not passive: the three
+    // routes this pane takes over, forwarding the wheel to Claude's fullscreen
+    // renderer (_maybeForwardWheelToCli), paging a hollow buffer's CLI
+    // transcript (_maybePageCliTranscript) and Shift+wheel's local scrollback
+    // (_maybeScrollLocalOnShift), are consumed right here (preventDefault plus
     // stopPropagation in the capture phase, the primary pane's technique), so
-    // xterm's viewport, a descendant, never sees it. Every other wheel is left
+    // xterm's viewport, a descendant, never sees them. Every other wheel is left
     // to xterm, which keeps doing the scrolling, and only observed for the
     // shell history pull.
     _installWheelListener() {
       this._onWheel = (ev) => {
-        if (this._maybePageCliTranscript(ev)) {
+        if (this._maybeForwardWheelToCli(ev) || this._maybePageCliTranscript(ev) || this._maybeScrollLocalOnShift(ev)) {
           ev.preventDefault();
           ev.stopPropagation();
           return;
@@ -1047,6 +1058,71 @@
         if (ev.deltaY < 0) this._maybeLoadMoreHistory();
       };
       this.mountEl.addEventListener('wheel', this._onWheel, { capture: true, passive: false });
+    }
+
+    // SGR wheel forwarding, the twin of the primary pane's capture-phase wheel
+    // handler and _forwardScrollToApp (terminal-ui.js; keep them in step).
+    // Claude's fullscreen renderer (claude 2.1.187+ while its mouse tracking is
+    // on, cliMouseTracking) scrolls its own transcript on SGR wheel reports,
+    // while this xterm holds only Codeman's replayed repaint frames (tmux keeps
+    // no history for such a pane). Left to xterm, the wheel dragged those stale
+    // frames, Claude's pinned input box with them, up the tile, or scrolled
+    // nothing at all. The gate is the primary pane's own, asked for THIS pane
+    // (its terminal, its session, never the active one), so the CLI rules stay
+    // in terminal-ui.js and this file names no CLI; the reports go to this
+    // pane's session through its own coalescer. Returns true when the wheel
+    // belongs to the CLI: a gesture with no whole line or no measurable cell is
+    // consumed too, as in the primary pane, so xterm never scrolls the stale
+    // frames under a forwarding session. Shift fails the gate, so Shift+wheel
+    // still scrolls the local scrollback (_maybeScrollLocalOnShift).
+    _maybeForwardWheelToCli(ev) {
+      if (this._destroyed || !this.terminal || !ev) return false;
+      const app = global.app;
+      const input = global.CodemanTerminalInput;
+      if (!app?._shouldForwardWheelToApp || !input?.sgrWheelReports || !input.wheelDeltaWholeLines) return false;
+      // xterm's own encoder forwards the wheel while the CLI's tracking reaches
+      // it, and its alt-scroll owns the alternate buffer, as in the primary pane.
+      const tracking = this.terminal.modes?.mouseTrackingMode;
+      if (tracking && tracking !== 'none') return false;
+      if (this.terminal.buffer?.active?.type === 'alternate') return false;
+      if (!app._shouldForwardWheelToApp(ev, { terminal: this.terminal, sessionId: this.sessionId })) return false;
+      // SGR coordinates address the live screen, so a report from a scrolled-up
+      // viewport would hit-test another row: snap home first (_forwardScrollToApp).
+      if (!app._terminalViewportAtBottom?.(this.terminal)) this.terminal.scrollToBottom?.();
+      const lines = input.wheelDeltaWholeLines(ev, this.terminal.rows);
+      const pos = app._clientPointToCell?.(ev.clientX, ev.clientY, this.terminal);
+      const bytes = input.sgrWheelReports(lines, pos);
+      if (bytes) this._queueScrollBytes(bytes);
+      return true;
+    }
+
+    // Shift+wheel scrolls this xterm's local scrollback, the explicit "local
+    // history" gesture, here as in the primary pane (whose capture-phase wheel
+    // handler scrolls with terminal.scrollLines() for the same reason). Left to
+    // xterm it was dead off macOS: Chrome on Windows sends Shift+wheel as a
+    // HORIZONTAL wheel (deltaX), and xterm's own scroller turns a Shift+vertical
+    // wheel into a horizontal one, so the viewport never moved. Reads the
+    // dominant axis under Shift (wheelDeltaLines), keeps the sub-line remainder
+    // for the next event (a trackpad's small deltas), and on the way up still
+    // asks a shell pane for more history. Returns true when the wheel was
+    // consumed here.
+    _maybeScrollLocalOnShift(ev) {
+      if (this._destroyed || !this.terminal || !ev?.shiftKey) return false;
+      const input = global.CodemanTerminalInput;
+      if (!input?.wheelDeltaLines) return false;
+      // xterm's own encoder forwards the wheel while the CLI's tracking reaches
+      // it, and its alt-scroll owns the alternate buffer, as in the primary pane.
+      const tracking = this.terminal.modes?.mouseTrackingMode;
+      if (tracking && tracking !== 'none') return false;
+      if (this.terminal.buffer?.active?.type === 'alternate') return false;
+      const total = this._shiftScrollPending + input.wheelDeltaLines(ev, this.terminal.rows);
+      const lines = Math.trunc(total);
+      this._shiftScrollPending = total - lines;
+      if (lines) {
+        this.terminal.scrollLines(lines);
+        if (lines < 0) this._maybeLoadMoreHistory();
+      }
+      return true;
     }
 
     // A plain left-click reported to the CLI, the primary pane's desktop click
@@ -1093,9 +1169,9 @@
       const tracking = this.terminal.modes?.mouseTrackingMode;
       if (tracking && tracking !== 'none') return false;
       const target = { terminal: this.terminal, sessionId: this.sessionId };
-      // The primary pane would forward this wheel to Claude's fullscreen
-      // renderer as SGR reports. Tiles do not do that yet (docs/tile-grid-plan.md
-      // follow-up 4), so the wheel stays with xterm, as before.
+      // A wheel for Claude's fullscreen renderer was forwarded as SGR reports
+      // before this ran (_maybeForwardWheelToCli); the gate is repeated so a
+      // forwarding session is never paged.
       if (app._shouldForwardWheelToApp?.(ev, target)) return false;
       if (!app._localScrollbackIsHollow?.({ ...target, localRows: this._localRows() })) return false;
       // Only from the live screen. The one gate the primary pane never needs: a
@@ -1121,8 +1197,9 @@
       return true;
     }
 
-    // Coalesces the page keys into one send per 40 ms, bounded at 512 bytes so a
-    // fling cannot build a backlog that keeps paging after it stops. A narrow
+    // Coalesces the scroll bytes (SGR wheel reports and page keys alike) into
+    // one send per 40 ms, bounded at 512 bytes so a fling cannot build a backlog
+    // that keeps scrolling after it stops. A narrow
     // twin of the primary pane's _queueScrollBytes / _flushWheelSgrQueue
     // (terminal-ui.js; keep the two in step), which flushes to the active
     // session only. Sent ephemeral (no seq, never persisted) to THIS pane's
