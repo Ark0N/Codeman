@@ -716,6 +716,19 @@ html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header {
   text-align: left;
 }
 
+/* A tab just arrived inside this collapsed group: a short highlight on its header. */
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header.tab-layout-group-arrived {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  transition: background-color 0.6s ease-out, color 0.6s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-header.tab-layout-group-arrived {
+    transition: none;
+  }
+}
+
 html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group-toggle {
   cursor: pointer;
   user-select: none;
@@ -2925,6 +2938,14 @@ html[data-tab-orientation='vertical'].tab-rail-compact .session-tab .tab-actions
 
 .tab-rail-action-menu .danger {
   color: var(--red);
+}
+
+/* A child session's placement note: information, not an action (no focus, no hover). */
+.tab-rail-action-menu .tab-rail-action-menu-note {
+  padding: 0.45rem 0.6rem;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  cursor: default;
 }
 
 :is(#appSettingsModal, #sessionOptionsModal, #createCaseModal) .set-range-field {

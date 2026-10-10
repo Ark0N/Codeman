@@ -703,6 +703,9 @@ const URL_SESSION_WAIT_MS = 30000;
  */
 const TAB_LAYOUT_PENDING_MAX_AGE_MS = 60000;
 
+/** How long a collapsed group's header stays marked after a tab arrives in it. */
+const TAB_GROUP_ARRIVAL_MS = 2000;
+
 class CodemanApp {
   constructor() {
     this.sessions = new Map();
@@ -2300,10 +2303,13 @@ class CodemanApp {
     // A session this tab is closing stays closed until the server answers.
     if (this._closingSessions?.has(data.id)) return;
     this.sessions.set(data.id, data);
-    // Add new session to end of tab order
     if (!this.sessionOrder.includes(data.id)) {
-      this.sessionOrder.push(data.id);
-      this.saveSessionOrder();
+      // The server placed it when it recorded the creation (a child after its
+      // parent, a grouped creation in its group) and broadcast that order
+      // (session:orderChanged); adopt it, appending only while that broadcast is
+      // still on its way. Never echo it back through PUT /api/session-order:
+      // the server reads that as a hand arrangement of every tab.
+      this.syncSessionOrder();
     }
     // Idempotent per id: the POST response and the session:created event both
     // land here, and a batch launched together cascades in creation order.
@@ -6975,6 +6981,7 @@ class CodemanApp {
       this._applyTabTreeSemantics(container, { identity: focusIdentity, refocus: focusWasInside });
       this._syncTabGroupHeaderAlerts(container, groupProjection);
     }
+    this._noteTabGroupArrivals(container, groupProjection);
     this._syncTabTriageChrome(container, triage);
     this._syncTabArrangementClasses(container, { clusters: !!clusterLayout, groupProjection });
     const activeBandMoved = this._noteActiveTabBand(container) && this._isScrollingTabRow(container);
@@ -7246,6 +7253,38 @@ class CodemanApp {
       const alert = alerts[header.dataset.tabGroupHeader];
       header.classList.toggle('tab-alert-action', alert === 'action');
       header.classList.toggle('tab-alert-idle', alert === 'idle');
+    }
+  }
+
+  /**
+   * A tab that first appears inside a COLLAPSED group (a spawned child, a session
+   * another device placed there) would otherwise arrive silently, the header
+   * count being its only trace. Its group header is marked for a moment instead
+   * (`.tab-layout-group-arrived`). Only a ref absent from the previous grouped
+   * render counts, so collapsing a group, or the first paint, marks nothing.
+   */
+  _noteTabGroupArrivals(container, projection) {
+    const previous = this._renderedTabGroupRefs;
+    this._renderedTabGroupRefs = projection ? new Set(Object.keys(projection.sectionByRef || {})) : null;
+    if (!projection) return;
+    const now = Date.now();
+    const arrivals = (this._tabGroupArrivals ||= new Map());
+    if (previous) {
+      for (const [key, groupId] of Object.entries(projection.hiddenTabGroupByRef || {})) {
+        if (previous.has(key)) continue;
+        arrivals.set(groupId, now + TAB_GROUP_ARRIVAL_MS);
+        setTimeout(() => {
+          if ((arrivals.get(groupId) ?? 0) > Date.now()) return;
+          arrivals.delete(groupId);
+          for (const header of this.$('sessionTabs')?.querySelectorAll('[data-tab-group-header]') || []) {
+            if (header.dataset.tabGroupHeader === groupId) header.classList.remove('tab-layout-group-arrived');
+          }
+        }, TAB_GROUP_ARRIVAL_MS);
+      }
+    }
+    for (const header of container.querySelectorAll('[data-tab-group-header]')) {
+      const until = arrivals.get(header.dataset.tabGroupHeader) ?? 0;
+      header.classList.toggle('tab-layout-group-arrived', until > now);
     }
   }
 
@@ -7571,6 +7610,8 @@ class CodemanApp {
       collapsedGroupIds: this._tabRailSearchActive() ? [] : [...this.collapsedTabGroupIds],
       activeSessionId: this.activeSessionId,
       activeWebviewId: this.activeWebviewId,
+      // A session spawned by another one shows up in its parent's group at once.
+      parents: this._tabLayoutParents(),
     });
   }
 
@@ -7771,8 +7812,8 @@ class CodemanApp {
     if (!this._tabLayoutEditable()) return [];
     const location = this._tabRefLocation(ref);
     if (!location) return [];
-    const actions = [];
     const grouped = this.tabLayout.groups.length > 0;
+    const actions = grouped ? this._tabRefPlacementActions(ref) : [];
     // Up/down follow the STORED order, which is what the rail paints unless a
     // sort is on (then the sort decides and there is nothing to reorder).
     if (grouped && !this.isTabRailSorted()) {
@@ -7795,6 +7836,55 @@ class CodemanApp {
     // At the server's group cap a new group can only fail, so it is not offered.
     if (this._canCreateTabGroup()) actions.push({ label: 'Move to new group', run: () => this.createTabGroup({ ref }) });
     return actions;
+  }
+
+  /**
+   * A child session's placement, for its row menu: an informational note (where
+   * it sits and why: plain text, never focusable) and, for a child placed by hand, "Follow
+   * parent again". A child follows its parent into the parent's group until it
+   * is moved by hand; a child whose parent is gone stands on its own and is
+   * never re-adopted automatically.
+   */
+  _tabRefPlacementActions(ref) {
+    // Following is the synced "Spawned tabs follow their parent" setting (off by
+    // default): off, every spawned tab is hand-placed, so there is nothing to say.
+    if (this.loadAppSettingsFromStorage?.()?.spawnedTabsFollowParent !== true) return [];
+    const parents = this._tabLayoutParents();
+    const placement = window.CodemanTabLayout.placementState(this.tabLayout, ref, parents);
+    if (!placement) return [];
+    const parent = this.sessions.get(placement.parentId);
+    const parentName = parent ? this.getSessionName(parent) : placement.parentId;
+    const summary = {
+      inherited: `Follows ${parentName}`,
+      manual: `Placed by hand (parent: ${parentName})`,
+      dangling: 'Parent closed; placed on its own',
+      cycle: 'Parent loop; placed on its own',
+    }[placement.state];
+    const actions = [{ label: summary, note: true }];
+    if (placement.canFollow) {
+      actions.push({
+        label: 'Follow parent again',
+        run: () => this.editTabLayout({ type: 'followParent', ref, parents: this._tabLayoutParents() }, `${ref.kind}:${ref.id}`),
+      });
+    }
+    return actions;
+  }
+
+  /**
+   * The group menu's "New session": launch ONE session with the current case and
+   * run mode, placed at the end of this group by the server in the same write
+   * that records it (the group id rides the create request). A collapsed group
+   * expands first so the new tab is visible when it arrives.
+   */
+  async createSessionInTabGroup(groupId) {
+    if (!this._tabLayoutEditable() || !this.tabLayout.groups.some((group) => group.id === groupId)) return false;
+    if (this._runInFlight) {
+      this.showToast?.('A session is already starting.', 'info');
+      return false;
+    }
+    this.toggleTabGroupCollapsed(groupId, false);
+    await this.run({ count: 1, tabGroupId: groupId });
+    return true;
   }
 
   // ─── Group and web-tab menus (right-click, the header's ⋯, Shift+F10) ──
@@ -7837,6 +7927,7 @@ class CodemanApp {
     const index = groups.findIndex((group) => group.id === groupId);
     if (index < 0) return false;
     return this._openTabLayoutMenu(event, `group:${groupId}`, 'Group actions', [
+      { label: 'New session', run: () => this.createSessionInTabGroup(groupId) },
       ...(this.canOpenTileGrid?.() ? [{ label: 'Open group as tiles', run: () => this.openGroupAsTiles(groupId) }] : []),
       { label: 'Rename group', run: () => this.startTabGroupRename(groupId) },
       ...(this._canCreateTabGroup() ? [{ label: 'New group', run: () => this.createTabGroup({ index: index + 1 }) }] : []),
@@ -9793,8 +9884,8 @@ class CodemanApp {
     // Remove from tab order
     const orderIndex = this.sessionOrder.indexOf(sessionId);
     if (orderIndex !== -1) {
+      // Not saved: the server's deletion already re-projected and broadcast the order.
       this.sessionOrder.splice(orderIndex, 1);
-      this.saveSessionOrder();
     }
     this.terminalBuffers.delete(sessionId);
     this.terminalBufferCache.delete(sessionId);

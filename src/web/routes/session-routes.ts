@@ -1269,7 +1269,9 @@ export function registerSessionRoutes(
       parentSessionId: resolveParentSessionId(ctx, req, body.parentSessionId, owner),
     });
 
-    await ctx.addSession(session);
+    const tabLayout = body.tabGroupId
+      ? await ctx.addSession(session, { tabGroupId: body.tabGroupId })
+      : await ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -1286,7 +1288,9 @@ export function registerSessionRoutes(
     // Avoids serializing 2-3MB of terminal+text buffers per session creation.
     const lightState = ctx.getSessionStateWithRespawn(session);
     ctx.broadcast(SseEvent.SessionCreated, lightState);
-    return { session: lightState };
+    // A grouped creation also returns the layout that placed it, so the browser
+    // draws the tab inside its group at once instead of after a re-read.
+    return { session: lightState, ...(body.tabGroupId ? { tabLayout } : {}) };
   });
 
   // ========== Rename Session ==========
@@ -3531,6 +3535,7 @@ export function registerSessionRoutes(
       parentSessionId,
       agentOrigin,
       customModel,
+      tabGroupId,
     } = parseBody(QuickStartSchema, req.body);
 
     // Resolved ONCE here: the same value labels a case directory this request creates
@@ -4183,7 +4188,7 @@ export function registerSessionRoutes(
       }
     }
 
-    await ctx.addSession(session);
+    const tabLayout = tabGroupId ? await ctx.addSession(session, { tabGroupId }) : await ctx.addSession(session);
     ctx.store.incrementSessionsCreated();
     ctx.persistSessionState(session);
     await ctx.setupSessionListeners(session);
@@ -4268,6 +4273,7 @@ export function registerSessionRoutes(
         casePath: resolvedCasePath,
         caseName,
         ...(customModel ? { modelSwapInProgress: qsCustomModelSwapInProgress } : {}),
+        ...(tabGroupId ? { tabLayout } : {}),
       };
     } catch (err) {
       // Clean up session on error to prevent orphaned resources
