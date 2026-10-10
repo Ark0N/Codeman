@@ -45,20 +45,28 @@ or settled a question the spec left open. The invariants as built are in
   `Right-click`) and `Arrows` translated. Every string has its own entry or pattern; refreshes
   compare with the last English value, not the translated DOM.
 - **The Tiles button opens the grid at once** (owner decision 8, with the count of
-  decision 10): a click (and `Ctrl+Shift+G`, the same `toggleTileGrid`) opens the remembered
-  count of tiles (default 6, at most what the window fits). `tileGridOpenSet`
-  (constants.js) picks the grid this tab last had, else an open split's two sessions, else
-  the open sessions in tab order, the active one always included and focused, and
-  `tileGridSetForCount` trims it (from the end, the session to focus kept) or fills it
-  (from tab order) to the count. A remembered grid comes back with its tiles first, in
-  their cells, then sessions in tab order, to the count in total: the count is a shape
-  change under the cell model's rule (`reformTileCells`: the tiles keep their row and
-  column when all fit, else they pack in reading order) and the added tiles fill the empty
-  cells first. This supersedes decision 8's "exactly the stored set" (owner answer). A
-  remembered grid still wins over an open split: the split closes and its sessions are not
-  seeded first. A page-load restore brings back exactly the stored grid, whatever the
-  count. Ctrl/Cmd+click on a tab with the grid closed opens the count in total, that
-  session among them and focused (owner answer: N, not N+1).
+  decision 10 and the layout memory of decision 11): a click (and `Ctrl+Shift+G`, the same
+  `toggleTileGrid`) brings back the grid this browser last had EXACTLY as the user left
+  it: which session sits in which cell, holes included, its tile count, divider sizes,
+  focus and a zoom the user chose (`restoreTileGridCells`, constants.js). It is never
+  filled to the remembered count and never trimmed to the window (a window too small
+  for it shows the focused tile alone until it fits, the arrangement kept). A session
+  that no longer exists frees its cell, which the ranking fills. Only with nothing
+  stored, or none of its sessions left, does `tileGridOpenSet` (constants.js) take an
+  open split's two sessions, else the open sessions as `rankTileSessions` orders them
+  (owner request: "prefer to load in tiles that are working and then the most recent,
+  so the oldest don't get opened"): WORKING first (the most recently started turn
+  first, keyed off `lastSubmitAt` only), then the ones NEEDING INPUT (the red and yellow
+  tab alerts), then the rest by most recent activity, tab order breaking ties; the
+  active one always included and focused, and `tileGridSetForCount` trims it (from the
+  end, the session to focus kept) or fills it (from the ranking) to the remembered count
+  (default 6, at most what the window fits). The states and stamps are the home
+  screens' own (`_mobileOverviewState`, `sessionActivityAnchor`). A remembered grid still
+  wins over an open split: the split closes and its sessions are not seeded first. A
+  page-load restore brings back the same grid as the toggle. Ctrl/Cmd+click on a tab
+  with the grid closed opens what the toggle would with that session among the tiles and
+  focused, never past the count (owner answer: N, not N+1): it joins the first empty cell
+  while the grid holds fewer than the count, else it takes the last tile's place.
 - **A hover card on the Tiles button says it** (owner feedback: "give me the hover info
   to right click over the tile button to adjust it"). It replaces the button's native title:
   "Tiles · N" (the remembered count, live), what a click does (open or close the grid),
@@ -80,9 +88,10 @@ or settled a question the spec left open. The invariants as built are in
   back on the Tiles button, Tab, a click elsewhere and the keyboard leaving it for another
   element close it (the single view a close starts focuses its terminal when its replay
   lands; a menu left open behind that would send its keys there). A pick is remembered per
-  device in `codeman:tile-count` (`codeman:tile-grid` stays ids only) and opens that many
-  tiles; with the grid open it re-forms it (`_reformTileGrid`): the focused tile always
-  stays, the others leave from the end or join from tab order, filling empty cells first,
+  device in `codeman:tile-count` and opens that many tiles (a stored grid re-formed to
+  it, its tiles first in their cells); with the grid open it re-forms it
+  (`_reformTileGrid`): the focused tile always stays, the others leave from the end or
+  join from the ranking, filling empty cells first,
   every joining tile mounted and laid out before any connects (one fit, one PTY resize
   each), and a zoom the user chose ends. The other ways in (Ctrl/Cmd+click, a dragged tab,
   "Open group as tiles", Run) still add up to the cap of 6.
@@ -392,16 +401,34 @@ the harness/model request; see "As built")
 
 ### Persistence
 
-Decided: per device, restored on reload. Stored in localStorage key
-`codeman:tile-grid`:
+Decided: per device (per browser), restored on reload, and by the Tiles toggle
+(decision 11). Stored in localStorage key `codeman:tile-grid`, never on the
+server:
 
 ```json
-{ "v": 1, "open": true, "ids": ["…", "…"], "focused": "…", "zoomed": null,
-  "colFr": [1, 1, 1], "rowFr": [1, 1] }
+{ "v": 1, "open": true, "ids": ["…", null, "…"], "count": 3, "focused": "…",
+  "zoomed": null, "colFr": [1, 1, 1], "rowFr": [1, 1] }
 ```
 
-Ids only, never content. A pure sanitizer drops unknown, deleted, detached and
-duplicate ids on load. Never restored in a solo window.
+Session ids and the layout, never content. `ids` are the CELLS in reading order,
+`null` for an empty one. `count` is how many tiles the user's own last change
+left (open, add, remove by hand, a count picked): a session that goes away by
+itself (deleted, popped out, its socket refused) does not lower it, so the next
+time the grid opens the ranking fills that place, while a hole the user made
+stays. It is written on every change (a move, a divider drag at pointer-up, a
+tile added or removed, a count picked, a focus, a zoom) and kept, as
+`open: false`, however the grid closes: the toggle, a non-tiled tab,
+`leaveTiles` or a `#session=` link (which flips `open` only, so a gone id still
+frees its cell), Home, the width gate, the last tile, "Open group as tiles",
+closing or killing sessions. Nothing is written while a stored grid is being
+put back, so a half-built grid never overwrites it.
+
+A pure sanitizer drops unknown, deleted, detached and duplicate ids on load,
+reports the cells their sessions freed (`freed`), and derives `count` for a
+value written before it existed (the number of sessions the cells name); the
+old packed `ids` (no nulls) read as cells with no hole, and anything that is not
+a v1 object is ignored. The format stays `v: 1`, so an older build still reads
+a newer value (it ignores `count`). Never read or written in a solo window.
 
 The restore runs INSIDE `handleInit`, in place of its initial
 `selectSession(restoreId, { auto: true })` (the non-`keepTerminal` branch), not
@@ -818,7 +845,8 @@ Separate follow-up PRs worth doing (see "Follow-ups").
   open, and an open menu owns the Escape (it closes alone and the keyboard goes
   back to the Tiles button, like the tab-group menu).
 - **User text** (names) via `textContent` / attributes, never `innerHTML`.
-- **No secrets in localStorage**: the stored grid holds ids only.
+- **No secrets in localStorage**: the stored grid holds session ids and its
+  layout only, never content.
 - **Memory**: everything a tile creates is released in `destroy()`.
 
 ## Delivery: two PRs
@@ -1060,7 +1088,8 @@ exits green. Use the browser runner for those files and read the file count.
    is on right-click of the button (its title says so, as do the wiki and the
    Help modal). Superseded in part by decision 10: right-click is now the count
    menu, and a remembered grid is filled to the count instead of opening
-   exactly as stored.
+   exactly as stored; decision 11 then restored "exactly as stored" and put a
+   ranking in place of the tab order.
 9. **No + in the tile header.** Decided by the owner ("remove the + button from
    these views"): the header is `● name ……… ⋯ ⤢ ×`. The + menu and its "New
    session in this case" went with it. Tiles are added from the Tiles button
@@ -1073,12 +1102,30 @@ exits green. Use the browser runner for those files and read the file count.
    right-click menu offers 2, 4 and 6, remembered per device; the session
    picker is gone, and decision 8's "picker on right-click" is superseded. The
    owner's answers on the details: the count wins over a remembered grid's
-   size (its tiles first, in their cells, holes filled first, then tab order);
+   size (its tiles first, in their cells, holes filled first, then tab order;
+   superseded by decision 11: a click brings the remembered grid back as it
+   was, and only a count picked in the menu re-forms it);
    Ctrl/Cmd+click with the grid closed opens the count in total, that session
    focused; shrinking keeps the focused tile; only the toggle animates the
    close; a remembered count larger than the window stays checked but greyed
    and a click opens what fits; the close keeps its dimmed still until the
    single view has painted (at most 700 ms); paced connect is in.
+11. **The grid keeps the layout the user arranged, and a fresh one ranks by
+   work.** Decided by the owner ("when I hit the tiles button, it should prefer
+   to load in tiles that are working and then the most recent working, so the
+   oldest dont get opened ... when I moved around and modified it, save it per
+   browser the layout, so when I turn tiles off and on, always keep what the
+   last setting was, if there was no setting before take the working ones, that
+   ones needs input and then the most recent ones in order"). The layout
+   (cells and holes, tile count, divider sizes, focus, a zoom the user chose)
+   is saved per browser on every change and comes back exactly from the toggle
+   and a reload, however the grid closed; it is never filled to the remembered
+   count nor trimmed to the window. A session gone since frees its cell for the
+   ranking; with none left, the grid opens from the ranking (`rankTileSessions`:
+   working, then needing input, then most recent), which also fills every place
+   the grid fills on its own (a count picked in the menu, a freed cell, an open
+   split's fill). Supersedes decision 10's "the count wins over a remembered
+   grid's size"; the count menu itself, its counts and its other answers stay.
 
 ## Code anchors
 
