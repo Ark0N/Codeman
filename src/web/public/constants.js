@@ -1032,12 +1032,18 @@ function tabSearchNeedle(query) {
  * rendered and applies the result as classes, so the list itself (grouping,
  * order, Alt+N badges) is never rebuilt or reordered by a search.
  *
- * @param {Array<{key: unknown, text: string, section?: unknown}>} rows in list
- *   order; `section` is the row's group or case box, null/undefined for none.
+ * A row flagged `keep: true` is never hidden, matching or not (the caller keeps
+ * a tab with an alert on screen: a prompt waiting on you is never hidden by a
+ * view filter). It counts toward its section, so its group stays on screen with
+ * it, but not toward `matchCount`.
+ *
+ * @param {Array<{key: unknown, text: string, section?: unknown, keep?: boolean}>} rows
+ *   in list order; `section` is the row's group or case box, null/undefined for none.
  * @param {unknown} query
  * @returns {{active: boolean, hidden: Set<unknown>, counts: Map<unknown, number>, matchCount: number}}
- *   `counts` has every section seen, an emptied one as 0, so it can be hidden;
- *   `matchCount` is the number of rows left showing.
+ *   `counts` is the rows left showing per section (kept rows included), every
+ *   section seen, an emptied one as 0, so it can be hidden; `matchCount` is the
+ *   number of rows whose TEXT matched, so it can be 0 above a lone kept row.
  */
 function filterTabSearchRows(rows, query) {
   const needle = tabSearchNeedle(query);
@@ -1048,11 +1054,12 @@ function filterTabSearchRows(rows, query) {
     const hasSection = row.section !== null && row.section !== undefined;
     if (hasSection && !counts.has(row.section)) counts.set(row.section, 0);
     const text = typeof row.text === 'string' ? row.text.toLocaleLowerCase() : '';
-    if (needle && !text.includes(needle)) {
+    const matches = !needle || text.includes(needle);
+    if (!matches && row.keep !== true) {
       hidden.add(row.key);
       continue;
     }
-    matchCount++;
+    if (matches) matchCount++;
     if (hasSection) counts.set(row.section, counts.get(row.section) + 1);
   }
   return { active: needle.length > 0, hidden, counts, matchCount };

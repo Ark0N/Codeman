@@ -42,7 +42,10 @@ type SearchResult = {
 };
 type TabSearch = {
   needle: (query: unknown) => string;
-  filter: (rows: Array<{ key: unknown; text: string; section?: unknown }>, query: unknown) => SearchResult;
+  filter: (
+    rows: Array<{ key: unknown; text: string; section?: unknown; keep?: boolean }>,
+    query: unknown
+  ) => SearchResult;
 };
 
 function loadSearch(): TabSearch {
@@ -92,6 +95,29 @@ describe('CodemanTabSearch (pure)', () => {
       expect(result.hidden.size).toBe(0);
       expect(result.matchCount).toBe(2);
     }
+  });
+
+  it('never hides a kept row, counts it toward its section, and leaves it out of matchCount', () => {
+    const rows = [
+      { key: 'a', text: 'Alpha', section: 'g1', keep: true },
+      { key: 'b', text: 'Beta', section: 'g1' },
+      { key: 'c', text: 'Gamma', section: 'g2' },
+      { key: 'd', text: 'Delta', section: null, keep: true },
+    ];
+    const result = search.filter(rows, 'zzz');
+    expect(result.active).toBe(true);
+    expect([...result.hidden]).toEqual(['b', 'c']);
+    // Zero TEXT matches: "No sessions match" still shows above the kept rows.
+    expect(result.matchCount).toBe(0);
+    // The kept row keeps its group on screen; the group without one empties.
+    expect([...result.counts]).toEqual([
+      ['g1', 1],
+      ['g2', 0],
+    ]);
+    // A kept row that also matches is one match, not two.
+    expect(search.filter(rows, 'alpha').matchCount).toBe(1);
+    // Only a literal true keeps a row.
+    expect(search.filter([{ key: 'x', text: 'X', keep: 'yes' as never }], 'zzz').hidden.has('x')).toBe(true);
   });
 
   it('reports no matches without throwing on odd input', () => {
@@ -196,6 +222,8 @@ function makeApp(options: { tabLayout?: unknown } = {}) {
   app._sidebarFilter = '';
   app._tabRailSearch = '';
   app.tabAlerts = new Map();
+  app.pendingHooks = new Map();
+  app._debounceTimers = {};
   app.terminalLoadStates = new Map();
   app.minimizedSubagents = new Map();
   app.hasTabDetachOverride = () => false;
@@ -348,6 +376,68 @@ describe('grouped rail search', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(app.sessionOrder).toEqual(['alpha', 'roadmap', 'review', 'notes']);
     expect(JSON.stringify(app.tabLayout)).toBe(layoutBefore);
+  });
+});
+
+describe('alerted rows stay visible during a search', () => {
+  /** What the app does on a hook event: pendingHooks, then updateTabAlertFromHooks (debounced render). */
+  async function setHook(app: Record<string, any>, id: string, hook: string | null) {
+    if (hook) app.pendingHooks.set(id, new Set([hook]));
+    else app.pendingHooks.delete(id);
+    app.updateTabAlertFromHooks(id);
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+  }
+
+  it('keeps a non-matching alerted row painted and its group on screen', async () => {
+    const app = makeApp();
+    app._fullRenderSessionTabs();
+    await setHook(app, 'alpha', 'permission_prompt');
+    expect(app.tabAlerts.get('alpha')).toBe('action');
+
+    app.setTabRailSearch('review');
+    expect(visibleRows()).toEqual(['alpha', 'review']);
+    expect(visibleGroups()).toEqual(['eng', 'plan']);
+    // The header counts the rows it is showing, the kept one included.
+    expect(document.querySelector('[data-tab-group-header="eng"] .tab-layout-group-count')?.textContent).toBe('1');
+    expect(emptyNote().hidden).toBe(true);
+  });
+
+  it('keeps the yellow idle alert too, and still says nothing matched', async () => {
+    const app = makeApp();
+    app._fullRenderSessionTabs();
+    await setHook(app, 'roadmap', 'idle_prompt');
+    expect(app.tabAlerts.get('roadmap')).toBe('idle');
+
+    app.setTabRailSearch('zzz');
+    expect(visibleRows()).toEqual(['roadmap']);
+    expect(visibleGroups()).toEqual(['plan']);
+    // matchCount is text matches only: the note explains why the row is there.
+    expect(emptyNote().hidden).toBe(false);
+  });
+
+  it('hides the row again once the alert clears and the rail re-renders', async () => {
+    const app = makeApp();
+    app._fullRenderSessionTabs();
+    app.setTabRailSearch('review');
+    expect(visibleRows()).toEqual(['review']);
+
+    await setHook(app, 'alpha', 'elicitation_dialog');
+    expect(visibleRows()).toEqual(['alpha', 'review']);
+
+    await setHook(app, 'alpha', null);
+    expect(app.tabAlerts.has('alpha')).toBe(false);
+    expect(visibleRows()).toEqual(['review']);
+    expect(visibleGroups()).toEqual(['plan']);
+  });
+
+  it('applies to the sidebar filter box as well', async () => {
+    const app = makeApp({ tabLayout: null });
+    document.documentElement.setAttribute('data-tab-orientation', 'horizontal');
+    app.isSessionSidebarActive = () => true;
+    app._fullRenderSessionTabs();
+    await setHook(app, 'notes', 'permission_prompt');
+    app.applySidebarFilter('/srv/api');
+    expect(visibleRows()).toEqual(['roadmap', 'notes']);
   });
 });
 

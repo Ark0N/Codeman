@@ -5753,9 +5753,15 @@ class CodemanApp {
    * - Rail: the NAME only, a web tab's title included (it is a row in the same
    *   list, and hiding every web tab would make a dashboard unfindable).
    *
-   * A group or case box left with no match hides with its header, its count
-   * shows the matches, and the grouped tree's roving stop and posinset follow
-   * the visible items. A collapsed group's rows are not in the DOM at all,
+   * A session row with a tab alert (red action or yellow idle, whatever
+   * tabAlerts holds, the set a collapsed group header surfaces) stays visible
+   * even when it does not match: a prompt waiting on you is never hidden by a
+   * view filter. Alerts come and go through renderSessionTabs(), and both
+   * render paths end here, so nothing else re-runs this for them.
+   *
+   * A group or case box left with nothing showing hides with its header, its
+   * count shows the rows left showing (a kept row included), and the grouped
+   * tree's roving stop and posinset follow the visible items. A collapsed group's rows are not in the DOM at all,
    * which is why the rail search also expands the projection (_projectTabGroups).
    */
   _applyTabListFilter() {
@@ -5771,6 +5777,8 @@ class CodemanApp {
         ? this._tabRowSearchName(tab)
         : `${tab.getAttribute('aria-label') || ''} ${tab.getAttribute('title') || ''}`,
       section: tab.closest('.tab-layout-group, .tab-cluster'),
+      // Web tabs carry no alerts; only a session row can be kept.
+      keep: !tab.dataset.webviewId && !!tab.dataset.id && !!this.tabAlerts?.get(tab.dataset.id),
     }));
     const result = window.CodemanTabSearch?.filter(rows, query);
     if (!result) return;
