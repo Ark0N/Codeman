@@ -7,6 +7,7 @@
 - @Randalix for `codeman agent` (#557), the session verbs (`ls`, `spawn`, `send`, `wait`, `read`, `interrupt`, `rm`) for agents in every CLI mode, and for moving every test server onto an ephemeral port (#570), which finishes #440. Thanks also for reporting and fixing git's clone errors on non-English hosts (#568, shipped as #572 with your commit).
 - @opticon454 for five PRs: MCP server sync for GitHub Copilot CLI (#581), an Apply button that saves Settings without closing them (#565), configurable toast and browser-notification display times (#564), in-document links in rendered markdown that scroll to their heading (#563), and npm-based CLI installs that work when the system npm prefix is root-owned (#562).
 - @JDProfresh for three PRs: pasted and uploaded files moving into a hidden, self-ignoring `.codeman-uploads/` folder (#574, after your #553 proposal), local echo that keeps painting on phones when the view sits above the bottom (#576), and upload failures that say why they failed (#578).
+- @aakhter for session search on the vertical tab rail (#580), built on the sidebar's existing filter instead of a second one, and for keeping alerted tabs visible during a search.
 
 ![Codeman tile grid: six live agents powering on and off with the CRT tile animation](https://raw.githubusercontent.com/Ark0N/Codeman/08694b5862534b2b1224e9e272ad9858c787ebef/release-1.41/tiles-crt-stats-800.gif)
 
@@ -23,6 +24,8 @@
 **Notifications stay up longer if you want (#564).** Settings → Notifications has a Toast display time and a Browser notification display time (1 second to 5 minutes, per device; the defaults stay 3 s and 8 s).
 
 **CLI logos on tabs can be switched off (#569).** App Settings → Appearance → Tabs → **CLI Logos on Tabs** hides the agent logo on every tab surface (header strip, rails, sidebar, phone chips, the desktop home list) on this device. On by default. Tile headers, split pane headers and the Run menus keep their logos.
+
+**Search sessions on the vertical rail (#580).** The vertical tab rail has a **Search sessions** box at the top: type part of a name and the rail narrows to the tabs that match (a web tab by its title), across every group, collapsed ones included, without touching your groups, their collapse or the tab order. A tab with an alert stays visible even when its name does not match, so a prompt waiting on you is never filtered away. Escape or × clears it, dragging is off while it is active, and nothing is saved. The sidebar's filter box shares the same filter: a tab with an alert stays visible there too, and in the by-case tab layout a case with no match now hides.
 
 **Fixes.**
 - **Clone errors on non-English hosts (#572, from #568).** Cloning a repository as a case now classifies a failed clone correctly whatever the host's language: a missing branch or tag is "does not exist on the remote" (400) and a missing repository is a 404, instead of a generic 422 with git's German (or any other) error text. Git runs with `LC_ALL=C` for clones and repo status, so the repo status card's error text is English on every host as well.
