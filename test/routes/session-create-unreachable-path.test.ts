@@ -1,9 +1,11 @@
 /**
- * @fileoverview Session creation must not freeze the server on a workspace whose
- * network mount has gone away (`POST /api/sessions` with a `workingDir` on it, and
- * `POST /api/quick-start` for a linked case that lives there), and must not treat
- * "did not answer" as "does not exist" (quick-start would scaffold a fresh case
- * over the top of where the real one is mounted).
+ * @fileoverview Request paths that touch a session's workspace must not freeze the
+ * server when its network mount has gone away: `POST /api/sessions` with a
+ * `workingDir` on it, `POST /api/quick-start` for a linked case that lives there,
+ * and `POST /api/sessions/:id/paste-image` for a live session whose mount went away
+ * after creation. Creation must also not treat "did not answer" as "does not exist"
+ * (quick-start would scaffold a fresh case over the top of where the real one is
+ * mounted).
  *
  * A hard mount that stopped answering is simulated two ways, matching how each
  * API behaves on one: a synchronous probe (`existsSync`/`statSync`/`mkdirSync`)
@@ -14,6 +16,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyCookie from '@fastify/cookie';
+import fastifyMultipart from '@fastify/multipart';
 
 const dead = vi.hoisted(() => {
   // Short probe timeout so a stalled stat costs ~200 ms here. Read at import.
@@ -81,6 +84,7 @@ import { dataPath } from '../../src/config/instance.js';
 
 describe('session creation on an unreachable mount', () => {
   let app: FastifyInstance;
+  let ctx: ReturnType<typeof createMockRouteContext>;
   let scratch: string;
   let warn: ReturnType<typeof vi.spyOn>;
 
@@ -90,7 +94,9 @@ describe('session creation on an unreachable mount', () => {
     scratch = await mkdtemp(join(tmpdir(), 'codeman-unreachable-create-'));
     app = Fastify({ logger: false });
     await app.register(fastifyCookie);
-    registerSessionRoutes(app, createMockRouteContext() as never);
+    await app.register(fastifyMultipart, { limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
+    ctx = createMockRouteContext();
+    registerSessionRoutes(app, ctx as never);
     installRouteErrorHandler(app);
     await app.ready();
   });
@@ -165,6 +171,29 @@ describe('session creation on an unreachable mount', () => {
 
     expect(elapsed).toBeLessThan(dead.blockMs - 1_000);
     // Neither probed nor created synchronously on the dead mount.
+    expect(dead.syncTouches).toEqual([]);
+    const body = JSON.parse(res.body);
+    expect(body.success).toBe(false);
+    expect(body.errorCode).toBe('OPERATION_FAILED');
+    expect(body.error).toMatch(/not responding/i);
+  });
+
+  it('POST /api/sessions/:id/paste-image answers promptly, not frozen, for a workspace on a dead mount', async () => {
+    // A live session can be created while its workspace is reachable and later have
+    // its mount go away. The probe runs before the multipart body is read, so the
+    // refusal lands without buffering the upload.
+    ctx._session.workingDir = `${dead.root}/project`;
+
+    const started = Date.now();
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/sessions/${ctx._sessionId}/paste-image`,
+      headers: { 'x-codeman-csrf': '1', 'content-type': 'multipart/form-data; boundary=b' },
+      payload: '--b--\r\n',
+    });
+    const elapsed = Date.now() - started;
+
+    expect(elapsed).toBeLessThan(dead.blockMs - 1_000);
     expect(dead.syncTouches).toEqual([]);
     const body = JSON.parse(res.body);
     expect(body.success).toBe(false);

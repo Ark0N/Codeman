@@ -374,7 +374,9 @@ export function imageMagicMatchesExt(data: Buffer, ext: string): boolean {
  * touched, and a file already there is theirs and stays as it is.
  */
 async function ensureUploadDir(workingDir: string): Promise<string | null> {
-  // workingDir is guaranteed to exist (live session).
+  // workingDir exists (live session) and the caller bounded-probed its mount, so
+  // the lstat/mkdir below normally start on a reachable path; a mount that dies
+  // after that probe is the same residual race POST /api/sessions accepts.
   const uploadDir = join(workingDir, UPLOADS_DIR);
   try {
     const dirStat = await fs.lstat(uploadDir);
@@ -5255,6 +5257,20 @@ export function registerSessionRoutes(
       return createErrorResponse(
         ApiErrorCode.INVALID_INPUT,
         'Prompt uploads are not supported for remote (SSH) sessions'
+      );
+    }
+
+    // The upload is written under session.workingDir (ensureUploadDir below), and
+    // a live session's workspace can sit on a network mount that stopped answering.
+    // Probe it bounded before the first disk touch, as #516 requires for a path the
+    // user named, so one dead mount cannot freeze a libuv threadpool worker per
+    // upload. Only "unknown" (the mount is not answering) is refused here, the way
+    // the create route does; absent / not-a-directory keep ensureUploadDir's own
+    // errors, since a live session's workspace should be neither.
+    if ((await probePathKind(session.workingDir, { pastCap: true })) === 'unknown') {
+      return createErrorResponse(
+        ApiErrorCode.OPERATION_FAILED,
+        describeUnknownPath('Workspace', session.workingDir, { pastCap: true })
       );
     }
 

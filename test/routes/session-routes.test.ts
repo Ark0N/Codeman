@@ -56,9 +56,28 @@ vi.mock('../../src/remote-hosts.js', async (orig) => {
   };
 });
 
+// Bounded path probe: a live session's workspace can sit on a network mount that
+// stopped answering, and the paste-image route probes it before the first disk
+// touch (#516). Default is call-through so the real probe runs for the other
+// routes here (create / quick-start); the paste-image tests drive the result via
+// pathProbe.kind (reset to null right after, since it is process-wide).
+const pathProbe = vi.hoisted(() => ({
+  kind: null as import('../../src/utils/bounded-path-probe.js').PathProbeKind | null,
+}));
+vi.mock('../../src/utils/bounded-path-probe.js', async (orig) => {
+  const actual = await orig<typeof import('../../src/utils/bounded-path-probe.js')>();
+  return {
+    ...actual,
+    probePathKind: vi.fn((path: string, opts?: { pastCap?: boolean }) =>
+      pathProbe.kind !== null ? Promise.resolve(pathProbe.kind) : actual.probePathKind(path, opts)
+    ),
+  };
+});
+
 import { registerSessionRoutes } from '../../src/web/routes/session-routes.js';
 import { RemoteWakeRegistry, REMOTE_WAKE_REQUEST_READY_TIMEOUT_MS } from '../../src/remote-wake.js';
 import { resolveTerminalHistoryConfig } from '../../src/config/terminal-history.js';
+import { describeUnknownPath, probePathKind } from '../../src/utils/bounded-path-probe.js';
 
 interface LocalHarness {
   app: FastifyInstance;
@@ -444,6 +463,37 @@ describe('session-routes', () => {
       expect(res.statusCode).toBe(415);
       expect(JSON.parse(res.body).success).toBe(false);
       expect(heicConvert).not.toHaveBeenCalled();
+    });
+
+    it('probes the session workspace past the stall cap before writing (#516)', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-uploads-'));
+      harness.ctx._session.workingDir = workDir;
+      try {
+        // Clear right before the request so only THIS upload's call can satisfy the pin.
+        vi.mocked(probePathKind).mockClear();
+        const res = await upload('shot.jpg', 'image/jpeg', jpeg);
+        expect(res.statusCode).toBe(200);
+        expect(probePathKind).toHaveBeenCalledWith(workDir, { pastCap: true });
+      } finally {
+        await rm(workDir, { recursive: true });
+      }
+    });
+
+    it('refuses with the describeUnknownPath message, and writes nothing, when the workspace does not answer', async () => {
+      const workDir = await mkdtemp(join(tmpdir(), 'codeman-uploads-'));
+      harness.ctx._session.workingDir = workDir;
+      pathProbe.kind = 'unknown';
+      try {
+        const res = await upload('shot.jpg', 'image/jpeg', jpeg);
+        expect(res.statusCode).toBe(422);
+        const body = JSON.parse(res.body);
+        expect(body.errorCode).toBe('OPERATION_FAILED');
+        expect(body.error).toBe(describeUnknownPath('Workspace', workDir, { pastCap: true }));
+        expect(await readdir(workDir)).toEqual([]);
+      } finally {
+        pathProbe.kind = null;
+        await rm(workDir, { recursive: true });
+      }
     });
   });
 
