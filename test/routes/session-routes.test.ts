@@ -1154,6 +1154,52 @@ describe('session-routes', () => {
       expect(captureSpy).toHaveBeenCalledWith(harness.ctx._session.muxName, {});
     });
 
+    // A shell's tab-select load reads a `lines=` window SMALLER than xterm's
+    // scrollback, so a cut there is real: the client must hear that tmux holds
+    // more, or it treats the window as the whole history and scroll-to-top
+    // stops offering the rest. tmux reports its history depth on the capture.
+    it('reports a `lines=` cut of tmux history as a recoverable tail truncation', async () => {
+      harness.ctx._session.mode = 'shell';
+      const lineCountFor = async (lines: number, historySize: number | undefined) => {
+        (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
+          (_name: string, opts?: { capturedHistorySize?: number }) => {
+            if (opts && historySize !== undefined) opts.capturedHistorySize = historySize;
+            return 'captured rows\r\nlast row';
+          }
+        );
+        const res = await harness.app.inject({
+          method: 'GET',
+          url: `/api/sessions/${harness.ctx._sessionId}/terminal?full=1&tail=${1024 * 1024}&lines=${lines}`,
+        });
+        const data = JSON.parse(res.body).data;
+        return { truncated: data.truncated, reason: data.truncationReason };
+      };
+
+      expect(await lineCountFor(10000, 25000)).toEqual({ truncated: true, reason: 'tail' });
+      expect(await lineCountFor(10000, 10000)).toEqual({ truncated: false, reason: null });
+      expect(await lineCountFor(10000, 400)).toEqual({ truncated: false, reason: null });
+      // No depth reported (an older tmux, a failed query): nothing is claimed.
+      expect(await lineCountFor(10000, undefined)).toEqual({ truncated: false, reason: null });
+    });
+
+    it('lets the byte cap outrank a `lines=` cut: the oldest bytes of the window are gone for good', async () => {
+      harness.ctx._session.mode = 'shell';
+      const { terminalBufferMaxBytes } = await harness.ctx.getTerminalHistoryConfig();
+      (harness.ctx.mux as { captureActivePaneBuffer?: unknown }).captureActivePaneBuffer = vi.fn(
+        (_name: string, opts?: { capturedHistorySize?: number }) => {
+          if (opts) opts.capturedHistorySize = 25000;
+          return `${'x'.repeat(100)}\r\n`.repeat(Math.ceil(terminalBufferMaxBytes / 102) + 10);
+        }
+      );
+      const res = await harness.app.inject({
+        method: 'GET',
+        url: `/api/sessions/${harness.ctx._sessionId}/terminal?full=1&lines=10000`,
+      });
+      const data = JSON.parse(res.body).data;
+      expect(data.truncated).toBe(true);
+      expect(data.truncationReason).toBe('capped');
+    });
+
     it('a capture bounded by `lines=` is still a full capture: rows kept, cursor restore last', async () => {
       // Only how much history tmux reads changes. The row-preserving skips key
       // on isFullCapture, and the relative cursor move must still end it.

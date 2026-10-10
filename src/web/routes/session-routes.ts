@@ -3160,6 +3160,21 @@ export function registerSessionRoutes(
     let truncationReason: 'capped' | 'tail' | null = null;
     let cleanBuffer: string;
 
+    // A `lines=` bound shallower than tmux's history left the older lines in
+    // tmux: an intentional partial read, so 'tail', and a later pull with a
+    // deeper (or no) bound recovers them. Without this a bounded window looks
+    // like the whole history to the client. The byte cap below still wins.
+    const capturedHistorySize = captureOpts.capturedHistorySize;
+    if (
+      isFullCapture &&
+      captureOpts.historyLimitLines !== undefined &&
+      capturedHistorySize !== undefined &&
+      capturedHistorySize > captureOpts.historyLimitLines
+    ) {
+      truncated = true;
+      truncationReason = 'tail';
+    }
+
     // Cap the payload EARLY — before the regex normalization passes below run
     // over it. A full-history tmux capture can be tens of MB of scrollback;
     // normalizing all of it would stall the event loop only to discard most
