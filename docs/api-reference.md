@@ -600,6 +600,21 @@ beside the 30 per minute the image path keeps; without the flag the route is
 byte-identical to the image-only version, same 50 MB image cap and same 30/min
 bucket. The response shape is unchanged (`path`, `filename`).
 
+Beyond images, the route also accepts documents a user hands an agent to read,
+admitted by the name's extension (the Content-Type a phone attaches to a `.md`
+or `.csv` is unreliable): the office formats `.pdf`, `.docx`, `.pptx`, `.xlsx`,
+`.zip` and the text family `.txt`, `.md`, `.csv`, `.tsv`, `.json`, `.log`,
+`.yaml`, `.yml`, `.xml`. A document is buffered under the same 50 MB image cap,
+its bytes are checked against the extension (a magic-number signature, or UTF-8
+with no NUL byte for text) and answered 415 on a mismatch, and it is saved under
+a sanitized stem of its name, so `Q3 report.pdf` is findable as
+`paste-<ms>-<hex>-Q3-report.pdf`. A named type that is neither an image nor a
+document (a script, an HTML page, a `.sh`) is refused 400 `Unsupported file
+type`. That refusal is a scope choice, not a security property: `file-raw`
+already serves non-media text inert (`text/plain`, `nosniff`), so this just
+keeps the server from storing what it would serve or an agent could run, and
+html and svg are the ones deliberately kept out.
+
 ## Rendered HTML files
 
 An `.html`/`.htm` file renders as a page in a sandbox, in two steps

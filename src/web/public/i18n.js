@@ -168,8 +168,8 @@
     'Restore the grid': '恢复平铺网格',
     'Remove tile (the session keeps running)': '移除窗格（会话继续运行）',
     'Drop a tab or a tile here': '将标签页或窗格拖放到此处',
-    // A file of an unsupported type dropped on a tile (tile-grid.js); the single
-    // view's drop (image-input.js) uses 'Only image or video files are supported'.
+    // A file of an unsupported type dropped on a tile (tile-grid.js) or the single
+    // view (image-input.js).
     'Unsupported file type': '不支持的文件类型',
     // Redraw (Ctrl+Shift+R, terminal-ui.js restoreTerminalSize) on the main pane, a tile or Pane B.
     'No active session': '没有活动会话',
@@ -691,7 +691,7 @@
     // the DOM translator skips <textarea> subtrees.
     'Compose prompt': '撰写提示词',
     'Open a session to attach a file': '请先打开一个会话再添加附件',
-    'Only image or video files are supported': '仅支持图片或视频文件',
+    '📎 Attach': '📎 添加附件',
     'Compose prompt, draft saved': '撰写提示词，草稿已保存',
     'Resume saved prompt draft': '继续编辑已保存的提示词草稿',
     'Enter adds a new line': '按 Enter 换行',

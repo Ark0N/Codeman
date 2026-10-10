@@ -274,7 +274,7 @@ Hit start — Codeman spawns the CLI via a real PTY and streams it to your brows
 ### 4. Talk to the agent
 
 - **Type prompts** straight into the terminal — input is delivered exactly-once even across reconnects (a dropped link never loses or double-sends a prompt).
-- **Paste, drop or attach images and videos** directly into the session. They are saved in a hidden `.codeman-uploads/` folder in the workspace (it ignores itself in git and is swept after 7 days), and the file's path lands on your prompt, unsent.
+- **Paste, drop or attach images, videos and documents** (PDF, Office files, zip and plain text) directly into the session. They are saved in a hidden `.codeman-uploads/` folder in the workspace (it ignores itself in git and is swept after 7 days), and the file's path lands on your prompt, unsent.
 - **Voice input** — `Ctrl+Shift+V` (Deepgram Nova-3, or this machine's Claude Code login with no API key; auto-silence stop).
 - **Attachments** — register external files/docs and preview Office/PDF inline; any file path an agent prints is clickable, in the terminal and in the chat view, including `~/` and relative paths and paths broken across lines. An `.html` report opens as a real page, Markdown opens rendered, and a folder opens as a grid of its files.
 - **When it needs you** — the tab turns yellow (waiting for input) or red (a question is blocking). The **Approvals Inbox** _(opt-in)_ queues every pending prompt across sessions, answerable from the header bell or the phone home screen, and 🧠 **Read My Mind** _(opt-in)_ drafts your next prompt from the case's goals and recent work.
