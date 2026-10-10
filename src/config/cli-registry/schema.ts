@@ -451,6 +451,7 @@ const capabilitiesSchema = z
           'codex-toml',
           'opencode-json',
           'antigravity-json',
+          'copilot-json',
         ] as const satisfies readonly McpConfigFormat[]),
         // The env var the CLI reads to move the file, and the path under it (same no-traversal
         // rule: sync writes there too). Resolved from the server env at call time, never here.
