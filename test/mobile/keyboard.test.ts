@@ -1,7 +1,7 @@
-// Port 3200 - Virtual keyboard simulation tests
+// Ephemeral port - Virtual keyboard simulation tests
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import type { Page, BrowserContext } from 'playwright';
-import { PORTS, KEYBOARD, SELECTORS, BODY_CLASSES, WAIT } from './helpers/constants.js';
+import { KEYBOARD, SELECTORS, BODY_CLASSES, WAIT } from './helpers/constants.js';
 import { createTestServer, stopTestServer } from './helpers/server.js';
 import { createDevicePage, getBrowser, closeAllBrowsers } from './helpers/browser.js';
 import {
@@ -26,8 +26,7 @@ import {
 import { REPRESENTATIVE_DEVICES } from './devices.js';
 import type { WebServer } from '../src/web/server.js';
 
-const PORT = PORTS.KEYBOARD;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 
 // ─── Page-global access helpers ───
 // KeyboardHandler is a `const` in app.js — NOT on `window`.
@@ -59,7 +58,8 @@ describe('Virtual Keyboard', () => {
   let server: WebServer;
 
   beforeAll(async () => {
-    server = await createTestServer(PORT);
+    server = await createTestServer();
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -75,7 +75,7 @@ describe('Virtual Keyboard', () => {
     const device = REPRESENTATIVE_DEVICES['standard-phone']; // iPhone 14 Pro
 
     beforeEach(async () => {
-      const result = await createDevicePage(device, BASE_URL, 'chromium');
+      const result = await createDevicePage(device, baseUrl, 'chromium');
       page = result.page;
       context = result.context;
     });
@@ -153,7 +153,7 @@ describe('Virtual Keyboard', () => {
       const { context, page } = await createDevicePage(device, 'about:blank', 'chromium');
       try {
         await setupViewportMock(page);
-        await page.goto(BASE_URL, { waitUntil: WAIT.DOM_CONTENT_LOADED });
+        await page.goto(baseUrl, { waitUntil: WAIT.DOM_CONTENT_LOADED });
         await page.waitForTimeout(2000);
 
         const success = await showKeyboardViaMock(page, KEYBOARD.TYPICAL_IOS_HEIGHT);
@@ -167,7 +167,7 @@ describe('Virtual Keyboard', () => {
       const { context, page } = await createDevicePage(device, 'about:blank', 'chromium');
       try {
         await setupViewportMock(page);
-        await page.goto(BASE_URL, { waitUntil: WAIT.DOM_CONTENT_LOADED });
+        await page.goto(baseUrl, { waitUntil: WAIT.DOM_CONTENT_LOADED });
         await page.waitForTimeout(2000);
 
         const success = await showKeyboardViaMock(page, KEYBOARD.TYPICAL_IOS_HEIGHT);
@@ -186,7 +186,7 @@ describe('Virtual Keyboard', () => {
         const result = await createDevicePage(device, 'about:blank', 'webkit');
         context = result.context;
         await setupViewportMock(result.page);
-        await result.page.goto(BASE_URL, { waitUntil: WAIT.DOM_CONTENT_LOADED });
+        await result.page.goto(baseUrl, { waitUntil: WAIT.DOM_CONTENT_LOADED });
         await result.page.waitForTimeout(2000);
 
         const success = await showKeyboardViaMock(result.page, KEYBOARD.TYPICAL_IOS_HEIGHT);
@@ -213,7 +213,7 @@ describe('Virtual Keyboard', () => {
     const device = REPRESENTATIVE_DEVICES['standard-phone'];
 
     beforeEach(async () => {
-      const result = await createDevicePage(device, BASE_URL, 'chromium');
+      const result = await createDevicePage(device, baseUrl, 'chromium');
       page = result.page;
       context = result.context;
     });
@@ -1469,7 +1469,7 @@ describe('Virtual Keyboard', () => {
     let page: Page;
 
     beforeAll(async () => {
-      ({ context, page } = await createDevicePage(REPRESENTATIVE_DEVICES['standard-phone'], BASE_URL, 'chromium'));
+      ({ context, page } = await createDevicePage(REPRESENTATIVE_DEVICES['standard-phone'], baseUrl, 'chromium'));
       await page.waitForTimeout(WAIT.PAGE_SETTLE);
     });
 
@@ -1638,7 +1638,7 @@ describe('Virtual Keyboard', () => {
   describe('Cross-device keyboard behavior', () => {
     it('phone: full keyboard handling active', async () => {
       const device = REPRESENTATIVE_DEVICES['standard-phone'];
-      const { context, page } = await createDevicePage(device, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(device, baseUrl, 'chromium');
       try {
         const state = await getKeyboardState(page);
         expect(state.exists).toBe(true);
@@ -1654,7 +1654,7 @@ describe('Virtual Keyboard', () => {
 
     it('tablet: keyboard handling active', async () => {
       const device = REPRESENTATIVE_DEVICES['standard-tablet']; // iPad Mini
-      const { context, page } = await createDevicePage(device, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(device, baseUrl, 'chromium');
       try {
         const state = await getKeyboardState(page);
         expect(state.exists).toBe(true);
@@ -1674,7 +1674,7 @@ describe('Virtual Keyboard', () => {
       });
       const page = await context.newPage();
       try {
-        await page.goto(BASE_URL, { waitUntil: WAIT.DOM_CONTENT_LOADED });
+        await page.goto(baseUrl, { waitUntil: WAIT.DOM_CONTENT_LOADED });
         await page.waitForTimeout(1000);
 
         const state = await getKeyboardState(page);

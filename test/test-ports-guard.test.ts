@@ -1,83 +1,32 @@
 /**
- * @fileoverview Static guard: a test builds `WebServer` on an ephemeral port.
+ * @fileoverview Static guard: a test binds an ephemeral port.
  *
  * A fixed port is a red suite on any machine where something else holds it, and a
  * collision between two runs on one host (two worktrees, or CI plus a local run): the
- * suite runs files serially (`fileParallelism: false`), so the four port pairs #440
- * found never met inside one run, only across runs. `new WebServer(0, …)` binds
- * whatever the OS hands out and `boundPort` reads it back, so there is nothing left
- * to collide on.
+ * suite runs files serially (`fileParallelism: false`), so the port pairs #440 found
+ * never met inside one run, only across runs. Binding port 0 takes whatever the OS
+ * hands out, so there is nothing left to collide on.
  *
- * A WebServer built under test/ whose port argument is not the literal `0` fails —
- * `new WebServer(…)`, a class declared `extends WebServer`, or a destructured alias
- * (`{ WebServer: T }`) — unless the file is in LEGACY_FIXED_PORT_FILES, the files that
- * construct one with a non-zero port today (a few never call `start()`); the follow-up
- * sweep converts them. A converted file cannot stay listed: an entry whose file no
- * longer matches fails too.
+ * Two rules, both over every file under test/:
+ * - A `WebServer` is built with the literal `0` as its port — `new WebServer(…)`, a
+ *   class declared `extends WebServer`, or a destructured alias (`{ WebServer: T }`) —
+ *   and the test reads `server.boundPort`.
+ * - A raw server (`http`/`net`/Fastify `listen`, `new WebSocketServer`) never listens
+ *   on a number or a `…PORT` constant: `listen(0, …)` / `{ port: 0 }`, then
+ *   `address().port`.
  *
  * Not covered: a helper that takes the port as a parameter is checked at the helper,
- * not at its callers (test/mobile/helpers/server.ts is listed, so the mobile tests
- * calling `createTestServer(PORT)` are not checked), `import { WebServer as X }`, and
- * `new mod.WebServer(…)`. Raw `listen({ port: N })` and `new WebSocketServer({ port: N })`
- * belong to the sweep.
+ * not at its callers; `import { WebServer as X }`; `new mod.WebServer(…)`; a port held
+ * in a variable that is not named `…PORT`.
  *
  * Port: N/A (pure static analysis).
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const TEST_ROOT = fileURLToPath(new URL('.', import.meta.url));
-
-/** Predates the guard; converted in the follow-up sweep. Shrink only. */
-const LEGACY_FIXED_PORT_FILES = new Set(
-  [
-    'admin-routes.test.ts',
-    'base-path-server.test.ts',
-    'capture-geometry-retry.browser.test.ts',
-    'capture-load-window.browser.test.ts',
-    'case-custom-path.browser.test.ts',
-    'doctor-settings.browser.test.ts',
-    'edge-cases.test.ts',
-    'file-link-click.test.ts',
-    'git-status.browser.test.ts',
-    'hooks-config.test.ts',
-    'http-contract.test.ts',
-    'inline-rename.test.ts',
-    'integration-flows.test.ts',
-    'key-tester.browser.test.ts',
-    'mobile/helpers/server.ts',
-    'opencode-resize.test.ts',
-    'operation-lightspeed.test.ts',
-    'ownership-scoping.test.ts',
-    'pane-exit-sweep.test.ts',
-    'paste-image-dir-shared.test.ts',
-    'perf-browser.test.ts',
-    'quick-start.test.ts',
-    'ralph-integration.test.ts',
-    'scheduled-runs.test.ts',
-    'security-regression.test.ts',
-    'session-cleanup.test.ts',
-    'session-pane-exit.test.ts',
-    'session.test.ts',
-    'shift-enter-keypress.browser.test.ts',
-    'split-pane-auto-collapse.browser.test.ts',
-    'split-pane-orchestration.browser.test.ts',
-    'split-pane-terminal.browser.test.ts',
-    'sse-cors-headers.test.ts',
-    'sse-events.test.ts',
-    'sse-routing-remote.test.ts',
-    'sse-subscription-filter.test.ts',
-    'static-cache-headers.test.ts',
-    'terminal-copy-shortcut.test.ts',
-    'terminal-keycode229-recovery.browser.test.ts',
-    'webgl-fallback.test.ts',
-    'webhook-settings.browser.test.ts',
-    'webview-lost-root-frame.test.ts',
-    'webview-sse.test.ts',
-  ].map((p) => p.split('/').join(sep))
-);
 
 function testFiles(dir: string): string[] {
   const out: string[] = [];
@@ -108,10 +57,29 @@ function webServerPortArgs(source: string): string[] {
   );
 }
 
+/** A fixed port as a reader would see it: a non-zero number, or a constant named `…PORT`. */
+const FIXED_PORT = /^(?:[1-9]\d*|[A-Z_]*PORT)$/;
+
+/**
+ * Fixed ports handed to a raw server in `source`: the first argument of `.listen(…)`,
+ * and `port:` inside `.listen({ … })` or `new WebSocketServer({ … })`. A socket path or
+ * `0` is fine; so is anything held in a lower-case variable (see the header).
+ */
+function rawListenerFixedPorts(source: string): string[] {
+  const firstArgs = [...source.matchAll(/\.listen\(\s*([^,){\s]+)/g)].map((m) => m[1]);
+  const options = [...source.matchAll(/(?:\.listen|new WebSocketServer)\(\s*\{[^}]*?\bport\s*:\s*([^,}\s]+)/g)].map(
+    (m) => m[1]
+  );
+  return [...firstArgs, ...options].filter((arg) => FIXED_PORT.test(arg));
+}
+
 const SELF = fileURLToPath(import.meta.url);
 const scanned = testFiles(TEST_ROOT)
   .filter((f) => f !== SELF)
-  .map((file) => ({ rel: relative(TEST_ROOT, file), args: webServerPortArgs(readFileSync(file, 'utf8')) }));
+  .map((file) => {
+    const source = readFileSync(file, 'utf8');
+    return { rel: relative(TEST_ROOT, file), args: webServerPortArgs(source), raw: rawListenerFixedPorts(source) };
+  });
 const fixed = (args: string[]) => args.some((a) => a !== '0');
 
 describe('test servers bind an ephemeral port', () => {
@@ -124,9 +92,19 @@ describe('test servers bind an ephemeral port', () => {
     expect(webServerPortArgs('const { WebServer: T } = mod;\nreturn new T(port, false);')).toEqual(['port']);
   });
 
-  it('no test outside the legacy list builds WebServer on a fixed port', () => {
+  it('reads raw listeners the way a reader would', () => {
+    expect(rawListenerFixedPorts("server.listen(0, '127.0.0.1', done)")).toEqual([]);
+    expect(rawListenerFixedPorts("server.listen(PORT, '127.0.0.1', done)")).toEqual(['PORT']);
+    expect(rawListenerFixedPorts('srv.listen(3216)')).toEqual(['3216']);
+    expect(rawListenerFixedPorts("await app.listen({ port: TEST_PORT, host: '127.0.0.1' })")).toEqual(['TEST_PORT']);
+    expect(rawListenerFixedPorts("await app.listen({ port: 0, host: '127.0.0.1' })")).toEqual([]);
+    expect(rawListenerFixedPorts('new WebSocketServer({ port: 8081 })')).toEqual(['8081']);
+    expect(rawListenerFixedPorts('net.createServer().listen(socketPath)')).toEqual([]);
+  });
+
+  it('no test builds WebServer on a fixed port', () => {
     const offenders = scanned
-      .filter((f) => fixed(f.args) && !LEGACY_FIXED_PORT_FILES.has(f.rel))
+      .filter((f) => fixed(f.args))
       .map(
         (f) =>
           `${f.rel}: new WebServer(${f.args.find((a) => a !== '0')}, …) — use new WebServer(0, …) and server.boundPort`
@@ -134,8 +112,10 @@ describe('test servers bind an ephemeral port', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('the legacy list only names files that still need converting', () => {
-    const stale = [...LEGACY_FIXED_PORT_FILES].filter((rel) => !scanned.some((f) => f.rel === rel && fixed(f.args)));
-    expect(stale).toEqual([]);
+  it('no test listens on a fixed port', () => {
+    const offenders = scanned
+      .filter((f) => f.raw.length > 0)
+      .map((f) => `${f.rel}: listens on ${f.raw.join(', ')} — listen on 0 and read address().port`);
+    expect(offenders).toEqual([]);
   });
 });

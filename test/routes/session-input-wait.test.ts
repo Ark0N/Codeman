@@ -451,13 +451,12 @@ describe('POST /api/sessions/:id/input: delivered reports the write, not just th
  * exactly why this regression needs a POST and a real socket to catch.
  */
 describe('POST /api/sessions/:id/input over real HTTP: hang-up handling', () => {
-  const PORT = 3181;
-  const base = `http://127.0.0.1:${PORT}`;
+  let base: string;
   let app: FastifyInstance;
 
   beforeAll(async () => {
     app = (await harness()).app;
-    await app.listen({ port: PORT, host: '127.0.0.1' });
+    base = await app.listen({ port: 0, host: '127.0.0.1' });
   });
 
   afterAll(async () => {

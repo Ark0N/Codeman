@@ -1,10 +1,10 @@
-// Port 3204 - General mobile layout tests
+// Ephemeral port - General mobile layout tests
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { BrowserContext, Page } from 'playwright';
 import type { WebServer } from '../src/web/server.js';
 import { createTestServer, stopTestServer } from './helpers/server.js';
 import { createDevicePage, closeAllBrowsers } from './helpers/browser.js';
-import { PORTS, SELECTORS, BREAKPOINTS, BODY_CLASSES, WAIT, MIN_TOUCH_TARGET } from './helpers/constants.js';
+import { SELECTORS, BREAKPOINTS, BODY_CLASSES, WAIT, MIN_TOUCH_TARGET } from './helpers/constants.js';
 import {
   assertFixedPosition,
   assertHidden,
@@ -21,8 +21,7 @@ import {
 } from './helpers/assertions.js';
 import { REPRESENTATIVE_DEVICES, DEVICE_REGISTRY, type DeviceEntry } from './devices.js';
 
-const PORT = PORTS.LAYOUT;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 
 let server: WebServer;
 
@@ -33,7 +32,8 @@ const iPadPro = REPRESENTATIVE_DEVICES['large-tablet'];
 
 describe('Mobile Layout', () => {
   beforeAll(async () => {
-    server = await createTestServer(PORT);
+    server = await createTestServer();
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -48,7 +48,7 @@ describe('Mobile Layout', () => {
     let page: Page;
 
     beforeAll(async () => {
-      ({ context, page } = await createDevicePage(iPhone14Pro, BASE_URL));
+      ({ context, page } = await createDevicePage(iPhone14Pro, baseUrl));
     });
 
     afterAll(async () => {
@@ -98,7 +98,7 @@ describe('Mobile Layout', () => {
     let page: Page;
 
     beforeAll(async () => {
-      ({ context, page } = await createDevicePage(iPhone14Pro, BASE_URL));
+      ({ context, page } = await createDevicePage(iPhone14Pro, baseUrl));
     });
 
     afterAll(async () => {
@@ -124,7 +124,7 @@ describe('Mobile Layout', () => {
 
   describe('Mobile-Only Visible Elements', () => {
     it('.btn-settings-mobile visible on phones', async () => {
-      const { context, page } = await createDevicePage(iPhone14Pro, BASE_URL);
+      const { context, page } = await createDevicePage(iPhone14Pro, baseUrl);
       try {
         await assertVisible(page, SELECTORS.SETTINGS_MOBILE);
       } finally {
@@ -133,7 +133,7 @@ describe('Mobile Layout', () => {
     });
 
     it('.btn-case-mobile visible on phones', async () => {
-      const { context, page } = await createDevicePage(iPhone14Pro, BASE_URL);
+      const { context, page } = await createDevicePage(iPhone14Pro, baseUrl);
       try {
         await assertVisible(page, SELECTORS.CASE_MOBILE);
       } finally {
@@ -142,7 +142,7 @@ describe('Mobile Layout', () => {
     });
 
     it('.btn-settings-mobile hidden on desktop', async () => {
-      const { context, page } = await createDevicePage(iPadPro, BASE_URL);
+      const { context, page } = await createDevicePage(iPadPro, baseUrl);
       try {
         await assertHidden(page, SELECTORS.SETTINGS_MOBILE);
       } finally {
@@ -156,7 +156,7 @@ describe('Mobile Layout', () => {
   describe('Toolbar Collision Regression', () => {
     it('keeps phone toolbar controls inside the viewport', async () => {
       const device = DEVICE_REGISTRY.find((d) => d.name === 'iPhone 8')!;
-      const { context, page } = await createDevicePage(device, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(device, baseUrl, 'chromium');
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
         const layout = await page.evaluate(() => {
@@ -189,7 +189,7 @@ describe('Mobile Layout', () => {
 
     it('does not render the desktop voice button on a 430px large phone', async () => {
       const device = REPRESENTATIVE_DEVICES['large-phone'];
-      const { context, page } = await createDevicePage(device, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(device, baseUrl, 'chromium');
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
         await assertHidden(page, '#voiceInputBtn');
@@ -201,7 +201,7 @@ describe('Mobile Layout', () => {
 
     it('uses phone upload and voice controls without toolbar overlap', async () => {
       const device = REPRESENTATIVE_DEVICES['small-phone'];
-      const { context, page } = await createDevicePage(device, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(device, baseUrl, 'chromium');
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
         expect(await page.locator('.toolbar-center .btn-upload').isVisible()).toBe(false);
@@ -246,7 +246,7 @@ describe('Mobile Layout', () => {
 
     it('keeps the mobile recording mic effect inside the button bounds', async () => {
       const device = REPRESENTATIVE_DEVICES['small-phone'];
-      const { context, page } = await createDevicePage(device, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(device, baseUrl, 'chromium');
       try {
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
         await page.evaluate(() => {
@@ -266,7 +266,7 @@ describe('Mobile Layout', () => {
     });
 
     it('keeps desktop upload and voice controls in one centered row', async () => {
-      const { context, page } = await createDevicePage(iPadPro, BASE_URL, 'chromium');
+      const { context, page } = await createDevicePage(iPadPro, baseUrl, 'chromium');
       try {
         await page.setViewportSize({ width: 1280, height: 800 });
         await page.waitForTimeout(WAIT.PAGE_SETTLE);
@@ -294,7 +294,7 @@ describe('Mobile Layout', () => {
 
   describe('Device Classes', () => {
     it('iOS user agent adds ios-device class', async () => {
-      const { context, page } = await createDevicePage(iPhone14Pro, BASE_URL);
+      const { context, page } = await createDevicePage(iPhone14Pro, baseUrl);
       try {
         await assertHasClass(page, 'body', BODY_CLASSES.IOS);
       } finally {
@@ -304,7 +304,7 @@ describe('Mobile Layout', () => {
 
     it('Android user agent does NOT add ios-device', async () => {
       const pixel = DEVICE_REGISTRY.find((d) => d.name === 'Pixel 7')!;
-      const { context, page } = await createDevicePage(pixel, BASE_URL);
+      const { context, page } = await createDevicePage(pixel, baseUrl);
       try {
         await assertNotHasClass(page, 'body', BODY_CLASSES.IOS);
       } finally {
@@ -314,7 +314,7 @@ describe('Mobile Layout', () => {
 
     it('Safari user agent adds safari-browser class', async () => {
       // iPhone 14 Pro uses Safari UA
-      const { context, page } = await createDevicePage(iPhone14Pro, BASE_URL);
+      const { context, page } = await createDevicePage(iPhone14Pro, baseUrl);
       try {
         await assertHasClass(page, 'body', BODY_CLASSES.SAFARI);
       } finally {
@@ -323,7 +323,7 @@ describe('Mobile Layout', () => {
     });
 
     it('touch device adds touch-device class', async () => {
-      const { context, page } = await createDevicePage(iPhone14Pro, BASE_URL);
+      const { context, page } = await createDevicePage(iPhone14Pro, baseUrl);
       try {
         await assertHasClass(page, 'body', BODY_CLASSES.TOUCH);
       } finally {
@@ -332,7 +332,7 @@ describe('Mobile Layout', () => {
     });
 
     it('width < 600 adds device-mobile', async () => {
-      const { context, page } = await createDevicePage(iPhone14Pro, BASE_URL);
+      const { context, page } = await createDevicePage(iPhone14Pro, baseUrl);
       try {
         await assertDeviceClasses(page, iPhone14Pro.viewport.width);
       } finally {
@@ -342,7 +342,7 @@ describe('Mobile Layout', () => {
 
     it('width 600-768 adds device-tablet', async () => {
       const tablet = REPRESENTATIVE_DEVICES['small-tablet'];
-      const { context, page } = await createDevicePage(tablet, BASE_URL);
+      const { context, page } = await createDevicePage(tablet, baseUrl);
       try {
         await assertDeviceClasses(page, tablet.viewport.width);
       } finally {
@@ -351,7 +351,7 @@ describe('Mobile Layout', () => {
     });
 
     it('width >= 768 adds device-desktop', async () => {
-      const { context, page } = await createDevicePage(iPadPro, BASE_URL);
+      const { context, page } = await createDevicePage(iPadPro, baseUrl);
       try {
         await assertDeviceClasses(page, iPadPro.viewport.width);
       } finally {
@@ -364,7 +364,7 @@ describe('Mobile Layout', () => {
 
   describe('iOS Safe Areas', () => {
     it('iOS header has extra padding for safe area', async () => {
-      const { context, page } = await createDevicePage(iPhone14Pro, BASE_URL);
+      const { context, page } = await createDevicePage(iPhone14Pro, baseUrl);
       try {
         // On iOS devices, the header should have padding-top that accounts for safe area
         const paddingTop = await getCSSNumericValue(page, SELECTORS.HEADER, 'padding-top');
@@ -378,7 +378,7 @@ describe('Mobile Layout', () => {
     });
 
     it('iOS modal content has safe area paddings', async () => {
-      const { context, page } = await createDevicePage(iPhone14Pro, BASE_URL);
+      const { context, page } = await createDevicePage(iPhone14Pro, baseUrl);
       try {
         // Open settings modal to test modal safe areas
         const settingsBtn = page.locator(SELECTORS.SETTINGS_MOBILE);
@@ -406,7 +406,7 @@ describe('Mobile Layout', () => {
 
   describe('Touch Targets', () => {
     it('all interactive elements meet 44px minimum', async () => {
-      const { context, page } = await createDevicePage(iPhone14Pro, BASE_URL);
+      const { context, page } = await createDevicePage(iPhone14Pro, baseUrl);
       try {
         const violations = await assertAccessibleTouchTargets(page, MIN_TOUCH_TARGET);
         if (violations.length > 0) {
@@ -428,7 +428,7 @@ describe('Mobile Layout', () => {
 
   describe('Inputs', () => {
     it('text inputs use font-size >= 16px', async () => {
-      const { context, page } = await createDevicePage(iPhone14Pro, BASE_URL);
+      const { context, page } = await createDevicePage(iPhone14Pro, baseUrl);
       try {
         // Check visible text inputs (font-size < 16px causes iOS auto-zoom)
         const inputs = await page.$$('input[type="text"], input[type="search"], input:not([type]), textarea');
@@ -457,7 +457,7 @@ describe('Mobile Layout', () => {
 
   describe('Terminal', () => {
     it('terminal-container has touch-action: pan-y', async () => {
-      const { context, page } = await createDevicePage(iPhone14Pro, BASE_URL);
+      const { context, page } = await createDevicePage(iPhone14Pro, baseUrl);
       try {
         const exists = await page.$(SELECTORS.TERMINAL_CONTAINER);
         if (exists) {
@@ -474,7 +474,7 @@ describe('Mobile Layout', () => {
 
   describe('No Horizontal Overflow', () => {
     it('no horizontal scroll on phone viewport', async () => {
-      const { context, page } = await createDevicePage(iPhone14Pro, BASE_URL);
+      const { context, page } = await createDevicePage(iPhone14Pro, baseUrl);
       try {
         await assertNoHorizontalOverflow(page);
       } finally {
@@ -487,7 +487,7 @@ describe('Mobile Layout', () => {
 
   describe('Main Content', () => {
     it('main has margin-top for fixed header', async () => {
-      const { context, page } = await createDevicePage(iPhone14Pro, BASE_URL);
+      const { context, page } = await createDevicePage(iPhone14Pro, baseUrl);
       try {
         const marginTop = await getCSSNumericValue(page, SELECTORS.MAIN, 'margin-top');
         // Main content should have enough margin-top to clear the fixed header (~42px)
@@ -502,7 +502,7 @@ describe('Mobile Layout', () => {
 
   describe('Viewport Meta', () => {
     it('zoom is not disabled', async () => {
-      const { context, page } = await createDevicePage(iPhone14Pro, BASE_URL);
+      const { context, page } = await createDevicePage(iPhone14Pro, baseUrl);
       try {
         await assertZoomNotDisabled(page);
       } finally {

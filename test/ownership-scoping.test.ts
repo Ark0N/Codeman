@@ -1,5 +1,5 @@
 /**
- * @fileoverview Phase 3 ownership-scoping tests (live server, port 3172).
+ * @fileoverview Phase 3 ownership-scoping tests (live server, ephemeral port).
  *
  * Verifies multi-user isolation at the API level: case lists are disjoint per user,
  * a non-admin cannot read/kill another user's session, workingDir confinement +
@@ -17,14 +17,13 @@ import { canAccessOwned, findSessionOrFail, sessionCapacityState } from '../src/
 
 vi.spyOn(TmuxManager, 'isTmuxAvailable').mockReturnValue(true);
 
-const PORT = 3172;
 const basic = (u: string, p: string) => 'Basic ' + Buffer.from(`${u}:${p}`).toString('base64');
 
 let server: WebServer;
 let dataDir: string;
 let spacesDir: string;
 const saved: Record<string, string | undefined> = {};
-const url = (p: string) => `http://localhost:${PORT}${p}`;
+const url = (p: string) => `http://localhost:${server.boundPort}${p}`;
 
 // Route returns are wrapped in the {success,data} envelope; unwrap to the payload.
 async function getJson(p: string, headers: Record<string, string>): Promise<unknown> {
@@ -58,7 +57,7 @@ beforeAll(async () => {
   await createUser({ username: 'alice', role: 'user', password: 'alicepass1' });
   await createUser({ username: 'bob', role: 'user', password: 'bobpass1234' });
 
-  server = new WebServer(PORT, false, true);
+  server = new WebServer(0, false, true);
   await server.start();
 });
 

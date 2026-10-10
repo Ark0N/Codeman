@@ -3,8 +3,6 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
 
-const PORT = 3196;
-
 const REPORT = {
   platform: { environment: 'linux' },
   summary: { ok: 1, requiredMissing: 1, optionalMissing: 0, exitCode: 1 },
@@ -46,13 +44,13 @@ describe('Diagnostics panel in a real browser', () => {
   let page: Page;
 
   beforeAll(async () => {
-    server = new WebServer(PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
     browser = await chromium.launch({ headless: true });
     // A controlling service worker can swallow requests before page.route() sees them, letting the
     // real /api/doctor (a forked Node process) answer instead; block it so the stub is reliable.
     page = await (await browser.newContext({ serviceWorkers: 'block' })).newPage();
-    await page.goto(`http://localhost:${PORT}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`http://localhost:${server.boundPort}`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => (window as any).app?.terminal, null, { timeout: 30000 });
     await page.evaluate(() => (window as any).app.openAppSettings());
   }, 90000);

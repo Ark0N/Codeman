@@ -16,6 +16,7 @@
 import { describe, expect, it, beforeEach, beforeAll, afterAll } from 'vitest';
 import { execFileSync, spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, chmodSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
@@ -24,8 +25,6 @@ import {
   resetDeepSeekStatusShimForTest,
   DEEPSEEK_STATE_TO_HOOK_EVENT,
 } from '../src/deepseek-status-shim.js';
-
-const PORT = 3251;
 
 describe('DeepSeek status shim: provisioning', () => {
   beforeEach(() => {
@@ -73,6 +72,7 @@ describe('DeepSeek status shim: provisioning', () => {
 
 describe('DeepSeek status shim: the supervisor contract', () => {
   let server: Server | undefined;
+  let port: number;
   const received: Array<{ body: unknown; secret: string | undefined }> = [];
   let status = 200;
 
@@ -96,7 +96,10 @@ describe('DeepSeek status shim: the supervisor contract', () => {
           res.end('{}');
         });
       });
-      server.listen(PORT, '127.0.0.1', resolve);
+      server.listen(0, '127.0.0.1', () => {
+        port = (server!.address() as AddressInfo).port;
+        resolve();
+      });
     });
 
   beforeAll(() => listen());
@@ -120,7 +123,7 @@ describe('DeepSeek status shim: the supervisor contract', () => {
       const child = spawn(process.execPath, [path, ...args], {
         env: {
           ...process.env,
-          CODEMAN_API_URL: `http://127.0.0.1:${PORT}`,
+          CODEMAN_API_URL: `http://127.0.0.1:${port}`,
           CODEMAN_SESSION_ID: 'sess-from-env',
           ...env,
         },

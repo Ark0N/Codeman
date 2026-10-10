@@ -11,6 +11,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { dataPath } from '../../src/config/instance.js';
@@ -32,10 +33,22 @@ import {
   type TuiExecFile,
 } from '../../src/tui/tui-client.js';
 
-const PORT = 3241;
-/** Nothing ever listens here: the "no server" path. */
-const DEAD_PORT = 3243;
-const BASE_URL = `http://127.0.0.1:${PORT}`;
+/**
+ * A port nothing listens on: bind 0, read what the OS handed out, close. Free at the
+ * moment of use, unlike "the server's port + 1", which anything may hold.
+ */
+async function closedPort(): Promise<number> {
+  const probe = http.createServer();
+  await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const { port: free } = probe.address() as AddressInfo;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  return free;
+}
+
+let port: number;
+/** Nothing listens one above the bound port: the "no server" path. */
+let deadPort: number;
+let baseUrl: string;
 
 interface Recorded {
   method: string;
@@ -115,7 +128,7 @@ const defaultResponder: Responder = (req, res) => {
 };
 
 function client(overrides: Record<string, unknown> = {}): TuiClient {
-  return new TuiClient({ baseUrl: BASE_URL, timeoutMs: 4000, ...overrides });
+  return new TuiClient({ baseUrl, timeoutMs: 4000, ...overrides });
 }
 
 let server: http.Server;
@@ -140,7 +153,10 @@ beforeAll(async () => {
       (responder ?? defaultResponder)(req, res, body);
     });
   });
-  await new Promise<void>((resolve) => server.listen(PORT, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  port = (server.address() as AddressInfo).port;
+  deadPort = await closedPort();
+  baseUrl = `http://127.0.0.1:${port}`;
 });
 
 afterAll(async () => {
@@ -391,8 +407,8 @@ describe('TuiClient remaining API surface', () => {
 
 describe('TuiClient.connect', () => {
   it('discovers the loopback server and reports its identity', async () => {
-    const info = await new TuiClient({ port: PORT, probeTimeoutMs: 1000 }).connect();
-    expect(info?.baseUrl).toBe(BASE_URL);
+    const info = await new TuiClient({ port, probeTimeoutMs: 1000 }).connect();
+    expect(info?.baseUrl).toBe(baseUrl);
     expect(info?.version).toBe('9.9.9');
     expect(info?.hostname).toBeTruthy();
     expect(info?.authRequired).toBeUndefined();
@@ -403,17 +419,17 @@ describe('TuiClient.connect', () => {
       res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="codeman"' });
       res.end('Unauthorized');
     };
-    const info = await new TuiClient({ port: PORT, probeTimeoutMs: 1000 }).connect();
-    expect(info?.baseUrl).toBe(BASE_URL);
+    const info = await new TuiClient({ port, probeTimeoutMs: 1000 }).connect();
+    expect(info?.baseUrl).toBe(baseUrl);
     expect(info?.authRequired).toBe(true);
   });
 
   it('returns null when nothing answers', async () => {
-    await expect(new TuiClient({ port: DEAD_PORT, probeTimeoutMs: 500 }).connect()).resolves.toBeNull();
+    await expect(new TuiClient({ port: deadPort, probeTimeoutMs: 500 }).connect()).resolves.toBeNull();
   });
 
   it('refuses to talk to an unconnected client', async () => {
-    await expect(new TuiClient({ port: DEAD_PORT }).fetchApprovals()).rejects.toThrow(/not connected/);
+    await expect(new TuiClient({ port: deadPort }).fetchApprovals()).rejects.toThrow(/not connected/);
   });
 });
 
@@ -501,7 +517,7 @@ describe('degraded-mode tmux enumeration', () => {
 describe('attach window sizing', () => {
   /** A client that only ever needs its injected exec: none of this talks to a server. */
   function sizingClient(exec: TuiExecFile): TuiClient {
-    return new TuiClient({ baseUrl: BASE_URL, socket: 'codeman-beta', exec });
+    return new TuiClient({ baseUrl, socket: 'codeman-beta', exec });
   }
 
   it('parses the sizing format, and rejects a window tmux could not measure', () => {
@@ -615,7 +631,7 @@ describe('TuiClient.bindSwitchKey', () => {
       calls.push([...args]);
       return { stdout: '', stderr: '' };
     };
-    const client = new TuiClient({ baseUrl: BASE_URL, socket: 'codeman-beta', exec });
+    const client = new TuiClient({ baseUrl, socket: 'codeman-beta', exec });
     return client.bindSwitchKey('M-2', 'codeman-aaaa1111').then(() => {
       const bind = calls.find((args) => args.includes('bind-key'));
       expect(bind).toBeDefined();
@@ -672,7 +688,7 @@ describe('TuiClient.clearLeakedAttachBanners', () => {
       }
       return { stdout: '', stderr: '' };
     };
-    return { client: new TuiClient({ baseUrl: BASE_URL, socket: 'codeman-beta', exec }), calls };
+    return { client: new TuiClient({ baseUrl, socket: 'codeman-beta', exec }), calls };
   }
 
   it('takes down a bar a killed TUI left behind, and puts status back off', async () => {
@@ -713,7 +729,7 @@ describe('TuiClient.clearLeakedAttachBanners', () => {
     const exec: TuiExecFile = async () => {
       throw new Error('no server running on /tmp/tmux-1000/codeman-beta');
     };
-    const client = new TuiClient({ baseUrl: BASE_URL, socket: 'codeman-beta', exec });
+    const client = new TuiClient({ baseUrl, socket: 'codeman-beta', exec });
     await expect(client.clearLeakedAttachBanners()).resolves.toBe(0);
   });
 });
@@ -761,7 +777,7 @@ describe('parseDetachKey', () => {
 
 describe('attach status bar options', () => {
   function optionsClient(exec: TuiExecFile): TuiClient {
-    return new TuiClient({ baseUrl: BASE_URL, socket: 'codeman-beta', exec });
+    return new TuiClient({ baseUrl, socket: 'codeman-beta', exec });
   }
 
   const SHOW = [

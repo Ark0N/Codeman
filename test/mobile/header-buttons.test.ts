@@ -1,4 +1,4 @@
-// Port 3208 - Header button visibility (real-browser E2E).
+// Ephemeral port - Header button visibility (real-browser E2E).
 //
 // Companion to the CI static guard (test/mobile-header-buttons-policy.test.ts).
 // Renders the real app and asserts ACTUAL computed visibility, catching CSS/layout
@@ -13,16 +13,16 @@ import { createTestServer, stopTestServer } from './helpers/server.js';
 import { createDevicePage, closeAllBrowsers } from './helpers/browser.js';
 import { assertHidden, assertVisible } from './helpers/assertions.js';
 import { REPRESENTATIVE_DEVICES } from './devices.js';
-import { PORTS, WAIT } from './helpers/constants.js';
+import { WAIT } from './helpers/constants.js';
 
-const PORT = PORTS.HEADER_BUTTONS;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 
 describe('Header button visibility (E2E)', () => {
   let server: WebServer;
 
   beforeAll(async () => {
-    server = await createTestServer(PORT);
+    server = await createTestServer();
+    baseUrl = `http://localhost:${server.boundPort}`;
   });
 
   afterAll(async () => {
@@ -31,20 +31,20 @@ describe('Header button visibility (E2E)', () => {
   });
 
   it('hides the settings gear + lifecycle log on a standard phone (iPhone 14 Pro)', async () => {
-    const { page } = await createDevicePage(REPRESENTATIVE_DEVICES['standard-phone'], BASE_URL);
+    const { page } = await createDevicePage(REPRESENTATIVE_DEVICES['standard-phone'], baseUrl);
     await page.waitForTimeout(WAIT.PAGE_SETTLE);
     await assertHidden(page, '.btn-icon-header.btn-settings');
     await assertHidden(page, '.btn-icon-header.btn-lifecycle-log');
   });
 
   it('keeps the opt-in attachments button HIDDEN by default on a desktop-class viewport', async () => {
-    const { page } = await createDevicePage(REPRESENTATIVE_DEVICES['large-tablet'], BASE_URL);
+    const { page } = await createDevicePage(REPRESENTATIVE_DEVICES['large-tablet'], baseUrl);
     await page.waitForTimeout(WAIT.PAGE_SETTLE);
     await assertHidden(page, '#attachmentsHistoryBtn');
   });
 
   it('shows the attachments button once the setting is enabled', async () => {
-    const { page } = await createDevicePage(REPRESENTATIVE_DEVICES['large-tablet'], BASE_URL);
+    const { page } = await createDevicePage(REPRESENTATIVE_DEVICES['large-tablet'], baseUrl);
     // Desktop-class devices use the non-mobile settings blob.
     await page.evaluate(() => {
       const cur = JSON.parse(localStorage.getItem('codeman-app-settings') || '{}');

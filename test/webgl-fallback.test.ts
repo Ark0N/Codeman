@@ -18,15 +18,14 @@
  * the trip math is pure and the dispose path is a couple of property
  * mutations, both of which run on any page where app.js loaded.
  *
- * Port: 3166 (per MEMORY.md, ports 3150+ for tests)
+ * Port: ephemeral
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright';
 import { WebServer } from '../src/web/server.js';
 
-const PORT = 3166;
-const BASE_URL = `http://localhost:${PORT}`;
+let baseUrl: string;
 
 describe('WebGL longtask auto-fallback', () => {
   let server: WebServer;
@@ -34,11 +33,12 @@ describe('WebGL longtask auto-fallback', () => {
   let page: Page;
 
   beforeAll(async () => {
-    server = new WebServer(PORT, false, true);
+    server = new WebServer(0, false, true);
     await server.start();
+    baseUrl = `http://localhost:${server.boundPort}`;
     browser = await chromium.launch({ headless: true });
     page = await browser.newPage();
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
     // Wait for constants.js + app.js to have loaded — both expose globals.
     await page.waitForFunction(
       () =>
