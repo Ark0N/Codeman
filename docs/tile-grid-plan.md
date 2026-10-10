@@ -439,6 +439,17 @@ the main terminal never loads on that page load. A later `handleInit` (SSE
 reconnect after a server restart, the `keepTerminal` branch) reconciles ids
 against the live list without rebuilding tiles that are still alive.
 
+A cell freed since the grid was stored is filled during that restore, from a
+ranking that knows each session's status and stamps (the init payload) but not
+yet its pending approvals: `seedApprovals` asks the server for them
+asynchronously, and the restore has run by the time they land. So on a reload a
+session waiting on a permission dialog or an unseen finished turn ranks with the
+quiet ones for that one fill (working sessions still rank first). Accepted: a
+fill held back for the approvals would open fewer tiles, which can be another
+shape, and then reshape the grid and move the user's tiles a second after the
+reload; so approvals that land later never re-form a restored grid. The Tiles
+toggle, run once the page has loaded, ranks with them.
+
 ### Gating
 
 - Setting `showTileGridButton`, per device (in `displayKeys`, stripped from the

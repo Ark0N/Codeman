@@ -12,8 +12,9 @@
  *   `selectSession(restoreId, { auto: true })`: with a stored open grid the
  *   main terminal never loads on that page load (no select, no socket, no
  *   capture), a deleted or detached session frees its cell for the ranking
- *   to fill, duplicate ids are dropped, and the stored fractions and zoom
- *   come back. A narrow window keeps the single view.
+ *   to fill (on status and stamps: pending approvals are seeded after, and
+ *   never re-form the restored grid), duplicate ids are dropped, and the
+ *   stored fractions and zoom come back. A narrow window keeps the single view.
  * - A `#session=` link on load wins, and leaves the stored grid remembered
  *   but closed.
  * - Leaving the grid invalidates the main terminal's cached content for every
@@ -172,6 +173,53 @@ describe('page load with a stored open grid', () => {
     expect(app.sessionOrder).toEqual(['s-c', 's-b', 's-a', 's-d']);
     // s-d is working: it takes the freed cell, though s-c comes first in the tab order.
     expect(app._tileGrid.cells).toEqual(['s-a', 's-d', 's-b']);
+  });
+
+  it('pending approvals seeded after the reload never re-form the restored grid (known limit of the reload fill)', async () => {
+    // seedApprovals is async (GET /api/approvals), so the freed cell is filled
+    // from status and stamps alone. A needs-input session the seed reveals a
+    // moment later does not take a tile from the grid already back on screen:
+    // a late fill would reshape it (fewer tiles opened is another shape) and
+    // move the user's tiles a second after the reload.
+    storeGrid({ ids: ['s-a', 'gone', 's-b'], focused: 's-a' });
+    const now = 1_000_000;
+    let release!: () => void;
+    const app = pageLoad(
+      IDS,
+      (a) => {
+        a.tabAlerts = new Map();
+        a.seedApprovals = vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              release = () => {
+                a.setPendingHook('s-d', 'permission_prompt');
+                resolve();
+              };
+            })
+        );
+      },
+      {
+        sessions: [
+          { id: 's-a', name: 's-a', mode: 'claude', pid: 1, status: 'idle', lastActivityAt: now },
+          { id: 's-b', name: 's-b', mode: 'claude', pid: 1, status: 'idle', lastActivityAt: now },
+          { id: 's-c', name: 's-c', mode: 'claude', pid: 1, status: 'idle', lastActivityAt: now - 10 },
+          { id: 's-d', name: 's-d', mode: 'claude', pid: 1, status: 'idle', lastActivityAt: now - 500 },
+        ],
+      }
+    );
+    expect(app.seedApprovals).toHaveBeenCalledTimes(1);
+    // Before the seed lands: all quiet, the most recent (s-c) takes the freed cell.
+    expect(app._tileGrid.cells).toEqual(['s-a', 's-c', 's-b']);
+    const before = stored();
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    // The seed made s-d need input: the ranking now puts it first...
+    expect(app._tileGridRanking()[0]).toBe('s-d');
+    app._renderTileChrome();
+    // ...but the restored grid and the stored layout stay as they came back.
+    expect(app._tileGrid.cells).toEqual(['s-a', 's-c', 's-b']);
+    expect(stored()).toEqual(before);
   });
 
   it('brings back the fractions (same layout only) and a zoom the user chose', () => {
