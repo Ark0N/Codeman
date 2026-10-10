@@ -1,3 +1,4 @@
+/** @fileoverview Guards cron docs against drift from routes, schema, statuses, and UI entry points. */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CronJobSchema } from '../src/web/schemas.js';
@@ -36,8 +37,20 @@ describe('cron documentation', () => {
       expect(guide).toContain(`| \`${status}\``);
       expect(cronSection(reference)).toContain(`\`${status}\``);
     }
-    expect(guide).toContain("not whether\nthe agent's task succeeded");
+    expect(guide.replace(/\s+/g, ' ')).toContain("not whether the agent's task succeeded");
     expect(guide).toContain('bottom toolbar');
     expect(guide).toContain('App Settings → Header & Panels → Scheduling');
+  });
+
+  it('keeps linked pages consistent and explains non-terminal launch history', () => {
+    expect(read('docs/wiki/The-Dashboard.md')).toMatch(/\| Cron\s*\| Bottom toolbar/);
+    expect(read('docs/cron-guide.md')).not.toMatch(/Cron\*\* (?:button )?in the header/);
+    for (const text of [reference, guide]) {
+      const normalized = text.replace(/\s+/g, ' ');
+      expect(normalized).toContain('session is closed during the readiness wait');
+      expect(normalized).toContain('server restarts before delivery');
+      expect(normalized).toContain('`session_started` indefinitely with `finishedAt: null`');
+    }
+    expect(reference).toContain("also closes the previous run's session before launching");
   });
 });

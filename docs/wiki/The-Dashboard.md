@@ -254,7 +254,7 @@ Two extras depending on the device:
 | Respawn          | Session Options                    | [Keeping Agents Running](Keeping-Agents-Running)                  |
 | Ralph            | Session Options                    | [Autonomous Loops](Autonomous-Loops)                              |
 | Orchestrator     | Toolbar                            | [Autonomous Loops](Autonomous-Loops)                              |
-| Cron             | Header ⏰ (opt-in)                 | [Cron Jobs](Cron-Jobs)                                            |
+| Cron             | Bottom toolbar ⏰ (opt-in)         | [Cron Jobs](Cron-Jobs)                                            |
 | Subagents        | Automatic while agents run         | [Watching Agents Work](Watching-Agents-Work)                      |
 | Ultracode        | Header (opt-in)                    | [Watching Agents Work](Watching-Agents-Work)                      |
 | File Viewer      | Header                             | [Working With Files](Working-With-Files)                          |

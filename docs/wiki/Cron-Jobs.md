@@ -106,6 +106,9 @@ Every fire is recorded per job, with a status:
 
 History records whether the session started and the prompt was delivered, **not whether
 the agent's task succeeded**. `prompt_sent` is not a task-completion signal.
+If the session is closed during the readiness wait or the server restarts before
+delivery, a run can remain `session_started` indefinitely with `finishedAt: null`;
+clients must not poll forever waiting for a terminal status.
 
 The schedule is advanced **before** the session launches, so a slow start cannot cause the
 same job to re-trigger.

@@ -5,7 +5,7 @@ spin up a Claude (or shell / OpenCode / Codex / Antigravity / Gemini / Pi) sessi
 feed it a prompt. Think "cron for agent sessions": _"every weekday at 3am, open a
 Claude session in `~/proj` and tell it to update dependencies and open a PR."_
 
-- **UI**: the **⏰ Cron** button in the header → the Cron Jobs modal (`#cronModal`).
+- **UI**: the **⏰ Cron** button in the bottom toolbar → the Cron Jobs modal (`#cronModal`).
 - **API**: `/api/cron/jobs*` and `/api/cron/runs`.
 - **Code**: `src/cron/cron-service.ts`, `src/cron/cron-time.ts`, `src/cron/cron-input.ts`,
   types in `src/types/cron.ts`, routes in `src/web/routes/cron-routes.ts`,
@@ -24,7 +24,7 @@ Claude session in `~/proj` and tell it to update dependencies and open a PR."_
 
 ### In the browser
 
-1. Click **⏰ Cron** in the header.
+1. Click **⏰ Cron** in the bottom toolbar.
 2. Click **+ New Job**.
 3. Fill in a **name**, pick an **agent type** and **working directory**, choose a
    **prompt** (inline text or a file path), pick a **schedule**, and leave

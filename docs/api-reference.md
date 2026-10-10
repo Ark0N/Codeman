@@ -120,7 +120,7 @@ are required according to the selected prompt and schedule:
 | `launchCommand` | Optional single-line string, at most 2000 characters; for shell jobs |
 | `promptMode` | `inline_text` or `prompt_file_path` |
 | `promptText` | Required for `inline_text`; nonempty single-line string, at most 100000 characters |
-| `promptFilePath` | Required for `prompt_file_path`; regular file confined to `workingDir`, at most 1 MiB, read when the job fires |
+| `promptFilePath` | Required for `prompt_file_path`; absolute path inside `workingDir` to a regular file, at most 1 MiB, read when the job fires |
 | `inputMode` | `paste` or `typed` |
 | `scheduleType` | `once`, `interval`, `daily`, or `weekly` |
 | `runAt` | Required for `once`; positive integer Unix timestamp in milliseconds |
@@ -138,6 +138,8 @@ When changing `promptMode` or `scheduleType`, supply the fields the new mode nee
 `Run Now` works even when the job is disabled, bypasses the scheduled concurrency
 policy, and does not change the schedule. `activeAgents` counts live sessions of
 the same agent type, excluding sessions created by this job.
+For recurring jobs with `autoClosePreviousSession` enabled (the default), `Run Now`
+also closes the previous run's session before launching, even if it is still working.
 
 ### Job and run response fields
 
@@ -145,6 +147,7 @@ the same agent type, excluding sessions created by this job.
 `owner` (multi-user mode), `createdAt`, `updatedAt`, `lastRunAt`, `nextRunAt`,
 `lastStatus`, `lastDueKey`, and optional `completedOnce`. Times are Unix
 milliseconds; `lastRunAt`, `nextRunAt`, `lastStatus`, and `lastDueKey` can be `null`.
+`lastDueKey` is an opaque internal duplicate-launch guard, not a stable API format.
 
 `CronJobRun` contains `id`, `cronJobId`, nullable `sessionId` and `sessionName`,
 `startedAt`, nullable `finishedAt`, `status`, optional `errorMessage`,
@@ -153,18 +156,23 @@ Run times are also Unix milliseconds. Status is one of `created`,
 `session_started`, `prompt_sent`, `failed`, or `skipped`.
 
 Prompt delivery continues asynchronously after session launch, so `Run Now` can
-return `session_started` before the prompt is sent. Read run history for the later
-status. `finishedAt` refers to the launch/prompt-delivery attempt, **not completion
+return `session_started` before the prompt is sent. Read run history for subsequent
+updates, but do not assume a terminal status will follow: if the session is closed
+during the readiness wait or the server restarts before delivery, the run can remain
+`session_started` indefinitely with `finishedAt: null`.
+`finishedAt` refers to the launch/prompt-delivery attempt, **not completion
 of the agent's task**; `prompt_sent` does not prove that the task succeeded.
 
 In multi-user mode, list/history endpoints filter to accessible jobs. An unknown
 or inaccessible job returns `NOT_FOUND`. Job creation and updates can return
-`FORBIDDEN` for a working directory outside the owner's workspace or a shell /
+`403 FORBIDDEN` for a working directory outside the owner's workspace or a shell /
 launch-command job without the required privilege grant. Invalid definitions or
 working directories return `INVALID_INPUT`; launch/delivery failures are recorded
 on the run, so inspect its `status` and `errorMessage` even after an HTTP success.
 
 See [Cron Jobs](wiki/Cron-Jobs.md) for the UI, scheduling, and prompt-file rules.
+See the [complete cron guide](cron-guide.md) for the `cron:runCreated` and
+`cron:runUpdated` SSE events.
 
 ## Long-polling (agent wait)
 
