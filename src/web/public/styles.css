@@ -18819,6 +18819,74 @@ html[data-session-list="sidebar"] .session-tab.tab-filtered-out {
   display: none !important;
 }
 
+/* The vertical rail's session search (app.js _applyTabListFilter) uses the same
+   class, and also hides a group or case box the search emptied. Rail-scoped for
+   the same reason as the sidebar rule above: the header strip has no box. */
+html[data-tab-orientation='vertical'] .tab-rail .session-tab.tab-filtered-out,
+html[data-tab-orientation='vertical'] .tab-rail .tab-layout-group.tab-filtered-out,
+html[data-tab-orientation='vertical'] .tab-rail .tab-cluster.tab-filtered-out {
+  display: none !important;
+}
+
+/* The box reuses .session-sidebar-filter / -input; this only adds the clear
+   button over its right edge and the "No sessions match" line. */
+.tab-rail-search {
+  position: relative;
+  /* Clear of the 16px resize handle on the rail's right edge. */
+  padding-right: calc(0.25rem + 16px);
+}
+
+.tab-rail-search .session-sidebar-filter-input {
+  padding-right: 1.6rem;
+}
+
+/* The native WebKit clear glyph would sit under ours. */
+.tab-rail-search .session-sidebar-filter-input::-webkit-search-cancel-button {
+  appearance: none;
+}
+
+.tab-rail-search-clear {
+  position: absolute;
+  top: 50%;
+  right: calc(0.45rem + 16px);
+  width: 1.2rem;
+  height: 1.2rem;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tab-rail-search-clear:hover,
+.tab-rail-search-clear:focus-visible {
+  background: var(--control-bg-hover);
+  color: var(--text);
+}
+
+.tab-rail-search-clear[hidden],
+.tab-rail-search-empty[hidden] {
+  display: none;
+}
+
+.tab-rail-search-empty {
+  flex-shrink: 0;
+  padding: 0.5rem 0.75rem;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+/* Every group is drawn open while searching and its header will not toggle,
+   so the chevron dims to say so. */
+html[data-tab-orientation='vertical'] .tab-rail .session-tabs.tabs-filtering .tab-layout-group-chevron {
+  opacity: 0.35;
+}
+
 /* --- Rich rows (sessionListLayout 'sidebar-rich' + tabRailDetail 'rich') --- */
 /* The detailed variant of the SAME sidebar: identical column, identical
    re-parented #sessionTabs, identical filter and Alt+B toggle. The only

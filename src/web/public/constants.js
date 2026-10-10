@@ -1020,6 +1020,54 @@ function tabClusterNameSplit(name, label) {
   return match[2].slice(1).toLowerCase() === label.toLowerCase() ? { shown: match[1], hidden: match[2] } : null;
 }
 
+/**
+ * Session-list search: the vertical rail's search box and the sidebar's filter
+ * box. Trimmed, case-insensitive substring; a whitespace-only query is no query.
+ * @param {unknown} query
+ * @returns {string} the needle, '' when there is nothing to search for
+ */
+function tabSearchNeedle(query) {
+  return typeof query === 'string' ? query.trim().toLocaleLowerCase() : '';
+}
+
+/**
+ * Which rows a search hides. Pure: the caller reads the rows off the list it
+ * rendered and applies the result as classes, so the list itself (grouping,
+ * order, Alt+N badges) is never rebuilt or reordered by a search.
+ *
+ * A row flagged `keep: true` is never hidden, matching or not (the caller keeps
+ * a tab with an alert on screen: a prompt waiting on you is never hidden by a
+ * view filter). It counts toward its section, so its group stays on screen with
+ * it, but not toward `matchCount`.
+ *
+ * @param {Array<{key: unknown, text: string, section?: unknown, keep?: boolean}>} rows
+ *   in list order; `section` is the row's group or case box, null/undefined for none.
+ * @param {unknown} query
+ * @returns {{active: boolean, hidden: Set<unknown>, counts: Map<unknown, number>, matchCount: number}}
+ *   `counts` is the rows left showing per section (kept rows included), every
+ *   section seen, an emptied one as 0, so it can be hidden; `matchCount` is the
+ *   number of rows whose TEXT matched, so it can be 0 above a lone kept row.
+ */
+function filterTabSearchRows(rows, query) {
+  const needle = tabSearchNeedle(query);
+  const hidden = new Set();
+  const counts = new Map();
+  let matchCount = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const hasSection = row.section !== null && row.section !== undefined;
+    if (hasSection && !counts.has(row.section)) counts.set(row.section, 0);
+    const text = typeof row.text === 'string' ? row.text.toLocaleLowerCase() : '';
+    const matches = !needle || text.includes(needle);
+    if (!matches && row.keep !== true) {
+      hidden.add(row.key);
+      continue;
+    }
+    if (matches) matchCount++;
+    if (hasSection) counts.set(row.section, counts.get(row.section) + 1);
+  }
+  return { active: needle.length > 0, hidden, counts, matchCount };
+}
+
 // Terminal font stack — the single source for every xterm surface (the main
 // terminal in terminal-ui.js, the log-viewer terminal in panels-ui.js).
 // "Symbols Nerd Font Mono" is a bundled icons-only webfont (fonts/ +
@@ -1414,6 +1462,10 @@ if (typeof window !== 'undefined') {
     STRIDE: TAB_TRIAGE_STRIDE,
     groupFor: tabTriageGroupFor,
     layout: computeTabTriageLayout,
+  };
+  window.CodemanTabSearch = {
+    needle: tabSearchNeedle,
+    filter: filterTabSearchRows,
   };
   window.CodemanInputLimit = {
     FRAME_MAX_CHARS: INPUT_FRAME_MAX_CHARS,

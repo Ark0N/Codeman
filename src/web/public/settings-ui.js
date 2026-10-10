@@ -3997,6 +3997,10 @@ Object.assign(CodemanApp.prototype, {
           })
         : 'horizontal';
 
+    // The search box lives in the rail: a search left applied after the list
+    // moves out would hide tabs with no box to clear it from.
+    if (orientation !== 'vertical' && this._tabRailSearch) this._resetTabRailSearch?.();
+
     const root = document.documentElement;
     const previous = root.getAttribute('data-tab-orientation') || 'horizontal';
     root.setAttribute('data-tab-orientation', orientation);
