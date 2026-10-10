@@ -15,6 +15,13 @@ export interface TabRef {
   kind: TabRefKind;
   id: string;
   placement?: 'manual';
+  /**
+   * Pinned to the vertical rail's Focus section. The browser draws a SHORTCUT to
+   * the ref there; the ref itself stays in its group, so the flag never moves
+   * anything and nothing that moves a ref may drop it. Only `true` is stored:
+   * an unfocused ref carries no key at all.
+   */
+  focus?: true;
 }
 
 export interface TabGroup {
@@ -104,7 +111,13 @@ function parseRef(value: unknown, label: string): TabRef {
   if (value.placement !== undefined && value.placement !== 'manual') {
     throw new TabLayoutValidationError(`${label}.placement must be manual when present`);
   }
-  return value.placement === 'manual' ? { kind: value.kind, id, placement: 'manual' } : { kind: value.kind, id };
+  if (value.focus !== undefined && value.focus !== true) {
+    throw new TabLayoutValidationError(`${label}.focus must be true when present`);
+  }
+  const ref: TabRef = { kind: value.kind, id };
+  if (value.placement === 'manual') ref.placement = 'manual';
+  if (value.focus === true) ref.focus = true;
+  return ref;
 }
 
 function parseTabLayout(input: unknown, repairDuplicates: boolean): TabLayout {
@@ -395,6 +408,11 @@ export function setManualPlacement(input: TabLayout, target: TabRef, manual: boo
   return mapRef(input, target, (ref) => ({ ...ref, placement: 'manual' }));
 }
 
+/** Pin `target` to the Focus section, or unpin it. Moves nothing; idempotent both ways. */
+export function setTabFocus(input: TabLayout, target: TabRef, focused: boolean): TabLayout {
+  return mapRef(input, target, ({ focus: _focus, ...ref }) => (focused ? { ...ref, focus: true } : ref));
+}
+
 export function followParent(input: TabLayout, target: TabRef, metadata: readonly TabRefMetadata[]): TabLayout {
   const normalized = normalizeTabLayout(input, metadata);
   if (target.kind !== 'session') {
@@ -420,7 +438,8 @@ export function followParent(input: TabLayout, target: TabRef, metadata: readonl
     throw new TabLayoutValidationError(`session parent is not represented: ${targetMetadata.parentSessionId}`);
   }
 
-  const cleared = mapRef(normalized, target, (ref) => ({ kind: ref.kind, id: ref.id }));
+  // Clear the manual placement only: a focused ref stays focused.
+  const cleared = mapRef(normalized, target, ({ placement: _placement, ...ref }) => ref);
   return normalizeTabLayout(cleared, metadata);
 }
 

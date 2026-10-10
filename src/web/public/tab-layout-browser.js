@@ -13,7 +13,7 @@
  *  3. Load sequencing: concurrent layout reads settle newest-wins, and a failed
  *     read degrades to the flat rail with a capped, backed-off retry.
  *  4. Editing: named operations (create/rename/delete/reorder a group, move a
- *     row) applied optimistically and saved through ONE serialized
+ *     row, pin a row to Focus) applied optimistically and saved through ONE serialized
  *     `PUT /api/tab-layout` at a time, rebased onto the server's layout on a
  *     version conflict.
  *
@@ -32,17 +32,26 @@
   'use strict';
 
   const COLLAPSED_STORAGE_KEY = 'codeman:tab-groups-collapsed';
+  // The Focus section's collapse, per device. Its own key, not an entry in the
+  // group list above: that list is garbage-collected against the layout's group
+  // ids, and Focus is not a group.
+  const FOCUS_COLLAPSED_STORAGE_KEY = 'codeman:tab-focus-collapsed';
 
   const refKey = (ref) => `${ref.kind}:${ref.id}`;
   const validRef = (ref) =>
     !!ref && (ref.kind === 'session' || ref.kind === 'webview') && typeof ref.id === 'string' && ref.id.length > 0;
   const asIds = (value) => (Array.isArray(value) ? value.filter((id) => typeof id === 'string' && id) : []);
   const stableIds = (value) => [...new Set(asIds(value))];
-  // `placement: 'manual'` must survive the round trip: the browser writes whole
-  // layouts back, and dropping it would re-attach a hand-placed child session to
-  // its parent's subtree on the next save.
-  const copyRef = (r) =>
-    r.placement === 'manual' ? { kind: r.kind, id: r.id, placement: 'manual' } : { kind: r.kind, id: r.id };
+  // `placement: 'manual'` and `focus: true` must survive the round trip: the
+  // browser writes whole layouts back, so a field dropped here is erased on the
+  // next save, by whoever saves. Losing placement re-attaches a hand-placed child
+  // session to its parent's subtree; losing focus unpins every Focus shortcut.
+  const copyRef = (r) => {
+    const copy = { kind: r.kind, id: r.id };
+    if (r.placement === 'manual') copy.placement = 'manual';
+    if (r.focus === true) copy.focus = true;
+    return copy;
+  };
   const copyRefs = (value) => (Array.isArray(value) ? value.filter(validRef).map(copyRef) : []);
 
   /** Server limits (src/tab-layout.ts), mirrored so a bad edit fails before the PUT. */
@@ -108,6 +117,52 @@
     }
   }
 
+  /**
+   * The Focus section's per-device collapse. `ok: false` means the store threw;
+   * any value other than 'true' reads as expanded.
+   */
+  function loadFocusCollapsed(storage) {
+    try {
+      return { collapsed: storage.getItem(FOCUS_COLLAPSED_STORAGE_KEY) === 'true', ok: true };
+    } catch (_error) {
+      return { collapsed: false, ok: false };
+    }
+  }
+
+  function saveFocusCollapsed(storage, collapsed) {
+    try {
+      storage.setItem(FOCUS_COLLAPSED_STORAGE_KEY, collapsed === true ? 'true' : 'false');
+      return { collapsed: collapsed === true, ok: true };
+    } catch (_error) {
+      return { collapsed: false, ok: false };
+    }
+  }
+
+  /**
+   * The refs pinned to the Focus section that this browser can draw: focused,
+   * a live session or an open web tab, each once, in stored order (groups in
+   * order, then Ungrouped). Works with or without named groups, so Focus also
+   * shows above the flat rail. A ref whose session closed or whose web tab is
+   * not open here simply drops out; the server prunes deleted refs on its own.
+   */
+  function focusRefs(layoutInput, options = {}) {
+    if (!layoutInput) return [];
+    const layout = normalizeLayout(layoutInput);
+    const live = new Set(asIds(options.liveSessionIds));
+    const open = new Set(asIds(options.openWebviewIds));
+    const seen = new Set();
+    const result = [];
+    for (const ref of [...layout.groups.flatMap((group) => group.refs), ...layout.ungrouped]) {
+      if (ref.focus !== true) continue;
+      if (!(ref.kind === 'session' ? live.has(ref.id) : open.has(ref.id))) continue;
+      const key = refKey(ref);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push({ kind: ref.kind, id: ref.id });
+    }
+    return result;
+  }
+
   function saveCollapsedGroupIds(storage, groupIds) {
     const ids = stableIds(groupIds);
     try {
@@ -131,11 +186,13 @@
    * tab, else the active session), so selecting a hidden session by keyboard,
    * palette or Alt+N never leaves the user with no visible selection.
    *
-   * @returns {null | { sections, visibleRefs, hiddenTabGroupByRef, sectionByRef }}
+   * @returns {null | { sections, visibleRefs, hiddenTabGroupByRef, sectionByRef, focusRefs }}
    *   null when the layout has no groups: the caller renders the flat rail
    *   unchanged. Each section lists the rows it shows (`refs`) and the rows its
    *   collapse hides (`hidden`); `sectionByRef` maps every placed row
    *   (`<kind>:<id>`) to its section id (null = Ungrouped), shown or hidden.
+   *   `focusRefs` is focusRefs() for the same options: shortcuts, never rows,
+   *   so they are in none of the other fields.
    */
   function project(layoutInput, options = {}) {
     if (!layoutInput) return null;
@@ -200,7 +257,7 @@
         collapsed: false,
       });
     }
-    return { sections, visibleRefs, hiddenTabGroupByRef, sectionByRef };
+    return { sections, visibleRefs, hiddenTabGroupByRef, sectionByRef, focusRefs: focusRefs(layout, options) };
   }
 
   const ALERT_RANK = { action: 2, idle: 1 };
@@ -526,6 +583,17 @@
         layout.groups.splice(clampIndex(op.index, layout.groups.length), 0, moved);
         return layout;
       }
+      case 'setFocus': {
+        // Pin or unpin one row. It never moves: Focus draws a shortcut, and the
+        // row stays in its group. Idempotent, so a replay after a 409 is safe.
+        if (!validRef(op.ref)) editError('invalid row');
+        if (typeof op.focused !== 'boolean') editError('invalid Focus state');
+        const location = refLocations(layout).find((item) => refKey(item.ref) === refKey(op.ref));
+        if (!location) editError('unknown row');
+        if (op.focused) location.ref.focus = true;
+        else delete location.ref.focus;
+        return layout;
+      }
       case 'moveRef': {
         if (!validRef(op.ref)) editError('invalid row');
         const targetKey = refKey(op.ref);
@@ -745,6 +813,9 @@
     createLoadCoordinator,
     loadCollapsedGroupIds,
     saveCollapsedGroupIds,
+    focusRefs,
+    loadFocusCollapsed,
+    saveFocusCollapsed,
     MAX_GROUPS,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

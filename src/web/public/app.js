@@ -6158,6 +6158,8 @@ class CodemanApp {
       }
     }
     this._syncTabTreeSelection(container);
+    // The Focus shortcut of the selected tab is marked aria-current.
+    this._renderTabFocus();
     // #257: selection used to stop at the class toggle. On phones/tablets the
     // strip scrolls horizontally, so a tab selected from the palette, a swipe,
     // Alt+N or a push notification could stay parked off-screen.
@@ -6649,6 +6651,10 @@ class CodemanApp {
     this._refreshMobileOverviewIfVisible?.();
     // Same deal for the desktop home screen's tab column.
     this._refreshHomeSessionsIfVisible?.();
+    // Focus shortcuts carry the status dot and alert of the tab they stand for.
+    // A no-op unless what the section would draw changed (and after a full
+    // rebuild above it already has).
+    this._renderTabFocus();
     // The full-render path already redraws the connection SVG; this incremental
     // one does not, and a badge appearing widens a tab and shifts every tab after
     // it, sliding the lineage lines off their anchors. Only pay for it when there
@@ -7000,6 +7006,10 @@ class CodemanApp {
 
     // Set up keyboard navigation for tabs
     this.setupTabKeyboardNavigation(container);
+
+    // The Focus section sits above this list in the rail, so it is drawn before
+    // the connection lines measure the rows.
+    this._renderTabFocus();
 
     // Update connection lines after tabs change (positions may have shifted)
     this.updateConnectionLines();
@@ -7535,6 +7545,9 @@ class CodemanApp {
     // rail (always so on the flat rail, which is every owner without groups).
     // Rebuild only when what the rail would draw actually changed.
     if (this._isTabGroupStructureStale()) this._fullRenderSessionTabs();
+    // A Focus flag set on another device is not a structural change of the
+    // list, so it would not rebuild it: draw the section on its own.
+    else if (this._renderTabFocus()) this.updateConnectionLines?.();
     // Edits left unsaved by the previous page (see _persistPendingTabLayoutEdits).
     if (next && !this._tabLayoutRestoreChecked) {
       this._tabLayoutRestoreChecked = true;
@@ -7606,6 +7619,226 @@ class CodemanApp {
     // The full render also redraws connectors anchored to rows that just moved.
     this._fullRenderSessionTabs();
     return this.collapsedTabGroupIds.has(groupId) === shouldCollapse;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Owner tab layout: the Focus section (pinned shortcuts)
+  // ═══════════════════════════════════════════════════════════════
+  //
+  // A ref flagged `focus: true` in the layout gets a SHORTCUT in a small
+  // "Focus" section pinned to the top of the vertical rail; the row itself stays
+  // in its group. The section is its own element in #tabRail, OUTSIDE
+  // #sessionTabs, on purpose: it shows above the flat rail as well as the
+  // grouped one, and nothing that walks #sessionTabs (Alt+N badges, the tree's
+  // roving stop and posinset, lineage lines, drag, the row filters, the rail
+  // sort) ever sees a shortcut. Its own keyboard model is a list with one tab
+  // stop and Up/Down/Home/End between shortcuts; each shortcut is a button, so
+  // Enter/Space select its tab, and the context-menu key opens "Remove from
+  // Focus". Collapse is per-device localStorage, like a group's.
+
+  /** True when `ref` carries `focus: true` in the held layout. */
+  _tabRefFocused(ref) {
+    const location = this._tabRefLocation(ref);
+    return location?.refs[location.index]?.focus === true;
+  }
+
+  /** Pin or unpin a row. One named operation through the edit coordinator. */
+  setTabRefFocus(ref, focused) {
+    if (!this._tabRefLocation(ref)) return false;
+    return this.editTabLayout({ type: 'setFocus', ref: { kind: ref.kind, id: ref.id }, focused: focused === true }, `${ref.kind}:${ref.id}`);
+  }
+
+  /** The row menu's Focus entry ([] where the rail cannot edit the layout). */
+  _tabRefFocusActions(ref) {
+    if (!this._tabLayoutEditable() || !this._tabRefLocation(ref)) return [];
+    const focused = this._tabRefFocused(ref);
+    return [{ label: focused ? 'Remove from Focus' : 'Add to Focus', run: () => this.setTabRefFocus(ref, !focused) }];
+  }
+
+  _tabFocusCollapsedNow() {
+    if (this._tabFocusCollapsed === undefined) {
+      const storage = this._getTabCollapseStorage();
+      const loaded = storage ? window.CodemanTabLayout.loadFocusCollapsed(storage) : { collapsed: false, ok: false };
+      if (!loaded.ok) this._tabCollapseStorageFailed = true;
+      this._tabFocusCollapsed = loaded.collapsed;
+    }
+    return this._tabFocusCollapsed;
+  }
+
+  /** Collapse/expand the Focus section. Per-device; a store failure leaves it expanded. */
+  toggleTabFocusCollapsed(forceCollapsed) {
+    const shouldCollapse = forceCollapsed === undefined ? !this._tabFocusCollapsedNow() : forceCollapsed === true;
+    const storage = this._getTabCollapseStorage();
+    const saved = storage ? window.CodemanTabLayout.saveFocusCollapsed(storage, shouldCollapse) : { collapsed: false, ok: false };
+    if (!saved.ok) this._tabCollapseStorageFailed = true;
+    this._tabFocusCollapsed = saved.collapsed;
+    if (this._renderTabFocus()) this.updateConnectionLines?.();
+    document.getElementById('tabFocusToggle')?.focus();
+    return this._tabFocusCollapsed === shouldCollapse;
+  }
+
+  /** The focused refs this rail draws now ([] off the vertical rail or without a layout). */
+  _tabFocusRefs() {
+    if (!this.tabLayout || this._tabOrientation() !== 'vertical' || !window.CodemanTabLayout) return [];
+    return window.CodemanTabLayout.focusRefs(this.tabLayout, {
+      liveSessionIds: this.sessionOrder.filter((id) => this.sessions.has(id)),
+      openWebviewIds: (this.webviewOrder || []).filter((id) => this.webviews?.has(id)),
+    });
+  }
+
+  /** The Focus section element, created once inside #tabRail just above the list. */
+  _tabFocusHost() {
+    let host = document.getElementById('tabFocus');
+    if (host) return host;
+    const rail = document.getElementById('tabRail');
+    if (!rail) return null;
+    host = document.createElement('section');
+    host.id = 'tabFocus';
+    host.className = 'tab-focus';
+    host.hidden = true;
+    host.setAttribute('aria-labelledby', 'tabFocusTitle');
+    // Delegated, so the listeners survive every repaint of the section.
+    host.addEventListener('keydown', (event) => this._handleTabFocusKeydown(event));
+    host.addEventListener('click', (event) => {
+      if (event.target?.closest?.('#tabFocusToggle')) {
+        this.toggleTabFocusCollapsed();
+        return;
+      }
+      const item = event.target?.closest?.('.tab-focus-item');
+      if (item) this.openTabFocusShortcut(event, item.dataset.focusKey);
+    });
+    host.addEventListener('contextmenu', (event) => {
+      const item = event.target?.closest?.('.tab-focus-item');
+      if (item) this.openTabFocusMenu(event, item.dataset.focusKey, item);
+    });
+    const list = this.$('sessionTabs');
+    if (list && list.parentElement === rail) rail.insertBefore(host, list);
+    else rail.appendChild(host);
+    return host;
+  }
+
+  /**
+   * Draw the Focus section from the held layout. Cheap enough for every render
+   * pass: the markup is compared with what was drawn last, and the DOM is only
+   * touched when it changed. Returns true when it did (the rail's list moved,
+   * so connector lines anchored to its rows need a redraw).
+   */
+  _renderTabFocus() {
+    const refs = this._tabFocusRefs();
+    const host = refs.length ? this._tabFocusHost() : document.getElementById('tabFocus');
+    if (!host) return false;
+    if (!refs.length) {
+      if (host.hidden && !host.firstChild) return false;
+      host.hidden = true;
+      host.replaceChildren();
+      this._lastTabFocusHtml = '';
+      return true;
+    }
+    // Keep the rail's list just below the section: applyTabOrientation()
+    // re-appends #sessionTabs to the rail when the orientation flips.
+    const list = this.$('sessionTabs');
+    const rail = host.parentElement;
+    if (list && rail && list.parentElement === rail && host.nextElementSibling !== list) rail.insertBefore(host, list);
+    const collapsed = this._tabFocusCollapsedNow();
+    const activeKey = this.activeWebviewId
+      ? `webview:${this.activeWebviewId}`
+      : this.activeSessionId
+        ? `session:${this.activeSessionId}`
+        : '';
+    const focusedEl = host.contains(document.activeElement) ? document.activeElement : null;
+    const focusedKey = focusedEl?.dataset?.focusKey || (focusedEl?.id === 'tabFocusToggle' ? 'toggle' : null);
+    const keys = refs.map((ref) => `${ref.kind}:${ref.id}`);
+    // One tab stop in the list: the shortcut that had it, else the selected
+    // tab's, else the first.
+    const stopKey = [focusedKey, this._tabFocusStopKey, activeKey].find((key) => key && keys.includes(key)) || keys[0];
+    const items = refs
+      .map((ref) => {
+        const key = `${ref.kind}:${ref.id}`;
+        let name;
+        let statusHtml;
+        let alertClass = '';
+        if (ref.kind === 'session') {
+          const session = this.sessions.get(ref.id);
+          name = this.getSessionName(session);
+          statusHtml = `<span class="tab-status ${escapeHtml(session.status || 'idle')}" aria-hidden="true"></span>`;
+          const alert = this.tabAlerts?.get(ref.id);
+          alertClass = alert === 'action' ? ' tab-alert-action' : alert === 'idle' ? ' tab-alert-idle' : '';
+        } else {
+          const webview = this.webviews.get(ref.id);
+          name = webview?.name || ref.id;
+          statusHtml = `<span class="tab-web-icon" aria-hidden="true">${webview?.icon ? escapeHtml(webview.icon) : this._webviewGlobeIcon?.() || ''}</span>`;
+        }
+        // The name is user text: the whole button is kept away from the
+        // translator (a session named "3 sessions" must not come out in Chinese).
+        return (
+          `<li class="tab-focus-entry"><button type="button" class="tab-focus-item${alertClass}" data-focus-key="${escapeHtml(key)}" data-i18n-skip ` +
+          `tabindex="${key === stopKey ? '0' : '-1'}" aria-current="${key === activeKey ? 'true' : 'false'}" aria-label="${escapeHtml(name)}" title="${escapeHtml(name)}">` +
+          `${statusHtml}<span class="tab-focus-name">${escapeHtml(name)}</span></button></li>`
+        );
+      })
+      .join('');
+    const html =
+      `<button type="button" id="tabFocusToggle" class="tab-focus-toggle" aria-expanded="${collapsed ? 'false' : 'true'}" aria-controls="tabFocusList">` +
+      `<span class="tab-layout-group-chevron" aria-hidden="true"></span><span class="tab-focus-title" id="tabFocusTitle">Focus</span>` +
+      `<span class="tab-focus-count" aria-hidden="true">${refs.length}</span></button>` +
+      `<ul class="tab-focus-list" id="tabFocusList" aria-labelledby="tabFocusTitle"${collapsed ? ' hidden' : ''}>${items}</ul>`;
+    if (!host.hidden && this._lastTabFocusHtml === html) return false;
+    host.classList.toggle('tab-focus--collapsed', collapsed);
+    host.innerHTML = html;
+    host.hidden = false;
+    this._lastTabFocusHtml = html;
+    if (focusedKey === 'toggle') document.getElementById('tabFocusToggle')?.focus();
+    else if (focusedKey) host.querySelector(`[data-focus-key="${CSS.escape(focusedKey)}"]`)?.focus();
+    return true;
+  }
+
+  _tabFocusRefFromKey(key) {
+    const at = typeof key === 'string' ? key.indexOf(':') : -1;
+    if (at < 0) return null;
+    const kind = key.slice(0, at);
+    return kind === 'session' || kind === 'webview' ? { kind, id: key.slice(at + 1) } : null;
+  }
+
+  /** A shortcut was clicked: select its tab, exactly as the row would. */
+  openTabFocusShortcut(event, key) {
+    const ref = this._tabFocusRefFromKey(key);
+    if (!ref) return undefined;
+    this._tabFocusStopKey = key;
+    if (ref.kind === 'webview') return this.handleWebviewTabClick?.(event, ref.id);
+    return this.handleSessionTabClick(event, ref.id);
+  }
+
+  /** Right-click, Shift+F10 or the menu key on a shortcut (`trigger` anchors the menu). */
+  openTabFocusMenu(event, key, trigger) {
+    const ref = this._tabFocusRefFromKey(key);
+    if (!ref) return false;
+    this._tabFocusStopKey = key;
+    // A delegated listener's currentTarget is the section; anchor on the shortcut.
+    const anchored = trigger
+      ? { preventDefault: () => event?.preventDefault?.(), stopPropagation: () => event?.stopPropagation?.(), currentTarget: trigger, type: event?.type, clientX: event?.clientX }
+      : event;
+    return this._openTabLayoutMenu(anchored, `focus:${key}`, 'Focus actions', [
+      { label: 'Remove from Focus', run: () => this.setTabRefFocus(ref, false) },
+    ]);
+  }
+
+  /** Up/Down/Home/End move between shortcuts; the list keeps one tab stop. */
+  _handleTabFocusKeydown(event) {
+    const current = event.target?.closest?.('.tab-focus-item');
+    if (!current || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const items = [...event.currentTarget.querySelectorAll('.tab-focus-item')];
+    const index = items.indexOf(current);
+    const next =
+      event.key === 'Home'
+        ? items[0]
+        : event.key === 'End'
+          ? items[items.length - 1]
+          : items[(index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length];
+    if (!next) return;
+    event.preventDefault();
+    for (const item of items) item.tabIndex = item === next ? 0 : -1;
+    this._tabFocusStopKey = next.dataset.focusKey;
+    next.focus();
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -7822,7 +8055,7 @@ class CodemanApp {
     // live tree item by identity.
     const rail = this.$('sessionTabs');
     const item =
-      (trigger?.isConnected && trigger.closest('[role="treeitem"]')) ||
+      (trigger?.isConnected && (trigger.closest('[role="treeitem"]') || trigger.closest('.tab-focus-item'))) ||
       [...(rail?.querySelectorAll('[role="treeitem"]') || [])].find((el) => this._tabTreeIdentity(el) === identity);
     item?.focus();
   }
@@ -7848,7 +8081,8 @@ class CodemanApp {
 
   /** Keyboard actions for a web-tab row in the vertical rail: its settings plus group moves. */
   openTabWebviewMenu(event, webviewId) {
-    const moves = this._tabRefMoveActions({ kind: 'webview', id: webviewId });
+    const ref = { kind: 'webview', id: webviewId };
+    const moves = [...this._tabRefFocusActions(ref), ...this._tabRefMoveActions(ref)];
     if (!moves.length) {
       this.showWebviewModal?.(webviewId);
       return false;
